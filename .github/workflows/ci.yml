@@ -86,8 +86,8 @@ jobs:
       - name: Test google-adk framework
         run: cd go-frameworks/google-adk && GOWORK=off go test ./...
 
-      - name: Test cursor plugin
-        run: cd plugins/cursor && GOWORK=off go test ./...
+      - name: Test sigil plugin
+        run: cd plugins/sigil && GOWORK=off go test ./...
 
   typescript:
     name: TypeScript SDK

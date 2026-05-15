@@ -6,7 +6,5 @@ use (
 	./go-providers/anthropic
 	./go-providers/gemini
 	./go-providers/openai
-	./plugins/claude-code
-	./plugins/codex
-	./plugins/cursor
+	./plugins/sigil
 )

@@ -1,7 +1,9 @@
 # sigil-cursor — Cursor → Grafana Sigil plugin
 
 Forwards Cursor agent generations (prompts, assistant replies, tool calls,
-token usage) to Grafana Sigil for AI observability.
+token usage) to Grafana Sigil for AI observability. Backed by the
+consolidated [`sigil`](../sigil/) binary; this plugin only ships the hook
+manifest and a wrapper script.
 
 ## Install
 
@@ -9,13 +11,14 @@ Cursor's hook runtime does not manage dependencies. Install the binary
 yourself:
 
 ```sh
-go install github.com/grafana/sigil-sdk/plugins/cursor/cmd/sigil-cursor@latest
+go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
 ```
 
-This places `sigil-cursor` in `$GOBIN` (default `$HOME/go/bin`). The
-`scripts/run.sh` shim probes `$SIGIL_CURSOR_BIN`, `$HOME/go/bin`,
-`/usr/local/bin`, `$HOME/.local/bin`, and `$PATH` to find it under Cursor's
-stripped hook environment.
+This places `sigil` in `$GOBIN` (default `$HOME/go/bin`). The wrapper at
+[`plugins/cursor/scripts/run.sh`](scripts/run.sh)
+probes `$SIGIL_BIN`, `$HOME/go/bin/sigil`, `/opt/homebrew/bin/sigil`,
+`/usr/local/bin/sigil`, and `$HOME/.local/bin/sigil` to find it under
+Cursor's stripped hook environment.
 
 Then register the plugin in Cursor:
 
@@ -26,7 +29,7 @@ Then register the plugin in Cursor:
 ## Configure
 
 Configuration is read from environment variables and from a dotenv file at
-`${XDG_CONFIG_HOME:-$HOME/.config}/sigil-cursor/config.env`. OS env wins
+`${XDG_CONFIG_HOME:-$HOME/.config}/sigil/config.env`. OS env wins
 per-key; the file fills in unset keys. Cursor runs hooks under a clean
 process environment that does not inherit your shell profile, so the file
 is the reliable place to put credentials.
@@ -45,11 +48,11 @@ The Sigil and OTel env-var schemas come from the SDKs, not this plugin:
 | `SIGIL_TAGS` | no | Comma-separated `k=v` pairs added to every generation. Built-ins (`git.branch`, `cwd`, `subagent`) win on collision. |
 | `SIGIL_CONTENT_CAPTURE_MODE` | no | `full`, `no_tool_content`, or `metadata_only` (default). |
 | `SIGIL_USER_ID` | no | Override the per-generation user id (default: `user_email` from Cursor's payload). |
-| `SIGIL_DEBUG` | no | `true` writes a log to `$XDG_STATE_HOME/sigil-cursor/sigil-cursor.log`. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | yes | OTLP HTTP endpoint for traces and metrics. The plugin runs without it, but the AI Observability UI depends on these signals — half the panels are empty. |
-| `OTEL_EXPORTER_OTLP_HEADERS` | no | Extra OTLP headers (CSV `k=v`). When `Authorization` is missing the plugin synthesizes `Authorization=Basic base64(SIGIL_AUTH_TENANT_ID:SIGIL_AUTH_TOKEN)` so the OTel SDK exporter picks it up. |
+| `SIGIL_DEBUG` | no | `true` writes a log to `$XDG_STATE_HOME/sigil/logs/sigil.log`. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | yes | OTLP HTTP endpoint for traces and metrics. The plugin runs without it, but the AI Observability UI depends on these signals; half the panels are empty without them. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | no | Extra OTLP headers (CSV `k=v`). When `Authorization` is missing the plugin synthesises `Authorization=Basic base64(SIGIL_AUTH_TENANT_ID:SIGIL_AUTH_TOKEN)` so the OTel SDK exporter picks it up. |
 | `OTEL_EXPORTER_OTLP_INSECURE` | no | Standard OTel toggle. `true` disables TLS for the OTLP endpoint. |
-| `SIGIL_CURSOR_BIN` | no | Override the binary path used by `scripts/run.sh`. |
+| `SIGIL_BIN` | no | Override the binary path used by the wrapper script. |
 
 Without `SIGIL_ENDPOINT` / `SIGIL_AUTH_TENANT_ID` / `SIGIL_AUTH_TOKEN`,
 hooks still run but nothing is emitted to Sigil.
@@ -103,16 +106,16 @@ override on the same key):
 ## How it works
 
 Per-generation state is buffered on disk under
-`$XDG_STATE_HOME/sigil-cursor/<conversation>/gen-<generation>.json` (mode
+`$XDG_STATE_HOME/sigil/cursor/<conversation>/gen-<generation>.json` (mode
 `0600`) until the `stop` event flushes it to Sigil. `sessionEnd` removes
 any stranded fragments left by crashed turns.
 
 ## Development
 
+The Go code lives in [`../sigil/`](../sigil/). Use the root [`mise`](../../mise.toml) tasks for lint/format/test, or:
+
 ```sh
-cd plugins/cursor
-make build      # → ./sigil-cursor
-make test       # go test ./...
-make lint       # golangci-lint run ./...
-make install    # go install ./cmd/sigil-cursor
+cd plugins/sigil
+GOWORK=off go test ./internal/agents/cursor/...
+GOWORK=off go build ./cmd/sigil
 ```
