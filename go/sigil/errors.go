@@ -36,6 +36,18 @@ var (
 	ErrRatingConflict = errors.New("sigil: conversation rating conflict")
 	// ErrRatingTransportFailed wraps conversation rating transport failures.
 	ErrRatingTransportFailed = errors.New("sigil: conversation rating transport failed")
+	// ErrExperimentValidationFailed wraps experiment control-plane input validation failures.
+	ErrExperimentValidationFailed = errors.New("sigil: experiment validation failed")
+	// ErrExperimentConflict wraps idempotency conflicts when creating experiments.
+	ErrExperimentConflict = errors.New("sigil: experiment conflict")
+	// ErrExperimentNotFound wraps missing experiment responses.
+	ErrExperimentNotFound = errors.New("sigil: experiment not found")
+	// ErrExperimentTransportFailed wraps experiment control-plane transport failures.
+	ErrExperimentTransportFailed = errors.New("sigil: experiment transport failed")
+	// ErrScoreValidationFailed wraps score export validation failures.
+	ErrScoreValidationFailed = errors.New("sigil: score validation failed")
+	// ErrScoreTransportFailed wraps score export transport failures.
+	ErrScoreTransportFailed = errors.New("sigil: score transport failed")
 	// ErrHookDenied is the sentinel returned when hook evaluation responds
 	// with action: "deny". Use errors.Is to detect this independently from
 	// HookDeniedError's typed assertion.
