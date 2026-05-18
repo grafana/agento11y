@@ -55,25 +55,33 @@ public sealed class MetricExemplarTests
 
     private sealed class ExemplarHarness : IDisposable
     {
-        private readonly MeterListener _listener;
+        private readonly MeterListener _meterListener;
+        private readonly ActivityListener _activityListener;
 
         public string? CapturedActivityId { get; private set; }
 
         public ExemplarHarness()
         {
-            _listener = new MeterListener();
-            _listener.InstrumentPublished += (instrument, meterListener) =>
+            _activityListener = new ActivityListener
+            {
+                ShouldListenTo = source => source.Name == SigilClient.InstrumentationName,
+                Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            };
+            ActivitySource.AddActivityListener(_activityListener);
+
+            _meterListener = new MeterListener();
+            _meterListener.InstrumentPublished += (instrument, meterListener) =>
             {
                 if (instrument.Name == "gen_ai.client.operation.duration")
                 {
                     meterListener.EnableMeasurementEvents(instrument);
                 }
             };
-            _listener.SetMeasurementEventCallback<double>((instrument, _, _, _) =>
+            _meterListener.SetMeasurementEventCallback<double>((instrument, _, _, _) =>
             {
                 CapturedActivityId = Activity.Current?.Id;
             });
-            _listener.Start();
+            _meterListener.Start();
         }
 
         public SigilClient NewClient()
@@ -85,7 +93,8 @@ public sealed class MetricExemplarTests
 
         public void Dispose()
         {
-            _listener.Dispose();
+            _meterListener.Dispose();
+            _activityListener.Dispose();
         }
     }
 }
