@@ -6,7 +6,16 @@ import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '
 import { defaultConfig, SigilClient } from '../.test-dist/index.js';
 
 const contextManager = new AsyncLocalStorageContextManager();
-context.setGlobalContextManager(contextManager);
+
+test.before(() => {
+  contextManager.enable();
+  context.setGlobalContextManager(contextManager);
+});
+
+test.after(() => {
+  context.disable();
+  contextManager.disable();
+});
 
 class CapturingExporter {
   requests = [];
