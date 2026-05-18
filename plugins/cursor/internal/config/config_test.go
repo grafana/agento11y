@@ -179,11 +179,11 @@ func TestApplyEnv(t *testing.T) {
 
 func TestHasCredentials(t *testing.T) {
 	cases := []struct {
-		name      string
-		endpoint  string
-		tenant    string
-		token     string
-		want      bool
+		name     string
+		endpoint string
+		tenant   string
+		token    string
+		want     bool
 	}{
 		{"all set", "https://e", "t", "k", true},
 		{"missing endpoint", "", "t", "k", false},
@@ -202,4 +202,3 @@ func TestHasCredentials(t *testing.T) {
 		})
 	}
 }
-

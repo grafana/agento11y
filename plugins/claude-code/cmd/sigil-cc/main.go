@@ -35,10 +35,10 @@ type hookDecision struct {
 }
 
 type hookSpecificOutput struct {
-	HookEventName              string `json:"hookEventName"`
-	PermissionDecision         string `json:"permissionDecision,omitempty"`
-	PermissionDecisionReason   string `json:"permissionDecisionReason,omitempty"`
-	AdditionalContext          string `json:"additionalContext,omitempty"`
+	HookEventName            string `json:"hookEventName"`
+	PermissionDecision       string `json:"permissionDecision,omitempty"`
+	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
+	AdditionalContext        string `json:"additionalContext,omitempty"`
 }
 
 var (
@@ -94,9 +94,9 @@ func run() {
 	authToken := os.Getenv("SIGIL_AUTH_TOKEN")
 
 	missing := missingEnvVars(map[string]string{
-		"SIGIL_ENDPOINT":        sigilEndpoint,
-		"SIGIL_AUTH_TENANT_ID":  tenantID,
-		"SIGIL_AUTH_TOKEN":      authToken,
+		"SIGIL_ENDPOINT":       sigilEndpoint,
+		"SIGIL_AUTH_TENANT_ID": tenantID,
+		"SIGIL_AUTH_TOKEN":     authToken,
 	})
 	if len(missing) > 0 {
 		// Stderr regardless of SIGIL_DEBUG; the debug-gated logger would swallow this.

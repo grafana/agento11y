@@ -18,7 +18,7 @@ from urllib import request as urllib_request
 
 from opentelemetry import metrics, trace
 from opentelemetry.metrics import Histogram
-from opentelemetry.trace import Span, SpanKind, Status, StatusCode
+from opentelemetry.trace import Span, SpanKind, Status, StatusCode, use_span
 
 from .config import ClientConfig, resolve_config
 from .context import (
@@ -1253,7 +1253,8 @@ class GenerationRecorder:
             else:
                 self.span.set_status(Status(StatusCode.OK))
 
-            self.client._record_generation_metrics(generation, error_type, error_category, first_token_at)
+            with use_span(self.span, end_on_exit=False):
+                self.client._record_generation_metrics(generation, error_type, error_category, first_token_at)
 
             self.span.end(end_time=_datetime_to_ns(generation.completed_at or completed_at))
 
@@ -1464,14 +1465,15 @@ class EmbeddingRecorder:
             self.span.set_attribute(_span_attr_error_type, error_type)
             self.span.set_attribute(_span_attr_error_category, error_category)
 
-        self.client._record_embedding_metrics(
-            self.seed,
-            result,
-            self.started_at,
-            completed_at,
-            error_type,
-            error_category,
-        )
+        with use_span(self.span, end_on_exit=False):
+            self.client._record_embedding_metrics(
+                self.seed,
+                result,
+                self.started_at,
+                completed_at,
+                error_type,
+                error_category,
+            )
         self.span.end(end_time=_datetime_to_ns(completed_at))
 
         with self._lock:
@@ -1576,7 +1578,8 @@ class ToolExecutionRecorder:
         else:
             self.span.set_status(Status(StatusCode.OK))
 
-        self.client._record_tool_execution_metrics(self.seed, self.started_at, completed_at, final_error)
+        with use_span(self.span, end_on_exit=False):
+            self.client._record_tool_execution_metrics(self.seed, self.started_at, completed_at, final_error)
 
         self.span.end(end_time=_datetime_to_ns(completed_at))
 

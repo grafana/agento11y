@@ -2,6 +2,7 @@ package com.grafana.sigil.sdk;
 
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.context.Scope;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -120,7 +121,9 @@ public class ToolExecutionRecorder implements AutoCloseable {
             span.setStatus(StatusCode.OK);
         }
 
-        client.recordToolExecutionMetrics(seed, startedAt, completedAt, snapshotCallError);
+        try (Scope metricsScope = span.makeCurrent()) {
+            client.recordToolExecutionMetrics(seed, startedAt, completedAt, snapshotCallError);
+        }
         span.end(completedAt.toEpochMilli(), TimeUnit.MILLISECONDS);
         client.recordToolExecution(execution);
 

@@ -2,6 +2,7 @@ package com.grafana.sigil.sdk;
 
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.context.Scope;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -110,7 +111,9 @@ public final class EmbeddingRecorder implements AutoCloseable {
         }
 
         Instant completedAt = client.now();
-        client.recordEmbeddingMetrics(seed, snapshotResult, startedAt, completedAt, errorType, errorCategory);
+        try (Scope metricsScope = span.makeCurrent()) {
+            client.recordEmbeddingMetrics(seed, snapshotResult, startedAt, completedAt, errorType, errorCategory);
+        }
         span.end(completedAt.toEpochMilli(), TimeUnit.MILLISECONDS);
 
         synchronized (lock) {

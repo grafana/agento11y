@@ -60,7 +60,7 @@ func TestEvaluateHookSendsRequestAndParsesAllow(t *testing.T) {
 	defer server.Close()
 
 	client := newHookTestClient(t, hookTestClientOptions{
-		apiEndpoint: server.URL,
+		apiEndpoint:  server.URL,
 		hooksEnabled: true,
 	})
 	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
@@ -155,7 +155,7 @@ func TestEvaluateHookReturnsDeny(t *testing.T) {
 	defer server.Close()
 
 	client := newHookTestClient(t, hookTestClientOptions{
-		apiEndpoint: server.URL,
+		apiEndpoint:  server.URL,
 		hooksEnabled: true,
 	})
 	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })

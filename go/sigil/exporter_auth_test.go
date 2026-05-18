@@ -103,11 +103,11 @@ func TestResolveHeadersWithAuth(t *testing.T) {
 // any real bug.
 func TestResolveHeadersWithAuthRejectsMissingRequiredField(t *testing.T) {
 	testCases := []AuthConfig{
-		{Mode: ExportAuthModeTenant},                              // tenant requires tenant_id
-		{Mode: ExportAuthModeBearer},                              // bearer requires bearer_token
-		{Mode: ExportAuthModeBasic},                               // basic requires password
-		{Mode: ExportAuthModeBasic, BasicPassword: "secret"},      // basic also requires user/tenant
-		{Mode: ExportAuthMode("unknown"), TenantID: "tenant-a"},   // unknown mode
+		{Mode: ExportAuthModeTenant},                            // tenant requires tenant_id
+		{Mode: ExportAuthModeBearer},                            // bearer requires bearer_token
+		{Mode: ExportAuthModeBasic},                             // basic requires password
+		{Mode: ExportAuthModeBasic, BasicPassword: "secret"},    // basic also requires user/tenant
+		{Mode: ExportAuthMode("unknown"), TenantID: "tenant-a"}, // unknown mode
 	}
 
 	for _, testCase := range testCases {

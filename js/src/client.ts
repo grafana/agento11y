@@ -1,4 +1,5 @@
 import {
+  context,
   type Histogram,
   type Meter,
   metrics,
@@ -788,7 +789,10 @@ export class SigilClient {
       span.setStatus({ code: SpanStatusCode.OK });
     }
 
-    this.recordGenerationMetrics(generation, errorType, errorCategory, firstTokenAt);
+    const spanCtx = trace.setSpan(context.active(), span);
+    context.with(spanCtx, () => {
+      this.recordGenerationMetrics(generation, errorType, errorCategory, firstTokenAt);
+    });
 
     span.end(generation.completedAt);
   }
@@ -832,7 +836,10 @@ export class SigilClient {
       span.setAttribute(spanAttrErrorCategory, errorCategory);
     }
 
-    this.recordEmbeddingMetrics(seed, result, startedAt, completedAt, errorType, errorCategory);
+    const spanCtx = trace.setSpan(context.active(), span);
+    context.with(spanCtx, () => {
+      this.recordEmbeddingMetrics(seed, result, startedAt, completedAt, errorType, errorCategory);
+    });
 
     span.end(completedAt);
   }
@@ -874,10 +881,13 @@ export class SigilClient {
       span.setStatus({ code: SpanStatusCode.OK });
     }
 
-    this.recordToolExecutionMetrics(
-      toolExecution,
-      localError ?? (toolExecution.callError !== undefined ? new Error(toolExecution.callError) : undefined),
-    );
+    const spanCtx = trace.setSpan(context.active(), span);
+    context.with(spanCtx, () => {
+      this.recordToolExecutionMetrics(
+        toolExecution,
+        localError ?? (toolExecution.callError !== undefined ? new Error(toolExecution.callError) : undefined),
+      );
+    });
 
     span.end(toolExecution.completedAt);
     return localError;

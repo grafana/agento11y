@@ -145,7 +145,9 @@ public class GenerationRecorder implements AutoCloseable {
                 span.setStatus(StatusCode.OK);
             }
 
-            client.recordGenerationMetrics(generation, errorType, errorCategory, snapshotFirstTokenAt);
+            try (Scope metricsScope = span.makeCurrent()) {
+                client.recordGenerationMetrics(generation, errorType, errorCategory, snapshotFirstTokenAt);
+            }
             span.end(completedAt.toEpochMilli(), TimeUnit.MILLISECONDS);
             client.recordGeneration(generation);
         } finally {

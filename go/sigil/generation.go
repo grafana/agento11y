@@ -50,29 +50,29 @@ type Generation struct {
 	OperationName string `json:"operation_name,omitempty"`
 	// TraceID and SpanID identify the OTel span created by StartGeneration or
 	// StartStreamingGeneration.
-	TraceID             string           `json:"trace_id,omitempty"`
-	SpanID              string           `json:"span_id,omitempty"`
-	Model               ModelRef         `json:"model"`
-	ResponseID          string           `json:"response_id,omitempty"`
-	ResponseModel       string           `json:"response_model,omitempty"`
-	SystemPrompt        string           `json:"system_prompt,omitempty"`
-	Input               []Message        `json:"input,omitempty"`
-	Output              []Message        `json:"output,omitempty"`
-	Tools               []ToolDefinition `json:"tools,omitempty"`
-	MaxTokens           *int64           `json:"max_tokens,omitempty"`
-	Temperature         *float64         `json:"temperature,omitempty"`
-	TopP                *float64         `json:"top_p,omitempty"`
-	ToolChoice          *string          `json:"tool_choice,omitempty"`
-	ThinkingEnabled     *bool            `json:"thinking_enabled,omitempty"`
-	ParentGenerationIDs []string         `json:"parent_generation_ids,omitempty"`
-	EffectiveVersion    string           `json:"effective_version,omitempty"`
-	Usage            TokenUsage        `json:"usage,omitempty"`
-	StopReason       string            `json:"stop_reason,omitempty"`
-	StartedAt        time.Time         `json:"started_at,omitempty"`
-	CompletedAt      time.Time         `json:"completed_at,omitempty"`
-	Tags             map[string]string `json:"tags,omitempty"`
-	Metadata         map[string]any    `json:"metadata,omitempty"`
-	Artifacts        []Artifact        `json:"artifacts,omitempty"`
+	TraceID             string            `json:"trace_id,omitempty"`
+	SpanID              string            `json:"span_id,omitempty"`
+	Model               ModelRef          `json:"model"`
+	ResponseID          string            `json:"response_id,omitempty"`
+	ResponseModel       string            `json:"response_model,omitempty"`
+	SystemPrompt        string            `json:"system_prompt,omitempty"`
+	Input               []Message         `json:"input,omitempty"`
+	Output              []Message         `json:"output,omitempty"`
+	Tools               []ToolDefinition  `json:"tools,omitempty"`
+	MaxTokens           *int64            `json:"max_tokens,omitempty"`
+	Temperature         *float64          `json:"temperature,omitempty"`
+	TopP                *float64          `json:"top_p,omitempty"`
+	ToolChoice          *string           `json:"tool_choice,omitempty"`
+	ThinkingEnabled     *bool             `json:"thinking_enabled,omitempty"`
+	ParentGenerationIDs []string          `json:"parent_generation_ids,omitempty"`
+	EffectiveVersion    string            `json:"effective_version,omitempty"`
+	Usage               TokenUsage        `json:"usage,omitempty"`
+	StopReason          string            `json:"stop_reason,omitempty"`
+	StartedAt           time.Time         `json:"started_at,omitempty"`
+	CompletedAt         time.Time         `json:"completed_at,omitempty"`
+	Tags                map[string]string `json:"tags,omitempty"`
+	Metadata            map[string]any    `json:"metadata,omitempty"`
+	Artifacts           []Artifact        `json:"artifacts,omitempty"`
 	// CallError captures upstream call failure text when End receives callErr.
 	CallError string `json:"call_error,omitempty"`
 }
@@ -99,8 +99,8 @@ type GenerationStart struct {
 	ParentGenerationIDs []string
 	EffectiveVersion    string
 	Tags                map[string]string
-	Metadata         map[string]any
-	StartedAt        time.Time
+	Metadata            map[string]any
+	StartedAt           time.Time
 	// ContentCapture overrides the client-level ContentCaptureMode for this
 	// generation. Default (zero value) inherits from Config.
 	ContentCapture ContentCaptureMode

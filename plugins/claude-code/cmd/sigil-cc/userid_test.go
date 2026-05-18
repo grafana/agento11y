@@ -59,12 +59,12 @@ func TestLoadUserIDFromClaudeJSON(t *testing.T) {
 
 func TestResolveUserID(t *testing.T) {
 	tests := []struct {
-		name       string
-		envUserID  string
-		envSource  string
-		writeFix   bool
-		contents   string
-		want       string
+		name      string
+		envUserID string
+		envSource string
+		writeFix  bool
+		contents  string
+		want      string
 	}{
 		{
 			name:      "SIGIL_USER_ID wins over file",

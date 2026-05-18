@@ -12,10 +12,10 @@ func TestToolSpanWindow(t *testing.T) {
 	dur := func(ms float64) *float64 { return &ms }
 
 	cases := []struct {
-		name              string
-		rec               fragment.ToolRecord
-		wantStarted       time.Time
-		wantCompleted     time.Time
+		name          string
+		rec           fragment.ToolRecord
+		wantStarted   time.Time
+		wantCompleted time.Time
 	}{
 		{
 			name: "uses tool's own completedAt and subtracts duration",

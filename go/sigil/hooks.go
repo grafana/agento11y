@@ -146,11 +146,11 @@ type HookEvaluation struct {
 
 // HookEvaluateResponse is the parsed server response.
 type HookEvaluateResponse struct {
-	Action            HookAction       `json:"action"`
-	RuleID            string           `json:"rule_id,omitempty"`
-	Reason            string           `json:"reason,omitempty"`
-	TransformedInput  *HookInput       `json:"transformed_input,omitempty"`
-	Evaluations       []HookEvaluation `json:"evaluations"`
+	Action           HookAction       `json:"action"`
+	RuleID           string           `json:"rule_id,omitempty"`
+	Reason           string           `json:"reason,omitempty"`
+	TransformedInput *HookInput       `json:"transformed_input,omitempty"`
+	Evaluations      []HookEvaluation `json:"evaluations"`
 }
 
 // EvaluateHook calls POST /api/v1/hooks:evaluate to run synchronous hook

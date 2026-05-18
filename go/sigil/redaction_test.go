@@ -485,4 +485,3 @@ func metaString(g Generation, key string) string {
 	v, _ := g.Metadata[key].(string)
 	return v
 }
-

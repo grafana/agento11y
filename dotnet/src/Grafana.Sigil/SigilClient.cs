@@ -2325,11 +2325,10 @@ public sealed class GenerationRecorder
             {
                 _activity.SetStatus(ActivityStatusCode.Ok);
             }
-
-            _activity.Stop();
         }
 
         _client.RecordGenerationMetrics(generation, errorType, errorCategory, firstTokenAt);
+        _activity?.Stop();
 
         LastGeneration = InternalUtils.DeepClone(generation);
         Error = localError;
@@ -2604,12 +2603,12 @@ public sealed class EmbeddingRecorder
             {
                 _activity.SetStatus(ActivityStatusCode.Ok);
             }
-
-            _activity.SetEndTime(completedAt.UtcDateTime);
-            _activity.Stop();
         }
 
         _client.RecordEmbeddingMetrics(_seed, result, _startedAt, completedAt, errorType, errorCategory);
+        _activity?.SetEndTime(completedAt.UtcDateTime);
+        _activity?.Stop();
+
         Error = localError;
     }
 }
@@ -2749,12 +2748,12 @@ public sealed class ToolExecutionRecorder
             {
                 _activity.SetStatus(ActivityStatusCode.Ok);
             }
-
-            _activity.SetEndTime(completedAt.UtcDateTime);
-            _activity.Stop();
         }
 
         _client!.RecordToolExecutionMetrics(_seed, _startedAt, completedAt, finalError);
+        _activity?.SetEndTime(completedAt.UtcDateTime);
+        _activity?.Stop();
+
         Error = finalError;
     }
 }

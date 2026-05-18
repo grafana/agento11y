@@ -195,9 +195,9 @@ func TestParseUserContent(t *testing.T) {
 
 func TestUserContentBlock_Content(t *testing.T) {
 	tests := []struct {
-		name    string
-		raw     string
-		want    string
+		name string
+		raw  string
+		want string
 	}{
 		{
 			name: "string content",
