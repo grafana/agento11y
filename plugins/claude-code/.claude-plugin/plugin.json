@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil-cc",
+            "command": "sigil claude-code hook",
             "timeout": 2000
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil-cc",
+            "command": "sigil claude-code hook",
             "timeout": 2000
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil-cc",
+            "command": "sigil claude-code hook",
             "timeout": 10000
           }
         ]

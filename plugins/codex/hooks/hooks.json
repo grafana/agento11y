@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil-codex",
+            "command": "sigil codex hook",
             "timeout": 10,
             "statusMessage": "Preparing Sigil telemetry"
           }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil-codex",
+            "command": "sigil codex hook",
             "timeout": 10
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil-codex",
+            "command": "sigil codex hook",
             "timeout": 10
           }
         ]
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil-codex",
+            "command": "sigil codex hook",
             "timeout": 30
           }
         ]
