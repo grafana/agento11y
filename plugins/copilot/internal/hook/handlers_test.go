@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/grafana/sigil-sdk/go/sigil"
 
@@ -175,6 +176,68 @@ func TestStopEnrichesExportFromTranscript(t *testing.T) {
 		if !strings.Contains(gotBody, want) {
 			t.Fatalf("export body missing %q: %s", want, gotBody)
 		}
+	}
+}
+
+func TestStopWaitsForCurrentCLITranscriptTurnInsteadOfReusingPreviousTurn(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
+	logger := log.New(io.Discard, "", 0)
+
+	transcriptPath := filepath.Join(t.TempDir(), "events.jsonl")
+	initialTranscript := "" +
+		"{\"type\":\"session.start\",\"data\":{\"sessionId\":\"sess\",\"copilotVersion\":\"1.0.49\"}}\n" +
+		"{\"type\":\"session.model_change\",\"data\":{\"newModel\":\"auto\"}}\n" +
+		"{\"type\":\"user.message\",\"data\":{\"content\":\"first prompt\",\"interactionId\":\"int-1\"}}\n" +
+		"{\"type\":\"assistant.message\",\"data\":{\"messageId\":\"msg-1\",\"model\":\"claude-sonnet-4.6\",\"content\":\"first answer\",\"interactionId\":\"int-1\",\"turnId\":\"0\",\"outputTokens\":621,\"requestId\":\"req-1\"}}\n" +
+		"{\"type\":\"user.message\",\"data\":{\"content\":\"second prompt\",\"interactionId\":\"int-2\"}}\n"
+	if err := os.WriteFile(transcriptPath, []byte(initialTranscript), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		f, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			return
+		}
+		defer func() { _ = f.Close() }()
+		_, _ = f.WriteString("{\"type\":\"assistant.message\",\"data\":{\"messageId\":\"msg-2\",\"model\":\"gpt-4.1\",\"content\":\"second answer\",\"interactionId\":\"int-2\",\"turnId\":\"0\",\"outputTokens\":123,\"requestId\":\"req-2\"}}\n")
+	}()
+
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+
+	UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "second prompt"}, cfg, logger)
+	Stop(Payload{HookEventNameJSON: "Stop", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:04Z"`), StopReasonJSON: "end_turn", TranscriptPathJSON: transcriptPath}, cfg, logger)
+
+	for _, want := range []string{
+		`"name":"gpt-4.1"`,
+		`"response_model":"gpt-4.1"`,
+		`"output_tokens":"123"`,
+		`"copilot.request_id":"req-2"`,
+	} {
+		if !strings.Contains(gotBody, want) {
+			t.Fatalf("export body missing %q: %s", want, gotBody)
+		}
+	}
+	if strings.Contains(gotBody, `"response_model":"claude-sonnet-4.6"`) {
+		t.Fatalf("export body reused previous turn model: %s", gotBody)
+	}
+	if strings.Contains(gotBody, `"output_tokens":"621"`) {
+		t.Fatalf("export body reused previous turn output tokens: %s", gotBody)
 	}
 }
 

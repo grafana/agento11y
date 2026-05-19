@@ -439,7 +439,9 @@ func enrichFromTranscript(f *fragment.Fragment, logger *log.Logger) {
 		lastErr error
 	)
 	for {
-		snap, ok, err := transcript.ReadLatestAssistantTurn(f.TranscriptPath)
+		snap, ok, err := transcript.ReadAssistantTurn(f.TranscriptPath, transcript.ReadHint{
+			UserPrompt: f.Prompt,
+		})
 		if err != nil {
 			lastErr = err
 		} else if ok {

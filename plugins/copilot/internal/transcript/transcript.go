@@ -27,6 +27,11 @@ type Snapshot struct {
 	UserPrompt      string
 }
 
+type ReadHint struct {
+	TurnID     string
+	UserPrompt string
+}
+
 type line struct {
 	Type string          `json:"type"`
 	Data json.RawMessage `json:"data"`
@@ -59,6 +64,14 @@ type assistantMessageData struct {
 }
 
 func ReadLatestAssistantTurn(path string) (Snapshot, bool, error) {
+	return ReadAssistantTurn(path, ReadHint{})
+}
+
+func ReadAssistantTurn(path string, hint ReadHint) (Snapshot, bool, error) {
+	return readTranscriptSnapshot(path, hint)
+}
+
+func readTranscriptSnapshot(path string, hint ReadHint) (Snapshot, bool, error) {
 	if strings.TrimSpace(path) == "" {
 		return Snapshot{}, false, nil
 	}
@@ -72,6 +85,11 @@ func ReadLatestAssistantTurn(path string) (Snapshot, bool, error) {
 		lastReasoning       string
 		copilotVersion      string
 		sessionID           string
+		hintPrompt          = strings.TrimSpace(hint.UserPrompt)
+		hintInteractionID   string
+		sawHintPrompt       bool
+		matched             Snapshot
+		matchedOK           bool
 	)
 
 	err := scanJSONLines(path, func(raw []byte) error {
@@ -103,36 +121,58 @@ func ReadLatestAssistantTurn(path string) (Snapshot, bool, error) {
 			if err := json.Unmarshal(item.Data, &data); err != nil {
 				return nil
 			}
-			if interactionID := strings.TrimSpace(data.InteractionID); interactionID != "" {
-				promptByInteraction[interactionID] = strings.TrimSpace(data.Content)
+			prompt := strings.TrimSpace(data.Content)
+			interactionID := strings.TrimSpace(data.InteractionID)
+			if interactionID != "" {
+				promptByInteraction[interactionID] = prompt
+			}
+			if hintPrompt != "" && prompt == hintPrompt {
+				sawHintPrompt = true
+				hintInteractionID = interactionID
+				matched = Snapshot{}
+				matchedOK = false
 			}
 		case "assistant.message":
 			var data assistantMessageData
 			if err := json.Unmarshal(item.Data, &data); err != nil {
 				return nil
 			}
-			if interactionID := strings.TrimSpace(data.InteractionID); interactionID != "" && strings.TrimSpace(data.Model) != "" {
+			interactionID := strings.TrimSpace(data.InteractionID)
+			if interactionID != "" && strings.TrimSpace(data.Model) != "" {
 				modelByInteraction[interactionID] = strings.TrimSpace(data.Model)
 			}
-			snap = Snapshot{
+			candidate := Snapshot{
 				SessionID:       sessionID,
 				CopilotVersion:  copilotVersion,
-				Model:           firstNonEmpty(strings.TrimSpace(data.Model), modelByInteraction[strings.TrimSpace(data.InteractionID)], lastModel),
+				Model:           firstNonEmpty(strings.TrimSpace(data.Model), modelByInteraction[interactionID], lastModel),
 				ReasoningEffort: lastReasoning,
 				NativeTurnID:    strings.TrimSpace(data.TurnID),
-				InteractionID:   strings.TrimSpace(data.InteractionID),
+				InteractionID:   interactionID,
 				RequestID:       strings.TrimSpace(data.RequestID),
 				MessageID:       strings.TrimSpace(data.MessageID),
 				AssistantText:   strings.TrimSpace(data.Content),
 				OutputTokens:    data.OutputTokens,
-				UserPrompt:      promptByInteraction[strings.TrimSpace(data.InteractionID)],
+				UserPrompt:      promptByInteraction[interactionID],
 			}
+			snap = candidate
 			ok = true
+			if matchesHintPromptCandidate(hintPrompt, hintInteractionID, candidate) {
+				matched = candidate
+				matchedOK = true
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		return Snapshot{}, false, err
+	}
+	if hintPrompt != "" {
+		if matchedOK {
+			snap = matched
+			ok = true
+		} else if sawHintPrompt {
+			return Snapshot{}, false, nil
+		}
 	}
 	if !ok {
 		return Snapshot{}, false, nil
@@ -184,4 +224,14 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func matchesHintPromptCandidate(hintPrompt, hintInteractionID string, candidate Snapshot) bool {
+	if strings.TrimSpace(hintPrompt) == "" {
+		return false
+	}
+	if strings.TrimSpace(hintInteractionID) != "" {
+		return strings.TrimSpace(candidate.InteractionID) == strings.TrimSpace(hintInteractionID)
+	}
+	return strings.TrimSpace(candidate.UserPrompt) == strings.TrimSpace(hintPrompt)
 }
