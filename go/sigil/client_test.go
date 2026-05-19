@@ -1661,9 +1661,10 @@ type capturingGenerationExporter struct {
 	requests []*sigilv1.ExportGenerationsRequest
 	err      error
 	response *sigilv1.ExportGenerationsResponse
+	export   func(context.Context, *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error)
 }
 
-func (e *capturingGenerationExporter) Export(_ context.Context, req *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error) {
+func (e *capturingGenerationExporter) Export(ctx context.Context, req *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error) {
 	if e.err != nil {
 		return nil, e.err
 	}
@@ -1671,6 +1672,10 @@ func (e *capturingGenerationExporter) Export(_ context.Context, req *sigilv1.Exp
 	e.mu.Lock()
 	e.requests = append(e.requests, req)
 	e.mu.Unlock()
+
+	if e.export != nil {
+		return e.export(ctx, req)
+	}
 
 	if e.response != nil {
 		return e.response, nil
@@ -1737,6 +1742,91 @@ func TestFlushReturnsErrorOnRejectedGenerationResult(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "generation export rejected") {
 		t.Fatalf("unexpected flush error: %v", err)
+	}
+	if got := exporter.requestCount(); got != 1 {
+		t.Fatalf("requestCount = %d, want 1", got)
+	}
+}
+
+func TestFlushReturnsErrorOnNilGenerationExportResponse(t *testing.T) {
+	exporter := &capturingGenerationExporter{
+		export: func(context.Context, *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error) {
+			return nil, nil
+		},
+	}
+	client, _, _ := newTestClient(t, Config{
+		GenerationExport: GenerationExportConfig{
+			MaxRetries:     1,
+			InitialBackoff: time.Millisecond,
+			MaxBackoff:     10 * time.Millisecond,
+		},
+		testGenerationExporter: exporter,
+	})
+
+	_, rec := client.StartGeneration(context.Background(), GenerationStart{
+		ID:    "gen-nil-response",
+		Model: ModelRef{Provider: "openai", Name: "gpt-5.4"},
+	})
+	rec.SetResult(Generation{
+		Output: []Message{AssistantTextMessage("hello")},
+	}, nil)
+	rec.End()
+	if err := rec.Err(); err != nil {
+		t.Fatalf("unexpected recorder error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := client.Flush(ctx)
+	if err == nil {
+		t.Fatal("expected flush error for nil response")
+	}
+	if !strings.Contains(err.Error(), "nil generation export response") {
+		t.Fatalf("unexpected flush error: %v", err)
+	}
+	if got := exporter.requestCount(); got != 1 {
+		t.Fatalf("requestCount = %d, want 1", got)
+	}
+}
+
+func TestFlushReturnsErrorOnNilGenerationResult(t *testing.T) {
+	exporter := &capturingGenerationExporter{
+		response: &sigilv1.ExportGenerationsResponse{
+			Results: []*sigilv1.ExportGenerationResult{nil},
+		},
+	}
+	client, _, _ := newTestClient(t, Config{
+		GenerationExport: GenerationExportConfig{
+			MaxRetries:     1,
+			InitialBackoff: time.Millisecond,
+			MaxBackoff:     10 * time.Millisecond,
+		},
+		testGenerationExporter: exporter,
+	})
+
+	_, rec := client.StartGeneration(context.Background(), GenerationStart{
+		ID:    "gen-nil-result",
+		Model: ModelRef{Provider: "openai", Name: "gpt-5.4"},
+	})
+	rec.SetResult(Generation{
+		Output: []Message{AssistantTextMessage("hello")},
+	}, nil)
+	rec.End()
+	if err := rec.Err(); err != nil {
+		t.Fatalf("unexpected recorder error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := client.Flush(ctx)
+	if err == nil {
+		t.Fatal("expected flush error for nil result")
+	}
+	if !strings.Contains(err.Error(), "<nil result>") {
+		t.Fatalf("unexpected flush error: %v", err)
+	}
+	if got := exporter.requestCount(); got != 1 {
+		t.Fatalf("requestCount = %d, want 1", got)
 	}
 }
 

@@ -153,3 +153,23 @@ func TestReadAssistantTurnDoesNotReusePreviousTranscriptTurnWhenPromptRepeats(t 
 		t.Fatalf("RequestID = %q", got.RequestID)
 	}
 }
+
+func TestReadAssistantTurnDoesNotReusePreviousTranscriptTurnWhenHintPromptNeverAppears(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	contents := "" +
+		"{\"type\":\"session.start\",\"data\":{\"sessionId\":\"sess-1\",\"copilotVersion\":\"1.0.49\"}}\n" +
+		"{\"type\":\"user.message\",\"data\":{\"content\":\"first prompt\",\"interactionId\":\"int-1\"}}\n" +
+		"{\"type\":\"assistant.message\",\"data\":{\"messageId\":\"msg-1\",\"model\":\"claude-sonnet-4.6\",\"content\":\"first answer\",\"interactionId\":\"int-1\",\"turnId\":\"0\",\"outputTokens\":621,\"requestId\":\"req-1\"}}\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	got, ok, err := ReadAssistantTurn(path, ReadHint{UserPrompt: "missing prompt"})
+	if err != nil {
+		t.Fatalf("ReadAssistantTurn missing prompt: %v", err)
+	}
+	if ok {
+		t.Fatalf("got stale snapshot for missing prompt: %+v", got)
+	}
+}

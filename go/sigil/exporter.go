@@ -450,6 +450,25 @@ func (c *Client) runExportWorker() {
 		return err
 	}
 
+	drainQueue := func() error {
+		for {
+			select {
+			case queued, ok := <-c.queue:
+				if !ok {
+					return nil
+				}
+				batch = append(batch, queued.generation)
+				if len(batch) >= c.config.GenerationExport.BatchSize {
+					if err := flush(); err != nil {
+						return err
+					}
+				}
+			default:
+				return nil
+			}
+		}
+	}
+
 	for {
 		select {
 		case queued, ok := <-c.queue:
@@ -467,6 +486,10 @@ func (c *Client) runExportWorker() {
 				resetTimer(timer, flushInterval)
 			}
 		case ack := <-c.flushReq:
+			if err := drainQueue(); err != nil {
+				ack <- err
+				continue
+			}
 			ack <- flush()
 		case <-timer.C:
 			if err := flush(); err != nil {
@@ -505,16 +528,12 @@ func (c *Client) exportWithRetry(request *sigilv1.ExportGenerationsRequest) erro
 				len(request.GetGenerations()),
 				len(response.GetResults()),
 			)
-			for i := range response.Results {
-				if !response.Results[i].Accepted {
-					c.logf("sigil generation rejected id=%s error=%s", response.Results[i].GenerationId, response.Results[i].Error)
-				}
-			}
-			if err := validateExportResponse(request, response); err == nil {
+			logRejectedExportResults(c, response)
+			validateErr := validateExportResponse(request, response)
+			if validateErr == nil {
 				return nil
-			} else {
-				lastErr = err
 			}
+			return validateErr
 		} else {
 			lastErr = err
 		}
@@ -531,6 +550,15 @@ func (c *Client) exportWithRetry(request *sigilv1.ExportGenerationsRequest) erro
 	}
 
 	return lastErr
+}
+
+func logRejectedExportResults(c *Client, response *sigilv1.ExportGenerationsResponse) {
+	for _, result := range response.GetResults() {
+		if result == nil || result.Accepted {
+			continue
+		}
+		c.logf("sigil generation rejected id=%s error=%s", result.GenerationId, result.Error)
+	}
 }
 
 func validateExportResponse(request *sigilv1.ExportGenerationsRequest, response *sigilv1.ExportGenerationsResponse) error {

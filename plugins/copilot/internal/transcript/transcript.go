@@ -87,7 +87,6 @@ func readTranscriptSnapshot(path string, hint ReadHint) (Snapshot, bool, error) 
 		sessionID           string
 		hintPrompt          = strings.TrimSpace(hint.UserPrompt)
 		hintInteractionID   string
-		sawHintPrompt       bool
 		matched             Snapshot
 		matchedOK           bool
 	)
@@ -127,7 +126,6 @@ func readTranscriptSnapshot(path string, hint ReadHint) (Snapshot, bool, error) 
 				promptByInteraction[interactionID] = prompt
 			}
 			if hintPrompt != "" && prompt == hintPrompt {
-				sawHintPrompt = true
 				hintInteractionID = interactionID
 				matched = Snapshot{}
 				matchedOK = false
@@ -170,7 +168,7 @@ func readTranscriptSnapshot(path string, hint ReadHint) (Snapshot, bool, error) 
 		if matchedOK {
 			snap = matched
 			ok = true
-		} else if sawHintPrompt {
+		} else {
 			return Snapshot{}, false, nil
 		}
 	}
