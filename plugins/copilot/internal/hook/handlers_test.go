@@ -29,16 +29,13 @@ func TestHookSequenceExportsOnStop(t *testing.T) {
 	logger := log.New(io.Discard, "", 0)
 	var gotPath, gotAuth, gotBody string
 	var requestCount atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newAcceptedGenerationServer(t, func(body string) {
 		requestCount.Add(1)
-		gotPath = r.URL.Path
-		gotAuth = r.Header.Get("Authorization")
-		body, _ := io.ReadAll(r.Body)
-		gotBody = string(body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
-	}))
+		gotBody = body
+	})
 	defer server.Close()
+	gotPath = "/api/v1/generations:export"
+	gotAuth = "Basic " + base64.StdEncoding.EncodeToString([]byte("tenant:token"))
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
@@ -151,12 +148,9 @@ func TestStopEnrichesExportFromTranscript(t *testing.T) {
 	}
 
 	var gotBody string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		gotBody = string(body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
-	}))
+	server := newAcceptedGenerationServer(t, func(body string) {
+		gotBody = body
+	})
 	defer server.Close()
 
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
@@ -280,12 +274,9 @@ func TestStopUsesPromptHashForMetadataOnlyTranscriptEnrichment(t *testing.T) {
 	}
 
 	var gotBody string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		gotBody = string(body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
-	}))
+	server := newAcceptedGenerationServer(t, func(body string) {
+		gotBody = body
+	})
 	defer server.Close()
 
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
@@ -325,12 +316,21 @@ func TestStopUsesPromptHashForMetadataOnlyTranscriptEnrichment(t *testing.T) {
 	}
 }
 
-func newAcceptedGenerationServer(t *testing.T) *httptest.Server {
+func newAcceptedGenerationServer(t *testing.T, capture ...func(string)) *httptest.Server {
 	t.Helper()
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		if len(capture) > 0 && capture[0] != nil {
+			capture[0](string(body))
+		}
+
 		var request map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if err := json.Unmarshal(body, &request); err != nil {
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
@@ -379,12 +379,9 @@ func TestStopWaitsForCurrentCLITranscriptTurnInsteadOfReusingPreviousTurn(t *tes
 	}()
 
 	var gotBody string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		gotBody = string(body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
-	}))
+	server := newAcceptedGenerationServer(t, func(body string) {
+		gotBody = body
+	})
 	defer server.Close()
 
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
