@@ -171,6 +171,11 @@ _TOKEN_USAGE_BUCKETS: tuple[float, ...] = (
 _status_code_pattern = re.compile(r"\b([1-5][0-9][0-9])\b")
 _instrumentation_name = "github.com/grafana/sigil/sdks/python"
 _sdk_name = "sdk-python"
+
+# Generation metadata keys for cache diagnostics (Sigil docs/guides/cache-diagnostics.md).
+CACHE_DIAGNOSTICS_MISS_REASON_KEY = "sigil.cache_diagnostics.miss_reason"
+CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY = "sigil.cache_diagnostics.missed_input_tokens"
+CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY = "sigil.cache_diagnostics.previous_message_id"
 _default_embedding_operation_name = "embeddings"
 _metadata_user_id_key = "sigil.user.id"
 _metadata_legacy_user_id_key = "user.id"
@@ -1114,6 +1119,7 @@ class GenerationRecorder:
     _last_generation: Generation | None = None
     _final_error: Exception | None = None
     _first_token_at: datetime | None = None
+    _extra_metadata: dict[str, Any] | None = field(default=None, repr=False)
 
     def __enter__(self) -> GenerationRecorder:
         return self
@@ -1155,6 +1161,32 @@ class GenerationRecorder:
         with self._lock:
             self._first_token_at = _to_utc(first_token_at)
 
+    def set_cache_diagnostics(
+        self,
+        miss_reason: str,
+        *,
+        missed_input_tokens: int | None = None,
+        previous_message_id: str | None = None,
+    ) -> None:
+        """Attach Anthropic-style cache diagnostic metadata before ``end()``."""
+
+        miss_reason = (miss_reason or "").strip()
+        if not miss_reason:
+            return
+        with self._lock:
+            if self._ended:
+                return
+            if self._extra_metadata is None:
+                self._extra_metadata = {}
+            self._extra_metadata.pop(CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY, None)
+            self._extra_metadata.pop(CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY, None)
+            self._extra_metadata[CACHE_DIAGNOSTICS_MISS_REASON_KEY] = miss_reason
+            if missed_input_tokens is not None:
+                self._extra_metadata[CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY] = str(int(missed_input_tokens))
+            prev = (previous_message_id or "").strip()
+            if prev:
+                self._extra_metadata[CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY] = prev
+
     def end(self) -> None:
         """Finalizes span and queues generation export. Safe to call multiple times."""
 
@@ -1166,10 +1198,11 @@ class GenerationRecorder:
             mapping_error = self._mapping_error
             result = copy.deepcopy(self._result) if self._result is not None else Generation()
             first_token_at = self._first_token_at
+            extra_metadata = copy.deepcopy(self._extra_metadata) if self._extra_metadata else None
 
         try:
             completed_at = _to_utc(self.client._now())
-            generation = self._normalize_generation(result, completed_at, call_error)
+            generation = self._normalize_generation(result, completed_at, call_error, extra_metadata)
             _apply_trace_context_from_span(self.span, generation)
 
             effective_content_capture_mode = self._content_capture_mode
@@ -1278,7 +1311,11 @@ class GenerationRecorder:
             return copy.deepcopy(self._last_generation)
 
     def _normalize_generation(
-        self, raw: Generation, completed_at: datetime, call_error: Exception | None
+        self,
+        raw: Generation,
+        completed_at: datetime,
+        call_error: Exception | None,
+        extra_metadata: dict[str, Any] | None = None,
     ) -> Generation:
         generation = copy.deepcopy(raw)
 
@@ -1342,6 +1379,8 @@ class GenerationRecorder:
 
         merged_metadata: dict[str, Any] = dict(self.seed.metadata)
         merged_metadata.update(generation.metadata)
+        if extra_metadata:
+            merged_metadata.update(extra_metadata)
         generation.metadata = merged_metadata
 
         conversation_title = generation.conversation_title.strip()

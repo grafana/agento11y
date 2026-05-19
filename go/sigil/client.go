@@ -318,6 +318,8 @@ type GenerationRecorder struct {
 	lastGeneration Generation
 	finalErr       error
 	firstTokenAt   time.Time
+	// extraMetadata is merged last in normalizeGeneration (e.g. cache diagnostics).
+	extraMetadata map[string]any
 }
 
 // EmbeddingRecorder records and closes one in-flight embeddings span.
@@ -809,6 +811,7 @@ func (r *GenerationRecorder) End() {
 	mapErr := r.mapErr
 	generation := r.generation
 	firstTokenAt := r.firstTokenAt
+	extraMeta := cloneMetadata(r.extraMetadata)
 	r.mu.Unlock()
 
 	// No-op recorder: no client/span means nothing to finalize.
@@ -817,7 +820,7 @@ func (r *GenerationRecorder) End() {
 	}
 
 	completedAt := r.client.now().UTC()
-	normalized := r.normalizeGeneration(generation, completedAt, callErr)
+	normalized := r.normalizeGeneration(generation, completedAt, callErr, extraMeta)
 	applyTraceContextFromSpan(r.span, &normalized)
 
 	sanitizerRan := false
@@ -1171,7 +1174,7 @@ func (r *ToolExecutionRecorder) Err() error {
 // internal helpers
 // ---------------------------------------------------------------------------
 
-func (r *GenerationRecorder) normalizeGeneration(raw Generation, completedAt time.Time, callErr error) Generation {
+func (r *GenerationRecorder) normalizeGeneration(raw Generation, completedAt time.Time, callErr error, extraMetadata map[string]any) Generation {
 	g := cloneGeneration(raw)
 
 	if g.ID == "" {
@@ -1242,6 +1245,7 @@ func (r *GenerationRecorder) normalizeGeneration(raw Generation, completedAt tim
 	}
 	g.Tags = mergeTags(r.seed.Tags, g.Tags)
 	g.Metadata = mergeMetadata(r.seed.Metadata, g.Metadata)
+	g.Metadata = mergeMetadata(g.Metadata, extraMetadata)
 	if g.Metadata == nil {
 		g.Metadata = map[string]any{}
 	}

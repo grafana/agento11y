@@ -515,6 +515,7 @@ export interface GenerationRecorder {
   setResult(result: GenerationResult): void;
   setCallError(error: unknown): void;
   setFirstTokenAt(firstTokenAt: Date): void;
+  setCacheDiagnostics(missReason: string, opts?: { missedInputTokens?: number; previousMessageId?: string }): void;
   end(): void;
   getError(): Error | undefined;
 }

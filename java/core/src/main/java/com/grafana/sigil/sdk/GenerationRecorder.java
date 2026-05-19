@@ -25,6 +25,7 @@ public class GenerationRecorder implements AutoCloseable {
     private Instant firstTokenAt;
     private Throwable finalError;
     private Generation lastGeneration;
+    private Map<String, Object> extraMetadata;
 
     GenerationRecorder(SigilClient client, GenerationStart seed, Span span, Instant startedAt,
                        ContentCaptureMode contentCaptureMode, Scope contentCaptureScope) {
@@ -63,11 +64,41 @@ public class GenerationRecorder implements AutoCloseable {
         }
     }
 
+    /**
+     * Attaches cache diagnostic metadata. Call before {@link #end()}, typically after the provider response.
+     *
+     * @param missedInputTokens {@code null} to omit that key
+     * @param previousMessageId {@code null} or blank to omit that key
+     */
+    public void setCacheDiagnostics(String missReason, Long missedInputTokens, String previousMessageId) {
+        if (missReason == null || missReason.isBlank()) {
+            return;
+        }
+        synchronized (lock) {
+            if (ended) {
+                return;
+            }
+            if (extraMetadata == null) {
+                extraMetadata = new LinkedHashMap<>();
+            }
+            extraMetadata.remove(CacheDiagnostics.MISSED_INPUT_TOKENS_KEY);
+            extraMetadata.remove(CacheDiagnostics.PREVIOUS_MESSAGE_ID_KEY);
+            extraMetadata.put(CacheDiagnostics.MISS_REASON_KEY, missReason.trim());
+            if (missedInputTokens != null) {
+                extraMetadata.put(CacheDiagnostics.MISSED_INPUT_TOKENS_KEY, String.valueOf(missedInputTokens));
+            }
+            if (previousMessageId != null && !previousMessageId.isBlank()) {
+                extraMetadata.put(CacheDiagnostics.PREVIOUS_MESSAGE_ID_KEY, previousMessageId.trim());
+            }
+        }
+    }
+
     /** Finalizes the generation lifecycle. Safe to call multiple times. */
     public void end() {
         GenerationResult snapshotResult;
         Throwable snapshotCallError;
         Instant snapshotFirstTokenAt;
+        Map<String, Object> snapshotExtra;
 
         synchronized (lock) {
             if (ended) {
@@ -77,13 +108,14 @@ public class GenerationRecorder implements AutoCloseable {
             snapshotResult = result == null ? new GenerationResult() : result.copy();
             snapshotCallError = callError;
             snapshotFirstTokenAt = firstTokenAt;
+            snapshotExtra = extraMetadata == null ? null : new LinkedHashMap<>(extraMetadata);
         }
 
         Instant completedAt = snapshotResult.getCompletedAt() == null ? client.now() : snapshotResult.getCompletedAt();
         Generation generation;
         Throwable localError = null;
         try {
-            generation = normalize(snapshotResult, completedAt, snapshotCallError);
+            generation = normalize(snapshotResult, completedAt, snapshotCallError, snapshotExtra);
 
             SigilClient.stampContentCaptureMetadata(generation, contentCaptureMode);
             if (contentCaptureMode == ContentCaptureMode.METADATA_ONLY) {
@@ -185,7 +217,8 @@ public class GenerationRecorder implements AutoCloseable {
         end();
     }
 
-    private Generation normalize(GenerationResult result, Instant completedAt, Throwable callError) {
+    private Generation normalize(
+            GenerationResult result, Instant completedAt, Throwable callError, Map<String, Object> extraMetadataSnapshot) {
         Generation generation = new Generation();
 
         generation.setId(firstNonBlank(result.getId(), seed.getId(), SigilClient.newID("gen")));
@@ -247,6 +280,9 @@ public class GenerationRecorder implements AutoCloseable {
 
         Map<String, Object> metadata = new LinkedHashMap<>(seed.getMetadata());
         metadata.putAll(result.getMetadata());
+        if (extraMetadataSnapshot != null) {
+            metadata.putAll(extraMetadataSnapshot);
+        }
         generation.setMetadata(metadata);
 
         generation.setConversationTitle(firstNonBlank(

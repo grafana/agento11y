@@ -1,5 +1,11 @@
 """Public exports for the Sigil Python SDK."""
 
+from .cache_diagnostics import (
+    CACHE_DIAGNOSTICS_MISS_REASON_KEY,
+    CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY,
+    CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY,
+    set_cache_diagnostics,
+)
 from .client import Client
 from .config import (
     ApiConfig,
@@ -95,6 +101,9 @@ __all__ = [
     "Client",
     "ClientConfig",
     "ClientShutdownError",
+    "CACHE_DIAGNOSTICS_MISS_REASON_KEY",
+    "CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY",
+    "CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY",
     "ContentCaptureMode",
     "ConversationRating",
     "ConversationRatingInput",
@@ -148,6 +157,7 @@ __all__ = [
     "assistant_text_message",
     "content_capture_mode_from_context",
     "create_secret_redaction_sanitizer",
+    "set_cache_diagnostics",
     "conversation_id_from_context",
     "conversation_title_from_context",
     "text_part",
