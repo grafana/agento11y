@@ -6,8 +6,8 @@ from datetime import timedelta
 
 from conftest import CapturingGenerationExporter
 from sigil_sdk import (
-    CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY,
     CACHE_DIAGNOSTICS_MISS_REASON_KEY,
+    CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY,
     CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY,
     Client,
     ClientConfig,
@@ -54,9 +54,7 @@ def test_set_cache_diagnostics_module_function() -> None:
             missed_input_tokens=100,
             previous_message_id="msg_prev",
         )
-        rec.set_result(
-            output=[Message(role=MessageRole.ASSISTANT, parts=[Part(kind=PartKind.TEXT, text="ok")])]
-        )
+        rec.set_result(output=[Message(role=MessageRole.ASSISTANT, parts=[Part(kind=PartKind.TEXT, text="ok")])])
         rec.end()
         assert rec.err() is None
         md = rec.last_generation.metadata
@@ -75,9 +73,7 @@ def test_set_cache_diagnostics_empty_reason_noop() -> None:
             GenerationStart(model=ModelRef(provider="anthropic", name="claude-3-5-sonnet-latest"))
         )
         set_cache_diagnostics(rec, "   ")
-        rec.set_result(
-            output=[Message(role=MessageRole.ASSISTANT, parts=[Part(kind=PartKind.TEXT, text="ok")])]
-        )
+        rec.set_result(output=[Message(role=MessageRole.ASSISTANT, parts=[Part(kind=PartKind.TEXT, text="ok")])])
         rec.end()
         assert CACHE_DIAGNOSTICS_MISS_REASON_KEY not in rec.last_generation.metadata
     finally:
@@ -95,9 +91,7 @@ def test_set_cache_diagnostics_after_end_noop() -> None:
         rec = client.start_generation(
             GenerationStart(model=ModelRef(provider="anthropic", name="claude-3-5-sonnet-latest"))
         )
-        rec.set_result(
-            output=[Message(role=MessageRole.ASSISTANT, parts=[Part(kind=PartKind.TEXT, text="ok")])]
-        )
+        rec.set_result(output=[Message(role=MessageRole.ASSISTANT, parts=[Part(kind=PartKind.TEXT, text="ok")])])
         rec.end()
 
         set_cache_diagnostics(rec, "system_changed", missed_input_tokens=42)

@@ -8,6 +8,11 @@ import {
   type Tracer,
   trace,
 } from '@opentelemetry/api';
+import {
+  CACHE_DIAGNOSTICS_MISS_REASON_KEY,
+  CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY,
+  CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY,
+} from './cache-diagnostics.js';
 import { defaultLogger, mergeConfig } from './config.js';
 import {
   callContentCaptureResolver,
@@ -82,11 +87,6 @@ import {
   validateGeneration,
   validateToolExecution,
 } from './utils.js';
-import {
-  CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY,
-  CACHE_DIAGNOSTICS_MISS_REASON_KEY,
-  CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY,
-} from './cache-diagnostics.js';
 
 const spanAttrGenerationID = 'sigil.generation.id';
 const spanAttrSDKName = 'sigil.sdk.name';
@@ -1190,10 +1190,7 @@ class GenerationRecorderImpl implements GenerationRecorder {
     this.firstTokenAt = new Date(firstTokenAt);
   }
 
-  setCacheDiagnostics(
-    missReason: string,
-    opts?: { missedInputTokens?: number; previousMessageId?: string },
-  ): void {
+  setCacheDiagnostics(missReason: string, opts?: { missedInputTokens?: number; previousMessageId?: string }): void {
     if (this.ended) {
       return;
     }
@@ -1254,10 +1251,7 @@ class GenerationRecorderImpl implements GenerationRecorder {
       startedAt: new Date(this.startedAt),
       completedAt: new Date(this.result?.completedAt ?? this.client.internalNow()),
       tags: mergeStringRecords(this.seed.tags, this.result?.tags),
-      metadata: mergeUnknownRecords(
-        mergeUnknownRecords(this.seed.metadata, this.result?.metadata),
-        this.extraMetadata,
-      ),
+      metadata: mergeUnknownRecords(mergeUnknownRecords(this.seed.metadata, this.result?.metadata), this.extraMetadata),
       artifacts: this.result?.artifacts?.map(cloneArtifact),
       callError: this.callError,
     };

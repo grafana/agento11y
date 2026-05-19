@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
-import { trace } from '@opentelemetry/api';
 import test from 'node:test';
+import { trace } from '@opentelemetry/api';
 import {
-  CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY,
   CACHE_DIAGNOSTICS_MISS_REASON_KEY,
+  CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY,
   CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY,
   defaultConfig,
-  setCacheDiagnostics,
   SigilClient,
+  setCacheDiagnostics,
 } from '../.test-dist/index.js';
 
 class MockGenerationExporter {
