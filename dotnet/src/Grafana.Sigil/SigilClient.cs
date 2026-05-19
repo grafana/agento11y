@@ -2227,20 +2227,20 @@ public sealed class GenerationRecorder
                 return;
             }
 
-            _extraMetadata ??= new Dictionary<string, object?>(StringComparer.Ordinal);
-            _extraMetadata.Remove(CacheDiagnostics.MissedInputTokensKey);
-            _extraMetadata.Remove(CacheDiagnostics.PreviousMessageIdKey);
-            _extraMetadata[CacheDiagnostics.MissReasonKey] = missReason.Trim();
+            var meta = _extraMetadata ??= new Dictionary<string, object?>(StringComparer.Ordinal);
+            meta.Remove(CacheDiagnostics.MissedInputTokensKey);
+            meta.Remove(CacheDiagnostics.PreviousMessageIdKey);
+            meta[CacheDiagnostics.MissReasonKey] = missReason.Trim();
             if (missedInputTokens.HasValue)
             {
-                _extraMetadata[CacheDiagnostics.MissedInputTokensKey] = missedInputTokens.Value.ToString(
+                meta[CacheDiagnostics.MissedInputTokensKey] = missedInputTokens.Value.ToString(
                     System.Globalization.CultureInfo.InvariantCulture
                 );
             }
 
             if (!string.IsNullOrWhiteSpace(previousMessageId))
             {
-                _extraMetadata[CacheDiagnostics.PreviousMessageIdKey] = previousMessageId.Trim();
+                meta[CacheDiagnostics.PreviousMessageIdKey] = previousMessageId.Trim();
             }
         }
     }
