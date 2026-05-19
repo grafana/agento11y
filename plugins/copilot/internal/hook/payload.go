@@ -210,8 +210,12 @@ func (p Payload) ResolvedTimestamp() string {
 }
 
 func parseTimestampString(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", false
+	}
+	if ms, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return time.UnixMilli(ms).UTC().Format(time.RFC3339Nano), true
 	}
 	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
 		return t.UTC().Format(time.RFC3339Nano), true

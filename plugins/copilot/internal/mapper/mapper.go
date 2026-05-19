@@ -155,6 +155,7 @@ func Map(in Inputs) Mapped {
 		Mode:           sigil.GenerationModeSync,
 		OperationName:  "generateText",
 		Model:          model,
+		ResponseID:     strings.TrimSpace(frag.RequestID),
 		ResponseModel:  model.Name,
 		Input:          input,
 		Output:         output,

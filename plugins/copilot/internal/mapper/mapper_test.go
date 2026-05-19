@@ -62,6 +62,9 @@ func TestMapFullModeIncludesRedactedPromptAndToolContent(t *testing.T) {
 	if got.Generation.ResponseModel != "gpt-5.4" {
 		t.Fatalf("ResponseModel = %q", got.Generation.ResponseModel)
 	}
+	if got.Generation.ResponseID != "req-1" {
+		t.Fatalf("ResponseID = %q", got.Generation.ResponseID)
+	}
 	if got.Generation.AgentVersion != "1.0.48" {
 		t.Fatalf("AgentVersion = %q", got.Generation.AgentVersion)
 	}

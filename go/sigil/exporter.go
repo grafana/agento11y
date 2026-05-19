@@ -533,7 +533,10 @@ func (c *Client) exportWithRetry(request *sigilv1.ExportGenerationsRequest) erro
 			if validateErr == nil {
 				return nil
 			}
-			return validateErr
+			lastErr = validateErr
+			if !isRetryableExportValidationError(validateErr) {
+				return validateErr
+			}
 		} else {
 			lastErr = err
 		}
@@ -552,6 +555,24 @@ func (c *Client) exportWithRetry(request *sigilv1.ExportGenerationsRequest) erro
 	return lastErr
 }
 
+type exportValidationError struct {
+	err       error
+	retryable bool
+}
+
+func (e *exportValidationError) Error() string {
+	return e.err.Error()
+}
+
+func (e *exportValidationError) Unwrap() error {
+	return e.err
+}
+
+func isRetryableExportValidationError(err error) bool {
+	var validationErr *exportValidationError
+	return errors.As(err, &validationErr) && validationErr.retryable
+}
+
 func logRejectedExportResults(c *Client, response *sigilv1.ExportGenerationsResponse) {
 	for _, result := range response.GetResults() {
 		if result == nil || result.Accepted {
@@ -563,17 +584,18 @@ func logRejectedExportResults(c *Client, response *sigilv1.ExportGenerationsResp
 
 func validateExportResponse(request *sigilv1.ExportGenerationsRequest, response *sigilv1.ExportGenerationsResponse) error {
 	if response == nil {
-		return errors.New("nil generation export response")
+		return &exportValidationError{err: errors.New("nil generation export response"), retryable: true}
 	}
 	requested := len(request.GetGenerations())
 	results := response.GetResults()
 	if len(results) != requested {
-		return fmt.Errorf("generation export result count mismatch: requested=%d results=%d", requested, len(results))
+		return &exportValidationError{err: fmt.Errorf("generation export result count mismatch: requested=%d results=%d", requested, len(results)), retryable: true}
 	}
+	var malformed []string
 	var rejected []string
 	for _, result := range results {
 		if result == nil {
-			rejected = append(rejected, "<nil result>")
+			malformed = append(malformed, "<nil result>")
 			continue
 		}
 		if result.Accepted {
@@ -586,7 +608,10 @@ func validateExportResponse(request *sigilv1.ExportGenerationsRequest, response 
 		rejected = append(rejected, fmt.Sprintf("%s: %s", result.GenerationId, msg))
 	}
 	if len(rejected) > 0 {
-		return fmt.Errorf("generation export rejected: %s", strings.Join(rejected, "; "))
+		return &exportValidationError{err: fmt.Errorf("generation export rejected: %s", strings.Join(rejected, "; "))}
+	}
+	if len(malformed) > 0 {
+		return &exportValidationError{err: fmt.Errorf("generation export malformed response: %s", strings.Join(malformed, "; ")), retryable: true}
 	}
 	return nil
 }

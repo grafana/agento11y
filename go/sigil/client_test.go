@@ -1784,8 +1784,57 @@ func TestFlushReturnsErrorOnNilGenerationExportResponse(t *testing.T) {
 	if !strings.Contains(err.Error(), "nil generation export response") {
 		t.Fatalf("unexpected flush error: %v", err)
 	}
-	if got := exporter.requestCount(); got != 1 {
-		t.Fatalf("requestCount = %d, want 1", got)
+	if got := exporter.requestCount(); got != 2 {
+		t.Fatalf("requestCount = %d, want 2", got)
+	}
+}
+
+func TestFlushRetriesMalformedGenerationExportResponse(t *testing.T) {
+	attempts := 0
+	exporter := &capturingGenerationExporter{
+		export: func(_ context.Context, req *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error) {
+			attempts++
+			if attempts == 1 {
+				return &sigilv1.ExportGenerationsResponse{}, nil
+			}
+			results := make([]*sigilv1.ExportGenerationResult, len(req.Generations))
+			for i := range req.Generations {
+				results[i] = &sigilv1.ExportGenerationResult{
+					GenerationId: req.Generations[i].Id,
+					Accepted:     true,
+				}
+			}
+			return &sigilv1.ExportGenerationsResponse{Results: results}, nil
+		},
+	}
+	client, _, _ := newTestClient(t, Config{
+		GenerationExport: GenerationExportConfig{
+			MaxRetries:     1,
+			InitialBackoff: time.Millisecond,
+			MaxBackoff:     10 * time.Millisecond,
+		},
+		testGenerationExporter: exporter,
+	})
+
+	_, rec := client.StartGeneration(context.Background(), GenerationStart{
+		ID:    "gen-retry-malformed",
+		Model: ModelRef{Provider: "openai", Name: "gpt-5.4"},
+	})
+	rec.SetResult(Generation{
+		Output: []Message{AssistantTextMessage("hello")},
+	}, nil)
+	rec.End()
+	if err := rec.Err(); err != nil {
+		t.Fatalf("unexpected recorder error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Flush(ctx); err != nil {
+		t.Fatalf("expected retry to recover malformed response, got %v", err)
+	}
+	if got := exporter.requestCount(); got != 2 {
+		t.Fatalf("requestCount = %d, want 2", got)
 	}
 }
 
@@ -1825,8 +1874,8 @@ func TestFlushReturnsErrorOnNilGenerationResult(t *testing.T) {
 	if !strings.Contains(err.Error(), "<nil result>") {
 		t.Fatalf("unexpected flush error: %v", err)
 	}
-	if got := exporter.requestCount(); got != 1 {
-		t.Fatalf("requestCount = %d, want 1", got)
+	if got := exporter.requestCount(); got != 2 {
+		t.Fatalf("requestCount = %d, want 2", got)
 	}
 }
 

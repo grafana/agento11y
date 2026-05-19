@@ -226,6 +226,7 @@ func TestStopUsesPromptHashForMetadataOnlyTranscriptEnrichment(t *testing.T) {
 
 	for _, want := range []string{
 		`"name":"gpt-4.1"`,
+		`"response_id":"req-2"`,
 		`"response_model":"gpt-4.1"`,
 		`"output_tokens":"123"`,
 		`"copilot.request_id":"req-2"`,
