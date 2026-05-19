@@ -53,8 +53,17 @@ export async function loadConfig(): Promise<SigilPiConfig | null> {
 export function resolveConfig(
   file: Record<string, unknown>,
 ): SigilPiConfig | null {
+  // Canonical SIGIL_* env vars (shared with claude-code/codex/cursor) take
+  // precedence over the legacy SIGIL_PI_* prefix so a single config.env can
+  // drive every agent. The pi-specific names remain as a fallback so users
+  // who already configured them keep working.
   const endpoint = ensureExportPath(
-    (env("SIGIL_PI_ENDPOINT") ?? asString(file.endpoint) ?? "").trim(),
+    (
+      env("SIGIL_ENDPOINT") ??
+      env("SIGIL_PI_ENDPOINT") ??
+      asString(file.endpoint) ??
+      ""
+    ).trim(),
   );
   if (!endpoint) return null;
 
@@ -62,6 +71,7 @@ export function resolveConfig(
   if (!auth) return null;
 
   const configuredAgentName = (
+    env("SIGIL_AGENT_NAME") ??
     env("SIGIL_PI_AGENT_NAME") ??
     asString(file.agentName) ??
     "pi"
@@ -69,6 +79,7 @@ export function resolveConfig(
   const agentName = configuredAgentName.length > 0 ? configuredAgentName : "pi";
 
   const configuredAgentVersion = (
+    env("SIGIL_AGENT_VERSION") ??
     env("SIGIL_PI_AGENT_VERSION") ??
     asString(file.agentVersion) ??
     ""
@@ -78,7 +89,11 @@ export function resolveConfig(
 
   const contentCapture = resolveContentCapture(file);
 
-  const debug = envBool("SIGIL_PI_DEBUG") ?? toBool(file.debug) ?? false;
+  const debug =
+    envBool("SIGIL_DEBUG") ??
+    envBool("SIGIL_PI_DEBUG") ??
+    toBool(file.debug) ??
+    false;
 
   const otlp = resolveOtlp(file);
   const redaction = resolveRedaction(file);
@@ -119,7 +134,11 @@ function resolveRedaction(file: Record<string, unknown>): RedactionConfig {
 function resolveOtlp(file: Record<string, unknown>): OtlpConfig | undefined {
   const otlpObj = (file.otlp ?? {}) as Record<string, unknown>;
 
+  // Endpoint precedence: canonical sigil override > standard OTel env var >
+  // legacy SIGIL_PI_OTLP_ENDPOINT > file config.
   const endpoint = (
+    env("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT") ??
+    env("OTEL_EXPORTER_OTLP_ENDPOINT") ??
     env("SIGIL_PI_OTLP_ENDPOINT") ??
     asString(otlpObj.endpoint) ??
     ""
@@ -163,6 +182,24 @@ function resolveOtlp(file: Record<string, unknown>): OtlpConfig | undefined {
     headers.Authorization = `Bearer ${bearerToken}`;
   }
 
+  // Final fallback: synthesise Basic auth from the canonical SIGIL_* creds,
+  // matching the consolidated sigil binary's behaviour. SIGIL_OTEL_AUTH_TOKEN
+  // overrides the auth token for OTel only (parity with sigil README).
+  if (!headers.Authorization) {
+    const canonicalTenant = (env("SIGIL_AUTH_TENANT_ID") ?? "").trim();
+    const canonicalToken = (
+      env("SIGIL_OTEL_AUTH_TOKEN") ??
+      env("SIGIL_AUTH_TOKEN") ??
+      ""
+    ).trim();
+    if (canonicalTenant && canonicalToken) {
+      const encoded = Buffer.from(
+        `${canonicalTenant}:${canonicalToken}`,
+      ).toString("base64");
+      headers.Authorization = `Basic ${encoded}`;
+    }
+  }
+
   return { endpoint, headers };
 }
 
@@ -175,7 +212,10 @@ const VALID_CAPTURE_MODES: ContentCaptureMode[] = [
 function resolveContentCapture(
   file: Record<string, unknown>,
 ): ContentCaptureMode {
-  const envVal = env("SIGIL_PI_CONTENT_CAPTURE");
+  // Canonical name (shared with other sigil adapters) wins over the legacy
+  // pi-specific one.
+  const envVal =
+    env("SIGIL_CONTENT_CAPTURE_MODE") ?? env("SIGIL_PI_CONTENT_CAPTURE");
   if (envVal !== undefined) {
     return parseContentCaptureMode(envVal);
   }
@@ -204,13 +244,28 @@ function parseContentCaptureMode(value: string): ContentCaptureMode {
 }
 
 function resolveAuth(file: Record<string, unknown>): SigilAuthConfig | null {
-  const mode = (
+  const explicitMode =
     env("SIGIL_PI_AUTH_MODE") ??
-    asString((file.auth as Record<string, unknown> | undefined)?.mode) ??
-    "none"
-  )
-    .trim()
-    .toLowerCase();
+    asString((file.auth as Record<string, unknown> | undefined)?.mode);
+
+  // Canonical SIGIL_AUTH_TENANT_ID + SIGIL_AUTH_TOKEN pattern: when neither
+  // the env nor the file picks an explicit auth mode, treat the canonical
+  // pair as Grafana Cloud basic auth (tenant as user, token as password).
+  // This matches the implicit contract used by claude-code/codex/cursor.
+  if (explicitMode === undefined) {
+    const canonicalTenant = (env("SIGIL_AUTH_TENANT_ID") ?? "").trim();
+    const canonicalToken = (env("SIGIL_AUTH_TOKEN") ?? "").trim();
+    if (canonicalTenant && canonicalToken) {
+      return {
+        mode: "basic",
+        user: canonicalTenant,
+        password: canonicalToken,
+        tenantId: canonicalTenant,
+      };
+    }
+  }
+
+  const mode = (explicitMode ?? "none").trim().toLowerCase();
 
   const authObj = (file.auth ?? {}) as Record<string, unknown>;
 

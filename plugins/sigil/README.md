@@ -1,9 +1,10 @@
-# sigil — single binary for the Claude Code, Codex, and Cursor agent plugins
+# sigil — single binary for the Claude Code, Codex, Cursor, and pi agent plugins
 
-`sigil` is one Go binary that backs all three agent plugins (`plugins/claude-code`, `plugins/codex`, `plugins/cursor`) in this repository. The dispatcher accepts:
+`sigil` is one Go binary that backs the agent plugins (`plugins/claude-code`, `plugins/codex`, `plugins/cursor`, `plugins/pi`) in this repository. The dispatcher accepts:
 
 ```
 sigil <agent> hook        # process a JSON hook payload on stdin for <agent>
+sigil pi [-- args...]     # bootstrap the @grafana/sigil-pi extension, then exec pi
 sigil --version           # print the build version
 ```
 
@@ -57,16 +58,18 @@ When `OTEL_EXPORTER_OTLP_HEADERS` does not contain an `Authorization` entry, the
 | `claude-code` | `sigil claude-code hook` (resolved via `PATH`) |
 | `codex` | `sigil codex hook` (resolved via `PATH`) |
 | `cursor` | `plugins/cursor/scripts/run.sh` |
+| `pi` | `sigil pi [-- args...]` (resolved via `PATH`) |
 
 Claude Code and Codex run hooks under the user's shell environment, so the binary just has to be on `PATH`. Cursor launches hooks under a stripped environment (macOS GUI launches inherit launchd's `/usr/bin:/bin:/usr/sbin:/sbin`), which doesn't include `~/go/bin` or `/opt/homebrew/bin` — the wrapper probes `$SIGIL_BIN`, `~/go/bin/sigil`, `/opt/homebrew/bin/sigil`, `/usr/local/bin/sigil`, and `~/.local/bin/sigil`, then exec's `sigil cursor hook` on the first hit. If no binary is found it emits a permissive JSON response so `beforeSubmitPrompt` is never blocked and exits 0.
 
-## Per-agent quirks
+## Per-agent details
 
 See the agent-plugin READMEs for agent-specific behaviour:
 
 - [`plugins/claude-code/README.md`](../claude-code/README.md)
 - [`plugins/codex/README.md`](../codex/README.md)
 - [`plugins/cursor/README.md`](../cursor/README.md)
+- [`plugins/pi/README.md`](../pi/README.md)
 
 ## Development
 

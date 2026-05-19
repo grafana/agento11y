@@ -3,7 +3,11 @@ import { resolveConfig, resolveEnvVars } from "./config.js";
 
 function clearEnv() {
   for (const key of Object.keys(process.env)) {
-    if (key.startsWith("SIGIL_PI_")) {
+    if (
+      key.startsWith("SIGIL_PI_") ||
+      key.startsWith("SIGIL_") ||
+      key.startsWith("OTEL_")
+    ) {
       delete process.env[key];
     }
   }
@@ -230,6 +234,169 @@ describe("resolveConfig", () => {
       auth: { mode: "berer" },
     });
     expect(cfg).toBeNull();
+  });
+});
+
+describe("resolveConfig canonical SIGIL_* env vars", () => {
+  beforeEach(clearEnv);
+  afterEach(clearEnv);
+
+  it("reads SIGIL_ENDPOINT as the endpoint", () => {
+    process.env.SIGIL_ENDPOINT = "http://canonical:8080";
+    const cfg = resolveConfig({});
+    expect(cfg?.endpoint).toBe(
+      "http://canonical:8080/api/v1/generations:export",
+    );
+  });
+
+  it("SIGIL_ENDPOINT wins over SIGIL_PI_ENDPOINT", () => {
+    process.env.SIGIL_ENDPOINT = "http://canonical:8080";
+    process.env.SIGIL_PI_ENDPOINT = "http://legacy:9090";
+    const cfg = resolveConfig({});
+    expect(cfg?.endpoint).toBe(
+      "http://canonical:8080/api/v1/generations:export",
+    );
+  });
+
+  it("derives basic auth from SIGIL_AUTH_TENANT_ID + SIGIL_AUTH_TOKEN", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "glc_token";
+    const cfg = resolveConfig({});
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      user: "tenant-1",
+      password: "glc_token",
+      tenantId: "tenant-1",
+    });
+  });
+
+  it("does not derive auth from a partial canonical pair", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    const cfg = resolveConfig({});
+    expect(cfg?.auth).toEqual({ mode: "none" });
+  });
+
+  it("explicit SIGIL_PI_AUTH_MODE bypasses canonical derivation", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "glc_token";
+    process.env.SIGIL_PI_AUTH_MODE = "bearer";
+    process.env.SIGIL_PI_BEARER_TOKEN = "bearer-tok";
+    const cfg = resolveConfig({});
+    expect(cfg?.auth).toEqual({ mode: "bearer", bearerToken: "bearer-tok" });
+  });
+
+  it("explicit file.auth.mode bypasses canonical derivation", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "glc_token";
+    const cfg = resolveConfig({ auth: { mode: "none" } });
+    expect(cfg?.auth).toEqual({ mode: "none" });
+  });
+
+  it("SIGIL_DEBUG flips debug on", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_DEBUG = "true";
+    const cfg = resolveConfig({});
+    expect(cfg?.debug).toBe(true);
+  });
+
+  it("SIGIL_PI_DEBUG still wins as legacy override when SIGIL_DEBUG is unset", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_PI_DEBUG = "true";
+    const cfg = resolveConfig({ debug: false });
+    expect(cfg?.debug).toBe(true);
+  });
+
+  it("SIGIL_CONTENT_CAPTURE_MODE sets content capture", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_CONTENT_CAPTURE_MODE = "full";
+    const cfg = resolveConfig({});
+    expect(cfg?.contentCapture).toBe("full");
+  });
+
+  it("SIGIL_AGENT_NAME and SIGIL_AGENT_VERSION override file values", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AGENT_NAME = "pi-canonical";
+    process.env.SIGIL_AGENT_VERSION = "9.9.9";
+    const cfg = resolveConfig({ agentName: "file-name", agentVersion: "1.0" });
+    expect(cfg?.agentName).toBe("pi-canonical");
+    expect(cfg?.agentVersion).toBe("9.9.9");
+  });
+});
+
+describe("resolveConfig canonical OTLP env vars", () => {
+  beforeEach(clearEnv);
+  afterEach(clearEnv);
+
+  it("reads SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    const cfg = resolveConfig({});
+    expect(cfg?.otlp?.endpoint).toBe("https://otlp.example.com/otlp");
+  });
+
+  it("falls back to OTEL_EXPORTER_OTLP_ENDPOINT", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://otlp.example.com/otlp";
+    const cfg = resolveConfig({});
+    expect(cfg?.otlp?.endpoint).toBe("https://otlp.example.com/otlp");
+  });
+
+  it("synthesises OTLP Basic auth from canonical SIGIL_* creds", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "glc_token";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    const cfg = resolveConfig({});
+    expect(cfg?.otlp?.headers.Authorization).toMatch(/^Basic /);
+    const decoded = Buffer.from(
+      cfg!.otlp!.headers.Authorization!.replace("Basic ", ""),
+      "base64",
+    ).toString();
+    expect(decoded).toBe("tenant-1:glc_token");
+  });
+
+  it("SIGIL_OTEL_AUTH_TOKEN overrides SIGIL_AUTH_TOKEN for OTel only", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "sigil-only-token";
+    process.env.SIGIL_OTEL_AUTH_TOKEN = "otel-only-token";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    const cfg = resolveConfig({});
+    const decoded = Buffer.from(
+      cfg!.otlp!.headers.Authorization!.replace("Basic ", ""),
+      "base64",
+    ).toString();
+    expect(decoded).toBe("tenant-1:otel-only-token");
+    // Generation auth still uses the unscoped token.
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      user: "tenant-1",
+      password: "sigil-only-token",
+      tenantId: "tenant-1",
+    });
+  });
+
+  it("explicit SIGIL_PI_OTLP_* creds win over canonical synthesis", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "sigil-token";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    process.env.SIGIL_PI_OTLP_BASIC_USER = "otlp-user";
+    process.env.SIGIL_PI_OTLP_BASIC_PASSWORD = "otlp-pass";
+    const cfg = resolveConfig({});
+    const decoded = Buffer.from(
+      cfg!.otlp!.headers.Authorization!.replace("Basic ", ""),
+      "base64",
+    ).toString();
+    expect(decoded).toBe("otlp-user:otlp-pass");
   });
 });
 

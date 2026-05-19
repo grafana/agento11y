@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -162,6 +163,124 @@ func TestRun_HookErrorIsSwallowedAfterDispatch(t *testing.T) {
 	if gotExit != nil {
 		t.Fatalf("exit code = %d, want no exit", *gotExit)
 	}
+}
+
+func TestRun_LauncherBareLaunch(t *testing.T) {
+	var got []string
+	called := 0
+	withStubLauncher(t, "pi", func(_ context.Context, args []string, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+		called++
+		got = append([]string{}, args...)
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"pi"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit != nil {
+		t.Fatalf("exit code = %d, want no exit", *gotExit)
+	}
+	if called != 1 {
+		t.Fatalf("launcher called %d times, want 1", called)
+	}
+	if len(got) != 0 {
+		t.Fatalf("launcher args = %v, want empty", got)
+	}
+}
+
+func TestRun_LauncherSeparatorOnly(t *testing.T) {
+	var got []string
+	withStubLauncher(t, "pi", func(_ context.Context, args []string, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+		got = append([]string{}, args...)
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	withExit(t, func() {
+		run([]string{"pi", "--"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if len(got) != 0 {
+		t.Fatalf("launcher args = %v, want empty", got)
+	}
+}
+
+func TestRun_LauncherForwardsArgsAfterSeparator(t *testing.T) {
+	var got []string
+	withStubLauncher(t, "pi", func(_ context.Context, args []string, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+		got = append([]string{}, args...)
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	withExit(t, func() {
+		run([]string{"pi", "--", "--print", "hi"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if !reflect.DeepEqual(got, []string{"--print", "hi"}) {
+		t.Fatalf("launcher args = %v, want [--print hi]", got)
+	}
+}
+
+func TestRun_LauncherMissingSeparatorExits2(t *testing.T) {
+	withStubLauncher(t, "pi", func(_ context.Context, _ []string, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+		t.Fatal("launcher must not be called when separator is missing")
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"pi", "--print", "hi"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit == nil || *gotExit != 2 {
+		t.Fatalf("exit = %v, want 2", gotExit)
+	}
+	if !strings.Contains(stderr.String(), "use `sigil pi -- <args>`") {
+		t.Fatalf("stderr missing forward-args hint: %q", stderr.String())
+	}
+}
+
+func TestRun_LauncherUnknownFlagsBeforeSeparatorExit2(t *testing.T) {
+	withStubLauncher(t, "pi", func(_ context.Context, _ []string, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+		t.Fatal("launcher must not be called when unknown options precede separator")
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"pi", "--debug", "--", "x"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit == nil || *gotExit != 2 {
+		t.Fatalf("exit = %v, want 2", gotExit)
+	}
+	if !strings.Contains(stderr.String(), "unknown options before `--`") {
+		t.Fatalf("stderr missing unknown-options message: %q", stderr.String())
+	}
+}
+
+func TestRun_LauncherErrorExits1(t *testing.T) {
+	withStubLauncher(t, "pi", func(_ context.Context, _ []string, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+		return errors.New("boom")
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"pi", "--"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit == nil || *gotExit != 1 {
+		t.Fatalf("exit = %v, want 1", gotExit)
+	}
+	if !strings.HasPrefix(stderr.String(), "sigil:") {
+		t.Fatalf("stderr does not start with sigil: %q", stderr.String())
+	}
+}
+
+// withStubLauncher replaces the launchers map with a single entry for the
+// duration of the test.
+func withStubLauncher(t *testing.T, name string, fn agentLauncher) {
+	t.Helper()
+	prev := launchers
+	t.Cleanup(func() { launchers = prev })
+	launchers = map[string]agentLauncher{name: fn}
 }
 
 // withExit replaces the package's exit function with a recorder, runs f, and
