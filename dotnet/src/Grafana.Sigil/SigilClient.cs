@@ -2227,11 +2227,17 @@ public sealed class GenerationRecorder
                 return;
             }
 
-            var meta = _extraMetadata ??= new Dictionary<string, object?>(StringComparer.Ordinal);
+            var meta = _extraMetadata;
+            if (meta == null)
+            {
+                meta = new Dictionary<string, object?>(StringComparer.Ordinal);
+                _extraMetadata = meta;
+            }
+
             meta.Remove(CacheDiagnostics.MissedInputTokensKey);
             meta.Remove(CacheDiagnostics.PreviousMessageIdKey);
             meta[CacheDiagnostics.MissReasonKey] = missReason.Trim();
-            if (missedInputTokens.HasValue)
+            if (missedInputTokens != null)
             {
                 meta[CacheDiagnostics.MissedInputTokensKey] = missedInputTokens.Value.ToString(
                     System.Globalization.CultureInfo.InvariantCulture
@@ -2240,7 +2246,7 @@ public sealed class GenerationRecorder
 
             if (!string.IsNullOrWhiteSpace(previousMessageId))
             {
-                meta[CacheDiagnostics.PreviousMessageIdKey] = previousMessageId.Trim();
+                meta[CacheDiagnostics.PreviousMessageIdKey] = previousMessageId!.Trim();
             }
         }
     }
