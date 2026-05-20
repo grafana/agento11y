@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ContentCaptureMode } from "@grafana/sigil-sdk-js";
+import { isMissingFileError } from "./fsErrors.js";
+import { applySigilDotenv } from "./sigilDotenv.js";
 
 export type SigilAuthConfig =
   | { mode: "bearer"; bearerToken: string }
@@ -38,12 +40,23 @@ export interface SigilPiConfig {
   guards: GuardsFeatureConfig;
 }
 
-const CONFIG_PATH = join(homedir(), ".config", "sigil-pi", "config.json");
+// Resolved lazily so tests can redirect $HOME at runtime and the loader
+// follows. Keeping this as a module-level `const` would pin the path to the
+// value at import time and silently bypass test redirection.
+function configPath(): string {
+  return join(homedir(), ".config", "sigil-pi", "config.json");
+}
 
 export async function loadConfig(): Promise<SigilPiConfig | null> {
+  // Read the shared sigil dotenv file before anything else so plain `pi` and
+  // `sigil pi --` resolve credentials from the same place. Values in
+  // process.env always win — applySigilDotenv only fills empty/whitespace
+  // entries — so an explicit shell export still overrides the file.
+  applySigilDotenv();
+
   let fileConfig: Record<string, unknown> = {};
   try {
-    const raw = await readFile(CONFIG_PATH, "utf-8");
+    const raw = await readFile(configPath(), "utf-8");
     fileConfig = parseConfig(raw);
   } catch (err) {
     if (!isMissingFileError(err)) {
@@ -62,8 +75,11 @@ export function resolveConfig(
 ): SigilPiConfig | null {
   // Canonical SIGIL_* env vars (shared with claude-code/codex/cursor) take
   // precedence over the legacy SIGIL_PI_* prefix so a single config.env can
-  // drive every agent. The pi-specific names remain as a fallback so users
-  // who already configured them keep working.
+  // drive every agent. `loadConfig` reads the shared config.env into
+  // process.env via applySigilDotenv() before this resolver runs, with the
+  // OS-env-wins rule: a non-empty shell export beats the file. The
+  // pi-specific names remain as a fallback so users who already configured
+  // them keep working.
   const endpoint = normalizeBaseEndpoint(
     (
       env("SIGIL_ENDPOINT") ??
@@ -495,13 +511,4 @@ function normalizeBaseEndpoint(endpoint: string): string {
       ? trimmed.slice(0, trimmed.length - EXPORT_PATH.length)
       : trimmed;
   }
-}
-
-function isMissingFileError(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: string }).code === "ENOENT"
-  );
 }

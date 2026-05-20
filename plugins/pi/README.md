@@ -102,7 +102,13 @@ By default, transport errors and timeouts let the tool through. Set `SIGIL_GUARD
 | `guards.timeoutMs` | `1500` | Per-call timeout for guard requests |
 | `guards.failOpen` | `true` | Allow tools through when guard checks fail |
 
-Every field can be overridden via env var. When launched via `sigil pi`, vars in `~/.config/sigil/config.env` are loaded automatically.
+Every field can be overridden via env var.
+
+On startup the extension reads `$XDG_CONFIG_HOME/sigil/config.env` (default `~/.config/sigil/config.env`) and copies the entries into `process.env` for keys whose existing OS value is empty or whitespace-only. This happens on every launch — plain `pi` and `sigil pi` resolve credentials from the same file.
+
+File format: one `KEY=value` per line, `#` line comments, optional `export ` prefix, optional matching single or double quotes around the value. Only the following keys are honoured — anything else (including stray `PATH=…` lines) is ignored: any `SIGIL_*` key plus `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_INSECURE`, and `OTEL_SERVICE_NAME`.
+
+A non-empty OS env value always wins over the file; an empty or whitespace-only OS value is treated as unset and gets filled from `config.env`. Missing files are silent.
 
 | Variable | Sets |
 |----------|------|

@@ -1,17 +1,9 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveConfig, resolveEnvVars } from "./config.js";
-
-function clearEnv() {
-  for (const key of Object.keys(process.env)) {
-    if (
-      key.startsWith("SIGIL_PI_") ||
-      key.startsWith("SIGIL_") ||
-      key.startsWith("OTEL_")
-    ) {
-      delete process.env[key];
-    }
-  }
-}
+import { loadConfig, resolveConfig, resolveEnvVars } from "./config.js";
+import { clearSigilEnv as clearEnv } from "./testEnv.js";
 
 describe("resolveConfig", () => {
   beforeEach(clearEnv);
@@ -752,5 +744,54 @@ describe("resolveEnvVars", () => {
 
   it("leaves strings without vars unchanged", () => {
     expect(resolveEnvVars("plain-value")).toBe("plain-value");
+  });
+});
+
+describe("loadConfig reads ~/.config/sigil/config.env", () => {
+  let dir: string;
+  let homeBackup: string | undefined;
+
+  beforeEach(() => {
+    clearEnv();
+    dir = mkdtempSync(join(tmpdir(), "sigil-pi-loadconfig-"));
+    // Redirect both XDG_CONFIG_HOME and HOME at the tmpdir. config.ts resolves
+    // the JSON config path lazily via homedir(), which reads $HOME on POSIX,
+    // so this redirect actually moves the JSON path off the developer's real
+    // home and onto $tmpdir/.config/sigil-pi/config.json (which doesn't
+    // exist). The dotenv loader becomes the only source of credentials.
+    process.env.XDG_CONFIG_HOME = dir;
+    homeBackup = process.env.HOME;
+    process.env.HOME = dir;
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    if (homeBackup === undefined) delete process.env.HOME;
+    else process.env.HOME = homeBackup;
+    clearEnv();
+  });
+
+  it("picks up SIGIL_* credentials from config.env when no shell env is set", async () => {
+    const cfgDir = join(dir, "sigil");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      join(cfgDir, "config.env"),
+      [
+        "SIGIL_ENDPOINT=https://sigil.example.com",
+        "SIGIL_AUTH_TENANT_ID=tenant-1",
+        "SIGIL_AUTH_TOKEN=glc_token",
+        "",
+      ].join("\n"),
+    );
+
+    const cfg = await loadConfig();
+    expect(cfg).not.toBeNull();
+    expect(cfg?.endpoint).toBe("https://sigil.example.com");
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      user: "tenant-1",
+      password: "glc_token",
+      tenantId: "tenant-1",
+    });
   });
 });
