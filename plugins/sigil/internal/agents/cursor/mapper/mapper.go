@@ -15,6 +15,7 @@ import (
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/cursor/fragment"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/cursor/tags"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/timeutil"
 )
 
 var errCursorStop = errors.New("cursor_stop_error")
@@ -69,8 +70,8 @@ func MapFragment(in Inputs) Mapped {
 		now = time.Now()
 	}
 
-	completedAt := parseTimestamp(frag.LastEventAt, now)
-	startedAt := parseTimestamp(frag.StartedAt, completedAt)
+	completedAt := timeutil.ParseTimestamp(frag.LastEventAt, now)
+	startedAt := timeutil.ParseTimestamp(frag.StartedAt, completedAt)
 
 	// Provider/model fallback: SDK validation requires both to be non-empty.
 	provider := frag.Provider
@@ -400,19 +401,4 @@ func mapTokenUsage(t *fragment.TokenCounts) sigil.TokenUsage {
 		u.TotalTokens = u.InputTokens + u.OutputTokens
 	}
 	return u
-}
-
-// parseTimestamp parses an ISO-8601 timestamp, falling back to `def` when the
-// input is empty or unparseable.
-func parseTimestamp(s string, def time.Time) time.Time {
-	if s == "" {
-		return def
-	}
-	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
-		return t
-	}
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t
-	}
-	return def
 }

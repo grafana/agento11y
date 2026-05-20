@@ -1,132 +1,96 @@
-# sigil-copilot: GitHub Copilot CLI plugin for Grafana Sigil
+# Sigil for GitHub Copilot CLI
 
 Forwards completed GitHub Copilot CLI turns, hook-visible tool calls, error
 metadata, subagent lifecycle metadata, and optional prompt/tool content to
 [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
-Ships as a GitHub Copilot CLI plugin.
+Ships as a GitHub Copilot CLI plugin powered by the shared `sigil` binary.
 
-## Status
+> Experimental. GitHub Copilot CLI plugin support is still evolving, and the
+> current documented hook payloads do not expose final assistant response text,
+> reliable full token usage, or stable native turn IDs for completed turns. This
+> plugin therefore exports one generation per completed turn using a local
+> synthetic turn ID at the hook layer, then enriches the completed turn from
+> Copilot CLI's local `events.jsonl` transcript when that artifact is present.
 
-This plugin is experimental.
+## 1. Install
 
-GitHub Copilot CLI plugin support is still evolving, and the current documented
-hook payloads do not expose final assistant response text, reliable full token
-usage, or stable native turn IDs for completed turns. This plugin therefore
-exports one generation per completed turn using a local synthetic turn ID at
-the hook layer, then enriches the completed turn from Copilot CLI's local
-`events.jsonl` transcript when that artifact is present.
-
-## Install
-
-Install the binary first:
-
-```bash
-go install github.com/grafana/sigil-sdk/plugins/copilot/cmd/sigil-copilot@latest
+```sh
+brew install grafana/grafana/sigil
 ```
 
 Verify the binary is on the `PATH` visible to Copilot hook subprocesses:
 
-```bash
-which sigil-copilot
+```sh
+which sigil
 ```
 
-Then install the plugin into GitHub Copilot CLI. The current
+## 2. Register the plugin
+
+The current
 [GitHub Copilot CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference)
 documents both local-path and GitHub-subdirectory install forms:
 
-```bash
+```sh
 copilot plugin install ./plugins/copilot
 ```
 
 or:
 
-```bash
+```sh
 copilot plugin install grafana/sigil-sdk:plugins/copilot
 ```
 
 Confirm the install:
 
-```bash
+```sh
 copilot plugin list
 ```
 
-You should see `sigil-copilot` in the installed plugin list.
+## 3. Add your credentials
 
-## Required Settings
+All Sigil connection details live at `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
-No Copilot feature flag is required beyond a working GitHub Copilot CLI install.
-This plugin relies on Copilot CLI's documented plugin and hook support.
+You need values from three Grafana Cloud pages:
 
-## Get Your Credentials From Grafana Cloud
+1. **AI Observability → Configuration**
+   - **API URL** → `SIGIL_ENDPOINT`
+   - **Instance ID** → `SIGIL_AUTH_TENANT_ID`
 
-Generation export needs three values from your Grafana Cloud stack: the Sigil
-API URL, an instance ID, and an access policy token. For the complete AI
-Observability UI, also configure an OTLP endpoint so traces and metrics are
-available.
+2. **Administration → Users and access → Cloud access policies**
+   - Create a policy with scopes `sigil:write`, `metrics:write`, `traces:write`.
+   - Add a token. The `glc_…` value is shown once → `SIGIL_AUTH_TOKEN`.
 
-### Sigil API URL and Instance ID
+3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
+   - **OTLP endpoint URL** → `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT`
 
-In **Observability -> AI Observability -> Configuration**, copy:
+Save them to `~/.config/sigil/config.env` (shared by all host plugins):
 
-- **API URL** -> `SIGIL_ENDPOINT`
-- **Instance ID** -> `SIGIL_AUTH_TENANT_ID`
-
-### Access Policy Token
-
-Create a Grafana Cloud access policy token with at least `sigil:write`.
-If you also want traces and metrics, include write scopes for those signals too.
-
-- Token -> `SIGIL_AUTH_TOKEN`
-
-### OTLP Endpoint
-
-In the Grafana Cloud portal for your stack, copy the **OTLP Endpoint URL**:
-
-- OTLP endpoint -> `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT`
-
-## Configure
-
-Configuration is read from environment variables and from a dotenv file at:
-
-```text
-${XDG_CONFIG_HOME:-$HOME/.config}/sigil-copilot/config.env
-```
-
-OS environment variables win per key. The config file is the reliable place to
-store credentials for hook subprocesses.
-
-Example:
-
-```bash
-mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/sigil-copilot"
-chmod 700 "${XDG_CONFIG_HOME:-$HOME/.config}/sigil-copilot"
-cat > "${XDG_CONFIG_HOME:-$HOME/.config}/sigil-copilot/config.env" <<'EOF'
+```dotenv
 SIGIL_ENDPOINT=https://sigil-prod-<region>.grafana.net
-SIGIL_AUTH_TENANT_ID=<stack-instance-id>
-SIGIL_AUTH_TOKEN=<grafana-cloud-access-policy-token>
+SIGIL_AUTH_TENANT_ID=<instance-id>
+SIGIL_AUTH_TOKEN=glc_...
 SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
-EOF
-chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/sigil-copilot/config.env"
 ```
 
-Supported variables:
+To also send the conversation text (with automatic secret redaction), add:
 
-| Variable | Required | Description |
-| --- | --- | --- |
-| `SIGIL_ENDPOINT` | yes | Sigil API URL. The plugin appends `/api/v1/generations:export`. |
-| `SIGIL_AUTH_TENANT_ID` | yes | Grafana Cloud instance ID. Used as Basic-auth username and tenant header. |
-| `SIGIL_AUTH_TOKEN` | yes | Grafana Cloud access policy token with `sigil:write`. |
-| `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` | for full UI | OTLP HTTP endpoint for traces and metrics. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
-| `SIGIL_OTEL_AUTH_TOKEN` | no | Optional OTel Basic-auth password override. Defaults to `SIGIL_AUTH_TOKEN`. |
-| `SIGIL_OTEL_EXPORTER_OTLP_INSECURE` | no | `true` disables TLS. Falls back to `OTEL_EXPORTER_OTLP_INSECURE`. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | no | Standard OTel endpoint fallback. |
-| `OTEL_EXPORTER_OTLP_HEADERS` | no | Standard OTel headers. Basic auth is synthesized from Sigil credentials when `Authorization` is absent. |
-| `OTEL_EXPORTER_OTLP_INSECURE` | no | Standard OTel TLS toggle fallback. |
-| `OTEL_SERVICE_NAME` | no | OTel service name. Defaults to `sigil-copilot`. |
-| `SIGIL_CONTENT_CAPTURE_MODE` | no | `metadata_only`, `full`, or `no_tool_content`. Default: `metadata_only`. |
-| `SIGIL_TAGS` | no | Comma-separated `key=value` tags added by the SDK. |
-| `SIGIL_USER_ID` | no | User id override. |
-| `SIGIL_DEBUG` | no | `true` writes logs under the plugin state directory. |
+```dotenv
+SIGIL_CONTENT_CAPTURE_MODE=full
+```
+
+## 4. Verify
+
+Start a Copilot CLI session in a repository and give it a prompt that triggers
+at least one tool call. The plugin only exports completed turns at `agentStop`.
+Then open **AI Observability → Conversations** in Grafana Cloud and look for
+generations with `agent_name=copilot`.
+
+If nothing shows up:
+
+```sh
+SIGIL_DEBUG=true copilot   # one turn
+tail -f ~/.local/state/sigil/logs/sigil.log
+```
 
 ## Supported Hook Events
 
@@ -143,10 +107,9 @@ The plugin registers these GitHub Copilot CLI hook triggers:
 - `subagentStop`
 - `agentStop`
 
-This plugin config uses the lower-camel event names shown in the GitHub Copilot
-CLI docs. The handler also accepts the PascalCase / VS Code-compatible payload
-shape for compatibility. `agentStop` is the completed-turn export boundary.
-`sessionEnd` performs cleanup only.
+`agentStop` is the completed-turn export boundary. `sessionEnd` performs cleanup
+only. The handler accepts both the lower-camel and PascalCase event payload
+shapes.
 
 ## Content Capture
 
@@ -157,6 +120,22 @@ shape for compatibility. `agentStop` is the completed-turn export boundary.
 | `full` | included with redaction | included with redaction | included with redaction | included with redaction |
 
 Redaction happens before export.
+
+## All options
+
+| Variable | Default | Description |
+|---|---|---|
+| `SIGIL_ENDPOINT` | — | Sigil API URL. Find it at `/plugins/grafana-sigil-app`. |
+| `SIGIL_AUTH_TENANT_ID` | — | Grafana Cloud instance ID. |
+| `SIGIL_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
+| `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the AI Observability latency and tool-call panels stay empty. |
+| `SIGIL_OTEL_AUTH_TOKEN` | `SIGIL_AUTH_TOKEN` | Override the OTel password. |
+| `SIGIL_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, or `full`. |
+| `SIGIL_TAGS` | — | `key=value,key=value` tags added to every generation. |
+| `SIGIL_USER_ID` | — | Override the user id. |
+| `SIGIL_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
+
+If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>` manually instead of relying on the auto-synthesised auth.
 
 ## What Gets Exported
 
@@ -189,22 +168,14 @@ The plugin always tags exported generations with:
 - Subagent hooks do not currently expose enough durable identity to synthesize separate child generations safely, so subagent activity is exported as parent-turn metadata only.
 - This package targets Copilot CLI plugin installation. Copilot cloud agent uses repository-level `.github/hooks/*.json` instead, and GitHub documents cloud-agent outbound network access as restricted by the firewall by default.
 
-## Verification
-
-1. Install the plugin and confirm it appears in `copilot plugin list`.
-2. Set valid Sigil credentials in the config file above.
-3. Start a Copilot CLI session in a repository and give it a prompt that triggers at least one tool call.
-4. Open Grafana AI Observability and look for generations with `agent_name=copilot`.
-5. Confirm the generation metadata includes `copilot.turn_id`, `copilot.native_turn_id`, and `copilot.request_id`.
-6. Confirm the generation shows the Copilot model and any available output token count.
-
 ## Troubleshooting
 
-| Symptom | What to check |
-| --- | --- |
+| Symptom | Try |
+|---|---|
 | Plugin does not appear in `copilot plugin list` | Re-run `copilot plugin install ./plugins/copilot` or the GitHub subdir install form. Confirm `plugin.json` is at the plugin root. |
+| Command not found | Reinstall: `brew install grafana/grafana/sigil`. Check `sigil --version`. |
 | Hooks run but nothing appears in Sigil | Check `SIGIL_ENDPOINT`, `SIGIL_AUTH_TENANT_ID`, and `SIGIL_AUTH_TOKEN`. Without all three, the plugin discards the completed fragment. |
-| No latency/tool charts in AI Observability | Set `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` so the plugin can emit traces and metrics. |
+| No latency/tool charts in AI Observability | Set `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` so the plugin can emit traces and metrics. |
 | Prompt or tool content is missing | Check `SIGIL_CONTENT_CAPTURE_MODE`. The default is `metadata_only`. |
 | Assistant response text is missing | Check that `agentStop` included a readable `transcriptPath` and that the local `events.jsonl` transcript still exists under `~/.copilot/session-state/<session-id>/`. |
 | Model or output tokens are still missing | The local Copilot transcript for that turn did not include those fields. This plugin can only export the fields Copilot recorded locally. |

@@ -1,6 +1,6 @@
 # sigil
 
-The hook binary behind the [Claude Code](../claude-code), [Codex](../codex), and [Cursor](../cursor) plugins for [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
+The hook binary behind the [Claude Code](../claude-code), [Codex](../codex), [Copilot](../copilot), and [Cursor](../cursor) plugins for [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
 
 ## Install
 
@@ -10,7 +10,7 @@ brew install grafana/grafana/sigil
 
 ## Configure
 
-All three hosts read the same config file at `~/.config/sigil/config.env`. The first run of `sigil claude` or `sigil pi` prompts for your endpoint, tenant ID, token, and OTLP endpoint and writes them there; run `sigil login` to re-enter them later.
+All four hosts read the same config file at `~/.config/sigil/config.env`. The first run of `sigil claude` or `sigil pi` prompts for your endpoint, tenant ID, token, and OTLP endpoint and writes them there; run `sigil login` to re-enter them later.
 
 To skip the prompt, create the file by hand:
 
@@ -27,6 +27,7 @@ Then follow your agent's quickstart:
 
 - [Claude Code](../claude-code/README.md)
 - [Codex](../codex/README.md)
+- [Copilot](../copilot/README.md)
 - [Cursor](../cursor/README.md)
 - [pi](../pi/README.md) (separate JS plugin)
 

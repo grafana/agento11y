@@ -17,9 +17,9 @@ import (
 
 	"github.com/grafana/sigil-sdk/go/sigil"
 
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/config"
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/fragment"
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/transcript"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/config"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/fragment"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/transcript"
 )
 
 func TestHookSequenceExportsOnStop(t *testing.T) {

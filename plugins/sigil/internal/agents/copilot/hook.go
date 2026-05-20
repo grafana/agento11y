@@ -1,41 +1,44 @@
-package main
+// Package copilot implements the GitHub Copilot CLI agent adapter for the
+// consolidated sigil binary. The dispatcher in cmd/sigil routes
+// `sigil copilot hook` here.
+package copilot
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/config"
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/fragment"
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/hook"
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/util"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/config"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/fragment"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/hook"
 )
 
-func main() {
-	config.ApplyEnv(nil)
-	logger := initLogger()
-	defer recoverAndLog(logger)
-	run(logger, os.Stdin)
-}
-
-func run(logger *log.Logger, stdin io.Reader) {
+// Hook reads a Copilot hook JSON payload from stdin and dispatches it to the
+// matching handler. Telemetry errors are logged; the function returns nil
+// in almost every case because hooks must never crash the agent.
+//
+// Copilot accepts both snake_case and camelCase event names. When the
+// payload omits the event name (the early Copilot CLI did this for several
+// events), SIGIL_COPILOT_HOOK_EVENT is consulted as a fallback — the
+// hooks.json manifest sets it per hook entry.
+func Hook(ctx context.Context, stdin io.Reader, _ io.Writer, logger *log.Logger) error {
 	raw, err := io.ReadAll(stdin)
 	if err != nil {
 		logger.Printf("dispatch: read stdin: %v", err)
-		return
+		return nil
 	}
 	if strings.TrimSpace(string(raw)) == "" {
 		logger.Print("dispatch: empty stdin")
-		return
+		return nil
 	}
 	var payload hook.Payload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		logger.Printf("dispatch: invalid JSON: %v", err)
-		return
+		return nil
 	}
 	eventName := payload.EventName()
 	if eventName == "" {
@@ -43,7 +46,7 @@ func run(logger *log.Logger, stdin io.Reader) {
 	}
 	if eventName == "" {
 		logger.Print("dispatch: missing hook_event_name")
-		return
+		return nil
 	}
 	sessionID := payload.SessionID()
 	defer func() {
@@ -81,26 +84,6 @@ func run(logger *log.Logger, stdin io.Reader) {
 	default:
 		logger.Printf("dispatch: unknown event %q", eventName)
 	}
-}
-
-func initLogger() *log.Logger {
-	logger := log.New(io.Discard, "sigil-copilot: ", log.Ltime)
-	if !util.ParseBool(os.Getenv("SIGIL_DEBUG")) {
-		return logger
-	}
-	path := fragment.LogFilePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return logger
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return logger
-	}
-	return log.New(f, "sigil-copilot: ", log.Ldate|log.Ltime|log.Lmicroseconds)
-}
-
-func recoverAndLog(logger *log.Logger) {
-	if r := recover(); r != nil {
-		logger.Printf("dispatch: panic: %v", r)
-	}
+	_ = ctx // handlers manage their own contexts
+	return nil
 }
