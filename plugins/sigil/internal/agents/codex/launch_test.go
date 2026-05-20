@@ -1,0 +1,331 @@
+package codex
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"log"
+	"os/exec"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestLaunch_MissingCodexBinary(t *testing.T) {
+	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+
+	err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+	if err == nil || !strings.Contains(err.Error(), "codex CLI not found") {
+		t.Fatalf("err = %v, want contains \"codex CLI not found\"", err)
+	}
+}
+
+func TestLaunch_SkipsInstallWhenPluginInstalledAndEnabled(t *testing.T) {
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
+	withPluginList(t, func(context.Context, string) ([]byte, error) {
+		return []byte("  sigil-codex@grafana-sigil (installed, enabled)\n"), nil
+	})
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("runInstall must not be called when plugin is installed and enabled")
+		return nil
+	})
+
+	var execArgv []string
+	withExecFn(t, func(_ string, argv []string, _ []string) error {
+		execArgv = append([]string{}, argv...)
+		return nil
+	})
+
+	var stderr bytes.Buffer
+	if err := Launch(context.Background(), []string{"exec", "hi"}, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+		t.Fatalf("Launch returned err: %v", err)
+	}
+	if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/codex", "exec", "hi"}) {
+		t.Fatalf("exec argv = %v", execArgv)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr non-empty: %q", stderr.String())
+	}
+}
+
+func TestLaunch_RunsInstallWhenPluginMissing(t *testing.T) {
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
+	withPluginList(t, func(context.Context, string) ([]byte, error) {
+		return []byte("  other-plugin@elsewhere (installed, enabled)\n"), nil
+	})
+
+	installCalls := 0
+	withRunInstall(t, func(_ context.Context, bin string, _ io.Writer) error {
+		installCalls++
+		if bin != "/usr/local/bin/codex" {
+			t.Errorf("install bin = %q, want /usr/local/bin/codex", bin)
+		}
+		return nil
+	})
+
+	execCalled := false
+	withExecFn(t, func(_ string, _ []string, _ []string) error {
+		execCalled = true
+		return nil
+	})
+
+	var stderr bytes.Buffer
+	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+		t.Fatalf("Launch returned err: %v", err)
+	}
+	if installCalls != 1 {
+		t.Fatalf("runInstall calls = %d, want 1", installCalls)
+	}
+	if !execCalled {
+		t.Fatal("execFn was not called after install")
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "registering "+PluginName+" with codex") {
+		t.Fatalf("stderr missing install message: %q", got)
+	}
+	if !strings.Contains(got, "/hooks") {
+		t.Fatalf("stderr missing /hooks trust hint: %q", got)
+	}
+}
+
+func TestLaunch_RunsInstallWhenPluginInstalledButDisabled(t *testing.T) {
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
+	withPluginList(t, func(context.Context, string) ([]byte, error) {
+		return []byte("  sigil-codex@grafana-sigil (installed, disabled)\n"), nil
+	})
+
+	installCalls := 0
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		installCalls++
+		return nil
+	})
+
+	execCalled := false
+	withExecFn(t, func(_ string, _ []string, _ []string) error {
+		execCalled = true
+		return nil
+	})
+
+	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+		t.Fatalf("Launch returned err: %v", err)
+	}
+	if installCalls != 1 {
+		t.Fatalf("runInstall calls = %d, want 1 (disabled plugin should trigger install)", installCalls)
+	}
+	if !execCalled {
+		t.Fatal("execFn was not called")
+	}
+}
+
+// A failed install must not block the user. The launcher must print the
+// failure and a manual-retry hint listing the correct codex verbs on stderr,
+// then still exec codex so the workflow keeps moving.
+func TestLaunch_InstallFailureContinuesToExec(t *testing.T) {
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
+	withPluginList(t, func(context.Context, string) ([]byte, error) {
+		return []byte(""), nil
+	})
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		return errors.New("network down")
+	})
+
+	execCalled := false
+	withExecFn(t, func(_ string, _ []string, _ []string) error {
+		execCalled = true
+		return nil
+	})
+
+	var stderr bytes.Buffer
+	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+		t.Fatalf("Launch returned err: %v", err)
+	}
+	if !execCalled {
+		t.Fatal("execFn was not called after install failure")
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "install of "+PluginName+" failed") {
+		t.Fatalf("stderr missing failure message: %q", got)
+	}
+	if !strings.Contains(got, "network down") {
+		t.Fatalf("stderr missing underlying error: %q", got)
+	}
+	if !strings.Contains(got, "codex plugin marketplace add grafana/sigil-sdk") {
+		t.Fatalf("stderr missing marketplace add hint: %q", got)
+	}
+	if !strings.Contains(got, "codex plugin add sigil-codex@grafana-sigil") {
+		t.Fatalf("stderr missing plugin add hint: %q", got)
+	}
+	// The /hooks trust hint should NOT appear when install failed.
+	if strings.Contains(got, "/hooks") {
+		t.Fatalf("stderr unexpectedly contains /hooks hint on failure: %q", got)
+	}
+}
+
+func TestLaunch_PluginListProbeFailureFallsThroughToInstall(t *testing.T) {
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
+	withPluginList(t, func(context.Context, string) ([]byte, error) {
+		return nil, errors.New("probe boom")
+	})
+
+	installCalls := 0
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		installCalls++
+		return nil
+	})
+
+	execCalled := false
+	withExecFn(t, func(_ string, _ []string, _ []string) error {
+		execCalled = true
+		return nil
+	})
+
+	var logbuf bytes.Buffer
+	logger := log.New(&logbuf, "", 0)
+	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, logger); err != nil {
+		t.Fatalf("Launch returned err: %v", err)
+	}
+	if installCalls != 1 {
+		t.Fatalf("runInstall calls = %d, want 1 (probe failure should trigger install)", installCalls)
+	}
+	if !execCalled {
+		t.Fatal("execFn was not called")
+	}
+	if !strings.Contains(logbuf.String(), "probe boom") {
+		t.Fatalf("logger missing probe failure: %q", logbuf.String())
+	}
+}
+
+func TestLaunch_ExecFailureSurfacesError(t *testing.T) {
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
+	withPluginList(t, func(context.Context, string) ([]byte, error) {
+		return []byte("  sigil-codex@grafana-sigil (installed, enabled)\n"), nil
+	})
+	withRunInstall(t, func(context.Context, string, io.Writer) error { return nil })
+	withExecFn(t, func(string, []string, []string) error {
+		return errors.New("exec boom")
+	})
+
+	err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+	if err == nil || !strings.Contains(err.Error(), "exec codex") {
+		t.Fatalf("err = %v, want contains \"exec codex\"", err)
+	}
+}
+
+func TestLaunch_ForwardsArgvUnchanged(t *testing.T) {
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
+	withPluginList(t, func(context.Context, string) ([]byte, error) {
+		return []byte("  sigil-codex@grafana-sigil (installed, enabled)\n"), nil
+	})
+	withRunInstall(t, func(context.Context, string, io.Writer) error { return nil })
+
+	var execArgv []string
+	withExecFn(t, func(_ string, argv []string, _ []string) error {
+		execArgv = append([]string{}, argv...)
+		return nil
+	})
+
+	args := []string{"exec", "--model", "gpt-5", "hi"}
+	if err := Launch(context.Background(), args, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+		t.Fatalf("Launch returned err: %v", err)
+	}
+	want := append([]string{"/usr/local/bin/codex"}, args...)
+	if !reflect.DeepEqual(execArgv, want) {
+		t.Fatalf("exec argv = %v, want %v", execArgv, want)
+	}
+}
+
+func TestPluginInstalled_ParsesPluginListOutput(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want bool
+	}{
+		{
+			name: "installed enabled",
+			out:  "  sigil-codex@grafana-sigil (installed, enabled)\n",
+			want: true,
+		},
+		{
+			name: "installed disabled",
+			out:  "  sigil-codex@grafana-sigil (installed, disabled)\n",
+			want: false,
+		},
+		{
+			name: "not installed",
+			out:  "  sigil-codex@grafana-sigil (not installed)\n",
+			want: false,
+		},
+		{
+			name: "empty",
+			out:  "",
+			want: false,
+		},
+		{
+			name: "other plugins only",
+			out:  "  other@somewhere (installed, enabled)\n",
+			want: false,
+		},
+		{
+			name: "mixed lines",
+			out:  "  other@somewhere (installed, disabled)\n  sigil-codex@grafana-sigil (installed, enabled)\n",
+			want: true,
+		},
+		{
+			name: "name prefix collision",
+			out:  "  my-sigil-codex@grafana-sigil (installed, enabled)\n",
+			want: false,
+		},
+		{
+			name: "alias suffix collision",
+			out:  "  sigil-codex@grafana-sigil-staging (installed, enabled)\n",
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withPluginList(t, func(context.Context, string) ([]byte, error) {
+				return []byte(tc.out), nil
+			})
+			got, err := pluginInstalled(context.Background(), "/usr/local/bin/codex")
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func withLookPath(t *testing.T, fn func(string) (string, error)) {
+	t.Helper()
+	prev := lookPath
+	t.Cleanup(func() { lookPath = prev })
+	lookPath = fn
+}
+
+func withRunInstall(t *testing.T, fn func(context.Context, string, io.Writer) error) {
+	t.Helper()
+	prev := runInstall
+	t.Cleanup(func() { runInstall = prev })
+	runInstall = fn
+}
+
+func withExecFn(t *testing.T, fn func(string, []string, []string) error) {
+	t.Helper()
+	prev := execFn
+	t.Cleanup(func() { execFn = prev })
+	execFn = fn
+}
+
+func withPluginList(t *testing.T, fn func(context.Context, string) ([]byte, error)) {
+	t.Helper()
+	prev := pluginList
+	t.Cleanup(func() { pluginList = prev })
+	pluginList = fn
+}
+
+func nopLogger() *log.Logger {
+	return log.New(io.Discard, "", 0)
+}

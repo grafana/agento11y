@@ -4,11 +4,12 @@ Send conversations from your coding agent to [Grafana AI Observability](https://
 
 > AI Observability is in [public preview](https://grafana.com/docs/release-life-cycle/).
 
-## Fastest start (Claude Code or pi)
+## Fastest start (Claude Code, Codex, or pi)
 
 ```sh
 brew install grafana/grafana/sigil
 sigil claude     # for Claude Code
+sigil codex      # for Codex
 sigil pi         # for pi
 ```
 

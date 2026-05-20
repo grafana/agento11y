@@ -74,7 +74,7 @@ func TestRun_UnknownAgentExits2(t *testing.T) {
 func TestRun_UnknownVerbExits2(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	gotExit := withExit(t, func() {
-		run([]string{"codex", "launch"}, strings.NewReader(""), &stdout, &stderr)
+		run([]string{"claude-code", "launch"}, strings.NewReader(""), &stdout, &stderr)
 	})
 	if gotExit == nil || *gotExit != 2 {
 		t.Fatalf("exit = %v, want 2", gotExit)
@@ -385,6 +385,115 @@ func TestRun_ClaudeLauncherErrorExits1(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	gotExit := withExit(t, func() {
 		run([]string{"claude", "--"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit == nil || *gotExit != 1 {
+		t.Fatalf("exit = %v, want 1", gotExit)
+	}
+	if !strings.HasPrefix(stderr.String(), "sigil:") {
+		t.Fatalf("stderr does not start with sigil: %q", stderr.String())
+	}
+}
+
+// `codex` is registered in both `agents` and `launchers`. The dispatcher
+// must prefer the hook branch when the second arg is the literal verb
+// `hook` so plugins/codex/hooks/hooks.json (which invokes `sigil codex hook`)
+// keeps working after the launcher was added.
+func TestRun_CodexHookDispatchesEvenWithLauncher(t *testing.T) {
+	hookCalls := 0
+	prevAgents := agents
+	t.Cleanup(func() { agents = prevAgents })
+	agents = map[string]agentHook{
+		"codex": func(_ context.Context, _ io.Reader, _ io.Writer, _ *log.Logger) error {
+			hookCalls++
+			return nil
+		},
+	}
+	withStubLauncher(t, "codex", func(_ context.Context, _ []string, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+		t.Fatal("launcher must not be called for `sigil codex hook`")
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"codex", "hook"}, strings.NewReader(`{}`), &stdout, &stderr)
+	})
+	if gotExit != nil {
+		t.Fatalf("exit = %v, want no exit", gotExit)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("hook called %d times, want 1", hookCalls)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr non-empty: %q", stderr.String())
+	}
+}
+
+func TestRun_CodexLauncherBare(t *testing.T) {
+	var got []string
+	called := 0
+	withStubLauncher(t, "codex", func(_ context.Context, args []string, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+		called++
+		got = append([]string{}, args...)
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"codex"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit != nil {
+		t.Fatalf("exit code = %d, want no exit", *gotExit)
+	}
+	if called != 1 {
+		t.Fatalf("launcher called %d times, want 1", called)
+	}
+	if len(got) != 0 {
+		t.Fatalf("launcher args = %v, want empty", got)
+	}
+}
+
+func TestRun_CodexLauncherForwardsArgs(t *testing.T) {
+	var got []string
+	withStubLauncher(t, "codex", func(_ context.Context, args []string, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+		got = append([]string{}, args...)
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	withExit(t, func() {
+		run([]string{"codex", "--", "exec", "prompt"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if !reflect.DeepEqual(got, []string{"exec", "prompt"}) {
+		t.Fatalf("launcher args = %v, want [exec prompt]", got)
+	}
+}
+
+func TestRun_CodexLauncherMissingSeparatorExits2(t *testing.T) {
+	withStubLauncher(t, "codex", func(_ context.Context, _ []string, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+		t.Fatal("launcher must not be called when separator is missing")
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"codex", "foo"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit == nil || *gotExit != 2 {
+		t.Fatalf("exit = %v, want 2", gotExit)
+	}
+	if !strings.Contains(stderr.String(), "use `sigil codex -- <args>`") {
+		t.Fatalf("stderr missing forward-args hint: %q", stderr.String())
+	}
+}
+
+func TestRun_CodexLauncherErrorExits1(t *testing.T) {
+	withStubLauncher(t, "codex", func(_ context.Context, _ []string, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+		return errors.New("boom")
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"codex", "--"}, strings.NewReader(""), &stdout, &stderr)
 	})
 	if gotExit == nil || *gotExit != 1 {
 		t.Fatalf("exit = %v, want 1", gotExit)
