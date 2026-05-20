@@ -3,6 +3,9 @@ package sigil
 import (
 	"context"
 	"errors"
+	"log"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -164,6 +167,140 @@ func TestShutdownFlushesPendingGenerations(t *testing.T) {
 	}
 	if len(exporter.requests[0].Generations) != 1 {
 		t.Fatalf("expected one generation in shutdown flush, got %d", len(exporter.requests[0].Generations))
+	}
+}
+
+// TestFlushReportsPriorIntervalFailure pins the Flush() contract: an
+// interval-driven flush that failed (with its error only logged) must
+// surface that error on the next explicit Flush call. Without this,
+// hooks that use Flush as a durability checkpoint silently treat data
+// loss as success and delete their on-disk retry state.
+func TestFlushReportsPriorIntervalFailure(t *testing.T) {
+	wantErr := errors.New("boom")
+	exporter := &capturingGenerationExporter{err: wantErr}
+	// Use a synchronized buffer so we can poll the worker's log output
+	// from the test goroutine without racing the logger.
+	logSink := &syncBuffer{}
+	client := NewClient(Config{
+		GenerationExport: GenerationExportConfig{
+			QueueSize:      10,
+			BatchSize:      100,
+			FlushInterval:  10 * time.Millisecond,
+			MaxRetries:     1,
+			InitialBackoff: time.Millisecond,
+			MaxBackoff:     time.Millisecond,
+		},
+		Logger:                 log.New(logSink, "", 0),
+		Tracer:                 noop.NewTracerProvider().Tracer("test"),
+		Now:                    time.Now,
+		testGenerationExporter: exporter,
+	})
+	t.Cleanup(func() {
+		_ = client.Shutdown(context.Background())
+	})
+
+	_, rec := client.StartGeneration(context.Background(), GenerationStart{Model: ModelRef{Provider: "openai", Name: "gpt-5"}})
+	rec.SetResult(Generation{
+		Input:  []Message{UserTextMessage("hello")},
+		Output: []Message{AssistantTextMessage("hi")},
+	}, nil)
+	rec.End()
+	if err := rec.Err(); err != nil {
+		t.Fatalf("unexpected enqueue error: %v", err)
+	}
+
+	// Wait for the worker to log the failed export. The log line is
+	// emitted from the same block that records pendingErr, so seeing
+	// it proves pendingErr is set before we call Flush.
+	if err := waitForCondition(500*time.Millisecond, func() bool {
+		return strings.Contains(logSink.String(), "sigil generation export failed")
+	}); err != nil {
+		t.Fatalf("interval-driven export never reported failure: %v\nlog so far: %q", err, logSink.String())
+	}
+
+	// Clear the injected failure so the explicit Flush itself has nothing
+	// to send — we want to assert it surfaces the prior async failure.
+	exporter.setExportErr(nil)
+
+	err := client.Flush(context.Background())
+	if err == nil {
+		t.Fatal("expected Flush to surface prior interval failure, got nil")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Flush err = %v, want it to wrap %v", err, wantErr)
+	}
+
+	// A second Flush has no pending error to surface and nothing queued.
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("expected clean Flush after pending error consumed, got %v", err)
+	}
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+// TestFlushDrainsQueuedGenerations pins that an explicit Flush exports
+// every generation enqueued before the call, including items still on
+// the channel that the worker hadn't pulled into the batch yet. Without
+// the drain step the worker's select can service flushReq first, see
+// an empty batch, and return nil while items linger on c.queue.
+func TestFlushDrainsQueuedGenerations(t *testing.T) {
+	exporter := &capturingGenerationExporter{}
+	client := NewClient(Config{
+		GenerationExport: GenerationExportConfig{
+			QueueSize:      200,
+			BatchSize:      200,
+			FlushInterval:  time.Hour, // disable the interval timer
+			MaxRetries:     0,
+			InitialBackoff: time.Millisecond,
+			MaxBackoff:     time.Millisecond,
+		},
+		Tracer:                 noop.NewTracerProvider().Tracer("test"),
+		Now:                    time.Now,
+		testGenerationExporter: exporter,
+	})
+	t.Cleanup(func() {
+		_ = client.Shutdown(context.Background())
+	})
+
+	const n = 50
+	for i := 0; i < n; i++ {
+		_, rec := client.StartGeneration(context.Background(), GenerationStart{Model: ModelRef{Provider: "openai", Name: "gpt-5"}})
+		rec.SetResult(Generation{
+			Input:  []Message{UserTextMessage("hello")},
+			Output: []Message{AssistantTextMessage("hi")},
+		}, nil)
+		rec.End()
+		if err := rec.Err(); err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+	}
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	exporter.mu.Lock()
+	defer exporter.mu.Unlock()
+	total := 0
+	for _, r := range exporter.requests {
+		total += len(r.Generations)
+	}
+	if total != n {
+		t.Fatalf("Flush exported %d generations across %d requests; want %d", total, len(exporter.requests), n)
 	}
 }
 

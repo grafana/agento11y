@@ -8,6 +8,7 @@ import {
 } from "@grafana/sigil-sdk-js";
 import type { Meter, Tracer } from "@opentelemetry/api";
 import type { SigilAuthConfig, SigilPiConfig } from "./config.js";
+import { EXPORT_PATH } from "./config.js";
 
 export interface SigilClientOptions {
   tracer?: Tracer;
@@ -49,8 +50,15 @@ export function createSigilClient(
     return new SigilClient({
       generationExport: {
         protocol: "http",
-        endpoint: config.endpoint,
+        endpoint: appendExportPath(config.endpoint),
         auth: mapAuth(config.auth),
+      },
+      api: { endpoint: config.endpoint },
+      hooks: {
+        enabled: config.guards.enabled,
+        phases: ["postflight"],
+        timeoutMs: config.guards.timeoutMs,
+        failOpen: config.guards.failOpen,
       },
       contentCapture: config.contentCapture,
       ...(options?.tracer ? { tracer: options.tracer } : {}),
@@ -66,6 +74,23 @@ export function createSigilClient(
   } catch (err) {
     console.warn("[sigil-pi] failed to create SigilClient:", err);
     return null;
+  }
+}
+
+/**
+ * Append `/api/v1/generations:export` to a bare Sigil base URL. The SDK's
+ * own normalizer only appends when the URL has no path, which breaks
+ * prefix-mounted Sigil deployments (`https://host/prefix`) — so we do it
+ * here unconditionally.
+ */
+function appendExportPath(endpoint: string): string {
+  if (!endpoint) return "";
+  try {
+    const url = new URL(endpoint);
+    url.pathname = url.pathname.replace(/\/+$/, "") + EXPORT_PATH;
+    return url.toString();
+  } catch {
+    return endpoint.replace(/\/+$/, "") + EXPORT_PATH;
   }
 }
 

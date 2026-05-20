@@ -907,11 +907,15 @@ export class SigilClient {
     const startedMs = generation.startedAt.getTime();
     const completedMs = generation.completedAt.getTime();
     const durationSeconds = Math.max(0, (completedMs - startedMs) / 1_000);
+    const identityAttributes = metricIdentityAttributes(
+      generation.model.provider,
+      generation.model.name,
+      generation.agentName,
+      generation.agentVersion,
+    );
     this.operationDurationHistogram.record(durationSeconds, {
       [spanAttrOperationName]: generation.operationName,
-      [spanAttrProviderName]: generation.model.provider,
-      [spanAttrRequestModel]: generation.model.name,
-      [spanAttrAgentName]: generation.agentName ?? '',
+      ...identityAttributes,
       [spanAttrErrorType]: errorType,
       [spanAttrErrorCategory]: errorCategory,
     });
@@ -926,18 +930,14 @@ export class SigilClient {
     }
 
     this.toolCallsHistogram.record(countToolCallParts(generation.output ?? []), {
-      [spanAttrProviderName]: generation.model.provider,
-      [spanAttrRequestModel]: generation.model.name,
-      [spanAttrAgentName]: generation.agentName ?? '',
+      ...identityAttributes,
     });
 
     if (generation.operationName === 'streamText' && firstTokenAt !== undefined) {
       const ttftSeconds = (firstTokenAt.getTime() - startedMs) / 1_000;
       if (ttftSeconds >= 0) {
         this.ttftHistogram.record(ttftSeconds, {
-          [spanAttrProviderName]: generation.model.provider,
-          [spanAttrRequestModel]: generation.model.name,
-          [spanAttrAgentName]: generation.agentName ?? '',
+          ...identityAttributes,
         });
       }
     }
@@ -952,11 +952,15 @@ export class SigilClient {
     errorCategory: string,
   ): void {
     const durationSeconds = Math.max(0, (completedAt.getTime() - startedAt.getTime()) / 1_000);
+    const identityAttributes = metricIdentityAttributes(
+      seed.model.provider,
+      seed.model.name,
+      seed.agentName,
+      seed.agentVersion,
+    );
     this.operationDurationHistogram.record(durationSeconds, {
       [spanAttrOperationName]: defaultEmbeddingOperationName,
-      [spanAttrProviderName]: seed.model.provider,
-      [spanAttrRequestModel]: seed.model.name,
-      [spanAttrAgentName]: seed.agentName ?? '',
+      ...identityAttributes,
       [spanAttrErrorType]: errorType,
       [spanAttrErrorCategory]: errorCategory,
     });
@@ -964,9 +968,7 @@ export class SigilClient {
     if (result.inputTokens !== undefined && result.inputTokens !== 0) {
       this.tokenUsageHistogram.record(result.inputTokens, {
         [spanAttrOperationName]: defaultEmbeddingOperationName,
-        [spanAttrProviderName]: seed.model.provider,
-        [spanAttrRequestModel]: seed.model.name,
-        [spanAttrAgentName]: seed.agentName ?? '',
+        ...identityAttributes,
         [metricAttrTokenType]: metricTokenTypeInput,
       });
     }
@@ -978,9 +980,12 @@ export class SigilClient {
     }
     this.tokenUsageHistogram.record(value, {
       [spanAttrOperationName]: generation.operationName,
-      [spanAttrProviderName]: generation.model.provider,
-      [spanAttrRequestModel]: generation.model.name,
-      [spanAttrAgentName]: generation.agentName ?? '',
+      ...metricIdentityAttributes(
+        generation.model.provider,
+        generation.model.name,
+        generation.agentName,
+        generation.agentVersion,
+      ),
       [metricAttrTokenType]: tokenType,
     });
   }
@@ -993,10 +998,13 @@ export class SigilClient {
     const errorCategory = finalError === undefined ? '' : errorCategoryFromError(finalError, true);
     this.operationDurationHistogram.record(durationSeconds, {
       [spanAttrOperationName]: 'execute_tool',
-      [spanAttrProviderName]: (toolExecution.requestProvider ?? '').trim(),
-      [spanAttrRequestModel]: (toolExecution.requestModel ?? '').trim(),
       [spanAttrToolName]: toolExecution.toolName.trim(),
-      [spanAttrAgentName]: toolExecution.agentName ?? '',
+      ...metricIdentityAttributes(
+        toolExecution.requestProvider ?? '',
+        toolExecution.requestModel ?? '',
+        toolExecution.agentName,
+        toolExecution.agentVersion,
+      ),
       [spanAttrErrorType]: errorType,
       [spanAttrErrorCategory]: errorCategory,
     });
@@ -1579,6 +1587,23 @@ function toolSpanName(toolName: string): string {
   return `execute_tool ${normalized}`;
 }
 
+function metricIdentityAttributes(
+  provider: string,
+  model: string,
+  agentName: string | undefined,
+  agentVersion: string | undefined,
+): Record<string, string> {
+  const attributes: Record<string, string> = {
+    [spanAttrProviderName]: provider.trim(),
+    [spanAttrRequestModel]: model.trim(),
+    [spanAttrAgentName]: agentName?.trim() ?? '',
+  };
+  if (notEmpty(agentVersion)) {
+    attributes[spanAttrAgentVersion] = agentVersion.trim();
+  }
+  return attributes;
+}
+
 function setGenerationSpanAttributes(
   span: Span,
   generation: {
@@ -1905,7 +1930,10 @@ function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean): string {
 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     const parsed = new URL(trimmed);
-    return `${parsed.protocol}//${parsed.host}`;
+    // Preserve a path prefix so prefix-mounted Sigil deployments
+    // (https://host/sigil) route /api/v1/conversations/... under the prefix.
+    const path = parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.protocol}//${parsed.host}${path}`;
   }
 
   const withoutScheme = trimmed.startsWith('grpc://') ? trimmed.slice('grpc://'.length) : trimmed;

@@ -12,6 +12,7 @@ import { createSigilClient } from "./client.js";
 import type { SigilPiConfig } from "./config.js";
 import { loadConfig } from "./config.js";
 import { resolveGitBranch } from "./git.js";
+import { runToolCallGuard } from "./guard.js";
 import {
   mapGenerationResult,
   mapGenerationStart,
@@ -59,6 +60,9 @@ export default function (pi: ExtensionAPI) {
   let sigil: SigilClient | null = null;
   let config: SigilPiConfig | null = null;
   let telemetry: TelemetryProviders | null = null;
+  // Cached from the latest assistant message. `tool_call` events carry no model
+  // metadata, so guards read it from `message_end` before the tool runs.
+  let lastSeenModel: { provider: string; name: string } | null = null;
 
   let turnStartTime = 0;
   // Earliest `message_update` event observed in the current turn. Pi emits
@@ -109,6 +113,14 @@ export default function (pi: ExtensionAPI) {
     }
     resetTurnState();
     pendingInputMessages.length = 0;
+    lastSeenModel = null;
+  }
+
+  function cacheAssistantModel(message: PiAssistantMessage) {
+    lastSeenModel = {
+      provider: message.provider,
+      name: message.model,
+    };
   }
 
   pi.on("session_start", async (_event, ctx) => {
@@ -183,6 +195,9 @@ export default function (pi: ExtensionAPI) {
         if (assistantMessageEndTime === 0) {
           assistantMessageEndTime = Date.now();
         }
+        if (isAssistantMessage(message)) {
+          cacheAssistantModel(message);
+        }
         return;
       }
       if (!isUserMessage(message)) return;
@@ -204,6 +219,21 @@ export default function (pi: ExtensionAPI) {
     const role = (event as { message?: { role?: string } }).message?.role;
     if (role !== "assistant") return;
     firstTokenTime = Date.now();
+  });
+
+  pi.on("tool_call", async (event, _ctx) => {
+    if (!sigil || !config?.guards.enabled) return;
+    return runToolCallGuard({
+      client: sigil,
+      agentName: config.agentName,
+      agentVersion: config.agentVersion,
+      model: lastSeenModel ?? { provider: "unknown", name: "unknown" },
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      input: event.input as Record<string, unknown>,
+      failOpen: config.guards.failOpen,
+      logger: { warn: (msg: string) => console.warn(msg) },
+    });
   });
 
   pi.on("tool_execution_start", async (event, _ctx) => {
@@ -365,6 +395,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     sigil = null;
+    lastSeenModel = null;
     await resetSessionState();
   });
 }

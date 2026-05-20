@@ -81,6 +81,58 @@ test('submitConversationRating sends HTTP request and maps response', async () =
   }
 });
 
+test('submitConversationRating routes under a path prefix when api.endpoint has one', async () => {
+  let receivedPath = '';
+  const server = createServer(async (request, response) => {
+    receivedPath = request.url ?? '';
+    for await (const _ of request) {
+      // drain
+    }
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        rating: {
+          rating_id: 'rat-1',
+          conversation_id: 'conv-1',
+          rating: 'CONVERSATION_RATING_VALUE_GOOD',
+          created_at: '2026-02-13T12:00:00Z',
+        },
+        summary: {
+          total_count: 1,
+          good_count: 1,
+          bad_count: 0,
+          latest_rating: 'CONVERSATION_RATING_VALUE_GOOD',
+          latest_rated_at: '2026-02-13T12:00:00Z',
+          has_bad_rating: false,
+        },
+      }),
+    );
+  });
+  await listen(server);
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('failed to resolve rating prefix server address');
+  }
+
+  const client = newClient({
+    generationEndpoint: 'localhost:4317',
+    generationProtocol: 'grpc',
+    apiEndpoint: `http://127.0.0.1:${address.port}/sigil`,
+    auth: { mode: 'tenant', tenantId: 'tenant-a' },
+  });
+
+  try {
+    await client.submitConversationRating('conv-1', {
+      ratingId: 'rat-1',
+      rating: 'CONVERSATION_RATING_VALUE_GOOD',
+    });
+    assert.equal(receivedPath, '/sigil/api/v1/conversations/conv-1/ratings');
+  } finally {
+    await client.shutdown();
+    await close(server);
+  }
+});
+
 test('submitConversationRating maps 409 to conflict error', async () => {
   const server = createServer((_request, response) => {
     response.writeHead(409, { 'content-type': 'text/plain' });

@@ -1,33 +1,33 @@
 # @grafana/sigil-opencode
 
-OpenCode plugin that records LLM generations to Grafana Sigil for AI observability.
+OpenCode plugin that sends LLM generations to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
 
-## What it does
-
-Hooks into OpenCode's chat lifecycle to capture assistant messages and send them to Sigil as generation telemetry. Tracks conversation context, tool usage, model metadata, and optionally full message content with PII redaction.
+By default only metadata is sent (model, tokens, tool names, timing). Flip `contentCapture` to `true` to also send message content (with automatic secret redaction).
 
 ## Setup
 
 1. Create `~/.config/opencode/opencode-sigil.json`:
 
-```json
-{
-  "enabled": true,
-  "endpoint": "http://localhost:8080",
-  "auth": { "mode": "none" },
-  "agentName": "opencode",
-  "contentCapture": true
-}
-```
+   ```json
+   {
+     "enabled": true,
+     "endpoint": "http://localhost:8080",
+     "auth": { "mode": "none" },
+     "agentName": "opencode",
+     "contentCapture": true
+   }
+   ```
+
+   For Grafana Cloud, set `endpoint` to your Sigil API URL (found at `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`) and use `basic` auth — see the modes below.
 
 2. Register the plugin in your OpenCode configuration.
 
 ### Auth modes
 
-- `none` -- no authentication (local dev)
-- `bearer` -- `{ "mode": "bearer", "bearerToken": "..." }`
-- `tenant` -- `{ "mode": "tenant", "tenantId": "..." }`
-- `basic` -- `{ "mode": "basic", "tenantId": "...", "token": "..." }`
+- `none` — no authentication (local dev)
+- `bearer` — `{ "mode": "bearer", "bearerToken": "..." }`
+- `tenant` — `{ "mode": "tenant", "tenantId": "..." }`
+- `basic` — `{ "mode": "basic", "tenantId": "<instance-id>", "token": "glc_..." }`
 
 ## Development
 

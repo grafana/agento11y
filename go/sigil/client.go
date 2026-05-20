@@ -1769,31 +1769,32 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 		duration = 0
 	}
 
-	durationAttrs := metric.WithAttributes(
-		attribute.String(spanAttrOperationName, operationName(generation)),
-		attribute.String(spanAttrProviderName, strings.TrimSpace(generation.Model.Provider)),
-		attribute.String(spanAttrRequestModel, strings.TrimSpace(generation.Model.Name)),
-		attribute.String(spanAttrAgentName, strings.TrimSpace(generation.AgentName)),
+	identityAttrs := metricIdentityAttributes(
+		generation.Model.Provider,
+		generation.Model.Name,
+		generation.AgentName,
+		generation.AgentVersion,
+	)
+	durationAttrs := append(
+		[]attribute.KeyValue{attribute.String(spanAttrOperationName, operationName(generation))},
+		identityAttrs...,
+	)
+	durationAttrs = append(durationAttrs,
 		attribute.String(spanAttrErrorType, errorType),
 		attribute.String(spanAttrErrorCategory, errorCategory),
 	)
-	c.instruments.operationDuration.Record(ctx, duration, durationAttrs)
+	c.instruments.operationDuration.Record(ctx, duration, metric.WithAttributes(durationAttrs...))
 
 	recordToken := func(tokenType string, value int64) {
 		if value == 0 {
 			return
 		}
-		c.instruments.tokenUsage.Record(
-			ctx,
-			value,
-			metric.WithAttributes(
-				attribute.String(spanAttrOperationName, operationName(generation)),
-				attribute.String(spanAttrProviderName, strings.TrimSpace(generation.Model.Provider)),
-				attribute.String(spanAttrRequestModel, strings.TrimSpace(generation.Model.Name)),
-				attribute.String(spanAttrAgentName, strings.TrimSpace(generation.AgentName)),
-				attribute.String(metricAttrTokenType, tokenType),
-			),
+		tokenAttrs := append(
+			[]attribute.KeyValue{attribute.String(spanAttrOperationName, operationName(generation))},
+			identityAttrs...,
 		)
+		tokenAttrs = append(tokenAttrs, attribute.String(metricAttrTokenType, tokenType))
+		c.instruments.tokenUsage.Record(ctx, value, metric.WithAttributes(tokenAttrs...))
 	}
 
 	recordToken(metricTokenTypeInput, generation.Usage.InputTokens)
@@ -1806,11 +1807,7 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 	c.instruments.toolCallsPerOperation.Record(
 		ctx,
 		int64(toolCalls),
-		metric.WithAttributes(
-			attribute.String(spanAttrProviderName, strings.TrimSpace(generation.Model.Provider)),
-			attribute.String(spanAttrRequestModel, strings.TrimSpace(generation.Model.Name)),
-			attribute.String(spanAttrAgentName, strings.TrimSpace(generation.AgentName)),
-		),
+		metric.WithAttributes(identityAttrs...),
 	)
 
 	if operationName(generation) == defaultOperationNameStream && !firstTokenAt.IsZero() {
@@ -1819,11 +1816,7 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 			c.instruments.timeToFirstToken.Record(
 				ctx,
 				ttft,
-				metric.WithAttributes(
-					attribute.String(spanAttrProviderName, strings.TrimSpace(generation.Model.Provider)),
-					attribute.String(spanAttrRequestModel, strings.TrimSpace(generation.Model.Name)),
-					attribute.String(spanAttrAgentName, strings.TrimSpace(generation.AgentName)),
-				),
+				metric.WithAttributes(identityAttrs...),
 			)
 		}
 	}
@@ -1856,30 +1849,31 @@ func (c *Client) recordEmbeddingMetrics(
 	provider := strings.TrimSpace(seed.Model.Provider)
 	model := strings.TrimSpace(seed.Model.Name)
 	agentName := strings.TrimSpace(seed.AgentName)
+	identityAttrs := metricIdentityAttributes(provider, model, agentName, seed.AgentVersion)
+	durationAttrs := append(
+		[]attribute.KeyValue{attribute.String(spanAttrOperationName, defaultEmbeddingOperationName)},
+		identityAttrs...,
+	)
+	durationAttrs = append(durationAttrs,
+		attribute.String(spanAttrErrorType, errorType),
+		attribute.String(spanAttrErrorCategory, errorCategory),
+	)
 	c.instruments.operationDuration.Record(
 		ctx,
 		duration,
-		metric.WithAttributes(
-			attribute.String(spanAttrOperationName, defaultEmbeddingOperationName),
-			attribute.String(spanAttrProviderName, provider),
-			attribute.String(spanAttrRequestModel, model),
-			attribute.String(spanAttrAgentName, agentName),
-			attribute.String(spanAttrErrorType, errorType),
-			attribute.String(spanAttrErrorCategory, errorCategory),
-		),
+		metric.WithAttributes(durationAttrs...),
 	)
 
 	if result.InputTokens != 0 {
+		tokenAttrs := append(
+			[]attribute.KeyValue{attribute.String(spanAttrOperationName, defaultEmbeddingOperationName)},
+			identityAttrs...,
+		)
+		tokenAttrs = append(tokenAttrs, attribute.String(metricAttrTokenType, metricTokenTypeInput))
 		c.instruments.tokenUsage.Record(
 			ctx,
 			result.InputTokens,
-			metric.WithAttributes(
-				attribute.String(spanAttrOperationName, defaultEmbeddingOperationName),
-				attribute.String(spanAttrProviderName, provider),
-				attribute.String(spanAttrRequestModel, model),
-				attribute.String(spanAttrAgentName, agentName),
-				attribute.String(metricAttrTokenType, metricTokenTypeInput),
-			),
+			metric.WithAttributes(tokenAttrs...),
 		)
 	}
 }
@@ -1904,19 +1898,32 @@ func (c *Client) recordToolExecutionMetrics(ctx context.Context, seed ToolExecut
 		errorType = "tool_execution_error"
 		errorCategory = toolErrorCategory(finalErr)
 	}
+	attrs := metricIdentityAttributes(seed.RequestProvider, seed.RequestModel, seed.AgentName, seed.AgentVersion)
+	attrs = append([]attribute.KeyValue{
+		attribute.String(spanAttrOperationName, "execute_tool"),
+		attribute.String(spanAttrToolName, strings.TrimSpace(seed.ToolName)),
+	}, attrs...)
+	attrs = append(attrs,
+		attribute.String(spanAttrErrorType, errorType),
+		attribute.String(spanAttrErrorCategory, errorCategory),
+	)
 	c.instruments.operationDuration.Record(
 		ctx,
 		duration,
-		metric.WithAttributes(
-			attribute.String(spanAttrOperationName, "execute_tool"),
-			attribute.String(spanAttrProviderName, strings.TrimSpace(seed.RequestProvider)),
-			attribute.String(spanAttrRequestModel, strings.TrimSpace(seed.RequestModel)),
-			attribute.String(spanAttrToolName, strings.TrimSpace(seed.ToolName)),
-			attribute.String(spanAttrAgentName, strings.TrimSpace(seed.AgentName)),
-			attribute.String(spanAttrErrorType, errorType),
-			attribute.String(spanAttrErrorCategory, errorCategory),
-		),
+		metric.WithAttributes(attrs...),
 	)
+}
+
+func metricIdentityAttributes(provider, model, agentName, agentVersion string) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		attribute.String(spanAttrProviderName, strings.TrimSpace(provider)),
+		attribute.String(spanAttrRequestModel, strings.TrimSpace(model)),
+		attribute.String(spanAttrAgentName, strings.TrimSpace(agentName)),
+	}
+	if version := strings.TrimSpace(agentVersion); version != "" {
+		attrs = append(attrs, attribute.String(spanAttrAgentVersion, version))
+	}
+	return attrs
 }
 
 func countToolCalls(messages []Message) int {

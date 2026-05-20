@@ -150,6 +150,10 @@ public sealed class ConformanceTests
         Assert.Contains("gen_ai.client.operation.duration", env.MetricNames);
         Assert.Contains("gen_ai.client.token.usage", env.MetricNames);
         Assert.DoesNotContain("gen_ai.client.time_to_first_token", env.MetricNames);
+        Assert.True(
+            env.HasMetricTag("gen_ai.client.token.usage", "gen_ai.agent.version", "v-roundtrip"),
+            "token usage metrics should include the agent version tag"
+        );
     }
 
     [Theory]
@@ -637,6 +641,7 @@ public sealed class ConformanceTests
         public SigilClient Client { get; }
         public ConcurrentQueue<Activity> Spans { get; } = new();
         public ConcurrentDictionary<string, byte> MetricNames { get; } = new(StringComparer.Ordinal);
+        public ConcurrentQueue<MetricMeasurement> MetricMeasurements { get; } = new();
 
         public ConformanceEnv(int batchSize = 1)
         {
@@ -659,9 +664,15 @@ public sealed class ConformanceTests
                     listener.EnableMeasurementEvents(instrument);
                 }
             };
-            _meterListener.SetMeasurementEventCallback<double>((instrument, _, _, _) =>
+            _meterListener.SetMeasurementEventCallback<double>((instrument, _, tags, _) =>
             {
                 MetricNames[instrument.Name] = 0;
+                var tagSnapshot = new Dictionary<string, object?>(StringComparer.Ordinal);
+                foreach (var tag in tags)
+                {
+                    tagSnapshot[tag.Key] = tag.Value;
+                }
+                MetricMeasurements.Enqueue(new MetricMeasurement(instrument.Name, tagSnapshot));
             });
             _meterListener.Start();
 
@@ -745,6 +756,23 @@ public sealed class ConformanceTests
             return OperationSpan([operationName]);
         }
 
+        public bool HasMetricTag(string metricName, string key, string value)
+        {
+            foreach (var measurement in MetricMeasurements)
+            {
+                if (!string.Equals(measurement.Name, metricName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                if (measurement.Tags.TryGetValue(key, out var got) && string.Equals(got?.ToString(), value, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private Activity OperationSpan(string[] operationNames)
         {
             var span = Spans
@@ -758,6 +786,8 @@ public sealed class ConformanceTests
             await ShutdownAsync();
         }
     }
+
+    private sealed record MetricMeasurement(string Name, IReadOnlyDictionary<string, object?> Tags);
 
     private sealed class NullScope : IDisposable
     {

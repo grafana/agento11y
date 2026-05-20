@@ -985,13 +985,17 @@ class Client:
             return
 
         duration_seconds = max((completed_at - started_at).total_seconds(), 0.0)
+        identity_attributes = _metric_identity_attributes(
+            generation.model.provider,
+            generation.model.name,
+            generation.agent_name,
+            generation.agent_version,
+        )
         self._operation_duration_histogram.record(
             duration_seconds,
             attributes={
                 _span_attr_operation_name: generation.operation_name,
-                _span_attr_provider_name: generation.model.provider,
-                _span_attr_request_model: generation.model.name,
-                _span_attr_agent_name: generation.agent_name,
+                **identity_attributes,
                 _span_attr_error_type: error_type,
                 _span_attr_error_category: error_category,
             },
@@ -1007,9 +1011,7 @@ class Client:
         self._tool_calls_histogram.record(
             _count_tool_call_parts(generation.output),
             attributes={
-                _span_attr_provider_name: generation.model.provider,
-                _span_attr_request_model: generation.model.name,
-                _span_attr_agent_name: generation.agent_name,
+                **identity_attributes,
             },
         )
 
@@ -1019,9 +1021,7 @@ class Client:
                 self._ttft_histogram.record(
                     ttft_seconds,
                     attributes={
-                        _span_attr_provider_name: generation.model.provider,
-                        _span_attr_request_model: generation.model.name,
-                        _span_attr_agent_name: generation.agent_name,
+                        **identity_attributes,
                     },
                 )
 
@@ -1035,13 +1035,17 @@ class Client:
         error_category: str,
     ) -> None:
         duration_seconds = max((completed_at - started_at).total_seconds(), 0.0)
+        identity_attributes = _metric_identity_attributes(
+            seed.model.provider,
+            seed.model.name,
+            seed.agent_name,
+            seed.agent_version,
+        )
         self._operation_duration_histogram.record(
             duration_seconds,
             attributes={
                 _span_attr_operation_name: _default_embedding_operation_name,
-                _span_attr_provider_name: seed.model.provider,
-                _span_attr_request_model: seed.model.name,
-                _span_attr_agent_name: seed.agent_name,
+                **identity_attributes,
                 _span_attr_error_type: error_type,
                 _span_attr_error_category: error_category,
             },
@@ -1052,9 +1056,7 @@ class Client:
                 result.input_tokens,
                 attributes={
                     _span_attr_operation_name: _default_embedding_operation_name,
-                    _span_attr_provider_name: seed.model.provider,
-                    _span_attr_request_model: seed.model.name,
-                    _span_attr_agent_name: seed.agent_name,
+                    **identity_attributes,
                     _metric_attr_token_type: _metric_token_type_input,
                 },
             )
@@ -1066,9 +1068,12 @@ class Client:
             value,
             attributes={
                 _span_attr_operation_name: generation.operation_name,
-                _span_attr_provider_name: generation.model.provider,
-                _span_attr_request_model: generation.model.name,
-                _span_attr_agent_name: generation.agent_name,
+                **_metric_identity_attributes(
+                    generation.model.provider,
+                    generation.model.name,
+                    generation.agent_name,
+                    generation.agent_version,
+                ),
                 _metric_attr_token_type: token_type,
             },
         )
@@ -1091,10 +1096,13 @@ class Client:
             duration_seconds,
             attributes={
                 _span_attr_operation_name: "execute_tool",
-                _span_attr_provider_name: seed.request_provider.strip() if seed.request_provider else "",
-                _span_attr_request_model: seed.request_model.strip() if seed.request_model else "",
                 _span_attr_tool_name: seed.tool_name.strip(),
-                _span_attr_agent_name: seed.agent_name,
+                **_metric_identity_attributes(
+                    seed.request_provider,
+                    seed.request_model,
+                    seed.agent_name,
+                    seed.agent_version,
+                ),
                 _span_attr_error_type: error_type,
                 _span_attr_error_category: error_category,
             },
@@ -1910,6 +1918,22 @@ def _default_operation_name(mode: GenerationMode | None) -> str:
     if mode == GenerationMode.STREAM:
         return "streamText"
     return "generateText"
+
+
+def _metric_identity_attributes(
+    provider: str | None,
+    model: str | None,
+    agent_name: str | None,
+    agent_version: str | None,
+) -> dict[str, str]:
+    attrs = {
+        _span_attr_provider_name: provider.strip() if provider else "",
+        _span_attr_request_model: model.strip() if model else "",
+        _span_attr_agent_name: agent_name.strip() if agent_name else "",
+    }
+    if agent_version and agent_version.strip():
+        attrs[_span_attr_agent_version] = agent_version.strip()
+    return attrs
 
 
 def _new_random_id(prefix: str) -> str:

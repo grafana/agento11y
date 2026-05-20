@@ -210,6 +210,7 @@ func TestConformance_FullGenerationRoundtrip(t *testing.T) {
 		spanAttrProviderName:  "anthropic",
 		spanAttrRequestModel:  "claude-sonnet-4-5",
 		spanAttrAgentName:     "assistant-anthropic",
+		spanAttrAgentVersion:  "1.0.0",
 		spanAttrErrorType:     "",
 		spanAttrErrorCategory: "",
 	})
@@ -233,6 +234,7 @@ func TestConformance_FullGenerationRoundtrip(t *testing.T) {
 			spanAttrProviderName:  "anthropic",
 			spanAttrRequestModel:  "claude-sonnet-4-5",
 			spanAttrAgentName:     "assistant-anthropic",
+			spanAttrAgentVersion:  "1.0.0",
 			metricAttrTokenType:   tokenType,
 		})
 		if point.Count != 1 {
@@ -248,6 +250,7 @@ func TestConformance_FullGenerationRoundtrip(t *testing.T) {
 		spanAttrProviderName: "anthropic",
 		spanAttrRequestModel: "claude-sonnet-4-5",
 		spanAttrAgentName:    "assistant-anthropic",
+		spanAttrAgentVersion: "1.0.0",
 	})
 	if toolPoint.Count != 1 {
 		t.Fatalf("unexpected %s count: got %d want %d", metricToolCallsPerOperation, toolPoint.Count, 1)

@@ -1,18 +1,27 @@
 # Sigil plugins for coding agents
 
-Plugins that send generations from coding agents to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/). They capture model, tool calls, traces, optionally full conversation content, and tokens/cost where the host agent exposes reliable usage data.
+Send conversations from your coding agent to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/) — model, tokens, tool calls, timing, and optionally the conversation content.
 
-Claude Code, Codex, and Cursor share one Go binary (`sigil`) built from [`sigil/`](sigil/) and invoked as `sigil <host> hook`. Each host directory ships the plugin manifest, hook config, and a wrapper script that locates the shared binary.
+> AI Observability is in [public preview](https://grafana.com/docs/release-life-cycle/).
 
-| Agent | Plugin | Backed by | Status |
-|-------|--------|-----------|--------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [`claude-code/`](claude-code/) | [`sigil/`](sigil/) | Available |
-| [Codex](https://developers.openai.com/codex) | [`codex/`](codex/) | [`sigil/`](sigil/) | Experimental |
-| [Cursor](https://cursor.com) | [`cursor/`](cursor/) | [`sigil/`](sigil/) | Available |
-| [OpenCode](https://opencode.ai) | [`opencode/`](opencode/) | TypeScript | Available |
-| [Pi](https://github.com/badlogic/pi) | [`pi/`](pi/) | TypeScript | Available |
+## Fastest start (Claude Code or pi)
 
-Each plugin's README covers install, config, auth, and content-capture options. The shared binary's own [README](sigil/README.md) documents environment variables that apply to all three Go-backed hosts.
+```sh
+brew install grafana/grafana/sigil
+sigil claude     # for Claude Code
+sigil pi         # for pi
+```
 
-Codex support is experimental because Codex hooks and plugin-provided lifecycle
-config remain feature-flagged.
+The launcher installs the plugin on first run. Add your credentials to `~/.config/sigil/config.env` — see any per-agent README for the 3-page Grafana Cloud walkthrough.
+
+## All plugins
+
+| Agent | Plugin | Status |
+|-------|--------|--------|
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [`claude-code/`](claude-code/) | Available |
+| [Codex](https://developers.openai.com/codex) | [`codex/`](codex/) | Experimental |
+| [Cursor](https://cursor.com) | [`cursor/`](cursor/) | Available |
+| [OpenCode](https://opencode.ai) | [`opencode/`](opencode/) | Available |
+| [Pi](https://github.com/badlogic/pi) | [`pi/`](pi/) | Available |
+
+Claude Code, Codex, and Cursor share the same Go binary (`brew install grafana/grafana/sigil`) and the same config file (`~/.config/sigil/config.env`). All Sigil connection details live at `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`.

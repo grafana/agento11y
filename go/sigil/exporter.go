@@ -450,23 +450,17 @@ func (c *Client) runExportWorker() {
 		return err
 	}
 
-	drainQueue := func() error {
-		for {
-			select {
-			case queued, ok := <-c.queue:
-				if !ok {
-					return nil
-				}
-				batch = append(batch, queued.generation)
-				if len(batch) >= c.config.GenerationExport.BatchSize {
-					if err := flush(); err != nil {
-						return err
-					}
-				}
-			default:
-				return nil
-			}
+	// pendingErr captures the first failure from an async flush (timer or
+	// batch-size triggered) since the last explicit Flush call. It's
+	// returned to and cleared by the next flushReq handler so callers who
+	// use Flush as a durability checkpoint can detect silent data loss
+	// instead of treating an empty post-failure batch as success.
+	var pendingErr error
+	recordAsyncErr := func(err error) {
+		if err == nil || pendingErr != nil {
+			return
 		}
+		pendingErr = err
 	}
 
 	for {
@@ -482,18 +476,65 @@ func (c *Client) runExportWorker() {
 			if len(batch) >= c.config.GenerationExport.BatchSize {
 				if err := flush(); err != nil {
 					c.logf("sigil generation export failed: %v", err)
+					recordAsyncErr(err)
 				}
 				resetTimer(timer, flushInterval)
 			}
 		case ack := <-c.flushReq:
-			if err := drainQueue(); err != nil {
-				ack <- err
-				continue
+			// Drain anything the worker hadn't yet pulled off c.queue so
+			// that an explicit Flush sees every generation enqueued before
+			// the call. Without this, the worker's select can service
+			// flushReq before an already-queued item, returning nil while
+			// the item still lingers on the channel.
+			//
+			// Respect BatchSize during the drain: queue depth can far
+			// exceed BatchSize, so flush mid-drain whenever the batch
+			// reaches the configured size and join any errors with the
+			// final flush result.
+			var flushErr error
+			joinFlush := func(err error) {
+				if err == nil {
+					return
+				}
+				if flushErr == nil {
+					flushErr = err
+					return
+				}
+				flushErr = errors.Join(flushErr, err)
 			}
-			ack <- flush()
+			queueClosed := false
+		draining:
+			for {
+				select {
+				case queued, ok := <-c.queue:
+					if !ok {
+						queueClosed = true
+						break draining
+					}
+					batch = append(batch, queued.generation)
+					if len(batch) >= c.config.GenerationExport.BatchSize {
+						joinFlush(flush())
+					}
+				default:
+					break draining
+				}
+			}
+			joinFlush(flush())
+			if pendingErr != nil {
+				joinFlush(pendingErr)
+				pendingErr = nil
+			}
+			ack <- flushErr
+			if queueClosed {
+				// Shutdown raced with Flush — caller has been acked, exit
+				// the worker like the regular shutdown path.
+				return
+			}
+			resetTimer(timer, flushInterval)
 		case <-timer.C:
 			if err := flush(); err != nil {
 				c.logf("sigil generation export failed: %v", err)
+				recordAsyncErr(err)
 			}
 			resetTimer(timer, flushInterval)
 		}

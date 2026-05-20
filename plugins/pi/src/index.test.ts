@@ -1116,6 +1116,236 @@ describe("extension lifecycle", () => {
     expect(capturedSeed!.conversationId).toBeUndefined();
   });
 
+  describe("guards (tool_call wiring)", () => {
+    function makeRecorder() {
+      return {
+        setResult: vi.fn(),
+        setCallError: vi.fn(),
+        setFirstTokenAt: vi.fn(),
+      };
+    }
+
+    function makeSigilLike(
+      evaluateHook?: ReturnType<typeof vi.fn>,
+    ): SigilLike & { evaluateHook?: ReturnType<typeof vi.fn> } {
+      const recorder = makeRecorder();
+      return {
+        startStreamingGeneration: vi.fn(async (_seed, run) => {
+          await run(recorder);
+        }),
+        startToolExecution: vi.fn(() => ({
+          setResult: vi.fn(),
+          setCallError: vi.fn(),
+          end: vi.fn(),
+          getError: vi.fn(),
+        })),
+        shutdown: vi.fn(async () => {}),
+        ...(evaluateHook ? { evaluateHook } : {}),
+      } as SigilLike & { evaluateHook?: ReturnType<typeof vi.fn> };
+    }
+
+    it("does not call evaluateHook when guards are disabled", async () => {
+      const evaluateHook = vi.fn();
+      const sigil = makeSigilLike(evaluateHook);
+
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+        guards: { enabled: false, timeoutMs: 1500, failOpen: true },
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const fakePi = new FakePi();
+      registerExtension(fakePi as any);
+
+      await fakePi.emit("session_start");
+      await fakePi.emit("turn_start");
+      const handler = fakePi.handlers.get("tool_call")!;
+      const result = await handler(
+        { toolCallId: "c1", toolName: "bash", input: { command: "ls" } },
+        defaultCtx,
+      );
+
+      expect(evaluateHook).not.toHaveBeenCalled();
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined (allow) when guards allow the tool call", async () => {
+      const evaluateHook = vi
+        .fn()
+        .mockResolvedValue({ action: "allow", evaluations: [] });
+      const sigil = makeSigilLike(evaluateHook);
+
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+        guards: { enabled: true, timeoutMs: 1500, failOpen: true },
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const fakePi = new FakePi();
+      registerExtension(fakePi as any);
+
+      await fakePi.emit("session_start");
+      await fakePi.emit("turn_start");
+      const handler = fakePi.handlers.get("tool_call")!;
+      const result = await handler(
+        { toolCallId: "c1", toolName: "bash", input: { command: "ls" } },
+        defaultCtx,
+      );
+
+      expect(evaluateHook).toHaveBeenCalledTimes(1);
+      expect(result).toBeUndefined();
+    });
+
+    it("returns { block, reason } when guards deny the tool call", async () => {
+      const evaluateHook = vi.fn().mockResolvedValue({
+        action: "deny",
+        reason: "blocked rm -rf",
+        evaluations: [],
+      });
+      const sigil = makeSigilLike(evaluateHook);
+
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+        guards: { enabled: true, timeoutMs: 1500, failOpen: true },
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const fakePi = new FakePi();
+      registerExtension(fakePi as any);
+
+      await fakePi.emit("session_start");
+      await fakePi.emit("turn_start");
+      const handler = fakePi.handlers.get("tool_call")!;
+      const result = await handler(
+        { toolCallId: "c1", toolName: "bash", input: { command: "rm -rf /" } },
+        defaultCtx,
+      );
+
+      expect(result).toEqual({ block: true, reason: "blocked rm -rf" });
+    });
+
+    it("forwards the model cached from the current assistant message_end", async () => {
+      const evaluateHook = vi
+        .fn()
+        .mockResolvedValue({ action: "allow", evaluations: [] });
+      const sigil = makeSigilLike(evaluateHook);
+
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+        guards: { enabled: true, timeoutMs: 1500, failOpen: true },
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const fakePi = new FakePi();
+      registerExtension(fakePi as any);
+
+      await fakePi.emit("session_start");
+      await fakePi.emit("turn_start");
+      await fakePi.emit("message_end", { message: assistantMessage() });
+      const handler = fakePi.handlers.get("tool_call")!;
+      await handler(
+        { toolCallId: "c1", toolName: "bash", input: { command: "ls" } },
+        defaultCtx,
+      );
+
+      const req = evaluateHook.mock.calls[0]![0] as {
+        context: { model: { provider: string; name: string } };
+      };
+      expect(req.context.model).toEqual({
+        provider: "anthropic",
+        name: "claude-sonnet-4",
+      });
+    });
+
+    it("falls back to unknown model when no assistant message has ended yet", async () => {
+      const evaluateHook = vi
+        .fn()
+        .mockResolvedValue({ action: "allow", evaluations: [] });
+      const sigil = makeSigilLike(evaluateHook);
+
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+        guards: { enabled: true, timeoutMs: 1500, failOpen: true },
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const fakePi = new FakePi();
+      registerExtension(fakePi as any);
+
+      await fakePi.emit("session_start");
+      await fakePi.emit("turn_start");
+      const handler = fakePi.handlers.get("tool_call")!;
+      await handler(
+        { toolCallId: "c1", toolName: "bash", input: { command: "ls" } },
+        defaultCtx,
+      );
+
+      const req = evaluateHook.mock.calls[0]![0] as {
+        context: { model: { provider: string; name: string } };
+      };
+      expect(req.context.model).toEqual({
+        provider: "unknown",
+        name: "unknown",
+      });
+    });
+
+    it("clears the cached model on session_shutdown", async () => {
+      const evaluateHook = vi
+        .fn()
+        .mockResolvedValue({ action: "allow", evaluations: [] });
+      const sigil = makeSigilLike(evaluateHook);
+
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+        guards: { enabled: true, timeoutMs: 1500, failOpen: true },
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const fakePi = new FakePi();
+      registerExtension(fakePi as any);
+
+      await fakePi.emit("session_start");
+      await fakePi.emit("turn_start");
+      await fakePi.emit("message_end", { message: assistantMessage() });
+      await fakePi.emit("session_shutdown");
+
+      // Re-init session and immediately try a tool_call (no assistant message yet).
+      await fakePi.emit("session_start");
+      await fakePi.emit("turn_start");
+      const handler = fakePi.handlers.get("tool_call")!;
+      await handler(
+        { toolCallId: "c1", toolName: "bash", input: { command: "ls" } },
+        defaultCtx,
+      );
+
+      const req = evaluateHook.mock.calls[0]![0] as {
+        context: { model: { provider: string; name: string } };
+      };
+      expect(req.context.model).toEqual({
+        provider: "unknown",
+        name: "unknown",
+      });
+    });
+  });
+
   it("emits git.branch tag when contentCapture=full", async () => {
     resolveGitBranchMock.mockReturnValue("feature-x");
 

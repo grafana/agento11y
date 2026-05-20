@@ -148,6 +148,13 @@ class ConformanceTest {
                     .isEqualTo("user-roundtrip");
             assertThat(metricNames).contains(SigilClient.METRIC_OPERATION_DURATION, SigilClient.METRIC_TOKEN_USAGE);
             assertThat(metricNames).doesNotContain(SigilClient.METRIC_TTFT);
+            assertThat(env.metricData(SigilClient.METRIC_TOKEN_USAGE).getHistogramData().getPoints())
+                    .anySatisfy(point -> {
+                        assertThat(point.getAttributes().get(AttributeKey.stringKey(SigilClient.SPAN_ATTR_AGENT_VERSION)))
+                                .isEqualTo("v-roundtrip");
+                        assertThat(point.getAttributes().get(AttributeKey.stringKey(SigilClient.METRIC_ATTR_TOKEN_TYPE)))
+                                .isEqualTo("input");
+                    });
         }
     }
 
@@ -702,6 +709,13 @@ class ConformanceTest {
             return metricReader.collectAllMetrics().stream()
                     .map(MetricData::getName)
                     .toList();
+        }
+
+        MetricData metricData(String name) {
+            return metricReader.collectAllMetrics().stream()
+                    .filter(metric -> metric.getName().equals(name))
+                    .findFirst()
+                    .orElseThrow();
         }
 
         @Override

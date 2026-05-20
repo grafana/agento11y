@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.common.AttributesBuilder;
 import io.opentelemetry.api.metrics.DoubleHistogram;
 import io.opentelemetry.api.metrics.Meter;
 import io.opentelemetry.api.trace.Span;
@@ -1216,6 +1217,17 @@ public final class SigilClient implements AutoCloseable {
         }
     }
 
+    private static AttributesBuilder metricIdentityAttributes(String provider, String model, String agentName, String agentVersion) {
+        AttributesBuilder builder = Attributes.builder()
+                .put(SPAN_ATTR_PROVIDER_NAME, provider == null ? "" : provider.trim())
+                .put(SPAN_ATTR_REQUEST_MODEL, model == null ? "" : model.trim())
+                .put(SPAN_ATTR_AGENT_NAME, agentName == null ? "" : agentName.trim());
+        if (agentVersion != null && !agentVersion.trim().isEmpty()) {
+            builder.put(SPAN_ATTR_AGENT_VERSION, agentVersion.trim());
+        }
+        return builder;
+    }
+
     void recordGenerationMetrics(Generation generation, String errorType, String errorCategory, Instant firstTokenAt) {
         if (generation == null) {
             return;
@@ -1225,13 +1237,16 @@ public final class SigilClient implements AutoCloseable {
         }
 
         double durationSeconds = Math.max(0d, Duration.between(generation.getStartedAt(), generation.getCompletedAt()).toNanos() / 1_000_000_000d);
+        Attributes identityAttributes = metricIdentityAttributes(
+                generation.getModel() == null ? "" : generation.getModel().getProvider(),
+                generation.getModel() == null ? "" : generation.getModel().getName(),
+                generation.getAgentName(),
+                generation.getAgentVersion()
+        ).build();
         operationDurationHistogram.record(
                 durationSeconds,
-                Attributes.builder()
+                identityAttributes.toBuilder()
                         .put(SPAN_ATTR_OPERATION_NAME, operationName(generation))
-                        .put(SPAN_ATTR_PROVIDER_NAME, generation.getModel() == null ? "" : generation.getModel().getProvider())
-                        .put(SPAN_ATTR_REQUEST_MODEL, generation.getModel() == null ? "" : generation.getModel().getName())
-                        .put(SPAN_ATTR_AGENT_NAME, generation.getAgentName())
                         .put(SPAN_ATTR_ERROR_TYPE, errorType == null ? "" : errorType)
                         .put(SPAN_ATTR_ERROR_CATEGORY, errorCategory == null ? "" : errorCategory)
                         .build()
@@ -1248,11 +1263,7 @@ public final class SigilClient implements AutoCloseable {
 
         toolCallsHistogram.record(
                 (double) countToolCalls(generation.getOutput()),
-                Attributes.builder()
-                        .put(SPAN_ATTR_PROVIDER_NAME, generation.getModel() == null ? "" : generation.getModel().getProvider())
-                        .put(SPAN_ATTR_REQUEST_MODEL, generation.getModel() == null ? "" : generation.getModel().getName())
-                        .put(SPAN_ATTR_AGENT_NAME, generation.getAgentName())
-                        .build()
+                identityAttributes
         );
 
         if (defaultOperationName(GenerationMode.STREAM).equals(operationName(generation)) && firstTokenAt != null) {
@@ -1260,11 +1271,7 @@ public final class SigilClient implements AutoCloseable {
             if (ttftSeconds >= 0d) {
                 ttftHistogram.record(
                         ttftSeconds,
-                        Attributes.builder()
-                                .put(SPAN_ATTR_PROVIDER_NAME, generation.getModel() == null ? "" : generation.getModel().getProvider())
-                                .put(SPAN_ATTR_REQUEST_MODEL, generation.getModel() == null ? "" : generation.getModel().getName())
-                                .put(SPAN_ATTR_AGENT_NAME, generation.getAgentName())
-                                .build()
+                        identityAttributes
                 );
             }
         }
@@ -1282,13 +1289,16 @@ public final class SigilClient implements AutoCloseable {
         }
 
         double durationSeconds = Math.max(0d, Duration.between(startedAt, completedAt).toNanos() / 1_000_000_000d);
+        Attributes identityAttributes = metricIdentityAttributes(
+                seed.getModel() == null ? "" : seed.getModel().getProvider(),
+                seed.getModel() == null ? "" : seed.getModel().getName(),
+                seed.getAgentName(),
+                seed.getAgentVersion()
+        ).build();
         operationDurationHistogram.record(
                 durationSeconds,
-                Attributes.builder()
+                identityAttributes.toBuilder()
                         .put(SPAN_ATTR_OPERATION_NAME, DEFAULT_EMBEDDING_OPERATION_NAME)
-                        .put(SPAN_ATTR_PROVIDER_NAME, seed.getModel() == null ? "" : seed.getModel().getProvider())
-                        .put(SPAN_ATTR_REQUEST_MODEL, seed.getModel() == null ? "" : seed.getModel().getName())
-                        .put(SPAN_ATTR_AGENT_NAME, seed.getAgentName())
                         .put(SPAN_ATTR_ERROR_TYPE, errorType == null ? "" : errorType)
                         .put(SPAN_ATTR_ERROR_CATEGORY, errorCategory == null ? "" : errorCategory)
                         .build()
@@ -1297,11 +1307,8 @@ public final class SigilClient implements AutoCloseable {
         if (result.getInputTokens() != 0L) {
             tokenUsageHistogram.record(
                     (double) result.getInputTokens(),
-                    Attributes.builder()
+                    identityAttributes.toBuilder()
                             .put(SPAN_ATTR_OPERATION_NAME, DEFAULT_EMBEDDING_OPERATION_NAME)
-                            .put(SPAN_ATTR_PROVIDER_NAME, seed.getModel() == null ? "" : seed.getModel().getProvider())
-                            .put(SPAN_ATTR_REQUEST_MODEL, seed.getModel() == null ? "" : seed.getModel().getName())
-                            .put(SPAN_ATTR_AGENT_NAME, seed.getAgentName())
                             .put(METRIC_ATTR_TOKEN_TYPE, METRIC_TOKEN_TYPE_INPUT)
                             .build()
             );
@@ -1314,11 +1321,13 @@ public final class SigilClient implements AutoCloseable {
         }
         tokenUsageHistogram.record(
                 (double) value,
-                Attributes.builder()
+                metricIdentityAttributes(
+                        generation.getModel() == null ? "" : generation.getModel().getProvider(),
+                        generation.getModel() == null ? "" : generation.getModel().getName(),
+                        generation.getAgentName(),
+                        generation.getAgentVersion()
+                )
                         .put(SPAN_ATTR_OPERATION_NAME, operationName(generation))
-                        .put(SPAN_ATTR_PROVIDER_NAME, generation.getModel() == null ? "" : generation.getModel().getProvider())
-                        .put(SPAN_ATTR_REQUEST_MODEL, generation.getModel() == null ? "" : generation.getModel().getName())
-                        .put(SPAN_ATTR_AGENT_NAME, generation.getAgentName())
                         .put(METRIC_ATTR_TOKEN_TYPE, tokenType)
                         .build()
         );
@@ -1339,12 +1348,9 @@ public final class SigilClient implements AutoCloseable {
 
         operationDurationHistogram.record(
                 durationSeconds,
-                Attributes.builder()
+                metricIdentityAttributes(seed.getRequestProvider(), seed.getRequestModel(), seed.getAgentName(), seed.getAgentVersion())
                         .put(SPAN_ATTR_OPERATION_NAME, TOOL_EXECUTION_OPERATION_NAME)
-                        .put(SPAN_ATTR_PROVIDER_NAME, seed.getRequestProvider().trim())
-                        .put(SPAN_ATTR_REQUEST_MODEL, seed.getRequestModel().trim())
                         .put(SPAN_ATTR_TOOL_NAME, seed.getToolName().trim())
-                        .put(SPAN_ATTR_AGENT_NAME, seed.getAgentName())
                         .put(SPAN_ATTR_ERROR_TYPE, errorType)
                         .put(SPAN_ATTR_ERROR_CATEGORY, errorCategory)
                         .build()

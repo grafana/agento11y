@@ -148,7 +148,10 @@ function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean): string {
 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     const parsed = new URL(trimmed);
-    return `${parsed.protocol}//${parsed.host}`;
+    // Preserve a path prefix so prefix-mounted Sigil deployments
+    // (https://host/sigil) route /api/v1/hooks:evaluate under the prefix.
+    const path = parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.protocol}//${parsed.host}${path}`;
   }
 
   const withoutScheme = trimmed.startsWith('grpc://') ? trimmed.slice('grpc://'.length) : trimmed;

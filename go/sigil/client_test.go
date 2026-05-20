@@ -1659,19 +1659,23 @@ func newTestClient(t *testing.T, config Config) (*Client, *tracetest.SpanRecorde
 type capturingGenerationExporter struct {
 	mu       sync.Mutex
 	requests []*sigilv1.ExportGenerationsRequest
+	attempts int
 	err      error
 	response *sigilv1.ExportGenerationsResponse
 	export   func(context.Context, *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error)
 }
 
 func (e *capturingGenerationExporter) Export(ctx context.Context, req *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error) {
-	if e.err != nil {
-		return nil, e.err
-	}
-
 	e.mu.Lock()
-	e.requests = append(e.requests, req)
+	e.attempts++
+	err := e.err
+	if err == nil {
+		e.requests = append(e.requests, req)
+	}
 	e.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 
 	if e.export != nil {
 		return e.export(ctx, req)
@@ -1921,6 +1925,12 @@ func TestFlushReturnsErrorOnNilGenerationResult(t *testing.T) {
 	if got := exporter.requestCount(); got != 2 {
 		t.Fatalf("requestCount = %d, want 2", got)
 	}
+}
+
+func (e *capturingGenerationExporter) setExportErr(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.err = err
 }
 
 func countGenerationSpans(spans []sdktrace.ReadOnlySpan) int {

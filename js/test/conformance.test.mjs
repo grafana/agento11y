@@ -111,6 +111,7 @@ test('conformance sync roundtrip semantics', async () => {
     const generation = env.singleGeneration();
     const span = env.latestGenerationSpan();
     const metricNames = await env.metricNames();
+    const tokenUsageAttributes = await env.metricDataPointAttributes('gen_ai.client.token.usage');
 
     assert.equal(generation.mode, 'GENERATION_MODE_SYNC');
     assert.equal(generation.operationName, 'generateText');
@@ -147,6 +148,13 @@ test('conformance sync roundtrip semantics', async () => {
     assert.ok(metricNames.includes('gen_ai.client.operation.duration'));
     assert.ok(metricNames.includes('gen_ai.client.token.usage'));
     assert.ok(!metricNames.includes('gen_ai.client.time_to_first_token'));
+    assert.ok(
+      tokenUsageAttributes.some(
+        (attributes) =>
+          attributes['gen_ai.agent.version'] === 'v-roundtrip' && attributes['gen_ai.token.type'] === 'input',
+      ),
+      'token usage metrics should include the agent version attribute',
+    );
   } finally {
     await env.close();
   }
@@ -789,6 +797,16 @@ async function createConformanceEnv(options = {}) {
       assert.ok(metric, `expected histogram metric ${metricName}`);
       assert.ok(metric.dataPoints.length > 0, `expected ${metricName} datapoints`);
       return metric.dataPoints[0].value.buckets.boundaries;
+    },
+    async metricDataPointAttributes(metricName) {
+      await meterProvider.forceFlush();
+      const metric = metricExporter
+        .getMetrics()
+        .flatMap((resourceMetrics) => resourceMetrics.scopeMetrics)
+        .flatMap((scopeMetrics) => scopeMetrics.metrics)
+        .find((m) => m.descriptor.name === metricName && m.dataPointType === DataPointType.HISTOGRAM);
+      assert.ok(metric, `expected histogram metric ${metricName}`);
+      return metric.dataPoints.map((point) => point.attributes);
     },
     async close() {
       if (closed) {

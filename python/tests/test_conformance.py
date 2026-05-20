@@ -327,6 +327,11 @@ def test_conformance_sync_roundtrip_semantics() -> None:
         assert "gen_ai.client.operation.duration" in metrics
         assert "gen_ai.client.token.usage" in metrics
         assert "gen_ai.client.time_to_first_token" not in metrics
+        assert any(
+            point.attributes.get("gen_ai.agent.version") == "v-roundtrip"
+            and point.attributes.get("gen_ai.token.type") == "input"
+            for point in metrics["gen_ai.client.token.usage"].data_points
+        )
     finally:
         env.shutdown()
 

@@ -1454,14 +1454,14 @@ public sealed partial class SigilClient : IAsyncDisposable
 
         _operationDurationHistogram.Record(
             durationSeconds,
-            [
+            WithAgentVersionTag(generation.AgentVersion, [
                 new(SpanAttrOperationName, OperationName(generation)),
                 new(SpanAttrProviderName, generation.Model.Provider ?? string.Empty),
                 new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
                 new(SpanAttrAgentName, generation.AgentName ?? string.Empty),
                 new(SpanAttrErrorType, errorType ?? string.Empty),
                 new(SpanAttrErrorCategory, errorCategory ?? string.Empty),
-            ]);
+            ]));
 
         RecordTokenUsage(generation, MetricTokenTypeInput, generation.Usage.InputTokens);
         RecordTokenUsage(generation, MetricTokenTypeOutput, generation.Usage.OutputTokens);
@@ -1471,11 +1471,11 @@ public sealed partial class SigilClient : IAsyncDisposable
 
         _toolCallsHistogram.Record(
             CountToolCallParts(generation.Output),
-            [
+            WithAgentVersionTag(generation.AgentVersion, [
                 new(SpanAttrProviderName, generation.Model.Provider ?? string.Empty),
                 new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
                 new(SpanAttrAgentName, generation.AgentName ?? string.Empty),
-            ]);
+            ]));
 
         if (string.Equals(OperationName(generation), DefaultOperationNameStream, StringComparison.Ordinal)
             && firstTokenAt.HasValue)
@@ -1485,11 +1485,11 @@ public sealed partial class SigilClient : IAsyncDisposable
             {
                 _ttftHistogram.Record(
                     ttftSeconds,
-                    [
+                    WithAgentVersionTag(generation.AgentVersion, [
                         new(SpanAttrProviderName, generation.Model.Provider ?? string.Empty),
                         new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
                         new(SpanAttrAgentName, generation.AgentName ?? string.Empty),
-                    ]);
+                    ]));
             }
         }
     }
@@ -1506,26 +1506,26 @@ public sealed partial class SigilClient : IAsyncDisposable
         var durationSeconds = Math.Max(0d, (completedAt - startedAt).TotalSeconds);
         _operationDurationHistogram.Record(
             durationSeconds,
-            [
+            WithAgentVersionTag(seed.AgentVersion, [
                 new(SpanAttrOperationName, DefaultOperationNameEmbedding),
                 new(SpanAttrProviderName, seed.Model.Provider ?? string.Empty),
                 new(SpanAttrRequestModel, seed.Model.Name ?? string.Empty),
                 new(SpanAttrAgentName, seed.AgentName ?? string.Empty),
                 new(SpanAttrErrorType, errorType ?? string.Empty),
                 new(SpanAttrErrorCategory, errorCategory ?? string.Empty),
-            ]);
+            ]));
 
         if (result.InputTokens != 0L)
         {
             _tokenUsageHistogram.Record(
                 result.InputTokens,
-                [
+                WithAgentVersionTag(seed.AgentVersion, [
                     new(SpanAttrOperationName, DefaultOperationNameEmbedding),
                     new(SpanAttrProviderName, seed.Model.Provider ?? string.Empty),
                     new(SpanAttrRequestModel, seed.Model.Name ?? string.Empty),
                     new(SpanAttrAgentName, seed.AgentName ?? string.Empty),
                     new(MetricAttrTokenType, MetricTokenTypeInput),
-                ]);
+                ]));
         }
     }
 
@@ -1542,7 +1542,7 @@ public sealed partial class SigilClient : IAsyncDisposable
 
         _operationDurationHistogram.Record(
             durationSeconds,
-            [
+            WithAgentVersionTag(seed.AgentVersion, [
                 new(SpanAttrOperationName, "execute_tool"),
                 new(SpanAttrProviderName, (seed.RequestProvider ?? string.Empty).Trim()),
                 new(SpanAttrRequestModel, (seed.RequestModel ?? string.Empty).Trim()),
@@ -1550,7 +1550,7 @@ public sealed partial class SigilClient : IAsyncDisposable
                 new(SpanAttrAgentName, seed.AgentName ?? string.Empty),
                 new(SpanAttrErrorType, errorType),
                 new(SpanAttrErrorCategory, errorCategory),
-            ]);
+            ]));
     }
 
     internal static string ErrorCategoryFromException(Exception? error, bool fallbackSdk)
@@ -1610,13 +1610,30 @@ public sealed partial class SigilClient : IAsyncDisposable
 
         _tokenUsageHistogram.Record(
             value,
-            [
+            WithAgentVersionTag(generation.AgentVersion, [
                 new(SpanAttrOperationName, OperationName(generation)),
                 new(SpanAttrProviderName, generation.Model.Provider ?? string.Empty),
                 new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
                 new(SpanAttrAgentName, generation.AgentName ?? string.Empty),
                 new(MetricAttrTokenType, tokenType),
-            ]);
+            ]));
+    }
+
+    private static KeyValuePair<string, object?>[] WithAgentVersionTag(
+        string? agentVersion,
+        KeyValuePair<string, object?>[] tags
+    )
+    {
+        var version = (agentVersion ?? string.Empty).Trim();
+        if (version.Length == 0)
+        {
+            return tags;
+        }
+
+        var outTags = new KeyValuePair<string, object?>[tags.Length + 1];
+        Array.Copy(tags, outTags, tags.Length);
+        outTags[tags.Length] = new KeyValuePair<string, object?>(SpanAttrAgentVersion, version);
+        return outTags;
     }
 
     private static long CountToolCallParts(IReadOnlyList<Message> messages)

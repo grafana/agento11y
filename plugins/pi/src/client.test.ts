@@ -22,7 +22,7 @@ import { createSigilClient } from "./client.js";
 
 function makeConfig(overrides?: Partial<SigilPiConfig>): SigilPiConfig {
   return {
-    endpoint: "http://localhost:8080/api/v1/generations:export",
+    endpoint: "http://localhost:8080",
     auth: { mode: "none" },
     agentName: "pi",
     contentCapture: "metadata_only",
@@ -31,6 +31,11 @@ function makeConfig(overrides?: Partial<SigilPiConfig>): SigilPiConfig {
       enabled: true,
       redactInputMessages: true,
       redactEmailAddresses: true,
+    },
+    guards: {
+      enabled: false,
+      timeoutMs: 1500,
+      failOpen: true,
     },
     ...overrides,
   };
@@ -59,10 +64,31 @@ describe("createSigilClient", () => {
         endpoint: "http://localhost:8080/api/v1/generations:export",
         auth: { mode: "tenant", tenantId: "t-1" },
       },
+      api: { endpoint: "http://localhost:8080" },
+      hooks: {
+        enabled: false,
+        phases: ["postflight"],
+        timeoutMs: 1500,
+        failOpen: true,
+      },
       contentCapture: "metadata_only",
       logger: expect.any(Object),
       generationSanitizer: SANITIZER,
     });
+  });
+
+  it("appends the export path for a prefix-mounted endpoint", () => {
+    createSigilClient(
+      makeConfig({ endpoint: "https://sigil.example.com/sigil" }),
+    );
+    expect(SigilClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generationExport: expect.objectContaining({
+          endpoint: "https://sigil.example.com/sigil/api/v1/generations:export",
+        }),
+        api: { endpoint: "https://sigil.example.com/sigil" },
+      }),
+    );
   });
 
   it("maps basic auth to sdk format with tenantId", () => {
@@ -88,10 +114,41 @@ describe("createSigilClient", () => {
           tenantId: "12345",
         },
       },
+      api: { endpoint: "http://localhost:8080" },
+      hooks: {
+        enabled: false,
+        phases: ["postflight"],
+        timeoutMs: 1500,
+        failOpen: true,
+      },
       contentCapture: "metadata_only",
       logger: expect.any(Object),
       generationSanitizer: SANITIZER,
     });
+  });
+
+  it("forwards guards config to the SDK hooks block", () => {
+    createSigilClient(
+      makeConfig({
+        endpoint: "https://sigil.example.com",
+        guards: { enabled: true, timeoutMs: 2500, failOpen: false },
+      }),
+    );
+
+    expect(SigilClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        api: { endpoint: "https://sigil.example.com" },
+        generationExport: expect.objectContaining({
+          endpoint: "https://sigil.example.com/api/v1/generations:export",
+        }),
+        hooks: {
+          enabled: true,
+          phases: ["postflight"],
+          timeoutMs: 2500,
+          failOpen: false,
+        },
+      }),
+    );
   });
 
   it("passes contentCapture to SigilClient", () => {
