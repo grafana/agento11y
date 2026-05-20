@@ -1,0 +1,147 @@
+{
+  "hooks": {
+    "sessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sigil-copilot",
+            "env": {
+              "SIGIL_COPILOT_HOOK_EVENT": "sessionStart"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "sessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sigil-copilot",
+            "env": {
+              "SIGIL_COPILOT_HOOK_EVENT": "sessionEnd"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sigil-copilot",
+            "env": {
+              "SIGIL_COPILOT_HOOK_EVENT": "userPromptSubmitted"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "preToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sigil-copilot",
+            "env": {
+              "SIGIL_COPILOT_HOOK_EVENT": "preToolUse"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "postToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sigil-copilot",
+            "env": {
+              "SIGIL_COPILOT_HOOK_EVENT": "postToolUse"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sigil-copilot",
+            "env": {
+              "SIGIL_COPILOT_HOOK_EVENT": "postToolUseFailure"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "errorOccurred": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sigil-copilot",
+            "env": {
+              "SIGIL_COPILOT_HOOK_EVENT": "errorOccurred"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "subagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sigil-copilot",
+            "env": {
+              "SIGIL_COPILOT_HOOK_EVENT": "subagentStart"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "subagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sigil-copilot",
+            "env": {
+              "SIGIL_COPILOT_HOOK_EVENT": "subagentStop"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "agentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sigil-copilot",
+            "env": {
+              "SIGIL_COPILOT_HOOK_EVENT": "agentStop"
+            },
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

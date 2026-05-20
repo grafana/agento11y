@@ -6,5 +6,6 @@ use (
 	./go-providers/anthropic
 	./go-providers/gemini
 	./go-providers/openai
+	./plugins/copilot
 	./plugins/sigil
 )

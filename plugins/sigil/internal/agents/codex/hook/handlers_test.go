@@ -249,8 +249,7 @@ func TestStopSuccessfulExportDeletesFragmentAndUsesAuth(t *testing.T) {
 		requestCount.Add(1)
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
+		writeAcceptedGenerationResponseFromRequest(t, w, r)
 	}))
 	defer server.Close()
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
@@ -294,9 +293,10 @@ func TestStopExportsRolloutTokenUsage(t *testing.T) {
 		body, err = io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("read body: %v", err)
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
+		writeAcceptedGenerationResponse(t, w, body)
 	}))
 	defer server.Close()
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
@@ -360,10 +360,9 @@ func TestStopResolvesSubagentParentGeneration(t *testing.T) {
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	logger := log.New(io.Discard, "", 0)
 	var requestCount atomic.Int64
-	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
+		writeAcceptedGenerationResponseFromRequest(t, w, r)
 	}))
 	defer server.Close()
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
@@ -470,10 +469,9 @@ func TestStopRetriesPendingFragmentsFromPriorTurns(t *testing.T) {
 	logger := log.New(io.Discard, "", 0)
 
 	var requestCount atomic.Int64
-	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
+		writeAcceptedGenerationResponseFromRequest(t, w, r)
 	}))
 	defer server.Close()
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
@@ -577,10 +575,11 @@ func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("read body: %v", err)
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
 		}
 		bodies = append(bodies, body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
+		writeAcceptedGenerationResponse(t, w, body)
 	}))
 	defer server.Close()
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
@@ -699,6 +698,41 @@ func writeHookTranscript(t *testing.T, lines ...string) string {
 		t.Fatalf("write transcript: %v", err)
 	}
 	return path
+}
+
+func writeAcceptedGenerationResponseFromRequest(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Errorf("read body: %v", err)
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	writeAcceptedGenerationResponse(t, w, body)
+}
+
+func writeAcceptedGenerationResponse(t *testing.T, w http.ResponseWriter, body []byte) {
+	t.Helper()
+	var request map[string]any
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Errorf("decode export request: %v", err)
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	generations, _ := request["generations"].([]any)
+	results := make([]map[string]any, 0, len(generations))
+	for _, raw := range generations {
+		generation, _ := raw.(map[string]any)
+		id, _ := generation["id"].(string)
+		results = append(results, map[string]any{
+			"generation_id": id,
+			"accepted":      true,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"results": results}); err != nil {
+		t.Errorf("encode response: %v", err)
+	}
 }
 
 func jsonInt64(t *testing.T, v any) int64 {

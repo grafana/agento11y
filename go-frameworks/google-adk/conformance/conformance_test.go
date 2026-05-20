@@ -333,9 +333,27 @@ func newGenerationCaptureServer(t *testing.T) *generationCaptureServer {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"results":[]}`))
+		_ = json.NewEncoder(w).Encode(acceptanceResponse(request))
 	}))
 	return capture
+}
+
+func acceptanceResponse(request map[string]any) map[string]any {
+	generations, _ := request["generations"].([]any)
+	results := make([]map[string]any, 0, len(generations))
+	for _, raw := range generations {
+		generation, ok := raw.(map[string]any)
+		if !ok {
+			results = append(results, map[string]any{"accepted": true})
+			continue
+		}
+		id, _ := generation["id"].(string)
+		results = append(results, map[string]any{
+			"generation_id": id,
+			"accepted":      true,
+		})
+	}
+	return map[string]any{"results": results}
 }
 
 func (c *generationCaptureServer) requestCount() int {
