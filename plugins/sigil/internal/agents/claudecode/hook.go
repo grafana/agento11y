@@ -16,10 +16,10 @@ import (
 
 	"github.com/grafana/sigil-sdk/go/sigil"
 
-	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/claudecode/mapper"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/claudecode/state"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/claudecode/transcript"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
 )
@@ -101,8 +101,8 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	st := state.Load(input.SessionID)
 
 	switch strings.TrimSpace(input.HookEventName) {
-	case "", "Stop":
-		// Stop hook uses the transcript to export generations.
+	case "", "Stop", "SessionEnd":
+		// Stop and SessionEnd hooks use the transcript to export generations.
 	case "SessionStart":
 		st.Model = strings.TrimSpace(input.Model)
 		if err := state.Save(input.SessionID, st); err != nil {
@@ -153,8 +153,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	}, r)
 
 	if len(gens) == 0 {
-		st.Offset = safeOffset
-		_ = state.Save(input.SessionID, st)
+		logger.Printf("no generations produced; keeping offset=%d for next event", st.Offset)
 		return nil
 	}
 	logger.Printf("produced %d generations", len(gens))

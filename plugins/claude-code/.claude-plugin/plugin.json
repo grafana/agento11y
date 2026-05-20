@@ -45,6 +45,18 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sigil claude-code hook",
+            "timeout": 10000
+          }
+        ]
+      }
     ]
   }
 }

@@ -1,13 +1,19 @@
 package claudecode
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/grafana/sigil-sdk/go/sigil"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/claudecode/state"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -37,6 +43,176 @@ func TestParseHookInput_RejectsEmpty(t *testing.T) {
 	if _, err := parseHookInput(strings.NewReader(`{}`)); err == nil {
 		t.Fatal("expected error on missing fields")
 	}
+}
+
+func TestHookEventRouting(t *testing.T) {
+	tests := []struct {
+		name            string
+		setup           func(t *testing.T, dir string) hookInput
+		wantLogs        []string
+		wantMissingLogs []string
+		assertState     func(t *testing.T)
+	}{
+		{
+			name: "Stop keeps offset when no generations are produced",
+			setup: func(t *testing.T, dir string) hookInput {
+				t.Helper()
+				sessionID := "zero-generation-session"
+				transcriptPath := filepath.Join(dir, "transcript.jsonl")
+				processedPart := buildHookUserJSONL(sessionID, "already processed") + "\n"
+				userPart := buildHookUserJSONL(sessionID, "hey") + "\n"
+				if err := os.WriteFile(transcriptPath, []byte(processedPart+userPart), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				startOffset := int64(len([]byte(processedPart)))
+				if err := state.Save(sessionID, state.Session{Offset: startOffset, Title: "existing title", Model: "claude-sonnet-4"}); err != nil {
+					t.Fatal(err)
+				}
+				return hookInput{
+					HookEventName:  "Stop",
+					SessionID:      sessionID,
+					TranscriptPath: transcriptPath,
+				}
+			},
+			wantLogs: []string{"no generations produced; keeping offset="},
+			assertState: func(t *testing.T) {
+				t.Helper()
+				sessionID := "zero-generation-session"
+				wantOffset := int64(len([]byte(buildHookUserJSONL(sessionID, "already processed") + "\n")))
+				st := state.Load(sessionID)
+				if st.Offset != wantOffset {
+					t.Fatalf("Offset = %d, want %d", st.Offset, wantOffset)
+				}
+				if st.Title != "existing title" {
+					t.Fatalf("Title = %q, want existing title", st.Title)
+				}
+			},
+		},
+		{
+			name: "SessionEnd processes transcript",
+			setup: func(t *testing.T, dir string) hookInput {
+				t.Helper()
+				sessionID := "sessionend-route"
+				transcriptPath := filepath.Join(dir, "transcript.jsonl")
+				userLine := buildHookUserJSONL(sessionID, "hey")
+				if err := os.WriteFile(transcriptPath, []byte(userLine+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return hookInput{
+					HookEventName:  "SessionEnd",
+					SessionID:      sessionID,
+					TranscriptPath: transcriptPath,
+				}
+			},
+			wantLogs: []string{
+				"read 1 raw lines",
+				"no generations produced; keeping offset=0 for next event",
+			},
+		},
+		{
+			name: "SessionStart does not process transcript",
+			setup: func(t *testing.T, dir string) hookInput {
+				t.Helper()
+				return hookInput{
+					HookEventName:  "SessionStart",
+					SessionID:      "sessionstart-route",
+					TranscriptPath: filepath.Join(dir, "missing.jsonl"),
+					Model:          "claude-opus-4-20250514",
+				}
+			},
+			wantMissingLogs: []string{"read transcript:", "raw lines"},
+			assertState: func(t *testing.T) {
+				t.Helper()
+				st := state.Load("sessionstart-route")
+				if st.Model != "claude-opus-4-20250514" {
+					t.Fatalf("Model = %q, want claude-opus-4-20250514", st.Model)
+				}
+			},
+		},
+		{
+			name: "unknown event does not process transcript",
+			setup: func(t *testing.T, dir string) hookInput {
+				t.Helper()
+				return hookInput{
+					HookEventName:  "UnknownEvent",
+					SessionID:      "unknown-route",
+					TranscriptPath: filepath.Join(dir, "missing.jsonl"),
+				}
+			},
+			wantMissingLogs: []string{"read transcript:", "raw lines"},
+			assertState: func(t *testing.T) {
+				t.Helper()
+				st := state.Load("unknown-route")
+				if st != (state.Session{}) {
+					t.Fatalf("state = %#v, want zero value", st)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+			setHookExportEnv(t, "http://example.invalid")
+
+			logs := runHookForTest(t, tt.setup(t, dir))
+			for _, want := range tt.wantLogs {
+				if !strings.Contains(logs, want) {
+					t.Fatalf("logs do not contain %q:\n%s", want, logs)
+				}
+			}
+			for _, missing := range tt.wantMissingLogs {
+				if strings.Contains(logs, missing) {
+					t.Fatalf("logs contain unexpected %q:\n%s", missing, logs)
+				}
+			}
+			if tt.assertState != nil {
+				tt.assertState(t)
+			}
+		})
+	}
+}
+
+func setHookExportEnv(t *testing.T, endpoint string) {
+	t.Helper()
+	t.Setenv("SIGIL_ENDPOINT", endpoint)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+	t.Setenv("SIGIL_AUTH_MODE", "basic")
+	t.Setenv("SIGIL_PROTOCOL", "http")
+	t.Setenv("SIGIL_USER_ID", "test-user")
+	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+}
+
+func runHookForTest(t *testing.T, input hookInput) string {
+	t.Helper()
+	payload, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	if err := Hook(context.Background(), bytes.NewReader(payload), io.Discard, log.New(&logs, "", 0)); err != nil {
+		t.Fatalf("Hook: %v", err)
+	}
+	return logs.String()
+}
+
+func buildHookUserJSONL(sessionID, text string) string {
+	line := map[string]any{
+		"type":      "user",
+		"sessionId": sessionID,
+		"timestamp": "2025-06-01T12:00:00Z",
+		"version":   "1.0.0",
+		"message": map[string]any{
+			"role":    "user",
+			"content": text,
+		},
+	}
+	data, _ := json.Marshal(line)
+	return string(data)
 }
 
 func TestBuildToolResultMap(t *testing.T) {
