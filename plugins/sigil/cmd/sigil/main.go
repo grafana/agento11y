@@ -16,6 +16,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -27,9 +29,10 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/pi"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/cli"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/dotenv"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/login"
 )
 
-const usageLine = "usage: sigil <agent> hook | sigil claude [-- args...] | sigil pi [-- args...]"
+const usageLine = "usage: sigil login | sigil <agent> hook | sigil claude [-- args...] | sigil pi [-- args...]"
 
 // version is overridden via -ldflags at build time.
 var version = "dev"
@@ -62,6 +65,10 @@ var launchers = map[string]agentLauncher{
 // exit is a package var so tests can intercept termination.
 var exit = os.Exit
 
+// loginRun is a package var so tests can stub the interactive login flow
+// without driving the huh TTY. Production code points at login.Run.
+var loginRun = login.Run
+
 func main() {
 	run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
 }
@@ -78,6 +85,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		return
 	}
 
+	// `sigil login` is a top-level subcommand handled before launcher and
+	// hook dispatch so it can run without a verb argument and without an
+	// agent name. It owns its own flag parsing.
+	if args[0] == "login" {
+		runLoginCommand(args[1:], stderr)
+		return
+	}
+
 	// Launcher dispatch handles `sigil <launcher> [-- args...]` before the
 	// hook branch because launchers have no verb (single mode of operation).
 	if launcher, ok := launchers[args[0]]; ok {
@@ -88,6 +103,29 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 
 		dotenv.ApplyEnv("sigil", nil)
 		logger := cli.InitLogger("sigil", args[0], "SIGIL_DEBUG")
+
+		// Auto-prompt for credentials on first run. login.Run returns
+		// ErrNotInteractive when stdin is not a TTY (e.g. CI, piped input);
+		// in that case we silently fall through to exec, matching the
+		// previous behaviour where hooks just emit a "missing credentials"
+		// line on stderr. A failed or aborted login does not block the
+		// launch — the user explicitly asked to start claude/pi, and we
+		// don't want sigil to gate that on its own setup.
+		if !dotenv.HasCredentials() {
+			err := loginRun(context.Background(), login.RunOpts{
+				Stderr: stderr,
+				Logger: logger,
+			})
+			switch {
+			case err == nil, errors.Is(err, login.ErrNotInteractive):
+				// either succeeded or no TTY; continue.
+			case errors.Is(err, login.ErrAborted):
+				_, _ = fmt.Fprintln(stderr, "sigil: setup aborted; continuing without capture")
+			default:
+				logger.Printf("auto-login: %v", err)
+				_, _ = fmt.Fprintf(stderr, "sigil: setup failed (%v); continuing without capture\n", err)
+			}
+		}
 		// Launcher panics must surface to the user (non-zero exit, message on
 		// stderr) — log to the debug file, then re-panic so the Go runtime
 		// reports it. cli.RecoverAndLog would silently swallow the panic and
@@ -142,6 +180,56 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 
 	if err := hook(context.Background(), stdin, stdout, logger); err != nil {
 		logger.Printf("hook: %v", err)
+	}
+}
+
+// runLoginCommand handles `sigil login`. The flow is interactive-only: any
+// args (including unknown flags) are rejected with exit 2. Non-interactive
+// callers should set SIGIL_* env vars or edit $XDG_CONFIG_HOME/sigil/config.env
+// directly.
+func runLoginCommand(args []string, stderr io.Writer) {
+	fs := flag.NewFlagSet("login", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: sigil login")
+		_, _ = fmt.Fprintln(stderr)
+		_, _ = fmt.Fprintln(stderr, "Interactively save Sigil credentials to $XDG_CONFIG_HOME/sigil/config.env.")
+	}
+	if err := fs.Parse(args); err != nil {
+		exit(2)
+		return
+	}
+	if fs.NArg() > 0 {
+		fs.Usage()
+		exit(2)
+		return
+	}
+
+	dotenv.ApplyEnv("sigil", nil)
+	logger := cli.InitLogger("sigil", "login", "SIGIL_DEBUG")
+
+	err := loginRun(context.Background(), login.RunOpts{
+		// Only the explicit `sigil login` shows the “Try sigil claude/pi”
+		// hint. The launcher auto-prompt path leaves this false because the
+		// launcher is about to exec the agent anyway.
+		ShowNextStep: true,
+		Stderr:       stderr,
+		Logger:       logger,
+	})
+	switch {
+	case err == nil:
+		return
+	case errors.Is(err, login.ErrAborted):
+		_, _ = fmt.Fprintln(stderr, "Aborted.")
+		return
+	case errors.Is(err, login.ErrNotInteractive):
+		_, _ = fmt.Fprintln(stderr, "sigil login: cannot prompt because stdin is not a terminal. Run from an interactive shell, or set SIGIL_ENDPOINT, SIGIL_AUTH_TENANT_ID and SIGIL_AUTH_TOKEN in your environment.")
+		exit(1)
+		return
+	default:
+		_, _ = fmt.Fprintf(stderr, "sigil: login failed: %v\n", err)
+		exit(1)
+		return
 	}
 }
 

@@ -11,7 +11,18 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/login"
 )
+
+// TestMain stubs the interactive login flow for the whole test package so
+// launcher dispatch tests don't accidentally drive the real huh form when
+// run from a TTY. Individual tests that exercise the login path can
+// override the stub via withStubLoginRun.
+func TestMain(m *testing.M) {
+	loginRun = func(context.Context, login.RunOpts) error { return login.ErrNotInteractive }
+	os.Exit(m.Run())
+}
 
 func TestRun_VersionFlag(t *testing.T) {
 	prev := version
@@ -392,6 +403,27 @@ func withStubLauncher(t *testing.T, name string, fn agentLauncher) {
 	launchers = map[string]agentLauncher{name: fn}
 }
 
+// withStubLoginRun replaces the package's loginRun seam for the duration of
+// a single test so per-test login behaviour can be asserted without driving
+// huh's TUI.
+func withStubLoginRun(t *testing.T, fn func(context.Context, login.RunOpts) error) {
+	t.Helper()
+	prev := loginRun
+	t.Cleanup(func() { loginRun = prev })
+	loginRun = fn
+}
+
+// isolateDotenvHome points $HOME/$XDG_CONFIG_HOME at a fresh tempdir so
+// dotenv reads/writes do not touch the user's real config during a test.
+func isolateDotenvHome(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	return dir
+}
+
 // withExit replaces the package's exit function with a recorder, runs f, and
 // returns the recorded code (nil if exit was never called).
 func withExit(t *testing.T, f func()) (code *int) {
@@ -415,3 +447,151 @@ func withExit(t *testing.T, f func()) (code *int) {
 }
 
 type exitSentinel struct{}
+
+func TestRun_LoginSubcommand_NotInteractiveExits1(t *testing.T) {
+	isolateDotenvHome(t)
+	withStubLoginRun(t, func(context.Context, login.RunOpts) error {
+		return login.ErrNotInteractive
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"login"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit == nil || *gotExit != 1 {
+		t.Fatalf("exit = %v, want 1", gotExit)
+	}
+	if !strings.Contains(stderr.String(), "stdin is not a terminal") {
+		t.Errorf("stderr missing non-interactive hint: %q", stderr.String())
+	}
+}
+
+func TestRun_LoginSubcommand_AbortedExits0(t *testing.T) {
+	isolateDotenvHome(t)
+	withStubLoginRun(t, func(context.Context, login.RunOpts) error {
+		return login.ErrAborted
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"login"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit != nil {
+		t.Fatalf("exit = %v, want no exit (aborted login is not an error)", *gotExit)
+	}
+	if !strings.Contains(stderr.String(), "Aborted.") {
+		t.Errorf("stderr missing Aborted: %q", stderr.String())
+	}
+}
+
+func TestRun_LoginSubcommand_BadFlagExits2(t *testing.T) {
+	isolateDotenvHome(t)
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"login", "--no-such-flag"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit == nil || *gotExit != 2 {
+		t.Fatalf("exit = %v, want 2", gotExit)
+	}
+}
+
+func TestRun_LauncherAutoPromptsWhenCredsMissing(t *testing.T) {
+	isolateDotenvHome(t)
+	t.Setenv("SIGIL_ENDPOINT", "")
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+	t.Setenv("SIGIL_AUTH_TOKEN", "")
+
+	loginCalled := 0
+	withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) error {
+		loginCalled++
+		// Simulate the prompt populating the credential env vars.
+		_ = os.Setenv("SIGIL_ENDPOINT", "https://sigil.example.com")
+		_ = os.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+		_ = os.Setenv("SIGIL_AUTH_TOKEN", "secret")
+		return nil
+	})
+
+	launcherCalled := 0
+	withStubLauncher(t, "pi", func(context.Context, []string, io.Reader, io.Writer, io.Writer, *log.Logger) error {
+		launcherCalled++
+		if os.Getenv("SIGIL_ENDPOINT") != "https://sigil.example.com" {
+			t.Errorf("launcher saw SIGIL_ENDPOINT = %q, want set by login", os.Getenv("SIGIL_ENDPOINT"))
+		}
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"pi", "--"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit != nil {
+		t.Fatalf("exit = %v, want no exit", *gotExit)
+	}
+	if loginCalled != 1 {
+		t.Errorf("loginRun called %d times, want 1", loginCalled)
+	}
+	if launcherCalled != 1 {
+		t.Errorf("launcher called %d times, want 1", launcherCalled)
+	}
+}
+
+func TestRun_LauncherSkipsAutoPromptWhenCredsPresent(t *testing.T) {
+	isolateDotenvHome(t)
+	t.Setenv("SIGIL_ENDPOINT", "https://sigil.example.com")
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "secret")
+
+	withStubLoginRun(t, func(context.Context, login.RunOpts) error {
+		t.Fatal("loginRun must not be called when credentials are present")
+		return nil
+	})
+
+	launcherCalled := 0
+	withStubLauncher(t, "pi", func(context.Context, []string, io.Reader, io.Writer, io.Writer, *log.Logger) error {
+		launcherCalled++
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"pi", "--"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit != nil {
+		t.Fatalf("exit = %v, want no exit", *gotExit)
+	}
+	if launcherCalled != 1 {
+		t.Errorf("launcher called %d times, want 1", launcherCalled)
+	}
+}
+
+func TestRun_LauncherContinuesWhenLoginAborted(t *testing.T) {
+	isolateDotenvHome(t)
+	t.Setenv("SIGIL_ENDPOINT", "")
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+	t.Setenv("SIGIL_AUTH_TOKEN", "")
+
+	withStubLoginRun(t, func(context.Context, login.RunOpts) error {
+		return login.ErrAborted
+	})
+
+	launcherCalled := 0
+	withStubLauncher(t, "pi", func(context.Context, []string, io.Reader, io.Writer, io.Writer, *log.Logger) error {
+		launcherCalled++
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"pi", "--"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit != nil {
+		t.Fatalf("exit = %v, want no exit", *gotExit)
+	}
+	if launcherCalled != 1 {
+		t.Errorf("launcher called %d times, want 1 (aborted login must not block launch)", launcherCalled)
+	}
+	if !strings.Contains(stderr.String(), "setup aborted") {
+		t.Errorf("stderr missing aborted notice: %q", stderr.String())
+	}
+}

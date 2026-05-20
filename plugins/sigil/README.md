@@ -10,7 +10,9 @@ brew install grafana/grafana/sigil
 
 ## Configure
 
-All three hosts read the same config file. Save this to `~/.config/sigil/config.env`:
+All three hosts read the same config file at `~/.config/sigil/config.env`. The first run of `sigil claude` or `sigil pi` prompts for your endpoint, tenant ID, token, and OTLP endpoint and writes them there; run `sigil login` to re-enter them later.
+
+To skip the prompt, create the file by hand:
 
 ```dotenv
 SIGIL_ENDPOINT=https://sigil-prod-<region>.grafana.net
