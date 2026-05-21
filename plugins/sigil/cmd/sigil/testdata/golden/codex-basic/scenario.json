@@ -1,0 +1,60 @@
+{
+  "agent": "codex",
+  "transcripts": {
+    "main": [
+      "{\"type\":\"session_meta\",\"payload\":{\"id\":\"codex-sess-1\"}}",
+      "{\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"codex-turn-1\"}}",
+      "{\"type\":\"response_item\",\"payload\":{\"type\":\"reasoning\"}}",
+      "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":120,\"cached_input_tokens\":30,\"output_tokens\":40,\"reasoning_output_tokens\":5,\"total_tokens\":160},\"last_token_usage\":{\"input_tokens\":120,\"cached_input_tokens\":30,\"output_tokens\":40,\"reasoning_output_tokens\":5,\"total_tokens\":160},\"model_context_window\":258400}}}"
+    ]
+  },
+  "events": [
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "codex-sess-1",
+      "cwd": "/repo/codex-app",
+      "model": "gpt-5.5",
+      "source": "startup",
+      "transcript_path": "{{transcript:main}}",
+      "timestamp": "2026-05-02T12:00:00Z"
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "codex-sess-1",
+      "turn_id": "codex-turn-1",
+      "prompt": "summarize go files",
+      "timestamp": "2026-05-02T12:00:01Z"
+    },
+    {
+      "hook_event_name": "PostToolUse",
+      "session_id": "codex-sess-1",
+      "turn_id": "codex-turn-1",
+      "tool_name": "Bash",
+      "tool_use_id": "tu-codex-1",
+      "tool_input": {"command": "ls"},
+      "tool_response": {"output": "main.go util.go", "exit_code": 0},
+      "tool_duration_ms": 8.0,
+      "status": "ok",
+      "timestamp": "2026-05-02T12:00:02Z"
+    },
+    {
+      "hook_event_name": "Stop",
+      "session_id": "codex-sess-1",
+      "turn_id": "codex-turn-1",
+      "transcript_path": "{{transcript:main}}",
+      "model": "gpt-5.5",
+      "timestamp": "2026-05-02T12:00:03Z"
+    }
+  ],
+  "raw_secrets": [],
+  "invariants": {
+    "export_count": 1,
+    "generations": 1,
+    "any_generation": [
+      "\"agent_name\":\"codex\"",
+      "\"conversation_id\":\"codex-sess-1\"",
+      "\"input_tokens\":\"120\"",
+      "\"output_tokens\":\"40\""
+    ]
+  }
+}

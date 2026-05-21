@@ -1,0 +1,87 @@
+[
+  {
+    "path": "/api/v1/generations:export",
+    "generations": [
+      {
+        "agent_name": "cursor",
+        "agent_version": "\u003cNORMALIZED\u003e",
+        "completed_at": "\u003cNORMALIZED\u003e",
+        "conversation_id": "conv-cursor-1",
+        "effective_version": "\u003cNORMALIZED\u003e",
+        "id": "gen-cursor-1",
+        "input": [
+          {
+            "parts": [
+              {
+                "text": "list go files"
+              }
+            ],
+            "role": "MESSAGE_ROLE_USER"
+          },
+          {
+            "parts": [
+              {
+                "tool_result": {
+                  "content_json": "eyJzdGRvdXQiOiJtYWluLmdvXG51dGlsLmdvIiwiZXhpdF9jb2RlIjowfQ==",
+                  "name": "Bash",
+                  "tool_call_id": "tu-1"
+                }
+              }
+            ],
+            "role": "MESSAGE_ROLE_TOOL"
+          }
+        ],
+        "metadata": {
+          "sigil.sdk.content_capture_mode": "full",
+          "sigil.sdk.name": "sdk-go",
+          "sigil.user.id": "test-user"
+        },
+        "mode": "GENERATION_MODE_SYNC",
+        "model": {
+          "name": "gpt-5-cursor",
+          "provider": "openai"
+        },
+        "operation_name": "generateText",
+        "output": [
+          {
+            "parts": [
+              {
+                "tool_call": {
+                  "id": "tu-1",
+                  "input_json": "eyJjb21tYW5kIjoibHMgKi5nbyJ9",
+                  "name": "Bash"
+                }
+              }
+            ],
+            "role": "MESSAGE_ROLE_ASSISTANT"
+          },
+          {
+            "parts": [
+              {
+                "text": "Found two go files: main.go and util.go."
+              }
+            ],
+            "role": "MESSAGE_ROLE_ASSISTANT"
+          }
+        ],
+        "response_model": "gpt-5-cursor",
+        "started_at": "\u003cNORMALIZED\u003e",
+        "stop_reason": "completed",
+        "tags": {
+          "cwd": "/repo/app"
+        },
+        "tools": [
+          {
+            "name": "Bash",
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "input_tokens": "80",
+          "output_tokens": "22",
+          "total_tokens": "102"
+        }
+      }
+    ]
+  }
+]

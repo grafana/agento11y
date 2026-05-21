@@ -130,6 +130,15 @@ jobs:
       - name: Test pi plugin
         run: pnpm --filter @grafana/sigil-pi run test
 
+      - name: Typecheck opencode plugin
+        run: pnpm --filter @grafana/sigil-opencode run typecheck
+
+      - name: Test opencode plugin
+        run: pnpm --filter @grafana/sigil-opencode run test
+
+      - name: Build opencode plugin
+        run: pnpm --filter @grafana/sigil-opencode run build
+
   python-lint:
     name: Python Lint
     runs-on: ubuntu-latest

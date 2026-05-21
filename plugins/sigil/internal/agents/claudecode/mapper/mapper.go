@@ -341,11 +341,13 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 			Provider: "anthropic",
 			Name:     msg.Model,
 		},
-		Usage:       usage,
-		StopReason:  msg.StopReason,
-		StartedAt:   completedAt, // no real start time; set equal to avoid zero-value skip in SDK metrics
-		CompletedAt: completedAt,
-		Tags:        buildTags(line, isSidechain, opts.ExtraTags),
+		ResponseID:    strings.TrimSpace(line.RequestID),
+		ResponseModel: msg.Model,
+		Usage:         usage,
+		StopReason:    msg.StopReason,
+		StartedAt:     completedAt, // no real start time; set equal to avoid zero-value skip in SDK metrics
+		CompletedAt:   completedAt,
+		Tags:          buildTags(line, isSidechain, opts.ExtraTags),
 	}
 
 	toolNames := map[string]bool{}

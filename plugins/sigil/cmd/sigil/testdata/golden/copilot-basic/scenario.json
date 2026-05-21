@@ -1,0 +1,56 @@
+{
+  "agent": "copilot",
+  "transcripts": {
+    "main": [
+      "{\"type\":\"session.start\",\"data\":{\"sessionId\":\"copilot-sess-1\",\"copilotVersion\":\"1.0.50\"}}",
+      "{\"type\":\"session.model_change\",\"data\":{\"newModel\":\"gpt-5.4\",\"reasoningEffort\":\"medium\"}}",
+      "{\"type\":\"user.message\",\"data\":{\"content\":\"hello glc_abcdefghijklmnopqrstuvwxyz\",\"interactionId\":\"int-1\"}}",
+      "{\"type\":\"assistant.message\",\"data\":{\"messageId\":\"msg-1\",\"model\":\"gpt-5.4\",\"content\":\"hello back\",\"interactionId\":\"int-1\",\"turnId\":\"1\",\"outputTokens\":14,\"inputTokens\":80,\"requestId\":\"req-1\"}}"
+    ]
+  },
+  "events": [
+    {
+      "_env": {"SIGIL_COPILOT_HOOK_EVENT": "sessionStart"},
+      "session_id": "copilot-sess-1",
+      "source": "new",
+      "transcript_path": "{{transcript:main}}",
+      "timestamp": "2026-05-03T12:00:00Z"
+    },
+    {
+      "_env": {"SIGIL_COPILOT_HOOK_EVENT": "userPromptSubmitted"},
+      "session_id": "copilot-sess-1",
+      "prompt": "hello glc_abcdefghijklmnopqrstuvwxyz",
+      "timestamp": "2026-05-03T12:00:01Z"
+    },
+    {
+      "_env": {"SIGIL_COPILOT_HOOK_EVENT": "preToolUse"},
+      "session_id": "copilot-sess-1",
+      "tool_name": "bash",
+      "tool_input": {"cmd": "echo hi"},
+      "timestamp": "2026-05-03T12:00:02Z"
+    },
+    {
+      "_env": {"SIGIL_COPILOT_HOOK_EVENT": "postToolUse"},
+      "session_id": "copilot-sess-1",
+      "tool_name": "bash",
+      "tool_result": {"text_result_for_llm": "ok"},
+      "timestamp": "2026-05-03T12:00:03Z"
+    },
+    {
+      "_env": {"SIGIL_COPILOT_HOOK_EVENT": "agentStop"},
+      "session_id": "copilot-sess-1",
+      "stop_reason": "end_turn",
+      "transcript_path": "{{transcript:main}}",
+      "timestamp": "2026-05-03T12:00:04Z"
+    }
+  ],
+  "raw_secrets": ["glc_abcdefghijklmnopqrstuvwxyz"],
+  "invariants": {
+    "export_count": 1,
+    "any_generation": [
+      "\"agent_name\":\"copilot\"",
+      "\"conversation_id\":\"copilot-sess-1\"",
+      "\"copilot.request_id\":\"req-1\""
+    ]
+  }
+}

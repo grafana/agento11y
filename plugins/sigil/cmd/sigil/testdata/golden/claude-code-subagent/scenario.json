@@ -1,0 +1,29 @@
+{
+  "agent": "claude-code",
+  "transcripts": {
+    "main": [
+      "{\"type\":\"user\",\"uuid\":\"cc-sub-user-1\",\"parentUuid\":null,\"sessionId\":\"cc-subagent-sess-1\",\"timestamp\":\"2026-05-05T12:00:00Z\",\"version\":\"1.0.0\",\"gitBranch\":\"main\",\"cwd\":\"/repo/cc-subagent-app\",\"isSidechain\":false,\"userType\":\"external\",\"message\":{\"role\":\"user\",\"content\":\"inspect the repository entrypoints\"}}",
+      "{\"type\":\"assistant\",\"uuid\":\"cc-sub-assistant-1\",\"parentUuid\":\"cc-sub-user-1\",\"sessionId\":\"cc-subagent-sess-1\",\"timestamp\":\"2026-05-05T12:00:01Z\",\"version\":\"1.0.0\",\"gitBranch\":\"main\",\"cwd\":\"/repo/cc-subagent-app\",\"entrypoint\":\"cli\",\"requestId\":\"req-cc-sub-1\",\"isSidechain\":false,\"userType\":\"external\",\"message\":{\"id\":\"msg-cc-sub-1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-20250514\",\"content\":[{\"type\":\"tool_use\",\"id\":\"agent-cc-1\",\"name\":\"Agent\",\"input\":{\"description\":\"Inspect entrypoints\",\"prompt\":\"Summarize the repository entrypoints without editing files.\",\"subagent_type\":\"Explore\"}}],\"stop_reason\":\"tool_use\",\"stop_details\":null,\"usage\":{\"input_tokens\":120,\"output_tokens\":25,\"cache_read_input_tokens\":10}}}",
+      "{\"type\":\"user\",\"uuid\":\"cc-sub-tool-result-1\",\"parentUuid\":\"cc-sub-assistant-1\",\"sessionId\":\"cc-subagent-sess-1\",\"timestamp\":\"2026-05-05T12:00:02Z\",\"version\":\"1.0.0\",\"gitBranch\":\"main\",\"cwd\":\"/repo/cc-subagent-app\",\"entrypoint\":\"cli\",\"isSidechain\":false,\"userType\":\"external\",\"sourceToolAssistantUUID\":\"cc-sub-assistant-1\",\"toolUseResult\":{\"type\":\"text\",\"content\":\"sanitized subagent result\"},\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"agent-cc-1\",\"content\":[{\"type\":\"text\",\"text\":\"Subagent found one CLI entrypoint.\"},{\"type\":\"text\",\"text\":\"Main command delegates to hook handlers.\"}]}]}}",
+      "{\"type\":\"assistant\",\"uuid\":\"cc-sub-assistant-2\",\"parentUuid\":\"cc-sub-tool-result-1\",\"sessionId\":\"cc-subagent-sess-1\",\"timestamp\":\"2026-05-05T12:00:03Z\",\"version\":\"1.0.0\",\"gitBranch\":\"main\",\"cwd\":\"/repo/cc-subagent-app\",\"entrypoint\":\"cli\",\"requestId\":\"req-cc-sub-2\",\"isSidechain\":false,\"userType\":\"external\",\"message\":{\"id\":\"msg-cc-sub-2\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-20250514\",\"content\":[{\"type\":\"text\",\"text\":\"The CLI entrypoint delegates to hook handlers.\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":160,\"output_tokens\":18,\"cache_read_input_tokens\":15}}}"
+    ]
+  },
+  "events": [
+    {
+      "hook_event_name": "Stop",
+      "session_id": "cc-subagent-sess-1",
+      "transcript_path": "{{transcript:main}}"
+    }
+  ],
+  "raw_secrets": [],
+  "invariants": {
+    "export_count": 1,
+    "generations": 3,
+    "any_generation": [
+      "\"agent_name\":\"claude-code/explore\"",
+      "\"conversation_id\":\"cc-subagent-sess-1\"",
+      "\"parent_generation_ids\":[",
+      "Subagent found one CLI entrypoint."
+    ]
+  }
+}

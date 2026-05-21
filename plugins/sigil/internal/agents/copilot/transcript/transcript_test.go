@@ -13,7 +13,7 @@ func TestReadLatestAssistantTurn(t *testing.T) {
 		"{\"type\":\"session.start\",\"data\":{\"sessionId\":\"sess-1\",\"copilotVersion\":\"1.0.48\"}}\n" +
 		"{\"type\":\"session.model_change\",\"data\":{\"newModel\":\"gpt-5.4\",\"reasoningEffort\":\"medium\"}}\n" +
 		"{\"type\":\"user.message\",\"data\":{\"content\":\"hello world\",\"interactionId\":\"int-1\"}}\n" +
-		"{\"type\":\"assistant.message\",\"data\":{\"messageId\":\"msg-1\",\"model\":\"gpt-5.4\",\"content\":\"assistant answer\",\"interactionId\":\"int-1\",\"turnId\":\"4\",\"outputTokens\":12,\"requestId\":\"req-1\"}}\n"
+		"{\"type\":\"assistant.message\",\"data\":{\"messageId\":\"msg-1\",\"model\":\"gpt-5.4\",\"content\":\"assistant answer\",\"interactionId\":\"int-1\",\"turnId\":\"4\",\"inputTokens\":80,\"outputTokens\":12,\"requestId\":\"req-1\"}}\n"
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
@@ -54,6 +54,9 @@ func TestReadLatestAssistantTurn(t *testing.T) {
 	}
 	if got.UserPrompt != "hello world" {
 		t.Fatalf("UserPrompt = %q", got.UserPrompt)
+	}
+	if got.InputTokens == nil || *got.InputTokens != 80 {
+		t.Fatalf("InputTokens = %+v", got.InputTokens)
 	}
 	if got.OutputTokens == nil || *got.OutputTokens != 12 {
 		t.Fatalf("OutputTokens = %+v", got.OutputTokens)

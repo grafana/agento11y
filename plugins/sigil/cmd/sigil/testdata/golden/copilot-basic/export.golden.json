@@ -1,0 +1,106 @@
+[
+  {
+    "path": "/api/v1/generations:export",
+    "generations": [
+      {
+        "agent_name": "copilot",
+        "agent_version": "\u003cNORMALIZED\u003e",
+        "completed_at": "\u003cNORMALIZED\u003e",
+        "conversation_id": "copilot-sess-1",
+        "id": "copilot-af6ee8e2135e9d360e0f42b7",
+        "input": [
+          {
+            "parts": [
+              {
+                "text": "hello [REDACTED:grafana-cloud-token]"
+              }
+            ],
+            "role": "MESSAGE_ROLE_USER"
+          },
+          {
+            "parts": [
+              {
+                "tool_result": {
+                  "content_json": "eyJ0ZXh0X3Jlc3VsdF9mb3JfbGxtIjoib2sifQ==",
+                  "name": "bash",
+                  "tool_call_id": "turn-000001-tool-001"
+                }
+              }
+            ],
+            "role": "MESSAGE_ROLE_TOOL"
+          }
+        ],
+        "metadata": {
+          "copilot.agent_version": "1.0.50",
+          "copilot.assistant_text_available": true,
+          "copilot.error_count": 0,
+          "copilot.interaction_id": "int-1",
+          "copilot.message_id": "msg-1",
+          "copilot.model_reported": true,
+          "copilot.native_turn_id": "1",
+          "copilot.provider_inferred": true,
+          "copilot.provider_reported": false,
+          "copilot.reasoning_effort": "medium",
+          "copilot.request_id": "req-1",
+          "copilot.session_source": "new",
+          "copilot.session_transcript_path_present": true,
+          "copilot.stop_reason": "end_turn",
+          "copilot.subagent_count": 0,
+          "copilot.tool_count": 1,
+          "copilot.transcript_path_present": true,
+          "copilot.turn_id": "turn-000001",
+          "sigil.sdk.content_capture_mode": "full",
+          "sigil.sdk.name": "sdk-go",
+          "sigil.user.id": "test-user"
+        },
+        "mode": "GENERATION_MODE_SYNC",
+        "model": {
+          "name": "gpt-5.4",
+          "provider": "openai"
+        },
+        "operation_name": "generateText",
+        "output": [
+          {
+            "parts": [
+              {
+                "tool_call": {
+                  "id": "turn-000001-tool-001",
+                  "input_json": "eyJjbWQiOiJlY2hvIGhpIn0=",
+                  "name": "bash"
+                }
+              }
+            ],
+            "role": "MESSAGE_ROLE_ASSISTANT"
+          },
+          {
+            "parts": [
+              {
+                "text": "hello back"
+              }
+            ],
+            "role": "MESSAGE_ROLE_ASSISTANT"
+          }
+        ],
+        "response_id": "req-1",
+        "response_model": "gpt-5.4",
+        "started_at": "\u003cNORMALIZED\u003e",
+        "stop_reason": "end_turn",
+        "tags": {
+          "entrypoint": "copilot",
+          "hook.source": "new"
+        },
+        "tools": [
+          {
+            "name": "bash",
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "input_tokens": "80",
+          "output_tokens": "14",
+          "total_tokens": "94"
+        }
+      }
+    ]
+  }
+]

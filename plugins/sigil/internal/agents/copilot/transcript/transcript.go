@@ -25,6 +25,7 @@ type Snapshot struct {
 	RequestID       string
 	MessageID       string
 	AssistantText   string
+	InputTokens     *int64
 	OutputTokens    *int64
 	UserPrompt      string
 }
@@ -63,6 +64,7 @@ type assistantMessageData struct {
 	InteractionID string `json:"interactionId"`
 	TurnID        string `json:"turnId"`
 	RequestID     string `json:"requestId"`
+	InputTokens   *int64 `json:"inputTokens"`
 	OutputTokens  *int64 `json:"outputTokens"`
 }
 
@@ -153,6 +155,7 @@ func readTranscriptSnapshot(path string, hint ReadHint) (Snapshot, bool, error) 
 				RequestID:       strings.TrimSpace(data.RequestID),
 				MessageID:       strings.TrimSpace(data.MessageID),
 				AssistantText:   strings.TrimSpace(data.Content),
+				InputTokens:     data.InputTokens,
 				OutputTokens:    data.OutputTokens,
 				UserPrompt:      promptByInteraction[interactionID],
 			}

@@ -1,0 +1,108 @@
+[
+  {
+    "path": "/api/v1/generations:export",
+    "generations": [
+      {
+        "id": "<NORMALIZED-ID>",
+        "conversation_id": "opencode-sess-1",
+        "operation_name": "generateText",
+        "mode": "GENERATION_MODE_SYNC",
+        "trace_id": "<NORMALIZED>",
+        "span_id": "<NORMALIZED>",
+        "model": {
+          "provider": "anthropic",
+          "name": "claude-sonnet-4-opencode"
+        },
+        "response_id": "",
+        "response_model": "claude-sonnet-4-opencode",
+        "system_prompt": "you are a helpful assistant",
+        "input": [
+          {
+            "role": "MESSAGE_ROLE_USER",
+            "name": "",
+            "parts": [
+              {
+                "text": "list go files in this repo"
+              }
+            ]
+          }
+        ],
+        "output": [
+          {
+            "role": "MESSAGE_ROLE_ASSISTANT",
+            "name": "",
+            "parts": [
+              {
+                "text": "I will list the go files for you."
+              }
+            ]
+          },
+          {
+            "role": "MESSAGE_ROLE_ASSISTANT",
+            "name": "",
+            "parts": [
+              {
+                "tool_call": {
+                  "id": "tc-oc-1",
+                  "name": "Bash",
+                  "input_json": "eyJjb21tYW5kIjoibHMgKi5nbyJ9"
+                }
+              }
+            ]
+          },
+          {
+            "role": "MESSAGE_ROLE_TOOL",
+            "name": "",
+            "parts": [
+              {
+                "tool_result": {
+                  "tool_call_id": "tc-oc-1",
+                  "name": "Bash",
+                  "content": "main.go\nutil.go",
+                  "content_json": "",
+                  "is_error": false
+                }
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "",
+            "type": "",
+            "input_schema_json": ""
+          },
+          {
+            "name": "Read",
+            "description": "",
+            "type": "",
+            "input_schema_json": ""
+          }
+        ],
+        "usage": {
+          "input_tokens": "200",
+          "output_tokens": "50",
+          "total_tokens": "250",
+          "cache_read_input_tokens": "30",
+          "cache_write_input_tokens": "0",
+          "reasoning_tokens": "0"
+        },
+        "stop_reason": "end_turn",
+        "started_at": "<NORMALIZED>",
+        "completed_at": "<NORMALIZED>",
+        "tags": {},
+        "metadata": {
+          "cost": 0.005,
+          "sigil.sdk.name": "sdk-js",
+          "sigil.sdk.content_capture_mode": "no_tool_content"
+        },
+        "raw_artifacts": [],
+        "call_error": "",
+        "agent_name": "opencode:build",
+        "agent_version": "test-version",
+        "effective_version": "<NORMALIZED>"
+      }
+    ]
+  }
+]

@@ -1,0 +1,172 @@
+[
+  {
+    "path": "/api/v1/generations:export",
+    "generations": [
+      {
+        "agent_name": "claude-code",
+        "agent_version": "\u003cNORMALIZED\u003e",
+        "completed_at": "\u003cNORMALIZED\u003e",
+        "conversation_id": "cc-subagent-sess-1",
+        "effective_version": "\u003cNORMALIZED\u003e",
+        "id": "2cfc7bc3-61c7-5d85-96a3-5ab556991143",
+        "input": [
+          {
+            "parts": [
+              {
+                "tool_result": {
+                  "content": "Subagent found one CLI entrypoint.\nMain command delegates to hook handlers.",
+                  "tool_call_id": "agent-cc-1"
+                }
+              }
+            ],
+            "role": "MESSAGE_ROLE_TOOL"
+          }
+        ],
+        "metadata": {
+          "sigil.conversation.title": "cc-subagent-sess-1",
+          "sigil.sdk.content_capture_mode": "full",
+          "sigil.sdk.name": "sdk-go",
+          "sigil.user.id": "test-user"
+        },
+        "mode": "GENERATION_MODE_SYNC",
+        "model": {
+          "name": "claude-sonnet-4-20250514",
+          "provider": "anthropic"
+        },
+        "operation_name": "generateText",
+        "output": [
+          {
+            "parts": [
+              {
+                "text": "The CLI entrypoint delegates to hook handlers."
+              }
+            ],
+            "role": "MESSAGE_ROLE_ASSISTANT"
+          }
+        ],
+        "response_id": "req-cc-sub-2",
+        "response_model": "claude-sonnet-4-20250514",
+        "started_at": "\u003cNORMALIZED\u003e",
+        "stop_reason": "end_turn",
+        "tags": {
+          "cwd": "/repo/cc-subagent-app",
+          "entrypoint": "cli",
+          "git.branch": "main"
+        },
+        "usage": {
+          "cache_read_input_tokens": "15",
+          "input_tokens": "160",
+          "output_tokens": "18",
+          "total_tokens": "178"
+        }
+      },
+      {
+        "agent_name": "claude-code/explore",
+        "agent_version": "\u003cNORMALIZED\u003e",
+        "completed_at": "\u003cNORMALIZED\u003e",
+        "conversation_id": "cc-subagent-sess-1",
+        "effective_version": "\u003cNORMALIZED\u003e",
+        "id": "eb85615f-6608-582f-9e24-ab0e555801cb",
+        "metadata": {
+          "sigil.conversation.title": "cc-subagent-sess-1",
+          "sigil.sdk.content_capture_mode": "full",
+          "sigil.sdk.name": "sdk-go",
+          "sigil.user.id": "test-user"
+        },
+        "mode": "GENERATION_MODE_SYNC",
+        "model": {
+          "name": "claude-sonnet-4-20250514",
+          "provider": "anthropic"
+        },
+        "operation_name": "generateText",
+        "output": [
+          {
+            "parts": [
+              {
+                "text": "Subagent found one CLI entrypoint.\nMain command delegates to hook handlers."
+              }
+            ],
+            "role": "MESSAGE_ROLE_ASSISTANT"
+          }
+        ],
+        "parent_generation_ids": [
+          "f71940b9-ba90-5501-a267-6495488bbd12"
+        ],
+        "started_at": "\u003cNORMALIZED\u003e",
+        "stop_reason": "end_turn",
+        "tags": {
+          "cwd": "/repo/cc-subagent-app",
+          "entrypoint": "cli",
+          "git.branch": "main",
+          "subagent": "true"
+        },
+        "usage": {}
+      },
+      {
+        "agent_name": "claude-code",
+        "agent_version": "\u003cNORMALIZED\u003e",
+        "completed_at": "\u003cNORMALIZED\u003e",
+        "conversation_id": "cc-subagent-sess-1",
+        "effective_version": "\u003cNORMALIZED\u003e",
+        "id": "f71940b9-ba90-5501-a267-6495488bbd12",
+        "input": [
+          {
+            "parts": [
+              {
+                "text": "inspect the repository entrypoints"
+              }
+            ],
+            "role": "MESSAGE_ROLE_USER"
+          }
+        ],
+        "metadata": {
+          "sigil.conversation.title": "cc-subagent-sess-1",
+          "sigil.sdk.content_capture_mode": "full",
+          "sigil.sdk.name": "sdk-go",
+          "sigil.user.id": "test-user"
+        },
+        "mode": "GENERATION_MODE_SYNC",
+        "model": {
+          "name": "claude-sonnet-4-20250514",
+          "provider": "anthropic"
+        },
+        "operation_name": "generateText",
+        "output": [
+          {
+            "parts": [
+              {
+                "tool_call": {
+                  "id": "agent-cc-1",
+                  "input_json": "eyJkZXNjcmlwdGlvbiI6Ikluc3BlY3QgZW50cnlwb2ludHMiLCJwcm9tcHQiOiJTdW1tYXJpemUgdGhlIHJlcG9zaXRvcnkgZW50cnlwb2ludHMgd2l0aG91dCBlZGl0aW5nIGZpbGVzLiIsInN1YmFnZW50X3R5cGUiOiJFeHBsb3JlIn0=",
+                  "name": "Agent"
+                }
+              }
+            ],
+            "role": "MESSAGE_ROLE_ASSISTANT"
+          }
+        ],
+        "response_id": "req-cc-sub-1",
+        "response_model": "claude-sonnet-4-20250514",
+        "started_at": "\u003cNORMALIZED\u003e",
+        "stop_reason": "tool_use",
+        "tags": {
+          "cwd": "/repo/cc-subagent-app",
+          "entrypoint": "cli",
+          "git.branch": "main"
+        },
+        "tools": [
+          {
+            "name": "Agent",
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "cache_read_input_tokens": "10",
+          "input_tokens": "120",
+          "output_tokens": "25",
+          "total_tokens": "145"
+        }
+      }
+    ]
+  }
+]

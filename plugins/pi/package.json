@@ -24,13 +24,13 @@
     ]
   },
   "scripts": {
-    "prebuild": "bash scripts/ensure-sdk.sh",
+    "prebuild": "mise run build:ts:sdk-js",
     "build": "node scripts/build.mjs",
     "lint": "biome check .",
     "lint:fix": "biome check --fix .",
-    "pretypecheck": "bash scripts/ensure-sdk.sh",
+    "pretypecheck": "mise run build:ts:sdk-js",
     "typecheck": "tsc --noEmit",
-    "pretest": "bash scripts/ensure-sdk.sh",
+    "pretest": "mise run build:ts:sdk-js",
     "test": "vitest run",
     "test:watch": "vitest"
   },

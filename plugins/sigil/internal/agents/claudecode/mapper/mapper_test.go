@@ -105,6 +105,12 @@ func TestProcess_SinglePromptResponse(t *testing.T) {
 	if gen.Model.Provider != "anthropic" || gen.Model.Name != "claude-sonnet-4-20250514" {
 		t.Errorf("Model = %+v", gen.Model)
 	}
+	if gen.ResponseID != "req-1" {
+		t.Errorf("ResponseID = %q", gen.ResponseID)
+	}
+	if gen.ResponseModel != "claude-sonnet-4-20250514" {
+		t.Errorf("ResponseModel = %q", gen.ResponseModel)
+	}
 	if gen.Usage.OutputTokens != 50 {
 		t.Errorf("OutputTokens = %d", gen.Usage.OutputTokens)
 	}

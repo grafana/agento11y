@@ -1,0 +1,114 @@
+[
+  {
+    "path": "/api/v1/generations:export",
+    "generations": [
+      {
+        "id": "<NORMALIZED-ID>",
+        "conversation_id": "pi-conv-1",
+        "operation_name": "streamText",
+        "mode": "GENERATION_MODE_STREAM",
+        "trace_id": "<NORMALIZED>",
+        "span_id": "<NORMALIZED>",
+        "model": {
+          "provider": "anthropic",
+          "name": "claude-sonnet-4-pi"
+        },
+        "response_id": "resp-pi-1",
+        "response_model": "claude-sonnet-4-pi",
+        "system_prompt": "",
+        "input": [
+          {
+            "role": "MESSAGE_ROLE_USER",
+            "name": "",
+            "parts": [
+              {
+                "text": "summarize the go files"
+              }
+            ]
+          }
+        ],
+        "output": [
+          {
+            "role": "MESSAGE_ROLE_ASSISTANT",
+            "name": "",
+            "parts": [
+              {
+                "thinking": "I should list the files first."
+              }
+            ]
+          },
+          {
+            "role": "MESSAGE_ROLE_ASSISTANT",
+            "name": "",
+            "parts": [
+              {
+                "tool_call": {
+                  "id": "tc-pi-1",
+                  "name": "Bash",
+                  "input_json": "eyJjb21tYW5kIjoibHMgKi5nbyJ9"
+                }
+              }
+            ]
+          },
+          {
+            "role": "MESSAGE_ROLE_ASSISTANT",
+            "name": "",
+            "parts": [
+              {
+                "text": "There are two go files: main.go and util.go."
+              }
+            ]
+          },
+          {
+            "role": "MESSAGE_ROLE_TOOL",
+            "name": "",
+            "parts": [
+              {
+                "tool_result": {
+                  "tool_call_id": "tc-pi-1",
+                  "name": "Bash",
+                  "content": "main.go\nutil.go",
+                  "content_json": "",
+                  "is_error": false
+                }
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "name": "Bash",
+            "description": "",
+            "type": "",
+            "input_schema_json": ""
+          }
+        ],
+        "usage": {
+          "input_tokens": "120",
+          "output_tokens": "30",
+          "total_tokens": "150",
+          "cache_read_input_tokens": "10",
+          "cache_write_input_tokens": "0",
+          "reasoning_tokens": "0"
+        },
+        "stop_reason": "end_turn",
+        "started_at": "<NORMALIZED>",
+        "completed_at": "<NORMALIZED>",
+        "tags": {
+          "git.branch": "<NORMALIZED>"
+        },
+        "metadata": {
+          "cost_usd": 0.003,
+          "sigil.sdk.name": "sdk-js",
+          "sigil.sdk.content_capture_mode": "full"
+        },
+        "raw_artifacts": [],
+        "call_error": "",
+        "agent_name": "pi",
+        "agent_version": "test-version",
+        "thinking_enabled": true,
+        "effective_version": "<NORMALIZED>"
+      }
+    ]
+  }
+]

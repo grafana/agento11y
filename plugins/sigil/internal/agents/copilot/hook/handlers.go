@@ -512,6 +512,9 @@ func enrichFromTranscript(f *fragment.Fragment, logger *log.Logger) {
 	if strings.TrimSpace(f.Prompt) == "" && strings.TrimSpace(best.UserPrompt) != "" {
 		f.Prompt = best.UserPrompt
 	}
+	if f.TokenUsage.InputTokens == nil && best.InputTokens != nil {
+		f.TokenUsage.InputTokens = best.InputTokens
+	}
 	if f.TokenUsage.OutputTokens == nil && best.OutputTokens != nil {
 		f.TokenUsage.OutputTokens = best.OutputTokens
 	}

@@ -1,0 +1,68 @@
+{
+  "agent": "cursor",
+  "transcripts": {},
+  "events": [
+    {
+      "hook_event_name": "sessionStart",
+      "conversation_id": "conv-cursor-1",
+      "workspace_roots": ["/repo/app"],
+      "user_email": "tester@example.com",
+      "cursor_version": "0.42.0",
+      "timestamp": "2026-05-01T12:00:00Z"
+    },
+    {
+      "hook_event_name": "beforeSubmitPrompt",
+      "conversation_id": "conv-cursor-1",
+      "generation_id": "gen-cursor-1",
+      "prompt": "list go files",
+      "timestamp": "2026-05-01T12:00:01Z"
+    },
+    {
+      "hook_event_name": "postToolUse",
+      "conversation_id": "conv-cursor-1",
+      "generation_id": "gen-cursor-1",
+      "tool_name": "Bash",
+      "tool_use_id": "tu-1",
+      "tool_input": {"command": "ls *.go"},
+      "tool_output": {"stdout": "main.go\nutil.go", "exit_code": 0},
+      "duration": 12.5,
+      "status": "ok",
+      "timestamp": "2026-05-01T12:00:02Z"
+    },
+    {
+      "hook_event_name": "afterAgentResponse",
+      "conversation_id": "conv-cursor-1",
+      "generation_id": "gen-cursor-1",
+      "text": "Found two go files: main.go and util.go.",
+      "model": "gpt-5-cursor",
+      "provider": "openai",
+      "input_tokens": 80,
+      "output_tokens": 22,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "timestamp": "2026-05-01T12:00:03Z"
+    },
+    {
+      "hook_event_name": "stop",
+      "conversation_id": "conv-cursor-1",
+      "generation_id": "gen-cursor-1",
+      "model": "gpt-5-cursor",
+      "provider": "openai",
+      "input_tokens": 80,
+      "output_tokens": 22,
+      "status": "completed",
+      "timestamp": "2026-05-01T12:00:04Z"
+    }
+  ],
+  "raw_secrets": [],
+  "invariants": {
+    "export_count": 1,
+    "generations": 1,
+    "any_generation": [
+      "\"agent_name\":\"cursor\"",
+      "\"conversation_id\":\"conv-cursor-1\"",
+      "\"name\":\"gpt-5-cursor\"",
+      "\"provider\":\"openai\""
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "agent": "claude-code",
+  "transcripts": {
+    "main": [
+      "{\"type\":\"user\",\"sessionId\":\"cc-sess-1\",\"timestamp\":\"2026-05-04T12:00:00Z\",\"version\":\"1.0.0\",\"message\":{\"role\":\"user\",\"content\":\"list go files\"}}",
+      "{\"type\":\"assistant\",\"sessionId\":\"cc-sess-1\",\"timestamp\":\"2026-05-04T12:00:01Z\",\"version\":\"1.0.0\",\"gitBranch\":\"main\",\"cwd\":\"/repo/cc-app\",\"requestId\":\"req-cc-1\",\"message\":{\"model\":\"claude-sonnet-4-20250514\",\"content\":[{\"type\":\"tool_use\",\"id\":\"tu-cc-1\",\"name\":\"Bash\",\"input\":{\"command\":\"ls *.go\"}}],\"stop_reason\":\"tool_use\",\"usage\":{\"input_tokens\":40,\"output_tokens\":15}}}",
+      "{\"type\":\"user\",\"sessionId\":\"cc-sess-1\",\"timestamp\":\"2026-05-04T12:00:02Z\",\"version\":\"1.0.0\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"tu-cc-1\",\"content\":\"main.go\\nutil.go\"}]}}",
+      "{\"type\":\"assistant\",\"sessionId\":\"cc-sess-1\",\"timestamp\":\"2026-05-04T12:00:03Z\",\"version\":\"1.0.0\",\"gitBranch\":\"main\",\"cwd\":\"/repo/cc-app\",\"requestId\":\"req-cc-2\",\"message\":{\"model\":\"claude-sonnet-4-20250514\",\"content\":[{\"type\":\"text\",\"text\":\"Two files: main.go and util.go.\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":60,\"output_tokens\":20}}}"
+    ]
+  },
+  "events": [
+    {
+      "hook_event_name": "Stop",
+      "session_id": "cc-sess-1",
+      "transcript_path": "{{transcript:main}}"
+    }
+  ],
+  "raw_secrets": [],
+  "invariants": {
+    "export_count": 1,
+    "any_generation": [
+      "\"agent_name\":\"claude-code\"",
+      "\"conversation_id\":\"cc-sess-1\"",
+      "\"name\":\"claude-sonnet-4-20250514\"",
+      "tu-cc-1"
+    ]
+  }
+}

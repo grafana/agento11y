@@ -1,0 +1,126 @@
+[
+  {
+    "path": "/api/v1/generations:export",
+    "generations": [
+      {
+        "agent_name": "claude-code",
+        "agent_version": "\u003cNORMALIZED\u003e",
+        "completed_at": "\u003cNORMALIZED\u003e",
+        "conversation_id": "cc-sess-1",
+        "effective_version": "\u003cNORMALIZED\u003e",
+        "id": "76106b04-ed9a-56b8-aba1-f22f0d851e85",
+        "input": [
+          {
+            "parts": [
+              {
+                "text": "list go files"
+              }
+            ],
+            "role": "MESSAGE_ROLE_USER"
+          }
+        ],
+        "metadata": {
+          "sigil.conversation.title": "cc-sess-1",
+          "sigil.sdk.content_capture_mode": "full",
+          "sigil.sdk.name": "sdk-go",
+          "sigil.user.id": "test-user"
+        },
+        "mode": "GENERATION_MODE_SYNC",
+        "model": {
+          "name": "claude-sonnet-4-20250514",
+          "provider": "anthropic"
+        },
+        "operation_name": "generateText",
+        "output": [
+          {
+            "parts": [
+              {
+                "tool_call": {
+                  "id": "tu-cc-1",
+                  "input_json": "eyJjb21tYW5kIjoibHMgKi5nbyJ9",
+                  "name": "Bash"
+                }
+              }
+            ],
+            "role": "MESSAGE_ROLE_ASSISTANT"
+          }
+        ],
+        "response_id": "req-cc-1",
+        "response_model": "claude-sonnet-4-20250514",
+        "started_at": "\u003cNORMALIZED\u003e",
+        "stop_reason": "tool_use",
+        "tags": {
+          "cwd": "/repo/cc-app",
+          "git.branch": "main"
+        },
+        "tools": [
+          {
+            "name": "Bash",
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "input_tokens": "40",
+          "output_tokens": "15",
+          "total_tokens": "55"
+        }
+      },
+      {
+        "agent_name": "claude-code",
+        "agent_version": "\u003cNORMALIZED\u003e",
+        "completed_at": "\u003cNORMALIZED\u003e",
+        "conversation_id": "cc-sess-1",
+        "effective_version": "\u003cNORMALIZED\u003e",
+        "id": "ae91bfdc-1e5f-5e26-8b3a-3dbdab3a07d5",
+        "input": [
+          {
+            "parts": [
+              {
+                "tool_result": {
+                  "content": "main.go\nutil.go",
+                  "tool_call_id": "tu-cc-1"
+                }
+              }
+            ],
+            "role": "MESSAGE_ROLE_TOOL"
+          }
+        ],
+        "metadata": {
+          "sigil.conversation.title": "cc-sess-1",
+          "sigil.sdk.content_capture_mode": "full",
+          "sigil.sdk.name": "sdk-go",
+          "sigil.user.id": "test-user"
+        },
+        "mode": "GENERATION_MODE_SYNC",
+        "model": {
+          "name": "claude-sonnet-4-20250514",
+          "provider": "anthropic"
+        },
+        "operation_name": "generateText",
+        "output": [
+          {
+            "parts": [
+              {
+                "text": "Two files: main.go and util.go."
+              }
+            ],
+            "role": "MESSAGE_ROLE_ASSISTANT"
+          }
+        ],
+        "response_id": "req-cc-2",
+        "response_model": "claude-sonnet-4-20250514",
+        "started_at": "\u003cNORMALIZED\u003e",
+        "stop_reason": "end_turn",
+        "tags": {
+          "cwd": "/repo/cc-app",
+          "git.branch": "main"
+        },
+        "usage": {
+          "input_tokens": "60",
+          "output_tokens": "20",
+          "total_tokens": "80"
+        }
+      }
+    ]
+  }
+]

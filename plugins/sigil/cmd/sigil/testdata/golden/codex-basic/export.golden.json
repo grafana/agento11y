@@ -1,0 +1,89 @@
+[
+  {
+    "path": "/api/v1/generations:export",
+    "generations": [
+      {
+        "agent_name": "codex",
+        "completed_at": "\u003cNORMALIZED\u003e",
+        "conversation_id": "codex-sess-1",
+        "id": "codex-310155c637b952e08dea4634",
+        "input": [
+          {
+            "parts": [
+              {
+                "text": "summarize go files"
+              }
+            ],
+            "role": "MESSAGE_ROLE_USER"
+          },
+          {
+            "parts": [
+              {
+                "tool_result": {
+                  "content_json": "eyJleGl0X2NvZGUiOjAsIm91dHB1dCI6Im1haW4uZ28gdXRpbC5nbyJ9",
+                  "name": "Bash",
+                  "tool_call_id": "tu-codex-1"
+                }
+              }
+            ],
+            "role": "MESSAGE_ROLE_TOOL"
+          }
+        ],
+        "metadata": {
+          "codex.token_usage.context_window": 258400,
+          "codex.token_usage.source": "turn_context_delta",
+          "codex.token_usage.total.cached_input_tokens": 30,
+          "codex.token_usage.total.input_tokens": 120,
+          "codex.token_usage.total.output_tokens": 40,
+          "codex.token_usage.total.reasoning_output_tokens": 5,
+          "codex.token_usage.total.total_tokens": 160,
+          "sigil.sdk.content_capture_mode": "full",
+          "sigil.sdk.name": "sdk-go",
+          "sigil.user.id": "test-user"
+        },
+        "mode": "GENERATION_MODE_SYNC",
+        "model": {
+          "name": "gpt-5.5",
+          "provider": "openai"
+        },
+        "operation_name": "generateText",
+        "output": [
+          {
+            "parts": [
+              {
+                "tool_call": {
+                  "id": "tu-codex-1",
+                  "input_json": "eyJjb21tYW5kIjoibHMifQ==",
+                  "name": "Bash"
+                }
+              }
+            ],
+            "role": "MESSAGE_ROLE_ASSISTANT"
+          }
+        ],
+        "response_model": "gpt-5.5",
+        "started_at": "\u003cNORMALIZED\u003e",
+        "stop_reason": "completed",
+        "tags": {
+          "codex.stop_hook_active": "false",
+          "cwd": "/repo/codex-app",
+          "entrypoint": "codex",
+          "hook.source": "startup"
+        },
+        "tools": [
+          {
+            "name": "Bash",
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "cache_read_input_tokens": "30",
+          "input_tokens": "120",
+          "output_tokens": "40",
+          "reasoning_tokens": "5",
+          "total_tokens": "160"
+        }
+      }
+    ]
+  }
+]

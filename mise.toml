@@ -108,19 +108,47 @@ run = "pnpm --filter @grafana/sigil-sdk-js run typecheck"
 
 [tasks."typecheck:ts:plugin-pi"]
 description = "Type-check Pi plugin code"
-depends = ["deps"]
+depends = ["deps", "build:ts:sdk-js"]
 run = "pnpm --filter @grafana/sigil-pi run typecheck"
+
+[tasks."typecheck:ts:plugin-opencode"]
+description = "Type-check OpenCode plugin code"
+depends = ["deps", "build:ts:sdk-js"]
+run = "pnpm --filter @grafana/sigil-opencode run typecheck"
 
 [tasks.typecheck]
 description = "Run all type checks"
-depends = ["typecheck:ts:sdk-js", "typecheck:ts:plugin-pi"]
+depends = ["typecheck:ts:sdk-js", "typecheck:ts:plugin-pi", "typecheck:ts:plugin-opencode"]
 
 # --- Build ---
 
+# build:ts:sdk-js produces the workspace-linked dist/ that plugin tasks
+# (typecheck/test/build) import from. Declared with sources/outputs so mise
+# skips the rebuild when dist/ is newer than every input -- the same
+# staleness check the previous plugins/*/scripts/ensure-sdk.sh did by hand.
+[tasks."build:ts:sdk-js"]
+description = "Build the TypeScript/JavaScript SDK bundle"
+depends = ["deps"]
+sources = [
+  "js/src/**/*.ts",
+  "js/proto/**/*",
+  "js/scripts/**/*",
+  "js/package.json",
+  "js/tsconfig.json",
+  "js/tsconfig.build.json",
+]
+outputs = ["js/dist/index.js", "js/dist/index.d.ts"]
+run = "pnpm --filter @grafana/sigil-sdk-js run build"
+
 [tasks."build:ts:plugin-pi"]
 description = "Build Pi plugin bundle"
-depends = ["deps"]
+depends = ["deps", "build:ts:sdk-js"]
 run = "pnpm --filter @grafana/sigil-pi run build"
+
+[tasks."build:ts:plugin-opencode"]
+description = "Build OpenCode plugin bundle"
+depends = ["deps", "build:ts:sdk-js"]
+run = "pnpm --filter @grafana/sigil-opencode run build"
 
 # --- Go SDK tests ---
 
@@ -156,8 +184,13 @@ run = "GOWORK=off go test ./..."
 
 [tasks."test:ts:plugin-pi"]
 description = "Run Pi plugin tests"
-depends = ["deps"]
+depends = ["deps", "build:ts:sdk-js"]
 run = "pnpm --filter @grafana/sigil-pi run test"
+
+[tasks."test:ts:plugin-opencode"]
+description = "Run OpenCode plugin tests"
+depends = ["deps", "build:ts:sdk-js"]
+run = "pnpm --filter @grafana/sigil-opencode run test"
 
 [tasks."test:go:plugin-cursor"]
 description = "Run Cursor plugin tests as standalone module"
@@ -425,6 +458,7 @@ mise run test:go:plugin-claude-code
 mise run test:go:plugin-cursor
 mise run test:ts:sdk-js
 mise run test:ts:plugin-pi
+mise run test:ts:plugin-opencode
 mise run test:py:sdk-core
 mise run test:py:sdk-provider-conformance
 mise run test:py:sdk-framework-conformance
