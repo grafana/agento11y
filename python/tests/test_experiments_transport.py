@@ -166,8 +166,7 @@ def test_experiment_runner_exports_and_finalizes() -> None:
                     self,
                     {
                         "results": [
-                            {"score_id": score["score_id"], "accepted": True}
-                            for score in payload.get("scores", [])
+                            {"score_id": score["score_id"], "accepted": True} for score in payload.get("scores", [])
                         ]
                     },
                     status=202,
