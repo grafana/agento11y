@@ -506,6 +506,80 @@ func TestCoalesce(t *testing.T) {
 			wantLines:  4,
 			wantOffset: 450,
 		},
+		{
+			name: "does not consume trailing user prompt",
+			lines: func() []transcript.Line {
+				user1 := makeUserLine("first")
+				user1.EndOffset = 50
+				asst := makeAssistantFragment("req-1", 50, []transcript.ContentBlock{
+					{Type: "text", Text: "hi"},
+				}, "end_turn")
+				asst.EndOffset = 150
+				user2 := makeUserLine("second")
+				user2.EndOffset = 200
+				return []transcript.Line{user1, asst, user2}
+			},
+			wantLines:  2,
+			wantOffset: 150,
+		},
+		{
+			name: "does not consume trailing tool result",
+			lines: func() []transcript.Line {
+				user := makeUserLine("read file")
+				user.EndOffset = 50
+				asst := makeAssistantFragment("req-1", 30, []transcript.ContentBlock{
+					{Type: "tool_use", ID: "tu_1", Name: "Read", Input: json.RawMessage(`{}`)},
+				}, "tool_use")
+				asst.EndOffset = 150
+				tr := makeToolResultLine("tu_1", "ok")
+				tr.EndOffset = 250
+				return []transcript.Line{user, asst, tr}
+			},
+			wantLines:  2,
+			wantOffset: 150,
+		},
+		{
+			name: "complete assistant without request id is safe before trailing context",
+			lines: func() []transcript.Line {
+				user1 := makeUserLine("first")
+				user1.EndOffset = 50
+				asst := makeAssistantFragment("", 50, []transcript.ContentBlock{
+					{Type: "text", Text: "hi"},
+				}, "end_turn")
+				asst.UUID = "assistant-without-request-id"
+				asst.EndOffset = 150
+				user2 := makeUserLine("second")
+				user2.EndOffset = 200
+				return []transcript.Line{user1, asst, user2}
+			},
+			wantLines:  2,
+			wantOffset: 150,
+		},
+		{
+			name: "incomplete assistant without request id is not safe",
+			lines: func() []transcript.Line {
+				user := makeUserLine("hello")
+				user.EndOffset = 50
+				asst := makeAssistantFragment("", 10, []transcript.ContentBlock{
+					{Type: "thinking", Text: "..."},
+				}, "")
+				asst.UUID = "incomplete-assistant-without-request-id"
+				asst.EndOffset = 150
+				return []transcript.Line{user, asst}
+			},
+			wantLines:  0,
+			wantOffset: 0,
+		},
+		{
+			name: "trailing user prompt with no prior assistant",
+			lines: func() []transcript.Line {
+				user := makeUserLine("hello")
+				user.EndOffset = 100
+				return []transcript.Line{user}
+			},
+			wantLines:  0,
+			wantOffset: 0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -555,6 +629,52 @@ func TestCoalesce_MergesFragmentContent(t *testing.T) {
 	}
 	if msg.StopReason != "tool_use" {
 		t.Errorf("StopReason = %q, want tool_use", msg.StopReason)
+	}
+}
+
+func TestCoalesce_PreservesContextWhenAssistantArrivesInLaterBatch(t *testing.T) {
+	user1 := makeUserLine("user1 prompt")
+	user1.EndOffset = 50
+	asst1 := makeAssistantFragment("req-1", 30, []transcript.ContentBlock{
+		{Type: "text", Text: "hi"},
+	}, "end_turn")
+	asst1.EndOffset = 150
+	user2 := makeUserLine("user2 prompt")
+	user2.EndOffset = 200
+
+	// First batch: trailing user2 must not advance the safe offset past asst1.
+	firstLines, firstOffset := Coalesce([]transcript.Line{user1, asst1, user2})
+	if len(firstLines) != 2 {
+		t.Fatalf("first Coalesce returned %d lines, want 2", len(firstLines))
+	}
+	if firstOffset != 150 {
+		t.Fatalf("first Coalesce offset = %d, want 150 (end of asst1)", firstOffset)
+	}
+
+	// Second batch: starts at firstOffset, so user2 is re-read with the new
+	// completed assistant response.
+	asst2 := makeAssistantFragment("req-2", 30, []transcript.ContentBlock{
+		{Type: "text", Text: "ok"},
+	}, "end_turn")
+	asst2.EndOffset = 300
+
+	secondLines, secondOffset := Coalesce([]transcript.Line{user2, asst2})
+	if len(secondLines) != 2 {
+		t.Fatalf("second Coalesce returned %d lines, want 2", len(secondLines))
+	}
+	if secondOffset != 300 {
+		t.Fatalf("second Coalesce offset = %d, want 300", secondOffset)
+	}
+
+	gens := Process(secondLines, &state.Session{}, Options{SessionID: "sess-1"}, nil)
+	if len(gens) != 1 {
+		t.Fatalf("got %d generations, want 1", len(gens))
+	}
+	if len(gens[0].Input) == 0 || len(gens[0].Input[0].Parts) == 0 {
+		t.Fatalf("gen[0].Input is empty: %+v", gens[0].Input)
+	}
+	if gens[0].Input[0].Parts[0].Text != "user2 prompt" {
+		t.Errorf("gen[0].Input text = %q, want %q", gens[0].Input[0].Parts[0].Text, "user2 prompt")
 	}
 }
 

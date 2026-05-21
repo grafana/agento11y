@@ -44,6 +44,15 @@ func TestRead(t *testing.T) {
 			wantTypes: []string{"assistant"},
 		},
 		{
+			name: "ai-title and system metadata are excluded",
+			content: `{"type":"ai-title","sessionId":"sess1","title":"my chat"}
+{"type":"user","sessionId":"sess1","message":{"role":"user","content":"hi"}}
+{"type":"system","sessionId":"sess1","subtype":"stop_hook_summary"}
+{"type":"assistant","sessionId":"sess1","message":{"model":"claude-sonnet-4-20250514","content":[],"usage":{"output_tokens":5}}}
+`,
+			wantTypes: []string{"user", "assistant"},
+		},
+		{
 			name: "unparseable lines are skipped",
 			content: `not json at all
 {"type":"assistant","sessionId":"sess1","message":{"model":"test","content":[],"usage":{"output_tokens":5}}}

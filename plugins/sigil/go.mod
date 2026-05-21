@@ -6,7 +6,7 @@ require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/google/uuid v1.6.0
-	github.com/grafana/sigil-sdk/go v0.6.1-0.20260520104157-c7d37040bbcf
+	github.com/grafana/sigil-sdk/go v0.6.1-0.20260521105622-b9817f5fe521
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.43.0

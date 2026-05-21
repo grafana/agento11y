@@ -77,7 +77,7 @@ func TestHookEventRouting(t *testing.T) {
 					TranscriptPath: transcriptPath,
 				}
 			},
-			wantLogs: []string{"no generations produced; keeping offset="},
+			wantLogs: []string{"no completed assistant turn yet; keeping offset="},
 			assertState: func(t *testing.T) {
 				t.Helper()
 				sessionID := "zero-generation-session"
@@ -109,7 +109,7 @@ func TestHookEventRouting(t *testing.T) {
 			},
 			wantLogs: []string{
 				"read 1 raw lines",
-				"no generations produced; keeping offset=0 for next event",
+				"no completed assistant turn yet; keeping offset=0",
 			},
 		},
 		{

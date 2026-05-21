@@ -137,6 +137,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 
 	lines, safeOffset := mapper.Coalesce(lines)
 	if safeOffset == 0 {
+		logger.Printf("no completed assistant turn yet; keeping offset=%d", st.Offset)
 		return nil
 	}
 	logger.Printf("coalesced to %d lines, safe offset=%d", len(lines), safeOffset)

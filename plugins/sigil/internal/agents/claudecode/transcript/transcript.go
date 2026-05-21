@@ -115,6 +115,10 @@ var skipTypes = map[string]bool{
 	"attachment":            true,
 	"permission-mode":       true,
 	"last-prompt":           true,
+	// Claude Code emits these for UI title generation; not LLM turns.
+	"ai-title": true,
+	// local_command / stop_hook_summary / turn_duration metadata.
+	"system": true,
 }
 
 const maxScannerBuf = 10 * 1024 * 1024 // 10MB for large tool result lines

@@ -41,14 +41,30 @@ type userContext struct {
 
 // Coalesce merges consecutive assistant lines sharing the same RequestID
 // into a single line with merged content blocks and the final line's metadata.
-// Returns the coalesced lines and a safe byte offset that only covers complete
-// request groups (trailing incomplete assistant groups are excluded).
+// It returns only the safe prefix ending at the last complete assistant turn.
+// Trailing prompts, tool results, and incomplete assistant fragments are left
+// out so the next hook invocation re-reads them from the unchanged offset.
 func Coalesce(lines []transcript.Line) ([]transcript.Line, int64) {
 	var (
 		result         []transcript.Line
 		pending        []transcript.Line
+		lastSafeLen    int
 		lastSafeOffset int64
 	)
+
+	markSafe := func(offset int64) {
+		lastSafeLen = len(result)
+		lastSafeOffset = offset
+	}
+
+	appendAssistantIfComplete := func(line transcript.Line) {
+		var msg transcript.AssistantMessage
+		if err := json.Unmarshal(line.Message, &msg); err != nil || msg.StopReason == "" {
+			return
+		}
+		result = append(result, line)
+		markSafe(line.EndOffset)
+	}
 
 	flush := func() {
 		if len(pending) == 0 {
@@ -57,30 +73,34 @@ func Coalesce(lines []transcript.Line) ([]transcript.Line, int64) {
 		last := pending[len(pending)-1]
 		var msg transcript.AssistantMessage
 		if err := json.Unmarshal(last.Message, &msg); err == nil && msg.StopReason != "" {
-			merged := mergeAssistantGroup(pending)
-			result = append(result, merged)
-			lastSafeOffset = last.EndOffset
+			result = append(result, mergeAssistantGroup(pending))
+			markSafe(last.EndOffset)
 		}
 		// Incomplete group (no terminal stop_reason): excluded,
-		// offset not advanced — will be re-read next invocation.
+		// offset not advanced; will be re-read next invocation.
 		pending = nil
 	}
 
 	for _, line := range lines {
-		if line.Type == "assistant" && line.RequestID != "" {
+		if line.Type == "assistant" {
+			if line.RequestID == "" {
+				flush()
+				appendAssistantIfComplete(line)
+				continue
+			}
 			if len(pending) > 0 && pending[0].RequestID != line.RequestID {
 				flush()
 			}
 			pending = append(pending, line)
-		} else {
-			flush()
-			result = append(result, line)
-			lastSafeOffset = line.EndOffset
+			continue
 		}
+
+		flush()
+		result = append(result, line)
 	}
 	flush()
 
-	return result, lastSafeOffset
+	return result[:lastSafeLen], lastSafeOffset
 }
 
 func mergeAssistantGroup(lines []transcript.Line) transcript.Line {
@@ -289,6 +309,9 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 		return sigil.Generation{}, false
 	}
 
+	// Zero-token assistant lines are Claude Code's client-side socket-error
+	// recovery markers ("API Error: The socket connection was closed..."),
+	// not real LLM turns.
 	if msg.Usage.OutputTokens <= 0 {
 		return sigil.Generation{}, false
 	}

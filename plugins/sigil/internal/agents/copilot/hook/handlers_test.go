@@ -202,6 +202,11 @@ func TestStopClearsActiveTurnWhenFragmentLoadFails(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
+	// Exercise the no-credentials path explicitly; otherwise the test inherits
+	// SIGIL_* vars from the developer's shell and hits a real Sigil instance.
+	t.Setenv("SIGIL_ENDPOINT", "")
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+	t.Setenv("SIGIL_AUTH_TOKEN", "")
 	logger := log.New(io.Discard, "", 0)
 	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
 
