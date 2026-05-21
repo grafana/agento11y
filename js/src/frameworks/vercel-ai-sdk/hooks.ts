@@ -5,11 +5,13 @@ import type {
   GenerationRecorder,
   HookEvaluateResponse,
   Message,
+  ToolDefinition,
   ToolExecutionRecorder,
 } from '../../types.js';
 import {
   buildFrameworkMetadata,
   buildFrameworkTags,
+  extractOutputSchemaTool,
   extractStepNumber,
   isTextChunk,
   mapInputMessages,
@@ -44,6 +46,9 @@ interface StepState {
   stepStartEvent: StepStartEvent;
   toolCallIds: Set<string>;
   hasToolCalls: boolean;
+  outputSchemaPromise?: Promise<ToolDefinition | undefined>;
+  outputSchemaTool?: ToolDefinition;
+  outputSchemaResolved: boolean;
 }
 
 interface ToolState {
@@ -219,12 +224,33 @@ export class SigilVercelAiSdkInstrumentation {
         stepStartEvent: params.stepStartEvent,
         toolCallIds: new Set<string>(),
         hasToolCalls: false,
+        outputSchemaResolved: false,
       };
       state.stepStates.set(params.stepNumber, stepState);
       if (mode === 'STREAM') {
         hasCreatedStreamStepState = true;
       }
+      kickOffOutputSchemaExtraction(stepState);
       return stepState;
+    };
+    const kickOffOutputSchemaExtraction = (stepState: StepState): void => {
+      const outputRef = stepState.stepStartEvent.output;
+      if (outputRef === undefined || outputRef === null) {
+        stepState.outputSchemaResolved = true;
+        return;
+      }
+      const promise = extractOutputSchemaTool(outputRef).then(
+        (tool) => {
+          stepState.outputSchemaTool = tool;
+          stepState.outputSchemaResolved = true;
+          return tool;
+        },
+        () => {
+          stepState.outputSchemaResolved = true;
+          return undefined;
+        },
+      );
+      stepState.outputSchemaPromise = promise;
     };
     const resolveOrCreateStepStateForFinish = (params: {
       eventStepNumber: unknown;
@@ -573,49 +599,66 @@ export class SigilVercelAiSdkInstrumentation {
         const usage = mapUsageFromStepFinish(event);
         const isError = shouldTreatStepAsError(event);
 
-        try {
-          recorder.setResult({
-            conversationId: conversation.conversationId,
-            agentName: callAgentName,
-            agentVersion: this.agentVersion,
-            operationName,
-            input: this.captureInputs ? stepState.inputMessages : undefined,
-            output: this.captureOutputs ? outputMapping.output : undefined,
-            usage,
-            stopReason: response.finishReason,
-            responseId: response.responseId,
-            responseModel: response.responseModel,
-            tags,
-            metadata,
-            completedAt: new Date(),
-          });
-          if (isError) {
-            recorder.setCallError(event.error ?? new Error('step finished with error'));
+        const completeFinish = (schemaTool: ToolDefinition | undefined): void => {
+          const tools = schemaTool !== undefined ? [schemaTool] : undefined;
+          try {
+            recorder.setResult({
+              conversationId: conversation.conversationId,
+              agentName: callAgentName,
+              agentVersion: this.agentVersion,
+              operationName,
+              input: this.captureInputs ? stepState.inputMessages : undefined,
+              output: this.captureOutputs ? outputMapping.output : undefined,
+              usage,
+              stopReason: response.finishReason,
+              responseId: response.responseId,
+              responseModel: response.responseModel,
+              tags,
+              metadata,
+              tools,
+              completedAt: new Date(),
+            });
+            if (isError) {
+              recorder.setCallError(event.error ?? new Error('step finished with error'));
+            }
+          } finally {
+            recorder.end();
           }
-        } finally {
-          recorder.end();
-        }
 
-        const recorderError = recorder.getError();
-        const fallbackToolRecorderError = recordToolExecutionFromStepFinish({
-          stepNumber,
-          stepState,
-          conversationId: conversation.conversationId,
-          output: outputMapping.output,
-        });
-        state.stepStates.delete(stepNumber);
-        if (stepState.toolCallIds.size > 0) {
-          const closeError = isError
-            ? (event.error ?? new Error('parent step failed'))
-            : new Error('tool call did not finish before step completion');
-          closeStepTools(state, stepState, closeError);
+          const recorderError = recorder.getError();
+          const fallbackToolRecorderError = recordToolExecutionFromStepFinish({
+            stepNumber,
+            stepState,
+            conversationId: conversation.conversationId,
+            output: outputMapping.output,
+          });
+          state.stepStates.delete(stepNumber);
+          if (stepState.toolCallIds.size > 0) {
+            const closeError = isError
+              ? (event.error ?? new Error('parent step failed'))
+              : new Error('tool call did not finish before step completion');
+            closeStepTools(state, stepState, closeError);
+          }
+          if (recorderError !== undefined) {
+            throw recorderError;
+          }
+          if (fallbackToolRecorderError !== undefined) {
+            throw fallbackToolRecorderError;
+          }
+        };
+
+        if (stepState.outputSchemaResolved || stepState.outputSchemaPromise === undefined) {
+          completeFinish(stepState.outputSchemaTool);
+          return;
         }
-        if (recorderError !== undefined) {
-          throw recorderError;
-        }
-        if (fallbackToolRecorderError !== undefined) {
-          throw fallbackToolRecorderError;
-        }
+        return stepState.outputSchemaPromise.then(
+          (tool) => {
+            completeFinish(tool);
+          },
+          () => {
+            completeFinish(undefined);
+          },
+        );
       },
       experimental_onToolCallStart: (event: ToolCallStartEvent) => {
         const parsed = parseToolCallStart(event);

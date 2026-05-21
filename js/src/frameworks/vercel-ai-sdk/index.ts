@@ -6,6 +6,7 @@ export { SigilVercelAiSdkInstrumentation } from './hooks.js';
 export {
   buildFrameworkMetadata,
   buildFrameworkTags,
+  extractOutputSchemaTool,
   fallbackConversationId,
   frameworkIdentity,
   isTextChunk,

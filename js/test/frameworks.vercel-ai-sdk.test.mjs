@@ -1134,6 +1134,98 @@ test('vercel ai sdk isolates step state across concurrent calls', async () => {
   assert.equal(generationB.output[0].content, 'out-b');
 });
 
+test('vercel ai sdk captures Output.object schema into Generation.tools', async () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      question: { type: 'string' },
+      skills: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['question', 'skills'],
+  };
+  const { generations } = await captureSession(async (client) => {
+    const sigil = createSigilVercelAiSdk(client, { agentName: 'structured-agent' });
+    const hooks = sigil.generateTextHooks({ conversationId: 'conv-output-schema' });
+    hooks.experimental_onStepStart?.({
+      stepNumber: 0,
+      model: { provider: 'openai', modelId: 'gpt-5' },
+      messages: [{ role: 'user', content: 'generate a question' }],
+      output: {
+        name: 'object',
+        responseFormat: Promise.resolve({
+          type: 'json',
+          schema,
+          name: 'question_skills',
+          description: 'Question with associated skills',
+        }),
+      },
+    });
+    await hooks.onStepFinish?.({
+      stepNumber: 0,
+      finishReason: 'stop',
+      text: '{"question":"q?","skills":["s1"]}',
+      response: { id: 'resp-schema', modelId: 'gpt-5' },
+    });
+  });
+
+  assert.equal(generations.length, 1);
+  const [generation] = generations;
+  assert.ok(generation.tools);
+  assert.equal(generation.tools.length, 1);
+  const [tool] = generation.tools;
+  assert.equal(tool.name, 'question_skills');
+  assert.equal(tool.type, 'output_schema');
+  assert.equal(tool.description, 'Question with associated skills');
+  assert.deepEqual(JSON.parse(tool.inputSchemaJSON), schema);
+});
+
+test('vercel ai sdk omits tools entry when no output schema is configured', async () => {
+  const { generations } = await captureSession(async (client) => {
+    const sigil = createSigilVercelAiSdk(client);
+    const hooks = sigil.generateTextHooks({ conversationId: 'conv-no-schema' });
+    hooks.experimental_onStepStart?.({
+      stepNumber: 0,
+      model: { provider: 'openai', modelId: 'gpt-5' },
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+    hooks.onStepFinish?.({
+      stepNumber: 0,
+      finishReason: 'stop',
+      text: 'hi',
+      response: { id: 'resp-no-schema', modelId: 'gpt-5' },
+    });
+  });
+
+  assert.equal(generations.length, 1);
+  assert.equal(generations[0].tools, undefined);
+});
+
+test('vercel ai sdk recovers without tools when output schema extraction fails', async () => {
+  const { generations } = await captureSession(async (client) => {
+    const sigil = createSigilVercelAiSdk(client);
+    const hooks = sigil.generateTextHooks({ conversationId: 'conv-schema-fail' });
+    hooks.experimental_onStepStart?.({
+      stepNumber: 0,
+      model: { provider: 'openai', modelId: 'gpt-5' },
+      messages: [{ role: 'user', content: 'hello' }],
+      output: {
+        name: 'object',
+        responseFormat: Promise.reject(new Error('schema resolution failed')),
+      },
+    });
+    await hooks.onStepFinish?.({
+      stepNumber: 0,
+      finishReason: 'stop',
+      text: 'recovered',
+      response: { id: 'resp-fail', modelId: 'gpt-5' },
+    });
+  });
+
+  assert.equal(generations.length, 1);
+  assert.equal(generations[0].tools, undefined);
+  assert.equal(generations[0].output[0].content, 'recovered');
+});
+
 async function captureSingleGeneration(run) {
   const { generations } = await captureSession(run);
   assert.equal(generations.length, 1);

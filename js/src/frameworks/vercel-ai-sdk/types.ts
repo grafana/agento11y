@@ -13,6 +13,12 @@ export interface StepStartEvent {
   stepNumber?: unknown;
   messages?: unknown;
   model?: StepStartModelRef;
+  /**
+   * Output configuration the AI SDK passes through (e.g. `Output.object(...)`).
+   * Not declared on the public AI SDK type — surfaced at runtime on the step-start
+   * event so adapters can capture the response-format schema.
+   */
+  output?: unknown;
 }
 
 export interface StepFinishResponseRef {

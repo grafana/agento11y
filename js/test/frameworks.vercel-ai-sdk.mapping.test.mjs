@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildFrameworkMetadata,
   buildFrameworkTags,
+  extractOutputSchemaTool,
   isTextChunk,
   mapInputMessages,
   mapModelFromStepStart,
@@ -221,6 +222,62 @@ test('vercel ai sdk mapping parses tool lifecycle events', () => {
   assert.equal(finish.toolCallId, 'call-1');
   assert.equal(finish.success, true);
   assert.equal(finish.durationMs, 120);
+});
+
+test('extractOutputSchemaTool returns ToolDefinition for Output.object-style responseFormat', async () => {
+  const schema = {
+    type: 'object',
+    properties: { question: { type: 'string' }, skills: { type: 'array', items: { type: 'string' } } },
+    required: ['question', 'skills'],
+  };
+  const output = {
+    name: 'object',
+    responseFormat: Promise.resolve({ type: 'json', schema, name: 'person', description: 'A person record' }),
+  };
+
+  const tool = await extractOutputSchemaTool(output);
+  assert.ok(tool);
+  assert.equal(tool.name, 'person');
+  assert.equal(tool.type, 'output_schema');
+  assert.equal(tool.description, 'A person record');
+  assert.deepEqual(JSON.parse(tool.inputSchemaJSON), schema);
+});
+
+test('extractOutputSchemaTool falls back to Output.name when responseFormat omits name', async () => {
+  const schema = { type: 'object', properties: { value: { type: 'number' } } };
+  const tool = await extractOutputSchemaTool({
+    name: 'object',
+    responseFormat: { type: 'json', schema },
+  });
+  assert.ok(tool);
+  assert.equal(tool.name, 'object');
+  assert.equal(tool.type, 'output_schema');
+  assert.equal(tool.description, undefined);
+  assert.deepEqual(JSON.parse(tool.inputSchemaJSON), schema);
+});
+
+test('extractOutputSchemaTool returns undefined for missing or non-json output', async () => {
+  assert.equal(await extractOutputSchemaTool(undefined), undefined);
+  assert.equal(await extractOutputSchemaTool(null), undefined);
+  assert.equal(await extractOutputSchemaTool({}), undefined);
+  assert.equal(await extractOutputSchemaTool({ responseFormat: { type: 'text' } }), undefined);
+  assert.equal(await extractOutputSchemaTool({ responseFormat: { type: 'json' } }), undefined);
+});
+
+test('extractOutputSchemaTool fails open when responseFormat promise rejects', async () => {
+  const tool = await extractOutputSchemaTool({
+    responseFormat: Promise.reject(new Error('schema unavailable')),
+  });
+  assert.equal(tool, undefined);
+});
+
+test('extractOutputSchemaTool fails open when schema cannot be serialized', async () => {
+  const circular = { type: 'object' };
+  circular.self = circular;
+  const tool = await extractOutputSchemaTool({
+    responseFormat: { type: 'json', schema: circular },
+  });
+  assert.equal(tool, undefined);
 });
 
 test('vercel ai sdk mapping includes canonical framework identity in tags and metadata', () => {

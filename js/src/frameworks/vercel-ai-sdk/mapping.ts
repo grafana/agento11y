@@ -1,4 +1,4 @@
-import type { Message, MessagePart, TokenUsage } from '../../types.js';
+import type { Message, MessagePart, TokenUsage, ToolDefinition } from '../../types.js';
 import type {
   ConversationResolution,
   ParsedToolCall,
@@ -91,6 +91,61 @@ export function extractStepNumber(event: { stepNumber?: unknown }, fallback: num
     return stepNumber;
   }
   return fallback;
+}
+
+/**
+ * Best-effort extraction of an output-schema tool from the AI SDK step-start
+ * `output` reference (set via `generateText({ output: Output.object({ schema }) })`).
+ *
+ * Fail-open: any shape mismatch, schema resolution failure, or serialization
+ * error resolves to `undefined` so schema capture never breaks the generation.
+ */
+export async function extractOutputSchemaTool(output: unknown): Promise<ToolDefinition | undefined> {
+  try {
+    if (!isRecord(output)) {
+      return undefined;
+    }
+    const responseFormatRef = (output as { responseFormat?: unknown }).responseFormat;
+    if (responseFormatRef === undefined || responseFormatRef === null) {
+      return undefined;
+    }
+    const responseFormat = await Promise.resolve(responseFormatRef as unknown);
+    if (!isRecord(responseFormat)) {
+      return undefined;
+    }
+    const formatType = asString((responseFormat as { type?: unknown }).type);
+    if (formatType !== 'json') {
+      return undefined;
+    }
+    const schema = (responseFormat as { schema?: unknown }).schema;
+    if (schema === undefined || schema === null) {
+      return undefined;
+    }
+    let inputSchemaJSON: string;
+    try {
+      const encoded = JSON.stringify(schema);
+      if (encoded === undefined || encoded === 'null') {
+        return undefined;
+      }
+      inputSchemaJSON = encoded;
+    } catch {
+      return undefined;
+    }
+    const formatName = asString((responseFormat as { name?: unknown }).name);
+    const outputName = asString((output as { name?: unknown }).name);
+    const description = asString((responseFormat as { description?: unknown }).description);
+    const tool: ToolDefinition = {
+      name: formatName.length > 0 ? formatName : outputName.length > 0 ? outputName : 'output',
+      type: 'output_schema',
+      inputSchemaJSON,
+    };
+    if (description.length > 0) {
+      tool.description = description;
+    }
+    return tool;
+  } catch {
+    return undefined;
+  }
 }
 
 export function mapModelFromStepStart(event: StepStartEvent): { provider: string; modelName: string } {
