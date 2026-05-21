@@ -13,10 +13,21 @@ brew install grafana/grafana/sigil
 ## 2. Register the plugin
 
 ```sh
-codex plugin marketplace add grafana/sigil-sdk
+sigil codex
 ```
 
-Enable it in `~/.codex/config.toml`:
+The launcher resolves `codex` on `PATH`, registers `sigil-codex@grafana-sigil` with codex on first run, then execs codex. On first launch only, open `/hooks` inside codex and trust each `sigil-codex@grafana-sigil` hook — codex requires manual review on install.
+
+### Manual setup
+
+If you'd rather drive codex's plugin store yourself (or are on an older build where the launcher's auto-install does not work), the same flow with codex's verbs:
+
+```sh
+codex plugin marketplace add grafana/sigil-sdk
+codex plugin add sigil-codex@grafana-sigil
+```
+
+On current codex builds the `hooks` and `plugin_hooks` features are stable by default (`codex features list` confirms this), so no config.toml edits are needed. Older builds gated this on feature flags — if `/hooks` is empty after install, add the following to `~/.codex/config.toml`:
 
 ```toml
 [plugins."sigil-codex@grafana-sigil"]

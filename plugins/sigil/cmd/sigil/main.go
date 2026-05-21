@@ -3,15 +3,16 @@
 //
 //	sigil <agent> hook           — dispatch a JSON hook payload on stdin to <agent>
 //	sigil claude [-- args...]    — exec claude after bootstrapping the sigil-cc plugin
-//	sigil pi [-- args...]        — exec pi after bootstrapping the @grafana/sigil-pi extension
+//	sigil codex  [-- args...]    — exec codex after bootstrapping the sigil-codex plugin
+//	sigil pi     [-- args...]    — exec pi after bootstrapping the @grafana/sigil-pi extension
 //	sigil --version              — print the build version
 //
 // Unknown agents and unknown verbs exit with code 2 and a usage message on
 // stderr. For hook agents the binary must never crash the calling agent
 // process; once argv parsing succeeds, all errors are swallowed (and logged
-// when SIGIL_DEBUG=true) and the process exits 0. Launcher agents (`claude`
-// and `pi`) are invoked by a human, so errors surface on stderr with a
-// non-zero exit code.
+// when SIGIL_DEBUG=true) and the process exits 0. Launcher agents (`claude`,
+// `codex`, and `pi`) are invoked by a human, so errors surface on stderr
+// with a non-zero exit code.
 package main
 
 import (
@@ -32,7 +33,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/login"
 )
 
-const usageLine = "usage: sigil login | sigil <agent> hook | sigil claude [-- args...] | sigil pi [-- args...]"
+const usageLine = "usage: sigil login | sigil <agent> hook | sigil claude [-- args...] | sigil codex [-- args...] | sigil pi [-- args...]"
 
 // version is overridden via -ldflags at build time.
 var version = "dev"
@@ -59,6 +60,7 @@ var agents = map[string]agentHook{
 // name (`claude`, `pi`), not the hook agent name (`claude-code`).
 var launchers = map[string]agentLauncher{
 	"claude": claudecode.Launch,
+	"codex":  codex.Launch,
 	"pi":     pi.Launch,
 }
 
@@ -95,7 +97,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 
 	// Launcher dispatch handles `sigil <launcher> [-- args...]` before the
 	// hook branch because launchers have no verb (single mode of operation).
-	if launcher, ok := launchers[args[0]]; ok {
+	//
+	// One exception: when a name appears in both maps (today: `codex`, which
+	// is both a launcher and a hook agent), the literal verb `hook` always
+	// means hook dispatch. Without this guard `sigil codex hook` would hit
+	// the launcher branch, fail parseLauncherArgs because there is no `--`,
+	// and exit 2 — breaking every hook fired by plugins/codex/hooks/hooks.json.
+	_, isHookAgent := agents[args[0]]
+	isHookCall := len(args) >= 2 && args[1] == "hook" && isHookAgent
+	if launcher, ok := launchers[args[0]]; ok && !isHookCall {
 		launcherArgs, ok := parseLauncherArgs(args[0], args[1:], stderr)
 		if !ok {
 			return
