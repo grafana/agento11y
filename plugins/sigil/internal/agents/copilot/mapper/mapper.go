@@ -10,9 +10,9 @@ import (
 
 	"github.com/grafana/sigil-sdk/go/sigil"
 
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/fragment"
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/redact"
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/util"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/fragment"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/timeutil"
 )
 
 var errGitHubCopilot = errors.New("copilot_error")
@@ -43,8 +43,8 @@ func Map(in Inputs) Mapped {
 	if mode == sigil.ContentCaptureModeDefault {
 		mode = sigil.ContentCaptureModeMetadataOnly
 	}
-	completedAt := util.ParseTimestamp(frag.CompletedAt, util.ParseTimestamp(frag.LastEventAt, now))
-	startedAt := util.ParseTimestamp(frag.StartedAt, completedAt)
+	completedAt := timeutil.ParseTimestamp(frag.CompletedAt, timeutil.ParseTimestamp(frag.LastEventAt, now))
+	startedAt := timeutil.ParseTimestamp(frag.StartedAt, completedAt)
 
 	model := sigil.ModelRef{
 		Provider: strings.TrimSpace(frag.Provider),

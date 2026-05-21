@@ -1,5 +1,5 @@
-// Command sigil is the single binary used by the Claude Code, Codex, Cursor,
-// and pi agent plugins. It accepts:
+// Command sigil is the single binary used by the Claude Code, Codex,
+// Copilot, Cursor, and pi agent plugins. It accepts:
 //
 //	sigil <agent> hook           — dispatch a JSON hook payload on stdin to <agent>
 //	sigil claude [-- args...]    — exec claude after bootstrapping the sigil-cc plugin
@@ -26,6 +26,7 @@ import (
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/claudecode"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/cursor"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/pi"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/cli"
@@ -51,6 +52,7 @@ type agentLauncher func(ctx context.Context, args []string, stdin io.Reader, std
 var agents = map[string]agentHook{
 	"claude-code": claudecode.Hook,
 	"codex":       codex.Hook,
+	"copilot":     copilot.Hook,
 	"cursor":      cursor.Hook,
 }
 

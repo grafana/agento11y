@@ -21,8 +21,9 @@ The launcher installs the plugin on first run. Add your credentials to `~/.confi
 |-------|--------|--------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [`claude-code/`](claude-code/) | Available |
 | [Codex](https://developers.openai.com/codex) | [`codex/`](codex/) | Experimental |
+| [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli/using-github-copilot-in-the-cli) | [`copilot/`](copilot/) | Experimental |
 | [Cursor](https://cursor.com) | [`cursor/`](cursor/) | Available |
 | [OpenCode](https://opencode.ai) | [`opencode/`](opencode/) | Available |
 | [Pi](https://github.com/badlogic/pi) | [`pi/`](pi/) | Available |
 
-Claude Code, Codex, and Cursor share the same Go binary (`brew install grafana/grafana/sigil`) and the same config file (`~/.config/sigil/config.env`). All Sigil connection details live at `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`.
+Claude Code, Codex, Copilot, and Cursor share the same Go binary (`brew install grafana/grafana/sigil`) and the same config file (`~/.config/sigil/config.env`). All Sigil connection details live at `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`.

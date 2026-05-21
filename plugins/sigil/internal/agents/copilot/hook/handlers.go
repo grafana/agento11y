@@ -12,16 +12,16 @@ import (
 
 	"github.com/grafana/sigil-sdk/go/sigil"
 
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/config"
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/fragment"
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/mapper"
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/otel"
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/redact"
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/transcript"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/config"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/fragment"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/mapper"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/transcript"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
 )
 
 const (
-	otelInstrumentationName = "sigil-copilot"
+	otelInstrumentationName = "sigil.copilot"
 	stopExportTimeout       = 20 * time.Second
 	transcriptRetryWindow   = 1500 * time.Millisecond
 	transcriptRetryInterval = 100 * time.Millisecond

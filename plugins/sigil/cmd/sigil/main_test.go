@@ -87,7 +87,7 @@ func TestRun_UnknownVerbExits2(t *testing.T) {
 func TestRun_DispatchesToMatchingAgentHook(t *testing.T) {
 	// Swap in a mock hook so we don't depend on real adapter behaviour.
 	called := map[string]int{}
-	wantAgents := []string{"claude-code", "codex", "cursor"}
+	wantAgents := []string{"claude-code", "codex", "copilot", "cursor"}
 
 	prev := agents
 	t.Cleanup(func() { agents = prev })

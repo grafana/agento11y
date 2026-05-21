@@ -7,7 +7,7 @@ import (
 
 	"github.com/grafana/sigil-sdk/go/sigil"
 
-	"github.com/grafana/sigil-sdk/plugins/copilot/internal/fragment"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/fragment"
 )
 
 var fixedTime = time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)

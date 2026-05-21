@@ -12,8 +12,8 @@ import (
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/codexlog"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/fragment"
-	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/util"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/timeutil"
 )
 
 const (
@@ -40,8 +40,8 @@ func Map(in Inputs) Mapped {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	completedAt := util.ParseTimestamp(frag.CompletedAt, util.ParseTimestamp(frag.LastEventAt, now))
-	startedAt := util.ParseTimestamp(frag.StartedAt, completedAt)
+	completedAt := timeutil.ParseTimestamp(frag.CompletedAt, timeutil.ParseTimestamp(frag.LastEventAt, now))
+	startedAt := timeutil.ParseTimestamp(frag.StartedAt, completedAt)
 	mode := in.ContentCapture
 	if mode == sigil.ContentCaptureModeDefault {
 		mode = sigil.ContentCaptureModeMetadataOnly

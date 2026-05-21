@@ -16,9 +16,9 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/config"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/fragment"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/mapper"
-	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/util"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/timeutil"
 )
 
 const (
@@ -495,7 +495,7 @@ func redactSpanContent(red *redact.Redactor, raw json.RawMessage) string {
 }
 
 func toolSpanWindow(t fragment.ToolRecord, genCompletedAt time.Time) (time.Time, time.Time) {
-	completedAt := util.ParseTimestamp(t.CompletedAt, genCompletedAt)
+	completedAt := timeutil.ParseTimestamp(t.CompletedAt, genCompletedAt)
 	startedAt := completedAt
 	if t.DurationMs != nil && !completedAt.IsZero() {
 		startedAt = completedAt.Add(-time.Duration(*t.DurationMs) * time.Millisecond)
