@@ -1,18 +1,19 @@
 // Command sigil is the single binary used by the Claude Code, Codex,
 // Copilot, Cursor, and pi agent plugins. It accepts:
 //
-//	sigil <agent> hook           — dispatch a JSON hook payload on stdin to <agent>
-//	sigil claude [-- args...]    — exec claude after bootstrapping the sigil-cc plugin
-//	sigil codex  [-- args...]    — exec codex after bootstrapping the sigil-codex plugin
-//	sigil pi     [-- args...]    — exec pi after bootstrapping the @grafana/sigil-pi extension
-//	sigil --version              — print the build version
+//	sigil <agent> hook            — dispatch a JSON hook payload on stdin to <agent>
+//	sigil claude  [-- args...]    — exec claude after bootstrapping the sigil-cc plugin
+//	sigil codex   [-- args...]    — exec codex after bootstrapping the sigil-codex plugin
+//	sigil copilot [-- args...]    — exec copilot after bootstrapping the sigil-copilot plugin
+//	sigil pi      [-- args...]    — exec pi after bootstrapping the @grafana/sigil-pi extension
+//	sigil --version               — print the build version
 //
 // Unknown agents and unknown verbs exit with code 2 and a usage message on
 // stderr. For hook agents the binary must never crash the calling agent
 // process; once argv parsing succeeds, all errors are swallowed (and logged
 // when SIGIL_DEBUG=true) and the process exits 0. Launcher agents (`claude`,
-// `codex`, and `pi`) are invoked by a human, so errors surface on stderr
-// with a non-zero exit code.
+// `codex`, `copilot`, and `pi`) are invoked by a human, so errors surface on
+// stderr with a non-zero exit code.
 package main
 
 import (
@@ -34,7 +35,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/login"
 )
 
-const usageLine = "usage: sigil login | sigil <agent> hook | sigil claude [-- args...] | sigil codex [-- args...] | sigil pi [-- args...]"
+const usageLine = "usage: sigil login | sigil <agent> hook | sigil claude [-- args...] | sigil codex [-- args...] | sigil copilot [-- args...] | sigil pi [-- args...]"
 
 // version is overridden via -ldflags at build time.
 var version = "dev"
@@ -61,9 +62,10 @@ var agents = map[string]agentHook{
 // process with the target CLI. The launcher name is the target CLI's own
 // name (`claude`, `pi`), not the hook agent name (`claude-code`).
 var launchers = map[string]agentLauncher{
-	"claude": claudecode.Launch,
-	"codex":  codex.Launch,
-	"pi":     pi.Launch,
+	"claude":  claudecode.Launch,
+	"codex":   codex.Launch,
+	"copilot": copilot.Launch,
+	"pi":      pi.Launch,
 }
 
 // exit is a package var so tests can intercept termination.

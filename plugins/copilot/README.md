@@ -26,6 +26,15 @@ which sigil
 
 ## 2. Register the plugin
 
+```sh
+sigil copilot
+```
+
+The launcher resolves `copilot` on `PATH`, registers `sigil-copilot` with copilot on first run, then execs copilot.
+
+<details>
+<summary>Manual install</summary>
+
 The current
 [GitHub Copilot CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference)
 documents both local-path and GitHub-subdirectory install forms:
@@ -45,6 +54,8 @@ Confirm the install:
 ```sh
 copilot plugin list
 ```
+
+</details>
 
 ## 3. Add your credentials
 
@@ -172,7 +183,7 @@ The plugin always tags exported generations with:
 
 | Symptom | Try |
 |---|---|
-| Plugin does not appear in `copilot plugin list` | Re-run `copilot plugin install ./plugins/copilot` or the GitHub subdir install form. Confirm `plugin.json` is at the plugin root. |
+| Plugin does not appear in `copilot plugin list` | Re-run `sigil copilot` or `copilot plugin install grafana/sigil-sdk:plugins/copilot`. Confirm `plugin.json` is at the plugin root. |
 | Command not found | Reinstall: `brew install grafana/grafana/sigil`. Check `sigil --version`. |
 | Hooks run but nothing appears in Sigil | Check `SIGIL_ENDPOINT`, `SIGIL_AUTH_TENANT_ID`, and `SIGIL_AUTH_TOKEN`. Without all three, the plugin discards the completed fragment. |
 | No latency/tool charts in AI Observability | Set `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` so the plugin can emit traces and metrics. |
