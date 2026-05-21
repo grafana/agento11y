@@ -19,7 +19,7 @@ import (
 func TestLaunch_MissingPiBinary(t *testing.T) {
 	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
-	err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+	err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev")
 	if err == nil || !strings.Contains(err.Error(), "pi CLI not found") {
 		t.Fatalf("err = %v, want contains \"pi CLI not found\"", err)
 	}
@@ -43,7 +43,7 @@ func TestLaunch_SkipsInstallWhenPackagePresent(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), []string{"--print", "hi"}, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), []string{"--print", "hi"}, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/pi", "--print", "hi"}) {
@@ -77,7 +77,7 @@ func TestLaunch_RunsInstallWhenPackageMissing(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -111,7 +111,7 @@ func TestLaunch_InstallFailureContinuesToExec(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !execCalled {
@@ -159,7 +159,7 @@ func TestLaunch_LocalInjectsEnvAndForwardsArgs(t *testing.T) {
 		Endpoint:     "http://127.0.0.1:9000",
 		OTLPEndpoint: "http://127.0.0.1:9000/otlp",
 	}
-	if err := Launch(context.Background(), []string{"--print", "hi"}, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), []string{"--print", "hi"}, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/pi", "--print", "hi"}) {
@@ -199,7 +199,7 @@ func TestLaunch_LocalDefaultsFullContentWhenUnset(t *testing.T) {
 		Endpoint:     "http://127.0.0.1:9000",
 		OTLPEndpoint: "http://127.0.0.1:9000/otlp",
 	}
-	if err := Launch(context.Background(), nil, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	got := envToMap(execEnv)
@@ -224,7 +224,7 @@ func TestLaunch_NormalModeDoesNotInjectLocalEnv(t *testing.T) {
 		return nil
 	})
 
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	got := envToMap(execEnv)

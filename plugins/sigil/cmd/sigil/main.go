@@ -81,7 +81,9 @@ type agentHook func(ctx context.Context, stdin io.Reader, stdout io.Writer, log 
 // unchanged to the underlying CLI via process replacement. localEnv is
 // non-nil when the caller requested `--local`, in which case the agent's
 // child inherits local-mode SIGIL_* env vars from local.LaunchEnv.Apply.
-type agentLauncher func(ctx context.Context, args []string, localEnv *local.LaunchEnv, stdin io.Reader, stdout, stderr io.Writer, log *log.Logger) error
+// sigilVersion is the build version forwarded so launchers can stamp
+// update-check state with the version that performed the refresh.
+type agentLauncher func(ctx context.Context, args []string, localEnv *local.LaunchEnv, stdin io.Reader, stdout, stderr io.Writer, log *log.Logger, sigilVersion string) error
 
 // agents maps the argv agent name to its adapter Hook. The map is a package
 // var so tests can substitute mock hooks.
@@ -201,7 +203,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 			}
 		}()
 
-		if err := launcher(context.Background(), launcherArgs, localEnv, stdin, stdout, stderr, logger); err != nil {
+		if err := launcher(context.Background(), launcherArgs, localEnv, stdin, stdout, stderr, logger, version); err != nil {
 			logger.Printf("launch %s: %v", args[0], err)
 			_, _ = fmt.Fprintf(stderr, "sigil: %v\n", err)
 			exit(1)

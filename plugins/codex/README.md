@@ -105,6 +105,7 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 | `SIGIL_GUARDS_ENABLED` | `false` | Enable Codex `PreToolUse` guards against Sigil rules. |
 | `SIGIL_GUARDS_FAIL_OPEN` | `true` | Allow the tool call when the guard request fails (set `false` for fail-closed). |
 | `SIGIL_GUARDS_TIMEOUT_MS` | `1500` | Per-call guard timeout. |
+| `SIGIL_AUTO_UPDATE` | `true` | Refresh the `sigil-codex` plugin automatically. Set `false` to pin the installed version. |
 
 Guards only intercept tool calls that Codex routes through `PreToolUse` — Bash, the `apply_patch` variants, and MCP tools. See the [Codex hooks docs](https://developers.openai.com/codex/hooks) for the supported set.
 

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,13 +21,14 @@ import (
 func TestLaunch_MissingCodexBinary(t *testing.T) {
 	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
-	err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+	err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev")
 	if err == nil || !strings.Contains(err.Error(), "codex CLI not found") {
 		t.Fatalf("err = %v, want contains \"codex CLI not found\"", err)
 	}
 }
 
 func TestLaunch_SkipsInstallWhenPluginInstalledAndEnabled(t *testing.T) {
+	t.Setenv("SIGIL_AUTO_UPDATE", "false")
 	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
 	withPluginList(t, func(context.Context, string) ([]byte, error) {
 		return []byte("  sigil-codex@grafana-sigil (installed, enabled)\n"), nil
@@ -42,7 +45,7 @@ func TestLaunch_SkipsInstallWhenPluginInstalledAndEnabled(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), []string{"exec", "hi"}, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), []string{"exec", "hi"}, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/codex", "exec", "hi"}) {
@@ -75,7 +78,7 @@ func TestLaunch_RunsInstallWhenPluginMissing(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -111,7 +114,7 @@ func TestLaunch_RunsInstallWhenPluginInstalledButDisabled(t *testing.T) {
 		return nil
 	})
 
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -141,7 +144,7 @@ func TestLaunch_InstallFailureContinuesToExec(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !execCalled {
@@ -186,7 +189,7 @@ func TestLaunch_PluginListProbeFailureFallsThroughToInstall(t *testing.T) {
 
 	var logbuf bytes.Buffer
 	logger := log.New(&logbuf, "", 0)
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, logger); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, logger, "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -201,6 +204,7 @@ func TestLaunch_PluginListProbeFailureFallsThroughToInstall(t *testing.T) {
 }
 
 func TestLaunch_ExecFailureSurfacesError(t *testing.T) {
+	t.Setenv("SIGIL_AUTO_UPDATE", "false")
 	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
 	withPluginList(t, func(context.Context, string) ([]byte, error) {
 		return []byte("  sigil-codex@grafana-sigil (installed, enabled)\n"), nil
@@ -210,7 +214,7 @@ func TestLaunch_ExecFailureSurfacesError(t *testing.T) {
 		return errors.New("exec boom")
 	})
 
-	err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+	err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev")
 	if err == nil || !strings.Contains(err.Error(), "exec codex") {
 		t.Fatalf("err = %v, want contains \"exec codex\"", err)
 	}
@@ -247,7 +251,7 @@ func TestLaunch_LocalEnv(t *testing.T) {
 			})
 
 			localEnv := &local.LaunchEnv{Endpoint: "http://127.0.0.1:9000", OTLPEndpoint: "http://127.0.0.1:9000/otlp"}
-			err := Launch(context.Background(), []string{"exec", "hi"}, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+			err := Launch(context.Background(), []string{"exec", "hi"}, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev")
 			require.NoError(t, err)
 			got := envMap(execEnv)
 			assert.Equal(t, "http://127.0.0.1:9000", got["SIGIL_ENDPOINT"])
@@ -260,6 +264,7 @@ func TestLaunch_LocalEnv(t *testing.T) {
 }
 
 func TestLaunch_ForwardsArgvUnchanged(t *testing.T) {
+	t.Setenv("SIGIL_AUTO_UPDATE", "false")
 	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
 	withPluginList(t, func(context.Context, string) ([]byte, error) {
 		return []byte("  sigil-codex@grafana-sigil (installed, enabled)\n"), nil
@@ -273,7 +278,7 @@ func TestLaunch_ForwardsArgvUnchanged(t *testing.T) {
 	})
 
 	args := []string{"exec", "--model", "gpt-5", "hi"}
-	if err := Launch(context.Background(), args, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), args, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	want := append([]string{"/usr/local/bin/codex"}, args...)
@@ -384,6 +389,65 @@ func envMap(env []string) map[string]string {
 	return out
 }
 
+func withRunUpdate(t *testing.T, fn func(context.Context, string, io.Writer) error) {
+	t.Helper()
+	prev := runUpdate
+	t.Cleanup(func() { runUpdate = prev })
+	runUpdate = fn
+}
+
+func launch(t *testing.T, args []string, stdout, stderr io.Writer) error {
+	t.Helper()
+	return launchWithLogger(t, args, stdout, stderr, nopLogger())
+}
+
+func launchWithLogger(t *testing.T, args []string, stdout, stderr io.Writer, logger *log.Logger) error {
+	t.Helper()
+	return Launch(context.Background(), args, nil, strings.NewReader(""), stdout, stderr, logger, "dev")
+}
+
+func launchOK(t *testing.T, args []string, stdout, stderr io.Writer) {
+	t.Helper()
+	require.NoError(t, launch(t, args, stdout, stderr))
+}
+
 func nopLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
+}
+
+func TestLaunch_RefreshesInstalledPlugin(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
+	withPluginList(t, func(context.Context, string) ([]byte, error) {
+		return []byte("  sigil-codex@grafana-sigil (installed, enabled)\n"), nil
+	})
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("runInstall must not be called when plugin is already installed")
+		return nil
+	})
+
+	updateCalls := 0
+	withRunUpdate(t, func(_ context.Context, bin string, _ io.Writer) error {
+		updateCalls++
+		if bin != "/usr/local/bin/codex" {
+			t.Errorf("update bin = %q", bin)
+		}
+		return nil
+	})
+	withExecFn(t, func(string, []string, []string) error { return nil })
+
+	var stderr bytes.Buffer
+	launchOK(t, nil, io.Discard, &stderr)
+	if updateCalls != 1 {
+		t.Fatalf("runUpdate calls = %d, want 1", updateCalls)
+	}
+	if !strings.Contains(stderr.String(), "refreshing "+PluginName+" in codex") {
+		t.Fatalf("stderr missing refresh message: %q", stderr.String())
+	}
+	stamp := filepath.Join(state, "sigil", "update-checks", PluginName+".stamp")
+	if _, err := os.Stat(stamp); err != nil {
+		t.Fatalf("expected update stamp: %v", err)
+	}
 }
