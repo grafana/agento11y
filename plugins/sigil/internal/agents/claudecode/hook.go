@@ -76,6 +76,12 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	tenantID := os.Getenv("SIGIL_AUTH_TENANT_ID")
 	authToken := os.Getenv("SIGIL_AUTH_TOKEN")
 
+	// A local-mode endpoint never needs real Cloud credentials. The
+	// launcher injects placeholders, but a user running the hook
+	// directly (e.g. for testing) might leave them empty — fill in
+	// stand-ins so the SDK proceeds.
+	tenantID, authToken = envconfig.LocalAuthPlaceholders(sigilEndpoint, tenantID, authToken)
+
 	missing := envconfig.MissingEnvVars(
 		[]string{"SIGIL_ENDPOINT", "SIGIL_AUTH_TENANT_ID", "SIGIL_AUTH_TOKEN"},
 		map[string]string{

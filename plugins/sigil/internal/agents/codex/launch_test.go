@@ -10,12 +10,16 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLaunch_MissingCodexBinary(t *testing.T) {
 	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
-	err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+	err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
 	if err == nil || !strings.Contains(err.Error(), "codex CLI not found") {
 		t.Fatalf("err = %v, want contains \"codex CLI not found\"", err)
 	}
@@ -38,7 +42,7 @@ func TestLaunch_SkipsInstallWhenPluginInstalledAndEnabled(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), []string{"exec", "hi"}, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), []string{"exec", "hi"}, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/codex", "exec", "hi"}) {
@@ -71,7 +75,7 @@ func TestLaunch_RunsInstallWhenPluginMissing(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -107,7 +111,7 @@ func TestLaunch_RunsInstallWhenPluginInstalledButDisabled(t *testing.T) {
 		return nil
 	})
 
-	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -137,7 +141,7 @@ func TestLaunch_InstallFailureContinuesToExec(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !execCalled {
@@ -182,7 +186,7 @@ func TestLaunch_PluginListProbeFailureFallsThroughToInstall(t *testing.T) {
 
 	var logbuf bytes.Buffer
 	logger := log.New(&logbuf, "", 0)
-	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, logger); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, logger); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -206,9 +210,52 @@ func TestLaunch_ExecFailureSurfacesError(t *testing.T) {
 		return errors.New("exec boom")
 	})
 
-	err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+	err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
 	if err == nil || !strings.Contains(err.Error(), "exec codex") {
 		t.Fatalf("err = %v, want contains \"exec codex\"", err)
+	}
+}
+
+func TestLaunch_LocalEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		presetMode string
+		wantMode   string
+	}{
+		{name: "defaults full capture", wantMode: "full"},
+		{name: "preserves user capture mode", presetMode: "metadata_only", wantMode: "metadata_only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.com")
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+			t.Setenv("SIGIL_AUTH_TOKEN", "")
+			t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", tc.presetMode)
+
+			withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
+			withPluginList(t, func(context.Context, string) ([]byte, error) {
+				return []byte("  sigil-codex@grafana-sigil (installed, enabled)\n"), nil
+			})
+			withRunInstall(t, func(context.Context, string, io.Writer) error {
+				t.Fatal("runInstall must not be called when plugin is installed and enabled")
+				return nil
+			})
+
+			var execEnv []string
+			withExecFn(t, func(_ string, _ []string, env []string) error {
+				execEnv = append([]string{}, env...)
+				return nil
+			})
+
+			localEnv := &local.LaunchEnv{Endpoint: "http://127.0.0.1:9000", OTLPEndpoint: "http://127.0.0.1:9000/otlp"}
+			err := Launch(context.Background(), []string{"exec", "hi"}, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+			require.NoError(t, err)
+			got := envMap(execEnv)
+			assert.Equal(t, "http://127.0.0.1:9000", got["SIGIL_ENDPOINT"])
+			assert.Equal(t, "http://127.0.0.1:9000/otlp", got["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"])
+			assert.Equal(t, "local", got["SIGIL_AUTH_TENANT_ID"])
+			assert.Equal(t, "local", got["SIGIL_AUTH_TOKEN"])
+			assert.Equal(t, tc.wantMode, got["SIGIL_CONTENT_CAPTURE_MODE"])
+		})
 	}
 }
 
@@ -226,7 +273,7 @@ func TestLaunch_ForwardsArgvUnchanged(t *testing.T) {
 	})
 
 	args := []string{"exec", "--model", "gpt-5", "hi"}
-	if err := Launch(context.Background(), args, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), args, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	want := append([]string{"/usr/local/bin/codex"}, args...)
@@ -324,6 +371,17 @@ func withPluginList(t *testing.T, fn func(context.Context, string) ([]byte, erro
 	prev := pluginList
 	t.Cleanup(func() { pluginList = prev })
 	pluginList = fn
+}
+
+func envMap(env []string) map[string]string {
+	out := map[string]string{}
+	for _, kv := range env {
+		key, value, ok := strings.Cut(kv, "=")
+		if ok {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func nopLogger() *log.Logger {

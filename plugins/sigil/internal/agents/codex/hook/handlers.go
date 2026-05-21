@@ -16,6 +16,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/config"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/fragment"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/mapper"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/timeutil"
@@ -128,6 +129,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		logger.Printf("stop: update: %v", err)
 		return
 	}
+	envconfig.ApplyLocalAuthPlaceholders()
 	if !config.HasCredentials() {
 		logger.Print("stop: missing SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/SIGIL_AUTH_TOKEN; discarding fragment")
 		if err := fragment.Delete(p.SessionID, p.TurnID); err != nil {

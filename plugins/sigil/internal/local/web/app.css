@@ -1,0 +1,88 @@
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap');
+
+    :root {
+      /* Official Grafana brand palette (Primary + Secondary, from the
+         brand guidelines). Used for the wordmark, accent surfaces, and
+         role labels. The dark-theme semantic colours below (success,
+         error, warning, info) stay on Grafana's app-tuned values so
+         status indicators remain readable on the dark canvas. */
+      --brand-orange: #FF671D;     /* primary */
+      --brand-orange-text: #FF8A4D; /* lighter hover/text shade */
+      --brand-yellow: #FFED23;
+      --brand-green:  #04BC4C;
+      --brand-blue:   #2970FF;
+      --brand-purple: #D444F1;
+      --brand-red: #F55F3E;
+
+      --space-0_5: 4px; --space-1: 8px; --space-2: 16px; --space-3: 24px;
+      --space-4: 32px; --space-6: 48px; --space-8: 64px;
+
+      --radius-default: 2px;
+      --radius-pill: 9999px;
+      --radius-circle: 50%;
+
+      --fontFamily: "Inter", "Helvetica", "Arial", sans-serif;
+      --fontFamilyMonospace: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+      --size-xs: 10px; --size-sm: 12px; --size-md: 14px; --size-lg: 18px; --size-xl: 24px;
+
+      --border-weak: rgba(204, 204, 220, 0.07);
+      --border-medium: rgba(204, 204, 220, 0.15);
+      --border-strong: rgba(204, 204, 220, 0.25);
+
+      --fg1: rgb(204, 204, 220);
+      --fg2: rgba(204, 204, 220, 0.65);
+      --fg3: rgba(204, 204, 220, 0.45);
+      --fg-link: var(--brand-orange-text);
+      --fg-max: #FFFFFF;
+
+      --bg-canvas: #111217;
+      --bg-primary: #181b1f;
+      --bg-secondary: #22252b;
+
+      --primary-main: #3D71D9;
+      --primary-text: #6E9FFF;
+
+      --info-main: #3D71D9;    --info-text: #6E9FFF;    --info-border: #6E9FFF;    --info-transparent: #3D71D926;
+      --success-main: #1A7F4B; --success-text: #6CCF8E; --success-border: #6CCF8E; --success-transparent: #1A7F4B26;
+      --warning-main: #F5B73D; --warning-text: #F8D06B; --warning-border: #F8D06B; --warning-transparent: #F5B73D26;
+      --error-main: #D10E5C;   --error-text: #FF5286;   --error-border: #FF5286;   --error-transparent: #D10E5C26;
+
+      --shadow-z2: 0 4px 10px rgba(24, 26, 27, 0.75);
+
+      --viz-blue: #5794F2; --viz-green: #73BF69; --viz-red: #F2495C;
+      --viz-orange: #FF9830; --viz-purple: #B877D9; --viz-yellow: #FADE2A;
+
+      --ui-accent: var(--brand-orange);
+    }
+
+    html, body, #root { height: 100%; }
+    html, body {
+      margin: 0;
+      background: var(--bg-canvas);
+      color: var(--fg1);
+      font-family: var(--fontFamily);
+      font-size: var(--size-md);
+      line-height: 1.571;
+      -webkit-font-smoothing: antialiased;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    button { font-family: var(--fontFamily); }
+
+    body {
+      background-image: radial-gradient(circle at 1px 1px, rgba(204,204,220,0.025) 1px, transparent 0);
+      background-size: 22px 22px;
+    }
+
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: rgba(204,204,220,0.10); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(204,204,220,0.18); }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    ::selection { background: rgba(110,159,255,0.30); color: var(--fg-max); }
+
+    :focus-visible {
+      outline: 2px solid var(--primary-text);
+      outline-offset: 2px;
+      border-radius: var(--radius-default);
+    }

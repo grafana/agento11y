@@ -23,6 +23,8 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/fragment"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/mapper"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSessionStartWithoutTurnIDSeedsLaterTurn(t *testing.T) {
@@ -278,6 +280,48 @@ func TestStopSuccessfulExportDeletesFragmentAndUsesAuth(t *testing.T) {
 	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("tenant:token"))
 	if gotAuth != wantAuth {
 		t.Fatalf("Authorization = %q, want %q", gotAuth, wantAuth)
+	}
+}
+
+func TestStopLocalEndpointAllowsMissingCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		tenantID string
+		token    string
+	}{
+		{name: "empty credentials", tenantID: "", token: ""},
+		{name: "blank credentials", tenantID: "  ", token: "\t"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			logger := log.New(io.Discard, "", 0)
+			var gotAuth string
+			var requestCount atomic.Int64
+			server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestCount.Add(1)
+				gotAuth = r.Header.Get("Authorization")
+				writeAcceptedGenerationResponseFromRequest(t, w, r)
+			}))
+			defer server.Close()
+			t.Setenv("SIGIL_ENDPOINT", server.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", tc.tenantID)
+			t.Setenv("SIGIL_AUTH_TOKEN", tc.token)
+
+			require.NoError(t, fragment.Update("sess", "turn", logger, func(f *fragment.Fragment) bool {
+				f.Model = "gpt-5.5"
+				f.Prompt = "hello"
+				return true
+			}))
+
+			Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: sigil.ContentCaptureModeFull}, logger)
+
+			assert.Equal(t, int64(1), requestCount.Load())
+			wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("local:local"))
+			assert.Equal(t, wantAuth, gotAuth)
+			assert.Nil(t, fragment.LoadTolerant("sess", "turn", logger))
+		})
 	}
 }
 

@@ -4,6 +4,7 @@ package envconfig
 
 import (
 	"log"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -27,6 +28,56 @@ func EnvOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// IsLocalEndpoint reports whether endpoint points at the local receiver.
+// Local URLs never need real Cloud credentials. The check uses URL parsing
+// so attacker-controlled hostnames like localhost.attacker.com do not match.
+func IsLocalEndpoint(endpoint string) bool {
+	e := strings.TrimSpace(endpoint)
+	if e == "" {
+		return false
+	}
+	u, err := url.Parse(e)
+	if err != nil || u.Scheme != "http" {
+		return false
+	}
+	switch u.Hostname() {
+	case "127.0.0.1", "::1", "localhost":
+		return true
+	default:
+		return false
+	}
+}
+
+// LocalAuthPlaceholders returns non-empty stand-in auth values for local
+// endpoints. The local server does not validate auth, but hook/export code
+// still expects these variables to be populated before it proceeds.
+func LocalAuthPlaceholders(endpoint, tenantID, authToken string) (string, string) {
+	if !IsLocalEndpoint(endpoint) {
+		return tenantID, authToken
+	}
+	if strings.TrimSpace(tenantID) == "" {
+		tenantID = "local"
+	}
+	if strings.TrimSpace(authToken) == "" {
+		authToken = "local"
+	}
+	return tenantID, authToken
+}
+
+// ApplyLocalAuthPlaceholders writes local endpoint auth placeholders to the
+// process environment. Use this after dotenv loading and before credential
+// checks or SDK client construction.
+func ApplyLocalAuthPlaceholders() {
+	endpoint := os.Getenv("SIGIL_ENDPOINT")
+	tenantID, authToken := LocalAuthPlaceholders(endpoint, os.Getenv("SIGIL_AUTH_TENANT_ID"), os.Getenv("SIGIL_AUTH_TOKEN"))
+	if tenantID != os.Getenv("SIGIL_AUTH_TENANT_ID") {
+		_ = os.Setenv("SIGIL_AUTH_TENANT_ID", tenantID)
+	}
+	if authToken != os.Getenv("SIGIL_AUTH_TOKEN") {
+		_ = os.Setenv("SIGIL_AUTH_TOKEN", authToken)
+	}
 }
 
 // MissingEnvVars returns the keys of vars whose values are empty, in the

@@ -17,6 +17,7 @@ import (
 
 	"github.com/grafana/sigil-sdk/go/sigil"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/claudecode/state"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -659,5 +660,54 @@ func TestEmitToolSpans_ErrorStatus(t *testing.T) {
 	}
 	if spans[0].Status().Code != codes.Error {
 		t.Errorf("span status code = %v, want Error", spans[0].Status().Code)
+	}
+}
+
+func TestIsLocalEndpoint(t *testing.T) {
+	cases := map[string]bool{
+		"http://127.0.0.1:9000":        true,
+		"http://127.0.0.1:9000/custom": true,
+		"http://localhost:9000":        true,
+		"http://localhost:9000/custom": true,
+		"http://[::1]:9000":            true,
+		"https://cloud.example.com":    false,
+		"https://127.0.0.1":            false, // https → not the local receiver
+		"":                             false,
+		"http://example.com":           false,
+		// Hostname-confusion attacks: HasPrefix matched these; URL parse
+		// rejects them.
+		"http://localhost.attacker.com": false,
+		"http://127.0.0.1.attacker.com": false,
+		"http://127.0.0.1@attacker.com": false,
+	}
+	for endpoint, want := range cases {
+		t.Run(endpoint, func(t *testing.T) {
+			if got := envconfig.IsLocalEndpoint(endpoint); got != want {
+				t.Fatalf("IsLocalEndpoint(%q) = %v, want %v", endpoint, got, want)
+			}
+		})
+	}
+}
+
+func TestHook_LocalEndpointSkipsCloudAuthCheck(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "local-export-session"
+	transcriptPath := filepath.Join(dir, "transcript.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(buildHookUserJSONL(sessionID, "hey")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SIGIL_ENDPOINT", "http://127.0.0.1:9000")
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+	t.Setenv("SIGIL_AUTH_TOKEN", "")
+	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+	logs := runHookForTest(t, hookInput{
+		HookEventName:  "Stop",
+		SessionID:      sessionID,
+		TranscriptPath: transcriptPath,
+	})
+	if strings.Contains(logs, "not exporting: missing") {
+		t.Fatalf("local endpoint should bypass cloud auth check; got logs:\n%s", logs)
 	}
 }

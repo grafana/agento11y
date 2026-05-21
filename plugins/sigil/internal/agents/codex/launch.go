@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"os/exec"
 	"strings"
 	"syscall"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
 )
 
 const (
@@ -36,8 +37,11 @@ var (
 // Launch resolves the `codex` binary on PATH, ensures the sigil-codex plugin
 // is registered and enabled in codex's plugin store (running
 // `codex plugin marketplace add` + `codex plugin add` once if it is not),
-// and then exec's codex with the supplied args.
-func Launch(ctx context.Context, args []string, _ io.Reader, _, stderr io.Writer, logger *log.Logger) error {
+// and then exec's codex with the supplied args. When localEnv is non-nil,
+// the child receives local-mode SIGIL_ENDPOINT,
+// SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT and placeholder auth values so it talks
+// to the in-process receiver instead of Sigil Cloud.
+func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger) error {
 	bin, err := lookPath("codex")
 	if err != nil {
 		return fmt.Errorf("codex CLI not found on PATH: %w", err)
@@ -77,8 +81,9 @@ func Launch(ctx context.Context, args []string, _ io.Reader, _, stderr io.Writer
 		}
 	}
 
+	env := local.Environ(localEnv)
 	argv := append([]string{bin}, args...)
-	if err := execFn(bin, argv, os.Environ()); err != nil {
+	if err := execFn(bin, argv, env); err != nil {
 		return fmt.Errorf("exec codex: %w", err)
 	}
 	return nil

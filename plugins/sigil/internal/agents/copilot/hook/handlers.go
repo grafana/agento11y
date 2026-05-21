@@ -17,6 +17,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/fragment"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/mapper"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/transcript"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
 )
@@ -313,6 +314,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		}
 	}()
 
+	envconfig.ApplyLocalAuthPlaceholders()
 	if !config.HasCredentials() {
 		logger.Print("stop: missing SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/SIGIL_AUTH_TOKEN; discarding fragment")
 		clearActiveTurn = true

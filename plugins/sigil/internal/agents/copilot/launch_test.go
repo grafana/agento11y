@@ -7,9 +7,12 @@ import (
 	"io"
 	"log"
 	"os/exec"
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLaunch(t *testing.T) {
@@ -129,34 +132,68 @@ func TestLaunch(t *testing.T) {
 			var logbuf bytes.Buffer
 			logger := log.New(&logbuf, "", 0)
 
-			err := Launch(context.Background(), tc.args, strings.NewReader(""), io.Discard, &stderr, logger)
+			err := Launch(context.Background(), tc.args, nil, strings.NewReader(""), io.Discard, &stderr, logger)
 
 			if tc.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("err = %v, want contains %q", err, tc.wantErr)
-				}
-			} else if err != nil {
-				t.Fatalf("Launch returned err: %v", err)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			} else {
+				require.NoError(t, err)
 			}
-			if installCalls != tc.wantInstall {
-				t.Errorf("runInstall calls = %d, want %d", installCalls, tc.wantInstall)
-			}
-			if execCalled != tc.wantExec {
-				t.Errorf("execFn called = %v, want %v", execCalled, tc.wantExec)
-			}
-			if tc.wantExecArgv != nil && !reflect.DeepEqual(execArgv, tc.wantExecArgv) {
-				t.Errorf("exec argv = %v, want %v", execArgv, tc.wantExecArgv)
+			assert.Equal(t, tc.wantInstall, installCalls)
+			assert.Equal(t, tc.wantExec, execCalled)
+			if tc.wantExecArgv != nil {
+				assert.Equal(t, tc.wantExecArgv, execArgv)
 			}
 			for _, want := range tc.wantStderr {
-				if !strings.Contains(stderr.String(), want) {
-					t.Errorf("stderr missing %q: %q", want, stderr.String())
-				}
+				assert.Contains(t, stderr.String(), want)
 			}
 			for _, want := range tc.wantLog {
-				if !strings.Contains(logbuf.String(), want) {
-					t.Errorf("log missing %q: %q", want, logbuf.String())
-				}
+				assert.Contains(t, logbuf.String(), want)
 			}
+		})
+	}
+}
+
+func TestLaunch_LocalEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		presetMode string
+		wantMode   string
+	}{
+		{name: "defaults full capture", wantMode: "full"},
+		{name: "preserves user capture mode", presetMode: "metadata_only", wantMode: "metadata_only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.com")
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+			t.Setenv("SIGIL_AUTH_TOKEN", "")
+			t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", tc.presetMode)
+
+			withLookPath(t, func(string) (string, error) { return "/usr/local/bin/copilot", nil })
+			withPluginList(t, func(context.Context, string) ([]byte, error) {
+				return []byte("Installed plugins:\n  • sigil-copilot (v0.1.0)\n"), nil
+			})
+			withRunInstall(t, func(context.Context, string, io.Writer) error {
+				t.Fatal("runInstall must not be called when plugin is installed")
+				return nil
+			})
+
+			var execEnv []string
+			withExecFn(t, func(_ string, _ []string, env []string) error {
+				execEnv = append([]string{}, env...)
+				return nil
+			})
+
+			localEnv := &local.LaunchEnv{Endpoint: "http://127.0.0.1:9000", OTLPEndpoint: "http://127.0.0.1:9000/otlp"}
+			err := Launch(context.Background(), []string{"exec", "hi"}, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+			require.NoError(t, err)
+			got := envMap(execEnv)
+			assert.Equal(t, "http://127.0.0.1:9000", got["SIGIL_ENDPOINT"])
+			assert.Equal(t, "http://127.0.0.1:9000/otlp", got["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"])
+			assert.Equal(t, "local", got["SIGIL_AUTH_TENANT_ID"])
+			assert.Equal(t, "local", got["SIGIL_AUTH_TOKEN"])
+			assert.Equal(t, tc.wantMode, got["SIGIL_CONTENT_CAPTURE_MODE"])
 		})
 	}
 }
@@ -250,4 +287,19 @@ func withPluginList(t *testing.T, fn func(context.Context, string) ([]byte, erro
 	prev := pluginList
 	t.Cleanup(func() { pluginList = prev })
 	pluginList = fn
+}
+
+func envMap(env []string) map[string]string {
+	out := map[string]string{}
+	for _, kv := range env {
+		key, value, ok := strings.Cut(kv, "=")
+		if ok {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func nopLogger() *log.Logger {
+	return log.New(io.Discard, "", 0)
 }

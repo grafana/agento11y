@@ -20,6 +20,8 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/config"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/fragment"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/transcript"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHookSequenceExportsOnStop(t *testing.T) {
@@ -62,6 +64,62 @@ func TestHookSequenceExportsOnStop(t *testing.T) {
 	}
 	if got := fragment.LoadSessionTolerant("sess", logger); got == nil || got.ActiveTurnID != "" {
 		t.Fatalf("expected cleared active turn, got %+v", got)
+	}
+}
+
+func TestStopLocalEndpointAllowsMissingCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		tenantID string
+		token    string
+	}{
+		{name: "empty credentials", tenantID: "", token: ""},
+		{name: "blank credentials", tenantID: "  ", token: "\t"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			logger := log.New(io.Discard, "", 0)
+			var gotAuth string
+			var requestCount atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestCount.Add(1)
+				gotAuth = r.Header.Get("Authorization")
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					http.Error(w, "read body", http.StatusBadRequest)
+					return
+				}
+				var request map[string]any
+				if err := json.Unmarshal(body, &request); err != nil {
+					http.Error(w, "invalid json", http.StatusBadRequest)
+					return
+				}
+				generations, _ := request["generations"].([]any)
+				results := make([]map[string]any, 0, len(generations))
+				for _, raw := range generations {
+					generation, _ := raw.(map[string]any)
+					id, _ := generation["id"].(string)
+					results = append(results, map[string]any{"generation_id": id, "accepted": true})
+				}
+				w.Header().Set("Content-Type", "application/json")
+				require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"results": results}))
+			}))
+			defer server.Close()
+			t.Setenv("SIGIL_ENDPOINT", server.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", tc.tenantID)
+			t.Setenv("SIGIL_AUTH_TOKEN", tc.token)
+			cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+
+			UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "hello"}, cfg, logger)
+			Stop(Payload{HookEventNameJSON: "Stop", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:04Z"`), StopReasonJSON: "end_turn"}, cfg, logger)
+
+			assert.Equal(t, int64(1), requestCount.Load())
+			wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("local:local"))
+			assert.Equal(t, wantAuth, gotAuth)
+			assert.Nil(t, fragment.LoadTolerant("sess", "turn-000001", logger))
+		})
 	}
 }
 

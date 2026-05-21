@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
 )
 
 const (
@@ -44,8 +46,11 @@ var (
 
 // Launch resolves the `pi` binary on PATH, ensures the @grafana/sigil-pi
 // extension is registered in the user's pi settings (running `pi install`
-// once if it is not), and then exec's pi with the supplied args.
-func Launch(ctx context.Context, args []string, _ io.Reader, _, stderr io.Writer, logger *log.Logger) error {
+// once if it is not), and then exec's pi with the supplied args. When
+// localEnv is non-nil, the child receives local-mode SIGIL_ENDPOINT,
+// SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT and placeholder auth values so it
+// talks to the in-process receiver instead of Sigil Cloud.
+func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger) error {
 	bin, err := lookPath("pi")
 	if err != nil {
 		return fmt.Errorf("pi CLI not found on PATH: %w", err)
@@ -77,8 +82,9 @@ func Launch(ctx context.Context, args []string, _ io.Reader, _, stderr io.Writer
 		}
 	}
 
+	env := local.Environ(localEnv)
 	argv := append([]string{bin}, args...)
-	if err := execFn(bin, argv, os.Environ()); err != nil {
+	if err := execFn(bin, argv, env); err != nil {
 		return fmt.Errorf("exec pi: %w", err)
 	}
 	return nil

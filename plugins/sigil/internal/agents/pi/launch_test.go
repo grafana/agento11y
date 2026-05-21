@@ -12,12 +12,14 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
 )
 
 func TestLaunch_MissingPiBinary(t *testing.T) {
 	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
-	err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+	err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
 	if err == nil || !strings.Contains(err.Error(), "pi CLI not found") {
 		t.Fatalf("err = %v, want contains \"pi CLI not found\"", err)
 	}
@@ -41,7 +43,7 @@ func TestLaunch_SkipsInstallWhenPackagePresent(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), []string{"--print", "hi"}, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), []string{"--print", "hi"}, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/pi", "--print", "hi"}) {
@@ -75,7 +77,7 @@ func TestLaunch_RunsInstallWhenPackageMissing(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -109,7 +111,7 @@ func TestLaunch_InstallFailureContinuesToExec(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !execCalled {
@@ -125,6 +127,125 @@ func TestLaunch_InstallFailureContinuesToExec(t *testing.T) {
 	if !strings.Contains(got, "pi install "+PluginSource) {
 		t.Fatalf("stderr missing manual install hint: %q", got)
 	}
+}
+
+func TestLaunch_LocalInjectsEnvAndForwardsArgs(t *testing.T) {
+	dir := t.TempDir()
+	writeSettings(t, dir, `{"packages":["npm:@grafana/sigil-pi"]}`)
+	t.Setenv("PI_CODING_AGENT_DIR", dir)
+
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/pi", nil })
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("runInstall must not be called when plugin is already present")
+		return nil
+	})
+	// Clear cloud creds inherited from the host shell so the placeholder
+	// branch fires. User-set values are preserved by design — that's
+	// covered in TestLaunch_NormalModeDoesNotInjectLocalEnv.
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+	t.Setenv("SIGIL_AUTH_TOKEN", "")
+	// Ensure the user's existing capture-mode preference flows through.
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "no_tool_content")
+
+	var execEnv []string
+	var execArgv []string
+	withExecFn(t, func(_ string, argv []string, env []string) error {
+		execArgv = append([]string{}, argv...)
+		execEnv = append([]string{}, env...)
+		return nil
+	})
+
+	localEnv := &local.LaunchEnv{
+		Endpoint:     "http://127.0.0.1:9000",
+		OTLPEndpoint: "http://127.0.0.1:9000/otlp",
+	}
+	if err := Launch(context.Background(), []string{"--print", "hi"}, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+		t.Fatalf("Launch returned err: %v", err)
+	}
+	if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/pi", "--print", "hi"}) {
+		t.Fatalf("exec argv = %v", execArgv)
+	}
+	got := envToMap(execEnv)
+	if got["SIGIL_ENDPOINT"] != "http://127.0.0.1:9000" {
+		t.Errorf("SIGIL_ENDPOINT = %q", got["SIGIL_ENDPOINT"])
+	}
+	if got["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"] != "http://127.0.0.1:9000/otlp" {
+		t.Errorf("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT = %q", got["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"])
+	}
+	if got["SIGIL_AUTH_TENANT_ID"] != "local" || got["SIGIL_AUTH_TOKEN"] != "local" {
+		t.Errorf("placeholder auth missing: tenant=%q token=%q", got["SIGIL_AUTH_TENANT_ID"], got["SIGIL_AUTH_TOKEN"])
+	}
+	// User pre-set capture mode must not be overwritten.
+	if got["SIGIL_CONTENT_CAPTURE_MODE"] != "no_tool_content" {
+		t.Errorf("SIGIL_CONTENT_CAPTURE_MODE = %q, want preserved no_tool_content", got["SIGIL_CONTENT_CAPTURE_MODE"])
+	}
+}
+
+func TestLaunch_LocalDefaultsFullContentWhenUnset(t *testing.T) {
+	dir := t.TempDir()
+	writeSettings(t, dir, `{"packages":["npm:@grafana/sigil-pi"]}`)
+	t.Setenv("PI_CODING_AGENT_DIR", dir)
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "")
+
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/pi", nil })
+
+	var execEnv []string
+	withExecFn(t, func(_ string, _ []string, env []string) error {
+		execEnv = append([]string{}, env...)
+		return nil
+	})
+
+	localEnv := &local.LaunchEnv{
+		Endpoint:     "http://127.0.0.1:9000",
+		OTLPEndpoint: "http://127.0.0.1:9000/otlp",
+	}
+	if err := Launch(context.Background(), nil, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+		t.Fatalf("Launch returned err: %v", err)
+	}
+	got := envToMap(execEnv)
+	if got["SIGIL_CONTENT_CAPTURE_MODE"] != "full" {
+		t.Errorf("SIGIL_CONTENT_CAPTURE_MODE = %q, want full (default in local mode)", got["SIGIL_CONTENT_CAPTURE_MODE"])
+	}
+}
+
+func TestLaunch_NormalModeDoesNotInjectLocalEnv(t *testing.T) {
+	dir := t.TempDir()
+	writeSettings(t, dir, `{"packages":["npm:@grafana/sigil-pi"]}`)
+	t.Setenv("PI_CODING_AGENT_DIR", dir)
+	t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.com")
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "real-tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "real-token")
+
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/pi", nil })
+
+	var execEnv []string
+	withExecFn(t, func(_ string, _ []string, env []string) error {
+		execEnv = append([]string{}, env...)
+		return nil
+	})
+
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+		t.Fatalf("Launch returned err: %v", err)
+	}
+	got := envToMap(execEnv)
+	if got["SIGIL_ENDPOINT"] != "https://cloud.example.com" {
+		t.Errorf("SIGIL_ENDPOINT changed in normal mode: %q", got["SIGIL_ENDPOINT"])
+	}
+	if got["SIGIL_AUTH_TENANT_ID"] != "real-tenant" {
+		t.Errorf("auth changed in normal mode: %q", got["SIGIL_AUTH_TENANT_ID"])
+	}
+}
+
+func envToMap(env []string) map[string]string {
+	m := map[string]string{}
+	for _, kv := range env {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		m[key] = value
+	}
+	return m
 }
 
 func TestPluginInstalled_RecognisesBothShapes(t *testing.T) {

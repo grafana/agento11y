@@ -12,12 +12,14 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
 )
 
 func TestLaunch_MissingClaudeBinary(t *testing.T) {
 	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
-	err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+	err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
 	if err == nil || !strings.Contains(err.Error(), "claude CLI not found") {
 		t.Fatalf("err = %v, want contains \"claude CLI not found\"", err)
 	}
@@ -41,7 +43,7 @@ func TestLaunch_SkipsInstallWhenPluginPresent(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), []string{"--resume", "abc"}, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), []string{"--resume", "abc"}, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/claude", "--resume", "abc"}) {
@@ -71,7 +73,7 @@ func TestLaunch_RunsInstallWhenOnlyForeignProjectScopeEntry(t *testing.T) {
 	})
 	withExecFn(t, func(string, []string, []string) error { return nil })
 
-	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -102,7 +104,7 @@ func TestLaunch_RunsInstallWhenMissing(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -129,7 +131,7 @@ func TestLaunch_RunsInstallWhenFileAbsent(t *testing.T) {
 	})
 	withExecFn(t, func(string, []string, []string) error { return nil })
 
-	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -151,7 +153,7 @@ func TestLaunch_RunsInstallWhenJSONMalformed(t *testing.T) {
 	})
 	withExecFn(t, func(string, []string, []string) error { return nil })
 
-	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -179,7 +181,7 @@ func TestLaunch_InstallFailureContinuesToExec(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !execCalled {
@@ -195,6 +197,93 @@ func TestLaunch_InstallFailureContinuesToExec(t *testing.T) {
 	if !strings.Contains(got, "claude plugin install "+PluginName+"@") {
 		t.Fatalf("stderr missing manual install hint: %q", got)
 	}
+}
+
+func TestLaunch_LocalInjectsEnvAndForwardsArgs(t *testing.T) {
+	dir := t.TempDir()
+	writeInstalled(t, dir, `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user"}]}}`)
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+	t.Setenv("SIGIL_AUTH_TOKEN", "")
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "")
+
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/claude", nil })
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("runInstall must not be called when plugin is already present")
+		return nil
+	})
+
+	var execEnv []string
+	var execArgv []string
+	withExecFn(t, func(_ string, argv []string, env []string) error {
+		execArgv = append([]string{}, argv...)
+		execEnv = append([]string{}, env...)
+		return nil
+	})
+
+	localEnv := &local.LaunchEnv{
+		Endpoint:     "http://127.0.0.1:9000",
+		OTLPEndpoint: "http://127.0.0.1:9000/otlp",
+	}
+	if err := Launch(context.Background(), []string{"--resume", "abc"}, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+		t.Fatalf("Launch returned err: %v", err)
+	}
+	if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/claude", "--resume", "abc"}) {
+		t.Fatalf("exec argv = %v", execArgv)
+	}
+	got := envToMap(execEnv)
+	if got["SIGIL_ENDPOINT"] != "http://127.0.0.1:9000" {
+		t.Errorf("SIGIL_ENDPOINT = %q", got["SIGIL_ENDPOINT"])
+	}
+	if got["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"] != "http://127.0.0.1:9000/otlp" {
+		t.Errorf("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT = %q", got["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"])
+	}
+	if got["SIGIL_AUTH_TENANT_ID"] != "local" || got["SIGIL_AUTH_TOKEN"] != "local" {
+		t.Errorf("placeholder auth missing: tenant=%q token=%q", got["SIGIL_AUTH_TENANT_ID"], got["SIGIL_AUTH_TOKEN"])
+	}
+	if got["SIGIL_CONTENT_CAPTURE_MODE"] != "full" {
+		t.Errorf("SIGIL_CONTENT_CAPTURE_MODE = %q, want full", got["SIGIL_CONTENT_CAPTURE_MODE"])
+	}
+}
+
+func TestLaunch_NormalModeDoesNotInjectLocalEnv(t *testing.T) {
+	dir := t.TempDir()
+	writeInstalled(t, dir, `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user"}]}}`)
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.com")
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "real-tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "real-token")
+
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/claude", nil })
+
+	var execEnv []string
+	withExecFn(t, func(_ string, _ []string, env []string) error {
+		execEnv = append([]string{}, env...)
+		return nil
+	})
+
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+		t.Fatalf("Launch returned err: %v", err)
+	}
+	got := envToMap(execEnv)
+	if got["SIGIL_ENDPOINT"] != "https://cloud.example.com" {
+		t.Errorf("SIGIL_ENDPOINT changed: %q", got["SIGIL_ENDPOINT"])
+	}
+	if got["SIGIL_AUTH_TENANT_ID"] != "real-tenant" {
+		t.Errorf("SIGIL_AUTH_TENANT_ID changed: %q", got["SIGIL_AUTH_TENANT_ID"])
+	}
+}
+
+func envToMap(env []string) map[string]string {
+	m := map[string]string{}
+	for _, kv := range env {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		m[key] = value
+	}
+	return m
 }
 
 func TestPluginInstalled_KeyShapes(t *testing.T) {
