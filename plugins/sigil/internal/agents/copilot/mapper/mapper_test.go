@@ -85,6 +85,27 @@ func TestMapFullModeIncludesRedactedPromptAndToolContent(t *testing.T) {
 	}
 }
 
+func TestMapFullWithMetadataSpansPreservesStartModeAndFullPayload(t *testing.T) {
+	frag := basicFragment()
+	frag.Model = "gpt-5.4"
+	frag.AssistantText = "done"
+
+	got := Map(Inputs{
+		Fragment:       frag,
+		ContentCapture: sigil.ContentCaptureModeFullWithMetadataSpans,
+		Now:            fixedTime,
+	})
+	if got.Start.ContentCapture != sigil.ContentCaptureModeFullWithMetadataSpans {
+		t.Fatalf("Start.ContentCapture = %v; want FullWithMetadataSpans", got.Start.ContentCapture)
+	}
+	if len(got.Generation.Input) == 0 || got.Generation.Input[0].Parts[0].Text == "" {
+		t.Fatalf("full_with_metadata_spans should keep full gRPC input payload: %+v", got.Generation.Input)
+	}
+	if len(got.Generation.Output) == 0 || got.Generation.Output[0].Parts[0].ToolCall == nil || len(got.Generation.Output[0].Parts[0].ToolCall.InputJSON) == 0 {
+		t.Fatalf("full_with_metadata_spans should keep full gRPC tool payload: %+v", got.Generation.Output)
+	}
+}
+
 func TestMapMetadataOnlyStripsPromptAndToolResultContent(t *testing.T) {
 	got := Map(Inputs{
 		Fragment:       basicFragment(),

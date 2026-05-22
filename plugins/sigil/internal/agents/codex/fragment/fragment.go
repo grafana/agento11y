@@ -3,18 +3,15 @@ package fragment
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/fragmentstore"
 )
 
-const (
-	DefaultStaleAge = 24 * time.Hour
-	lockTimeout     = 2 * time.Second
-	staleLockAge    = 2 * time.Minute
-)
+const DefaultStaleAge = 24 * time.Hour
 
 type ToolRecord struct {
 	ToolName     string          `json:"toolName"`
@@ -95,33 +92,24 @@ func TouchSession(s *Session, ts string) {
 
 func LoadSessionTolerant(sessionID string, logger *log.Logger) *Session {
 	path := SessionFilePath(sessionID)
-	raw, err := os.ReadFile(path)
+	s, corrupt, err := fragmentstore.ReadJSON[Session](path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if logger != nil {
-			logger.Printf("fragment: read session %s: %v", path, err)
-		}
+		fragmentstore.LogLoadErr(logger, "session ", path, corrupt, err)
 		return nil
 	}
-	var s Session
-	if err := json.Unmarshal(raw, &s); err != nil {
-		if logger != nil {
-			logger.Printf("fragment: corrupt session %s: %v", path, err)
-		}
+	if s == nil {
 		return nil
 	}
 	s.SessionID = sessionID
-	return &s
+	return s
 }
 
 func SaveSession(s *Session) error {
-	return atomicWriteJSON(SessionFilePath(s.SessionID), s)
+	return fragmentstore.WriteJSON(SessionFilePath(s.SessionID), s)
 }
 
 func UpdateSession(sessionID string, logger *log.Logger, mutate func(s *Session) bool) error {
-	return withFileLock(SessionFilePath(sessionID), func() error {
+	return fragmentstore.WithFileLock(SessionFilePath(sessionID), func() error {
 		s := LoadSessionTolerant(sessionID, logger)
 		if s == nil {
 			s = &Session{SessionID: sessionID}
@@ -136,33 +124,24 @@ func UpdateSession(sessionID string, logger *log.Logger, mutate func(s *Session)
 
 func LoadSubagentLinkTolerant(childSessionID string, logger *log.Logger) *SubagentLink {
 	path := SubagentLinkFilePath(childSessionID)
-	raw, err := os.ReadFile(path)
+	link, corrupt, err := fragmentstore.ReadJSON[SubagentLink](path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if logger != nil {
-			logger.Printf("fragment: read subagent link %s: %v", path, err)
-		}
+		fragmentstore.LogLoadErr(logger, "subagent link ", path, corrupt, err)
 		return nil
 	}
-	var link SubagentLink
-	if err := json.Unmarshal(raw, &link); err != nil {
-		if logger != nil {
-			logger.Printf("fragment: corrupt subagent link %s: %v", path, err)
-		}
+	if link == nil {
 		return nil
 	}
 	link.ChildSessionID = childSessionID
-	return &link
+	return link
 }
 
 func SaveSubagentLink(link *SubagentLink) error {
-	return atomicWriteJSON(SubagentLinkFilePath(link.ChildSessionID), link)
+	return fragmentstore.WriteJSON(SubagentLinkFilePath(link.ChildSessionID), link)
 }
 
 func UpdateSubagentLink(childSessionID string, logger *log.Logger, mutate func(link *SubagentLink) bool) error {
-	return withFileLock(SubagentLinkFilePath(childSessionID), func() error {
+	return fragmentstore.WithFileLock(SubagentLinkFilePath(childSessionID), func() error {
 		link := LoadSubagentLinkTolerant(childSessionID, logger)
 		if link == nil {
 			link = &SubagentLink{ChildSessionID: childSessionID}
@@ -176,7 +155,7 @@ func UpdateSubagentLink(childSessionID string, logger *log.Logger, mutate func(l
 }
 
 func DeleteSubagentLink(childSessionID string) error {
-	return withFileLock(SubagentLinkFilePath(childSessionID), func() error {
+	return fragmentstore.WithFileLock(SubagentLinkFilePath(childSessionID), func() error {
 		err := os.Remove(SubagentLinkFilePath(childSessionID))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -187,34 +166,25 @@ func DeleteSubagentLink(childSessionID string) error {
 
 func LoadTolerant(sessionID, turnID string, logger *log.Logger) *Fragment {
 	path := FragmentFilePath(sessionID, turnID)
-	raw, err := os.ReadFile(path)
+	f, corrupt, err := fragmentstore.ReadJSON[Fragment](path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if logger != nil {
-			logger.Printf("fragment: read %s: %v", path, err)
-		}
+		fragmentstore.LogLoadErr(logger, "", path, corrupt, err)
 		return nil
 	}
-	var f Fragment
-	if err := json.Unmarshal(raw, &f); err != nil {
-		if logger != nil {
-			logger.Printf("fragment: corrupt %s: %v", path, err)
-		}
+	if f == nil {
 		return nil
 	}
 	f.SessionID = sessionID
 	f.TurnID = turnID
-	return &f
+	return f
 }
 
 func Save(f *Fragment) error {
-	return atomicWriteJSON(FragmentFilePath(f.SessionID, f.TurnID), f)
+	return fragmentstore.WriteJSON(FragmentFilePath(f.SessionID, f.TurnID), f)
 }
 
 func Delete(sessionID, turnID string) error {
-	return withFileLock(FragmentFilePath(sessionID, turnID), func() error {
+	return fragmentstore.WithFileLock(FragmentFilePath(sessionID, turnID), func() error {
 		err := os.Remove(FragmentFilePath(sessionID, turnID))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -224,7 +194,7 @@ func Delete(sessionID, turnID string) error {
 }
 
 func Update(sessionID, turnID string, logger *log.Logger, mutate func(f *Fragment) bool) error {
-	return withFileLock(FragmentFilePath(sessionID, turnID), func() error {
+	return fragmentstore.WithFileLock(FragmentFilePath(sessionID, turnID), func() error {
 		f := LoadTolerant(sessionID, turnID, logger)
 		if f == nil {
 			f = &Fragment{SessionID: sessionID, TurnID: turnID}
@@ -266,26 +236,17 @@ func ListTurnFiles(sessionID string, logger *log.Logger) []string {
 // LoadFile reads a fragment from an explicit file path. Used by the retry
 // sweep which enumerates the turns directory directly.
 func LoadFile(path string, logger *log.Logger) *Fragment {
-	raw, err := os.ReadFile(path)
+	f, corrupt, err := fragmentstore.ReadJSON[Fragment](path)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) && logger != nil {
-			logger.Printf("fragment: read %s: %v", path, err)
-		}
+		fragmentstore.LogLoadErr(logger, "", path, corrupt, err)
 		return nil
 	}
-	var f Fragment
-	if err := json.Unmarshal(raw, &f); err != nil {
-		if logger != nil {
-			logger.Printf("fragment: corrupt %s: %v", path, err)
-		}
-		return nil
-	}
-	return &f
+	return f
 }
 
 // DeleteFile removes a fragment file by absolute path.
 func DeleteFile(path string) error {
-	return withFileLock(path, func() error {
+	return fragmentstore.WithFileLock(path, func() error {
 		err := os.Remove(path)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -315,133 +276,17 @@ func CleanupStaleExcept(maxAge time.Duration, now time.Time, logger *log.Logger,
 	if sessionID != "" {
 		sessionSkipPath = SessionFilePath(sessionID)
 	}
-	if err := cleanupStaleDir(filepath.Join(root, "turns"), cutoff, logger, turnSkipPath); err != nil && logger != nil {
+	if err := fragmentstore.CleanupStaleDir(filepath.Join(root, "turns"), cutoff, logger, turnSkipPath); err != nil && logger != nil {
 		logger.Printf("fragment: cleanup turns: %v", err)
 	}
-	if err := cleanupStaleDir(filepath.Join(root, "sessions"), cutoff, logger, sessionSkipPath); err != nil && logger != nil {
+	if err := fragmentstore.CleanupStaleDir(filepath.Join(root, "sessions"), cutoff, logger, sessionSkipPath); err != nil && logger != nil {
 		logger.Printf("fragment: cleanup sessions: %v", err)
 	}
 	subagentSkipPath := ""
 	if sessionID != "" {
 		subagentSkipPath = SubagentLinkFilePath(sessionID)
 	}
-	if err := cleanupStaleDir(filepath.Join(root, "subagents"), cutoff, logger, subagentSkipPath); err != nil && logger != nil {
+	if err := fragmentstore.CleanupStaleDir(filepath.Join(root, "subagents"), cutoff, logger, subagentSkipPath); err != nil && logger != nil {
 		logger.Printf("fragment: cleanup subagents: %v", err)
 	}
-}
-
-func cleanupStaleDir(dir string, cutoff time.Time, logger *log.Logger, skipPath string) error {
-	info, err := os.Stat(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return nil
-	}
-	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil
-			}
-			if logger != nil {
-				logger.Printf("fragment: cleanup walk %s: %v", path, err)
-			}
-			return nil
-		}
-		if path == dir {
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if filepath.Ext(path) != ".json" {
-			return nil
-		}
-		if skipPath != "" && path == skipPath {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			if logger != nil {
-				logger.Printf("fragment: cleanup stat %s: %v", path, err)
-			}
-			return nil
-		}
-		if info.ModTime().After(cutoff) {
-			return nil
-		}
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) && logger != nil {
-			logger.Printf("fragment: cleanup remove %s: %v", path, err)
-		}
-		return nil
-	})
-}
-
-func atomicWriteJSON(target string, v any) error {
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return fmt.Errorf("fragment: mkdir: %w", err)
-	}
-	data, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("fragment: marshal: %w", err)
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".*.tmp")
-	if err != nil {
-		return fmt.Errorf("fragment: create tmp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("fragment: write tmp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("fragment: close tmp: %w", err)
-	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return fmt.Errorf("fragment: chmod tmp: %w", err)
-	}
-	if err := os.Rename(tmpName, target); err != nil {
-		return fmt.Errorf("fragment: rename: %w", err)
-	}
-	return nil
-}
-
-func withFileLock(target string, fn func() error) error {
-	lockPath := target + ".lock"
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
-		return fmt.Errorf("fragment: mkdir lock dir: %w", err)
-	}
-	deadline := time.Now().Add(lockTimeout)
-	for {
-		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			_, _ = fmt.Fprintf(f, "pid=%d\ncreated=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339Nano))
-			_ = f.Close()
-			defer func() { _ = os.Remove(lockPath) }()
-			return fn()
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("fragment: create lock: %w", err)
-		}
-		if isStaleLock(lockPath, time.Now()) {
-			_ = os.Remove(lockPath)
-			continue
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("fragment: lock timeout: %s", lockPath)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-func isStaleLock(path string, now time.Time) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return now.Sub(info.ModTime()) > staleLockAge
 }

@@ -246,12 +246,13 @@ func TestStopSuccessfulExportDeletesFragmentAndUsesAuth(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	logger := log.New(io.Discard, "", 0)
-	var gotPath, gotAuth string
+	var gotPath, gotAuth, gotUA string
 	var requestCount atomic.Int64
 	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
+		gotUA = r.Header.Get("User-Agent")
 		writeAcceptedGenerationResponseFromRequest(t, w, r)
 	}))
 	defer server.Close()
@@ -281,6 +282,9 @@ func TestStopSuccessfulExportDeletesFragmentAndUsesAuth(t *testing.T) {
 	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("tenant:token"))
 	if gotAuth != wantAuth {
 		t.Fatalf("Authorization = %q, want %q", gotAuth, wantAuth)
+	}
+	if !strings.HasPrefix(gotUA, "sigil-plugin-codex/") {
+		t.Fatalf("User-Agent = %q, want sigil-plugin-codex/ prefix", gotUA)
 	}
 }
 
@@ -464,7 +468,7 @@ func TestStopMissingCredentialsDiscardsFragment(t *testing.T) {
 	}
 }
 
-func TestStopExportFailureRetainsFragmentAndBoundsRetries(t *testing.T) {
+func TestStopExportFailureRetainsFragmentAndUsesSDKRetryDefaults(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	logger := log.New(io.Discard, "", 0)
@@ -498,8 +502,9 @@ func TestStopExportFailureRetainsFragmentAndBoundsRetries(t *testing.T) {
 	if !got.PendingRetry {
 		t.Fatal("expected fragment marked PendingRetry after export failure")
 	}
-	if requestCount.Load() != 2 {
-		t.Fatalf("request count = %d, want 2 attempts after bounded retry override", requestCount.Load())
+	wantAttempts := int64(sigil.DefaultConfig().GenerationExport.MaxRetries + 1)
+	if requestCount.Load() != wantAttempts {
+		t.Fatalf("request count = %d, want %d attempts from SDK defaults", requestCount.Load(), wantAttempts)
 	}
 }
 

@@ -17,6 +17,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/fragmentstore"
 )
 
 // ToolRecord captures one tool invocation observed via postToolUse(Failure).
@@ -108,33 +110,24 @@ func Touch(f *Fragment, ts string) {
 // sessionEnd can quarantine it rather than the data being silently destroyed.
 func LoadTolerant(conversationID, generationID string, logger *log.Logger) *Fragment {
 	path := FragmentFilePath(conversationID, generationID)
-	raw, err := os.ReadFile(path)
+	f, corrupt, err := fragmentstore.ReadJSON[Fragment](path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if logger != nil {
-			logger.Printf("fragment: read %s: %v", path, err)
-		}
+		fragmentstore.LogLoadErr(logger, "", path, corrupt, err)
 		return nil
 	}
-	var f Fragment
-	if err := json.Unmarshal(raw, &f); err != nil {
-		if logger != nil {
-			logger.Printf("fragment: corrupt %s (treating as missing): %v", path, err)
-		}
+	if f == nil {
 		return nil
 	}
 	// Reassert IDs from the path in case the on-disk file was tampered with.
 	f.ConversationID = conversationID
 	f.GenerationID = generationID
-	return &f
+	return f
 }
 
 // Save writes the fragment atomically. Mode 0600 — fragments may carry
 // prompts and tool I/O between hook invocations.
 func Save(f *Fragment) error {
-	return atomicWriteJSON(FragmentFilePath(f.ConversationID, f.GenerationID), f)
+	return fragmentstore.WriteJSON(FragmentFilePath(f.ConversationID, f.GenerationID), f)
 }
 
 // Delete removes the fragment file. ENOENT is not an error.
@@ -164,62 +157,17 @@ func Quarantine(conversationID, generationID string) error {
 // are logged and treated as missing.
 func LoadSession(conversationID string, logger *log.Logger) *Session {
 	path := SessionFilePath(conversationID)
-	raw, err := os.ReadFile(path)
+	s, corrupt, err := fragmentstore.ReadJSON[Session](path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if logger != nil {
-			logger.Printf("fragment: read session %s: %v", path, err)
-		}
+		fragmentstore.LogLoadErr(logger, "session ", path, corrupt, err)
 		return nil
 	}
-	var s Session
-	if err := json.Unmarshal(raw, &s); err != nil {
-		if logger != nil {
-			logger.Printf("fragment: corrupt session %s: %v", path, err)
-		}
-		return nil
-	}
-	return &s
+	return s
 }
 
 // SaveSession writes session metadata atomically.
 func SaveSession(s Session) error {
-	return atomicWriteJSON(SessionFilePath(s.ConversationID), s)
-}
-
-// atomicWriteJSON marshals v to JSON and writes it to target via
-// os.CreateTemp + Rename so a SIGKILL between write and rename can't leak a
-// partial file under a deterministic name.
-func atomicWriteJSON(target string, v any) error {
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return fmt.Errorf("fragment: mkdir: %w", err)
-	}
-	data, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("fragment: marshal: %w", err)
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".*.tmp")
-	if err != nil {
-		return fmt.Errorf("fragment: create tmp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("fragment: write tmp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("fragment: close tmp: %w", err)
-	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return fmt.Errorf("fragment: chmod tmp: %w", err)
-	}
-	if err := os.Rename(tmpName, target); err != nil {
-		return fmt.Errorf("fragment: rename: %w", err)
-	}
-	return nil
+	return fragmentstore.WriteJSON(SessionFilePath(s.ConversationID), s)
 }
 
 // Update is the canonical read-modify-write. The mutator returns true when
@@ -268,21 +216,12 @@ func ListFragmentIDs(conversationID string, logger *log.Logger) []string {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		data, err := os.ReadFile(path)
+		f, corrupt, err := fragmentstore.ReadJSON[Fragment](path)
 		if err != nil {
-			if logger != nil {
-				logger.Printf("fragment: read %s: %v", path, err)
-			}
+			fragmentstore.LogLoadErr(logger, "", path, corrupt, err)
 			continue
 		}
-		var f Fragment
-		if err := json.Unmarshal(data, &f); err != nil {
-			if logger != nil {
-				logger.Printf("fragment: corrupt %s: %v", path, err)
-			}
-			continue
-		}
-		if f.GenerationID == "" {
+		if f == nil || f.GenerationID == "" {
 			continue
 		}
 		ids = append(ids, f.GenerationID)

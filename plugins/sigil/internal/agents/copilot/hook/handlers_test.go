@@ -32,15 +32,22 @@ func TestHookSequenceExportsOnStop(t *testing.T) {
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
 	logger := log.New(io.Discard, "", 0)
-	var gotPath, gotAuth, gotBody string
+	var gotPath, gotAuth, gotUA, gotBody string
 	var requestCount atomic.Int64
-	server := newAcceptedGenerationServer(t, func(body string) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
-		gotBody = body
-	})
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotUA = r.Header.Get("User-Agent")
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		gotBody = string(body)
+		writeAcceptedGenerationResponse(t, w, body)
+	}))
 	defer server.Close()
-	gotPath = "/api/v1/generations:export"
-	gotAuth = "Basic " + base64.StdEncoding.EncodeToString([]byte("tenant:token"))
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
@@ -61,6 +68,9 @@ func TestHookSequenceExportsOnStop(t *testing.T) {
 	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("tenant:token"))
 	if gotAuth != wantAuth {
 		t.Fatalf("auth = %q, want %q", gotAuth, wantAuth)
+	}
+	if !strings.HasPrefix(gotUA, "sigil-plugin-copilot/") {
+		t.Fatalf("User-Agent = %q, want sigil-plugin-copilot/ prefix", gotUA)
 	}
 	if strings.Contains(gotBody, "glc_abcdefghijklmnopqrstuvwxyz") {
 		t.Fatalf("export leaked unredacted secret: %s", gotBody)
@@ -394,27 +404,31 @@ func newAcceptedGenerationServer(t *testing.T, capture ...func(string)) *httptes
 		if len(capture) > 0 && capture[0] != nil {
 			capture[0](string(body))
 		}
-
-		var request map[string]any
-		if err := json.Unmarshal(body, &request); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
-			return
-		}
-		generations, _ := request["generations"].([]any)
-		results := make([]map[string]any, 0, len(generations))
-		for _, raw := range generations {
-			generation, _ := raw.(map[string]any)
-			id, _ := generation["id"].(string)
-			results = append(results, map[string]any{
-				"generation_id": id,
-				"accepted":      true,
-			})
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]any{"results": results}); err != nil {
-			http.Error(w, "encode response", http.StatusInternalServerError)
-		}
+		writeAcceptedGenerationResponse(t, w, body)
 	}))
+}
+
+func writeAcceptedGenerationResponse(t *testing.T, w http.ResponseWriter, body []byte) {
+	t.Helper()
+	var request map[string]any
+	if err := json.Unmarshal(body, &request); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	generations, _ := request["generations"].([]any)
+	results := make([]map[string]any, 0, len(generations))
+	for _, raw := range generations {
+		generation, _ := raw.(map[string]any)
+		id, _ := generation["id"].(string)
+		results = append(results, map[string]any{
+			"generation_id": id,
+			"accepted":      true,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"results": results}); err != nil {
+		http.Error(w, "encode response", http.StatusInternalServerError)
+	}
 }
 
 func TestStopWaitsForCurrentCLITranscriptTurnInsteadOfReusingPreviousTurn(t *testing.T) {

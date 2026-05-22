@@ -67,6 +67,33 @@ func TestMapFullRedactsContent(t *testing.T) {
 	}
 }
 
+func TestMapFullWithMetadataSpansPreservesStartModeAndFullPayload(t *testing.T) {
+	f := &fragment.Fragment{
+		SessionID:            "sess",
+		TurnID:               "turn",
+		Model:                "gpt-5.5",
+		Prompt:               "hello",
+		LastAssistantMessage: "done",
+		Tools: []fragment.ToolRecord{{
+			ToolName:     "Bash",
+			ToolUseID:    "tool-1",
+			ToolInput:    json.RawMessage(`{"cmd":"echo hi"}`),
+			ToolResponse: json.RawMessage(`{"output":"hi"}`),
+		}},
+	}
+
+	got := Map(Inputs{Fragment: f, ContentCapture: sigil.ContentCaptureModeFullWithMetadataSpans, Now: time.Unix(1, 0)})
+	if got.Start.ContentCapture != sigil.ContentCaptureModeFullWithMetadataSpans {
+		t.Fatalf("Start.ContentCapture = %v; want FullWithMetadataSpans", got.Start.ContentCapture)
+	}
+	if len(got.Generation.Input) == 0 || got.Generation.Input[0].Parts[0].Text == "" {
+		t.Fatalf("full_with_metadata_spans should keep full gRPC input payload: %+v", got.Generation.Input)
+	}
+	if len(got.Generation.Output) == 0 || got.Generation.Output[0].Parts[0].ToolCall == nil || len(got.Generation.Output[0].Parts[0].ToolCall.InputJSON) == 0 {
+		t.Fatalf("full_with_metadata_spans should keep full gRPC tool payload: %+v", got.Generation.Output)
+	}
+}
+
 func TestMapFullRedactsInvalidJSONAsJSONString(t *testing.T) {
 	secret := "glc_abcdefghijklmnopqrstuvwxyz"
 	f := &fragment.Fragment{

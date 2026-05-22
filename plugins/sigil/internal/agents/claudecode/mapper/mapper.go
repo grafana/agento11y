@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"maps"
-	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -13,6 +12,7 @@ import (
 	"github.com/grafana/sigil-sdk/go/sigil"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/claudecode/state"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/claudecode/transcript"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/mapperutil"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
 )
 
@@ -431,12 +431,11 @@ func buildTags(line transcript.Line, subagent bool, extras map[string]string) ma
 }
 
 func buildToolDefs(names map[string]bool) []sigil.ToolDefinition {
-	sorted := slices.Sorted(maps.Keys(names))
-	defs := make([]sigil.ToolDefinition, len(sorted))
-	for i, name := range sorted {
-		defs[i] = sigil.ToolDefinition{Name: name, Type: "function"}
+	keys := make([]string, 0, len(names))
+	for name := range names {
+		keys = append(keys, name)
 	}
-	return defs
+	return mapperutil.SortedToolDefinitions(keys)
 }
 
 func buildInput(uctx *userContext, r *redact.Redactor) []sigil.Message {

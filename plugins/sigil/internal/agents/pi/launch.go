@@ -20,6 +20,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/launcher"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
 )
 
@@ -54,43 +55,29 @@ var (
 // auto-update checks (pi's own installer handles upgrades) so it is
 // accepted to satisfy the launcher signature and ignored.
 func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, _ string) error {
-	bin, err := lookPath("pi")
-	if err != nil {
-		return fmt.Errorf("pi CLI not found on PATH: %w", err)
-	}
-
-	installed, err := pluginInstalled()
-	if err != nil {
-		logger.Printf("settings probe: %v", err)
-		// Surface the probe failure so the user can see why we're falling
-		// through to install on a settings file we couldn't read. Treat the
-		// case like a missing extension — pi's installer will fail loudly if
-		// the file is genuinely broken.
-		_, _ = fmt.Fprintf(stderr, "sigil: pi settings probe failed: %v\n", err)
-		installed = false
-	}
-	if !installed {
-		_, _ = fmt.Fprintf(stderr, "sigil: installing %s into pi\n", PluginSource)
-		if err := runInstall(ctx, bin, stderr); err != nil {
-			// Don't block the user's pi session on a failed install (offline
-			// machine, npm rate-limit, sandboxed CI, etc.). Log the failure for
-			// SIGIL_DEBUG, point the user at the manual command, and fall
-			// through to exec. pi still runs, just without Sigil capture.
-			logger.Printf("install %s: %v", PluginSource, err)
-			_, _ = fmt.Fprintf(stderr,
-				"sigil: install of %s failed: %v\n"+
-					"sigil: continuing without Sigil capture. To retry manually:\n"+
-					"          pi install %s\n",
-				PluginSource, err, PluginSource)
-		}
-	}
-
-	env := local.Environ(localEnv)
-	argv := append([]string{bin}, args...)
-	if err := execFn(bin, argv, env); err != nil {
-		return fmt.Errorf("exec pi: %w", err)
-	}
-	return nil
+	return launcher.Bootstrap(ctx, launcher.BootstrapSpec{
+		BinName:     "pi",
+		PluginLabel: PluginSource,
+		LookPath:    lookPath,
+		ExecFn:      execFn,
+		Args:        args,
+		Env:         local.Environ(localEnv),
+		Logger:      logger,
+		Stderr:      stderr,
+		// Surface a settings-file probe failure on stderr too so the user
+		// can see why we're falling through to install on a file we couldn't
+		// read. Treat the case like a missing extension — pi's installer
+		// will fail loudly if the file is genuinely broken.
+		Probe:           func(context.Context, string) (bool, error) { return pluginInstalled() },
+		ProbeErrLog:     "pi settings probe",
+		ProbeErrEcho:    true,
+		RegisterMessage: fmt.Sprintf("sigil: installing %s into pi\n", PluginSource),
+		Install:         runInstall,
+		InstallRecoveryHint: func(w io.Writer) {
+			fmt.Fprintf(w, "          pi install %s\n", PluginSource)
+		},
+		// No Update: pi's own installer handles upgrades.
+	})
 }
 
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
