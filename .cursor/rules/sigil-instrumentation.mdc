@@ -266,11 +266,13 @@ result = graph.invoke(input, config={"callbacks": [handler]})
 End-to-end example showing OTel setup, Sigil client, handler, and correct shutdown order.
 The `OTEL_EXPORTER_OTLP_ENDPOINT` env var is read automatically by the OTel exporters.
 
-Minimal `.env`:
-```
-SIGIL_ENDPOINT=http://localhost:8080
-SIGIL_TENANT_ID=anonymous
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+`.env` — find these values at `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`:
+```dotenv
+SIGIL_ENDPOINT=https://sigil-prod-<region>.grafana.net
+SIGIL_AUTH_TENANT_ID=<instance-id>
+SIGIL_AUTH_TOKEN=glc_...
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(instance_id:cloud_api_token)>
 ```
 
 ```python
@@ -306,7 +308,7 @@ client = sigil_sdk.Client(
             endpoint=os.environ.get("SIGIL_ENDPOINT", "http://localhost:8080"),
             auth=AuthConfig(
                 mode="tenant",
-                tenant_id=os.environ.get("SIGIL_TENANT_ID", "anonymous"),
+                tenant_id=os.environ.get("SIGIL_AUTH_TENANT_ID", "anonymous"),
             ),
         ),
     )
