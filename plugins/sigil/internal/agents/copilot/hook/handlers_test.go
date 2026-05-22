@@ -1,6 +1,8 @@
 package hook
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -20,6 +22,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/config"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/fragment"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/transcript"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,7 +48,7 @@ func TestHookSequenceExportsOnStop(t *testing.T) {
 
 	SessionStart(Payload{HookEventNameJSON: "SessionStart", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:00Z"`), SourceValue: "new"}, cfg, logger)
 	UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "hello glc_abcdefghijklmnopqrstuvwxyz"}, cfg, logger)
-	PreToolUse(Payload{HookEventNameJSON: "PreToolUse", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:02Z"`), ToolNameJSON: "bash", ToolInputJSON: []byte(`{"cmd":"echo hi"}`)}, cfg, logger)
+	PreToolUse(context.Background(), io.Discard, Payload{HookEventNameJSON: "PreToolUse", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:02Z"`), ToolNameJSON: "bash", ToolInputJSON: []byte(`{"cmd":"echo hi"}`)}, cfg, logger)
 	PostToolUse(Payload{HookEventNameJSON: "PostToolUse", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:03Z"`), ToolNameJSON: "bash", ToolResultJSON: []byte(`{"text_result_for_llm":"ok"}`)}, cfg, logger, false)
 	Stop(Payload{HookEventNameJSON: "Stop", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:04Z"`), StopReasonJSON: "end_turn"}, cfg, logger)
 
@@ -470,6 +473,149 @@ func TestStopWaitsForCurrentCLITranscriptTurnInsteadOfReusingPreviousTurn(t *tes
 	}
 	if strings.Contains(gotBody, `"output_tokens":"621"`) {
 		t.Fatalf("export body reused previous turn output tokens: %s", gotBody)
+	}
+}
+
+func TestPreToolUseGuardBehavior(t *testing.T) {
+	tests := []struct {
+		name string
+		// guards is the GuardsConfig the test passes through cfg.Guards.
+		guards envconfig.GuardsConfig
+		// hookResponse is the JSON the fake Sigil hook server returns.
+		// If empty, an allow is returned.
+		hookResponse string
+		// useClosedServer points cfg.Endpoint at a closed listener so
+		// the request fails at transport.
+		useClosedServer bool
+		// clearCreds blanks SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/SIGIL_AUTH_TOKEN.
+		clearCreds          bool
+		wantServerCalled    bool
+		wantStdoutContains  string
+		wantStdoutEmpty     bool
+		wantToolRecordCount int
+	}{
+		{
+			name:                "disabled stays stdout-empty and records pending tool",
+			guards:              envconfig.GuardsConfig{Enabled: false, TimeoutMs: 1500, FailOpen: true},
+			wantStdoutEmpty:     true,
+			wantToolRecordCount: 1,
+		},
+		{
+			name:                "allow stays stdout-empty and records pending tool",
+			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			hookResponse:        `{"action":"allow"}`,
+			wantServerCalled:    true,
+			wantStdoutEmpty:     true,
+			wantToolRecordCount: 1,
+		},
+		{
+			name:                "deny writes copilot deny JSON and skips record",
+			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			hookResponse:        `{"action":"deny","reason":"blocked tool"}`,
+			wantServerCalled:    true,
+			wantStdoutContains:  `"permissionDecision":"deny"`,
+			wantToolRecordCount: 0,
+		},
+		{
+			name:                "fail-open transport error allows tool and records it",
+			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			useClosedServer:     true,
+			wantStdoutEmpty:     true,
+			wantToolRecordCount: 1,
+		},
+		{
+			name:                "fail-closed transport error denies tool and skips record",
+			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: false},
+			useClosedServer:     true,
+			wantStdoutContains:  `"permissionDecision":"deny"`,
+			wantToolRecordCount: 0,
+		},
+		{
+			name:                "fail-open missing credentials allows tool and records it",
+			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			clearCreds:          true,
+			wantStdoutEmpty:     true,
+			wantToolRecordCount: 1,
+		},
+		{
+			name:                "fail-closed missing credentials denies tool and skips record",
+			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: false},
+			clearCreds:          true,
+			wantStdoutContains:  `"permissionDecision":"deny"`,
+			wantToolRecordCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			logger := log.New(io.Discard, "", 0)
+
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				body := tt.hookResponse
+				if body == "" {
+					body = `{"action":"allow"}`
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(body))
+			}))
+			defer server.Close()
+
+			closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			closed.Close()
+
+			endpoint := server.URL
+			if tt.useClosedServer {
+				endpoint = closed.URL
+			}
+			if tt.clearCreds {
+				t.Setenv("SIGIL_ENDPOINT", "")
+				t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+				t.Setenv("SIGIL_AUTH_TOKEN", "")
+			} else {
+				t.Setenv("SIGIL_ENDPOINT", endpoint)
+				t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+				t.Setenv("SIGIL_AUTH_TOKEN", "token")
+			}
+
+			cfg := config.Config{
+				ContentCapture: sigil.ContentCaptureModeFull,
+				Guards:         tt.guards,
+			}
+			UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "hello"}, cfg, logger)
+
+			var stdout bytes.Buffer
+			PreToolUse(context.Background(), &stdout, Payload{
+				HookEventNameJSON: "PreToolUse",
+				SessionIDJSON:     "sess",
+				Timestamp:         []byte(`"2026-05-18T12:00:02Z"`),
+				ToolNameJSON:      "bash",
+				ToolInputJSON:     []byte(`{"cmd":"echo hi"}`),
+			}, cfg, logger)
+
+			if tt.wantServerCalled && calls.Load() == 0 {
+				t.Errorf("expected sigil hook server call, got 0")
+			}
+			if !tt.wantServerCalled && !tt.useClosedServer && calls.Load() != 0 {
+				t.Errorf("expected no sigil hook server call, got %d", calls.Load())
+			}
+			if tt.wantStdoutEmpty && stdout.Len() != 0 {
+				t.Errorf("stdout not empty: %q", stdout.String())
+			}
+			if tt.wantStdoutContains != "" && !strings.Contains(stdout.String(), tt.wantStdoutContains) {
+				t.Errorf("stdout = %q, want substring %q", stdout.String(), tt.wantStdoutContains)
+			}
+
+			frag := fragment.LoadTolerant("sess", "turn-000001", logger)
+			if frag == nil {
+				t.Fatalf("expected fragment to exist after UserPromptSubmit")
+			}
+			if len(frag.Tools) != tt.wantToolRecordCount {
+				t.Fatalf("len(frag.Tools) = %d, want %d", len(frag.Tools), tt.wantToolRecordCount)
+			}
+		})
 	}
 }
 

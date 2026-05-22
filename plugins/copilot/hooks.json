@@ -44,7 +44,6 @@
     ],
     "preToolUse": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
@@ -59,7 +58,6 @@
     ],
     "postToolUse": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
@@ -74,7 +72,6 @@
     ],
     "postToolUseFailure": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",

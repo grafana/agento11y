@@ -25,7 +25,7 @@ import (
 // payload omits the event name (the early Copilot CLI did this for several
 // events), SIGIL_COPILOT_HOOK_EVENT is consulted as a fallback — the
 // hooks.json manifest sets it per hook entry.
-func Hook(ctx context.Context, stdin io.Reader, _ io.Writer, logger *log.Logger) error {
+func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Logger) error {
 	raw, err := io.ReadAll(stdin)
 	if err != nil {
 		logger.Printf("dispatch: read stdin: %v", err)
@@ -68,7 +68,7 @@ func Hook(ctx context.Context, stdin io.Reader, _ io.Writer, logger *log.Logger)
 	case "userPromptSubmitted", "UserPromptSubmit", "UserPromptSubmitted":
 		hook.UserPromptSubmit(payload, cfg, logger)
 	case "preToolUse", "PreToolUse":
-		hook.PreToolUse(payload, cfg, logger)
+		hook.PreToolUse(ctx, stdout, payload, cfg, logger)
 	case "postToolUse", "PostToolUse":
 		hook.PostToolUse(payload, cfg, logger, false)
 	case "postToolUseFailure", "PostToolUseFailure":
@@ -84,6 +84,5 @@ func Hook(ctx context.Context, stdin io.Reader, _ io.Writer, logger *log.Logger)
 	default:
 		logger.Printf("dispatch: unknown event %q", eventName)
 	}
-	_ = ctx // handlers manage their own contexts
 	return nil
 }

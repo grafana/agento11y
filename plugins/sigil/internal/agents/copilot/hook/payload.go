@@ -27,6 +27,7 @@ type Payload struct {
 
 	ToolInputJSON json.RawMessage `json:"tool_input,omitempty"`
 	ToolInputJS   json.RawMessage `json:"toolInput,omitempty"`
+	ToolArgsJS    json.RawMessage `json:"toolArgs,omitempty"`
 
 	ToolResultJSON json.RawMessage `json:"tool_result,omitempty"`
 	ToolResultJS   json.RawMessage `json:"toolResult,omitempty"`
@@ -101,7 +102,7 @@ func (p Payload) ToolName() string {
 }
 
 func (p Payload) ToolInput() json.RawMessage {
-	return firstNonEmptyRaw(p.ToolInputJSON, p.ToolInputJS)
+	return firstNonEmptyRaw(p.ToolInputJSON, p.ToolInputJS, p.ToolArgsJS)
 }
 
 func (p Payload) ToolResult() json.RawMessage {

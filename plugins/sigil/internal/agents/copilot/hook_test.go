@@ -1,9 +1,12 @@
 package copilot
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -28,6 +31,61 @@ func TestHookUserPromptCreatesTurn(t *testing.T) {
 	got := fragment.LoadTolerant("sess", "turn-000001", logger)
 	if got == nil || got.Prompt != "hello" {
 		t.Fatalf("expected fragment with prompt, got %+v", got)
+	}
+}
+
+func TestHookPreToolUseDeniedPropagatesStdout(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("SIGIL_GUARDS_ENABLED", "true")
+	t.Setenv("SIGIL_GUARDS_FAIL_OPEN", "true")
+	t.Setenv("SIGIL_GUARDS_TIMEOUT_MS", "1500")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"action":"deny","reason":"blocked"}`))
+	}))
+	defer server.Close()
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+
+	var stdout bytes.Buffer
+	payload := `{"hook_event_name":"preToolUse","session_id":"sess","tool_name":"bash","toolArgs":{"cmd":"rm -rf /"}}`
+	logger := log.New(io.Discard, "", 0)
+	if err := Hook(context.Background(), strings.NewReader(payload), &stdout, logger); err != nil {
+		t.Fatalf("Hook: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"permissionDecision":"deny"`) {
+		t.Fatalf("stdout = %q, want deny decision", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"permissionDecisionReason":"blocked"`) {
+		t.Fatalf("stdout = %q, want deny reason", stdout.String())
+	}
+}
+
+func TestHookPreToolUseAllowKeepsStdoutEmpty(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("SIGIL_GUARDS_ENABLED", "true")
+	t.Setenv("SIGIL_GUARDS_FAIL_OPEN", "true")
+	t.Setenv("SIGIL_GUARDS_TIMEOUT_MS", "1500")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"action":"allow"}`))
+	}))
+	defer server.Close()
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+
+	var stdout bytes.Buffer
+	payload := `{"hook_event_name":"preToolUse","session_id":"sess","tool_name":"bash","toolArgs":{"cmd":"echo hi"}}`
+	logger := log.New(io.Discard, "", 0)
+	if err := Hook(context.Background(), strings.NewReader(payload), &stdout, logger); err != nil {
+		t.Fatalf("Hook: %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
 }
 
