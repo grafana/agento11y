@@ -25,6 +25,7 @@ from sigil_sdk import (
     ToolResult,
     create_secret_redaction_sanitizer,
 )
+from sigil_sdk.redaction import _resolve_redact_input_messages
 
 
 def _new_client(
@@ -290,3 +291,58 @@ def test_generation_sanitizer_failure_falls_back_to_metadata_only(caplog) -> Non
         assert "sigil: generation sanitization failed, falling back to metadata_only" in caplog.text
     finally:
         client.shutdown()
+
+
+def test_resolve_redact_input_messages_defaults_to_false() -> None:
+    assert _resolve_redact_input_messages(None, env={}) is False
+
+
+def test_resolve_redact_input_messages_explicit_wins_over_env() -> None:
+    assert _resolve_redact_input_messages(False, env={"SIGIL_REDACT_INPUT_MESSAGES": "true"}) is False
+    assert _resolve_redact_input_messages(True, env={"SIGIL_REDACT_INPUT_MESSAGES": "false"}) is True
+
+
+def test_resolve_redact_input_messages_truthy_tokens() -> None:
+    for token in ("1", "true", "TRUE", "yes", "on"):
+        got = _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": token})
+        assert got is True, f"token={token!r}"
+
+
+def test_resolve_redact_input_messages_falsy_tokens() -> None:
+    for token in ("0", "false", "FALSE", "no", "off"):
+        got = _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": token})
+        assert got is False, f"token={token!r}"
+
+
+def test_resolve_redact_input_messages_blank_falls_back_to_false() -> None:
+    assert _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": "   "}) is False
+
+
+def test_resolve_redact_input_messages_invalid_warns_and_falls_back(caplog) -> None:
+    with caplog.at_level(logging.WARNING, logger="sigil_sdk"):
+        got = _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": "maybe"})
+    assert got is False
+    assert any(
+        "SIGIL_REDACT_INPUT_MESSAGES" in record.getMessage() and "maybe" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_create_secret_redaction_sanitizer_reads_env(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_REDACT_INPUT_MESSAGES", "true")
+    sanitizer = create_secret_redaction_sanitizer()
+    generation = Generation(
+        id="gen-env",
+        mode=GenerationMode.SYNC,
+        operation_name="generateText",
+        model=ModelRef(provider="openai", name="gpt-5"),
+        input=[
+            Message(
+                role=MessageRole.USER,
+                parts=[Part(kind=PartKind.TEXT, text="token glc_abcdefghijklmnopqrstuvwxyz0123")],
+            )
+        ],
+    )
+    sanitized = sanitizer(generation)
+    assert "glc_" not in sanitized.input[0].parts[0].text
+    assert "[REDACTED:grafana-cloud-token]" in sanitized.input[0].parts[0].text

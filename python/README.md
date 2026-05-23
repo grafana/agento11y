@@ -202,7 +202,7 @@ client = Client(
     ClientConfig(
         generation_sanitizer=create_secret_redaction_sanitizer(
             SecretRedactionOptions(
-                redact_input_messages=False,
+                redact_input_messages=False,  # None falls back to SIGIL_REDACT_INPUT_MESSAGES, then False
                 redact_email_addresses=True,
             )
         )
@@ -215,7 +215,7 @@ The built-in sanitizer:
 - redacts high-confidence secret formats in assistant text and thinking
 - redacts secret formats plus env-style secret values in tool call inputs and tool results
 - redacts email addresses by default
-- leaves user input unchanged unless `redact_input_messages=True` is set
+- leaves user input unchanged unless input redaction is enabled
 
 To preserve email addresses, opt out explicitly:
 
@@ -225,6 +225,25 @@ client = Client(
         generation_sanitizer=create_secret_redaction_sanitizer(
             SecretRedactionOptions(redact_email_addresses=False)
         )
+    )
+)
+```
+
+### Configuring redaction via environment variables
+
+`create_secret_redaction_sanitizer()` reads `SIGIL_REDACT_INPUT_MESSAGES` (accepts `1/0`, `true/false`, `yes/no`, `on/off`) when `redact_input_messages` is left `None`. Precedence is explicit option > env var > `False`. An unrecognised env value logs a warning through the `sigil_sdk` logger and falls back to the next layer, so a typo cannot silently flip redaction.
+
+```python
+from sigil_sdk import (
+    Client,
+    ClientConfig,
+    create_secret_redaction_sanitizer,
+)
+
+# Leave redact_input_messages unset so SIGIL_REDACT_INPUT_MESSAGES decides.
+client = Client(
+    ClientConfig(
+        generation_sanitizer=create_secret_redaction_sanitizer(),
     )
 )
 ```

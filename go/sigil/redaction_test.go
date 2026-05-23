@@ -185,15 +185,18 @@ func TestSecretRedactionSanitizerInputRedactionByRole(t *testing.T) {
 	cases := []struct {
 		name             string
 		opts             SecretRedactionOptions
+		env              map[string]string
 		wantUserRedacted bool
 	}{
 		{name: "default preserves user only", opts: SecretRedactionOptions{}, wantUserRedacted: false},
-		{name: "opt-in redacts user too", opts: SecretRedactionOptions{RedactInputMessages: true}, wantUserRedacted: true},
+		{name: "opt-in redacts user too", opts: SecretRedactionOptions{RedactInputMessages: boolPtr(true)}, wantUserRedacted: true},
+		{name: "env enables when option nil", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "true"}, wantUserRedacted: true},
+		{name: "explicit false beats env true", opts: SecretRedactionOptions{RedactInputMessages: boolPtr(false)}, env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "true"}, wantUserRedacted: false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			sanitized := NewSecretRedactionSanitizer(tc.opts)(build())
+			sanitized := newSecretRedactionSanitizer(mapLookup(tc.env), tc.opts)(build())
 
 			userText := sanitized.Input[0].Parts[0].Text
 			if tc.wantUserRedacted {
@@ -545,4 +548,34 @@ func TestGenerationSanitizerSkippedInMetadataOnlyMode(t *testing.T) {
 func metaString(g Generation, key string) string {
 	v, _ := g.Metadata[key].(string)
 	return v
+}
+
+func TestResolveRedactInputMessages(t *testing.T) {
+	cases := []struct {
+		name     string
+		explicit *bool
+		env      map[string]string
+		want     bool
+	}{
+		{name: "nil and unset defaults to false", want: false},
+		{name: "explicit true wins over unset env", explicit: boolPtr(true), want: true},
+		{name: "explicit false wins over env true", explicit: boolPtr(false), env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "true"}, want: false},
+		{name: "explicit true wins over env false", explicit: boolPtr(true), env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "false"}, want: true},
+		{name: "env true when option nil", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "true"}, want: true},
+		{name: "env false when option nil", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "false"}, want: false},
+		{name: "env 1 parses true", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "1"}, want: true},
+		{name: "env ON case-insensitive", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "ON"}, want: true},
+		{name: "env yes parses true", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "yes"}, want: true},
+		{name: "env off parses false", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "off"}, want: false},
+		{name: "blank env falls back to false", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "   "}, want: false},
+		{name: "invalid env falls back to false", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "maybe"}, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveRedactInputMessages(mapLookup(tc.env), tc.explicit); got != tc.want {
+				t.Errorf("resolveRedactInputMessages = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }

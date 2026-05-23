@@ -143,7 +143,7 @@ import {
 
 const client = new SigilClient({
   generationSanitizer: createSecretRedactionSanitizer({
-    redactInputMessages: false,
+    redactInputMessages: false, // omit to fall back to SIGIL_REDACT_INPUT_MESSAGES, then false
     redactEmailAddresses: true,
   }),
 });
@@ -154,7 +154,7 @@ The built-in sanitizer:
 - redacts high-confidence secret formats in assistant text and thinking
 - redacts secret formats plus env-style secret values in tool call inputs and tool results
 - redacts email addresses by default
-- leaves user input unchanged unless `redactInputMessages: true` is set
+- leaves user input unchanged unless input redaction is enabled
 
 To preserve email addresses, opt out explicitly:
 
@@ -163,6 +163,26 @@ const client = new SigilClient({
   generationSanitizer: createSecretRedactionSanitizer({
     redactEmailAddresses: false,
   }),
+});
+```
+
+### Configuring redaction via environment variables
+
+`createSecretRedactionSanitizer()` reads `SIGIL_REDACT_INPUT_MESSAGES` (accepts
+`1/0`, `true/false`, `yes/no`, `on/off`) when `redactInputMessages` is omitted.
+Precedence is explicit option > env var > `false`. An unrecognised env value is
+warned and falls back to the next layer, so a typo cannot silently flip
+redaction.
+
+```ts
+import {
+  createSecretRedactionSanitizer,
+  SigilClient,
+} from "@grafana/sigil-sdk-js";
+
+// Omit redactInputMessages so SIGIL_REDACT_INPUT_MESSAGES decides.
+const client = new SigilClient({
+  generationSanitizer: createSecretRedactionSanitizer(),
 });
 ```
 

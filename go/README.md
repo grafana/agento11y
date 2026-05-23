@@ -342,9 +342,10 @@ Use `GenerationSanitizer` when you want to redact substrings from normalized gen
 
 ```go
 redactEmails := true
+redactInputs := false
 cfg := sigil.DefaultConfig()
 cfg.GenerationSanitizer = sigil.NewSecretRedactionSanitizer(sigil.SecretRedactionOptions{
-    RedactInputMessages:  false,         // also redact user messages in Generation.Input
+    RedactInputMessages:  &redactInputs, // nil falls back to SIGIL_REDACT_INPUT_MESSAGES, then false
     RedactEmailAddresses: &redactEmails, // nil defaults to true; point to false to preserve
 })
 
@@ -357,7 +358,7 @@ The built-in sanitizer:
 - redacts secret formats plus env-style secret values in tool call inputs and tool results
 - redacts email addresses by default
 - redacts historic assistant turns and tool messages in `Generation.Input`
-- leaves user messages in `Generation.Input` unchanged unless `RedactInputMessages: true` is set
+- leaves user messages in `Generation.Input` unchanged unless input redaction is enabled
 
 To preserve email addresses, opt out explicitly:
 
@@ -369,6 +370,15 @@ cfg.GenerationSanitizer = sigil.NewSecretRedactionSanitizer(sigil.SecretRedactio
 ```
 
 If a sanitizer panics during `Recorder.End`, the SDK falls back to `ContentCaptureModeMetadataOnly` for that generation and logs a warning via `Config.Logger`, so a partially redacted payload is never shipped.
+
+### Configuring redaction via environment variables
+
+`NewSecretRedactionSanitizer` reads `SIGIL_REDACT_INPUT_MESSAGES` (accepts `1/0`, `true/false`, `yes/no`, `on/off`) when `RedactInputMessages` is left nil. Precedence is explicit option > env var > `false`. An unrecognised env value is logged via the standard logger and ignored, so a typo falls back to the next layer instead of silently flipping redaction.
+
+```go
+// Leave RedactInputMessages nil so SIGIL_REDACT_INPUT_MESSAGES decides.
+cfg.GenerationSanitizer = sigil.NewSecretRedactionSanitizer(sigil.SecretRedactionOptions{})
+```
 
 ## Conversation Ratings
 

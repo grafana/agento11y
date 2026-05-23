@@ -274,3 +274,64 @@ test('secret redaction sanitizer redacts assistant and tool messages in input', 
   assert.match(sanitized.input[1].parts[0].toolResult.content, /\[REDACTED:grafana-cloud-token\]/);
   assert.match(sanitized.input[1].parts[0].toolResult.content, /\[REDACTED:env-secret-value\]/);
 });
+
+function buildUserSecretGeneration() {
+  return {
+    id: 'gen-env-1',
+    mode: 'SYNC',
+    operationName: 'generateText',
+    model: { provider: 'openai', name: 'gpt-5' },
+    startedAt: new Date('2026-01-01T00:00:00Z'),
+    completedAt: new Date('2026-01-01T00:00:01Z'),
+    input: [
+      {
+        role: 'user',
+        parts: [{ type: 'text', text: 'key sk-proj-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
+      },
+    ],
+  };
+}
+
+test('createSecretRedactionSanitizer: SIGIL_REDACT_INPUT_MESSAGES truthy aliases enable user input redaction', () => {
+  for (const value of ['1', 'true', 'TRUE', 'yes', 'on']) {
+    const sanitizer = createSecretRedactionSanitizer({}, { SIGIL_REDACT_INPUT_MESSAGES: value });
+    const sanitized = sanitizer(buildUserSecretGeneration());
+    assert.match(sanitized.input[0].parts[0].text, /\[REDACTED:openai-project-key\]/, `value=${value}`);
+  }
+});
+
+test('createSecretRedactionSanitizer: SIGIL_REDACT_INPUT_MESSAGES falsy aliases leave user input untouched', () => {
+  for (const value of ['0', 'false', 'FALSE', 'no', 'off']) {
+    const sanitizer = createSecretRedactionSanitizer({}, { SIGIL_REDACT_INPUT_MESSAGES: value });
+    const sanitized = sanitizer(buildUserSecretGeneration());
+    assert.match(sanitized.input[0].parts[0].text, /sk-proj-/, `value=${value}`);
+  }
+});
+
+test('createSecretRedactionSanitizer: explicit redactInputMessages wins over env', () => {
+  const sanitizer = createSecretRedactionSanitizer(
+    { redactInputMessages: false },
+    { SIGIL_REDACT_INPUT_MESSAGES: 'true' },
+  );
+  const sanitized = sanitizer(buildUserSecretGeneration());
+  assert.match(sanitized.input[0].parts[0].text, /sk-proj-/);
+});
+
+test('createSecretRedactionSanitizer: invalid env value warns and falls back to false', () => {
+  const warnings = [];
+  const logger = { warn: (message) => warnings.push(message) };
+  const sanitizer = createSecretRedactionSanitizer({}, { SIGIL_REDACT_INPUT_MESSAGES: 'maybe' }, logger);
+  const sanitized = sanitizer(buildUserSecretGeneration());
+  assert.match(sanitized.input[0].parts[0].text, /sk-proj-/);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /SIGIL_REDACT_INPUT_MESSAGES.*maybe/);
+});
+
+test('createSecretRedactionSanitizer: blank env value is treated as unset (no warning)', () => {
+  const warnings = [];
+  const logger = { warn: (message) => warnings.push(message) };
+  const sanitizer = createSecretRedactionSanitizer({}, { SIGIL_REDACT_INPUT_MESSAGES: '   ' }, logger);
+  const sanitized = sanitizer(buildUserSecretGeneration());
+  assert.match(sanitized.input[0].parts[0].text, /sk-proj-/);
+  assert.equal(warnings.length, 0);
+});

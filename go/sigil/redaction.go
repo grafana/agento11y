@@ -1,6 +1,7 @@
 package sigil
 
 import (
+	"log"
 	"regexp"
 	"strings"
 )
@@ -16,11 +17,13 @@ type GenerationSanitizer func(Generation) Generation
 
 // SecretRedactionOptions configures the built-in secret-redaction sanitizer.
 type SecretRedactionOptions struct {
-	// RedactInputMessages, when true, also sanitizes user messages in
-	// Generation.Input. Assistant and tool messages in Input are sanitized
-	// regardless because they typically replay tool results and prior model
-	// output that share the same secret surface as Generation.Output.
-	RedactInputMessages bool
+	// RedactInputMessages, when non-nil, sets whether user messages in
+	// Generation.Input are sanitized too. Nil falls back to
+	// SIGIL_REDACT_INPUT_MESSAGES and then to false (leave user input as-is).
+	// Assistant and tool messages in Input are sanitized regardless because
+	// they typically replay tool results and prior model output that share the
+	// same secret surface as Generation.Output.
+	RedactInputMessages *bool
 	// RedactEmailAddresses, when non-nil, sets whether email addresses are
 	// redacted. Nil defaults to true (redact). Set to a pointer to false to
 	// preserve email addresses verbatim.
@@ -163,6 +166,24 @@ func redactTier1Bytes(src []byte) []byte {
 	return out
 }
 
+// resolveRedactInputMessages applies precedence explicit > env > false.
+// An unrecognised SIGIL_REDACT_INPUT_MESSAGES value is logged and ignored.
+func resolveRedactInputMessages(lookup envLookup, explicit *bool) bool {
+	if explicit != nil {
+		return *explicit
+	}
+	if lookup == nil {
+		lookup = defaultLookup
+	}
+	if v, ok := envTrimmed(lookup, envRedactInputMessages); ok {
+		if parsed, valid := parseStrictBool(v); valid {
+			return parsed
+		}
+		log.Default().Printf("sigil: ignoring invalid %s %q", envRedactInputMessages, v)
+	}
+	return false
+}
+
 // NewSecretRedactionSanitizer returns a GenerationSanitizer that redacts
 // known secret formats from generation content. The returned sanitizer is
 // safe for concurrent use.
@@ -170,11 +191,17 @@ func redactTier1Bytes(src []byte) []byte {
 // By default it redacts Generation.Output (assistant + tool), Generation.SystemPrompt,
 // Generation.ConversationTitle, Generation.CallError, and the assistant /
 // tool messages in Generation.Input. User messages in Generation.Input are
-// only redacted when RedactInputMessages is set. Email redaction is on unless
+// only redacted when input redaction is enabled, resolved as:
+// explicit RedactInputMessages > SIGIL_REDACT_INPUT_MESSAGES > false.
+// An invalid env value is logged and ignored. Email redaction is on unless
 // RedactEmailAddresses points to false.
 func NewSecretRedactionSanitizer(opts SecretRedactionOptions) GenerationSanitizer {
+	return newSecretRedactionSanitizer(defaultLookup, opts)
+}
+
+func newSecretRedactionSanitizer(lookup envLookup, opts SecretRedactionOptions) GenerationSanitizer {
 	includeEmail := opts.RedactEmailAddresses == nil || *opts.RedactEmailAddresses
-	redactInputs := opts.RedactInputMessages
+	redactInputs := resolveRedactInputMessages(lookup, opts.RedactInputMessages)
 
 	return func(g Generation) Generation {
 		if g.SystemPrompt != "" {

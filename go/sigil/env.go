@@ -9,19 +9,20 @@ import (
 
 // canonical SIGIL_* env-var names.
 const (
-	envEndpoint           = "SIGIL_ENDPOINT"
-	envProtocol           = "SIGIL_PROTOCOL"
-	envInsecure           = "SIGIL_INSECURE"
-	envHeaders            = "SIGIL_HEADERS"
-	envAuthMode           = "SIGIL_AUTH_MODE"
-	envAuthTenantID       = "SIGIL_AUTH_TENANT_ID"
-	envAuthToken          = "SIGIL_AUTH_TOKEN"
-	envAgentName          = "SIGIL_AGENT_NAME"
-	envAgentVersion       = "SIGIL_AGENT_VERSION"
-	envUserID             = "SIGIL_USER_ID"
-	envTags               = "SIGIL_TAGS"
-	envContentCaptureMode = "SIGIL_CONTENT_CAPTURE_MODE"
-	envDebug              = "SIGIL_DEBUG"
+	envEndpoint            = "SIGIL_ENDPOINT"
+	envProtocol            = "SIGIL_PROTOCOL"
+	envInsecure            = "SIGIL_INSECURE"
+	envHeaders             = "SIGIL_HEADERS"
+	envAuthMode            = "SIGIL_AUTH_MODE"
+	envAuthTenantID        = "SIGIL_AUTH_TENANT_ID"
+	envAuthToken           = "SIGIL_AUTH_TOKEN"
+	envAgentName           = "SIGIL_AGENT_NAME"
+	envAgentVersion        = "SIGIL_AGENT_VERSION"
+	envUserID              = "SIGIL_USER_ID"
+	envTags                = "SIGIL_TAGS"
+	envContentCaptureMode  = "SIGIL_CONTENT_CAPTURE_MODE"
+	envDebug               = "SIGIL_DEBUG"
+	envRedactInputMessages = "SIGIL_REDACT_INPUT_MESSAGES"
 )
 
 // envLookup resolves canonical SIGIL_* env vars from os.Environ unless a
@@ -139,6 +140,19 @@ func parseBool(raw string) bool {
 		return true
 	}
 	return false
+}
+
+// parseStrictBool accepts the same true tokens as parseBool plus the matching
+// false tokens, and reports whether the input was recognised. Use this when an
+// invalid value must not silently fall through to false.
+func parseStrictBool(raw string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off":
+		return false, true
+	}
+	return false, false
 }
 
 func parseCSVKV(raw string) map[string]string {
