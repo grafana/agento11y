@@ -1,7 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type {
   ContentCaptureMode,
   Message,
@@ -11,6 +8,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { createSigilClient } from "./client.js";
 import type { SigilPiConfig } from "./config.js";
 import { loadConfig } from "./config.js";
+import { detectPiVersion } from "./detectPiVersion.js";
 import { resolveGitBranch } from "./git.js";
 import { runToolCallGuard } from "./guard.js";
 import {
@@ -27,34 +25,6 @@ import {
   createTelemetryProviders,
   type TelemetryProviders,
 } from "./telemetry.js";
-
-function detectPiVersion(): string | undefined {
-  try {
-    // Resolve an exported subpath via ESM resolution, then walk up to package.json.
-    // createRequire won't work here: pi's package.json uses "import"-only exports.
-    const resolved = import.meta.resolve("@mariozechner/pi-coding-agent/hooks");
-    // import.meta.resolve is sync on Node ≥20.6; older versions return a
-    // Promise. Bail out in that case rather than passing a Promise downstream.
-    if (typeof resolved !== "string") return undefined;
-    let dir = dirname(fileURLToPath(resolved));
-    for (let i = 0; i < 5; i++) {
-      try {
-        const pkgPath = join(dir, "package.json");
-        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as {
-          name?: string;
-          version?: string;
-        };
-        if (pkg.name === "@mariozechner/pi-coding-agent") return pkg.version;
-      } catch {
-        // no package.json at this level, keep walking
-      }
-      dir = dirname(dir);
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 export default function (pi: ExtensionAPI) {
   let sigil: SigilClient | null = null;
