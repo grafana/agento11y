@@ -33,8 +33,8 @@ func ResponsesFromRequestResponse(req responses.ResponseNewParams, resp *respons
 	tools := mapResponsesTools(requestPayload["tools"])
 	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapResponsesRequestControls(requestPayload)
 
-	requestModel := string(req.Model)
-	responseModel := string(resp.Model)
+	requestModel := req.Model
+	responseModel := resp.Model
 	if responseModel == "" {
 		responseModel = requestModel
 	}
@@ -114,7 +114,7 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 	options := applyOptions(opts)
 
 	responseID := ""
-	responseModel := string(req.Model)
+	responseModel := req.Model
 	usage := sigil.TokenUsage{}
 	stopReason := ""
 	text := strings.Builder{}
@@ -127,7 +127,7 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 
 		if event.Response.ID != "" {
 			responseID = event.Response.ID
-			if model := string(event.Response.Model); model != "" {
+			if model := event.Response.Model; model != "" {
 				responseModel = model
 			}
 			usage = mapResponsesUsage(event.Response.Usage)
@@ -236,7 +236,7 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: string(req.Model)},
+		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
 		ResponseID:        responseID,
 		ResponseModel:     responseModel,
 		SystemPrompt:      systemPrompt,

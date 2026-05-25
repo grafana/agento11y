@@ -57,7 +57,7 @@ type ConversationRatingSummary struct {
 	BadCount      int       `json:"bad_count"`
 	LatestRating  string    `json:"latest_rating,omitempty"`
 	LatestRatedAt time.Time `json:"latest_rated_at"`
-	LatestBadAt   time.Time `json:"latest_bad_at,omitempty"`
+	LatestBadAt   time.Time `json:"latest_bad_at"`
 	HasBadRating  bool      `json:"has_bad_rating"`
 }
 
@@ -80,7 +80,7 @@ func (c *Client) SubmitConversationRating(ctx context.Context, conversationID st
 	}
 
 	// Check content capture resolver — strip comment when MetadataOnly.
-	resolverMode := callContentCaptureResolver(c.config.ContentCaptureResolver, ctx, input.Metadata)
+	resolverMode := callContentCaptureResolver(ctx, c.config.ContentCaptureResolver, input.Metadata)
 	effectiveMode := resolveContentCaptureMode(resolverMode, resolveClientContentCaptureMode(c.config.ContentCapture))
 	if effectiveMode == ContentCaptureModeMetadataOnly {
 		input.Comment = ""

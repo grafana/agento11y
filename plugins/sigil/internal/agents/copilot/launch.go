@@ -114,7 +114,7 @@ func pluginInstalled(ctx context.Context, bin string) (bool, error) {
 	// and the bullet glyph, then exact-match the first remaining token. This
 	// rejects the `Installed plugins:` header, a bare bullet line, and
 	// suffix collisions like `my-sigil-copilot`.
-	for _, line := range bytes.Split(out, []byte{'\n'}) {
+	for line := range bytes.SplitSeq(out, []byte{'\n'}) {
 		trimmed := bytes.TrimLeft(bytes.TrimSpace(line), "•*-+ \t")
 		fields := bytes.Fields(trimmed)
 		if len(fields) > 0 && bytes.Equal(fields[0], needle) {

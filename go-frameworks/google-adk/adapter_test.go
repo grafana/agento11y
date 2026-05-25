@@ -585,9 +585,9 @@ func TestOnRunStartDeduplicatesConcurrentStarts(t *testing.T) {
 	})
 
 	adapter := NewSigilAdapter(client, Options{})
-	var startCalls int32
+	var startCalls atomic.Int32
 	adapter.startRun = func(ctx context.Context, start sigil.GenerationStart, stream bool) *sigil.GenerationRecorder {
-		atomic.AddInt32(&startCalls, 1)
+		startCalls.Add(1)
 		if stream {
 			_, rec := client.StartStreamingGeneration(ctx, start)
 			return rec
@@ -606,7 +606,7 @@ func TestOnRunStartDeduplicatesConcurrentStarts(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		go func() {
 			defer wg.Done()
 			_ = adapter.OnRunStart(context.Background(), startEvent)
@@ -614,7 +614,7 @@ func TestOnRunStartDeduplicatesConcurrentStarts(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := atomic.LoadInt32(&startCalls); got != 1 {
+	if got := startCalls.Load(); got != 1 {
 		t.Fatalf("expected one generation start call, got %d", got)
 	}
 
@@ -632,9 +632,9 @@ func TestOnToolStartDeduplicatesConcurrentStarts(t *testing.T) {
 	})
 
 	adapter := NewSigilAdapter(client, Options{})
-	var startCalls int32
+	var startCalls atomic.Int32
 	adapter.startTool = func(ctx context.Context, start sigil.ToolExecutionStart) *sigil.ToolExecutionRecorder {
-		atomic.AddInt32(&startCalls, 1)
+		startCalls.Add(1)
 		_, rec := client.StartToolExecution(ctx, start)
 		return rec
 	}
@@ -649,7 +649,7 @@ func TestOnToolStartDeduplicatesConcurrentStarts(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		go func() {
 			defer wg.Done()
 			_ = adapter.OnToolStart(context.Background(), startEvent)
@@ -657,7 +657,7 @@ func TestOnToolStartDeduplicatesConcurrentStarts(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := atomic.LoadInt32(&startCalls); got != 1 {
+	if got := startCalls.Load(); got != 1 {
 		t.Fatalf("expected one tool start call, got %d", got)
 	}
 

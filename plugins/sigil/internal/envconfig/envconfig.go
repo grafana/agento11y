@@ -50,7 +50,7 @@ func ParseExtraTags(s string) map[string]string {
 		return nil
 	}
 	out := make(map[string]string)
-	for _, pair := range strings.Split(s, ",") {
+	for pair := range strings.SplitSeq(s, ",") {
 		k, v, ok := strings.Cut(pair, "=")
 		if !ok {
 			continue

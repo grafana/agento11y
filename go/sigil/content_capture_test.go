@@ -562,7 +562,7 @@ func TestCallContentCaptureResolver(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := callContentCaptureResolver(tc.resolver, context.Background(), tc.metadata)
+			got := callContentCaptureResolver(context.Background(), tc.resolver, tc.metadata)
 			if got != tc.want {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}

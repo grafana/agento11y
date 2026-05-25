@@ -62,7 +62,7 @@ func ResolveGitBranch(workspaceRoot string) string {
 		return ""
 	}
 	current := workspaceRoot
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		gitPath := filepath.Join(current, ".git")
 		if gitDir := resolveGitDir(gitPath); gitDir != "" {
 			return readHeadBranch(gitDir)

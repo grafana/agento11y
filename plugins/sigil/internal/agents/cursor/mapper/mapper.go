@@ -279,11 +279,18 @@ func buildToolDefinitions(tools []fragment.ToolRecord) []sigil.ToolDefinition {
 
 func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (input, output []sigil.Message) {
 	// Normalize so the rest of this function only deals with the three real
-	// modes. envconfig.ResolveContentMode also maps Default → MetadataOnly,
-	// but doing it again here keeps the three content-gating checks below
-	// internally consistent regardless of caller.
-	if mode == sigil.ContentCaptureModeDefault {
+	// content-gating modes. envconfig.ResolveContentMode also maps Default →
+	// MetadataOnly, but doing it again here keeps the gating below internally
+	// consistent regardless of caller. FullWithMetadataSpans differs from
+	// Full only in what the OTel span exposes; the gRPC payload that
+	// buildMessages produces carries the same full content in both modes.
+	switch mode {
+	case sigil.ContentCaptureModeDefault:
 		mode = sigil.ContentCaptureModeMetadataOnly
+	case sigil.ContentCaptureModeFullWithMetadataSpans:
+		mode = sigil.ContentCaptureModeFull
+	default:
+		// Full, NoToolContent, MetadataOnly pass through unchanged.
 	}
 
 	// User prompt → user input message. Dropped in metadata-only mode.
@@ -358,6 +365,8 @@ func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (inpu
 			})
 		case sigil.ContentCaptureModeMetadataOnly:
 			// Drop the tool_result entirely.
+		default:
+			// Default and FullWithMetadataSpans are normalized away above.
 		}
 	}
 

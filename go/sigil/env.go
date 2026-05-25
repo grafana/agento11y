@@ -143,7 +143,7 @@ func parseBool(raw string) bool {
 
 func parseCSVKV(raw string) map[string]string {
 	out := map[string]string{}
-	for _, part := range strings.Split(raw, ",") {
+	for part := range strings.SplitSeq(raw, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue

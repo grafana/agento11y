@@ -39,7 +39,7 @@ func chatCompletionsNew(
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: string(req.Model)},
+		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
 	})
 	defer rec.End()
 
@@ -71,7 +71,7 @@ func ChatCompletionsNewStreaming(
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: string(req.Model)},
+		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
 	})
 	defer rec.End()
 
@@ -133,7 +133,7 @@ func responsesNew(
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: string(req.Model)},
+		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
 	})
 	defer rec.End()
 
@@ -173,7 +173,7 @@ func embeddingsNew(
 	start := sigil.EmbeddingStart{
 		AgentName:    options.agentName,
 		AgentVersion: options.agentVersion,
-		Model:        sigil.ModelRef{Provider: options.providerName, Name: string(req.Model)},
+		Model:        sigil.ModelRef{Provider: options.providerName, Name: req.Model},
 	}
 	if req.Dimensions.Valid() {
 		start.Dimensions = &req.Dimensions.Value
@@ -212,7 +212,7 @@ func ResponsesNewStreaming(
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: string(req.Model)},
+		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
 	})
 	defer rec.End()
 
