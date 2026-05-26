@@ -381,6 +381,7 @@ In the sigil-sdk repo:
 - Keep behavior unchanged except instrumentation additions/fixes.
 - Prefer small targeted patches over refactors.
 - Use existing conventions in each language package.
+- When adding a JS workspace package, plugin, or private example, update `js/scripts/check-js-dependency-pinning.mjs` so dependency pinning enforcement covers the new manifest. Published packages should keep runtime `dependencies` and `peerDependencies` as compatible ranges, but pin `devDependencies`; private examples should pin external dependencies exactly.
 - Keep raw artifacts disabled unless explicitly asked.
 - Ensure non-stream wrappers set `SYNC`, stream wrappers set `STREAM`.
 - Ensure lifecycle flush/shutdown semantics are preserved.
