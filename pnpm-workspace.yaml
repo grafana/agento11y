@@ -4,7 +4,21 @@ packages:
 
 # Security Hardening Week package-manager policy.
 minimumReleaseAge: 4320
+trustPolicy: no-downgrade
+trustPolicyExclude:
+  # Transitive of @mariozechner/pi-coding-agent@0.70.5; reviewed during pnpm 11 migration.
+  - '@mariozechner/clipboard@0.3.3'
+  - '@mariozechner/clipboard-darwin-arm64@0.3.3'
+  - '@mariozechner/clipboard-darwin-universal@0.3.3'
+  - '@mariozechner/clipboard-darwin-x64@0.3.3'
+  - '@mariozechner/clipboard-linux-arm64-gnu@0.3.3'
+  - '@mariozechner/clipboard-linux-arm64-musl@0.3.3'
+  - '@mariozechner/clipboard-linux-riscv64-gnu@0.3.3'
+  - '@mariozechner/clipboard-linux-x64-gnu@0.3.3'
+  - '@mariozechner/clipboard-linux-x64-musl@0.3.3'
+  - '@mariozechner/clipboard-win32-arm64-msvc@0.3.3'
+  - '@mariozechner/clipboard-win32-x64-msvc@0.3.3'
 blockExoticSubdeps: true
 strictDepBuilds: true
-onlyBuiltDependencies:
-  - esbuild@0.27.4 || 0.28.0
+allowBuilds:
+  esbuild: true
