@@ -15,6 +15,7 @@ import (
 type Config struct {
 	ContentCapture sigil.ContentCaptureMode
 	Debug          bool
+	Guards         envconfig.GuardsConfig
 }
 
 // HasCredentials reports whether the canonical SIGIL_* credentials are
@@ -51,5 +52,6 @@ func Load(logger *log.Logger) Config {
 	return Config{
 		ContentCapture: envconfig.ResolveContentMode(logger),
 		Debug:          envconfig.ParseBool(os.Getenv("SIGIL_DEBUG")),
+		Guards:         envconfig.ResolveGuards(logger),
 	}
 }

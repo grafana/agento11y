@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/config"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/fragment"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/mapper"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/guard"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
@@ -76,6 +78,76 @@ func UserPromptSubmit(p Payload, cfg config.Config, logger *log.Logger) {
 	}); err != nil {
 		logger.Printf("userPromptSubmit: %v", err)
 	}
+}
+
+// preToolUseDecision is the JSON shape Codex understands as a deny verdict
+// on PreToolUse. Matches Claude Code's hookDecision so downstream rules
+// stay consistent across agents.
+type preToolUseDecision struct {
+	HookSpecificOutput preToolUseDecisionOutput `json:"hookSpecificOutput"`
+}
+
+type preToolUseDecisionOutput struct {
+	HookEventName            string `json:"hookEventName"`
+	PermissionDecision       string `json:"permissionDecision"`
+	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
+}
+
+// PreToolUse evaluates a Codex tool call against Sigil guard rules. It writes
+// a deny JSON object to stdout when the call must be blocked and stays silent
+// when the call is allowed. Transport setup, credential checks, and
+// fail-open/closed behaviour all live in the shared guard package so this
+// handler stays in lockstep with the copilot and other agents.
+func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Config, logger *log.Logger) {
+	res := guard.EvaluateToolCall(ctx, cfg.Guards, guard.ToolCallInput{
+		AgentName:     mapper.AgentName,
+		ToolName:      p.ToolName,
+		ToolCallID:    p.ToolUseID,
+		ToolInputJSON: p.ToolInput,
+		ModelProvider: guardProviderFromModel(p.Model),
+		ModelName:     p.Model,
+	}, logger)
+	if res.Blocked() {
+		writePreToolDeny(stdout, res.Reason)
+	}
+}
+
+func guardProviderFromModel(model string) string {
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(m, "claude"):
+		return "anthropic"
+	case strings.HasPrefix(m, "gpt"), isOpenAIOSeriesModel(m):
+		return "openai"
+	case strings.Contains(m, "gemini"):
+		return "google"
+	}
+	return ""
+}
+
+// isOpenAIOSeriesModel reports whether m starts with the OpenAI "o-series"
+// prefix `o` immediately followed by a digit (o1, o3, o4, o5, …). Matching
+// the family rather than a fixed list keeps future releases attributed to
+// OpenAI without code changes.
+func isOpenAIOSeriesModel(m string) bool {
+	if len(m) < 2 || m[0] != 'o' {
+		return false
+	}
+	return m[1] >= '0' && m[1] <= '9'
+}
+
+func writePreToolDeny(stdout io.Writer, reason string) {
+	if strings.TrimSpace(reason) == "" {
+		reason = "tool call denied by Sigil guard"
+	}
+	out := preToolUseDecision{
+		HookSpecificOutput: preToolUseDecisionOutput{
+			HookEventName:            "PreToolUse",
+			PermissionDecision:       "deny",
+			PermissionDecisionReason: reason,
+		},
+	}
+	_ = json.NewEncoder(stdout).Encode(out)
 }
 
 func PostToolUse(p Payload, cfg config.Config, logger *log.Logger) {

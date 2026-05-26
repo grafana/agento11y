@@ -1,6 +1,6 @@
 {
   "name": "sigil-codex",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Send Codex session telemetry to Grafana Sigil",
   "author": {
     "name": "Grafana Labs"

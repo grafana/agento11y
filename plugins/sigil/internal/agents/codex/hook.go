@@ -18,7 +18,7 @@ import (
 // Hook reads a Codex hook JSON payload from stdin and dispatches it to the
 // matching handler. Telemetry errors are logged; the function returns nil
 // in almost every case because hooks must never crash the agent.
-func Hook(ctx context.Context, stdin io.Reader, _ io.Writer, logger *log.Logger) error {
+func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Logger) error {
 	raw, err := io.ReadAll(stdin)
 	if err != nil {
 		logger.Printf("dispatch: read stdin: %v", err)
@@ -47,6 +47,8 @@ func Hook(ctx context.Context, stdin io.Reader, _ io.Writer, logger *log.Logger)
 		hook.SessionStart(payload, cfg, logger)
 	case "UserPromptSubmit":
 		hook.UserPromptSubmit(payload, cfg, logger)
+	case "PreToolUse":
+		hook.PreToolUse(ctx, stdout, payload, cfg, logger)
 	case "PostToolUse":
 		hook.PostToolUse(payload, cfg, logger)
 	case "Stop":
@@ -54,6 +56,5 @@ func Hook(ctx context.Context, stdin io.Reader, _ io.Writer, logger *log.Logger)
 	default:
 		logger.Printf("dispatch: unknown event %q", payload.HookEventName)
 	}
-	_ = ctx // hook handlers manage their own contexts
 	return nil
 }

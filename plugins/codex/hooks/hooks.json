@@ -24,6 +24,19 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sigil codex hook",
+            "timeout": 10,
+            "statusMessage": "Checking Sigil guard"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "*",

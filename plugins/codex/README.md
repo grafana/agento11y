@@ -35,7 +35,7 @@ codex_hooks = true
 
 Older Codex builds use `hooks = true` and `plugin_hooks = true` instead of `codex_hooks`. Run `codex features list` to see which flag names your build accepts.
 
-Restart Codex, open `/hooks`, and trust the four `sigil-codex@grafana-sigil` hooks (first-run review is expected).
+Restart Codex, open `/hooks`, and trust the five `sigil-codex@grafana-sigil` hooks (first-run review is expected).
 
 </details>
 
@@ -102,6 +102,11 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 | `SIGIL_TAGS` | — | `key=value,key=value` tags added to every generation. |
 | `SIGIL_USER_ID` | — | Override the user id. |
 | `SIGIL_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
+| `SIGIL_GUARDS_ENABLED` | `false` | Enable Codex `PreToolUse` guards against Sigil rules. |
+| `SIGIL_GUARDS_FAIL_OPEN` | `true` | Allow the tool call when the guard request fails (set `false` for fail-closed). |
+| `SIGIL_GUARDS_TIMEOUT_MS` | `1500` | Per-call guard timeout. |
+
+Guards only intercept tool calls that Codex routes through `PreToolUse` — Bash, the `apply_patch` variants, and MCP tools. See the [Codex hooks docs](https://developers.openai.com/codex/hooks) for the supported set.
 
 If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 

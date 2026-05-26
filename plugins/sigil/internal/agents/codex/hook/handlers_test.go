@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -720,6 +721,236 @@ func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 	}
 	if retried.Metadata["codex.token_usage.source"] != "turn_context_delta" {
 		t.Errorf("retry token-usage metadata missing or wrong: %+v", retried.Metadata)
+	}
+}
+
+func TestPreToolUseGuard(t *testing.T) {
+	var calls atomic.Int32
+	var responseBody atomic.Value
+	responseBody.Store("")
+	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		body, _ := responseBody.Load().(string)
+		if body == "" {
+			body = `{"action":"allow"}`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	closed := newTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	closed.Close()
+
+	tests := []struct {
+		name               string
+		env                map[string]string
+		useClosedEndpoint  bool
+		clearCreds         bool
+		serverResponds     string
+		expectServerCall   bool
+		wantStdoutContains []string
+		wantStdoutEmpty    bool
+	}{
+		{
+			name:            "disabled_by_default_no_env",
+			wantStdoutEmpty: true,
+		},
+		{
+			name:            "disabled_explicit_false",
+			env:             map[string]string{"SIGIL_GUARDS_ENABLED": "false"},
+			wantStdoutEmpty: true,
+		},
+		{
+			name:             "enabled_allow_response",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:   `{"action":"allow"}`,
+			expectServerCall: true,
+			wantStdoutEmpty:  true,
+		},
+		{
+			name:               "enabled_deny_response",
+			env:                map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:     `{"action":"deny","reason":"blocked tool"}`,
+			expectServerCall:   true,
+			wantStdoutContains: []string{`"permissionDecision":"deny"`, "blocked tool"},
+		},
+		{
+			name:               "enabled_deny_empty_reason_fallback",
+			env:                map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:     `{"action":"deny"}`,
+			expectServerCall:   true,
+			wantStdoutContains: []string{`"permissionDecision":"deny"`, "tool call denied by Sigil guard"},
+		},
+		{
+			name:              "enabled_fail_open_on_transport_error",
+			env:               map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			useClosedEndpoint: true,
+			wantStdoutEmpty:   true,
+		},
+		{
+			name: "enabled_fail_closed_on_transport_error",
+			env: map[string]string{
+				"SIGIL_GUARDS_ENABLED":   "true",
+				"SIGIL_GUARDS_FAIL_OPEN": "false",
+			},
+			useClosedEndpoint:  true,
+			wantStdoutContains: []string{`"permissionDecision":"deny"`, "sigil guard evaluation failed"},
+		},
+		{
+			name:            "enabled_fail_open_missing_credentials",
+			env:             map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			clearCreds:      true,
+			wantStdoutEmpty: true,
+		},
+		{
+			name: "enabled_fail_closed_missing_credentials",
+			env: map[string]string{
+				"SIGIL_GUARDS_ENABLED":   "true",
+				"SIGIL_GUARDS_FAIL_OPEN": "false",
+			},
+			clearCreds:         true,
+			wantStdoutContains: []string{`"permissionDecision":"deny"`, "missing SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/SIGIL_AUTH_TOKEN"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("SIGIL_GUARDS_ENABLED", "")
+			t.Setenv("SIGIL_GUARDS_FAIL_OPEN", "")
+			t.Setenv("SIGIL_GUARDS_TIMEOUT_MS", "")
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			endpoint := server.URL
+			if tt.useClosedEndpoint {
+				endpoint = closed.URL
+			}
+			if tt.clearCreds {
+				t.Setenv("SIGIL_ENDPOINT", "")
+				t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+				t.Setenv("SIGIL_AUTH_TOKEN", "")
+			} else {
+				t.Setenv("SIGIL_ENDPOINT", endpoint)
+				t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+				t.Setenv("SIGIL_AUTH_TOKEN", "token")
+			}
+
+			calls.Store(0)
+			responseBody.Store(tt.serverResponds)
+
+			cfg := config.Load(log.New(io.Discard, "", 0))
+			var stdout bytes.Buffer
+			var logs bytes.Buffer
+			payload := Payload{
+				HookEventName: "PreToolUse",
+				SessionID:     "sess",
+				ToolName:      "Bash",
+				ToolUseID:     "tu_1",
+				ToolInput:     json.RawMessage(`{"command":"echo hi"}`),
+				Model:         "gpt-5",
+			}
+
+			PreToolUse(context.Background(), &stdout, payload, cfg, log.New(&logs, "", 0))
+
+			if tt.expectServerCall && calls.Load() == 0 {
+				t.Errorf("expected server call, got 0")
+			}
+			if !tt.expectServerCall && !tt.useClosedEndpoint && !tt.clearCreds && calls.Load() != 0 {
+				t.Errorf("expected no server call, got %d", calls.Load())
+			}
+			if tt.wantStdoutEmpty && stdout.Len() != 0 {
+				t.Errorf("stdout not empty: %q", stdout.String())
+			}
+			for _, want := range tt.wantStdoutContains {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("stdout = %q, want substring %q", stdout.String(), want)
+				}
+			}
+		})
+	}
+}
+
+func TestPreToolUseGuardSendsExpectedRequest(t *testing.T) {
+	var capturedPath atomic.Value
+	var capturedBody atomic.Value
+	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath.Store(r.URL.Path)
+		body, _ := io.ReadAll(r.Body)
+		capturedBody.Store(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"action":"allow"}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("SIGIL_GUARDS_ENABLED", "true")
+	t.Setenv("SIGIL_GUARDS_FAIL_OPEN", "")
+	t.Setenv("SIGIL_GUARDS_TIMEOUT_MS", "")
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+
+	cfg := config.Load(log.New(io.Discard, "", 0))
+	var stdout bytes.Buffer
+	payload := Payload{
+		HookEventName: "PreToolUse",
+		SessionID:     "sess",
+		ToolName:      "Bash",
+		ToolUseID:     "tu_1",
+		ToolInput:     json.RawMessage(`{"command":"rm -rf /"}`),
+		Model:         "gpt-5",
+	}
+	PreToolUse(context.Background(), &stdout, payload, cfg, log.New(io.Discard, "", 0))
+
+	path, _ := capturedPath.Load().(string)
+	if path != "/api/v1/hooks:evaluate" {
+		t.Errorf("path = %q, want /api/v1/hooks:evaluate", path)
+	}
+	rawBody, _ := capturedBody.Load().([]byte)
+	if len(rawBody) == 0 {
+		t.Fatal("captured body is empty")
+	}
+	var req struct {
+		Phase   string `json:"phase"`
+		Context struct {
+			AgentName string `json:"agent_name"`
+		} `json:"context"`
+		Input struct {
+			Output []struct {
+				Role  string `json:"role"`
+				Parts []struct {
+					Kind     string `json:"kind"`
+					ToolCall *struct {
+						ID    string          `json:"id"`
+						Name  string          `json:"name"`
+						Input json.RawMessage `json:"input_json"`
+					} `json:"tool_call"`
+				} `json:"parts"`
+			} `json:"output"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(rawBody, &req); err != nil {
+		t.Fatalf("decode request body: %v\nbody: %s", err, string(rawBody))
+	}
+	if req.Phase != "postflight" {
+		t.Errorf("phase = %q, want postflight", req.Phase)
+	}
+	if req.Context.AgentName != mapper.AgentName {
+		t.Errorf("agent_name = %q, want %q", req.Context.AgentName, mapper.AgentName)
+	}
+	if len(req.Input.Output) != 1 || len(req.Input.Output[0].Parts) != 1 {
+		t.Fatalf("unexpected output shape: %+v", req.Input.Output)
+	}
+	tc := req.Input.Output[0].Parts[0].ToolCall
+	if tc == nil {
+		t.Fatal("missing tool_call part")
+	}
+	if tc.Name != "Bash" || tc.ID != "tu_1" {
+		t.Errorf("tool_call name/id = %q/%q, want Bash/tu_1", tc.Name, tc.ID)
+	}
+	if !strings.Contains(string(tc.Input), "rm -rf /") {
+		t.Errorf("tool_call input = %s, want substring %q", string(tc.Input), "rm -rf /")
 	}
 }
 
