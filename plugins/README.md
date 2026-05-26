@@ -14,7 +14,7 @@ sigil copilot    # for Copilot CLI
 sigil pi         # for pi
 ```
 
-The launcher installs the plugin on first run. Add your credentials to `~/.config/sigil/config.env` — see any per-agent README for the 3-page Grafana Cloud walkthrough.
+Use the `sigil <agent>` launcher for setup and daily use. On first run it installs the agent plugin or extension, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches the agent.
 
 ## All plugins
 
@@ -27,4 +27,4 @@ The launcher installs the plugin on first run. Add your credentials to `~/.confi
 | [OpenCode](https://opencode.ai) | [`opencode/`](opencode/) | Available |
 | [Pi](https://github.com/badlogic/pi) | [`pi/`](pi/) | Available |
 
-Claude Code, Codex, Copilot, and Cursor share the same Go binary (`brew install grafana/grafana/sigil`) and the same config file (`~/.config/sigil/config.env`). All Sigil connection details live at `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`.
+Plugins backed by the `sigil` launcher share one config file at `~/.config/sigil/config.env`. The launcher creates or updates it on first run; `sigil login` re-runs the same prompt later. Cursor has no launcher, so register its plugin in-app and run `sigil login` once for the shared config. OpenCode uses its own JSON config.

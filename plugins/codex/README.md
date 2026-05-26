@@ -4,30 +4,26 @@ Sends Codex turns to [Grafana AI Observability](https://grafana.com/docs/grafana
 
 > Experimental. Codex hooks and plugin lifecycle config are still feature-flagged.
 
-## 1. Install
+## 1. Install and launch
 
 ```sh
 brew install grafana/grafana/sigil
-```
-
-## 2. Register the plugin
-
-```sh
 sigil codex
 ```
 
-The launcher resolves `codex` on `PATH`, registers `sigil-codex@grafana-sigil` with codex on first run, then execs codex. On first launch only, open `/hooks` inside codex and trust each `sigil-codex@grafana-sigil` hook — codex requires manual review on install.
+`sigil codex` registers `sigil-codex@grafana-sigil` on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches Codex.
 
-### Manual setup
+On first launch only, open `/hooks` inside Codex and trust each `sigil-codex@grafana-sigil` hook. Codex requires this manual review after plugin install.
 
-If you'd rather drive codex's plugin store yourself (or are on an older build where the launcher's auto-install does not work), the same flow with codex's verbs:
+<details>
+<summary>Manual plugin registration</summary>
 
 ```sh
 codex plugin marketplace add grafana/sigil-sdk
 codex plugin add sigil-codex@grafana-sigil
 ```
 
-On current codex builds the `hooks` and `plugin_hooks` features are stable by default (`codex features list` confirms this), so no config.toml edits are needed. Older builds gated this on feature flags — if `/hooks` is empty after install, add the following to `~/.codex/config.toml`:
+On current Codex builds the `hooks` and `plugin_hooks` features are stable by default (`codex features list` confirms this), so no `config.toml` edits are needed. Older builds gated this on feature flags — if `/hooks` is empty after install, add the following to `~/.codex/config.toml`:
 
 ```toml
 [plugins."sigil-codex@grafana-sigil"]
@@ -41,9 +37,11 @@ Older Codex builds use `hooks = true` and `plugin_hooks = true` instead of `code
 
 Restart Codex, open `/hooks`, and trust the four `sigil-codex@grafana-sigil` hooks (first-run review is expected).
 
-## 3. Add your credentials
+</details>
 
-All Sigil connection details live at `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+## 2. Credentials
+
+When `sigil codex` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -58,7 +56,12 @@ You need values from three Grafana Cloud pages:
 3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
    - **OTLP endpoint URL** → `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT`
 
-Save them to `~/.config/sigil/config.env` (shared by all three host plugins):
+Run `sigil login` later to update saved credentials.
+
+<details>
+<summary>Non-interactive config.env</summary>
+
+Create or update `~/.config/sigil/config.env`:
 
 ```dotenv
 SIGIL_ENDPOINT=https://sigil-prod-<region>.grafana.net
@@ -67,20 +70,22 @@ SIGIL_AUTH_TOKEN=glc_...
 SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
 
-To also send the conversation text (with automatic secret redaction), add:
+</details>
+
+To also send the conversation text (with automatic secret redaction), add this to `~/.config/sigil/config.env`:
 
 ```dotenv
 SIGIL_CONTENT_CAPTURE_MODE=full
 ```
 
-## 4. Verify
+## 3. Verify
 
 Run one turn in Codex and let it finish — the plugin only exports completed turns, so `/exit` mid-turn means nothing is sent. Then open **AI Observability → Conversations** in Grafana Cloud.
 
 If nothing shows up:
 
 ```sh
-SIGIL_DEBUG=true codex  # one turn
+SIGIL_DEBUG=true sigil codex  # one turn
 tail -f ~/.local/state/sigil/logs/sigil.log
 ```
 
@@ -98,7 +103,7 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 | `SIGIL_USER_ID` | — | Override the user id. |
 | `SIGIL_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
 
-If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>` manually instead of relying on the auto-synthesised auth.
+If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 
 ## Troubleshooting
 

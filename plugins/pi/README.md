@@ -2,24 +2,32 @@
 
 [Pi](https://github.com/badlogic/pi) agent extension that sends LLM generations to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
 
-By default only metadata is sent (token counts, cost, model, tool names, durations). Flip `SIGIL_CONTENT_CAPTURE_MODE` to `full` or `no_tool_content` to include message content.
+By default only metadata is sent (token counts, cost, model, tool names, durations). Set `SIGIL_CONTENT_CAPTURE_MODE=full` or `no_tool_content` to include message content.
 
-## 1. Install
-
-```sh
-pi install npm:@grafana/sigil-pi
-```
-
-Or use the [sigil launcher](../sigil/README.md) which installs the extension on first run:
+## 1. Install and launch
 
 ```sh
 brew install grafana/grafana/sigil
 sigil pi
 ```
 
-## 2. Add your Grafana Cloud credentials
+`sigil pi` installs the `@grafana/sigil-pi` extension on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches pi.
 
-All Sigil connection details live at `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`.
+<details>
+<summary>Manual extension registration</summary>
+
+```sh
+pi install npm:@grafana/sigil-pi
+sigil login
+```
+
+The extension reads the same `~/.config/sigil/config.env` file whether you start pi with `sigil pi` or plain `pi`.
+
+</details>
+
+## 2. Credentials
+
+When `sigil pi` or `sigil login` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -34,20 +42,35 @@ You need values from three Grafana Cloud pages:
 3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
    - **OTLP endpoint URL** → `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT`
 
-## 3. Configure
+Run `sigil login` later to update saved credentials.
 
-Configuration comes from canonical `SIGIL_*` env vars. The extension also reads `$XDG_CONFIG_HOME/sigil/config.env` (default `~/.config/sigil/config.env`) on startup and copies entries into `process.env` for keys whose existing OS value is empty or whitespace-only. Plain `pi` and `sigil pi` share the same file.
+<details>
+<summary>Non-interactive config.env</summary>
 
-Minimal `~/.config/sigil/config.env`:
+Create or update `~/.config/sigil/config.env`:
 
-```sh
+```dotenv
 SIGIL_ENDPOINT=https://sigil-prod-<region>.grafana.net
 SIGIL_AUTH_TENANT_ID=<instance-id>
 SIGIL_AUTH_TOKEN=glc_...
 SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
 
+</details>
+
 When `SIGIL_AUTH_TENANT_ID` and `SIGIL_AUTH_TOKEN` are both set, both Sigil generation export and the OTLP endpoint authenticate with the synthesized Basic auth header (`Basic base64(tenant:token)`). With only one of the two set, no auth header is sent.
+
+To include conversation text (with automatic secret redaction), add this to `~/.config/sigil/config.env`:
+
+```dotenv
+SIGIL_CONTENT_CAPTURE_MODE=full
+```
+
+## 3. Verify
+
+Run one pi turn, then open **AI Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
+
+If nothing shows up, set `SIGIL_DEBUG=true` in `~/.config/sigil/config.env`, run another turn, and check pi stderr plus any Sigil logs.
 
 ## Redaction
 
@@ -58,7 +81,7 @@ Before any generation leaves the process, the SDK scrubs known token formats, PE
 Guards block tool calls before they execute (e.g. refuse a `bash` invocation matching a deny rule). They're off by default:
 
 ```sh
-SIGIL_GUARDS_ENABLED=true pi
+SIGIL_GUARDS_ENABLED=true sigil pi
 ```
 
 By default, transport errors and timeouts let the tool through. Set `SIGIL_GUARDS_FAIL_OPEN=false` to block on errors instead. Raise or lower `SIGIL_GUARDS_TIMEOUT_MS` (default `1500`) to trade latency against tolerance for slow evaluators.

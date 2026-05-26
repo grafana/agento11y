@@ -2,30 +2,28 @@
 
 Sends every Claude Code turn to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/): model, tokens, tools, timing, and optionally the conversation content.
 
-## 1. Install
+## 1. Install and launch
 
 ```sh
 brew install grafana/grafana/sigil
-```
-
-## 2. Register the plugin
-
-Either run:
-
-```sh
 sigil claude
 ```
 
-…which installs the `sigil-cc` plugin on first run and launches Claude Code. Or from inside Claude Code:
+`sigil claude` registers the `sigil-cc` plugin on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches Claude Code.
+
+<details>
+<summary>Manual plugin registration</summary>
 
 ```
 /plugin marketplace add grafana/sigil-sdk
 /plugin install sigil-cc@grafana-sigil
 ```
 
-## 3. Add your credentials
+</details>
 
-All Sigil connection details live at `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+## 2. Credentials
+
+When `sigil claude` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -40,7 +38,12 @@ You need values from three Grafana Cloud pages:
 3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
    - **OTLP endpoint URL** → `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT`
 
-Save them to `~/.config/sigil/config.env` (shared by all three host plugins):
+Run `sigil login` later to update saved credentials.
+
+<details>
+<summary>Non-interactive config.env</summary>
+
+Create or update `~/.config/sigil/config.env`:
 
 ```dotenv
 SIGIL_ENDPOINT=https://sigil-prod-<region>.grafana.net
@@ -49,20 +52,22 @@ SIGIL_AUTH_TOKEN=glc_...
 SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
 
-To also send the conversation text (with automatic secret redaction), add:
+</details>
+
+To also send the conversation text (with automatic secret redaction), add this to `~/.config/sigil/config.env`:
 
 ```dotenv
 SIGIL_CONTENT_CAPTURE_MODE=full
 ```
 
-## 4. Verify
+## 3. Verify
 
 Run any turn in Claude Code, then open **AI Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
 
 If nothing shows up:
 
 ```sh
-SIGIL_DEBUG=true claude  # one turn
+SIGIL_DEBUG=true sigil claude  # one turn
 tail -f ~/.local/state/sigil/logs/sigil.log
 ```
 
@@ -86,4 +91,4 @@ Common culprits: `sigil --version` doesn't work (binary not on `PATH`), a missin
 | `SIGIL_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |
 | `SIGIL_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout. Lower = less added latency on every tool call, higher = better tolerance for slow `llm_judge` evaluators. |
 
-If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>` manually instead of relying on the auto-synthesised auth.
+If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.

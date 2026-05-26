@@ -2,11 +2,13 @@
 
 Sends Cursor agent generations to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/): prompts, replies, tool calls, and token usage.
 
-## 1. Install
+## 1. Install the shared binary
 
 ```sh
 brew install grafana/grafana/sigil
 ```
+
+Cursor does not have a `sigil cursor` launcher. Install the binary, register the Cursor plugin, then use `sigil login` or `~/.config/sigil/config.env` for credentials.
 
 ## 2. Register the plugin
 
@@ -18,7 +20,7 @@ In Cursor:
 
 ## 3. Add your credentials
 
-All Sigil connection details live at `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+Run `sigil login` from a terminal. The prompt asks for values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -33,7 +35,10 @@ You need values from three Grafana Cloud pages:
 3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
    - **OTLP endpoint URL** → `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT`
 
-Save them to `~/.config/sigil/config.env` (shared by all three host plugins):
+<details>
+<summary>Non-interactive config.env</summary>
+
+Create or update `~/.config/sigil/config.env`:
 
 ```dotenv
 SIGIL_ENDPOINT=https://sigil-prod-<region>.grafana.net
@@ -42,7 +47,9 @@ SIGIL_AUTH_TOKEN=glc_...
 SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
 
-To also send the conversation text (with automatic secret redaction), add:
+</details>
+
+To also send the conversation text (with automatic secret redaction), add this to `~/.config/sigil/config.env`:
 
 ```dotenv
 SIGIL_CONTENT_CAPTURE_MODE=full
@@ -73,4 +80,4 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 | `SIGIL_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
 | `SIGIL_BIN` | auto | Override the binary path if you installed `sigil` somewhere unusual. |
 
-If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>` manually instead of relying on the auto-synthesised auth.
+If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.

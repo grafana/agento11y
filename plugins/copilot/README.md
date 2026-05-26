@@ -12,28 +12,17 @@ Ships as a GitHub Copilot CLI plugin powered by the shared `sigil` binary.
 > synthetic turn ID at the hook layer, then enriches the completed turn from
 > Copilot CLI's local `events.jsonl` transcript when that artifact is present.
 
-## 1. Install
+## 1. Install and launch
 
 ```sh
 brew install grafana/grafana/sigil
-```
-
-Verify the binary is on the `PATH` visible to Copilot hook subprocesses:
-
-```sh
-which sigil
-```
-
-## 2. Register the plugin
-
-```sh
 sigil copilot
 ```
 
-The launcher resolves `copilot` on `PATH`, registers `sigil-copilot` with copilot on first run, then execs copilot.
+`sigil copilot` registers `sigil-copilot` on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches Copilot CLI.
 
 <details>
-<summary>Manual install</summary>
+<summary>Manual plugin registration</summary>
 
 The current
 [GitHub Copilot CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference)
@@ -57,9 +46,9 @@ copilot plugin list
 
 </details>
 
-## 3. Add your credentials
+## 2. Credentials
 
-All Sigil connection details live at `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+When `sigil copilot` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -74,7 +63,12 @@ You need values from three Grafana Cloud pages:
 3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
    - **OTLP endpoint URL** → `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT`
 
-Save them to `~/.config/sigil/config.env` (shared by all host plugins):
+Run `sigil login` later to update saved credentials.
+
+<details>
+<summary>Non-interactive config.env</summary>
+
+Create or update `~/.config/sigil/config.env`:
 
 ```dotenv
 SIGIL_ENDPOINT=https://sigil-prod-<region>.grafana.net
@@ -83,13 +77,15 @@ SIGIL_AUTH_TOKEN=glc_...
 SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
 
-To also send the conversation text (with automatic secret redaction), add:
+</details>
+
+To also send the conversation text (with automatic secret redaction), add this to `~/.config/sigil/config.env`:
 
 ```dotenv
 SIGIL_CONTENT_CAPTURE_MODE=full
 ```
 
-## 4. Verify
+## 3. Verify
 
 Start a Copilot CLI session in a repository and give it a prompt that triggers
 at least one tool call. The plugin only exports completed turns at `agentStop`.
@@ -99,7 +95,7 @@ generations with `agent_name=copilot`.
 If nothing shows up:
 
 ```sh
-SIGIL_DEBUG=true copilot   # one turn
+SIGIL_DEBUG=true sigil copilot   # one turn
 tail -f ~/.local/state/sigil/logs/sigil.log
 ```
 
@@ -146,7 +142,7 @@ Redaction happens before export.
 | `SIGIL_USER_ID` | — | Override the user id. |
 | `SIGIL_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
 
-If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>` manually instead of relying on the auto-synthesised auth.
+If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 
 ## What Gets Exported
 
