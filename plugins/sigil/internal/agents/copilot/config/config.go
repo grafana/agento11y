@@ -15,6 +15,7 @@ import (
 // before this struct is built, so it does not appear here.
 type Config struct {
 	ContentCapture sigil.ContentCaptureMode
+	Guards         envconfig.GuardsConfig
 }
 
 // HasCredentials reports whether the canonical SIGIL_* credentials are
@@ -29,5 +30,6 @@ func HasCredentials() bool {
 func Load(logger *log.Logger) Config {
 	return Config{
 		ContentCapture: envconfig.ResolveContentMode(logger),
+		Guards:         envconfig.ResolveGuards(logger),
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/fragment"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/mapper"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/transcript"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/guard"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
@@ -108,11 +110,37 @@ func UserPromptSubmit(p Payload, cfg config.Config, logger *log.Logger) {
 	}
 }
 
-func PreToolUse(p Payload, cfg config.Config, logger *log.Logger) {
+func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Config, logger *log.Logger) {
 	sessionID := p.SessionID()
 	if sessionID == "" {
 		logger.Print("preToolUse: missing session_id")
 		return
+	}
+	toolArgs := p.ToolInput()
+	if cfg.Guards.Enabled {
+		// Best-effort: pull last-known model/provider off the active turn
+		// fragment. Copilot's preToolUse payload doesn't carry model, but
+		// once enrichFromTranscript has run for a prior turn we may have
+		// it cached. The guard helper falls back to "unknown" when blank,
+		// which keeps the request well-formed for Sigil.
+		var provider, modelName string
+		if session := fragment.LoadSessionTolerant(sessionID, logger); session != nil && session.ActiveTurnID != "" {
+			if frag := loadFragment(sessionID, session.ActiveTurnID, logger); frag != nil {
+				provider = frag.Provider
+				modelName = frag.Model
+			}
+		}
+		res := guard.EvaluateToolCall(ctx, cfg.Guards, guard.ToolCallInput{
+			AgentName:     mapper.AgentName,
+			ToolName:      p.ToolName(),
+			ToolInputJSON: toolArgs,
+			ModelProvider: provider,
+			ModelName:     modelName,
+		}, logger)
+		if res.Blocked() {
+			emitCopilotDeny(stdout, res.Reason, logger)
+			return
+		}
 	}
 	turnID, session, err := fragment.EnsureActiveTurn(sessionID, logger, p.ResolvedTimestamp())
 	if err != nil {
@@ -121,7 +149,7 @@ func PreToolUse(p Payload, cfg config.Config, logger *log.Logger) {
 	}
 	if err := updateCommon(sessionID, turnID, session, p, logger, func(f *fragment.Fragment) {
 		f.NextToolIndex++
-		input := p.ToolInput()
+		input := toolArgs
 		if cfg.ContentCapture != sigil.ContentCaptureModeFull {
 			input = nil
 		}
@@ -136,6 +164,29 @@ func PreToolUse(p Payload, cfg config.Config, logger *log.Logger) {
 		})
 	}); err != nil {
 		logger.Printf("preToolUse: update turn: %v", err)
+	}
+}
+
+// copilotDecision matches GitHub's documented preToolUse stdout shape:
+// top-level permissionDecision and permissionDecisionReason. Sigil only
+// emits permissionDecision=deny here; allow paths stay stdout-empty.
+type copilotDecision struct {
+	PermissionDecision       string `json:"permissionDecision"`
+	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
+}
+
+func emitCopilotDeny(stdout io.Writer, reason string, logger *log.Logger) {
+	if stdout == nil {
+		return
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "tool call denied by Sigil guard"
+	}
+	if err := json.NewEncoder(stdout).Encode(copilotDecision{
+		PermissionDecision:       "deny",
+		PermissionDecisionReason: reason,
+	}); err != nil && logger != nil {
+		logger.Printf("preToolUse: write deny decision: %v", err)
 	}
 }
 
