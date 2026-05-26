@@ -1,7 +1,6 @@
 # Grafana Sigil .NET SDKs
 
 Sigil extends OpenTelemetry-style instrumentation with normalized AI generation records.
-The .NET SDK follows the same generation-first contract and provider parity target as the Go SDK.
 
 ## Packages
 

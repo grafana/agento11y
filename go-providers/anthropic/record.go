@@ -38,7 +38,7 @@ func message(
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: string(req.Model)},
+		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
 	})
 	defer rec.End()
 
@@ -70,7 +70,7 @@ func MessageStream(
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: string(req.Model)},
+		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
 	})
 	defer rec.End()
 

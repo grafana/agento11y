@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestSetCacheDiagnostics_NilRecorder(t *testing.T) {
+func TestSetCacheDiagnostics_NilRecorder(_ *testing.T) {
 	SetCacheDiagnostics(nil, "system_changed")
 }
 

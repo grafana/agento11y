@@ -368,12 +368,12 @@ auth: {
 },
 ```
 
-## Env-secret wiring example
+## Wiring custom env vars
 
-The SDK does not auto-load env vars. Resolve env secrets in your app and map them into config.
+The SDK only auto-loads `SIGIL_*` env vars (`SIGIL_ENDPOINT`, `SIGIL_PROTOCOL`, `SIGIL_AUTH_MODE`, `SIGIL_AUTH_TOKEN`, etc.) when you call `new SigilClient()`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:
 
 ```ts
-const generationBearerToken = (process.env.SIGIL_GEN_BEARER_TOKEN ?? "").trim();
+const generationBearerToken = (process.env.MY_APP_SIGIL_TOKEN ?? "").trim();
 
 const client = new SigilClient({
   generationExport: {

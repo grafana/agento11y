@@ -3,6 +3,7 @@ package gemini
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"strings"
 
 	"google.golang.org/genai"
@@ -434,9 +435,7 @@ func cloneStringMap(in map[string]string) map[string]string {
 	}
 
 	out := make(map[string]string, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
+	maps.Copy(out, in)
 	return out
 }
 
@@ -446,9 +445,7 @@ func cloneAnyMap(in map[string]any) map[string]any {
 	}
 
 	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
+	maps.Copy(out, in)
 	return out
 }
 

@@ -76,7 +76,7 @@ func resolveContentCaptureMode(override, fallback ContentCaptureMode) ContentCap
 // callContentCaptureResolver invokes the resolver callback safely, recovering
 // from panics. Returns ContentCaptureModeDefault when the resolver is nil.
 // Panics are treated as ContentCaptureModeMetadataOnly (fail-closed).
-func callContentCaptureResolver(resolver func(ctx context.Context, metadata map[string]any) ContentCaptureMode, ctx context.Context, metadata map[string]any) (mode ContentCaptureMode) {
+func callContentCaptureResolver(ctx context.Context, resolver func(ctx context.Context, metadata map[string]any) ContentCaptureMode, metadata map[string]any) (mode ContentCaptureMode) {
 	if resolver == nil {
 		return ContentCaptureModeDefault
 	}

@@ -3,6 +3,7 @@ package googleadk
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
 	"strings"
@@ -237,9 +238,7 @@ func (a *Adapter) OnRunStart(ctx context.Context, event RunStartEvent) error {
 	})
 
 	tags := make(map[string]string, len(a.opts.ExtraTags)+3)
-	for key, value := range a.opts.ExtraTags {
-		tags[key] = value
-	}
+	maps.Copy(tags, a.opts.ExtraTags)
 	tags["sigil.framework.name"] = frameworkName
 	tags["sigil.framework.source"] = frameworkSource
 	tags["sigil.framework.language"] = frameworkLanguage

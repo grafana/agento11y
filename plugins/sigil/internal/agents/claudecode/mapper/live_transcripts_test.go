@@ -37,7 +37,7 @@ func TestLiveTranscripts(t *testing.T) {
 		totalErrors              int
 	)
 
-	for _, path := range strings.Split(raw, ",") {
+	for path := range strings.SplitSeq(raw, ",") {
 		path = strings.TrimSpace(path)
 		if path == "" {
 			continue

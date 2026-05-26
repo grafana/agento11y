@@ -32,7 +32,7 @@ func TestConformance_OpenAIResponsesSyncMapping(t *testing.T) {
 		ConversationTitle: "OpenAI responses sync",
 		AgentName:         "agent-openai",
 		AgentVersion:      "v-openai",
-		Model:             sigil.ModelRef{Provider: "openai", Name: string(req.Model)},
+		Model:             sigil.ModelRef{Provider: "openai", Name: req.Model},
 	}
 
 	generation, err := ResponsesFromRequestResponse(
@@ -105,7 +105,7 @@ func TestConformance_OpenAIResponsesStreamMapping(t *testing.T) {
 		ConversationID: "conv-openai-stream",
 		AgentName:      "agent-openai-stream",
 		AgentVersion:   "v-openai-stream",
-		Model:          sigil.ModelRef{Provider: "openai", Name: string(req.Model)},
+		Model:          sigil.ModelRef{Provider: "openai", Name: req.Model},
 	}
 
 	generation, err := ResponsesFromStream(
@@ -200,7 +200,7 @@ func TestConformance_OpenAIEmbeddingMapping(t *testing.T) {
 	}
 	dimensions := int64(3)
 	sigiltest.RecordEmbedding(t, env, sigil.EmbeddingStart{
-		Model:        sigil.ModelRef{Provider: "openai", Name: string(req.Model)},
+		Model:        sigil.ModelRef{Provider: "openai", Name: req.Model},
 		AgentName:    "agent-openai-embed",
 		AgentVersion: "v-openai-embed",
 		Dimensions:   &dimensions,

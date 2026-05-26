@@ -1,18 +1,45 @@
-# Grafana Sigil Go SDK (Core)
+# Grafana Sigil Go SDK
 
-If you already use OpenTelemetry, Sigil is a thin extension plus sugar for AI observability.
+The Sigil Go SDK records LLM generations and tool calls for [Grafana AI observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/). It emits OpenTelemetry spans and metrics through your existing OTel setup and sends normalized generation payloads through Sigil's ingest channel.
 
-The Go SDK is the current production-ready baseline for normalized generation recording with OTEL traces and generation-first export.
+## Install
 
-Cross-language parity tracks are available for:
+```sh
+go get github.com/grafana/sigil-sdk/go
+```
 
-- Python: `python/`
-- TypeScript/JavaScript: `js/`
-- .NET/C#: `dotnet/`
+## Quick start
 
-Framework modules:
+```go
+client := sigil.NewClient(sigil.Config{}) // reads SIGIL_* env vars
+defer func() { _ = client.Shutdown(context.Background()) }()
 
-- Google ADK helper: [`go-frameworks/google-adk`](../go-frameworks/google-adk/README.md)
+ctx, rec := client.StartGeneration(ctx, sigil.GenerationStart{
+	ConversationID: "conv-9b2f",
+	AgentName:      "assistant-core",
+	AgentVersion:   "1.0.0",
+	Model:          sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-5"},
+})
+defer rec.End()
+
+resp, err := provider.Call(ctx, req)
+if err != nil {
+	rec.SetCallError(err)
+	return err
+}
+
+rec.SetResult(sigil.Generation{
+	Input:  []sigil.Message{sigil.UserTextMessage("Hello")},
+	Output: []sigil.Message{sigil.AssistantTextMessage(resp.Text)},
+	Usage:  sigil.TokenUsage{InputTokens: 120, OutputTokens: 42},
+}, nil)
+```
+
+See `Configuration` for the explicit-config form and `Recording API` for the full surface.
+
+Framework helpers:
+
+- Google ADK: [`go-frameworks/google-adk`](../go-frameworks/google-adk/README.md)
 
 ## Core model
 
@@ -178,12 +205,12 @@ cfg.GenerationExport.Auth = sigil.AuthConfig{
 }
 ```
 
-## Env-secret wiring example
+## Wiring custom env vars
 
-The SDK does not auto-load env vars. Read env values in your app and assign config explicitly.
+The SDK only auto-loads `SIGIL_*` env vars (`SIGIL_ENDPOINT`, `SIGIL_PROTOCOL`, `SIGIL_AUTH_MODE`, `SIGIL_AUTH_TOKEN`, etc.) when you call `sigil.NewClient(sigil.Config{})`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:
 
 ```go
-genToken := strings.TrimSpace(os.Getenv("SIGIL_GEN_BEARER_TOKEN"))
+genToken := strings.TrimSpace(os.Getenv("MY_APP_SIGIL_TOKEN"))
 if genToken != "" {
 	cfg.GenerationExport.Auth = sigil.AuthConfig{
 		Mode:        sigil.ExportAuthModeBearer,
@@ -271,39 +298,6 @@ The SDK emits four OTel histograms automatically through your configured OTel me
 - `gen_ai.client.time_to_first_token`
 - `gen_ai.client.tool_calls_per_operation`
 
-## Conformance harness
-
-The Go SDK ships a local no-Docker conformance harness for the current cross-SDK baseline.
-
-- Shared spec: `docs/references/sdk-conformance-spec.md` (in the sigil repo)
-- Default local command: `mise run sdk:conformance`
-- Direct Go command: `cd go && GOWORK=off go test ./sigil -run '^TestConformance' -count=1`
-- Current baseline coverage: sync roundtrip, conversation title resolution, user ID resolution, agent name/version resolution, streaming mode + TTFT, tool execution, embeddings, validation/error handling, rating submission, and shutdown flush semantics across exported generation payloads, OTLP spans, OTLP metrics, and local rating HTTP capture
-
-## Explicit flow example
-
-```go
-ctx, rec := client.StartGeneration(ctx, sigil.GenerationStart{
-	ConversationID: "conv-9b2f",
-	AgentName:      "assistant-core",
-	AgentVersion:   "1.0.0",
-	Model:          sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-5"},
-})
-defer rec.End()
-
-resp, err := provider.Call(ctx, req)
-if err != nil {
-	rec.SetCallError(err)
-	return err
-}
-
-rec.SetResult(sigil.Generation{
-	Input:  []sigil.Message{sigil.UserTextMessage("Hello")},
-	Output: []sigil.Message{sigil.AssistantTextMessage(resp.Text)},
-	Usage:  sigil.TokenUsage{InputTokens: 120, OutputTokens: 42},
-}, nil)
-```
-
 ## Streaming example
 
 ```go
@@ -384,3 +378,12 @@ Current Go provider helpers:
 - Default: raw artifacts OFF in provider wrappers.
 - Opt-in only for debug workflows (`WithRawArtifacts()` in provider helper packages).
 - Normalized generation fields remain always on.
+
+## Conformance harness
+
+The Go SDK ships a local no-Docker conformance harness for the current cross-SDK baseline.
+
+- Shared spec: `docs/references/sdk-conformance-spec.md` (in the sigil repo)
+- Default local command: `mise run sdk:conformance`
+- Direct Go command: `cd go && GOWORK=off go test ./sigil -run '^TestConformance' -count=1`
+- Current baseline coverage: sync roundtrip, conversation title resolution, user ID resolution, agent name/version resolution, streaming mode + TTFT, tool execution, embeddings, validation/error handling, rating submission, and shutdown flush semantics across exported generation payloads, OTLP spans, OTLP metrics, and local rating HTTP capture

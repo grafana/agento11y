@@ -1,28 +1,75 @@
-# Grafana Sigil SDK
+# Grafana AI observability SDK
 
 <p align="center">
-  <img src="./assets/readme/sigil-tri-shot.svg" alt="Sigil landing, analytics, and conversation explore views" width="100%" />
+  <img src="./assets/readme/sigil-tri-shot.svg" alt="Grafana AI observability landing, analytics, and conversation explore views" width="100%" />
 </p>
 
-[Grafana AI observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/) is a product from Grafana for teams running agents in production.
+[Grafana AI observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/) is a product from Grafana for teams running agents in production. This repo holds the open-source SDKs and the coding-agent plugins that send telemetry to it.
 
-Instrument once with a thin OpenTelemetry-native SDK, then use it to see what your agents are doing, what they cost, how quality is changing, and which conversations need attention.
+## Quick start (with an AI coding agent)
 
-## What You Get
+Drop [`llms.txt`](llms.txt) into your repo and ask your agent what you want. It handles either case, depending on what your repo is:
 
-- **Simple onboarding.** Sigil is a thin SDK layer on top of OpenTelemetry and the OTel GenAI semantic conventions, with helpers for common providers and frameworks. If you already have OTel, setup is small enough to do by hand or with coding assistants such as Claude Code or Cursor.
-- **A single pane of glass for your agents.** See activity, latency, errors, token usage, cost, cache behavior, and quality in one place with filters for time range, provider, model, agent, and labels.
-- **Conversation drilldown when something looks off.** Open any conversation to inspect the full thread, tool calls, traces, scores, ratings, annotations, token usage, and cost breakdowns.
-- **Agent catalog and version history.** Sigil automatically groups agents, tracks versions, shows prompt and tool footprints, surfaces usage and cost per version, and helps you compare how an agent changes over time.
-- **Actionable suggestions, not just dashboards.** Built-in insight bars flag anomalies and optimization opportunities around cost, cache, errors, and performance, and agent detail can rate a version's prompt/tool setup and suggest improvements.
-- **Online evaluation on live traffic.** Score production generations continuously so you can monitor quality, catch regressions, and avoid manually reading every conversation.
+- `Instrument this codebase with Grafana AI observability`: the agent wires the [SDK](#sdks) into your app or agent code.
+- `Set up Grafana AI observability for my coding agent`: the agent installs one of the [`plugins/`](plugins/) launchers to capture sessions from popular coding agents.
 
-## Why Sigil
+Or open the AI Observability plugin in your Grafana Cloud stack and use the onboarding wizard.
 
-- **OpenTelemetry-native**: follows the OTel GenAI semantic conventions, emits standard traces and metrics over OTLP, and works with existing OTel pipelines.
-- **Generation-first**: normalized generation ingest lets Sigil correlate conversations, tool executions, traces, costs, and scores.
-- **Version-aware agents**: prompt and tool changes become queryable agent versions, even when producers do not send a clean version string.
-- **Built for production quality loops**: observability, agent understanding, ratings, annotations, and online evaluation live in the same workflow.
+## Quick start (manual)
+
+Set the [`SIGIL_*` env vars](#grafana-cloud-credentials) and construct the client. To configure it explicitly instead, see the per-SDK READMEs linked under [SDKs](#sdks).
+
+### TypeScript
+
+```ts
+import { SigilClient } from "@grafana/sigil-sdk-js";
+
+const client = new SigilClient(); // reads SIGIL_* env vars
+
+await client.startGeneration(
+  { conversationId: "conv-1", model: { provider: "openai", name: "gpt-5" } },
+  async (recorder) => {
+    recorder.setResult({ output: [{ role: "assistant", content: "Hello" }] });
+  },
+);
+
+await client.shutdown();
+```
+
+### Python
+
+```python
+from sigil_sdk import Client, GenerationStart, ModelRef, assistant_text_message
+
+client = Client()  # reads SIGIL_* env vars
+
+with client.start_generation(
+    GenerationStart(
+        conversation_id="conv-1",
+        model=ModelRef(provider="openai", name="gpt-5"),
+    )
+) as rec:
+    rec.set_result(output=[assistant_text_message("Hello")])
+
+client.shutdown()
+```
+
+### Go
+
+```go
+client := sigil.NewClient(sigil.Config{}) // reads SIGIL_* env vars
+defer func() { _ = client.Shutdown(context.Background()) }()
+
+ctx, rec := client.StartGeneration(context.Background(), sigil.GenerationStart{
+    ConversationID: "conv-1",
+    Model:          sigil.ModelRef{Provider: "openai", Name: "gpt-5"},
+})
+defer rec.End()
+
+rec.SetResult(sigil.Generation{
+    Output: []sigil.Message{sigil.AssistantTextMessage("Hello from Grafana AI observability")},
+}, nil)
+```
 
 ## SDKs
 
@@ -34,159 +81,65 @@ Instrument once with a thin OpenTelemetry-native SDK, then use it to see what yo
 | .NET/C# | `Grafana.Sigil` | [`dotnet/`](dotnet/) |
 | Java | `com.grafana.sigil` | [`java/`](java/) |
 
-## Provider Adapters
+## Provider adapters
 
-| Language | Providers | Path |
-|----------|-----------|------|
+| Language | Providers | Where |
+|----------|-----------|-------|
 | Go | Anthropic, OpenAI, Gemini | [`go-providers/`](go-providers/) |
 | Python | Anthropic, OpenAI, Gemini | [`python-providers/`](python-providers/) |
 | Java | Anthropic, OpenAI, Gemini | [`java/providers/`](java/providers/) |
 | .NET | Anthropic, OpenAI, Gemini | [`dotnet/src/`](dotnet/src/) |
-| TypeScript/JavaScript | Anthropic, OpenAI, Gemini | [`js/docs/providers/`](js/docs/providers/) |
+| TypeScript/JavaScript | Anthropic, OpenAI, Gemini | Subpath exports of `@grafana/sigil-sdk-js`. See [`js/README.md`](js/README.md). |
 
-## Framework Integrations
+## Framework integrations
 
-| Language | Frameworks | Path |
-|----------|------------|------|
-| Go | Google ADK | [`go-frameworks/`](go-frameworks/) |
+| Language | Frameworks | Where |
+|----------|------------|-------|
 | Python | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands Agents, LiteLLM, Pydantic AI | [`python-frameworks/`](python-frameworks/) |
+| TypeScript/JavaScript | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands, Vercel AI SDK | Subpath exports of `@grafana/sigil-sdk-js`. See [`js/README.md`](js/README.md). |
+| Go | Google ADK | [`go-frameworks/`](go-frameworks/) |
 | Java | Google ADK | [`java/frameworks/`](java/frameworks/) |
-| TypeScript/JavaScript | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands, Vercel AI SDK | [`js/docs/frameworks/`](js/docs/frameworks/) |
 
-## Quick Examples
+## Runnable examples
 
-The snippets below configure the SDK explicitly. As an alternative, set `SIGIL_*` environment variables and construct the client with no config — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names.
+Minimal, self-contained examples that make a real LLM call and record the generation to Grafana AI observability.
 
-### TypeScript
-
-```ts
-import { SigilClient } from "@grafana/sigil-sdk-js";
-
-const client = new SigilClient({
-  generationExport: {
-    protocol: "http",
-    endpoint: "http://localhost:8080",
-    auth: { mode: "tenant", tenantId: "dev-tenant" },
-  },
-});
-
-// Configure OTEL exporters (traces/metrics) in your app OTEL setup.
-
-await client.startGeneration(
-  {
-    conversationId: "conv-1",
-    model: { provider: "openai", name: "gpt-5" },
-  },
-  async (recorder) => {
-    recorder.setResult({
-      output: [{ role: "assistant", content: "Hello from Sigil" }],
-    });
-  }
-);
-
-await client.shutdown();
-```
-
-### Go
-
-```go
-cfg := sigil.DefaultConfig()
-cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolHTTP
-cfg.GenerationExport.Endpoint = "http://localhost:8080"
-cfg.GenerationExport.Auth = sigil.AuthConfig{
-	Mode:     sigil.ExportAuthModeTenant,
-	TenantID: "dev-tenant",
-}
-
-client := sigil.NewClient(cfg)
-defer func() { _ = client.Shutdown(context.Background()) }()
-
-ctx, rec := client.StartGeneration(context.Background(), sigil.GenerationStart{
-	ConversationID: "conv-1",
-	Model:          sigil.ModelRef{Provider: "openai", Name: "gpt-5"},
-})
-defer rec.End()
-
-rec.SetResult(sigil.Generation{
-	Output: []sigil.Message{sigil.AssistantTextMessage("Hello from Sigil")},
-}, nil)
-```
-
-### Python
-
-```python
-from sigil_sdk import Client, ClientConfig, GenerationExportConfig, GenerationStart, ModelRef, assistant_text_message
-
-client = Client(
-    ClientConfig(
-        generation_export=GenerationExportConfig(
-            protocol="http",
-            endpoint="http://localhost:8080",
-        ),
-    )
-)
-
-with client.start_generation(
-    GenerationStart(
-        conversation_id="conv-1",
-        model=ModelRef(provider="openai", name="gpt-5"),
-    )
-) as rec:
-    rec.set_result(output=[assistant_text_message("Hello from Sigil")])
-
-client.shutdown()
-```
-
-## Instrument with AI Coding Agents
-
-Let your AI coding assistant add instrumentation for you. We provide ready-to-use prompts for Cursor, Claude Code, and GitHub Copilot that tell the agent how to find your LLM calls and wrap them with the SDK.
-
-**From the UI** — open the AI Observability plugin in your Grafana Cloud stack, go through the onboarding wizard, and pick your IDE. The prompt is generated for you with one click.
-
-**From this repo** — copy the prompt file for your IDE into your project:
-
-| IDE | Prompt file | Where to put it in your project |
-|-----|------------|-------------------------------|
-| Cursor | [`CLAUDE.md`](CLAUDE.md) | `.cursor/rules/sigil.mdc` (or paste into Cursor chat) |
-| Claude Code | [`CLAUDE.md`](CLAUDE.md) | `CLAUDE.md` at your project root |
-| GitHub Copilot | [`.github/copilot-instructions.md`](.github/copilot-instructions.md) | `.github/copilot-instructions.md` in your project |
-
-Then ask your agent: *"Instrument this codebase with Grafana AI Observability"*.
-
-## Getting Started Examples
-
-Minimal, self-contained examples that make a real LLM call and record the generation to Grafana Cloud AI Observability.
-
-| Language | Example |
-|----------|---------|
+| Stack | Example |
+|-------|---------|
 | Python | [`examples/getting-started/python/`](examples/getting-started/python/) |
+| Python (multi-agent) | [`examples/getting-started/python-multi-agent/`](examples/getting-started/python-multi-agent/) |
 | Python + Pydantic AI | [`examples/getting-started/python-pydantic-ai/`](examples/getting-started/python-pydantic-ai/) |
 | Python + Strands | [`examples/getting-started/python-strands/`](examples/getting-started/python-strands/) |
 | TypeScript | [`examples/getting-started/typescript/`](examples/getting-started/typescript/) |
 | TypeScript + Strands | [`examples/getting-started/typescript-strands/`](examples/getting-started/typescript-strands/) |
 | Go | [`examples/getting-started/go/`](examples/getting-started/go/) |
 
-### Grafana Cloud credentials
+## Grafana Cloud credentials
 
-You need three values to connect. The endpoint and instance ID are visible in **AI Observability → Configuration** in your Grafana Cloud stack; see the [Grafana Cloud AI Observability getting started docs](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the full setup flow.
+All four connection values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the AI Observability plugin in your stack:
 
-| What | Where to find it |
-|------|-----------------|
-| **Instance ID** — numeric stack ID, used as tenant ID and basic-auth username | Shown under **Instance ID** in AI Observability → Configuration. Also in the Cloud Portal under your stack details. |
-| **API token** — starts with `glc_`, used as the basic-auth password | Create one via **Administration → Cloud Access Policies** ([docs](https://grafana.com/docs/grafana-cloud/account-management/authentication-and-permissions/access-policies/)). Scope it to your stack with write permissions for AI Observability. |
-| **Endpoint URL** — the ingest URL for your region | Shown under **API URL** in AI Observability → Configuration. |
+```
+https://<your-stack>.grafana.net/plugins/grafana-sigil-app
+```
 
-## Plugins
+Follow *Create a token in Cloud Access Policies* on the Connection page and create one token scoped with `sigil:write`, `metrics:write`, `traces:write`, and `logs:write`. The same token then covers both `SIGIL_AUTH_TOKEN` (Sigil ingest) and `OTEL_EXPORTER_OTLP_HEADERS` (OTel traces and metrics).
 
-Drop-in integrations for coding agents. See [`plugins/`](plugins/) for details.
+See the [Grafana Cloud AI observability getting started docs](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the full setup flow.
 
-- [Claude Code](plugins/claude-code/)
-- [OpenCode](plugins/opencode/)
-- [Pi](plugins/pi/)
+## Plugins for coding agents
 
-## Proto
+Plugins can record sessions from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, and Pi without changing application code. See [`plugins/README.md`](plugins/README.md) for install and config per agent.
 
-Vendored protobuf definitions used by SDKs live in [`proto/`](proto/). See [`docs/development.md`](docs/development.md#regenerating-protobuf-stubs) for how to regenerate language stubs.
+## Why Grafana AI observability
+
+- The SDK emits traces and metrics as standard OTLP, so they can use existing OTel pipelines. Conversations and generations go through Sigil ingest so Grafana can join them with traces, costs, and scores.
+- It uses OTel GenAI semantic conventions where they exist. Sigil-specific fields cover agent versions, generation IDs, and tool executions.
+- Prompt and tool changes create agent versions when the producer does not send a version string.
+- Evaluators can score live traffic, so teams can find regressions without reviewing every conversation manually.
+
+## Contributing
+
+Contributor notes (proto regeneration, mise tasks, conformance suites) live in [`docs/development.md`](docs/development.md). Agent context for working in this repo is in [`CLAUDE.md`](CLAUDE.md).
 
 ## License
 

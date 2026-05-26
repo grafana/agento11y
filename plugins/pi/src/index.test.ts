@@ -92,6 +92,8 @@ function assistantMessageUpdate(
 
 class FakePi {
   handlers = new Map<string, (event: any, ctx: any) => Promise<void> | void>();
+  getAllTools?: () => unknown;
+  getActiveTools?: () => string[];
 
   on(event: string, handler: (event: any, ctx: any) => Promise<void> | void) {
     this.handlers.set(event, handler);
@@ -1483,6 +1485,702 @@ describe("extension lifecycle", () => {
 
     expect(resolveGitBranchMock).toHaveBeenCalledTimes(1);
     expect(capturedSeed!.tags).toBeUndefined();
+  });
+
+  describe("systemPrompt capture", () => {
+    function setupClient() {
+      const seeds: Array<{ systemPrompt?: string }> = [];
+      const recorder = {
+        setResult: vi.fn(),
+        setCallError: vi.fn(),
+        setFirstTokenAt: vi.fn(),
+      };
+      const sigil: SigilLike = {
+        startStreamingGeneration: vi.fn(async (seed, run) => {
+          seeds.push(seed as { systemPrompt?: string });
+          await run(recorder);
+        }),
+        startToolExecution: vi.fn(() => ({
+          setResult: vi.fn(),
+          setCallError: vi.fn(),
+          end: vi.fn(),
+          getError: vi.fn(),
+        })),
+        shutdown: vi.fn(async () => {}),
+      };
+      return { sigil, seeds, recorder };
+    }
+
+    it("attaches systemPrompt to every turn_end during the agent loop under full mode", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "full",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("before_agent_start", {
+        systemPrompt: "You are a helpful agent.",
+      });
+      // Turn 1
+      await pi.emit("turn_start");
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+      // Turn 2 (tool-loop continuation)
+      await pi.emit("turn_start");
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds).toHaveLength(2);
+      expect(seeds[0]!.systemPrompt).toBe("You are a helpful agent.");
+      expect(seeds[1]!.systemPrompt).toBe("You are a helpful agent.");
+    });
+
+    it("caches the prompt under no_tool_content but strips it under metadata_only", async () => {
+      for (const mode of ["no_tool_content", "metadata_only"] as const) {
+        const { sigil, seeds } = setupClient();
+        loadConfigMock.mockResolvedValue({
+          endpoint: "http://localhost:8080/api/v1/generations:export",
+          auth: { mode: "none" },
+          agentName: "pi",
+          contentCapture: mode,
+        });
+        createSigilClientMock.mockReturnValue(sigil);
+
+        const pi = new FakePi();
+        registerExtension(pi as any);
+
+        await pi.emit("session_start");
+        await pi.emit("before_agent_start", {
+          systemPrompt: "You are a helpful agent.",
+        });
+        await pi.emit("turn_start");
+        await pi.emit("turn_end", {
+          message: assistantMessage(),
+          toolResults: [],
+        });
+
+        if (mode === "no_tool_content") {
+          expect(seeds[0]!.systemPrompt, `mode=${mode}`).toBe(
+            "You are a helpful agent.",
+          );
+        } else {
+          expect(seeds[0]!.systemPrompt, `mode=${mode}`).toBeUndefined();
+        }
+      }
+    });
+
+    it("clears the cached prompt on agent_end so the next loop starts empty", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "full",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("before_agent_start", { systemPrompt: "first prompt" });
+      await pi.emit("turn_start");
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+      await pi.emit("agent_end", { messages: [] });
+
+      // No new before_agent_start — second loop must not reuse the prior prompt.
+      await pi.emit("turn_start");
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds).toHaveLength(2);
+      expect(seeds[0]!.systemPrompt).toBe("first prompt");
+      expect(seeds[1]!.systemPrompt).toBeUndefined();
+    });
+
+    it("clears the cached prompt on session_shutdown", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "full",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("before_agent_start", { systemPrompt: "first prompt" });
+      await pi.emit("session_shutdown");
+
+      // Fresh session, no new before_agent_start.
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds[0]!.systemPrompt).toBeUndefined();
+    });
+  });
+
+  describe("tool catalog capture", () => {
+    function setupClient() {
+      const seeds: Array<{ tools?: unknown[] }> = [];
+      const recorder = {
+        setResult: vi.fn(),
+        setCallError: vi.fn(),
+        setFirstTokenAt: vi.fn(),
+      };
+      const sigil: SigilLike = {
+        startStreamingGeneration: vi.fn(async (seed, run) => {
+          seeds.push(seed as { tools?: unknown[] });
+          await run(recorder);
+        }),
+        startToolExecution: vi.fn(() => ({
+          setResult: vi.fn(),
+          setCallError: vi.fn(),
+          end: vi.fn(),
+          getError: vi.fn(),
+        })),
+        shutdown: vi.fn(async () => {}),
+      };
+      return { sigil, seeds };
+    }
+
+    const bashTool = {
+      name: "bash",
+      description: "Run a shell command",
+      parameters: {
+        type: "object",
+        properties: { command: { type: "string" } },
+      },
+    };
+    const readTool = {
+      name: "read",
+      description: "Read a file",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" } },
+      },
+    };
+
+    it("emits description and inputSchemaJSON for active tools under full mode", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "full",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      pi.getAllTools = () => [bashTool, readTool];
+      pi.getActiveTools = () => ["bash", "read"];
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      const tools = seeds[0]!.tools as Array<{
+        name: string;
+        description?: string;
+        inputSchemaJSON?: string;
+      }>;
+      expect(tools).toHaveLength(2);
+      expect(tools[0]).toEqual({
+        name: "bash",
+        description: "Run a shell command",
+        inputSchemaJSON: JSON.stringify(bashTool.parameters),
+      });
+      expect(tools[1]?.inputSchemaJSON).toBe(
+        JSON.stringify(readTool.parameters),
+      );
+    });
+
+    it("strips description and inputSchemaJSON under metadata_only and no_tool_content", async () => {
+      for (const mode of ["metadata_only", "no_tool_content"] as const) {
+        const { sigil, seeds } = setupClient();
+        loadConfigMock.mockResolvedValue({
+          endpoint: "http://localhost:8080/api/v1/generations:export",
+          auth: { mode: "none" },
+          agentName: "pi",
+          contentCapture: mode,
+        });
+        createSigilClientMock.mockReturnValue(sigil);
+
+        const pi = new FakePi();
+        pi.getAllTools = () => [bashTool, readTool];
+        pi.getActiveTools = () => ["bash", "read"];
+        registerExtension(pi as any);
+
+        await pi.emit("session_start");
+        await pi.emit("turn_start");
+        await pi.emit("turn_end", {
+          message: assistantMessage(),
+          toolResults: [],
+        });
+
+        const tools = seeds[0]!.tools as Array<{
+          name: string;
+          description?: string;
+          inputSchemaJSON?: string;
+        }>;
+        expect(tools, `mode=${mode}`).toEqual([
+          { name: "bash" },
+          { name: "read" },
+        ]);
+      }
+    });
+
+    it("emits the offered (active) catalog even when no tool is called this turn", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      pi.getAllTools = () => [bashTool, readTool];
+      pi.getActiveTools = () => ["bash", "read"];
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      // No tool_execution_* events — model offered tools but didn't call any.
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      const tools = seeds[0]!.tools as Array<{ name: string }>;
+      expect(tools.map((t) => t.name)).toEqual(["bash", "read"]);
+    });
+
+    it("degrades to empty tools without crashing when getAllTools throws", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "full",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      pi.getAllTools = () => {
+        throw new Error("registry unavailable");
+      };
+      pi.getActiveTools = () => [];
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds).toHaveLength(1);
+      expect(seeds[0]!.tools).toBeUndefined();
+    });
+
+    it("synthesizes name-only tools from getActiveTools when getAllTools throws", async () => {
+      // Registry lookup fails (signature drift, transient error) but the
+      // active-set API still reports the names pi offered the model.
+      // Without the fallback, mapTools would filter an empty catalog and
+      // the seed would silently omit the tool list.
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "full",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      pi.getAllTools = () => {
+        throw new Error("registry unavailable");
+      };
+      pi.getActiveTools = () => ["bash", "read"];
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds).toHaveLength(1);
+      const tools = seeds[0]!.tools as Array<{
+        name: string;
+        description?: string;
+        inputSchemaJSON?: string;
+      }>;
+      expect(tools.map((t) => t.name).sort()).toEqual(["bash", "read"]);
+      // Catalog was unavailable, so we have no description/schema to emit.
+      for (const t of tools) {
+        expect(t.description).toBeUndefined();
+        expect(t.inputSchemaJSON).toBeUndefined();
+      }
+    });
+
+    it("falls back to called tool names when getActiveTools is unavailable", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      // Neither hook present — emulates older pi versions.
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("tool_execution_start", {
+        toolCallId: "c1",
+        toolName: "bash",
+      });
+      await pi.emit("tool_execution_end", { toolCallId: "c1", isError: false });
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      const tools = seeds[0]!.tools as Array<{ name: string }>;
+      expect(tools).toEqual([{ name: "bash" }]);
+    });
+
+    it("emits no tools when getActiveTools explicitly returns []", async () => {
+      // The registry is populated but the user disabled every tool via
+      // setActiveTools([]); the seed must NOT report the full registry.
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      pi.getAllTools = () => [bashTool, readTool];
+      pi.getActiveTools = () => [];
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds[0]!.tools).toBeUndefined();
+    });
+  });
+
+  describe("request controls capture", () => {
+    function setupClient() {
+      const seeds: Array<Record<string, unknown>> = [];
+      const recorder = {
+        setResult: vi.fn(),
+        setCallError: vi.fn(),
+        setFirstTokenAt: vi.fn(),
+      };
+      const sigil: SigilLike = {
+        startStreamingGeneration: vi.fn(async (seed, run) => {
+          seeds.push(seed as Record<string, unknown>);
+          await run(recorder);
+        }),
+        startToolExecution: vi.fn(() => ({
+          setResult: vi.fn(),
+          setCallError: vi.fn(),
+          end: vi.fn(),
+          getError: vi.fn(),
+        })),
+        shutdown: vi.fn(async () => {}),
+      };
+      return { sigil, seeds };
+    }
+
+    it("populates the seed for the matching turn_end", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("before_provider_request", {
+        payload: {
+          max_tokens: 4096,
+          temperature: 0.2,
+          top_p: 0.9,
+          tool_choice: { type: "auto" },
+          thinking: { type: "enabled", budget_tokens: 2048 },
+        },
+      });
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      const seed = seeds[0]!;
+      expect(seed.maxTokens).toBe(4096);
+      expect(seed.temperature).toBe(0.2);
+      expect(seed.topP).toBe(0.9);
+      expect(seed.toolChoice).toBe("auto");
+      expect(seed.metadata).toEqual({
+        "sigil.gen_ai.request.thinking.budget_tokens": 2048,
+      });
+    });
+
+    it("clears between turns so an empty turn 2 does not inherit turn 1's values", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("before_provider_request", {
+        payload: { max_tokens: 1024, temperature: 0.5 },
+      });
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      // Turn 2: no before_provider_request fires — values must clear.
+      await pi.emit("turn_start");
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds[0]!.maxTokens).toBe(1024);
+      expect(seeds[0]!.temperature).toBe(0.5);
+      expect(seeds[1]!.maxTokens).toBeUndefined();
+      expect(seeds[1]!.temperature).toBeUndefined();
+    });
+
+    it("clears on agent_end so the next agent loop does not inherit controls", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("before_agent_start", { systemPrompt: "sp" });
+      await pi.emit("turn_start");
+      await pi.emit("before_provider_request", {
+        payload: { max_tokens: 1024, temperature: 0.5 },
+      });
+      // Agent loop ends without a matching turn_end — turn_end's finally
+      // never runs, so agent_end is the last line of defense against stale
+      // request controls leaking into the next agent loop.
+      await pi.emit("agent_end", { messages: [] });
+
+      // Next agent loop: no before_provider_request fires before turn_end.
+      await pi.emit("turn_start");
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds).toHaveLength(1);
+      expect(seeds[0]!.maxTokens).toBeUndefined();
+      expect(seeds[0]!.temperature).toBeUndefined();
+    });
+
+    it("refreshes per turn when consecutive before_provider_request events fire", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("before_provider_request", {
+        payload: { max_tokens: 1024, temperature: 0.5, top_p: 0.8 },
+      });
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      // Tool-loop continuation: a new request payload with fewer fields.
+      await pi.emit("turn_start");
+      await pi.emit("before_provider_request", {
+        payload: { max_tokens: 2048 },
+      });
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds[0]!.maxTokens).toBe(1024);
+      expect(seeds[0]!.topP).toBe(0.8);
+      expect(seeds[1]!.maxTokens).toBe(2048);
+      expect(seeds[1]!.temperature).toBeUndefined();
+      expect(seeds[1]!.topP).toBeUndefined();
+    });
+
+    it("emits controls under metadata_only too", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("before_provider_request", {
+        payload: { temperature: 0.1, max_tokens: 256 },
+      });
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds[0]!.temperature).toBe(0.1);
+      expect(seeds[0]!.maxTokens).toBe(256);
+    });
+
+    it("extracts controls from Gemini-shaped payloads", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("before_provider_request", {
+        payload: {
+          model: "gemini-2.0-flash",
+          contents: [],
+          config: {
+            temperature: 0.4,
+            topP: 0.95,
+            maxOutputTokens: 8192,
+            toolConfig: { functionCallingConfig: { mode: "ANY" } },
+            thinkingConfig: { thinkingBudget: 2048 },
+          },
+        },
+      });
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds[0]!.maxTokens).toBe(8192);
+      expect(seeds[0]!.temperature).toBe(0.4);
+      expect(seeds[0]!.topP).toBe(0.95);
+      expect(seeds[0]!.toolChoice).toBe("ANY");
+      expect(seeds[0]!.metadata).toEqual({
+        "sigil.gen_ai.request.thinking.budget_tokens": 2048,
+      });
+    });
+
+    it("preserves the forced tool name in Anthropic tool_choice", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("before_provider_request", {
+        payload: { tool_choice: { type: "tool", name: "search" } },
+      });
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds[0]!.toolChoice).toBe("tool:search");
+    });
   });
 });
 

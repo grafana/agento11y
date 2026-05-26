@@ -134,7 +134,7 @@ func pluginInstalled(ctx context.Context, bin string) (bool, error) {
 		return false, err
 	}
 	needle := []byte(PluginName + "@" + marketplaceAlias)
-	for _, line := range bytes.Split(out, []byte{'\n'}) {
+	for line := range bytes.SplitSeq(out, []byte{'\n'}) {
 		// Anchor on the first whitespace-delimited token so suffix collisions
 		// like `my-sigil-codex@grafana-sigil` or
 		// `sigil-codex@grafana-sigil-staging` don't satisfy the check.

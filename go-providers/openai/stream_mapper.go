@@ -42,7 +42,7 @@ func ChatCompletionsFromStream(req osdk.ChatCompletionNewParams, summary ChatCom
 	output := make([]sigil.Message, 0, 1)
 	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapRequestControls(req)
 
-	modelName := string(req.Model)
+	modelName := req.Model
 	responseID := ""
 	usage := sigil.TokenUsage{}
 	stopReason := ""
@@ -145,7 +145,7 @@ func ChatCompletionsFromStream(req osdk.ChatCompletionNewParams, summary ChatCom
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: string(req.Model)},
+		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
 		ResponseID:        responseID,
 		ResponseModel:     modelName,
 		SystemPrompt:      systemPrompt,

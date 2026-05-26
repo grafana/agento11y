@@ -135,29 +135,18 @@ Full framework examples:
 
 ## Quick Start (Sync Generation)
 
-The snippet below configures the SDK explicitly. As an alternative, set `SIGIL_*` environment variables and call `Client()` with no arguments — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names.
+`Client()` reads `SIGIL_*` env vars by default. See the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names. Pass an explicit `ClientConfig` only when you need to override.
 
 ```python
 from sigil_sdk import (
-    AuthConfig,
     Client,
-    ClientConfig,
-    GenerationExportConfig,
     GenerationStart,
     ModelRef,
     assistant_text_message,
     user_text_message,
 )
 
-client = Client(
-    ClientConfig(
-        generation_export=GenerationExportConfig(
-            protocol="http",
-            endpoint="http://localhost:8080",
-            auth=AuthConfig(mode="tenant", tenant_id="dev-tenant"),
-        ),
-    )
-)
+client = Client()  # reads SIGIL_* env vars
 
 with client.start_generation(
     GenerationStart(
@@ -178,6 +167,22 @@ with client.start_generation(
         raise rec.err()
 
 client.shutdown()
+```
+
+Explicit configuration form:
+
+```python
+from sigil_sdk import AuthConfig, Client, ClientConfig, GenerationExportConfig
+
+client = Client(
+    ClientConfig(
+        generation_export=GenerationExportConfig(
+            protocol="http",
+            endpoint="http://localhost:8080",
+            auth=AuthConfig(mode="tenant", tenant_id="dev-tenant"),
+        ),
+    )
+)
 ```
 
 ## Pre-Ingest Redaction
@@ -509,9 +514,9 @@ auth=AuthConfig(
 )
 ```
 
-## Env-secret wiring example
+## Wiring custom env vars
 
-The SDK does not auto-load env vars. Resolve env values in your application and pass them into config explicitly.
+The SDK only auto-loads `SIGIL_*` env vars (`SIGIL_ENDPOINT`, `SIGIL_PROTOCOL`, `SIGIL_AUTH_MODE`, `SIGIL_AUTH_TOKEN`, etc.) when you call `Client()`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:
 
 ```python
 import os
@@ -519,7 +524,7 @@ from sigil_sdk import AuthConfig, ClientConfig
 
 cfg = ClientConfig()
 
-gen_token = (os.getenv("SIGIL_GEN_BEARER_TOKEN") or "").strip()
+gen_token = (os.getenv("MY_APP_SIGIL_TOKEN") or "").strip()
 if gen_token:
     cfg.generation_export.auth = AuthConfig(mode="bearer", bearer_token=gen_token)
 ```

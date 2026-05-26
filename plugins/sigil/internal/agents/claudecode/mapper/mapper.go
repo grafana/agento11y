@@ -381,9 +381,7 @@ func buildTags(line transcript.Line, subagent bool, extras map[string]string) ma
 	tags := make(map[string]string, 4+len(extras))
 	// Extras go in first; built-ins written below overwrite any collisions
 	// so user-supplied keys can never shadow git.branch/cwd/entrypoint/subagent.
-	for k, v := range extras {
-		tags[k] = v
-	}
+	maps.Copy(tags, extras)
 	if line.GitBranch != "" {
 		tags["git.branch"] = line.GitBranch
 	}

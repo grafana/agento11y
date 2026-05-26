@@ -559,7 +559,7 @@ func (c *Client) exportWithRetry(request *sigilv1.ExportGenerationsRequest) erro
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < attempts; attempt++ {
+	for attempt := range attempts {
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		response, err := c.exporter.Export(timeoutCtx, request)
 		cancel()

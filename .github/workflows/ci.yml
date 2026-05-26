@@ -53,9 +53,19 @@ jobs:
       - name: Check protobuf stubs are in sync
         run: mise run check:proto
 
-  go:
-    name: Go SDK
+  go-module:
+    name: Go module
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - go
+          - go-providers/anthropic
+          - go-providers/openai
+          - go-providers/gemini
+          - go-frameworks/google-adk
+          - plugins/sigil
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -63,31 +73,33 @@ jobs:
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: go/go.mod
+          go-version-file: ${{ matrix.module }}/go.mod
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+        env:
+          # Force each module to lint with GOWORK=off so it resolves its own
+          # go.mod, matching the local `mise run lint:go` behavior.
+          GOWORK: "off"
         with:
           args: --timeout=5m
-          working-directory: go
+          working-directory: ${{ matrix.module }}
 
-      - name: Test core
-        run: cd go && GOWORK=off go test ./...
+      - name: Test
+        run: cd ${{ matrix.module }} && GOWORK=off go test ./...
 
-      - name: Test anthropic provider
-        run: cd go-providers/anthropic && GOWORK=off go test ./...
-
-      - name: Test openai provider
-        run: cd go-providers/openai && GOWORK=off go test ./...
-
-      - name: Test gemini provider
-        run: cd go-providers/gemini && GOWORK=off go test ./...
-
-      - name: Test google-adk framework
-        run: cd go-frameworks/google-adk && GOWORK=off go test ./...
-
-      - name: Test sigil plugin
-        run: cd plugins/sigil && GOWORK=off go test ./...
+  go:
+    name: Go SDK
+    runs-on: ubuntu-latest
+    needs: [go-module]
+    if: always()
+    steps:
+      - name: Verify all Go module jobs succeeded
+        run: |
+          if [[ "${{ needs.go-module.result }}" != "success" ]]; then
+            echo "Go module matrix did not succeed: ${{ needs.go-module.result }}"
+            exit 1
+          fi
 
   typescript:
     name: TypeScript SDK

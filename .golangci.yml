@@ -1,0 +1,114 @@
+version: "2"
+
+linters:
+  enable:
+    - asciicheck
+    - bodyclose
+    - dogsled
+    - errcheck
+    - errorlint
+    - exhaustive
+    - forbidigo
+    - gocyclo
+    - goprintffuncname
+    - gosec
+    - govet
+    - ineffassign
+    - loggercheck
+    - misspell
+    - modernize
+    - nakedret
+    - prealloc
+    - revive
+    - staticcheck
+    - unconvert
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - io.Copy
+        - io/ioutil.ReadFile
+        - io/ioutil.WriteFile
+    exhaustive:
+      # A default clause is treated as covering all unlisted enum members.
+      default-signifies-exhaustive: true
+    errorlint:
+      # Do not check whether fmt.Errorf uses the %w verb for formatting errors.
+      errorf: false
+      # Do not check for plain type assertions and type switches.
+      asserts: false
+      # Check for plain error comparisons.
+      comparison: true
+    gocyclo:
+      # Provider mappers and metadata normalizers are inherently branchy.
+      # Raise the default 30 to accommodate them; test files are excluded below.
+      min-complexity: 50
+    revive:
+      rules:
+        # Allow `*testing.T` and friends to precede context.Context in test
+        # helpers, which is the standard Go testing convention.
+        - name: context-as-argument
+          arguments:
+            - allowTypesBefore: "*testing.T,*testing.B,*testing.TB,testing.TB"
+    gosec:
+      includes:
+        - G104
+        - G108
+        - G109
+        - G112
+        - G114
+    staticcheck:
+      checks:
+        - "-QF1008" # Disable the "could remove embedded field" check.
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - revive
+        text: if-return
+      - linters:
+          - revive
+        text: consider calling this Factory
+      - linters:
+          - revive
+        text: by other packages, and that stutters
+      - linters:
+          - revive
+        text: "var-naming: don't use an underscore in package name"
+      - linters:
+          - revive
+        text: "var-naming: avoid meaningless package names"
+      - linters:
+          - revive
+        text: "var-naming: avoid package names that conflict with"
+      - linters:
+          - revive
+          - staticcheck
+        text: should have name of the form ErrFoo
+      - linters:
+          - staticcheck
+        text: should not use underscores in package names
+      # Table-driven tests are intentionally large; complexity checks don't add value there.
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - prealloc
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

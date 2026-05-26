@@ -1,5 +1,7 @@
 package gemini
 
+import "maps"
+
 // Option configures Gemini mapper behavior.
 type Option func(*mapperOptions)
 
@@ -76,9 +78,7 @@ func WithTags(tags map[string]string) Option {
 		if options.tags == nil {
 			options.tags = make(map[string]string, len(tags))
 		}
-		for key, value := range tags {
-			options.tags[key] = value
-		}
+		maps.Copy(options.tags, tags)
 	}
 }
 
@@ -101,9 +101,7 @@ func WithMetadata(metadata map[string]any) Option {
 		if options.metadata == nil {
 			options.metadata = make(map[string]any, len(metadata))
 		}
-		for key, value := range metadata {
-			options.metadata[key] = value
-		}
+		maps.Copy(options.metadata, metadata)
 	}
 }
 

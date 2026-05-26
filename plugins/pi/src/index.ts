@@ -1,7 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type {
   ContentCaptureMode,
   Message,
@@ -11,14 +8,18 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { createSigilClient } from "./client.js";
 import type { SigilPiConfig } from "./config.js";
 import { loadConfig } from "./config.js";
+import { detectPiVersion } from "./detectPiVersion.js";
 import { resolveGitBranch } from "./git.js";
 import { runToolCallGuard } from "./guard.js";
 import {
+  type CachedRequestControls,
+  extractRequestControls,
   mapGenerationResult,
   mapGenerationStart,
-  mapToolNames,
+  mapTools,
   mapUserMessage,
   type PiAssistantMessage,
+  type PiToolInfo,
   type PiToolResult,
   type PiUserMessage,
   type ToolTiming,
@@ -27,34 +28,6 @@ import {
   createTelemetryProviders,
   type TelemetryProviders,
 } from "./telemetry.js";
-
-function detectPiVersion(): string | undefined {
-  try {
-    // Resolve an exported subpath via ESM resolution, then walk up to package.json.
-    // createRequire won't work here: pi's package.json uses "import"-only exports.
-    const resolved = import.meta.resolve("@mariozechner/pi-coding-agent/hooks");
-    // import.meta.resolve is sync on Node ≥20.6; older versions return a
-    // Promise. Bail out in that case rather than passing a Promise downstream.
-    if (typeof resolved !== "string") return undefined;
-    let dir = dirname(fileURLToPath(resolved));
-    for (let i = 0; i < 5; i++) {
-      try {
-        const pkgPath = join(dir, "package.json");
-        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as {
-          name?: string;
-          version?: string;
-        };
-        if (pkg.name === "@mariozechner/pi-coding-agent") return pkg.version;
-      } catch {
-        // no package.json at this level, keep walking
-      }
-      dir = dirname(dir);
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 export default function (pi: ExtensionAPI) {
   let sigil: SigilClient | null = null;
@@ -76,6 +49,15 @@ export default function (pi: ExtensionAPI) {
   // same turn, so this is the actual completion time of the model call.
   // 0 means: no assistant message_end seen yet for this turn.
   let assistantMessageEndTime = 0;
+  // Cached from the most recent `before_agent_start`. Outlives a single
+  // turn so multi-turn tool loops reuse the same prompt; cleared on
+  // agent_end and session_shutdown.
+  let currentSystemPrompt: string | undefined;
+  // Refreshed for every `before_provider_request` and consumed by the
+  // matching `turn_end`. Cleared in the per-turn finally so a stale value
+  // from turn N never leaks into turn N+1, and also on `agent_end` /
+  // session shutdown in case a turn ends without a matching `turn_end`.
+  let currentRequestControls: CachedRequestControls = {};
 
   function debugLog(msg: string, ...args: unknown[]) {
     if (config?.debug) console.error(`[sigil-pi] ${msg}`, ...args);
@@ -114,6 +96,8 @@ export default function (pi: ExtensionAPI) {
     resetTurnState();
     pendingInputMessages.length = 0;
     lastSeenModel = null;
+    currentSystemPrompt = undefined;
+    currentRequestControls = {};
   }
 
   function cacheAssistantModel(message: PiAssistantMessage) {
@@ -181,6 +165,45 @@ export default function (pi: ExtensionAPI) {
     resetTurnState();
     if (!sigil) return;
     turnStartTime = Date.now();
+  });
+
+  pi.on("before_agent_start", async (event, _ctx) => {
+    if (!sigil || !config) return;
+    try {
+      // System prompts encode project conventions (CLAUDE.md, skill text,
+      // etc.). Gate on contentCapture the same way `git.branch` is gated.
+      if (config.contentCapture === "metadata_only") return;
+      const prompt = (event as { systemPrompt?: unknown }).systemPrompt;
+      if (typeof prompt === "string" && prompt.length > 0) {
+        currentSystemPrompt = prompt;
+      }
+    } catch (err) {
+      console.warn("[sigil-pi] before_agent_start failed:", err);
+    }
+  });
+
+  pi.on("agent_end", async (_event, _ctx) => {
+    // Clear both caches at the agent boundary. `currentRequestControls` is
+    // normally cleared in turn_end's finally, but if an agent loop ends
+    // without a matching turn_end, those provider settings could otherwise
+    // attach to the next agent loop's first exported generation.
+    currentSystemPrompt = undefined;
+    currentRequestControls = {};
+  });
+
+  // Refresh request controls before every provider call. The payload is
+  // provider-specific (Anthropic/OpenAI/Gemini), so extraction is purely
+  // structural — see `extractRequestControls`. This handler MUST NOT return
+  // a value: pi treats a returned value as a payload replacement.
+  pi.on("before_provider_request", async (event, _ctx) => {
+    if (!sigil) return;
+    try {
+      const payload = (event as { payload?: unknown }).payload;
+      currentRequestControls = extractRequestControls(payload);
+    } catch (err) {
+      console.warn("[sigil-pi] before_provider_request failed:", err);
+      currentRequestControls = {};
+    }
   });
 
   pi.on("message_end", async (event, _ctx) => {
@@ -282,7 +305,45 @@ export default function (pi: ExtensionAPI) {
 
       const msg = event.message;
       const contentCapture = config.contentCapture;
-      const toolDefs = mapToolNames(turnToolTimings);
+
+      // Build the active tool catalog from pi's registry. Prefer the active
+      // set (what the model was offered this turn) so evaluators can
+      // compute precision/recall. `null` means the active-set API is
+      // unavailable (older pi versions); an empty Set means it returned
+      // explicitly no tools — those are different cases and `mapTools`
+      // treats them differently.
+      let toolCatalog: PiToolInfo[] = [];
+      try {
+        toolCatalog = pi.getAllTools?.() ?? [];
+      } catch (err) {
+        debugLog("getAllTools failed", err);
+        toolCatalog = [];
+      }
+      let activeNames: Set<string> | null = null;
+      try {
+        const active = pi.getActiveTools?.();
+        if (Array.isArray(active)) activeNames = new Set(active);
+      } catch (err) {
+        debugLog("getActiveTools failed", err);
+      }
+      if (
+        toolCatalog.length === 0 &&
+        activeNames !== null &&
+        activeNames.size > 0
+      ) {
+        // getAllTools threw or returned [] but getActiveTools still gave us
+        // names — synthesize name-only defs so the seed records the tools
+        // pi actually offered the model. Without this, `mapTools` would
+        // filter an empty catalog and drop the tool list entirely.
+        toolCatalog = Array.from(activeNames).map((name) => ({ name }));
+      } else if (activeNames === null && toolCatalog.length === 0) {
+        // Neither catalog nor active-set API — fall back to the called-tools
+        // subset so older pi versions still emit something useful.
+        const calledNames = new Set(turnToolTimings.map((t) => t.toolName));
+        toolCatalog = Array.from(calledNames).map((name) => ({ name }));
+        activeNames = calledNames;
+      }
+      const toolDefs = mapTools(toolCatalog, activeNames, contentCapture);
 
       // Read the current sessionId every turn. SessionManager reassigns
       // sessionId on fork/branch, and extensions that spawn child sessions
@@ -316,15 +377,16 @@ export default function (pi: ExtensionAPI) {
           : undefined;
       const builtinTags = gitBranch ? { "git.branch": gitBranch } : undefined;
 
-      const seed = mapGenerationStart(
-        msg,
+      const seed = mapGenerationStart(msg, {
         conversationId,
-        config.agentName,
-        config.agentVersion,
-        startedAtMs,
-        toolDefs.length > 0 ? toolDefs : undefined,
-        builtinTags,
-      );
+        agentName: config.agentName,
+        agentVersion: config.agentVersion,
+        startedAt: startedAtMs,
+        tools: toolDefs.length > 0 ? toolDefs : undefined,
+        tags: builtinTags,
+        systemPrompt: currentSystemPrompt,
+        requestControls: currentRequestControls,
+      });
 
       const toolResults = (event.toolResults ?? []) as PiToolResult[];
       // Snapshot the buffer; the finally below clears it in place and
@@ -382,6 +444,7 @@ export default function (pi: ExtensionAPI) {
       toolStarts.clear();
       turnToolTimings.length = 0;
       pendingInputMessages.length = 0;
+      currentRequestControls = {};
     }
   });
 

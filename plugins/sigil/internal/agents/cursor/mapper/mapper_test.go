@@ -29,7 +29,9 @@ func basicFragment(t *testing.T) *fragment.Fragment {
 	}
 }
 
-func TestMapFragment_FullMode_IncludesContent(t *testing.T) {
+// TestMapFragment_BasicFields covers the non-content-capture-dependent
+// fields that MapFragment populates from a fragment.
+func TestMapFragment_BasicFields(t *testing.T) {
 	got := MapFragment(Inputs{
 		Fragment:       basicFragment(t),
 		ContentCapture: sigil.ContentCaptureModeFull,
@@ -42,147 +44,93 @@ func TestMapFragment_FullMode_IncludesContent(t *testing.T) {
 	if got.Generation.Model.Provider != "anthropic" || got.Generation.Model.Name != "claude-sonnet-4-6" {
 		t.Errorf("Model = %+v; want anthropic/claude-sonnet-4-6", got.Generation.Model)
 	}
-
-	// User prompt should appear in input.
-	foundUserPrompt := false
-	for _, msg := range got.Generation.Input {
-		if msg.Role == sigil.RoleUser {
-			for _, p := range msg.Parts {
-				if p.Text == "hello" {
-					foundUserPrompt = true
-				}
-			}
-		}
-	}
-	if !foundUserPrompt {
-		t.Errorf("user prompt 'hello' missing from input; got %+v", got.Generation.Input)
-	}
-
-	// Assistant text should appear in output.
-	foundAssistantText := false
-	for _, msg := range got.Generation.Output {
-		if msg.Role == sigil.RoleAssistant {
-			for _, p := range msg.Parts {
-				if p.Text == "hi there" {
-					foundAssistantText = true
-				}
-			}
-		}
-	}
-	if !foundAssistantText {
-		t.Errorf("assistant text 'hi there' missing from output; got %+v", got.Generation.Output)
-	}
-
-	// Tool input bytes should be present in full mode.
-	foundToolInput := false
-	for _, msg := range got.Generation.Output {
-		for _, p := range msg.Parts {
-			if p.ToolCall != nil && len(p.ToolCall.InputJSON) > 0 {
-				foundToolInput = true
-			}
-		}
-	}
-	if !foundToolInput {
-		t.Errorf("tool input bytes missing in full mode")
-	}
-
 	if got.Generation.ThinkingEnabled == nil || !*got.Generation.ThinkingEnabled {
 		t.Errorf("ThinkingEnabled = %v; want true", got.Generation.ThinkingEnabled)
 	}
 }
 
-func TestMapFragment_MetadataOnly_StripsContent(t *testing.T) {
-	got := MapFragment(Inputs{
-		Fragment:       basicFragment(t),
-		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
-		Now:            fixedTime,
-	})
-
-	// User prompt must be absent.
-	for _, msg := range got.Generation.Input {
-		for _, p := range msg.Parts {
-			if p.Text == "hello" {
-				t.Errorf("user prompt leaked into metadata_only output")
-			}
-		}
+// TestMapFragment_ContentCaptureModes covers what every supported
+// ContentCaptureMode includes or strips in the gRPC payload that
+// buildMessages produces.
+//
+//   - Full and FullWithMetadataSpans carry full content; they only diverge
+//     in what the OTel span exposes, which is decided elsewhere.
+//   - NoToolContent keeps the tool_call/tool_result skeleton but strips
+//     argument and result bytes.
+//   - MetadataOnly drops user prompts, assistant text, and the tool_result
+//     message entirely.
+//   - Default is the zero-value enum. envconfig.ResolveContentMode maps it
+//     to MetadataOnly, but a caller that bypasses the config layer (or
+//     constructs Inputs directly in tests) might pass it through, so
+//     buildMessages re-applies the same mapping defensively.
+func TestMapFragment_ContentCaptureModes(t *testing.T) {
+	cases := []struct {
+		name            string
+		mode            sigil.ContentCaptureMode
+		wantUserPrompt  bool
+		wantAssistant   bool
+		wantToolInput   bool
+		wantToolResult  bool // tool_result message present in input
+		wantToolContent bool // tool_result carries ContentJSON or Content
+	}{
+		{"full", sigil.ContentCaptureModeFull, true, true, true, true, true},
+		{"full_with_metadata_spans", sigil.ContentCaptureModeFullWithMetadataSpans, true, true, true, true, true},
+		{"no_tool_content", sigil.ContentCaptureModeNoToolContent, true, true, false, true, false},
+		{"metadata_only", sigil.ContentCaptureModeMetadataOnly, false, false, false, false, false},
+		{"default", sigil.ContentCaptureModeDefault, false, false, false, false, false},
 	}
-	// Assistant text must be absent.
-	for _, msg := range got.Generation.Output {
-		for _, p := range msg.Parts {
-			if p.Text == "hi there" {
-				t.Errorf("assistant text leaked into metadata_only output")
-			}
-		}
-	}
-	// Tool calls keep structure, but tool result messages should be dropped.
-	for _, msg := range got.Generation.Input {
-		if msg.Role == sigil.RoleTool {
-			t.Errorf("tool result message leaked in metadata_only; got %+v", msg)
-		}
-	}
-}
 
-// envconfig.ResolveContentMode maps the Default zero-value enum to
-// MetadataOnly, but a caller that bypasses the config layer (or constructs
-// Inputs directly in tests) might pass Default through. buildMessages must
-// treat the two consistently across user prompt, tool results, and
-// assistant text — otherwise prompts could leak while tool results drop.
-func TestMapFragment_DefaultModeBehavesAsMetadataOnly(t *testing.T) {
-	got := MapFragment(Inputs{
-		Fragment:       basicFragment(t),
-		ContentCapture: sigil.ContentCaptureModeDefault,
-		Now:            fixedTime,
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := MapFragment(Inputs{
+				Fragment:       basicFragment(t),
+				ContentCapture: tc.mode,
+				Now:            fixedTime,
+			})
 
-	for _, msg := range got.Generation.Input {
-		for _, p := range msg.Parts {
-			if p.Text == "hello" {
-				t.Errorf("user prompt leaked under Default mode")
-			}
-		}
-		if msg.Role == sigil.RoleTool {
-			t.Errorf("tool result leaked under Default mode; got %+v", msg)
-		}
-	}
-	for _, msg := range got.Generation.Output {
-		for _, p := range msg.Parts {
-			if p.Text == "hi there" {
-				t.Errorf("assistant text leaked under Default mode")
-			}
-		}
-	}
-}
-
-func TestMapFragment_NoToolContent_KeepsStructureStripsBytes(t *testing.T) {
-	got := MapFragment(Inputs{
-		Fragment:       basicFragment(t),
-		ContentCapture: sigil.ContentCaptureModeNoToolContent,
-		Now:            fixedTime,
-	})
-
-	// Tool result message present, but content stripped.
-	foundToolResult := false
-	for _, msg := range got.Generation.Input {
-		if msg.Role == sigil.RoleTool {
-			foundToolResult = true
-			for _, p := range msg.Parts {
-				if p.ToolResult != nil && (p.ToolResult.Content != "" || len(p.ToolResult.ContentJSON) > 0) {
-					t.Errorf("tool result content leaked in no_tool_content mode; got %+v", p.ToolResult)
+			var gotPrompt, gotAssistant, gotToolInput, gotToolResult, gotToolContent bool
+			for _, msg := range got.Generation.Input {
+				for _, p := range msg.Parts {
+					if p.Text == "hello" {
+						gotPrompt = true
+					}
+				}
+				if msg.Role == sigil.RoleTool {
+					gotToolResult = true
+					for _, p := range msg.Parts {
+						if p.ToolResult != nil && (p.ToolResult.Content != "" || len(p.ToolResult.ContentJSON) > 0) {
+							gotToolContent = true
+						}
+					}
 				}
 			}
-		}
-	}
-	if !foundToolResult {
-		t.Errorf("tool_result skeleton missing in no_tool_content mode")
-	}
-
-	// Tool call inputJSON should be absent.
-	for _, msg := range got.Generation.Output {
-		for _, p := range msg.Parts {
-			if p.ToolCall != nil && len(p.ToolCall.InputJSON) > 0 {
-				t.Errorf("tool call inputJSON leaked in no_tool_content mode")
+			for _, msg := range got.Generation.Output {
+				for _, p := range msg.Parts {
+					if p.Text == "hi there" {
+						gotAssistant = true
+					}
+					if p.ToolCall != nil && len(p.ToolCall.InputJSON) > 0 {
+						gotToolInput = true
+					}
+				}
 			}
-		}
+
+			if gotPrompt != tc.wantUserPrompt {
+				t.Errorf("user prompt present = %v; want %v", gotPrompt, tc.wantUserPrompt)
+			}
+			if gotAssistant != tc.wantAssistant {
+				t.Errorf("assistant text present = %v; want %v", gotAssistant, tc.wantAssistant)
+			}
+			if gotToolInput != tc.wantToolInput {
+				t.Errorf("tool_call InputJSON present = %v; want %v", gotToolInput, tc.wantToolInput)
+			}
+			if gotToolResult != tc.wantToolResult {
+				t.Errorf("tool_result message present = %v; want %v", gotToolResult, tc.wantToolResult)
+			}
+			if gotToolContent != tc.wantToolContent {
+				t.Errorf("tool_result content present = %v; want %v", gotToolContent, tc.wantToolContent)
+			}
+		})
 	}
 }
 

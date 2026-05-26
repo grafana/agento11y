@@ -1,0 +1,463 @@
+# Grafana AI observability: LLM agent instructions
+
+You are a coding agent. The user wants help with [Grafana AI observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/), powered by the open-source Sigil SDKs and plugins in [grafana/sigil-sdk](https://github.com/grafana/sigil-sdk).
+
+There are two distinct things this file covers. Pick the path that matches the request before doing anything else.
+
+- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, or Pi sent to Grafana AI observability. They are not changing application code.
+- Path B, [Instrument an LLM app or agent](#path-b-instrument-an-llm-app-or-agent): the user wants their own code (an app, agent, framework pipeline) to send generations to Grafana AI observability.
+
+If you cannot tell, ask one clarifying question and stop.
+
+## Resources
+
+- Product docs: https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/
+- SDK + plugin source: https://github.com/grafana/sigil-sdk
+- Grafana Cloud OTLP setup: https://grafana.com/docs/grafana-cloud/send-data/otlp/send-data-otlp
+
+## Credentials (both paths)
+
+All four values (API URL, Instance ID, Sigil API token, and OTLP endpoint) live on the Connection tab of the AI Observability plugin in the user's stack:
+
+```
+https://<your-stack>.grafana.net/plugins/grafana-sigil-app
+```
+
+Follow *Create a token in Cloud Access Policies* on the Connection page and create one token scoped with `sigil:write`, `metrics:write`, `traces:write`, and `logs:write`. The same token then covers both `SIGIL_AUTH_TOKEN` (Sigil ingest) and `OTEL_EXPORTER_OTLP_HEADERS` (OTel traces and metrics).
+
+The Connection page also has a *Set `OTEL_EXPORTER_OTLP_ENDPOINT` for traces and metrics* link that routes to the [OpenTelemetry stack tile](https://grafana.com/docs/grafana-cloud/send-data/otlp/send-data-otlp/#recommended-opentelemetry-setup-via-grafana-cloud-integrations), the recommended OTel setup for Grafana Cloud. The tile emits `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_ENDPOINT`, and `OTEL_EXPORTER_OTLP_HEADERS` ready to copy.
+
+If you need to build the OTel `Authorization` header value by hand:
+
+```
+printf '%s' '<otlp-instance-id>:<glc_token>' | base64 | tr -d '\n'
+```
+
+`tr -d '\n'` is mandatory; a trailing newline silently breaks the header.
+
+---
+
+# Path A: Monitor a coding agent
+
+The user wants Grafana AI observability to capture sessions from their coding agent. They do not write app code for this; they install a plugin and configure credentials.
+
+## Supported agents
+
+| Agent | Plugin | Mechanism |
+|-------|--------|-----------|
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [`plugins/claude-code/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/claude-code) | Shared `sigil` Go binary, plugin name `sigil-cc` |
+| [Codex](https://developers.openai.com/codex) | [`plugins/codex/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/codex) | Shared `sigil` Go binary via hooks |
+| [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`plugins/copilot/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/copilot) | Shared `sigil` Go binary via hooks |
+| [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/cursor) | Shared `sigil` Go binary via hooks |
+| [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/opencode) | Independent npm package `@grafana/sigil-opencode` |
+| [Pi](https://github.com/badlogic/pi) | [`plugins/pi/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/pi) | Independent npm package `@grafana/sigil-pi` |
+
+## Fast path (Claude Code, Codex, Copilot, Cursor, Pi)
+
+```sh
+brew install grafana/grafana/sigil
+sigil claude     # Claude Code
+sigil codex      # Codex
+sigil copilot    # Copilot CLI
+sigil cursor     # Cursor
+sigil pi         # Pi
+```
+
+`sigil <agent>` installs the plugin on first run, prompts for credentials, writes `~/.config/sigil/config.env`, and launches the agent.
+
+To skip the prompt, write the config file by hand:
+
+```dotenv
+SIGIL_ENDPOINT=<your-sigil-api-url>
+SIGIL_AUTH_TENANT_ID=<your-instance-id>
+SIGIL_AUTH_TOKEN=glc_...
+SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=<otlp-gateway-url>
+```
+
+To re-enter credentials later, run `sigil login`.
+
+## OpenCode
+
+OpenCode does not use the shared `sigil` binary. It reads its own config file `~/.config/opencode/opencode-sigil.json`:
+
+```json
+{
+  "enabled": true,
+  "endpoint": "<your-sigil-api-url>",
+  "auth": { "mode": "basic", "tenantId": "<your-instance-id>", "token": "glc_..." },
+  "agentName": "opencode",
+  "contentCapture": true
+}
+```
+
+Auth modes: `none` | `bearer` ({ bearerToken }) | `tenant` ({ tenantId }) | `basic` ({ tenantId, token }).
+
+## Content capture
+
+By default plugins send metadata only (model, tokens, tool names, timing, cost). To send prompt and response bodies as well, set the content capture mode in the plugin config. Valid values across SDKs: `full`, `no_tool_content`, `metadata_only` (default), `full_with_metadata_spans`.
+
+- Shared `sigil` binary: set `SIGIL_CONTENT_CAPTURE_MODE=full` (or one of the other values above) in `config.env`.
+- OpenCode: `"contentCapture": true` (shortcut for `full`).
+- Pi: `contentCapture: "full" | "no_tool_content" | "metadata_only" | "full_with_metadata_spans"`.
+
+Secrets are auto-redacted before send. Treat content capture as opt-in for shared/production machines.
+
+## Verifying the install
+
+1. Run the agent normally for one turn (any prompt).
+2. Open Grafana Cloud → AI Observability → Conversations. A new conversation should appear within a few seconds.
+3. If it doesn't, check the launcher's stderr for `sigil:` warnings and confirm `~/.config/sigil/config.env` is readable.
+
+---
+
+# Path B: Instrument an LLM app or agent
+
+You are acting as a coding agent inside the user's repository. Your goal is to add or improve Grafana AI observability instrumentation with minimal, safe changes.
+
+## Environment
+
+The Sigil SDK reads these `SIGIL_*` env vars automatically. Set them before the SDK starts:
+
+```
+SIGIL_ENDPOINT=<your-sigil-api-url>
+SIGIL_PROTOCOL=http
+SIGIL_AUTH_MODE=basic
+SIGIL_AUTH_TENANT_ID=<your-instance-id>
+SIGIL_AUTH_TOKEN=<glc_... token>
+
+# OTel traces and metrics (separate channel; same token)
+OTEL_EXPORTER_OTLP_ENDPOINT=<from stack OpenTelemetry card>
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64 of "<otlp-instance-id>:<glc_... token>">
+```
+
+Construct the client with no config when the env vars are present; the SDK reads them. Only use explicit `ClientConfig(...)` when the app needs values that aren't in env (e.g. test endpoints).
+
+## Mission
+
+1. Find AI generation and tool/agent execution paths in the user's code.
+2. Add Sigil instrumentation using the local language SDK where possible.
+3. Preserve behavior and keep diffs small.
+4. Add or update tests for changed instrumentation behavior.
+5. Explain what was instrumented and why.
+
+## Output contract (required)
+
+Return:
+
+- Top opportunities first (highest traffic / highest impact)
+- For each opportunity:
+  - exact file path(s)
+  - why this location matters
+  - concrete diff proposal
+  - test plan
+  - any risk or compatibility concern
+
+## Sigil architecture and ingest model (must follow)
+
+- Sigil uses generation-first ingest:
+  - gRPC: `sigil.v1.GenerationIngestService.ExportGenerations`
+  - HTTP parity: `POST /api/v1/generations:export`
+- Traces/metrics go through OTel collector/Alloy or direct OTLP, **not** through Sigil ingest.
+- Required generation modes:
+  - non-stream: `SYNC`
+  - stream: `STREAM`
+- Raw provider artifacts are default OFF and only enabled for explicit debug opt-in.
+
+## OTel setup (required)
+
+The Sigil SDK internally emits OTel spans and metrics (`gen_ai.client.operation.duration`, `gen_ai.client.token.usage`, `gen_ai.client.time_to_first_token`, `gen_ai.client.tool_calls_per_operation`). **Without a configured TracerProvider and MeterProvider these go to the default no-op and are silently lost.**
+
+The SDK does not create OTel providers; that is the application's responsibility. Always configure providers before creating the Sigil client, and shut them down after `sigil.shutdown()`.
+
+Two delivery options. The OTel SDK exporters read `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS` automatically.
+
+### Option A: Direct to Grafana Cloud (no collector needed)
+
+Send OTLP straight to the Grafana Cloud OTLP gateway. Authentication uses Basic auth with the OTLP Instance ID and the same `glc_…` token from Credentials.
+
+### Option B: Via Alloy / OTel Collector (optional)
+
+Run a local Alloy or OTel Collector that receives unauthenticated OTLP and forwards to Cloud with credentials. Useful for centralized token management, retries, relabeling, and metadata enrichment. Common local ports: 4318 (OTLP/HTTP), 4317 (OTLP/gRPC). In this mode set `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` and skip the headers.
+
+### Provider setup snippets
+
+#### Python
+```python
+from opentelemetry import trace, metrics
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+
+resource = Resource.create({"service.name": "my-app"})
+
+tp = TracerProvider(resource=resource)
+tp.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+trace.set_tracer_provider(tp)
+
+mp = MeterProvider(resource=resource, metric_readers=[
+    PeriodicExportingMetricReader(OTLPMetricExporter())
+])
+metrics.set_meter_provider(mp)
+# Deps: opentelemetry-sdk, opentelemetry-exporter-otlp-proto-http
+```
+
+#### Go
+```go
+traceExp, _ := otlptracehttp.New(ctx)
+tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(traceExp), sdktrace.WithResource(res))
+otel.SetTracerProvider(tp)
+defer tp.Shutdown(ctx)
+
+metricExp, _ := otlpmetrichttp.New(ctx)
+mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp)), sdkmetric.WithResource(res))
+otel.SetMeterProvider(mp)
+defer mp.Shutdown(ctx)
+```
+
+#### JS/TS
+```typescript
+import { metrics } from '@opentelemetry/api';
+import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
+
+const tp = new NodeTracerProvider({ resource });
+tp.addSpanProcessor(new BatchSpanProcessor(new OTLPTraceExporter()));
+tp.register();
+
+const mp = new MeterProvider({
+  resource,
+  readers: [new PeriodicExportingMetricReader({ exporter: new OTLPMetricExporter() })],
+});
+metrics.setGlobalMeterProvider(mp);
+```
+
+## SDK API surface
+
+| Language | Package | Core methods |
+|----------|---------|--------------|
+| Go | `github.com/grafana/sigil-sdk/go` | `StartGeneration`, `StartStreamingGeneration`, `StartToolExecution`, `StartEmbedding` |
+| Python | `sigil-sdk` | `start_generation`, `start_streaming_generation`, `start_tool_execution`, `start_embedding` |
+| JS/TS | `@grafana/sigil-sdk-js` | `startGeneration`, `startStreamingGeneration`, `startToolExecution`, `startEmbedding` |
+| Java | `com.grafana.sigil` | `startGeneration`, `startStreamingGeneration`, `withGeneration`, `withToolExecution` |
+| .NET | `Grafana.Sigil` | `StartGeneration`, `StartStreamingGeneration`, `StartToolExecution`, `StartEmbedding` |
+
+Provider wrappers (use these before hand-instrumenting an SDK call):
+
+- Go: `go-providers/openai`, `go-providers/anthropic`, `go-providers/gemini`
+- Python: `python-providers/openai`, `python-providers/anthropic`, `python-providers/gemini`
+- JS/TS: subpath exports like `@grafana/sigil-sdk-js/openai` (see [`js/README.md`](https://github.com/grafana/sigil-sdk/blob/main/js/README.md))
+- Java: `java/providers/openai`, `java/providers/anthropic`, `java/providers/gemini`
+- .NET: `Grafana.Sigil.OpenAI`, `Grafana.Sigil.Anthropic`, `Grafana.Sigil.Gemini`
+
+Framework adapters:
+
+- Python: `python-frameworks/{langchain,langgraph,openai-agents,llamaindex,google-adk,strands,litellm,pydantic-ai}`; each is its own pip package (e.g. `sigil-sdk-langgraph`).
+- JS/TS: subpath exports like `@grafana/sigil-sdk-js/langgraph`, `@grafana/sigil-sdk-js/vercel-ai-sdk`; single npm package, multiple entry points.
+- Go: `go-frameworks/google-adk`.
+- Java: `java/frameworks/google-adk`.
+
+## Telemetry fields to prioritize
+
+On generation and tool spans, capture or preserve these when available:
+
+- identity and routing:
+  - `gen_ai.operation.name`
+  - `sigil.generation.id`
+  - `gen_ai.conversation.id`
+  - `gen_ai.agent.name`
+  - `gen_ai.agent.version`
+  - `sigil.generation.parent_generation_ids`
+  - `sigil.sdk.name`
+- model:
+  - `gen_ai.provider.name`
+  - `gen_ai.request.model`
+  - `gen_ai.response.model`
+- request controls:
+  - `gen_ai.request.max_tokens`
+  - `gen_ai.request.temperature`
+  - `gen_ai.request.top_p`
+  - `sigil.gen_ai.request.tool_choice`
+  - `sigil.gen_ai.request.thinking.enabled`
+  - `sigil.gen_ai.request.thinking.budget_tokens`
+- usage and outcomes:
+  - `gen_ai.usage.input_tokens`
+  - `gen_ai.usage.output_tokens`
+  - `gen_ai.usage.cache_read_input_tokens`
+  - `gen_ai.usage.cache_write_input_tokens` *(not `cache_creation_input_tokens`, which was renamed)*
+  - `gen_ai.usage.reasoning_tokens`
+  - `gen_ai.response.finish_reasons`
+  - error classification fields (`error.type`, `error.category`)
+
+## Workflow step instrumentation (agentic pipelines)
+
+Sigil has two separate ingest pipelines: **generations** (LLM calls) and **workflow steps** (agentic execution nodes).
+
+### When to use workflow steps
+
+Use workflow steps when instrumenting agentic frameworks (LangGraph, CrewAI, Google ADK, custom orchestrators) where:
+- The pipeline has non-LLM nodes (routing, formatting, validation, tool calls)
+- You need the execution graph as well as LLM calls
+- You need input/output state captured per node
+
+### Architecture
+
+- Workflow steps are a **separate entity** from generations, with their own proto message, ingest endpoint, and storage.
+- Generations track LLM calls (model, tokens, cost). Workflow steps track execution nodes (input state, output state, duration).
+- The two are linked via `linked_generation_ids` on the workflow step (which LLM calls ran inside this node) and `parent_step_ids` (DAG edges between workflow nodes).
+
+### Ingest endpoints
+
+| Entity | gRPC | HTTP |
+|--------|------|------|
+| Generations | `GenerationIngestService.ExportGenerations` | `POST /api/v1/generations:export` |
+| Workflow steps | `WorkflowStepIngestService.ExportWorkflowSteps` | `POST /api/v1/workflow-steps:export` |
+
+### WorkflowStep fields
+
+```
+id                     — unique step ID (e.g. "wfs_<hex>")
+conversation_id        — links step to a conversation
+step_name              — node name (e.g. "classify", "analyze")
+framework              — framework name (e.g. "langgraph")
+started_at / completed_at — execution timestamps
+input_state            — node input (Struct/dict)
+output_state           — node output (Struct/dict)
+error                  — error message if the node failed
+tags                   — key-value filtering tags
+metadata               — arbitrary metadata (Struct/dict)
+linked_generation_ids  — generation IDs of LLM calls inside this step
+parent_step_ids        — IDs of upstream workflow steps (DAG edges)
+agent_name / agent_version — agent identity
+trace_id / span_id     — OTel correlation
+```
+
+### Choosing a workflow step instrumentation path
+
+There are two layers:
+
+- **Manual SDK API** — use `enqueue_workflow_step(step)` when forwarding pre-built workflow steps or instrumenting custom execution graphs directly. You create step IDs, parent edges, timestamps, input/output state, and linked generation IDs yourself.
+- **Framework adapter** — use the adapter when one exists, such as `SigilLangGraphHandler` for LangGraph. The adapter creates workflow steps automatically from framework callbacks.
+
+Do not use both paths for the same LangGraph node, or you will record duplicate workflow steps.
+
+### Manual SDK workflow step API
+
+The SDK client exposes `enqueue_workflow_step(step)` which queues the step for batch export alongside generations. The flush pipeline handles both.
+
+```python
+from sigil_sdk import Client, WorkflowStep
+from datetime import datetime, timezone
+
+step = WorkflowStep(
+    id="wfs_abc123",
+    conversation_id="conv-1",
+    step_name="classify",
+    framework="custom-orchestrator",
+    started_at=datetime.now(timezone.utc),
+    completed_at=datetime.now(timezone.utc),
+    input_state={"text": "input data"},
+    output_state={"category": "incident"},
+    tags={"sigil.framework.name": "custom-orchestrator"},
+    linked_generation_ids=["gen_xyz"],  # LLM calls inside this step
+    parent_step_ids=[],                  # first node, no parents
+)
+client.enqueue_workflow_step(step)
+```
+
+### LangGraph adapter pattern
+
+For LangGraph, prefer the adapter instead of manually calling `enqueue_workflow_step`.
+The `SigilLangGraphHandler` automatically captures workflow steps when `capture_workflow_steps=True`.
+Always set `conversation_title` to a short human-readable label. It appears as the conversation name in the Sigil UI; without it, the title falls back to an opaque auto-generated ID.
+
+```python
+from sigil_sdk_langgraph import SigilLangGraphHandler
+
+handler = SigilLangGraphHandler(
+    client=client,
+    agent_name="my-pipeline",
+    conversation_title="Incident Response Pipeline",
+    capture_workflow_steps=True,
+)
+result = graph.invoke(
+    {"prompt": "Investigate elevated API latency.", "answer": ""},
+    config={"callbacks": [handler]},
+)
+```
+
+### Workflow step vs generation: decision table
+
+| Signal | Use Generation | Use WorkflowStep |
+|--------|---------------|-------------------|
+| LLM API call (tokens, model, cost) | Yes | No |
+| Non-LLM node (routing, formatting) | No | Yes |
+| Tool execution | Yes (start_tool_execution) | Optional (as a step) |
+| Node input/output state | No | Yes |
+| DAG edges between nodes | parent_generation_ids | parent_step_ids |
+
+## Multi-agent dependency tracking
+
+When instrumenting multi-agent pipelines where one agent's output feeds into another:
+
+- Set `parent_generation_ids` on the GenerationStart/seed with the generation ID(s) of the upstream agent(s) whose output this generation consumes.
+- This is a list: a generation can depend on multiple parents (fan-in).
+- Sigil uses these links to build a dependency DAG and propagate quality signals: if an upstream generation fails evaluation, all downstream dependents are flagged.
+
+Example: an orchestrator spawns agents A, B, C where C depends on A and B:
+- A: `parent_generation_ids = []` (no parents)
+- B: `parent_generation_ids = []` (no parents)
+- C: `parent_generation_ids = [A.generation_id, B.generation_id]`
+
+## Useful examples to copy patterns from
+
+In the grafana/sigil-sdk repo:
+
+- Getting-started: [`examples/getting-started/`](https://github.com/grafana/sigil-sdk/tree/main/examples/getting-started) (Python, TypeScript, Go, plus multi-agent and framework variants)
+- Go explicit generation flow: [`go/sigil/example_test.go`](https://github.com/grafana/sigil-sdk/blob/main/go/sigil/example_test.go)
+- Go provider wrapper examples: [`go-providers/openai/sdk_example_test.go`](https://github.com/grafana/sigil-sdk/blob/main/go-providers/openai/sdk_example_test.go), `…/anthropic/sdk_example_test.go`, `…/gemini/sdk_example_test.go`
+- .NET end-to-end emitter: [`dotnet/examples/Grafana.Sigil.DevExEmitter/Program.cs`](https://github.com/grafana/sigil-sdk/blob/main/dotnet/examples/Grafana.Sigil.DevExEmitter/Program.cs)
+- JS transport and framework behavior: [`js/test/client.transport.test.mjs`](https://github.com/grafana/sigil-sdk/blob/main/js/test/client.transport.test.mjs), [`js/test/frameworks.vercel-ai-sdk.test.mjs`](https://github.com/grafana/sigil-sdk/blob/main/js/test/frameworks.vercel-ai-sdk.test.mjs)
+- Python framework integration tests: [`python-frameworks/*/tests/*.py`](https://github.com/grafana/sigil-sdk/tree/main/python-frameworks)
+
+## Implementation rules
+
+- Keep behavior unchanged except instrumentation additions/fixes.
+- Prefer small targeted patches over refactors.
+- Use existing conventions in each language package.
+- Keep raw artifacts disabled unless explicitly asked.
+- Ensure non-stream wrappers set `SYNC`, stream wrappers set `STREAM`.
+- Ensure lifecycle flush/shutdown semantics are preserved.
+- When calling `set_result` / `SetResult`, always include all available fields:
+  - `response_id` (provider correlation, maps to `gen_ai.response.id`)
+  - `response_model` (actual model used)
+  - `stop_reason` / `finish_reason`
+  - Full token usage including `cache_read_input_tokens`, `cache_write_input_tokens`, and `reasoning_tokens` when the provider returns them
+- Always check `rec.err()` / `Err()` after the generation recorder closes; SDK validation or enqueue errors are otherwise silent.
+- Use `tags` on `GenerationStart` for filtering in the Sigil UI (e.g. pipeline name, layer, agent role).
+
+## Validation checklist
+
+After proposing edits, include checks for:
+
+- span attributes emitted as expected
+- generation payload shape valid for ingest contract
+- no regressions in existing tests
+- language-specific tests or focused test additions for new instrumentation logic
+
+## Deliverable format (strict)
+
+Provide:
+
+1. Prioritized instrumentation opportunities
+2. Proposed diffs per opportunity
+3. Test updates per opportunity
+4. Rollout/risk notes
+
+If no safe opportunities are found, explain exactly why and list what evidence you checked.
