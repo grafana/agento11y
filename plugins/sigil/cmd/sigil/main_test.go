@@ -222,7 +222,7 @@ func TestRun_LauncherDispatch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var gotArgs []string
 			called := 0
-			withStubLauncher(t, tc.agent, func(_ context.Context, args []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+			withStubLauncher(t, tc.agent, func(_ context.Context, args []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 				called++
 				gotArgs = append([]string{}, args...)
 				return tc.launcherErr
@@ -275,7 +275,7 @@ func TestRun_CodexHookDispatchesEvenWithLauncher(t *testing.T) {
 			return nil
 		},
 	}
-	withStubLauncher(t, "codex", func(_ context.Context, _ []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+	withStubLauncher(t, "codex", func(_ context.Context, _ []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 		t.Fatal("launcher must not be called for `sigil codex hook`")
 		return nil
 	})
@@ -298,7 +298,7 @@ func TestRun_CodexHookDispatchesEvenWithLauncher(t *testing.T) {
 func TestRun_CodexLauncherBare(t *testing.T) {
 	var got []string
 	called := 0
-	withStubLauncher(t, "codex", func(_ context.Context, args []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+	withStubLauncher(t, "codex", func(_ context.Context, args []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 		called++
 		got = append([]string{}, args...)
 		return nil
@@ -321,7 +321,7 @@ func TestRun_CodexLauncherBare(t *testing.T) {
 
 func TestRun_CodexLauncherForwardsArgs(t *testing.T) {
 	var got []string
-	withStubLauncher(t, "codex", func(_ context.Context, args []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+	withStubLauncher(t, "codex", func(_ context.Context, args []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 		got = append([]string{}, args...)
 		return nil
 	})
@@ -336,7 +336,7 @@ func TestRun_CodexLauncherForwardsArgs(t *testing.T) {
 }
 
 func TestRun_CodexLauncherMissingSeparatorExits2(t *testing.T) {
-	withStubLauncher(t, "codex", func(_ context.Context, _ []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+	withStubLauncher(t, "codex", func(_ context.Context, _ []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 		t.Fatal("launcher must not be called when separator is missing")
 		return nil
 	})
@@ -354,7 +354,7 @@ func TestRun_CodexLauncherMissingSeparatorExits2(t *testing.T) {
 }
 
 func TestRun_CodexLauncherErrorExits1(t *testing.T) {
-	withStubLauncher(t, "codex", func(_ context.Context, _ []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+	withStubLauncher(t, "codex", func(_ context.Context, _ []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 		return errors.New("boom")
 	})
 
@@ -494,7 +494,7 @@ func TestRun_LauncherAutoPromptsWhenCredsMissing(t *testing.T) {
 	})
 
 	launcherCalled := 0
-	withStubLauncher(t, "pi", func(context.Context, []string, *local.LaunchEnv, io.Reader, io.Writer, io.Writer, *log.Logger) error {
+	withStubLauncher(t, "pi", func(context.Context, []string, *local.LaunchEnv, io.Reader, io.Writer, io.Writer, *log.Logger, string) error {
 		launcherCalled++
 		if os.Getenv("SIGIL_ENDPOINT") != "https://sigil.example.com" {
 			t.Errorf("launcher saw SIGIL_ENDPOINT = %q, want set by login", os.Getenv("SIGIL_ENDPOINT"))
@@ -529,7 +529,7 @@ func TestRun_LauncherSkipsAutoPromptWhenCredsPresent(t *testing.T) {
 	})
 
 	launcherCalled := 0
-	withStubLauncher(t, "pi", func(context.Context, []string, *local.LaunchEnv, io.Reader, io.Writer, io.Writer, *log.Logger) error {
+	withStubLauncher(t, "pi", func(context.Context, []string, *local.LaunchEnv, io.Reader, io.Writer, io.Writer, *log.Logger, string) error {
 		launcherCalled++
 		return nil
 	})
@@ -557,7 +557,7 @@ func TestRun_LauncherContinuesWhenLoginAborted(t *testing.T) {
 	})
 
 	launcherCalled := 0
-	withStubLauncher(t, "pi", func(context.Context, []string, *local.LaunchEnv, io.Reader, io.Writer, io.Writer, *log.Logger) error {
+	withStubLauncher(t, "pi", func(context.Context, []string, *local.LaunchEnv, io.Reader, io.Writer, io.Writer, *log.Logger, string) error {
 		launcherCalled++
 		return nil
 	})
@@ -680,7 +680,7 @@ func TestRun_LauncherLocalFlagInjectsOpts(t *testing.T) {
 			_, daemonURL := inProcessDaemon(t)
 
 			var gotEnv *local.LaunchEnv
-			withStubLauncher(t, tc.name, func(_ context.Context, _ []string, env *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+			withStubLauncher(t, tc.name, func(_ context.Context, _ []string, env *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 				gotEnv = env
 				return nil
 			})
@@ -716,7 +716,7 @@ func TestRun_LauncherLocalFlagInvalidArgsDoNotStartDaemon(t *testing.T) {
 				return &local.Status{PID: os.Getpid(), Port: 8765, Endpoint: "http://127.0.0.1:8765", StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}, nil
 			})
 			t.Cleanup(restore)
-			withStubLauncher(t, tc.agent, func(_ context.Context, _ []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+			withStubLauncher(t, tc.agent, func(_ context.Context, _ []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 				t.Fatal("launcher must not be called for invalid sigil-side args")
 				return nil
 			})
@@ -742,7 +742,7 @@ func TestRun_LauncherLocalFlagWithForwardedArgs(t *testing.T) {
 	inProcessDaemon(t)
 
 	var gotArgs []string
-	withStubLauncher(t, "claude", func(_ context.Context, args []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+	withStubLauncher(t, "claude", func(_ context.Context, args []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 		gotArgs = append([]string{}, args...)
 		return nil
 	})
@@ -767,7 +767,7 @@ func TestRun_LocalLaunchersShareReceiver(t *testing.T) {
 	envs := map[string]*local.LaunchEnv{}
 	stubs := map[string]agentLauncher{}
 	for _, name := range []string{"claude", "codex", "copilot", "pi"} {
-		stubs[name] = func(_ context.Context, _ []string, env *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger) error {
+		stubs[name] = func(_ context.Context, _ []string, env *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 			envs[name] = env
 			return nil
 		}

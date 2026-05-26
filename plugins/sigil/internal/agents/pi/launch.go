@@ -49,8 +49,11 @@ var (
 // once if it is not), and then exec's pi with the supplied args. When
 // localEnv is non-nil, the child receives local-mode SIGIL_ENDPOINT,
 // SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT and placeholder auth values so it
-// talks to the in-process receiver instead of Sigil Cloud.
-func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger) error {
+// talks to the in-process receiver instead of Sigil Cloud. The trailing
+// string arg is the sigil build version; the pi adapter does not run
+// auto-update checks (pi's own installer handles upgrades) so it is
+// accepted to satisfy the launcher signature and ignored.
+func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, _ string) error {
 	bin, err := lookPath("pi")
 	if err != nil {
 		return fmt.Errorf("pi CLI not found on PATH: %w", err)

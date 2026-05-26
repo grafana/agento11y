@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -92,6 +94,7 @@ func TestLaunch(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SIGIL_AUTO_UPDATE", "false")
 			withLookPath(t, tc.lookPath)
 
 			listFn := tc.pluginList
@@ -132,7 +135,7 @@ func TestLaunch(t *testing.T) {
 			var logbuf bytes.Buffer
 			logger := log.New(&logbuf, "", 0)
 
-			err := Launch(context.Background(), tc.args, nil, strings.NewReader(""), io.Discard, &stderr, logger)
+			err := Launch(context.Background(), tc.args, nil, strings.NewReader(""), io.Discard, &stderr, logger, "dev")
 
 			if tc.wantErr != "" {
 				require.Error(t, err)
@@ -186,7 +189,7 @@ func TestLaunch_LocalEnv(t *testing.T) {
 			})
 
 			localEnv := &local.LaunchEnv{Endpoint: "http://127.0.0.1:9000", OTLPEndpoint: "http://127.0.0.1:9000/otlp"}
-			err := Launch(context.Background(), []string{"exec", "hi"}, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+			err := Launch(context.Background(), []string{"exec", "hi"}, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev")
 			require.NoError(t, err)
 			got := envMap(execEnv)
 			assert.Equal(t, "http://127.0.0.1:9000", got["SIGIL_ENDPOINT"])
@@ -251,14 +254,17 @@ func TestPluginInstalled_ParsesPluginListOutput(t *testing.T) {
 				return []byte(tc.out), nil
 			})
 			got, err := pluginInstalled(context.Background(), "/usr/local/bin/copilot")
-			if err != nil {
-				t.Fatalf("err = %v", err)
-			}
+			require.NoError(t, err)
 			if got != tc.want {
 				t.Fatalf("got = %v, want %v", got, tc.want)
 			}
 		})
 	}
+}
+
+func launchWithLogger(t *testing.T, args []string, stderr io.Writer, logger *log.Logger) error {
+	t.Helper()
+	return Launch(context.Background(), args, nil, strings.NewReader(""), io.Discard, stderr, logger, "dev")
 }
 
 func withLookPath(t *testing.T, fn func(string) (string, error)) {
@@ -302,4 +308,49 @@ func envMap(env []string) map[string]string {
 
 func nopLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
+}
+
+func withRunUpdate(t *testing.T, fn func(context.Context, string, io.Writer) error) {
+	t.Helper()
+	prev := runUpdate
+	t.Cleanup(func() { runUpdate = prev })
+	runUpdate = fn
+}
+
+func TestLaunch_RefreshesInstalledPlugin(t *testing.T) {
+	const binPath = "/usr/local/bin/copilot"
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+
+	withLookPath(t, func(string) (string, error) { return binPath, nil })
+	withPluginList(t, func(context.Context, string) ([]byte, error) {
+		return []byte("Installed plugins:\n  • sigil-copilot (v0.1.0)\n"), nil
+	})
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("runInstall must not be called when plugin is already installed")
+		return nil
+	})
+
+	updateCalls := 0
+	withRunUpdate(t, func(_ context.Context, bin string, _ io.Writer) error {
+		updateCalls++
+		if bin != binPath {
+			t.Errorf("update bin = %q", bin)
+		}
+		return nil
+	})
+	withExecFn(t, func(string, []string, []string) error { return nil })
+
+	var stderr bytes.Buffer
+	require.NoError(t, launchWithLogger(t, nil, &stderr, log.New(io.Discard, "", 0)))
+	if updateCalls != 1 {
+		t.Fatalf("runUpdate calls = %d, want 1", updateCalls)
+	}
+	if !strings.Contains(stderr.String(), "refreshing "+PluginName+" in copilot") {
+		t.Fatalf("stderr missing refresh message: %q", stderr.String())
+	}
+	stamp := filepath.Join(state, "sigil", "update-checks", PluginName+".stamp")
+	if _, err := os.Stat(stamp); err != nil {
+		t.Fatalf("expected update stamp: %v", err)
+	}
 }

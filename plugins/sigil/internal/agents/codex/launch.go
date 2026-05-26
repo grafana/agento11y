@@ -9,8 +9,10 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/updatecheck"
 )
 
 const (
@@ -24,6 +26,8 @@ const (
 	// PluginName is the codex plugin name declared in
 	// plugins/codex/.codex-plugin/plugin.json.
 	PluginName = "sigil-codex"
+
+	updateCheckTTL = 24 * time.Hour
 )
 
 // Test seams.
@@ -31,6 +35,7 @@ var (
 	lookPath   = exec.LookPath
 	execFn     = syscall.Exec
 	runInstall = defaultRunInstall
+	runUpdate  = defaultRunUpdate
 	pluginList = defaultPluginList
 )
 
@@ -41,7 +46,7 @@ var (
 // the child receives local-mode SIGIL_ENDPOINT,
 // SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT and placeholder auth values so it talks
 // to the in-process receiver instead of Sigil Cloud.
-func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger) error {
+func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, sigilVersion string) error {
 	bin, err := lookPath("codex")
 	if err != nil {
 		return fmt.Errorf("codex CLI not found on PATH: %w", err)
@@ -79,6 +84,18 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 				"sigil: first run only — open /hooks inside codex and trust the\n"+
 					"       %s hooks to start exporting turns.\n", PluginName)
 		}
+	} else if updatecheck.ShouldRun(PluginName, updateCheckTTL, sigilVersion) {
+		_, _ = fmt.Fprintf(stderr, "sigil: refreshing %s in codex\n", PluginName)
+		if err := runUpdate(ctx, bin, stderr); err != nil {
+			logger.Printf("update %s: %v", PluginName, err)
+			_, _ = fmt.Fprintf(stderr,
+				"sigil: update of %s failed: %v\n"+
+					"sigil: continuing with the installed version. To retry manually:\n"+
+					"          codex plugin marketplace upgrade\n"+
+					"          codex plugin add %s@%s\n",
+				PluginName, err, PluginName, marketplaceAlias)
+		}
+		updatecheck.Record(PluginName, sigilVersion)
 	}
 
 	env := local.Environ(localEnv)
@@ -90,10 +107,20 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 }
 
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
-	steps := [][]string{
+	return runSteps(ctx, bin, w, [][]string{
 		{"plugin", "marketplace", "add", marketplaceRepo},
 		{"plugin", "add", PluginName + "@" + marketplaceAlias},
-	}
+	})
+}
+
+func defaultRunUpdate(ctx context.Context, bin string, w io.Writer) error {
+	return runSteps(ctx, bin, w, [][]string{
+		{"plugin", "marketplace", "upgrade"},
+		{"plugin", "add", PluginName + "@" + marketplaceAlias},
+	})
+}
+
+func runSteps(ctx context.Context, bin string, w io.Writer, steps [][]string) error {
 	for _, argv := range steps {
 		cmd := exec.CommandContext(ctx, bin, argv...)
 		cmd.Stdout = w

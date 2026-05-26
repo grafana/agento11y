@@ -14,18 +14,21 @@ import (
 	"testing"
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLaunch_MissingClaudeBinary(t *testing.T) {
 	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
-	err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger())
+	err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev")
 	if err == nil || !strings.Contains(err.Error(), "claude CLI not found") {
 		t.Fatalf("err = %v, want contains \"claude CLI not found\"", err)
 	}
 }
 
 func TestLaunch_SkipsInstallWhenPluginPresent(t *testing.T) {
+	t.Setenv("SIGIL_AUTO_UPDATE", "false")
+
 	dir := t.TempDir()
 	writeInstalled(t, dir, `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user"}]}}`)
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
@@ -43,7 +46,7 @@ func TestLaunch_SkipsInstallWhenPluginPresent(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), []string{"--resume", "abc"}, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), []string{"--resume", "abc"}, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/claude", "--resume", "abc"}) {
@@ -73,7 +76,7 @@ func TestLaunch_RunsInstallWhenOnlyForeignProjectScopeEntry(t *testing.T) {
 	})
 	withExecFn(t, func(string, []string, []string) error { return nil })
 
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -104,7 +107,7 @@ func TestLaunch_RunsInstallWhenMissing(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -131,7 +134,7 @@ func TestLaunch_RunsInstallWhenFileAbsent(t *testing.T) {
 	})
 	withExecFn(t, func(string, []string, []string) error { return nil })
 
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -153,7 +156,7 @@ func TestLaunch_RunsInstallWhenJSONMalformed(t *testing.T) {
 	})
 	withExecFn(t, func(string, []string, []string) error { return nil })
 
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if installCalls != 1 {
@@ -181,7 +184,7 @@ func TestLaunch_InstallFailureContinuesToExec(t *testing.T) {
 	})
 
 	var stderr bytes.Buffer
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !execCalled {
@@ -225,7 +228,7 @@ func TestLaunch_LocalInjectsEnvAndForwardsArgs(t *testing.T) {
 		Endpoint:     "http://127.0.0.1:9000",
 		OTLPEndpoint: "http://127.0.0.1:9000/otlp",
 	}
-	if err := Launch(context.Background(), []string{"--resume", "abc"}, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), []string{"--resume", "abc"}, localEnv, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/claude", "--resume", "abc"}) {
@@ -262,7 +265,7 @@ func TestLaunch_NormalModeDoesNotInjectLocalEnv(t *testing.T) {
 		return nil
 	})
 
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger()); err != nil {
+	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev"); err != nil {
 		t.Fatalf("Launch returned err: %v", err)
 	}
 	got := envToMap(execEnv)
@@ -463,6 +466,61 @@ func withGetwd(t *testing.T, fn func() (string, error)) {
 	getwd = fn
 }
 
+func withRunUpdate(t *testing.T, fn func(context.Context, string, io.Writer) error) {
+	t.Helper()
+	prev := runUpdate
+	t.Cleanup(func() { runUpdate = prev })
+	runUpdate = fn
+}
+
+func launch(t *testing.T, args []string, stdout, stderr io.Writer) error {
+	t.Helper()
+	return Launch(context.Background(), args, nil, strings.NewReader(""), stdout, stderr, nopLogger(), "dev")
+}
+
+func launchOK(t *testing.T, args []string, stdout, stderr io.Writer) {
+	t.Helper()
+	require.NoError(t, launch(t, args, stdout, stderr))
+}
+
 func nopLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
+}
+
+func TestLaunch_RefreshesInstalledPlugin(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+
+	dir := t.TempDir()
+	writeInstalled(t, dir, `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user"}]}}`)
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/claude", nil })
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("runInstall must not be called when plugin is already present")
+		return nil
+	})
+
+	updateCalls := 0
+	withRunUpdate(t, func(_ context.Context, bin string, _ io.Writer) error {
+		updateCalls++
+		if bin != "/usr/local/bin/claude" {
+			t.Errorf("update bin = %q", bin)
+		}
+		return nil
+	})
+	withExecFn(t, func(string, []string, []string) error { return nil })
+
+	var stderr bytes.Buffer
+	launchOK(t, nil, io.Discard, &stderr)
+	if updateCalls != 1 {
+		t.Fatalf("runUpdate calls = %d, want 1", updateCalls)
+	}
+	if !strings.Contains(stderr.String(), "refreshing "+PluginName+" in claude") {
+		t.Fatalf("stderr missing refresh message: %q", stderr.String())
+	}
+	stamp := filepath.Join(state, "sigil", "update-checks", PluginName+".stamp")
+	if _, err := os.Stat(stamp); err != nil {
+		t.Fatalf("expected update stamp: %v", err)
+	}
 }

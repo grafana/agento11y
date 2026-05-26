@@ -31,6 +31,10 @@ Then follow your agent's quickstart:
 - [Cursor](../cursor/README.md)
 - [pi](../pi/README.md) (separate JS plugin)
 
+## Auto-update
+
+`sigil claude`, `sigil codex`, and `sigil copilot` refresh the installed host plugin automatically. Set `SIGIL_AUTO_UPDATE=false` to opt out.
+
 ## Troubleshooting
 
 Hooks always exit 0, so problems only show up in the debug log. Set `SIGIL_DEBUG=true` in `~/.config/sigil/config.env` and tail `~/.local/state/sigil/logs/sigil.log`.

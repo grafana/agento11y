@@ -8,8 +8,10 @@ import (
 	"log"
 	"os/exec"
 	"syscall"
+	"time"
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/updatecheck"
 )
 
 const (
@@ -20,6 +22,8 @@ const (
 	installSource = "grafana/sigil-sdk:plugins/copilot"
 	// PluginName is the plugin name declared in plugins/copilot/plugin.json.
 	PluginName = "sigil-copilot"
+
+	updateCheckTTL = 24 * time.Hour
 )
 
 // Test seams.
@@ -27,6 +31,7 @@ var (
 	lookPath   = exec.LookPath
 	execFn     = syscall.Exec
 	runInstall = defaultRunInstall
+	runUpdate  = defaultRunUpdate
 	pluginList = defaultPluginList
 )
 
@@ -37,7 +42,7 @@ var (
 // non-nil, the child receives local-mode SIGIL_ENDPOINT,
 // SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT and placeholder auth values so it talks
 // to the in-process receiver instead of Sigil Cloud.
-func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger) error {
+func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, sigilVersion string) error {
 	bin, err := lookPath("copilot")
 	if err != nil {
 		return fmt.Errorf("copilot CLI not found on PATH: %w", err)
@@ -67,6 +72,17 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 					"          copilot plugin install %s\n",
 				PluginName, err, installSource)
 		}
+	} else if updatecheck.ShouldRun(PluginName, updateCheckTTL, sigilVersion) {
+		_, _ = fmt.Fprintf(stderr, "sigil: refreshing %s in copilot\n", PluginName)
+		if err := runUpdate(ctx, bin, stderr); err != nil {
+			logger.Printf("update %s: %v", PluginName, err)
+			_, _ = fmt.Fprintf(stderr,
+				"sigil: update of %s failed: %v\n"+
+					"sigil: continuing with the installed version. To retry manually:\n"+
+					"          copilot plugin update %s\n",
+				PluginName, err, PluginName)
+		}
+		updatecheck.Record(PluginName, sigilVersion)
 	}
 
 	env := local.Environ(localEnv)
@@ -83,6 +99,16 @@ func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
 	cmd.Stderr = w
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("copilot plugin install %s: %w", installSource, err)
+	}
+	return nil
+}
+
+func defaultRunUpdate(ctx context.Context, bin string, w io.Writer) error {
+	cmd := exec.CommandContext(ctx, bin, "plugin", "update", PluginName)
+	cmd.Stdout = w
+	cmd.Stderr = w
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("copilot plugin update %s: %w", PluginName, err)
 	}
 	return nil
 }
