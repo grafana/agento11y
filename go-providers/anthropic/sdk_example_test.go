@@ -55,7 +55,7 @@ func Example_withSigilDefer() {
 		ConversationID: "conv-anthropic-2",
 		AgentName:      "assistant-anthropic",
 		AgentVersion:   "1.0.0",
-		Model:          sigil.ModelRef{Provider: "anthropic", Name: string(req.Model)},
+		Model:          sigil.ModelRef{Provider: "anthropic", Name: req.Model},
 	})
 	defer rec.End()
 
@@ -117,7 +117,7 @@ func Example_withSigilStreamingDefer() {
 		ConversationID: "conv-anthropic-4",
 		AgentName:      "assistant-anthropic",
 		AgentVersion:   "1.0.0",
-		Model:          sigil.ModelRef{Provider: "anthropic", Name: string(req.Model)},
+		Model:          sigil.ModelRef{Provider: "anthropic", Name: req.Model},
 	})
 	defer rec.End()
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -688,8 +689,8 @@ func toolErrorOr(msg string) error {
 var errToolError = errors.New("tool returned error")
 
 func findPendingToolIndex(tools []fragment.ToolRecord, toolName string) int {
-	for i := len(tools) - 1; i >= 0; i-- {
-		if tools[i].ToolName == toolName && tools[i].CompletedAt == "" {
+	for i, v := range slices.Backward(tools) {
+		if v.ToolName == toolName && v.CompletedAt == "" {
 			return i
 		}
 	}
@@ -697,11 +698,11 @@ func findPendingToolIndex(tools []fragment.ToolRecord, toolName string) int {
 }
 
 func findPendingSubagentIndex(items []fragment.SubagentRecord, agentName, displayName string) int {
-	for i := len(items) - 1; i >= 0; i-- {
-		if items[i].CompletedAt != "" {
+	for i, v := range slices.Backward(items) {
+		if v.CompletedAt != "" {
 			continue
 		}
-		if items[i].AgentName == agentName || items[i].AgentDisplayName == displayName {
+		if v.AgentName == agentName || v.AgentDisplayName == displayName {
 			return i
 		}
 	}

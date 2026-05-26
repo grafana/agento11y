@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -227,8 +229,8 @@ func buildSubagentMetadata(subagents []fragment.SubagentRecord) []map[string]any
 }
 
 func mapCallError(records []fragment.ErrorRecord) (*fragment.ErrorRecord, error) {
-	for i := len(records) - 1; i >= 0; i-- {
-		item := records[i]
+	for _, v := range slices.Backward(records) {
+		item := v
 		if item.Recoverable || item.Context == "tool_execution" {
 			continue
 		}
@@ -328,9 +330,7 @@ func cloneStringMap(in map[string]string) map[string]string {
 		return nil
 	}
 	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
+	maps.Copy(out, in)
 	return out
 }
 
@@ -339,9 +339,7 @@ func cloneAnyMap(in map[string]any) map[string]any {
 		return nil
 	}
 	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
+	maps.Copy(out, in)
 	return out
 }
 

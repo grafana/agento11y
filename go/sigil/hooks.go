@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -282,10 +283,5 @@ func phaseEnabled(phases []HookPhase, phase HookPhase) bool {
 	if len(phases) == 0 {
 		return true
 	}
-	for _, candidate := range phases {
-		if candidate == phase {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(phases, phase)
 }

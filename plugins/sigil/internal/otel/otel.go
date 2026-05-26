@@ -208,13 +208,13 @@ func envOr(key, fallback string) string {
 
 func parseHeaders(raw string) map[string]string {
 	out := map[string]string{}
-	for _, pair := range strings.Split(raw, ",") {
-		eq := strings.IndexByte(pair, '=')
-		if eq < 0 {
+	for pair := range strings.SplitSeq(raw, ",") {
+		before, after, ok := strings.Cut(pair, "=")
+		if !ok {
 			continue
 		}
-		key := strings.TrimSpace(pair[:eq])
-		value := strings.TrimSpace(pair[eq+1:])
+		key := strings.TrimSpace(before)
+		value := strings.TrimSpace(after)
 		if key != "" && value != "" {
 			out[key] = value
 		}
@@ -230,4 +230,3 @@ func hasAuthorizationHeader(headers map[string]string) bool {
 	}
 	return false
 }
-

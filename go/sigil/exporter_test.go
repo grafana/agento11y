@@ -71,7 +71,7 @@ func TestGenerationExporterFlushesByBatchSize(t *testing.T) {
 		_ = client.Shutdown(context.Background())
 	})
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		_, rec := client.StartGeneration(context.Background(), GenerationStart{Model: ModelRef{Provider: "openai", Name: "gpt-5"}})
 		rec.SetResult(Generation{
 			Input:  []Message{UserTextMessage("hello")},
@@ -278,7 +278,7 @@ func TestFlushDrainsQueuedGenerations(t *testing.T) {
 	})
 
 	const n = 50
-	for i := 0; i < n; i++ {
+	for i := range n {
 		_, rec := client.StartGeneration(context.Background(), GenerationStart{Model: ModelRef{Provider: "openai", Name: "gpt-5"}})
 		rec.SetResult(Generation{
 			Input:  []Message{UserTextMessage("hello")},

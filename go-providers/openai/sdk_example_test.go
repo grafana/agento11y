@@ -56,7 +56,7 @@ func Example_withSigilDefer() {
 		ConversationID: "conv-openai-2",
 		AgentName:      "assistant-openai",
 		AgentVersion:   "1.0.0",
-		Model:          sigil.ModelRef{Provider: "openai", Name: string(req.Model)},
+		Model:          sigil.ModelRef{Provider: "openai", Name: req.Model},
 	})
 	defer rec.End()
 
@@ -118,7 +118,7 @@ func Example_withSigilStreamingDefer() {
 		ConversationID: "conv-openai-4",
 		AgentName:      "assistant-openai",
 		AgentVersion:   "1.0.0",
-		Model:          sigil.ModelRef{Provider: "openai", Name: string(req.Model)},
+		Model:          sigil.ModelRef{Provider: "openai", Name: req.Model},
 	})
 	defer rec.End()
 

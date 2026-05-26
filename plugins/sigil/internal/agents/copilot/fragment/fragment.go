@@ -91,7 +91,7 @@ type Fragment struct {
 	Tools           []ToolRecord     `json:"tools,omitempty"`
 	Errors          []ErrorRecord    `json:"errors,omitempty"`
 	Subagents       []SubagentRecord `json:"subagents,omitempty"`
-	TokenUsage      TokenUsage       `json:"tokenUsage,omitempty"`
+	TokenUsage      TokenUsage       `json:"tokenUsage"`
 	StartedAt       string           `json:"startedAt,omitempty"`
 	CompletedAt     string           `json:"completedAt,omitempty"`
 	LastEventAt     string           `json:"lastEventAt,omitempty"`

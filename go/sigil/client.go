@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -543,9 +544,7 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 	}
 	if len(c.config.Tags) > 0 {
 		merged := cloneTags(c.config.Tags)
-		for k, v := range seed.Tags {
-			merged[k] = v
-		}
+		maps.Copy(merged, seed.Tags)
 		seed.Tags = merged
 	}
 
@@ -559,7 +558,7 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 
 	// Resolve content capture mode before the span starts so MetadataOnly never
 	// attaches sensitive content to live span attributes.
-	resolverMode := callContentCaptureResolver(c.config.ContentCaptureResolver, ctx, seed.Metadata)
+	resolverMode := callContentCaptureResolver(ctx, c.config.ContentCaptureResolver, seed.Metadata)
 	clientMode := resolveClientContentCaptureMode(resolveContentCaptureMode(resolverMode, c.config.ContentCapture))
 	ccMode := resolveContentCaptureMode(seed.ContentCapture, clientMode)
 
@@ -635,7 +634,7 @@ func (c *Client) StartEmbedding(ctx context.Context, start EmbeddingStart) (cont
 	}
 	seed.StartedAt = startedAt
 
-	resolverMode := callContentCaptureResolver(c.config.ContentCaptureResolver, ctx, seed.Metadata)
+	resolverMode := callContentCaptureResolver(ctx, c.config.ContentCaptureResolver, seed.Metadata)
 	effectiveMode := resolveClientContentCaptureMode(resolveContentCaptureMode(resolverMode, c.config.ContentCapture))
 
 	tracer := c.tracer
@@ -714,7 +713,7 @@ func (c *Client) StartToolExecution(ctx context.Context, start ToolExecutionStar
 
 	// Resolve content capture before the span starts so MetadataOnly never
 	// attaches sensitive content to live span attributes.
-	resolverMode := callContentCaptureResolver(c.config.ContentCaptureResolver, ctx, nil)
+	resolverMode := callContentCaptureResolver(ctx, c.config.ContentCaptureResolver, nil)
 	effectiveClientDefault := resolveContentCaptureMode(resolverMode, c.config.ContentCapture)
 	ctxMode, ctxSet := contentCaptureModeFromContext(ctx)
 	toolMode := resolveToolContentCaptureMode(seed.ContentCapture, ctxMode, ctxSet, effectiveClientDefault)
@@ -1656,7 +1655,7 @@ func coerceInt64(value any) (int64, bool) {
 	case uint32:
 		return int64(typed), true
 	case uint64:
-		if typed > uint64(^uint64(0)>>1) {
+		if typed > ^uint64(0)>>1 {
 			return 0, false
 		}
 		return int64(typed), true
@@ -2147,9 +2146,7 @@ func mergeTags(base, override map[string]string) map[string]string {
 	if out == nil {
 		out = map[string]string{}
 	}
-	for key, value := range override {
-		out[key] = value
-	}
+	maps.Copy(out, override)
 	return out
 }
 
@@ -2162,9 +2159,7 @@ func mergeMetadata(base, override map[string]any) map[string]any {
 	if out == nil {
 		out = map[string]any{}
 	}
-	for key, value := range override {
-		out[key] = value
-	}
+	maps.Copy(out, override)
 	return out
 }
 

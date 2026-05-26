@@ -55,7 +55,6 @@ var (
 	bannerSubtitle = lipgloss.NewStyle().Faint(true)
 	bannerLabel    = lipgloss.NewStyle().Faint(true)
 	bannerURL      = lipgloss.NewStyle().Underline(true)
-	inlineAccent   = lipgloss.NewStyle().Bold(true).Foreground(grafanaOrange)
 )
 
 // grafanaTheme returns a huh theme tinted with Grafana orange for the

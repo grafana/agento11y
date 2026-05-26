@@ -517,7 +517,7 @@ func TestConformance_ConversationTitleSemantics(t *testing.T) {
 				}
 			}
 
-			recordGeneration(t, env, ctx, start, sigil.Generation{})
+			recordGeneration(t, ctx, env, start, sigil.Generation{})
 
 			span := findSpan(t, env.Spans.Ended(), conformanceOperationName)
 			attrs := spanAttrs(span)
@@ -608,7 +608,7 @@ func TestConformance_UserIDSemantics(t *testing.T) {
 				}
 			}
 
-			recordGeneration(t, env, ctx, start, sigil.Generation{})
+			recordGeneration(t, ctx, env, start, sigil.Generation{})
 
 			span := findSpan(t, env.Spans.Ended(), conformanceOperationName)
 			attrs := spanAttrs(span)
@@ -685,7 +685,7 @@ func TestConformance_AgentIdentitySemantics(t *testing.T) {
 				AgentVersion: tc.resultVersion,
 			}
 
-			recordGeneration(t, env, ctx, start, result)
+			recordGeneration(t, ctx, env, start, result)
 
 			span := findSpan(t, env.Spans.Ended(), conformanceOperationName)
 			attrs := spanAttrs(span)
@@ -759,7 +759,7 @@ func TestConformance_EffectiveVersionSemantics(t *testing.T) {
 				Model:            conformanceModel,
 				EffectiveVersion: tc.effectiveVersion,
 			}
-			recordGeneration(t, env, context.Background(), start, sigil.Generation{})
+			recordGeneration(t, context.Background(), env, start, sigil.Generation{})
 
 			env.Shutdown(t)
 			generation := env.Ingest.SingleGeneration(t)
@@ -815,7 +815,7 @@ func TestConformance_EffectiveVersionResultOverridesStart(t *testing.T) {
 				EffectiveVersion: tc.startValue,
 			}
 			result := sigil.Generation{EffectiveVersion: tc.resultValue}
-			recordGeneration(t, env, context.Background(), start, result)
+			recordGeneration(t, context.Background(), env, start, result)
 
 			env.Shutdown(t)
 			generation := env.Ingest.SingleGeneration(t)
@@ -830,7 +830,7 @@ func TestConformance_EffectiveVersionResultOverridesStart(t *testing.T) {
 func TestConformance_StreamingMode(t *testing.T) {
 	env := newConformanceEnv(t)
 
-	recordGeneration(t, env, context.Background(), sigil.GenerationStart{
+	recordGeneration(t, context.Background(), env, sigil.GenerationStart{
 		ConversationID: "conv-sync",
 		Model:          conformanceModel,
 		StartedAt:      time.Date(2026, 3, 12, 14, 0, 0, 0, time.UTC),
@@ -1581,7 +1581,7 @@ func TestConformance_ShutdownFlushesPendingGeneration(t *testing.T) {
 		cfg.GenerationExport.BatchSize = 10
 	}))
 
-	recordGeneration(t, env, context.Background(), sigil.GenerationStart{
+	recordGeneration(t, context.Background(), env, sigil.GenerationStart{
 		ConversationID: "conv-shutdown",
 		Model:          conformanceModel,
 		StartedAt:      time.Date(2026, 3, 12, 14, 6, 0, 0, time.UTC),
@@ -1606,7 +1606,7 @@ func TestConformance_ShutdownFlushesPendingGeneration(t *testing.T) {
 	}
 }
 
-func recordGeneration(t *testing.T, env *conformanceEnv, ctx context.Context, start sigil.GenerationStart, result sigil.Generation) {
+func recordGeneration(t *testing.T, ctx context.Context, env *conformanceEnv, start sigil.GenerationStart, result sigil.Generation) {
 	t.Helper()
 
 	_, recorder := env.Client.StartGeneration(ctx, start)

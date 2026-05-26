@@ -3,6 +3,7 @@ package openai
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -47,7 +48,7 @@ func ChatCompletionsFromRequestResponse(req osdk.ChatCompletionNewParams, resp *
 		artifacts = append(artifacts, artifact)
 	}
 
-	requestModel := string(req.Model)
+	requestModel := req.Model
 	responseModel := resp.Model
 	if responseModel == "" {
 		responseModel = requestModel
@@ -585,9 +586,7 @@ func cloneStringMap(in map[string]string) map[string]string {
 	}
 
 	out := make(map[string]string, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
+	maps.Copy(out, in)
 
 	return out
 }
@@ -598,9 +597,7 @@ func cloneAnyMap(in map[string]any) map[string]any {
 	}
 
 	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
+	maps.Copy(out, in)
 
 	return out
 }

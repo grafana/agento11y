@@ -28,12 +28,14 @@ type Message struct {
 }
 
 type Part struct {
-	Kind       PartKind     `json:"kind"`
-	Text       string       `json:"text,omitempty"`
-	Thinking   string       `json:"thinking,omitempty"`
-	ToolCall   *ToolCall    `json:"tool_call,omitempty"`
-	ToolResult *ToolResult  `json:"tool_result,omitempty"`
-	Metadata   PartMetadata `json:"metadata,omitempty"`
+	Kind       PartKind    `json:"kind"`
+	Text       string      `json:"text,omitempty"`
+	Thinking   string      `json:"thinking,omitempty"`
+	ToolCall   *ToolCall   `json:"tool_call,omitempty"`
+	ToolResult *ToolResult `json:"tool_result,omitempty"`
+	// Metadata is a value-type struct where `omitempty` has no effect; the
+	// field is always emitted in JSON form.
+	Metadata PartMetadata `json:"metadata"`
 }
 
 // PartMetadata carries provider-specific details while keeping the core shape typed.

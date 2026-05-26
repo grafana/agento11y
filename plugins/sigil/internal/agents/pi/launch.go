@@ -176,8 +176,8 @@ func sourceMatchesPlugin(source, settingsDir string) bool {
 	if source == "" {
 		return false
 	}
-	if strings.HasPrefix(source, npmPrefix) {
-		return stripNpmVersion(strings.TrimPrefix(source, npmPrefix)) == pluginName
+	if after, ok := strings.CutPrefix(source, npmPrefix); ok {
+		return stripNpmVersion(after) == pluginName
 	}
 	if filepath.IsAbs(source) || strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../") {
 		path := source

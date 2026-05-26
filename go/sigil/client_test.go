@@ -3,6 +3,7 @@ package sigil
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1130,9 +1131,9 @@ func TestToolExecutionRecorderContentCapture(t *testing.T) {
 			t.Fatalf("tool execution error: %v", err)
 		}
 		spans := recorder.Ended()
-		for i := len(spans) - 1; i >= 0; i-- {
-			if isToolSpan(spans[i]) {
-				return spans[i]
+		for _, v := range slices.Backward(spans) {
+			if isToolSpan(v) {
+				return v
 			}
 		}
 		t.Fatal("tool span not found")

@@ -45,7 +45,7 @@ func TestConformance_AnthropicSyncMapping(t *testing.T) {
 		ConversationTitle: "Anthropic sync",
 		AgentName:         "agent-anthropic",
 		AgentVersion:      "v-anthropic",
-		Model:             sigil.ModelRef{Provider: "anthropic", Name: string(req.Model)},
+		Model:             sigil.ModelRef{Provider: "anthropic", Name: req.Model},
 	}
 
 	generation, err := FromRequestResponse(
@@ -156,7 +156,7 @@ func TestConformance_AnthropicStreamMapping(t *testing.T) {
 		ConversationID: "conv-anthropic-stream",
 		AgentName:      "agent-anthropic-stream",
 		AgentVersion:   "v-anthropic-stream",
-		Model:          sigil.ModelRef{Provider: "anthropic", Name: string(req.Model)},
+		Model:          sigil.ModelRef{Provider: "anthropic", Name: req.Model},
 	}
 
 	generation, err := FromStream(
