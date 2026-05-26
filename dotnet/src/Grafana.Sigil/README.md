@@ -6,6 +6,8 @@ Core runtime for normalized generation export and OpenTelemetry-aligned instrume
 
 ```bash
 dotnet add package Grafana.Sigil
+dotnet add package OpenTelemetry
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
 ```
 
 ## Configure `SigilClient`

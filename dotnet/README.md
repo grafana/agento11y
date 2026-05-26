@@ -27,6 +27,8 @@ Package docs:
 dotnet add package Grafana.Sigil
 dotnet add package Grafana.Sigil.OpenAI
 # or: Grafana.Sigil.Anthropic / Grafana.Sigil.Gemini
+dotnet add package OpenTelemetry
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
 ```
 
 For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance ID, and API token), refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/).

@@ -14,6 +14,8 @@ Use this package when you want:
 pip install sigil-sdk
 ```
 
+Install `opentelemetry-sdk` in applications that configure local trace or metric providers.
+
 For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance ID, and API token), refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/).
 
 ## Validation
@@ -232,6 +234,10 @@ client = Client(
 Configure OTEL exporters (traces/metrics) in your application OTEL SDK setup. You can optionally pass `tracer` and `meter` via `ClientConfig`.
 
 Quick OTEL setup pattern before creating the Sigil client:
+
+```bash
+pip install opentelemetry-sdk
+```
 
 ```python
 from opentelemetry import metrics, trace
