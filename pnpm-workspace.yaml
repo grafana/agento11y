@@ -22,3 +22,7 @@ blockExoticSubdeps: true
 strictDepBuilds: true
 allowBuilds:
   esbuild: true
+  koffi: true
+  protobufjs: true
+  sqlite3: true
+  tree-sitter: true
