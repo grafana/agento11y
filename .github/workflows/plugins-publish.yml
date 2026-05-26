@@ -64,6 +64,12 @@ jobs:
           node-version: "24"
           cache: pnpm
 
+      - name: Setup mise
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
+        with:
+          install: true
+          cache: true
+
       - run: pnpm install --frozen-lockfile
 
       - name: Resolve plugin list
