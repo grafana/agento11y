@@ -63,16 +63,16 @@ importers:
         version: 6.33.0(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@opentelemetry/context-async-hooks':
-        specifier: ^2.6.0
+        specifier: 2.6.1
         version: 2.6.1(@opentelemetry/api@1.9.1)
       '@strands-agents/sdk':
-        specifier: ^1.0.0-rc.5
+        specifier: 1.0.0-rc.5
         version: 1.0.0-rc.5(@a2a-js/sdk@0.3.13(@grpc/grpc-js@1.14.3)(express@5.2.1))(@anthropic-ai/sdk@0.81.0(zod@4.3.6))(@google/genai@1.47.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6)))(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-metrics-otlp-http@0.213.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.213.0(@opentelemetry/api@1.9.1))(@opentelemetry/resources@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.6.1(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.6.1(@opentelemetry/api@1.9.1))(express@5.2.1)(openai@6.33.0(ws@8.20.0)(zod@4.3.6))(zod@4.3.6)
       '@types/node':
-        specifier: ^24.11.0
+        specifier: 24.12.0
         version: 24.12.0
       typescript:
-        specifier: ^6.0.0
+        specifier: 6.0.2
         version: 6.0.2
 
   plugins/opencode:
@@ -81,22 +81,22 @@ importers:
         specifier: workspace:*
         version: link:../../js
       '@opencode-ai/plugin':
-        specifier: ^1.3.0
+        specifier: 1.3.13
         version: 1.3.13
       '@opencode-ai/sdk':
-        specifier: ^1.3.2
+        specifier: 1.3.13
         version: 1.3.13
       '@types/node':
-        specifier: ^24.0.0
+        specifier: 24.12.0
         version: 24.12.0
       esbuild:
-        specifier: ^0.27.3
+        specifier: 0.27.4
         version: 0.27.4
       typescript:
-        specifier: ^6.0.0
+        specifier: 6.0.2
         version: 6.0.2
       vitest:
-        specifier: ^4.1.0
+        specifier: 4.1.2
         version: 4.1.2(@opentelemetry/api@1.9.1)(@types/node@24.12.0)(vite@8.0.3(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)(@types/node@24.12.0)(esbuild@0.27.4)(yaml@2.8.3))
 
   plugins/pi:
@@ -115,40 +115,40 @@ importers:
         specifier: workspace:*
         version: link:../../js
       '@mariozechner/pi-ai':
-        specifier: '*'
+        specifier: 0.70.5
         version: 0.70.5(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
-        specifier: '*'
+        specifier: 0.70.5
         version: 0.70.5(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@opentelemetry/api':
-        specifier: ^1.9.0
+        specifier: 1.9.1
         version: 1.9.1
       '@opentelemetry/exporter-metrics-otlp-http':
-        specifier: ^0.214.0
+        specifier: 0.214.0
         version: 0.214.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/exporter-trace-otlp-http':
-        specifier: ^0.214.0
+        specifier: 0.214.0
         version: 0.214.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/resources':
-        specifier: ^2.6.1
+        specifier: 2.6.1
         version: 2.6.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-metrics':
-        specifier: ^2.1.0
+        specifier: 2.6.1
         version: 2.6.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-trace-base':
-        specifier: ^2.5.0
+        specifier: 2.6.1
         version: 2.6.1(@opentelemetry/api@1.9.1)
       '@types/node':
-        specifier: ^25.6.0
+        specifier: 25.6.0
         version: 25.6.0
       esbuild:
-        specifier: ^0.28.0
+        specifier: 0.28.0
         version: 0.28.0
       typescript:
-        specifier: ^6.0.3
+        specifier: 6.0.3
         version: 6.0.3
       vitest:
-        specifier: ^4.1.4
+        specifier: 4.1.5
         version: 4.1.5(@opentelemetry/api@1.9.1)(@types/node@25.6.0)(vite@8.0.3(@emnapi/core@1.9.1)(@emnapi/runtime@1.9.1)(@types/node@25.6.0)(esbuild@0.28.0)(yaml@2.8.3))
 
 packages:

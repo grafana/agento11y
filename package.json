@@ -1,4 +1,7 @@
 {
   "private": true,
-  "packageManager": "pnpm@10.28.2"
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "check:js-dependency-pinning": "node js/scripts/check-js-dependency-pinning.mjs"
+  }
 }

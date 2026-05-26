@@ -95,9 +95,13 @@ description = "Lint Pi plugin code"
 depends = ["deps"]
 run = "pnpm --filter @grafana/sigil-pi run lint"
 
+[tasks."lint:js-dependency-pinning"]
+description = "Verify JavaScript dependencies are pinned where required"
+run = "pnpm run check:js-dependency-pinning"
+
 [tasks.lint]
 description = "Run all linting"
-depends = ["lint:go", "lint:py", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi"]
+depends = ["lint:go", "lint:py", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi", "lint:js-dependency-pinning"]
 
 # --- Type checking ---
 
