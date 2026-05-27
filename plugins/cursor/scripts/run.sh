@@ -9,10 +9,14 @@
 # common locations directly. Set SIGIL_BIN to override.
 set -u
 
+# Save the original stdin (the JSON payload from Cursor) before the heredoc
+# below replaces fd 0 with the candidate-path list.
+exec 3<&0
+
 # Iterate over a newline-delimited list so paths with spaces (e.g. macOS
 # user homes) survive word-splitting.
 while IFS= read -r b; do
-  [ -n "$b" ] && [ -x "$b" ] && exec "$b" cursor hook "$@"
+  [ -n "$b" ] && [ -x "$b" ] && exec "$b" cursor hook "$@" <&3
 done <<EOF
 ${SIGIL_BIN:-}
 ${HOME:-}/go/bin/sigil
