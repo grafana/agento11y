@@ -293,7 +293,12 @@ function toBase64Payload(value: string | undefined): string {
   if (value === undefined || value.length === 0) {
     return '';
   }
-  return Buffer.from(value, 'utf8').toString('base64');
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
 }
 
 function toInt64String(value: number | undefined): string {

@@ -1,5 +1,6 @@
 packages:
   - 'js'
+  - 'js-core'
   - 'plugins/*'
 
 # Security Hardening Week package-manager policy.

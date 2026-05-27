@@ -1,5 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
-
 type SigilContextValues = {
   conversationId?: string;
   conversationTitle?: string;
@@ -8,7 +6,12 @@ type SigilContextValues = {
   agentVersion?: string;
 };
 
-const storage = new AsyncLocalStorage<SigilContextValues>();
+type ContextStorage<T> = {
+  getStore(): T | undefined;
+  run<R>(store: T, callback: () => R): R;
+};
+
+type AsyncLocalStorageConstructor = new <T>() => ContextStorage<T>;
 
 export function withConversationId<T>(conversationId: string, callback: () => T): T {
   return runWithContext({ conversationId }, callback);
@@ -72,4 +75,43 @@ function normalizedString(value: string | undefined): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveNodeAsyncLocalStorage(): AsyncLocalStorageConstructor | undefined {
+  const processWithBuiltins = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process;
+  const module = processWithBuiltins?.getBuiltinModule?.('async_hooks') as
+    | { AsyncLocalStorage?: AsyncLocalStorageConstructor }
+    | undefined;
+  return module?.AsyncLocalStorage;
+}
+
+// NoopContextStorage is used when the runtime does not expose Node's
+// AsyncLocalStorage (for example some edge runtimes). A naive mutable-global
+// fallback would silently mix contexts across concurrent async chains, which
+// is worse than no propagation at all because telemetry would attribute
+// records to the wrong conversation/user. Disabling propagation makes the
+// limitation observable: callers must pass identifiers explicitly via the
+// generation/tool start fields when running in such a runtime.
+class NoopContextStorage<T> implements ContextStorage<T> {
+  getStore(): T | undefined {
+    return undefined;
+  }
+
+  run<R>(_store: T, callback: () => R): R {
+    return callback();
+  }
+}
+
+const AsyncLocalStorage = resolveNodeAsyncLocalStorage();
+const storage: ContextStorage<SigilContextValues> =
+  AsyncLocalStorage !== undefined
+    ? new AsyncLocalStorage<SigilContextValues>()
+    : new NoopContextStorage<SigilContextValues>();
+
+if (AsyncLocalStorage === undefined && typeof console !== 'undefined' && typeof console.warn === 'function') {
+  console.warn(
+    'sigil: AsyncLocalStorage is not available in this runtime; context helpers ' +
+      '(withConversationId, withUserId, withAgentName, ...) are disabled. ' +
+      'Pass identifiers explicitly on each startGeneration / startToolExecution call.',
+  );
 }

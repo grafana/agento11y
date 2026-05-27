@@ -15,6 +15,7 @@ coverage/
 .storybook-static/
 *.tsbuildinfo
 js/.test-dist/
+js-core/proto/
 python/build/
 python-frameworks/*/build/
 

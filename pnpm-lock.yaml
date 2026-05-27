@@ -75,6 +75,25 @@ importers:
         specifier: 6.0.2
         version: 6.0.2
 
+  js-core:
+    dependencies:
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.1
+    devDependencies:
+      '@grpc/grpc-js':
+        specifier: 1.14.3
+        version: 1.14.3
+      '@grpc/proto-loader':
+        specifier: 0.8.0
+        version: 0.8.0
+      '@types/node':
+        specifier: 24.12.0
+        version: 24.12.0
+      typescript:
+        specifier: 6.0.2
+        version: 6.0.2
+
   plugins/opencode:
     devDependencies:
       '@grafana/sigil-sdk-js':
