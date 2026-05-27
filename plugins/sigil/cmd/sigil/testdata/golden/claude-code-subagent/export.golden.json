@@ -23,7 +23,7 @@
           }
         ],
         "metadata": {
-          "sigil.conversation.title": "cc-subagent-sess-1",
+          "sigil.conversation.title": "inspect the repository entrypoints",
           "sigil.sdk.content_capture_mode": "full",
           "sigil.sdk.name": "sdk-go",
           "sigil.user.id": "test-user"
@@ -68,7 +68,7 @@
         "effective_version": "\u003cNORMALIZED\u003e",
         "id": "eb85615f-6608-582f-9e24-ab0e555801cb",
         "metadata": {
-          "sigil.conversation.title": "cc-subagent-sess-1",
+          "sigil.conversation.title": "inspect the repository entrypoints",
           "sigil.sdk.content_capture_mode": "full",
           "sigil.sdk.name": "sdk-go",
           "sigil.user.id": "test-user"
@@ -120,7 +120,7 @@
           }
         ],
         "metadata": {
-          "sigil.conversation.title": "cc-subagent-sess-1",
+          "sigil.conversation.title": "inspect the repository entrypoints",
           "sigil.sdk.content_capture_mode": "full",
           "sigil.sdk.name": "sdk-go",
           "sigil.user.id": "test-user"

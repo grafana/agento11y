@@ -20,7 +20,7 @@
           }
         ],
         "metadata": {
-          "sigil.conversation.title": "cc-sess-1",
+          "sigil.conversation.title": "list go files",
           "sigil.sdk.content_capture_mode": "full",
           "sigil.sdk.name": "sdk-go",
           "sigil.user.id": "test-user"
@@ -86,7 +86,7 @@
           }
         ],
         "metadata": {
-          "sigil.conversation.title": "cc-sess-1",
+          "sigil.conversation.title": "list go files",
           "sigil.sdk.content_capture_mode": "full",
           "sigil.sdk.name": "sdk-go",
           "sigil.user.id": "test-user"

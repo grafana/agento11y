@@ -211,11 +211,12 @@ func TestProcess_ContentModes(t *testing.T) {
 
 func TestProcess_ConversationTitle(t *testing.T) {
 	tests := []struct {
-		name       string
-		state      state.Session
-		lines      []transcript.Line
-		wantTitle  string
-		wantGenCnt int
+		name          string
+		state         state.Session
+		lines         []transcript.Line
+		wantTitle     string
+		wantConvTitle string
+		wantGenCnt    int
 	}{
 		{
 			name:  "title from first prompt",
@@ -230,8 +231,9 @@ func TestProcess_ConversationTitle(t *testing.T) {
 					{Type: "text", Text: "done"},
 				}, "end_turn"),
 			},
-			wantTitle:  "fix the auth bug",
-			wantGenCnt: 2,
+			wantTitle:     "fix the auth bug",
+			wantConvTitle: "fix the auth bug",
+			wantGenCnt:    2,
 		},
 		{
 			name:  "preserves existing title",
@@ -242,8 +244,34 @@ func TestProcess_ConversationTitle(t *testing.T) {
 					{Type: "text", Text: "ok"},
 				}, "end_turn"),
 			},
-			wantTitle:  "old title",
-			wantGenCnt: 1,
+			wantTitle:     "old title",
+			wantConvTitle: "old title",
+			wantGenCnt:    1,
+		},
+		{
+			name:  "falls back to session ID without user lines",
+			state: state.Session{},
+			lines: []transcript.Line{
+				makeAssistantLine("claude-sonnet-4-20250514", 10, []transcript.ContentBlock{
+					{Type: "text", Text: "hi"},
+				}, "end_turn"),
+			},
+			wantTitle:     "",
+			wantConvTitle: "sess-1",
+			wantGenCnt:    1,
+		},
+		{
+			name:  "truncates long prompt to 100 chars",
+			state: state.Session{},
+			lines: []transcript.Line{
+				makeUserLine(strings.Repeat("a", 200)),
+				makeAssistantLine("claude-sonnet-4-20250514", 10, []transcript.ContentBlock{
+					{Type: "text", Text: "ok"},
+				}, "end_turn"),
+			},
+			wantTitle:     strings.Repeat("a", 200),
+			wantConvTitle: strings.Repeat("a", 100),
+			wantGenCnt:    1,
 		},
 	}
 
@@ -258,10 +286,9 @@ func TestProcess_ConversationTitle(t *testing.T) {
 			if len(gens) != tt.wantGenCnt {
 				t.Fatalf("got %d generations, want %d", len(gens), tt.wantGenCnt)
 			}
-			// ConversationTitle always equals SessionID
 			for i, gen := range gens {
-				if gen.ConversationTitle != "sess-1" {
-					t.Errorf("gen[%d].ConversationTitle = %q, want sess-1", i, gen.ConversationTitle)
+				if gen.ConversationTitle != tt.wantConvTitle {
+					t.Errorf("gen[%d].ConversationTitle = %q, want %q", i, gen.ConversationTitle, tt.wantConvTitle)
 				}
 			}
 		})
