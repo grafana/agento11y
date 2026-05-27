@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -45,4 +46,38 @@ test('sdk js core package keeps provider and framework dependencies out of defau
       `${dependencyName} should not be a default dependency of @grafana/sigil-sdk-js-core`,
     );
   }
+});
+
+test('core entrypoint loads in runtimes without process or Buffer globals', () => {
+  // The core package promises to load on edge-like runtimes where Node-only
+  // globals (process, Buffer) and Node built-in modules (node:async_hooks,
+  // node:crypto) are not available. The TS build emits the same source under
+  // .test-dist, so we point the smoke test at that compiled entry to avoid
+  // depending on the published dist layout.
+  const coreEntry = path.join(__dirname, '..', '.test-dist', 'core.js');
+  const coreEntryUrl = pathToFileURL(coreEntry).href;
+  const script = `
+    delete globalThis.process;
+    delete globalThis.Buffer;
+    const mod = await import(${JSON.stringify(coreEntryUrl)});
+    if (typeof mod.SigilClient !== 'function') {
+      throw new Error('SigilClient missing from core export');
+    }
+    if (typeof mod.createSigilClient !== 'function') {
+      throw new Error('createSigilClient missing from core export');
+    }
+    // Constructing the default-config client must not touch Buffer or read
+    // process.env on its hot path.
+    new mod.SigilClient({ generationExport: { protocol: 'none', endpoint: 'http://localhost' } });
+  `;
+
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+    encoding: 'utf8',
+  });
+
+  assert.equal(
+    result.status,
+    0,
+    `core entrypoint failed to load without process/Buffer.\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+  );
 });

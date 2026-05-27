@@ -85,44 +85,33 @@ function resolveNodeAsyncLocalStorage(): AsyncLocalStorageConstructor | undefine
   return module?.AsyncLocalStorage;
 }
 
-class FallbackContextStorage<T> implements ContextStorage<T> {
-  private current: T | undefined;
-
+// NoopContextStorage is used when the runtime does not expose Node's
+// AsyncLocalStorage (for example some edge runtimes). A naive mutable-global
+// fallback would silently mix contexts across concurrent async chains, which
+// is worse than no propagation at all because telemetry would attribute
+// records to the wrong conversation/user. Disabling propagation makes the
+// limitation observable: callers must pass identifiers explicitly via the
+// generation/tool start fields when running in such a runtime.
+class NoopContextStorage<T> implements ContextStorage<T> {
   getStore(): T | undefined {
-    return this.current;
+    return undefined;
   }
 
-  run<R>(store: T, callback: () => R): R {
-    const previous = this.current;
-    this.current = store;
-
-    try {
-      const result = callback();
-      if (isPromiseLike(result)) {
-        return result.finally(() => {
-          this.current = previous;
-        }) as R;
-      }
-      this.current = previous;
-      return result;
-    } catch (error) {
-      this.current = previous;
-      throw error;
-    }
+  run<R>(_store: T, callback: () => R): R {
+    return callback();
   }
-}
-
-function isPromiseLike(value: unknown): value is Promise<unknown> {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'finally' in value &&
-    typeof (value as { finally?: unknown }).finally === 'function'
-  );
 }
 
 const AsyncLocalStorage = resolveNodeAsyncLocalStorage();
 const storage: ContextStorage<SigilContextValues> =
   AsyncLocalStorage !== undefined
     ? new AsyncLocalStorage<SigilContextValues>()
-    : new FallbackContextStorage<SigilContextValues>();
+    : new NoopContextStorage<SigilContextValues>();
+
+if (AsyncLocalStorage === undefined && typeof console !== 'undefined' && typeof console.warn === 'function') {
+  console.warn(
+    'sigil: AsyncLocalStorage is not available in this runtime; context helpers ' +
+      '(withConversationId, withUserId, withAgentName, ...) are disabled. ' +
+      'Pass identifiers explicitly on each startGeneration / startToolExecution call.',
+  );
+}

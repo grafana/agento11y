@@ -111,8 +111,16 @@ jobs:
 
       - name: Publish to npm
         run: |
-          npm publish ./tarballs/sdk-js.tgz --access public --ignore-scripts
+          # Preflight both tarballs first so a registry/auth error on the new
+          # core package is caught before the full SDK version is burned.
+          npm publish ./tarballs/sdk-js-core.tgz --access public --ignore-scripts --dry-run
+          npm publish ./tarballs/sdk-js.tgz --access public --ignore-scripts --dry-run
+
+          # Publish the new (less-proven) package first. If it fails the run
+          # can be retried without leaving an orphan @grafana/sigil-sdk-js
+          # release on npm.
           npm publish ./tarballs/sdk-js-core.tgz --access public --ignore-scripts
+          npm publish ./tarballs/sdk-js.tgz --access public --ignore-scripts
 
   tag:
     if: ${{ !inputs.dry-run }}
