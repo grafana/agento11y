@@ -122,7 +122,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		return nil
 	}
 
-	otelProviders, err := otel.Setup(hookCtx)
+	otelProviders, err := otel.Setup(hookCtx, input.SessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sigil claude-code: otel setup failed: %v\n", err)
 		logger.Printf("otel setup: %v", err)

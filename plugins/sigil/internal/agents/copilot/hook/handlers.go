@@ -385,7 +385,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), stopExportTimeout)
 	defer cancel()
-	providers := setupOTelIfConfigured(ctx, logger)
+	providers := setupOTelIfConfigured(ctx, sessionID, logger)
 	if providers != nil {
 		defer func() {
 			if err := providers.Shutdown(ctx); err != nil {
@@ -620,11 +620,11 @@ func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logge
 	return sigil.NewClient(c)
 }
 
-func setupOTelIfConfigured(ctx context.Context, logger *log.Logger) *otel.Providers {
+func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.Logger) *otel.Providers {
 	if otel.EndpointFromEnv() == "" {
 		return nil
 	}
-	providers, err := otel.Setup(ctx)
+	providers, err := otel.Setup(ctx, instanceID)
 	if err != nil {
 		logger.Printf("otel: setup: %v", err)
 		return nil

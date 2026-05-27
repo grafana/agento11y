@@ -218,7 +218,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	tokenSnapshot := tokenSnapshotForStop(p, frag, logger)
 	ctx, cancel := context.WithTimeout(context.Background(), stopExportTimeout)
 	defer cancel()
-	providers := setupOTelIfConfigured(ctx, logger)
+	providers := setupOTelIfConfigured(ctx, p.SessionID, logger)
 	if providers != nil {
 		defer func() {
 			if err := providers.Shutdown(ctx); err != nil {
@@ -470,11 +470,11 @@ func applySessionDefaults(f *fragment.Fragment, s *fragment.Session) {
 	}
 }
 
-func setupOTelIfConfigured(ctx context.Context, logger *log.Logger) *otel.Providers {
+func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.Logger) *otel.Providers {
 	if otel.EndpointFromEnv() == "" {
 		return nil
 	}
-	providers, err := otel.Setup(ctx)
+	providers, err := otel.Setup(ctx, instanceID)
 	if err != nil {
 		logger.Printf("otel: setup: %v", err)
 		return nil

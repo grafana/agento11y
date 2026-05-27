@@ -82,7 +82,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	providers := setupOTelIfConfigured(ctx, logger)
+	providers := setupOTelIfConfigured(ctx, p.ConversationID, logger)
 	defer func() { _ = providers.Shutdown(ctx) }()
 
 	client := buildClient(cfg, providers)

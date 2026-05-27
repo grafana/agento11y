@@ -29,12 +29,12 @@ const otelInstrumentationName = "sigil.cursor"
 // SDK reads transport env vars (endpoint, headers, insecure, protocol)
 // natively; the plugin only provides convenience auth-header injection from
 // SIGIL_AUTH_*.
-func setupOTelIfConfigured(ctx context.Context, logger *log.Logger) *otel.Providers {
+func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.Logger) *otel.Providers {
 	endpoint := otel.EndpointFromEnv()
 	if endpoint == "" {
 		return nil
 	}
-	providers, err := otel.Setup(ctx)
+	providers, err := otel.Setup(ctx, instanceID)
 	if err != nil {
 		logger.Printf("otel: setup: %v", err)
 		return nil
