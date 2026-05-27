@@ -35,8 +35,6 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation(libs.assertj.core)
     testImplementation(libs.mockwebserver)
-    testImplementation(libs.grpc.testing)
-    testImplementation(libs.grpc.services)
     testImplementation("io.opentelemetry.proto:opentelemetry-proto:1.9.0-alpha")
     testImplementation(libs.otel.sdk.testing)
 }
