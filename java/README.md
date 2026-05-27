@@ -117,7 +117,7 @@ For RAG retrieval or other preprocessing steps, use tool execution even though t
 try (ToolExecutionRecorder rec = client.startToolExecution(
         new ToolExecutionStart()
             .setToolName("document_retriever")
-            .setContentCapture(ContentCaptureMode.FULL_CONTENT))) {
+            .setContentCapture(ContentCaptureMode.FULL))) {
     
     rec.setArguments(Map.of("query", searchQuery, "limit", 5));
     List<Document> docs = vectorStore.similaritySearch(searchQuery, 5);
@@ -125,7 +125,78 @@ try (ToolExecutionRecorder rec = client.startToolExecution(
 }
 ```
 
-See [Tool Calls vs Tool Executions](../docs/concepts/tool-call-vs-tool-execution.md) for the full conceptual guide.
+See [Tool Calls vs Tool Executions](../docs/concepts/tool-call-vs-tool-execution.md) for the full conceptual guide, and [Content Capture Modes](../docs/concepts/content-capture-modes.md) for the modes and defaults.
+
+## Content Capture
+
+`ContentCaptureMode` controls what content the SDK includes in exported generation payloads and OTel span attributes. See [Content Capture Modes](../docs/concepts/content-capture-modes.md) for the canonical mode matrix; the snippets below show how to wire it up in Java.
+
+Client-level default:
+
+```java
+SigilClient client = new SigilClient(new SigilClientConfig()
+    .setContentCapture(ContentCaptureMode.METADATA_ONLY));
+```
+
+The core SDK client treats `ContentCaptureMode.DEFAULT` as `NO_TOOL_CONTENT`.
+
+Per-generation override:
+
+```java
+client.withGeneration(
+    new GenerationStart()
+        .setModel(new ModelRef().setProvider("openai").setName("gpt-5"))
+        .setContentCapture(ContentCaptureMode.FULL),
+    recorder -> {
+        recorder.setResult(new GenerationResult()
+            .setOutput(java.util.List.of(
+                new Message().setRole(MessageRole.ASSISTANT)
+                    .setParts(java.util.List.of(MessagePart.text("hello"))))));
+        return null;
+    }
+);
+```
+
+Per-tool-execution override (here `FULL` opts into capturing arguments and results in the span):
+
+```java
+try (ToolExecutionRecorder rec = client.startToolExecution(
+        new ToolExecutionStart()
+            .setToolName("search")
+            .setContentCapture(ContentCaptureMode.FULL))) {
+    rec.setArguments(Map.of("q", "weather"));
+    rec.setResult(Map.of("temp_c", 18));
+}
+```
+
+Dynamic resolution via `ContentCaptureResolver`:
+
+```java
+SigilClient client = new SigilClient(new SigilClientConfig()
+    .setContentCaptureResolver(metadata -> {
+        if (metadata != null && "healthcare".equals(metadata.get("sigil.tenant"))) {
+            return ContentCaptureMode.METADATA_ONLY;
+        }
+        return ContentCaptureMode.DEFAULT;
+    }));
+```
+
+Resolver exceptions are caught and treated as `METADATA_ONLY` (fail-closed).
+
+Resolution precedence for generations (highest to lowest):
+
+1. Per-generation `ContentCapture`
+2. `ContentCaptureResolver` return value
+3. `SigilClientConfig.contentCapture` (defaults to `NO_TOOL_CONTENT`)
+
+Resolution precedence for tool executions (highest to lowest):
+
+1. Per-tool `ContentCapture`
+2. Parent generation's resolved mode
+3. `ContentCaptureResolver` return value
+4. `SigilClientConfig.contentCapture` (defaults to `NO_TOOL_CONTENT`)
+
+User-provided `metadata` and `tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content.
 
 ## Embedding Observability
 

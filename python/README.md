@@ -346,17 +346,20 @@ with with_conversation_id("conv-ctx"), with_agent_name("planner"), with_agent_ve
 
 ## Content Capture Mode
 
-`ContentCaptureMode` controls what content is included in exported generation payloads and OTel span attributes. Use it to prevent sensitive text (prompts, tool I/O, model responses) from leaving the process.
+`ContentCaptureMode` controls what content is included in exported generation payloads and OTel span attributes. Use it to prevent sensitive text (prompts, tool I/O, model responses) from leaving the process. See [Content Capture Modes](../docs/concepts/content-capture-modes.md) for the cross-SDK reference, including the per-surface behavior matrix.
 
+| Mode                            | Generation export                            | Generation span             | Tool spans                              | Embedding span                          |
+| ------------------------------- | -------------------------------------------- | --------------------------- | --------------------------------------- | --------------------------------------- |
+| `FULL`                          | Full content                                 | Content attributes included | Arguments and results included          | Input texts included when capture is on |
+| `NO_TOOL_CONTENT` (SDK default) | Full content                                 | Content attributes included | Arguments and results excluded          | Input texts included when capture is on |
+| `METADATA_ONLY`                 | Structure only; text and tool I/O stripped   | Content attributes omitted  | Arguments and results excluded          | Input texts omitted                     |
+| `FULL_WITH_METADATA_SPANS`      | Full content                                 | Content attributes omitted  | Arguments and results excluded          | Input texts omitted                     |
 
-| Mode                            | Generations                            | Tool spans                               |
-| ------------------------------- | -------------------------------------- | ---------------------------------------- |
-| `FULL`                          | All content exported                   | Arguments and results in span attributes |
-| `NO_TOOL_CONTENT` (SDK default) | All content exported                   | Arguments and results excluded           |
-| `METADATA_ONLY`                 | Structure preserved, all text stripped | Arguments and results excluded           |
+`DEFAULT` is a placeholder for "inherit from the next layer"; at the client level it resolves to `NO_TOOL_CONTENT`. The SDK default is `NO_TOOL_CONTENT`, which matches the SDK's behavior before this feature was added.
 
+`FULL_WITH_METADATA_SPANS` is the right mode when the gRPC ingest destination is private but the OTel trace/metric destination is shared and must not receive any content. Tool execution and embedding spans behave like `METADATA_ONLY` under this mode because they have no separate gRPC export.
 
-The default is `NO_TOOL_CONTENT`, which matches the SDK's behavior before this feature was added.
+User-provided `metadata` and `tags` are **not** stripped by any capture mode; callers must avoid putting sensitive content in those dicts when using `METADATA_ONLY` or `FULL_WITH_METADATA_SPANS`. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content.
 
 ### Client-level default
 
@@ -416,12 +419,21 @@ client = Client(ClientConfig(
 ))
 ```
 
-### Resolution precedence (highest to lowest)
+### Resolution precedence
 
-1. Per-recording `content_capture` field (`GenerationStart` / `ToolExecutionStart`)
-2. `content_capture_resolver` return value
-3. `ContextVar` from `with_content_capture_mode()`
-4. `ClientConfig.content_capture` (defaults to `NO_TOOL_CONTENT`)
+For generations, highest to lowest:
+
+1. `GenerationStart.content_capture`
+2. `with_content_capture_mode(...)` when set
+3. `content_capture_resolver` return value
+4. `ClientConfig.content_capture` (defaults to `NO_TOOL_CONTENT`; `DEFAULT` at the client level resolves to `NO_TOOL_CONTENT`)
+
+For tool executions, highest to lowest:
+
+1. `ToolExecutionStart.content_capture`
+2. Parent generation's resolved mode, or `with_content_capture_mode(...)` when set
+3. `content_capture_resolver` return value
+4. `ClientConfig.content_capture` (defaults to `NO_TOOL_CONTENT`; `DEFAULT` at the client level resolves to `NO_TOOL_CONTENT`)
 
 Exceptions in the resolver are caught and treated as `METADATA_ONLY` (fail-closed).
 

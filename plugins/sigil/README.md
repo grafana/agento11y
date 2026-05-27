@@ -32,6 +32,19 @@ Then follow your agent's quickstart:
 - [OpenCode](../opencode/README.md)
 - [pi](../pi/README.md)
 
+## Content capture
+
+The shared `sigil` binary defaults to `metadata_only`: only model, tokens, tool names, timing, and cost ship to Grafana AI Observability. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `SIGIL_CONTENT_CAPTURE_MODE` in `~/.config/sigil/config.env`. The shared binary parser accepts every mode the SDKs support:
+
+```dotenv
+# valid values: full | no_tool_content | metadata_only | full_with_metadata_spans
+SIGIL_CONTENT_CAPTURE_MODE=full
+```
+
+Unknown values fall back to `metadata_only` with a warning. `default` is accepted as an alias for `metadata_only` so the shared binary matches the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`. The Pi (`@grafana/sigil-pi`) and OpenCode (`@grafana/sigil-opencode`) plugins ship their own parsers but accept the same set of values.
+
+A plugin can only export fields the host agent passes through to it, so individual plugins may capture less than the SDK matrix shows. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the SDK-level behavior matrix and plugin defaults.
+
 ## Auto-update
 
 `sigil claude`, `sigil codex`, `sigil copilot`, and `sigil opencode` refresh the installed host plugin automatically. Set `SIGIL_AUTO_UPDATE=false` to opt out.

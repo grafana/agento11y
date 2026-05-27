@@ -193,6 +193,74 @@ TraceQL examples:
 - `traces{gen_ai.operation.name="embeddings" && gen_ai.request.model="text-embedding-3-small"}`
 - `traces{gen_ai.operation.name="embeddings" && error.type!=""}`
 
+## Content capture
+
+`ContentCaptureMode` controls what content the SDK includes in exported generation payloads and OTel span attributes. See [Content Capture Modes](../docs/concepts/content-capture-modes.md) for the canonical mode matrix and defaults; the snippets below show how to wire it up in C#.
+
+Client-level default:
+
+```csharp
+var sigil = new SigilClient(new SigilClientConfig
+{
+    ContentCapture = ContentCaptureMode.MetadataOnly,
+});
+```
+
+The core SDK client treats `ContentCaptureMode.Default` as `ContentCaptureMode.NoToolContent`: generation content is captured but tool-execution arguments and results stay out of spans.
+
+Per-generation override:
+
+```csharp
+var recorder = client.StartGeneration(new GenerationStart
+{
+    Model = new ModelRef { Provider = "openai", Name = "gpt-5" },
+    ContentCapture = ContentCaptureMode.Full,
+});
+```
+
+Per-tool-execution override (here `Full` opts into capturing tool arguments and results in the span):
+
+```csharp
+var tool = client.StartToolExecution(new ToolExecutionStart
+{
+    ToolName = "search",
+    ContentCapture = ContentCaptureMode.Full,
+});
+```
+
+Dynamic resolution via `ContentCaptureResolver`:
+
+```csharp
+var sigil = new SigilClient(new SigilClientConfig
+{
+    ContentCaptureResolver = metadata =>
+    {
+        if (metadata != null && metadata.TryGetValue("sigil.tenant", out var tenant) && (string?)tenant == "healthcare")
+        {
+            return ContentCaptureMode.MetadataOnly;
+        }
+        return ContentCaptureMode.Default; // defer to ContentCapture
+    },
+});
+```
+
+Exception-throwing resolvers are caught and treated as `ContentCaptureMode.MetadataOnly` (fail-closed).
+
+Resolution precedence for generations (highest to lowest):
+
+1. Per-generation `GenerationStart.ContentCapture`
+2. `SigilClientConfig.ContentCaptureResolver` return value
+3. `SigilClientConfig.ContentCapture` (defaults to `ContentCaptureMode.NoToolContent`)
+
+Resolution precedence for tool executions (highest to lowest):
+
+1. Per-tool `ToolExecutionStart.ContentCapture`
+2. Parent generation's resolved mode
+3. `SigilClientConfig.ContentCaptureResolver` return value
+4. `SigilClientConfig.ContentCapture` (defaults to `ContentCaptureMode.NoToolContent`)
+
+User-provided `Metadata` and `Tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content.
+
 ## Context defaults
 
 `SigilContext` uses async-local scopes:

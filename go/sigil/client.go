@@ -35,10 +35,10 @@ type Config struct {
 	// generations and tool executions. Per-recording overrides take precedence.
 	ContentCapture ContentCaptureMode
 	// ContentCaptureResolver, when set, is called before each generation,
-	// tool execution, and rating submission to dynamically resolve the content
-	// capture mode. It receives the request context and the recording's
-	// metadata (nil when the recording type has no metadata, e.g. tool
-	// executions).
+	// embedding, tool execution, and rating submission to dynamically resolve
+	// the content capture mode. It receives the request context and the
+	// recording's metadata (nil when the recording type has no metadata, e.g.
+	// tool executions).
 	//
 	// Resolution precedence (highest → lowest):
 	//   1. Per-recording ContentCapture field (explicit override)

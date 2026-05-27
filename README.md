@@ -114,6 +114,10 @@ Minimal, self-contained examples that make a real LLM call and record the genera
 | TypeScript + Strands | [`examples/getting-started/typescript-strands/`](examples/getting-started/typescript-strands/) |
 | Go | [`examples/getting-started/go/`](examples/getting-started/go/) |
 
+## Content capture and privacy
+
+The SDKs default to `no_tool_content`: full generation messages ship to Sigil, but tool-execution arguments and results stay out of spans. The coding-agent plugins default to `metadata_only`. See [Content Capture Modes](docs/concepts/content-capture-modes.md) for the mode matrix, defaults per surface, and the generation, tool-execution, and embedding resolution rules.
+
 ## Grafana Cloud credentials
 
 All four connection values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the AI Observability plugin in your stack:

@@ -2,7 +2,7 @@
 
 [OpenCode](https://opencode.ai) plugin that sends LLM generations to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
 
-By default only metadata is sent (token counts, cost, model, tool names, durations). Set `SIGIL_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`.
+By default only metadata is sent (token counts, cost, model, tool names, durations). Set `SIGIL_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
 
 ## 1. Install and launch
 
@@ -60,11 +60,13 @@ SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net
 
 When `SIGIL_AUTH_TENANT_ID` and `SIGIL_AUTH_TOKEN` are set, the plugin uses them for Sigil and OTLP auth. If the OpenTelemetry card shows a different Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 
-To include conversation text (with automatic secret redaction), add this to `~/.config/sigil/config.env`:
+To include conversation text, add this to `~/.config/sigil/config.env`:
 
 ```dotenv
 SIGIL_CONTENT_CAPTURE_MODE=full
 ```
+
+OpenCode redacts assistant and tool content before export. User prompt text is sent as-is when content capture allows it.
 
 ## 3. Verify
 

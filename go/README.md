@@ -226,6 +226,72 @@ Common topology:
 - Traces/metrics via OTEL Collector/Alloy: configure exporters in your app OTEL SDK setup.
 - Enterprise proxy: generation `bearer` mode to proxy; proxy authenticates and forwards tenant header upstream.
 
+## Content Capture Mode
+
+`ContentCaptureMode` controls what content the SDK includes in exported generation payloads and OTel span attributes. See [Content Capture Modes](../docs/concepts/content-capture-modes.md) for the canonical mode matrix and defaults; the snippets below show how to wire it up in Go.
+
+Client-level default:
+
+```go
+cfg := sigil.DefaultConfig()
+cfg.ContentCapture = sigil.ContentCaptureModeMetadataOnly
+
+client := sigil.NewClient(cfg)
+defer func() { _ = client.Shutdown(context.Background()) }()
+```
+
+The core SDK client treats `ContentCaptureModeDefault` as `ContentCaptureModeNoToolContent`: generation content is captured but tool-execution arguments and results stay out of spans.
+
+Per-generation override:
+
+```go
+ctx, rec := client.StartGeneration(ctx, sigil.GenerationStart{
+    Model:          sigil.ModelRef{Provider: "openai", Name: "gpt-5"},
+    ContentCapture: sigil.ContentCaptureModeFull,
+})
+defer rec.End()
+```
+
+Per-tool-execution override (here `Full` opts into capturing tool arguments and results in the span):
+
+```go
+ctx, tool := client.StartToolExecution(ctx, sigil.ToolExecutionStart{
+    ToolName:       "search",
+    ContentCapture: sigil.ContentCaptureModeFull,
+})
+defer tool.End()
+```
+
+Tool executions also inherit the parent generation's resolved mode via context, so explicit overrides are rarely needed inside an instrumented generation block.
+
+Dynamic resolution via `ContentCaptureResolver`:
+
+```go
+cfg.ContentCaptureResolver = func(ctx context.Context, metadata map[string]any) sigil.ContentCaptureMode {
+    if metadata["sigil.tenant"] == "healthcare" {
+        return sigil.ContentCaptureModeMetadataOnly
+    }
+    return sigil.ContentCaptureModeDefault // defer to Config.ContentCapture
+}
+```
+
+Resolver panics are recovered and treated as `ContentCaptureModeMetadataOnly` (fail-closed).
+
+Resolution precedence for generations (highest to lowest):
+
+1. Per-generation `ContentCapture`
+2. `ContentCaptureResolver` return value
+3. `Config.ContentCapture` (defaults to `ContentCaptureModeNoToolContent`)
+
+Resolution precedence for tool executions (highest to lowest):
+
+1. Per-tool `ContentCapture`
+2. Parent generation's resolved mode, propagated through `context.Context`
+3. `ContentCaptureResolver` return value
+4. `Config.ContentCapture` (defaults to `ContentCaptureModeNoToolContent`)
+
+User-provided `Metadata` and `Tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content.
+
 ## Pre-Ingest Redaction
 
 Use `GenerationSanitizer` when you want to redact substrings from normalized generations before validation, span sync, and export.

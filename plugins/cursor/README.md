@@ -49,11 +49,13 @@ SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net
 
 </details>
 
-To also send the conversation text (with automatic secret redaction), add this to `~/.config/sigil/config.env`:
+To also send the conversation text, add this to `~/.config/sigil/config.env`:
 
 ```dotenv
 SIGIL_CONTENT_CAPTURE_MODE=full
 ```
+
+Cursor content is not passed through the shared redactor before export. Avoid `full` when prompts, replies, or tool output may contain secrets.
 
 ## 4. Verify
 
@@ -74,7 +76,7 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 | `SIGIL_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
 | `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the AI Observability latency and tool-call panels stay empty. |
 | `SIGIL_OTEL_AUTH_TOKEN` | `SIGIL_AUTH_TOKEN` | Override the OTel password. |
-| `SIGIL_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, or `full`. |
+| `SIGIL_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
 | `SIGIL_TAGS` | — | `key=value,key=value` tags added to every generation. Built-ins (`git.branch`, `cwd`, `subagent`) win on collision. |
 | `SIGIL_USER_ID` | from Cursor | Override the user id. |
 | `SIGIL_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |

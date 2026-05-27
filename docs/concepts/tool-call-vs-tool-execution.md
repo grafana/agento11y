@@ -100,13 +100,13 @@ This allows Sigil to correlate the model's request with your execution timing.
 
 ## Capturing Arguments and Results
 
-By default, tool execution spans capture timing but not content. To capture arguments and results, enable content capture:
+By default, tool execution spans capture timing but not content. The core SDK client default is `NO_TOOL_CONTENT`, which keeps generation content but excludes tool arguments and results from spans. To include them, raise the mode to `FULL` for the tool execution:
 
 ```java
 try (ToolExecutionRecorder rec = client.startToolExecution(
         new ToolExecutionStart()
             .setToolName("document_retriever")
-            .setContentCapture(ContentCaptureMode.FULL_CONTENT))) {
+            .setContentCapture(ContentCaptureMode.FULL))) {
     
     rec.setArguments(Map.of("query", searchQuery, "limit", 5));
     List<Document> docs = vectorStore.similaritySearch(searchQuery, 5);
@@ -115,6 +115,8 @@ try (ToolExecutionRecorder rec = client.startToolExecution(
 ```
 
 With content capture enabled, arguments appear as `gen_ai.tool.call.arguments` and results as `gen_ai.tool.call.result` in span attributes.
+
+See [Content Capture Modes](./content-capture-modes.md) for the full mode matrix, defaults, and resolution precedence.
 
 ## Summary
 

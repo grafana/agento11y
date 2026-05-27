@@ -125,8 +125,9 @@ shapes.
 | `metadata_only` | stripped | stripped | tool names/status only | stripped |
 | `no_tool_content` | included with redaction | included with redaction | tool names/status only | stripped |
 | `full` | included with redaction | included with redaction | included with redaction | included with redaction |
+| `full_with_metadata_spans` | included on generation export with redaction; stripped on OTel spans | included on generation export with redaction; stripped on OTel spans | tool names/status only | stripped |
 
-Redaction happens before export.
+Captured prompt, assistant, and tool content is redacted before export. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the cross-SDK reference.
 
 ## All options
 
@@ -137,7 +138,7 @@ Redaction happens before export.
 | `SIGIL_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
 | `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the AI Observability latency and tool-call panels stay empty. |
 | `SIGIL_OTEL_AUTH_TOKEN` | `SIGIL_AUTH_TOKEN` | Override the OTel password. |
-| `SIGIL_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, or `full`. |
+| `SIGIL_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. |
 | `SIGIL_TAGS` | — | `key=value,key=value` tags added to every generation. |
 | `SIGIL_USER_ID` | — | Override the user id. |
 | `SIGIL_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |

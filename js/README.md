@@ -58,6 +58,72 @@ await client.startGeneration(
 await client.shutdown();
 ```
 
+## Content Capture
+
+`contentCapture` controls what content the SDK includes in exported generation payloads and OTel span attributes. See [Content Capture Modes](../docs/concepts/content-capture-modes.md) for the canonical mode matrix and defaults; the snippets below show how to wire it up in TypeScript.
+
+Client-level default:
+
+```ts
+import { SigilClient } from "@grafana/sigil-sdk-js";
+
+const client = new SigilClient({
+  contentCapture: "metadata_only",
+});
+```
+
+The core SDK client treats `"default"` as `"no_tool_content"`: generation content is captured but tool-execution arguments and results stay out of spans.
+
+Per-generation override:
+
+```ts
+await client.startGeneration(
+  {
+    model: { provider: "openai", name: "gpt-5" },
+    contentCapture: "full",
+  },
+  async (recorder) => {
+    recorder.setResult({ output: [{ role: "assistant", content: "hi" }] });
+  }
+);
+```
+
+Per-tool-execution override (here `"full"` opts into capturing tool arguments and results in the span):
+
+```ts
+await client.startToolExecution(
+  { toolName: "search", contentCapture: "full" },
+  async (recorder) => {
+    recorder.setResult({ arguments: { q: "weather" }, result: { tempC: 18 } });
+  }
+);
+```
+
+Dynamic resolution via `contentCaptureResolver`:
+
+```ts
+const client = new SigilClient({
+  contentCaptureResolver: (metadata) => {
+    if (metadata?.["sigil.tenant"] === "healthcare") {
+      return "metadata_only";
+    }
+    return "default"; // defer to `contentCapture`
+  },
+});
+```
+
+The resolver receives the recording's metadata (or `undefined` for recording types that have no metadata, like tool executions). Thrown errors are caught and treated as `"metadata_only"` (fail-closed).
+
+Resolution precedence (highest to lowest):
+
+1. Per-recording `contentCapture` on `GenerationStart` / `ToolExecutionStart`
+2. `contentCaptureResolver` return value
+3. Client-level `contentCapture` (defaults to `"no_tool_content"`)
+
+Unlike the Go, Python, Java, and .NET SDKs, the JS SDK does not propagate the resolved capture mode through async context, so tool executions started inside a generation block do not automatically inherit the generation's mode. Set `contentCapture` on each `ToolExecutionStart` when you need a tool to follow a non-default policy.
+
+User-provided `metadata` and `tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content.
+
 ## Pre-Ingest Redaction
 
 Use `generationSanitizer` when you want to redact substrings from normalized generations before

@@ -22,29 +22,60 @@
 //
 // # Content Capture
 //
-// Config.ContentCapture sets the default ContentCaptureMode (Full or MetadataOnly).
-// MetadataOnly strips prompts, messages, tool arguments, and tool results before
-// export while preserving usage, timing, model info, and message structure.
+// Config.ContentCapture sets the default ContentCaptureMode. The SDK supports
+// four concrete modes plus the Default placeholder:
+//
+//   - ContentCaptureModeDefault: inherit from the next layer. At the client
+//     level this resolves to ContentCaptureModeNoToolContent.
+//   - ContentCaptureModeFull: export all content.
+//   - ContentCaptureModeNoToolContent: full generation content, but tool
+//     execution arguments and results are excluded from span attributes.
+//     This is the effective client default and matches pre-ContentCaptureMode
+//     SDK behavior.
+//   - ContentCaptureModeMetadataOnly: preserve structure, tool names, usage,
+//     timing, and IDs; strip text, tool arguments, tool results, thinking,
+//     system prompts, conversation titles, raw artifacts, tool descriptions,
+//     tool input schemas, and detailed error text.
+//   - ContentCaptureModeFullWithMetadataSpans: keep full content on the
+//     generation export (gRPC/HTTP) but omit content fields from OTel spans.
+//     Use this when the gRPC ingest destination is private but the OTel
+//     traces/metrics destination is shared. Tool execution and embedding
+//     spans behave like MetadataOnly under this mode because they have no
+//     separate gRPC export.
+//
 // Per-generation and per-tool-execution overrides are available via the
 // ContentCapture field on GenerationStart and ToolExecutionStart.
-// Tool executions inherit the parent generation's mode via context.
+// Tool executions inherit the parent generation's resolved mode via context.
 //
 // Config.ContentCaptureResolver enables dynamic per-request resolution. When set,
-// the resolver is called before each generation start and rating submission with
-// the request context and recording metadata. This is the recommended integration
-// point for multi-tenant services that need to resolve content capture mode based
-// on tenant-level policies (e.g., data-sharing opt-out).
+// the resolver is called before each generation start, embedding start, tool
+// execution, and rating submission with the request context and recording
+// metadata (nil for tool executions, which carry no metadata). This is the
+// recommended integration point for multi-tenant services that need to resolve
+// content capture mode based on tenant-level policies (e.g., data-sharing
+// opt-out).
 //
-// Resolution precedence (highest to lowest):
-//   - Per-recording ContentCapture field (explicit override)
+// Generation resolution precedence (highest to lowest):
+//   - GenerationStart.ContentCapture (explicit override)
 //   - ContentCaptureResolver return value
-//   - Config.ContentCapture (static default)
+//   - Config.ContentCapture (static default; ContentCaptureModeDefault here
+//     resolves to ContentCaptureModeNoToolContent)
+//
+// Tool execution resolution precedence (highest to lowest):
+//   - ToolExecutionStart.ContentCapture (explicit override)
+//   - Parent generation's resolved mode (via context)
+//   - ContentCaptureResolver return value
+//   - Config.ContentCapture (static default; ContentCaptureModeDefault here
+//     resolves to ContentCaptureModeNoToolContent)
 //
 // Resolver panics are recovered and treated as MetadataOnly (fail-closed).
 //
-// MetadataOnly does not filter user-provided Metadata or Tags maps.
+// Capture modes do not filter user-provided Metadata or Tags maps.
 // Callers are responsible for not including sensitive content in those fields
-// when using MetadataOnly mode.
+// when using MetadataOnly or FullWithMetadataSpans mode.
+//
+// See docs/concepts/content-capture-modes.md in the repository for the full
+// per-surface behavior matrix shared across SDKs.
 //
 // # Linking
 //

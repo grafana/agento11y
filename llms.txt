@@ -79,9 +79,13 @@ To re-enter credentials later, run `sigil login`.
 
 ## Content capture
 
-By default plugins send metadata only (model, tokens, tool names, timing, cost). To send prompt and response bodies as well, set `SIGIL_CONTENT_CAPTURE_MODE` in `~/.config/sigil/config.env`. Valid values across SDKs: `full`, `no_tool_content`, `metadata_only` (default), `full_with_metadata_spans`.
+Coding-agent plugins default to `metadata_only`: only model, tokens, tool names, timing, and cost are sent. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `SIGIL_CONTENT_CAPTURE_MODE` in `~/.config/sigil/config.env`.
 
-Secrets are auto-redacted before send. Treat content capture as opt-in for shared/production machines.
+Accepted values depend on the plugin surface:
+
+- Claude Code, Codex, Copilot, Cursor (shared `sigil` binary), OpenCode (`@grafana/sigil-opencode`), and Pi (`@grafana/sigil-pi`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
+
+Unknown values fall back to `metadata_only` with a warning. Secret redaction is plugin-specific. Capture modes choose which fields ship, not whether the shipped fields are scrubbed. Treat content capture as opt-in for shared/production machines.
 
 ## Verifying the install
 
@@ -112,6 +116,14 @@ OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64 of "<otlp-instance-id>:<g
 ```
 
 Construct the client with no config when the env vars are present; the SDK reads them. Only use explicit `ClientConfig(...)` when the app needs values that aren't in env (e.g. test endpoints).
+
+### Content capture
+
+The core SDK clients default to `no_tool_content`: generation content (prompts, responses, thinking, system prompts) is exported, but tool-execution arguments and results stay out of spans. Setting `contentCapture: 'default'` (or the language equivalent) resolves to `no_tool_content` at the client level.
+
+Use the cross-language reference at [`docs/concepts/content-capture-modes.md`](https://github.com/grafana/sigil-sdk/blob/main/docs/concepts/content-capture-modes.md) and the per-language READMEs for examples. Modes supported by the SDKs: `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. User-provided `metadata` and `tags` are not stripped by capture modes; do not put sensitive content there.
+
+This default differs from coding-agent plugin defaults (Path A), which ship `metadata_only`. Do not mix the two.
 
 ## Mission
 
