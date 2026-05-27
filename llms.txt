@@ -49,10 +49,10 @@ The user wants Grafana AI observability to capture sessions from their coding ag
 | [Codex](https://developers.openai.com/codex) | [`plugins/codex/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/codex) | Shared `sigil` Go binary via hooks |
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`plugins/copilot/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/copilot) | Shared `sigil` Go binary via hooks |
 | [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/cursor) | Shared `sigil` Go binary via hooks |
-| [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/opencode) | Independent npm package `@grafana/sigil-opencode` |
+| [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/opencode) | Shared `sigil` Go binary, installs `@grafana/sigil-opencode` |
 | [Pi](https://github.com/badlogic/pi) | [`plugins/pi/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/pi) | Independent npm package `@grafana/sigil-pi` |
 
-## Fast path (Claude Code, Codex, Copilot, Cursor, Pi)
+## Fast path (Claude Code, Codex, Copilot, Cursor, OpenCode, Pi)
 
 ```sh
 brew install grafana/grafana/sigil
@@ -60,6 +60,7 @@ sigil claude     # Claude Code
 sigil codex      # Codex
 sigil copilot    # Copilot CLI
 sigil cursor     # Cursor
+sigil opencode   # OpenCode
 sigil pi         # Pi
 ```
 
@@ -76,29 +77,9 @@ SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=<otlp-gateway-url>
 
 To re-enter credentials later, run `sigil login`.
 
-## OpenCode
-
-OpenCode does not use the shared `sigil` binary. It reads its own config file `~/.config/opencode/opencode-sigil.json`:
-
-```json
-{
-  "enabled": true,
-  "endpoint": "<your-sigil-api-url>",
-  "auth": { "mode": "basic", "tenantId": "<your-instance-id>", "token": "glc_..." },
-  "agentName": "opencode",
-  "contentCapture": true
-}
-```
-
-Auth modes: `none` | `bearer` ({ bearerToken }) | `tenant` ({ tenantId }) | `basic` ({ tenantId, token }).
-
 ## Content capture
 
-By default plugins send metadata only (model, tokens, tool names, timing, cost). To send prompt and response bodies as well, set the content capture mode in the plugin config. Valid values across SDKs: `full`, `no_tool_content`, `metadata_only` (default), `full_with_metadata_spans`.
-
-- Shared `sigil` binary: set `SIGIL_CONTENT_CAPTURE_MODE=full` (or one of the other values above) in `config.env`.
-- OpenCode: `"contentCapture": true` (shortcut for `full`).
-- Pi: `contentCapture: "full" | "no_tool_content" | "metadata_only" | "full_with_metadata_spans"`.
+By default plugins send metadata only (model, tokens, tool names, timing, cost). To send prompt and response bodies as well, set `SIGIL_CONTENT_CAPTURE_MODE` in `~/.config/sigil/config.env`. Valid values across SDKs: `full`, `no_tool_content`, `metadata_only` (default), `full_with_metadata_spans`.
 
 Secrets are auto-redacted before send. Treat content capture as opt-in for shared/production machines.
 

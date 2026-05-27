@@ -37,12 +37,12 @@ CI runs `mise run check:proto` and fails the build if the committed stubs drift 
 
 | Plugin dir | What it actually is |
 |------------|---------------------|
-| `plugins/sigil/` | The shared Go binary (`brew install grafana/grafana/sigil`). Has subcommands `claude`, `codex`, `copilot`, `cursor`, `pi`, `login`. This is also what consumers use. |
+| `plugins/sigil/` | The shared Go binary (`brew install grafana/grafana/sigil`). Has subcommands `claude`, `codex`, `copilot`, `cursor`, `opencode`, `pi`, `login`. This is also what consumers use. |
 | `plugins/claude-code/`, `plugins/codex/`, `plugins/copilot/`, `plugins/cursor/` | Thin glue: hook scripts and READMEs that wire the host agent to the shared `sigil` binary. No independent code paths. |
-| `plugins/opencode/` | Independent npm package `@grafana/sigil-opencode`. Does *not* use the shared binary. |
-| `plugins/pi/` | Independent npm package `@grafana/sigil-pi`. Does *not* use the shared binary, but `sigil pi` will install it. |
+| `plugins/opencode/` | Independent npm package `@grafana/sigil-opencode`. Runs in-process inside opencode through its TypeScript plugin API; `sigil opencode` installs and launches it. |
+| `plugins/pi/` | Independent npm package `@grafana/sigil-pi`. Runs in-process inside pi; `sigil pi` installs and launches it. |
 
-If you change shared-binary behavior, the four glue plugins all see it. If you change OpenCode or Pi, nothing else moves.
+If you change shared-binary behavior, the four glue plugins all see it. The OpenCode and pi plugins evolve independently, but the shared binary owns their install/launch flow.
 
 ## Cross-language conventions
 

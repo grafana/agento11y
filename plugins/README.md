@@ -4,13 +4,14 @@ Send conversations from your coding agent to [Grafana AI Observability](https://
 
 > AI Observability is in [public preview](https://grafana.com/docs/release-life-cycle/).
 
-## Fastest start (Claude Code, Codex, Copilot, or pi)
+## Fastest start (Claude Code, Codex, Copilot, OpenCode, or pi)
 
 ```sh
 brew install grafana/grafana/sigil
 sigil claude     # for Claude Code
 sigil codex      # for Codex
 sigil copilot    # for Copilot CLI
+sigil opencode   # for OpenCode
 sigil pi         # for pi
 ```
 
@@ -27,4 +28,4 @@ Use the `sigil <agent>` launcher for setup and daily use. On first run it instal
 | [OpenCode](https://opencode.ai) | [`opencode/`](opencode/) | Available |
 | [Pi](https://github.com/badlogic/pi) | [`pi/`](pi/) | Available |
 
-Plugins backed by the `sigil` launcher share one config file at `~/.config/sigil/config.env`. The launcher creates or updates it on first run; `sigil login` re-runs the same prompt later. Cursor has no launcher, so register its plugin in-app and run `sigil login` once for the shared config. OpenCode uses its own JSON config.
+Plugins backed by the `sigil` launcher share one config file at `~/.config/sigil/config.env`. The launcher creates or updates it on first run; `sigil login` re-runs the same prompt later. Cursor has no launcher, so register its plugin in-app and run `sigil login` once for the shared config.

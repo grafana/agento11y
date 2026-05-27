@@ -8,10 +8,12 @@ By default only metadata is sent (token counts, cost, model, tool names, duratio
 
 ```sh
 brew install grafana/grafana/sigil
-opencode plugin install @grafana/sigil-opencode
+sigil opencode
 ```
 
-The `sigil` CLI is used to prompt for credentials (`sigil login`) and writes them to `~/.config/sigil/config.env`. The OpenCode plugin reads that same file on every session start.
+`sigil opencode` installs `@grafana/sigil-opencode` into OpenCode on first run, prompts for credentials when they're missing, writes them to `~/.config/sigil/config.env`, and then launches OpenCode. Pass arguments to OpenCode after `--`, e.g. `sigil opencode -- run "say hi"`.
+
+To install the plugin manually, run `opencode plugin @grafana/sigil-opencode --global` and then `sigil login` to populate `~/.config/sigil/config.env`. The plugin reads that file on every session start.
 
 ## 2. Credentials
 

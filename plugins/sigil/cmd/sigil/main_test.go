@@ -216,6 +216,13 @@ func TestRun_LauncherDispatch(t *testing.T) {
 		{name: "claude missing separator exits 2", agent: "claude", argv: []string{"foo"}, wantExit: exitPtr(2), wantStderrContains: "use `sigil claude -- <args>`"},
 		{name: "claude unknown options before separator exits 2", agent: "claude", argv: []string{"--foo", "--", "args"}, wantExit: exitPtr(2), wantStderrContains: "unknown options before `--`: [--foo]"},
 		{name: "claude launcher error exits 1", agent: "claude", argv: []string{"--"}, launcherErr: boom, wantCalled: 1, wantExit: exitPtr(1), wantStderrPrefix: "sigil:"},
+
+		{name: "opencode bare", agent: "opencode", wantCalled: 1},
+		{name: "opencode separator only", agent: "opencode", argv: []string{"--"}, wantCalled: 1},
+		{name: "opencode forwards args after separator", agent: "opencode", argv: []string{"--", "run", "say hi"}, wantCalled: 1, wantArgs: []string{"run", "say hi"}},
+		{name: "opencode missing separator exits 2", agent: "opencode", argv: []string{"run", "hi"}, wantExit: exitPtr(2), wantStderrContains: "use `sigil opencode -- <args>`"},
+		{name: "opencode unknown options before separator exits 2", agent: "opencode", argv: []string{"--debug", "--", "x"}, wantExit: exitPtr(2), wantStderrContains: "unknown options before `--`: [--debug]"},
+		{name: "opencode launcher error exits 1", agent: "opencode", argv: []string{"--"}, launcherErr: boom, wantCalled: 1, wantExit: exitPtr(1), wantStderrPrefix: "sigil:"},
 	}
 
 	for _, tc := range cases {
@@ -670,6 +677,7 @@ func TestRun_LauncherLocalFlagInjectsOpts(t *testing.T) {
 		{name: "claude"},
 		{name: "codex"},
 		{name: "copilot"},
+		{name: "opencode"},
 		{name: "pi"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -766,7 +774,7 @@ func TestRun_LocalLaunchersShareReceiver(t *testing.T) {
 
 	envs := map[string]*local.LaunchEnv{}
 	stubs := map[string]agentLauncher{}
-	for _, name := range []string{"claude", "codex", "copilot", "pi"} {
+	for _, name := range []string{"claude", "codex", "copilot", "opencode", "pi"} {
 		stubs[name] = func(_ context.Context, _ []string, env *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 			envs[name] = env
 			return nil
@@ -775,7 +783,7 @@ func TestRun_LocalLaunchersShareReceiver(t *testing.T) {
 	withStubLaunchers(t, stubs)
 
 	var stdout, stderr bytes.Buffer
-	for _, name := range []string{"pi", "claude", "codex", "copilot"} {
+	for _, name := range []string{"pi", "claude", "codex", "copilot", "opencode"} {
 		stdout.Reset()
 		stderr.Reset()
 		gotExit := withExit(t, func() {
@@ -784,9 +792,9 @@ func TestRun_LocalLaunchersShareReceiver(t *testing.T) {
 		require.Nil(t, gotExit, "launcher=%s stderr=%q", name, stderr.String())
 	}
 
-	require.Len(t, envs, 4)
+	require.Len(t, envs, 5)
 	endpoint := envs["pi"].Endpoint
-	for _, name := range []string{"claude", "codex", "copilot", "pi"} {
+	for _, name := range []string{"claude", "codex", "copilot", "opencode", "pi"} {
 		require.NotNil(t, envs[name], name)
 		assert.Equal(t, endpoint, envs[name].Endpoint, name)
 	}

@@ -1,6 +1,6 @@
 # sigil
 
-The hook binary behind the [Claude Code](../claude-code), [Codex](../codex), [Copilot](../copilot), and [Cursor](../cursor) plugins for [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
+The launcher binary behind the [Claude Code](../claude-code), [Codex](../codex), [Copilot](../copilot), [Cursor](../cursor), [OpenCode](../opencode), and [pi](../pi) plugins for [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
 
 ## Install
 
@@ -10,7 +10,7 @@ brew install grafana/grafana/sigil
 
 ## Configure
 
-All four hosts read the same config file at `~/.config/sigil/config.env`. The first run of `sigil claude` or `sigil pi` prompts for your endpoint, tenant ID, token, and OTLP endpoint and writes them there; run `sigil login` to re-enter them later.
+All hosts read the same config file at `~/.config/sigil/config.env`. The first run of `sigil claude`, `sigil opencode`, or `sigil pi` prompts for your endpoint, tenant ID, token, and OTLP endpoint and writes them there; run `sigil login` to re-enter them later.
 
 To preconfigure without the prompt, create the file:
 
@@ -29,11 +29,12 @@ Then follow your agent's quickstart:
 - [Codex](../codex/README.md)
 - [Copilot](../copilot/README.md)
 - [Cursor](../cursor/README.md)
-- [pi](../pi/README.md) (separate JS plugin)
+- [OpenCode](../opencode/README.md)
+- [pi](../pi/README.md)
 
 ## Auto-update
 
-`sigil claude`, `sigil codex`, and `sigil copilot` refresh the installed host plugin automatically. Set `SIGIL_AUTO_UPDATE=false` to opt out.
+`sigil claude`, `sigil codex`, `sigil copilot`, and `sigil opencode` refresh the installed host plugin automatically. Set `SIGIL_AUTO_UPDATE=false` to opt out.
 
 ## Troubleshooting
 
