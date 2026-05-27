@@ -11,6 +11,11 @@ export type SigilAuthConfig =
   | { mode: "tenant"; tenantId: string }
   | { mode: "none" };
 
+export interface OtlpConfig {
+  endpoint: string;
+  headers: Record<string, string>;
+}
+
 export interface SigilOpencodeConfig {
   endpoint: string;
   auth: SigilAuthConfig;
@@ -18,6 +23,7 @@ export interface SigilOpencodeConfig {
   agentVersion?: string;
   contentCapture: ContentCaptureMode;
   debug: boolean;
+  otlp?: OtlpConfig;
 }
 
 export async function loadConfig(): Promise<SigilOpencodeConfig | null> {
@@ -50,6 +56,7 @@ export function resolveConfig(): SigilOpencodeConfig | null {
     agentVersion,
     contentCapture,
     debug,
+    otlp: resolveOtlp(),
   };
 }
 
@@ -73,6 +80,45 @@ function resolveAuth(): SigilAuthConfig {
     );
   }
   return { mode: "none" };
+}
+
+function resolveOtlp(): OtlpConfig | undefined {
+  const endpoint = (
+    env("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT") ??
+    env("OTEL_EXPORTER_OTLP_ENDPOINT") ??
+    ""
+  ).trim();
+  if (!endpoint) return undefined;
+
+  const headers = parseOtelHeaders(env("OTEL_EXPORTER_OTLP_HEADERS") ?? "");
+  const tenant = (env("SIGIL_AUTH_TENANT_ID") ?? "").trim();
+  const token = (
+    env("SIGIL_OTEL_AUTH_TOKEN") ??
+    env("SIGIL_AUTH_TOKEN") ??
+    ""
+  ).trim();
+  if (tenant && token && !hasAuthorizationHeader(headers)) {
+    headers.Authorization = `Basic ${Buffer.from(`${tenant}:${token}`).toString("base64")}`;
+  }
+  return { endpoint, headers };
+}
+
+function parseOtelHeaders(raw: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const pair of raw.split(",")) {
+    const eq = pair.indexOf("=");
+    if (eq <= 0) continue;
+    const key = pair.slice(0, eq).trim();
+    const value = pair.slice(eq + 1).trim();
+    if (key && value) headers[key] = value;
+  }
+  return headers;
+}
+
+function hasAuthorizationHeader(headers: Record<string, string>): boolean {
+  return Object.keys(headers).some(
+    (key) => key.trim().toLowerCase() === "authorization",
+  );
 }
 
 function resolveContentCapture(): ContentCaptureMode {

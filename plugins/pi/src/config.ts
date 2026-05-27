@@ -91,17 +91,35 @@ function resolveOtlp(): OtlpConfig | undefined {
   ).trim();
   if (!endpoint) return undefined;
 
-  const headers: Record<string, string> = {};
+  const headers = parseOtelHeaders(env("OTEL_EXPORTER_OTLP_HEADERS") ?? "");
   const tenant = (env("SIGIL_AUTH_TENANT_ID") ?? "").trim();
   const token = (
     env("SIGIL_OTEL_AUTH_TOKEN") ??
     env("SIGIL_AUTH_TOKEN") ??
     ""
   ).trim();
-  if (tenant && token) {
+  if (tenant && token && !hasAuthorizationHeader(headers)) {
     headers.Authorization = `Basic ${Buffer.from(`${tenant}:${token}`).toString("base64")}`;
   }
   return { endpoint, headers };
+}
+
+function parseOtelHeaders(raw: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const pair of raw.split(",")) {
+    const eq = pair.indexOf("=");
+    if (eq <= 0) continue;
+    const key = pair.slice(0, eq).trim();
+    const value = pair.slice(eq + 1).trim();
+    if (key && value) headers[key] = value;
+  }
+  return headers;
+}
+
+function hasAuthorizationHeader(headers: Record<string, string>): boolean {
+  return Object.keys(headers).some(
+    (key) => key.trim().toLowerCase() === "authorization",
+  );
 }
 
 function resolveContentCapture(): ContentCaptureMode {

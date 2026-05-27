@@ -58,7 +58,7 @@ SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net
 
 </details>
 
-When `SIGIL_AUTH_TENANT_ID` and `SIGIL_AUTH_TOKEN` are both set, both Sigil generation export and the OTLP endpoint authenticate with the synthesized Basic auth header (`Basic base64(tenant:token)`). With only one of the two set, no auth header is sent.
+When `SIGIL_AUTH_TENANT_ID` and `SIGIL_AUTH_TOKEN` are set, the extension uses them for Sigil and OTLP auth. If the OpenTelemetry card shows a different Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 
 To include conversation text (with automatic secret redaction), add this to `~/.config/sigil/config.env`:
 
@@ -103,7 +103,7 @@ The same three variables are honored by the [Claude Code plugin](../claude-code/
 | `SIGIL_DEBUG` | `false` | Log lifecycle events to stderr. |
 | `SIGIL_REDACT_INPUT_MESSAGES` | `true` | Redact known secret patterns in user input messages before export. |
 | `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP HTTP endpoint. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
-| `SIGIL_OTEL_AUTH_TOKEN` | — | OTel-only auth token. Overrides `SIGIL_AUTH_TOKEN` when synthesising OTLP Basic auth. |
+| `SIGIL_OTEL_AUTH_TOKEN` | `SIGIL_AUTH_TOKEN` | Override the OTLP password. |
 | `SIGIL_GUARDS_ENABLED` | `false` | Evaluate `tool_call` requests against Sigil policy. |
 | `SIGIL_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout for guard requests, in milliseconds. |
 | `SIGIL_GUARDS_FAIL_OPEN` | `true` | Allow tools through when the guard call fails. Set `false` for strict mode. |

@@ -1,8 +1,15 @@
 import { SigilClient } from "@grafana/sigil-sdk-js";
+import type { Meter, Tracer } from "@opentelemetry/api";
 import { EXPORT_PATH, type SigilOpencodeConfig } from "./config.js";
+
+export interface SigilClientOptions {
+  tracer?: Tracer;
+  meter?: Meter;
+}
 
 export function createSigilClient(
   config: SigilOpencodeConfig,
+  options?: SigilClientOptions,
 ): SigilClient | null {
   try {
     return new SigilClient({
@@ -12,6 +19,8 @@ export function createSigilClient(
         auth: config.auth,
       },
       contentCapture: config.contentCapture,
+      ...(options?.tracer ? { tracer: options.tracer } : {}),
+      ...(options?.meter ? { meter: options.meter } : {}),
     });
   } catch (err) {
     console.warn("[sigil-opencode] failed to create SigilClient:", err);

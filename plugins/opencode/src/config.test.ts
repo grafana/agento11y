@@ -137,6 +137,118 @@ describe("resolveConfig", () => {
   });
 });
 
+describe("resolveConfig OTLP env vars", () => {
+  beforeEach(clearSigilEnv);
+  afterEach(clearSigilEnv);
+
+  it("returns no otlp when not configured", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp).toBeUndefined();
+  });
+
+  it("reads SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.endpoint).toBe("https://otlp.example.com/otlp");
+  });
+
+  it("falls back to OTEL_EXPORTER_OTLP_ENDPOINT", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://otlp.example.com/otlp";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.endpoint).toBe("https://otlp.example.com/otlp");
+  });
+
+  it("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT overrides OTEL_EXPORTER_OTLP_ENDPOINT", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://sigil-otlp.example.com";
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://fallback-otlp.example.com";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.endpoint).toBe("https://sigil-otlp.example.com");
+  });
+
+  it("treats whitespace endpoint as unset", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT = "   ";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp).toBeUndefined();
+  });
+
+  it("synthesises OTLP Basic auth from tenant and token", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "glc_token";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.headers.Authorization).toMatch(/^Basic /);
+    const decoded = Buffer.from(
+      cfg!.otlp!.headers.Authorization!.replace("Basic ", ""),
+      "base64",
+    ).toString();
+    expect(decoded).toBe("tenant-1:glc_token");
+  });
+
+  it("SIGIL_OTEL_AUTH_TOKEN overrides SIGIL_AUTH_TOKEN for OTel only", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "sigil-only-token";
+    process.env.SIGIL_OTEL_AUTH_TOKEN = "otel-only-token";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    const cfg = resolveConfig();
+    const decoded = Buffer.from(
+      cfg!.otlp!.headers.Authorization!.replace("Basic ", ""),
+      "base64",
+    ).toString();
+    expect(decoded).toBe("tenant-1:otel-only-token");
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      basicUser: "tenant-1",
+      basicPassword: "sigil-only-token",
+      tenantId: "tenant-1",
+    });
+  });
+
+  it("keeps explicit OTEL_EXPORTER_OTLP_HEADERS Authorization", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "sigil-token";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    process.env.OTEL_EXPORTER_OTLP_HEADERS =
+      "Authorization=Basic explicit-otlp,X-Test=ok";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.headers.Authorization).toBe("Basic explicit-otlp");
+    expect(cfg?.otlp?.headers["X-Test"]).toBe("ok");
+  });
+
+  it("omits Authorization header when tenant is missing", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TOKEN = "glc_token";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.endpoint).toBe("https://otlp.example.com/otlp");
+    expect(cfg?.otlp?.headers.Authorization).toBeUndefined();
+  });
+
+  it("omits Authorization header when token is missing", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.endpoint).toBe("https://otlp.example.com/otlp");
+    expect(cfg?.otlp?.headers.Authorization).toBeUndefined();
+  });
+});
+
 describe("normalizeBaseEndpoint", () => {
   it("returns empty string for empty input", () => {
     expect(normalizeBaseEndpoint("")).toBe("");

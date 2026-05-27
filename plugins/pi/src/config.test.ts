@@ -240,6 +240,19 @@ describe("resolveConfig canonical OTLP env vars", () => {
     });
   });
 
+  it("keeps explicit OTEL_EXPORTER_OTLP_HEADERS Authorization", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";
+    process.env.SIGIL_AUTH_TOKEN = "sigil-token";
+    process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =
+      "https://otlp.example.com/otlp";
+    process.env.OTEL_EXPORTER_OTLP_HEADERS =
+      "Authorization=Basic explicit-otlp,X-Test=ok";
+    const cfg = resolveConfig();
+    expect(cfg?.otlp?.headers.Authorization).toBe("Basic explicit-otlp");
+    expect(cfg?.otlp?.headers["X-Test"]).toBe("ok");
+  });
+
   it("env var overrides OTLP endpoint", () => {
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
     process.env.SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT =

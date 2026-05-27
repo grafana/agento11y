@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { SigilClient } from "@grafana/sigil-sdk-js";
 import type { PluginInput } from "@opencode-ai/plugin";
 import type { AssistantMessage, Part, UserMessage } from "@opencode-ai/sdk";
@@ -5,6 +6,10 @@ import { createSigilClient } from "./client.js";
 import type { SigilOpencodeConfig } from "./config.js";
 import { mapError, mapGeneration, mapToolDefinitions } from "./mappers.js";
 import { Redactor } from "./redact.js";
+import {
+  createTelemetryProviders,
+  type TelemetryProviders,
+} from "./telemetry.js";
 
 type OpencodeClient = PluginInput["client"];
 
@@ -132,15 +137,20 @@ async function handleEvent(
 
 async function handleLifecycle(
   sigil: SigilClient,
+  telemetry: TelemetryProviders | null,
+  debugLog: (msg: string, ...args: unknown[]) => void,
   event: { type: string; properties: unknown },
 ): Promise<void> {
   const type = event.type as string;
 
   if (type === "session.idle") {
-    try {
-      await sigil.flush();
-    } catch {
-      // flush failure is non-fatal
+    // Fire-and-forget: a stuck OTLP endpoint must not block session.idle for
+    // up to ~30s (BatchSpanProcessor default) per turn.
+    void sigil.flush().catch((err) => debugLog("sigil flush failed", err));
+    if (telemetry) {
+      void telemetry
+        .forceFlush()
+        .catch((err) => debugLog("telemetry flush failed", err));
     }
   }
 
@@ -161,6 +171,13 @@ async function handleLifecycle(
     } catch {
       // shutdown failure is non-fatal
     }
+    if (telemetry) {
+      try {
+        await telemetry.shutdown();
+      } catch (err) {
+        debugLog("telemetry shutdown failed", err);
+      }
+    }
   }
 }
 
@@ -178,19 +195,49 @@ export async function createSigilHooks(
   config: SigilOpencodeConfig,
   client: OpencodeClient,
 ): Promise<SigilHooks | null> {
-  const sigil = createSigilClient(config);
-  if (!sigil) return null;
+  function debugLog(msg: string, ...args: unknown[]) {
+    if (config.debug) console.error(`[sigil-opencode] ${msg}`, ...args);
+  }
+
+  let telemetry: TelemetryProviders | null = null;
+  if (config.otlp) {
+    try {
+      telemetry = createTelemetryProviders(config.otlp, randomUUID());
+    } catch (err) {
+      console.warn("[sigil-opencode] failed to create OTel providers:", err);
+    }
+  }
+
+  const sigil = createSigilClient(config, {
+    tracer: telemetry?.tracer,
+    meter: telemetry?.meter,
+  });
+  if (!sigil) {
+    if (telemetry) {
+      try {
+        await telemetry.shutdown();
+      } catch (err) {
+        debugLog("telemetry shutdown failed", err);
+      }
+    }
+    return null;
+  }
 
   const redactor = new Redactor();
 
   process.on("beforeExit", () => {
     sigil.shutdown().catch(() => {});
+    if (telemetry) {
+      telemetry
+        .shutdown()
+        .catch((err) => debugLog("telemetry shutdown failed", err));
+    }
   });
 
   return {
     event: async (input) => {
       await handleEvent(sigil, config, client, redactor, input.event);
-      await handleLifecycle(sigil, input.event);
+      await handleLifecycle(sigil, telemetry, debugLog, input.event);
     },
     chatMessage: (input, output) => {
       handleChatMessage(input, output);

@@ -4,30 +4,43 @@
 
 By default only metadata is sent (token counts, cost, model, tool names, durations). Set `SIGIL_CONTENT_CAPTURE_MODE=full` or `no_tool_content` to include message content.
 
-## 1. Install
+## 1. Install and launch
 
 ```sh
 brew install grafana/grafana/sigil
 sigil opencode
 ```
 
-`sigil opencode` installs `@grafana/sigil-opencode` into OpenCode on first run, prompts for credentials when they're missing, writes them to `~/.config/sigil/config.env`, and then launches OpenCode. Pass arguments to OpenCode after `--`, e.g. `sigil opencode -- run "say hi"`.
+`sigil opencode` installs `@grafana/sigil-opencode` into OpenCode on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches OpenCode. Pass arguments to OpenCode after `--`, e.g. `sigil opencode -- run "say hi"`.
 
-To install the plugin manually, run `opencode plugin @grafana/sigil-opencode --global` and then `sigil login` to populate `~/.config/sigil/config.env`. The plugin reads that file on every session start.
+<details>
+<summary>Manual plugin registration</summary>
+
+```sh
+opencode plugin @grafana/sigil-opencode --global
+sigil login
+```
+
+The plugin reads `~/.config/sigil/config.env` on every session start, whether you start OpenCode with `sigil opencode` or plain `opencode`.
+
+</details>
 
 ## 2. Credentials
 
-Run `sigil login` and copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+When `sigil opencode` or `sigil login` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
-You need values from two Grafana Cloud pages:
+You need values from three Grafana Cloud pages:
 
 1. **AI Observability → Configuration**
    - **API URL** → `SIGIL_ENDPOINT`
    - **Instance ID** → `SIGIL_AUTH_TENANT_ID`
 
 2. **Administration → Users and access → Cloud access policies**
-   - Create a policy with scope `sigil:write`.
+   - Create a policy with scopes `sigil:write`, `metrics:write`, `traces:write`.
    - Add a token. The `glc_…` value is shown once → `SIGIL_AUTH_TOKEN`.
+
+3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
+   - **OTLP endpoint URL** → `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT`
 
 Run `sigil login` later to update saved credentials.
 
@@ -40,11 +53,12 @@ Create or update `~/.config/sigil/config.env`:
 SIGIL_ENDPOINT=https://sigil-prod-<region>.grafana.net
 SIGIL_AUTH_TENANT_ID=<instance-id>
 SIGIL_AUTH_TOKEN=glc_...
+SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
 
 </details>
 
-When `SIGIL_AUTH_TENANT_ID` and `SIGIL_AUTH_TOKEN` are both set, Sigil generation export authenticates with the synthesized Basic auth header (`Basic base64(tenant:token)`). With only `SIGIL_AUTH_TENANT_ID` set, the `X-Scope-OrgID` header is sent on its own (tenant mode). Without either, no auth header is sent.
+When `SIGIL_AUTH_TENANT_ID` and `SIGIL_AUTH_TOKEN` are set, the plugin uses them for Sigil and OTLP auth. If the OpenTelemetry card shows a different Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 
 To include conversation text (with automatic secret redaction), add this to `~/.config/sigil/config.env`:
 
@@ -56,20 +70,22 @@ SIGIL_CONTENT_CAPTURE_MODE=full
 
 Run one OpenCode turn, then open **AI Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
 
-If nothing shows up, set `SIGIL_DEBUG=true` in `~/.config/sigil/config.env`, run another turn, and check OpenCode stderr plus any Sigil logs.
+If nothing shows up, set `SIGIL_DEBUG=true` in `~/.config/sigil/config.env`, run another turn, and check OpenCode stderr.
 
 ## All options
 
 `~/.config/sigil/config.env` is the only configuration file. Every option is set via env var.
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `SIGIL_ENDPOINT` | — | Sigil URL (find it at `/plugins/grafana-sigil-app`). Empty value disables the plugin. |
-| `SIGIL_AUTH_TENANT_ID` | — | Grafana Cloud instance ID. Combined with `SIGIL_AUTH_TOKEN` becomes Basic auth. |
-| `SIGIL_AUTH_TOKEN` | — | Cloud access policy token (`glc_…`). |
-| `SIGIL_AGENT_NAME` | `opencode` | Agent name reported to Sigil. The plugin appends `:<mode>` (OpenCode's UI mode, e.g. `build`, `plan`) to this. |
+|---|---|---|
+| `SIGIL_ENDPOINT` | — | Sigil API URL. Find it at `/plugins/grafana-sigil-app`. Empty value disables the plugin. |
+| `SIGIL_AUTH_TENANT_ID` | — | Grafana Cloud instance ID. |
+| `SIGIL_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
+| `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the AI Observability latency and tool-call panels stay empty. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| `SIGIL_OTEL_AUTH_TOKEN` | `SIGIL_AUTH_TOKEN` | Override the OTLP password. |
+| `SIGIL_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, or `full`. |
+| `SIGIL_AGENT_NAME` | `opencode` | Agent name reported to Sigil. The plugin appends `:<mode>` for OpenCode's UI mode, such as `build` or `plan`. |
 | `SIGIL_AGENT_VERSION` | — | Optional version string reported with the agent. |
-| `SIGIL_CONTENT_CAPTURE_MODE` | `metadata_only` | `full`, `no_tool_content`, or `metadata_only`. |
 | `SIGIL_DEBUG` | `false` | Log lifecycle events to stderr. |
 
 File format: one `KEY=value` per line, `#` line comments, optional `export ` prefix, optional matching single or double quotes around the value. Only `SIGIL_*` keys plus `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_INSECURE`, and `OTEL_SERVICE_NAME` are honored — anything else (including stray `PATH=…` lines) is ignored.
