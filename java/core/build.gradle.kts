@@ -34,7 +34,6 @@ dependencies {
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation(libs.assertj.core)
-    testImplementation("io.opentelemetry.proto:opentelemetry-proto:1.9.0-alpha")
     testImplementation(libs.otel.sdk.testing)
 }
 
