@@ -101,6 +101,20 @@ describe("mapInputMessages", () => {
     expect(result).toHaveLength(1);
     expect(result[0].parts?.[0]).toEqual({ type: "text", text: "hello" });
   });
+
+  it("omits input bodies in metadata_only mode", () => {
+    const parts = [
+      {
+        id: "p1",
+        sessionID: "s1",
+        messageID: "m1",
+        type: "text" as const,
+        text: "hello world",
+      },
+    ] as Part[];
+
+    expect(mapInputMessages(parts, "metadata_only")).toEqual([]);
+  });
 });
 
 describe("mapOutputMessages", () => {
@@ -165,8 +179,83 @@ describe("mapOutputMessages", () => {
     expect(result).toHaveLength(2);
     expect(result[0].role).toBe("assistant");
     expect(result[0].parts?.[0].type).toBe("tool_call");
+    const toolCall = (result[0].parts?.[0] as any).toolCall;
+    expect(toolCall.inputJSON).toBe('{"command":"echo test"}');
     expect(result[1].role).toBe("tool");
     expect(result[1].parts?.[0].type).toBe("tool_result");
+    const toolResult = (result[1].parts?.[0] as any).toolResult;
+    expect(toolResult.content).toBe("test output");
+  });
+
+  it("keeps message text but omits tool bodies in no_tool_content mode", () => {
+    const parts = [
+      {
+        id: "p1",
+        sessionID: "s1",
+        messageID: "m1",
+        type: "text" as const,
+        text: "assistant reply",
+      },
+      {
+        id: "p2",
+        sessionID: "s1",
+        messageID: "m1",
+        type: "tool" as const,
+        callID: "call-1",
+        tool: "bash",
+        state: {
+          status: "completed" as const,
+          input: { command: "echo test" },
+          output: "test output",
+          title: "Run bash",
+          metadata: {},
+          time: { start: 1000, end: 2000 },
+        },
+      },
+    ] as Part[];
+
+    const result = mapOutputMessages(parts, redactor, "no_tool_content");
+
+    expect(result[0].parts?.[0]).toEqual({
+      type: "text",
+      text: "assistant reply",
+    });
+    expect((result[1].parts?.[0] as any).toolCall.inputJSON).toBe("");
+    expect((result[2].parts?.[0] as any).toolResult.content).toBe("");
+  });
+
+  it("omits text and tool bodies in metadata_only mode", () => {
+    const parts = [
+      {
+        id: "p1",
+        sessionID: "s1",
+        messageID: "m1",
+        type: "text" as const,
+        text: "assistant reply",
+      },
+      {
+        id: "p2",
+        sessionID: "s1",
+        messageID: "m1",
+        type: "tool" as const,
+        callID: "call-1",
+        tool: "bash",
+        state: {
+          status: "completed" as const,
+          input: { command: "echo test" },
+          output: "test output",
+          title: "Run bash",
+          metadata: {},
+          time: { start: 1000, end: 2000 },
+        },
+      },
+    ] as Part[];
+
+    const result = mapOutputMessages(parts, redactor, "metadata_only");
+
+    expect(result).toHaveLength(2);
+    expect((result[0].parts?.[0] as any).toolCall.inputJSON).toBe("");
+    expect((result[1].parts?.[0] as any).toolResult.content).toBe("");
   });
 
   it("skips text parts with empty or whitespace-only text", () => {

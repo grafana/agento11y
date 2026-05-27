@@ -17,7 +17,7 @@ import { createServer, type Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { SigilConfig } from "./config.js";
+import type { SigilOpencodeConfig } from "./config.js";
 import { createSigilHooks } from "./hooks.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -78,7 +78,7 @@ function startExportCaptureServer(): Promise<{
       }
       resolve({
         server,
-        baseUrl: `http://127.0.0.1:${addr.port}/api/v1/generations:export`,
+        baseUrl: `http://127.0.0.1:${addr.port}`,
         captures,
         errors,
       });
@@ -215,7 +215,7 @@ describe("opencode plugin: real-SDK golden export", () => {
   });
 
   async function runCompleteAssistantTurn(
-    configOverrides: Partial<SigilConfig> = {},
+    configOverrides: Partial<SigilOpencodeConfig> = {},
   ) {
     const {
       sessionID,
@@ -225,13 +225,13 @@ describe("opencode plugin: real-SDK golden export", () => {
       assistantParts,
     } = opencodeMessageFixture();
 
-    const config: SigilConfig = {
-      enabled: true,
+    const config: SigilOpencodeConfig = {
       endpoint: serverEnv.baseUrl,
       auth: { mode: "none" },
       agentName: "opencode",
       agentVersion: "test-version",
-      contentCapture: true,
+      contentCapture: "full",
+      debug: false,
       ...configOverrides,
     };
 
@@ -330,7 +330,51 @@ describe("opencode plugin: real-SDK golden export", () => {
 
     assertGoldenJSON(GOLDEN_PATH, exports);
   });
+
+  it.each([
+    "full",
+    "no_tool_content",
+    "metadata_only",
+  ] as const)("propagates content capture mode %s to the SDK export", async (contentCapture) => {
+    const { turn, messageFetches } = await runCompleteAssistantTurn({
+      contentCapture,
+    });
+
+    expectCommonTurnFields(turn);
+    expect(turn.metadata["sigil.sdk.content_capture_mode"]).toBe(
+      contentCapture,
+    );
+    expect(messageFetches).toBe(contentCapture === "metadata_only" ? 0 : 1);
+    if (contentCapture === "metadata_only") {
+      expect(turn.tools.map((tool: any) => tool.name)).toEqual([
+        "Bash",
+        "Read",
+      ]);
+    }
+  });
+
+  it("keeps text but omits tool bodies in no_tool_content exports", async () => {
+    const { turn } = await runCompleteAssistantTurn({
+      contentCapture: "no_tool_content",
+    });
+
+    expect(turn.input[0].parts[0].text).toBe("list go files in this repo");
+    expect(findOutputPart(turn, "text").text).toBe(
+      "I will list the go files for you.",
+    );
+    expect(findOutputPart(turn, "tool_call").tool_call.input_json).toBe("");
+    expect(findOutputPart(turn, "tool_result").tool_result.content).toBe("");
+  });
 });
+
+function findOutputPart(turn: any, key: string): any {
+  for (const message of turn.output ?? []) {
+    for (const part of message.parts ?? []) {
+      if (part[key] !== undefined) return part;
+    }
+  }
+  throw new Error(`missing output part ${key}`);
+}
 
 const normalizeFields: Record<string, string> = {
   started_at: "<NORMALIZED>",

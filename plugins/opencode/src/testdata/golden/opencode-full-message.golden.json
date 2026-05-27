@@ -95,7 +95,7 @@
         "metadata": {
           "cost": 0.005,
           "sigil.sdk.name": "sdk-js",
-          "sigil.sdk.content_capture_mode": "no_tool_content"
+          "sigil.sdk.content_capture_mode": "full"
         },
         "raw_artifacts": [],
         "call_error": "",

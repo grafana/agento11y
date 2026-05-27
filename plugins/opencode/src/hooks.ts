@@ -2,7 +2,7 @@ import type { SigilClient } from "@grafana/sigil-sdk-js";
 import type { PluginInput } from "@opencode-ai/plugin";
 import type { AssistantMessage, Part, UserMessage } from "@opencode-ai/sdk";
 import { createSigilClient } from "./client.js";
-import type { SigilConfig } from "./config.js";
+import type { SigilOpencodeConfig } from "./config.js";
 import { mapError, mapGeneration, mapToolDefinitions } from "./mappers.js";
 import { Redactor } from "./redact.js";
 
@@ -44,7 +44,7 @@ function handleChatMessage(
 
 async function handleEvent(
   sigil: SigilClient,
-  config: SigilConfig,
+  config: SigilOpencodeConfig,
   client: OpencodeClient,
   redactor: Redactor,
   event: { type: string; properties: unknown },
@@ -74,19 +74,22 @@ async function handleEvent(
   // Look up pending generation (user-side data)
   const pending = pendingGenerations.get(assistantMsg.sessionID);
 
-  // Fetch assistant parts via REST
+  const includeMessageBodies = config.contentCapture !== "metadata_only";
+
+  // Fetch assistant parts only when the selected mode can export message bodies.
   let assistantParts: Part[] = [];
-  try {
-    const response = await client.session.message({
-      path: { id: assistantMsg.sessionID, messageID: assistantMsg.id },
-    });
-    assistantParts = response.data?.parts ?? [];
-  } catch {
-    // REST fetch failed — fall back to metadata-only
+  if (includeMessageBodies) {
+    try {
+      const response = await client.session.message({
+        path: { id: assistantMsg.sessionID, messageID: assistantMsg.id },
+      });
+      assistantParts = response.data?.parts ?? [];
+    } catch {
+      // REST fetch failed — fall back to metadata-only output content.
+    }
   }
 
-  const contentCapture = config.contentCapture ?? true;
-
+  const tools = mapToolDefinitions(pending?.tools);
   const seed = {
     conversationId: assistantMsg.sessionID,
     agentName: buildAgentName(config.agentName, assistantMsg.mode),
@@ -94,22 +97,18 @@ async function handleEvent(
     effectiveVersion: config.agentVersion,
     model: { provider: assistantMsg.providerID, name: assistantMsg.modelID },
     startedAt: new Date(assistantMsg.time.created),
-    ...(contentCapture && {
-      systemPrompt: pending?.systemPrompt,
-      tools: mapToolDefinitions(pending?.tools),
-    }),
+    contentCapture: config.contentCapture,
+    ...(tools.length > 0 && { tools }),
+    ...(includeMessageBodies && { systemPrompt: pending?.systemPrompt }),
   };
 
-  // When contentCapture is enabled, map full content with redaction;
-  // otherwise fall back to metadata-only result (no message content).
-  const result = contentCapture
-    ? mapGeneration(
-        assistantMsg,
-        pending?.userParts ?? [],
-        assistantParts,
-        redactor,
-      )
-    : mapGeneration(assistantMsg, [], [], redactor);
+  const result = mapGeneration(
+    assistantMsg,
+    includeMessageBodies ? (pending?.userParts ?? []) : [],
+    assistantParts,
+    redactor,
+    config.contentCapture,
+  );
 
   try {
     if (assistantMsg.error) {
@@ -176,18 +175,9 @@ export type SigilHooks = {
 };
 
 export async function createSigilHooks(
-  config: SigilConfig,
+  config: SigilOpencodeConfig,
   client: OpencodeClient,
 ): Promise<SigilHooks | null> {
-  if (!config.enabled) return null;
-
-  if (!config.endpoint) {
-    console.warn(
-      "[sigil] endpoint is required when enabled -- skipping Sigil initialization",
-    );
-    return null;
-  }
-
   const sigil = createSigilClient(config);
   if (!sigil) return null;
 
