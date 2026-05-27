@@ -28,6 +28,7 @@ import (
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/updatecheck"
+	"github.com/tailscale/hujson"
 )
 
 const (
@@ -43,12 +44,17 @@ const (
 
 // Test seams.
 var (
-	lookPath     = exec.LookPath
-	execFn       = syscall.Exec
-	runInstall   = defaultRunInstall
-	runUpdate    = defaultRunUpdate
-	configPathFn = defaultConfigPath
+	lookPath    = exec.LookPath
+	execFn      = syscall.Exec
+	runInstall  = defaultRunInstall
+	runUpdate   = defaultRunUpdate
+	configDirFn = defaultConfigDir
 )
+
+// configFileNames lists the basenames opencode recognises for its
+// global config, in precedence order. The docs advertise both .json
+// and .jsonc; users may pick either, so we probe both.
+var configFileNames = []string{"opencode.json", "opencode.jsonc"}
 
 // Launch resolves the `opencode` binary on PATH, ensures the
 // @grafana/sigil-opencode plugin is registered in opencode's global
@@ -138,24 +144,46 @@ type opencodeConfig struct {
 }
 
 // pluginInstalled reports whether the @grafana/sigil-opencode plugin is
-// already registered in opencode's global config. The config lives at
-// $XDG_CONFIG_HOME/opencode/opencode.json (default
-// $HOME/.config/opencode/opencode.json). A missing file means opencode
-// has never been configured with any plugins — treat as not installed.
+// already registered in opencode's global config. The config lives in
+// $XDG_CONFIG_HOME/opencode (default $HOME/.config/opencode) as either
+// opencode.json or opencode.jsonc. A missing file means opencode has
+// never been configured with any plugins — treat as not installed.
+//
+// The file contents are parsed as JSONC: opencode's docs explicitly
+// support comments and trailing commas (the very first config example
+// in the docs has a trailing comma), so a strict json.Unmarshal would
+// reject perfectly valid configs and trap us in a reinstall loop.
 func pluginInstalled() (bool, error) {
-	path, err := configPathFn()
+	dir, err := configDirFn()
 	if err != nil {
 		return false, err
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
+	var (
+		data []byte
+		path string
+	)
+	for _, name := range configFileNames {
+		candidate := filepath.Join(dir, name)
+		b, err := os.ReadFile(candidate)
+		if err == nil {
+			data = b
+			path = candidate
+			break
 		}
-		return false, fmt.Errorf("read %s: %w", path, err)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		return false, fmt.Errorf("read %s: %w", candidate, err)
+	}
+	if data == nil {
+		return false, nil
+	}
+	std, err := hujson.Standardize(data)
+	if err != nil {
+		return false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	var c opencodeConfig
-	if err := json.Unmarshal(data, &c); err != nil {
+	if err := json.Unmarshal(std, &c); err != nil {
 		return false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	for _, raw := range c.Plugin {
@@ -209,17 +237,17 @@ func stripNpmVersion(spec string) string {
 	return spec[:at]
 }
 
-// defaultConfigPath returns the path to opencode's global config file,
-// honouring $XDG_CONFIG_HOME (default $HOME/.config). Errors resolving
-// the user's home directory are surfaced so callers don't probe a path
-// silently rooted at CWD.
-func defaultConfigPath() (string, error) {
+// defaultConfigDir returns the directory holding opencode's global
+// config, honouring $XDG_CONFIG_HOME (default $HOME/.config). Errors
+// resolving the user's home directory are surfaced so callers don't
+// probe a path silently rooted at CWD.
+func defaultConfigDir() (string, error) {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(dir) {
-		return filepath.Join(dir, "opencode", "opencode.json"), nil
+		return filepath.Join(dir, "opencode"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir for opencode config: %w", err)
 	}
-	return filepath.Join(home, ".config", "opencode", "opencode.json"), nil
+	return filepath.Join(home, ".config", "opencode"), nil
 }

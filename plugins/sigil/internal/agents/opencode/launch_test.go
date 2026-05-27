@@ -300,6 +300,24 @@ func TestPluginInstalled_PluginEntryShapes(t *testing.T) {
 			contents: `{"plugin":[[]]}`,
 			want:     false,
 		},
+		{
+			name:     "jsonc trailing comma accepted",
+			write:    true,
+			contents: "{\n  \"plugin\": [\n    \"@grafana/sigil-opencode\",\n  ],\n}\n",
+			want:     true,
+		},
+		{
+			name:     "jsonc line comment accepted",
+			write:    true,
+			contents: "// global opencode config\n{\n  \"plugin\": [\"@grafana/sigil-opencode\"] // sigil capture\n}\n",
+			want:     true,
+		},
+		{
+			name:     "jsonc block comment accepted",
+			write:    true,
+			contents: "{\n  /* installed by sigil */\n  \"plugin\": [\"@grafana/sigil-opencode\"]\n}\n",
+			want:     true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -317,6 +335,27 @@ func TestPluginInstalled_PluginEntryShapes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPluginInstalled_JsoncFilename(t *testing.T) {
+	withConfigFiles(t, map[string]string{
+		"opencode.jsonc": "{\n  // sigil\n  \"plugin\": [\"@grafana/sigil-opencode\"],\n}\n",
+	})
+	got, err := pluginInstalled()
+	require.NoError(t, err)
+	assert.True(t, got, "plugin in opencode.jsonc must be detected")
+}
+
+func TestPluginInstalled_JsonTakesPrecedenceOverJsonc(t *testing.T) {
+	// When both files exist, opencode.json wins. Verify we don't fall
+	// through to opencode.jsonc and report a stale answer.
+	withConfigFiles(t, map[string]string{
+		"opencode.json":  `{"plugin":["other-plugin"]}`,
+		"opencode.jsonc": `{"plugin":["@grafana/sigil-opencode"]}`,
+	})
+	got, err := pluginInstalled()
+	require.NoError(t, err)
+	assert.False(t, got, "opencode.json should take precedence")
 }
 
 func TestLaunch_RefreshesInstalledPluginWhenUpdateDue(t *testing.T) {
@@ -376,34 +415,44 @@ func TestLaunch_SkipsRefreshWhenUpdateDisabled(t *testing.T) {
 	require.NoError(t, Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"))
 }
 
-func TestDefaultConfigPath(t *testing.T) {
+func TestDefaultConfigDir(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/custom/config")
-	got, err := defaultConfigPath()
+	got, err := defaultConfigDir()
 	require.NoError(t, err)
-	assert.Equal(t, "/custom/config/opencode/opencode.json", got)
+	assert.Equal(t, "/custom/config/opencode", got)
 
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", "/home/user")
-	got, err = defaultConfigPath()
+	got, err = defaultConfigDir()
 	require.NoError(t, err)
-	assert.Equal(t, "/home/user/.config/opencode/opencode.json", got)
+	assert.Equal(t, "/home/user/.config/opencode", got)
 }
 
-// withConfig points configPathFn at a temp file (creating it with the
-// given contents, or leaving it absent when contents == "") for the
-// duration of one test.
+// withConfig points configDirFn at a temp directory, optionally
+// seeding it with an opencode.json containing the given contents.
+// Pass "" to leave the directory empty.
 func withConfig(t *testing.T, contents string) {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "opencode.json")
+	files := map[string]string{}
 	if contents != "" {
-		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-			t.Fatalf("write opencode config: %v", err)
+		files["opencode.json"] = contents
+	}
+	withConfigFiles(t, files)
+}
+
+// withConfigFiles points configDirFn at a temp directory and writes the
+// supplied {basename: contents} files into it.
+func withConfigFiles(t *testing.T, files map[string]string) {
+	t.Helper()
+	dir := t.TempDir()
+	for name, contents := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	prev := configPathFn
-	t.Cleanup(func() { configPathFn = prev })
-	configPathFn = func() (string, error) { return path, nil }
+	prev := configDirFn
+	t.Cleanup(func() { configDirFn = prev })
+	configDirFn = func() (string, error) { return dir, nil }
 }
 
 func withLookPath(t *testing.T, fn func(string) (string, error)) {
