@@ -8,6 +8,12 @@ Sigil records normalized LLM generation and tool-execution telemetry using your 
 pnpm add @grafana/sigil-sdk-js
 ```
 
+For low-dependency runtimes that only need the core `SigilClient` and generation export APIs, use the slim core package:
+
+```bash
+pnpm add @grafana/sigil-sdk-js-core
+```
+
 For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance ID, and API token), refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/).
 
 ## Validation

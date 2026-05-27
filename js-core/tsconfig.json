@@ -1,0 +1,21 @@
+{
+  "extends": "../js/tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../js/src"
+  },
+  "include": [
+    "../js/src/core.ts",
+    "../js/src/cache-diagnostics.ts",
+    "../js/src/client.ts",
+    "../js/src/config.ts",
+    "../js/src/content_capture.ts",
+    "../js/src/context.ts",
+    "../js/src/exporters/default.ts",
+    "../js/src/exporters/grpc.ts",
+    "../js/src/exporters/http.ts",
+    "../js/src/hooks.ts",
+    "../js/src/redaction.ts",
+    "../js/src/types.ts",
+    "../js/src/utils.ts"
+  ]
+}

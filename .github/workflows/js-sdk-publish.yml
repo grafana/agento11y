@@ -51,8 +51,10 @@ jobs:
           DRY_RUN: ${{ inputs.dry-run }}
         run: |
           CURRENT=$(node -p "require('./js/package.json').version")
+          CORE_CURRENT=$(node -p "require('./js-core/package.json').version")
           (cd js && npm version "$BUMP" --no-git-tag-version --package-lock=false --ignore-scripts >/dev/null)
           NEW=$(node -p "require('./js/package.json').version")
+          (cd js-core && npm version "$NEW" --no-git-tag-version --allow-same-version --package-lock=false --ignore-scripts >/dev/null)
 
           echo "new-version=${NEW}" >> "$GITHUB_OUTPUT"
           echo "tag=sdk-js/v${NEW}" >> "$GITHUB_OUTPUT"
@@ -62,6 +64,7 @@ jobs:
             echo ""
             echo "- bump type: \`${BUMP}\`"
             echo "- current: \`${CURRENT}\`"
+            echo "- core current: \`${CORE_CURRENT}\`"
             echo "- new: \`${NEW}\`"
             echo "- tag: \`sdk-js/v${NEW}\`"
             echo "- dry-run: \`${DRY_RUN}\`"
@@ -71,11 +74,12 @@ jobs:
         run: pnpm --filter @grafana/sigil-sdk-js run build
 
       - name: Pack tarball
-        working-directory: js
         run: |
-          mkdir -p ../tarballs
-          pnpm --config.ignore-scripts=true pack --pack-destination ../tarballs
-          mv ../tarballs/grafana-sigil-sdk-js-*.tgz ../tarballs/sdk-js.tgz
+          mkdir -p tarballs
+          (cd js && pnpm --config.ignore-scripts=true pack --pack-destination ../tarballs)
+          mv tarballs/grafana-sigil-sdk-js-*.tgz tarballs/sdk-js.tgz
+          (cd js-core && pnpm --config.ignore-scripts=true pack --pack-destination ../tarballs)
+          mv tarballs/grafana-sigil-sdk-js-core-*.tgz tarballs/sdk-js-core.tgz
 
       - name: Upload tarball
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -106,7 +110,9 @@ jobs:
           path: tarballs/
 
       - name: Publish to npm
-        run: npm publish ./tarballs/sdk-js.tgz --access public --ignore-scripts
+        run: |
+          npm publish ./tarballs/sdk-js.tgz --access public --ignore-scripts
+          npm publish ./tarballs/sdk-js-core.tgz --access public --ignore-scripts
 
   tag:
     if: ${{ !inputs.dry-run }}
@@ -149,10 +155,11 @@ jobs:
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
 
           (cd js && npm version "${NEW_VERSION}" --no-git-tag-version --allow-same-version --package-lock=false --ignore-scripts >/dev/null)
+          (cd js-core && npm version "${NEW_VERSION}" --no-git-tag-version --allow-same-version --package-lock=false --ignore-scripts >/dev/null)
 
           BRANCH="release/sdk-js-${NEW_VERSION}"
           git checkout -b "${BRANCH}"
-          git add js/package.json
+          git add js/package.json js-core/package.json
           git commit -m "chore(sdk-js): bump version to ${NEW_VERSION}"
 
           git push origin ":refs/tags/${TAG}" 2>/dev/null || true

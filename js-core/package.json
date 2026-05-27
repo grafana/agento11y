@@ -1,0 +1,54 @@
+{
+  "name": "@grafana/sigil-sdk-js-core",
+  "version": "0.5.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/grafana/sigil-sdk.git",
+    "directory": "js-core"
+  },
+  "type": "module",
+  "main": "./dist/core.js",
+  "types": "./dist/core.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    }
+  },
+  "files": [
+    "dist",
+    "proto",
+    "LICENSE",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "clean": "find dist -type f -delete 2>/dev/null || true && find dist -type d -empty -delete 2>/dev/null || true",
+    "sync-proto": "node ../js/scripts/sync-proto.mjs proto",
+    "build": "pnpm run sync-proto && pnpm run clean && tsc --project tsconfig.build.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "lint": "cd ../js && biome check src/core.ts src/cache-diagnostics.ts src/client.ts src/config.ts src/content_capture.ts src/context.ts src/exporters/default.ts src/exporters/grpc.ts src/exporters/http.ts src/hooks.ts src/redaction.ts src/types.ts src/utils.ts"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0"
+  },
+  "peerDependencies": {
+    "@grpc/grpc-js": "^1.14.1",
+    "@grpc/proto-loader": "^0.8.0"
+  },
+  "peerDependenciesMeta": {
+    "@grpc/grpc-js": {
+      "optional": true
+    },
+    "@grpc/proto-loader": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@grpc/grpc-js": "1.14.3",
+    "@grpc/proto-loader": "0.8.0",
+    "@types/node": "24.12.0",
+    "typescript": "6.0.2"
+  }
+}

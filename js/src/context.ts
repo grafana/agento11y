@@ -1,5 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
-
 type SigilContextValues = {
   conversationId?: string;
   conversationTitle?: string;
@@ -8,7 +6,12 @@ type SigilContextValues = {
   agentVersion?: string;
 };
 
-const storage = new AsyncLocalStorage<SigilContextValues>();
+type ContextStorage<T> = {
+  getStore(): T | undefined;
+  run<R>(store: T, callback: () => R): R;
+};
+
+type AsyncLocalStorageConstructor = new <T>() => ContextStorage<T>;
 
 export function withConversationId<T>(conversationId: string, callback: () => T): T {
   return runWithContext({ conversationId }, callback);
@@ -73,3 +76,53 @@ function normalizedString(value: string | undefined): string | undefined {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
+
+function resolveNodeAsyncLocalStorage(): AsyncLocalStorageConstructor | undefined {
+  const processWithBuiltins = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process;
+  const module = processWithBuiltins?.getBuiltinModule?.('async_hooks') as
+    | { AsyncLocalStorage?: AsyncLocalStorageConstructor }
+    | undefined;
+  return module?.AsyncLocalStorage;
+}
+
+class FallbackContextStorage<T> implements ContextStorage<T> {
+  private current: T | undefined;
+
+  getStore(): T | undefined {
+    return this.current;
+  }
+
+  run<R>(store: T, callback: () => R): R {
+    const previous = this.current;
+    this.current = store;
+
+    try {
+      const result = callback();
+      if (isPromiseLike(result)) {
+        return result.finally(() => {
+          this.current = previous;
+        }) as R;
+      }
+      this.current = previous;
+      return result;
+    } catch (error) {
+      this.current = previous;
+      throw error;
+    }
+  }
+}
+
+function isPromiseLike(value: unknown): value is Promise<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'finally' in value &&
+    typeof (value as { finally?: unknown }).finally === 'function'
+  );
+}
+
+const AsyncLocalStorage = resolveNodeAsyncLocalStorage();
+const storage: ContextStorage<SigilContextValues> =
+  AsyncLocalStorage !== undefined
+    ? new AsyncLocalStorage<SigilContextValues>()
+    : new FallbackContextStorage<SigilContextValues>();

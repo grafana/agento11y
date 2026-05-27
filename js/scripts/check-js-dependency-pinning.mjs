@@ -9,6 +9,7 @@ const exactVersionPattern =
 
 const publishedManifests = [
   "js/package.json",
+  "js-core/package.json",
   "plugins/pi/package.json",
   "plugins/opencode/package.json",
 ];

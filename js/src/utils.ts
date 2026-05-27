@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type {
   Artifact,
   EmbeddingResult,
@@ -28,7 +27,7 @@ export function canonicalEffectiveVersion(value: string | undefined): string | u
   if (trimmed.length === 0) {
     return undefined;
   }
-  return `sha256:${createHash('sha256').update(trimmed).digest('hex')}`;
+  return `sha256:${sha256Hex(trimmed)}`;
 }
 
 export function encodedSizeBytes(value: unknown): number {
@@ -143,6 +142,29 @@ export function defaultSleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, durationMs);
   });
+}
+
+type NodeHash = {
+  update(input: string): NodeHash;
+  digest(encoding: 'hex'): string;
+};
+
+type NodeCrypto = {
+  createHash(algorithm: 'sha256'): NodeHash;
+};
+
+function sha256Hex(input: string): string {
+  const nodeCrypto = resolveNodeCrypto();
+  if (nodeCrypto === undefined) {
+    throw new Error('sha256 hashing is unavailable in this JavaScript runtime');
+  }
+  return nodeCrypto.createHash('sha256').update(input).digest('hex');
+}
+
+function resolveNodeCrypto(): NodeCrypto | undefined {
+  const processWithBuiltins = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process;
+  const module = processWithBuiltins?.getBuiltinModule?.('crypto') as NodeCrypto | undefined;
+  return typeof module?.createHash === 'function' ? module : undefined;
 }
 
 export function cloneGeneration(generation: Generation): Generation {
