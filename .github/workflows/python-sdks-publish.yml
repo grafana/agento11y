@@ -187,6 +187,11 @@ jobs:
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           packages-dir: dist/sigil-sdk/
+          # PEP 740 attestations via OIDC (id-token: write). Default since
+          # v1.11.0; pin it explicitly so future action upgrades that flip the
+          # default would surface as a workflow change instead of a silent
+          # regression.
+          attestations: true
 
   publish-dependents:
     if: ${{ !inputs.dry-run }}
@@ -222,3 +227,4 @@ jobs:
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           packages-dir: dist/${{ matrix.package }}/
+          attestations: true

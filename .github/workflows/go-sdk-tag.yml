@@ -17,14 +17,15 @@ on:
         type: boolean
         default: true
 
-permissions:
-  contents: write
-  id-token: write
+permissions: {}
 
 jobs:
   tag:
     if: github.repository == 'grafana/sigil-sdk' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
 
     steps:
       - name: Generate GitHub token
