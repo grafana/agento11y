@@ -18,5 +18,11 @@ export const SigilPlugin: Plugin = async ({ client }) => {
         event: event as { type: string; properties: unknown },
       });
     },
+    "tool.execute.before": async (input, output) => {
+      await hooks.toolExecuteBefore(input, output);
+    },
+    "permission.ask": async (input, output) => {
+      await hooks.permissionAsk(input, output);
+    },
   };
 };

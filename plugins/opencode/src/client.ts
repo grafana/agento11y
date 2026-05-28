@@ -12,11 +12,23 @@ export function createSigilClient(
   options?: SigilClientOptions,
 ): SigilClient | null {
   try {
+    const guards = config.guards ?? {
+      enabled: false,
+      timeoutMs: 1500,
+      failOpen: true,
+    };
     return new SigilClient({
       generationExport: {
         protocol: "http",
         endpoint: appendExportPath(config.endpoint),
         auth: config.auth,
+      },
+      api: { endpoint: config.endpoint },
+      hooks: {
+        enabled: guards.enabled,
+        phases: ["postflight"],
+        timeoutMs: guards.timeoutMs,
+        failOpen: guards.failOpen,
       },
       contentCapture: config.contentCapture,
       ...(options?.tracer ? { tracer: options.tracer } : {}),

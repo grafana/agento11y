@@ -115,6 +115,42 @@ describe("resolveConfig", () => {
     expect(cfg?.debug).toBe(false);
   });
 
+  it("defaults guards off, fail-open, with 1500ms timeout", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    const cfg = resolveConfig();
+    expect(cfg?.guards).toEqual({
+      enabled: false,
+      timeoutMs: 1500,
+      failOpen: true,
+    });
+  });
+
+  it("reads guard settings from canonical env vars", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_GUARDS_ENABLED = "on";
+    process.env.SIGIL_GUARDS_TIMEOUT_MS = "2400";
+    process.env.SIGIL_GUARDS_FAIL_OPEN = "no";
+
+    const cfg = resolveConfig();
+    expect(cfg?.guards).toEqual({
+      enabled: true,
+      timeoutMs: 2400,
+      failOpen: false,
+    });
+  });
+
+  it("falls back to the default guard timeout for invalid values", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_GUARDS_TIMEOUT_MS = "nope";
+    const cfg = resolveConfig();
+    expect(cfg?.guards?.timeoutMs).toBe(1500);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("invalid integer value"),
+    );
+    warn.mockRestore();
+  });
+
   it("derives basic auth from SIGIL_AUTH_TENANT_ID + SIGIL_AUTH_TOKEN", () => {
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
     process.env.SIGIL_AUTH_TENANT_ID = "tenant-1";

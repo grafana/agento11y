@@ -52,8 +52,34 @@ describe("createSigilClient", () => {
         endpoint: "http://localhost:8080/api/v1/generations:export",
         auth: { mode: "none" },
       },
+      api: { endpoint: "http://localhost:8080" },
+      hooks: {
+        enabled: false,
+        phases: ["postflight"],
+        timeoutMs: 1500,
+        failOpen: true,
+      },
       contentCapture: "metadata_only",
     });
+  });
+
+  it("passes guard config to the SDK client", () => {
+    createSigilClient(
+      makeConfig({
+        guards: { enabled: true, timeoutMs: 2500, failOpen: false },
+      }),
+    );
+
+    expect(SigilClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hooks: {
+          enabled: true,
+          phases: ["postflight"],
+          timeoutMs: 2500,
+          failOpen: false,
+        },
+      }),
+    );
   });
 
   it("appends the export path for a prefix-mounted endpoint", () => {
