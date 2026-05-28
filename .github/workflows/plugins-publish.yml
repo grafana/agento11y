@@ -202,4 +202,5 @@ jobs:
       - name: Publish ${{ matrix.plugin }} to npm
         env:
           PLUGIN: ${{ matrix.plugin }}
-        run: npm publish "./tarballs/${PLUGIN}.tgz" --access public --ignore-scripts
+        # --provenance attaches SLSA build provenance via OIDC (id-token: write).
+        run: npm publish "./tarballs/${PLUGIN}.tgz" --access public --ignore-scripts --provenance
