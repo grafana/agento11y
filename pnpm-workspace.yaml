@@ -27,3 +27,6 @@ allowBuilds:
   protobufjs: true
   sqlite3: true
   tree-sitter: true
+minimumReleaseAgeExclude:
+  # Renovate security update: @anthropic-ai/sdk@0.91.1
+  - "@anthropic-ai/sdk@0.91.1"
