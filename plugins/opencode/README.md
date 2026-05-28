@@ -84,6 +84,9 @@ If nothing shows up, set `SIGIL_DEBUG=true` in `~/.config/sigil/config.env`, run
 | `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the AI Observability latency and tool-call panels stay empty. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
 | `SIGIL_OTEL_AUTH_TOKEN` | `SIGIL_AUTH_TOKEN` | Override the OTLP password. |
 | `SIGIL_CONTENT_CAPTURE_MODE` | `metadata_only` | One of `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`. |
+| `SIGIL_GUARDS_ENABLED` | `false` | Evaluate OpenCode tool calls against Sigil guards before execution. |
+| `SIGIL_GUARDS_TIMEOUT_MS` | `1500` | Per-evaluation guard timeout in milliseconds. |
+| `SIGIL_GUARDS_FAIL_OPEN` | `true` | Allow tool calls if guard evaluation fails. Set to `false` to fail closed. |
 | `SIGIL_AGENT_NAME` | `opencode` | Agent name reported to Sigil. The plugin appends `:<mode>` for OpenCode's UI mode, such as `build` or `plan`. |
 | `SIGIL_AGENT_VERSION` | — | Optional version string reported with the agent. |
 | `SIGIL_DEBUG` | `false` | Log lifecycle events to stderr. |

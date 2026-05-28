@@ -16,6 +16,12 @@ export interface OtlpConfig {
   headers: Record<string, string>;
 }
 
+export interface GuardsFeatureConfig {
+  enabled: boolean;
+  timeoutMs: number;
+  failOpen: boolean;
+}
+
 export interface SigilOpencodeConfig {
   endpoint: string;
   auth: SigilAuthConfig;
@@ -23,6 +29,7 @@ export interface SigilOpencodeConfig {
   agentVersion?: string;
   contentCapture: ContentCaptureMode;
   debug: boolean;
+  guards?: GuardsFeatureConfig;
   otlp?: OtlpConfig;
 }
 
@@ -56,6 +63,7 @@ export function resolveConfig(): SigilOpencodeConfig | null {
     agentVersion,
     contentCapture,
     debug,
+    guards: resolveGuards(),
     otlp: resolveOtlp(),
   };
 }
@@ -166,6 +174,25 @@ function env(key: string): string | undefined {
 function envBool(key: string): boolean | undefined {
   const v = env(key);
   return v !== undefined ? toBool(v) : undefined;
+}
+
+export function resolveGuards(): GuardsFeatureConfig {
+  return {
+    enabled: envBool("SIGIL_GUARDS_ENABLED") ?? false,
+    timeoutMs: envPositiveInt("SIGIL_GUARDS_TIMEOUT_MS") ?? 1500,
+    failOpen: envBool("SIGIL_GUARDS_FAIL_OPEN") ?? true,
+  };
+}
+
+function envPositiveInt(key: string): number | undefined {
+  const raw = env(key);
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n > 0) return n;
+  console.warn(
+    `[sigil-opencode] invalid integer value for ${key}: "${raw}" - using default`,
+  );
+  return undefined;
 }
 
 function toBool(v: unknown): boolean | undefined {
