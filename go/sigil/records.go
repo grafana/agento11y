@@ -5,33 +5,22 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/grafana/sigil-sdk/go/sigil/sigilmodel"
 )
 
-type ArtifactKind string
+type ArtifactKind = sigilmodel.ArtifactKind
 
 const (
-	ArtifactKindRequest       ArtifactKind = "request"
-	ArtifactKindResponse      ArtifactKind = "response"
-	ArtifactKindTools         ArtifactKind = "tools"
-	ArtifactKindProviderEvent ArtifactKind = "provider_event"
+	ArtifactKindRequest       = sigilmodel.ArtifactKindRequest
+	ArtifactKindResponse      = sigilmodel.ArtifactKindResponse
+	ArtifactKindTools         = sigilmodel.ArtifactKindTools
+	ArtifactKindProviderEvent = sigilmodel.ArtifactKindProviderEvent
 )
 
-type Artifact struct {
-	Kind        ArtifactKind `json:"kind"`
-	Name        string       `json:"name,omitempty"`
-	ContentType string       `json:"content_type,omitempty"`
-	Payload     []byte       `json:"payload,omitempty"`
-	RecordID    string       `json:"record_id,omitempty"`
-	URI         string       `json:"uri,omitempty"`
-}
+type Artifact = sigilmodel.Artifact
 
-type ArtifactRef struct {
-	Kind        ArtifactKind `json:"kind"`
-	Name        string       `json:"name,omitempty"`
-	ContentType string       `json:"content_type,omitempty"`
-	RecordID    string       `json:"record_id"`
-	URI         string       `json:"uri"`
-}
+type ArtifactRef = sigilmodel.ArtifactRef
 
 type Record struct {
 	ID          string

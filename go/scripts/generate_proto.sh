@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT_DIR="${1:-${ROOT_DIR}/go/sigil/internal/gen}"
-GO_PKG="github.com/grafana/sigil-sdk/go/sigil/internal/gen/sigil/v1"
+OUT_DIR="${1:-${ROOT_DIR}/go/proto}"
+GO_PKG="github.com/grafana/sigil-sdk/go/proto/sigil/v1"
 
 GOPATH_BIN="$(go env GOPATH 2>/dev/null || echo "${HOME}/go")/bin"
 PATH="${GOPATH_BIN}:${PATH}"

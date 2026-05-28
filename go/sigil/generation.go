@@ -1,9 +1,10 @@
 package sigil
 
 import (
-	"encoding/json"
 	"maps"
 	"time"
+
+	"github.com/grafana/sigil-sdk/go/sigil/sigilmodel"
 )
 
 const (
@@ -11,75 +12,22 @@ const (
 	defaultOperationNameStream = "streamText"
 )
 
-type GenerationMode string
+type GenerationMode = sigilmodel.GenerationMode
 
 const (
-	GenerationModeSync   GenerationMode = "SYNC"
-	GenerationModeStream GenerationMode = "STREAM"
+	GenerationModeSync   = sigilmodel.GenerationModeSync
+	GenerationModeStream = sigilmodel.GenerationModeStream
 )
 
 // ModelRef identifies the LLM provider and model used for a generation.
-type ModelRef struct {
-	Provider string `json:"provider"`
-	Name     string `json:"name"`
-}
+type ModelRef = sigilmodel.ModelRef
 
 // ToolDefinition describes a callable tool visible to the model.
-type ToolDefinition struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Type        string          `json:"type,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema,omitempty"`
-	Deferred    bool            `json:"deferred,omitempty"`
-}
+type ToolDefinition = sigilmodel.ToolDefinition
 
 // Generation is the normalized, provider-agnostic generation payload.
 // It can represent both request/response and streaming outcomes.
-type Generation struct {
-	// ID is the Sigil generation identifier. If empty, End assigns one.
-	ID                string         `json:"id,omitempty"`
-	ConversationID    string         `json:"conversation_id,omitempty"`
-	ConversationTitle string         `json:"conversation_title,omitempty"`
-	UserID            string         `json:"user_id,omitempty"`
-	AgentName         string         `json:"agent_name,omitempty"`
-	AgentVersion      string         `json:"agent_version,omitempty"`
-	Mode              GenerationMode `json:"mode,omitempty"`
-	// OperationName maps to gen_ai.operation.name.
-	// Defaults are mode-aware:
-	//   - SYNC   -> "generateText"
-	//   - STREAM -> "streamText"
-	OperationName string `json:"operation_name,omitempty"`
-	// TraceID and SpanID identify the OTel span created by StartGeneration or
-	// StartStreamingGeneration.
-	TraceID             string           `json:"trace_id,omitempty"`
-	SpanID              string           `json:"span_id,omitempty"`
-	Model               ModelRef         `json:"model"`
-	ResponseID          string           `json:"response_id,omitempty"`
-	ResponseModel       string           `json:"response_model,omitempty"`
-	SystemPrompt        string           `json:"system_prompt,omitempty"`
-	Input               []Message        `json:"input,omitempty"`
-	Output              []Message        `json:"output,omitempty"`
-	Tools               []ToolDefinition `json:"tools,omitempty"`
-	MaxTokens           *int64           `json:"max_tokens,omitempty"`
-	Temperature         *float64         `json:"temperature,omitempty"`
-	TopP                *float64         `json:"top_p,omitempty"`
-	ToolChoice          *string          `json:"tool_choice,omitempty"`
-	ThinkingEnabled     *bool            `json:"thinking_enabled,omitempty"`
-	ParentGenerationIDs []string         `json:"parent_generation_ids,omitempty"`
-	EffectiveVersion    string           `json:"effective_version,omitempty"`
-	// Usage/StartedAt/CompletedAt are value-type structs where `omitempty` has
-	// no effect (gostructs are never "empty" in encoding/json's sense). The tag
-	// is intentionally omitted so the JSON shape matches the actual behavior.
-	Usage       TokenUsage        `json:"usage"`
-	StopReason  string            `json:"stop_reason,omitempty"`
-	StartedAt   time.Time         `json:"started_at"`
-	CompletedAt time.Time         `json:"completed_at"`
-	Tags        map[string]string `json:"tags,omitempty"`
-	Metadata    map[string]any    `json:"metadata,omitempty"`
-	Artifacts   []Artifact        `json:"artifacts,omitempty"`
-	// CallError captures upstream call failure text when End receives callErr.
-	CallError string `json:"call_error,omitempty"`
-}
+type Generation = sigilmodel.Generation
 
 // GenerationStart seeds generation fields before the provider call executes.
 // Any zero-valued fields can be filled later by End.
@@ -108,10 +56,6 @@ type GenerationStart struct {
 	// ContentCapture overrides the client-level ContentCaptureMode for this
 	// generation. Default (zero value) inherits from Config.
 	ContentCapture ContentCaptureMode
-}
-
-func (g Generation) Validate() error {
-	return ValidateGeneration(g)
 }
 
 func defaultOperationNameForMode(mode GenerationMode) string {

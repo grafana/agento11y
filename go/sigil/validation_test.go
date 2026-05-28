@@ -150,7 +150,7 @@ func TestValidateStrippedGeneration(t *testing.T) {
 		g := base
 		g.Input = []Message{{Role: RoleUser, Parts: []Part{{Kind: PartKindText}}}}
 		g.Output = []Message{{Role: RoleAssistant, Parts: []Part{{Kind: PartKindThinking}}}}
-		if err := validateGeneration(g); err != nil {
+		if err := ValidateGeneration(g); err != nil {
 			t.Fatalf("expected valid, got %v", err)
 		}
 	})
@@ -158,7 +158,7 @@ func TestValidateStrippedGeneration(t *testing.T) {
 	t.Run("nil ToolCall still fails when stripped", func(t *testing.T) {
 		g := base
 		g.Output = []Message{{Role: RoleAssistant, Parts: []Part{{Kind: PartKindToolCall}}}}
-		err := validateGeneration(g)
+		err := ValidateGeneration(g)
 		if err == nil {
 			t.Fatal("expected error for nil ToolCall even when stripped")
 		}
@@ -170,7 +170,7 @@ func TestValidateStrippedGeneration(t *testing.T) {
 	t.Run("nil ToolResult still fails when stripped", func(t *testing.T) {
 		g := base
 		g.Input = []Message{{Role: RoleTool, Parts: []Part{{Kind: PartKindToolResult}}}}
-		err := validateGeneration(g)
+		err := ValidateGeneration(g)
 		if err == nil {
 			t.Fatal("expected error for nil ToolResult even when stripped")
 		}

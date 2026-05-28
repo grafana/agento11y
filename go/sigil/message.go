@@ -2,60 +2,37 @@ package sigil
 
 import (
 	"encoding/json"
+
+	"github.com/grafana/sigil-sdk/go/sigil/sigilmodel"
 )
 
-type Role string
+type Role = sigilmodel.Role
 
 const (
-	RoleUser      Role = "user"
-	RoleAssistant Role = "assistant"
-	RoleTool      Role = "tool"
+	RoleUser      = sigilmodel.RoleUser
+	RoleAssistant = sigilmodel.RoleAssistant
+	RoleTool      = sigilmodel.RoleTool
 )
 
-type PartKind string
+type PartKind = sigilmodel.PartKind
 
 const (
-	PartKindText       PartKind = "text"
-	PartKindThinking   PartKind = "thinking"
-	PartKindToolCall   PartKind = "tool_call"
-	PartKindToolResult PartKind = "tool_result"
+	PartKindText       = sigilmodel.PartKindText
+	PartKindThinking   = sigilmodel.PartKindThinking
+	PartKindToolCall   = sigilmodel.PartKindToolCall
+	PartKindToolResult = sigilmodel.PartKindToolResult
 )
 
-type Message struct {
-	Role  Role   `json:"role"`
-	Name  string `json:"name,omitempty"`
-	Parts []Part `json:"parts"`
-}
+type Message = sigilmodel.Message
 
-type Part struct {
-	Kind       PartKind    `json:"kind"`
-	Text       string      `json:"text,omitempty"`
-	Thinking   string      `json:"thinking,omitempty"`
-	ToolCall   *ToolCall   `json:"tool_call,omitempty"`
-	ToolResult *ToolResult `json:"tool_result,omitempty"`
-	// Metadata is a value-type struct where `omitempty` has no effect; the
-	// field is always emitted in JSON form.
-	Metadata PartMetadata `json:"metadata"`
-}
+type Part = sigilmodel.Part
 
 // PartMetadata carries provider-specific details while keeping the core shape typed.
-type PartMetadata struct {
-	ProviderType string `json:"provider_type,omitempty"`
-}
+type PartMetadata = sigilmodel.PartMetadata
 
-type ToolCall struct {
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name"`
-	InputJSON json.RawMessage `json:"input_json,omitempty"`
-}
+type ToolCall = sigilmodel.ToolCall
 
-type ToolResult struct {
-	ToolCallID  string          `json:"tool_call_id,omitempty"`
-	Name        string          `json:"name,omitempty"`
-	IsError     bool            `json:"is_error,omitempty"`
-	Content     string          `json:"content,omitempty"`
-	ContentJSON json.RawMessage `json:"content_json,omitempty"`
-}
+type ToolResult = sigilmodel.ToolResult
 
 func TextPart(text string) Part {
 	return Part{
@@ -84,10 +61,6 @@ func ToolResultPart(result ToolResult) Part {
 		ToolResult: &result,
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Message-level constructors
-// ---------------------------------------------------------------------------
 
 // UserTextMessage creates a user message with a single text part.
 func UserTextMessage(text string) Message {

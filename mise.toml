@@ -560,7 +560,7 @@ fail=0
 
 echo "==> check:proto go"
 bash go/scripts/generate_proto.sh "$tmp/go"
-if ! diff -ruN go/sigil/internal/gen "$tmp/go"; then
+if ! diff -ruN go/proto/sigil/v1 "$tmp/go/sigil/v1"; then
   echo >&2 "::error::Go protobuf stubs are out of sync with proto/sigil/v1/*.proto"
   fail=1
 fi

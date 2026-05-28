@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	sigilv1 "github.com/grafana/sigil-sdk/go/sigil/internal/gen/sigil/v1"
+	sigilv1 "github.com/grafana/sigil-sdk/go/proto/sigil/v1"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"

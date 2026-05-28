@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	sigilv1 "github.com/grafana/sigil-sdk/go/sigil/internal/gen/sigil/v1"
+	sigilv1 "github.com/grafana/sigil-sdk/go/proto/sigil/v1"
 	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"

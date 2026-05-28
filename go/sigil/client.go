@@ -1406,7 +1406,7 @@ func combineAllErrors(errs ...error) error {
 }
 
 func (c *Client) persistGeneration(generation Generation) error {
-	if err := validateGeneration(generation); err != nil {
+	if err := ValidateGeneration(generation); err != nil {
 		return fmt.Errorf("%w: %v", errGenerationValidation, err)
 	}
 	if err := c.enqueueGeneration(generation); err != nil {

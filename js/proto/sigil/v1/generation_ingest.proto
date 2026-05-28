@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package sigil.v1;
 
-option go_package = "github.com/grafana/sigil/sigil/internal/gen/sigil/v1;sigilv1";
+option go_package = "github.com/grafana/sigil-sdk/go/proto/sigil/v1;sigilv1";
 
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";

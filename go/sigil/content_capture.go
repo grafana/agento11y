@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/grafana/sigil-sdk/go/sigil/sigilmodel"
 )
 
 // ContentCaptureMode controls what content is included in exported generation
@@ -57,10 +59,12 @@ const (
 )
 
 const (
-	metadataKeyContentCaptureMode                = "sigil.sdk.content_capture_mode"
+	// Pinned to sigilmodel so the shared validator and SDK stripping logic stay
+	// in lockstep.
+	metadataKeyContentCaptureMode                = sigilmodel.MetadataKeyContentCaptureMode
+	contentCaptureModeValueMetaOnly              = sigilmodel.ContentCaptureModeMetadataOnly
 	contentCaptureModeValueFull                  = "full"
 	contentCaptureModeValueNoToolContent         = "no_tool_content"
-	contentCaptureModeValueMetaOnly              = "metadata_only"
 	contentCaptureModeValueFullWithMetadataSpans = "full_with_metadata_spans"
 )
 
@@ -105,16 +109,6 @@ func stampContentCaptureMetadata(g *Generation, mode ContentCaptureMode) {
 		g.Metadata = map[string]any{}
 	}
 	g.Metadata[metadataKeyContentCaptureMode] = mode.String()
-}
-
-// isContentStripped reports whether the generation has been through MetadataOnly
-// stripping, based on the stamped metadata marker.
-func isContentStripped(g Generation) bool {
-	if g.Metadata == nil {
-		return false
-	}
-	v, _ := g.Metadata[metadataKeyContentCaptureMode].(string)
-	return v == contentCaptureModeValueMetaOnly
 }
 
 // stripContent removes sensitive content from a generation while preserving

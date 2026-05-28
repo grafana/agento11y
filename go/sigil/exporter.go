@@ -12,19 +12,18 @@ import (
 	"strings"
 	"time"
 
-	sigilv1 "github.com/grafana/sigil-sdk/go/sigil/internal/gen/sigil/v1"
+	sigilv1 "github.com/grafana/sigil-sdk/go/proto/sigil/v1"
+	"github.com/grafana/sigil-sdk/go/proto/sigil/wire"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
 const (
-	tenantHeaderName         = "X-Scope-OrgID"
-	authorizationHeaderName  = "Authorization"
-	httpGenerationExportPath = "/api/v1/generations:export"
+	tenantHeaderName        = wire.TenantHeaderName
+	authorizationHeaderName = wire.AuthorizationHeaderName
 )
 
 type queuedGeneration struct {
@@ -135,31 +134,10 @@ type httpGenerationExporter struct {
 }
 
 func newHTTPGenerationExporter(cfg GenerationExportConfig) (generationExporter, error) {
-	trimmed := strings.TrimSpace(cfg.Endpoint)
-	if trimmed == "" {
-		return nil, errors.New("endpoint is required")
-	}
-
-	urlString := trimmed
-	lowerPrefix := strings.ToLower(trimmed)
-	if !strings.HasPrefix(lowerPrefix, "http://") && !strings.HasPrefix(lowerPrefix, "https://") {
-		scheme := "https://"
-		if insecureValue(cfg.Insecure) {
-			scheme = "http://"
-		}
-		urlString = scheme + trimmed
-	}
-	parsed, err := url.Parse(urlString)
+	urlString, err := wire.NormalizeGenerationExportURL(cfg.Endpoint, insecureValue(cfg.Insecure))
 	if err != nil {
-		return nil, fmt.Errorf("parse generation export endpoint %q: %w", cfg.Endpoint, err)
+		return nil, err
 	}
-	if parsed.Host == "" {
-		return nil, fmt.Errorf("endpoint %q has empty host", cfg.Endpoint)
-	}
-	if parsed.Path == "" || parsed.Path == "/" {
-		parsed.Path = httpGenerationExportPath
-	}
-	urlString = parsed.String()
 
 	return &httpGenerationExporter{
 		endpoint: urlString,
@@ -171,7 +149,7 @@ func newHTTPGenerationExporter(cfg GenerationExportConfig) (generationExporter, 
 }
 
 func (e *httpGenerationExporter) Export(ctx context.Context, request *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error) {
-	payload, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(request)
+	payload, err := wire.MarshalExportGenerationsJSON(request)
 	if err != nil {
 		return nil, fmt.Errorf("marshal generation request: %w", err)
 	}
@@ -180,7 +158,7 @@ func (e *httpGenerationExporter) Export(ctx context.Context, request *sigilv1.Ex
 	if err != nil {
 		return nil, fmt.Errorf("build generation request: %w", err)
 	}
-	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Content-Type", wire.ContentTypeJSON)
 	for key, value := range e.headers {
 		httpRequest.Header.Set(key, value)
 	}
@@ -201,12 +179,12 @@ func (e *httpGenerationExporter) Export(ctx context.Context, request *sigilv1.Ex
 		return nil, fmt.Errorf("http generation export status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	var exportResponse sigilv1.ExportGenerationsResponse
-	if err := protojson.Unmarshal(body, &exportResponse); err != nil {
+	exportResponse, err := wire.UnmarshalExportGenerationsResponseJSON(body)
+	if err != nil {
 		return nil, fmt.Errorf("unmarshal generation response: %w", err)
 	}
 
-	return &exportResponse, nil
+	return exportResponse, nil
 }
 
 func (e *httpGenerationExporter) Shutdown(_ context.Context) error {
