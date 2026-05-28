@@ -5,12 +5,16 @@ const {
   createSigilClientMock,
   createTelemetryProvidersMock,
   resolveGitBranchMock,
+  loggerMock,
 } = vi.hoisted(() => ({
   loadConfigMock: vi.fn(),
   createSigilClientMock: vi.fn(),
   createTelemetryProvidersMock: vi.fn(),
   resolveGitBranchMock: vi.fn(),
+  loggerMock: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
+
+vi.mock("./logger.js", () => ({ logger: loggerMock }));
 
 vi.mock("./config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./config.js")>();
@@ -160,6 +164,9 @@ describe("extension lifecycle", () => {
     // Default: no git repo. Individual tests opt into a branch by overriding.
     resolveGitBranchMock.mockReset();
     resolveGitBranchMock.mockReturnValue(undefined);
+    loggerMock.debug.mockReset();
+    loggerMock.warn.mockReset();
+    loggerMock.error.mockReset();
   });
 
   it("uses assistant message_end timestamp as completedAt, not msg.timestamp", async () => {
@@ -612,7 +619,6 @@ describe("extension lifecycle", () => {
       auth: { mode: "none" },
       agentName: "pi",
       contentCapture: "metadata_only",
-      debug: false,
       otlp: { endpoint: "http://localhost:4318", headers: {} },
     });
     createTelemetryProvidersMock.mockReturnValue(telemetry);
@@ -811,7 +817,7 @@ describe("extension lifecycle", () => {
     expect(toolRecorders[1]!.setCallError).toHaveBeenCalled();
   });
 
-  it("swallows sigil failures instead of throwing or printing by default", async () => {
+  it("swallows sigil failures instead of throwing", async () => {
     const sigil = {
       startStreamingGeneration: vi.fn(async () => {
         throw new Error("transport down");
@@ -824,7 +830,6 @@ describe("extension lifecycle", () => {
       auth: { mode: "none" },
       agentName: "pi",
       contentCapture: "metadata_only",
-      debug: false,
     });
     createSigilClientMock.mockReturnValue(sigil);
 
@@ -841,6 +846,7 @@ describe("extension lifecycle", () => {
         pi.emit("turn_end", { message: assistantMessage(), toolResults: [] }),
       ).resolves.toBeUndefined();
 
+      // Never touch the terminal: it would corrupt pi's TUI frame.
       expect(warn).not.toHaveBeenCalled();
       expect(error).not.toHaveBeenCalled();
     } finally {
@@ -849,7 +855,7 @@ describe("extension lifecycle", () => {
     }
   });
 
-  it("prints sigil failures in debug mode", async () => {
+  it("logs export failures to the debug log, not the terminal", async () => {
     const sigil = {
       startStreamingGeneration: vi.fn(async () => {
         throw new Error("transport down");
@@ -862,7 +868,6 @@ describe("extension lifecycle", () => {
       auth: { mode: "none" },
       agentName: "pi",
       contentCapture: "metadata_only",
-      debug: true,
     });
     createSigilClientMock.mockReturnValue(sigil);
 
@@ -878,13 +883,17 @@ describe("extension lifecycle", () => {
         toolResults: [],
       });
 
-      expect(error).toHaveBeenCalledWith(
-        "[sigil-pi] generation export failed",
+      expect(loggerMock.debug).toHaveBeenCalledWith(
+        "generation export failed",
         expect.any(Error),
       );
-      expect(error.mock.calls.map(([message]) => message)).not.toEqual(
+      expect(
+        loggerMock.debug.mock.calls.map(([message]) => message),
+      ).not.toEqual(
         expect.arrayContaining([expect.stringContaining("generation queued")]),
       );
+      // The export failure must never reach the terminal.
+      expect(error).not.toHaveBeenCalled();
     } finally {
       error.mockRestore();
     }
@@ -911,7 +920,6 @@ describe("extension lifecycle", () => {
     });
     createSigilClientMock.mockReturnValue(sigil);
 
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const pi = new FakePi();
     registerExtension(pi as any);
 
@@ -924,10 +932,9 @@ describe("extension lifecycle", () => {
     });
 
     expect(sigil.startStreamingGeneration).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(
+    expect(loggerMock.warn).toHaveBeenCalledWith(
       expect.stringContaining("did not validate"),
     );
-    warn.mockRestore();
   });
 
   it("uses sessionId, not file basename, as conversationId", async () => {

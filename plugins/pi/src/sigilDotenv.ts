@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { isMissingFileError } from "./fsErrors.js";
+import { logger } from "./logger.js";
 
 // Mirror plugins/sigil/internal/dotenv/dotenv.go::AllowedDotenvKey so the
 // allow-list stays in sync with the Go launcher. Anything outside the SIGIL_*
@@ -101,7 +102,7 @@ function readSigilDotenv(path: string): SigilDotenvReadResult {
     if (isMissingFileError(err)) {
       return { env: {}, reliable: true };
     }
-    console.warn(`[sigil-pi] failed to read ${path}:`, err);
+    logger.warn(`failed to read ${path}`, err);
     return { env: {}, reliable: false };
   }
   return { env: parseSigilDotenv(body), reliable: true };
@@ -110,8 +111,8 @@ function readSigilDotenv(path: string): SigilDotenvReadResult {
 /**
  * Read and parse the dotenv file at `path`. Missing files return `{}`
  * silently — the dotenv config is optional and credentials may come from
- * other sources (shell env). Other read failures emit a single `[sigil-pi]`
- * warning and also return `{}`.
+ * other sources (shell env). Other read failures emit a single warning to
+ * the sigil debug log and also return `{}`.
  */
 export function loadSigilDotenv(path: string): Record<string, string> {
   return readSigilDotenv(path).env;

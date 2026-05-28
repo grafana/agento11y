@@ -6,28 +6,29 @@ import {
 import type { Meter, Tracer } from "@opentelemetry/api";
 import type { SigilPiConfig } from "./config.js";
 import { EXPORT_PATH } from "./config.js";
+import { logger } from "./logger.js";
 
 export interface SigilClientOptions {
   tracer?: Tracer;
   meter?: Meter;
 }
 
-function createSdkLogger(debug: boolean): SigilLogger {
-  const debugLog = (message: string, ...args: unknown[]) => {
-    if (debug) console.error(`[sigil-pi] ${message}`, ...args);
-  };
-
+function createSdkLogger(): SigilLogger {
   return {
-    debug: debugLog,
+    debug: (message: string, ...args: unknown[]) => {
+      logger.debug(message, ...args);
+    },
     warn: (message: string, ...args: unknown[]) => {
+      // Best-effort export failures are expected when the endpoint is
+      // unreachable; keep them at debug level so they don't read as warnings.
       if (isBestEffortExportLog(message)) {
-        debugLog(message, ...args);
+        logger.debug(message, ...args);
         return;
       }
-      console.warn(`[sigil-pi] ${message}`, ...args);
+      logger.warn(message, ...args);
     },
     error: (message: string, ...args: unknown[]) => {
-      console.error(`[sigil-pi] ${message}`, ...args);
+      logger.error(message, ...args);
     },
   };
 }
@@ -60,13 +61,13 @@ export function createSigilClient(
       contentCapture: config.contentCapture,
       ...(options?.tracer ? { tracer: options.tracer } : {}),
       ...(options?.meter ? { meter: options.meter } : {}),
-      logger: createSdkLogger(config.debug),
+      logger: createSdkLogger(),
       generationSanitizer: createSecretRedactionSanitizer({
         redactInputMessages: config.redactInputMessages,
       }),
     });
   } catch (err) {
-    console.warn("[sigil-pi] failed to create SigilClient:", err);
+    logger.error("failed to create SigilClient", err);
     return null;
   }
 }

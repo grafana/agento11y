@@ -12,6 +12,7 @@ import { detectPiVersion } from "./detectPiVersion.js";
 import { resolveGitBranch } from "./git.js";
 import { runToolCallGuard } from "./guard.js";
 import { resolvePiGenerationLineage } from "./lineage.js";
+import { logger } from "./logger.js";
 import {
   type CachedRequestControls,
   extractRequestControls,
@@ -60,10 +61,6 @@ export default function (pi: ExtensionAPI) {
   // session shutdown in case a turn ends without a matching `turn_end`.
   let currentRequestControls: CachedRequestControls = {};
 
-  function debugLog(msg: string, ...args: unknown[]) {
-    if (config?.debug) console.error(`[sigil-pi] ${msg}`, ...args);
-  }
-
   // Tool execution timing: toolCallId → start timestamp
   const toolStarts = new Map<string, { toolName: string; startedAt: number }>();
   const turnToolTimings: ToolTiming[] = [];
@@ -90,7 +87,7 @@ export default function (pi: ExtensionAPI) {
       try {
         await telemetry.shutdown();
       } catch (err) {
-        console.warn("[sigil-pi] telemetry shutdown failed:", err);
+        logger.error("telemetry shutdown failed", err);
       }
       telemetry = null;
     }
@@ -114,7 +111,7 @@ export default function (pi: ExtensionAPI) {
         try {
           await sigil.shutdown();
         } catch (err) {
-          console.warn("[sigil-pi] stale client shutdown failed:", err);
+          logger.error("stale client shutdown failed", err);
         }
       }
 
@@ -141,7 +138,7 @@ export default function (pi: ExtensionAPI) {
           const instanceId = ctx.sessionManager.getSessionId() || randomUUID();
           telemetry = createTelemetryProviders(config.otlp, instanceId);
         } catch (err) {
-          console.warn("[sigil-pi] failed to create OTel providers:", err);
+          logger.error("failed to create OTel providers", err);
         }
       }
 
@@ -154,9 +151,11 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      debugLog(`enabled, endpoint=${config.endpoint} auth=${config.auth.mode}`);
+      logger.debug(
+        `enabled, endpoint=${config.endpoint} auth=${config.auth.mode}`,
+      );
     } catch (err) {
-      console.warn("[sigil-pi] session_start failed:", err);
+      logger.error("session_start failed", err);
       sigil = null;
       await resetSessionState();
     }
@@ -179,7 +178,7 @@ export default function (pi: ExtensionAPI) {
         currentSystemPrompt = prompt;
       }
     } catch (err) {
-      console.warn("[sigil-pi] before_agent_start failed:", err);
+      logger.error("before_agent_start failed", err);
     }
   });
 
@@ -202,7 +201,7 @@ export default function (pi: ExtensionAPI) {
       const payload = (event as { payload?: unknown }).payload;
       currentRequestControls = extractRequestControls(payload);
     } catch (err) {
-      console.warn("[sigil-pi] before_provider_request failed:", err);
+      logger.error("before_provider_request failed", err);
       currentRequestControls = {};
     }
   });
@@ -228,7 +227,7 @@ export default function (pi: ExtensionAPI) {
       const mapped = mapUserMessage(message, config.contentCapture);
       if (mapped) pendingInputMessages.push(mapped);
     } catch (err) {
-      console.warn("[sigil-pi] message_end failed:", err);
+      logger.error("message_end failed", err);
     }
   });
 
@@ -256,7 +255,7 @@ export default function (pi: ExtensionAPI) {
       toolName: event.toolName,
       input: event.input as Record<string, unknown>,
       failOpen: config.guards.failOpen,
-      logger: { warn: (msg: string) => console.warn(msg) },
+      logger: { warn: (msg: string) => logger.warn(msg) },
     });
   });
 
@@ -269,7 +268,7 @@ export default function (pi: ExtensionAPI) {
         startedAt: Date.now(),
       });
     } catch (err) {
-      console.warn("[sigil-pi] tool_execution_start failed:", err);
+      logger.error("tool_execution_start failed", err);
     }
   });
 
@@ -289,7 +288,7 @@ export default function (pi: ExtensionAPI) {
         isError: event.isError,
       });
     } catch (err) {
-      console.warn("[sigil-pi] tool_execution_end failed:", err);
+      logger.error("tool_execution_end failed", err);
     }
   });
 
@@ -298,8 +297,8 @@ export default function (pi: ExtensionAPI) {
 
     try {
       if (!isAssistantMessage(event.message)) {
-        console.warn(
-          "[sigil-pi] turn_end: assistant message shape did not validate, skipping",
+        logger.warn(
+          "turn_end: assistant message shape did not validate, skipping",
         );
         return;
       }
@@ -317,7 +316,7 @@ export default function (pi: ExtensionAPI) {
       try {
         toolCatalog = pi.getAllTools?.() ?? [];
       } catch (err) {
-        debugLog("getAllTools failed", err);
+        logger.debug("getAllTools failed", err);
         toolCatalog = [];
       }
       let activeNames: Set<string> | null = null;
@@ -325,7 +324,7 @@ export default function (pi: ExtensionAPI) {
         const active = pi.getActiveTools?.();
         if (Array.isArray(active)) activeNames = new Set(active);
       } catch (err) {
-        debugLog("getActiveTools failed", err);
+        logger.debug("getActiveTools failed", err);
       }
       if (
         toolCatalog.length === 0 &&
@@ -442,19 +441,19 @@ export default function (pi: ExtensionAPI) {
             },
           );
         });
-        debugLog(
+        logger.debug(
           `generation queued, model=${msg.model} tokens=${msg.usage.totalTokens}`,
         );
       } catch (err) {
-        debugLog("generation export failed", err);
+        logger.debug("generation export failed", err);
       }
       if (telemetry) {
         void telemetry.forceFlush().catch((err) => {
-          debugLog("telemetry flush failed", err);
+          logger.debug("telemetry flush failed", err);
         });
       }
     } catch (err) {
-      console.warn("[sigil-pi] turn_end failed:", err);
+      logger.error("turn_end failed", err);
     } finally {
       toolStarts.clear();
       turnToolTimings.length = 0;
@@ -468,7 +467,7 @@ export default function (pi: ExtensionAPI) {
       try {
         await sigil.shutdown();
       } catch (err) {
-        console.warn("[sigil-pi] session shutdown failed:", err);
+        logger.error("session shutdown failed", err);
       }
     }
 
@@ -556,10 +555,7 @@ export function emitToolSpans(
       toolRec.setResult(end);
       toolRec.end();
     } catch (err) {
-      console.warn(
-        `[sigil-pi] failed to emit tool span for ${timing.toolName}:`,
-        err,
-      );
+      logger.error(`failed to emit tool span for ${timing.toolName}`, err);
     }
   }
 }

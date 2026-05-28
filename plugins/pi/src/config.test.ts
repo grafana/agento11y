@@ -2,8 +2,15 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadConfig, resolveConfig } from "./config.js";
 import { clearSigilEnv as clearEnv } from "./testEnv.js";
+
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock("./logger.js", () => ({ logger: loggerMock }));
+
+import { loadConfig, resolveConfig } from "./config.js";
 
 describe("resolveConfig", () => {
   beforeEach(clearEnv);
@@ -93,7 +100,8 @@ describe("resolveConfig", () => {
   });
 
   it("maps SIGIL_CONTENT_CAPTURE_MODE=default to metadata_only without warning", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = loggerMock.warn;
+    warn.mockClear();
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
     process.env.SIGIL_CONTENT_CAPTURE_MODE = "default";
     const cfg = resolveConfig();
@@ -103,7 +111,8 @@ describe("resolveConfig", () => {
   });
 
   it("warns and falls back on unknown mode string", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = loggerMock.warn;
+    warn.mockClear();
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
     process.env.SIGIL_CONTENT_CAPTURE_MODE = "yolo";
     const cfg = resolveConfig();
@@ -170,13 +179,6 @@ describe("resolveConfig canonical SIGIL_* env vars", () => {
     process.env.SIGIL_ENDPOINT = "http://canonical:8080";
     const cfg = resolveConfig();
     expect(cfg?.endpoint).toBe("http://canonical:8080");
-  });
-
-  it("SIGIL_DEBUG flips debug on", () => {
-    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
-    process.env.SIGIL_DEBUG = "true";
-    const cfg = resolveConfig();
-    expect(cfg?.debug).toBe(true);
   });
 
   it("SIGIL_CONTENT_CAPTURE_MODE sets content capture", () => {
@@ -316,7 +318,8 @@ describe("resolveConfig guards", () => {
   });
 
   it("warns and falls back to default when SIGIL_GUARDS_ENABLED is not a boolean", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = loggerMock.warn;
+    warn.mockClear();
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
     process.env.SIGIL_GUARDS_ENABLED = "maybe";
     const cfg = resolveConfig();
@@ -329,7 +332,8 @@ describe("resolveConfig guards", () => {
   });
 
   it("warns and falls back to default when SIGIL_GUARDS_TIMEOUT_MS is not numeric", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = loggerMock.warn;
+    warn.mockClear();
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
     process.env.SIGIL_GUARDS_TIMEOUT_MS = "fast";
     const cfg = resolveConfig();
@@ -344,7 +348,8 @@ describe("resolveConfig guards", () => {
   });
 
   it("rejects SIGIL_GUARDS_TIMEOUT_MS=0 so the SDK does not fall back to its 15s default", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = loggerMock.warn;
+    warn.mockClear();
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
     process.env.SIGIL_GUARDS_TIMEOUT_MS = "0";
     const cfg = resolveConfig();
@@ -358,7 +363,8 @@ describe("resolveConfig guards", () => {
   });
 
   it("warns and falls back to default when SIGIL_GUARDS_FAIL_OPEN is not a boolean", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = loggerMock.warn;
+    warn.mockClear();
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
     process.env.SIGIL_GUARDS_FAIL_OPEN = "sometimes";
     const cfg = resolveConfig();

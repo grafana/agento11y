@@ -1,4 +1,5 @@
 import type { ContentCaptureMode } from "@grafana/sigil-sdk-js";
+import { logger } from "./logger.js";
 import { applySigilDotenv } from "./sigilDotenv.js";
 
 export type SigilAuthConfig =
@@ -27,7 +28,6 @@ export interface SigilPiConfig {
   agentName: string;
   agentVersion?: string;
   contentCapture: ContentCaptureMode;
-  debug: boolean;
   redactInputMessages: boolean;
   otlp?: OtlpConfig;
   guards: GuardsFeatureConfig;
@@ -53,7 +53,6 @@ export function resolveConfig(): SigilPiConfig | null {
     configuredAgentVersion.length > 0 ? configuredAgentVersion : undefined;
 
   const contentCapture = resolveContentCapture();
-  const debug = envBool("SIGIL_DEBUG") ?? false;
   const redactInputMessages = envBoolOr("SIGIL_REDACT_INPUT_MESSAGES", true);
 
   return {
@@ -62,7 +61,6 @@ export function resolveConfig(): SigilPiConfig | null {
     agentName,
     agentVersion,
     contentCapture,
-    debug,
     redactInputMessages,
     otlp: resolveOtlp(),
     guards: resolveGuards(),
@@ -161,8 +159,8 @@ function parseContentCaptureMode(value: string): ContentCaptureMode {
   if (VALID_CAPTURE_MODES.includes(normalized as ContentCaptureMode)) {
     return normalized as ContentCaptureMode;
   }
-  console.warn(
-    `[sigil-pi] unsupported contentCapture value "${value}", defaulting to metadata_only`,
+  logger.warn(
+    `unsupported contentCapture value "${value}", defaulting to metadata_only`,
   );
   return "metadata_only";
 }
@@ -172,18 +170,13 @@ function env(key: string): string | undefined {
   return v !== undefined && v !== "" ? v : undefined;
 }
 
-function envBool(key: string): boolean | undefined {
-  const v = env(key);
-  return v !== undefined ? toBool(v) : undefined;
-}
-
 function envBoolOr(envKey: string, defaultValue: boolean): boolean {
   const raw = env(envKey);
   if (raw === undefined) return defaultValue;
   const parsed = toBool(raw);
   if (parsed === undefined) {
-    console.warn(
-      `[sigil-pi] invalid boolean value for ${envKey}: "${raw}" — using default ${defaultValue}`,
+    logger.warn(
+      `invalid boolean value for ${envKey}: "${raw}" — using default ${defaultValue}`,
     );
     return defaultValue;
   }
@@ -197,8 +190,8 @@ function envPositiveIntOr(envKey: string, defaultValue: number): number {
   if (raw === undefined) return defaultValue;
   const n = Number(raw);
   if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
-    console.warn(
-      `[sigil-pi] invalid integer value for ${envKey}: "${raw}" — using default ${defaultValue}`,
+    logger.warn(
+      `invalid integer value for ${envKey}: "${raw}" — using default ${defaultValue}`,
     );
     return defaultValue;
   }

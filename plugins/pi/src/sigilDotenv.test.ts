@@ -2,6 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock("./logger.js", () => ({ logger: loggerMock }));
+
 import {
   applySigilDotenv,
   loadSigilDotenv,
@@ -152,7 +159,8 @@ describe("loadSigilDotenv", () => {
   });
 
   it("returns an empty map silently when the file is missing", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = loggerMock.warn;
+    warn.mockClear();
     const got = loadSigilDotenv(join(dir, "does-not-exist.env"));
     expect(got).toEqual({});
     expect(warn).not.toHaveBeenCalled();
@@ -174,11 +182,12 @@ describe("loadSigilDotenv", () => {
   it("warns and returns an empty map on non-ENOENT read failures", () => {
     // A path that points to a directory rather than a file triggers an
     // EISDIR (or similar) read error, not ENOENT.
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = loggerMock.warn;
+    warn.mockClear();
     const got = loadSigilDotenv(dir);
     expect(got).toEqual({});
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toMatch(/^\[sigil-pi\]/);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/^failed to read/);
     warn.mockRestore();
   });
 });
@@ -239,7 +248,8 @@ describe("applySigilDotenv", () => {
   });
 
   it("does nothing silently when config.env is missing", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = loggerMock.warn;
+    warn.mockClear();
     applySigilDotenv();
     expect(process.env.SIGIL_ENDPOINT).toBeUndefined();
     expect(warn).not.toHaveBeenCalled();
@@ -347,7 +357,8 @@ describe("applySigilDotenv", () => {
   });
 
   it("keeps owned keys when config.env cannot be read", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = loggerMock.warn;
+    warn.mockClear();
     writeConfig("SIGIL_ENDPOINT=https://from-file\nSIGIL_AUTH_TOKEN=tok\n");
     applySigilDotenv();
     expect(process.env.SIGIL_ENDPOINT).toBe("https://from-file");

@@ -60,7 +60,7 @@ export async function runToolCallGuard(
     }
     return undefined;
   } catch (err) {
-    args.logger?.warn(`[sigil-pi] guard eval failed: ${err}`);
+    args.logger?.warn(`guard eval failed: ${err}`);
     if (!args.failOpen) {
       return denyResult(`guard evaluation failed: ${err}`);
     }

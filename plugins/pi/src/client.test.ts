@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SigilPiConfig } from "./config.js";
 
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock("./logger.js", () => ({ logger: loggerMock }));
+
 const { SigilClientMock, createSecretRedactionSanitizerMock, SANITIZER } =
   vi.hoisted(() => {
     const sanitizer = Object.assign(() => ({}) as never, {
@@ -26,7 +32,6 @@ function makeConfig(overrides?: Partial<SigilPiConfig>): SigilPiConfig {
     auth: { mode: "none" },
     agentName: "pi",
     contentCapture: "metadata_only",
-    debug: false,
     redactInputMessages: true,
     guards: {
       enabled: false,
@@ -41,6 +46,9 @@ describe("createSigilClient", () => {
   beforeEach(() => {
     SigilClientMock.mockReset();
     createSecretRedactionSanitizerMock.mockClear();
+    loggerMock.debug.mockReset();
+    loggerMock.warn.mockReset();
+    loggerMock.error.mockReset();
     // biome-ignore lint/complexity/useArrowFunction: must be a regular function for `new` to work
     SigilClientMock.mockImplementation(function () {
       return {};
@@ -152,50 +160,32 @@ describe("createSigilClient", () => {
     );
   });
 
-  it("uses warn as the default sdk log level", () => {
-    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      createSigilClient(makeConfig());
-      const [{ logger }] = SigilClientMock.mock.calls[0]!;
-      logger.debug("debug");
-      logger.warn("warn");
-      logger.error("error");
+  it("routes sdk logs through the file logger by level", () => {
+    createSigilClient(makeConfig());
+    const [{ logger }] = SigilClientMock.mock.calls[0]!;
+    logger.debug("debug");
+    logger.warn("warn");
+    logger.error("error");
 
-      expect(debug).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledWith("[sigil-pi] warn");
-      expect(error).toHaveBeenCalledWith("[sigil-pi] error");
-    } finally {
-      debug.mockRestore();
-      warn.mockRestore();
-      error.mockRestore();
-    }
+    expect(loggerMock.debug).toHaveBeenCalledWith("debug");
+    expect(loggerMock.warn).toHaveBeenCalledWith("warn");
+    expect(loggerMock.error).toHaveBeenCalledWith("error");
   });
 
   it("downgrades best-effort export sdk logs to debug", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      createSigilClient(makeConfig());
-      const [{ logger: defaultLogger }] = SigilClientMock.mock.calls[0]!;
-      defaultLogger.warn("sigil generation export failed: transport down");
-      defaultLogger.warn("sigil generation rejected id=g-1: invalid");
+    createSigilClient(makeConfig());
+    const [{ logger }] = SigilClientMock.mock.calls[0]!;
+    logger.warn("sigil generation export failed: transport down");
+    logger.warn("sigil generation rejected id=g-1: invalid");
 
-      expect(warn).not.toHaveBeenCalled();
-      expect(error).not.toHaveBeenCalled();
-
-      createSigilClient(makeConfig({ debug: true }));
-      const [{ logger: debugLogger }] = SigilClientMock.mock.calls[1]!;
-      debugLogger.warn("sigil generation export failed: transport down");
-
-      expect(error).toHaveBeenCalledWith(
-        "[sigil-pi] sigil generation export failed: transport down",
-      );
-    } finally {
-      warn.mockRestore();
-      error.mockRestore();
-    }
+    // Best-effort export failures are demoted to debug, never warn.
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+    expect(loggerMock.debug).toHaveBeenCalledWith(
+      "sigil generation export failed: transport down",
+    );
+    expect(loggerMock.debug).toHaveBeenCalledWith(
+      "sigil generation rejected id=g-1: invalid",
+    );
   });
 
   it("returns null when sdk constructor throws", () => {
