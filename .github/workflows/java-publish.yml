@@ -76,7 +76,6 @@ jobs:
     if: ${{ !inputs.dry-run }}
     needs: build
     runs-on: ubuntu-latest
-    environment: maven-central
     permissions:
       contents: read
       id-token: write
