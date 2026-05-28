@@ -237,6 +237,58 @@ describe("mapGenerationStart", () => {
     expect(start.toolChoice).toBeUndefined();
     expect(start.metadata).toBeUndefined();
   });
+
+  it("copies generationId to start.id when set", () => {
+    const start = mapGenerationStart(makeMsg(), {
+      conversationId: "s",
+      agentName: "pi",
+      startedAt: 0,
+      generationId: "pi-abcdef0123456789abcdef01",
+    });
+    expect(start.id).toBe("pi-abcdef0123456789abcdef01");
+  });
+
+  it("omits start.id when generationId is missing or empty", () => {
+    const a = mapGenerationStart(makeMsg(), {
+      conversationId: "s",
+      agentName: "pi",
+      startedAt: 0,
+    });
+    const b = mapGenerationStart(makeMsg(), {
+      conversationId: "s",
+      agentName: "pi",
+      startedAt: 0,
+      generationId: "",
+    });
+    expect(a.id).toBeUndefined();
+    expect(b.id).toBeUndefined();
+  });
+
+  it("copies parentGenerationIds when set", () => {
+    const start = mapGenerationStart(makeMsg(), {
+      conversationId: "s",
+      agentName: "pi",
+      startedAt: 0,
+      parentGenerationIds: ["pi-deadbeefcafebabe00010203"],
+    });
+    expect(start.parentGenerationIds).toEqual(["pi-deadbeefcafebabe00010203"]);
+  });
+
+  it("omits parentGenerationIds when empty or undefined", () => {
+    const a = mapGenerationStart(makeMsg(), {
+      conversationId: "s",
+      agentName: "pi",
+      startedAt: 0,
+    });
+    const b = mapGenerationStart(makeMsg(), {
+      conversationId: "s",
+      agentName: "pi",
+      startedAt: 0,
+      parentGenerationIds: [],
+    });
+    expect(a.parentGenerationIds).toBeUndefined();
+    expect(b.parentGenerationIds).toBeUndefined();
+  });
 });
 
 describe("mapGenerationResult", () => {

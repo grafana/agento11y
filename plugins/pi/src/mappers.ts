@@ -128,6 +128,17 @@ export interface MapGenerationStartOptions {
   tags?: Record<string, string>;
   systemPrompt?: string;
   requestControls?: CachedRequestControls;
+  /**
+   * Deterministic generation ID. When set, overrides the SDK's random
+   * `gen-*` ID so Sigil can link this generation in the dependency graph.
+   * Resolved from the active Pi session branch in `index.ts`.
+   */
+  generationId?: string;
+  /**
+   * Producer-supplied parent generation IDs. Pi uses this to point at the
+   * previous assistant turn on the same branch.
+   */
+  parentGenerationIds?: string[];
 }
 
 /** Build the GenerationStart seed from an assistant message and context. */
@@ -144,6 +155,8 @@ export function mapGenerationStart(
     tags,
     systemPrompt,
     requestControls,
+    generationId,
+    parentGenerationIds,
   } = opts;
   // Tags on the seed override client-level SIGIL_TAGS (the SDK merges
   // `{...clientTags, ...seedTags}`), matching claude-code/cursor.
@@ -157,6 +170,12 @@ export function mapGenerationStart(
     ...(tools && tools.length > 0 ? { tools } : {}),
     ...(tags && Object.keys(tags).length > 0 ? { tags } : {}),
   };
+  if (generationId) {
+    start.id = generationId;
+  }
+  if (parentGenerationIds && parentGenerationIds.length > 0) {
+    start.parentGenerationIds = parentGenerationIds;
+  }
   if (msg.content.some((b) => b.type === "thinking")) {
     start.thinkingEnabled = true;
   }

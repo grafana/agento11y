@@ -3,7 +3,7 @@
     "path": "/api/v1/generations:export",
     "generations": [
       {
-        "id": "<NORMALIZED-ID>",
+        "id": "pi-7d0cc91aec6a3962f720b126",
         "conversation_id": "pi-conv-1",
         "operation_name": "streamText",
         "mode": "GENERATION_MODE_STREAM",

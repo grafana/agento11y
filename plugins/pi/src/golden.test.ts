@@ -256,14 +256,31 @@ describe("pi plugin: real-SDK golden export", () => {
     const pi = new FakePi();
     registerExtension(pi as any);
 
+    const { userMsg, assistantMsg, toolResult } = piTurnFixture();
+
+    // Static session branch matching the fixture: user u1 -> assistant a1.
+    // Lineage resolution hashes (conversationId, entry id) so the
+    // generation id in the golden stays stable across runs.
     const ctx = {
       sessionManager: {
         getSessionFile: () => "pi-session.jsonl",
         getSessionId: () => "pi-conv-1",
+        getBranch: () => [
+          {
+            type: "message",
+            id: "u1",
+            parentId: null,
+            message: userMsg,
+          },
+          {
+            type: "message",
+            id: "a1",
+            parentId: "u1",
+            message: assistantMsg,
+          },
+        ],
       },
     };
-
-    const { userMsg, assistantMsg, toolResult } = piTurnFixture();
 
     await pi.emit("session_start", {}, ctx);
     await pi.emit("turn_start", {}, ctx);
@@ -404,8 +421,11 @@ const normalizeFields: Record<string, string> = {
 
 const normalizeKeySuffixes = [".started_at", ".completed_at", ".timestamp"];
 
-// generated-ID prefixes whose values look like `gen-<random>` and need
-// scrubbing. Pi's generation IDs are issued by the JS SDK at enqueue time.
+// Generated-ID prefixes whose values look like `<prefix>-<random>` and need
+// scrubbing. The SDK assigns `gen-*` when a producer-supplied id is absent
+// and `span-*`/`trace-*` from the OTel SDK. Pi's deterministic `pi-*` ids
+// are intentionally NOT scrubbed: they are stable per conversationId +
+// session entry id, so they should remain visible in the golden fixture.
 const idPrefixes = ["gen-", "span-", "trace-"];
 
 function normalizeAny(value: unknown): unknown {
@@ -429,7 +449,9 @@ function normalizeAny(value: unknown): unknown {
       }
       if (matched) continue;
       // The SDK assigns a generation `id` if the producer didn't set one.
-      // Pi does not pass an explicit ID, so the field is dynamic.
+      // Pi sets a deterministic `pi-*` id from the session branch when
+      // available; only random-prefixed ids (gen-/span-/trace-) are
+      // scrubbed so the pi-* id stays visible in the golden.
       if (
         k === "id" &&
         typeof v === "string" &&

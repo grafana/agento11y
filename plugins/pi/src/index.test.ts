@@ -2182,6 +2182,266 @@ describe("extension lifecycle", () => {
       expect(seeds[0]!.toolChoice).toBe("tool:search");
     });
   });
+
+  describe("generation lineage", () => {
+    function setupClient() {
+      const seeds: Array<{
+        id?: string;
+        parentGenerationIds?: string[];
+      }> = [];
+      const recorder = {
+        setResult: vi.fn(),
+        setCallError: vi.fn(),
+        setFirstTokenAt: vi.fn(),
+      };
+      const sigil: SigilLike = {
+        startStreamingGeneration: vi.fn(async (seed, run) => {
+          seeds.push(seed as { id?: string; parentGenerationIds?: string[] });
+          await run(recorder);
+        }),
+        startToolExecution: vi.fn(() => ({
+          setResult: vi.fn(),
+          setCallError: vi.fn(),
+          end: vi.fn(),
+          getError: vi.fn(),
+        })),
+        shutdown: vi.fn(async () => {}),
+      };
+      return { sigil, seeds };
+    }
+
+    // ctxWithBranch is a fake ReadonlySessionManager that returns a static
+    // session branch. We track which assistant entry each turn_end should
+    // hit by swapping a shared `currentMessage` reference between turns,
+    // mirroring how the real pi runtime appends entries to the tree.
+    function ctxWithBranch(
+      sessionId: string,
+      branch: Array<{
+        type: string;
+        id: string;
+        parentId: string | null;
+        message?: { role: string } | null;
+      }>,
+    ) {
+      return {
+        sessionManager: {
+          getSessionFile: () => "pi-session.jsonl",
+          getSessionId: () => sessionId,
+          getBranch: () => branch,
+        },
+      };
+    }
+
+    it("emits deterministic pi-* generation id when branch data is available", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const msg = assistantMessage();
+      const ctx = ctxWithBranch("pi-conv-1", [
+        {
+          type: "message",
+          id: "u1",
+          parentId: null,
+          message: { role: "user" },
+        },
+        {
+          type: "message",
+          id: "a1",
+          parentId: "u1",
+          message: msg,
+        },
+      ]);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+
+      expect(seeds).toHaveLength(1);
+      expect(seeds[0]!.id).toMatch(/^pi-[a-f0-9]{24}$/);
+      // First assistant turn — no parent.
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+    });
+
+    it("is stable across re-exports of the same conversationId + session entry", async () => {
+      // Re-running the export pipeline against the same session state
+      // (same conversationId, same assistant entry id) must produce the
+      // same generation id. This is what makes the dependency graph robust
+      // to retries.
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const msg = assistantMessage();
+      const branch = [
+        {
+          type: "message",
+          id: "u1",
+          parentId: null,
+          message: { role: "user" },
+        },
+        {
+          type: "message",
+          id: "a1",
+          parentId: "u1",
+          message: msg,
+        },
+      ];
+
+      const piA = new FakePi();
+      registerExtension(piA as any);
+      const ctxA = ctxWithBranch("pi-conv-1", branch);
+      await piA.emit("session_start", {}, ctxA);
+      await piA.emit("turn_start", {}, ctxA);
+      await piA.emit("turn_end", { message: msg, toolResults: [] }, ctxA);
+
+      const piB = new FakePi();
+      registerExtension(piB as any);
+      const ctxB = ctxWithBranch("pi-conv-1", branch);
+      await piB.emit("session_start", {}, ctxB);
+      await piB.emit("turn_start", {}, ctxB);
+      await piB.emit("turn_end", { message: msg, toolResults: [] }, ctxB);
+
+      expect(seeds).toHaveLength(2);
+      expect(seeds[0]!.id).toBe(seeds[1]!.id);
+    });
+
+    it("links a second assistant turn to the first one on the same branch", async () => {
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const msg1 = assistantMessage();
+      const msg2 = assistantMessage();
+      // Branch grows as turns proceed: turn 1 sees only [u1, a1]; turn 2
+      // sees [u1, a1, u2, a2]. Encode this with a closure-backed branch.
+      let branch: Array<{
+        type: string;
+        id: string;
+        parentId: string | null;
+        message?: { role: string } | null;
+      }> = [
+        {
+          type: "message",
+          id: "u1",
+          parentId: null,
+          message: { role: "user" },
+        },
+        { type: "message", id: "a1", parentId: "u1", message: msg1 },
+      ];
+      const ctx = {
+        sessionManager: {
+          getSessionFile: () => "pi-session.jsonl",
+          getSessionId: () => "pi-conv-2",
+          getBranch: () => branch,
+        },
+      };
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: msg1, toolResults: [] }, ctx);
+
+      // Pi appends the user message and assistant response to the tree as
+      // turn 2 progresses.
+      branch = [
+        ...branch,
+        {
+          type: "message",
+          id: "u2",
+          parentId: "a1",
+          message: { role: "user" },
+        },
+        { type: "message", id: "a2", parentId: "u2", message: msg2 },
+      ];
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: msg2, toolResults: [] }, ctx);
+
+      expect(seeds).toHaveLength(2);
+      expect(seeds[0]!.id).toMatch(/^pi-[a-f0-9]{24}$/);
+      expect(seeds[1]!.id).toMatch(/^pi-[a-f0-9]{24}$/);
+      expect(seeds[0]!.id).not.toBe(seeds[1]!.id);
+
+      // Turn 1 is the first assistant on the branch — no parent.
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+      // Turn 2 points back to turn 1.
+      expect(seeds[1]!.parentGenerationIds).toEqual([seeds[0]!.id]);
+    });
+
+    it("omits lineage fields when getBranch is unavailable (older pi)", async () => {
+      // Older pi runtimes do not expose getBranch on ReadonlySessionManager;
+      // the plugin must not set id or parentGenerationIds so the SDK keeps
+      // its random `gen-*` fallback behavior.
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      // defaultCtx has no getBranch.
+      await pi.emit("session_start");
+      await pi.emit("turn_start");
+      await pi.emit("turn_end", {
+        message: assistantMessage(),
+        toolResults: [],
+      });
+
+      expect(seeds).toHaveLength(1);
+      expect(seeds[0]!.id).toBeUndefined();
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+    });
+
+    it("omits lineage when conversationId is empty", async () => {
+      // No conversationId (no-session mode): we cannot hash a stable id.
+      const { sigil, seeds } = setupClient();
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createSigilClientMock.mockReturnValue(sigil);
+
+      const msg = assistantMessage();
+      const ctx = ctxWithBranch("", [
+        { type: "message", id: "a1", parentId: null, message: msg },
+      ]);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+
+      expect(seeds[0]!.id).toBeUndefined();
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+    });
+  });
 });
 
 // --- Unit tests for emitToolSpans ---

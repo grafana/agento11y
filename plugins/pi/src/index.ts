@@ -11,6 +11,7 @@ import { loadConfig } from "./config.js";
 import { detectPiVersion } from "./detectPiVersion.js";
 import { resolveGitBranch } from "./git.js";
 import { runToolCallGuard } from "./guard.js";
+import { resolvePiGenerationLineage } from "./lineage.js";
 import {
   type CachedRequestControls,
   extractRequestControls,
@@ -377,6 +378,18 @@ export default function (pi: ExtensionAPI) {
           : undefined;
       const builtinTags = gitBranch ? { "git.branch": gitBranch } : undefined;
 
+      // Resolve lineage at `turn_end`, not `message_end`: pi awaits
+      // extension `message_end` callbacks *before* calling
+      // `sessionManager.appendMessage` (see agent-session.js `_publish`),
+      // so the assistant entry is not yet in the tree at that point. By
+      // `turn_end` it has been appended and any subsequent extension
+      // mutations have settled.
+      const lineage = resolvePiGenerationLineage(
+        ctx.sessionManager,
+        msg,
+        conversationId,
+      );
+
       const seed = mapGenerationStart(msg, {
         conversationId,
         agentName: config.agentName,
@@ -386,6 +399,8 @@ export default function (pi: ExtensionAPI) {
         tags: builtinTags,
         systemPrompt: currentSystemPrompt,
         requestControls: currentRequestControls,
+        generationId: lineage.generationId,
+        parentGenerationIds: lineage.parentGenerationIds,
       });
 
       const toolResults = (event.toolResults ?? []) as PiToolResult[];
