@@ -190,21 +190,115 @@ function serializeContext(context: HookEvaluateRequest['context']): Record<strin
 function serializeInput(input: HookEvaluateRequest['input']): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (input.messages !== undefined && input.messages.length > 0) {
-    out.messages = input.messages;
+    out.messages = input.messages.map(serializeMessage);
   }
   if (input.tools !== undefined && input.tools.length > 0) {
-    out.tools = input.tools;
+    out.tools = input.tools.map(serializeToolDefinition);
   }
   if (input.systemPrompt !== undefined && input.systemPrompt.length > 0) {
     out.system_prompt = input.systemPrompt;
   }
   if (input.output !== undefined && input.output.length > 0) {
-    out.output = input.output;
+    out.output = input.output.map(serializeMessage);
   }
   if (input.conversationPreview !== undefined && input.conversationPreview.length > 0) {
     out.conversation_preview = input.conversationPreview;
   }
   return out;
+}
+
+function serializeMessage(message: Message): Record<string, unknown> {
+  const out: Record<string, unknown> = { role: message.role };
+  if (message.name !== undefined && message.name.length > 0) {
+    out.name = message.name;
+  }
+  const parts = message.parts?.map(serializeMessagePart) ?? [];
+  if (parts.length > 0) {
+    out.parts = parts;
+  } else if (message.content !== undefined && message.content.length > 0) {
+    out.parts = [{ kind: 'text', text: message.content }];
+  }
+  return out;
+}
+
+function serializeMessagePart(part: MessagePart): Record<string, unknown> {
+  const metadata = serializePartMetadata(part.metadata);
+  switch (part.type) {
+    case 'text':
+      return maybeWithMetadata({ kind: 'text', text: part.text }, metadata);
+    case 'thinking':
+      return maybeWithMetadata({ kind: 'thinking', thinking: part.thinking }, metadata);
+    case 'tool_call': {
+      const toolCall: Record<string, unknown> = {
+        name: part.toolCall.name,
+      };
+      if (part.toolCall.id !== undefined && part.toolCall.id.length > 0) {
+        toolCall.id = part.toolCall.id;
+      }
+      if (part.toolCall.inputJSON !== undefined && part.toolCall.inputJSON.length > 0) {
+        toolCall.input_json = jsonPayload(part.toolCall.inputJSON);
+      }
+      return maybeWithMetadata({ kind: 'tool_call', tool_call: toolCall }, metadata);
+    }
+    case 'tool_result': {
+      const toolResult: Record<string, unknown> = {};
+      if (part.toolResult.toolCallId !== undefined && part.toolResult.toolCallId.length > 0) {
+        toolResult.tool_call_id = part.toolResult.toolCallId;
+      }
+      if (part.toolResult.name !== undefined && part.toolResult.name.length > 0) {
+        toolResult.name = part.toolResult.name;
+      }
+      if (part.toolResult.content !== undefined && part.toolResult.content.length > 0) {
+        toolResult.content = part.toolResult.content;
+      }
+      if (part.toolResult.contentJSON !== undefined && part.toolResult.contentJSON.length > 0) {
+        toolResult.content_json = jsonPayload(part.toolResult.contentJSON);
+      }
+      if (part.toolResult.isError === true) {
+        toolResult.is_error = true;
+      }
+      return maybeWithMetadata({ kind: 'tool_result', tool_result: toolResult }, metadata);
+    }
+  }
+}
+
+function serializeToolDefinition(tool: ToolDefinition): Record<string, unknown> {
+  const out: Record<string, unknown> = { name: tool.name };
+  if (tool.description !== undefined && tool.description.length > 0) {
+    out.description = tool.description;
+  }
+  if (tool.type !== undefined && tool.type.length > 0) {
+    out.type = tool.type;
+  }
+  if (tool.inputSchemaJSON !== undefined && tool.inputSchemaJSON.length > 0) {
+    out.input_schema = jsonPayload(tool.inputSchemaJSON);
+  }
+  return out;
+}
+
+function serializePartMetadata(metadata: MessagePart['metadata']): Record<string, unknown> | undefined {
+  if (metadata?.providerType !== undefined && metadata.providerType.length > 0) {
+    return { provider_type: metadata.providerType };
+  }
+  return undefined;
+}
+
+function maybeWithMetadata(
+  part: Record<string, unknown>,
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (metadata !== undefined) {
+    part.metadata = metadata;
+  }
+  return part;
+}
+
+function jsonPayload(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 
 function parseEvaluateResponse(payload: unknown): HookEvaluateResponse {

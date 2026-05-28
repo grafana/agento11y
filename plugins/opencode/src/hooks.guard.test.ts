@@ -120,11 +120,11 @@ describe("opencode guards", () => {
             role: "assistant",
             parts: [
               {
-                type: "tool_call",
-                toolCall: {
+                kind: "tool_call",
+                tool_call: {
                   id: "call-1",
                   name: "third-party-test-mcp_third_party_test_mcp_leak_fake_credential",
-                  inputJSON: JSON.stringify({ demo: true }),
+                  input_json: { demo: true },
                 },
               },
             ],
@@ -169,15 +169,15 @@ describe("opencode guards", () => {
     expect(
       hookServer.captures[0]?.input?.output?.[0]?.parts?.[0],
     ).toMatchObject({
-      type: "tool_call",
-      toolCall: {
+      kind: "tool_call",
+      tool_call: {
         id: "call-1",
         name: "bash",
-        inputJSON: JSON.stringify({
+        input_json: {
           pattern: "rm *",
           title: "Run shell command",
           metadata: { command: "rm -rf /tmp/demo" },
-        }),
+        },
       },
     });
 

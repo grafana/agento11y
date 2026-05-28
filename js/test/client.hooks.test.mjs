@@ -96,7 +96,7 @@ test('evaluateHook posts JSON to /api/v1/hooks:evaluate and parses allow respons
         messages: [
           {
             role: 'user',
-            parts: [{ type: 'text', text: 'hello world' }],
+            parts: [{ kind: 'text', text: 'hello world' }],
           },
         ],
       },
@@ -173,6 +173,76 @@ test('evaluateHook handles api.endpoint with a trailing slash', async () => {
       input: {},
     });
     assert.equal(receivedPath, '/sigil/api/v1/hooks:evaluate');
+  } finally {
+    await client.shutdown();
+    await close(server);
+  }
+});
+
+test('evaluateHook serializes tool calls with guard-compatible wire keys', async () => {
+  let receivedBody = {};
+
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) {
+      chunks.push(chunk);
+    }
+    receivedBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ action: 'deny', reason: 'blocked', evaluations: [] }));
+  });
+  await listen(server);
+  const address = server.address();
+
+  const client = newClient({
+    apiEndpoint: `http://127.0.0.1:${address.port}`,
+    hooksEnabled: true,
+    hooksPhases: ['postflight'],
+  });
+
+  try {
+    const response = await client.evaluateHook({
+      phase: 'postflight',
+      context: {
+        agentName: 'opencode',
+        model: { provider: 'anthropic', name: 'claude' },
+      },
+      input: {
+        output: [
+          {
+            role: 'assistant',
+            parts: [
+              {
+                type: 'tool_call',
+                toolCall: {
+                  id: 'call-1',
+                  name: 'third-party-test-mcp_third_party_test_mcp_leak_fake_credential',
+                  inputJSON: JSON.stringify({ demo: true }),
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    assert.equal(response.action, 'deny');
+    assert.deepEqual(receivedBody.input.output, [
+      {
+        role: 'assistant',
+        parts: [
+          {
+            kind: 'tool_call',
+            tool_call: {
+              id: 'call-1',
+              name: 'third-party-test-mcp_third_party_test_mcp_leak_fake_credential',
+              input_json: { demo: true },
+            },
+          },
+        ],
+      },
+    ]);
   } finally {
     await client.shutdown();
     await close(server);
