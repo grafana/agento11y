@@ -229,6 +229,38 @@ func TestMapFragment_MissingModelAndProvider_FallsBackToCursor(t *testing.T) {
 	}
 }
 
+func TestMapFragment_ConversationTitleFromSession(t *testing.T) {
+	got := MapFragment(Inputs{
+		Fragment: basicFragment(t),
+		Session: &fragment.Session{
+			ConversationID:    "conv-1",
+			ConversationTitle: "list go files",
+		},
+		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		Now:            fixedTime,
+	})
+	if got.Start.ConversationTitle != "list go files" {
+		t.Errorf("Start.ConversationTitle = %q; want %q", got.Start.ConversationTitle, "list go files")
+	}
+	if got.Generation.ConversationTitle != "list go files" {
+		t.Errorf("Generation.ConversationTitle = %q; want %q", got.Generation.ConversationTitle, "list go files")
+	}
+}
+
+func TestMapFragment_ConversationTitleEmptyWithoutSession(t *testing.T) {
+	got := MapFragment(Inputs{
+		Fragment:       basicFragment(t),
+		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		Now:            fixedTime,
+	})
+	if got.Start.ConversationTitle != "" {
+		t.Errorf("Start.ConversationTitle = %q; want empty", got.Start.ConversationTitle)
+	}
+	if got.Generation.ConversationTitle != "" {
+		t.Errorf("Generation.ConversationTitle = %q; want empty", got.Generation.ConversationTitle)
+	}
+}
+
 func TestMapFragment_BuiltinTags(t *testing.T) {
 	got := MapFragment(Inputs{
 		Fragment: basicFragment(t),
