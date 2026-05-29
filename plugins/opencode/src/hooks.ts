@@ -490,6 +490,7 @@ function handleToolExecuteAfter(
 async function handlePermissionAsk(
   sigil: SigilClient,
   config: SigilOpencodeConfig,
+  debugLog: (msg: string, ...args: unknown[]) => void,
   input: Permission,
   output: { status: "ask" | "deny" | "allow" },
 ): Promise<void> {
@@ -511,6 +512,12 @@ async function handlePermissionAsk(
   });
   if (res?.block) {
     output.status = "deny";
+    // Log the reason so it's recoverable from the debug log; opencode's
+    // permission.ask output API has no field to surface it to the model or
+    // the user.
+    debugLog(
+      `guard denied permission.ask for tool=${input.type} (reason dropped, API has no field): ${res.reason}`,
+    );
   }
 }
 
@@ -797,7 +804,7 @@ export async function createSigilHooks(
       handleToolExecuteAfter(input, output);
     },
     permissionAsk: async (input, output) => {
-      await handlePermissionAsk(sigil, config, input, output);
+      await handlePermissionAsk(sigil, config, debugLog, input, output);
     },
   };
 }

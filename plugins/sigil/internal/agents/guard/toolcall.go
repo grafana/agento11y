@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -19,6 +20,34 @@ import (
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 )
+
+// guardBehaviorHint instructs the model on how to react to a deny verdict so
+// the surfaced reason is not mistaken for a generic tool failure to retry or
+// work around. It is appended by both the policy-deny and fail-closed
+// formatters.
+const guardBehaviorHint = "Stop and tell the user this tool call was blocked, then wait for their direction before taking any other action."
+
+// formatPolicyDeny wraps a rule-authored reason (which may be empty) into a
+// self-explanatory message naming the Grafana AI Observability source, the
+// blocked tool, and the expected agent behavior.
+func formatPolicyDeny(toolName, reason string) string {
+	msg := fmt.Sprintf("A Grafana AI Observability policy blocked the %q tool call, so it was not run.", toolName)
+	if r := strings.TrimSpace(reason); r != "" {
+		msg += " Reason: " + r
+	}
+	return msg + "\n\n" + guardBehaviorHint
+}
+
+// formatEvalFailure is the fail-closed message used when the guard could not
+// be evaluated (missing credentials or transport failure). It explicitly
+// distinguishes the infrastructure failure from a policy decision.
+func formatEvalFailure(toolName, detail string) string {
+	msg := fmt.Sprintf("Sigil could not evaluate the Grafana AI Observability guard for the %q tool call, so it was blocked as a safety measure.", toolName)
+	if d := strings.TrimSpace(detail); d != "" {
+		msg += " Details: " + d
+	}
+	return msg + "\n\n" + guardBehaviorHint
+}
 
 // ToolCallInput is the host-neutral set of fields needed to evaluate a
 // tool call against Sigil guards.
@@ -96,7 +125,7 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 		}
 		return Result{
 			Action: sigil.HookActionDeny,
-			Reason: "sigil guard evaluation unavailable: missing SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/SIGIL_AUTH_TOKEN",
+			Reason: formatEvalFailure(in.ToolName, "missing SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/SIGIL_AUTH_TOKEN"),
 		}
 	}
 
@@ -169,7 +198,7 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 		}
 		return Result{
 			Action: sigil.HookActionDeny,
-			Reason: "sigil guard evaluation failed: " + err.Error(),
+			Reason: formatEvalFailure(in.ToolName, err.Error()),
 		}
 	}
 
@@ -185,10 +214,10 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 	}
 
 	if deniedErr := sigil.HookDeniedFromResponse(resp); deniedErr != nil {
-		reason := "tool call denied by Sigil guard"
+		var ruleReason string
 		var denied *sigil.HookDeniedError
-		if errors.As(deniedErr, &denied) && strings.TrimSpace(denied.Reason) != "" {
-			reason = denied.Reason
+		if errors.As(deniedErr, &denied) {
+			ruleReason = denied.Reason
 		}
 		ruleID := ""
 		if resp != nil {
@@ -196,7 +225,7 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 		}
 		return Result{
 			Action: sigil.HookActionDeny,
-			Reason: reason,
+			Reason: formatPolicyDeny(in.ToolName, ruleReason),
 			RuleID: ruleID,
 		}
 	}
