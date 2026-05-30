@@ -171,5 +171,6 @@ The callback file reads connection details from environment variables. Adjust th
 - LiteLLM `request_tags` are forwarded as `litellm.tag.<value>`.
 - Token usage includes detailed breakdowns (cached tokens, reasoning tokens) when the provider returns them.
 - Tool calls and tool results in messages are mapped to Sigil's tool call/result parts.
+- Reasoning/thinking text is captured as `THINKING` parts, ordered before the assistant text. It is read from `thinking_blocks` when present (including redacted blocks), otherwise from the flat `reasoning_content` string.
 
 Call `client.shutdown()` during teardown to flush buffered telemetry.

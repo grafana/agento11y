@@ -88,6 +88,9 @@ def _map_messages(messages: list[dict[str, Any]] | None) -> tuple[list[Message],
             )
             continue
 
+        if mapped_role == MessageRole.ASSISTANT:
+            parts.extend(_map_thinking_parts(msg))
+
         if content:
             parts.append(Part(kind=PartKind.TEXT, text=content))
 
@@ -100,6 +103,39 @@ def _map_messages(messages: list[dict[str, Any]] | None) -> tuple[list[Message],
         out.append(Message(role=mapped_role, parts=parts))
 
     return out, "\n\n".join(system_chunks)
+
+
+def _map_thinking_parts(message: dict[str, Any]) -> list[Part]:
+    """Map reasoning/thinking from an OpenAI-format message to THINKING parts.
+
+    Prefers structured ``thinking_blocks`` (Anthropic-style, may include
+    redacted blocks) and falls back to the flat ``reasoning_content`` string.
+    Reading both would double-emit the same text, since ``reasoning_content``
+    is usually the concatenation of the blocks.
+    """
+    if not isinstance(message, dict):
+        return []
+
+    blocks = message.get("thinking_blocks")
+    if isinstance(blocks, list) and blocks:
+        out: list[Part] = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if (block.get("type") or "").lower() == "redacted_thinking":
+                text = block.get("data") or block.get("text") or ""
+            else:
+                text = block.get("thinking") or block.get("text") or ""
+            if text:
+                out.append(Part(kind=PartKind.THINKING, thinking=text))
+        if out:
+            return out
+
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning:
+        return [Part(kind=PartKind.THINKING, thinking=reasoning)]
+
+    return []
 
 
 def _map_tool_call_parts(tool_calls: list[dict[str, Any]] | None) -> list[Part]:
@@ -173,6 +209,8 @@ def _map_response_output(response: Any) -> list[Message]:
 
         content = response_message.get("content") or ""
         parts: list[Part] = []
+
+        parts.extend(_map_thinking_parts(response_message))
 
         if content:
             parts.append(Part(kind=PartKind.TEXT, text=content))
