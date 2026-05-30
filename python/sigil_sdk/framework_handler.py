@@ -175,6 +175,7 @@ class SigilFrameworkHandlerBase:
         self._graph_root_run_keys: set[str] = set()
         self._graph_run_conversation_id: dict[str, str] = {}
         self._graph_run_last_step_id: dict[str, str] = {}
+        self._graph_run_last_generation_id: dict[str, str] = {}
         # parent_run_id chain for any active run (chain/llm/chat). Used to walk
         # upwards from an LLM run to find the enclosing workflow step.
         self._run_to_graph_key: dict[str, str] = {}
@@ -264,6 +265,7 @@ class SigilFrameworkHandlerBase:
         self._graph_root_run_keys.discard(root_run_key)
         self._graph_run_conversation_id.pop(root_run_key, None)
         self._graph_run_last_step_id.pop(root_run_key, None)
+        self._graph_run_last_generation_id.pop(root_run_key, None)
 
     def _reaches_run(self, start_key: str, target_key: str) -> bool:
         """Return True if walking ``_run_to_graph_key`` from start_key
@@ -347,6 +349,13 @@ class SigilFrameworkHandlerBase:
         if parent_run_id is not None:
             self._run_to_graph_key[run_key] = str(parent_run_id)
 
+        graph_root_key = self._find_graph_root_key(run_key)
+        parent_generation_ids: list[str] = []
+        if graph_root_key:
+            last_generation_id = self._graph_run_last_generation_id.get(graph_root_key, "")
+            if last_generation_id:
+                parent_generation_ids = [last_generation_id]
+
         start = GenerationStart(
             conversation_id=conversation_id,
             conversation_title=self._conversation_title,
@@ -356,10 +365,13 @@ class SigilFrameworkHandlerBase:
             model=ModelRef(provider=provider_name, name=model_name),
             tags=tags,
             metadata=metadata,
+            parent_generation_ids=parent_generation_ids,
         )
         if start.id == "":
             start.id = f"gen_{secrets.token_hex(8)}"
         self._track_run_generation_id(run_key, start.id)
+        if graph_root_key:
+            self._graph_run_last_generation_id[graph_root_key] = start.id
 
         recorder = (
             self._client.start_streaming_generation(start)
@@ -440,6 +452,13 @@ class SigilFrameworkHandlerBase:
         if parent_run_id is not None:
             self._run_to_graph_key[run_key] = str(parent_run_id)
 
+        graph_root_key = self._find_graph_root_key(run_key)
+        parent_generation_ids: list[str] = []
+        if graph_root_key:
+            last_generation_id = self._graph_run_last_generation_id.get(graph_root_key, "")
+            if last_generation_id:
+                parent_generation_ids = [last_generation_id]
+
         start = GenerationStart(
             conversation_id=conversation_id,
             conversation_title=self._conversation_title,
@@ -455,10 +474,13 @@ class SigilFrameworkHandlerBase:
             max_tokens=_as_optional_int(_read(invocation_params, "max_tokens")),
             top_p=_as_optional_float(_read(invocation_params, "top_p")),
             tool_choice=_as_str(_read(invocation_params, "tool_choice")) or None,
+            parent_generation_ids=parent_generation_ids,
         )
         if start.id == "":
             start.id = f"gen_{secrets.token_hex(8)}"
         self._track_run_generation_id(run_key, start.id)
+        if graph_root_key:
+            self._graph_run_last_generation_id[graph_root_key] = start.id
 
         recorder = (
             self._client.start_streaming_generation(start)
