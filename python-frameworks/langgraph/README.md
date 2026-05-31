@@ -145,6 +145,33 @@ When `thread_id` is present, the handler records:
 - `metadata["sigil.framework.thread_id"]=<thread id>`
 - generation span attributes `sigil.framework.run_id` and `sigil.framework.thread_id`
 
+## Dependency DAG metadata
+
+Sigil's conversation dependency graph is built from generation IDs, not framework run IDs. For LangGraph workflows where one node consumes another node's output, pass stable generation IDs through callback metadata:
+
+```python
+config = with_sigil_langgraph_callbacks(
+    {
+        "metadata": {
+            "thread_id": "rad-ai-case-42",
+            "langgraph_node": "draft_answer",
+            "sigil.generation.id": "rad-ai-case-42:draft_answer",
+            "sigil.generation.parent_generation_ids": ["rad-ai-case-42:retrieve_context"],
+        },
+        "configurable": {"thread_id": "rad-ai-case-42"},
+    },
+    client=client,
+    provider="custom",
+)
+```
+
+The handler uses:
+
+- `sigil.generation.id` / `generation_id` / `generationId` as the current generation ID.
+- `sigil.generation.parent_generation_ids` / `parent_generation_ids` / `parentGenerationIds` as upstream generation IDs.
+
+See `examples/python-langgraph-dag` for a multi-node POC.
+
 ## Behavior
 
 - Lifecycle mapping:

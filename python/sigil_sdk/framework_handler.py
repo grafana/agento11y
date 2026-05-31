@@ -60,6 +60,8 @@ _default_framework_language = "python"
 _default_framework_instrumentation_name = "github.com/grafana/sigil/sdks/python/frameworks"
 _span_attr_operation_name = "gen_ai.operation.name"
 _span_attr_conversation_id = "gen_ai.conversation.id"
+_span_attr_generation_id = "sigil.generation.id"
+_span_attr_parent_generation_ids = "sigil.generation.parent_generation_ids"
 _span_attr_framework_name = "sigil.framework.name"
 _span_attr_framework_source = "sigil.framework.source"
 _span_attr_framework_language = "sigil.framework.language"
@@ -324,6 +326,8 @@ class SigilFrameworkHandlerBase:
         retry_attempt = _resolve_framework_retry_attempt(callback_kwargs, invocation_params, serialized)
         langgraph_node = _resolve_langgraph_node(callback_kwargs, invocation_params, serialized)
         event_id = _resolve_framework_event_id(callback_kwargs, invocation_params, serialized)
+        generation_id = _resolve_generation_id(callback_kwargs, invocation_params, serialized)
+        parent_generation_ids = _resolve_parent_generation_ids(callback_kwargs, invocation_params, serialized)
 
         metadata: dict[str, Any] = dict(self._extra_metadata)
         metadata[_span_attr_framework_run_id] = run_key
@@ -348,6 +352,7 @@ class SigilFrameworkHandlerBase:
             self._run_to_graph_key[run_key] = str(parent_run_id)
 
         start = GenerationStart(
+            id=generation_id,
             conversation_id=conversation_id,
             conversation_title=self._conversation_title,
             agent_name=self._agent_name,
@@ -356,6 +361,7 @@ class SigilFrameworkHandlerBase:
             model=ModelRef(provider=provider_name, name=model_name),
             tags=tags,
             metadata=metadata,
+            parent_generation_ids=parent_generation_ids,
         )
         if start.id == "":
             start.id = f"gen_{secrets.token_hex(8)}"
@@ -417,6 +423,8 @@ class SigilFrameworkHandlerBase:
         retry_attempt = _resolve_framework_retry_attempt(callback_kwargs, invocation_params, serialized)
         langgraph_node = _resolve_langgraph_node(callback_kwargs, invocation_params, serialized)
         event_id = _resolve_framework_event_id(callback_kwargs, invocation_params, serialized)
+        generation_id = _resolve_generation_id(callback_kwargs, invocation_params, serialized)
+        parent_generation_ids = _resolve_parent_generation_ids(callback_kwargs, invocation_params, serialized)
 
         metadata: dict[str, Any] = dict(self._extra_metadata)
         metadata[_span_attr_framework_run_id] = run_key
@@ -441,6 +449,7 @@ class SigilFrameworkHandlerBase:
             self._run_to_graph_key[run_key] = str(parent_run_id)
 
         start = GenerationStart(
+            id=generation_id,
             conversation_id=conversation_id,
             conversation_title=self._conversation_title,
             agent_name=self._agent_name,
@@ -455,6 +464,7 @@ class SigilFrameworkHandlerBase:
             max_tokens=_as_optional_int(_read(invocation_params, "max_tokens")),
             top_p=_as_optional_float(_read(invocation_params, "top_p")),
             tool_choice=_as_str(_read(invocation_params, "tool_choice")) or None,
+            parent_generation_ids=parent_generation_ids,
         )
         if start.id == "":
             start.id = f"gen_{secrets.token_hex(8)}"
@@ -1167,6 +1177,79 @@ def _langgraph_node_from_payload(payload: Any) -> str:
         if candidate != "":
             return candidate
     return ""
+
+
+def _resolve_generation_id(*payloads: Any) -> str:
+    for payload in payloads:
+        candidate = _generation_id_from_payload(payload)
+        if candidate != "":
+            return candidate
+    return ""
+
+
+def _generation_id_from_payload(payload: Any) -> str:
+    candidates = (
+        _as_str(_read(payload, _span_attr_generation_id)),
+        _as_str(_read(payload, "generation_id")),
+        _as_str(_read(payload, "generationId")),
+        _as_str(_read(_read(payload, "metadata"), _span_attr_generation_id)),
+        _as_str(_read(_read(payload, "metadata"), "generation_id")),
+        _as_str(_read(_read(payload, "metadata"), "generationId")),
+        _as_str(_read(_read(payload, "configurable"), _span_attr_generation_id)),
+        _as_str(_read(_read(payload, "configurable"), "generation_id")),
+        _as_str(_read(_read(payload, "configurable"), "generationId")),
+        _as_str(_read(_read(_read(payload, "config"), "metadata"), _span_attr_generation_id)),
+        _as_str(_read(_read(_read(payload, "config"), "configurable"), _span_attr_generation_id)),
+    )
+    for candidate in candidates:
+        if candidate != "":
+            return candidate
+    return ""
+
+
+def _resolve_parent_generation_ids(*payloads: Any) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for payload in payloads:
+        for raw_value in _parent_generation_id_values_from_payload(payload):
+            for generation_id in _normalize_parent_generation_id_values(raw_value):
+                if generation_id in seen:
+                    continue
+                seen.add(generation_id)
+                output.append(generation_id)
+    return output
+
+
+def _parent_generation_id_values_from_payload(payload: Any) -> tuple[Any, ...]:
+    return (
+        _read(payload, _span_attr_parent_generation_ids),
+        _read(payload, "parent_generation_ids"),
+        _read(payload, "parentGenerationIds"),
+        _read(_read(payload, "metadata"), _span_attr_parent_generation_ids),
+        _read(_read(payload, "metadata"), "parent_generation_ids"),
+        _read(_read(payload, "metadata"), "parentGenerationIds"),
+        _read(_read(payload, "configurable"), _span_attr_parent_generation_ids),
+        _read(_read(payload, "configurable"), "parent_generation_ids"),
+        _read(_read(payload, "configurable"), "parentGenerationIds"),
+        _read(_read(_read(payload, "config"), "metadata"), _span_attr_parent_generation_ids),
+        _read(_read(_read(payload, "config"), "configurable"), _span_attr_parent_generation_ids),
+    )
+
+
+def _normalize_parent_generation_id_values(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return [trimmed] if trimmed != "" else []
+    if isinstance(value, (list, tuple, set)):
+        output: list[str] = []
+        for item in value:
+            trimmed = _as_str(item)
+            if trimmed != "":
+                output.append(trimmed)
+        return output
+    return []
 
 
 def _normalize_framework_tags(value: Any) -> list[str]:

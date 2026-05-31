@@ -118,6 +118,39 @@ def test_langgraph_sync_lifecycle_sets_framework_tags_and_metadata() -> None:
         client.shutdown()
 
 
+def test_langgraph_sync_lifecycle_accepts_explicit_generation_dag_ids() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        run_id = uuid4()
+        handler = SigilLangGraphHandler(client=client, provider="custom")
+
+        handler.on_chat_model_start(
+            {"name": "InHouseChatModel"},
+            [[{"type": "human", "content": "draft answer"}]],
+            run_id=run_id,
+            invocation_params={"model": "rad-ai-internal"},
+            metadata={
+                "thread_id": "rad-ai-case-42",
+                "langgraph_node": "draft_answer",
+                "sigil.generation.id": "gen-draft-answer",
+                "sigil.generation.parent_generation_ids": ["gen-retrieve-context", "", "gen-retrieve-context"],
+            },
+        )
+        handler.on_llm_end(
+            {"generations": [[{"text": "drafted"}]], "llm_output": {"model_name": "rad-ai-internal"}},
+            run_id=run_id,
+        )
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert generation.id == "gen-draft-answer"
+        assert generation.parent_generation_ids == ["gen-retrieve-context"]
+    finally:
+        client.shutdown()
+
+
 def test_langgraph_stream_lifecycle_uses_stream_mode_and_chunk_fallback() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
