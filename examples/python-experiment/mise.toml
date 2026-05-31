@@ -1,0 +1,11 @@
+[env]
+PYTHONPATH = ""
+PYTHONHOME = ""
+
+[tasks.sync]
+description = "Install deps into the local venv"
+run = "uv sync"
+
+[tasks.experiment]
+description = "Run the framework-free dataset experiment against Sigil"
+run = "uv run python -m app.run_experiment"

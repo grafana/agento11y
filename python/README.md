@@ -604,6 +604,63 @@ The SDK emits these OTel histograms through your configured OTEL meter provider:
 - `gen_ai.client.time_to_first_token`
 - `gen_ai.client.tool_calls_per_operation`
 
+## Experiments (offline evaluation)
+
+Run any agent over a dataset as a Sigil **experiment**, grade locally, and
+publish scores you can compare in the Sigil UI — no framework adapter required.
+The runner rides on the core generation recording above: record the agent's call
+through `run.start_generation(...)` and every generation is auto-tagged with the
+experiment `run_id` and captured for scoring.
+
+```python
+from sigil_sdk import (
+    DatasetItem, ExperimentRunner, Generation, GenerationStart, ModelRef,
+    ScoreOutput, ScoreValue, TargetResult, assistant_text_message, user_text_message,
+)
+
+dataset = [
+    DatasetItem(id="capital-fr", input="Capital of France?", expected="Paris",
+                metadata={"task_id": "capital", "task_category": "trivia"}),
+]
+
+def target(item, run):
+    # Record the agent's call so the generation carries the experiment run_id.
+    with run.start_generation(GenerationStart(model=ModelRef(provider="openai", name="gpt-4o-mini"))) as rec:
+        answer = my_agent(item.input)  # your code
+        rec.set_result(Generation(
+            model=ModelRef(provider="openai", name="gpt-4o-mini"),
+            input=[user_text_message(str(item.input))],
+            output=[assistant_text_message(answer)],
+        ))
+    return TargetResult(output=answer)  # generation ids captured automatically
+
+def exact_match(item, result):
+    passed = str(item.expected).lower() in str(result.output).lower()
+    return [ScoreOutput(evaluator_id="suite.exact_match", evaluator_version="2026-05-30",
+                        score_key="exact_match", value=ScoreValue(number=1.0 if passed else 0.0),
+                        passed=passed)]
+
+runner = ExperimentRunner(client=client, run_id="pr-123", name="PR 123",
+                          dataset={"id": "smoke", "version": "2026-05-30"}, tags=["ci"])
+result = runner.run(dataset, target, [exact_match])
+print(result.url)  # deep link to the experiment in Sigil
+```
+
+The runner creates the run (`source="external"`), runs + grades each item,
+exports scores attributed to the `run_id`, and finalizes the run (`succeeded` on
+clean exit, `failed` on exception, `canceled` on Ctrl-C). For ad-hoc loops use
+the lower-level `experiment(...)` context manager. A/B testing is two runs with
+different `run_id`/`tags`. Upload modes: `continuous` (default, publish per
+item), `bulk` (publish at the end), `manual` (publish + finalize only when you
+call `run.publish()` / `run.finalize()`).
+
+If you use a supported framework, prefer its adapter (e.g. `sigil-sdk-langgraph`)
+— it auto-captures generation ids from the framework callback so you don't wrap
+`start_generation` yourself. See the `sigil-experiments` skill
+(`python/skills/sigil-experiments/SKILL.md`) and the runnable example at
+`examples/python-experiment/` for grading patterns (including LLM-as-judge) and
+uploading older runs.
+
 ## Public API Overview
 
 Core client and lifecycle:
@@ -631,6 +688,13 @@ Helpers:
 Validation:
 
 - `validate_generation(...)`
+
+Experiments (offline evaluation):
+
+- `experiment(...)`, `ExperimentRunner`, `ExperimentRun`
+- `DatasetItem`, `TargetResult`, `ScoreOutput`, `ExperimentResult`
+- `stable_id(...)`
+- `Client.create_experiment(...)`, `Client.export_scores(...)`, `Client.complete_experiment(...)`, `Client.experiment_url(...)`
 
 ## Provider Helper Packages
 
