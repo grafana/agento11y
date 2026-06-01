@@ -42,6 +42,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/dotenv"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/login"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/useragent"
 )
 
 // Banner used by `sigil <agent> --local` to call out that local capture
@@ -238,6 +239,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// evaluation request carries the right agent_version. Other adapters
 	// don't need it yet.
 	claudecode.Version = version
+
+	// Propagate the build version to the generation-export User-Agent so each
+	// agent plugin identifies itself, e.g. "sigil-plugin-cursor/<ver> ...".
+	useragent.SigilVersion = version
 
 	// Apply the dotenv file before initialising the logger so SIGIL_DEBUG=true
 	// set only in $XDG_CONFIG_HOME/sigil/config.env still enables file logging.

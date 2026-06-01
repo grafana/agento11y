@@ -22,6 +22,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/timeutil"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/useragent"
 )
 
 const (
@@ -455,26 +456,31 @@ func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.L
 	return providers
 }
 
+func exportConfig() sigil.GenerationExportConfig {
+	return sigil.GenerationExportConfig{
+		Protocol:       sigil.GenerationExportProtocolHTTP,
+		Endpoint:       strings.TrimRight(os.Getenv("SIGIL_ENDPOINT"), "/") + "/api/v1/generations:export",
+		Headers:        map[string]string{"User-Agent": useragent.For("codex")},
+		BatchSize:      100,
+		FlushInterval:  100 * time.Millisecond,
+		QueueSize:      16,
+		MaxRetries:     1,
+		InitialBackoff: 50 * time.Millisecond,
+		MaxBackoff:     100 * time.Millisecond,
+		Auth: sigil.AuthConfig{
+			Mode:          sigil.ExportAuthModeBasic,
+			BasicUser:     os.Getenv("SIGIL_AUTH_TENANT_ID"),
+			BasicPassword: os.Getenv("SIGIL_AUTH_TOKEN"),
+			TenantID:      os.Getenv("SIGIL_AUTH_TENANT_ID"),
+		},
+	}
+}
+
 func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logger) *sigil.Client {
 	c := sigil.Config{
-		ContentCapture: cfg.ContentCapture,
-		Logger:         logger,
-		GenerationExport: sigil.GenerationExportConfig{
-			Protocol:       sigil.GenerationExportProtocolHTTP,
-			Endpoint:       strings.TrimRight(os.Getenv("SIGIL_ENDPOINT"), "/") + "/api/v1/generations:export",
-			BatchSize:      100,
-			FlushInterval:  100 * time.Millisecond,
-			QueueSize:      16,
-			MaxRetries:     1,
-			InitialBackoff: 50 * time.Millisecond,
-			MaxBackoff:     100 * time.Millisecond,
-			Auth: sigil.AuthConfig{
-				Mode:          sigil.ExportAuthModeBasic,
-				BasicUser:     os.Getenv("SIGIL_AUTH_TENANT_ID"),
-				BasicPassword: os.Getenv("SIGIL_AUTH_TOKEN"),
-				TenantID:      os.Getenv("SIGIL_AUTH_TENANT_ID"),
-			},
-		},
+		ContentCapture:   cfg.ContentCapture,
+		Logger:           logger,
+		GenerationExport: exportConfig(),
 	}
 	if providers != nil {
 		c.Tracer = providers.Tracer(otelInstrumentationName)

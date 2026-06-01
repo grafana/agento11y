@@ -7,6 +7,7 @@ import type { Meter, Tracer } from "@opentelemetry/api";
 import type { SigilPiConfig } from "./config.js";
 import { EXPORT_PATH } from "./config.js";
 import { logger } from "./logger.js";
+import { pluginUserAgent } from "./version.js";
 
 export interface SigilClientOptions {
   tracer?: Tracer;
@@ -50,6 +51,7 @@ export function createSigilClient(
         protocol: "http",
         endpoint: appendExportPath(config.endpoint),
         auth: config.auth,
+        headers: { "User-Agent": pluginUserAgent() },
       },
       api: { endpoint: config.endpoint },
       hooks: {

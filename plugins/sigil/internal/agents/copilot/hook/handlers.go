@@ -22,6 +22,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/useragent"
 )
 
 const (
@@ -603,15 +604,20 @@ func shouldPreferTranscriptSnapshot(current transcript.Snapshot, haveCurrent boo
 	return false
 }
 
+func exportConfig() sigil.GenerationExportConfig {
+	return sigil.GenerationExportConfig{
+		Protocol: sigil.GenerationExportProtocolHTTP,
+		Endpoint: strings.TrimRight(os.Getenv("SIGIL_ENDPOINT"), "/") + "/api/v1/generations:export",
+		Headers:  map[string]string{"User-Agent": useragent.For("copilot")},
+		Auth:     sigil.AuthConfig{Mode: sigil.ExportAuthModeBasic},
+	}
+}
+
 func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logger) *sigil.Client {
 	c := sigil.Config{
-		ContentCapture: cfg.ContentCapture,
-		Logger:         logger,
-		GenerationExport: sigil.GenerationExportConfig{
-			Protocol: sigil.GenerationExportProtocolHTTP,
-			Endpoint: strings.TrimRight(os.Getenv("SIGIL_ENDPOINT"), "/") + "/api/v1/generations:export",
-			Auth:     sigil.AuthConfig{Mode: sigil.ExportAuthModeBasic},
-		},
+		ContentCapture:   cfg.ContentCapture,
+		Logger:           logger,
+		GenerationExport: exportConfig(),
 	}
 	if providers != nil {
 		c.Tracer = providers.Tracer(otelInstrumentationName)

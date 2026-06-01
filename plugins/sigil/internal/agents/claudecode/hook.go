@@ -22,6 +22,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/useragent"
 )
 
 // Version is overridden via -ldflags at build time. The dispatcher prints it
@@ -32,6 +33,20 @@ var Version = "dev"
 // AgentName is the Sigil identity attached to every generation this agent
 // emits. Stable across versions so dashboards survive renames.
 const AgentName = "claude-code"
+
+func exportConfig(endpoint, tenantID, authToken string) sigil.GenerationExportConfig {
+	return sigil.GenerationExportConfig{
+		Protocol: sigil.GenerationExportProtocolHTTP,
+		Endpoint: endpoint + "/api/v1/generations:export",
+		Headers:  map[string]string{"User-Agent": useragent.For("claude-code")},
+		Auth: sigil.AuthConfig{
+			Mode:          sigil.ExportAuthModeBasic,
+			BasicUser:     tenantID,
+			BasicPassword: authToken,
+			TenantID:      tenantID,
+		},
+	}
+}
 
 // otelInstrumentationName is the OTel instrumentation scope name attached
 // to every span and metric this agent emits. Renamed from "sigil-cc" when
@@ -163,16 +178,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	logger.Printf("produced %d generations", len(gens))
 
 	cfg := sigil.Config{
-		GenerationExport: sigil.GenerationExportConfig{
-			Protocol: sigil.GenerationExportProtocolHTTP,
-			Endpoint: sigilEndpoint + "/api/v1/generations:export",
-			Auth: sigil.AuthConfig{
-				Mode:          sigil.ExportAuthModeBasic,
-				BasicUser:     tenantID,
-				BasicPassword: authToken,
-				TenantID:      tenantID,
-			},
-		},
+		GenerationExport: exportConfig(sigilEndpoint, tenantID, authToken),
 	}
 
 	if otelProviders != nil {

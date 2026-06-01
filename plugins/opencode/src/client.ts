@@ -1,6 +1,7 @@
 import { SigilClient } from "@grafana/sigil-sdk-js";
 import type { Meter, Tracer } from "@opentelemetry/api";
 import { EXPORT_PATH, type SigilOpencodeConfig } from "./config.js";
+import { pluginUserAgent } from "./version.js";
 
 export interface SigilClientOptions {
   tracer?: Tracer;
@@ -22,6 +23,7 @@ export function createSigilClient(
         protocol: "http",
         endpoint: appendExportPath(config.endpoint),
         auth: config.auth,
+        headers: { "User-Agent": pluginUserAgent() },
       },
       api: { endpoint: config.endpoint },
       hooks: {

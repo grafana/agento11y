@@ -7,6 +7,7 @@ const { SigilClientMock } = vi.hoisted(() => ({
 
 vi.mock("@grafana/sigil-sdk-js", () => ({
   SigilClient: SigilClientMock,
+  userAgent: () => "sigil-sdk-js/0.0.0-test",
 }));
 
 import { createSigilClient } from "./client.js";
@@ -51,6 +52,11 @@ describe("createSigilClient", () => {
         protocol: "http",
         endpoint: "http://localhost:8080/api/v1/generations:export",
         auth: { mode: "none" },
+        headers: {
+          "User-Agent": expect.stringMatching(
+            /^sigil-plugin-opencode\/.+ sigil-sdk-js\/0\.0\.0-test$/,
+          ),
+        },
       },
       api: { endpoint: "http://localhost:8080" },
       hooks: {
@@ -61,6 +67,15 @@ describe("createSigilClient", () => {
       },
       contentCapture: "metadata_only",
     });
+  });
+
+  it("sets the plugin User-Agent on the generation export", () => {
+    createSigilClient(makeConfig());
+
+    const [arg] = SigilClientMock.mock.calls[0];
+    const ua = arg.generationExport.headers["User-Agent"];
+    expect(ua.startsWith("sigil-plugin-opencode/")).toBe(true);
+    expect(ua.endsWith("sigil-sdk-js/0.0.0-test")).toBe(true);
   });
 
   it("passes guard config to the SDK client", () => {
