@@ -1,12 +1,12 @@
 [project]
 name = "sigil-sdk-langchain"
-version = "0.6.0"
+version = "0.7.0"
 description = "LangChain callback handlers for Sigil Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "sigil-sdk>=0.6.0",
+  "sigil-sdk>=0.7.0",
   "langchain-core>=0.3.0",
 ]
 
