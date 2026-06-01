@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.8.0] - 2026-06-01
+
+### Features
+
+- **plugins**: send plugin User-Agent on generation export (#273)
+- **plugins/sigil**: surface conversation title for Cursor sessions (#223)
+- **plugins/sigil**: use first prompt as conversation title for Claude Code (#228)
+- **plugins**: wrap guard deny messages with source, tool, and behavior hint (#260)
+
+### Bug Fixes
+
+- **security/unknown**: update module golang.org/x/net to v0.55.0 [security] (#237)
+
+### Documentation
+
+- clarify content capture modes across SDKs and plugins (#229)
+
 ## [0.7.0] - 2026-05-27
 
 ### Features
