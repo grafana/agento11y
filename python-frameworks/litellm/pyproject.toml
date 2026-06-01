@@ -1,12 +1,12 @@
 [project]
 name = "sigil-sdk-litellm"
-version = "0.7.0"
+version = "0.8.0"
 description = "LiteLLM callback handler for Sigil Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "sigil-sdk>=0.7.0",
+  "sigil-sdk>=0.8.0",
   "litellm>=1.82.3,!=1.82.7,!=1.82.8",
 ]
 
