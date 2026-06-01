@@ -161,7 +161,9 @@ The callback file reads connection details from environment variables. Adjust th
 - Mode mapping: non-stream calls -> `SYNC`, stream calls -> `STREAM` with first-token timestamp.
 - Provider detection: uses `custom_llm_provider` from LiteLLM's standard logging object.
 - Failed calls are recorded with the error attached via `set_call_error`.
-- Only chat completion call types (`completion`, `acompletion`) are recorded; embeddings and other call types are skipped.
+- Chat completion call types (`completion`, `acompletion`, `text_completion`, `atext_completion`) are recorded as generations.
+- Embedding call types (`embedding`, `aembedding`) are recorded as OTel embedding spans (no generation export). The span carries input/token counts and dimensions; the input text is attached only when the handler's `capture_inputs` is set and the SDK's `EmbeddingCaptureConfig.capture_input=True`. Embedding spans require a configured OTel tracer.
+- Image, audio, and transcription call types are skipped.
 - Framework tags are always set:
   - `sigil.framework.name=litellm`
   - `sigil.framework.source=handler`
