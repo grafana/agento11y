@@ -98,11 +98,17 @@ def _make_slo_response(
     content: str = "Hello!",
     finish_reason: str = "stop",
     tool_calls: list[dict[str, Any]] | None = None,
+    reasoning_content: str | None = None,
+    thinking_blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build an SLO response dict in OpenAI chat completion format."""
     message: dict[str, Any] = {"content": content}
     if tool_calls is not None:
         message["tool_calls"] = tool_calls
+    if reasoning_content is not None:
+        message["reasoning_content"] = reasoning_content
+    if thinking_blocks is not None:
+        message["thinking_blocks"] = thinking_blocks
     return {
         "choices": [
             {
@@ -1404,4 +1410,187 @@ def test_embedding_input_text_honours_litellm_redaction() -> None:
     finally:
         litellm.turn_off_message_logging = prev_redaction
         litellm.callbacks = prev_callbacks
+        client.shutdown()
+
+
+def test_reasoning_content_mapped_to_thinking_output() -> None:
+    """Flat reasoning_content becomes a THINKING part ordered before TEXT."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        slo = _base_slo(
+            response=_make_slo_response(
+                content="The answer is 42.",
+                reasoning_content="Let me work through this step by step.",
+            )
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        parts = gen.output[0].parts
+        assert [p.kind for p in parts] == [PartKind.THINKING, PartKind.TEXT]
+        assert parts[0].thinking == "Let me work through this step by step."
+        assert parts[1].text == "The answer is 42."
+    finally:
+        client.shutdown()
+
+
+def test_thinking_blocks_including_redacted() -> None:
+    """thinking_blocks produce a THINKING part per block, reading thinking/data."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        slo = _base_slo(
+            response=_make_slo_response(
+                content="Done.",
+                thinking_blocks=[
+                    {"type": "thinking", "thinking": "First I consider X.", "signature": "sig"},
+                    {"type": "redacted_thinking", "data": "encrypted-blob"},
+                ],
+            )
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        parts = gen.output[0].parts
+        assert [p.kind for p in parts] == [PartKind.THINKING, PartKind.THINKING, PartKind.TEXT]
+        assert parts[0].thinking == "First I consider X."
+        assert parts[1].thinking == "encrypted-blob"
+        assert parts[2].text == "Done."
+    finally:
+        client.shutdown()
+
+
+def test_thinking_blocks_preferred_over_reasoning_content() -> None:
+    """When both are present, thinking_blocks win and reasoning_content is not duplicated."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        slo = _base_slo(
+            response=_make_slo_response(
+                content="Result.",
+                reasoning_content="Block one. Block two.",
+                thinking_blocks=[
+                    {"type": "thinking", "thinking": "Block one."},
+                    {"type": "thinking", "thinking": "Block two."},
+                ],
+            )
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        thinking_parts = [p for p in gen.output[0].parts if p.kind == PartKind.THINKING]
+        assert [p.thinking for p in thinking_parts] == ["Block one.", "Block two."]
+    finally:
+        client.shutdown()
+
+
+def test_thinking_dropped_when_outputs_disabled() -> None:
+    """capture_outputs=False omits THINKING parts."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client, capture_outputs=False)
+        slo = _base_slo(
+            response=_make_slo_response(
+                content="Hi",
+                reasoning_content="Secret reasoning.",
+            )
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert len(gen.output) == 0
+    finally:
+        client.shutdown()
+
+
+def test_input_assistant_reasoning_mapped_to_thinking() -> None:
+    """Input assistant message reasoning_content becomes a THINKING part before TEXT."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        slo = _base_slo(
+            messages=[
+                {"role": "user", "content": "Hello"},
+                {
+                    "role": "assistant",
+                    "content": "Sure.",
+                    "reasoning_content": "They greeted me.",
+                },
+            ]
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assistant_msg = gen.input[1]
+        assert assistant_msg.role == MessageRole.ASSISTANT
+        assert [p.kind for p in assistant_msg.parts] == [PartKind.THINKING, PartKind.TEXT]
+        assert assistant_msg.parts[0].thinking == "They greeted me."
+        assert assistant_msg.parts[1].text == "Sure."
+    finally:
+        client.shutdown()
+
+
+def test_input_assistant_thinking_dropped_when_inputs_disabled() -> None:
+    """capture_inputs=False omits THINKING parts from input assistant messages."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client, capture_inputs=False)
+        slo = _base_slo(
+            messages=[
+                {"role": "user", "content": "Hello"},
+                {
+                    "role": "assistant",
+                    "content": "Sure.",
+                    "reasoning_content": "Secret reasoning.",
+                },
+            ]
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert len(gen.input) == 0
+    finally:
         client.shutdown()
