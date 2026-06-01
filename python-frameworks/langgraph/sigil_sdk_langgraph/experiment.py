@@ -250,8 +250,13 @@ class ExperimentRun:
             callbacks = []
         else:
             callbacks = [existing]
-        if not any(isinstance(item, (SigilLangGraphHandler, SigilAsyncLangGraphHandler)) for item in callbacks):
-            callbacks.append(self.make_handler(**overrides))
+        # Remove any existing Sigil handlers and replace with experiment-specific one
+        callbacks = [
+            item
+            for item in callbacks
+            if not isinstance(item, (SigilLangGraphHandler, SigilAsyncLangGraphHandler))
+        ]
+        callbacks.append(self.make_handler(**overrides))
         merged["callbacks"] = callbacks
         return merged
 
