@@ -1239,7 +1239,12 @@ describe("extension lifecycle", () => {
         defaultCtx,
       );
 
-      expect(result).toEqual({ block: true, reason: "blocked rm -rf" });
+      expect(result).toMatchObject({ block: true });
+      const reason = (result as unknown as { reason: string }).reason;
+      expect(reason).toContain("blocked rm -rf");
+      expect(reason).toContain("A Grafana AI Observability policy");
+      expect(reason).toContain('"bash"');
+      expect(reason).toContain("Stop and tell the user");
     });
 
     it("forwards the model cached from the current assistant message_end", async () => {

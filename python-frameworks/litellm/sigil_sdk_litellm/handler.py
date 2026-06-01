@@ -10,6 +10,8 @@ from typing import Any
 from litellm.integrations.custom_logger import CustomLogger
 from sigil_sdk import Client
 from sigil_sdk.models import (
+    EmbeddingResult,
+    EmbeddingStart,
     Generation,
     GenerationMode,
     GenerationStart,
@@ -35,6 +37,8 @@ _CHAT_CALL_TYPES = frozenset(
         "atext_completion",
     }
 )
+
+_EMBEDDING_CALL_TYPES = frozenset({"embedding", "aembedding"})
 
 
 def _make_tool_call_part(*, call_id: str, name: str, arguments: str) -> Part:
@@ -84,6 +88,9 @@ def _map_messages(messages: list[dict[str, Any]] | None) -> tuple[list[Message],
             )
             continue
 
+        if mapped_role == MessageRole.ASSISTANT:
+            parts.extend(_map_thinking_parts(msg))
+
         if content:
             parts.append(Part(kind=PartKind.TEXT, text=content))
 
@@ -96,6 +103,39 @@ def _map_messages(messages: list[dict[str, Any]] | None) -> tuple[list[Message],
         out.append(Message(role=mapped_role, parts=parts))
 
     return out, "\n\n".join(system_chunks)
+
+
+def _map_thinking_parts(message: dict[str, Any]) -> list[Part]:
+    """Map reasoning/thinking from an OpenAI-format message to THINKING parts.
+
+    Prefers structured ``thinking_blocks`` (Anthropic-style, may include
+    redacted blocks) and falls back to the flat ``reasoning_content`` string.
+    Reading both would double-emit the same text, since ``reasoning_content``
+    is usually the concatenation of the blocks.
+    """
+    if not isinstance(message, dict):
+        return []
+
+    blocks = message.get("thinking_blocks")
+    if isinstance(blocks, list) and blocks:
+        out: list[Part] = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if (block.get("type") or "").lower() == "redacted_thinking":
+                text = block.get("data") or block.get("text") or ""
+            else:
+                text = block.get("thinking") or block.get("text") or ""
+            if text:
+                out.append(Part(kind=PartKind.THINKING, thinking=text))
+        if out:
+            return out
+
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning:
+        return [Part(kind=PartKind.THINKING, thinking=reasoning)]
+
+    return []
 
 
 def _map_tool_call_parts(tool_calls: list[dict[str, Any]] | None) -> list[Part]:
@@ -169,6 +209,8 @@ def _map_response_output(response: Any) -> list[Message]:
 
         content = response_message.get("content") or ""
         parts: list[Part] = []
+
+        parts.extend(_map_thinking_parts(response_message))
 
         if content:
             parts.append(Part(kind=PartKind.TEXT, text=content))
@@ -271,6 +313,55 @@ def _safe_cast(params: dict[str, Any], key: str, cast: type) -> Any:
         return None
 
 
+def _normalize_embedding_inputs(inputs: Any) -> list[str]:
+    """Extract embedding input text, dropping token-id inputs that aren't text.
+
+    LiteLLM clears the input to an empty string when message logging is off, so
+    an empty string is dropped to stay consistent with ``_embedding_input_count``.
+    """
+    if isinstance(inputs, str):
+        return [inputs] if inputs else []
+    if isinstance(inputs, list):
+        return [item for item in inputs if isinstance(item, str)]
+    return []
+
+
+def _embedding_input_count(inputs: Any) -> int:
+    """Count distinct embedding inputs.
+
+    A single pre-tokenized input (``list[int]``) counts as one; a batch of
+    token-id lists (``list[list[int]]``) counts each entry. LiteLLM clears the
+    input to an empty string when message logging is off, so an empty string is
+    treated as no input rather than a single one.
+    """
+    if inputs is None:
+        return 0
+    if isinstance(inputs, str):
+        return 1 if inputs else 0
+    if isinstance(inputs, list):
+        if inputs and all(isinstance(item, int) for item in inputs):
+            return 1
+        return len(inputs)
+    return 0
+
+
+def _embedding_dimensions_from_response(response_obj: Any) -> int | None:
+    """Read the embedding vector length from the first response item."""
+    data = getattr(response_obj, "data", None)
+    if not data:
+        return None
+    first = data[0]
+    embedding = first.get("embedding") if isinstance(first, dict) else getattr(first, "embedding", None)
+    if not isinstance(embedding, (list, tuple)):
+        return None
+    return len(embedding)
+
+
+def _response_model(response_obj: Any) -> str:
+    """Extract the response model name, tolerating a missing attribute."""
+    return getattr(response_obj, "model", "") or ""
+
+
 def _extract_detailed_usage(response_obj: Any, slo: dict[str, Any]) -> TokenUsage:
     """Build TokenUsage with detailed breakdowns from response_obj, basic counts from SLO."""
     usage = TokenUsage(
@@ -353,10 +444,14 @@ class SigilLiteLLMLogger(CustomLogger):
         if slo is None:
             return
 
+        call_type = slo.get("call_type") or ""
         try:
-            self._record_generation(kwargs, response_obj, slo, start_time, end_time, is_failure=is_failure)
+            if call_type in _EMBEDDING_CALL_TYPES:
+                self._record_embedding(kwargs, response_obj, slo, start_time, end_time, is_failure=is_failure)
+            else:
+                self._record_generation(kwargs, response_obj, slo, start_time, end_time, is_failure=is_failure)
         except Exception:
-            logger.exception("sigil: failed to record LiteLLM generation")
+            logger.exception("sigil: failed to record LiteLLM event")
 
     def _resolve_agent_name(self, kwargs: dict[str, Any]) -> str:
         """Resolve agent_name from per-request metadata, falling back to static."""
@@ -505,3 +600,72 @@ class SigilLiteLLMLogger(CustomLogger):
             err = recorder.err()
             if err is not None:
                 logger.warning("sigil: recorder error: %s", err)
+
+    def _record_embedding(
+        self,
+        kwargs: dict[str, Any],
+        response_obj: Any,
+        slo: dict[str, Any],
+        start_time: datetime,
+        end_time: datetime,
+        *,
+        is_failure: bool,
+    ) -> None:
+        model_name = slo.get("model") or ""
+        if not model_name:
+            return
+
+        provider = (slo.get("custom_llm_provider") or "").lower()
+        optional_params = kwargs.get("optional_params") or {}
+        dimensions = _safe_cast(optional_params, "dimensions", int)
+        encoding_format = optional_params.get("encoding_format") or ""
+
+        tags: dict[str, str] = {
+            "sigil.framework.name": "litellm",
+            "sigil.framework.source": "handler",
+            "sigil.framework.language": "python",
+        }
+        for tag_value in slo.get("request_tags") or []:
+            tag_str = str(tag_value)
+            tags[f"litellm.tag.{tag_str}"] = tag_str
+        tags.update(self._extra_tags)
+
+        recorder = self._client.start_embedding(
+            EmbeddingStart(
+                model=ModelRef(provider=provider, name=model_name),
+                agent_name=self._resolve_agent_name(kwargs),
+                agent_version=self._resolve_agent_version(kwargs),
+                dimensions=dimensions,
+                encoding_format=encoding_format,
+                tags=tags,
+                metadata=dict(self._extra_metadata),
+                started_at=_datetime_to_utc(start_time),
+            )
+        )
+
+        try:
+            if is_failure:
+                error_str = slo.get("error_str") or ""
+                if error_str:
+                    recorder.set_call_error(RuntimeError(error_str))
+
+            # Embedding input lives in kwargs["input"], not the SLO. LiteLLM clears
+            # it (sets it to "") before invoking callbacks when message logging is
+            # turned off, so reading it here honours LiteLLM redaction settings.
+            inputs = kwargs.get("input")
+            input_texts = _normalize_embedding_inputs(inputs) if self._capture_inputs else []
+
+            recorder.set_result(
+                EmbeddingResult(
+                    input_count=_embedding_input_count(inputs),
+                    input_tokens=slo.get("prompt_tokens") or 0,
+                    input_texts=input_texts,
+                    response_model=_response_model(response_obj) or model_name,
+                    dimensions=dimensions or _embedding_dimensions_from_response(response_obj),
+                )
+            )
+        finally:
+            recorder.end()
+            err = recorder.err()
+            if err is not None:
+                logger.warning("sigil: embedding recorder error: %s", err)

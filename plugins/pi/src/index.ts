@@ -24,7 +24,9 @@ import {
   type PiToolInfo,
   type PiToolResult,
   type PiUserMessage,
+  resolveConversationTitle,
   type ToolTiming,
+  userMessageText,
 } from "./mappers.js";
 import {
   createTelemetryProviders,
@@ -73,6 +75,12 @@ export default function (pi: ExtensionAPI) {
   // boundaries.
   const pendingInputMessages: Message[] = [];
 
+  // First user prompt text seen in this session, used to derive a
+  // conversation title when pi has no user-set session name. First prompt
+  // wins, so it persists across turns and is only cleared on session
+  // boundaries (never in resetTurnState).
+  let firstUserText: string | undefined;
+
   function resetTurnState() {
     turnStartTime = 0;
     firstTokenTime = 0;
@@ -93,6 +101,7 @@ export default function (pi: ExtensionAPI) {
     }
     resetTurnState();
     pendingInputMessages.length = 0;
+    firstUserText = undefined;
     lastSeenModel = null;
     currentSystemPrompt = undefined;
     currentRequestControls = {};
@@ -224,6 +233,10 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       if (!isUserMessage(message)) return;
+      if (firstUserText === undefined) {
+        const text = userMessageText(message).trim();
+        if (text.length > 0) firstUserText = text;
+      }
       const mapped = mapUserMessage(message, config.contentCapture);
       if (mapped) pendingInputMessages.push(mapped);
     } catch (err) {
@@ -389,8 +402,25 @@ export default function (pi: ExtensionAPI) {
         conversationId,
       );
 
+      // Prefer pi's user-set session name; otherwise derive from the first
+      // prompt (suppressed in metadata_only). Resolved per turn so a name
+      // set mid-session shows up on the next generation.
+      let sessionName: string | undefined;
+      try {
+        sessionName = ctx.sessionManager.getSessionName?.();
+      } catch (err) {
+        logger.debug("getSessionName failed", err);
+      }
+      const conversationTitle = resolveConversationTitle({
+        sessionName,
+        firstUserText,
+        conversationId,
+        contentCapture,
+      });
+
       const seed = mapGenerationStart(msg, {
         conversationId,
+        conversationTitle,
         agentName: config.agentName,
         agentVersion: config.agentVersion,
         startedAt: startedAtMs,
@@ -435,6 +465,7 @@ export default function (pi: ExtensionAPI) {
             turnToolTimings,
             {
               conversationId,
+              conversationTitle,
               agentName: (config as SigilPiConfig).agentName,
               agentVersion: (config as SigilPiConfig).agentVersion,
               contentCapture,
@@ -485,6 +516,7 @@ export function emitToolSpans(
   timings: ToolTiming[],
   opts: {
     conversationId?: string;
+    conversationTitle?: string;
     agentName: string;
     agentVersion?: string;
     contentCapture: ContentCaptureMode;
@@ -521,6 +553,7 @@ export function emitToolSpans(
         toolCallId: timing.toolCallId,
         toolType: "function",
         conversationId: opts.conversationId,
+        conversationTitle: opts.conversationTitle,
         agentName: opts.agentName,
         agentVersion: opts.agentVersion,
         requestModel: msg.model,

@@ -15,6 +15,7 @@ from ..models import (
     ExportWorkflowStepsResponse,
 )
 from ..proto_mapping import generation_to_proto_json, workflow_step_to_proto_json
+from ..version import user_agent
 
 
 class HTTPGenerationExporter:
@@ -23,7 +24,19 @@ class HTTPGenerationExporter:
     def __init__(self, endpoint: str, headers: dict[str, str] | None = None) -> None:
         self._endpoint = _normalize_endpoint(endpoint, _EXPORT_PATH)
         self._wf_endpoint = _normalize_endpoint(endpoint, _WF_EXPORT_PATH)
-        self._headers = dict(headers or {})
+        # Resolve the User-Agent like the gRPC exporter: a non-blank caller
+        # override wins, otherwise the SDK default (urllib would otherwise send
+        # "Python-urllib/<ver>"). Any User-Agent entry is stripped so a blank
+        # value can't override the resolved one.
+        user_agent_value = user_agent()
+        self._headers = {}
+        for key, value in (headers or {}).items():
+            if key.lower() == "user-agent":
+                if value.strip():
+                    user_agent_value = value
+                continue
+            self._headers[key] = value
+        self._headers["User-Agent"] = user_agent_value
 
     def export_generations(self, request: ExportGenerationsRequest) -> ExportGenerationsResponse:
         payload = {

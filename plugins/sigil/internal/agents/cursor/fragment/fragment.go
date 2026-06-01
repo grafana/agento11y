@@ -87,6 +87,7 @@ type Session struct {
 	UserEmail         string   `json:"userEmail,omitempty"`
 	CursorVersion     string   `json:"cursorVersion,omitempty"`
 	IsBackgroundAgent bool     `json:"isBackgroundAgent,omitempty"`
+	ConversationTitle string   `json:"conversationTitle,omitempty"`
 	StartedAt         string   `json:"startedAt,omitempty"`
 }
 

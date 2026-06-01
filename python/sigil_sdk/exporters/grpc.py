@@ -17,6 +17,7 @@ from ..models import (
     ExportWorkflowStepsResponse,
 )
 from ..proto_mapping import generation_to_proto, workflow_step_to_proto
+from ..version import user_agent
 
 
 class GRPCGenerationExporter:
@@ -24,11 +25,23 @@ class GRPCGenerationExporter:
 
     def __init__(self, endpoint: str, headers: dict[str, str] | None = None, insecure: bool = False) -> None:
         host, implicit_insecure = _parse_endpoint(endpoint)
-        self._headers = [(k.lower(), v) for k, v in (headers or {}).items()]
+        # gRPC reserves the user-agent metadata key, so the User-Agent travels
+        # via the channel option rather than per-call metadata. grpc appends its
+        # own token after this value.
+        user_agent_value = user_agent()
+        metadata: list[tuple[str, str]] = []
+        for key, value in (headers or {}).items():
+            if key.lower() == "user-agent":
+                if value.strip():
+                    user_agent_value = value
+                continue
+            metadata.append((key.lower(), value))
+        self._headers = metadata
+        options = [("grpc.primary_user_agent", user_agent_value)]
         self._channel = (
-            grpc.insecure_channel(host)
+            grpc.insecure_channel(host, options=options)
             if (insecure or implicit_insecure)
-            else grpc.secure_channel(host, grpc.ssl_channel_credentials())
+            else grpc.secure_channel(host, grpc.ssl_channel_credentials(), options=options)
         )
         self._stub = sigil_pb2_grpc.GenerationIngestServiceStub(self._channel)
         self._workflow_step_stub = sigil_pb2_grpc.WorkflowStepIngestServiceStub(self._channel)

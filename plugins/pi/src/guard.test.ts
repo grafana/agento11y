@@ -52,7 +52,7 @@ describe("runToolCallGuard", () => {
     expect(result).toBeUndefined();
   });
 
-  it("returns block + reason when the server denies", async () => {
+  it("returns block with wrapped policy-deny reason when the server denies", async () => {
     const { client } = makeClient(async () => ({
       action: "deny",
       reason: "blocked rm -rf",
@@ -60,10 +60,14 @@ describe("runToolCallGuard", () => {
     }));
 
     const result = await runToolCallGuard(makeArgs({ client }));
-    expect(result).toEqual({ block: true, reason: "blocked rm -rf" });
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toContain("blocked rm -rf");
+    expect(result?.reason).toContain("A Grafana AI Observability policy");
+    expect(result?.reason).toContain('"bash"');
+    expect(result?.reason).toContain("Stop and tell the user");
   });
 
-  it("falls back to a generic reason when the deny reason is empty", async () => {
+  it("omits the Reason clause when the deny reason is empty", async () => {
     const { client } = makeClient(async () => ({
       action: "deny",
       reason: "   ",
@@ -71,10 +75,11 @@ describe("runToolCallGuard", () => {
     }));
 
     const result = await runToolCallGuard(makeArgs({ client }));
-    expect(result).toEqual({
-      block: true,
-      reason: "tool call denied by Sigil guard",
-    });
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toContain("A Grafana AI Observability policy");
+    expect(result?.reason).toContain('"bash"');
+    expect(result?.reason).not.toContain("Reason:");
+    expect(result?.reason).toContain("Stop and tell the user");
   });
 
   it("returns undefined and logs a warning on transport errors when failOpen", async () => {
@@ -109,7 +114,7 @@ describe("runToolCallGuard", () => {
     );
   });
 
-  it("returns block on transport errors when failOpen=false", async () => {
+  it("returns block with fail-closed message on transport errors when failOpen=false", async () => {
     const { client } = makeClient(async () => {
       throw new Error("network down");
     });
@@ -118,10 +123,14 @@ describe("runToolCallGuard", () => {
     const result = await runToolCallGuard(
       makeArgs({ client, failOpen: false, logger: { warn } }),
     );
-    expect(result).toEqual({
-      block: true,
-      reason: expect.stringContaining("guard evaluation failed"),
-    });
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toContain("could not evaluate");
+    expect(result?.reason).toContain("safety measure");
+    expect(result?.reason).toContain('"bash"');
+    expect(result?.reason).toContain("network down");
+    expect(result?.reason).not.toContain(
+      "A Grafana AI Observability policy blocked",
+    );
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("guard eval failed"),
     );

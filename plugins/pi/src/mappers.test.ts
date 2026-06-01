@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractRequestControls,
+  MAX_TITLE_LEN,
   mapGenerationResult,
   mapGenerationStart,
   mapTools,
@@ -9,6 +10,8 @@ import {
   type PiToolInfo,
   type PiToolResult,
   type PiUserMessage,
+  resolveConversationTitle,
+  userMessageText,
 } from "./mappers.js";
 
 function makeMsg(overrides?: Partial<PiAssistantMessage>): PiAssistantMessage {
@@ -88,6 +91,23 @@ describe("mapGenerationStart", () => {
     expect(start.agentName).toBe("pi");
     expect(start.agentVersion).toBe("1.0.0");
     expect(start.startedAt).toEqual(new Date(1700000000000));
+  });
+
+  it("sets conversationTitle when provided and omits it when empty", () => {
+    const withTitle = mapGenerationStart(makeMsg(), {
+      conversationId: "s",
+      conversationTitle: "summarize the go files",
+      agentName: "pi",
+      startedAt: 0,
+    });
+    expect(withTitle.conversationTitle).toBe("summarize the go files");
+
+    const without = mapGenerationStart(makeMsg(), {
+      conversationId: "s",
+      agentName: "pi",
+      startedAt: 0,
+    });
+    expect(without.conversationTitle).toBeUndefined();
   });
 
   it("includes tools whenever provided", () => {
@@ -665,6 +685,124 @@ describe("mapUserMessage", () => {
       role: "user",
       parts: [{ type: "text", text: "hey" }],
     });
+  });
+});
+
+describe("resolveConversationTitle", () => {
+  it("prefers a user-set session name over the first prompt", () => {
+    expect(
+      resolveConversationTitle({
+        sessionName: "My named session",
+        firstUserText: "summarize the go files",
+        conversationId: "pi-conv-1",
+        contentCapture: "full",
+      }),
+    ).toBe("My named session");
+  });
+
+  it("derives from the first prompt when no session name is set", () => {
+    expect(
+      resolveConversationTitle({
+        firstUserText: "summarize the go files",
+        conversationId: "pi-conv-1",
+        contentCapture: "full",
+      }),
+    ).toBe("summarize the go files");
+  });
+
+  it("trims whitespace from session name and derived title", () => {
+    expect(
+      resolveConversationTitle({
+        sessionName: "  spaced name  ",
+        contentCapture: "full",
+      }),
+    ).toBe("spaced name");
+    expect(
+      resolveConversationTitle({
+        firstUserText: "  hi there  ",
+        contentCapture: "full",
+      }),
+    ).toBe("hi there");
+  });
+
+  it("ignores a blank session name and falls through to the prompt", () => {
+    expect(
+      resolveConversationTitle({
+        sessionName: "   ",
+        firstUserText: "do the thing",
+        conversationId: "pi-conv-1",
+        contentCapture: "full",
+      }),
+    ).toBe("do the thing");
+  });
+
+  it("suppresses the derived title in metadata_only but keeps the session name", () => {
+    expect(
+      resolveConversationTitle({
+        firstUserText: "summarize the go files",
+        conversationId: "pi-conv-1",
+        contentCapture: "metadata_only",
+      }),
+    ).toBe("pi-conv-1");
+    expect(
+      resolveConversationTitle({
+        sessionName: "My named session",
+        firstUserText: "summarize the go files",
+        conversationId: "pi-conv-1",
+        contentCapture: "metadata_only",
+      }),
+    ).toBe("My named session");
+  });
+
+  it("falls back to the conversation id when nothing else is available", () => {
+    expect(
+      resolveConversationTitle({
+        conversationId: "pi-conv-1",
+        contentCapture: "full",
+      }),
+    ).toBe("pi-conv-1");
+  });
+
+  it("returns undefined when there is no name, prompt, or id", () => {
+    expect(
+      resolveConversationTitle({ contentCapture: "full" }),
+    ).toBeUndefined();
+  });
+
+  it("caps the title at MAX_TITLE_LEN code points without splitting surrogates", () => {
+    const long = "a".repeat(150);
+    expect(
+      resolveConversationTitle({ firstUserText: long, contentCapture: "full" }),
+    ).toHaveLength(MAX_TITLE_LEN);
+
+    // 150 two-code-unit emoji = 150 code points; the cap counts code points,
+    // so it clips to 100 without slicing mid-surrogate into a replacement char.
+    const emoji = "😀".repeat(150);
+    const clipped = resolveConversationTitle({
+      firstUserText: emoji,
+      contentCapture: "full",
+    });
+    expect(Array.from(clipped ?? "")).toHaveLength(MAX_TITLE_LEN);
+    expect(clipped).not.toContain("\uFFFD");
+  });
+});
+
+describe("userMessageText", () => {
+  it("returns string content as-is", () => {
+    expect(userMessageText(makeUserMsg({ content: "hello" }))).toBe("hello");
+  });
+
+  it("joins text parts and drops images", () => {
+    const text = userMessageText(
+      makeUserMsg({
+        content: [
+          { type: "text", text: "first" },
+          { type: "image", data: "ZmFrZQ==", mimeType: "image/png" },
+          { type: "text", text: "second" },
+        ],
+      }),
+    );
+    expect(text).toBe("first\nsecond");
   });
 });
 

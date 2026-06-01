@@ -11,6 +11,7 @@ import type {
   ToolDefinition,
 } from '../types.js';
 import { canonicalEffectiveVersion, isRecord } from '../utils.js';
+import { userAgent } from '../version.js';
 
 export class HTTPGenerationExporter implements GenerationExporter {
   private readonly endpoint: string;
@@ -18,7 +19,21 @@ export class HTTPGenerationExporter implements GenerationExporter {
 
   constructor(endpoint: string, headers?: Record<string, string>) {
     this.endpoint = normalizeHTTPGenerationEndpoint(endpoint);
-    this.headers = headers ? { ...headers } : {};
+    // Resolve the User-Agent like the gRPC exporter: a non-blank caller override
+    // (case-insensitive) wins, otherwise the SDK default. A blank/whitespace
+    // override is dropped so it can't blank out the default.
+    let resolved = userAgent();
+    const rest: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers ?? {})) {
+      if (key.toLowerCase() === 'user-agent') {
+        if (value.trim().length > 0) {
+          resolved = value;
+        }
+        continue;
+      }
+      rest[key] = value;
+    }
+    this.headers = { 'user-agent': resolved, ...rest };
   }
 
   async exportGenerations(request: ExportGenerationsRequest): Promise<ExportGenerationsResponse> {

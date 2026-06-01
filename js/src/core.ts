@@ -75,6 +75,7 @@ export type {
   ToolExecutionStart,
   ToolResultPart,
 } from './types.js';
+export { SDK_VERSION, userAgent } from './version.js';
 
 import { SigilClient } from './client.js';
 import type { SigilSdkConfigInput } from './types.js';

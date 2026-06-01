@@ -16,6 +16,7 @@ import (
 	sigilv1 "github.com/grafana/sigil-sdk/go/proto/sigil/v1"
 	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -442,13 +443,32 @@ func boolPtr(value bool) *bool {
 type capturingIngestServer struct {
 	sigilv1.UnimplementedGenerationIngestServiceServer
 
-	mu       sync.Mutex
-	requests []*sigilv1.ExportGenerationsRequest
+	mu         sync.Mutex
+	requests   []*sigilv1.ExportGenerationsRequest
+	userAgents []string
 }
 
-func (s *capturingIngestServer) ExportGenerations(_ context.Context, req *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error) {
+func (s *capturingIngestServer) ExportGenerations(ctx context.Context, req *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error) {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if vals := md.Get("user-agent"); len(vals) > 0 {
+			s.mu.Lock()
+			s.userAgents = append(s.userAgents, vals[0])
+			s.mu.Unlock()
+		}
+	}
 	s.capture(req)
 	return acceptanceResponse(req), nil
+}
+
+func (s *capturingIngestServer) singleUserAgent(t *testing.T) string {
+	t.Helper()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.userAgents) != 1 {
+		t.Fatalf("expected exactly one captured user-agent, got %d", len(s.userAgents))
+	}
+	return s.userAgents[0]
 }
 
 func (s *capturingIngestServer) capture(req *sigilv1.ExportGenerationsRequest) {

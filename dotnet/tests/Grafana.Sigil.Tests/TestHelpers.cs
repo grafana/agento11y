@@ -361,6 +361,8 @@ internal sealed class GrpcIngestServer : IDisposable
 
     public IReadOnlyList<(IngestProto.ExportGenerationsRequest Request, Metadata Headers)> Requests => _store.Snapshot();
 
+    public IReadOnlyList<string> UserAgents => _store.UserAgentSnapshot();
+
     public GrpcIngestServer()
     {
         Port = ReservePort();
@@ -413,12 +415,14 @@ internal sealed class GrpcIngestServer : IDisposable
 #endif
 
         private readonly List<(IngestProto.ExportGenerationsRequest Request, Metadata Headers)> _requests = [];
+        private readonly List<string> _userAgents = [];
 
-        public void Add(IngestProto.ExportGenerationsRequest request, Metadata headers)
+        public void Add(IngestProto.ExportGenerationsRequest request, Metadata headers, string userAgent)
         {
             lock (_gate)
             {
                 _requests.Add((request, headers));
+                _userAgents.Add(userAgent);
             }
         }
 
@@ -427,6 +431,14 @@ internal sealed class GrpcIngestServer : IDisposable
             lock (_gate)
             {
                 return [.. _requests];
+            }
+        }
+
+        public IReadOnlyList<string> UserAgentSnapshot()
+        {
+            lock (_gate)
+            {
+                return [.. _userAgents];
             }
         }
     }
@@ -442,7 +454,8 @@ internal sealed class GrpcIngestServer : IDisposable
             ServerCallContext context
         )
         {
-            _store.Add(request, context.RequestHeaders);
+            var userAgent = context.GetHttpContext().Request.Headers.UserAgent.ToString();
+            _store.Add(request, context.RequestHeaders, userAgent);
 
             var response = new IngestProto.ExportGenerationsResponse();
             foreach (var generation in request.Generations)

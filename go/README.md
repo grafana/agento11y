@@ -205,6 +205,50 @@ cfg.GenerationExport.Auth = sigil.AuthConfig{
 }
 ```
 
+## Hooks and Guards
+
+Use hooks when you want Sigil guard rules to run before an LLM call. The SDK evaluates the hook on your request path; guard rules configured in Grafana Cloud decide whether to allow, deny, or transform the input.
+
+Hooks are disabled by default. Enable them on the client and call `EvaluateHook(...)` before the provider request:
+
+```go
+cfg := sigil.DefaultConfig()
+cfg.Hooks.Enabled = true
+cfg.Hooks.Phases = []sigil.HookPhase{sigil.HookPhasePreflight}
+
+client := sigil.NewClient(cfg)
+
+messages := []sigil.Message{
+	sigil.UserTextMessage("Summarize this customer note..."),
+}
+response, err := client.EvaluateHook(ctx, sigil.HookEvaluateRequest{
+	Phase: sigil.HookPhasePreflight,
+	Context: sigil.HookContext{
+		AgentName:    "support-agent",
+		AgentVersion: "1.0.0",
+		Model:        &sigil.HookModel{Provider: "openai", Name: "gpt-5"},
+	},
+	Input: sigil.HookInput{
+		Messages:            messages,
+		SystemPrompt:        "You are a helpful support agent.",
+		ConversationPreview: "Summarize this customer note...",
+	},
+})
+if err != nil {
+	return err
+}
+if err := sigil.HookDeniedFromResponse(response); err != nil {
+	return err
+}
+if response.TransformedInput != nil && len(response.TransformedInput.Messages) > 0 {
+	messages = response.TransformedInput.Messages
+}
+```
+
+`HooksConfig` defaults to `Phases: []HookPhase{HookPhasePreflight}`, `Timeout: 15s`, and fail-open behavior. With fail-open enabled, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `FailOpen` to `sigil.BoolPtr(false)` for strict paths that should fail closed.
+
+If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `StartGeneration(...)`. For a runnable example, see [`../examples/getting-started/go-hooks/`](../examples/getting-started/go-hooks/).
+
 ## Wiring custom env vars
 
 The SDK only auto-loads `SIGIL_*` env vars (`SIGIL_ENDPOINT`, `SIGIL_PROTOCOL`, `SIGIL_AUTH_MODE`, `SIGIL_AUTH_TOKEN`, etc.) when you call `sigil.NewClient(sigil.Config{})`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:

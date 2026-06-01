@@ -490,7 +490,7 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 		// clearCreds blanks SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/SIGIL_AUTH_TOKEN.
 		clearCreds          bool
 		wantServerCalled    bool
-		wantStdoutContains  string
+		wantStdoutContains  []string
 		wantStdoutEmpty     bool
 		wantToolRecordCount int
 	}{
@@ -513,7 +513,7 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			hookResponse:        `{"action":"deny","reason":"blocked tool"}`,
 			wantServerCalled:    true,
-			wantStdoutContains:  `"permissionDecision":"deny"`,
+			wantStdoutContains:  []string{`"permissionDecision":"deny"`, `A Grafana AI Observability policy`, `blocked tool`},
 			wantToolRecordCount: 0,
 		},
 		{
@@ -527,7 +527,7 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			name:                "fail-closed transport error denies tool and skips record",
 			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: false},
 			useClosedServer:     true,
-			wantStdoutContains:  `"permissionDecision":"deny"`,
+			wantStdoutContains:  []string{`"permissionDecision":"deny"`, `could not evaluate`},
 			wantToolRecordCount: 0,
 		},
 		{
@@ -541,7 +541,7 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			name:                "fail-closed missing credentials denies tool and skips record",
 			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: false},
 			clearCreds:          true,
-			wantStdoutContains:  `"permissionDecision":"deny"`,
+			wantStdoutContains:  []string{`"permissionDecision":"deny"`, `could not evaluate`, `missing SIGIL_ENDPOINT`},
 			wantToolRecordCount: 0,
 		},
 	}
@@ -604,8 +604,10 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			if tt.wantStdoutEmpty && stdout.Len() != 0 {
 				t.Errorf("stdout not empty: %q", stdout.String())
 			}
-			if tt.wantStdoutContains != "" && !strings.Contains(stdout.String(), tt.wantStdoutContains) {
-				t.Errorf("stdout = %q, want substring %q", stdout.String(), tt.wantStdoutContains)
+			for _, want := range tt.wantStdoutContains {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("stdout = %q, want substring %q", stdout.String(), want)
+				}
 			}
 
 			frag := fragment.LoadTolerant("sess", "turn-000001", logger)

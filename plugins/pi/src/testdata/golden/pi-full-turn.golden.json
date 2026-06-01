@@ -99,6 +99,7 @@
         },
         "metadata": {
           "cost_usd": 0.003,
+          "sigil.conversation.title": "summarize the go files",
           "sigil.sdk.name": "sdk-js",
           "sigil.sdk.content_capture_mode": "full"
         },

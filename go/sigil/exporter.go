@@ -94,9 +94,15 @@ func newGRPCGenerationExporter(cfg GenerationExportConfig) (generationExporter, 
 		transportCreds = insecure.NewCredentials()
 	}
 
+	// gRPC reserves the user-agent metadata key, so the User-Agent must travel
+	// via the dial option rather than outgoing metadata. grpc-go appends its own
+	// token after this value.
+	userAgent, headers := splitUserAgent(cfg.Headers)
+
 	conn, err := grpc.NewClient(
 		endpoint,
 		grpc.WithTransportCredentials(transportCreds),
+		grpc.WithUserAgent(userAgent),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallSendMsgSize(maxSendMessageBytes),
 			grpc.MaxCallRecvMsgSize(maxReceiveMessageBytes),
@@ -109,8 +115,25 @@ func newGRPCGenerationExporter(cfg GenerationExportConfig) (generationExporter, 
 	return &grpcGenerationExporter{
 		client:  sigilv1.NewGenerationIngestServiceClient(conn),
 		conn:    conn,
-		headers: cloneTags(cfg.Headers),
+		headers: headers,
 	}, nil
+}
+
+// splitUserAgent returns the User-Agent to set as the gRPC dial option and the
+// remaining headers with any User-Agent entry removed. When the caller did not
+// supply one, the SDK default (UserAgent) is used.
+func splitUserAgent(headers map[string]string) (userAgent string, rest map[string]string) {
+	userAgent = UserAgent()
+	rest = cloneTags(headers)
+	for key, value := range rest {
+		if strings.EqualFold(key, "User-Agent") {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				userAgent = value
+			}
+			delete(rest, key)
+		}
+	}
+	return userAgent, rest
 }
 
 func (e *grpcGenerationExporter) Export(ctx context.Context, request *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error) {
@@ -128,9 +151,10 @@ func (e *grpcGenerationExporter) Shutdown(_ context.Context) error {
 }
 
 type httpGenerationExporter struct {
-	endpoint string
-	headers  map[string]string
-	client   *http.Client
+	endpoint  string
+	userAgent string
+	headers   map[string]string
+	client    *http.Client
 }
 
 func newHTTPGenerationExporter(cfg GenerationExportConfig) (generationExporter, error) {
@@ -139,9 +163,14 @@ func newHTTPGenerationExporter(cfg GenerationExportConfig) (generationExporter, 
 		return nil, err
 	}
 
+	// Resolve the User-Agent the same way the gRPC exporter does: a non-blank
+	// caller override wins, otherwise the SDK default. headers has any
+	// User-Agent entry removed so it can't blank out the resolved value below.
+	userAgent, headers := splitUserAgent(cfg.Headers)
 	return &httpGenerationExporter{
-		endpoint: urlString,
-		headers:  cloneTags(cfg.Headers),
+		endpoint:  urlString,
+		userAgent: userAgent,
+		headers:   headers,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -159,6 +188,7 @@ func (e *httpGenerationExporter) Export(ctx context.Context, request *sigilv1.Ex
 		return nil, fmt.Errorf("build generation request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", wire.ContentTypeJSON)
+	httpRequest.Header.Set("User-Agent", e.userAgent)
 	for key, value := range e.headers {
 		httpRequest.Header.Set(key, value)
 	}

@@ -38,6 +38,49 @@ const result = await generateText({
 
 The model object stays untouched. Sigil only consumes hook callbacks.
 
+## Preflight guards
+
+Set `enableHooks: true` when you want Sigil guard rules to evaluate each Vercel AI SDK model step before it reaches the provider:
+
+```ts
+import { HookDeniedError, SigilClient } from '@grafana/sigil-sdk-js';
+import { createSigilVercelAiSdk } from '@grafana/sigil-sdk-js/vercel-ai-sdk';
+import { generateText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+const client = new SigilClient({
+  hooks: {
+    enabled: true,
+    phases: ['preflight'],
+    timeoutMs: 15_000,
+    failOpen: true,
+  },
+});
+
+const sigil = createSigilVercelAiSdk(client, {
+  agentName: 'research-agent',
+  agentVersion: '1.0.0',
+  enableHooks: true,
+});
+
+try {
+  await generateText({
+    model: openai('gpt-5'),
+    prompt: 'Summarize this ticket in one paragraph.',
+    ...sigil.generateTextHooks({ conversationId: 'chat-123' }),
+  });
+} catch (error) {
+  if (error instanceof HookDeniedError) {
+    return new Response(`Blocked by guard: ${error.reason}`, { status: 400 });
+  }
+  throw error;
+}
+```
+
+The adapter sends the step messages, model, agent name/version, and conversation preview to Sigil. If a guard returns `action: "deny"`, the adapter throws `HookDeniedError` and the provider call is aborted. If a guard returns `transformed_input.messages`, the adapter sends those transformed messages to the provider and records the transformed input in the generation.
+
+`enableHooks` overrides the client-level switch for this instrumentation. Leave it unset to use `client.config.hooks.enabled`, or set it to `false` to disable hook evaluation for calls made through this adapter. With `failOpen: true`, hook transport errors resolve to allow; set `failOpen: false` for strict paths that should fail closed.
+
 ## Conversation ID (required for multi-turn continuity)
 
 Vercel AI SDK is stateless on the server side. For multi-turn grouping, pass a stable `conversationId` per call:

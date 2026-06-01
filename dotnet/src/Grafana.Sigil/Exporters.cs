@@ -40,6 +40,7 @@ internal sealed class HttpGenerationExporter : IGenerationExporter
 {
     private readonly HttpClient _httpClient;
     private readonly Uri _endpoint;
+    private readonly string _userAgent;
     private readonly IReadOnlyDictionary<string, string> _headers;
 
     public HttpGenerationExporter(string endpoint, IReadOnlyDictionary<string, string> headers)
@@ -66,11 +67,24 @@ internal sealed class HttpGenerationExporter : IGenerationExporter
         }
 
         _endpoint = uri;
+        // Resolve the User-Agent like the gRPC exporter: a non-blank caller
+        // override wins, otherwise the SDK default. Any User-Agent entry is
+        // stripped so a blank value can't override the resolved one.
+        var userAgent = SdkVersion.UserAgent();
         var normalizedHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var pair in headers)
         {
+            if (string.Equals(pair.Key, "User-Agent", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(pair.Value))
+                {
+                    userAgent = pair.Value;
+                }
+                continue;
+            }
             normalizedHeaders[pair.Key] = pair.Value;
         }
+        _userAgent = userAgent;
         _headers = normalizedHeaders;
         _httpClient = new HttpClient(new HttpClientHandler
         {
@@ -95,6 +109,7 @@ internal sealed class HttpGenerationExporter : IGenerationExporter
             Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json"),
         };
 
+        httpRequest.Headers.TryAddWithoutValidation("User-Agent", _userAgent);
         foreach (var header in _headers)
         {
             httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
@@ -176,18 +191,53 @@ internal sealed class GrpcGenerationExporter : IGenerationExporter, IDisposable
             handler.ServerCertificateCustomValidationCallback = static (_, _, _, _) => true;
         }
 
-        _channel = GrpcChannel.ForAddress(uri, new GrpcChannelOptions
-        {
-            HttpHandler = handler,
-            DisposeHttpClient = true,
-        });
-        _client = new Proto.GenerationIngestService.GenerationIngestServiceClient(_channel);
+        // grpc-dotnet sets its own user-agent and ignores call metadata for it,
+        // so prepend our token in a delegating handler that rewrites the header
+        // just before the request goes out.
+        var userAgent = SdkVersion.UserAgent();
         var normalizedHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var pair in headers)
         {
+            if (string.Equals(pair.Key, "User-Agent", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(pair.Value))
+                {
+                    userAgent = pair.Value;
+                }
+                continue;
+            }
             normalizedHeaders[pair.Key] = pair.Value;
         }
         _headers = normalizedHeaders;
+
+        _channel = GrpcChannel.ForAddress(uri, new GrpcChannelOptions
+        {
+            HttpHandler = new UserAgentHandler(userAgent) { InnerHandler = handler },
+            DisposeHttpClient = true,
+        });
+        _client = new Proto.GenerationIngestService.GenerationIngestServiceClient(_channel);
+    }
+
+    // UserAgentHandler prepends our token in front of grpc-dotnet's own
+    // user-agent on every request, so the wire User-Agent is
+    // "sigil-sdk-dotnet/<ver> grpc-dotnet/<ver>".
+    private sealed class UserAgentHandler : DelegatingHandler
+    {
+        private readonly string _userAgent;
+
+        public UserAgentHandler(string userAgent)
+        {
+            _userAgent = userAgent;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var existing = request.Headers.UserAgent.ToString();
+            request.Headers.Remove("User-Agent");
+            var value = string.IsNullOrEmpty(existing) ? _userAgent : _userAgent + " " + existing;
+            request.Headers.TryAddWithoutValidation("User-Agent", value);
+            return base.SendAsync(request, cancellationToken);
+        }
     }
 
     public void Dispose()

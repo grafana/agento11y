@@ -14,6 +14,15 @@ Minimal, self-contained examples that make a real LLM call and record the genera
 | Go                   | `[go/](go/)`                                 | OpenAI                         |
 
 
+### Hooks and guards
+
+
+| Language | Directory                          | LLM provider | Guard phase |
+| -------- | ---------------------------------- | ------------ | ----------- |
+| Go       | `[go-hooks/](go-hooks/)`           | OpenAI       | Preflight   |
+| Python   | `[python-hooks/](python-hooks/)`   | OpenAI       | Preflight   |
+
+
 ### Multi-agent dependency graph
 
 

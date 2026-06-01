@@ -106,13 +106,19 @@ Minimal, self-contained examples that make a real LLM call and record the genera
 
 | Stack | Example |
 |-------|---------|
+| Go | [`examples/getting-started/go/`](examples/getting-started/go/) |
+| Go hooks and guards | [`examples/getting-started/go-hooks/`](examples/getting-started/go-hooks/) |
 | Python | [`examples/getting-started/python/`](examples/getting-started/python/) |
+| Python hooks and guards | [`examples/getting-started/python-hooks/`](examples/getting-started/python-hooks/) |
 | Python (multi-agent) | [`examples/getting-started/python-multi-agent/`](examples/getting-started/python-multi-agent/) |
 | Python + Pydantic AI | [`examples/getting-started/python-pydantic-ai/`](examples/getting-started/python-pydantic-ai/) |
 | Python + Strands | [`examples/getting-started/python-strands/`](examples/getting-started/python-strands/) |
 | TypeScript | [`examples/getting-started/typescript/`](examples/getting-started/typescript/) |
 | TypeScript + Strands | [`examples/getting-started/typescript-strands/`](examples/getting-started/typescript-strands/) |
-| Go | [`examples/getting-started/go/`](examples/getting-started/go/) |
+
+## Hooks and guards
+
+Application SDK hooks evaluate Sigil guard rules on your request path before a provider call. A guard can allow the request, deny it, or return transformed input such as redacted messages. See the Go, Python, and TypeScript SDK READMEs for manual hook evaluation, and the runnable [`examples/getting-started/go-hooks/`](examples/getting-started/go-hooks/) and [`examples/getting-started/python-hooks/`](examples/getting-started/python-hooks/) examples for preflight guard setups.
 
 ## Content capture and privacy
 

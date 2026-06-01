@@ -166,6 +166,45 @@ const client = new SigilClient({
 });
 ```
 
+## Hooks and Guards
+
+Use hooks when you want Sigil guard rules to run before an LLM call. The SDK evaluates the hook on your request path; guard rules configured in Grafana Cloud decide whether to allow, deny, or transform the input.
+
+Hooks are disabled by default. Enable them on the client and call `evaluateHook(...)` before the provider request:
+
+```ts
+import { HookDeniedError, SigilClient } from "@grafana/sigil-sdk-js";
+
+const client = new SigilClient({
+  hooks: { enabled: true, phases: ["preflight"], timeoutMs: 15_000, failOpen: true },
+});
+
+let messages = [{ role: "user" as const, content: "Summarize this customer note..." }];
+const response = await client.evaluateHook({
+  phase: "preflight",
+  context: {
+    agentName: "support-agent",
+    agentVersion: "1.0.0",
+    model: { provider: "openai", name: "gpt-5" },
+  },
+  input: {
+    messages,
+    systemPrompt: "You are a helpful support agent.",
+    conversationPreview: "Summarize this customer note...",
+  },
+});
+
+if (response.action === "deny") {
+  throw new HookDeniedError(response.reason ?? "", response.ruleId, response.evaluations);
+}
+
+messages = response.transformedInput?.messages ?? messages;
+```
+
+With `failOpen: true`, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `failOpen: false` for strict paths that should fail closed.
+
+If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `startGeneration(...)`. If you use the Vercel AI SDK adapter, see `docs/frameworks/vercel-ai-sdk.md` for automatic preflight hook wiring.
+
 Configure OTEL exporters (traces/metrics) in your application OTEL SDK setup. You can optionally pass `tracer` and `meter` directly to `SigilClient`.
 
 Quick OTEL setup pattern before creating the Sigil client:

@@ -56,6 +56,7 @@ class _CapturingGenerationServicer(sigil_pb2_grpc.GenerationIngestServiceService
 
 import pytest
 from sigil_sdk.exporters.http import _normalize_endpoint
+from sigil_sdk.version import SDK_VERSION
 
 
 @pytest.mark.parametrize(
@@ -298,6 +299,111 @@ def test_sdk_generation_auth_tenant_over_http() -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+_DEFAULT_USER_AGENT = f"sigil-sdk-python/{SDK_VERSION}"
+_OVERRIDE_USER_AGENT = f"sigil-plugin-langgraph/1.2.3 {_DEFAULT_USER_AGENT}"
+
+# A non-blank caller User-Agent wins; a blank or whitespace-only one must not
+# blank out the default. None exercises the no-header path. HTTP and gRPC must
+# resolve identically.
+_USER_AGENT_CASES = [
+    pytest.param(None, _DEFAULT_USER_AGENT, id="no-header"),
+    pytest.param({"User-Agent": _OVERRIDE_USER_AGENT}, _OVERRIDE_USER_AGENT, id="override"),
+    pytest.param({"User-Agent": ""}, _DEFAULT_USER_AGENT, id="empty"),
+    pytest.param({"User-Agent": "   "}, _DEFAULT_USER_AGENT, id="whitespace"),
+]
+
+
+@pytest.mark.parametrize(("headers", "expected_user_agent"), _USER_AGENT_CASES)
+def test_sdk_generation_user_agent_over_http(headers, expected_user_agent) -> None:
+    captured_headers: list[dict[str, str]] = []
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            captured_headers.append({k.lower(): v for k, v in self.headers.items()})
+            self.send_response(202)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"results":[{"generation_id":"gen-fixture-1","accepted":true}]}')
+
+        def log_message(self, _format, *_args):  # noqa: A003
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    client = _new_client(
+        GenerationExportConfig(
+            protocol="http",
+            endpoint=f"http://127.0.0.1:{server.server_address[1]}/api/v1/generations:export",
+            headers=headers,
+            batch_size=1,
+            flush_interval=timedelta(seconds=1),
+            max_retries=1,
+            initial_backoff=timedelta(milliseconds=1),
+            max_backoff=timedelta(milliseconds=10),
+        )
+    )
+
+    try:
+        start, result = _payload_fixture()
+        rec = client.start_generation(start)
+        rec.set_result(result)
+        rec.end()
+        assert rec.err() is None
+        client.shutdown()
+
+        assert len(captured_headers) >= 1
+        assert captured_headers[0].get("user-agent") == expected_user_agent
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(("headers", "expected_user_agent"), _USER_AGENT_CASES)
+def test_sdk_generation_user_agent_over_grpc(headers, expected_user_agent) -> None:
+    servicer = _CapturingGenerationServicer()
+    grpc_server = grpc.server(thread_pool=__import__("concurrent.futures").futures.ThreadPoolExecutor(max_workers=2))
+    sigil_pb2_grpc.add_GenerationIngestServiceServicer_to_server(servicer, grpc_server)
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    grpc_server.add_insecure_port(f"127.0.0.1:{port}")
+    grpc_server.start()
+
+    client = _new_client(
+        GenerationExportConfig(
+            protocol="grpc",
+            endpoint=f"127.0.0.1:{port}",
+            insecure=True,
+            headers=headers,
+            batch_size=1,
+            flush_interval=timedelta(seconds=1),
+            max_retries=1,
+            initial_backoff=timedelta(milliseconds=1),
+            max_backoff=timedelta(milliseconds=10),
+        )
+    )
+
+    try:
+        start, result = _payload_fixture()
+        rec = client.start_generation(start)
+        rec.set_result(result)
+        rec.end()
+        assert rec.err() is None
+        client.shutdown()
+
+        assert len(servicer.metadata) == 1
+        # grpc appends its own token after ours, so compare the first token.
+        user_agent = servicer.metadata[0].get("user-agent", "")
+        assert user_agent.split(" ", 1)[0] == expected_user_agent.split(" ", 1)[0]
+    finally:
+        grpc_server.stop(grace=0)
 
 
 def test_sdk_generation_auth_bearer_over_grpc_with_header_override() -> None:

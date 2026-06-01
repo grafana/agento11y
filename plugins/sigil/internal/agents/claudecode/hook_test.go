@@ -228,7 +228,8 @@ func TestHandlePreToolUse(t *testing.T) {
 				`"hookSpecificOutput"`,
 				`"hookEventName":"PreToolUse"`,
 				`"permissionDecision":"deny"`,
-				`"permissionDecisionReason":"blocked tool"`,
+				`A Grafana AI Observability policy`,
+				`blocked tool`,
 			},
 		},
 	}

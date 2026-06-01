@@ -6,7 +6,10 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
-from sigil_sdk import Client, ClientConfig, GenerationExportConfig
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from sigil_sdk import Client, ClientConfig, EmbeddingCaptureConfig, GenerationExportConfig
 from sigil_sdk.models import (
     ExportGenerationResult,
     ExportGenerationsResponse,
@@ -43,15 +46,69 @@ def _new_client(exporter: _CapturingExporter) -> Client:
     )
 
 
+def _new_span_client(
+    exporter: _CapturingExporter,
+    span_exporter: InMemorySpanExporter,
+    *,
+    embedding_capture: EmbeddingCaptureConfig | None = None,
+) -> Client:
+    """Client wired to an in-memory span exporter for span-only output."""
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    return Client(
+        ClientConfig(
+            tracer=provider.get_tracer("sigil-litellm-test"),
+            generation_export=GenerationExportConfig(
+                batch_size=10,
+                flush_interval=timedelta(seconds=60),
+            ),
+            generation_exporter=exporter,
+            embedding_capture=embedding_capture or EmbeddingCaptureConfig(),
+        )
+    )
+
+
+def _base_embedding_slo(**overrides: Any) -> dict[str, Any]:
+    slo: dict[str, Any] = {
+        "id": "embd-abc123",
+        "call_type": "embedding",
+        "stream": False,
+        "custom_llm_provider": "openai",
+        "model": "text-embedding-3-small",
+        "prompt_tokens": 8,
+        "total_tokens": 8,
+        "error_str": None,
+        "request_tags": [],
+        "end_user": None,
+    }
+    slo.update(overrides)
+    return slo
+
+
+def _embedding_response_obj(dimensions: int = 3) -> SimpleNamespace:
+    """Build an EmbeddingResponse-like object with one vector."""
+    return SimpleNamespace(
+        model="text-embedding-3-small",
+        data=[{"embedding": [0.0] * dimensions}],
+        usage=SimpleNamespace(prompt_tokens=8, total_tokens=8),
+    )
+
+
 def _make_slo_response(
     content: str = "Hello!",
     finish_reason: str = "stop",
     tool_calls: list[dict[str, Any]] | None = None,
+    reasoning_content: str | None = None,
+    thinking_blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build an SLO response dict in OpenAI chat completion format."""
     message: dict[str, Any] = {"content": content}
     if tool_calls is not None:
         message["tool_calls"] = tool_calls
+    if reasoning_content is not None:
+        message["reasoning_content"] = reasoning_content
+    if thinking_blocks is not None:
+        message["thinking_blocks"] = thinking_blocks
     return {
         "choices": [
             {
@@ -573,12 +630,12 @@ def test_create_sigil_litellm_logger_factory() -> None:
 
 
 def test_non_chat_call_type_skipped() -> None:
-    """Embedding, image_generation etc. call types are silently skipped."""
+    """image_generation/transcription call types produce no generation export."""
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
         handler = SigilLiteLLMLogger(client=client)
-        for call_type in ("embedding", "aembedding", "image_generation", "transcription"):
+        for call_type in ("image_generation", "transcription"):
             slo = _base_slo(call_type=call_type)
             handler.log_success_event(
                 kwargs=_make_kwargs(slo),
@@ -1067,5 +1124,473 @@ def test_multi_choice_response_all_mapped() -> None:
         assert gen.output[2].parts[0].text == "Answer C"
         # stop_reason comes from first choice
         assert gen.stop_reason == "stop"
+    finally:
+        client.shutdown()
+
+
+def test_embedding_produces_span() -> None:
+    """Embedding call emits a span with provider, model, counts, and dimensions."""
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    client = _new_span_client(exporter, span_exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        slo = _base_embedding_slo()
+        kwargs = _make_kwargs(slo)
+        kwargs["input"] = "hello world"
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=_embedding_response_obj(dimensions=3),
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert len(exporter.requests) == 0
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.name == "embeddings text-embedding-3-small"
+        assert span.attributes.get("gen_ai.provider.name") == "openai"
+        assert span.attributes.get("gen_ai.request.model") == "text-embedding-3-small"
+        assert span.attributes.get("gen_ai.embeddings.input_count") == 1
+        assert span.attributes.get("gen_ai.usage.input_tokens") == 8
+        assert span.attributes.get("gen_ai.embeddings.dimension.count") == 3
+    finally:
+        client.shutdown()
+
+
+def test_embedding_input_texts_suppressed_by_default() -> None:
+    """input_texts is absent unless both capture flags are enabled."""
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    client = _new_span_client(exporter, span_exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client, capture_inputs=True)
+        slo = _base_embedding_slo()
+        kwargs = _make_kwargs(slo)
+        kwargs["input"] = "secret text"
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=_embedding_response_obj(),
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert "gen_ai.embeddings.input_texts" not in span.attributes
+        assert span.attributes.get("gen_ai.embeddings.input_count") == 1
+        assert span.attributes.get("gen_ai.usage.input_tokens") == 8
+    finally:
+        client.shutdown()
+
+
+def test_embedding_input_texts_captured_when_both_flags_enabled() -> None:
+    """input_texts is attached only when capture_inputs and capture_input are both true."""
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    client = _new_span_client(
+        exporter,
+        span_exporter,
+        embedding_capture=EmbeddingCaptureConfig(capture_input=True),
+    )
+    try:
+        handler = SigilLiteLLMLogger(client=client, capture_inputs=True)
+        slo = _base_embedding_slo()
+        kwargs = _make_kwargs(slo)
+        kwargs["input"] = ["first", "second"]
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=_embedding_response_obj(),
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert span.attributes.get("gen_ai.embeddings.input_texts") == ("first", "second")
+        assert span.attributes.get("gen_ai.embeddings.input_count") == 2
+    finally:
+        client.shutdown()
+
+
+def test_embedding_empty_input_sets_no_input_texts() -> None:
+    """A redacted empty-string input counts as 0 and leaves input_texts unset."""
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    client = _new_span_client(
+        exporter,
+        span_exporter,
+        embedding_capture=EmbeddingCaptureConfig(capture_input=True),
+    )
+    try:
+        handler = SigilLiteLLMLogger(client=client, capture_inputs=True)
+        slo = _base_embedding_slo()
+        kwargs = _make_kwargs(slo)
+        kwargs["input"] = ""
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=_embedding_response_obj(),
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert "gen_ai.embeddings.input_texts" not in span.attributes
+        assert span.attributes.get("gen_ai.embeddings.input_count") == 0
+    finally:
+        client.shutdown()
+
+
+def test_embedding_input_text_gated_by_handler_capture_inputs() -> None:
+    """SDK capture_input alone is not enough; handler capture_inputs must also be true."""
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    client = _new_span_client(
+        exporter,
+        span_exporter,
+        embedding_capture=EmbeddingCaptureConfig(capture_input=True),
+    )
+    try:
+        handler = SigilLiteLLMLogger(client=client, capture_inputs=False)
+        slo = _base_embedding_slo()
+        kwargs = _make_kwargs(slo)
+        kwargs["input"] = "secret text"
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=_embedding_response_obj(),
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert "gen_ai.embeddings.input_texts" not in span.attributes
+    finally:
+        client.shutdown()
+
+
+def test_aembedding_recorded() -> None:
+    """Async embedding call_type produces a span."""
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    client = _new_span_client(exporter, span_exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        slo = _base_embedding_slo(call_type="aembedding")
+        kwargs = _make_kwargs(slo)
+        kwargs["input"] = "hello"
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=_embedding_response_obj(),
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert spans[0].name == "embeddings text-embedding-3-small"
+    finally:
+        client.shutdown()
+
+
+def test_embedding_failure_sets_error_status() -> None:
+    """A failed embedding call produces an error-status span."""
+    from opentelemetry.trace import StatusCode
+
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    client = _new_span_client(exporter, span_exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        slo = _base_embedding_slo(error_str="rate limit exceeded")
+        kwargs = _make_kwargs(slo)
+        kwargs["input"] = "hello"
+        handler.log_failure_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert span.status.status_code == StatusCode.ERROR
+        assert span.attributes.get("error.type") == "provider_call_error"
+    finally:
+        client.shutdown()
+
+
+def test_embedding_input_count_string_vs_list() -> None:
+    """String counts as 1, a list of N strings as N, and a redacted empty string as 0."""
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    client = _new_span_client(exporter, span_exporter)
+    cases = [
+        ("just one", 1),
+        (["a", "b", "c"], 3),
+        ("", 0),
+    ]
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        for inputs, _ in cases:
+            slo = _base_embedding_slo()
+            kwargs = _make_kwargs(slo)
+            kwargs["input"] = inputs
+            handler.log_success_event(
+                kwargs=kwargs,
+                response_obj=_embedding_response_obj(),
+                start_time=_START,
+                end_time=_END,
+            )
+
+        client.flush()
+        spans = span_exporter.get_finished_spans()
+        for span, (_, expected) in zip(spans, cases, strict=True):
+            assert span.attributes.get("gen_ai.embeddings.input_count") == expected
+    finally:
+        client.shutdown()
+
+
+def test_embedding_dimensions_fall_back_to_response() -> None:
+    """When optional_params lacks dimensions, the response vector length is used."""
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    client = _new_span_client(exporter, span_exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        slo = _base_embedding_slo()
+        kwargs = _make_kwargs(slo)
+        kwargs["input"] = "hello"
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=_embedding_response_obj(dimensions=5),
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        span = span_exporter.get_finished_spans()[0]
+        assert span.attributes.get("gen_ai.embeddings.dimension.count") == 5
+    finally:
+        client.shutdown()
+
+
+def test_embedding_input_text_honours_litellm_redaction() -> None:
+    """With message logging off, LiteLLM clears kwargs['input'] before the callback,
+    so no real input text reaches the span even with both capture flags enabled."""
+    import litellm
+
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    client = _new_span_client(
+        exporter,
+        span_exporter,
+        embedding_capture=EmbeddingCaptureConfig(capture_input=True),
+    )
+    prev_redaction = litellm.turn_off_message_logging
+    prev_callbacks = litellm.callbacks
+    try:
+        handler = SigilLiteLLMLogger(client=client, capture_inputs=True)
+        litellm.turn_off_message_logging = True
+        litellm.callbacks = [handler]
+        litellm.embedding(
+            model="openai/text-embedding-3-small",
+            input=["secret one", "secret two"],
+            mock_response=[0.1, 0.2, 0.3],
+        )
+        client.flush()
+
+        span = span_exporter.get_finished_spans()[0]
+        texts = span.attributes.get("gen_ai.embeddings.input_texts")
+        assert texts is None or all(not text for text in texts)
+    finally:
+        litellm.turn_off_message_logging = prev_redaction
+        litellm.callbacks = prev_callbacks
+        client.shutdown()
+
+
+def test_reasoning_content_mapped_to_thinking_output() -> None:
+    """Flat reasoning_content becomes a THINKING part ordered before TEXT."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        slo = _base_slo(
+            response=_make_slo_response(
+                content="The answer is 42.",
+                reasoning_content="Let me work through this step by step.",
+            )
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        parts = gen.output[0].parts
+        assert [p.kind for p in parts] == [PartKind.THINKING, PartKind.TEXT]
+        assert parts[0].thinking == "Let me work through this step by step."
+        assert parts[1].text == "The answer is 42."
+    finally:
+        client.shutdown()
+
+
+def test_thinking_blocks_including_redacted() -> None:
+    """thinking_blocks produce a THINKING part per block, reading thinking/data."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        slo = _base_slo(
+            response=_make_slo_response(
+                content="Done.",
+                thinking_blocks=[
+                    {"type": "thinking", "thinking": "First I consider X.", "signature": "sig"},
+                    {"type": "redacted_thinking", "data": "encrypted-blob"},
+                ],
+            )
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        parts = gen.output[0].parts
+        assert [p.kind for p in parts] == [PartKind.THINKING, PartKind.THINKING, PartKind.TEXT]
+        assert parts[0].thinking == "First I consider X."
+        assert parts[1].thinking == "encrypted-blob"
+        assert parts[2].text == "Done."
+    finally:
+        client.shutdown()
+
+
+def test_thinking_blocks_preferred_over_reasoning_content() -> None:
+    """When both are present, thinking_blocks win and reasoning_content is not duplicated."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        slo = _base_slo(
+            response=_make_slo_response(
+                content="Result.",
+                reasoning_content="Block one. Block two.",
+                thinking_blocks=[
+                    {"type": "thinking", "thinking": "Block one."},
+                    {"type": "thinking", "thinking": "Block two."},
+                ],
+            )
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        thinking_parts = [p for p in gen.output[0].parts if p.kind == PartKind.THINKING]
+        assert [p.thinking for p in thinking_parts] == ["Block one.", "Block two."]
+    finally:
+        client.shutdown()
+
+
+def test_thinking_dropped_when_outputs_disabled() -> None:
+    """capture_outputs=False omits THINKING parts."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client, capture_outputs=False)
+        slo = _base_slo(
+            response=_make_slo_response(
+                content="Hi",
+                reasoning_content="Secret reasoning.",
+            )
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert len(gen.output) == 0
+    finally:
+        client.shutdown()
+
+
+def test_input_assistant_reasoning_mapped_to_thinking() -> None:
+    """Input assistant message reasoning_content becomes a THINKING part before TEXT."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client)
+        slo = _base_slo(
+            messages=[
+                {"role": "user", "content": "Hello"},
+                {
+                    "role": "assistant",
+                    "content": "Sure.",
+                    "reasoning_content": "They greeted me.",
+                },
+            ]
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assistant_msg = gen.input[1]
+        assert assistant_msg.role == MessageRole.ASSISTANT
+        assert [p.kind for p in assistant_msg.parts] == [PartKind.THINKING, PartKind.TEXT]
+        assert assistant_msg.parts[0].thinking == "They greeted me."
+        assert assistant_msg.parts[1].text == "Sure."
+    finally:
+        client.shutdown()
+
+
+def test_input_assistant_thinking_dropped_when_inputs_disabled() -> None:
+    """capture_inputs=False omits THINKING parts from input assistant messages."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = SigilLiteLLMLogger(client=client, capture_inputs=False)
+        slo = _base_slo(
+            messages=[
+                {"role": "user", "content": "Hello"},
+                {
+                    "role": "assistant",
+                    "content": "Sure.",
+                    "reasoning_content": "Secret reasoning.",
+                },
+            ]
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert len(gen.input) == 0
     finally:
         client.shutdown()

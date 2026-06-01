@@ -25,9 +25,26 @@ public final class GrpcGenerationExporter implements GenerationExporter {
         if (insecure || parsed.insecure) {
             builder = builder.usePlaintext();
         }
+        // gRPC reserves the user-agent metadata key, so the User-Agent travels
+        // via the channel user-agent rather than per-call metadata. grpc-java
+        // appends its own token after this value.
+        Map<String, String> remaining = new LinkedHashMap<>();
+        String userAgent = SdkVersion.userAgent();
+        if (headers != null) {
+            for (Map.Entry<String, String> entry : headers.entrySet()) {
+                if (entry.getKey().equalsIgnoreCase("User-Agent")) {
+                    if (entry.getValue() != null && !entry.getValue().isBlank()) {
+                        userAgent = entry.getValue();
+                    }
+                    continue;
+                }
+                remaining.put(entry.getKey(), entry.getValue());
+            }
+        }
+        builder = builder.userAgent(userAgent);
         this.channel = builder.build();
         this.stub = GenerationIngestServiceGrpc
-                .newBlockingStub(io.grpc.ClientInterceptors.intercept(channel, new HeadersInterceptor(headers)));
+                .newBlockingStub(io.grpc.ClientInterceptors.intercept(channel, new HeadersInterceptor(remaining)));
     }
 
     @Override

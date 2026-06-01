@@ -9,6 +9,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -16,12 +17,32 @@ import java.util.Map;
 /** HTTP exporter for generation ingest parity endpoint. */
 public final class HttpGenerationExporter implements GenerationExporter {
     private final URI endpoint;
+    private final String userAgent;
     private final Map<String, String> headers;
     private final HttpClient client;
 
     public HttpGenerationExporter(String endpoint, Map<String, String> headers) {
         this.endpoint = URI.create(normalizeEndpoint(endpoint));
-        this.headers = headers;
+        // Resolve the User-Agent like the gRPC exporter: a non-blank caller
+        // override wins, otherwise the SDK default (HttpClient would otherwise
+        // send "Java-http-client/<ver>"). Any User-Agent entry is stripped so a
+        // blank value can't override the resolved one, and header() can't append
+        // a duplicate.
+        String resolvedUserAgent = SdkVersion.userAgent();
+        Map<String, String> remaining = new LinkedHashMap<>();
+        if (headers != null) {
+            for (Map.Entry<String, String> entry : headers.entrySet()) {
+                if (entry.getKey().equalsIgnoreCase("User-Agent")) {
+                    if (entry.getValue() != null && !entry.getValue().isBlank()) {
+                        resolvedUserAgent = entry.getValue();
+                    }
+                    continue;
+                }
+                remaining.put(entry.getKey(), entry.getValue());
+            }
+        }
+        this.userAgent = resolvedUserAgent;
+        this.headers = remaining;
         this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     }
 
@@ -36,6 +57,7 @@ public final class HttpGenerationExporter implements GenerationExporter {
                 .timeout(Duration.ofSeconds(10))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body));
+        requestBuilder.header("User-Agent", userAgent);
         for (Map.Entry<String, String> entry : headers.entrySet()) {
             requestBuilder.header(entry.getKey(), entry.getValue());
         }

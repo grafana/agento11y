@@ -229,6 +229,61 @@ client = Client(
 )
 ```
 
+## Hooks and Guards
+
+Use hooks when you want Sigil guard rules to run before an LLM call. The SDK evaluates the hook on your request path; guard rules configured in Grafana Cloud decide whether to allow, deny, or transform the input.
+
+Hooks are disabled by default. Enable them on the client and call `evaluate_hook(...)` before the provider request:
+
+```python
+from sigil_sdk import (
+    Client,
+    ClientConfig,
+    HookContext,
+    HookEvaluateRequest,
+    HookInput,
+    HookModel,
+    HookPhase,
+    HooksConfig,
+    Message,
+    MessageRole,
+    hook_denied_from_response,
+    text_part,
+)
+
+client = Client(ClientConfig(hooks=HooksConfig(enabled=True)))
+
+messages = [
+    Message(role=MessageRole.USER, parts=[text_part("Summarize this customer note...")]),
+]
+response = client.evaluate_hook(
+    HookEvaluateRequest(
+        phase=HookPhase.PREFLIGHT.value,
+        context=HookContext(
+            agent_name="support-agent",
+            agent_version="1.0.0",
+            model=HookModel(provider="openai", name="gpt-5"),
+        ),
+        input=HookInput(
+            messages=messages,
+            system_prompt="You are a helpful support agent.",
+            conversation_preview="Summarize this customer note...",
+        ),
+    )
+)
+
+denied = hook_denied_from_response(response)
+if denied is not None:
+    raise denied
+
+if response.transformed_input is not None:
+    messages = response.transformed_input.messages or messages
+```
+
+`HooksConfig` defaults to `phases=["preflight"]`, `timeout_seconds=15.0`, and `fail_open=True`. With fail-open enabled, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `fail_open=False` for strict paths that should fail closed.
+
+If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `start_generation(...)`. For a runnable example, see `../examples/getting-started/python-hooks/`.
+
 Configure OTEL exporters (traces/metrics) in your application OTEL SDK setup. You can optionally pass `tracer` and `meter` via `ClientConfig`.
 
 Quick OTEL setup pattern before creating the Sigil client:

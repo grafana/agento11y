@@ -32,6 +32,7 @@
           }
         ],
         "metadata": {
+          "sigil.conversation.title": "list go files",
           "sigil.sdk.content_capture_mode": "full",
           "sigil.sdk.name": "sdk-go",
           "sigil.user.id": "test-user"

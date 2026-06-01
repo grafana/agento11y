@@ -25,7 +25,11 @@ import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import sigil.v1.GenerationIngest;
 import sigil.v1.GenerationIngestServiceGrpc;
 
@@ -83,8 +87,70 @@ class SigilClientTransportTest {
 
         assertThat(path.get()).isEqualTo("/api/v1/generations:export");
         assertThat(headers.get().get("x-scope-orgid")).isEqualTo("tenant-a");
+        assertThat(headers.get().get("user-agent")).isEqualTo(SdkVersion.userAgent());
         assertThat(request.getGenerationsCount()).isEqualTo(1);
         assertThat(request.getGenerations(0)).isEqualTo(ProtoMapper.toProtoGeneration(lastGeneration.get()));
+    }
+
+    static Stream<Arguments> httpUserAgentCases() {
+        String defaultUserAgent = SdkVersion.userAgent();
+        String override = "sigil-plugin-langchain4j/1.2.3 " + defaultUserAgent;
+        // A non-blank caller User-Agent wins; a blank or whitespace-only one must
+        // not blank out the default. A null header value exercises the no-header
+        // path.
+        return Stream.of(
+                Arguments.of("no header", null, defaultUserAgent),
+                Arguments.of("non-blank override", override, override),
+                Arguments.of("empty falls back to default", "", defaultUserAgent),
+                Arguments.of("whitespace falls back to default", "   ", defaultUserAgent));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("httpUserAgentCases")
+    void httpExportResolvesUserAgent(String name, String headerValue, String wantUserAgent) throws Exception {
+        AtomicReference<Map<String, String>> headers = new AtomicReference<>();
+
+        com.sun.net.httpserver.HttpServer server =
+                com.sun.net.httpserver.HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/v1/generations:export", exchange -> {
+            Map<String, String> requestHeaders = new LinkedHashMap<>();
+            exchange.getRequestHeaders().forEach((k, v) -> requestHeaders.put(k.toLowerCase(), String.join(",", v)));
+            headers.set(requestHeaders);
+            exchange.getRequestBody().readAllBytes();
+
+            byte[] response = "{\"results\":[{\"generation_id\":\"gen-fixture-1\",\"accepted\":true}]}".getBytes();
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(202, response.length);
+            try (OutputStream outputStream = exchange.getResponseBody()) {
+                outputStream.write(response);
+            }
+        });
+        server.start();
+
+        GenerationExportConfig exportConfig = new GenerationExportConfig()
+                .setProtocol(GenerationExportProtocol.HTTP)
+                .setEndpoint("http://127.0.0.1:" + server.getAddress().getPort() + "/api/v1/generations:export")
+                .setBatchSize(1)
+                .setFlushInterval(Duration.ofMinutes(10))
+                .setMaxRetries(0);
+        if (headerValue != null) {
+            exportConfig.setHeaders(Map.of("User-Agent", headerValue));
+        }
+
+        SigilClientConfig config = new SigilClientConfig()
+                .setTracer(GlobalOpenTelemetry.getTracer("test"))
+                .setGenerationExport(exportConfig);
+
+        try (SigilClient client = new SigilClient(config)) {
+            GenerationRecorder recorder = client.startGeneration(TestFixtures.startFixture());
+            recorder.setResult(TestFixtures.resultFixture());
+            recorder.end();
+            client.shutdown();
+        } finally {
+            server.stop(0);
+        }
+
+        assertThat(headers.get().get("user-agent")).isEqualTo(wantUserAgent);
     }
 
     @Test
@@ -164,6 +230,8 @@ class SigilClientTransportTest {
         assertThat(requests.get(0).getGenerations(0).getOutput(0).getParts(1).hasToolCall()).isTrue();
         assertThat(requests.get(0).getGenerations(0).getOutput(1).getParts(0).hasToolResult()).isTrue();
         assertThat(metadata.get().get("authorization")).isEqualTo("Bearer override-token");
+        // grpc-java appends its own token after ours.
+        assertThat(metadata.get().get("user-agent")).startsWith(SdkVersion.userAgent());
     }
 
     @Test

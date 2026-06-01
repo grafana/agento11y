@@ -14,6 +14,7 @@ import type {
   ToolDefinition,
 } from '../types.js';
 import { canonicalEffectiveVersion } from '../utils.js';
+import { userAgent } from '../version.js';
 
 type ExportGenerationsMethod = (
   request: unknown,
@@ -49,6 +50,7 @@ export class GRPCGenerationExporter implements GenerationExporter {
   private readonly endpoint: string;
   private readonly headers: Record<string, string>;
   private readonly insecure: boolean;
+  private readonly userAgent: string;
 
   private initPromise: Promise<void> | undefined;
   private client: GRPCServiceClient | undefined;
@@ -57,7 +59,12 @@ export class GRPCGenerationExporter implements GenerationExporter {
     const parsed = parseGRPCEndpoint(endpoint);
     this.endpoint = parsed.host;
     this.insecure = insecure || parsed.insecure;
-    this.headers = headers ? { ...headers } : {};
+    // gRPC reserves the user-agent metadata key, so the User-Agent must travel
+    // via the channel option rather than per-call metadata. grpc-js appends its
+    // own token after this value.
+    const split = splitUserAgent(headers);
+    this.userAgent = split.userAgent;
+    this.headers = split.rest;
   }
 
   async exportGenerations(request: ExportGenerationsRequest): Promise<ExportGenerationsResponse> {
@@ -119,8 +126,31 @@ export class GRPCGenerationExporter implements GenerationExporter {
     }
 
     const credentials = this.insecure ? grpc.credentials.createInsecure() : grpc.credentials.createSsl();
-    this.client = new clientCtor(this.endpoint, credentials) as GRPCServiceClient;
+    this.client = new clientCtor(this.endpoint, credentials, {
+      'grpc.primary_user_agent': this.userAgent,
+    }) as GRPCServiceClient;
   }
+}
+
+// splitUserAgent returns the User-Agent to set as the gRPC channel option and
+// the remaining headers with any user-agent entry removed. When the caller did
+// not supply one, the SDK default (userAgent) is used.
+function splitUserAgent(headers?: Record<string, string>): {
+  userAgent: string;
+  rest: Record<string, string>;
+} {
+  const rest: Record<string, string> = {};
+  let resolved = userAgent();
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    if (key.toLowerCase() === 'user-agent') {
+      if (value.trim().length > 0) {
+        resolved = value;
+      }
+      continue;
+    }
+    rest[key] = value;
+  }
+  return { userAgent: resolved, rest };
 }
 
 function parseGRPCEndpoint(endpoint: string): { host: string; insecure: boolean } {

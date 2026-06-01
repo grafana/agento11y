@@ -19,6 +19,8 @@ import (
 const (
 	agentName       = "claude-code"
 	maxToolInputLen = 4096
+	// maxTitleLen caps the conversation title derived from the first user prompt.
+	maxTitleLen = 100
 )
 
 // Options controls how transcript lines are mapped to generations.
@@ -185,7 +187,36 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 		}
 	}
 
+	title := conversationTitle(st, opts.SessionID, r)
+	for i := range gens {
+		gens[i].ConversationTitle = title
+	}
+
 	return gens
+}
+
+// conversationTitle returns a truncated version of the session title derived
+// from the first user prompt. Falls back to the session ID when no title is
+// available (e.g. transcript with no user lines processed yet).
+func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) string {
+	if st == nil || st.Title == "" {
+		return sessionID
+	}
+	t := strings.TrimSpace(st.Title)
+	if r != nil {
+		t = r.RedactLightweight(t)
+	}
+	if t == "" {
+		return sessionID
+	}
+	if len(t) > maxTitleLen {
+		t = t[:maxTitleLen]
+		// Truncate to valid UTF-8 boundary
+		for !utf8.ValidString(t) {
+			t = t[:len(t)-1]
+		}
+	}
+	return t
 }
 
 // synthesiseSubagentGens creates a generation for each Agent tool result in

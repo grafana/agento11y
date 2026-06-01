@@ -78,7 +78,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			useClosedServer: true,
 			toolName:        "bash",
 			wantAction:      sigil.HookActionDeny,
-			wantReasonSub:   "sigil guard evaluation failed",
+			wantReasonSub:   "could not evaluate",
 		},
 		{
 			name:          "missing credentials fail open",

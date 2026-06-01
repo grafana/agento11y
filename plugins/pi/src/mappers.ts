@@ -118,9 +118,63 @@ export interface ToolTiming {
   isError: boolean;
 }
 
+/**
+ * Cap for the conversation title. Counts code points, not UTF-16 units, so a
+ * trailing surrogate pair (emoji) is never split.
+ */
+export const MAX_TITLE_LEN = 100;
+
+function clipTitle(value: string): string {
+  const trimmed = value.trim();
+  const codepoints = Array.from(trimmed);
+  return codepoints.length > MAX_TITLE_LEN
+    ? codepoints.slice(0, MAX_TITLE_LEN).join("")
+    : trimmed;
+}
+
+/** Inputs for {@link resolveConversationTitle}. */
+export interface ResolveConversationTitleOptions {
+  /** User-defined session name from pi's `SessionManager.getSessionName()`. */
+  sessionName?: string;
+  /** First user prompt text seen in the session (first prompt wins). */
+  firstUserText?: string;
+  /** Session id, used as the last-resort fallback. */
+  conversationId?: string;
+  contentCapture: ContentCaptureMode;
+}
+
+/**
+ * Resolve the conversation title shown in Sigil.
+ *
+ * Pi exposes a real, user-defined session name via `getSessionName()`; prefer
+ * it whenever set. Otherwise derive a title from the first user prompt, the
+ * same approach the Claude Code and Cursor plugins take since neither host
+ * exposes a name. The derived title is suppressed in `metadata_only` because
+ * the prompt body is dropped from the export in that mode; a user-set session
+ * name is metadata rather than content, so it survives. Falls back to the
+ * session id when nothing else is available.
+ *
+ * The returned title is not redacted here: the SDK's generation sanitizer
+ * runs `redactLightweight` over `conversationTitle` on export.
+ */
+export function resolveConversationTitle(
+  opts: ResolveConversationTitleOptions,
+): string | undefined {
+  const name = opts.sessionName?.trim();
+  if (name) return clipTitle(name);
+
+  if (opts.contentCapture !== "metadata_only") {
+    const derived = opts.firstUserText?.trim();
+    if (derived) return clipTitle(derived);
+  }
+
+  return opts.conversationId;
+}
+
 /** Optional context for building a GenerationStart seed. */
 export interface MapGenerationStartOptions {
   conversationId?: string;
+  conversationTitle?: string;
   agentName: string;
   agentVersion?: string;
   startedAt: number;
@@ -148,6 +202,7 @@ export function mapGenerationStart(
 ): GenerationStart {
   const {
     conversationId,
+    conversationTitle,
     agentName,
     agentVersion,
     startedAt,
@@ -162,6 +217,7 @@ export function mapGenerationStart(
   // `{...clientTags, ...seedTags}`), matching claude-code/cursor.
   const start: GenerationStart = {
     conversationId,
+    ...(conversationTitle ? { conversationTitle } : {}),
     agentName,
     agentVersion,
     effectiveVersion: agentVersion,
@@ -272,22 +328,26 @@ export function mapUserMessage(
 ): Message | null {
   if (contentCapture === "metadata_only") return null;
 
-  let text: string;
-  if (typeof msg.content === "string") {
-    text = msg.content;
-  } else {
-    text = msg.content
-      .filter((c): c is PiTextContent => c.type === "text")
-      .map((c) => c.text)
-      .join("\n");
-  }
-
+  const text = userMessageText(msg);
   if (text.trim().length === 0) return null;
 
   return {
     role: "user",
     parts: [{ type: "text", text }],
   };
+}
+
+/**
+ * Flatten a pi user message to plain text. String content passes through;
+ * a content array keeps text parts (joined with a newline) and drops images,
+ * which Sigil's `MessagePart` union cannot represent.
+ */
+export function userMessageText(msg: PiUserMessage): string {
+  if (typeof msg.content === "string") return msg.content;
+  return msg.content
+    .filter((c): c is PiTextContent => c.type === "text")
+    .map((c) => c.text)
+    .join("\n");
 }
 
 /**

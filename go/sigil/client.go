@@ -22,6 +22,20 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// Version is the released version of the Sigil Go SDK. It is stamped into the
+// default generation-export User-Agent (see UserAgent). Released via the
+// go/vX.Y.Z git tag; bump this on release.
+const Version = "0.8.0"
+
+// UserAgent returns the SDK's default generation-export User-Agent product
+// token, "sigil-sdk-go/<Version>". Coding-agent plugins prepend their own token
+// (most-specific first), e.g.
+//
+//	"sigil-plugin-claude-code/" + pluginVersion + " " + sigil.UserAgent()
+func UserAgent() string {
+	return sdkUserAgentProduct + "/" + Version
+}
+
 // Config controls Sigil client behavior.
 type Config struct {
 	GenerationExport GenerationExportConfig
@@ -159,9 +173,10 @@ const (
 	defaultGRPCMaxReceiveMessageBytes = 16 << 20
 	defaultGenerationPayloadMaxBytes  = 16 << 20
 
-	sdkMetadataKeyName = "sigil.sdk.name"
-	metadataUserIDKey  = "sigil.user.id"
-	sdkName            = "sdk-go"
+	sdkMetadataKeyName  = "sigil.sdk.name"
+	metadataUserIDKey   = "sigil.user.id"
+	sdkName             = "sdk-go"
+	sdkUserAgentProduct = "sigil-sdk-go"
 
 	spanAttrGenerationID           = "sigil.generation.id"
 	spanAttrConversationID         = "gen_ai.conversation.id"

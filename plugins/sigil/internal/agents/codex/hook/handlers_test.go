@@ -773,14 +773,14 @@ func TestPreToolUseGuard(t *testing.T) {
 			env:                map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
 			serverResponds:     `{"action":"deny","reason":"blocked tool"}`,
 			expectServerCall:   true,
-			wantStdoutContains: []string{`"permissionDecision":"deny"`, "blocked tool"},
+			wantStdoutContains: []string{`"permissionDecision":"deny"`, "blocked tool", "A Grafana AI Observability policy"},
 		},
 		{
 			name:               "enabled_deny_empty_reason_fallback",
 			env:                map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
 			serverResponds:     `{"action":"deny"}`,
 			expectServerCall:   true,
-			wantStdoutContains: []string{`"permissionDecision":"deny"`, "tool call denied by Sigil guard"},
+			wantStdoutContains: []string{`"permissionDecision":"deny"`, "A Grafana AI Observability policy blocked"},
 		},
 		{
 			name:              "enabled_fail_open_on_transport_error",
@@ -795,7 +795,7 @@ func TestPreToolUseGuard(t *testing.T) {
 				"SIGIL_GUARDS_FAIL_OPEN": "false",
 			},
 			useClosedEndpoint:  true,
-			wantStdoutContains: []string{`"permissionDecision":"deny"`, "sigil guard evaluation failed"},
+			wantStdoutContains: []string{`"permissionDecision":"deny"`, "could not evaluate"},
 		},
 		{
 			name:            "enabled_fail_open_missing_credentials",
