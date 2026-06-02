@@ -7,7 +7,7 @@ license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
   "sigil-sdk>=0.8.0",
-  "google-adk>=1.0.0",
+  "google-adk>=1.31.0",
 ]
 
 [project.optional-dependencies]

@@ -7,6 +7,7 @@ from datetime import timedelta
 from uuid import UUID, uuid4
 
 from google.adk.plugins import BasePlugin
+from google.genai import types as genai_types
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -492,6 +493,163 @@ def test_sigil_sdk_google_adk_plugin_helpers_attach_plugin_list() -> None:
         generation = exporter.requests[0].generations[0]
         assert generation.conversation_id == "adk-plugin-session-42"
         assert generation.tags["sigil.framework.name"] == "google-adk"
+    finally:
+        client.shutdown()
+
+
+def test_sigil_sdk_google_adk_plugin_maps_current_request_config_tools_and_usage() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    class _Session:
+        id = "adk-current-session-42"
+        state: dict[str, str] = {}
+
+    class _InvocationContext:
+        invocation_id = "adk-current-invocation-42"
+        session = _Session()
+        agent_name = "adk-current-agent"
+
+    class _CallbackContext:
+        invocation_context = _InvocationContext()
+
+    class _LlmRequest:
+        model = "gemini-2.5-pro"
+        contents = [
+            genai_types.Content(role="user", parts=[genai_types.Part(text="weather in Paris?")]),
+            genai_types.Content(
+                role="model",
+                parts=[
+                    genai_types.Part(
+                        function_call=genai_types.FunctionCall(
+                            id="call-weather-0",
+                            name="get_weather",
+                            args={"city": "Paris"},
+                        )
+                    )
+                ],
+            ),
+            genai_types.Content(
+                role="user",
+                parts=[
+                    genai_types.Part(
+                        function_response=genai_types.FunctionResponse(
+                            id="call-weather-0",
+                            name="get_weather",
+                            response={"forecast": "sunny"},
+                        )
+                    )
+                ],
+            ),
+        ]
+        config = genai_types.GenerateContentConfig(
+            system_instruction=genai_types.Content(role="system", parts=[genai_types.Part(text="Be concise.")]),
+            temperature=0.2,
+            max_output_tokens=256,
+            top_p=0.95,
+            tool_config=genai_types.ToolConfig(
+                function_calling_config=genai_types.FunctionCallingConfig(
+                    mode=genai_types.FunctionCallingConfigMode.ANY,
+                    allowed_function_names=["get_weather"],
+                )
+            ),
+            thinking_config=genai_types.ThinkingConfig(include_thoughts=True, thinking_budget=1536),
+            tools=[
+                genai_types.Tool(
+                    function_declarations=[
+                        genai_types.FunctionDeclaration(
+                            name="get_weather",
+                            description="Gets the weather for a city.",
+                            parameters_json_schema={
+                                "type": "object",
+                                "properties": {"city": {"type": "string"}},
+                                "required": ["city"],
+                            },
+                        )
+                    ]
+                )
+            ],
+        )
+        tools_dict = {}
+
+    class _LlmResponse:
+        content = genai_types.Content(
+            role="model",
+            parts=[
+                genai_types.Part(
+                    function_call=genai_types.FunctionCall(
+                        id="call-weather-1",
+                        name="get_weather",
+                        args={"city": "Paris"},
+                    )
+                )
+            ],
+        )
+        model_version = "gemini-2.5-pro-001"
+        usage_metadata = genai_types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=10,
+            candidates_token_count=5,
+            cached_content_token_count=3,
+            thoughts_token_count=2,
+            tool_use_prompt_token_count=4,
+            total_token_count=21,
+        )
+        finish_reason = "STOP"
+
+    try:
+        plugin = create_sigil_google_adk_plugin(client=client)
+
+        async def _run() -> None:
+            invocation_context = _InvocationContext()
+            callback_context = _CallbackContext()
+            await plugin.before_run_callback(invocation_context=invocation_context)
+            await plugin.before_agent_callback(agent=object(), callback_context=callback_context)
+            await plugin.before_model_callback(callback_context=callback_context, llm_request=_LlmRequest())
+            await plugin.after_model_callback(callback_context=callback_context, llm_response=_LlmResponse())
+            await plugin.after_agent_callback(agent=object(), callback_context=callback_context)
+            await plugin.after_run_callback(invocation_context=invocation_context)
+
+        asyncio.run(_run())
+        client.flush()
+
+        generation = exporter.requests[0].generations[0]
+        assert generation.system_prompt == "Be concise."
+        assert generation.max_tokens == 256
+        assert generation.temperature == 0.2
+        assert generation.top_p == 0.95
+        assert generation.tool_choice == "get_weather"
+        assert generation.thinking_enabled is True
+        assert generation.metadata["sigil.gen_ai.request.thinking.budget_tokens"] == 1536
+        assert len(generation.tools) == 1
+        assert generation.tools[0].name == "get_weather"
+        assert generation.tools[0].description == "Gets the weather for a city."
+        assert b'"city"' in generation.tools[0].input_schema_json
+
+        assert generation.input[1].role.value == "assistant"
+        history_tool_call = generation.input[1].parts[0].tool_call
+        assert history_tool_call is not None
+        assert history_tool_call.id == "call-weather-0"
+        assert history_tool_call.name == "get_weather"
+
+        assert generation.input[2].role.value == "tool"
+        history_tool_result = generation.input[2].parts[0].tool_result
+        assert history_tool_result is not None
+        assert history_tool_result.tool_call_id == "call-weather-0"
+        assert history_tool_result.name == "get_weather"
+        assert b'"forecast"' in history_tool_result.content_json
+
+        assert generation.output[0].role.value == "assistant"
+        tool_call = generation.output[0].parts[0].tool_call
+        assert tool_call is not None
+        assert tool_call.id == "call-weather-1"
+        assert tool_call.name == "get_weather"
+        assert b'"Paris"' in tool_call.input_json
+
+        assert generation.usage.input_tokens == 14
+        assert generation.usage.output_tokens == 7
+        assert generation.usage.cache_read_input_tokens == 3
+        assert generation.usage.reasoning_tokens == 2
+        assert generation.usage.total_tokens == 21
     finally:
         client.shutdown()
 

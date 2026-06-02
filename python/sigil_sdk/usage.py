@@ -71,14 +71,16 @@ def from_gemini(raw: Any) -> TokenUsage:
     if raw is None:
         return TokenUsage()
 
-    input_tokens = _as_int(_read(raw, "prompt_token_count"))
-    output_tokens = _as_int(_read(raw, "candidates_token_count"))
+    prompt_tokens = _as_int(_read(raw, "prompt_token_count"))
+    candidate_tokens = _as_int(_read(raw, "candidates_token_count"))
     total_tokens = _as_int(_read(raw, "total_token_count"))
     tool_use_prompt_tokens = _as_int(_read(raw, "tool_use_prompt_token_count"))
     reasoning_tokens = _as_int(_read(raw, "thoughts_token_count"))
+    input_tokens = prompt_tokens + tool_use_prompt_tokens
+    output_tokens = candidate_tokens + reasoning_tokens
 
     if total_tokens == 0:
-        total_tokens = input_tokens + output_tokens + tool_use_prompt_tokens + reasoning_tokens
+        total_tokens = input_tokens + output_tokens
 
     cache_write_raw = _read(raw, "cache_write_input_token_count")
     cache_write = (

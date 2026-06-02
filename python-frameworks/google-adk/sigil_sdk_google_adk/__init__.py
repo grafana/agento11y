@@ -7,7 +7,7 @@ import json
 from typing import Any
 from uuid import UUID, uuid4
 
-from sigil_sdk import Client
+from sigil_sdk import Client, ToolDefinition
 
 from .handler import SigilAsyncGoogleAdkHandler, SigilGoogleAdkHandler
 
@@ -28,6 +28,14 @@ except Exception:  # pragma: no cover - lightweight fallback for local unit test
 
         async def after_run_callback(self, *, invocation_context: Any) -> None:
             del invocation_context
+            return None
+
+        async def before_agent_callback(self, *, agent: Any, callback_context: Any) -> Any:
+            del agent, callback_context
+            return None
+
+        async def after_agent_callback(self, *, agent: Any, callback_context: Any) -> Any:
+            del agent, callback_context
             return None
 
         async def before_model_callback(self, *, callback_context: Any, llm_request: Any) -> Any:
@@ -96,13 +104,8 @@ class SigilGoogleAdkCallbacks:
         run_id = uuid4()
         self._llm_run_stacks.setdefault(invocation_key, []).append(run_id)
 
-        model_name = _first_non_empty(
-            _as_string(_read(llm_request, "model")),
-            _as_string(_read(_read(llm_request, "config"), "model")),
-        )
-        invocation_params: dict[str, Any] = {}
-        if model_name != "":
-            invocation_params["model"] = model_name
+        invocation_params = _adk_invocation_params(llm_request)
+        model_name = _as_string(invocation_params.get("model"))
 
         messages = _adk_messages(_read(llm_request, "contents"))
         await _invoke_handler(
@@ -289,7 +292,7 @@ class SigilGoogleAdkPlugin(BasePlugin):
         await _invoke_handler(self._sigil_handler, "on_chain_end", {"status": "completed"}, run_id=run_id)
         return None
 
-    async def before_agent_callback(self, *, callback_context: Any) -> None:
+    async def before_agent_callback(self, *, callback_context: Any, agent: Any | None = None) -> None:
         invocation_context = _adk_invocation_context(callback_context)
         invocation_key = _invocation_key(invocation_context)
         run_id = uuid4()
@@ -297,7 +300,7 @@ class SigilGoogleAdkPlugin(BasePlugin):
         parent_run_id = stack[-1] if stack else self._run_ids.get(invocation_key)
         stack.append(run_id)
 
-        run_name = _agent_name(callback_context)
+        run_name = _agent_name(callback_context, agent)
         await _invoke_handler(
             self._sigil_handler,
             "on_chain_start",
@@ -311,7 +314,8 @@ class SigilGoogleAdkPlugin(BasePlugin):
         )
         return None
 
-    async def after_agent_callback(self, *, callback_context: Any) -> None:
+    async def after_agent_callback(self, *, callback_context: Any, agent: Any | None = None) -> None:
+        del agent
         invocation_key = _invocation_key(_adk_invocation_context(callback_context))
         stack = self._agent_run_stacks.get(invocation_key, [])
         run_id = stack.pop() if stack else None
@@ -527,18 +531,189 @@ def _serialized_llm_payload(callback_context: Any, model_name: str) -> dict[str,
     return serialized
 
 
+def _adk_invocation_params(llm_request: Any) -> dict[str, Any]:
+    config = _read(llm_request, "config")
+    invocation_params: dict[str, Any] = {}
+
+    model_name = _first_non_empty(
+        _as_string(_read(llm_request, "model")),
+        _as_string(_read(config, "model")),
+    )
+    if model_name != "":
+        invocation_params["model"] = model_name
+
+    system_prompt = _adk_content_text(_read(config, "system_instruction"))
+    if system_prompt != "":
+        invocation_params["system_prompt"] = system_prompt
+
+    tools = _adk_tool_definitions(_read(config, "tools"), _read(llm_request, "tools_dict"))
+    if tools:
+        invocation_params["tools"] = tools
+
+    max_tokens = _read(config, "max_output_tokens")
+    if max_tokens is not None:
+        invocation_params["max_tokens"] = max_tokens
+
+    temperature = _read(config, "temperature")
+    if temperature is not None:
+        invocation_params["temperature"] = temperature
+
+    top_p = _read(config, "top_p")
+    if top_p is not None:
+        invocation_params["top_p"] = top_p
+
+    tool_choice = _adk_tool_choice(_read(config, "tool_config"))
+    if tool_choice != "":
+        invocation_params["tool_choice"] = tool_choice
+
+    thinking_config = _read(config, "thinking_config")
+    thinking_enabled = _bool_or_none(
+        _first_non_none(
+            _read(thinking_config, "include_thoughts"),
+            _read(thinking_config, "includeThoughts"),
+        )
+    )
+    if thinking_enabled is not None:
+        invocation_params["thinking_enabled"] = thinking_enabled
+
+    thinking_budget = _int_or_none(
+        _first_non_none(
+            _read(thinking_config, "thinking_budget"),
+            _read(thinking_config, "thinkingBudget"),
+        )
+    )
+    if thinking_budget is not None:
+        invocation_params["thinking_budget"] = thinking_budget
+
+    thinking_level = _adk_thinking_level(
+        _first_non_none(
+            _read(thinking_config, "thinking_level"),
+            _read(thinking_config, "thinkingLevel"),
+        )
+    )
+    if thinking_level != "":
+        invocation_params["thinking_level"] = thinking_level
+
+    return invocation_params
+
+
+def _adk_tool_definitions(config_tools: Any, tools_dict: Any) -> list[ToolDefinition]:
+    definitions: list[ToolDefinition] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(definition: ToolDefinition) -> None:
+        key = (definition.type, definition.name)
+        if definition.name == "" or key in seen:
+            return
+        seen.add(key)
+        definitions.append(definition)
+
+    for tool in _as_sequence(config_tools):
+        for declaration in _as_sequence(_read(tool, "function_declarations")):
+            name = _as_string(_read(declaration, "name"))
+            if name == "":
+                continue
+            schema = _first_non_none(
+                _read(declaration, "parameters_json_schema"),
+                _read(declaration, "parameters"),
+            )
+            add(
+                ToolDefinition(
+                    name=name,
+                    description=_as_string(_read(declaration, "description")),
+                    type="function",
+                    input_schema_json=_json_bytes(schema),
+                )
+            )
+
+        for builtin_name in (
+            "google_search",
+            "google_search_retrieval",
+            "code_execution",
+            "url_context",
+            "retrieval",
+            "enterprise_web_search",
+            "google_maps",
+            "computer_use",
+            "file_search",
+        ):
+            if _read(tool, builtin_name) is not None:
+                add(ToolDefinition(name=builtin_name, type=builtin_name))
+
+    if isinstance(tools_dict, dict):
+        for key, tool in tools_dict.items():
+            name = _first_non_empty(_as_string(_read(tool, "name")), _as_string(key))
+            if name == "":
+                continue
+            add(
+                ToolDefinition(
+                    name=name,
+                    description=_as_string(_read(tool, "description")),
+                    type="function",
+                )
+            )
+
+    return definitions
+
+
+def _adk_tool_choice(tool_config: Any) -> str:
+    function_calling_config = _read(tool_config, "function_calling_config")
+    mode = _as_string(_jsonable(_read(function_calling_config, "mode"))).lower()
+    allowed_names = _as_sequence(_read(function_calling_config, "allowed_function_names"))
+    if len(allowed_names) == 1:
+        return _as_string(allowed_names[0])
+    return mode
+
+
+def _adk_thinking_level(value: Any) -> str:
+    normalized = _as_string(_jsonable(value)).lower()
+    if normalized in {"", "thinking_level_unspecified"}:
+        return ""
+    if normalized in {"thinking_level_low", "low"}:
+        return "low"
+    if normalized in {"thinking_level_medium", "medium"}:
+        return "medium"
+    if normalized in {"thinking_level_high", "high"}:
+        return "high"
+    if normalized in {"thinking_level_minimal", "minimal"}:
+        return "minimal"
+    return normalized
+
+
 def _adk_messages(contents: Any) -> list[dict[str, Any]]:
     if not isinstance(contents, list):
         return []
     messages: list[dict[str, Any]] = []
     for content in contents:
-        role = _first_non_empty(_as_string(_read(content, "role")), "user")
-        parts = _read(content, "parts")
-        text = _content_parts_text(parts)
-        if text == "":
+        message = _adk_content_message(content, default_role="user")
+        if message is None:
             continue
-        messages.append({"role": role, "content": text})
+        messages.append(message)
     return messages
+
+
+def _adk_content_message(content: Any, *, default_role: str) -> dict[str, Any] | None:
+    parts = _read(content, "parts")
+    text = _content_parts_text(parts)
+    tool_calls = _adk_function_calls(parts)
+    tool_results = _adk_function_responses(parts)
+    if text == "" and not tool_calls and not tool_results:
+        return None
+
+    role = _adk_role(_first_non_empty(_as_string(_read(content, "role")), default_role))
+    if tool_results:
+        role = "tool"
+
+    message: dict[str, Any] = {
+        "role": role,
+    }
+    if text != "":
+        message["content"] = text
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    if tool_results:
+        message["tool_results"] = tool_results
+    return message
 
 
 def _content_parts_text(parts: Any) -> str:
@@ -556,6 +731,53 @@ def _content_parts_text(parts: Any) -> str:
     return " ".join(text_parts).strip()
 
 
+def _adk_function_calls(parts: Any) -> list[dict[str, Any]]:
+    if not isinstance(parts, list):
+        return []
+
+    calls: list[dict[str, Any]] = []
+    for part in parts:
+        function_call = _read(part, "function_call")
+        if function_call is None:
+            continue
+
+        name = _as_string(_read(function_call, "name"))
+        if name == "":
+            continue
+
+        call: dict[str, Any] = {
+            "id": _as_string(_read(function_call, "id")),
+            "name": name,
+        }
+        args = _read(function_call, "args")
+        if args is not None:
+            call["args"] = _jsonable(args)
+        calls.append(call)
+    return calls
+
+
+def _adk_function_responses(parts: Any) -> list[dict[str, Any]]:
+    if not isinstance(parts, list):
+        return []
+
+    results: list[dict[str, Any]] = []
+    for part in parts:
+        function_response = _read(part, "function_response")
+        if function_response is None:
+            continue
+
+        response = _jsonable(_read(function_response, "response"))
+        result: dict[str, Any] = {
+            "tool_call_id": _as_string(_read(function_response, "id")),
+            "name": _as_string(_read(function_response, "name")),
+            "response": response,
+        }
+        if isinstance(response, dict) and "error" in response:
+            result["is_error"] = True
+        results.append(result)
+    return results
+
+
 def _adk_llm_end_payload(llm_response: Any) -> dict[str, Any]:
     llm_output: dict[str, Any] = {}
     model_name = _first_non_empty(
@@ -570,28 +792,33 @@ def _adk_llm_end_payload(llm_response: Any) -> dict[str, Any]:
         llm_output["finish_reason"] = finish_reason
 
     usage_metadata = _read(llm_response, "usage_metadata")
-    token_usage = _adk_token_usage(usage_metadata)
-    if token_usage:
-        llm_output["token_usage"] = token_usage
+    usage = _adk_usage_metadata(usage_metadata)
+    if usage:
+        llm_output["usage"] = usage
 
-    text = _content_parts_text(_read(_read(llm_response, "content"), "parts"))
     payload: dict[str, Any] = {"llm_output": llm_output}
-    if text != "":
-        payload["generations"] = [[{"text": text}]]
+    message = _adk_content_message(_read(llm_response, "content"), default_role="assistant")
+    if message is not None:
+        payload["generations"] = [[{"message": message}]]
     return payload
 
 
-def _adk_token_usage(usage_metadata: Any) -> dict[str, int]:
-    prompt_tokens = _int_or_none(_read(usage_metadata, "prompt_token_count"))
-    completion_tokens = _int_or_none(_read(usage_metadata, "candidates_token_count"))
-    total_tokens = _int_or_none(_read(usage_metadata, "total_token_count"))
+def _adk_usage_metadata(usage_metadata: Any) -> dict[str, int]:
+    fields = (
+        "prompt_token_count",
+        "candidates_token_count",
+        "total_token_count",
+        "cached_content_token_count",
+        "cache_write_input_token_count",
+        "cache_creation_input_token_count",
+        "thoughts_token_count",
+        "tool_use_prompt_token_count",
+    )
     token_usage: dict[str, int] = {}
-    if prompt_tokens is not None:
-        token_usage["prompt_tokens"] = prompt_tokens
-    if completion_tokens is not None:
-        token_usage["completion_tokens"] = completion_tokens
-    if total_tokens is not None:
-        token_usage["total_tokens"] = total_tokens
+    for field_name in fields:
+        value = _int_or_none(_read(usage_metadata, field_name))
+        if value is not None:
+            token_usage[field_name] = value
     return token_usage
 
 
@@ -628,12 +855,13 @@ def _adk_context_metadata(callback_context: Any) -> dict[str, Any]:
     return metadata
 
 
-def _agent_name(callback_context: Any) -> str:
+def _agent_name(callback_context: Any, agent: Any | None = None) -> str:
     invocation_context = _adk_invocation_context(callback_context)
     return _first_non_empty(
         _as_string(_read(callback_context, "agent_name")),
         _as_string(_read(callback_context, "agentName")),
         _as_string(_read(_read(callback_context, "agent"), "name")),
+        _as_string(_read(agent, "name")),
         _as_string(_read(invocation_context, "agent_name")),
         _as_string(_read(invocation_context, "agentName")),
         _as_string(_read(_read(invocation_context, "agent"), "name")),
@@ -661,10 +889,23 @@ def _adk_event_text(event: Any) -> str:
 def _adk_content_text(content: Any) -> str:
     if isinstance(content, str):
         return content.strip()
+    if isinstance(content, list):
+        return " ".join(text for text in (_adk_content_text(item) for item in content) if text != "").strip()
     parts_text = _content_parts_text(_read(content, "parts"))
     if parts_text != "":
         return parts_text
     return _as_string(_read(content, "text"))
+
+
+def _adk_role(role: str) -> str:
+    normalized = role.strip().lower()
+    if normalized == "model":
+        return "assistant"
+    if normalized in {"function", "tool"}:
+        return "tool"
+    if normalized != "":
+        return normalized
+    return "user"
 
 
 def _json_string(value: Any) -> str:
@@ -672,6 +913,34 @@ def _json_string(value: Any) -> str:
         return json.dumps(value, default=str, sort_keys=True)
     except Exception:
         return str(value)
+
+
+def _json_bytes(value: Any) -> bytes:
+    if value is None:
+        return b""
+    try:
+        return json.dumps(_jsonable(value), default=str, sort_keys=True).encode("utf-8")
+    except Exception:
+        return b""
+
+
+def _jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    enum_value = getattr(value, "value", None)
+    if enum_value is not None and not callable(enum_value):
+        return enum_value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return model_dump(by_alias=True, exclude_none=True, mode="json")
+        except TypeError:
+            return model_dump()
+    return value
 
 
 def _read(value: Any, key: str) -> Any:
@@ -694,6 +963,26 @@ def _int_or_none(value: Any) -> int | None:
     if isinstance(value, int):
         return value
     return None
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _as_sequence(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return []
 
 
 def _is_true(value: Any) -> bool:
