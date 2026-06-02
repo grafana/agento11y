@@ -4,7 +4,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net/url"
 	"os"
@@ -14,7 +13,6 @@ import (
 	"github.com/joho/godotenv"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/shared"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -96,7 +94,7 @@ func main() {
 	if err := sigil.HookDeniedFromResponse(hookResponse); err != nil {
 		var denied *sigil.HookDeniedError
 		if errors.As(err, &denied) {
-			fmt.Printf("Blocked by Sigil guard rule %s: %s\n", valueOrUnknown(denied.RuleID), denied.Reason)
+			log.Printf("Blocked by Sigil guard rule %s: %s", valueOrUnknown(denied.RuleID), denied.Reason)
 			return
 		}
 		log.Fatalf("Sigil hook denied: %v", err)
@@ -109,13 +107,13 @@ func main() {
 		if hookResponse.TransformedInput.SystemPrompt != "" {
 			systemPrompt = hookResponse.TransformedInput.SystemPrompt
 		}
-		fmt.Println("Sigil hook allowed the call with transformed input.")
+		log.Println("Sigil hook allowed the call with transformed input.")
 	} else {
-		fmt.Println("Sigil hook allowed the call.")
+		log.Println("Sigil hook allowed the call.")
 	}
 
 	completion, err := openaiClient.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Model:    shared.ChatModel(model),
+		Model:    model,
 		Messages: openAIMessages(systemPrompt, inputMessages),
 	})
 	if err != nil {
@@ -123,7 +121,7 @@ func main() {
 	}
 
 	responseText := completion.Choices[0].Message.Content
-	fmt.Printf("\nResponse: %s\n\n", responseText)
+	log.Printf("Response: %s", responseText)
 
 	ctx, rec := sigilClient.StartGeneration(ctx, sigil.GenerationStart{
 		ConversationID: "getting-started-go-hooks",
@@ -140,14 +138,14 @@ func main() {
 		Output:        []sigil.Message{sigil.AssistantTextMessage(responseText)},
 		ResponseID:    completion.ID,
 		ResponseModel: completion.Model,
-		StopReason:    string(completion.Choices[0].FinishReason),
+		StopReason:    completion.Choices[0].FinishReason,
 		Usage: sigil.TokenUsage{
 			InputTokens:  completion.Usage.PromptTokens,
 			OutputTokens: completion.Usage.CompletionTokens,
 		},
 	}, nil)
 
-	fmt.Println("Done - check the AI Observability plugin in your Grafana Cloud stack.")
+	log.Println("Done - check the AI Observability plugin in your Grafana Cloud stack.")
 }
 
 func sigilAPIEndpoint() string {

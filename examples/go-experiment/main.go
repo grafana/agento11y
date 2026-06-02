@@ -53,11 +53,11 @@ func main() {
 		log.Fatalf("run experiment: %v", err)
 	}
 
-	fmt.Printf("\nExperiment %q finished: %d score(s) accepted.\n", result.RunID, result.AcceptedScores)
+	log.Printf("Experiment %q finished: %d score(s) accepted.", result.RunID, result.AcceptedScores)
 	if result.Report != nil {
-		fmt.Printf("pass_rate=%.2f mean_score=%.2f\n", result.Report.Summary.PassRate, result.Report.Summary.MeanScore)
+		log.Printf("pass_rate=%.2f mean_score=%.2f", result.Report.Summary.PassRate, result.Report.Summary.MeanScore)
 	}
-	fmt.Printf("View in Sigil: %s\n", result.URL)
+	log.Printf("View in Sigil: %s", result.URL)
 }
 
 func buildClient() *sigil.Client {

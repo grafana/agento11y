@@ -103,7 +103,7 @@ func isSensitiveJSONKey(key string) bool {
 
 func jsonKeyParts(key string) []string {
 	var parts []string
-	var current []rune
+	current := make([]rune, 0, len(key))
 	flush := func() {
 		if len(current) == 0 {
 			return

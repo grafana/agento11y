@@ -182,7 +182,7 @@ func WithExperiment(ctx context.Context, opts ExperimentOptions, fn func(context
 	}
 
 	run := NewExperimentRun(opts)
-	err := fn(ctx, run)
+	err := fn(run.Context(ctx), run)
 	if err != nil {
 		if errorsIsContextCanceled(err) {
 			cancelCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -515,10 +515,8 @@ func (r *ExperimentRunner) Run(ctx context.Context, items []DatasetItem, target 
 }
 
 func (r *ExperimentRun) prepareGeneration(start GenerationStart) GenerationStart {
-	seed := cloneGenerationStart(start)
-
 	r.mu.Lock()
-	conversationID := strings.TrimSpace(seed.ConversationID)
+	conversationID := strings.TrimSpace(start.ConversationID)
 	if conversationID == "" {
 		conversationID = strings.TrimSpace(r.activeConversationID)
 	}
@@ -527,31 +525,31 @@ func (r *ExperimentRun) prepareGeneration(start GenerationStart) GenerationStart
 	}
 	r.activeConversationID = conversationID
 	r.mu.Unlock()
-	seed.ConversationID = conversationID
+	start.ConversationID = conversationID
 
 	tags := cloneTags(r.extraTags)
 	if tags == nil {
 		tags = map[string]string{}
 	}
-	maps.Copy(tags, seed.Tags)
+	maps.Copy(tags, start.Tags)
 	tags[ExperimentRunIDTag] = r.RunID
-	seed.Tags = tags
+	start.Tags = tags
 
 	metadata := cloneMetadata(r.extraMetadata)
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
-	maps.Copy(metadata, seed.Metadata)
+	maps.Copy(metadata, start.Metadata)
 	metadata[ExperimentRunIDMetadataKey] = r.RunID
-	seed.Metadata = metadata
+	start.Metadata = metadata
 
-	if seed.AgentName == "" && r.agentName != "" {
-		seed.AgentName = r.agentName
+	if start.AgentName == "" && r.agentName != "" {
+		start.AgentName = r.agentName
 	}
-	if seed.AgentVersion == "" && r.agentVersion != "" {
-		seed.AgentVersion = r.agentVersion
+	if start.AgentVersion == "" && r.agentVersion != "" {
+		start.AgentVersion = r.agentVersion
 	}
-	return seed
+	return start
 }
 
 func prepareGenerationForExperimentRunID(start GenerationStart, runID string) GenerationStart {
@@ -611,6 +609,10 @@ func (r *ExperimentRun) buildScoreItem(score ScoreOutput, item *DatasetItem, gen
 
 func (r *ExperimentRun) scoreMetadata(score ScoreOutput, item *DatasetItem, trialID string) map[string]any {
 	metadata := map[string]any{}
+	if item != nil {
+		maps.Copy(metadata, item.Metadata)
+	}
+	maps.Copy(metadata, score.Metadata)
 	if id, ok := stringMetadataValue(r.dataset, "id"); ok {
 		metadata["dataset_id"] = id
 	}
@@ -622,12 +624,10 @@ func (r *ExperimentRun) scoreMetadata(score ScoreOutput, item *DatasetItem, tria
 	}
 	if item != nil {
 		metadata["item_id"] = item.ID
-		maps.Copy(metadata, item.Metadata)
 	}
 	if strings.TrimSpace(trialID) != "" {
 		metadata["trial_id"] = strings.TrimSpace(trialID)
 	}
-	maps.Copy(metadata, score.Metadata)
 	return metadata
 }
 

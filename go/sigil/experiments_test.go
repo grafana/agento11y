@@ -424,7 +424,9 @@ func TestExperimentContextTagsExistingInstrumentationAndCapturesIDs(t *testing.T
 		ExtraTags:     map[string]string{"suite": "smoke"},
 		ExtraMetadata: map[string]any{"candidate": "abc"},
 	})
-	ctx := run.Context(context.Background())
+	ctx := WithConversationID(context.Background(), "ctx-conv")
+	ctx = WithAgentName(ctx, "ctx-agent")
+	ctx = run.Context(ctx)
 
 	ctx, recorder := client.StartGeneration(ctx, GenerationStart{
 		Model: sigilModelRef("openai", "gpt-5"),
@@ -448,8 +450,40 @@ func TestExperimentContextTagsExistingInstrumentationAndCapturesIDs(t *testing.T
 	if generation.GetMetadata().GetFields()[ExperimentRunIDMetadataKey].GetStringValue() != "run_existing" {
 		t.Fatalf("expected experiment run metadata, got %#v", generation.GetMetadata())
 	}
+	if got := generation.GetConversationId(); got != "ctx-conv" {
+		t.Fatalf("expected context conversation id to win, got %q", got)
+	}
+	if got := generation.GetAgentName(); got != "ctx-agent" {
+		t.Fatalf("expected context agent name to win, got %q", got)
+	}
 	if ids := run.ProducedGenerationIDs(); len(ids) != 1 || ids[0] != generation.GetId() {
 		t.Fatalf("unexpected captured ids: %#v", ids)
+	}
+}
+
+func TestWithExperimentPassesExperimentContext(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusOK, experimentBody(map[string]any{"run_id": "run_ctx"}))
+	recorder.push(http.StatusOK, experimentBody(map[string]any{"run_id": "run_ctx", "status": "succeeded"}))
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	sawExperimentContext := false
+	_, err := WithExperiment(context.Background(), ExperimentOptions{
+		Client: client,
+		RunID:  "run_ctx",
+		Name:   "context",
+	}, func(ctx context.Context, run *ExperimentRun) error {
+		got, ok := experimentRunFromContext(ctx)
+		sawExperimentContext = ok && got == run
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("with experiment: %v", err)
+	}
+	if !sawExperimentContext {
+		t.Fatal("expected callback context to carry experiment run")
 	}
 }
 
@@ -564,6 +598,59 @@ func TestExperimentRunnerExportsScoresAndFinalizesSucceeded(t *testing.T) {
 	completeReq := recorder.request(2)
 	if completeReq.Method != http.MethodPatch || completeReq.Payload["status"] != "succeeded" || completeReq.Payload["score_count"] != float64(1) {
 		t.Fatalf("unexpected complete request: %#v", completeReq)
+	}
+}
+
+func TestExperimentScoreMetadataPreservesStructuralKeys(t *testing.T) {
+	run := NewExperimentRun(ExperimentOptions{
+		RunID:     "run_1",
+		Dataset:   map[string]any{"id": "dataset-a", "version": "2026-06-02"},
+		Candidate: map[string]any{"git_sha": "abc123"},
+	})
+	item := DatasetItem{
+		ID: "item-a",
+		Metadata: map[string]any{
+			"dataset_id":      "wrong-dataset",
+			"dataset_version": "wrong-version",
+			"item_id":         "wrong-item",
+			"trial_id":        "wrong-trial",
+			"candidate":       "wrong-candidate",
+			"custom":          "item-custom",
+		},
+	}
+	score := ScoreOutput{
+		EvaluatorID:      "eval",
+		EvaluatorVersion: "v1",
+		ScoreKey:         "quality",
+		Value:            NumberScoreValue(1),
+		Metadata: map[string]any{
+			"dataset_id":      "score-dataset",
+			"dataset_version": "score-version",
+			"item_id":         "score-item",
+			"trial_id":        "score-trial",
+			"candidate":       "score-candidate",
+			"custom":          "score-custom",
+		},
+	}
+
+	scoreItem, err := run.buildScoreItem(score, &item, []string{"gen-a"}, "conv-a", "trial-a")
+	if err != nil {
+		t.Fatalf("build score item: %v", err)
+	}
+
+	metadata := scoreItem.Metadata
+	if metadata["dataset_id"] != "dataset-a" ||
+		metadata["dataset_version"] != "2026-06-02" ||
+		metadata["item_id"] != "item-a" ||
+		metadata["trial_id"] != "trial-a" {
+		t.Fatalf("structural metadata was not preserved: %#v", metadata)
+	}
+	candidate, ok := metadata["candidate"].(map[string]any)
+	if !ok || candidate["git_sha"] != "abc123" {
+		t.Fatalf("candidate metadata was not preserved: %#v", metadata["candidate"])
+	}
+	if metadata["custom"] != "score-custom" {
+		t.Fatalf("expected user metadata to keep non-structural keys, got %#v", metadata)
 	}
 }
 

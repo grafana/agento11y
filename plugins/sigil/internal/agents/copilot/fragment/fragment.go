@@ -296,7 +296,7 @@ func ListTurnIDs(sessionID string, logger *log.Logger) []string {
 		id   string
 		name string
 	}
-	var items []item
+	items := make([]item, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue

@@ -522,12 +522,6 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 	if seed.OperationName == "" {
 		seed.OperationName = defaultOperationNameForMode(seed.Mode)
 	}
-	experimentRun, hasExperimentRun := experimentRunFromContext(ctx)
-	if hasExperimentRun {
-		seed = experimentRun.prepareGeneration(seed)
-	} else if experimentRunID, ok := ExperimentRunIDFromContext(ctx); ok {
-		seed = prepareGenerationForExperimentRunID(seed, experimentRunID)
-	}
 	// Read conversation ID from context when explicit field is empty.
 	if seed.ConversationID == "" {
 		if id, ok := ConversationIDFromContext(ctx); ok {
@@ -544,21 +538,27 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 			seed.UserID = userID
 		}
 	}
-	if seed.UserID == "" && c.config.UserID != "" {
-		seed.UserID = c.config.UserID
-	}
 	if seed.AgentName == "" {
 		if name, ok := AgentNameFromContext(ctx); ok {
 			seed.AgentName = name
 		}
 	}
-	if seed.AgentName == "" && c.config.AgentName != "" {
-		seed.AgentName = c.config.AgentName
-	}
 	if seed.AgentVersion == "" {
 		if version, ok := AgentVersionFromContext(ctx); ok {
 			seed.AgentVersion = version
 		}
+	}
+	experimentRun, hasExperimentRun := experimentRunFromContext(ctx)
+	if hasExperimentRun {
+		seed = experimentRun.prepareGeneration(seed)
+	} else if experimentRunID, ok := ExperimentRunIDFromContext(ctx); ok {
+		seed = prepareGenerationForExperimentRunID(seed, experimentRunID)
+	}
+	if seed.UserID == "" && c.config.UserID != "" {
+		seed.UserID = c.config.UserID
+	}
+	if seed.AgentName == "" && c.config.AgentName != "" {
+		seed.AgentName = c.config.AgentName
 	}
 	if seed.AgentVersion == "" && c.config.AgentVersion != "" {
 		seed.AgentVersion = c.config.AgentVersion
