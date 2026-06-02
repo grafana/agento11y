@@ -48,7 +48,7 @@ func main() {
 		FetchReport: true,
 	}
 
-	result, err := runner.Run(ctx, dataset, target(client), []sigil.DatasetScorer{exactMatchScorer})
+	result, err := runner.Run(ctx, dataset, target(client, runID), []sigil.DatasetScorer{exactMatchScorer})
 	if err != nil {
 		log.Fatalf("run experiment: %v", err)
 	}
@@ -107,18 +107,43 @@ func authConfig(mode sigil.ExportAuthMode, tenantID string, token string) sigil.
 	}
 }
 
-func target(client *sigil.Client) sigil.DatasetTarget {
+func target(client *sigil.Client, runID string) sigil.DatasetTarget {
 	return func(ctx context.Context, item sigil.DatasetItem) (sigil.TargetResult, error) {
-		answer, err := existingInstrumentedAgent(ctx, client, fmt.Sprint(item.Input))
+		response, err := callRemoteInstrumentedAgent(ctx, client, runID, item)
 		if err != nil {
 			return sigil.TargetResult{}, err
 		}
-		return sigil.TargetResult{Output: answer}, nil
+		return sigil.TargetResult{
+			Output:         response.Answer,
+			GenerationIDs:  []string{response.GenerationID},
+			ConversationID: response.ConversationID,
+		}, nil
 	}
 }
 
-func existingInstrumentedAgent(ctx context.Context, client *sigil.Client, question string) (string, error) {
+type remoteAgentResponse struct {
+	Answer         string
+	GenerationID   string
+	ConversationID string
+}
+
+func callRemoteInstrumentedAgent(_ context.Context, client *sigil.Client, runID string, item sigil.DatasetItem) (remoteAgentResponse, error) {
+	// In a real A2A/HTTP runner, runID would be serialized into request
+	// metadata or a header, then restored by the receiving service.
+	return remoteInstrumentedAgent(context.Background(), client, runID, item)
+}
+
+func remoteInstrumentedAgent(ctx context.Context, client *sigil.Client, runID string, item sigil.DatasetItem) (remoteAgentResponse, error) {
+	question := fmt.Sprint(item.Input)
+	generationID := sigil.StableID("gen", runID, item.ID)
+	conversationID := sigil.StableID("conv", runID, item.ID)
+
+	ctx = sigil.WithExperimentRunID(ctx, runID)
+	ctx = sigil.WithConversationID(ctx, conversationID)
+	ctx = sigil.WithAgentName(ctx, "go-example-agent")
+
 	_, rec := client.StartGeneration(ctx, sigil.GenerationStart{
+		ID:    generationID,
 		Model: sigil.ModelRef{Provider: "example", Name: "canned-answer"},
 	})
 	defer rec.End()
@@ -129,7 +154,11 @@ func existingInstrumentedAgent(ctx context.Context, client *sigil.Client, questi
 		Input:  []sigil.Message{sigil.UserTextMessage(question)},
 		Output: []sigil.Message{sigil.AssistantTextMessage(answer)},
 	}, nil)
-	return answer, nil
+	return remoteAgentResponse{
+		Answer:         answer,
+		GenerationID:   generationID,
+		ConversationID: conversationID,
+	}, nil
 }
 
 func exactMatchScorer(_ context.Context, item sigil.DatasetItem, result sigil.TargetResult) ([]sigil.ScoreOutput, error) {

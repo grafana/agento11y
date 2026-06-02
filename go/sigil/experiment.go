@@ -552,6 +552,31 @@ func (r *ExperimentRun) prepareGeneration(start GenerationStart) GenerationStart
 	return seed
 }
 
+func prepareGenerationForExperimentRunID(start GenerationStart, runID string) GenerationStart {
+	seed := cloneGenerationStart(start)
+
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return seed
+	}
+
+	tags := cloneTags(seed.Tags)
+	if tags == nil {
+		tags = map[string]string{}
+	}
+	tags[ExperimentRunIDTag] = runID
+	seed.Tags = tags
+
+	metadata := cloneMetadata(seed.Metadata)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata[ExperimentRunIDMetadataKey] = runID
+	seed.Metadata = metadata
+
+	return seed
+}
+
 func (r *ExperimentRun) buildScoreItem(score ScoreOutput, item *DatasetItem, generationIDs []string, conversationID string, trialID string) (ScoreItem, error) {
 	generationID := strings.TrimSpace(score.GenerationID)
 	if generationID == "" {

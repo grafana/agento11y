@@ -453,6 +453,55 @@ func TestExperimentContextTagsExistingInstrumentationAndCapturesIDs(t *testing.T
 	}
 }
 
+func TestWithExperimentRunIDTagsExistingInstrumentation(t *testing.T) {
+	exporter := &capturingExperimentExporter{}
+	client := NewClient(Config{
+		Tracer: noop.NewTracerProvider().Tracer("sigil-go-experiment-run-id-test"),
+		GenerationExport: GenerationExportConfig{
+			Protocol:        GenerationExportProtocolHTTP,
+			Endpoint:        "http://example.invalid/api/v1/generations:export",
+			Auth:            AuthConfig{Mode: ExportAuthModeTenant, TenantID: "tenant-a"},
+			Insecure:        BoolPtr(true),
+			BatchSize:       10,
+			FlushInterval:   time.Hour,
+			QueueSize:       100,
+			MaxRetries:      1,
+			InitialBackoff:  time.Millisecond,
+			MaxBackoff:      time.Millisecond,
+			PayloadMaxBytes: 1 << 20,
+		},
+		testGenerationExporter: exporter,
+	})
+	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+	ctx := WithExperimentRunID(context.Background(), "run_remote")
+	ctx, recorder := client.StartGeneration(ctx, GenerationStart{
+		Model:    sigilModelRef("anthropic", "claude-sonnet"),
+		Metadata: map[string]any{"service": "assistant-api"},
+		Tags:     map[string]string{"surface": "a2a"},
+	})
+	recorder.SetResult(Generation{
+		Input:  []Message{UserTextMessage("hello")},
+		Output: []Message{AssistantTextMessage("world")},
+	}, nil)
+	recorder.End()
+	if err := client.Flush(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	generation := exporter.firstGeneration()
+	if generation == nil {
+		t.Fatal("expected exported generation")
+	}
+	if generation.GetTags()[ExperimentRunIDTag] != "run_remote" || generation.GetTags()["surface"] != "a2a" {
+		t.Fatalf("expected experiment and existing tags, got %#v", generation.GetTags())
+	}
+	fields := generation.GetMetadata().GetFields()
+	if fields[ExperimentRunIDMetadataKey].GetStringValue() != "run_remote" || fields["service"].GetStringValue() != "assistant-api" {
+		t.Fatalf("expected experiment and existing metadata, got %#v", generation.GetMetadata())
+	}
+}
+
 func TestExperimentRunnerExportsScoresAndFinalizesSucceeded(t *testing.T) {
 	recorder := &experimentRecorder{}
 	recorder.push(http.StatusOK, experimentBody(map[string]any{"run_id": "run_1"}))

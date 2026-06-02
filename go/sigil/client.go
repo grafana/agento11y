@@ -525,6 +525,8 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 	experimentRun, hasExperimentRun := experimentRunFromContext(ctx)
 	if hasExperimentRun {
 		seed = experimentRun.prepareGeneration(seed)
+	} else if experimentRunID, ok := ExperimentRunIDFromContext(ctx); ok {
+		seed = prepareGenerationForExperimentRunID(seed, experimentRunID)
 	}
 	// Read conversation ID from context when explicit field is empty.
 	if seed.ConversationID == "" {
