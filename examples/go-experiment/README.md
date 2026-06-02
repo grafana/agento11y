@@ -6,9 +6,9 @@ The shape mirrors the Python experiment examples:
 
 1. Build a Sigil client.
 2. Define a dataset, target, and scorer.
-3. Run `ExperimentRunner`, which creates the experiment, records generations, exports scores, finalizes the run, and prints a link.
+3. Run `ExperimentRunner`, which creates the experiment, passes an experiment-aware context into the target, exports scores, finalizes the run, and prints a link.
 
-Go does not have a LangGraph adapter in this repo, so the target records through `run.StartGeneration(...)` directly.
+Go does not have a LangGraph adapter in this repo. Existing Go agents should keep their normal `client.StartGeneration(ctx, ...)` instrumentation; the runner passes a context that adds the experiment run ID and captures generation IDs automatically.
 
 This example is designed for Grafana Cloud AI Observability. There is no supported local Grafana path for users; local/self-hosted Sigil is only a development override for SDK contributors.
 

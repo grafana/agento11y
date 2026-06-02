@@ -8,6 +8,7 @@ type userIDContextKey struct{}
 type agentNameContextKey struct{}
 type agentVersionContextKey struct{}
 type contentCaptureModeContextKey struct{}
+type experimentRunContextKey struct{}
 
 // WithConversationID stores a conversation ID in the context.
 // StartGeneration, StartStreamingGeneration, and StartToolExecution read it when
@@ -85,4 +86,13 @@ func withContentCaptureMode(ctx context.Context, mode ContentCaptureMode) contex
 func contentCaptureModeFromContext(ctx context.Context) (ContentCaptureMode, bool) {
 	mode, ok := ctx.Value(contentCaptureModeContextKey{}).(ContentCaptureMode)
 	return mode, ok
+}
+
+func withExperimentRun(ctx context.Context, run *ExperimentRun) context.Context {
+	return context.WithValue(ctx, experimentRunContextKey{}, run)
+}
+
+func experimentRunFromContext(ctx context.Context) (*ExperimentRun, bool) {
+	run, ok := ctx.Value(experimentRunContextKey{}).(*ExperimentRun)
+	return run, ok && run != nil
 }

@@ -48,7 +48,7 @@ func main() {
 		FetchReport: true,
 	}
 
-	result, err := runner.Run(ctx, dataset, target, []sigil.DatasetScorer{exactMatchScorer})
+	result, err := runner.Run(ctx, dataset, target(client), []sigil.DatasetScorer{exactMatchScorer})
 	if err != nil {
 		log.Fatalf("run experiment: %v", err)
 	}
@@ -107,11 +107,21 @@ func authConfig(mode sigil.ExportAuthMode, tenantID string, token string) sigil.
 	}
 }
 
-func target(ctx context.Context, item sigil.DatasetItem, run *sigil.ExperimentRun) (sigil.TargetResult, error) {
-	question := fmt.Sprint(item.Input)
-	_, rec := run.StartGeneration(ctx, sigil.GenerationStart{
+func target(client *sigil.Client) sigil.DatasetTarget {
+	return func(ctx context.Context, item sigil.DatasetItem) (sigil.TargetResult, error) {
+		answer, err := existingInstrumentedAgent(ctx, client, fmt.Sprint(item.Input))
+		if err != nil {
+			return sigil.TargetResult{}, err
+		}
+		return sigil.TargetResult{Output: answer}, nil
+	}
+}
+
+func existingInstrumentedAgent(ctx context.Context, client *sigil.Client, question string) (string, error) {
+	_, rec := client.StartGeneration(ctx, sigil.GenerationStart{
 		Model: sigil.ModelRef{Provider: "example", Name: "canned-answer"},
 	})
+	defer rec.End()
 
 	answer := answerQuestion(question)
 	rec.SetResult(sigil.Generation{
@@ -119,9 +129,7 @@ func target(ctx context.Context, item sigil.DatasetItem, run *sigil.ExperimentRu
 		Input:  []sigil.Message{sigil.UserTextMessage(question)},
 		Output: []sigil.Message{sigil.AssistantTextMessage(answer)},
 	}, nil)
-	rec.End()
-
-	return sigil.TargetResult{Output: answer}, nil
+	return answer, nil
 }
 
 func exactMatchScorer(_ context.Context, item sigil.DatasetItem, result sigil.TargetResult) ([]sigil.ScoreOutput, error) {

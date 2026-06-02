@@ -59,7 +59,7 @@ type ExperimentResult struct {
 	Report         *ExperimentReport
 }
 
-type DatasetTarget func(ctx context.Context, item DatasetItem, run *ExperimentRun) (TargetResult, error)
+type DatasetTarget func(ctx context.Context, item DatasetItem) (TargetResult, error)
 type DatasetScorer func(ctx context.Context, item DatasetItem, result TargetResult) ([]ScoreOutput, error)
 
 type ExperimentOptions struct {
@@ -211,38 +211,14 @@ func WithExperiment(ctx context.Context, opts ExperimentOptions, fn func(context
 	return run, nil
 }
 
-func (r *ExperimentRun) StartGeneration(ctx context.Context, start GenerationStart) (context.Context, *GenerationRecorder) {
-	return r.StartGenerationWithCapture(ctx, start, true)
-}
-
-func (r *ExperimentRun) StartGenerationWithCapture(ctx context.Context, start GenerationStart, capture bool) (context.Context, *GenerationRecorder) {
-	if r == nil || r.client == nil {
-		return ctx, &GenerationRecorder{}
+func (r *ExperimentRun) Context(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	callCtx, recorder := r.client.StartGeneration(ctx, r.prepareGeneration(start))
-	if capture {
-		r.mu.Lock()
-		r.recorders = append(r.recorders, recorder)
-		r.mu.Unlock()
+	if r == nil {
+		return ctx
 	}
-	return callCtx, recorder
-}
-
-func (r *ExperimentRun) StartStreamingGeneration(ctx context.Context, start GenerationStart) (context.Context, *GenerationRecorder) {
-	return r.StartStreamingGenerationWithCapture(ctx, start, true)
-}
-
-func (r *ExperimentRun) StartStreamingGenerationWithCapture(ctx context.Context, start GenerationStart, capture bool) (context.Context, *GenerationRecorder) {
-	if r == nil || r.client == nil {
-		return ctx, &GenerationRecorder{}
-	}
-	callCtx, recorder := r.client.StartStreamingGeneration(ctx, r.prepareGeneration(start))
-	if capture {
-		r.mu.Lock()
-		r.recorders = append(r.recorders, recorder)
-		r.mu.Unlock()
-	}
-	return callCtx, recorder
+	return withExperimentRun(ctx, r)
 }
 
 func (r *ExperimentRun) TrackGenerationID(generationID string) {
@@ -305,6 +281,15 @@ func (r *ExperimentRun) ActiveConversationID() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.activeConversationID
+}
+
+func (r *ExperimentRun) captureRecorder(recorder *GenerationRecorder) {
+	if r == nil || recorder == nil {
+		return
+	}
+	r.mu.Lock()
+	r.recorders = append(r.recorders, recorder)
+	r.mu.Unlock()
 }
 
 func (r *ExperimentRun) AddScores(ctx context.Context, scores []ScoreOutput, opts AddScoresOptions) (int, error) {
@@ -472,7 +457,8 @@ func (r *ExperimentRunner) Run(ctx context.Context, items []DatasetItem, target 
 		completedRun = run
 		for _, item := range items {
 			run.ResetCapture(StableID("conv", run.RunID, item.ID))
-			result, err := target(ctx, item, run)
+			itemCtx := run.Context(ctx)
+			result, err := target(itemCtx, item)
 			if err != nil {
 				return err
 			}

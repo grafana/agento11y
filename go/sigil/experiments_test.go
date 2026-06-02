@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -393,10 +394,10 @@ func (e *capturingExperimentExporter) firstGeneration() *sigilv1.Generation {
 	return e.requests[0].GetGenerations()[0]
 }
 
-func TestExperimentRunTagsGenerationsAndCapturesIDs(t *testing.T) {
+func TestExperimentContextTagsExistingInstrumentationAndCapturesIDs(t *testing.T) {
 	exporter := &capturingExperimentExporter{}
 	client := NewClient(Config{
-		Tracer: noop.NewTracerProvider().Tracer("sigil-go-experiment-run-test"),
+		Tracer: noop.NewTracerProvider().Tracer("sigil-go-experiment-context-test"),
 		GenerationExport: GenerationExportConfig{
 			Protocol:        GenerationExportProtocolHTTP,
 			Endpoint:        "http://example.invalid/api/v1/generations:export",
@@ -416,15 +417,17 @@ func TestExperimentRunTagsGenerationsAndCapturesIDs(t *testing.T) {
 
 	run := NewExperimentRun(ExperimentOptions{
 		Client:        client,
-		RunID:         "run_e2e",
-		Name:          "e2e",
+		RunID:         "run_existing",
+		Name:          "existing",
 		Upload:        UploadModeContinuous,
 		AgentName:     "support-bot",
 		ExtraTags:     map[string]string{"suite": "smoke"},
 		ExtraMetadata: map[string]any{"candidate": "abc"},
 	})
-	ctx, recorder := run.StartGeneration(context.Background(), GenerationStart{
-		Model: ModelRef{Provider: "openai", Name: "gpt-5"},
+	ctx := run.Context(context.Background())
+
+	ctx, recorder := client.StartGeneration(ctx, GenerationStart{
+		Model: sigilModelRef("openai", "gpt-5"),
 	})
 	recorder.SetResult(Generation{
 		Input:  []Message{UserTextMessage("hello")},
@@ -439,14 +442,11 @@ func TestExperimentRunTagsGenerationsAndCapturesIDs(t *testing.T) {
 	if generation == nil {
 		t.Fatal("expected exported generation")
 	}
-	if generation.GetTags()[ExperimentRunIDTag] != "run_e2e" {
+	if generation.GetTags()[ExperimentRunIDTag] != "run_existing" {
 		t.Fatalf("expected experiment run tag, got %#v", generation.GetTags())
 	}
-	if generation.GetMetadata().GetFields()[ExperimentRunIDMetadataKey].GetStringValue() != "run_e2e" {
+	if generation.GetMetadata().GetFields()[ExperimentRunIDMetadataKey].GetStringValue() != "run_existing" {
 		t.Fatalf("expected experiment run metadata, got %#v", generation.GetMetadata())
-	}
-	if generation.GetConversationId() == "" || run.ActiveConversationID() != generation.GetConversationId() {
-		t.Fatalf("expected active conversation id to match generation")
 	}
 	if ids := run.ProducedGenerationIDs(); len(ids) != 1 || ids[0] != generation.GetId() {
 		t.Fatalf("unexpected captured ids: %#v", ids)
@@ -475,7 +475,7 @@ func TestExperimentRunnerExportsScoresAndFinalizesSucceeded(t *testing.T) {
 	result, err := runner.Run(
 		context.Background(),
 		[]DatasetItem{{ID: "it1", Input: "2+2", Expected: "4", Metadata: map[string]any{"task_id": "math"}}},
-		func(_ context.Context, item DatasetItem, run *ExperimentRun) (TargetResult, error) {
+		func(_ context.Context, item DatasetItem) (TargetResult, error) {
 			return TargetResult{Output: item.Expected, GenerationIDs: []string{"gen-it1"}, ConversationID: "conv-it1"}, nil
 		},
 		[]DatasetScorer{
@@ -516,4 +516,62 @@ func TestExperimentRunnerExportsScoresAndFinalizesSucceeded(t *testing.T) {
 	if completeReq.Method != http.MethodPatch || completeReq.Payload["status"] != "succeeded" || completeReq.Payload["score_count"] != float64(1) {
 		t.Fatalf("unexpected complete request: %#v", completeReq)
 	}
+}
+
+func TestExperimentRunnerPassesContextForExistingInstrumentation(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusOK, experimentBody(map[string]any{"run_id": "run_ctx"}))
+	recorder.push(http.StatusAccepted, map[string]any{"results": []map[string]any{{"score_id": "score-1", "accepted": true}}})
+	recorder.push(http.StatusOK, experimentBody(map[string]any{"run_id": "run_ctx", "status": "succeeded", "score_count": float64(1)}))
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	runner := ExperimentRunner{
+		Client:      client,
+		RunID:       "run_ctx",
+		Name:        "context",
+		Upload:      UploadModeContinuous,
+		FetchReport: false,
+	}
+	_, err := runner.Run(
+		context.Background(),
+		[]DatasetItem{{ID: "it1", Input: "question", Expected: "answer"}},
+		func(ctx context.Context, item DatasetItem) (TargetResult, error) {
+			_, rec := client.StartGeneration(ctx, GenerationStart{Model: sigilModelRef("example", "existing-agent")})
+			rec.SetResult(Generation{
+				Input:  []Message{UserTextMessage(fmt.Sprint(item.Input))},
+				Output: []Message{AssistantTextMessage(fmt.Sprint(item.Expected))},
+			}, nil)
+			rec.End()
+			return TargetResult{Output: item.Expected}, nil
+		},
+		[]DatasetScorer{
+			func(context.Context, DatasetItem, TargetResult) ([]ScoreOutput, error) {
+				passed := true
+				return []ScoreOutput{{
+					EvaluatorID:      "example.exact_match",
+					EvaluatorVersion: "2026-06-02",
+					ScoreKey:         "exact_match",
+					Value:            NumberScoreValue(1),
+					Passed:           &passed,
+				}}, nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("run experiment: %v", err)
+	}
+	scoreReq := recorder.request(1)
+	score := scoreReq.Payload["scores"].([]any)[0].(map[string]any)
+	if score["generation_id"] == "" {
+		t.Fatalf("expected score to attach to captured generation id: %#v", score)
+	}
+	if score["conversation_id"] != StableID("conv", "run_ctx", "it1") {
+		t.Fatalf("unexpected score conversation id: %#v", score)
+	}
+}
+
+func sigilModelRef(provider string, name string) ModelRef {
+	return ModelRef{Provider: provider, Name: name}
 }

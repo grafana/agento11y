@@ -522,6 +522,10 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 	if seed.OperationName == "" {
 		seed.OperationName = defaultOperationNameForMode(seed.Mode)
 	}
+	experimentRun, hasExperimentRun := experimentRunFromContext(ctx)
+	if hasExperimentRun {
+		seed = experimentRun.prepareGeneration(seed)
+	}
 	// Read conversation ID from context when explicit field is empty.
 	if seed.ConversationID == "" {
 		if id, ok := ConversationIDFromContext(ctx); ok {
@@ -602,7 +606,7 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 
 	callCtx = withContentCaptureMode(callCtx, ccMode)
 
-	return callCtx, &GenerationRecorder{
+	recorder := &GenerationRecorder{
 		client:             c,
 		ctx:                callCtx,
 		span:               span,
@@ -610,6 +614,10 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 		startedAt:          startedAt,
 		contentCaptureMode: ccMode,
 	}
+	if hasExperimentRun {
+		experimentRun.captureRecorder(recorder)
+	}
+	return callCtx, recorder
 }
 
 // StartEmbedding starts an embeddings GenAI span and returns a context for the provider call.
