@@ -1,0 +1,85 @@
+# Changelog
+
+## [0.11.0] - 2026-06-01
+
+### Features
+
+- **plugins**: send plugin User-Agent on generation export (#273)
+
+## [0.10.0] - 2026-05-29
+
+### Features
+
+- **plugins**: wrap guard deny messages with source, tool, and behavior hint (#260)
+- **plugins/opencode**: emit tool execution spans (#252)
+
+### Documentation
+
+- clarify content capture modes across SDKs and plugins (#229)
+
+## [0.9.0] - 2026-05-28
+
+_No user-facing changes._
+
+## [0.8.0] - 2026-05-28
+
+### Features
+
+- **plugin**: adding opencode guard support (#219)
+- **plugins/opencode**: export OTel traces and metrics via OTLP (#227)
+- **plugins/sigil**: add opencode launcher (#224)
+
+### Bug Fixes
+
+- **plugins**: accept all ContentCaptureMode values in opencode and pi (#230)
+
+## [0.7.0] - 2026-05-27
+
+### Features
+
+- **plugins/opencode**: read shared ~/.config/sigil/config.env (#221)
+
+### Documentation
+
+- **plugins**: switch install instructions to brew and simplify (#174)
+
+## [0.6.0] - 2026-05-16
+
+### Bug Fixes
+
+- use cache_write_input_tokens instead of cache_creation_input_tokens (#151)
+
+### Documentation
+
+- align SDK READMEs and examples to SIGIL_* env vars (#133)
+
+## [0.5.0] - 2026-05-08
+
+### Features
+
+- **sdk**: plumb effective_version through SDKs and coding agent plugins (#124)
+
+## [0.4.0] - 2026-05-01
+
+_No user-facing changes._
+
+## [0.3.1] - 2026-04-29
+
+_No user-facing changes._
+
+## [0.3.0] - 2026-04-29
+
+_No user-facing changes._
+
+## [0.2.0] - 2026-04-29
+
+### Features
+
+- **plugins**: publish pi and opencode to npm under @grafana scope (#86)
+- add opencode plugin (#519)
+
+### Documentation
+
+- add OTel setup guidance, Cloud OTLP options, and telemetry to examples (#78)
+- add parent_generation_ids to OpenCode instrumentation skill (#43)
+
