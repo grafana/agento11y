@@ -18,6 +18,13 @@ type Payload struct {
 
 	SourceValue string `json:"source,omitempty"`
 
+	// SurfaceMarker identifies which host integration fired the hook
+	// (e.g. "vscode" or "copilot-cli"). It is NOT part of the Copilot hook
+	// wire payload — the dispatcher populates it from the
+	// SIGIL_COPILOT_HOOK_SURFACE env var set per entry in the hooks config,
+	// so each config file (plugin vs ~/.copilot/hooks) self-identifies.
+	SurfaceMarker string `json:"-"`
+
 	InitialPromptJSON string `json:"initial_prompt,omitempty"`
 	InitialPromptJS   string `json:"initialPrompt,omitempty"`
 	Prompt            string `json:"prompt,omitempty"`
@@ -91,6 +98,12 @@ func (p Payload) SessionID() string {
 
 func (p Payload) Source() string {
 	return firstNonEmpty(p.SourceValue)
+}
+
+// Surface returns the host integration that fired the hook, as declared by
+// the hooks config via SIGIL_COPILOT_HOOK_SURFACE. Empty when unknown.
+func (p Payload) Surface() string {
+	return firstNonEmpty(p.SurfaceMarker)
 }
 
 func (p Payload) InitialPrompt() string {

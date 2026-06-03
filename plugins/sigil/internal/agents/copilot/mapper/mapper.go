@@ -100,6 +100,11 @@ func Map(in Inputs) Mapped {
 	if frag.StopReason != "" {
 		metadata["copilot.stop_reason"] = frag.StopReason
 	}
+	if surface := frag.Surface; surface != "" {
+		metadata["copilot.hook_surface"] = surface
+	} else if in.Session != nil && in.Session.Surface != "" {
+		metadata["copilot.hook_surface"] = in.Session.Surface
+	}
 	if in.Session != nil {
 		if in.Session.Source != "" {
 			metadata["copilot.session_source"] = in.Session.Source
@@ -193,6 +198,11 @@ func buildTags(frag *fragment.Fragment, session *fragment.Session) map[string]st
 		tags["hook.source"] = frag.Source
 	} else if session != nil && session.Source != "" {
 		tags["hook.source"] = session.Source
+	}
+	if frag.Surface != "" {
+		tags["hook.surface"] = frag.Surface
+	} else if session != nil && session.Surface != "" {
+		tags["hook.surface"] = session.Surface
 	}
 	if len(frag.Subagents) > 0 {
 		tags["copilot.subagent_activity"] = "true"

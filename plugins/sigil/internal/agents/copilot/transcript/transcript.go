@@ -86,15 +86,22 @@ func readTranscriptSnapshot(path string, hint ReadHint) (Snapshot, bool, error) 
 		ok                  bool
 		modelByInteraction  = map[string]string{}
 		promptByInteraction = map[string]string{}
-		lastModel           string
-		lastReasoning       string
-		copilotVersion      string
-		sessionID           string
-		hintPrompt          = strings.TrimSpace(hint.UserPrompt)
-		hintPromptHash      = strings.TrimSpace(hint.UserPromptHash)
-		hintInteractionID   string
-		matched             Snapshot
-		matchedOK           bool
+		// lastUserPrompt tracks the most recent user.message content so an
+		// assistant.message can be associated with its prompt even when the
+		// transcript carries no interactionId. The Copilot CLI emits
+		// interactionId on every message; VS Code's copilot-chat transcript
+		// does not, so without this fallback the prompt-hint match (and thus
+		// assistant-text recovery) fails for VS Code sessions.
+		lastUserPrompt    string
+		lastModel         string
+		lastReasoning     string
+		copilotVersion    string
+		sessionID         string
+		hintPrompt        = strings.TrimSpace(hint.UserPrompt)
+		hintPromptHash    = strings.TrimSpace(hint.UserPromptHash)
+		hintInteractionID string
+		matched           Snapshot
+		matchedOK         bool
 	)
 
 	err := scanJSONLines(path, func(raw []byte) error {
@@ -131,6 +138,7 @@ func readTranscriptSnapshot(path string, hint ReadHint) (Snapshot, bool, error) 
 			if interactionID != "" {
 				promptByInteraction[interactionID] = prompt
 			}
+			lastUserPrompt = prompt
 			if matchesHintUserMessage(hintPrompt, hintPromptHash, prompt) {
 				hintInteractionID = interactionID
 				matched = Snapshot{}
@@ -157,7 +165,7 @@ func readTranscriptSnapshot(path string, hint ReadHint) (Snapshot, bool, error) 
 				AssistantText:   strings.TrimSpace(data.Content),
 				InputTokens:     data.InputTokens,
 				OutputTokens:    data.OutputTokens,
-				UserPrompt:      promptByInteraction[interactionID],
+				UserPrompt:      firstNonEmpty(promptByInteraction[interactionID], lastUserPrompt),
 			}
 			snap = candidate
 			ok = true

@@ -1,9 +1,12 @@
 # Sigil for GitHub Copilot CLI
 
-Forwards completed GitHub Copilot CLI turns, hook-visible tool calls, error
+Forwards completed GitHub Copilot turns, hook-visible tool calls, error
 metadata, subagent lifecycle metadata, and optional prompt/tool content to
 [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
-Ships as a GitHub Copilot CLI plugin powered by the shared `sigil` binary.
+Powered by the shared `sigil` binary and driven by a single hooks file at
+`~/.copilot/hooks/sigil.json`, which is read by **both** the GitHub Copilot CLI
+and Copilot Chat in **VS Code**. Each exported turn is tagged with the host it
+came from (`hook.surface` = `copilot-cli` or `vscode`).
 
 > Experimental. GitHub Copilot CLI plugin support is still evolving, and the
 > current documented hook payloads do not expose final assistant response text,
@@ -16,35 +19,18 @@ Ships as a GitHub Copilot CLI plugin powered by the shared `sigil` binary.
 
 ```sh
 brew install grafana/grafana/sigil
-sigil copilot
+sigil copilot -- <copilot args>
 ```
 
-`sigil copilot` registers `sigil-copilot` on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches Copilot CLI.
+`sigil copilot` writes the shared hooks file to `~/.copilot/hooks/sigil.json`, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, removes any legacy `sigil-copilot` plugin left by older versions, and then launches Copilot CLI.
 
-<details>
-<summary>Manual plugin registration</summary>
+For VS Code, no launch wrapper is needed — once `~/.copilot/hooks/sigil.json` exists, add `~/.copilot/hooks` to the `chat.hookFilesLocations` setting and Copilot Chat picks it up.
 
-The current
-[GitHub Copilot CLI plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference)
-documents both local-path and GitHub-subdirectory install forms:
-
-```sh
-copilot plugin install ./plugins/copilot
-```
-
-or:
-
-```sh
-copilot plugin install grafana/sigil-sdk:plugins/copilot
-```
-
-Confirm the install:
-
-```sh
-copilot plugin list
-```
-
-</details>
+> The integration deliberately does **not** register a Copilot CLI plugin. The
+> CLI runs hooks from the plugin store *and* `~/.copilot/hooks`, so a plugin
+> alongside the shared file would fire every hook (and export every turn)
+> twice. The single shared file covers both the CLI and VS Code; the hook
+> dispatcher infers the host at runtime.
 
 ## 2. Credentials
 
@@ -101,7 +87,7 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 
 ## Supported Hook Events
 
-The plugin registers these GitHub Copilot CLI hook triggers:
+The shared hooks file wires these GitHub Copilot hook triggers:
 
 - `sessionStart`
 - `sessionEnd`
@@ -145,7 +131,7 @@ Captured prompt, assistant, and tool content is redacted before export. See [Con
 | `SIGIL_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Copilot `preToolUse` hook is evaluated against Sigil and tool calls denied by guard rules are blocked. |
 | `SIGIL_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |
 | `SIGIL_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout. Lower = less added latency on every tool call, higher = better tolerance for slow `llm_judge` evaluators. |
-| `SIGIL_AUTO_UPDATE` | `true` | Refresh the `sigil-copilot` plugin automatically. Set `false` to pin the installed version. |
+| `SIGIL_COPILOT_HOOK_SURFACE` | _(auto)_ | Override the detected host surface (`copilot-cli` or `vscode`). Normally inferred at runtime; set explicitly only when driving capture through a custom hooks config. |
 
 If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 
@@ -166,11 +152,30 @@ When the documented Copilot hook payloads provide it, the plugin exports:
 - subagent lifecycle metadata from `SubagentStart` and `SubagentStop`
 - timestamps and turn duration
 
-The plugin always tags exported generations with:
+Exported generations are always tagged with:
 
 - `entrypoint=copilot`
+- `hook.surface` — `copilot-cli` or `vscode`, inferred at runtime (see below)
 - `cwd` when Copilot includes it
 - `hook.source` when Copilot includes it
+
+### Surface detection (`copilot-cli` vs `vscode`)
+
+The Copilot hook payload carries no host identifier, and one shared
+`~/.copilot/hooks/sigil.json` serves both hosts, so the surface is resolved at
+runtime:
+
+1. An explicit `SIGIL_COPILOT_HOOK_SURFACE` env var wins (the in-repo
+   `plugins/copilot/hooks.json` sets `copilot-cli` for anyone driving capture
+   through a plugin instead of the shared file).
+2. Otherwise, if a `copilot` process is an ancestor of the hook, the surface is
+   `copilot-cli` — this holds even when the CLI runs inside a VS Code
+   integrated terminal.
+3. Otherwise the surface is `vscode` (Copilot Chat's extension host spawns the
+   hook, with no `copilot` ancestor).
+
+The resolved surface is also written to the `copilot.hook_surface` metadata
+field and the `SIGIL_DEBUG` log line (`dispatch: event=… surface=…`).
 
 ## Limitations / Known Gaps
 
@@ -178,13 +183,14 @@ The plugin always tags exported generations with:
 - Current observed Copilot CLI transcripts expose assistant text, model, request ids, message ids, native turn ids, reasoning effort, and output token counts. They do not appear to expose input token counts, cache token counts, or reasoning token counts for completed turns, so usage and cost can still be partial.
 - Copilot does not document a stable native turn ID in these hook payloads. This plugin creates a local monotonic turn ID per session and hashes it into the Sigil generation id.
 - Subagent hooks do not currently expose enough durable identity to synthesize separate child generations safely, so subagent activity is exported as parent-turn metadata only.
-- This package targets Copilot CLI plugin installation. Copilot cloud agent uses repository-level `.github/hooks/*.json` instead, and GitHub documents cloud-agent outbound network access as restricted by the firewall by default.
+- This package targets the local Copilot CLI and Copilot Chat in VS Code via the shared `~/.copilot/hooks/sigil.json`. Copilot cloud agent uses repository-level `.github/hooks/*.json` instead, and GitHub documents cloud-agent outbound network access as restricted by the firewall by default.
 
 ## Troubleshooting
 
 | Symptom | Try |
 |---|---|
-| Plugin does not appear in `copilot plugin list` | Re-run `sigil copilot` or `copilot plugin install grafana/sigil-sdk:plugins/copilot`. Confirm `plugin.json` is at the plugin root. |
+| Hooks file missing at `~/.copilot/hooks/sigil.json` | Re-run `sigil copilot -- <args>` (it writes the file before launching). For VS Code, also add `~/.copilot/hooks` to `chat.hookFilesLocations`. |
+| Turns appear twice in Sigil | A leftover `sigil-copilot` plugin is firing alongside the shared file. Remove it: `copilot plugin uninstall sigil-copilot` (newer `sigil copilot` runs do this automatically). |
 | Command not found | Reinstall: `brew install grafana/grafana/sigil`. Check `sigil --version`. |
 | Hooks run but nothing appears in Sigil | Check `SIGIL_ENDPOINT`, `SIGIL_AUTH_TENANT_ID`, and `SIGIL_AUTH_TOKEN`. Without all three, the plugin discards the completed fragment. |
 | No latency/tool charts in AI Observability | Set `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` so the plugin can emit traces and metrics. |

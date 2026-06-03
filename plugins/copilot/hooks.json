@@ -7,6 +7,7 @@
             "type": "command",
             "command": "sigil copilot hook",
             "env": {
+              "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_EVENT": "sessionStart"
             },
             "timeout": 10
@@ -21,6 +22,7 @@
             "type": "command",
             "command": "sigil copilot hook",
             "env": {
+              "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_EVENT": "sessionEnd"
             },
             "timeout": 10
@@ -35,6 +37,7 @@
             "type": "command",
             "command": "sigil copilot hook",
             "env": {
+              "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_EVENT": "userPromptSubmitted"
             },
             "timeout": 10
@@ -49,6 +52,7 @@
             "type": "command",
             "command": "sigil copilot hook",
             "env": {
+              "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_EVENT": "preToolUse"
             },
             "timeout": 10
@@ -63,6 +67,7 @@
             "type": "command",
             "command": "sigil copilot hook",
             "env": {
+              "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_EVENT": "postToolUse"
             },
             "timeout": 10
@@ -77,6 +82,7 @@
             "type": "command",
             "command": "sigil copilot hook",
             "env": {
+              "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_EVENT": "postToolUseFailure"
             },
             "timeout": 10
@@ -91,6 +97,7 @@
             "type": "command",
             "command": "sigil copilot hook",
             "env": {
+              "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_EVENT": "errorOccurred"
             },
             "timeout": 10
@@ -105,6 +112,7 @@
             "type": "command",
             "command": "sigil copilot hook",
             "env": {
+              "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_EVENT": "subagentStart"
             },
             "timeout": 10
@@ -119,6 +127,7 @@
             "type": "command",
             "command": "sigil copilot hook",
             "env": {
+              "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_EVENT": "subagentStop"
             },
             "timeout": 10
@@ -133,6 +142,7 @@
             "type": "command",
             "command": "sigil copilot hook",
             "env": {
+              "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_EVENT": "agentStop"
             },
             "timeout": 30
