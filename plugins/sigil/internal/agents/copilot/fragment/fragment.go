@@ -60,6 +60,7 @@ type Session struct {
 	SessionID      string `json:"sessionId"`
 	Cwd            string `json:"cwd,omitempty"`
 	Source         string `json:"source,omitempty"`
+	Surface        string `json:"surface,omitempty"`
 	InitialPrompt  string `json:"initialPrompt,omitempty"`
 	TranscriptPath string `json:"transcriptPath,omitempty"`
 	StartedAt      string `json:"startedAt,omitempty"`
@@ -73,6 +74,7 @@ type Fragment struct {
 	TurnID          string           `json:"turnId"`
 	Cwd             string           `json:"cwd,omitempty"`
 	Source          string           `json:"source,omitempty"`
+	Surface         string           `json:"surface,omitempty"`
 	Prompt          string           `json:"prompt,omitempty"`
 	PromptHash      string           `json:"promptHash,omitempty"`
 	InitialPrompt   string           `json:"initialPrompt,omitempty"`

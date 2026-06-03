@@ -513,7 +513,7 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			hookResponse:        `{"action":"deny","reason":"blocked tool"}`,
 			wantServerCalled:    true,
-			wantStdoutContains:  []string{`"permissionDecision":"deny"`, `A Grafana AI Observability policy`, `blocked tool`},
+			wantStdoutContains:  []string{`"hookSpecificOutput"`, `"hookEventName":"PreToolUse"`, `"permissionDecision":"deny"`, `A Grafana AI Observability policy`, `blocked tool`},
 			wantToolRecordCount: 0,
 		},
 		{

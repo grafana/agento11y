@@ -49,6 +49,9 @@ func SessionStart(p Payload, cfg config.Config, logger *log.Logger) {
 		if src := p.Source(); src != "" {
 			s.Source = src
 		}
+		if surface := p.Surface(); surface != "" {
+			s.Surface = surface
+		}
 		if cfg.ContentCapture != sigil.ContentCaptureModeMetadataOnly {
 			if initialPrompt := p.InitialPrompt(); initialPrompt != "" {
 				s.InitialPrompt = initialPrompt
@@ -139,7 +142,13 @@ func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Con
 			ModelName:     modelName,
 		}, logger)
 		if res.Blocked() {
-			emitCopilotDeny(stdout, res.Reason, logger)
+			// Copilot command hooks (both the CLI and Copilot Chat in VS
+			// Code) read the deny verdict from the nested
+			// hookSpecificOutput.permissionDecision envelope — the same
+			// shape Claude Code and Codex use. A top-level permissionDecision
+			// (the Copilot *SDK* return shape) is silently ignored by VS
+			// Code, so the tool would run anyway. Use the shared writer.
+			guard.WriteHookSpecificOutputDeny(stdout, res.Reason)
 			return
 		}
 	}
@@ -165,29 +174,6 @@ func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Con
 		})
 	}); err != nil {
 		logger.Printf("preToolUse: update turn: %v", err)
-	}
-}
-
-// copilotDecision matches GitHub's documented preToolUse stdout shape:
-// top-level permissionDecision and permissionDecisionReason. Sigil only
-// emits permissionDecision=deny here; allow paths stay stdout-empty.
-type copilotDecision struct {
-	PermissionDecision       string `json:"permissionDecision"`
-	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
-}
-
-func emitCopilotDeny(stdout io.Writer, reason string, logger *log.Logger) {
-	if stdout == nil {
-		return
-	}
-	if strings.TrimSpace(reason) == "" {
-		reason = "tool call denied by Sigil guard"
-	}
-	if err := json.NewEncoder(stdout).Encode(copilotDecision{
-		PermissionDecision:       "deny",
-		PermissionDecisionReason: reason,
-	}); err != nil && logger != nil {
-		logger.Printf("preToolUse: write deny decision: %v", err)
 	}
 }
 
@@ -444,6 +430,9 @@ func updateCommon(sessionID, turnID string, session *fragment.Session, p Payload
 		if src := p.Source(); src != "" {
 			f.Source = src
 		}
+		if surface := p.Surface(); surface != "" {
+			f.Surface = surface
+		}
 		if transcriptPath := p.TranscriptPath(); transcriptPath != "" {
 			f.TranscriptPath = transcriptPath
 		}
@@ -471,6 +460,9 @@ func applySessionDefaults(f *fragment.Fragment, session *fragment.Session) {
 	}
 	if f.Source == "" {
 		f.Source = session.Source
+	}
+	if f.Surface == "" {
+		f.Surface = session.Surface
 	}
 	if f.TranscriptPath == "" {
 		f.TranscriptPath = session.TranscriptPath

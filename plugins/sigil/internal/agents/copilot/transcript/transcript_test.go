@@ -247,3 +247,41 @@ func TestReadAssistantTurnMatchesPromptHash(t *testing.T) {
 		t.Fatalf("RequestID = %q", got.RequestID)
 	}
 }
+
+// TestReadAssistantTurnVSCodeFormatNoInteractionID mirrors the copilot-chat
+// transcript emitted by VS Code, which (unlike the Copilot CLI) omits
+// interactionId. The prompt-hint match must still associate the final
+// assistant.message with the preceding user.message via the lastUserPrompt
+// fallback, otherwise assistant text is silently dropped for VS Code sessions.
+func TestReadAssistantTurnVSCodeFormatNoInteractionID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	contents := "" +
+		"{\"type\":\"session.start\",\"data\":{\"sessionId\":\"sess-1\",\"copilotVersion\":\"0.50.1\"}}\n" +
+		"{\"type\":\"user.message\",\"data\":{\"content\":\"create an empty test file\"}}\n" +
+		"{\"type\":\"assistant.message\",\"data\":{\"messageId\":\"m1\",\"content\":\"Creating that now.\",\"toolRequests\":[{\"toolCallId\":\"c1\"}]}}\n" +
+		"{\"type\":\"tool.execution_start\",\"data\":{\"toolCallId\":\"c1\",\"toolName\":\"create_file\"}}\n" +
+		"{\"type\":\"tool.execution_complete\",\"data\":{\"toolCallId\":\"c1\",\"success\":true}}\n" +
+		"{\"type\":\"assistant.message\",\"data\":{\"messageId\":\"m2\",\"content\":\"Created an empty file at test.\"}}\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	prompt := "create an empty test file"
+	got, ok, err := ReadAssistantTurn(path, ReadHint{UserPrompt: prompt, UserPromptHash: PromptHash(prompt)})
+	if err != nil {
+		t.Fatalf("ReadAssistantTurn: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected transcript snapshot via lastUserPrompt fallback")
+	}
+	if got.AssistantText != "Created an empty file at test." {
+		t.Fatalf("AssistantText = %q", got.AssistantText)
+	}
+	if got.CopilotVersion != "0.50.1" {
+		t.Fatalf("CopilotVersion = %q", got.CopilotVersion)
+	}
+	if got.UserPrompt != prompt {
+		t.Fatalf("UserPrompt = %q", got.UserPrompt)
+	}
+}

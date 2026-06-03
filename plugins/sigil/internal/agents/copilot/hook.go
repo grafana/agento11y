@@ -48,6 +48,16 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		logger.Print("dispatch: missing hook_event_name")
 		return nil
 	}
+	// The Copilot payload carries no host identifier and one shared
+	// ~/.copilot/hooks file is read by both the CLI and VS Code, so the
+	// surface (vscode vs copilot-cli) is resolved at runtime: an explicit
+	// SIGIL_COPILOT_HOOK_SURFACE env wins, otherwise it is inferred from the
+	// process tree. Stamp it onto the payload so handlers persist it.
+	payload.SurfaceMarker = surfaceDetect()
+	surfaceLog := payload.SurfaceMarker
+	if surfaceLog == "" {
+		surfaceLog = "unknown"
+	}
 	sessionID := payload.SessionID()
 	defer func() {
 		activeTurnID := ""
@@ -59,7 +69,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		fragment.CleanupStaleExcept(fragment.DefaultStaleAge, time.Now(), logger, sessionID, activeTurnID)
 	}()
 	cfg := config.Load(logger)
-	logger.Printf("dispatch: event=%s", eventName)
+	logger.Printf("dispatch: event=%s surface=%s", eventName, surfaceLog)
 	switch eventName {
 	case "sessionStart", "SessionStart":
 		hook.SessionStart(payload, cfg, logger)

@@ -3,6 +3,7 @@ package copilot
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -17,75 +18,88 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestMain redirects user-level Copilot hooks writes to a throwaway COPILOT_HOME
+// so tests exercising the install path never touch the developer's real
+// ~/.copilot. Individual tests override COPILOT_HOME with their own temp dir.
+func TestMain(m *testing.M) {
+	tmp, err := os.MkdirTemp("", "sigil-copilot-hooks-test-*")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("COPILOT_HOME", tmp)
+	code := m.Run()
+	_ = os.RemoveAll(tmp)
+	os.Exit(code)
+}
+
 func TestLaunch(t *testing.T) {
 	const binPath = "/usr/local/bin/copilot"
-	pluginInstalledOut := []byte("Installed plugins:\n  • sigil-copilot (v0.1.0)\n")
+	pluginInstalledOut := []byte("Installed plugins:\n  • sigil-copilot (v0.2.0)\n")
 	pluginOtherOut := []byte("Installed plugins:\n  • other-plugin (v1.0.0)\n")
-	pluginEmptyOut := []byte("Installed plugins:\n")
 
 	cases := []struct {
 		name string
 
-		lookPath   func(string) (string, error)
-		pluginList func(context.Context, string) ([]byte, error)
-		runInstall func(context.Context, string, io.Writer) error // nil = success
-		execFn     func(string, []string, []string) error         // nil = success
-		args       []string
+		lookPath     func(string) (string, error)
+		pluginList   func(context.Context, string) ([]byte, error)
+		runUninstall func(context.Context, string, io.Writer) error // nil = success
+		execFn       func(string, []string, []string) error         // nil = success
+		args         []string
 
-		wantErr      string   // substring; "" means no error
-		wantInstall  int      // expected runInstall call count
-		wantExec     bool     // whether execFn must be called
-		wantExecArgv []string // nil = don't assert
-		wantStderr   []string // substrings that must appear in stderr
-		wantLog      []string // substrings that must appear in the logger output
+		wantErr       string   // substring; "" means no error
+		wantUninstall int      // expected runUninstall call count
+		wantExec      bool     // whether execFn must be called
+		wantExecArgv  []string // nil = don't assert
+		wantStderr    []string // substrings that must appear in stderr
+		wantLog       []string // substrings that must appear in the logger output
 	}{
 		{
-			name:     "missing copilot binary",
+			name:     "missing copilot binary still surfaces error",
 			lookPath: func(string) (string, error) { return "", exec.ErrNotFound },
 			wantErr:  "copilot CLI not found",
 		},
 		{
-			name:         "skips install when plugin installed and forwards args",
-			lookPath:     func(string) (string, error) { return binPath, nil },
-			pluginList:   func(context.Context, string) ([]byte, error) { return pluginInstalledOut, nil },
-			args:         []string{"exec", "hi"},
-			wantInstall:  0,
-			wantExec:     true,
-			wantExecArgv: []string{binPath, "exec", "hi"},
+			name:          "no plugin installed forwards args without uninstall",
+			lookPath:      func(string) (string, error) { return binPath, nil },
+			pluginList:    func(context.Context, string) ([]byte, error) { return pluginOtherOut, nil },
+			args:          []string{"exec", "hi"},
+			wantUninstall: 0,
+			wantExec:      true,
+			wantExecArgv:  []string{binPath, "exec", "hi"},
 		},
 		{
-			name:        "runs install when plugin missing",
-			lookPath:    func(string) (string, error) { return binPath, nil },
-			pluginList:  func(context.Context, string) ([]byte, error) { return pluginOtherOut, nil },
-			wantInstall: 1,
-			wantExec:    true,
-			wantStderr:  []string{"registering " + PluginName + " with copilot"},
+			name:          "stale plugin is uninstalled then execs",
+			lookPath:      func(string) (string, error) { return binPath, nil },
+			pluginList:    func(context.Context, string) ([]byte, error) { return pluginInstalledOut, nil },
+			wantUninstall: 1,
+			wantExec:      true,
+			wantStderr:    []string{"removing the legacy " + PluginName + " plugin"},
 		},
 		{
-			name:        "runs install when plugin list probe fails",
-			lookPath:    func(string) (string, error) { return binPath, nil },
-			pluginList:  func(context.Context, string) ([]byte, error) { return nil, errors.New("probe boom") },
-			wantInstall: 1,
-			wantExec:    true,
-			wantLog:     []string{"probe boom"},
+			name:          "plugin list probe failure is non-fatal",
+			lookPath:      func(string) (string, error) { return binPath, nil },
+			pluginList:    func(context.Context, string) ([]byte, error) { return nil, errors.New("probe boom") },
+			wantUninstall: 0,
+			wantExec:      true,
+			wantLog:       []string{"probe boom"},
 		},
 		{
-			name:        "continues when install fails",
-			lookPath:    func(string) (string, error) { return binPath, nil },
-			pluginList:  func(context.Context, string) ([]byte, error) { return pluginEmptyOut, nil },
-			runInstall:  func(context.Context, string, io.Writer) error { return errors.New("network down") },
-			wantInstall: 1,
-			wantExec:    true,
+			name:          "continues when uninstall fails",
+			lookPath:      func(string) (string, error) { return binPath, nil },
+			pluginList:    func(context.Context, string) ([]byte, error) { return pluginInstalledOut, nil },
+			runUninstall:  func(context.Context, string, io.Writer) error { return errors.New("network down") },
+			wantUninstall: 1,
+			wantExec:      true,
 			wantStderr: []string{
-				"install of " + PluginName + " failed",
+				"could not remove the " + PluginName + " plugin",
 				"network down",
-				"copilot plugin install grafana/sigil-sdk:plugins/copilot",
+				"copilot plugin uninstall " + PluginName,
 			},
 		},
 		{
 			name:       "exec failure surfaces error",
 			lookPath:   func(string) (string, error) { return binPath, nil },
-			pluginList: func(context.Context, string) ([]byte, error) { return pluginInstalledOut, nil },
+			pluginList: func(context.Context, string) ([]byte, error) { return pluginOtherOut, nil },
 			execFn:     func(string, []string, []string) error { return errors.New("exec boom") },
 			wantExec:   true,
 			wantErr:    "exec copilot",
@@ -94,7 +108,6 @@ func TestLaunch(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("SIGIL_AUTO_UPDATE", "false")
 			withLookPath(t, tc.lookPath)
 
 			listFn := tc.pluginList
@@ -106,17 +119,17 @@ func TestLaunch(t *testing.T) {
 			}
 			withPluginList(t, listFn)
 
-			installFn := tc.runInstall
-			if installFn == nil {
-				installFn = func(context.Context, string, io.Writer) error { return nil }
+			uninstallFn := tc.runUninstall
+			if uninstallFn == nil {
+				uninstallFn = func(context.Context, string, io.Writer) error { return nil }
 			}
-			installCalls := 0
-			withRunInstall(t, func(ctx context.Context, bin string, w io.Writer) error {
-				installCalls++
+			uninstallCalls := 0
+			withRunUninstall(t, func(ctx context.Context, bin string, w io.Writer) error {
+				uninstallCalls++
 				if bin != binPath {
-					t.Errorf("install bin = %q, want %q", bin, binPath)
+					t.Errorf("uninstall bin = %q, want %q", bin, binPath)
 				}
-				return installFn(ctx, bin, w)
+				return uninstallFn(ctx, bin, w)
 			})
 
 			execMock := tc.execFn
@@ -143,7 +156,7 @@ func TestLaunch(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			assert.Equal(t, tc.wantInstall, installCalls)
+			assert.Equal(t, tc.wantUninstall, uninstallCalls)
 			assert.Equal(t, tc.wantExec, execCalled)
 			if tc.wantExecArgv != nil {
 				assert.Equal(t, tc.wantExecArgv, execArgv)
@@ -175,11 +188,7 @@ func TestLaunch_LocalEnv(t *testing.T) {
 
 			withLookPath(t, func(string) (string, error) { return "/usr/local/bin/copilot", nil })
 			withPluginList(t, func(context.Context, string) ([]byte, error) {
-				return []byte("Installed plugins:\n  • sigil-copilot (v0.1.0)\n"), nil
-			})
-			withRunInstall(t, func(context.Context, string, io.Writer) error {
-				t.Fatal("runInstall must not be called when plugin is installed")
-				return nil
+				return []byte("Installed plugins:\n  • other-plugin (v1.0.0)\n"), nil
 			})
 
 			var execEnv []string
@@ -274,11 +283,11 @@ func withLookPath(t *testing.T, fn func(string) (string, error)) {
 	lookPath = fn
 }
 
-func withRunInstall(t *testing.T, fn func(context.Context, string, io.Writer) error) {
+func withRunUninstall(t *testing.T, fn func(context.Context, string, io.Writer) error) {
 	t.Helper()
-	prev := runInstall
-	t.Cleanup(func() { runInstall = prev })
-	runInstall = fn
+	prev := runUninstall
+	t.Cleanup(func() { runUninstall = prev })
+	runUninstall = fn
 }
 
 func withExecFn(t *testing.T, fn func(string, []string, []string) error) {
@@ -310,47 +319,106 @@ func nopLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
 }
 
-func withRunUpdate(t *testing.T, fn func(context.Context, string, io.Writer) error) {
+// userHooksPath returns the sigil.json path under the test's COPILOT_HOME.
+func userHooksPath(t *testing.T) string {
 	t.Helper()
-	prev := runUpdate
-	t.Cleanup(func() { runUpdate = prev })
-	runUpdate = fn
+	return filepath.Join(os.Getenv("COPILOT_HOME"), "hooks", "sigil.json")
 }
 
-func TestLaunch_RefreshesInstalledPlugin(t *testing.T) {
-	const binPath = "/usr/local/bin/copilot"
-	state := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", state)
+// assertValidUserHooks checks the written file is the expected Copilot hooks
+// document: version 1, every wired event, and the shared `sigil copilot hook`
+// command carrying its event env var.
+func assertValidUserHooks(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
 
-	withLookPath(t, func(string) (string, error) { return binPath, nil })
-	withPluginList(t, func(context.Context, string) ([]byte, error) {
-		return []byte("Installed plugins:\n  • sigil-copilot (v0.1.0)\n"), nil
-	})
-	withRunInstall(t, func(context.Context, string, io.Writer) error {
-		t.Fatal("runInstall must not be called when plugin is already installed")
-		return nil
-	})
+	var f struct {
+		Version int `json:"version"`
+		Hooks   map[string][]struct {
+			Hooks []struct {
+				Type    string            `json:"type"`
+				Command string            `json:"command"`
+				Env     map[string]string `json:"env"`
+				Timeout int               `json:"timeout"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	require.NoError(t, json.Unmarshal(data, &f), "written hooks file must be valid JSON")
+	assert.Equal(t, 1, f.Version)
 
-	updateCalls := 0
-	withRunUpdate(t, func(_ context.Context, bin string, _ io.Writer) error {
-		updateCalls++
-		if bin != binPath {
-			t.Errorf("update bin = %q", bin)
-		}
-		return nil
-	})
-	withExecFn(t, func(string, []string, []string) error { return nil })
+	wantEvents := []string{
+		"sessionStart", "sessionEnd", "userPromptSubmitted", "preToolUse",
+		"postToolUse", "postToolUseFailure", "errorOccurred", "subagentStart",
+		"subagentStop", "agentStop",
+	}
+	for _, ev := range wantEvents {
+		groups, ok := f.Hooks[ev]
+		require.Truef(t, ok, "missing event %q", ev)
+		require.Len(t, groups, 1)
+		require.Len(t, groups[0].Hooks, 1)
+		cmd := groups[0].Hooks[0]
+		assert.Equal(t, "command", cmd.Type)
+		assert.Equal(t, "sigil copilot hook", cmd.Command)
+		assert.Equal(t, ev, cmd.Env["SIGIL_COPILOT_HOOK_EVENT"])
+		// The shared user file must NOT pin a surface — runtime detection
+		// distinguishes VS Code from the copilot CLI for this same file.
+		assert.Empty(t, cmd.Env["SIGIL_COPILOT_HOOK_SURFACE"])
+	}
+	assert.Equal(t, 30, f.Hooks["agentStop"][0].Hooks[0].Timeout)
+}
+
+// When the copilot CLI is missing, the launcher cannot start a session, but it
+// must still install the shared user-level hooks (read by Copilot in VS Code)
+// before surfacing the not-found error.
+func TestLaunch_MissingBinaryInstallsUserHooks(t *testing.T) {
+	t.Setenv("COPILOT_HOME", t.TempDir())
+	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
 	var stderr bytes.Buffer
-	require.NoError(t, launchWithLogger(t, nil, &stderr, log.New(io.Discard, "", 0)))
-	if updateCalls != 1 {
-		t.Fatalf("runUpdate calls = %d, want 1", updateCalls)
-	}
-	if !strings.Contains(stderr.String(), "refreshing "+PluginName+" in copilot") {
-		t.Fatalf("stderr missing refresh message: %q", stderr.String())
-	}
-	stamp := filepath.Join(state, "sigil", "update-checks", PluginName+".stamp")
-	if _, err := os.Stat(stamp); err != nil {
-		t.Fatalf("expected update stamp: %v", err)
-	}
+	err := launchWithLogger(t, nil, &stderr, nopLogger())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "copilot CLI not found")
+
+	assertValidUserHooks(t, userHooksPath(t))
+	assert.Contains(t, stderr.String(), "installed Copilot hooks at")
+}
+
+// The shared hooks file must be installed and KEPT even when copilot is present
+// and a stale plugin is uninstalled — VS Code relies on it and the CLI reads
+// the same file, so it is the single source of truth.
+func TestLaunch_InstallsAndKeepsUserHooks(t *testing.T) {
+	t.Setenv("COPILOT_HOME", t.TempDir())
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/copilot", nil })
+	withPluginList(t, func(context.Context, string) ([]byte, error) {
+		return []byte("Installed plugins:\n  • sigil-copilot (v0.2.0)\n"), nil
+	})
+	uninstalled := false
+	withRunUninstall(t, func(context.Context, string, io.Writer) error {
+		uninstalled = true
+		return nil
+	})
+	execCalled := false
+	withExecFn(t, func(string, []string, []string) error {
+		execCalled = true
+		return nil
+	})
+
+	require.NoError(t, launchWithLogger(t, nil, io.Discard, nopLogger()))
+	assert.True(t, execCalled, "should exec copilot")
+	assert.True(t, uninstalled, "stale plugin should be uninstalled")
+	// The shared file must remain after the run.
+	assertValidUserHooks(t, userHooksPath(t))
+}
+
+func TestRenderUserHooks_IsStableAndValid(t *testing.T) {
+	a, err := renderUserHooks()
+	require.NoError(t, err)
+	b, err := renderUserHooks()
+	require.NoError(t, err)
+	assert.Equal(t, a, b, "render must be deterministic for idempotent writes")
+	assert.True(t, json.Valid(a))
+	assert.Contains(t, string(a), "\"sigil copilot hook\"")
+	// The shared file must not pin a surface marker.
+	assert.NotContains(t, string(a), "SIGIL_COPILOT_HOOK_SURFACE")
 }

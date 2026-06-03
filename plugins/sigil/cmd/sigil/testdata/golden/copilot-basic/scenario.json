@@ -10,34 +10,34 @@
   },
   "events": [
     {
-      "_env": {"SIGIL_COPILOT_HOOK_EVENT": "sessionStart"},
+      "_env": {"SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli", "SIGIL_COPILOT_HOOK_EVENT": "sessionStart"},
       "session_id": "copilot-sess-1",
       "source": "new",
       "transcript_path": "{{transcript:main}}",
       "timestamp": "2026-05-03T12:00:00Z"
     },
     {
-      "_env": {"SIGIL_COPILOT_HOOK_EVENT": "userPromptSubmitted"},
+      "_env": {"SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli", "SIGIL_COPILOT_HOOK_EVENT": "userPromptSubmitted"},
       "session_id": "copilot-sess-1",
       "prompt": "hello glc_abcdefghijklmnopqrstuvwxyz",
       "timestamp": "2026-05-03T12:00:01Z"
     },
     {
-      "_env": {"SIGIL_COPILOT_HOOK_EVENT": "preToolUse"},
+      "_env": {"SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli", "SIGIL_COPILOT_HOOK_EVENT": "preToolUse"},
       "session_id": "copilot-sess-1",
       "tool_name": "bash",
       "tool_input": {"cmd": "echo hi"},
       "timestamp": "2026-05-03T12:00:02Z"
     },
     {
-      "_env": {"SIGIL_COPILOT_HOOK_EVENT": "postToolUse"},
+      "_env": {"SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli", "SIGIL_COPILOT_HOOK_EVENT": "postToolUse"},
       "session_id": "copilot-sess-1",
       "tool_name": "bash",
       "tool_result": {"text_result_for_llm": "ok"},
       "timestamp": "2026-05-03T12:00:03Z"
     },
     {
-      "_env": {"SIGIL_COPILOT_HOOK_EVENT": "agentStop"},
+      "_env": {"SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli", "SIGIL_COPILOT_HOOK_EVENT": "agentStop"},
       "session_id": "copilot-sess-1",
       "stop_reason": "end_turn",
       "transcript_path": "{{transcript:main}}",

@@ -34,6 +34,7 @@
           "copilot.agent_version": "1.0.50",
           "copilot.assistant_text_available": true,
           "copilot.error_count": 0,
+          "copilot.hook_surface": "copilot-cli",
           "copilot.interaction_id": "int-1",
           "copilot.message_id": "msg-1",
           "copilot.model_reported": true,
@@ -87,7 +88,8 @@
         "stop_reason": "end_turn",
         "tags": {
           "entrypoint": "copilot",
-          "hook.source": "new"
+          "hook.source": "new",
+          "hook.surface": "copilot-cli"
         },
         "tools": [
           {
