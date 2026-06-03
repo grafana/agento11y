@@ -271,8 +271,9 @@ func markPendingRetry(sessionID, turnID string, logger *log.Logger) {
 // turns with empty token usage.
 func sweepPendingRetries(ctx context.Context, client *sigil.Client, cfg config.Config, sessionID, currentTurnID string, logger *log.Logger) []string {
 	currentPath := fragment.FragmentFilePath(sessionID, currentTurnID)
-	var enqueued []string
-	for _, path := range fragment.ListTurnFiles(sessionID, logger) {
+	paths := fragment.ListTurnFiles(sessionID, logger)
+	enqueued := make([]string, 0, len(paths))
+	for _, path := range paths {
 		if path == currentPath {
 			continue
 		}

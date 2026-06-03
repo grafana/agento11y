@@ -644,8 +644,8 @@ func validateExportResponse(request *sigilv1.ExportGenerationsRequest, response 
 	if len(results) != requested {
 		return &exportValidationError{err: fmt.Errorf("generation export result count mismatch: requested=%d results=%d", requested, len(results)), retryable: true}
 	}
-	var malformed []string
-	var rejected []string
+	malformed := make([]string, 0, len(results))
+	rejected := make([]string, 0, len(results))
 	for _, result := range results {
 		if result == nil {
 			malformed = append(malformed, "<nil result>")

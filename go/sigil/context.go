@@ -8,6 +8,8 @@ type userIDContextKey struct{}
 type agentNameContextKey struct{}
 type agentVersionContextKey struct{}
 type contentCaptureModeContextKey struct{}
+type experimentRunContextKey struct{}
+type experimentRunIDContextKey struct{}
 
 // WithConversationID stores a conversation ID in the context.
 // StartGeneration, StartStreamingGeneration, and StartToolExecution read it when
@@ -85,4 +87,32 @@ func withContentCaptureMode(ctx context.Context, mode ContentCaptureMode) contex
 func contentCaptureModeFromContext(ctx context.Context) (ContentCaptureMode, bool) {
 	mode, ok := ctx.Value(contentCaptureModeContextKey{}).(ContentCaptureMode)
 	return mode, ok
+}
+
+func withExperimentRun(ctx context.Context, run *ExperimentRun) context.Context {
+	return context.WithValue(ctx, experimentRunContextKey{}, run)
+}
+
+func experimentRunFromContext(ctx context.Context) (*ExperimentRun, bool) {
+	run, ok := ctx.Value(experimentRunContextKey{}).(*ExperimentRun)
+	return run, ok && run != nil
+}
+
+// WithExperimentRunID stores a Sigil experiment run ID in the context.
+// StartGeneration and StartStreamingGeneration read it and tag normal
+// instrumentation with experiment.run_id / experiment_run_id.
+//
+// Use ExperimentRun.Context when the experiment runner and instrumented code
+// are in the same process; it also captures generation IDs for score export.
+// Use WithExperimentRunID when only the run ID crosses a process boundary, such
+// as an HTTP request into an already-instrumented service.
+func WithExperimentRunID(ctx context.Context, runID string) context.Context {
+	return context.WithValue(ctx, experimentRunIDContextKey{}, runID)
+}
+
+// ExperimentRunIDFromContext retrieves the experiment run ID stored by
+// WithExperimentRunID.
+func ExperimentRunIDFromContext(ctx context.Context) (string, bool) {
+	runID, ok := ctx.Value(experimentRunIDContextKey{}).(string)
+	return runID, ok && runID != ""
 }

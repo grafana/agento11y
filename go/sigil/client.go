@@ -538,21 +538,27 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 			seed.UserID = userID
 		}
 	}
-	if seed.UserID == "" && c.config.UserID != "" {
-		seed.UserID = c.config.UserID
-	}
 	if seed.AgentName == "" {
 		if name, ok := AgentNameFromContext(ctx); ok {
 			seed.AgentName = name
 		}
 	}
-	if seed.AgentName == "" && c.config.AgentName != "" {
-		seed.AgentName = c.config.AgentName
-	}
 	if seed.AgentVersion == "" {
 		if version, ok := AgentVersionFromContext(ctx); ok {
 			seed.AgentVersion = version
 		}
+	}
+	experimentRun, hasExperimentRun := experimentRunFromContext(ctx)
+	if hasExperimentRun {
+		seed = experimentRun.prepareGeneration(seed)
+	} else if experimentRunID, ok := ExperimentRunIDFromContext(ctx); ok {
+		seed = prepareGenerationForExperimentRunID(seed, experimentRunID)
+	}
+	if seed.UserID == "" && c.config.UserID != "" {
+		seed.UserID = c.config.UserID
+	}
+	if seed.AgentName == "" && c.config.AgentName != "" {
+		seed.AgentName = c.config.AgentName
 	}
 	if seed.AgentVersion == "" && c.config.AgentVersion != "" {
 		seed.AgentVersion = c.config.AgentVersion
@@ -602,7 +608,7 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 
 	callCtx = withContentCaptureMode(callCtx, ccMode)
 
-	return callCtx, &GenerationRecorder{
+	recorder := &GenerationRecorder{
 		client:             c,
 		ctx:                callCtx,
 		span:               span,
@@ -610,6 +616,10 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 		startedAt:          startedAt,
 		contentCaptureMode: ccMode,
 	}
+	if hasExperimentRun {
+		experimentRun.captureRecorder(recorder)
+	}
+	return callCtx, recorder
 }
 
 // StartEmbedding starts an embeddings GenAI span and returns a context for the provider call.

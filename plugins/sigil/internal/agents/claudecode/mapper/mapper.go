@@ -48,7 +48,7 @@ type userContext struct {
 // out so the next hook invocation re-reads them from the unchanged offset.
 func Coalesce(lines []transcript.Line) ([]transcript.Line, int64) {
 	var (
-		result         []transcript.Line
+		result         = make([]transcript.Line, 0, len(lines))
 		pending        []transcript.Line
 		lastSafeLen    int
 		lastSafeOffset int64
