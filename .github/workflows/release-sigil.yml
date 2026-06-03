@@ -81,18 +81,10 @@ jobs:
           DRY_RUN: ${{ inputs.dry-run }}
           NEW: ${{ steps.ver.outputs.new }}
         run: |
-          NEW_SECTION=$(./.github/scripts/changelog-for-plugin.sh plugins/sigil "$NEW")
+          NEW_SECTION=$(./.github/scripts/changelog-for-release.sh "$NEW" plugins/sigil plugins/sigil)
 
-          # Prepend the new section, then the existing body (minus its old
-          # top-level header so we don't duplicate it).
-          {
-            printf '# Changelog\n\n'
-            printf '%s\n' "$NEW_SECTION"
-            if [[ -f plugins/sigil/CHANGELOG.md ]]; then
-              awk 'NR==1 && /^# /{next} {print}' plugins/sigil/CHANGELOG.md
-            fi
-          } > /tmp/CHANGELOG.md
-          mv /tmp/CHANGELOG.md plugins/sigil/CHANGELOG.md
+          # Prepend the new section to the existing changelog.
+          printf '%s\n' "$NEW_SECTION" | ./.github/scripts/prepend-changelog.sh plugins/sigil/CHANGELOG.md
 
           # Stash the section for the PR body and the run summary.
           {

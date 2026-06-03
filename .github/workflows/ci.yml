@@ -20,8 +20,11 @@ jobs:
       - name: Test bump-version.sh
         run: ./.github/scripts/bump-version.test.sh
 
-      - name: Test changelog-for-plugin.sh
-        run: ./.github/scripts/changelog-for-plugin.test.sh
+      - name: Test changelog-for-release.sh
+        run: ./.github/scripts/changelog-for-release.test.sh
+
+      - name: Test prepend-changelog.sh
+        run: ./.github/scripts/prepend-changelog.test.sh
 
   proto:
     name: Protobuf drift
