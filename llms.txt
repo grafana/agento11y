@@ -109,6 +109,7 @@ SIGIL_PROTOCOL=http
 SIGIL_AUTH_MODE=basic
 SIGIL_AUTH_TENANT_ID=<your-instance-id>
 SIGIL_AUTH_TOKEN=<glc_... token>
+SIGIL_TAGS=project=my-app,env=dev   # optional; also sigil.tag.<key> on OTel spans/metrics
 
 # OTel traces and metrics (separate channel; same token)
 OTEL_EXPORTER_OTLP_ENDPOINT=<from stack OpenTelemetry card>
@@ -435,7 +436,7 @@ In the grafana/sigil-sdk repo:
   - `stop_reason` / `finish_reason`
   - Full token usage including `cache_read_input_tokens`, `cache_write_input_tokens`, and `reasoning_tokens` when the provider returns them
 - Always check `rec.err()` / `Err()` after the generation recorder closes; SDK validation or enqueue errors are otherwise silent.
-- Use `tags` on `GenerationStart` for filtering in the Sigil UI (e.g. pipeline name, layer, agent role).
+- Use `SIGIL_TAGS` (client-level) or `tags` on `GenerationStart` for filtering: export tags on generations; client-level tags also appear as `sigil.tag.<key>` on OTel spans and metrics (e.g. `project=my-app`).
 
 ## Validation checklist
 

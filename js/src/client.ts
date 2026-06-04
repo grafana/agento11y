@@ -133,6 +133,7 @@ const spanAttrToolType = 'gen_ai.tool.type';
 const spanAttrToolDescription = 'gen_ai.tool.description';
 const spanAttrToolCallArguments = 'gen_ai.tool.call.arguments';
 const spanAttrToolCallResult = 'gen_ai.tool.call.result';
+const spanAttrTagPrefix = 'sigil.tag.';
 const maxRatingConversationIdLen = 255;
 const maxRatingIdLen = 128;
 const maxRatingGenerationIdLen = 255;
@@ -727,6 +728,7 @@ export class SigilClient {
       thinkingEnabled: seed.thinkingEnabled,
       metadata: seed.metadata,
     });
+    setTagSpanAttributes(span, this.config.tags);
 
     return span;
   }
@@ -737,6 +739,7 @@ export class SigilClient {
       startTime: startedAt,
     });
     setEmbeddingStartSpanAttributes(span, seed);
+    setTagSpanAttributes(span, this.config.tags);
     return span;
   }
 
@@ -747,6 +750,7 @@ export class SigilClient {
     });
 
     setToolSpanAttributes(span, seed);
+    setTagSpanAttributes(span, this.config.tags);
     return span;
   }
 
@@ -964,9 +968,11 @@ export class SigilClient {
       generation.agentName,
       generation.agentVersion,
     );
+    const tagAttributes = tagMetricAttributes(this.config.tags);
     this.operationDurationHistogram.record(durationSeconds, {
       [spanAttrOperationName]: generation.operationName,
       ...identityAttributes,
+      ...tagAttributes,
       [spanAttrErrorType]: errorType,
       [spanAttrErrorCategory]: errorCategory,
     });
@@ -982,6 +988,7 @@ export class SigilClient {
 
     this.toolCallsHistogram.record(countToolCallParts(generation.output ?? []), {
       ...identityAttributes,
+      ...tagAttributes,
     });
 
     if (generation.operationName === 'streamText' && firstTokenAt !== undefined) {
@@ -989,6 +996,7 @@ export class SigilClient {
       if (ttftSeconds >= 0) {
         this.ttftHistogram.record(ttftSeconds, {
           ...identityAttributes,
+          ...tagAttributes,
         });
       }
     }
@@ -1009,9 +1017,11 @@ export class SigilClient {
       seed.agentName,
       seed.agentVersion,
     );
+    const tagAttributes = tagMetricAttributes(this.config.tags);
     this.operationDurationHistogram.record(durationSeconds, {
       [spanAttrOperationName]: defaultEmbeddingOperationName,
       ...identityAttributes,
+      ...tagAttributes,
       [spanAttrErrorType]: errorType,
       [spanAttrErrorCategory]: errorCategory,
     });
@@ -1020,6 +1030,7 @@ export class SigilClient {
       this.tokenUsageHistogram.record(result.inputTokens, {
         [spanAttrOperationName]: defaultEmbeddingOperationName,
         ...identityAttributes,
+        ...tagAttributes,
         [metricAttrTokenType]: metricTokenTypeInput,
       });
     }
@@ -1037,6 +1048,7 @@ export class SigilClient {
         generation.agentName,
         generation.agentVersion,
       ),
+      ...tagMetricAttributes(this.config.tags),
       [metricAttrTokenType]: tokenType,
     });
   }
@@ -1056,6 +1068,7 @@ export class SigilClient {
         toolExecution.agentName,
         toolExecution.agentVersion,
       ),
+      ...tagMetricAttributes(this.config.tags),
       [spanAttrErrorType]: errorType,
       [spanAttrErrorCategory]: errorCategory,
     });
@@ -1683,6 +1696,33 @@ function toolSpanName(toolName: string): string {
     return 'execute_tool unknown';
   }
   return `execute_tool ${normalized}`;
+}
+
+function tagMetricAttributes(tags: Record<string, string> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (tags === undefined) {
+    return out;
+  }
+  const pairs: { key: string; value: string }[] = [];
+  for (const [k, v] of Object.entries(tags)) {
+    const key = k.trim();
+    if (key.length === 0) {
+      continue;
+    }
+    pairs.push({ key, value: (v ?? '').trim() });
+  }
+  pairs.sort((a, b) => a.key.localeCompare(b.key));
+  for (const { key, value } of pairs) {
+    out[`${spanAttrTagPrefix}${key}`] = value;
+  }
+  return out;
+}
+
+function setTagSpanAttributes(span: Span, tags: Record<string, string> | undefined): void {
+  const attrs = tagMetricAttributes(tags);
+  for (const [key, value] of Object.entries(attrs)) {
+    span.setAttribute(key, value);
+  }
 }
 
 function metricIdentityAttributes(

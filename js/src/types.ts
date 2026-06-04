@@ -222,7 +222,10 @@ export interface SigilSdkConfig {
   agentVersion?: string;
   /** Default user identifier. Read from `SIGIL_USER_ID`. */
   userId?: string;
-  /** Default tags merged into every generation; per-call tags win. Read from `SIGIL_TAGS` (CSV). */
+  /**
+   * Default tags merged into every generation (per-call tags win) and emitted on
+   * OTel spans/metrics as `sigil.tag.<key>`. Read from `SIGIL_TAGS` (CSV).
+   */
   tags?: Record<string, string>;
   /**
    * When true, signals to downstream consumers (plugins, telemetry) that the

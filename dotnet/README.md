@@ -343,7 +343,7 @@ SDK schema defaults fill the rest.
 | `SIGIL_AGENT_NAME` | `SigilClientConfig.AgentName` |
 | `SIGIL_AGENT_VERSION` | `SigilClientConfig.AgentVersion` |
 | `SIGIL_USER_ID` | `SigilClientConfig.UserId` |
-| `SIGIL_TAGS` | `SigilClientConfig.Tags` (CSV merged under per-call tags) |
+| `SIGIL_TAGS` | `SigilClientConfig.Tags` (CSV; merged into generation export; Go/JS also emit `sigil.tag.<key>` on spans/metrics) |
 | `SIGIL_CONTENT_CAPTURE_MODE` | `SigilClientConfig.ContentCapture` |
 | `SIGIL_DEBUG` | `SigilClientConfig.Debug` (tri-state `bool?`) |
 
