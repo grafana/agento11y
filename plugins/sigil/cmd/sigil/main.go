@@ -442,7 +442,7 @@ func mergeTags(existing string, flagTags []string) string {
 		}
 		vals[k] = v
 	}
-	for _, part := range strings.Split(existing, ",") {
+	for part := range strings.SplitSeq(existing, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
