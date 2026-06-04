@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0] - 2026-06-04
+
+### Features
+
+- **plugins/sigil**: add --tag flag to set SIGIL_TAGS on launchers (#285)
+- **experiments**: go SDK support for experiments API (#277)
+- **plugins/copilot**: VS Code support, surface tracking, guard deny fix (#280)
+
 ## [0.8.0] - 2026-06-01
 
 ### Features
