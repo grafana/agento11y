@@ -9,16 +9,18 @@ import (
 
 // canonical SIGIL_* env-var names.
 const (
-	envEndpoint            = "SIGIL_ENDPOINT"
-	envProtocol            = "SIGIL_PROTOCOL"
-	envInsecure            = "SIGIL_INSECURE"
-	envHeaders             = "SIGIL_HEADERS"
-	envAuthMode            = "SIGIL_AUTH_MODE"
-	envAuthTenantID        = "SIGIL_AUTH_TENANT_ID"
-	envAuthToken           = "SIGIL_AUTH_TOKEN"
-	envAgentName           = "SIGIL_AGENT_NAME"
-	envAgentVersion        = "SIGIL_AGENT_VERSION"
-	envUserID              = "SIGIL_USER_ID"
+	envEndpoint     = "SIGIL_ENDPOINT"
+	envProtocol     = "SIGIL_PROTOCOL"
+	envInsecure     = "SIGIL_INSECURE"
+	envHeaders      = "SIGIL_HEADERS"
+	envAuthMode     = "SIGIL_AUTH_MODE"
+	envAuthTenantID = "SIGIL_AUTH_TENANT_ID"
+	envAuthToken    = "SIGIL_AUTH_TOKEN"
+	envAgentName    = "SIGIL_AGENT_NAME"
+	envAgentVersion = "SIGIL_AGENT_VERSION"
+	envUserID       = "SIGIL_USER_ID"
+	// envTags: comma-separated key=value pairs merged into generation export tags
+	// and emitted on OTel spans/metrics as sigil.tag.<key>.
 	envTags                = "SIGIL_TAGS"
 	envContentCaptureMode  = "SIGIL_CONTENT_CAPTURE_MODE"
 	envDebug               = "SIGIL_DEBUG"

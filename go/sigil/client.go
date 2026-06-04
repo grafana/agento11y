@@ -9,6 +9,7 @@ import (
 	"maps"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,8 +96,9 @@ type Config struct {
 	// empty and no user_id has been threaded through the request context.
 	// Read from SIGIL_USER_ID by ConfigFromEnv.
 	UserID string
-	// Tags are merged into every GenerationStart.Tags. Per-call tags win on
-	// key conflict. Read from SIGIL_TAGS (CSV) by ConfigFromEnv.
+	// Tags are merged into every GenerationStart.Tags (per-call tags win on
+	// key conflict) and emitted on OTel spans/metrics as sigil.tag.<key>.
+	// Read from SIGIL_TAGS (CSV) by ConfigFromEnv.
 	Tags map[string]string
 	// Debug, when set, signals downstream consumers (plugins, telemetry) that
 	// the SDK is running in verbose mode. Read from SIGIL_DEBUG by ConfigFromEnv.
@@ -213,6 +215,7 @@ const (
 	spanAttrToolDescription        = "gen_ai.tool.description"
 	spanAttrToolCallArguments      = "gen_ai.tool.call.arguments"
 	spanAttrToolCallResult         = "gen_ai.tool.call.result"
+	spanAttrTagPrefix              = "sigil.tag."
 
 	metricOperationDuration     = "gen_ai.client.operation.duration"
 	metricTokenUsage            = "gen_ai.client.token.usage"
@@ -605,6 +608,7 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 
 	callCtx, span := c.startSpan(ctx, spanGeneration, trace.SpanKindClient, startedAt)
 	span.SetAttributes(generationSpanAttributes(spanGeneration)...)
+	setSpanTagAttributes(span, c.config.Tags)
 
 	callCtx = withContentCaptureMode(callCtx, ccMode)
 
@@ -673,6 +677,7 @@ func (c *Client) StartEmbedding(ctx context.Context, start EmbeddingStart) (cont
 		trace.WithTimestamp(startedAt),
 	)
 	span.SetAttributes(embeddingSpanStartAttributes(seed)...)
+	setSpanTagAttributes(span, c.config.Tags)
 
 	return callCtx, &EmbeddingRecorder{
 		client:             c,
@@ -769,6 +774,7 @@ func (c *Client) StartToolExecution(ctx context.Context, start ToolExecutionStar
 		trace.WithTimestamp(startedAt),
 	)
 	span.SetAttributes(toolSpanAttributes(seed)...)
+	setSpanTagAttributes(span, c.config.Tags)
 
 	return callCtx, &ToolExecutionRecorder{
 		client:             c,
@@ -1894,10 +1900,12 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 		generation.AgentName,
 		generation.AgentVersion,
 	)
+	tagAttrs := c.clientTagMetricAttributes()
 	durationAttrs := append(
 		[]attribute.KeyValue{attribute.String(spanAttrOperationName, operationName(generation))},
 		identityAttrs...,
 	)
+	durationAttrs = append(durationAttrs, tagAttrs...)
 	durationAttrs = append(durationAttrs,
 		attribute.String(spanAttrErrorType, errorType),
 		attribute.String(spanAttrErrorCategory, errorCategory),
@@ -1912,6 +1920,7 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 			[]attribute.KeyValue{attribute.String(spanAttrOperationName, operationName(generation))},
 			identityAttrs...,
 		)
+		tokenAttrs = append(tokenAttrs, tagAttrs...)
 		tokenAttrs = append(tokenAttrs, attribute.String(metricAttrTokenType, tokenType))
 		c.instruments.tokenUsage.Record(ctx, value, metric.WithAttributes(tokenAttrs...))
 	}
@@ -1923,19 +1932,21 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 	recordToken(metricTokenTypeReasoning, generation.Usage.ReasoningTokens)
 
 	toolCalls := countToolCalls(generation.Output)
+	toolCallAttrs := append(append([]attribute.KeyValue(nil), identityAttrs...), tagAttrs...)
 	c.instruments.toolCallsPerOperation.Record(
 		ctx,
 		int64(toolCalls),
-		metric.WithAttributes(identityAttrs...),
+		metric.WithAttributes(toolCallAttrs...),
 	)
 
 	if operationName(generation) == defaultOperationNameStream && !firstTokenAt.IsZero() {
 		ttft := firstTokenAt.Sub(generation.StartedAt).Seconds()
 		if ttft >= 0 {
+			ttftAttrs := append(append([]attribute.KeyValue(nil), identityAttrs...), tagAttrs...)
 			c.instruments.timeToFirstToken.Record(
 				ctx,
 				ttft,
-				metric.WithAttributes(identityAttrs...),
+				metric.WithAttributes(ttftAttrs...),
 			)
 		}
 	}
@@ -1969,10 +1980,12 @@ func (c *Client) recordEmbeddingMetrics(
 	model := strings.TrimSpace(seed.Model.Name)
 	agentName := strings.TrimSpace(seed.AgentName)
 	identityAttrs := metricIdentityAttributes(provider, model, agentName, seed.AgentVersion)
+	tagAttrs := c.clientTagMetricAttributes()
 	durationAttrs := append(
 		[]attribute.KeyValue{attribute.String(spanAttrOperationName, defaultEmbeddingOperationName)},
 		identityAttrs...,
 	)
+	durationAttrs = append(durationAttrs, tagAttrs...)
 	durationAttrs = append(durationAttrs,
 		attribute.String(spanAttrErrorType, errorType),
 		attribute.String(spanAttrErrorCategory, errorCategory),
@@ -1988,6 +2001,7 @@ func (c *Client) recordEmbeddingMetrics(
 			[]attribute.KeyValue{attribute.String(spanAttrOperationName, defaultEmbeddingOperationName)},
 			identityAttrs...,
 		)
+		tokenAttrs = append(tokenAttrs, tagAttrs...)
 		tokenAttrs = append(tokenAttrs, attribute.String(metricAttrTokenType, metricTokenTypeInput))
 		c.instruments.tokenUsage.Record(
 			ctx,
@@ -2022,6 +2036,7 @@ func (c *Client) recordToolExecutionMetrics(ctx context.Context, seed ToolExecut
 		attribute.String(spanAttrOperationName, "execute_tool"),
 		attribute.String(spanAttrToolName, strings.TrimSpace(seed.ToolName)),
 	}, attrs...)
+	attrs = append(attrs, c.clientTagMetricAttributes()...)
 	attrs = append(attrs,
 		attribute.String(spanAttrErrorType, errorType),
 		attribute.String(spanAttrErrorCategory, errorCategory),
@@ -2031,6 +2046,51 @@ func (c *Client) recordToolExecutionMetrics(ctx context.Context, seed ToolExecut
 		duration,
 		metric.WithAttributes(attrs...),
 	)
+}
+
+func tagAttributes(tags map[string]string) []attribute.KeyValue {
+	if len(tags) == 0 {
+		return nil
+	}
+	type tagPair struct {
+		key   string
+		value string
+	}
+	pairs := make([]tagPair, 0, len(tags))
+	for k, v := range tags {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		pairs = append(pairs, tagPair{key: key, value: strings.TrimSpace(v)})
+	}
+	if len(pairs) == 0 {
+		return nil
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].key < pairs[j].key })
+	attrs := make([]attribute.KeyValue, 0, len(pairs))
+	for _, p := range pairs {
+		attrs = append(attrs, attribute.String(spanAttrTagPrefix+p.key, p.value))
+	}
+	return attrs
+}
+
+func setSpanTagAttributes(span trace.Span, tags map[string]string) {
+	if span == nil {
+		return
+	}
+	attrs := tagAttributes(tags)
+	if len(attrs) == 0 {
+		return
+	}
+	span.SetAttributes(attrs...)
+}
+
+func (c *Client) clientTagMetricAttributes() []attribute.KeyValue {
+	if c == nil {
+		return nil
+	}
+	return tagAttributes(c.config.Tags)
 }
 
 func metricIdentityAttributes(provider, model, agentName, agentVersion string) []attribute.KeyValue {

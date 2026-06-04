@@ -99,7 +99,7 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 | `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the AI Observability latency and tool-call panels stay empty. |
 | `SIGIL_OTEL_AUTH_TOKEN` | `SIGIL_AUTH_TOKEN` | Override the OTel password. |
 | `SIGIL_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
-| `SIGIL_TAGS` | — | `key=value,key=value` tags added to every generation. |
+| `SIGIL_TAGS` | — | `key=value,key=value` tags on every generation and as `sigil.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
 | `SIGIL_USER_ID` | — | Override the user id. |
 | `SIGIL_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
 | `SIGIL_GUARDS_ENABLED` | `false` | Enable Codex `PreToolUse` guards against Sigil rules. |
