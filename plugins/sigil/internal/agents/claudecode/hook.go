@@ -295,7 +295,13 @@ func readTranscriptSettled(ctx context.Context, path string, offset int64, logge
 
 		coalesced, safeOffset := mapper.Coalesce(raw)
 
-		settled := len(raw) > 0 && raw[len(raw)-1].EndOffset == safeOffset
+		// Settle when there is nothing left to wait for: either the read is
+		// empty (a redundant Stop/SessionEnd after a prior export — the user
+		// prompt that begins any real turn lands well before Stop fires, so an
+		// empty read means "nothing new", not "mid-flush"), or the tail is
+		// already the last complete assistant turn. Only a trailing tool_result
+		// or partial turn that Claude Code is still flushing warrants the wait.
+		settled := len(raw) == 0 || raw[len(raw)-1].EndOffset == safeOffset
 		if settled || !time.Now().Before(deadline) {
 			return coalesced, safeOffset, len(raw)
 		}

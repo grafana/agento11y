@@ -444,6 +444,35 @@ func TestReadTranscriptSettled_ReturnsImmediatelyWhenTerminal(t *testing.T) {
 	}
 }
 
+// TestReadTranscriptSettled_EmptyReadReturnsImmediately guards against blocking
+// the hook for the full settle window on a redundant Stop/SessionEnd: when the
+// read at the saved offset yields nothing (EOF / already exported), there is no
+// pending fragment to wait for, so the function must return at once.
+func TestReadTranscriptSettled_EmptyReadReturnsImmediately(t *testing.T) {
+	prev := transcriptSettleWindow
+	transcriptSettleWindow = 5 * time.Second
+	t.Cleanup(func() { transcriptSettleWindow = prev })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	sessionID := "already-exported"
+	content := buildHookAssistantJSONL(sessionID, "req_a", "end_turn", "done", 5) + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read from end-of-file: a prior export already consumed everything.
+	eof := int64(len(content))
+	start := time.Now()
+	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, eof, log.New(io.Discard, "", 0))
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("empty read took %s; expected immediate return without waiting out the settle window", elapsed)
+	}
+	if rawCount != 0 || len(lines) != 0 || safeOffset != 0 {
+		t.Fatalf("rawCount=%d len(lines)=%d safeOffset=%d, want 0/0/0", rawCount, len(lines), safeOffset)
+	}
+}
+
 func TestBuildToolResultMap(t *testing.T) {
 	tests := []struct {
 		name     string
