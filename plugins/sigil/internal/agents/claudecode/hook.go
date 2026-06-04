@@ -275,12 +275,12 @@ func handlePreToolUse(ctx context.Context, stdout io.Writer, input *hookInput, s
 // Because export happens solely on Stop/SessionEnd, no later event re-reads the
 // turn once it lands, so the final message is lost forever.
 //
-// To close the race we re-read until the transcript's tail is itself the last
-// complete assistant turn — i.e. the safe offset reaches the end of the last
-// meaningful line, meaning nothing is still landing — or transcriptSettleWindow
-// elapses. The common case (the turn is already fully flushed when Stop fires)
-// settles on the first read and adds no latency; only a detected trailing
-// fragment triggers the bounded wait.
+// To close the race we re-read until the tail no longer looks like an
+// assistant turn that is still landing (see tailNeedsSettle) or
+// transcriptSettleWindow elapses. The common case (the turn is already fully
+// flushed when Stop fires) settles on the first read and adds no latency; only
+// a trailing tool_result, a partial assistant line, or a lone prompt awaiting
+// its first assistant reply triggers the bounded wait.
 //
 // Returns the coalesced lines, the safe offset, and the raw line count so the
 // caller can distinguish "nothing to read" from "read but nothing complete".
@@ -295,15 +295,10 @@ func readTranscriptSettled(ctx context.Context, path string, offset int64, logge
 
 		coalesced, safeOffset := mapper.Coalesce(raw)
 
-		// Settle when there is nothing left to wait for: either the read is
-		// empty (a redundant Stop/SessionEnd after a prior export — the user
-		// prompt that begins any real turn lands well before Stop fires, so an
-		// empty read means "nothing new", not "mid-flush"), or the tail is
-		// already the last complete assistant turn. Only a trailing tool_result
-		// or partial turn that Claude Code is still flushing warrants the wait.
-		// A trailing user prompt (text only, no tool_result) is context for the
-		// next turn and doesn't indicate mid-flush state; treat as settled.
-		settled := len(raw) == 0 || raw[len(raw)-1].EndOffset == safeOffset || isUserTextPrompt(raw[len(raw)-1])
+		// Settle unless the tail is an assistant turn Claude Code is still
+		// flushing. An empty read (redundant Stop/SessionEnd after a prior
+		// export) has nothing to wait for, and tailNeedsSettle decides the rest.
+		settled := len(raw) == 0 || !tailNeedsSettle(raw[len(raw)-1], safeOffset)
 		if settled || !time.Now().Before(deadline) {
 			return coalesced, safeOffset, len(raw)
 		}
@@ -318,31 +313,45 @@ func readTranscriptSettled(ctx context.Context, path string, offset int64, logge
 	}
 }
 
-// isUserTextPrompt returns true if line is a user message containing only a
-// text prompt (no tool_result blocks). Such lines are context for the next
-// turn, not evidence that Claude Code is mid-flush, so they should not trigger
-// the settle wait.
-func isUserTextPrompt(line transcript.Line) bool {
-	if line.Type != "user" {
+// tailNeedsSettle reports whether the last raw transcript line indicates an
+// assistant turn that Claude Code is still flushing, so re-reading may recover
+// it. safeOffset is the end of the last complete assistant turn (from Coalesce).
+//
+//   - Tail is the last complete assistant turn (EndOffset == safeOffset): fully
+//     landed, nothing to wait for.
+//   - Tail is an assistant line that did not coalesce (no terminal stop_reason):
+//     a partial/streaming turn still landing — wait.
+//   - Tail is a tool_result: the assistant called a tool and will emit a follow
+//     -up turn that has not landed yet — wait (this is the diagnosed bug).
+//   - Tail is a plain user prompt: the start of a turn. Wait only when no
+//     completed assistant turn has landed in this batch (safeOffset == 0) — that
+//     is the symmetric race for a tool-free final turn whose assistant reply is
+//     still flushing. When a completed turn precedes the prompt (safeOffset > 0)
+//     the prompt belongs to a *future* turn, so the current event already has
+//     all it needs and must not block on it.
+func tailNeedsSettle(last transcript.Line, safeOffset int64) bool {
+	if last.EndOffset == safeOffset {
 		return false
 	}
-	var msg transcript.UserMessage
-	if err := json.Unmarshal(line.Message, &msg); err != nil {
-		return false
-	}
-	text, blocks, err := transcript.ParseUserContent(msg.Content)
-	if err != nil {
-		return false
-	}
-	if text != "" {
+	if last.Type == "assistant" {
 		return true
 	}
-	for _, b := range blocks {
-		if b.Type == "tool_result" {
-			return false
+
+	var msg transcript.UserMessage
+	if err := json.Unmarshal(last.Message, &msg); err != nil {
+		// Unknown shape: be conservative and wait rather than risk dropping
+		// an assistant turn that is mid-flush behind it.
+		return true
+	}
+	_, blocks, err := transcript.ParseUserContent(msg.Content)
+	if err == nil {
+		for _, b := range blocks {
+			if b.Type == "tool_result" {
+				return true
+			}
 		}
 	}
-	return true
+	return safeOffset == 0
 }
 
 func parseHookInput(r io.Reader) (*hookInput, error) {

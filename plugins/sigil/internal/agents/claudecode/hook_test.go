@@ -473,6 +473,83 @@ func TestReadTranscriptSettled_EmptyReadReturnsImmediately(t *testing.T) {
 	}
 }
 
+// TestReadTranscriptSettled_TrailingPromptAfterCompleteTurn guards against
+// blocking the settle window on a Stop whose tail is an already-flushed next
+// user prompt sitting after a complete assistant turn. The completed turn is
+// what the event reports; the prompt belongs to a future turn, so the read must
+// settle at once (returning the complete turn, leaving the prompt for later).
+func TestReadTranscriptSettled_TrailingPromptAfterCompleteTurn(t *testing.T) {
+	prev := transcriptSettleWindow
+	transcriptSettleWindow = 5 * time.Second
+	t.Cleanup(func() { transcriptSettleWindow = prev })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	sessionID := "trailing-prompt"
+	complete := buildHookAssistantJSONL(sessionID, "req_a", "end_turn", "done", 5) + "\n"
+	content := complete + buildHookUserJSONL(sessionID, "next question") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, 0, log.New(io.Discard, "", 0))
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("trailing-prompt read took %s; expected immediate return (completed turn already present)", elapsed)
+	}
+	if rawCount != 2 {
+		t.Fatalf("rawCount = %d, want 2 (assistant turn + trailing prompt)", rawCount)
+	}
+	// safeOffset must stop at the end of the completed assistant turn, leaving
+	// the trailing prompt to be consumed by a later event.
+	wantSafe := int64(len(complete))
+	if safeOffset != wantSafe {
+		t.Fatalf("safeOffset = %d, want %d (end of completed assistant turn)", safeOffset, wantSafe)
+	}
+	if lines[len(lines)-1].RequestID != "req_a" {
+		t.Fatalf("last coalesced line = %q, want req_a", lines[len(lines)-1].RequestID)
+	}
+}
+
+// TestReadTranscriptSettled_LonePromptWaitsForReply confirms the symmetric race
+// is still covered: a tool-free final turn whose only flushed line is the user
+// prompt (no completed assistant turn yet) must still poll so the assistant
+// reply is captured when it lands.
+func TestReadTranscriptSettled_LonePromptWaitsForReply(t *testing.T) {
+	prev := transcriptSettleWindow
+	transcriptSettleWindow = 2 * time.Second
+	t.Cleanup(func() { transcriptSettleWindow = prev })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	sessionID := "lone-prompt"
+	if err := os.WriteFile(path, []byte(buildHookUserJSONL(sessionID, "hi there")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return
+		}
+		defer func() { _ = f.Close() }()
+		_, _ = f.WriteString(buildHookAssistantJSONL(sessionID, "req_a", "end_turn", "hello", 4) + "\n")
+	}()
+
+	lines, safeOffset, rawCount := readTranscriptSettled(context.Background(), path, 0, log.New(io.Discard, "", 0))
+	if rawCount != 2 {
+		t.Fatalf("rawCount = %d, want 2 (prompt + late assistant reply)", rawCount)
+	}
+	last := lines[len(lines)-1]
+	if last.RequestID != "req_a" {
+		t.Fatalf("last coalesced line = %q, want req_a (the late reply)", last.RequestID)
+	}
+	if safeOffset != last.EndOffset {
+		t.Fatalf("safeOffset = %d, want %d (end of late reply)", safeOffset, last.EndOffset)
+	}
+}
+
 func TestBuildToolResultMap(t *testing.T) {
 	tests := []struct {
 		name     string
