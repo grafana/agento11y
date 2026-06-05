@@ -21,6 +21,7 @@ from opentelemetry import metrics, trace
 from opentelemetry.metrics import Histogram
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode, use_span
 
+from . import conversations as _conversations
 from . import experiments as _experiments
 from .config import ClientConfig, resolve_config
 from .context import (
@@ -826,6 +827,37 @@ class Client:
         return _experiments.get_experiment_report(
             **self._eval_args(),
             run_id=run_id,
+            retry=self._experiment_retry_policy(),
+        )
+
+    def list_collection_members(self, collection_id: str) -> list[dict[str, Any]]:
+        """Lists the saved conversations belonging to an eval collection.
+
+        Uses the protected eval control plane (see :meth:`_eval_args`). Returns
+        raw member dicts (``saved_id``, ``conversation_id``, ``name``, ...).
+        Pair with :func:`sigil_sdk.dataset_from_collection` to turn a collection
+        into experiment dataset items.
+        """
+
+        self._assert_open()
+        return _conversations.list_collection_members(
+            **self._eval_args(),
+            collection_id=collection_id,
+            retry=self._experiment_retry_policy(),
+        )
+
+    def get_conversation(self, conversation_id: str) -> dict[str, Any]:
+        """Fetches a single conversation (with its generations) by id.
+
+        Uses the protected eval control plane (see :meth:`_eval_args`). Returns
+        the raw conversation dict; use :func:`sigil_sdk.initial_user_prompt` to
+        recover the prompt that started it.
+        """
+
+        self._assert_open()
+        return _conversations.get_conversation(
+            **self._eval_args(),
+            conversation_id=conversation_id,
             retry=self._experiment_retry_policy(),
         )
 

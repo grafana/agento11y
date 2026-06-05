@@ -49,6 +49,7 @@ from .errors import (
 )
 from .experiment import (
     DatasetItem,
+    DatasetMode,
     DatasetScorer,
     DatasetTarget,
     ExperimentResult,
@@ -57,7 +58,9 @@ from .experiment import (
     ScoreOutput,
     TargetResult,
     UploadMode,
+    dataset_from_collection,
     experiment,
+    initial_user_prompt,
     stable_id,
 )
 from .hooks import (
@@ -145,6 +148,7 @@ __all__ = [
     "ConversationRatingValue",
     "CreateExperimentRequest",
     "DatasetItem",
+    "DatasetMode",
     "DatasetScorer",
     "DatasetTarget",
     "EmbeddingCaptureConfig",
@@ -216,7 +220,9 @@ __all__ = [
     "assistant_text_message",
     "content_capture_mode_from_context",
     "create_secret_redaction_sanitizer",
+    "dataset_from_collection",
     "experiment",
+    "initial_user_prompt",
     "set_cache_diagnostics",
     "conversation_id_from_context",
     "conversation_title_from_context",

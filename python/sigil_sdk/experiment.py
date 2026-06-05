@@ -65,6 +65,21 @@ RESERVED_METADATA_KEYS = (
 
 UploadMode = Literal["continuous", "bulk", "manual"]
 
+# How to turn a saved conversation into a dataset item. ``user_prompt`` re-runs
+# the agent from the conversation's initial user prompt (implemented). ``golden``
+# will additionally keep the original answer as a reference for LLM-judge
+# scoring (reserved; not implemented yet).
+DatasetMode = Literal["user_prompt", "golden"]
+
+# Message roles as recorded on conversation generations (proto enum names plus
+# their lowercase forms, to be liberal in what we accept).
+_USER_ROLES = frozenset({"MESSAGE_ROLE_USER", "user", "USER"})
+_SYSTEM_ROLES = frozenset({"MESSAGE_ROLE_SYSTEM", "system", "SYSTEM"})
+
+# Tag prefix linking an experiment run back to the collection its dataset came
+# from. The plugin UI and `gcx` filter runs on this.
+COLLECTION_ID_TAG_PREFIX = "collectionId:"
+
 
 @dataclass(slots=True)
 class DatasetItem:
@@ -128,6 +143,141 @@ def stable_id(prefix: str, *parts: Any) -> str:
 # Target and scorer callable signatures (documented as type aliases).
 DatasetTarget = Callable[[DatasetItem, "ExperimentRun"], "TargetResult | None"]
 DatasetScorer = Callable[[DatasetItem, TargetResult], "Sequence[ScoreOutput] | None"]
+
+
+# --------------------------------------------------------------------------- #
+# Building a dataset from an existing Sigil collection
+# --------------------------------------------------------------------------- #
+
+
+def _message_text(message: dict[str, Any]) -> str:
+    """Concatenates the text parts of one conversation message."""
+
+    parts = message.get("parts")
+    if not isinstance(parts, list):
+        return ""
+    texts = [p.get("text", "") for p in parts if isinstance(p, dict) and isinstance(p.get("text"), str)]
+    return "".join(texts).strip()
+
+
+def _generation_sort_key(generation: dict[str, Any]) -> str:
+    """Sort key picking the chronologically earliest generation (ISO-8601 sorts lexically)."""
+
+    return str(generation.get("started_at") or generation.get("created_at") or "")
+
+
+def initial_user_prompt(conversation: dict[str, Any]) -> str:
+    """Returns the initial user prompt from a fetched conversation.
+
+    Looks at the chronologically earliest generation and returns the text of its
+    last user-role input message — i.e. the user turn that kicked the
+    conversation off, skipping any leading system prompt (some agents record the
+    system prompt as a user-role message, so we keep the *last* user message).
+    Falls back to the first non-system message, then to ``""`` when nothing
+    usable is present.
+    """
+
+    generations = conversation.get("generations")
+    if not isinstance(generations, list) or not generations:
+        return ""
+    earliest = min(generations, key=_generation_sort_key)
+    messages = earliest.get("input")
+    if not isinstance(messages, list):
+        return ""
+
+    user_texts = [
+        text
+        for m in messages
+        if isinstance(m, dict) and str(m.get("role") or "") in _USER_ROLES
+        for text in (_message_text(m),)
+        if text
+    ]
+    if user_texts:
+        return user_texts[-1]
+
+    for m in messages:
+        if isinstance(m, dict) and str(m.get("role") or "") not in _SYSTEM_ROLES:
+            text = _message_text(m)
+            if text:
+                return text
+    return ""
+
+
+def dataset_from_collection(
+    client: Client,
+    collection_id: str,
+    *,
+    mode: DatasetMode = "user_prompt",
+    limit: int | None = None,
+    skip_empty: bool = True,
+) -> list[DatasetItem]:
+    """Builds experiment :class:`DatasetItem`s from a Sigil collection.
+
+    Lists the collection's saved conversations, fetches each one, and turns it
+    into a dataset item keyed by its initial user prompt:
+
+    - ``mode="user_prompt"`` (default, implemented): ``input`` is the
+      conversation's initial user prompt, so the experiment target can re-run
+      the agent from scratch on that prompt and you score the fresh answer.
+      ``expected`` is left ``None``.
+    - ``mode="golden"`` (reserved, not yet implemented): will additionally
+      capture the original assistant answer as ``expected`` so it can be used as
+      a reference in an LLM-as-judge scorer. Raises :class:`NotImplementedError`
+      for now.
+
+    Each item carries ``collection_id``, ``conversation_id``, ``saved_id`` and a
+    ``task_id`` (defaulting to the saved/conversation id) in ``metadata`` so the
+    Sigil report groups scores cleanly. ``limit`` caps how many members are
+    pulled; ``skip_empty`` drops conversations with no recoverable user prompt.
+
+    Pair the result with :class:`ExperimentRunner` (passing the same
+    ``collection_id`` so the run links back to the collection)::
+
+        ds = dataset_from_collection(client, collection_id)
+        runner = ExperimentRunner(client=client, run_id=..., name=...,
+                                  collection_id=collection_id)
+        runner.run(ds, target, [scorer])
+    """
+
+    if mode == "golden":
+        raise NotImplementedError(
+            "sigil dataset: mode='golden' is not implemented yet; use mode='user_prompt' "
+            "(the original answer will later be exposed as DatasetItem.expected)"
+        )
+    if mode != "user_prompt":
+        raise ValueError(f"sigil dataset: unknown mode {mode!r}; expected 'user_prompt' or 'golden'")
+
+    cid = (collection_id or "").strip()
+    if cid == "":
+        raise ValueError("sigil dataset: collection_id is required")
+
+    members = client.list_collection_members(cid)
+    if limit is not None:
+        members = members[: max(limit, 0)]
+
+    items: list[DatasetItem] = []
+    for member in members:
+        conversation_id = str(member.get("conversation_id") or "").strip()
+        if conversation_id == "":
+            continue
+        saved_id = str(member.get("saved_id") or "").strip()
+        conversation = client.get_conversation(conversation_id)
+        prompt = initial_user_prompt(conversation)
+        if skip_empty and prompt == "":
+            continue
+        item_id = saved_id or conversation_id
+        metadata: dict[str, Any] = {
+            "collection_id": cid,
+            "conversation_id": conversation_id,
+            "saved_id": saved_id,
+            "task_id": item_id,
+            "source": "collection",
+        }
+        name = str(member.get("name") or "").strip()
+        if name:
+            metadata["saved_name"] = name
+        items.append(DatasetItem(id=item_id, input=prompt, metadata=metadata))
+    return items
 
 
 class ExperimentRun:
@@ -439,6 +589,7 @@ def experiment(
     agent_version: str = "",
     extra_tags: dict[str, str] | None = None,
     extra_metadata: dict[str, Any] | None = None,
+    collection_id: str = "",
 ) -> Iterator[ExperimentRun]:
     """Opens an external experiment run and finalizes it on exit.
 
@@ -450,16 +601,33 @@ def experiment(
 
     ``agent_name``/``agent_version`` and ``extra_tags``/``extra_metadata`` are
     applied to every generation recorded via :meth:`ExperimentRun.start_generation`.
+
+    When ``collection_id`` is set (e.g. the collection a
+    :func:`dataset_from_collection` dataset came from), the run is linked to that
+    collection and a ``collectionId:<id>`` tag is added so it can be filtered in
+    the Sigil UI / ``gcx``.
     """
 
+    cid = (collection_id or "").strip()
+    run_tags = list(tags or [])
+    if cid:
+        collection_tag = f"{COLLECTION_ID_TAG_PREFIX}{cid}"
+        if collection_tag not in run_tags:
+            run_tags.append(collection_tag)
     create_metadata = _run_metadata(metadata, dataset, candidate)
+    # Also stamp the collection id into metadata. The dedicated collection_id
+    # field and the collectionId tag are sent too, but some backends don't yet
+    # persist those columns — metadata is durable, so the link survives there.
+    if cid:
+        create_metadata.setdefault("collection_id", cid)
     client.create_experiment(
         CreateExperimentRequest(
             run_id=run_id,
             name=name,
             source="external",
             description=description,
-            tags=list(tags or []),
+            tags=run_tags,
+            collection_id=cid,
             metadata=create_metadata,
         )
     )
@@ -524,6 +692,7 @@ class ExperimentRunner:
         agent_version: str = "",
         extra_tags: dict[str, str] | None = None,
         extra_metadata: dict[str, Any] | None = None,
+        collection_id: str = "",
     ) -> None:
         self._client = client
         self._run_id = run_id
@@ -540,6 +709,7 @@ class ExperimentRunner:
         self._agent_version = agent_version
         self._extra_tags = dict(extra_tags or {})
         self._extra_metadata = dict(extra_metadata or {})
+        self._collection_id = collection_id
 
     def run(
         self,
@@ -564,6 +734,7 @@ class ExperimentRunner:
             agent_version=self._agent_version,
             extra_tags=self._extra_tags,
             extra_metadata=self._extra_metadata,
+            collection_id=self._collection_id,
         ) as run:
             for item in items:
                 # Assign one stable conversation id per item before running the
