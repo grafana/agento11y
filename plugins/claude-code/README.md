@@ -4,10 +4,21 @@ Sends every Claude Code turn to [Grafana AI Observability](https://grafana.com/d
 
 ## 1. Install and launch
 
+**macOS** (Homebrew):
+
 ```sh
 brew install grafana/grafana/sigil
 sigil claude
 ```
+
+**Linux and Windows** (or any platform with Go 1.25+):
+
+```sh
+go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
+sigil claude
+```
+
+`go install` puts `sigil` in `go env GOPATH`/bin (or `GOBIN`); add that to `PATH`. See the [`sigil` binary README](../sigil/README.md#install) for details.
 
 `sigil claude` registers the `sigil-cc` plugin on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches Claude Code.
 

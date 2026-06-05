@@ -4,9 +4,25 @@ The launcher binary behind the [Claude Code](../claude-code), [Codex](../codex),
 
 ## Install
 
+On macOS use Homebrew; on Linux and Windows (or any platform with Go 1.25+) use `go install`.
+
+**macOS** — Homebrew:
+
 ```sh
 brew install grafana/grafana/sigil
 ```
+
+Upgrade later with `brew upgrade grafana/grafana/sigil`.
+
+**Linux and Windows** — `go install` (also works on macOS):
+
+```sh
+go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
+```
+
+This installs the binary to `go env GOPATH`/bin (or `GOBIN` if set); make sure that directory is on your `PATH`. Re-run the same command to upgrade.
+
+Verify the install with `sigil --version`.
 
 ## Configure
 
