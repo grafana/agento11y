@@ -94,6 +94,18 @@ jobs:
       - name: Test
         run: cd ${{ matrix.module }} && GOWORK=off go test ./...
 
+      - name: Build Sigil CLI
+        if: matrix.module == 'plugins/sigil'
+        env:
+          GOWORK: "off"
+        run: |
+          cd ${{ matrix.module }}
+          for target in windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do
+            echo "::group::build $target"
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build ./...
+            echo "::endgroup::"
+          done
+
   go:
     name: Go SDK
     runs-on: ubuntu-latest
