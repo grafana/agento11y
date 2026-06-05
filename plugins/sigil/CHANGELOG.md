@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.10.0] - 2026-06-05
+
+### Bug Fixes
+
+- **plugins/claude**: capture final assistant turn lost to transcript flush race (#287)
+
 ## [0.9.0] - 2026-06-04
 
 ### Features
