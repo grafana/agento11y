@@ -163,7 +163,7 @@ def _message_text(message: dict[str, Any]) -> str:
 def _generation_sort_key(generation: dict[str, Any]) -> str:
     """Sort key picking the chronologically earliest generation (ISO-8601 sorts lexically)."""
 
-    return str(generation.get("started_at") or generation.get("created_at") or "")
+    return str(generation.get("started_at") or generation.get("created_at") or "~")
 
 
 def initial_user_prompt(conversation: dict[str, Any]) -> str:
