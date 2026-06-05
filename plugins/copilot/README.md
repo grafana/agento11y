@@ -17,10 +17,21 @@ came from (`hook.surface` = `copilot-cli` or `vscode`).
 
 ## 1. Install and launch
 
+**macOS** (Homebrew):
+
 ```sh
 brew install grafana/grafana/sigil
 sigil copilot -- <copilot args>
 ```
+
+**Linux and Windows** (or any platform with Go 1.25+):
+
+```sh
+go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
+sigil copilot -- <copilot args>
+```
+
+`go install` puts `sigil` in `go env GOPATH`/bin (or `GOBIN`); add that to `PATH`. See the [`sigil` binary README](../sigil/README.md#install) for details.
 
 `sigil copilot` writes the shared hooks file to `~/.copilot/hooks/sigil.json`, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, removes any legacy `sigil-copilot` plugin left by older versions, and then launches Copilot CLI.
 
@@ -191,7 +202,7 @@ field and the `SIGIL_DEBUG` log line (`dispatch: event=… surface=…`).
 |---|---|
 | Hooks file missing at `~/.copilot/hooks/sigil.json` | Re-run `sigil copilot -- <args>` (it writes the file before launching). For VS Code, also add `~/.copilot/hooks` to `chat.hookFilesLocations`. |
 | Turns appear twice in Sigil | A leftover `sigil-copilot` plugin is firing alongside the shared file. Remove it: `copilot plugin uninstall sigil-copilot` (newer `sigil copilot` runs do this automatically). |
-| Command not found | Reinstall: `brew install grafana/grafana/sigil`. Check `sigil --version`. |
+| Command not found | Reinstall `sigil` (see step 1). Check `sigil --version` and that its install dir is on `PATH`. |
 | Hooks run but nothing appears in Sigil | Check `SIGIL_ENDPOINT`, `SIGIL_AUTH_TENANT_ID`, and `SIGIL_AUTH_TOKEN`. Without all three, the plugin discards the completed fragment. |
 | No latency/tool charts in AI Observability | Set `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` so the plugin can emit traces and metrics. |
 | Prompt or tool content is missing | Check `SIGIL_CONTENT_CAPTURE_MODE`. The default is `metadata_only`. |

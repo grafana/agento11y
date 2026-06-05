@@ -6,10 +6,21 @@ Sends Codex turns to [Grafana AI Observability](https://grafana.com/docs/grafana
 
 ## 1. Install and launch
 
+**macOS** (Homebrew):
+
 ```sh
 brew install grafana/grafana/sigil
 sigil codex
 ```
+
+**Linux and Windows** (or any platform with Go 1.25+):
+
+```sh
+go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
+sigil codex
+```
+
+`go install` puts `sigil` in `go env GOPATH`/bin (or `GOBIN`); add that to `PATH`. See the [`sigil` binary README](../sigil/README.md#install) for details.
 
 `sigil codex` registers `sigil-codex@grafana-sigil` on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches Codex.
 
@@ -117,6 +128,6 @@ If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Ob
 |---|---|
 | `/hooks` is empty | Enable the hook feature flags (`codex features list`), enable `plugins."sigil-codex@grafana-sigil"`, restart Codex. |
 | Hooks listed but inactive | Open `/hooks` and trust each one. |
-| Command not found | Reinstall: `brew install grafana/grafana/sigil`. Check `sigil --version`. |
+| Command not found | Reinstall `sigil` (see step 1). Check `sigil --version` and that its install dir is on `PATH`. |
 | No data appears | Let turns finish (interrupted turns are not exported). Then check the debug log. |
 | Subagent appears as a normal turn | Codex hook payloads don't always carry the parent link. Known limitation. |

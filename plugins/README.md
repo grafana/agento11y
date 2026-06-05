@@ -4,18 +4,33 @@ Send conversations from your coding agent to [Grafana AI Observability](https://
 
 > AI Observability is in [public preview](https://grafana.com/docs/release-life-cycle/).
 
-## Fastest start (Claude Code, Codex, Copilot, OpenCode, or pi)
+## Install
+
+On macOS use Homebrew; on Linux and Windows (or any platform with Go 1.25+) use `go install`.
+
+**macOS** — Homebrew:
 
 ```sh
 brew install grafana/grafana/sigil
-sigil claude     # for Claude Code
-sigil codex      # for Codex
-sigil copilot    # for Copilot CLI
-sigil opencode   # for OpenCode
-sigil pi         # for pi
 ```
 
-Use the `sigil <agent>` launcher for setup and daily use. On first run it installs the agent plugin or extension, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches the agent.
+Upgrade later with `brew upgrade grafana/grafana/sigil`.
+
+**Linux and Windows** — `go install` (also works on macOS):
+
+```sh
+go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
+```
+
+This installs `sigil` to `go env GOPATH`/bin (or `GOBIN`); make sure that directory is on your `PATH`. Re-run the same command to upgrade.
+
+Verify the install with `sigil --version`.
+
+## Launch your agent
+
+Launch with `sigil <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, or `pi`. On first run it installs the agent plugin or extension, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches the agent.
+
+Cursor has no launcher; see [`cursor/README.md`](cursor/README.md) for setup.
 
 ## All plugins
 
