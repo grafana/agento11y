@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.11.0] - 2026-06-06
+
+### Bug Fixes
+
+- **plugins/sigil**: fix compilation on Windows (#291)
+
+### Documentation
+
+- **plugins**: add go install path for Linux and Windows (#289)
+
 ## [0.10.0] - 2026-06-05
 
 ### Bug Fixes
