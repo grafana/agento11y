@@ -210,6 +210,40 @@ finally:
     client.shutdown()
 ```
 
+## Pattern 4 — Build a dataset from a Sigil collection
+
+Instead of hand-writing a dataset, pull one from an existing **collection** of
+saved conversations and re-run the agent from each conversation's *initial user
+prompt* (the "user-prompt kickoff"). `dataset_from_collection` lists the
+collection's members, fetches each conversation, and returns `DatasetItem`s
+keyed by the recovered prompt:
+
+```python
+from sigil_sdk import ExperimentRunner, dataset_from_collection
+
+collection_id = "0324f4c9-..."           # from `gcx aio11y collections list`
+dataset = dataset_from_collection(client, collection_id)  # -> list[DatasetItem]
+# item.input = initial user prompt; item.metadata has collection_id / conversation_id
+
+runner = ExperimentRunner(
+    client=client, run_id=run_id, name="collection replay",
+    collection_id=collection_id,         # links the run + adds a `collectionId:<id>` tag
+)
+runner.run(dataset, target, [my_scorer]) # target re-runs the agent on item.input
+```
+
+Notes:
+- `mode="user_prompt"` (default) sets `input` to the initial prompt and leaves
+  `expected=None`. `mode="golden"` (capture the original answer as a reference
+  for an LLM-judge) is reserved and raises `NotImplementedError` for now.
+- Passing `collection_id` to `ExperimentRunner`/`experiment(...)` sets the run's
+  `collection_id`, adds a `collectionId:<id>` tag, and stamps `collection_id`
+  into the run metadata (durable even where the tag/field columns aren't yet
+  persisted), so the run is discoverable from the collection.
+- Reading collections/conversations uses the protected eval control plane (same
+  `SIGIL_EVAL_*` config as experiments). `limit=` caps how many members are
+  pulled; `skip_empty=False` keeps conversations with no recoverable prompt.
+
 ## Rules / gotchas
 
 - Always record the agent's call through `run.start_generation(...)` (or call
