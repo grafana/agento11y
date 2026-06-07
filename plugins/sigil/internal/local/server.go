@@ -51,6 +51,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /assets/app.jsx", s.handleAppJSX)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/v1/conversations", s.handleListConversations)
+	mux.HandleFunc("GET /api/v1/metrics/tokens", s.handleTokenMetrics)
 	mux.HandleFunc("GET /api/v1/conversations/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s.handleConversationDetail(w, r, r.PathValue("id"))
 	})
@@ -234,6 +235,22 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 		convs = []ConversationSummary{}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"conversations": convs})
+}
+
+// handleTokenMetrics returns one token-usage point per recorded
+// generation as JSON. The viewer buckets these by time to draw the
+// token-usage chart; an empty store returns an empty array, never null.
+func (s *Server) handleTokenMetrics(w http.ResponseWriter, _ *http.Request) {
+	points, err := s.storage.TokenUsagePoints()
+	if err != nil {
+		s.logger.Printf("local: token metrics: %v", err)
+		http.Error(w, "token metrics: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if points == nil {
+		points = []TokenUsagePoint{}
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"points": points})
 }
 
 // handleConversationDetail returns the per-conversation generation

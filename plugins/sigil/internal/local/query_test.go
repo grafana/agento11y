@@ -134,6 +134,9 @@ func TestListConversations_Aggregates(t *testing.T) {
 		if a.InputTokens != 300 || a.OutputTokens != 130 || a.TotalTokens != 430 {
 			t.Errorf("conv-A tokens = in=%d out=%d total=%d, want 300/130/430", a.InputTokens, a.OutputTokens, a.TotalTokens)
 		}
+		if a.TokenBuckets != (TokenBuckets{FreshInput: 300, Output: 130}) {
+			t.Errorf("conv-A token_buckets = %+v, want fresh=300 output=130", a.TokenBuckets)
+		}
 		if len(a.Agents) != 1 || a.Agents[0] != "pi" {
 			t.Errorf("conv-A agents = %v, want [pi]", a.Agents)
 		}
@@ -263,6 +266,9 @@ func TestConversationDetail(t *testing.T) {
 	}
 	if first.TotalTokens != 15 {
 		t.Errorf("first.total_tokens = %d, want 15 (input+output via Normalize)", first.TotalTokens)
+	}
+	if first.TokenBuckets != (TokenBuckets{FreshInput: 10, Output: 5}) {
+		t.Errorf("first.token_buckets = %+v, want fresh=10 output=5", first.TokenBuckets)
 	}
 	// Dedup keeps a single "bash" tool; preview unwraps `command`.
 	if len(first.Tools) != 1 || first.Tools[0] != "bash" {
@@ -501,4 +507,182 @@ func TestConversationDetail_InputOutputPassThrough(t *testing.T) {
 			tc.check(t, got.Generations[0])
 		})
 	}
+}
+
+// TestDisjointTokenUsage covers the provider-aware split into
+// non-overlapping buckets. Anthropic keeps cache tokens separate from
+// input; OpenAI, Gemini, and codex fold cache_read into input; OpenAI
+// and codex also nest reasoning in output while Gemini keeps thoughts
+// additive; unknown providers default to "separate" on both axes.
+func TestDisjointTokenUsage(t *testing.T) {
+	cases := []struct {
+		name                                                 string
+		provider                                             string
+		usage                                                sigil.TokenUsage
+		freshInput, cacheRead, cacheWrite, output, reasoning int64
+	}{
+		{
+			name:       "anthropic keeps cache additive",
+			provider:   "anthropic",
+			usage:      sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, CacheWriteInputTokens: 20},
+			freshInput: 100, cacheRead: 30, cacheWrite: 20, output: 50, reasoning: 0,
+		},
+		{
+			name:       "openai carves cache_read out of input and reasoning out of output",
+			provider:   "openai",
+			usage:      sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
+			freshInput: 70, cacheRead: 30, cacheWrite: 0, output: 40, reasoning: 10,
+		},
+		{
+			name:       "gemini fully cached prompt leaves zero fresh input",
+			provider:   "gemini",
+			usage:      sigil.TokenUsage{InputTokens: 80, OutputTokens: 20, CacheReadInputTokens: 80},
+			freshInput: 0, cacheRead: 80, cacheWrite: 0, output: 20, reasoning: 0,
+		},
+		{
+			// Gemini carves cache_read out of input but keeps thoughts
+			// additive: output stays at the candidate count.
+			name:       "gemini keeps reasoning additive to output",
+			provider:   "gemini",
+			usage:      sigil.TokenUsage{InputTokens: 80, OutputTokens: 40, CacheReadInputTokens: 20, ReasoningTokens: 10},
+			freshInput: 60, cacheRead: 20, cacheWrite: 0, output: 40, reasoning: 10,
+		},
+		{
+			// Azure OpenAI shares OpenAI's subset semantics on both axes.
+			name:       "azure carves cache_read and reasoning out",
+			provider:   "azure",
+			usage:      sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
+			freshInput: 70, cacheRead: 30, cacheWrite: 0, output: 40, reasoning: 10,
+		},
+		{
+			// The codex agent falls back to provider "codex" for model
+			// names it can't attribute; its usage comes from the
+			// Responses API, so OpenAI subset semantics apply.
+			name:       "codex shares openai subset semantics",
+			provider:   "codex",
+			usage:      sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
+			freshInput: 70, cacheRead: 30, cacheWrite: 0, output: 40, reasoning: 10,
+		},
+		{
+			// Unknown provider keeps reasoning additive (never hide output).
+			name:       "unknown provider keeps reasoning additive",
+			provider:   "openrouter",
+			usage:      sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, ReasoningTokens: 10},
+			freshInput: 100, cacheRead: 0, cacheWrite: 0, output: 50, reasoning: 10,
+		},
+		{
+			name:       "unknown provider defaults to separate (no subtraction)",
+			provider:   "mystery-llm",
+			usage:      sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30},
+			freshInput: 100, cacheRead: 30, cacheWrite: 0, output: 50, reasoning: 0,
+		},
+		{
+			name:       "empty provider defaults to separate",
+			provider:   "",
+			usage:      sigil.TokenUsage{InputTokens: 100, CacheReadInputTokens: 30},
+			freshInput: 100, cacheRead: 30, cacheWrite: 0, output: 0, reasoning: 0,
+		},
+		{
+			name:       "subset cache_read larger than input clamps fresh input to zero",
+			provider:   "openai",
+			usage:      sigil.TokenUsage{InputTokens: 10, OutputTokens: 5, CacheReadInputTokens: 30},
+			freshInput: 0, cacheRead: 30, cacheWrite: 0, output: 5, reasoning: 0,
+		},
+		{
+			name:       "reasoning larger than output clamps output to zero",
+			provider:   "openai",
+			usage:      sigil.TokenUsage{InputTokens: 20, OutputTokens: 5, ReasoningTokens: 10},
+			freshInput: 20, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 10,
+		},
+		{
+			name:       "negative values clamp to zero",
+			provider:   "anthropic",
+			usage:      sigil.TokenUsage{InputTokens: -5, OutputTokens: -1, CacheReadInputTokens: -3},
+			freshInput: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := disjointTokenUsage(tc.usage, tc.provider)
+			assert.Equal(t, TokenBuckets{
+				FreshInput: tc.freshInput,
+				CacheRead:  tc.cacheRead,
+				CacheWrite: tc.cacheWrite,
+				Output:     tc.output,
+				Reasoning:  tc.reasoning,
+			}, b)
+		})
+	}
+}
+
+// TestTokenUsagePoints seeds generations across conversations and checks
+// the flattened, time-sorted points: provider-aware buckets, model and
+// provider tagging, the received_at timestamp fallback, and that
+// zero-token generations are dropped.
+func TestTokenUsagePoints(t *testing.T) {
+	s := newStorage(t)
+
+	writeGen(t, s, "conv-A", "g1", sigil.Generation{
+		Model:       sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
+		StartedAt:   mustParse(t, "2026-05-21T10:00:10Z"),
+		CompletedAt: mustParse(t, "2026-05-21T10:00:12Z"),
+		Usage:       sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, CacheWriteInputTokens: 20},
+	}, "2026-05-21T10:00:12Z")
+
+	// Earlier than g1 so it must sort first; OpenAI subset semantics.
+	writeGen(t, s, "conv-B", "g2", sigil.Generation{
+		Model:       sigil.ModelRef{Provider: "openai", Name: "gpt-5-omni"},
+		StartedAt:   mustParse(t, "2026-05-21T09:00:00Z"),
+		CompletedAt: mustParse(t, "2026-05-21T09:00:01Z"),
+		Usage:       sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
+	}, "2026-05-21T09:00:01Z")
+
+	// No started/completed: timestamp must fall back to received_at.
+	writeGen(t, s, "conv-C", "g3", sigil.Generation{
+		Model: sigil.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
+		Usage: sigil.TokenUsage{InputTokens: 5, OutputTokens: 3},
+	}, "2026-05-21T12:00:00Z")
+
+	// Zero tokens: must be dropped entirely.
+	writeGen(t, s, "conv-D", "g4", sigil.Generation{
+		Model:     sigil.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
+		StartedAt: mustParse(t, "2026-05-21T08:00:00Z"),
+	}, "2026-05-21T08:00:00Z")
+
+	points, err := s.TokenUsagePoints()
+	require.NoError(t, err)
+	require.Len(t, points, 3, "zero-token generation should be dropped")
+
+	// Sorted oldest-first: g2 (09:00) → g1 (10:00) → g3 (12:00 received_at).
+	assert.Equal(t, "gpt-5-omni", points[0].Model)
+	assert.Equal(t, "claude-sonnet-4", points[1].Model)
+	assert.Equal(t, "claude-opus-4-7", points[2].Model)
+
+	// g2 OpenAI: cache_read carved out of input, reasoning out of output.
+	assert.Equal(t, TokenUsagePoint{
+		Timestamp:    mustParse(t, "2026-05-21T09:00:00Z"),
+		Model:        "gpt-5-omni",
+		Provider:     "openai",
+		TokenBuckets: TokenBuckets{FreshInput: 70, CacheRead: 30, Output: 40, Reasoning: 10},
+	}, points[0])
+
+	// g1 Anthropic: cache stays additive.
+	assert.Equal(t, TokenUsagePoint{
+		Timestamp:    mustParse(t, "2026-05-21T10:00:10Z"),
+		Model:        "claude-sonnet-4",
+		Provider:     "anthropic",
+		TokenBuckets: TokenBuckets{FreshInput: 100, CacheRead: 30, CacheWrite: 20, Output: 50},
+	}, points[1])
+
+	// g3 timestamp falls back to received_at.
+	assert.Equal(t, mustParse(t, "2026-05-21T12:00:00Z"), points[2].Timestamp)
+}
+
+// TestTokenUsagePoints_EmptyStore checks that TokenUsagePoints returns
+// no points and no error before any conversations exist.
+func TestTokenUsagePoints_EmptyStore(t *testing.T) {
+	s := newStorage(t)
+	points, err := s.TokenUsagePoints()
+	require.NoError(t, err)
+	assert.Empty(t, points)
 }

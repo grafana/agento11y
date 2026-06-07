@@ -438,3 +438,59 @@ func decodeJSON(t *testing.T, body interface {
 		t.Fatalf("decode: %v", err)
 	}
 }
+
+// TestServer_APITokenMetrics checks the token-usage endpoint the viewer
+// charts: a seeded store returns points with provider-aware disjoint
+// buckets, and a wrong method is rejected. Bucket math and sorting are
+// covered in query_test; this asserts the wire shape.
+func TestServer_APITokenMetrics(t *testing.T) {
+	srv, dir := newTestServer(t)
+	storage, err := NewStorage(dir)
+	require.NoError(t, err)
+
+	writeGen(t, storage, "conv-A", "g1", sigil.Generation{
+		Model:       sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
+		StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
+		CompletedAt: mustParse(t, "2026-05-21T10:00:02Z"),
+		Usage:       sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, CacheWriteInputTokens: 20},
+	}, "2026-05-21T10:00:02Z")
+
+	t.Run("seeded store returns disjoint points", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/tokens", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		var body struct {
+			Points []TokenUsagePoint `json:"points"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+		require.Len(t, body.Points, 1)
+		// The embedded TokenBuckets must flatten into the point object;
+		// the viewer reads these keys at the top level.
+		assert.Contains(t, rr.Body.String(), `"fresh_input":100`)
+		assert.Contains(t, rr.Body.String(), `"cache_read":30`)
+		assert.Equal(t, TokenUsagePoint{
+			Timestamp:    mustParse(t, "2026-05-21T10:00:00Z"),
+			Model:        "claude-sonnet-4",
+			Provider:     "anthropic",
+			TokenBuckets: TokenBuckets{FreshInput: 100, CacheRead: 30, CacheWrite: 20, Output: 50},
+		}, body.Points[0])
+	})
+
+	t.Run("wrong method rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/tokens", strings.NewReader("{}"))
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	})
+}
+
+func TestServer_APITokenMetrics_EmptyStorage(t *testing.T) {
+	srv, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/tokens", nil)
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, `{"points":[]}`, strings.TrimSpace(rr.Body.String()))
+}

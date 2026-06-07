@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -25,8 +26,11 @@ type ConversationSummary struct {
 	InputTokens  int64     `json:"input_tokens"`
 	OutputTokens int64     `json:"output_tokens"`
 	TotalTokens  int64     `json:"total_tokens"`
-	Agents       []string  `json:"agents"`
-	Models       []string  `json:"models"`
+	// TokenBuckets sums the disjoint per-generation buckets across the
+	// conversation, for the list's token breakdown tooltip.
+	TokenBuckets TokenBuckets `json:"token_buckets"`
+	Agents       []string     `json:"agents"`
+	Models       []string     `json:"models"`
 	// Status is "ok" or "err". "err" means at least one generation in
 	// the conversation recorded a call_error.
 	Status string `json:"status"`
@@ -40,23 +44,26 @@ type ConversationSummary struct {
 // metadata_only mode, in which case the viewer should fall back to the
 // token counts and tool preview.
 type GenerationView struct {
-	GenerationID    string          `json:"generation_id"`
-	AgentName       string          `json:"agent_name,omitempty"`
-	Model           string          `json:"model,omitempty"`
-	Provider        string          `json:"provider,omitempty"`
-	StartedAt       time.Time       `json:"started_at"`
-	CompletedAt     time.Time       `json:"completed_at"`
-	DurationSeconds float64         `json:"duration_seconds"`
-	InputTokens     int64           `json:"input_tokens"`
-	OutputTokens    int64           `json:"output_tokens"`
-	TotalTokens     int64           `json:"total_tokens"`
-	Messages        []sigil.Message `json:"messages,omitempty"`
-	Input           []sigil.Message `json:"input,omitempty"`
-	Output          []sigil.Message `json:"output,omitempty"`
-	Tools           []string        `json:"tools,omitempty"`
-	ToolPreview     string          `json:"tool_preview,omitempty"`
-	StopReason      string          `json:"stop_reason,omitempty"`
-	CallError       string          `json:"call_error,omitempty"`
+	GenerationID    string    `json:"generation_id"`
+	AgentName       string    `json:"agent_name,omitempty"`
+	Model           string    `json:"model,omitempty"`
+	Provider        string    `json:"provider,omitempty"`
+	StartedAt       time.Time `json:"started_at"`
+	CompletedAt     time.Time `json:"completed_at"`
+	DurationSeconds float64   `json:"duration_seconds"`
+	InputTokens     int64     `json:"input_tokens"`
+	OutputTokens    int64     `json:"output_tokens"`
+	TotalTokens     int64     `json:"total_tokens"`
+	// TokenBuckets is this step's disjoint usage split, so the viewer
+	// can show where the step's tokens went (cache hit vs fresh input).
+	TokenBuckets TokenBuckets    `json:"token_buckets"`
+	Messages     []sigil.Message `json:"messages,omitempty"`
+	Input        []sigil.Message `json:"input,omitempty"`
+	Output       []sigil.Message `json:"output,omitempty"`
+	Tools        []string        `json:"tools,omitempty"`
+	ToolPreview  string          `json:"tool_preview,omitempty"`
+	StopReason   string          `json:"stop_reason,omitempty"`
+	CallError    string          `json:"call_error,omitempty"`
 }
 
 // ConversationDetail is the payload for the detail screen — the
@@ -122,6 +129,7 @@ func summariseConversationFile(path string) (ConversationSummary, bool, error) {
 		sum.InputTokens += usage.InputTokens
 		sum.OutputTokens += usage.OutputTokens
 		sum.TotalTokens += usage.Normalize().TotalTokens
+		sum.TokenBuckets = sum.TokenBuckets.plus(disjointTokenUsage(usage, gen.Model.Provider))
 
 		if !gen.StartedAt.IsZero() && (sum.StartedAt.IsZero() || gen.StartedAt.Before(sum.StartedAt)) {
 			sum.StartedAt = gen.StartedAt
@@ -194,6 +202,7 @@ func (s *Storage) ConversationDetail(id string) (*ConversationDetail, error) {
 			InputTokens:  usage.InputTokens,
 			OutputTokens: usage.OutputTokens,
 			TotalTokens:  usage.Normalize().TotalTokens,
+			TokenBuckets: disjointTokenUsage(usage, gen.Model.Provider),
 			Messages:     threadMessages(input, output),
 			Input:        input,
 			Output:       output,
@@ -216,6 +225,187 @@ func (s *Storage) ConversationDetail(id string) (*ConversationDetail, error) {
 		return out.Generations[i].StartedAt.Before(out.Generations[j].StartedAt)
 	})
 	return out, nil
+}
+
+// TokenBuckets is token usage split into five non-overlapping buckets
+// (see disjointTokenUsage). Because they are disjoint, the viewer can
+// stack or sum them without double-counting; the chart points, the
+// conversation summaries, and the per-step views all share this shape.
+type TokenBuckets struct {
+	FreshInput int64 `json:"fresh_input"`
+	CacheRead  int64 `json:"cache_read"`
+	CacheWrite int64 `json:"cache_write"`
+	Output     int64 `json:"output"`
+	Reasoning  int64 `json:"reasoning"`
+}
+
+func (b TokenBuckets) plus(o TokenBuckets) TokenBuckets {
+	return TokenBuckets{
+		FreshInput: b.FreshInput + o.FreshInput,
+		CacheRead:  b.CacheRead + o.CacheRead,
+		CacheWrite: b.CacheWrite + o.CacheWrite,
+		Output:     b.Output + o.Output,
+		Reasoning:  b.Reasoning + o.Reasoning,
+	}
+}
+
+// TokenUsagePoint is one generation's disjoint token buckets tagged
+// with the model/provider that produced them and the time it ran. The
+// viewer re-buckets these by time to draw the token-usage chart. The
+// embedded TokenBuckets fields flatten into the JSON object.
+type TokenUsagePoint struct {
+	Timestamp time.Time `json:"t"`
+	Model     string    `json:"model,omitempty"`
+	Provider  string    `json:"provider,omitempty"`
+	TokenBuckets
+}
+
+// TokenUsagePoints walks every conversation file and returns one point
+// per generation that recorded any token usage, sorted oldest-first.
+// A missing conversations dir yields no points (first-launch case).
+func (s *Storage) TokenUsagePoints() ([]TokenUsagePoint, error) {
+	dir := filepath.Join(s.dir, ConversationsDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []TokenUsagePoint
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
+			continue
+		}
+		err := scanGenerationRecords(filepath.Join(dir, e.Name()), func(r generationRecord, gen storedGeneration) {
+			if p, ok := tokenUsagePoint(r, gen); ok {
+				out = append(out, p)
+			}
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Timestamp.Before(out[j].Timestamp)
+	})
+	return out, nil
+}
+
+// tokenUsagePoint builds a TokenUsagePoint from one record. ok is false
+// when the generation recorded no tokens or has no usable timestamp, so
+// the caller can skip it rather than plot a zero-height bar at the epoch.
+func tokenUsagePoint(r generationRecord, gen storedGeneration) (TokenUsagePoint, bool) {
+	buckets := disjointTokenUsage(gen.Usage.toSDK(), gen.Model.Provider)
+	if buckets == (TokenBuckets{}) {
+		return TokenUsagePoint{}, false
+	}
+	when := generationTime(gen, r)
+	if when.IsZero() {
+		return TokenUsagePoint{}, false
+	}
+	return TokenUsagePoint{
+		Timestamp:    when,
+		Model:        gen.modelName(),
+		Provider:     gen.Model.Provider,
+		TokenBuckets: buckets,
+	}, true
+}
+
+// generationTime is the wall-clock moment a generation ran, preferring
+// started_at, then completed_at, then the receiver's arrival time.
+func generationTime(gen storedGeneration, r generationRecord) time.Time {
+	if !gen.StartedAt.IsZero() {
+		return gen.StartedAt
+	}
+	if !gen.CompletedAt.IsZero() {
+		return gen.CompletedAt
+	}
+	when, _ := time.Parse(time.RFC3339Nano, r.ReceivedAt)
+	return when
+}
+
+// disjointTokenUsage splits a generation's usage into five buckets that
+// don't overlap, so the viewer can stack them without double-counting.
+//
+// Providers disagree on how cache and reasoning tokens relate to the
+// input/output totals, so both carve-outs are provider-aware:
+//
+//   - cache_read: Anthropic reports input_tokens as the non-cached input,
+//     so cache_read/cache_write are extra on top. OpenAI, Gemini, and
+//     codex fold cached tokens into input_tokens, so cache_read is a
+//     subset that must be carved back out (see cacheReadInsideInput).
+//   - reasoning: OpenAI and codex nest reasoning inside output
+//     (completion) tokens, so it's carved out. Gemini reports thoughts as
+//     additive (output is just the candidate tokens) and Anthropic
+//     doesn't populate it, so for those reasoning stands alone (see
+//     reasoningInsideOutput).
+//
+// cache_write is never folded into input by any provider we map, so it
+// always stands alone.
+//
+// For well-formed usage the buckets sum back to what the provider
+// reported: Anthropic input + cache_read + cache_write + output; OpenAI
+// input + output; Gemini input + output + reasoning (its total also
+// counts tool-use prompt tokens, which the SDK's TokenUsage has no field
+// for). When a subset field exceeds its total, the nonNeg clamps keep
+// the subset and zero the remainder, so the sum can exceed what was
+// reported.
+func disjointTokenUsage(u sigil.TokenUsage, provider string) TokenBuckets {
+	b := TokenBuckets{
+		FreshInput: nonNeg(u.InputTokens),
+		CacheRead:  nonNeg(u.CacheReadInputTokens),
+		CacheWrite: nonNeg(u.CacheWriteInputTokens),
+		Output:     nonNeg(u.OutputTokens),
+		Reasoning:  nonNeg(u.ReasoningTokens),
+	}
+	if cacheReadInsideInput(provider) {
+		b.FreshInput = nonNeg(b.FreshInput - b.CacheRead)
+	}
+	if reasoningInsideOutput(provider) {
+		b.Output = nonNeg(b.Output - b.Reasoning)
+	}
+	return b
+}
+
+// cacheReadInsideInput reports whether the provider counts cache_read
+// tokens within input_tokens (subset semantics). Anthropic keeps them
+// separate; OpenAI and Gemini fold them in, and so does codex, the codex
+// agent's fallback provider for model names it can't attribute (its
+// usage comes from the Responses API). Unknown providers default to
+// "separate" so we never subtract tokens we can't account for and end up
+// hiding real input.
+func cacheReadInsideInput(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai", "azure", "azure-openai", "azureopenai", "codex",
+		"gemini", "google", "googleai", "google-genai", "vertex", "vertexai", "google-vertex":
+		return true
+	default:
+		return false
+	}
+}
+
+// reasoningInsideOutput reports whether the provider counts reasoning
+// tokens within output_tokens (subset semantics). OpenAI and codex nest
+// reasoning inside completion tokens; Gemini reports thoughts as a
+// separate additive count and Anthropic doesn't populate reasoning, so
+// both keep it standalone. Unknown providers default to "separate" so we
+// never subtract reasoning we can't account for and end up hiding real
+// output.
+func reasoningInsideOutput(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai", "azure", "azure-openai", "azureopenai", "codex":
+		return true
+	default:
+		return false
+	}
+}
+
+func nonNeg(n int64) int64 {
+	if n < 0 {
+		return 0
+	}
+	return n
 }
 
 // scanGenerationRecords walks one per-conversation JSONL file calling visit

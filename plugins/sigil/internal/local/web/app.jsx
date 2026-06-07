@@ -59,6 +59,8 @@
     }
 
     const TIME_RANGES = [
+      { value: "5m", label: "Last 5 minutes", ms: 5 * 60 * 1000 },
+      { value: "15m", label: "Last 15 minutes", ms: 15 * 60 * 1000 },
       { value: "1h", label: "Last 1 hour", ms: 60 * 60 * 1000 },
       { value: "6h", label: "Last 6 hours", ms: 6 * 60 * 60 * 1000 },
       { value: "24h", label: "Last 24 hours", ms: 24 * 60 * 60 * 1000 },
@@ -67,7 +69,7 @@
     ];
 
     function timeRangeOption(value) {
-      return TIME_RANGES.find(r => r.value === value) || TIME_RANGES[1];
+      return TIME_RANGES.find(r => r.value === value) || TIME_RANGES.find(r => r.value === "6h");
     }
 
     function conversationTime(c) {
@@ -77,6 +79,7 @@
 
     function formatBucketSize(ms) {
       if (!Number.isFinite(ms) || ms <= 0) return "buckets";
+      if (ms < 60000) return `${Math.round(ms / 1000)}-sec buckets`;
       const mins = Math.round(ms / 60000);
       if (mins < 60) return `${mins}-min buckets`;
       const hours = Math.round(mins / 60);
@@ -90,7 +93,23 @@
       if (bucketMs >= 24 * 60 * 60 * 1000) {
         return d.toLocaleDateString([], { month: "short", day: "numeric" });
       }
-      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+      const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+      // 2h+ buckets mean the chart spans more than a day, so a bare
+      // time is ambiguous — prefix the date.
+      if (bucketMs >= 2 * 60 * 60 * 1000) {
+        return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + time;
+      }
+      // Sub-minute buckets need seconds or adjacent labels collide.
+      if (bucketMs < 60 * 1000) {
+        return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+      }
+      return time;
+    }
+
+    // chartTooltipLeft centers the hover tooltip on its bar but keeps it
+    // clear of the card edges so the first and last buckets don't clip.
+    function chartTooltipLeft(i, n) {
+      return `${Math.min(88, Math.max(12, ((i + 0.5) / n) * 100))}%`;
     }
 
     // Per-model dot colour. New models fall back to a neutral grey
@@ -107,34 +126,109 @@
       return MODEL_COLORS[name] || "#808080";
     }
 
-    function bucketActivity(conversations, rangeValue, now, { count = 12 } = {}) {
+    // Token-usage chart series. The server splits each generation into
+    // these five non-overlapping buckets (provider-aware, see
+    // disjointTokenUsage in query.go), so stacking them never
+    // double-counts. Order is bottom-to-top in the stack.
+    const TOKEN_SERIES = [
+      { key: "fresh_input", label: "Input",       color: "var(--viz-blue)" },
+      { key: "cache_read",  label: "Cache read",  color: "var(--viz-green)" },
+      { key: "cache_write", label: "Cache write", color: "var(--viz-purple)" },
+      { key: "output",      label: "Output",      color: "var(--viz-orange)" },
+      { key: "reasoning",   label: "Reasoning",   color: "var(--viz-yellow)" },
+    ];
+
+    // tokenBreakdownTitle renders disjoint token buckets as a multi-line
+    // native tooltip for the list's Tokens cell.
+    function tokenBreakdownTitle(buckets) {
+      if (!buckets) return undefined;
+      const lines = TOKEN_SERIES.filter(s => buckets[s.key] > 0)
+        .map(s => `${s.label}: ${formatTokens(buckets[s.key])}`);
+      return lines.length ? lines.join("\n") : undefined;
+    }
+
+    // timeWindow computes a chart's [start, end] for a range selection.
+    // For "All", min/max accumulate in a loop instead of spreading into
+    // Math.min/Math.max: with one entry per generation the times array
+    // can be large enough that spread overflows the argument stack
+    // (RangeError).
+    function timeWindow(times, rangeValue, now) {
       const range = timeRangeOption(rangeValue);
-      const times = conversations.map(conversationTime).filter(t => t != null);
-      const end = range.ms == null
-        ? Math.max(now, ...times)
-        : now;
-      const start = range.ms == null
-        ? (times.length ? Math.min(...times) : end - 60 * 60 * 1000)
-        : end - range.ms;
+      if (range.ms != null) return { start: now - range.ms, end: now };
+      let minT = Infinity, maxT = -Infinity, n = 0;
+      for (const t of times) {
+        if (!Number.isFinite(t)) continue;
+        n++;
+        if (t < minT) minT = t;
+        if (t > maxT) maxT = t;
+      }
+      const end = n ? Math.max(now, maxT) : now;
+      const start = n ? minT : end - 60 * 60 * 1000;
+      return { start, end };
+    }
+
+    // bucketByTime lays out `count` equal buckets across the selected
+    // range and folds every in-window item into its bucket: init seeds a
+    // bucket's counters, add(bucket, item) accumulates one item. Pass
+    // `window` to share one [start, end] between charts.
+    function bucketByTime(items, getTime, rangeValue, now, { count = 12, init, add, window: win }) {
+      const times = items.map(getTime);
+      const { start, end } = win || timeWindow(times, rangeValue, now);
       const span = Math.max(end - start, 60 * 1000);
       const bucketMs = span / count;
       const buckets = [];
       for (let i = 0; i < count; i++) {
         const bucketStart = start + i * bucketMs;
+        // The last bucket absorbs the end instant, mirroring the clamped
+        // index below, so [start, end) tests against bucket bounds agree
+        // with where points were counted.
         const bucketEnd = i === count - 1 ? end + 1 : bucketStart + bucketMs;
-        buckets.push({
-          t: formatBucketLabel(bucketStart, bucketMs),
-          start: bucketStart,
-          end: bucketEnd,
-          c: 0,
-        });
+        buckets.push({ t: formatBucketLabel(bucketStart, bucketMs), start: bucketStart, end: bucketEnd, ...init() });
       }
-      for (const t of times) {
-        if (t < start || t > end) continue;
-        const idx = Math.min(count - 1, Math.max(0, Math.floor((t - start) / bucketMs)));
-        buckets[idx].c++;
-      }
+      items.forEach((item, i) => {
+        const t = times[i];
+        if (!Number.isFinite(t) || t < start || t > end) return;
+        add(buckets[Math.min(count - 1, Math.max(0, Math.floor((t - start) / bucketMs)))], item);
+      });
       return { buckets, bucketLabel: formatBucketSize(bucketMs) };
+    }
+
+    function tokenPointTime(p) {
+      return new Date(p.t).getTime();
+    }
+
+    // bucketTokenUsage sums each disjoint token series per bucket. points
+    // carry an RFC3339 `t` plus the five token fields.
+    function bucketTokenUsage(points, rangeValue, now, opts = {}) {
+      let grandTotal = 0;
+      const totals = {};
+      for (const s of TOKEN_SERIES) totals[s.key] = 0;
+      const result = bucketByTime(points, tokenPointTime, rangeValue, now, {
+        ...opts,
+        init: () => {
+          const b = { total: 0 };
+          for (const s of TOKEN_SERIES) b[s.key] = 0;
+          return b;
+        },
+        add: (b, p) => {
+          for (const s of TOKEN_SERIES) {
+            const v = p[s.key] || 0;
+            b[s.key] += v;
+            b.total += v;
+            totals[s.key] += v;
+            grandTotal += v;
+          }
+        },
+      });
+      return { ...result, grandTotal, totals };
+    }
+
+    function bucketActivity(conversations, rangeValue, now, opts = {}) {
+      return bucketByTime(conversations, conversationTime, rangeValue, now, {
+        ...opts,
+        init: () => ({ c: 0 }),
+        add: b => { b.c += 1; },
+      });
     }
 
     // ============================================================
@@ -353,7 +447,32 @@
     // Screen 1 — Conversations list
     // ============================================================
 
-    function ActivityChart({ data, bucketLabel, accent = "var(--brand-orange)" }) {
+    // ChartSwitch picks which metric the single chart slot shows. It
+    // doubles as the chart's title: the active segment names the data.
+    function ChartSwitch({ value, onChange }) {
+      const opts = [
+        { value: "tokens", label: "Tokens" },
+        { value: "activity", label: "Conversations" },
+      ];
+      return (
+        <div style={{ display: "inline-flex", border: "1px solid var(--border-medium)", borderRadius: 2, overflow: "hidden" }}>
+          {opts.map(o => {
+            const active = o.value === value;
+            return (
+              <button key={o.value} onClick={() => onChange(o.value)} style={{
+                padding: "4px 10px",
+                background: active ? "rgba(204,204,220,0.08)" : "transparent",
+                color: active ? "var(--fg-max)" : "var(--fg2)",
+                border: "none", cursor: active ? "default" : "pointer",
+                fontSize: 11, fontFamily: "var(--fontFamilyMonospace)",
+              }}>{o.label}</button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    function ActivityChart({ data, bucketLabel, switcher, selection, onBucketClick, accent = "var(--brand-orange)" }) {
       const W = 100, H = 32;
       const max = Math.max(1, ...data.map(d => d.c));
       const barW = (W / Math.max(1, data.length)) * 0.7;
@@ -363,7 +482,7 @@
       return (
         <div style={{ position: "relative", padding: "16px 20px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <div style={{ fontSize: 13, color: "var(--fg1)", fontWeight: 500 }}>Conversation activity</div>
+            {switcher}
             <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)" }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                 <span style={{ width: 10, height: 10, background: accent, borderRadius: 1 }}/> count
@@ -381,10 +500,17 @@
                 const x = i * (W / data.length) + gap/2;
                 const y = H - h;
                 const isHover = hover === i;
+                // Midpoint containment, not overlap: the window shifts a
+                // little every render (now moves), so an overlap test can
+                // light up two adjacent bars.
+                const isSel = selection && (d.start + d.end) / 2 >= selection.start && (d.start + d.end) / 2 < selection.end;
+                const dim = selection && !isSel;
                 return (
-                  <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+                  <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
+                    onClick={onBucketClick ? () => onBucketClick(d) : undefined}
+                    style={{ cursor: onBucketClick ? "pointer" : "default" }}>
                     <rect x={x - 0.4} y={0} width={barW + 0.8} height={H} fill="transparent"/>
-                    <rect x={x} y={y} width={barW} height={Math.max(h, 0.4)} fill={isHover ? "var(--brand-orange-text)" : accent} opacity={isHover ? 1 : 0.85}/>
+                    <rect x={x} y={y} width={barW} height={Math.max(h, 0.4)} fill={isHover ? "var(--brand-orange-text)" : accent} opacity={isHover || isSel ? 1 : dim ? 0.3 : 0.85}/>
                   </g>
                 );
               })}
@@ -395,7 +521,7 @@
             {hover !== null && (
               <div style={{
                 position: "absolute",
-                left: `${((hover + 0.5) / data.length) * 100}%`,
+                left: chartTooltipLeft(hover, data.length),
                 transform: "translate(-50%, -100%)",
                 top: -4,
                 background: "var(--bg-secondary)",
@@ -410,6 +536,166 @@
                 boxShadow: "var(--shadow-z2)",
               }}>
                 <span style={{ color: "var(--fg3)" }}>{data[hover].t}</span> · {data[hover].c} {data[hover].c === 1 ? "conversation" : "conversations"}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // Stacked token-usage-over-time chart. Mirrors ActivityChart's frame
+    // but stacks the five disjoint token series per bucket, with a
+    // per-model filter and a click-to-toggle legend. data comes from
+    // bucketTokenUsage.
+    function TokenChart({ data, bucketLabel, grandTotal, totals, models, model, onModelChange, switcher, selection, onBucketClick }) {
+      const W = 100, H = 32;
+      const barW = (W / Math.max(1, data.length)) * 0.7;
+      const gap  = (W / Math.max(1, data.length)) * 0.3;
+      const [hover, setHover] = useState(null);
+      const [hidden, setHidden] = useState(() => new Set());
+      const toggleSeries = key => setHidden(prev => {
+        const next = new Set(prev);
+        next.has(key) ? next.delete(key) : next.add(key);
+        return next;
+      });
+      // Only show legend entries for series that actually appear, so a
+      // pure-Anthropic store doesn't carry an always-zero "Reasoning"
+      // swatch. Fall back to the full set when there's no data at all.
+      const present = TOKEN_SERIES.filter(s => data.some(d => d[s.key] > 0));
+      const legend = present.length ? present : TOKEN_SERIES;
+      // Hidden series drop out of the bars, the tooltip, and the y scale,
+      // so toggling a dominant series (usually cache reads) rescales the
+      // chart to show what's left.
+      const visible = TOKEN_SERIES.filter(s => !hidden.has(s.key));
+      const visibleTotal = d => visible.reduce((acc, s) => acc + (d[s.key] || 0), 0);
+      const max = Math.max(1, ...data.map(visibleTotal));
+      const empty = grandTotal === 0;
+      // The header total tracks the visible series so it always matches
+      // the stacked bars and the tooltip; hiding a series excludes it
+      // here too. The cache stat only renders while both of its inputs
+      // are visible — with cache read hidden it would claim "0% cached".
+      const shownTotal = totals ? visible.reduce((acc, s) => acc + (totals[s.key] || 0), 0) : grandTotal;
+      const cacheVisible = !hidden.has("fresh_input") && !hidden.has("cache_read");
+      const cacheDenom = totals ? (totals.fresh_input || 0) + (totals.cache_read || 0) : 0;
+      const cachePct = cacheVisible && cacheDenom > 0 ? Math.round(((totals.cache_read || 0) / cacheDenom) * 100) : null;
+      const yLabel = {
+        position: "absolute", left: 0, transform: "translateY(-50%)",
+        fontSize: 10, lineHeight: "10px", color: "var(--fg3)",
+        fontFamily: "var(--fontFamilyMonospace)",
+        background: "var(--bg-primary)", padding: "1px 4px 1px 0",
+        pointerEvents: "none",
+      };
+
+      return (
+        <div style={{ position: "relative", padding: "16px 20px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {switcher}
+              <span style={{ color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11 }}>
+                {formatTokens(shownTotal)} tok
+                {cachePct != null && (
+                  <span title="Share of input tokens served from the prompt cache: cache read / (fresh input + cache read)"> · {cachePct}% cached</span>
+                )}
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", flexWrap: "wrap" }}>
+              {legend.map(s => {
+                const off = hidden.has(s.key);
+                return (
+                  <button key={s.key} onClick={() => toggleSeries(s.key)}
+                    title={off ? `Show ${s.label}` : `Hide ${s.label}`}
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      background: "transparent", border: "none", padding: 0,
+                      cursor: "pointer", font: "inherit",
+                      color: off ? "var(--fg3)" : "inherit",
+                      opacity: off ? 0.6 : 1,
+                      textDecoration: off ? "line-through" : "none",
+                    }}>
+                    <span style={{ width: 10, height: 10, boxSizing: "border-box", background: off ? "transparent" : s.color, border: `1px solid ${off ? "var(--border-medium)" : s.color}`, borderRadius: 1 }}/> {s.label}
+                  </button>
+                );
+              })}
+              {models.length > 0 && (
+                <select value={model} onChange={e => onModelChange(e.target.value)} title="Filter by model"
+                  style={{ height: 24, padding: "0 6px", border: "1px solid var(--border-medium)", borderRadius: 2, background: "var(--bg-primary)", color: "var(--fg1)", fontSize: 11, fontFamily: "var(--fontFamilyMonospace)" }}>
+                  <option value="all">All models</option>
+                  {models.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              )}
+              <span>{bucketLabel}</span>
+            </div>
+          </div>
+          <div style={{ position: "relative" }}>
+            <svg viewBox={`0 0 ${W} ${H + 8}`} preserveAspectRatio="none" style={{ width: "100%", height: 130, display: "block" }}>
+              {[0, 1, 2, 3, 4].map(g => (
+                <line key={g} x1={0} x2={W} y1={(H * g)/4} y2={(H * g)/4} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2"/>
+              ))}
+              {data.map((d, i) => {
+                const x = i * (W / data.length) + gap/2;
+                const isHover = hover === i;
+                // Midpoint containment, not overlap — see ActivityChart.
+                const isSel = selection && (d.start + d.end) / 2 >= selection.start && (d.start + d.end) / 2 < selection.end;
+                const dim = selection && !isSel;
+                const barOpacity = isHover || isSel ? 1 : dim ? 0.3 : 0.85;
+                let yTop = H;
+                const segs = [];
+                for (const s of visible) {
+                  const v = d[s.key] || 0;
+                  if (v <= 0) continue;
+                  const h = (v / max) * H;
+                  yTop -= h;
+                  segs.push(<rect key={s.key} x={x} y={yTop} width={barW} height={Math.max(h, 0.2)} fill={s.color} opacity={barOpacity}/>);
+                }
+                return (
+                  <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
+                    onClick={onBucketClick ? () => onBucketClick(d) : undefined}
+                    style={{ cursor: onBucketClick ? "pointer" : "default" }}>
+                    <rect x={x - 0.4} y={0} width={barW + 0.8} height={H} fill="transparent"/>
+                    {segs}
+                  </g>
+                );
+              })}
+            </svg>
+            {/* The svg stretches its viewBox, so the y-scale labels are
+                HTML overlays pinned to the top and middle gridlines (0px
+                and 52px of the 130px-tall plot). */}
+            {!empty && visible.length > 0 && <div style={{ ...yLabel, top: 0 }}>{formatTokens(max)}</div>}
+            {!empty && visible.length > 0 && <div style={{ ...yLabel, top: 52 }}>{formatTokens(Math.round(max / 2))}</div>}
+            {empty && (
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 130, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", pointerEvents: "none" }}>
+                No token usage {model !== "all" ? `for ${model} ` : ""}in this range
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 10, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)" }}>
+              {data.map((d, i) => <span key={i} style={{ flex: 1, textAlign: "left" }}>{d.t}</span>)}
+            </div>
+            {hover !== null && visibleTotal(data[hover]) > 0 && (
+              <div style={{
+                position: "absolute",
+                left: chartTooltipLeft(hover, data.length),
+                transform: "translate(-50%, -100%)",
+                top: -4,
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border-medium)",
+                borderRadius: 2,
+                padding: "6px 8px",
+                fontFamily: "var(--fontFamilyMonospace)",
+                fontSize: 11,
+                color: "var(--fg1)",
+                whiteSpace: "nowrap",
+                pointerEvents: "none",
+                boxShadow: "var(--shadow-z2)",
+                zIndex: 1,
+              }}>
+                <div style={{ color: "var(--fg3)", marginBottom: 4 }}>{data[hover].t} · {formatTokens(visibleTotal(data[hover]))} tok</div>
+                {visible.filter(s => data[hover][s.key] > 0).map(s => (
+                  <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ width: 8, height: 8, background: s.color, borderRadius: 1 }}/>
+                    <span style={{ color: "var(--fg2)" }}>{s.label}</span>
+                    <span style={{ marginLeft: "auto", color: "var(--fg1)" }}>{formatTokens(data[hover][s.key])}</span>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -508,7 +794,7 @@
             <span style={{ color: "var(--fg3)", padding: "0 6px" }}>·</span>
             <span style={{ color: "var(--fg1)" }}>{c.calls} {c.calls === 1 ? "call" : "calls"}</span>
           </span>
-          <span style={{ color: "var(--fg1)" }}>{formatTokens(c.total_tokens)}</span>
+          <span style={{ color: "var(--fg1)" }} title={tokenBreakdownTitle(c.token_buckets)}>{formatTokens(c.total_tokens)}</span>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {(c.agents || []).map(a => <AgentPill key={a} name={a} size="sm"/>)}
           </div>
@@ -519,7 +805,25 @@
       );
     }
 
-    function ConversationsView({ conversations, loading, error, query, setQuery, timeRange, setTimeRange, onOpen, onRefresh, refreshing }) {
+    // SortHeader is a clickable list-header cell: click sorts by the
+    // column, clicking again flips the direction.
+    function SortHeader({ label, sortKey, sort, onSort }) {
+      const active = sort.key === sortKey;
+      return (
+        <button onClick={() => onSort(sortKey)} title={`Sort by ${label.toLowerCase()}`}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 4,
+            background: "transparent", border: "none", padding: 0,
+            cursor: "pointer", font: "inherit", textAlign: "left",
+            textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 500,
+            color: active ? "var(--fg1)" : "inherit",
+          }}>
+          {label}{active && <span style={{ fontSize: 8 }}>{sort.dir === "asc" ? "▲" : "▼"}</span>}
+        </button>
+      );
+    }
+
+    function ConversationsView({ conversations, tokenPoints, loading, error, query, setQuery, timeRange, setTimeRange, tokenModel, setTokenModel, chartMetric, setChartMetric, bucketSel, setBucketSel, listSort, setListSort, onOpen, onRefresh, refreshing }) {
       const now = Date.now();
       const range = timeRangeOption(timeRange);
       const rangeFiltered = useMemo(() => {
@@ -541,12 +845,93 @@
         );
       }, [rangeFiltered, query]);
 
-      const activity = useMemo(() => bucketActivity(filtered, timeRange, now), [filtered, timeRange, now]);
+      // Token chart has its own model filter and is driven only by the
+      // time range, not the text query (token points carry model, not the
+      // searchable conversation fields). The selection lives in App so it
+      // survives navigating into a conversation and back; a model that
+      // disappears from the store falls back to "all" by derivation.
+      const points = tokenPoints || [];
+      const tokenModels = useMemo(
+        () => Array.from(new Set(points.map(p => p.model).filter(Boolean))).sort(),
+        [points]
+      );
+      const effectiveModel = tokenModels.includes(tokenModel) ? tokenModel : "all";
+      const tokenFiltered = useMemo(
+        () => effectiveModel === "all" ? points : points.filter(p => p.model === effectiveModel),
+        [points, effectiveModel]
+      );
+      // Both metrics share one window so switching the chart between
+      // them doesn't shift the time axis; with per-metric windows the
+      // "All" range drifts when the datasets' extents differ.
+      const chartWindow = useMemo(() => {
+        const times = filtered.map(conversationTime).concat(tokenFiltered.map(tokenPointTime));
+        return timeWindow(times, timeRange, now);
+      }, [filtered, tokenFiltered, timeRange, now]);
+      const activity = useMemo(
+        () => bucketActivity(filtered, timeRange, now, { window: chartWindow }),
+        [filtered, timeRange, now, chartWindow]
+      );
+      const tokenUsage = useMemo(
+        () => bucketTokenUsage(tokenFiltered, timeRange, now, { window: chartWindow }),
+        [tokenFiltered, timeRange, now, chartWindow]
+      );
+
+      // Bucket drill-down from a chart bar click: the list narrows to
+      // conversations active inside the picked bucket, while the charts
+      // keep the full window and just highlight the selection.
+      const onBucketClick = useCallback(b => {
+        setBucketSel(sel => sel && sel.start === b.start && sel.end === b.end ? null : { start: b.start, end: b.end });
+      }, [setBucketSel]);
+      const listFiltered = useMemo(() => {
+        if (!bucketSel) return filtered;
+        return filtered.filter(c => {
+          const endT = conversationTime(c);
+          if (endT == null) return false;
+          const startT = new Date(c.started_at).getTime();
+          const s = Number.isFinite(startT) ? startT : endT;
+          return s < bucketSel.end && endT >= bucketSel.start;
+        });
+      }, [filtered, bucketSel]);
+
+      const handleSort = useCallback(key => {
+        setListSort(s => s.key === key ? { key, dir: s.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" });
+      }, [setListSort]);
+      const sorted = useMemo(() => {
+        const dir = listSort.dir === "asc" ? 1 : -1;
+        const val = c => {
+          if (listSort.key === "duration") {
+            const d = durationBetweenSeconds(c.started_at, c.last_activity);
+            return d == null ? -1 : d;
+          }
+          if (listSort.key === "tokens") return c.total_tokens || 0;
+          const t = conversationTime(c);
+          return t == null ? 0 : t;
+        };
+        return [...listFiltered].sort((a, b) => (val(a) - val(b)) * dir);
+      }, [listFiltered, listSort]);
 
       return (
         <div style={{ padding: 24, maxWidth: 1600, margin: "0 auto" }}>
           <FilterBar query={query} onQueryChange={setQuery} timeRange={timeRange} onTimeRangeChange={setTimeRange} onRefresh={onRefresh} refreshing={refreshing}/>
-          <ActivityChart data={activity.buckets} bucketLabel={activity.bucketLabel}/>
+          {chartMetric === "activity"
+            ? <ActivityChart data={activity.buckets} bucketLabel={activity.bucketLabel}
+                selection={bucketSel} onBucketClick={onBucketClick}
+                switcher={<ChartSwitch value={chartMetric} onChange={setChartMetric}/>}/>
+            : <TokenChart data={tokenUsage.buckets} bucketLabel={tokenUsage.bucketLabel} grandTotal={tokenUsage.grandTotal} totals={tokenUsage.totals} models={tokenModels} model={effectiveModel} onModelChange={setTokenModel}
+                selection={bucketSel} onBucketClick={onBucketClick}
+                switcher={<ChartSwitch value={chartMetric} onChange={setChartMetric}/>}/>}
+
+          {bucketSel && (
+            <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, fontSize: 11, fontFamily: "var(--fontFamilyMonospace)", color: "var(--fg2)" }}>
+              <span>
+                Showing {formatBucketLabel(bucketSel.start, bucketSel.end - bucketSel.start)} – {formatBucketLabel(bucketSel.end, bucketSel.end - bucketSel.start)}
+              </span>
+              <button onClick={() => setBucketSel(null)}
+                style={{ background: "transparent", border: "1px solid var(--border-medium)", borderRadius: 2, color: "var(--fg2)", cursor: "pointer", fontSize: 11, fontFamily: "var(--fontFamilyMonospace)", padding: "1px 8px" }}>
+                ✕ clear
+              </button>
+            </div>
+          )}
 
           <div style={{
             marginTop: 18,
@@ -564,7 +949,11 @@
               background: "var(--bg-secondary)",
               fontSize: 11, color: "var(--fg3)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 500,
             }}>
-              <span>Last activity</span><span>Conversation</span><span>Duration</span><span>Tokens</span><span>Agents</span><span>Models</span>
+              <SortHeader label="Last activity" sortKey="last_activity" sort={listSort} onSort={handleSort}/>
+              <span>Conversation</span>
+              <SortHeader label="Duration" sortKey="duration" sort={listSort} onSort={handleSort}/>
+              <SortHeader label="Tokens" sortKey="tokens" sort={listSort} onSort={handleSort}/>
+              <span>Agents</span><span>Models</span>
             </div>
 
             {error && (
@@ -592,7 +981,12 @@
                 No matches for <code style={{ color: "var(--fg1)" }}>{query}</code>.
               </div>
             )}
-            {filtered.map(c => <ConvRow key={c.id} c={c} now={now} onOpen={onOpen}/>)}
+            {!error && bucketSel && listFiltered.length === 0 && filtered.length > 0 && (
+              <div style={{ padding: "16px 18px", color: "var(--fg2)", fontSize: 12 }}>
+                No conversations in the selected bucket.
+              </div>
+            )}
+            {sorted.map(c => <ConvRow key={c.id} c={c} now={now} onOpen={onOpen}/>)}
           </div>
 
           <div style={{
@@ -600,7 +994,7 @@
             fontSize: 11, color: "var(--fg3)",
             fontFamily: "var(--fontFamilyMonospace)",
           }}>
-            {filtered.length} of {conversations.length} {conversations.length === 1 ? "conversation" : "conversations"}
+            {sorted.length} of {conversations.length} {conversations.length === 1 ? "conversation" : "conversations"}
           </div>
         </div>
       );
@@ -736,6 +1130,31 @@
       );
     }
 
+    // StepTokenBar shows one step's disjoint token buckets: a thin
+    // proportional stacked bar plus labeled counts in the chart's series
+    // colors. Answers "did this step hit the prompt cache?" at a glance.
+    function StepTokenBar({ buckets }) {
+      if (!buckets) return null;
+      const parts = TOKEN_SERIES.map(s => ({ ...s, v: buckets[s.key] || 0 })).filter(p => p.v > 0);
+      const total = parts.reduce((acc, p) => acc + p.v, 0);
+      if (total === 0) return null;
+      return (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", height: 4, borderRadius: 1, overflow: "hidden", marginBottom: 6 }}>
+            {parts.map(p => <span key={p.key} style={{ width: `${(p.v / total) * 100}%`, background: p.color }}/>)}
+          </div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, fontFamily: "var(--fontFamilyMonospace)", color: "var(--fg2)" }}>
+            {parts.map(p => (
+              <span key={p.key} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <span style={{ width: 8, height: 8, background: p.color, borderRadius: 1 }}/>
+                {p.label} <span style={{ color: "var(--fg1)" }}>{formatTokens(p.v)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     function StepCard({ step, n, expanded, onToggle }) {
       const hasError = !!step.call_error;
       const dotColor = hasError ? "var(--error-text)" : "#73BF69";
@@ -789,6 +1208,8 @@
                   <span style={{ color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)" }}>provider · {step.provider}</span>
                 )}
               </div>
+
+              <StepTokenBar buckets={step.token_buckets}/>
 
               {hasError && (
                 <div style={{ marginBottom: 10 }}>
@@ -981,13 +1402,43 @@
       };
     }
 
+    // usePersistedState is useState mirrored into localStorage (string
+    // values only, plain values — no updater functions) so viewer
+    // preferences survive reloads. accept guards against stale or
+    // foreign stored values; storage errors (private mode, disabled)
+    // fall back to in-memory state.
+    function usePersistedState(key, initial, accept) {
+      const [value, setValue] = useState(() => {
+        try {
+          const raw = window.localStorage.getItem(key);
+          return raw != null && accept(raw) ? raw : initial;
+        } catch (_) {
+          return initial;
+        }
+      });
+      const set = useCallback(v => {
+        setValue(v);
+        try {
+          window.localStorage.setItem(key, v);
+        } catch (_) {}
+      }, [key]);
+      return [value, set];
+    }
+
     function App() {
       const [selectedID, setSelectedID] = useState(conversationIDFromPath);
       const [conversations, setConversations] = useState([]);
+      const [tokenPoints, setTokenPoints] = useState([]);
       const [loadingList, setLoadingList] = useState(true);
       const [errList, setErrList] = useState(null);
       const [query, setQuery] = useState("");
-      const [timeRange, setTimeRange] = useState("6h");
+      const [timeRange, setTimeRange] = usePersistedState("sigil.local.timeRange", "6h",
+        v => TIME_RANGES.some(r => r.value === v));
+      const [tokenModel, setTokenModel] = useState("all");
+      const [chartMetric, setChartMetric] = usePersistedState("sigil.local.chartMetric", "tokens",
+        v => v === "tokens" || v === "activity");
+      const [bucketSel, setBucketSel] = useState(null);
+      const [listSort, setListSort] = useState({ key: "last_activity", dir: "desc" });
 
       const [detail, setDetail] = useState(null);
       const [loadingDetail, setLoadingDetail] = useState(false);
@@ -997,6 +1448,18 @@
       const selected = selectedID
         ? conversations.find(c => c.id === selectedID) || summaryFromDetail(detail, selectedID)
         : null;
+
+      // Changing the time range invalidates a bucket drill-down: the
+      // bucket boundaries belong to the old window.
+      const changeTimeRange = useCallback(v => {
+        setBucketSel(null);
+        setTimeRange(v);
+      }, [setTimeRange]);
+
+      const pageTitle = view === "conversation" && selected
+        ? `${selected.title || selected.id} — sigil local`
+        : "sigil — local";
+      useEffect(() => { document.title = pageTitle; }, [pageTitle]);
 
       const fetchList = useCallback(() => {
         setLoadingList(true);
@@ -1009,6 +1472,21 @@
           .catch(e => setErrList(String(e.message || e)))
           .finally(() => setLoadingList(false));
       }, []);
+
+      // Token points back the usage chart. Failures are swallowed: the
+      // chart is supplementary, so a hiccup here shouldn't surface an
+      // error banner over the conversation list.
+      const fetchTokens = useCallback(() => {
+        return fetch("/api/v1/metrics/tokens")
+          .then(r => r.ok ? r.json() : null)
+          .then(body => { if (body) setTokenPoints(body.points || []); })
+          .catch(() => {});
+      }, []);
+
+      const refreshAll = useCallback(() => {
+        fetchList();
+        fetchTokens();
+      }, [fetchList, fetchTokens]);
 
       const fetchDetail = useCallback((id) => {
         setLoadingDetail(true);
@@ -1025,7 +1503,7 @@
           .finally(() => setLoadingDetail(false));
       }, []);
 
-      useEffect(() => { fetchList(); }, [fetchList]);
+      useEffect(() => { refreshAll(); }, [refreshAll]);
 
       useEffect(() => {
         const onPopState = () => setSelectedID(conversationIDFromPath());
@@ -1049,9 +1527,9 @@
       // user.
       useEffect(() => {
         if (view !== "conversations") return;
-        const id = setInterval(fetchList, 30_000);
+        const id = setInterval(refreshAll, 30_000);
         return () => clearInterval(id);
-      }, [view, fetchList]);
+      }, [view, refreshAll]);
 
       const openConv = (c) => {
         window.history.pushState({}, "", conversationPath(c.id));
@@ -1078,14 +1556,23 @@
             {view === "conversations" && (
               <ConversationsView
                 conversations={conversations}
+                tokenPoints={tokenPoints}
                 loading={loadingList}
                 error={errList}
                 query={query}
                 setQuery={setQuery}
                 timeRange={timeRange}
-                setTimeRange={setTimeRange}
+                setTimeRange={changeTimeRange}
+                tokenModel={tokenModel}
+                setTokenModel={setTokenModel}
+                chartMetric={chartMetric}
+                setChartMetric={setChartMetric}
+                bucketSel={bucketSel}
+                setBucketSel={setBucketSel}
+                listSort={listSort}
+                setListSort={setListSort}
                 onOpen={openConv}
-                onRefresh={fetchList}
+                onRefresh={refreshAll}
                 refreshing={loadingList}
               />
             )}
