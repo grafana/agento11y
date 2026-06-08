@@ -92,10 +92,18 @@ jobs:
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean -f plugins/sigil/.goreleaser.yaml
+          # `--skip=validate` is required because GORELEASER_CURRENT_TAG
+          # overrides the tag with the prefix-stripped version (e.g.
+          # v0.11.0), which is not a real git tag. Without it goreleaser's
+          # git-state check fails with "git tag v0.11.0 was not made against
+          # commit ...". The monorepo block that would handle the real
+          # plugins/sigil/v* tag natively is goreleaser Pro only.
+          args: release --clean --skip=validate -f plugins/sigil/.goreleaser.yaml
         env:
-          # `release.disable: true` in the config skips goreleaser's GitHub
-          # Release step; the dedicated step below creates the release.
+          # GORELEASER_CURRENT_TAG feeds {{ .Version }} (prefix and leading
+          # `v` stripped). `release.disable: true` in the config skips
+          # goreleaser's GitHub Release step; the dedicated step below
+          # creates the release.
           GORELEASER_CURRENT_TAG: ${{ steps.ver.outputs.version }}
 
       - name: Create GitHub Release
