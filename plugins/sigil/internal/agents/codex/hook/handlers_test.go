@@ -748,9 +748,12 @@ func TestPreToolUseGuard(t *testing.T) {
 		useClosedEndpoint  bool
 		clearCreds         bool
 		serverResponds     string
+		toolInput          string
 		expectServerCall   bool
 		wantStdoutContains []string
+		wantStdoutExcludes []string
 		wantStdoutEmpty    bool
+		wantLogContains    string
 	}{
 		{
 			name:            "disabled_by_default_no_env",
@@ -812,6 +815,60 @@ func TestPreToolUseGuard(t *testing.T) {
 			clearCreds:         true,
 			wantStdoutContains: []string{`"permissionDecision":"deny"`, "missing SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/SIGIL_AUTH_TOKEN"},
 		},
+		{
+			name:             "enabled_allow_transform_writes_updated_input",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_1","name":"Bash","input_json":{"command":"echo [REDACTED]"}}}]}]}}`,
+			expectServerCall: true,
+			wantStdoutContains: []string{
+				`"hookSpecificOutput"`,
+				`"hookEventName":"PreToolUse"`,
+				`"permissionDecision":"allow"`,
+				`"updatedInput":{"command":"echo [REDACTED]"}`,
+			},
+		},
+		{
+			name:             "enabled_allow_transform_for_mcp_tool_without_command",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_1","name":"mcp__vault__read","input_json":{"token":"REDACTED"}}}]}]}}`,
+			toolInput:        `{"token":"secret"}`,
+			expectServerCall: true,
+			wantStdoutContains: []string{
+				`"permissionDecision":"allow"`,
+				`"updatedInput":{"token":"REDACTED"}`,
+			},
+		},
+		{
+			name:             "enabled_allow_transform_dropping_command_is_dropped",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_1","name":"Bash","input_json":{"args":"echo [REDACTED]"}}}]}]}}`,
+			expectServerCall: true,
+			wantStdoutEmpty:  true,
+			wantLogContains:  "tool-call transform for tu_1 dropped",
+		},
+		{
+			name:             "enabled_allow_transform_with_null_command_is_dropped",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_1","name":"Bash","input_json":{"command":null}}}]}]}}`,
+			expectServerCall: true,
+			wantStdoutEmpty:  true,
+			wantLogContains:  "tool-call transform for tu_1 dropped",
+		},
+		{
+			name:               "enabled_deny_with_transform_stays_deny_only",
+			env:                map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:     `{"action":"deny","reason":"blocked tool","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_1","name":"Bash","input_json":{"command":"echo [REDACTED]"}}}]}]}}`,
+			expectServerCall:   true,
+			wantStdoutContains: []string{`"permissionDecision":"deny"`, "blocked tool"},
+			wantStdoutExcludes: []string{"updatedInput"},
+		},
+		{
+			name:             "enabled_allow_unusable_transform_stays_silent",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_other","name":"Bash","input_json":{"command":"echo X"}}}]}]}}`,
+			expectServerCall: true,
+			wantStdoutEmpty:  true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -843,12 +900,16 @@ func TestPreToolUseGuard(t *testing.T) {
 			cfg := config.Load(log.New(io.Discard, "", 0))
 			var stdout bytes.Buffer
 			var logs bytes.Buffer
+			toolInput := tt.toolInput
+			if toolInput == "" {
+				toolInput = `{"command":"echo hi"}`
+			}
 			payload := Payload{
 				HookEventName: "PreToolUse",
 				SessionID:     "sess",
 				ToolName:      "Bash",
 				ToolUseID:     "tu_1",
-				ToolInput:     json.RawMessage(`{"command":"echo hi"}`),
+				ToolInput:     json.RawMessage(toolInput),
 				Model:         "gpt-5",
 			}
 
@@ -867,6 +928,14 @@ func TestPreToolUseGuard(t *testing.T) {
 				if !strings.Contains(stdout.String(), want) {
 					t.Errorf("stdout = %q, want substring %q", stdout.String(), want)
 				}
+			}
+			for _, exclude := range tt.wantStdoutExcludes {
+				if strings.Contains(stdout.String(), exclude) {
+					t.Errorf("stdout = %q, must not contain %q", stdout.String(), exclude)
+				}
+			}
+			if tt.wantLogContains != "" && !strings.Contains(logs.String(), tt.wantLogContains) {
+				t.Errorf("logs missing %q:\n%s", tt.wantLogContains, logs.String())
 			}
 		})
 	}

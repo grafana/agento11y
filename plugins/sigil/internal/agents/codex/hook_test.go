@@ -30,7 +30,7 @@ func TestHookRoutesPreToolUse(t *testing.T) {
 		name               string
 		serverResponds     string
 		wantStdoutEmpty    bool
-		wantStdoutContains string
+		wantStdoutContains []string
 	}{
 		{
 			name:            "allow_response_produces_empty_stdout",
@@ -40,7 +40,17 @@ func TestHookRoutesPreToolUse(t *testing.T) {
 		{
 			name:               "deny_response_emits_codex_deny_json",
 			serverResponds:     `{"action":"deny","reason":"blocked"}`,
-			wantStdoutContains: `"permissionDecision":"deny"`,
+			wantStdoutContains: []string{`"permissionDecision":"deny"`},
+		},
+		{
+			name:           "transform_response_emits_allow_updated_input_json",
+			serverResponds: `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_1","name":"Bash","input_json":{"command":"echo [REDACTED]"}}}]}]}}`,
+			wantStdoutContains: []string{
+				`"hookSpecificOutput"`,
+				`"hookEventName":"PreToolUse"`,
+				`"permissionDecision":"allow"`,
+				`"updatedInput":{"command":"echo [REDACTED]"}`,
+			},
 		},
 	}
 
@@ -65,8 +75,10 @@ func TestHookRoutesPreToolUse(t *testing.T) {
 			if tt.wantStdoutEmpty && stdout.Len() != 0 {
 				t.Errorf("stdout not empty: %q", stdout.String())
 			}
-			if tt.wantStdoutContains != "" && !strings.Contains(stdout.String(), tt.wantStdoutContains) {
-				t.Errorf("stdout = %q, want substring %q", stdout.String(), tt.wantStdoutContains)
+			for _, want := range tt.wantStdoutContains {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("stdout = %q, want substring %q", stdout.String(), want)
+				}
 			}
 		})
 	}

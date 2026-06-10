@@ -118,7 +118,7 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 | `SIGIL_GUARDS_TIMEOUT_MS` | `1500` | Per-call guard timeout. |
 | `SIGIL_AUTO_UPDATE` | `true` | Refresh the `sigil-codex` plugin automatically. Set `false` to pin the installed version. |
 
-Guards only intercept tool calls that Codex routes through `PreToolUse` — Bash, the `apply_patch` variants, and MCP tools. See the [Codex hooks docs](https://developers.openai.com/codex/hooks) for the supported set.
+Guard rules can block a tool call or rewrite its arguments (Transform rules, e.g. redacting a secret before the tool runs). Guards only intercept tool calls that Codex routes through `PreToolUse` — Bash, the `apply_patch` variants, and MCP tools. See the [Codex hooks docs](https://developers.openai.com/codex/hooks) for the supported set.
 
 If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 

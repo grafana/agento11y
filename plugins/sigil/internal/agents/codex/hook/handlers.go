@@ -82,10 +82,11 @@ func UserPromptSubmit(p Payload, cfg config.Config, logger *log.Logger) {
 }
 
 // PreToolUse evaluates a Codex tool call against Sigil guard rules. It writes
-// a PreToolUse deny envelope to stdout when the call must be blocked and
-// stays silent when the call is allowed. Transport setup, credential checks,
-// and fail-open/closed behaviour live in the shared guard package. Claude
-// Code and Codex also share the PreToolUse deny envelope writer.
+// a PreToolUse deny envelope to stdout when the call must be blocked, an
+// allow+updatedInput envelope when a Transform rule redacted the tool
+// arguments, and stays silent on a plain allow. Transport setup, credential
+// checks, and fail-open/closed behaviour live in the shared guard package.
+// Claude Code and Codex also share both PreToolUse envelope writers.
 func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Config, logger *log.Logger) {
 	res := guard.EvaluateToolCall(ctx, cfg.Guards, guard.ToolCallInput{
 		AgentName:     mapper.AgentName,
@@ -97,7 +98,29 @@ func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Con
 	}, logger)
 	if res.Blocked() {
 		guard.WriteHookSpecificOutputDeny(stdout, res.Reason)
+		return
 	}
+	if len(res.UpdatedInputJSON) == 0 {
+		return
+	}
+	// Codex rejects Bash and apply_patch updatedInput without a string
+	// command field, which would error the tool call instead of running it.
+	// A transform that strips command therefore fails open: keep the
+	// original arguments.
+	if hasStringCommand(p.ToolInput) && !hasStringCommand(res.UpdatedInputJSON) {
+		logger.Printf("guard: tool-call transform for %s dropped: transformed arguments missing string command field", p.ToolUseID)
+		return
+	}
+	guard.WriteHookSpecificOutputUpdatedInput(stdout, res.UpdatedInputJSON)
+}
+
+func hasStringCommand(raw json.RawMessage) bool {
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return false
+	}
+	_, ok := obj["command"].(string)
+	return ok
 }
 
 func guardProviderFromModel(model string) string {
