@@ -113,6 +113,9 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 | `SIGIL_TAGS` | — | `key=value,key=value` tags on every generation and as `sigil.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). Built-ins (`git.branch`, `cwd`, `subagent`) win on generation-export tag collision. |
 | `SIGIL_USER_ID` | from Cursor | Override the user id. |
 | `SIGIL_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
+| `SIGIL_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Cursor `preToolUse` hook is evaluated against Sigil: tool calls denied by guard rules are blocked, and Transform rules rewrite the tool arguments before execution. |
+| `SIGIL_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |
+| `SIGIL_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout. Lower = less added latency on every tool call, higher = better tolerance for slow `llm_judge` evaluators. |
 | `SIGIL_BIN` | auto | Override the binary path if you installed `sigil` somewhere unusual. |
 
 If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.

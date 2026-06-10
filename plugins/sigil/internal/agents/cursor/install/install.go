@@ -31,10 +31,11 @@ import (
 // cursorEvents are the hook events Sigil wires, matching the set shipped in
 // plugins/cursor/hooks/hooks.json. The Cursor dispatcher infers the event
 // from hook_event_name in the payload, so the same `sigil cursor hook`
-// command serves all eight.
+// command serves all nine.
 var cursorEvents = []string{
 	"sessionStart",
 	"beforeSubmitPrompt",
+	"preToolUse",
 	"afterAgentResponse",
 	"afterAgentThought",
 	"postToolUse",

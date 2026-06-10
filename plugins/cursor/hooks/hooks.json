@@ -3,6 +3,7 @@
   "hooks": {
     "sessionStart":       [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run.sh" }],
     "beforeSubmitPrompt": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run.sh" }],
+    "preToolUse":         [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run.sh" }],
     "afterAgentResponse": [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run.sh" }],
     "afterAgentThought":  [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run.sh" }],
     "postToolUse":        [{ "command": "${CURSOR_PLUGIN_ROOT}/scripts/run.sh" }],
