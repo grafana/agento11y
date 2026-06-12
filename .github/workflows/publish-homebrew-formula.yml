@@ -1,0 +1,203 @@
+name: Publish Homebrew Formula
+
+# Fourth stage of the sigil release pipeline (release-sigil.yml opens the
+# release PR, tag-sigil-on-merge.yml pushes the tag, release-sigil-binaries.yml
+# builds binaries). Renders the tap formula from a template and opens a bump
+# PR against grafana/homebrew-grafana.
+
+on:
+  push:
+    tags:
+      - "plugins/sigil/v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing plugins/sigil/v* tag to publish (e.g. plugins/sigil/v0.11.0)."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-homebrew-formula-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'grafana/sigil-sdk'
+    name: Publish formula PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # to checkout the template
+      id-token: write # required by the create-github-app-token broker OIDC exchange
+
+    steps:
+      - name: Resolve tag and version
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          # Manual runs must pass an explicit tag; only tag-triggered
+          # pushes can derive it from GITHUB_REF.
+          if [[ -n "$INPUT_TAG" ]]; then
+            TAG="$INPUT_TAG"
+          elif [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            echo "::error::Input 'tag' is required when dispatching this workflow manually."
+            exit 1
+          fi
+          case "$TAG" in
+            plugins/sigil/v*) ;;
+            *)
+              echo "::error::Refusing to publish '$TAG'; expected a plugins/sigil/v* tag."
+              exit 1
+              ;;
+          esac
+          VERSION="${TAG#plugins/sigil/v}"
+          # Homebrew users should only ever see stable releases in the tap;
+          # skip SemVer pre-releases (version containing a hyphen, e.g.
+          # 0.12.0-rc.1).
+          if [[ "$VERSION" == *-* ]]; then
+            echo "Tag '$TAG' is a pre-release; skipping tap publication."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "tag=${TAG}"
+            echo "version=${VERSION}"
+            echo "branch=sigil-${VERSION}"
+            echo "skip=false"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout (for template)
+        if: steps.tag.outputs.skip != 'true'
+        # On tag pushes github.ref is the tag, so checkout gets the template
+        # at that ref. On workflow_dispatch github.ref is the dispatch branch
+        # (typically main), which also has the template. Deliberately not
+        # checking out the tag itself so that old tags predating the template
+        # can still be backfilled via dispatch.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Compute source tarball sha256
+        if: steps.tag.outputs.skip != 'true'
+        id: sha
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The slashes in the tag are fine here; GitHub serves source
+          # tarballs for slashed tags at the same refs/tags path.
+          TARBALL_URL="https://github.com/${GH_REPO}/archive/refs/tags/${TAG}.tar.gz"
+          echo "Fetching: ${TARBALL_URL}"
+          curl -fsSL --retry 3 --retry-delay 5 -o source.tar.gz "${TARBALL_URL}"
+          SHA256="$(sha256sum source.tar.gz | awk '{print $1}')"
+          if [[ ! "${SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::computed sha256 is not 64 hex chars: '${SHA256}'"
+            exit 1
+          fi
+          echo "Computed sha256=${SHA256}"
+          echo "sha256=${SHA256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Render formula from template
+        if: steps.tag.outputs.skip != 'true'
+        id: render
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          SHA256: ${{ steps.sha.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          TMPL=".github/homebrew/sigil.rb.tmpl"
+          if [[ ! -f "${TMPL}" ]]; then
+            echo "::error::template missing at ${TMPL}"
+            exit 1
+          fi
+          # Restricting envsubst to these two variables keeps the Ruby
+          # #{...} interpolations in the template intact. The single quotes
+          # are deliberate: envsubst takes the variable list literally.
+          # shellcheck disable=SC2016
+          envsubst '$VERSION $SHA256' < "${TMPL}" > sigil.rb
+          # Sanity-check the rendered formula:
+          grep -q "^class Sigil < Formula" sigil.rb \
+            || { echo "::error::bad formula render (missing class header)"; exit 1; }
+          grep -q "sha256 \"${SHA256}\"" sigil.rb \
+            || { echo "::error::sha256 not substituted"; exit 1; }
+          grep -q "version \"${VERSION}\"" sigil.rb \
+            || { echo "::error::version not substituted"; exit 1; }
+          grep -q "/archive/refs/tags/plugins/sigil/v${VERSION}.tar.gz" sigil.rb \
+            || { echo "::error::version not substituted into URL"; exit 1; }
+          echo "Rendered sigil.rb:"
+          echo "---"
+          cat sigil.rb
+          echo "---"
+          echo "rb_path=${GITHUB_WORKSPACE}/sigil.rb" >> "${GITHUB_OUTPUT}"
+
+      - name: Mint App installation token
+        if: steps.tag.outputs.skip != 'true'
+        id: app-token
+        uses: grafana/shared-workflows/actions/create-github-app-token@259ba21cb3ff07724f331e26d926d655d24b317b # create-github-app-token/v0.2.3
+        with:
+          github_app: grafana-assistant-cli-publisher
+
+      - name: Open tap pull request
+        if: steps.tag.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RB_PATH: ${{ steps.render.outputs.rb_path }}
+          BRANCH: ${{ steps.tag.outputs.branch }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+
+          TAP_DIR="$(mktemp -d)"
+          gh repo clone grafana/homebrew-grafana "${TAP_DIR}" -- --depth 1
+          cd "${TAP_DIR}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B "${BRANCH}"
+
+          # Flat-layout tap: sigil.rb goes at the root, next to alloy.rb and
+          # grafana.rb, NOT under Casks/.
+          cp "${RB_PATH}" sigil.rb
+          git add sigil.rb
+
+          # Idempotency guard: byte-identical input means no staged diff, so
+          # exit 0 without committing.
+          if git diff --cached --quiet; then
+            echo "No changes in sigil.rb for sigil ${VERSION}; exiting without opening a PR."
+            exit 0
+          fi
+
+          git commit -m "sigil ${VERSION}"
+          # Force-push so re-running on the same tag overwrites any prior
+          # attempt on this branch.
+          git push --force origin "${BRANCH}"
+
+          DEFAULT_BRANCH="$(gh repo view grafana/homebrew-grafana --json defaultBranchRef --jq '.defaultBranchRef.name')"
+
+          EXISTING_PR="$(gh pr list \
+              --repo grafana/homebrew-grafana \
+              --head "${BRANCH}" \
+              --state open \
+              --json number \
+              --jq '.[0].number // empty')"
+
+          if [[ -n "${EXISTING_PR}" ]]; then
+            echo "PR #${EXISTING_PR} already open for ${BRANCH}; updated branch in place."
+            exit 0
+          fi
+
+          gh pr create \
+            --repo grafana/homebrew-grafana \
+            --base "${DEFAULT_BRANCH}" \
+            --head "${BRANCH}" \
+            --title "sigil ${VERSION}" \
+            --body "Automated formula bump for [sigil ${VERSION}](https://github.com/grafana/sigil-sdk/releases/tag/plugins/sigil/v${VERSION}). Generated by the sigil release pipeline."
