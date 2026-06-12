@@ -27,3 +27,6 @@ allowBuilds:
   protobufjs: true
   sqlite3: true
   tree-sitter: true
+minimumReleaseAgeExclude:
+  # Renovate security update: esbuild@0.28.1
+  - esbuild@0.28.1
