@@ -27,3 +27,6 @@ allowBuilds:
   protobufjs: true
   sqlite3: true
   tree-sitter: true
+minimumReleaseAgeExclude:
+  # Renovate security update: @grpc/grpc-js@1.14.4
+  - "@grpc/grpc-js@1.14.4"
