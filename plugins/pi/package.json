@@ -35,7 +35,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@grpc/grpc-js": "^1.14.1",
+    "@grpc/grpc-js": "^1.14.4",
     "@grpc/proto-loader": "^0.8.0"
   },
   "peerDependencies": {
@@ -45,8 +45,8 @@
   },
   "devDependencies": {
     "@grafana/sigil-sdk-js": "workspace:*",
-    "@mariozechner/pi-ai": "0.70.5",
-    "@mariozechner/pi-coding-agent": "0.70.5",
+    "@mariozechner/pi-ai": "0.73.1",
+    "@mariozechner/pi-coding-agent": "0.73.1",
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/exporter-metrics-otlp-http": "0.214.0",
     "@opentelemetry/exporter-trace-otlp-http": "0.214.0",
