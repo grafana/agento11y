@@ -10,6 +10,7 @@ import type {
 import { createSigilClient } from "./client.js";
 import type { SigilOpencodeConfig } from "./config.js";
 import { runToolCallGuard } from "./guard.js";
+import { stableOpencodeGenerationId } from "./lineage.js";
 import { mapError, mapGeneration, mapToolDefinitions } from "./mappers.js";
 import { Redactor } from "./redact.js";
 import {
@@ -21,6 +22,27 @@ type OpencodeClient = PluginInput["client"];
 
 // Track recorded messages per session for dedup and cleanup
 const recordedMessages = new Map<string, Set<string>>();
+
+// Last assistant generation id recorded per session, used as the parent for
+// the next assistant generation. opencode assistant messages all share a
+// `parentID` pointing at the user message, so they cannot express
+// assistant-to-assistant lineage themselves. Message ids are monotonic and
+// recording is sequential, so the previous recorded generation is the
+// correct parent. The chain is in-memory and resets per process: the first
+// turn after a restart loses its parent edge, but its deterministic id still
+// dedups.
+const lastGenerationIdBySession = new Map<string, string>();
+
+// First streamed assistant part time per message, keyed by
+// `${sessionID}\x00${messageID}`. Captured from `message.part.updated`
+// before the message completes so it survives `metadata_only` (where we
+// never fetch the message body). Consumed and cleared when the message is
+// recorded.
+const firstPartAtByMessage = new Map<string, number>();
+
+function messageKey(sessionID: string, messageID: string): string {
+  return `${sessionID}\x00${messageID}`;
+}
 
 // Pending generation store: user-side data captured before assistant responds
 type PendingGeneration = {
@@ -183,6 +205,7 @@ async function handleMessagePartUpdated(
   properties: unknown,
 ): Promise<void> {
   const part = recordField(properties, "part");
+  recordFirstPartTime(part);
   if (stringField(part, "type") !== "step-finish") return;
   const sessionID = stringField(part, "sessionID");
   const messageID = stringField(part, "messageID");
@@ -205,6 +228,34 @@ async function handleMessagePartUpdated(
   } catch (err) {
     debugLog("failed to export terminal message part", err);
   }
+}
+
+/**
+ * Record the time of the first streamed text/reasoning/tool part for a
+ * message. This is the time-to-first-token signal: opencode emits
+ * `message.part.updated` as the provider streams output, so the first such
+ * part marks when the model began producing the response. Keyed by message
+ * id, so a user message's parts never displace the assistant turn we read
+ * back in `recordAssistantMessage`.
+ *
+ * Prefer the part's own `time.start`; fall back to `Date.now()` so tool
+ * parts (whose timestamp lives under `state.time`) and any part lacking a
+ * `time` field still yield a signal. First write wins.
+ */
+function recordFirstPartTime(part: Record<string, unknown> | undefined): void {
+  if (!part) return;
+  const type = stringField(part, "type");
+  if (type !== "text" && type !== "reasoning" && type !== "tool") return;
+  const sessionID = stringField(part, "sessionID");
+  const messageID = stringField(part, "messageID");
+  if (!sessionID || !messageID) return;
+  const key = messageKey(sessionID, messageID);
+  if (firstPartAtByMessage.has(key)) return;
+  const rawStart = recordField(part, "time")?.start;
+  firstPartAtByMessage.set(
+    key,
+    typeof rawStart === "number" ? rawStart : Date.now(),
+  );
 }
 
 async function recordAssistantMessage(
@@ -236,6 +287,17 @@ async function recordAssistantMessage(
   sessionSet.add(assistantMsg.id);
   recordedMessages.set(assistantMsg.sessionID, sessionSet);
 
+  // Deterministic id + parent link. The id makes re-exporting this message a
+  // backend no-op; the parent is the previous assistant generation recorded
+  // for this session in this process. Update the chain before exporting so a
+  // failed export still parents the next turn correctly.
+  const genId = stableOpencodeGenerationId(
+    assistantMsg.sessionID,
+    assistantMsg.id,
+  );
+  const parent = lastGenerationIdBySession.get(assistantMsg.sessionID);
+  lastGenerationIdBySession.set(assistantMsg.sessionID, genId);
+
   // Look up pending generation (user-side data)
   const pending = pendingGenerations.get(assistantMsg.sessionID);
 
@@ -261,6 +323,7 @@ async function recordAssistantMessage(
 
   const tools = mapToolDefinitions(pending?.tools);
   const seed = {
+    id: genId,
     conversationId: assistantMsg.sessionID,
     agentName: buildAgentName(config.agentName, assistantMsg.mode),
     agentVersion: config.agentVersion,
@@ -268,6 +331,7 @@ async function recordAssistantMessage(
     model: { provider: assistantMsg.providerID, name: assistantMsg.modelID },
     startedAt: new Date(assistantMsg.time.created),
     contentCapture: config.contentCapture,
+    ...(parent && { parentGenerationIds: [parent] }),
     ...(tools.length > 0 && { tools }),
     ...(includeMessageBodies && { systemPrompt: pending?.systemPrompt }),
   };
@@ -301,16 +365,25 @@ async function recordAssistantMessage(
     debugLog,
   };
 
+  // opencode streams provider responses, so generations are exported with
+  // mode=STREAM. The SDK only records the gen_ai.client.time_to_first_token
+  // histogram for streaming generations.
+  const firstAt = firstPartAtByMessage.get(
+    messageKey(assistantMsg.sessionID, assistantMsg.id),
+  );
+
   try {
     if (assistantMsg.error) {
       const error = assistantMsg.error;
-      await sigil.startGeneration(seed, async (recorder) => {
+      await sigil.startStreamingGeneration(seed, async (recorder) => {
+        if (firstAt !== undefined) recorder.setFirstTokenAt(new Date(firstAt));
         recorder.setResult(result);
         recorder.setCallError(mapError(error));
         emitToolSpans(sigil, spanRecords, spanOpts);
       });
     } else {
-      await sigil.startGeneration(seed, async (recorder) => {
+      await sigil.startStreamingGeneration(seed, async (recorder) => {
+        if (firstAt !== undefined) recorder.setFirstTokenAt(new Date(firstAt));
         recorder.setResult(result);
         emitToolSpans(sigil, spanRecords, spanOpts);
       });
@@ -325,35 +398,9 @@ async function recordAssistantMessage(
   // another export path fires for the same session.
   pendingGenerations.delete(assistantMsg.sessionID);
   completedToolExecutions.delete(assistantMsg.sessionID);
-}
-
-async function sweepTerminalAssistantMessages(
-  sigil: SigilClient,
-  config: SigilOpencodeConfig,
-  client: OpencodeClient,
-  redactor: Redactor,
-  debugLog: (msg: string, ...args: unknown[]) => void,
-  sessionID: string,
-): Promise<void> {
-  try {
-    const response = await client.session.messages({
-      path: { id: sessionID },
-    });
-    for (const message of response.data ?? []) {
-      if (message.info.role !== "assistant") continue;
-      await recordAssistantMessage(
-        sigil,
-        config,
-        client,
-        redactor,
-        debugLog,
-        message.info as AssistantMessage,
-        message.parts ?? [],
-      );
-    }
-  } catch (err) {
-    debugLog("failed to sweep terminal assistant messages", err);
-  }
+  firstPartAtByMessage.delete(
+    messageKey(assistantMsg.sessionID, assistantMsg.id),
+  );
 }
 
 function isTerminalMessageUpdate(msg: MessageUpdatedInfo): boolean {
@@ -362,9 +409,6 @@ function isTerminalMessageUpdate(msg: MessageUpdatedInfo): boolean {
 
 async function handleLifecycle(
   sigil: SigilClient,
-  config: SigilOpencodeConfig,
-  client: OpencodeClient,
-  redactor: Redactor,
   telemetry: TelemetryProviders | null,
   debugLog: (msg: string, ...args: unknown[]) => void,
   event: { type: string; properties: unknown },
@@ -372,22 +416,10 @@ async function handleLifecycle(
   const type = event.type as string;
 
   if (type === "session.idle") {
-    const properties = event.properties as
-      | { info?: { id?: string } }
-      | undefined;
-    const sessionIds = properties?.info?.id
-      ? [properties.info.id]
-      : Array.from(pendingGenerations.keys());
-    for (const sessionId of sessionIds) {
-      await sweepTerminalAssistantMessages(
-        sigil,
-        config,
-        client,
-        redactor,
-        debugLog,
-        sessionId,
-      );
-    }
+    // Recording happens live on `message.updated` and `message.part.updated`
+    // (step-finish). Idle only flushes already-recorded events; it does not
+    // refetch session history.
+    //
     // Fire-and-forget: a stuck OTLP endpoint must not block session.idle for
     // up to ~30s (BatchSpanProcessor default) per turn.
     void sigil.flush().catch((err) => debugLog("sigil flush failed", err));
@@ -405,12 +437,18 @@ async function handleLifecycle(
     const sessionId = properties?.info?.id;
     if (sessionId) {
       recordedMessages.delete(sessionId);
+      lastGenerationIdBySession.delete(sessionId);
       pendingGenerations.delete(sessionId);
       sessionContexts.delete(sessionId);
       completedToolExecutions.delete(sessionId);
       for (const key of activeToolExecutions.keys()) {
         if (key.startsWith(`${sessionId}\x00`)) {
           activeToolExecutions.delete(key);
+        }
+      }
+      for (const key of firstPartAtByMessage.keys()) {
+        if (key.startsWith(`${sessionId}\x00`)) {
+          firstPartAtByMessage.delete(key);
         }
       }
     }
@@ -784,15 +822,7 @@ export async function createSigilHooks(
   return {
     event: async (input) => {
       await handleEvent(sigil, config, client, redactor, debugLog, input.event);
-      await handleLifecycle(
-        sigil,
-        config,
-        client,
-        redactor,
-        telemetry,
-        debugLog,
-        input.event,
-      );
+      await handleLifecycle(sigil, telemetry, debugLog, input.event);
     },
     chatMessage: (input, output) => {
       handleChatMessage(input, output);

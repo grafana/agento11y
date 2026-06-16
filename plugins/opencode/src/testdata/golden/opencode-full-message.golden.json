@@ -3,10 +3,10 @@
     "path": "/api/v1/generations:export",
     "generations": [
       {
-        "id": "<NORMALIZED-ID>",
+        "id": "opencode-d0c11673ecf0262346ca8e82",
         "conversation_id": "opencode-sess-1",
-        "operation_name": "generateText",
-        "mode": "GENERATION_MODE_SYNC",
+        "operation_name": "streamText",
+        "mode": "GENERATION_MODE_STREAM",
         "trace_id": "<NORMALIZED>",
         "span_id": "<NORMALIZED>",
         "model": {
