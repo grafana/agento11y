@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0] - 2026-06-16
+
+### Features
+
+- **plugins/codex**: apply transform/redact guards (#305)
+- **plugins/sigil**: add install script for prebuilt binaries (#298)
+
 ## [0.12.0] - 2026-06-12
 
 ### Features
