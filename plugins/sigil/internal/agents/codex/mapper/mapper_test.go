@@ -2,6 +2,8 @@ package mapper
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -127,6 +129,62 @@ func TestMapFullRedactsSensitiveJSONKeys(t *testing.T) {
 	}
 	if !json.Valid([]byte(toolResult)) {
 		t.Fatalf("redacted JSON must remain valid: %s", toolResult)
+	}
+}
+
+func TestMapResolvesGitBranchFromCwd(t *testing.T) {
+	// Fragment cwd points at a temp dir containing a `.git/HEAD` symbolic
+	// ref, so the gitbranch resolver finds the branch without shelling
+	// out. Mirrors the cursor tags-package fixture.
+	cases := []struct {
+		name    string
+		headRaw string
+		want    string
+	}{
+		{name: "regular branch", headRaw: "ref: refs/heads/feature/codex\n", want: "feature/codex"},
+		{name: "detached HEAD", headRaw: "abcdef0123456789abcdef0123456789abcdef01\n", want: "abcdef012345"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			gitHead := filepath.Join(root, ".git", "HEAD")
+			if err := os.MkdirAll(filepath.Dir(gitHead), 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(gitHead, []byte(tc.headRaw), 0o644); err != nil {
+				t.Fatalf("write head: %v", err)
+			}
+			f := &fragment.Fragment{
+				SessionID: "sess",
+				TurnID:    "turn",
+				Model:     "gpt-5.5",
+				Cwd:       root,
+			}
+			got := Map(Inputs{Fragment: f, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+			if got.Generation.Tags["git.branch"] != tc.want {
+				t.Fatalf("git.branch = %q, want %q", got.Generation.Tags["git.branch"], tc.want)
+			}
+			if got.Generation.Tags["cwd"] != root {
+				t.Fatalf("cwd = %q, want %q", got.Generation.Tags["cwd"], root)
+			}
+		})
+	}
+}
+
+func TestMapOmitsGitBranchWhenNoCheckout(t *testing.T) {
+	root := t.TempDir()
+	f := &fragment.Fragment{
+		SessionID: "sess",
+		TurnID:    "turn",
+		Model:     "gpt-5.5",
+		Cwd:       root,
+	}
+	got := Map(Inputs{Fragment: f, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	if _, ok := got.Generation.Tags["git.branch"]; ok {
+		t.Fatalf("git.branch should be absent when no .git found; got tags=%+v", got.Generation.Tags)
+	}
+	if got.Generation.Tags["cwd"] != root {
+		t.Fatalf("cwd should still be present; got %q", got.Generation.Tags["cwd"])
 	}
 }
 

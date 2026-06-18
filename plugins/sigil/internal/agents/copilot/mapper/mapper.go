@@ -13,6 +13,7 @@ import (
 	"github.com/grafana/sigil-sdk/go/sigil"
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/copilot/fragment"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/gitbranch"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/timeutil"
 )
@@ -189,10 +190,15 @@ func buildTags(frag *fragment.Fragment, session *fragment.Session) map[string]st
 	tags := map[string]string{
 		"entrypoint": "copilot",
 	}
-	if frag.Cwd != "" {
-		tags["cwd"] = frag.Cwd
-	} else if session != nil && session.Cwd != "" {
-		tags["cwd"] = session.Cwd
+	cwd := frag.Cwd
+	if cwd == "" && session != nil {
+		cwd = session.Cwd
+	}
+	if cwd != "" {
+		tags["cwd"] = cwd
+	}
+	if branch := gitbranch.Resolve(cwd); branch != "" {
+		tags["git.branch"] = branch
 	}
 	if frag.Source != "" {
 		tags["hook.source"] = frag.Source

@@ -31,6 +31,7 @@ import {
   toolResultText,
   userMessageText,
 } from "./mappers.js";
+import { buildBuiltinTags } from "./tags.js";
 import {
   createTelemetryProviders,
   type TelemetryProviders,
@@ -457,14 +458,14 @@ export default function (pi: ExtensionAPI) {
       );
 
       // Resolved per turn so mid-session checkouts land on the next
-      // generation. Gated on contentCapture=full because branch names
-      // can leak project context (diverges from claude-code/cursor,
-      // which always send it).
-      const gitBranch =
-        config.contentCapture === "full"
-          ? resolveGitBranch(process.cwd())
-          : undefined;
-      const builtinTags = gitBranch ? { "git.branch": gitBranch } : undefined;
+      // generation. Always sent, regardless of content capture mode:
+      // `git.branch` and `cwd` are low-cardinality session metadata,
+      // not message content, matching claude-code/cursor.
+      const turnCwd = process.cwd();
+      const builtinTags = buildBuiltinTags({
+        cwd: turnCwd,
+        gitBranch: resolveGitBranch(turnCwd),
+      });
 
       // Resolve lineage at `turn_end`, not `message_end`: pi awaits
       // extension `message_end` callbacks *before* calling

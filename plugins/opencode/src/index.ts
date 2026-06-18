@@ -2,11 +2,13 @@ import type { Plugin } from "@opencode-ai/plugin";
 import { loadConfig } from "./config.js";
 import { createSigilHooks } from "./hooks.js";
 
-export const SigilPlugin: Plugin = async ({ client }) => {
+export const SigilPlugin: Plugin = async ({ client, directory }) => {
   const config = await loadConfig();
   if (!config) return {};
 
-  const hooks = await createSigilHooks(config, client);
+  const hooks = await createSigilHooks(config, client, {
+    projectDir: directory,
+  });
   if (!hooks) return {};
 
   return {

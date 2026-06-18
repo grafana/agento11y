@@ -15,6 +15,7 @@ import (
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/cursor/fragment"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/cursor/tags"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/gitbranch"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/timeutil"
 )
 
@@ -105,7 +106,7 @@ func MapFragment(in Inputs) Mapped {
 	tagMap := tags.Build(tags.BuiltinInputs{
 		WorkspaceRoot:     workspaceRoot,
 		Cwd:               firstToolCwd(frag.Tools),
-		GitBranch:         tags.ResolveGitBranch(workspaceRoot),
+		GitBranch:         gitbranch.Resolve(workspaceRoot),
 		IsBackgroundAgent: isBackgroundAgent,
 	})
 

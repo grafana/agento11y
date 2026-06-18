@@ -90,6 +90,25 @@ Run one pi turn, then open **AI Observability → Conversations** in Grafana Clo
 
 If nothing shows up, set `SIGIL_DEBUG=true` in `~/.config/sigil/config.env`, run another turn, and check the debug log at `~/.local/state/sigil/logs/sigil.log` (honors `XDG_STATE_HOME`).
 
+## Tagging sessions
+
+Launch with `--tag key=value` (repeatable) to attach tags to every generation pi exports:
+
+```sh
+sigil pi --tag project=hackathon --tag team=ai
+# forward args to pi after `--`
+sigil pi --tag team=ai -- --resume
+```
+
+`--tag` is shorthand for `SIGIL_TAGS`; flag tags merge onto (and override) any `SIGIL_TAGS` already in the environment or `~/.config/sigil/config.env`. The merge happens in the SDK, so user tags reach every generation without the plugin reparsing them.
+
+The plugin always attaches two built-in tags to every generation:
+
+- `git.branch` — current branch from the working directory, or a 12-char short SHA on detached HEAD. Omitted when not inside a git checkout.
+- `cwd` — the process working directory.
+
+Built-in tags win collisions with user tags, matching the claude-code and cursor launchers.
+
 ## Redaction
 
 Before any generation leaves the process, the SDK scrubs known token formats, PEM private keys, database URLs, `KEY=value` pairs, bearer tokens, and email addresses. Matches become `[REDACTED:<id>]`. User input messages are redacted by default; set `SIGIL_REDACT_INPUT_MESSAGES=false` to leave them unchanged.

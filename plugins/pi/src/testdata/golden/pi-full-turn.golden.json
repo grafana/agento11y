@@ -95,7 +95,8 @@
         "started_at": "<NORMALIZED>",
         "completed_at": "<NORMALIZED>",
         "tags": {
-          "git.branch": "<NORMALIZED>"
+          "git.branch": "<NORMALIZED>",
+          "cwd": "<NORMALIZED>"
         },
         "metadata": {
           "cost_usd": 0.003,
