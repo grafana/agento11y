@@ -1,4 +1,4 @@
-    const { useState, useEffect, useMemo, useCallback } = React;
+    const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
     // ============================================================
     // Formatters — all server responses ship raw numbers + RFC3339
@@ -1141,7 +1141,7 @@
       // palette: green for the user (input side), purple for tool
       // results, orange for the assistant so the primary brand colour
       // attaches to the agent's own output.
-      const labelColor = isUser ? "var(--brand-green)" : (isTool ? "var(--brand-purple)" : (isToolCall ? "var(--warning-text)" : "var(--brand-orange-text)"));
+      const labelColor = isUser ? "var(--viz-green)" : (isTool ? "var(--viz-purple)" : (isToolCall ? "var(--warning-text)" : "var(--brand-orange)"));
       const label = isTool ? "TOOL RESULT" : (isToolCall ? "TOOL CALL" : ((msg.role || "").toUpperCase() || "MESSAGE"));
       return (
         <div style={{
@@ -1163,6 +1163,45 @@
       );
     }
 
+    // ThinkingPart collapses a thinking block to a single toggle line so
+    // an empty or long chain-of-thought doesn't take over the turn. The
+    // SDK doesn't record a per-part token count, so the line is just the
+    // label; expanding reveals the captured text.
+    function ThinkingPart({ text }) {
+      const [open, setOpen] = useState(false);
+      return (
+        <div style={{ marginTop: 4 }}>
+          <div onClick={() => setOpen(o => !o)} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", color: "var(--fg3)", fontSize: 11, fontFamily: "var(--fontFamilyMonospace)" }}>
+            <Icon name={open ? "chevron" : "cright"} size={10} style={{ color: "var(--fg3)" }}/>
+            Thinking
+          </div>
+          {open && <div style={{ fontSize: 12, color: "var(--fg2)", whiteSpace: "pre-wrap", marginTop: 4, fontStyle: "italic" }}>{text}</div>}
+        </div>
+      );
+    }
+
+    // CappedBlock renders a <pre> capped to ~208px with a bottom fade and
+    // a "Show all N lines" toggle once the content runs past the cap, so a
+    // single huge tool result (an ls/tree dump) can't stretch the page to
+    // thousands of pixels.
+    function CappedBlock({ children, lineCount, preStyle }) {
+      const [open, setOpen] = useState(false);
+      const base = { background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "8px 10px", margin: "4px 0 0", fontFamily: "var(--fontFamilyMonospace)", fontSize: 12, lineHeight: 1.6, color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-all", ...(preStyle || {}) };
+      if (lineCount <= 14 || open) {
+        return <pre style={base}>{children}</pre>;
+      }
+      return (
+        <div style={{ position: "relative" }}>
+          <pre style={{ ...base, maxHeight: 208, overflow: "hidden" }}>{children}</pre>
+          <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 96, background: "linear-gradient(to bottom, transparent, var(--bg-primary))", display: "flex", alignItems: "flex-end", justifyContent: "center", paddingBottom: 8, pointerEvents: "none" }}>
+            <span onClick={() => setOpen(true)} style={{ pointerEvents: "auto", display: "inline-flex", alignItems: "center", gap: 6, height: 26, padding: "0 12px", background: "var(--bg-secondary)", border: "1px solid var(--border-medium)", borderRadius: 2, fontSize: 11, color: "var(--fg1)", cursor: "pointer" }}>
+              <Icon name="chevron" size={11} style={{ color: "var(--fg3)" }}/>Show all {lineCount} lines
+            </span>
+          </div>
+        </div>
+      );
+    }
+
     // MessagePart picks a renderer per part kind. Text and thinking are
     // wrapped pre-line so newlines from the model render naturally;
     // tool calls and tool results show a compact label + payload so the
@@ -1175,12 +1214,7 @@
         );
       }
       if (kind === "thinking" && part.thinking) {
-        return (
-          <details style={{ marginTop: 2 }}>
-            <summary style={{ cursor: "pointer", color: "var(--fg3)", fontSize: 11, fontFamily: "var(--fontFamilyMonospace)", textTransform: "uppercase", letterSpacing: "0.06em" }}>thinking</summary>
-            <div style={{ fontSize: 12, color: "var(--fg2)", whiteSpace: "pre-wrap", marginTop: 4, fontStyle: "italic" }}>{part.thinking}</div>
-          </details>
-        );
+        return <ThinkingPart text={part.thinking}/>;
       }
       if (kind === "tool_call" && part.tool_call) {
         const tc = part.tool_call;
@@ -1195,9 +1229,9 @@
             </div>
             {description && <div style={{ marginTop: 4, color: "var(--fg2)", fontSize: 12 }}>{description}</div>}
             {command ? (
-              <pre style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "6px 8px", margin: "4px 0 0", fontSize: 12, color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-all", overflowX: "auto" }}><span style={{ color: "var(--warning-text)" }}>$</span> {command}</pre>
+              <CappedBlock lineCount={command.split("\n").length}><span style={{ color: "var(--warning-text)" }}>$</span> {command}</CappedBlock>
             ) : args && (
-              <pre style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "6px 8px", margin: "4px 0 0", fontSize: 11, color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-all", overflowX: "auto" }}>{args}</pre>
+              <CappedBlock lineCount={args.split("\n").length} preStyle={{ fontSize: 11 }}>{args}</CappedBlock>
             )}
           </div>
         );
@@ -1206,14 +1240,13 @@
         const tr = part.tool_result;
         const body = tr.content || (tr.content_json ? (typeof tr.content_json === "string" ? tr.content_json : JSON.stringify(tr.content_json)) : "");
         const isErr = !!tr.is_error;
+        const lineCount = body ? body.split("\n").length : 0;
         return (
           <div style={{ marginTop: 4 }}>
             <div style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: isErr ? "var(--error-text)" : "var(--fg2)" }}>
-              ← result{tr.tool_call_id ? <span style={{ color: "var(--fg3)" }}> · {tr.tool_call_id}</span> : null}{isErr ? <span style={{ color: "var(--error-text)" }}> · error</span> : null}
+              ← result{tr.tool_call_id ? <span style={{ color: "var(--fg3)" }}> · {tr.tool_call_id}</span> : null}{lineCount > 0 ? <span style={{ color: "var(--fg3)" }}> · {lineCount} {lineCount === 1 ? "line" : "lines"}</span> : null}{isErr ? <span style={{ color: "var(--error-text)" }}> · error</span> : null}
             </div>
-            {body && (
-              <pre style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "6px 8px", margin: "4px 0 0", fontSize: 11, color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-all", overflowX: "auto" }}>{body}</pre>
-            )}
+            {body && <CappedBlock lineCount={lineCount} preStyle={{ fontSize: 11 }}>{body}</CappedBlock>}
           </div>
         );
       }
@@ -1274,12 +1307,13 @@
       );
     }
 
-    function StepCard({ step, n, expanded, onToggle }) {
+    function StepCard({ step, n, expanded, onToggle, innerRef, flash }) {
       const hasError = !!step.call_error;
       const dotColor = hasError ? "var(--error-text)" : "#73BF69";
       return (
-        <div style={{
+        <div ref={innerRef} className={flash ? "sigil-step-flash" : undefined} style={{
           border: "1px solid var(--border-weak)",
+          borderLeft: hasError ? "2px solid var(--error-main)" : "1px solid var(--border-weak)",
           borderRadius: 2,
           background: "var(--bg-primary)",
           marginBottom: 12,
@@ -1305,6 +1339,9 @@
                 <span style={{ fontFamily: "var(--fontFamilyMonospace)", color: "var(--fg2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{step.model}</span>
               )}
             </span>
+            {hasError && (
+              <span style={{ display: "inline-flex", alignItems: "center", height: 16, padding: "0 6px", borderRadius: 2, background: "var(--error-transparent)", color: "var(--error-text)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, letterSpacing: "0.04em" }}>error</span>
+            )}
             <span style={{ flex: 1 }}/>
             <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg2)", display: "flex", gap: 12, whiteSpace: "nowrap", flexShrink: 0 }}>
               <span>{formatDuration(step.duration_seconds)}</span>
@@ -1359,31 +1396,136 @@
       );
     }
 
+    // stepRailSummary picks a one-line label for a rail row: the first
+    // tool call's name + preview when the step ran a tool, otherwise
+    // "Initial prompt" for the opening step and "Final response" for a
+    // trailing text-only step. mono renders the tool form in Roboto Mono;
+    // prose labels stay in Inter. There is no "initial/final" flag in the
+    // data, so the position heuristic is the best we can do.
+    function stepRailSummary(step, i, total) {
+      const tool = (step.tools && step.tools[0]) || "";
+      if (tool) {
+        const preview = step.tool_preview ? ` · ${step.tool_preview}` : "";
+        return { label: `${tool}${preview}`, mono: true };
+      }
+      if (i === 0) return { label: "Initial prompt", mono: false };
+      if (i === total - 1) return { label: "Final response", mono: false };
+      return { label: "Response", mono: false };
+    }
+
+    // StepRail is the sticky left navigator for long traces. Each row
+    // mirrors a StepCard: number, a tool/prose summary, duration · tokens
+    // (warning on the slowest step, error on a failed one), and a status
+    // dot. Clicking a row expands and scrolls to that step.
+    function StepRail({ steps, activeStep, peakIdx, onSelect }) {
+      if (!steps || steps.length === 0) return null;
+      return (
+        <aside style={{ flex: "none", width: 248, position: "sticky", top: 72 }}>
+          <div style={{ fontSize: 11, color: "var(--fg3)", fontWeight: 500, padding: "0 4px 10px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span>Steps</span>
+            <span style={{ fontFamily: "var(--fontFamilyMonospace)" }}>{steps.length}</span>
+          </div>
+          <div style={{ border: "1px solid var(--border-weak)", borderRadius: 2, overflow: "hidden", background: "var(--bg-primary)" }}>
+            {steps.map((s, i) => {
+              const n = i + 1;
+              const active = n === activeStep;
+              const hasError = !!s.call_error;
+              const summary = stepRailSummary(s, i, steps.length);
+              const isPeak = i === peakIdx;
+              const subColor = hasError ? "var(--error-text)" : (isPeak ? "var(--warning-text)" : "var(--fg3)");
+              return (
+                <div key={s.generation_id || i} onClick={() => onSelect(n)} style={{
+                  display: "grid", gridTemplateColumns: "24px 1fr auto", alignItems: "center", gap: 8,
+                  padding: "9px 11px",
+                  borderBottom: i === steps.length - 1 ? "none" : "1px solid var(--border-weak)",
+                  borderLeft: active ? "2px solid var(--brand-orange)" : "2px solid transparent",
+                  background: active ? "var(--action-selected)" : "transparent",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={e => { if (!active) e.currentTarget.style.background = "rgba(204,204,220,0.03)"; }}
+                onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}>
+                  <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>{n}</span>
+                  <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                    <span style={{ fontFamily: summary.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)", fontSize: 12, color: active ? "var(--fg-max)" : "var(--fg1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary.label}</span>
+                    <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, color: subColor, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {formatDuration(s.duration_seconds)} · {formatTokens(s.total_tokens)}{isPeak ? " · peak" : ""}
+                    </span>
+                  </span>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: hasError ? "var(--error-text)" : "var(--viz-green)" }}/>
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+      );
+    }
+
     function ConversationThread({ steps }) {
       // First 4 cards default to expanded — the typical attention zone.
       const [expanded, setExpanded] = useState(() => new Set(steps.slice(0, 4).map((_, i) => i + 1)));
+      const [activeStep, setActiveStep] = useState(1);
+      const [flashStep, setFlashStep] = useState(null);
+      const cardRefs = useRef({});
+      const flashTimer = useRef(null);
+
+      useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
+
+      // Toggling a card header is also a focus signal, so keep the rail's
+      // active marker in sync with it — otherwise the highlight stays on
+      // the last rail-clicked step while the user works elsewhere.
       const toggle = n => {
+        setActiveStep(n);
         const next = new Set(expanded);
         next.has(n) ? next.delete(n) : next.add(n);
         setExpanded(next);
       };
 
+      // Rail click: expand the step, mark it active, smooth-scroll its card
+      // just below the sticky top bar, and trigger a brief orange glow. The
+      // page scrolls on the window (no ancestor has a definite height, so
+      // the inner main never becomes a scroll container), and 72px clears
+      // the 48px header plus a gap, matching the rail's sticky offset.
+      // Clearing flashStep before re-setting it restarts the animation when
+      // the same step is clicked twice; the nested rAF lets the expand
+      // reflow settle so the scroll target is measured against the final
+      // layout.
+      const selectStep = n => {
+        setExpanded(prev => prev.has(n) ? prev : new Set(prev).add(n));
+        setActiveStep(n);
+        setFlashStep(null);
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const card = cardRefs.current[n];
+          if (card) {
+            const top = window.scrollY + card.getBoundingClientRect().top - 72;
+            window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+          }
+          setFlashStep(n);
+        }));
+        if (flashTimer.current) clearTimeout(flashTimer.current);
+        flashTimer.current = setTimeout(() => setFlashStep(null), 1400);
+      };
+
       const totalSec = steps.reduce((acc, s) => acc + (s.duration_seconds || 0), 0);
       const peakSec  = steps.reduce((acc, s) => Math.max(acc, s.duration_seconds || 0), 0);
       const totalTok = steps.reduce((acc, s) => acc + (s.total_tokens || 0), 0);
+      let peakIdx = -1;
+      steps.forEach((s, i) => { if (peakSec > 0 && peakIdx === -1 && (s.duration_seconds || 0) === peakSec) peakIdx = i; });
 
       return (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ borderBottom: "1px solid var(--border-weak)", paddingBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
-            <Icon name="list" size={12} style={{ color: "var(--fg3)" }}/>
-            <span style={{ fontSize: 11, color: "var(--fg3)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Conversation thread</span>
-            <span style={{ flex: 1 }}/>
-            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg2)" }}>
-              {steps.length} {steps.length === 1 ? "call" : "calls"} · peak {formatDuration(peakSec)} · {formatTokens(totalTok)} tok · {formatDuration(totalSec)} aggregate
-            </span>
-          </div>
-          <div>
-            {steps.map((s, i) => <StepCard key={s.generation_id || i} step={s} n={i + 1} expanded={expanded.has(i + 1)} onToggle={() => toggle(i + 1)}/>)}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 24 }}>
+          <StepRail steps={steps} activeStep={activeStep} peakIdx={peakIdx} onSelect={selectStep}/>
+          <div style={{ flex: 1, minWidth: 0, maxWidth: 920, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ borderBottom: "1px solid var(--border-weak)", paddingBottom: 9, display: "flex", alignItems: "center", gap: 8 }}>
+              <Icon name="list" size={13} style={{ color: "var(--fg3)" }}/>
+              <span style={{ fontSize: 13, color: "var(--fg1)", fontWeight: 500 }}>Conversation thread</span>
+              <span style={{ flex: 1 }}/>
+              <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg2)" }}>
+                {steps.length} {steps.length === 1 ? "call" : "calls"} · peak {formatDuration(peakSec)} · {formatTokens(totalTok)} tok · {formatDuration(totalSec)} aggregate
+              </span>
+            </div>
+            <div>
+              {steps.map((s, i) => <StepCard key={s.generation_id || i} step={s} n={i + 1} expanded={expanded.has(i + 1)} onToggle={() => toggle(i + 1)} innerRef={el => { cardRefs.current[i + 1] = el; }} flash={flashStep === i + 1}/>)}
+            </div>
           </div>
         </div>
       );
@@ -1392,10 +1534,28 @@
     function DetailStats({ conv, steps }) {
       const wallSec = durationBetweenSeconds(conv.started_at, conv.last_activity);
       const errStatus = conv.status === "err";
+
+      // Cache rate from the per-step buckets: the conversation summary is
+      // synthesised from the detail on a deep link and omits the aggregate
+      // buckets, so the steps are the reliable source. Mirror the list
+      // KPI: cache reads over cache reads + fresh input, capped at 99% so a
+      // near-perfect cache doesn't round up to a misleading 100%.
+      const cache = (steps || []).reduce((a, s) => {
+        const b = s.token_buckets || {};
+        a.read += b.cache_read || 0;
+        a.fresh += b.fresh_input || 0;
+        return a;
+      }, { read: 0, fresh: 0 });
+      const cacheDenom = cache.read + cache.fresh;
+      const cachePct = cacheDenom === 0 ? null
+        : cache.read === cacheDenom ? 100
+        : Math.min(99, Math.round((cache.read / cacheDenom) * 100));
+
       const stats = [
-        { icon: "clock", label: formatDuration(wallSec),                       sub: "elapsed" },
-        { icon: "swap",  label: `${conv.calls} ${conv.calls === 1 ? "call" : "calls"}`, sub: "calls" },
-        { icon: "bolt",  label: formatTokens(conv.total_tokens),               sub: "tok" },
+        { value: formatDuration(wallSec),         unit: "elapsed" },
+        { value: String(conv.calls),              unit: conv.calls === 1 ? "call" : "calls" },
+        { value: formatTokens(conv.total_tokens), unit: "tokens" },
+        ...(cachePct != null ? [{ value: `${cachePct}%`, unit: "cached", color: "var(--viz-green)" }] : []),
       ];
       const onExport = () => {
         const blob = new Blob([JSON.stringify({ ...conv, generations: steps }, null, 2)], { type: "application/json" });
@@ -1407,12 +1567,16 @@
       };
 
       return (
-        <div style={{ display: "flex", gap: 18, alignItems: "center", padding: "12px 24px", borderBottom: "1px solid var(--border-weak)", background: "var(--bg-primary)", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "11px 24px", borderBottom: "1px solid var(--border-weak)", background: "var(--bg-primary)", flexWrap: "wrap" }}>
           {stats.map((s, i) => (
-            <div key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--fg2)", fontSize: 12, fontFamily: "var(--fontFamilyMonospace)", whiteSpace: "nowrap" }}>
-              <Icon name={s.icon} size={13} style={{ color: "var(--fg3)" }}/>
-              <span style={{ color: "var(--fg1)" }}>{s.label}</span>
-              <span style={{ color: "var(--fg3)" }}>{s.sub}</span>
+            <div key={i} style={{
+              display: "inline-flex", alignItems: "baseline", gap: 6,
+              paddingRight: 14,
+              borderRight: i === stats.length - 1 ? "none" : "1px solid var(--border-weak)",
+              whiteSpace: "nowrap",
+            }}>
+              <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 14, color: s.color || "var(--fg-max)" }}>{s.value}</span>
+              <span style={{ fontSize: 11, color: "var(--fg3)" }}>{s.unit}</span>
             </div>
           ))}
           {errStatus && (
@@ -1431,13 +1595,15 @@
           <span style={{ flex: 1 }}/>
           <button title="Download trace as JSON" onClick={onExport} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
-            padding: "4px 10px", height: 26,
+            padding: "0 11px", height: 28,
             background: "transparent", color: "var(--fg1)",
             border: "1px solid var(--border-medium)",
-            borderRadius: 2, fontSize: 11, cursor: "pointer", fontFamily: "var(--fontFamily)", fontWeight: 500,
+            borderRadius: 2, fontSize: 12, cursor: "pointer", fontFamily: "var(--fontFamily)", fontWeight: 500,
             whiteSpace: "nowrap",
-          }}>
-            <Icon name="download" size={11}/> Export JSON
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = "var(--action-hover)"}
+          onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+            <Icon name="download" size={12}/> Export JSON
           </button>
         </div>
       );
@@ -1447,8 +1613,8 @@
       return (
         <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, background: "var(--bg-canvas)" }}>
           <DetailStats conv={conv} steps={detail ? detail.generations : []}/>
-          <main style={{ padding: "24px 32px", overflowY: "auto", flex: 1 }}>
-            <div style={{ maxWidth: 880, margin: "0 auto" }}>
+          <main style={{ padding: 24 }}>
+            <div style={{ maxWidth: 1392, margin: "0 auto" }}>
               {error && <Notice kind="error" title="Failed to load conversation">{error}</Notice>}
               {!error && loading && <div style={{ color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 12 }}>Loading…</div>}
               {!error && !loading && detail && <ConversationThread steps={detail.generations}/>}
