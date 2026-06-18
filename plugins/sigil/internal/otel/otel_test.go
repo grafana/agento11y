@@ -84,6 +84,63 @@ func TestExporterConfigKeepsExplicitAuthorization(t *testing.T) {
 	}
 }
 
+func TestProbeConfig(t *testing.T) {
+	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "https://otlp.example/otlp")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "")
+
+	metrics, traces, ok := ProbeConfig()
+	if !ok {
+		t.Fatal("expected ok=true when an OTLP endpoint is configured")
+	}
+	if metrics.URL != "https://otlp.example/otlp/v1/metrics" {
+		t.Fatalf("metrics URL = %q", metrics.URL)
+	}
+	if traces.URL != "https://otlp.example/otlp/v1/traces" {
+		t.Fatalf("traces URL = %q", traces.URL)
+	}
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("tenant:token"))
+	if metrics.Headers["Authorization"] != want {
+		t.Fatalf("metrics auth = %q, want %q", metrics.Headers["Authorization"], want)
+	}
+	// Headers must be independent copies so a probe mutating one signal's
+	// headers cannot corrupt the other's.
+	metrics.Headers["Authorization"] = "tampered"
+	if traces.Headers["Authorization"] != want {
+		t.Fatalf("traces headers aliased metrics headers")
+	}
+}
+
+func TestProbeConfigInsecureDropsToHTTP(t *testing.T) {
+	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "https://otlp.example/otlp")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_INSECURE", "true")
+	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "")
+
+	metrics, traces, ok := ProbeConfig()
+	if !ok {
+		t.Fatal("expected ok=true when an OTLP endpoint is configured")
+	}
+	// Real export ships cleartext when insecure is set, so the probe must hit
+	// http to test the same transport.
+	if metrics.URL != "http://otlp.example/otlp/v1/metrics" {
+		t.Fatalf("metrics URL = %q", metrics.URL)
+	}
+	if traces.URL != "http://otlp.example/otlp/v1/traces" {
+		t.Fatalf("traces URL = %q", traces.URL)
+	}
+}
+
+func TestProbeConfigNoEndpoint(t *testing.T) {
+	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	if _, _, ok := ProbeConfig(); ok {
+		t.Fatal("expected ok=false when no OTLP endpoint is configured")
+	}
+}
+
 func TestSignalEndpointURLAppendsOTLPHTTPPaths(t *testing.T) {
 	if got := signalEndpointURL("https://otlp.example/otlp", "traces"); got != "https://otlp.example/otlp/v1/traces" {
 		t.Fatalf("trace endpoint = %q", got)

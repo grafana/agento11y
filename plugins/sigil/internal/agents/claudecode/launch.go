@@ -100,6 +100,16 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 	return nil
 }
 
+// Status reports whether the sigil-cc plugin is installed for the current
+// working directory. It reuses the read-only pluginInstalled probe and never
+// installs, updates, or writes update-check state — `sigil doctor` relies on
+// this. installed_plugins.json carries no version, so version is always empty
+// (best-effort).
+func Status(_ context.Context) (installed bool, version string, err error) {
+	installed, err = pluginInstalled()
+	return installed, "", err
+}
+
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
 	return runSteps(ctx, bin, w, [][]string{
 		{"plugin", "marketplace", "add", marketplaceRepo},

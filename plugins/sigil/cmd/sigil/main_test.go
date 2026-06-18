@@ -756,6 +756,56 @@ func TestRun_LocalSubcommand(t *testing.T) {
 	}
 }
 
+func TestRun_DoctorSubcommand(t *testing.T) {
+	cases := []struct {
+		name          string
+		argv          []string
+		env           map[string]string
+		wantExit      *int // nil = no exit
+		wantStdoutHas string
+	}{
+		{name: "unconfigured is healthy and exits 0", argv: []string{"doctor"}, wantStdoutHas: "sigil doctor"},
+		{name: "json mode emits sections", argv: []string{"doctor", "--json"}, wantStdoutHas: `"conversations"`},
+		{
+			name:     "conversations set but no OTLP exits 1",
+			argv:     []string{"doctor"},
+			env:      map[string]string{"SIGIL_ENDPOINT": "https://x", "SIGIL_AUTH_TENANT_ID": "1", "SIGIL_AUTH_TOKEN": "glc_t"},
+			wantExit: intPtr(1),
+		},
+		{name: "bad flag exits 2", argv: []string{"doctor", "--nope"}, wantExit: intPtr(2)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			// Empty PATH so no host-agent binaries are found: the agent sweep
+			// then never shells out, keeping the test hermetic and fast.
+			t.Setenv("PATH", t.TempDir())
+			for _, k := range []string{
+				"SIGIL_ENDPOINT", "SIGIL_AUTH_TENANT_ID", "SIGIL_AUTH_TOKEN",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT",
+			} {
+				t.Setenv(k, "")
+			}
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run(tc.argv, strings.NewReader(""), &stdout, &stderr)
+			})
+			switch {
+			case tc.wantExit == nil && gotExit != nil:
+				t.Fatalf("exit = %d, want no exit (stderr=%q)", *gotExit, stderr.String())
+			case tc.wantExit != nil && (gotExit == nil || *gotExit != *tc.wantExit):
+				t.Fatalf("exit = %v, want %d", gotExit, *tc.wantExit)
+			}
+			if tc.wantStdoutHas != "" && !strings.Contains(stdout.String(), tc.wantStdoutHas) {
+				t.Fatalf("stdout missing %q: %q", tc.wantStdoutHas, stdout.String())
+			}
+		})
+	}
+}
+
 func intPtr(c int) *int { return &c }
 
 // inProcessDaemon swaps the local daemon for an httptest.Server so the

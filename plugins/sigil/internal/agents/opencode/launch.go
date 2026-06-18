@@ -154,9 +154,36 @@ type opencodeConfig struct {
 // in the docs has a trailing comma), so a strict json.Unmarshal would
 // reject perfectly valid configs and trap us in a reinstall loop.
 func pluginInstalled() (bool, error) {
+	_, found, err := installedPluginSource()
+	return found, err
+}
+
+// Status reports whether the @grafana/sigil-opencode plugin is registered in
+// opencode's global config. It reuses the read-only config probe and never
+// installs or updates — `sigil doctor` relies on this. When the registered
+// spec pins a version (`@grafana/sigil-opencode@1.2.3`) that version is
+// reported; an unpinned spec yields an empty (unknown) version.
+func Status(_ context.Context) (installed bool, version string, err error) {
+	source, found, err := installedPluginSource()
+	if err != nil {
+		return false, "", err
+	}
+	if !found {
+		return false, "", nil
+	}
+	return true, versionFromNpmSpec(source), nil
+}
+
+// installedPluginSource reads opencode's global config and returns the plugin
+// entry source string that matches @grafana/sigil-opencode, if any. The config
+// lives in $XDG_CONFIG_HOME/opencode (default $HOME/.config/opencode) as either
+// opencode.json or opencode.jsonc; a missing file means no plugins are
+// configured. The file is parsed as JSONC because opencode's docs allow
+// comments and trailing commas.
+func installedPluginSource() (source string, found bool, err error) {
 	dir, err := configDirFn()
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	var (
 		data []byte
@@ -173,24 +200,24 @@ func pluginInstalled() (bool, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		return false, fmt.Errorf("read %s: %w", candidate, err)
+		return "", false, fmt.Errorf("read %s: %w", candidate, err)
 	}
 	if data == nil {
-		return false, nil
+		return "", false, nil
 	}
 	std, err := hujson.Standardize(data)
 	if err != nil {
-		return false, fmt.Errorf("parse %s: %w", path, err)
+		return "", false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	var c opencodeConfig
 	if err := json.Unmarshal(std, &c); err != nil {
-		return false, fmt.Errorf("parse %s: %w", path, err)
+		return "", false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	for _, raw := range c.Plugin {
 		var asString string
 		if err := json.Unmarshal(raw, &asString); err == nil {
 			if sourceMatchesPlugin(asString) {
-				return true, nil
+				return asString, true, nil
 			}
 			continue
 		}
@@ -207,10 +234,22 @@ func pluginInstalled() (bool, error) {
 			continue
 		}
 		if sourceMatchesPlugin(name) {
-			return true, nil
+			return name, true, nil
 		}
 	}
-	return false, nil
+	return "", false, nil
+}
+
+// versionFromNpmSpec returns the pinned version of a scoped npm spec, e.g.
+// "1.2.3" from "@grafana/sigil-opencode@1.2.3". The leading `@` of a scoped
+// package is part of the name, so only a later `@` separates the version.
+// Returns "" for an unpinned spec.
+func versionFromNpmSpec(spec string) string {
+	at := strings.LastIndex(spec, "@")
+	if at <= 0 {
+		return ""
+	}
+	return spec[at+1:]
 }
 
 // sourceMatchesPlugin returns true when a plugin entry identifies the

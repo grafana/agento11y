@@ -46,6 +46,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/pi"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/vibe"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/cli"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/doctor"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/dotenv"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/login"
@@ -78,7 +79,7 @@ func renderLocalBanner(uiURL string) string {
 	return localBannerBox.Render(strings.Join(lines, "\n"))
 }
 
-const usageLine = "usage: sigil login | sigil local start|status|stop | sigil cursor install|uninstall | sigil <agent> hook | sigil <claude|codex|copilot|opencode|pi|vibe> [--local] [--tag key=value]... [-- args...]"
+const usageLine = "usage: sigil login | sigil doctor [--json] [--probe] | sigil local start|status|stop | sigil cursor install|uninstall | sigil <agent> hook | sigil <claude|codex|copilot|opencode|pi|vibe> [--local] [--tag key=value]... [-- args...]"
 
 // version is overridden via -ldflags at build time.
 var version = "dev"
@@ -158,6 +159,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 
 	if args[0] == "local" {
 		runLocalCommand(args[1:], stdout, stderr)
+		return
+	}
+
+	// `sigil doctor` is a read-only diagnostic, dispatched before launcher
+	// dispatch like `local`. It owns its own flag parsing.
+	if args[0] == "doctor" {
+		runDoctorCommand(args[1:], stdout, stderr)
 		return
 	}
 
@@ -379,6 +387,23 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 			logger.Printf("auto-login: %v", err)
 			_, _ = fmt.Fprintf(stderr, "sigil: setup failed (%v); run `sigil login` when ready\n", err)
 		}
+	}
+}
+
+// runDoctorCommand handles `sigil doctor`. doctor is strictly read-only and
+// owns its own flag parsing. The OS environment is snapshotted before dotenv
+// is applied so doctor can attribute each value to the OS env vs config.env.
+func runDoctorCommand(args []string, stdout, stderr io.Writer) {
+	osEnv := doctor.SnapshotEnv()
+	dotenv.ApplyEnv("sigil", nil)
+	code := doctor.Run(context.Background(), args, doctor.Params{
+		Version: version,
+		OSEnv:   osEnv,
+		Stdout:  stdout,
+		Stderr:  stderr,
+	})
+	if code != 0 {
+		exit(code)
 	}
 }
 

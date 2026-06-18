@@ -118,59 +118,97 @@ type piSettings struct {
 // A missing settings file means that scope is unused — treat as not
 // installed in that scope and move on.
 func pluginInstalled() (bool, error) {
+	_, found, err := installedPluginSource()
+	return found, err
+}
+
+// Status reports whether the @grafana/sigil-pi extension is registered in pi's
+// settings. It reuses the read-only settings probe and never installs — `sigil
+// doctor` relies on this. When the registered source is a pinned npm spec
+// (`npm:@grafana/sigil-pi@0.1.1`) that version is reported; bare specs and
+// local-path installs yield an empty (unknown) version.
+func Status(_ context.Context) (installed bool, version string, err error) {
+	source, found, err := installedPluginSource()
+	if err != nil {
+		return false, "", err
+	}
+	if !found {
+		return false, "", nil
+	}
+	return true, versionFromPiSource(source), nil
+}
+
+// installedPluginSource returns the settings source string registering the
+// @grafana/sigil-pi extension, checking the global settings first and then the
+// project-scoped settings (<cwd>/.pi/settings.json, written by `pi install -l`).
+func installedPluginSource() (source string, found bool, err error) {
 	globalPath, err := settingsPath()
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	if found, err := readSettingsAndCheck(globalPath); err != nil {
-		return false, err
+	if src, found, err := readSettingsAndCheck(globalPath); err != nil {
+		return "", false, err
 	} else if found {
-		return true, nil
+		return src, true, nil
 	}
 
-	// Project-scoped install (`pi install -l`) writes to <cwd>/.pi/settings.json.
 	// Pi only consults the literal cwd, no parent walking, so we mirror that.
 	// A failure to resolve cwd is exceptionally rare; treat it as "no project
 	// settings available" rather than blocking the launch.
 	projectPath, err := projectSettingsPath()
 	if err != nil {
-		return false, nil
+		return "", false, nil
 	}
 	return readSettingsAndCheck(projectPath)
 }
 
-// readSettingsAndCheck loads one pi settings file and returns whether the
-// @grafana/sigil-pi extension is registered in it. A missing file is not
-// an error — that scope is just unused.
-func readSettingsAndCheck(path string) (bool, error) {
+// readSettingsAndCheck loads one pi settings file and returns the source
+// string registering the @grafana/sigil-pi extension, if any. A missing file
+// is not an error — that scope is just unused.
+func readSettingsAndCheck(path string) (source string, found bool, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
+			return "", false, nil
 		}
-		return false, fmt.Errorf("read %s: %w", path, err)
+		return "", false, fmt.Errorf("read %s: %w", path, err)
 	}
 	var s piSettings
 	if err := json.Unmarshal(data, &s); err != nil {
-		return false, fmt.Errorf("parse %s: %w", path, err)
+		return "", false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	settingsDir := filepath.Dir(path)
 	for _, raw := range s.Packages {
-		var source string
-		if err := json.Unmarshal(raw, &source); err != nil {
+		var src string
+		if err := json.Unmarshal(raw, &src); err != nil {
 			var asObj struct {
 				Source string `json:"source"`
 			}
 			if err := json.Unmarshal(raw, &asObj); err != nil {
 				continue
 			}
-			source = asObj.Source
+			src = asObj.Source
 		}
-		if sourceMatchesPlugin(source, settingsDir) {
-			return true, nil
+		if sourceMatchesPlugin(src, settingsDir) {
+			return src, true, nil
 		}
 	}
-	return false, nil
+	return "", false, nil
+}
+
+// versionFromPiSource returns the pinned version of an npm-spec source, e.g.
+// "0.1.1" from "npm:@grafana/sigil-pi@0.1.1". Bare specs and local-path
+// sources yield "".
+func versionFromPiSource(source string) string {
+	after, ok := strings.CutPrefix(source, npmPrefix)
+	if !ok {
+		return ""
+	}
+	at := strings.LastIndex(after, "@")
+	if at <= 0 {
+		return ""
+	}
+	return after[at+1:]
 }
 
 // sourceMatchesPlugin returns true when a pi settings source identifies the

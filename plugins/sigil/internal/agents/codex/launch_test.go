@@ -451,3 +451,44 @@ func TestLaunch_RefreshesInstalledPlugin(t *testing.T) {
 		t.Fatalf("expected update stamp: %v", err)
 	}
 }
+
+func TestStatus(t *testing.T) {
+	tests := []struct {
+		name          string
+		lookPath      func(string) (string, error)
+		pluginList    func(context.Context, string) ([]byte, error)
+		wantInstalled bool
+		wantErr       bool
+	}{
+		{
+			name:     "installed",
+			lookPath: func(string) (string, error) { return "/usr/local/bin/codex", nil },
+			pluginList: func(context.Context, string) ([]byte, error) {
+				return []byte("  sigil-codex@grafana-sigil (installed, enabled)\n"), nil
+			},
+			wantInstalled: true,
+		},
+		{
+			name:     "not on path",
+			lookPath: func(string) (string, error) { return "", errors.New("not found") },
+			wantErr:  true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			withLookPath(t, tc.lookPath)
+			if tc.pluginList != nil {
+				withPluginList(t, tc.pluginList)
+			}
+
+			installed, version, err := Status(context.Background())
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.wantInstalled, installed)
+			require.Empty(t, version) // codex plugin list does not expose a version
+		})
+	}
+}

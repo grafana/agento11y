@@ -497,3 +497,41 @@ func envMap(env []string) map[string]string {
 func nopLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
 }
+
+func TestVersionFromNpmSpec(t *testing.T) {
+	cases := []struct {
+		spec string
+		want string
+	}{
+		{spec: "@grafana/sigil-opencode", want: ""},
+		{spec: "@grafana/sigil-opencode@0.6.0", want: "0.6.0"},
+		{spec: "@grafana/sigil-opencode@next", want: "next"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.spec, func(t *testing.T) {
+			require.Equal(t, tc.want, versionFromNpmSpec(tc.spec))
+		})
+	}
+}
+
+func TestStatus(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        string
+		wantInstalled bool
+		wantVersion   string
+	}{
+		{name: "installed", config: `{"plugin":["@grafana/sigil-opencode@0.6.0"]}`, wantInstalled: true, wantVersion: "0.6.0"},
+		{name: "not installed", config: `{"plugin":["other-plugin"]}`, wantInstalled: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			withConfig(t, tc.config)
+
+			installed, version, err := Status(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, tc.wantInstalled, installed)
+			require.Equal(t, tc.wantVersion, version)
+		})
+	}
+}

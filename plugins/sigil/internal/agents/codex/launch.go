@@ -106,6 +106,19 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 	return nil
 }
 
+// Status reports whether the sigil-codex plugin is installed and enabled. It
+// reuses the read-only `codex plugin list` probe and never installs, updates,
+// or writes update-check state — `sigil doctor` relies on this. codex's plugin
+// list does not expose a version, so version is always empty (best-effort).
+func Status(ctx context.Context) (installed bool, version string, err error) {
+	bin, err := lookPath("codex")
+	if err != nil {
+		return false, "", err
+	}
+	installed, err = pluginInstalled(ctx, bin)
+	return installed, "", err
+}
+
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
 	return runSteps(ctx, bin, w, [][]string{
 		{"plugin", "marketplace", "add", marketplaceRepo},

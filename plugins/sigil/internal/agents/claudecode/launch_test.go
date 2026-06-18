@@ -524,3 +524,28 @@ func TestLaunch_RefreshesInstalledPlugin(t *testing.T) {
 		t.Fatalf("expected update stamp: %v", err)
 	}
 }
+
+func TestStatus(t *testing.T) {
+	tests := []struct {
+		name          string
+		installed     string // installed_plugins.json content; empty means not written
+		wantInstalled bool
+	}{
+		{name: "installed", installed: `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user"}]}}`, wantInstalled: true},
+		{name: "not installed", wantInstalled: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.installed != "" {
+				writeInstalled(t, dir, tc.installed)
+			}
+			t.Setenv("CLAUDE_CONFIG_DIR", dir)
+
+			installed, version, err := Status(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, tc.wantInstalled, installed)
+			require.Empty(t, version) // installed_plugins.json carries no version
+		})
+	}
+}
