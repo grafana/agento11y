@@ -1,0 +1,59 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "parent_session_id": null,
+  "title": "cats on the keyboard",
+  "stats": {
+    "steps": 7,
+    "session_prompt_tokens": 4096,
+    "session_completion_tokens": 512,
+    "tool_calls_agreed": 3,
+    "tool_calls_rejected": 0,
+    "tool_calls_hook_denied": 0,
+    "tool_calls_failed": 0,
+    "tool_calls_succeeded": 3,
+    "context_tokens": 2048,
+    "last_turn_prompt_tokens": 320,
+    "last_turn_completion_tokens": 48,
+    "last_turn_duration": 1.5,
+    "input_price_per_million": 1.5,
+    "output_price_per_million": 7.5,
+    "session_total_llm_tokens": 4608,
+    "session_cost": 0.05
+  },
+  "config": {
+    "active_model": "mistral-medium-3.5",
+    "models": [
+      {
+        "name": "mistral-vibe-cli-latest",
+        "provider": "mistral",
+        "alias": "mistral-medium-3.5",
+        "input_price": 1.5,
+        "output_price": 7.5
+      }
+    ]
+  },
+  "tools_available": [
+    {
+      "type": "function",
+      "function": {
+        "name": "bash",
+        "description": "Run a one-off bash command and capture its output.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "command"
+          ]
+        }
+      }
+    }
+  ],
+  "system_prompt": {
+    "role": "system",
+    "content": "You are a helpful assistant that keeps tabs on the cats commandeering the user's keyboard."
+  }
+}
