@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.15.0] - 2026-06-18
+
+### Features
+
+- **plugins/cursor**: add tool-call guards (block + transform) (#306)
+
+### Bug Fixes
+
+- **plugins/sigil**: scope the headline model count to the time window (#333)
+
 ## [0.14.0] - 2026-06-18
 
 ### Features
