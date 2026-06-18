@@ -319,6 +319,27 @@ describe("pi plugin: real-SDK golden export", () => {
     assertGoldenJSON(GOLDEN_PATH, exports);
   });
 
+  it("keeps user SIGIL_TAGS and lets built-in git.branch win collisions", async () => {
+    // Drive the user-tag merge path: SIGIL_TAGS becomes a client-level
+    // tag (js/src/config.ts) that the SDK merges under the per-generation
+    // (seed) tags, so the built-in git.branch must win over the
+    // user-supplied one. team=ai must survive because it does not collide.
+    process.env.SIGIL_TAGS = "team=ai,git.branch=should-lose";
+
+    await runFullTurn();
+
+    // Inspect the raw export capture (pre-normalization) so we can assert
+    // on the actual git.branch value. The normalizeFields rule rewrites
+    // git.branch to "<NORMALIZED>" by key, which would hide a regression
+    // where the user value won.
+    const allRawGen = serverEnv.captures.flatMap((c) => c.generations);
+    const rawTurn = allRawGen.find((g: any) => g?.agent_name === "pi") as any;
+    expect(rawTurn).toBeDefined();
+    expect(rawTurn.tags.team).toBe("ai");
+    expect(rawTurn.tags["git.branch"]).toBeDefined();
+    expect(rawTurn.tags["git.branch"]).not.toBe("should-lose");
+  });
+
   it.each([
     "full",
     "no_tool_content",
@@ -368,11 +389,13 @@ const normalizeFields: Record<string, string> = {
   // effective_version is a sha256 derived from agent_version. Normalize so
   // a future agent_version bump does not silently change the golden hash.
   effective_version: "<NORMALIZED>",
-  // The plugin resolves git.branch from process.cwd(), which varies per
-  // developer checkout. Normalize so the golden is stable in CI. The Go
-  // harness does not need the same rule because Go fixtures pass cwd /
-  // git.branch in via transcript or event data, not from process.cwd().
+  // The plugin resolves git.branch and cwd from process.cwd(), which
+  // varies per developer checkout. Normalize so the golden is stable in
+  // CI. The Go harness does not need the same rule because Go fixtures
+  // pass cwd / git.branch in via transcript or event data, not from
+  // process.cwd().
   "git.branch": "<NORMALIZED>",
+  cwd: "<NORMALIZED>",
 };
 
 const normalizeKeySuffixes = [".started_at", ".completed_at", ".timestamp"];

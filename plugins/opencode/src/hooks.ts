@@ -9,10 +9,12 @@ import type {
 } from "@opencode-ai/sdk";
 import { createSigilClient } from "./client.js";
 import type { SigilOpencodeConfig } from "./config.js";
+import { resolveGitBranch } from "./git.js";
 import { runToolCallGuard } from "./guard.js";
 import { stableOpencodeGenerationId } from "./lineage.js";
 import { mapError, mapGeneration, mapToolDefinitions } from "./mappers.js";
 import { Redactor } from "./redact.js";
+import { buildBuiltinTags } from "./tags.js";
 import {
   createTelemetryProviders,
   type TelemetryProviders,
@@ -159,6 +161,7 @@ async function handleEvent(
   client: OpencodeClient,
   redactor: Redactor,
   debugLog: (msg: string, ...args: unknown[]) => void,
+  projectDir: string,
   event: { type: string; properties: unknown },
 ): Promise<void> {
   if (event.type === "message.part.updated") {
@@ -168,6 +171,7 @@ async function handleEvent(
       client,
       redactor,
       debugLog,
+      projectDir,
       event.properties,
     );
     return;
@@ -210,6 +214,7 @@ async function handleEvent(
     client,
     redactor,
     debugLog,
+    projectDir,
     assistantMsg,
     fetchedParts,
   );
@@ -221,6 +226,7 @@ async function handleMessagePartUpdated(
   client: OpencodeClient,
   redactor: Redactor,
   debugLog: (msg: string, ...args: unknown[]) => void,
+  projectDir: string,
   properties: unknown,
 ): Promise<void> {
   const part = recordField(properties, "part");
@@ -241,6 +247,7 @@ async function handleMessagePartUpdated(
       client,
       redactor,
       debugLog,
+      projectDir,
       response.data.info as AssistantMessage,
       response.data.parts ?? [],
     );
@@ -283,6 +290,7 @@ async function recordAssistantMessage(
   client: OpencodeClient,
   redactor: Redactor,
   debugLog: (msg: string, ...args: unknown[]) => void,
+  projectDir: string,
   assistantMsg: AssistantMessage,
   fetchedParts?: Part[],
 ): Promise<void> {
@@ -341,6 +349,14 @@ async function recordAssistantMessage(
   }
 
   const tools = mapToolDefinitions(pending?.tools);
+  // Resolved per turn so a mid-session checkout lands on the next
+  // generation. Always sent regardless of content capture mode:
+  // `git.branch` and `cwd` are low-cardinality session metadata, not
+  // message content, matching claude-code/cursor.
+  const builtinTags = buildBuiltinTags({
+    cwd: projectDir,
+    gitBranch: resolveGitBranch(projectDir),
+  });
   const seed = {
     id: genId,
     conversationId: assistantMsg.sessionID,
@@ -353,6 +369,7 @@ async function recordAssistantMessage(
     ...(parent && { parentGenerationIds: [parent] }),
     ...(tools.length > 0 && { tools }),
     ...(includeMessageBodies && { systemPrompt: pending?.systemPrompt }),
+    ...(builtinTags && { tags: builtinTags }),
   };
 
   const result = mapGeneration(
@@ -840,7 +857,12 @@ export type SigilHooks = {
 export async function createSigilHooks(
   config: SigilOpencodeConfig,
   client: OpencodeClient,
+  options: { projectDir?: string } = {},
 ): Promise<SigilHooks | null> {
+  // Prefer the opencode plugin's project directory (PluginInput.directory)
+  // because the opencode server can run from a directory different from the
+  // project root. Fall back to `process.cwd()` for older callers and tests.
+  const projectDir = options.projectDir || process.cwd();
   function debugLog(msg: string, ...args: unknown[]) {
     if (config.debug) console.error(`[sigil-opencode] ${msg}`, ...args);
   }
@@ -882,7 +904,15 @@ export async function createSigilHooks(
 
   return {
     event: async (input) => {
-      await handleEvent(sigil, config, client, redactor, debugLog, input.event);
+      await handleEvent(
+        sigil,
+        config,
+        client,
+        redactor,
+        debugLog,
+        projectDir,
+        input.event,
+      );
       await handleLifecycle(sigil, telemetry, debugLog, input.event);
     },
     chatMessage: (input, output) => {

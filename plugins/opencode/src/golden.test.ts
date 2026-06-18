@@ -399,6 +399,12 @@ const normalizeFields: Record<string, string> = {
   "sigil.sdk.commit": "<NORMALIZED>",
   // sha256 derived from agent_version; see Pi golden test for the rationale.
   effective_version: "<NORMALIZED>",
+  // The plugin resolves git.branch and cwd from the opencode plugin
+  // directory (PluginInput.directory, falling back to process.cwd() in
+  // tests), which varies per developer checkout. Normalize so the golden
+  // is stable in CI.
+  "git.branch": "<NORMALIZED>",
+  cwd: "<NORMALIZED>",
 };
 
 const normalizeKeySuffixes = [".started_at", ".completed_at", ".timestamp"];

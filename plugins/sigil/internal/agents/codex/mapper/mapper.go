@@ -13,6 +13,7 @@ import (
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/codexlog"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/fragment"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/gitbranch"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/timeutil"
 )
@@ -61,6 +62,9 @@ func Map(in Inputs) Mapped {
 	tags := map[string]string{"entrypoint": "codex"}
 	if frag.Cwd != "" {
 		tags["cwd"] = frag.Cwd
+	}
+	if branch := gitbranch.Resolve(frag.Cwd); branch != "" {
+		tags["git.branch"] = branch
 	}
 	if frag.Source != "" {
 		tags["hook.source"] = frag.Source
