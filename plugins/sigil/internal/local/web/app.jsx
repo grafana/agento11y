@@ -253,6 +253,7 @@
         wrench:   <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>,
         alert:    <><path d="M12 9v4"/><circle cx="12" cy="16.5" r="0.6" fill="currentColor"/><path d="M10.3 4.1 2.7 17.4a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 4.1a2 2 0 0 0-3.4 0Z"/></>,
         empty:    <><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></>,
+        extlink:  <path d="M7 17 17 7M9 7h8v8"/>,
       };
       return (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
@@ -277,12 +278,14 @@
 
     function Wordmark() {
       return (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, userSelect: "none" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 9, userSelect: "none" }}>
           <GrafanaMark size={22}/>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 14, letterSpacing: "0.02em", color: "var(--fg-max)", fontWeight: 500 }}>Grafana AI Observability</span>
-            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 10.5, color: "var(--fg3)", letterSpacing: "0.08em", textTransform: "uppercase" }}>local</span>
-          </div>
+          <span style={{ fontFamily: "var(--fontFamily)", fontSize: 15, fontWeight: 600, letterSpacing: "-0.01em", color: "var(--fg-max)", whiteSpace: "nowrap" }}>Grafana AI Observability</span>
+          <span style={{
+            fontFamily: "var(--fontFamily)", fontSize: 10, fontWeight: 600,
+            letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--fg2)",
+            border: "1px solid var(--border-medium)", borderRadius: 2, padding: "2px 6px", lineHeight: 1,
+          }}>Local</span>
         </div>
       );
     }
@@ -342,22 +345,33 @@
         }}>
           <Wordmark/>
           <div style={{ width: 1, height: 20, background: "var(--border-weak)", margin: "0 4px" }}/>
-          <nav style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1, overflow: "hidden" }}>
+          <nav style={{ display: "flex", alignItems: "center", alignSelf: "stretch", gap: 6, minWidth: 0, flex: 1, overflow: "hidden" }}>
             {breadcrumbs.map((b, i) => {
               const last = i === breadcrumbs.length - 1;
+              const activeBar = last && breadcrumbs.length === 1;
               return (
                 <React.Fragment key={i}>
                   {i > 0 && <Icon name="cright" size={11} style={{ color: "var(--fg3)", flexShrink: 0 }}/>}
                   {last
-                    ? <span style={{
-                        fontFamily: b.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)",
-                        fontSize: 13,
-                        color: "var(--fg-max)",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        minWidth: 0,
-                      }}>{b.label}</span>
+                    ? activeBar
+                      ? <span style={{
+                          position: "relative", display: "inline-flex", alignItems: "center",
+                          height: "100%",
+                          fontFamily: "var(--fontFamily)", fontSize: 13,
+                          color: "var(--fg-max)", whiteSpace: "nowrap",
+                        }}>
+                          {b.label}
+                          <span style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 2, background: "var(--brandVertical)", borderRadius: 1 }}/>
+                        </span>
+                      : <span style={{
+                          fontFamily: b.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)",
+                          fontSize: 13,
+                          color: "var(--fg-max)",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          minWidth: 0,
+                        }}>{b.label}</span>
                     : b.href
                       ? <a href={b.href}
                           onClick={e => {
@@ -396,20 +410,17 @@
             target="_blank"
             rel="noreferrer"
             style={{
-              height: 30,
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              padding: "0 12px",
-              border: "1px solid var(--brand-orange)",
-              borderRadius: 2,
-              background: "var(--brand-orange)",
-              color: "#111217",
+              display: "inline-flex", alignItems: "center", gap: 5,
+              color: "var(--fg2)",
               textDecoration: "none",
               fontSize: 12,
-              fontWeight: 600,
               whiteSpace: "nowrap",
               flexShrink: 0,
-            }}>
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = "var(--fg-max)"}
+            onMouseLeave={e => e.currentTarget.style.color = "var(--fg2)"}>
             Sign up for Grafana Cloud
+            <Icon name="extlink" size={11}/>
           </a>
         </header>
       );
@@ -456,19 +467,55 @@
       ];
       return (
         <div style={{ display: "inline-flex", border: "1px solid var(--border-medium)", borderRadius: 2, overflow: "hidden" }}>
-          {opts.map(o => {
+          {opts.map((o, i) => {
             const active = o.value === value;
             return (
               <button key={o.value} onClick={() => onChange(o.value)} style={{
-                padding: "4px 10px",
-                background: active ? "rgba(204,204,220,0.08)" : "transparent",
+                padding: "4px 12px",
+                background: active ? "var(--action-selected)" : "transparent",
                 color: active ? "var(--fg-max)" : "var(--fg2)",
-                border: "none", cursor: active ? "default" : "pointer",
-                fontSize: 11, fontFamily: "var(--fontFamilyMonospace)",
+                border: "none", borderLeft: i > 0 ? "1px solid var(--border-medium)" : "none",
+                cursor: active ? "default" : "pointer",
+                fontSize: 12, fontWeight: active ? 500 : 400, fontFamily: "var(--fontFamily)",
               }}>{o.label}</button>
             );
           })}
         </div>
+      );
+    }
+
+    // ChartXLabels renders at most ~5 evenly-spaced bucket labels so the
+    // axis stays readable instead of becoming a wall of timestamps. Empty
+    // slots keep the flex columns aligned with the bars above them.
+    function ChartXLabels({ data }) {
+      const step = Math.max(1, Math.ceil(data.length / 5));
+      return (
+        <div style={{ display: "flex", marginLeft: 44, marginTop: 6, fontSize: 10, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)" }}>
+          {data.map((d, i) => {
+            const last = i === data.length - 1;
+            const show = i % step === 0 || last;
+            return <span key={i} style={{ flex: 1, textAlign: last ? "right" : "left", overflow: "hidden", whiteSpace: "nowrap" }}>{show ? d.t : ""}</span>;
+          })}
+        </div>
+      );
+    }
+
+    // ChartYAxis renders the three right-aligned scale labels (max, mid, 0)
+    // in the 44px gutter to the left of the plot. The plot is 130px tall, so
+    // the labels pin to the top, middle (65px), and baseline (130px).
+    function ChartYAxis({ top, mid }) {
+      const label = {
+        position: "absolute", left: 0, width: 34, textAlign: "right",
+        transform: "translateY(-50%)",
+        fontSize: 10, lineHeight: "10px", color: "var(--fg3)",
+        fontFamily: "var(--fontFamilyMonospace)", pointerEvents: "none",
+      };
+      return (
+        <React.Fragment>
+          <div style={{ ...label, top: 0 }}>{top}</div>
+          <div style={{ ...label, top: 65 }}>{mid}</div>
+          <div style={{ ...label, top: 130 }}>0</div>
+        </React.Fragment>
       );
     }
 
@@ -491,53 +538,54 @@
             </div>
           </div>
           <div style={{ position: "relative" }}>
-            <svg viewBox={`0 0 ${W} ${H + 8}`} preserveAspectRatio="none" style={{ width: "100%", height: 130, display: "block" }}>
-              {[0, 1, 2, 3, 4].map(g => (
-                <line key={g} x1={0} x2={W} y1={(H * g)/4} y2={(H * g)/4} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2"/>
-              ))}
-              {data.map((d, i) => {
-                const h = (d.c / max) * H;
-                const x = i * (W / data.length) + gap/2;
-                const y = H - h;
-                const isHover = hover === i;
-                // Midpoint containment, not overlap: the window shifts a
-                // little every render (now moves), so an overlap test can
-                // light up two adjacent bars.
-                const isSel = selection && (d.start + d.end) / 2 >= selection.start && (d.start + d.end) / 2 < selection.end;
-                const dim = selection && !isSel;
-                return (
-                  <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
-                    onClick={onBucketClick ? () => onBucketClick(d) : undefined}
-                    style={{ cursor: onBucketClick ? "pointer" : "default" }}>
-                    <rect x={x - 0.4} y={0} width={barW + 0.8} height={H} fill="transparent"/>
-                    <rect x={x} y={y} width={barW} height={Math.max(h, 0.4)} fill={isHover ? "var(--brand-orange-text)" : accent} opacity={isHover || isSel ? 1 : dim ? 0.3 : 0.85}/>
-                  </g>
-                );
-              })}
-            </svg>
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 10, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)" }}>
-              {data.map((d, i) => <span key={i} style={{ flex: 1, textAlign: "left" }}>{d.t}</span>)}
+            <ChartYAxis top={String(max)} mid={String(Math.round(max / 2))}/>
+            <div style={{ marginLeft: 44, position: "relative", borderBottom: "1px solid var(--border-medium)" }}>
+              <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: 130, display: "block" }}>
+                {[0, 0.5].map(g => (
+                  <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2"/>
+                ))}
+                {data.map((d, i) => {
+                  const h = (d.c / max) * H;
+                  const x = i * (W / data.length) + gap/2;
+                  const y = H - h;
+                  const isHover = hover === i;
+                  // Midpoint containment, not overlap: the window shifts a
+                  // little every render (now moves), so an overlap test can
+                  // light up two adjacent bars.
+                  const isSel = selection && (d.start + d.end) / 2 >= selection.start && (d.start + d.end) / 2 < selection.end;
+                  const dim = selection && !isSel;
+                  return (
+                    <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
+                      onClick={onBucketClick ? () => onBucketClick(d) : undefined}
+                      style={{ cursor: onBucketClick ? "pointer" : "default" }}>
+                      <rect x={x - 0.4} y={0} width={barW + 0.8} height={H} fill="transparent"/>
+                      <rect x={x} y={y} width={barW} height={Math.max(h, 0.4)} fill={isHover ? "var(--brand-orange-text)" : accent} opacity={isHover || isSel ? 1 : dim ? 0.3 : 0.85}/>
+                    </g>
+                  );
+                })}
+              </svg>
+              {hover !== null && (
+                <div style={{
+                  position: "absolute",
+                  left: chartTooltipLeft(hover, data.length),
+                  transform: "translate(-50%, -100%)",
+                  top: -4,
+                  background: "var(--bg-secondary)",
+                  border: "1px solid var(--border-medium)",
+                  borderRadius: 2,
+                  padding: "4px 8px",
+                  fontFamily: "var(--fontFamilyMonospace)",
+                  fontSize: 11,
+                  color: "var(--fg1)",
+                  whiteSpace: "nowrap",
+                  pointerEvents: "none",
+                  boxShadow: "var(--shadow-z2)",
+                }}>
+                  <span style={{ color: "var(--fg3)" }}>{data[hover].t}</span> · {data[hover].c} {data[hover].c === 1 ? "conversation" : "conversations"}
+                </div>
+              )}
             </div>
-            {hover !== null && (
-              <div style={{
-                position: "absolute",
-                left: chartTooltipLeft(hover, data.length),
-                transform: "translate(-50%, -100%)",
-                top: -4,
-                background: "var(--bg-secondary)",
-                border: "1px solid var(--border-medium)",
-                borderRadius: 2,
-                padding: "4px 8px",
-                fontFamily: "var(--fontFamilyMonospace)",
-                fontSize: 11,
-                color: "var(--fg1)",
-                whiteSpace: "nowrap",
-                pointerEvents: "none",
-                boxShadow: "var(--shadow-z2)",
-              }}>
-                <span style={{ color: "var(--fg3)" }}>{data[hover].t}</span> · {data[hover].c} {data[hover].c === 1 ? "conversation" : "conversations"}
-              </div>
-            )}
+            <ChartXLabels data={data}/>
           </div>
         </div>
       );
@@ -547,17 +595,11 @@
     // but stacks the five disjoint token series per bucket, with a
     // per-model filter and a click-to-toggle legend. data comes from
     // bucketTokenUsage.
-    function TokenChart({ data, bucketLabel, grandTotal, totals, models, model, onModelChange, switcher, selection, onBucketClick }) {
+    function TokenChart({ data, bucketLabel, grandTotal, models, model, onModelChange, hidden, onToggleSeries, switcher, selection, onBucketClick }) {
       const W = 100, H = 32;
       const barW = (W / Math.max(1, data.length)) * 0.7;
       const gap  = (W / Math.max(1, data.length)) * 0.3;
       const [hover, setHover] = useState(null);
-      const [hidden, setHidden] = useState(() => new Set());
-      const toggleSeries = key => setHidden(prev => {
-        const next = new Set(prev);
-        next.has(key) ? next.delete(key) : next.add(key);
-        return next;
-      });
       // Only show legend entries for series that actually appear, so a
       // pure-Anthropic store doesn't carry an always-zero "Reasoning"
       // swatch. Fall back to the full set when there's no data at all.
@@ -570,39 +612,16 @@
       const visibleTotal = d => visible.reduce((acc, s) => acc + (d[s.key] || 0), 0);
       const max = Math.max(1, ...data.map(visibleTotal));
       const empty = grandTotal === 0;
-      // The header total tracks the visible series so it always matches
-      // the stacked bars and the tooltip; hiding a series excludes it
-      // here too. The cache stat only renders while both of its inputs
-      // are visible — with cache read hidden it would claim "0% cached".
-      const shownTotal = totals ? visible.reduce((acc, s) => acc + (totals[s.key] || 0), 0) : grandTotal;
-      const cacheVisible = !hidden.has("fresh_input") && !hidden.has("cache_read");
-      const cacheDenom = totals ? (totals.fresh_input || 0) + (totals.cache_read || 0) : 0;
-      const cachePct = cacheVisible && cacheDenom > 0 ? Math.round(((totals.cache_read || 0) / cacheDenom) * 100) : null;
-      const yLabel = {
-        position: "absolute", left: 0, transform: "translateY(-50%)",
-        fontSize: 10, lineHeight: "10px", color: "var(--fg3)",
-        fontFamily: "var(--fontFamilyMonospace)",
-        background: "var(--bg-primary)", padding: "1px 4px 1px 0",
-        pointerEvents: "none",
-      };
 
       return (
         <div style={{ position: "relative", padding: "16px 20px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 12, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              {switcher}
-              <span style={{ color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11 }}>
-                {formatTokens(shownTotal)} tok
-                {cachePct != null && (
-                  <span title="Share of input tokens served from the prompt cache: cache read / (fresh input + cache read)"> · {cachePct}% cached</span>
-                )}
-              </span>
-            </div>
+            {switcher}
             <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", flexWrap: "wrap" }}>
               {legend.map(s => {
                 const off = hidden.has(s.key);
                 return (
-                  <button key={s.key} onClick={() => toggleSeries(s.key)}
+                  <button key={s.key} onClick={() => onToggleSeries(s.key)}
                     title={off ? `Show ${s.label}` : `Hide ${s.label}`}
                     style={{
                       display: "inline-flex", alignItems: "center", gap: 6,
@@ -627,77 +646,73 @@
             </div>
           </div>
           <div style={{ position: "relative" }}>
-            <svg viewBox={`0 0 ${W} ${H + 8}`} preserveAspectRatio="none" style={{ width: "100%", height: 130, display: "block" }}>
-              {[0, 1, 2, 3, 4].map(g => (
-                <line key={g} x1={0} x2={W} y1={(H * g)/4} y2={(H * g)/4} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2"/>
-              ))}
-              {data.map((d, i) => {
-                const x = i * (W / data.length) + gap/2;
-                const isHover = hover === i;
-                // Midpoint containment, not overlap — see ActivityChart.
-                const isSel = selection && (d.start + d.end) / 2 >= selection.start && (d.start + d.end) / 2 < selection.end;
-                const dim = selection && !isSel;
-                const barOpacity = isHover || isSel ? 1 : dim ? 0.3 : 0.85;
-                let yTop = H;
-                const segs = [];
-                for (const s of visible) {
-                  const v = d[s.key] || 0;
-                  if (v <= 0) continue;
-                  const h = (v / max) * H;
-                  yTop -= h;
-                  segs.push(<rect key={s.key} x={x} y={yTop} width={barW} height={Math.max(h, 0.2)} fill={s.color} opacity={barOpacity}/>);
-                }
-                return (
-                  <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
-                    onClick={onBucketClick ? () => onBucketClick(d) : undefined}
-                    style={{ cursor: onBucketClick ? "pointer" : "default" }}>
-                    <rect x={x - 0.4} y={0} width={barW + 0.8} height={H} fill="transparent"/>
-                    {segs}
-                  </g>
-                );
-              })}
-            </svg>
-            {/* The svg stretches its viewBox, so the y-scale labels are
-                HTML overlays pinned to the top and middle gridlines (0px
-                and 52px of the 130px-tall plot). */}
-            {!empty && visible.length > 0 && <div style={{ ...yLabel, top: 0 }}>{formatTokens(max)}</div>}
-            {!empty && visible.length > 0 && <div style={{ ...yLabel, top: 52 }}>{formatTokens(Math.round(max / 2))}</div>}
-            {empty && (
-              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 130, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", pointerEvents: "none" }}>
-                No token usage {model !== "all" ? `for ${model} ` : ""}in this range
-              </div>
-            )}
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 10, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)" }}>
-              {data.map((d, i) => <span key={i} style={{ flex: 1, textAlign: "left" }}>{d.t}</span>)}
-            </div>
-            {hover !== null && visibleTotal(data[hover]) > 0 && (
-              <div style={{
-                position: "absolute",
-                left: chartTooltipLeft(hover, data.length),
-                transform: "translate(-50%, -100%)",
-                top: -4,
-                background: "var(--bg-secondary)",
-                border: "1px solid var(--border-medium)",
-                borderRadius: 2,
-                padding: "6px 8px",
-                fontFamily: "var(--fontFamilyMonospace)",
-                fontSize: 11,
-                color: "var(--fg1)",
-                whiteSpace: "nowrap",
-                pointerEvents: "none",
-                boxShadow: "var(--shadow-z2)",
-                zIndex: 1,
-              }}>
-                <div style={{ color: "var(--fg3)", marginBottom: 4 }}>{data[hover].t} · {formatTokens(visibleTotal(data[hover]))} tok</div>
-                {visible.filter(s => data[hover][s.key] > 0).map(s => (
-                  <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ width: 8, height: 8, background: s.color, borderRadius: 1 }}/>
-                    <span style={{ color: "var(--fg2)" }}>{s.label}</span>
-                    <span style={{ marginLeft: "auto", color: "var(--fg1)" }}>{formatTokens(data[hover][s.key])}</span>
-                  </div>
+            {!empty && visible.length > 0 && <ChartYAxis top={formatTokens(max)} mid={formatTokens(Math.round(max / 2))}/>}
+            <div style={{ marginLeft: 44, position: "relative", borderBottom: "1px solid var(--border-medium)" }}>
+              <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: 130, display: "block" }}>
+                {[0, 0.5].map(g => (
+                  <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2"/>
                 ))}
-              </div>
-            )}
+                {data.map((d, i) => {
+                  const x = i * (W / data.length) + gap/2;
+                  const isHover = hover === i;
+                  // Midpoint containment, not overlap — see ActivityChart.
+                  const isSel = selection && (d.start + d.end) / 2 >= selection.start && (d.start + d.end) / 2 < selection.end;
+                  const dim = selection && !isSel;
+                  const barOpacity = isHover || isSel ? 1 : dim ? 0.3 : 0.85;
+                  let yTop = H;
+                  const segs = [];
+                  for (const s of visible) {
+                    const v = d[s.key] || 0;
+                    if (v <= 0) continue;
+                    const h = (v / max) * H;
+                    yTop -= h;
+                    segs.push(<rect key={s.key} x={x} y={yTop} width={barW} height={Math.max(h, 0.2)} fill={s.color} opacity={barOpacity}/>);
+                  }
+                  return (
+                    <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
+                      onClick={onBucketClick ? () => onBucketClick(d) : undefined}
+                      style={{ cursor: onBucketClick ? "pointer" : "default" }}>
+                      <rect x={x - 0.4} y={0} width={barW + 0.8} height={H} fill="transparent"/>
+                      {segs}
+                    </g>
+                  );
+                })}
+              </svg>
+              {empty && (
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 130, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", pointerEvents: "none" }}>
+                  No token usage {model !== "all" ? `for ${model} ` : ""}in this range
+                </div>
+              )}
+              {hover !== null && visibleTotal(data[hover]) > 0 && (
+                <div style={{
+                  position: "absolute",
+                  left: chartTooltipLeft(hover, data.length),
+                  transform: "translate(-50%, -100%)",
+                  top: -4,
+                  background: "var(--bg-secondary)",
+                  border: "1px solid var(--border-medium)",
+                  borderRadius: 2,
+                  padding: "6px 8px",
+                  fontFamily: "var(--fontFamilyMonospace)",
+                  fontSize: 11,
+                  color: "var(--fg1)",
+                  whiteSpace: "nowrap",
+                  pointerEvents: "none",
+                  boxShadow: "var(--shadow-z2)",
+                  zIndex: 1,
+                }}>
+                  <div style={{ color: "var(--fg3)", marginBottom: 4 }}>{data[hover].t} · {formatTokens(visibleTotal(data[hover]))} tok</div>
+                  {visible.filter(s => data[hover][s.key] > 0).map(s => (
+                    <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ width: 8, height: 8, background: s.color, borderRadius: 1 }}/>
+                      <span style={{ color: "var(--fg2)" }}>{s.label}</span>
+                      <span style={{ marginLeft: "auto", color: "var(--fg1)" }}>{formatTokens(data[hover][s.key])}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <ChartXLabels data={data}/>
           </div>
         </div>
       );
@@ -708,8 +723,8 @@
         <div style={{ display: "flex", alignItems: "stretch", gap: 8, marginBottom: 16, fontSize: 13 }}>
           <div style={{
             flex: 1, display: "flex", alignItems: "center", gap: 8,
-            padding: "0 10px",
-            height: 32,
+            padding: "0 11px",
+            height: 34,
             border: "1px solid var(--border-medium)",
             borderRadius: 2,
             background: "var(--bg-primary)",
@@ -731,9 +746,9 @@
             onChange={e => onTimeRangeChange(e.target.value)}
             title="Time range"
             style={{
-              height: 32,
-              minWidth: 138,
-              padding: "0 30px 0 10px",
+              height: 34,
+              minWidth: 150,
+              padding: "0 30px 0 11px",
               border: "1px solid var(--border-medium)",
               borderRadius: 2,
               background: "var(--bg-primary)",
@@ -744,8 +759,10 @@
             {TIME_RANGES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
           </select>
           <button onClick={onRefresh} disabled={refreshing}
-            style={{ ...iconBtn, height: 32, width: 32, border: "1px solid var(--border-medium)", opacity: refreshing ? 0.5 : 1, cursor: refreshing ? "wait" : "pointer" }}
-            title="Refresh">
+            style={{ ...iconBtn, height: 34, width: 34, border: "1px solid var(--border-medium)", opacity: refreshing ? 0.5 : 1, cursor: refreshing ? "wait" : "pointer" }}
+            title="Refresh"
+            onMouseEnter={e => { if (!refreshing) { e.currentTarget.style.background = "var(--action-hover)"; e.currentTarget.style.color = "var(--fg1)"; } }}
+            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg2)"; }}>
             <Icon name="refresh" size={14}/>
           </button>
         </div>
@@ -766,10 +783,10 @@
            }}
            style={{
           display: "grid",
-          gridTemplateColumns: "90px minmax(280px, 1.4fr) 150px 100px minmax(180px, 1fr) minmax(160px, 1fr)",
+          gridTemplateColumns: "110px minmax(280px, 1.6fr) 150px 110px 130px 200px",
           alignItems: "center",
           gap: 16,
-          padding: "10px 16px",
+          padding: "12px 16px",
           borderBottom: "1px solid var(--border-weak)",
           borderLeft: `3px solid ${accent}`,
           background: "transparent",
@@ -784,7 +801,7 @@
         >
           <span style={{ color: "var(--fg2)" }}>{formatAgo(c.last_activity, now)}</span>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-            <span style={{ color: "var(--fg1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title || c.id}</span>
+            <span style={{ fontFamily: "var(--fontFamily)", color: "var(--fg1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title || c.id}</span>
             {c.title && c.title !== c.id && (
               <span style={{ color: "var(--fg3)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.id}</span>
             )}
@@ -794,7 +811,12 @@
             <span style={{ color: "var(--fg3)", padding: "0 6px" }}>·</span>
             <span style={{ color: "var(--fg1)" }}>{c.calls} {c.calls === 1 ? "call" : "calls"}</span>
           </span>
-          <span style={{ color: "var(--fg1)" }} title={tokenBreakdownTitle(c.token_buckets)}>{formatTokens(c.total_tokens)}</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }} title={tokenBreakdownTitle(c.token_buckets)}>
+            <span style={{ color: "var(--fg1)" }}>{formatTokens(c.total_tokens)}</span>
+            {c.status === "err" && (
+              <span style={{ display: "inline-flex", alignItems: "center", padding: "0 6px", height: 16, borderRadius: 2, background: "var(--error-transparent)", color: "var(--error-text)", fontSize: 10, letterSpacing: "0.04em" }}>ERR</span>
+            )}
+          </span>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {(c.agents || []).map(a => <AgentPill key={a} name={a} size="sm"/>)}
           </div>
@@ -815,11 +837,54 @@
             display: "inline-flex", alignItems: "center", gap: 4,
             background: "transparent", border: "none", padding: 0,
             cursor: "pointer", font: "inherit", textAlign: "left",
-            textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 500,
+            fontWeight: 500, whiteSpace: "nowrap",
             color: active ? "var(--fg1)" : "inherit",
           }}>
           {label}{active && <span style={{ fontSize: 8 }}>{sort.dir === "asc" ? "▲" : "▼"}</span>}
         </button>
+      );
+    }
+
+    // KpiTile is one cell of the KPI strip: a sentence-case label, a big
+    // mono value (optionally tinted, with a leading status dot), an
+    // optional progress bar, and a sub line.
+    function KpiTile({ label, value, valueColor, sub, dot, bar }) {
+      return (
+        <div style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 7 }}>
+          <span style={{ fontSize: 11, color: "var(--fg3)" }}>{label}</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {dot && <span style={{ width: 8, height: 8, borderRadius: "50%", background: dot, flexShrink: 0 }}/>}
+            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 24, fontWeight: 500, lineHeight: 1, color: valueColor || "var(--fg-max)" }}>{value}</span>
+          </span>
+          {bar != null && (
+            <span style={{ display: "block", height: 4, borderRadius: 2, background: "rgba(204,204,220,0.1)", overflow: "hidden", marginTop: 1 }}>
+              <span style={{ display: "block", height: "100%", width: `${bar}%`, background: "var(--viz-green)" }}/>
+            </span>
+          )}
+          {sub != null && <span style={{ fontSize: 11, color: "var(--fg2)" }}>{sub}</span>}
+        </div>
+      );
+    }
+
+    // KpiStrip surfaces the headline numbers for the in-view set: counts
+    // from the range + search conversations, token and cache rate from the
+    // chart's series (so they honour the model dropdown and legend
+    // toggles). "Tool calls" is the per-generation call count; "Errored
+    // conversations" counts conversations with a call error, since the
+    // list API exposes no per-tool-call breakdown.
+    function KpiStrip({ kpi }) {
+      const avg = kpi.avgCalls.toFixed(1).replace(/\.0$/, "");
+      return (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 16 }}>
+          <KpiTile label="Conversations" value={kpi.conversations} sub={kpi.conversationsSub}/>
+          <KpiTile label="Total tokens" value={formatTokens(kpi.tokens)} sub={`${kpi.models} ${kpi.models === 1 ? "model" : "models"}`}/>
+          <KpiTile label="Cache hit rate" value={kpi.cachePct == null ? "\u2014" : `${kpi.cachePct}%`} bar={kpi.cachePct == null ? 0 : kpi.cachePct}/>
+          <KpiTile label="Tool calls" value={kpi.calls} sub={`${avg} avg / conversation`}/>
+          <KpiTile label="Errored conversations" value={kpi.errConvs}
+            valueColor={kpi.errConvs > 0 ? "var(--error-text)" : "var(--fg-max)"}
+            dot={kpi.errConvs > 0 ? "var(--error-text)" : undefined}
+            sub={`${kpi.errPct}% of conversations`}/>
+        </div>
       );
     }
 
@@ -860,6 +925,15 @@
         () => effectiveModel === "all" ? points : points.filter(p => p.model === effectiveModel),
         [points, effectiveModel]
       );
+      // Legend visibility is shared with the KPI strip so hiding a series
+      // rescales the chart and drops it from the headline tokens in step.
+      // Lives here, not in TokenChart, so both read the one set.
+      const [hiddenSeries, setHiddenSeries] = useState(() => new Set());
+      const toggleSeries = useCallback(key => setHiddenSeries(prev => {
+        const next = new Set(prev);
+        next.has(key) ? next.delete(key) : next.add(key);
+        return next;
+      }), []);
       // Both metrics share one window so switching the chart between
       // them doesn't shift the time axis; with per-metric windows the
       // "All" range drifts when the datasets' extents differ.
@@ -910,14 +984,59 @@
         return [...listFiltered].sort((a, b) => (val(a) - val(b)) * dir);
       }, [listFiltered, listSort]);
 
+      // KPI tiles read the range + search set (not the bucket drill-down).
+      // Conversation, tool-call and error counts come from that set; token
+      // and cache numbers come from the same series the chart draws, so the
+      // headline tokens always match the chart below, including its model
+      // dropdown and legend toggles. Conversation rows carry no per-model
+      // token breakdown, so that can only be honoured via the token series.
+      const kpi = useMemo(() => {
+        let calls = 0, errConvs = 0;
+        for (const c of filtered) {
+          calls += c.calls || 0;
+          if (c.status === "err") errConvs++;
+        }
+        // Sum only the series the chart is currently showing, so hiding one
+        // in the legend pulls it out of the headline total too.
+        let tokens = 0;
+        for (const s of TOKEN_SERIES) {
+          if (!hiddenSeries.has(s.key)) tokens += tokenUsage.totals[s.key] || 0;
+        }
+        const fresh = tokenUsage.totals.fresh_input || 0;
+        const cacheRead = tokenUsage.totals.cache_read || 0;
+        const cacheDenom = fresh + cacheRead;
+        // Hiding either side of the ratio makes the rate meaningless, so
+        // blank it out the way the old chart header did. Otherwise only
+        // report a flat 100% when there is literally no fresh input; cap at
+        // 99% so 99.99% (a few fresh tokens against a huge cache) doesn't
+        // round up and read as a perfect cache.
+        const cacheHidden = hiddenSeries.has("fresh_input") || hiddenSeries.has("cache_read");
+        const cachePct = cacheHidden || cacheDenom === 0 ? null
+          : cacheRead === cacheDenom ? 100
+          : Math.min(99, Math.round((cacheRead / cacheDenom) * 100));
+        return {
+          conversations: filtered.length,
+          conversationsSub: query ? "matching filter" : "active in range",
+          tokens,
+          models: effectiveModel === "all" ? tokenModels.length : 1,
+          cachePct,
+          calls,
+          avgCalls: filtered.length ? calls / filtered.length : 0,
+          errConvs,
+          errPct: filtered.length ? Math.round((errConvs / filtered.length) * 100) : 0,
+        };
+      }, [filtered, tokenUsage, tokenModels, effectiveModel, query, hiddenSeries]);
+
       return (
         <div style={{ padding: 24, maxWidth: 1600, margin: "0 auto" }}>
           <FilterBar query={query} onQueryChange={setQuery} timeRange={timeRange} onTimeRangeChange={setTimeRange} onRefresh={onRefresh} refreshing={refreshing}/>
+          <KpiStrip kpi={kpi}/>
           {chartMetric === "activity"
             ? <ActivityChart data={activity.buckets} bucketLabel={activity.bucketLabel}
                 selection={bucketSel} onBucketClick={onBucketClick}
                 switcher={<ChartSwitch value={chartMetric} onChange={setChartMetric}/>}/>
-            : <TokenChart data={tokenUsage.buckets} bucketLabel={tokenUsage.bucketLabel} grandTotal={tokenUsage.grandTotal} totals={tokenUsage.totals} models={tokenModels} model={effectiveModel} onModelChange={setTokenModel}
+            : <TokenChart data={tokenUsage.buckets} bucketLabel={tokenUsage.bucketLabel} grandTotal={tokenUsage.grandTotal} models={tokenModels} model={effectiveModel} onModelChange={setTokenModel}
+                hidden={hiddenSeries} onToggleSeries={toggleSeries}
                 selection={bucketSel} onBucketClick={onBucketClick}
                 switcher={<ChartSwitch value={chartMetric} onChange={setChartMetric}/>}/>}
 
@@ -942,12 +1061,12 @@
           }}>
             <div style={{
               display: "grid",
-              gridTemplateColumns: "90px minmax(280px, 1.4fr) 150px 100px minmax(180px, 1fr) minmax(160px, 1fr)",
+              gridTemplateColumns: "110px minmax(280px, 1.6fr) 150px 110px 130px 200px",
               alignItems: "center", gap: 16,
-              padding: "10px 16px 10px 19px",
+              padding: "11px 16px 11px 19px",
               borderBottom: "1px solid var(--border-weak)",
               background: "var(--bg-secondary)",
-              fontSize: 11, color: "var(--fg3)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 500,
+              fontFamily: "var(--fontFamily)", fontSize: 12, color: "var(--fg3)", fontWeight: 500,
             }}>
               <SortHeader label="Last activity" sortKey="last_activity" sort={listSort} onSort={handleSort}/>
               <span>Conversation</span>
@@ -994,7 +1113,7 @@
             fontSize: 11, color: "var(--fg3)",
             fontFamily: "var(--fontFamilyMonospace)",
           }}>
-            {sorted.length} of {conversations.length} {conversations.length === 1 ? "conversation" : "conversations"}
+            {sorted.length} of {filtered.length} {filtered.length === 1 ? "conversation" : "conversations"}
           </div>
         </div>
       );
