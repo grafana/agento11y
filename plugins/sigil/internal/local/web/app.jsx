@@ -949,6 +949,21 @@
         () => bucketTokenUsage(tokenFiltered, timeRange, now, { window: chartWindow }),
         [tokenFiltered, timeRange, now, chartWindow]
       );
+      // Distinct models that actually produced tokens inside the visible
+      // window. tokenModels spans the whole store (so the dropdown can
+      // still offer every model), but the headline count must agree with
+      // the windowed token total beside it — otherwise a 6h view reports
+      // models that only appear in older conversations.
+      const windowModelCount = useMemo(() => {
+        const seen = new Set();
+        for (const p of points) {
+          if (!p.model) continue;
+          const t = tokenPointTime(p);
+          if (!Number.isFinite(t) || t < chartWindow.start || t > chartWindow.end) continue;
+          seen.add(p.model);
+        }
+        return seen.size;
+      }, [points, chartWindow]);
 
       // Bucket drill-down from a chart bar click: the list narrows to
       // conversations active inside the picked bucket, while the charts
@@ -1018,14 +1033,14 @@
           conversations: filtered.length,
           conversationsSub: query ? "matching filter" : "active in range",
           tokens,
-          models: effectiveModel === "all" ? tokenModels.length : 1,
+          models: effectiveModel === "all" ? windowModelCount : 1,
           cachePct,
           calls,
           avgCalls: filtered.length ? calls / filtered.length : 0,
           errConvs,
           errPct: filtered.length ? Math.round((errConvs / filtered.length) * 100) : 0,
         };
-      }, [filtered, tokenUsage, tokenModels, effectiveModel, query, hiddenSeries]);
+      }, [filtered, tokenUsage, windowModelCount, effectiveModel, query, hiddenSeries]);
 
       return (
         <div style={{ padding: 24, maxWidth: 1600, margin: "0 auto" }}>
