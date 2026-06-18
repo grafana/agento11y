@@ -1,5 +1,5 @@
 // Command sigil is the single binary used by the Claude Code, Codex,
-// Copilot, Cursor, OpenCode, and pi agent plugins. It accepts:
+// Copilot, Cursor, OpenCode, pi, and Vibe agent plugins. It accepts:
 //
 //	sigil <agent> hook                                — dispatch a JSON hook payload on stdin to <agent>
 //	sigil claude   [--local] [--tag k=v] [-- args...] — exec claude after bootstrapping the sigil-cc plugin
@@ -7,6 +7,7 @@
 //	sigil copilot  [--local] [--tag k=v] [-- args...] — exec copilot after bootstrapping the sigil-copilot plugin
 //	sigil opencode [--local] [--tag k=v] [-- args...] — exec opencode after bootstrapping the @grafana/sigil-opencode plugin
 //	sigil pi       [--local] [--tag k=v] [-- args...] — exec pi after bootstrapping the @grafana/sigil-pi extension
+//	sigil vibe     [--local] [--tag k=v] [-- args...] — exec vibe after installing the sigil hook in vibe's hooks.toml
 //	sigil local start|status|stop                     — manage the local capture daemon
 //	sigil --version                                   — print the build version
 //
@@ -17,8 +18,8 @@
 // stderr. For hook agents the binary must never crash the calling agent
 // process; once argv parsing succeeds, all errors are swallowed (and logged
 // when SIGIL_DEBUG=true) and the process exits 0. Launcher agents (`claude`,
-// `codex`, `copilot`, `opencode`, and `pi`) are invoked by a human, so
-// errors surface on stderr with a non-zero exit code.
+// `codex`, `copilot`, `opencode`, `pi`, and `vibe`) are invoked by a human,
+// so errors surface on stderr with a non-zero exit code.
 package main
 
 import (
@@ -41,6 +42,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/cursor"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/opencode"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/pi"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/vibe"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/cli"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/dotenv"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
@@ -74,7 +76,7 @@ func renderLocalBanner(uiURL string) string {
 	return localBannerBox.Render(strings.Join(lines, "\n"))
 }
 
-const usageLine = "usage: sigil login | sigil local start|status|stop | sigil <agent> hook | sigil <claude|codex|copilot|opencode|pi> [--local] [--tag key=value]... [-- args...]"
+const usageLine = "usage: sigil login | sigil local start|status|stop | sigil <agent> hook | sigil <claude|codex|copilot|opencode|pi|vibe> [--local] [--tag key=value]... [-- args...]"
 
 // version is overridden via -ldflags at build time.
 var version = "dev"
@@ -98,6 +100,7 @@ var agents = map[string]agentHook{
 	"codex":       codex.Hook,
 	"copilot":     copilot.Hook,
 	"cursor":      cursor.Hook,
+	"vibe":        vibe.Hook,
 }
 
 // launchers maps the argv name to its launcher adapter. Launchers are
@@ -110,6 +113,7 @@ var launchers = map[string]agentLauncher{
 	"copilot":  copilot.Launch,
 	"opencode": opencode.Launch,
 	"pi":       pi.Launch,
+	"vibe":     vibe.Launch,
 }
 
 // exit is a package var so tests can intercept termination.
