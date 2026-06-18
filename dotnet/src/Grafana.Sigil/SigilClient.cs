@@ -2318,35 +2318,56 @@ public sealed class GenerationRecorder
         }
 
         Generation generation;
+        var initialContentCaptureMode = _contentCaptureMode;
+        var effectiveContentCaptureMode = _contentCaptureMode;
+        var sanitizerRan = false;
+        var spanCallError = string.Empty;
+        var redactErrors = false;
         try
         {
             var completedAt = _client!._config.UtcNow!();
             generation = NormalizeGeneration(result, completedAt, callError, snapshotExtra);
 
-            var modeValue = _contentCaptureMode.ToMetadataValue();
+            if (_client!._config.GenerationSanitizer != null && effectiveContentCaptureMode != ContentCaptureMode.MetadataOnly)
+            {
+                sanitizerRan = true;
+                try
+                {
+                    generation = _client._config.GenerationSanitizer(generation);
+                }
+                catch (Exception ex)
+                {
+                    _client._config.Logger?.Invoke(
+                        $"sigil: generation sanitization failed, falling back to metadata_only: {ex.Message}"
+                    );
+                    effectiveContentCaptureMode = ContentCaptureMode.MetadataOnly;
+                }
+            }
+
+            SyncCanonicalMetadataMirrors(generation);
+
+            var modeValue = effectiveContentCaptureMode.ToMetadataValue();
             if (modeValue.Length > 0)
             {
                 generation.Metadata[SigilClient.MetadataKeyContentCaptureMode] = modeValue;
             }
 
-            if (_contentCaptureMode == ContentCaptureMode.MetadataOnly)
+            if (effectiveContentCaptureMode == ContentCaptureMode.MetadataOnly)
             {
                 var stripErrorCategory = SigilClient.ErrorCategoryFromException(callError, false);
                 SigilClient.StripContent(generation, stripErrorCategory);
             }
+
+            redactErrors =
+                effectiveContentCaptureMode == ContentCaptureMode.MetadataOnly
+                || effectiveContentCaptureMode == ContentCaptureMode.FullWithMetadataSpans;
+            spanCallError = generation.CallError;
         }
         finally
         {
             _contextScope?.Dispose();
             _contextScope = null;
         }
-
-        // Redact span-side error text under both stripped modes. Proto export
-        // under FullWithMetadataSpans still gets the raw generation.CallError
-        // (set during normalization); only the OTel span path is redacted.
-        var redactErrors =
-            _contentCaptureMode == ContentCaptureMode.MetadataOnly
-            || _contentCaptureMode == ContentCaptureMode.FullWithMetadataSpans;
 
         if (_activity != null)
         {
@@ -2358,7 +2379,7 @@ public sealed class GenerationRecorder
             // must drop sigil.conversation.title. `generation` is a local
             // snapshot here, so save the title, zero it for the span call,
             // and restore — no deep clone needed.
-            if (_contentCaptureMode == ContentCaptureMode.FullWithMetadataSpans)
+            if (effectiveContentCaptureMode == ContentCaptureMode.FullWithMetadataSpans)
             {
                 var savedTitle = generation.ConversationTitle;
                 generation.ConversationTitle = string.Empty;
@@ -2376,9 +2397,17 @@ public sealed class GenerationRecorder
                 SigilClient.ApplyGenerationSpanAttributes(_activity, generation);
             }
 
+            if (sanitizerRan && initialContentCaptureMode != ContentCaptureMode.FullWithMetadataSpans)
+            {
+                _activity.SetTag(SigilClient.SpanAttrConversationTitle, generation.ConversationTitle);
+            }
+
             if (callError != null)
             {
-                SigilClient.RecordException(_activity, callError, redactErrors);
+                var spanError = redactErrors || spanCallError == callError.Message
+                    ? callError
+                    : new Exception(spanCallError);
+                SigilClient.RecordException(_activity, spanError, redactErrors);
             }
 
             if (mappingError != null)
@@ -2436,7 +2465,9 @@ public sealed class GenerationRecorder
                 _activity.SetTag(SigilClient.SpanAttrErrorCategory, errorCategory);
                 var statusDescription = redactErrors
                     ? errorCategory
-                    : (callError ?? mappingError ?? localError)?.Message;
+                    : callError != null
+                        ? spanCallError
+                        : (mappingError ?? localError)?.Message;
                 _activity.SetStatus(ActivityStatusCode.Error, statusDescription);
             }
             else
@@ -2572,6 +2603,27 @@ public sealed class GenerationRecorder
 
         var text = value.ToString()?.Trim() ?? string.Empty;
         return text;
+    }
+
+    private static void SyncCanonicalMetadataMirrors(Generation generation)
+    {
+        if (!string.IsNullOrWhiteSpace(generation.ConversationTitle))
+        {
+            generation.Metadata[SigilClient.SpanAttrConversationTitle] = generation.ConversationTitle;
+        }
+        else
+        {
+            generation.Metadata.Remove(SigilClient.SpanAttrConversationTitle);
+        }
+
+        if (!string.IsNullOrWhiteSpace(generation.CallError))
+        {
+            generation.Metadata["call_error"] = generation.CallError;
+        }
+        else
+        {
+            generation.Metadata.Remove("call_error");
+        }
     }
 
     private static string NormalizeResolvedString(string value)

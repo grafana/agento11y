@@ -127,6 +127,40 @@ Generation export transport protocols:
 - `GenerationExportProtocol.Http`
 - `GenerationExportProtocol.None` (instrumentation-only; no generation transport)
 
+## Secrets redaction
+
+Use the built-in secrets sanitizer to redact high-confidence secret formats
+before generation data is exported. It uses the same gitleaks-derived pattern
+set as the other Sigil SDKs and replaces matches with
+`[REDACTED:<category>]` placeholders.
+
+```csharp
+using Grafana.Sigil;
+
+var sigil = new SigilClient(new SigilClientConfig
+{
+    GenerationSanitizer = SecretRedactionSanitizer.Create(),
+});
+```
+
+By default, the sanitizer redacts assistant output, thinking blocks, tool call
+arguments, tool results, system prompts, conversation titles, provider call
+errors, and email addresses. User input messages are left unchanged unless you
+opt in:
+
+```csharp
+var sigil = new SigilClient(new SigilClientConfig
+{
+    GenerationSanitizer = SecretRedactionSanitizer.Create(new SecretRedactionOptions
+    {
+        RedactInputMessages = true,
+    }),
+});
+```
+
+You can also set `SIGIL_REDACT_INPUT_MESSAGES=true`. An explicit
+`RedactInputMessages` value takes precedence over the environment variable.
+
 ## Embedding observability
 
 Use `StartEmbedding(...)` for manual embedding instrumentation. Embedding recording emits OTel spans and SDK metrics only, and does not enqueue generation export payloads.
