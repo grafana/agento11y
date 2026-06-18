@@ -2,11 +2,12 @@
 // the explicit `sigil login` subcommand and the auto-prompt that runs
 // before `sigil claude` / `sigil pi` when no credentials are configured.
 //
-// The flow prompts for SIGIL_ENDPOINT, SIGIL_AUTH_TENANT_ID, SIGIL_AUTH_TOKEN
-// and an optional OTel OTLP endpoint, then writes them to the standard
-// dotenv at $XDG_CONFIG_HOME/sigil/config.env. Existing allowed keys not
-// covered by prompts (e.g. SIGIL_TAGS, SIGIL_CONTENT_CAPTURE_MODE) are
-// preserved by the underlying writer.
+// The flow prompts for the connection details (SIGIL_ENDPOINT,
+// SIGIL_AUTH_TENANT_ID, SIGIL_AUTH_TOKEN and an optional OTel OTLP endpoint)
+// followed by an optional preferences group (content capture mode, session
+// tags, and guards), then writes them to the standard dotenv at
+// $XDG_CONFIG_HOME/sigil/config.env. Existing allowed keys not covered by
+// prompts are preserved by the underlying writer.
 //
 // Prompts use github.com/charmbracelet/huh, the same library gcx uses. The
 // flow is interactive-only: callers without a TTY receive ErrNotInteractive
@@ -22,6 +23,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -175,6 +177,32 @@ func Run(_ context.Context, opts RunOpts) error {
 		tokenValidate = func(string) error { return nil }
 	}
 
+	// Optional preferences. These default to the same values the plugin
+	// resolves when the keys are absent, so leaving the second group at its
+	// defaults is a no-op rather than a behaviour change.
+	contentMode := normalizeContentMode(existing["SIGIL_CONTENT_CAPTURE_MODE"])
+	tags := existing["SIGIL_TAGS"]
+	guards := seedGuards(existing["SIGIL_GUARDS_ENABLED"], existing["SIGIL_GUARDS_FAIL_OPEN"])
+	guardTimeout := strings.TrimSpace(existing["SIGIL_GUARDS_TIMEOUT_MS"])
+	if guardTimeout == "" {
+		guardTimeout = strconv.Itoa(defaultGuardTimeoutMs)
+	}
+
+	// Only metadata_only and full are offered. The advanced no_tool_content
+	// and full_with_metadata_spans modes are still honoured if already set —
+	// append the current one so re-running login preserves it instead of
+	// silently downgrading to the first option.
+	contentOptions := []huh.Option[string]{
+		huh.NewOption("Metadata only — no prompts, responses, or tool I/O (default)", contentModeMetadataOnly),
+		huh.NewOption("Full — capture everything", contentModeFull),
+	}
+	switch contentMode {
+	case contentModeNoToolContent:
+		contentOptions = append(contentOptions, huh.NewOption("No tool content — capture generations, drop tool args and results", contentModeNoToolContent))
+	case contentModeFullWithMetadataSpans:
+		contentOptions = append(contentOptions, huh.NewOption("Full to ingest, metadata-only spans — keep content off OTel traces", contentModeFullWithMetadataSpans))
+	}
+
 	// Banner is printed once, on stderr, BEFORE huh takes over rendering.
 	// huh stays in inline mode so this text remains static terminal
 	// scrollback above the form (the URL stays selectable, redraws inside
@@ -182,29 +210,64 @@ func Run(_ context.Context, opts RunOpts) error {
 	banner, bannerLines := welcomeBanner()
 	fmt.Fprintln(opts.Stderr, banner)
 
-	form := huh.NewForm(huh.NewGroup(
-		huh.NewInput().
-			Title("Endpoint").
-			Description("Copy 'API URL' from the page above").
-			Validate(requireURL).
-			Value(&endpoint),
-		huh.NewInput().
-			Title("Tenant ID").
-			Description("Copy 'Instance ID' from the page above").
-			Validate(requireNonEmpty("tenant id")).
-			Value(&tenantID),
-		huh.NewInput().
-			Title("Auth token").
-			Description(tokenDesc).
-			EchoMode(huh.EchoModePassword).
-			Validate(tokenValidate).
-			Value(&token),
-		huh.NewInput().
-			Title("OTLP endpoint").
-			Description("For SDK traces and metrics. Press Enter to skip.").
-			Validate(allowEmptyURL).
-			Value(&otelEndpoint),
-	)).WithTheme(grafanaTheme())
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Endpoint").
+				Description("Copy 'API URL' from the page above").
+				Validate(requireURL).
+				Value(&endpoint),
+			huh.NewInput().
+				Title("Tenant ID").
+				Description("Copy 'Instance ID' from the page above").
+				Validate(requireNonEmpty("tenant id")).
+				Value(&tenantID),
+			huh.NewInput().
+				Title("Auth token").
+				Description(tokenDesc).
+				EchoMode(huh.EchoModePassword).
+				Validate(tokenValidate).
+				Value(&token),
+			huh.NewInput().
+				Title("OTLP endpoint").
+				Description("For SDK traces and metrics. Press Enter to skip.").
+				Validate(allowEmptyURL).
+				Value(&otelEndpoint),
+		),
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Content capture").
+				Description("What leaves this machine for each generation").
+				Options(contentOptions...).
+				Value(&contentMode),
+			huh.NewInput().
+				Title("Session tags").
+				Description("Applied to every generation, e.g. team=ai,project=demo. Press Enter to skip.").
+				Validate(validateTags).
+				Value(&tags),
+			huh.NewSelect[string]().
+				Title("Guards").
+				Description("Pre-tool-use safety checks").
+				Options(
+					huh.NewOption("Disabled (default)", guardsOff),
+					huh.NewOption("Enabled, fail-open — allow the action when a guard errors or times out", guardsOpen),
+					huh.NewOption("Enabled, fail-closed — block the action when a guard errors or times out", guardsClosed),
+				).
+				Value(&guards),
+			huh.NewInput().
+				Title("Guard timeout (ms)").
+				Description("How long to wait for guards before applying the fail mode. Only used when guards are enabled.").
+				Validate(func(s string) error {
+					// The timeout is ignored while guards are disabled, so don't
+					// let a stale or invalid value block submission then.
+					if guards == guardsOff {
+						return nil
+					}
+					return validateGuardTimeout(s)
+				}).
+				Value(&guardTimeout),
+		),
+	).WithTheme(grafanaTheme())
 	formErr := form.Run()
 
 	// Erase the banner regardless of outcome. The banner is one-shot
@@ -232,12 +295,16 @@ func Run(_ context.Context, opts RunOpts) error {
 	token = strings.TrimSpace(token)
 	otelEndpoint = strings.TrimSpace(otelEndpoint)
 
-	updates := map[string]string{
-		"SIGIL_ENDPOINT":                    endpoint,
-		"SIGIL_AUTH_TENANT_ID":              tenantID,
-		"SIGIL_AUTH_TOKEN":                  token,
-		"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": otelEndpoint, // "" deletes
-	}
+	updates := buildUpdates(formValues{
+		endpoint:     endpoint,
+		tenantID:     tenantID,
+		token:        token,
+		otelEndpoint: otelEndpoint,
+		contentMode:  normalizeContentMode(contentMode),
+		tags:         strings.TrimSpace(tags),
+		guards:       guards,
+		guardTimeout: guardTimeout,
+	})
 	if err := dotenv.WriteDotenv(configPath, updates, opts.Logger); err != nil {
 		return err
 	}
@@ -285,6 +352,161 @@ var seededKeys = []string{
 	"SIGIL_AUTH_TENANT_ID",
 	"SIGIL_AUTH_TOKEN",
 	"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT",
+	"SIGIL_CONTENT_CAPTURE_MODE",
+	"SIGIL_TAGS",
+	"SIGIL_GUARDS_ENABLED",
+	"SIGIL_GUARDS_FAIL_OPEN",
+	"SIGIL_GUARDS_TIMEOUT_MS",
+}
+
+// Content capture mode labels mirror sigil.ContentCaptureMode.String() so
+// the value we persist round-trips through the SDK's UnmarshalText and the
+// plugin's envconfig.ResolveContentMode without translation.
+const (
+	contentModeFull                  = "full"
+	contentModeNoToolContent         = "no_tool_content"
+	contentModeMetadataOnly          = "metadata_only"
+	contentModeFullWithMetadataSpans = "full_with_metadata_spans"
+)
+
+// Guard select values. The single select encodes both the enabled flag and
+// the fail mode so the form has one fewer field than the three underlying
+// SIGIL_GUARDS_* keys.
+const (
+	guardsOff    = "off"
+	guardsOpen   = "open"
+	guardsClosed = "closed"
+)
+
+// defaultGuardTimeoutMs mirrors envconfig.defaultGuardsTimeoutMs so the
+// prefilled value matches what the plugin uses when the key is absent.
+const defaultGuardTimeoutMs = 1500
+
+// formValues holds the resolved field values the form produced. It exists so
+// buildUpdates can be unit-tested without driving the huh TUI.
+type formValues struct {
+	endpoint     string
+	tenantID     string
+	token        string
+	otelEndpoint string
+	contentMode  string
+	tags         string
+	guards       string
+	guardTimeout string
+}
+
+// buildUpdates maps the form values onto the dotenv keys WriteDotenv expects.
+// Empty values delete their key (handled by the writer); content capture mode
+// and the guard-enabled flag are always written explicitly so a downgrade
+// (e.g. full back to metadata_only, or enabled back to disabled) actually
+// takes effect instead of being silently preserved. When guards are enabled
+// the timeout and fail mode are always written too, so clearing the timeout
+// field deletes the key (the runtime default then applies) rather than
+// leaving a stale value behind. While guards are off only the disabled flag
+// is written, leaving any prior timeout/fail-mode untouched and inert.
+func buildUpdates(v formValues) map[string]string {
+	updates := map[string]string{
+		"SIGIL_ENDPOINT":                    v.endpoint,
+		"SIGIL_AUTH_TENANT_ID":              v.tenantID,
+		"SIGIL_AUTH_TOKEN":                  v.token,
+		"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": v.otelEndpoint, // "" deletes
+		"SIGIL_CONTENT_CAPTURE_MODE":        normalizeContentMode(v.contentMode),
+		"SIGIL_TAGS":                        strings.TrimSpace(v.tags), // "" deletes
+	}
+	switch v.guards {
+	case guardsOpen, guardsClosed:
+		updates["SIGIL_GUARDS_ENABLED"] = "true"
+		if v.guards == guardsOpen {
+			updates["SIGIL_GUARDS_FAIL_OPEN"] = "true"
+		} else {
+			updates["SIGIL_GUARDS_FAIL_OPEN"] = "false"
+		}
+		// Empty deletes, so a cleared field falls back to the runtime default
+		// instead of keeping a stale timeout from a previous config.
+		updates["SIGIL_GUARDS_TIMEOUT_MS"] = strings.TrimSpace(v.guardTimeout)
+	default:
+		updates["SIGIL_GUARDS_ENABLED"] = "false"
+	}
+	return updates
+}
+
+// normalizeContentMode maps a raw (possibly stale or empty) value onto one of
+// the four known modes, falling back to metadata_only — the same default the
+// plugin applies when SIGIL_CONTENT_CAPTURE_MODE is unset or unparseable.
+func normalizeContentMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case contentModeFull:
+		return contentModeFull
+	case contentModeNoToolContent:
+		return contentModeNoToolContent
+	case contentModeFullWithMetadataSpans:
+		return contentModeFullWithMetadataSpans
+	default:
+		return contentModeMetadataOnly
+	}
+}
+
+// seedGuards derives the guard select value from the persisted enabled and
+// fail-open keys. Fail-open defaults to true (matching the plugin), so an
+// enabled-but-unspecified config seeds the fail-open option.
+func seedGuards(enabledRaw, failOpenRaw string) string {
+	if !parseBoolDefault(enabledRaw, false) {
+		return guardsOff
+	}
+	if parseBoolDefault(failOpenRaw, true) {
+		return guardsOpen
+	}
+	return guardsClosed
+}
+
+// parseBoolDefault mirrors envconfig.resolveGuardsBool: empty or unrecognised
+// values fall back to def, while the usual truthy/falsy words are honoured.
+func parseBoolDefault(raw string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return def
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
+}
+
+// validateTags accepts an empty value (tags are optional) and otherwise
+// requires each comma-separated entry to be key=value with a non-empty key
+// and value. The plugin reads SIGIL_TAGS through envconfig.ParseExtraTags,
+// which drops pairs with an empty value, so rejecting them here keeps login
+// from persisting tags that would never attach to a generation.
+func validateTags(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	for part := range strings.SplitSeq(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key, val, ok := strings.Cut(part, "=")
+		if !ok || strings.TrimSpace(key) == "" || strings.TrimSpace(val) == "" {
+			return fmt.Errorf("tag %q must be key=value with a non-empty key and value", part)
+		}
+	}
+	return nil
+}
+
+// validateGuardTimeout accepts an empty value (the plugin default applies) and
+// otherwise requires a positive whole number of milliseconds.
+func validateGuardTimeout(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || n <= 0 {
+		return errors.New("timeout must be a positive whole number of milliseconds")
+	}
+	return nil
 }
 
 // loadSeeds returns initial values for the login form. It starts from the

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -159,6 +160,209 @@ func TestRequireURL(t *testing.T) {
 			err := requireURL(c.in)
 			if (err != nil) != c.wantErr {
 				t.Errorf("requireURL(%q) err = %v, wantErr = %v", c.in, err, c.wantErr)
+			}
+		})
+	}
+}
+
+func TestNormalizeContentMode(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", "metadata_only"},
+		{"   ", "metadata_only"},
+		{"garbage", "metadata_only"},
+		{"metadata_only", "metadata_only"},
+		{"FULL", "full"},
+		{"  no_tool_content  ", "no_tool_content"},
+		{"full_with_metadata_spans", "full_with_metadata_spans"},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			if got := normalizeContentMode(c.in); got != c.want {
+				t.Errorf("normalizeContentMode(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func TestSeedGuards(t *testing.T) {
+	cases := []struct {
+		name     string
+		enabled  string
+		failOpen string
+		want     string
+	}{
+		{"unset defaults off", "", "", guardsOff},
+		{"disabled", "false", "true", guardsOff},
+		{"enabled defaults fail-open", "true", "", guardsOpen},
+		{"enabled fail-open explicit", "1", "yes", guardsOpen},
+		{"enabled fail-closed", "on", "false", guardsClosed},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := seedGuards(c.enabled, c.failOpen); got != c.want {
+				t.Errorf("seedGuards(%q, %q) = %q, want %q", c.enabled, c.failOpen, got, c.want)
+			}
+		})
+	}
+}
+
+func TestValidateTags(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		wantErr bool
+	}{
+		{"empty ok", "", false},
+		{"whitespace ok", "   ", false},
+		{"single pair", "team=ai", false},
+		{"multiple pairs", "team=ai,project=demo", false},
+		{"trailing comma tolerated", "team=ai,", false},
+		{"empty value rejected", "team=", true},
+		{"whitespace value rejected", "team=  ", true},
+		{"missing equals", "team", true},
+		{"empty key", "=ai", true},
+		{"whitespace key", "  =ai", true},
+		{"one bad among good", "team=ai,bogus", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateTags(c.in)
+			if (err != nil) != c.wantErr {
+				t.Errorf("validateTags(%q) err = %v, wantErr = %v", c.in, err, c.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateGuardTimeout(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		wantErr bool
+	}{
+		{"empty ok", "", false},
+		{"whitespace ok", "  ", false},
+		{"positive", "1500", false},
+		{"padded positive", " 2000 ", false},
+		{"zero", "0", true},
+		{"negative", "-1", true},
+		{"non-numeric", "1.5", true},
+		{"word", "soon", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateGuardTimeout(c.in)
+			if (err != nil) != c.wantErr {
+				t.Errorf("validateGuardTimeout(%q) err = %v, wantErr = %v", c.in, err, c.wantErr)
+			}
+		})
+	}
+}
+
+// TestBuildUpdates pins the dotenv write rules for the optional preferences:
+// content capture mode and the guard-enabled flag are always written; tags
+// and OTLP delete on empty; guard timeout and fail mode only appear when
+// guards are enabled.
+func TestBuildUpdates(t *testing.T) {
+	cases := []struct {
+		name string
+		in   formValues
+		want map[string]string
+	}{
+		{
+			name: "credentials only, guards off",
+			in: formValues{
+				endpoint:    "https://sigil.example.com",
+				tenantID:    "123",
+				token:       "glc_abc",
+				contentMode: "metadata_only",
+				guards:      guardsOff,
+				// guardTimeout is ignored while guards are off
+				guardTimeout: "1500",
+			},
+			want: map[string]string{
+				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":              "123",
+				"SIGIL_AUTH_TOKEN":                  "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
+				"SIGIL_CONTENT_CAPTURE_MODE":        "metadata_only",
+				"SIGIL_TAGS":                        "",
+				"SIGIL_GUARDS_ENABLED":              "false",
+			},
+		},
+		{
+			name: "stale content mode normalised, tags trimmed",
+			in: formValues{
+				endpoint:    "https://sigil.example.com",
+				tenantID:    "123",
+				token:       "glc_abc",
+				contentMode: "bogus",
+				tags:        "  team=ai  ",
+				guards:      guardsOff,
+			},
+			want: map[string]string{
+				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":              "123",
+				"SIGIL_AUTH_TOKEN":                  "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
+				"SIGIL_CONTENT_CAPTURE_MODE":        "metadata_only",
+				"SIGIL_TAGS":                        "team=ai",
+				"SIGIL_GUARDS_ENABLED":              "false",
+			},
+		},
+		{
+			name: "guards fail-open with timeout",
+			in: formValues{
+				endpoint:     "https://sigil.example.com",
+				tenantID:     "123",
+				token:        "glc_abc",
+				otelEndpoint: "https://otlp.example.com",
+				contentMode:  "full",
+				guards:       guardsOpen,
+				guardTimeout: " 2000 ",
+			},
+			want: map[string]string{
+				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":              "123",
+				"SIGIL_AUTH_TOKEN":                  "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example.com",
+				"SIGIL_CONTENT_CAPTURE_MODE":        "full",
+				"SIGIL_TAGS":                        "",
+				"SIGIL_GUARDS_ENABLED":              "true",
+				"SIGIL_GUARDS_FAIL_OPEN":            "true",
+				"SIGIL_GUARDS_TIMEOUT_MS":           "2000",
+			},
+		},
+		{
+			name: "guards fail-closed, blank timeout clears key",
+			in: formValues{
+				endpoint:     "https://sigil.example.com",
+				tenantID:     "123",
+				token:        "glc_abc",
+				contentMode:  "no_tool_content",
+				guards:       guardsClosed,
+				guardTimeout: "   ",
+			},
+			want: map[string]string{
+				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":              "123",
+				"SIGIL_AUTH_TOKEN":                  "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
+				"SIGIL_CONTENT_CAPTURE_MODE":        "no_tool_content",
+				"SIGIL_TAGS":                        "",
+				"SIGIL_GUARDS_ENABLED":              "true",
+				"SIGIL_GUARDS_FAIL_OPEN":            "false",
+				"SIGIL_GUARDS_TIMEOUT_MS":           "", // empty deletes via WriteDotenv
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := buildUpdates(c.in); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("buildUpdates() =\n%v\nwant\n%v", got, c.want)
 			}
 		})
 	}
