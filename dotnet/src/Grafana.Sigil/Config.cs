@@ -80,6 +80,12 @@ public sealed class SigilClientConfig
     public EmbeddingCaptureConfig EmbeddingCapture { get; set; } = new();
     public ContentCaptureMode ContentCapture { get; set; } = ContentCaptureMode.Default;
     public Func<IReadOnlyDictionary<string, object?>?, ContentCaptureMode>? ContentCaptureResolver { get; set; }
+    /// <summary>
+    /// Optional hook invoked for each generation after normalization and before
+    /// content-capture stripping/export. Use <see cref="SecretRedactionSanitizer"/>
+    /// to create the built-in regex-based secrets redactor.
+    /// </summary>
+    public GenerationSanitizer? GenerationSanitizer { get; set; }
     public Action<string>? Logger { get; set; }
     public Func<DateTimeOffset>? UtcNow { get; set; }
     public Func<TimeSpan, CancellationToken, Task>? SleepAsync { get; set; }

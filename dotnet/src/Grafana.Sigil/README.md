@@ -78,6 +78,33 @@ var client = new SigilClient(new SigilClientConfig
 });
 ```
 
+## Secrets redaction
+
+Use the built-in sanitizer to redact high-confidence secret formats before
+generation data is exported:
+
+```csharp
+var client = new SigilClient(new SigilClientConfig
+{
+    GenerationSanitizer = SecretRedactionSanitizer.Create(),
+});
+```
+
+User input messages are not redacted by default. To opt in:
+
+```csharp
+var client = new SigilClient(new SigilClientConfig
+{
+    GenerationSanitizer = SecretRedactionSanitizer.Create(new SecretRedactionOptions
+    {
+        RedactInputMessages = true,
+    }),
+});
+```
+
+You can also set `SIGIL_REDACT_INPUT_MESSAGES=true`. Explicit options take
+precedence over the environment variable.
+
 ## Manual generation instrumentation (sync)
 
 Use this API for unsupported providers or custom pipelines.
