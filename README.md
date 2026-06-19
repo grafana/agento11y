@@ -124,6 +124,8 @@ Application SDK hooks evaluate Sigil guard rules on your request path before a p
 
 The SDKs default to `no_tool_content`: full generation messages ship to Sigil, but tool-execution arguments and results stay out of spans. The coding-agent plugins default to `metadata_only`. See [Content Capture Modes](docs/concepts/content-capture-modes.md) for the mode matrix, defaults per surface, and the generation, tool-execution, and embedding resolution rules.
 
+To attach custom key/values (team, project, env, request id, end-user id), see [Tags and Metadata](docs/concepts/tags-and-metadata.md). It covers which of client tags, per-generation tags, metadata, and `user_id` reach the generation export vs OTel spans vs metrics, and the cardinality rules for metric labels.
+
 ## Grafana Cloud credentials
 
 All four connection values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the AI Observability plugin in your stack:

@@ -57,6 +57,10 @@ After running an example, open the AI Observability plugin in your Grafana Cloud
 - The input prompt and assistant response visible in the conversation drilldown.
 - Traces in your Grafana Cloud Traces datasource and metrics in Grafana Cloud Metrics.
 
+## Custom tags and metadata
+
+The Python, TypeScript, and Go single-generation examples set a client-level tag, a per-generation tag, `metadata`, and `user_id` so you can see where each one shows up. Client tags reach the generation plus (on Go/JS) OTel spans/metrics as `sigil.tag.<key>`; per-generation tags and metadata are export-only; `user_id` becomes the `user.id` span attribute. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md) for the full routing table and cardinality rules.
+
 ## Next steps
 
 - **Provider wrappers** — reduce boilerplate by using pre-built wrappers for [OpenAI](../../go-providers/openai/), [Anthropic](../../python-providers/anthropic/), and [Gemini](../../go-providers/gemini/).

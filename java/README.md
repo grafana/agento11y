@@ -196,7 +196,7 @@ Resolution precedence for tool executions (highest to lowest):
 3. `ContentCaptureResolver` return value
 4. `SigilClientConfig.contentCapture` (defaults to `NO_TOOL_CONTENT`)
 
-User-provided `metadata` and `tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content.
+User-provided `metadata` and `tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content. See [Tags and Metadata](../docs/concepts/tags-and-metadata.md) for where client tags, per-generation tags, metadata, and `userId` each show up. Java merges client tags into the generation export only; it does not emit `sigil.tag.<key>` on spans/metrics.
 
 ## Embedding Observability
 
@@ -367,7 +367,7 @@ SDK schema defaults fill the rest.
 | `SIGIL_AGENT_NAME` | `SigilClientConfig.agentName` |
 | `SIGIL_AGENT_VERSION` | `SigilClientConfig.agentVersion` |
 | `SIGIL_USER_ID` | `SigilClientConfig.userId` |
-| `SIGIL_TAGS` | `SigilClientConfig.tags` (CSV; merged into generation export; Go/JS also emit `sigil.tag.<key>` on spans/metrics) |
+| `SIGIL_TAGS` | `SigilClientConfig.tags` (CSV; merged into generation export only. Only Go/JS emit `sigil.tag.<key>` on spans/metrics; see [Tags and Metadata](../docs/concepts/tags-and-metadata.md)) |
 | `SIGIL_CONTENT_CAPTURE_MODE` | `SigilClientConfig.contentCapture` |
 | `SIGIL_DEBUG` | `SigilClientConfig.debug` (tri-state) |
 

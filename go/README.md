@@ -334,7 +334,7 @@ Resolution precedence for tool executions (highest to lowest):
 3. `ContentCaptureResolver` return value
 4. `Config.ContentCapture` (defaults to `ContentCaptureModeNoToolContent`)
 
-User-provided `Metadata` and `Tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content.
+User-provided `Metadata` and `Tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content. See [Tags and Metadata](../docs/concepts/tags-and-metadata.md) for where client tags, per-generation tags, metadata, and `user_id` each show up (export vs spans vs metrics).
 
 ## Pre-Ingest Redaction
 
