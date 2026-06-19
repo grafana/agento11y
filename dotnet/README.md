@@ -293,7 +293,7 @@ Resolution precedence for tool executions (highest to lowest):
 3. `SigilClientConfig.ContentCaptureResolver` return value
 4. `SigilClientConfig.ContentCapture` (defaults to `ContentCaptureMode.NoToolContent`)
 
-User-provided `Metadata` and `Tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content.
+User-provided `Metadata` and `Tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content. See [Tags and Metadata](../docs/concepts/tags-and-metadata.md) for where client tags, per-generation tags, metadata, and `UserId` each show up. .NET merges client tags into the generation export only; it does not emit `sigil.tag.<key>` on spans/metrics.
 
 ## Context defaults
 
@@ -377,7 +377,7 @@ SDK schema defaults fill the rest.
 | `SIGIL_AGENT_NAME` | `SigilClientConfig.AgentName` |
 | `SIGIL_AGENT_VERSION` | `SigilClientConfig.AgentVersion` |
 | `SIGIL_USER_ID` | `SigilClientConfig.UserId` |
-| `SIGIL_TAGS` | `SigilClientConfig.Tags` (CSV; merged into generation export; Go/JS also emit `sigil.tag.<key>` on spans/metrics) |
+| `SIGIL_TAGS` | `SigilClientConfig.Tags` (CSV; merged into generation export only. Only Go/JS emit `sigil.tag.<key>` on spans/metrics; see [Tags and Metadata](../docs/concepts/tags-and-metadata.md)) |
 | `SIGIL_CONTENT_CAPTURE_MODE` | `SigilClientConfig.ContentCapture` |
 | `SIGIL_DEBUG` | `SigilClientConfig.Debug` (tri-state `bool?`) |
 

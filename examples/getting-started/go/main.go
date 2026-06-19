@@ -57,6 +57,10 @@ func main() {
 		TenantID:      os.Getenv("SIGIL_AUTH_TENANT_ID"),
 		BasicPassword: os.Getenv("SIGIL_AUTH_TOKEN"),
 	}
+	// Client tags attach to every generation. On Go/JS they also become
+	// sigil.tag.<key> attributes on OTel spans and metrics, so keep them
+	// low-cardinality (team, env). See docs/concepts/tags-and-metadata.md.
+	cfg.Tags = map[string]string{"team": "checkout", "env": "dev"}
 	sigilClient := sigil.NewClient(cfg)
 	defer func() { _ = sigilClient.Shutdown(ctx) }()
 
@@ -83,6 +87,13 @@ func main() {
 		AgentName:      "getting-started",
 		AgentVersion:   "1.0.0",
 		Model:          sigil.ModelRef{Provider: "openai", Name: model},
+		// user_id sets the user.id span attribute (all SDKs); use it for
+		// end-user identity instead of a high-cardinality tag.
+		UserID: "demo-user",
+		// Per-generation tags and metadata are export-only: searchable on the
+		// generation in Sigil, never emitted on spans or metrics.
+		Tags:     map[string]string{"feature": "summarize"},
+		Metadata: map[string]any{"prompt_version": "v2"},
 	})
 	defer rec.End()
 	_ = ctx

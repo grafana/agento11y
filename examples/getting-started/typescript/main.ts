@@ -44,6 +44,10 @@ const sigil = createSigilClient({
       basicPassword: process.env.SIGIL_AUTH_TOKEN!,
     },
   },
+  // Client tags attach to every generation. On Go/JS they also become
+  // sigil.tag.<key> attributes on OTel spans and metrics, so keep them
+  // low-cardinality (team, env). See docs/concepts/tags-and-metadata.md.
+  tags: { team: "checkout", env: "dev" },
 });
 
 const prompt = "Explain what LLM observability is in two sentences.";
@@ -66,6 +70,13 @@ await sigil.startGeneration(
     agentName: "getting-started",
     agentVersion: "1.0.0",
     model: { provider: "openai", name: model },
+    // userId sets the user.id span attribute (all SDKs); use it for end-user
+    // identity instead of a high-cardinality tag.
+    userId: "demo-user",
+    // Per-generation tags and metadata are export-only: searchable on the
+    // generation in Sigil, never emitted on spans or metrics.
+    tags: { feature: "summarize" },
+    metadata: { promptVersion: "v2" },
   },
   (rec: GenerationRecorder) => {
     rec.setResult({

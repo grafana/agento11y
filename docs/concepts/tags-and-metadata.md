@@ -1,0 +1,105 @@
+# Tags and Metadata
+
+The SDK lets you attach custom key/value data (team, project, environment, request ID, end-user id) to what you record. Where each piece of data shows up depends on how you attach it. There are three independent mechanisms, and only one of them reaches OTel metrics.
+
+Each SDK README links here for the language-specific config fields.
+
+## The three mechanisms
+
+| Mechanism | Set where | Cardinality | Generation export (Sigil UI) | OTel spans (traces) | OTel metrics |
+| --- | --- | --- | --- | --- | --- |
+| **Client tags** (`SIGIL_TAGS` / config `tags`) | Once, on the client | Keep low | Yes, merged into every generation | Yes, as `sigil.tag.<key>` (Go/JS only) | Yes, as `sigil.tag.<key>` (Go/JS only) |
+| **Per-generation `tags`** | Per `startGeneration` call | Any | Yes | No | No |
+| **`metadata`** (struct/dict) | Per `startGeneration` call | Any | Yes | No | No |
+
+There is also a dedicated **`user_id`** field (`SIGIL_USER_ID` / config / per-call / context). It is recorded on the generation export and on the generation span as the `user.id` attribute (all SDKs), but it is **not** a metric label.
+
+## Cross-SDK parity
+
+`user.id` is emitted on the generation span by all five SDKs (Go, Python, JS, Java, .NET).
+
+Client tags are merged into the generation export by all five SDKs, but only **Go and JS** also emit them as `sigil.tag.<key>` attributes on OTel spans and metrics. In Python, Java, and .NET, client tags are export-only today. If you need a tag as a metric/trace label in those languages, set it on the OTel `Resource` (for example `service.name`, or a custom resource attribute) when you configure the providers.
+
+Client tags become OTel metric attributes on Go/JS, which become Prometheus label values: one time series per distinct value.
+
+## Setting them
+
+### Client tags and default user id (apply to every generation)
+
+Set client tags with the `SIGIL_TAGS` env var (CSV: `key=value,key=value`) and `SIGIL_USER_ID`. The SDK reads them when you construct the client with no explicit values. To set them in code:
+
+**Go**
+
+```go
+cfg := sigil.DefaultConfig()
+cfg.Tags = map[string]string{"team": "checkout", "env": "prod"}
+cfg.UserID = "u-1234" // default; per-call UserID and context still win
+client := sigil.NewClient(cfg)
+```
+
+**Python**
+
+```python
+client = Client(ClientConfig(
+    tags={"team": "checkout", "env": "prod"},
+    user_id="u-1234",
+    generation_export=...,
+))
+```
+
+**TypeScript / JavaScript**
+
+```ts
+const sigil = createSigilClient({
+  tags: { team: "checkout", env: "prod" },
+  userId: "u-1234",
+  generationExport: { /* ... */ },
+});
+```
+
+### Per-generation tags, metadata, and user id
+
+Per-call values win over client-level values on key conflict. Per-call `tags` and `metadata` are export-only; they do not appear on spans or metrics.
+
+**Go**
+
+```go
+ctx, rec := client.StartGeneration(ctx, sigil.GenerationStart{
+    Model:    sigil.ModelRef{Provider: "openai", Name: "gpt-4.1-mini"},
+    UserID:   "u-1234",                                  // -> user.id span attribute + export
+    Tags:     map[string]string{"feature": "summarize"}, // export only
+    Metadata: map[string]any{"prompt_version": "v2"},   // export only
+})
+defer rec.End()
+```
+
+**Python**
+
+```python
+with client.start_generation(GenerationStart(
+    model=ModelRef(provider="openai", name="gpt-4.1-mini"),
+    user_id="u-1234",                  # -> user.id span attribute + export
+    tags={"feature": "summarize"},     # export only
+    metadata={"prompt_version": "v2"} # export only
+)) as rec:
+    ...
+```
+
+**TypeScript / JavaScript**
+
+```ts
+await sigil.startGeneration(
+  {
+    model: { provider: "openai", name: "gpt-4.1-mini" },
+    userId: "u-1234",                  // -> user.id span attribute + export
+    tags: { feature: "summarize" },    // export only
+    metadata: { promptVersion: "v2" }, // export only
+  },
+  (rec) => { /* rec.setResult(...) */ },
+);
+```
+
+## See also
+
+- [Content Capture Modes](content-capture-modes.md) — which content fields ship. Content capture does not strip `tags` or `metadata`; both are always exported.
+- Per-language SDK READMEs for the full config surface and env-var mapping.
