@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.16.0] - 2026-06-19
+
+### Features
+
+- **plugins/sigil**: prompt for content capture, tags, and guards in login (#335)
+
 ## [0.15.0] - 2026-06-18
 
 ### Features
