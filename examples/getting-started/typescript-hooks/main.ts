@@ -1,0 +1,175 @@
+/**
+ * Guarded AI Observability getting-started example — TypeScript + OpenAI.
+ *
+ * The SDK evaluates a Sigil preflight hook before the provider call. Guard rules
+ * configured in Grafana Cloud can allow the call, deny it, or return transformed
+ * input such as redacted messages.
+ */
+
+import "dotenv/config";
+import OpenAI from "openai";
+import { metrics } from "@opentelemetry/api";
+import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import {
+  MeterProvider,
+  PeriodicExportingMetricReader,
+} from "@opentelemetry/sdk-metrics";
+import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
+import { Resource } from "@opentelemetry/resources";
+import { createSigilClient } from "@grafana/sigil-sdk-js";
+import type {
+  GenerationRecorder,
+  HookEvaluateRequest,
+  Message,
+} from "@grafana/sigil-sdk-js";
+
+function sigilApiEndpoint(): string {
+  const explicit = (process.env.SIGIL_API_ENDPOINT ?? "").trim();
+  if (explicit) {
+    return explicit;
+  }
+  const url = new URL(process.env.SIGIL_ENDPOINT!);
+  return `${url.protocol}//${url.host}`;
+}
+
+function messageText(message: Message): string {
+  if (message.content !== undefined) {
+    return message.content;
+  }
+  return (message.parts ?? [])
+    .map((part) => (part.type === "text" ? part.text : ""))
+    .filter((text) => text.length > 0)
+    .join("\n");
+}
+
+function openaiMessages(
+  systemPrompt: string,
+  messages: Message[],
+): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+  const out: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+  ];
+  for (const message of messages) {
+    out.push(
+      message.role === "assistant"
+        ? { role: "assistant", content: messageText(message) }
+        : { role: "user", content: messageText(message) },
+    );
+  }
+  return out;
+}
+
+const resource = new Resource({
+  "service.name": "getting-started-typescript-hooks",
+});
+
+const tp = new NodeTracerProvider({ resource });
+tp.addSpanProcessor(new BatchSpanProcessor(new OTLPTraceExporter()));
+tp.register();
+
+const mp = new MeterProvider({
+  resource,
+  readers: [
+    new PeriodicExportingMetricReader({ exporter: new OTLPMetricExporter() }),
+  ],
+});
+metrics.setGlobalMeterProvider(mp);
+
+const openai = new OpenAI();
+const model = "gpt-4.1-mini";
+
+const sigil = createSigilClient({
+  generationExport: {
+    protocol: "http",
+    endpoint: process.env.SIGIL_ENDPOINT!,
+    auth: {
+      mode: "basic",
+      tenantId: process.env.SIGIL_AUTH_TENANT_ID!,
+      basicPassword: process.env.SIGIL_AUTH_TOKEN!,
+    },
+  },
+  api: { endpoint: sigilApiEndpoint() },
+  hooks: { enabled: true, phases: ["preflight"] },
+});
+
+let systemPrompt = "You are a helpful assistant. Keep answers concise.";
+const prompt =
+  "My name is Jane Doe and my email is jane@example.com. Explain LLM guardrails in one sentence.";
+let inputMessages: Message[] = [{ role: "user", content: prompt }];
+
+const hookRequest: HookEvaluateRequest = {
+  phase: "preflight",
+  context: {
+    agentName: "getting-started-hooks",
+    agentVersion: "1.0.0",
+    model: { provider: "openai", name: model },
+  },
+  input: {
+    messages: inputMessages,
+    systemPrompt,
+    conversationPreview: prompt,
+  },
+};
+
+const hookResponse = await sigil.evaluateHook(hookRequest);
+
+if (hookResponse.action === "deny") {
+  console.log(
+    `Blocked by Sigil guard rule ${hookResponse.ruleId ?? "<unknown>"}: ${hookResponse.reason ?? ""}`,
+  );
+} else {
+  const transformed = hookResponse.transformedInput;
+  if (transformed !== undefined) {
+    if (transformed.messages && transformed.messages.length > 0) {
+      inputMessages = transformed.messages;
+    }
+    if (transformed.systemPrompt) {
+      systemPrompt = transformed.systemPrompt;
+    }
+    console.log("Sigil hook allowed the call with transformed input.\n");
+  } else {
+    console.log("Sigil hook allowed the call.\n");
+  }
+
+  const completion = await openai.chat.completions.create({
+    model,
+    messages: openaiMessages(systemPrompt, inputMessages),
+  });
+
+  const responseText = completion.choices[0].message.content ?? "";
+  const usage = completion.usage;
+  console.log(`Response: ${responseText}\n`);
+
+  await sigil.startGeneration(
+    {
+      conversationId: "getting-started-typescript-hooks",
+      agentName: "getting-started-hooks",
+      agentVersion: "1.0.0",
+      model: { provider: "openai", name: model },
+      systemPrompt,
+    },
+    (rec: GenerationRecorder) => {
+      rec.setResult({
+        input: inputMessages,
+        output: [{ role: "assistant", content: responseText }],
+        responseId: completion.id,
+        responseModel: completion.model,
+        stopReason: completion.choices[0].finish_reason ?? "",
+        usage: {
+          inputTokens: usage?.prompt_tokens ?? 0,
+          outputTokens: usage?.completion_tokens ?? 0,
+        },
+      });
+    },
+  );
+
+  console.log(
+    "Done — check the AI Observability plugin in your Grafana Cloud stack.",
+  );
+}
+
+await sigil.shutdown();
+await tp.shutdown();
+await mp.shutdown();

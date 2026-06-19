@@ -102,7 +102,9 @@ rec.SetResult(sigil.Generation{
 
 ## Runnable examples
 
-Minimal, self-contained examples that make a real LLM call and record the generation to Grafana AI observability.
+Self-contained examples grouped into three tiers. See [`examples/README.md`](examples/README.md) for the full map.
+
+The getting-started quickstarts each make a real LLM call and record the generation to Grafana AI observability.
 
 | Stack | Example |
 |-------|---------|
@@ -114,11 +116,26 @@ Minimal, self-contained examples that make a real LLM call and record the genera
 | Python + Pydantic AI | [`examples/getting-started/python-pydantic-ai/`](examples/getting-started/python-pydantic-ai/) |
 | Python + Strands | [`examples/getting-started/python-strands/`](examples/getting-started/python-strands/) |
 | TypeScript | [`examples/getting-started/typescript/`](examples/getting-started/typescript/) |
+| TypeScript hooks and guards | [`examples/getting-started/typescript-hooks/`](examples/getting-started/typescript-hooks/) |
 | TypeScript + Strands | [`examples/getting-started/typescript-strands/`](examples/getting-started/typescript-strands/) |
+
+The experiments are offline evals: run an agent over a dataset, grade it, and publish the results. See [`examples/experiments/README.md`](examples/experiments/README.md).
+
+| Stack | Example |
+|-------|---------|
+| Python | [`examples/experiments/python/`](examples/experiments/python/) |
+| Python + LangGraph | [`examples/experiments/python-langgraph/`](examples/experiments/python-langgraph/) |
+| Go | [`examples/experiments/go/`](examples/experiments/go/) |
+
+The reference app is a fuller FastAPI service with framework callbacks and manual instrumentation side by side.
+
+| Stack | Example |
+|-------|---------|
+| Python + LangChain (FastAPI) | [`examples/python-langchain/`](examples/python-langchain/) |
 
 ## Hooks and guards
 
-Application SDK hooks evaluate Sigil guard rules on your request path before a provider call. A guard can allow the request, deny it, or return transformed input such as redacted messages. See the Go, Python, and TypeScript SDK READMEs for manual hook evaluation, and the runnable [`examples/getting-started/go-hooks/`](examples/getting-started/go-hooks/) and [`examples/getting-started/python-hooks/`](examples/getting-started/python-hooks/) examples for preflight guard setups.
+Application SDK hooks evaluate Sigil guard rules on your request path before a provider call. A guard can allow the request, deny it, or return transformed input such as redacted messages. See the Go, Python, and TypeScript SDK READMEs for manual hook evaluation, and the runnable [`examples/getting-started/go-hooks/`](examples/getting-started/go-hooks/), [`examples/getting-started/python-hooks/`](examples/getting-started/python-hooks/), and [`examples/getting-started/typescript-hooks/`](examples/getting-started/typescript-hooks/) examples for preflight guard setups.
 
 ## Content capture and privacy
 

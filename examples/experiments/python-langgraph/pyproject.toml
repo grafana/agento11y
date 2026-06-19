@@ -21,8 +21,8 @@ dependencies = [
 # Point at the local packages in this monorepo so the example runs against the
 # code in this checkout. Remove these two entries to consume the published
 # PyPI releases instead.
-sigil-sdk = { path = "../../python", editable = true }
-sigil-sdk-langgraph = { path = "../../python-frameworks/langgraph", editable = true }
+sigil-sdk = { path = "../../../python", editable = true }
+sigil-sdk-langgraph = { path = "../../../python-frameworks/langgraph", editable = true }
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -35,4 +35,4 @@ include = ["app*"]
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
-extraPaths = ["../../python", "../../python-frameworks/langgraph"]
+extraPaths = ["../../../python", "../../../python-frameworks/langgraph"]

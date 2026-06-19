@@ -1,4 +1,4 @@
-module github.com/grafana/sigil-sdk/examples/go-experiment
+module github.com/grafana/sigil-sdk/examples/experiments/go
 
 go 1.25.6
 
@@ -20,4 +20,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/grafana/sigil-sdk/go => ../../go
+replace github.com/grafana/sigil-sdk/go => ../../../go

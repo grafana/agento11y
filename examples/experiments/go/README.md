@@ -25,7 +25,7 @@ This example is designed for Grafana Cloud AI Observability. There is no support
 ## Run
 
 ```bash
-cd examples/go-experiment
+cd examples/experiments/go
 cp .env.example .env
 # Fill in the Grafana Cloud Sigil values in .env.
 set -a && source .env && set +a

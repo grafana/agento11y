@@ -732,7 +732,7 @@ If you use a supported framework, prefer its adapter (e.g. `sigil-sdk-langgraph`
 — it auto-captures generation ids from the framework callback so you don't wrap
 `start_generation` yourself. See the `sigil-experiments` skill
 (`python/skills/sigil-experiments/SKILL.md`) and the runnable example at
-`examples/python-experiment/` for grading patterns (including LLM-as-judge) and
+`examples/experiments/python/` for grading patterns (including LLM-as-judge) and
 uploading older runs.
 
 ## Public API Overview

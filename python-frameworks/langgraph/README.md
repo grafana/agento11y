@@ -184,7 +184,7 @@ clean exit, `failed` on exception, `canceled` on Ctrl-C). For ad-hoc loops use
 the lower-level `experiment(...)` context manager. A/B testing is two runs with
 different `run_id`/`tags`. See the `sigil-langgraph-experiments` skill
 (`skills/sigil-langgraph-experiments/SKILL.md`) and the runnable example at
-`examples/python-langgraph-experiment/` for grading patterns (including
+`examples/experiments/python-langgraph/` for grading patterns (including
 LLM-as-judge) and uploading older runs.
 
 Upload modes: `continuous` (default, publish per item), `bulk` (publish at the

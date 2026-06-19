@@ -16,7 +16,7 @@ dependencies = [
 [tool.uv.sources]
 # Point at the local package in this monorepo so the example runs against the
 # code in this checkout. Remove this entry to consume the published PyPI release.
-sigil-sdk = { path = "../../python", editable = true }
+sigil-sdk = { path = "../../../python", editable = true }
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -29,4 +29,4 @@ include = ["app*"]
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
-extraPaths = ["../../python"]
+extraPaths = ["../../../python"]
