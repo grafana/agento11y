@@ -41,7 +41,7 @@ Cursor has no launcher; see [`cursor/README.md`](cursor/README.md) for setup.
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli/using-github-copilot-in-the-cli) | [`copilot/`](copilot/) | Experimental |
 | [Cursor](https://cursor.com) | [`cursor/`](cursor/) | Available |
 | [OpenCode](https://opencode.ai) | [`opencode/`](opencode/) | Available |
-| [Pi](https://github.com/badlogic/pi) | [`pi/`](pi/) | Available |
+| [Pi](https://github.com/earendil-works/pi) | [`pi/`](pi/) | Available |
 | [Vibe](https://github.com/mistralai/vibe) | [`vibe/`](vibe/) | Experimental |
 
 Plugins backed by the `sigil` launcher share one config file at `~/.config/sigil/config.env`. The launcher creates or updates it on first run; `sigil login` re-runs the same prompt later. Cursor has no launcher, so register its plugin in-app and run `sigil login` once for the shared config.
