@@ -29,6 +29,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/dotenv"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"golang.org/x/term"
 )
 
@@ -185,7 +186,7 @@ func Run(_ context.Context, opts RunOpts) error {
 	guards := seedGuards(existing["SIGIL_GUARDS_ENABLED"], existing["SIGIL_GUARDS_FAIL_OPEN"])
 	guardTimeout := strings.TrimSpace(existing["SIGIL_GUARDS_TIMEOUT_MS"])
 	if guardTimeout == "" {
-		guardTimeout = strconv.Itoa(defaultGuardTimeoutMs)
+		guardTimeout = strconv.Itoa(envconfig.DefaultGuardsTimeoutMs)
 	}
 
 	// Only metadata_only and full are offered. The advanced no_tool_content
@@ -378,10 +379,6 @@ const (
 	guardsClosed = "closed"
 )
 
-// defaultGuardTimeoutMs mirrors envconfig.defaultGuardsTimeoutMs so the
-// prefilled value matches what the plugin uses when the key is absent.
-const defaultGuardTimeoutMs = 1500
-
 // formValues holds the resolved field values the form produced. It exists so
 // buildUpdates can be unit-tested without driving the huh TUI.
 type formValues struct {
@@ -450,28 +447,13 @@ func normalizeContentMode(raw string) string {
 // fail-open keys. Fail-open defaults to true (matching the plugin), so an
 // enabled-but-unspecified config seeds the fail-open option.
 func seedGuards(enabledRaw, failOpenRaw string) string {
-	if !parseBoolDefault(enabledRaw, false) {
+	if !envconfig.ParseBoolDefault(enabledRaw, false) {
 		return guardsOff
 	}
-	if parseBoolDefault(failOpenRaw, true) {
+	if envconfig.ParseBoolDefault(failOpenRaw, true) {
 		return guardsOpen
 	}
 	return guardsClosed
-}
-
-// parseBoolDefault mirrors envconfig.resolveGuardsBool: empty or unrecognised
-// values fall back to def, while the usual truthy/falsy words are honoured.
-func parseBoolDefault(raw string, def bool) bool {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "":
-		return def
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return def
-	}
 }
 
 // validateTags accepts an empty value (tags are optional) and otherwise

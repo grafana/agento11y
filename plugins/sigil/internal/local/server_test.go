@@ -3,6 +3,7 @@ package local
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/grafana/sigil-sdk/go/sigil"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/dotenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -147,6 +149,8 @@ func TestServer_Routing(t *testing.T) {
 	}{
 		{name: "root serves viewer HTML", method: http.MethodGet, path: "/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `<script type="text/babel" src="/assets/app.jsx">`},
 		{name: "conversation path serves viewer HTML", method: http.MethodGet, path: "/conversations/conv-123", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `<script type="text/babel" src="/assets/app.jsx">`},
+		{name: "settings path serves viewer HTML", method: http.MethodGet, path: "/settings", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `<script type="text/babel" src="/assets/app.jsx">`},
+		{name: "settings trailing slash serves viewer HTML", method: http.MethodGet, path: "/settings/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `<script type="text/babel" src="/assets/app.jsx">`},
 		{name: "CSS asset", method: http.MethodGet, path: "/assets/app.css", want: http.StatusOK, wantContentType: "text/css", wantBodyHas: ":root"},
 		{name: "JSX asset", method: http.MethodGet, path: "/assets/app.jsx", want: http.StatusOK, wantContentType: "text/babel", wantBodyHas: "function App()"},
 		{name: "healthz serves JSON", method: http.MethodGet, path: "/healthz", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"status":"ok"`},
@@ -401,7 +405,7 @@ func newTestServer(t *testing.T) (*Server, string) {
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
-	return NewServer(storage, nil), dir
+	return NewServer(storage, nil, filepath.Join(dir, "config.env")), dir
 }
 
 func post(t *testing.T, s *Server, path, contentType, body string) *http.Response {
@@ -493,4 +497,165 @@ func TestServer_APITokenMetrics_EmptyStorage(t *testing.T) {
 	srv.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, `{"points":[]}`, strings.TrimSpace(rr.Body.String()))
+}
+
+// configPathFor returns the dotenv path newTestServer wired into the server,
+// so config-endpoint tests can inspect what was written to disk.
+func configPathFor(dir string) string { return filepath.Join(dir, "config.env") }
+
+func putConfig(t *testing.T, s *Server, settings Settings) *http.Response {
+	t.Helper()
+	body, err := json.Marshal(configRequest{Settings: settings})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	s.ServeHTTP(rr, req)
+	return rr.Result()
+}
+
+// TestServer_Config_RoundTrip saves settings and reads them back, asserting
+// the GET reflects the normalised on-disk state and the file is written.
+func TestServer_Config_RoundTrip(t *testing.T) {
+	srv, dir := newTestServer(t)
+
+	// GET on an absent file returns the local defaults.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got configResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	assert.Empty(t, got.Settings.Capture) // unset until the user picks a mode
+	assert.True(t, got.Settings.AutoUpdate)
+	assert.Equal(t, guardsOff, got.Settings.Guards)
+
+	// Save a non-default configuration.
+	resp := putConfig(t, srv, Settings{
+		Capture:      "metadata_only",
+		Tags:         []Tag{{Key: "team", Value: "ai"}},
+		Guards:       guardsFailClosed,
+		GuardTimeout: "2000",
+		Debug:        true,
+		AutoUpdate:   false,
+		UserID:       "alice",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var saved configResponse
+	decodeJSON(t, resp.Body, &saved)
+	assert.Equal(t, "metadata_only", saved.Settings.Capture)
+	assert.Equal(t, guardsFailClosed, saved.Settings.Guards)
+	assert.Equal(t, "2000", saved.Settings.GuardTimeout)
+	assert.True(t, saved.Settings.Debug)
+	assert.False(t, saved.Settings.AutoUpdate)
+	assert.Equal(t, "alice", saved.Settings.UserID)
+
+	// Preview and on-disk file agree, sorted with the managed header.
+	onDisk, err := os.ReadFile(configPathFor(dir))
+	require.NoError(t, err)
+	assert.Contains(t, string(onDisk), "SIGIL_CONTENT_CAPTURE_MODE=metadata_only")
+	assert.Contains(t, string(onDisk), "SIGIL_GUARDS_TIMEOUT_MS=2000")
+	assert.Contains(t, saved.Preview, "SIGIL_USER_ID=alice")
+	assert.True(t, strings.HasPrefix(saved.Preview, "# Managed by `sigil login`."))
+
+	// A fresh GET returns the same saved snapshot.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	rr2 := httptest.NewRecorder()
+	srv.ServeHTTP(rr2, req2)
+	require.Equal(t, http.StatusOK, rr2.Code)
+	var reread configResponse
+	require.NoError(t, json.Unmarshal(rr2.Body.Bytes(), &reread))
+	assert.Equal(t, saved.Settings, reread.Settings)
+}
+
+// TestServer_Config_Preview renders without writing to disk.
+func TestServer_Config_Preview(t *testing.T) {
+	srv, dir := newTestServer(t)
+	body, err := json.Marshal(configRequest{Settings: Settings{
+		Capture: "full", Guards: guardsFailOpen, GuardTimeout: "2500", AutoUpdate: true,
+	}})
+	require.NoError(t, err)
+	resp := post(t, srv, "/api/v1/config:preview", "application/json", string(body))
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var got struct {
+		Preview string `json:"preview"`
+	}
+	decodeJSON(t, resp.Body, &got)
+	assert.Contains(t, got.Preview, "SIGIL_GUARDS_FAIL_OPEN=true")
+	assert.Contains(t, got.Preview, "SIGIL_GUARDS_TIMEOUT_MS=2500")
+	// Opt-out/opt-in keys at their defaults must not appear.
+	assert.NotContains(t, got.Preview, "SIGIL_AUTO_UPDATE")
+	assert.NotContains(t, got.Preview, "SIGIL_DEBUG")
+	// Preview is read-only: no file should have been created.
+	_, statErr := os.Stat(configPathFor(dir))
+	assert.True(t, os.IsNotExist(statErr))
+}
+
+// TestServer_Config_DoesNotLeakSecrets confirms the auth token never crosses
+// to the client (endpoint and tenant id may, they are not secrets), that a
+// blank token is kept, and that an explicit reset removes it.
+func TestServer_Config_DoesNotLeakSecrets(t *testing.T) {
+	srv, dir := newTestServer(t)
+	path := configPathFor(dir)
+	require.NoError(t, dotenv.WriteDotenv(path, map[string]string{
+		"SIGIL_ENDPOINT":       "https://sigil.example.net",
+		"SIGIL_AUTH_TENANT_ID": "12345",
+		"SIGIL_AUTH_TOKEN":     "glc_supersecret",
+		"SIGIL_USER_ID_SOURCE": "accountUuid",
+	}, nil))
+
+	// GET surfaces endpoint/tenant and reports the token is set, but never
+	// returns the token value; the preview shows it masked.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.NotContains(t, rr.Body.String(), "glc_supersecret")
+	var got configResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	assert.Equal(t, "https://sigil.example.net", got.Settings.Endpoint)
+	assert.Equal(t, "12345", got.Settings.TenantID)
+	assert.True(t, got.Settings.TokenSet)
+	assert.Empty(t, got.Settings.Token)
+	assert.Contains(t, got.Preview, "SIGIL_AUTH_TOKEN=<set>")
+
+	// Saving with a blank token keeps it; endpoint/tenant round-trip; unmanaged
+	// keys survive the merge.
+	resp := putConfig(t, srv, Settings{
+		Endpoint: "https://sigil.example.net", TenantID: "12345", TokenSet: true,
+		Capture: "full", Guards: guardsOff, AutoUpdate: true, UserID: "alice",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.NotContains(t, string(body), "glc_supersecret")
+
+	onDisk, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(onDisk), "SIGIL_AUTH_TOKEN=glc_supersecret")
+	assert.Contains(t, string(onDisk), "SIGIL_USER_ID_SOURCE=accountUuid")
+	assert.Contains(t, string(onDisk), "SIGIL_USER_ID=alice")
+
+	// Resetting the token removes it from disk.
+	resp2 := putConfig(t, srv, Settings{
+		Endpoint: "https://sigil.example.net", TenantID: "12345",
+		TokenSet: true, TokenCleared: true,
+		Capture: "full", Guards: guardsOff, AutoUpdate: true,
+	})
+	defer resp2.Body.Close()
+	require.Equal(t, http.StatusOK, resp2.StatusCode)
+	onDisk2, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(onDisk2), "SIGIL_AUTH_TOKEN")
+}
+
+// TestServer_Config_RejectsBadBody covers malformed input handling.
+func TestServer_Config_RejectsBadBody(t *testing.T) {
+	srv, _ := newTestServer(t)
+	resp := post(t, srv, "/api/v1/config:preview", "application/json", "{not json")
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
 }

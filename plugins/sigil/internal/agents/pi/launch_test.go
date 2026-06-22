@@ -144,7 +144,8 @@ func TestLaunch_LocalInjectsEnvAndForwardsArgs(t *testing.T) {
 	// covered in TestLaunch_NormalModeDoesNotInjectLocalEnv.
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
 	t.Setenv("SIGIL_AUTH_TOKEN", "")
-	// Ensure the user's existing capture-mode preference flows through.
+	// Local forces full content on this machine regardless of the configured
+	// Cloud capture mode, so a preset value here must be overridden to full.
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "no_tool_content")
 
 	var execEnv []string
@@ -175,9 +176,10 @@ func TestLaunch_LocalInjectsEnvAndForwardsArgs(t *testing.T) {
 	if got["SIGIL_AUTH_TENANT_ID"] != "local" || got["SIGIL_AUTH_TOKEN"] != "local" {
 		t.Errorf("placeholder auth missing: tenant=%q token=%q", got["SIGIL_AUTH_TENANT_ID"], got["SIGIL_AUTH_TOKEN"])
 	}
-	// User pre-set capture mode must not be overwritten.
-	if got["SIGIL_CONTENT_CAPTURE_MODE"] != "no_tool_content" {
-		t.Errorf("SIGIL_CONTENT_CAPTURE_MODE = %q, want preserved no_tool_content", got["SIGIL_CONTENT_CAPTURE_MODE"])
+	// Local always captures full content; the configured Cloud capture mode is
+	// overridden for the local session.
+	if got["SIGIL_CONTENT_CAPTURE_MODE"] != "full" {
+		t.Errorf("SIGIL_CONTENT_CAPTURE_MODE = %q, want full (local forces full content)", got["SIGIL_CONTENT_CAPTURE_MODE"])
 	}
 }
 

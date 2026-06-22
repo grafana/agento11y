@@ -822,7 +822,7 @@ func inProcessDaemon(t *testing.T) (dir string, baseURL string) {
 	if err != nil {
 		t.Fatalf("storage: %v", err)
 	}
-	ts := httptest.NewServer(local.NewServer(storage, nil))
+	ts := httptest.NewServer(local.NewServer(storage, nil, filepath.Join(dir, "config.env")))
 	t.Cleanup(ts.Close)
 
 	// Pin the daemon launcher to return the running test server's

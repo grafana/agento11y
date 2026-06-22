@@ -38,21 +38,9 @@ func WriteDotenv(path string, updates map[string]string, logger *log.Logger) err
 		merged[k] = v
 	}
 
-	keys := make([]string, 0, len(merged))
-	for k := range merged {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	var b strings.Builder
-	b.WriteString("# Managed by `sigil login`. Hand-edits to known keys persist\n")
-	b.WriteString("# across re-runs; comments and ordering do not.\n")
-	for _, k := range keys {
-		quoted, err := quoteDotenvValue(merged[k])
-		if err != nil {
-			return fmt.Errorf("dotenv: cannot serialise %s: %w", k, err)
-		}
-		fmt.Fprintf(&b, "%s=%s\n", k, quoted)
+	rendered, err := renderDotenv(merged)
+	if err != nil {
+		return err
 	}
 
 	dir := filepath.Dir(path)
@@ -66,7 +54,7 @@ func WriteDotenv(path string, updates map[string]string, logger *log.Logger) err
 	}
 	tmpPath := tmp.Name()
 	cleanup := func() { _ = os.Remove(tmpPath) }
-	if _, err := tmp.WriteString(b.String()); err != nil {
+	if _, err := tmp.Write(rendered); err != nil {
 		_ = tmp.Close()
 		cleanup()
 		return fmt.Errorf("dotenv: write temp: %w", err)
@@ -85,6 +73,49 @@ func WriteDotenv(path string, updates map[string]string, logger *log.Logger) err
 		return fmt.Errorf("dotenv: rename to %s: %w", path, err)
 	}
 	return nil
+}
+
+// RenderManaged renders updates as managed dotenv file content without
+// touching disk. The output is what WriteDotenv would produce for a file that
+// contained only these keys: the managed header followed by KEY=value lines
+// sorted alphabetically. Empty values are dropped because they represent
+// deletions, and only keys accepted by AllowedDotenvKey may appear. Callers
+// use this to preview the file a form will persist without exposing any other
+// keys already on disk.
+func RenderManaged(updates map[string]string) ([]byte, error) {
+	for k := range updates {
+		if !AllowedDotenvKey(k) {
+			return nil, fmt.Errorf("dotenv: refusing to render disallowed key %q", k)
+		}
+	}
+	return renderDotenv(updates)
+}
+
+// renderDotenv serialises m into the managed dotenv format: the two-line
+// managed header, then KEY=value lines sorted alphabetically, each value
+// quoted by quoteDotenvValue. Keys whose value is empty (after trimming) are
+// skipped so the rendered bytes match the on-disk result of deleting them.
+func renderDotenv(m map[string]string) ([]byte, error) {
+	keys := make([]string, 0, len(m))
+	for k, v := range m {
+		if strings.TrimSpace(v) == "" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	b.WriteString("# Managed by `sigil login`. Hand-edits to known keys persist\n")
+	b.WriteString("# across re-runs; comments and ordering do not.\n")
+	for _, k := range keys {
+		quoted, err := quoteDotenvValue(m[k])
+		if err != nil {
+			return nil, fmt.Errorf("dotenv: cannot serialise %s: %w", k, err)
+		}
+		fmt.Fprintf(&b, "%s=%s\n", k, quoted)
+	}
+	return []byte(b.String()), nil
 }
 
 // quoteDotenvValue returns v in a form the dotenv parser can round-trip.

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/dotenv"
 )
 
 // Status describes the running local receiver daemon.
@@ -237,7 +239,7 @@ func Serve(ctx context.Context, dir string, port int, logger *log.Logger) error 
 		return fmt.Errorf("listen: %w", err)
 	}
 	actualPort := listener.Addr().(*net.TCPAddr).Port
-	srv := NewServer(storage, logger)
+	srv := NewServer(storage, logger, dotenv.FilePath("sigil"))
 	httpSrv := &http.Server{
 		Handler:           srv,
 		ReadHeaderTimeout: 5 * time.Second,

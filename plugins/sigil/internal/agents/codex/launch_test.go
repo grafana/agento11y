@@ -227,7 +227,7 @@ func TestLaunch_LocalEnv(t *testing.T) {
 		wantMode   string
 	}{
 		{name: "defaults full capture", wantMode: "full"},
-		{name: "preserves user capture mode", presetMode: "metadata_only", wantMode: "metadata_only"},
+		{name: "forces full even when a capture mode is set", presetMode: "metadata_only", wantMode: "full"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.com")
