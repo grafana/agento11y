@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/dotenv"
 )
 
 // Maximum body sizes accepted by the receiver. These guard against
@@ -21,22 +23,27 @@ const (
 // Server is the in-process HTTP handler that records generations from
 // local agent sessions and serves the local viewer API.
 type Server struct {
-	storage *Storage
-	logger  *log.Logger
-	now     func() time.Time
-	mux     *http.ServeMux
+	storage    *Storage
+	logger     *log.Logger
+	now        func() time.Time
+	configPath string
+	mux        *http.ServeMux
 }
 
 // NewServer builds a Server backed by the given storage. logger may be
-// nil — the server logs only diagnostic information.
-func NewServer(storage *Storage, logger *log.Logger) *Server {
+// nil — the server logs only diagnostic information. configPath is the
+// dotenv file the Settings API reads and writes; an empty path disables
+// persistence (reads return defaults, writes fail) but keeps the rest of
+// the server usable for tests.
+func NewServer(storage *Storage, logger *log.Logger, configPath string) *Server {
 	if logger == nil {
 		logger = log.New(io.Discard, "", 0)
 	}
 	s := &Server{
-		storage: storage,
-		logger:  logger,
-		now:     func() time.Time { return time.Now().UTC() },
+		storage:    storage,
+		logger:     logger,
+		configPath: configPath,
+		now:        func() time.Time { return time.Now().UTC() },
 	}
 	s.mux = s.routes()
 	return s
@@ -47,11 +54,16 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /conversations/{id}", s.handleIndex)
 	mux.HandleFunc("GET /conversations/{id}/{$}", s.handleIndex)
+	mux.HandleFunc("GET /settings", s.handleIndex)
+	mux.HandleFunc("GET /settings/{$}", s.handleIndex)
 	mux.HandleFunc("GET /assets/app.css", s.handleAppCSS)
 	mux.HandleFunc("GET /assets/app.jsx", s.handleAppJSX)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/v1/conversations", s.handleListConversations)
 	mux.HandleFunc("GET /api/v1/metrics/tokens", s.handleTokenMetrics)
+	mux.HandleFunc("GET /api/v1/config", s.handleGetConfig)
+	mux.HandleFunc("POST /api/v1/config:preview", s.handlePreviewConfig)
+	mux.HandleFunc("PUT /api/v1/config", s.handleSaveConfig)
 	mux.HandleFunc("GET /api/v1/conversations/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s.handleConversationDetail(w, r, r.PathValue("id"))
 	})
@@ -211,6 +223,101 @@ func (s *Server) handleHookEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, hookResponse{Action: "allow", Evaluations: []any{}})
+}
+
+// configResponse is the GET /api/v1/config and PUT /api/v1/config payload:
+// the page-managed settings, the rendered config.env preview, and a display
+// path for the file. It never includes the endpoint, tenant id, or auth
+// token — those keys are not part of Settings and are never read back into
+// the response.
+type configResponse struct {
+	Settings Settings `json:"settings"`
+	Preview  string   `json:"preview"`
+	Path     string   `json:"path"`
+}
+
+// configRequest is the POST :preview / PUT body: the form state the viewer
+// edits.
+type configRequest struct {
+	Settings Settings `json:"settings"`
+}
+
+// handleGetConfig hydrates Settings from the current config.env and returns
+// them with a rendered preview. Only the page-managed keys are exposed.
+func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
+	settings := ParseSettings(dotenv.LoadDotenv(s.configPath, s.logger))
+	s.writeConfigResponse(w, settings)
+}
+
+// handlePreviewConfig renders the config.env the given form state would
+// produce, without writing. It backs the viewer's live preview panel.
+func (s *Server) handlePreviewConfig(w http.ResponseWriter, r *http.Request) {
+	settings, ok := s.decodeConfigRequest(w, r)
+	if !ok {
+		return
+	}
+	preview, err := dotenv.RenderManaged(settings.previewUpdates())
+	if err != nil {
+		http.Error(w, "render config: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"preview": string(preview)})
+}
+
+// handleSaveConfig persists the given form state to config.env (merging with
+// and preserving any keys the page does not manage) and returns the re-read
+// settings plus preview so the client gets a clean saved snapshot.
+func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
+	if s.configPath == "" {
+		http.Error(w, "config persistence disabled", http.StatusServiceUnavailable)
+		return
+	}
+	settings, ok := s.decodeConfigRequest(w, r)
+	if !ok {
+		return
+	}
+	if err := dotenv.WriteDotenv(s.configPath, settings.Updates(), s.logger); err != nil {
+		s.logger.Printf("local: write config: %v", err)
+		http.Error(w, "write config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Re-read so the response reflects the normalised on-disk state (dropped
+	// defaults, deleted keys), which the client adopts as its saved snapshot.
+	settings = ParseSettings(dotenv.LoadDotenv(s.configPath, s.logger))
+	s.writeConfigResponse(w, settings)
+}
+
+func (s *Server) writeConfigResponse(w http.ResponseWriter, settings Settings) {
+	preview, err := dotenv.RenderManaged(settings.previewUpdates())
+	if err != nil {
+		http.Error(w, "render config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, configResponse{
+		Settings: settings,
+		Preview:  string(preview),
+		Path:     displayConfigPath(s.configPath),
+	})
+}
+
+// decodeConfigRequest reads and decodes a configRequest body, writing the
+// appropriate HTTP error and returning ok=false on failure.
+func (s *Server) decodeConfigRequest(w http.ResponseWriter, r *http.Request) (Settings, bool) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxHookBodyBytes+1))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return Settings{}, false
+	}
+	if len(body) > maxHookBodyBytes {
+		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+		return Settings{}, false
+	}
+	var req configRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "decode body: "+err.Error(), http.StatusBadRequest)
+		return Settings{}, false
+	}
+	return req.Settings, true
 }
 
 // handleListConversations returns the aggregated conversation list as

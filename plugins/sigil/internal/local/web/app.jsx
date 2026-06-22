@@ -254,6 +254,10 @@
         alert:    <><path d="M12 9v4"/><circle cx="12" cy="16.5" r="0.6" fill="currentColor"/><path d="M10.3 4.1 2.7 17.4a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 4.1a2 2 0 0 0-3.4 0Z"/></>,
         empty:    <><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></>,
         extlink:  <path d="M7 17 17 7M9 7h8v8"/>,
+        info:     <><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.6" r="0.6" fill="currentColor"/></>,
+        plus:     <path d="M12 5v14M5 12h14"/>,
+        times:    <path d="M6 6l12 12M18 6 6 18"/>,
+        check:    <path d="M5 12l4.5 4.5L19 7"/>,
       };
       return (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
@@ -334,7 +338,36 @@
       color: "var(--fg2)", cursor: "pointer", borderRadius: 2,
     };
 
-    function TopBar({ breadcrumbs = [] }) {
+    // NavTab is a top-level header nav link. The current section gets a 2px
+    // brand underline bar and white text; other tabs render as faint links
+    // that brighten on hover and navigate on a plain left click (modifier
+    // clicks fall through so the anchor opens a new tab).
+    function NavTab({ label, href, onClick, state }) {
+      const current = state === "current";
+      return (
+        <a href={href}
+          onClick={e => {
+            if (!isPlainLeftClick(e)) return;
+            e.preventDefault();
+            onClick && onClick(e);
+          }}
+          onMouseEnter={e => { if (!current) e.currentTarget.style.color = "var(--fg-max)"; }}
+          onMouseLeave={e => { if (!current) e.currentTarget.style.color = "var(--fg2)"; }}
+          style={{
+            position: "relative", display: "inline-flex", alignItems: "center",
+            height: "100%", padding: "0 2px",
+            fontFamily: "var(--fontFamily)", fontSize: 13,
+            color: current ? "var(--fg-max)" : "var(--fg2)",
+            textDecoration: "none", whiteSpace: "nowrap", flexShrink: 0,
+            transition: "color .12s",
+          }}>
+          {label}
+          {current && <span style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 2, background: "var(--brandVertical)", borderRadius: 1 }}/>}
+        </a>
+      );
+    }
+
+    function TopBar({ tabs = [], trail = [] }) {
       return (
         <header style={{
           height: 48,
@@ -345,65 +378,18 @@
         }}>
           <Wordmark/>
           <div style={{ width: 1, height: 20, background: "var(--border-weak)", margin: "0 4px" }}/>
-          <nav style={{ display: "flex", alignItems: "center", alignSelf: "stretch", gap: 6, minWidth: 0, flex: 1, overflow: "hidden" }}>
-            {breadcrumbs.map((b, i) => {
-              const last = i === breadcrumbs.length - 1;
-              const activeBar = last && breadcrumbs.length === 1;
-              return (
-                <React.Fragment key={i}>
-                  {i > 0 && <Icon name="cright" size={11} style={{ color: "var(--fg3)", flexShrink: 0 }}/>}
-                  {last
-                    ? activeBar
-                      ? <span style={{
-                          position: "relative", display: "inline-flex", alignItems: "center",
-                          height: "100%",
-                          fontFamily: "var(--fontFamily)", fontSize: 13,
-                          color: "var(--fg-max)", whiteSpace: "nowrap",
-                        }}>
-                          {b.label}
-                          <span style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 2, background: "var(--brandVertical)", borderRadius: 1 }}/>
-                        </span>
-                      : <span style={{
-                          fontFamily: b.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)",
-                          fontSize: 13,
-                          color: "var(--fg-max)",
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          minWidth: 0,
-                        }}>{b.label}</span>
-                    : b.href
-                      ? <a href={b.href}
-                          onClick={e => {
-                            if (!isPlainLeftClick(e)) return;
-                            e.preventDefault();
-                            b.onClick && b.onClick(e);
-                          }}
-                          style={{
-                            background: "transparent",
-                            padding: "2px 4px", cursor: "pointer",
-                            color: "var(--fg2)", fontSize: 13,
-                            fontFamily: b.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)",
-                            whiteSpace: "nowrap", flexShrink: 0,
-                            textDecoration: "none",
-                          }}
-                          onMouseEnter={e => e.currentTarget.style.color = "var(--fg-max)"}
-                          onMouseLeave={e => e.currentTarget.style.color = "var(--fg2)"}
-                        >{b.label}</a>
-                      : <button onClick={b.onClick} style={{
-                          background: "transparent", border: "none",
-                          padding: "2px 4px", cursor: b.onClick ? "pointer" : "default",
-                          color: "var(--fg2)", fontSize: 13,
-                          fontFamily: b.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)",
-                          whiteSpace: "nowrap", flexShrink: 0,
-                        }}
-                        onMouseEnter={e => b.onClick && (e.currentTarget.style.color = "var(--fg-max)")}
-                        onMouseLeave={e => b.onClick && (e.currentTarget.style.color = "var(--fg2)")}
-                        >{b.label}</button>
-                  }
-                </React.Fragment>
-              );
-            })}
+          <nav style={{ display: "flex", alignItems: "center", alignSelf: "stretch", gap: 14, minWidth: 0, flex: 1, overflow: "hidden" }}>
+            {tabs.map((t, i) => <NavTab key={i} {...t}/>)}
+            {trail.map((b, i) => (
+              <React.Fragment key={"trail-" + i}>
+                <Icon name="cright" size={11} style={{ color: "var(--fg3)", flexShrink: 0 }}/>
+                <span style={{
+                  fontFamily: b.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)",
+                  fontSize: 13, color: "var(--fg-max)",
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0,
+                }}>{b.label}</span>
+              </React.Fragment>
+            ))}
           </nav>
           <a
             href="https://grafana.com/auth/sign-up/create-user/?"
@@ -1640,6 +1626,407 @@
     }
 
     // ============================================================
+    // Settings — edits config.env via the daemon's /api/v1/config endpoints
+    // ============================================================
+
+    // Mono renders inline code in the monospace face used across the viewer.
+    function Mono({ children }) {
+      return <code style={{ fontFamily: "var(--fontFamilyMonospace)", color: "var(--fg2)" }}>{children}</code>;
+    }
+
+    // sameSettings is a field-wise deep compare for dirty tracking. Tag order
+    // is significant (it survives a round-trip), so it is compared positionally.
+    function sameSettings(a, b) {
+      if (!a || !b) return a === b;
+      if (a.endpoint !== b.endpoint || a.tenantId !== b.tenantId || a.otlpEndpoint !== b.otlpEndpoint
+        || a.token !== b.token || a.tokenCleared !== b.tokenCleared) return false;
+      if (a.capture !== b.capture || a.guards !== b.guards || a.guardTimeout !== b.guardTimeout
+        || a.debug !== b.debug || a.autoUpdate !== b.autoUpdate || a.userId !== b.userId) return false;
+      const at = a.tags || [], bt = b.tags || [];
+      if (at.length !== bt.length) return false;
+      for (let i = 0; i < at.length; i++) {
+        if (at[i].key !== bt[i].key || at[i].value !== bt[i].value) return false;
+      }
+      return true;
+    }
+
+    // cloneSettings deep-copies so the form and the saved snapshot never share
+    // the tags array (editing one must not mutate the other).
+    function cloneSettings(s) {
+      return { ...s, tags: (s.tags || []).map(t => ({ ...t })) };
+    }
+
+    function Segmented({ value, onChange, options }) {
+      return (
+        <div style={{ display: "inline-flex", padding: 3, gap: 3, background: "var(--bg-canvas)", border: "1px solid var(--border-medium)", borderRadius: 2 }}>
+          {options.map(o => {
+            const active = o.value === value;
+            return (
+              <button key={o.value} onClick={() => onChange(o.value)} style={{
+                padding: "6px 14px", borderRadius: 2, fontSize: 13, border: "none", cursor: "pointer",
+                background: active ? "var(--secondary-main)" : "transparent",
+                color: active ? "var(--fg-max)" : "var(--fg2)",
+                fontWeight: active ? 500 : 400, transition: "background .12s, color .12s",
+              }}>{o.label}</button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    function Toggle({ checked, onChange }) {
+      return (
+        <button role="switch" aria-checked={checked} onClick={() => onChange(!checked)} style={{
+          position: "relative", width: 38, height: 22, borderRadius: 9999, border: "none",
+          cursor: "pointer", padding: 0, flexShrink: 0,
+          background: checked ? "var(--primary-main)" : "rgba(204,204,220,0.25)", transition: "background .15s",
+        }}>
+          <span style={{
+            position: "absolute", top: 3, left: 3, width: 16, height: 16, borderRadius: "50%",
+            background: "#fff", transform: checked ? "translateX(16px)" : "translateX(0)", transition: "transform .15s",
+          }}/>
+        </button>
+      );
+    }
+
+    function MonoInput({ value, onChange, placeholder, width, align, type }) {
+      return (
+        <input type={type || "text"} value={value} placeholder={placeholder}
+          onChange={e => onChange(e.target.value)}
+          onFocus={e => e.currentTarget.style.borderColor = "var(--primary-border)"}
+          onBlur={e => e.currentTarget.style.borderColor = "var(--border-medium)"}
+          style={{
+            height: 32, width: width || "auto", background: "var(--bg-canvas)",
+            border: "1px solid var(--border-medium)", borderRadius: 2, color: "var(--fg1)",
+            padding: "0 10px", fontFamily: "var(--fontFamilyMonospace)", fontSize: 12,
+            textAlign: align || "left", outline: "none",
+          }}/>
+      );
+    }
+
+    function PrimaryButton({ onClick, children }) {
+      return (
+        <button onClick={onClick}
+          onMouseEnter={e => { e.currentTarget.style.background = "var(--primary-shade)"; e.currentTarget.style.borderColor = "var(--primary-shade)"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "var(--primary-main)"; e.currentTarget.style.borderColor = "var(--primary-main)"; }}
+          style={{ height: 32, padding: "0 14px", background: "var(--primary-main)", border: "1px solid var(--primary-main)", color: "#fff", borderRadius: 2, fontSize: 13, fontWeight: 500, cursor: "pointer" }}>{children}</button>
+      );
+    }
+
+    function GhostButton({ onClick, children }) {
+      return (
+        <button onClick={onClick}
+          onMouseEnter={e => e.currentTarget.style.background = "var(--action-hover)"}
+          onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+          style={{ height: 32, padding: "0 14px", background: "transparent", border: "1px solid var(--secondary-border)", color: "var(--fg1)", borderRadius: 2, fontSize: 13, cursor: "pointer" }}>{children}</button>
+      );
+    }
+
+    function SettingsCard({ children }) {
+      return <div style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "4px 20px 10px", marginBottom: 16 }}>{children}</div>;
+    }
+
+    function SectionLabel({ children }) {
+      return <div style={{ padding: "16px 0 2px", fontSize: 11, fontWeight: 600, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--fg3)" }}>{children}</div>;
+    }
+
+    // SettingRow is one label/help + control line inside a card. `full` stacks
+    // the control under the label for wide controls (the tags editor).
+    function SettingRow({ label, help, children, full }) {
+      const left = (
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 500, color: "var(--fg1)" }}>{label}</div>
+          {help && <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg3)", maxWidth: 460, marginTop: 4 }}>{help}</div>}
+        </div>
+      );
+      if (full) {
+        return (
+          <div style={{ padding: "16px 0", borderTop: "1px solid var(--border-weak)" }}>
+            {left}
+            <div style={{ marginTop: 12 }}>{children}</div>
+          </div>
+        );
+      }
+      return (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 32, padding: "16px 0", borderTop: "1px solid var(--border-weak)" }}>
+          {left}
+          <div style={{ flexShrink: 0 }}>{children}</div>
+        </div>
+      );
+    }
+
+    // PreviewBody renders the rendered config.env with key/value colouring:
+    // comments and `=` are dimmed, keys are blue, values green.
+    function PreviewBody({ text }) {
+      const lines = (text || "").split("\n");
+      if (lines.length && lines[lines.length - 1] === "") lines.pop();
+      return (
+        <div style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 12, lineHeight: 1.9, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+          {lines.map((line, i) => {
+            if (line.startsWith("#")) return <div key={i} style={{ color: "var(--fg3)" }}>{line}</div>;
+            const eq = line.indexOf("=");
+            if (eq < 0) return <div key={i} style={{ color: "var(--fg1)" }}>{line || "\u00a0"}</div>;
+            return (
+              <div key={i}>
+                <span style={{ color: "var(--primary-text)" }}>{line.slice(0, eq)}</span>
+                <span style={{ color: "var(--fg3)" }}>=</span>
+                <span style={{ color: "var(--viz-green)" }}>{line.slice(eq + 1)}</span>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    function UnsavedBar({ onReset, onSave }) {
+      return (
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: 24, display: "flex", justifyContent: "center", pointerEvents: "none", zIndex: 20 }}>
+          <div style={{ pointerEvents: "auto", display: "flex", alignItems: "center", gap: 12, background: "var(--bg-secondary)", border: "1px solid var(--border-medium)", borderRadius: 2, padding: "9px 12px 9px 16px", boxShadow: "var(--shadow-z2)", animation: "sigil-barin .16s ease-out" }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--brand-orange)" }}/>
+            <span style={{ fontSize: 13, color: "var(--fg2)" }}>Unsaved changes</span>
+            <GhostButton onClick={onReset}>Reset</GhostButton>
+            <PrimaryButton onClick={onSave}>Save to config.env</PrimaryButton>
+          </div>
+        </div>
+      );
+    }
+
+    function Toast({ message }) {
+      return (
+        <div style={{ position: "fixed", top: 60, right: 20, zIndex: 30, display: "flex", alignItems: "center", gap: 8, background: "var(--bg-secondary)", border: "1px solid var(--border-medium)", borderLeft: "3px solid var(--success-border)", borderRadius: 2, padding: "10px 14px", boxShadow: "var(--shadow-z2)", animation: "sigil-tin .2s ease-out" }}>
+          <Icon name="check" size={16} style={{ color: "var(--success-text)" }}/>
+          <span style={{ fontSize: 13, color: "var(--fg1)" }}>{message}</span>
+        </div>
+      );
+    }
+
+    const CAPTURE_OPTIONS = [{ value: "metadata_only", label: "Metadata only" }, { value: "full", label: "Full" }];
+    const GUARD_OPTIONS = [{ value: "off", label: "Disabled" }, { value: "failopen", label: "Fail-open" }, { value: "failclosed", label: "Fail-closed" }];
+
+    function SettingsView() {
+      const [form, setForm] = useState(null);
+      const [saved, setSaved] = useState(null);
+      const [preview, setPreview] = useState("");
+      const [path, setPath] = useState("~/.config/sigil/config.env");
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(null);
+      const [toast, setToast] = useState(null);
+      const toastTimer = useRef(null);
+
+      const showToast = useCallback((msg) => {
+        setToast(msg);
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setToast(null), 2600);
+      }, []);
+      useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+
+      // Hydrate the form from config.env on mount.
+      useEffect(() => {
+        let alive = true;
+        setLoading(true);
+        setError(null);
+        fetch("/api/v1/config")
+          .then(r => r.ok ? r.json() : r.text().then(t => Promise.reject(new Error(t || `HTTP ${r.status}`))))
+          .then(body => {
+            if (!alive) return;
+            setForm(cloneSettings(body.settings));
+            setSaved(cloneSettings(body.settings));
+            setPreview(body.preview || "");
+            if (body.path) setPath(body.path);
+          })
+          .catch(e => { if (alive) setError(String(e.message || e)); })
+          .finally(() => { if (alive) setLoading(false); });
+        return () => { alive = false; };
+      }, []);
+
+      // Live preview: the daemon renders exactly what it would write, so the
+      // panel never drifts from the file. Debounced to coalesce keystrokes.
+      // Each run aborts the prior in-flight request and ignores its result, so
+      // a slow older response can never overwrite a newer one.
+      useEffect(() => {
+        if (!form) return;
+        let ignore = false;
+        const controller = new AbortController();
+        const t = setTimeout(() => {
+          fetch("/api/v1/config:preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: form }), signal: controller.signal })
+            .then(r => r.ok ? r.json() : null)
+            .then(b => { if (!ignore && b && typeof b.preview === "string") setPreview(b.preview); })
+            .catch(() => {});
+        }, 180);
+        return () => { ignore = true; controller.abort(); clearTimeout(t); };
+      }, [form]);
+
+      const page = { maxWidth: 1300, margin: "0 auto", padding: "28px 24px 110px", width: "100%" };
+      if (loading && !form) {
+        return <div style={page}><Notice kind="info" title="Loading settings…">Reading config.env.</Notice></div>;
+      }
+      if (!form) {
+        return <div style={page}><Notice kind="error" title="Failed to load settings">{error}</Notice></div>;
+      }
+
+      const dirty = !sameSettings(form, saved);
+      const captureUnset = form.capture === "";
+      const advanced = form.capture === "no_tool_content" || form.capture === "full_with_metadata_spans";
+      const guardsOn = form.guards !== "off";
+      const set = (patch) => setForm(f => ({ ...f, ...patch }));
+      const setTag = (i, patch) => setForm(f => ({ ...f, tags: f.tags.map((t, j) => j === i ? { ...t, ...patch } : t) }));
+      const addTag = () => setForm(f => ({ ...f, tags: [...f.tags, { key: "", value: "" }] }));
+      const removeTag = (i) => setForm(f => ({ ...f, tags: f.tags.filter((_, j) => j !== i) }));
+      const reset = () => setForm(cloneSettings(saved));
+
+      const save = () => {
+        setError(null);
+        fetch("/api/v1/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: form }) })
+          .then(r => r.ok ? r.json() : r.text().then(t => Promise.reject(new Error(t || `HTTP ${r.status}`))))
+          .then(body => {
+            setForm(cloneSettings(body.settings));
+            setSaved(cloneSettings(body.settings));
+            if (typeof body.preview === "string") setPreview(body.preview);
+            showToast("Settings saved to config.env.");
+          })
+          .catch(e => setError(String(e.message || e)));
+      };
+      const copy = () => {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(preview).then(() => showToast("Copied to clipboard.")).catch(() => {});
+        }
+      };
+
+      return (
+        <div style={page}>
+          <h1 style={{ fontSize: 20, fontWeight: 500, color: "var(--fg-max)", margin: "0 0 20px" }}>Settings</h1>
+
+          {error && <div style={{ marginBottom: 16 }}><Notice kind="error" title="Couldn’t save settings">{error}</Notice></div>}
+
+          <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
+            <div style={{ flex: "1 1 0", minWidth: 0 }}>
+              <SettingsCard>
+                <SectionLabel>Connection</SectionLabel>
+                <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg3)", padding: "0 0 10px" }}>
+                  These values apply to your Grafana Cloud sessions.
+                </div>
+                <SettingRow label="Endpoint" help={<>Grafana AI Observability ingest URL.</>}>
+                  <MonoInput value={form.endpoint} onChange={v => set({ endpoint: v })} placeholder="https://sigil-prod-….grafana.net" width={320}/>
+                </SettingRow>
+                <SettingRow label="Tenant ID" help={<>Your stack instance ID.</>}>
+                  <MonoInput value={form.tenantId} onChange={v => set({ tenantId: v })} placeholder="123456" width={200}/>
+                </SettingRow>
+                <SettingRow label="Auth token" help={<>Stored locally with <Mono>0600</Mono> perms. Reset to replace or remove the saved token.</>}>
+                  {form.tokenSet && !form.tokenCleared && form.token === "" ? (
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                      <input value="" disabled placeholder="configured" style={{ height: 32, width: 200, background: "var(--bg-canvas)", border: "1px solid var(--border-medium)", borderRadius: 2, color: "var(--fg3)", padding: "0 10px", fontFamily: "var(--fontFamilyMonospace)", fontSize: 12, cursor: "not-allowed" }}/>
+                      <GhostButton onClick={() => set({ tokenCleared: true, token: "" })}>Reset</GhostButton>
+                    </div>
+                  ) : (
+                    <MonoInput type="password" value={form.token}
+                      onChange={v => set({ token: v, tokenCleared: form.tokenSet && v === "" })}
+                      placeholder={form.tokenSet ? "new token, or blank to remove" : "glc_…"} width={260}/>
+                  )}
+                </SettingRow>
+                <SettingRow label="OTLP endpoint" help={<>For SDK traces and metrics.</>}>
+                  <MonoInput value={form.otlpEndpoint} onChange={v => set({ otlpEndpoint: v })} placeholder="https://otlp-gateway-….grafana.net/otlp" width={320}/>
+                </SettingRow>
+                <SettingRow
+                  label="Content capture mode"
+                  help={<>
+                    What content sigil sends to Grafana Cloud for each generation. <Mono>--local</Mono> sessions always capture full content on this machine.
+                    {captureUnset && <div style={{ color: "var(--fg3)", marginTop: 6 }}>Not set: Grafana Cloud sessions capture metadata only. Pick a mode to pin it.</div>}
+                    {advanced && <div style={{ color: "var(--warning-text)", marginTop: 6 }}>Advanced mode <Mono>{form.capture}</Mono> is set in config.env and will be preserved.</div>}
+                  </>}
+                >
+                  <Segmented value={form.capture} onChange={v => set({ capture: v })} options={CAPTURE_OPTIONS}/>
+                </SettingRow>
+              </SettingsCard>
+
+              <SettingsCard>
+                <SectionLabel>Tags</SectionLabel>
+                <SettingRow full label="Session tags" help={<>Applied to every generation as <Mono>key=value</Mono>. Empty pairs are dropped on save.</>}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {form.tags.map((t, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <MonoInput value={t.key} onChange={v => setTag(i, { key: v })} placeholder="key" width={200}/>
+                        <span style={{ color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)" }}>=</span>
+                        <MonoInput value={t.value} onChange={v => setTag(i, { value: v })} placeholder="value" width={200}/>
+                        <button onClick={() => removeTag(i)} title="Remove tag" aria-label="Remove tag" style={{
+                          width: 28, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                          background: "transparent", border: "1px solid transparent", color: "var(--fg3)", cursor: "pointer", borderRadius: 2,
+                        }}
+                          onMouseEnter={e => e.currentTarget.style.color = "var(--fg1)"}
+                          onMouseLeave={e => e.currentTarget.style.color = "var(--fg3)"}>
+                          <Icon name="times" size={14}/>
+                        </button>
+                      </div>
+                    ))}
+                    <button onClick={addTag} style={{
+                      alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 6,
+                      height: 30, padding: "0 12px", background: "transparent", border: "1px dashed var(--border-medium)",
+                      borderRadius: 2, color: "var(--fg2)", fontSize: 13, cursor: "pointer",
+                    }}
+                      onMouseEnter={e => e.currentTarget.style.borderColor = "var(--border-strong)"}
+                      onMouseLeave={e => e.currentTarget.style.borderColor = "var(--border-medium)"}>
+                      <Icon name="plus" size={13}/>Add tag
+                    </button>
+                  </div>
+                </SettingRow>
+              </SettingsCard>
+
+              <SettingsCard>
+                <SectionLabel>Guards</SectionLabel>
+                <SettingRow label="Pre-tool-use guards" help={<>Run safety checks before each tool call. <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Fail-open</b> allows the action if a check errors or times out; <b style={{ fontWeight: 500, color: "var(--fg2)" }}>fail-closed</b> blocks it.</>}>
+                  <Segmented value={form.guards} onChange={v => set({ guards: v })} options={GUARD_OPTIONS}/>
+                </SettingRow>
+                {guardsOn && (
+                  <SettingRow label="Guard timeout" help={<>Max time for a guard check to respond. Clear the field to use the default of 1500 ms.</>}>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <MonoInput value={form.guardTimeout} onChange={v => set({ guardTimeout: v })} placeholder="1500" width={110} align="right"/>
+                      <span style={{ fontSize: 12, color: "var(--fg3)" }}>ms</span>
+                    </div>
+                  </SettingRow>
+                )}
+              </SettingsCard>
+
+              <SettingsCard>
+                <SectionLabel>Runtime</SectionLabel>
+                <SettingRow label="Debug logging" help={<>Write a verbose log to <Mono>~/.local/state/sigil/logs/sigil.log</Mono>.</>}>
+                  <Toggle checked={form.debug} onChange={v => set({ debug: v })}/>
+                </SettingRow>
+                <SettingRow label="Automatic updates" help={<>Keep host agent plugins refreshed automatically. Turn off to pin the current versions.</>}>
+                  <Toggle checked={form.autoUpdate} onChange={v => set({ autoUpdate: v })}/>
+                </SettingRow>
+              </SettingsCard>
+
+              <SettingsCard>
+                <SectionLabel>Identity · Optional</SectionLabel>
+                <SettingRow label="User ID" help={<>Override the resolved user id used to attribute generations. Leave blank to auto-resolve.</>}>
+                  <MonoInput value={form.userId} onChange={v => set({ userId: v })} placeholder="auto" width={260}/>
+                </SettingRow>
+              </SettingsCard>
+            </div>
+
+            <div style={{ width: 440, flexShrink: 0, position: "sticky", top: 72 }}>
+              <div style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderBottom: "1px solid var(--border-weak)" }}>
+                  <span style={{ fontSize: 12, color: "var(--fg2)", fontFamily: "var(--fontFamilyMonospace)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>
+                  <button onClick={copy} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "transparent", border: "1px solid var(--secondary-border)", color: "var(--fg1)", borderRadius: 2, height: 26, padding: "0 8px", fontSize: 12, cursor: "pointer" }}
+                    onMouseEnter={e => e.currentTarget.style.background = "var(--action-hover)"}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    <Icon name="copy" size={13}/>Copy
+                  </button>
+                </div>
+                <div style={{ background: "var(--bg-canvas)", padding: "14px 16px", maxHeight: "calc(100vh - 220px)", overflow: "auto" }}>
+                  <PreviewBody text={preview}/>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {dirty && <UnsavedBar onReset={reset} onSave={save}/>}
+          {toast && <Toast message={toast}/>}
+        </div>
+      );
+    }
+
+    // ============================================================
     // App container — fetches from the daemon and routes between views.
     // ============================================================
 
@@ -1658,6 +2045,14 @@
 
     function conversationPath(id) {
       return `/conversations/${encodeURIComponent(id)}`;
+    }
+
+    // settingsRouteActive reports whether the URL is the Settings tab. It is
+    // the only non-conversation route; every other path is the conversations
+    // section (the list, or a detail when conversationIDFromPath matches).
+    function settingsRouteActive() {
+      if (typeof window === "undefined") return false;
+      return window.location.pathname.replace(/\/$/, "") === "/settings";
     }
 
     // Returns true for a plain primary-button click with no modifier keys.
@@ -1727,6 +2122,7 @@
 
     function App() {
       const [selectedID, setSelectedID] = useState(conversationIDFromPath);
+      const [showSettings, setShowSettings] = useState(settingsRouteActive);
       const [conversations, setConversations] = useState([]);
       const [tokenPoints, setTokenPoints] = useState([]);
       const [loadingList, setLoadingList] = useState(true);
@@ -1744,7 +2140,7 @@
       const [loadingDetail, setLoadingDetail] = useState(false);
       const [errDetail, setErrDetail] = useState(null);
 
-      const view = selectedID ? "conversation" : "conversations";
+      const view = showSettings ? "settings" : (selectedID ? "conversation" : "conversations");
       const selected = selectedID
         ? conversations.find(c => c.id === selectedID) || summaryFromDetail(detail, selectedID)
         : null;
@@ -1756,9 +2152,11 @@
         setTimeRange(v);
       }, [setTimeRange]);
 
-      const pageTitle = view === "conversation" && selected
-        ? `${selected.title || selected.id} — sigil local`
-        : "sigil — local";
+      const pageTitle = view === "settings"
+        ? "Settings — sigil local"
+        : view === "conversation" && selected
+          ? `${selected.title || selected.id} — sigil local`
+          : "sigil — local";
       useEffect(() => { document.title = pageTitle; }, [pageTitle]);
 
       const fetchList = useCallback(() => {
@@ -1806,7 +2204,10 @@
       useEffect(() => { refreshAll(); }, [refreshAll]);
 
       useEffect(() => {
-        const onPopState = () => setSelectedID(conversationIDFromPath());
+        const onPopState = () => {
+          setSelectedID(conversationIDFromPath());
+          setShowSettings(settingsRouteActive());
+        };
         window.addEventListener("popstate", onPopState);
         return () => window.removeEventListener("popstate", onPopState);
       }, []);
@@ -1833,26 +2234,33 @@
 
       const openConv = (c) => {
         window.history.pushState({}, "", conversationPath(c.id));
+        setShowSettings(false);
         setSelectedID(c.id);
       };
       const goHome = () => {
         window.history.pushState({}, "", "/");
+        setShowSettings(false);
         setSelectedID(null);
       };
+      const goSettings = () => {
+        window.history.pushState({}, "", "/settings");
+        setSelectedID(null);
+        setShowSettings(true);
+      };
 
-      const breadcrumbs = selected
-        ? [
-            { label: "Conversations", href: "/", onClick: goHome },
-            { label: selected.title || selected.id, mono: true },
-          ]
-        : [
-            { label: "Conversations" },
-          ];
+      const tabs = [
+        { label: "Conversations", href: "/", onClick: goHome, state: view === "conversations" ? "current" : "link" },
+        { label: "Settings", href: "/settings", onClick: goSettings, state: view === "settings" ? "current" : "link" },
+      ];
+      const trail = view === "conversation" && selected
+        ? [{ label: selected.title || selected.id, mono: true }]
+        : [];
 
       return (
         <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-          <TopBar breadcrumbs={breadcrumbs}/>
+          <TopBar tabs={tabs} trail={trail}/>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            {view === "settings" && <SettingsView/>}
             {view === "conversations" && (
               <ConversationsView
                 conversations={conversations}

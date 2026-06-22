@@ -45,6 +45,11 @@
 
       --primary-main: #3D71D9;
       --primary-text: #6E9FFF;
+      --primary-shade: rgb(90, 134, 222);
+      --primary-border: #3D71D9;
+
+      --secondary-main: rgba(204, 204, 220, 0.16);
+      --secondary-border: rgba(204, 204, 220, 0.25);
 
       --info-main: #3D71D9;    --info-text: #6E9FFF;    --info-border: #6E9FFF;    --info-transparent: #3D71D926;
       --success-main: #1A7F4B; --success-text: #6CCF8E; --success-border: #6CCF8E; --success-transparent: #1A7F4B26;
@@ -104,4 +109,18 @@
     }
     @media (prefers-reduced-motion: reduce) {
       .sigil-step-flash { animation: none; }
+    }
+
+    /* Settings: unsaved-changes bar slides up, toast fades down. Restrained,
+       per Saga. Disabled under reduced-motion. */
+    @keyframes sigil-barin {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes sigil-tin {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      [style*="sigil-barin"], [style*="sigil-tin"] { animation: none !important; }
     }

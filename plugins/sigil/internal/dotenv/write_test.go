@@ -129,3 +129,32 @@ func TestWriteDotenv_RejectsDisallowedKeys(t *testing.T) {
 		t.Errorf("error = %v, want mention of disallowed key", err)
 	}
 }
+
+func TestRenderManaged(t *testing.T) {
+	t.Run("sorts keys, prepends header, drops empties", func(t *testing.T) {
+		out, err := RenderManaged(map[string]string{
+			"SIGIL_USER_ID":              "alice",
+			"SIGIL_CONTENT_CAPTURE_MODE": "full",
+			"SIGIL_DEBUG":                "", // deletion: must not appear
+			"SIGIL_TAGS":                 "team=ai",
+		})
+		if err != nil {
+			t.Fatalf("RenderManaged: %v", err)
+		}
+		got := string(out)
+		want := "# Managed by `sigil login`. Hand-edits to known keys persist\n" +
+			"# across re-runs; comments and ordering do not.\n" +
+			"SIGIL_CONTENT_CAPTURE_MODE=full\n" +
+			"SIGIL_TAGS=team=ai\n" +
+			"SIGIL_USER_ID=alice\n"
+		if got != want {
+			t.Errorf("RenderManaged mismatch:\n got: %q\nwant: %q", got, want)
+		}
+	})
+
+	t.Run("rejects disallowed keys", func(t *testing.T) {
+		if _, err := RenderManaged(map[string]string{"PATH": "/usr/bin"}); err == nil {
+			t.Fatal("expected error for disallowed key, got nil")
+		}
+	})
+}

@@ -22,6 +22,21 @@ func ParseBool(raw string) bool {
 	}
 }
 
+// ParseBoolDefault parses a boolean config value, returning def when the value
+// is empty or unrecognised. It honours the same 1/true/yes/on and
+// 0/false/no/off whitelist as resolveGuardsBool, so callers that read SIGIL_*
+// booleans from a dotenv map (rather than os.Getenv) get identical semantics.
+func ParseBoolDefault(raw string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
+}
+
 // EnvOr returns the value of key if non-empty (after trimming), else fallback.
 func EnvOr(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
@@ -156,10 +171,15 @@ type GuardsConfig struct {
 	FailOpen  bool
 }
 
+// DefaultGuardsTimeoutMs is the guard check timeout applied when
+// SIGIL_GUARDS_TIMEOUT_MS is unset, non-numeric, or non-positive. Exported so
+// callers writing config.env (sigil login, the local Settings page) can treat
+// this value as "use the default" and omit the key.
+const DefaultGuardsTimeoutMs = 1500
+
 const (
-	defaultGuardsEnabled   = false
-	defaultGuardsTimeoutMs = 1500
-	defaultGuardsFailOpen  = true
+	defaultGuardsEnabled  = false
+	defaultGuardsFailOpen = true
 )
 
 // ResolveGuards reads SIGIL_GUARDS_ENABLED / _TIMEOUT_MS / _FAIL_OPEN and
@@ -172,14 +192,14 @@ const (
 func ResolveGuards(logger *log.Logger) GuardsConfig {
 	cfg := GuardsConfig{
 		Enabled:   resolveGuardsBool(logger, "SIGIL_GUARDS_ENABLED", defaultGuardsEnabled),
-		TimeoutMs: defaultGuardsTimeoutMs,
+		TimeoutMs: DefaultGuardsTimeoutMs,
 		FailOpen:  resolveGuardsBool(logger, "SIGIL_GUARDS_FAIL_OPEN", defaultGuardsFailOpen),
 	}
 	if v := strings.TrimSpace(os.Getenv("SIGIL_GUARDS_TIMEOUT_MS")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
 			if logger != nil {
-				logger.Printf("config: invalid SIGIL_GUARDS_TIMEOUT_MS=%q; using %d", v, defaultGuardsTimeoutMs)
+				logger.Printf("config: invalid SIGIL_GUARDS_TIMEOUT_MS=%q; using %d", v, DefaultGuardsTimeoutMs)
 			}
 		} else {
 			cfg.TimeoutMs = n
