@@ -172,14 +172,19 @@ client.shutdown()
 Explicit configuration form:
 
 ```python
+import os
 from sigil_sdk import AuthConfig, Client, ClientConfig, GenerationExportConfig
 
 client = Client(
     ClientConfig(
         generation_export=GenerationExportConfig(
             protocol="http",
-            endpoint="http://localhost:8080",
-            auth=AuthConfig(mode="tenant", tenant_id="dev-tenant"),
+            endpoint="https://sigil-prod-<region>.grafana.net",
+            auth=AuthConfig(
+                mode="basic",
+                tenant_id=os.environ["SIGIL_AUTH_TENANT_ID"],
+                basic_password=os.environ["SIGIL_AUTH_TOKEN"],
+            ),
         ),
     )
 )
@@ -516,29 +521,20 @@ Exceptions in the resolver are caught and treated as `METADATA_ONLY` (fail-close
 ### HTTP generation export
 
 ```python
+import os
 from sigil_sdk import ApiConfig, AuthConfig, ClientConfig, GenerationExportConfig
 
 cfg = ClientConfig(
     generation_export=GenerationExportConfig(
         protocol="http",
-        endpoint="http://localhost:8080",
-        auth=AuthConfig(mode="tenant", tenant_id="dev-tenant"),
+        endpoint="https://sigil-prod-<region>.grafana.net",
+        auth=AuthConfig(
+            mode="basic",
+            tenant_id=os.environ["SIGIL_AUTH_TENANT_ID"],
+            basic_password=os.environ["SIGIL_AUTH_TOKEN"],
+        ),
     ),
-    api=ApiConfig(endpoint="http://localhost:8080"),
-)
-```
-
-### gRPC generation export
-
-```python
-cfg = ClientConfig(
-    generation_export=GenerationExportConfig(
-        protocol="grpc",
-        endpoint="localhost:50051",
-        insecure=True,
-        auth=AuthConfig(mode="tenant", tenant_id="dev-tenant"),
-    ),
-    api=ApiConfig(endpoint="http://localhost:8080"),
+    api=ApiConfig(endpoint="https://sigil-prod-<region>.grafana.net"),
 )
 ```
 
@@ -556,15 +552,20 @@ Invalid mode/field combinations fail fast in `resolve_config(...)`.
 If explicit `headers` already include `Authorization` or `X-Scope-OrgID`, explicit headers win.
 
 ```python
+import os
 from sigil_sdk import ApiConfig, AuthConfig, ClientConfig, GenerationExportConfig
 
 cfg = ClientConfig(
     generation_export=GenerationExportConfig(
         protocol="http",
-        endpoint="http://localhost:8080",
-        auth=AuthConfig(mode="tenant", tenant_id="prod-tenant"),
+        endpoint="https://sigil-prod-<region>.grafana.net",
+        auth=AuthConfig(
+            mode="basic",
+            tenant_id=os.environ["SIGIL_AUTH_TENANT_ID"],
+            basic_password=os.environ["SIGIL_AUTH_TOKEN"],
+        ),
     ),
-    api=ApiConfig(endpoint="http://localhost:8080"),
+    api=ApiConfig(endpoint="https://sigil-prod-<region>.grafana.net"),
 )
 ```
 
@@ -643,7 +644,7 @@ result = client.submit_conversation_rating(
 print(result.rating.rating, result.summary.has_bad_rating)
 ```
 
-`submit_conversation_rating(...)` sends requests to `ClientConfig.api.endpoint` (default `http://localhost:8080`) and uses the same generation-export auth headers (`tenant` or `bearer`) already configured on the SDK client.
+`submit_conversation_rating(...)` sends requests to `ClientConfig.api.endpoint`, which should be the Grafana Cloud Sigil API URL from AI Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
 
 ## Instrumentation-only mode (no generation send)
 

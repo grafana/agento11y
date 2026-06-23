@@ -34,7 +34,7 @@ A/B testing is just two runs with different `run_id`/`tags` over the same items.
 ## Prerequisites
 
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/)
-- A running Sigil stack (defaults to `http://localhost:8080`)
+- Grafana Cloud AI Observability credentials from your stack's Connection page
 - Optional: `OPENAI_API_KEY` (without it, deterministic canned answers are used
   so the example runs fully offline)
 
@@ -43,11 +43,18 @@ A/B testing is just two runs with different `run_id`/`tags` over the same items.
 ```bash
 uv sync
 
-# Point at your stack (defaults shown)
-export SIGIL_ENDPOINT=http://localhost:8080
-export SIGIL_AUTH_TENANT_ID=fake
+# Grafana Cloud ingest plane: generations and scores.
+export SIGIL_ENDPOINT=https://<your-sigil-api-host>
+export SIGIL_AUTH_TENANT_ID=<your-tenant-id>
+export SIGIL_AUTH_TOKEN=<your-cloud-access-policy-token>
+
+# Grafana Cloud eval control plane: experiment create/update/finalize/report.
+export SIGIL_EVAL_ENDPOINT=https://<your-stack>.grafana.net
+export SIGIL_EVAL_PATH_PREFIX=/api/plugins/grafana-sigil-app/resources
+export SIGIL_EVAL_AUTH_TOKEN=<your-grafana-service-account-token>
+
 # Optional: stable run id for CI retries / a real model
-export RUN_ID=experiment-example-$(git rev-parse --short HEAD 2>/dev/null || echo local)
+export RUN_ID=experiment-example-$(git rev-parse --short HEAD 2>/dev/null || echo dev)
 # export OPENAI_API_KEY=sk-...
 
 uv run python -m app.run_experiment
@@ -56,14 +63,13 @@ uv run python -m app.run_experiment
 You should see output like:
 
 ```
-Experiment 'experiment-example-local' finished: 3 score(s) accepted.
+Experiment 'experiment-example-abc123' finished: 3 score(s) accepted.
 pass_rate=1.00 mean_score=1.00
-View in Sigil: http://localhost:8080/a/grafana-sigil-app/evaluation/experiments/experiment-example-local
+View in Sigil: https://<your-stack>.grafana.net/a/grafana-sigil-app/evaluation/experiments/experiment-example-abc123
 ```
 
-> The deep link is derived from `SIGIL_ENDPOINT`. If your Grafana UI is served
-> from a different host, set `SIGIL_EXPERIMENT_URL_TEMPLATE`, e.g.
-> `https://grafana.example.com/a/grafana-sigil-app/evaluation/experiments/{run_id}`.
+> The deep link is derived from `SIGIL_EVAL_ENDPOINT`. Set
+> `SIGIL_EXPERIMENT_URL_TEMPLATE` only if your UI needs a custom URL shape.
 
 ## Adapt it
 

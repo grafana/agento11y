@@ -40,11 +40,15 @@ import { SigilClient } from "@grafana/sigil-sdk-js";
 const client = new SigilClient({
   generationExport: {
     protocol: "http",
-    endpoint: "http://localhost:8080",
-    auth: { mode: "tenant", tenantId: "dev-tenant" },
+    endpoint: "https://sigil-prod-<region>.grafana.net",
+    auth: {
+      mode: "basic",
+      tenantId: process.env.SIGIL_AUTH_TENANT_ID,
+      basicPassword: process.env.SIGIL_AUTH_TOKEN,
+    },
   },
   api: {
-    endpoint: "http://localhost:8080",
+    endpoint: "https://sigil-prod-<region>.grafana.net",
   },
 });
 
@@ -461,11 +465,15 @@ If explicit headers already contain `Authorization` or `X-Scope-OrgID`, explicit
 const client = new SigilClient({
   generationExport: {
     protocol: "http",
-    endpoint: "http://localhost:8080",
-    auth: { mode: "tenant", tenantId: "prod-tenant" },
+    endpoint: "https://sigil-prod-<region>.grafana.net",
+    auth: {
+      mode: "basic",
+      tenantId: process.env.SIGIL_AUTH_TENANT_ID,
+      basicPassword: process.env.SIGIL_AUTH_TOKEN,
+    },
   },
   api: {
-    endpoint: "http://localhost:8080",
+    endpoint: "https://sigil-prod-<region>.grafana.net",
   },
 });
 ```
@@ -509,14 +517,18 @@ const generationBearerToken = (process.env.MY_APP_SIGIL_TOKEN ?? "").trim();
 const client = new SigilClient({
   generationExport: {
     protocol: "http",
-    endpoint: "http://localhost:8080",
+    endpoint: "https://sigil-prod-<region>.grafana.net",
     auth:
       generationBearerToken.length > 0
         ? { mode: "bearer", bearerToken: generationBearerToken }
-        : { mode: "tenant", tenantId: "dev-tenant" },
+        : {
+            mode: "basic",
+            tenantId: process.env.SIGIL_AUTH_TENANT_ID,
+            basicPassword: process.env.SIGIL_AUTH_TOKEN,
+          },
   },
   api: {
-    endpoint: "http://localhost:8080",
+    endpoint: "https://sigil-prod-<region>.grafana.net",
   },
 });
 ```
@@ -544,4 +556,4 @@ const result = await client.submitConversationRating("conv-123", {
 console.log(result.rating.rating, result.summary.hasBadRating);
 ```
 
-`submitConversationRating` sends requests to `api.endpoint` (default `http://localhost:8080`) and uses the same generation-export auth headers (`tenant` or `bearer`) already configured on the SDK client.
+`submitConversationRating` sends requests to `api.endpoint`, which should be the Grafana Cloud Sigil API URL from AI Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.

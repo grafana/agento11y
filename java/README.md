@@ -55,11 +55,14 @@ The snippet below configures the SDK explicitly. As an alternative, set `SIGIL_*
 ```java
 SigilClient client = new SigilClient(new SigilClientConfig()
     .setApi(new ApiConfig()
-        .setEndpoint("http://localhost:8080"))
+        .setEndpoint("https://sigil-prod-<region>.grafana.net"))
     .setGenerationExport(new GenerationExportConfig()
         .setProtocol(GenerationExportProtocol.HTTP)
-        .setEndpoint("http://localhost:8080")
-        .setAuth(new AuthConfig().setMode(AuthMode.TENANT).setTenantId("dev-tenant"))));
+        .setEndpoint("https://sigil-prod-<region>.grafana.net")
+        .setAuth(new AuthConfig()
+            .setMode(AuthMode.BASIC)
+            .setTenantId(System.getenv("SIGIL_AUTH_TENANT_ID"))
+            .setBasicPassword(System.getenv("SIGIL_AUTH_TOKEN")))));
 
 try {
     client.withGeneration(
@@ -312,7 +315,7 @@ SubmitConversationRatingResponse result = client.submitConversationRating(
 System.out.println(result.getRating().getRating() + " hasBad=" + result.getSummary().isHasBadRating());
 ```
 
-`submitConversationRating(...)` sends requests to `ApiConfig.endpoint` (default `http://localhost:8080`) and uses the same generation-export auth headers (`tenant` or `bearer`) already configured on the SDK client.
+`submitConversationRating(...)` sends requests to `ApiConfig.endpoint`, which should be the Grafana Cloud Sigil API URL from AI Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
 
 ## Lifecycle
 

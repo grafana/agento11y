@@ -44,7 +44,7 @@ public sealed class GenerationExportConfig
     public GenerationExportProtocol? Protocol { get; set; }
     /// <summary>
     /// Export endpoint. Empty string means "not set" — env layer or
-    /// <c>ConfigResolver</c> resolves it to <c>localhost:4317</c>. An explicit
+    /// <c>ConfigResolver</c> resolves it from <c>SIGIL_ENDPOINT</c> when configured. An explicit
     /// non-empty value is preserved (caller-wins) and not overridden by
     /// <c>SIGIL_ENDPOINT</c>.
     /// </summary>

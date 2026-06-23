@@ -8,9 +8,8 @@ This is the shape a CI job or local script would take:
   4. The runner creates the experiment, runs+grades each item, exports scores
      attributed to the run, finalizes the run, and prints a link.
 
-Config via env: SIGIL_ENDPOINT, SIGIL_AUTH_TENANT_ID (or SIGIL_AUTH_* /
-SIGIL_PROTOCOL), RUN_ID, GIT_SHA. With no OPENAI_API_KEY the agent uses a
-deterministic fake model so the flow runs offline against a local Sigil.
+Config via env: SIGIL_ENDPOINT, SIGIL_AUTH_TENANT_ID, SIGIL_AUTH_TOKEN, RUN_ID,
+GIT_SHA. With no OPENAI_API_KEY the agent uses a deterministic fake model.
 """
 
 from __future__ import annotations
@@ -52,16 +51,24 @@ DATASET: list[DatasetItem] = [
 ]
 
 
+def required_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if value == "":
+        raise RuntimeError(f"{name} is required; copy it from Grafana Cloud AI Observability")
+    return value
+
+
 def build_client() -> Client:
-    endpoint = os.environ.get("SIGIL_ENDPOINT", "http://localhost:8080")
-    tenant_id = os.environ.get("SIGIL_AUTH_TENANT_ID", "fake")
+    endpoint = required_env("SIGIL_ENDPOINT").rstrip("/")
+    tenant_id = required_env("SIGIL_AUTH_TENANT_ID")
+    auth_token = required_env("SIGIL_AUTH_TOKEN")
     return Client(
         ClientConfig(
             api=ApiConfig(endpoint=endpoint),
             generation_export=GenerationExportConfig(
                 protocol="http",
                 endpoint=f"{endpoint}/api/v1/generations:export",
-                auth=AuthConfig(mode="tenant", tenant_id=tenant_id),
+                auth=AuthConfig(mode="basic", tenant_id=tenant_id, basic_password=auth_token),
             ),
         )
     )
