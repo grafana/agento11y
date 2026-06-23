@@ -85,7 +85,7 @@ export interface GenerationExportConfig {
 
 /** Sigil HTTP API settings used by non-ingest helper endpoints. */
 export interface ApiConfig {
-  /** Sigil API base endpoint, for example `http://localhost:8080`. */
+  /** Sigil API base endpoint, for example the Grafana Cloud AI Observability API URL. */
   endpoint: string;
 }
 

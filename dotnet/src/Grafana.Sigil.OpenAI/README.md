@@ -45,16 +45,17 @@ var sigilConfig = new SigilClientConfig
     GenerationExport = new GenerationExportConfig
     {
         Protocol = GenerationExportProtocol.Http,
-        Endpoint = "http://localhost:8080",
+        Endpoint = "https://sigil-prod-<region>.grafana.net",
         Auth = new AuthConfig
         {
-            Mode = ExportAuthMode.Tenant,
-            TenantId = "dev-tenant",
+            Mode = ExportAuthMode.Basic,
+            TenantId = Environment.GetEnvironmentVariable("SIGIL_AUTH_TENANT_ID"),
+            BasicPassword = Environment.GetEnvironmentVariable("SIGIL_AUTH_TOKEN"),
         },
     },
     Api = new ApiConfig
     {
-        Endpoint = "http://localhost:8080",
+        Endpoint = "https://sigil-prod-<region>.grafana.net",
     },
 };
 var sigil = new SigilClient(sigilConfig);

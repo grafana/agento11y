@@ -20,7 +20,7 @@ This example uses the production-style shape you would use for LLMSpec or A2A:
 
 When the runner and agent are in the same process, use `run.Context(ctx)` instead; that also captures generation IDs automatically. When the agent is behind HTTP, A2A, or a task queue, propagate the run ID explicitly and restore it with `WithExperimentRunID`.
 
-This example is designed for Grafana Cloud AI Observability. There is no supported local Grafana path for users; local/self-hosted Sigil is only a development override for SDK contributors.
+This example is designed for Grafana Cloud AI Observability.
 
 ## Run
 

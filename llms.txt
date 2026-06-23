@@ -183,7 +183,7 @@ Send OTLP straight to the Grafana Cloud OTLP gateway. Authentication uses Basic 
 
 ### Option B: Via Alloy / OTel Collector (optional)
 
-Run a local Alloy or OTel Collector that receives unauthenticated OTLP and forwards to Cloud with credentials. Useful for centralized token management, retries, relabeling, and metadata enrichment. Common local ports: 4318 (OTLP/HTTP), 4317 (OTLP/gRPC). In this mode set `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` and skip the headers.
+Run Alloy or an OTel Collector in your deployment and forward telemetry to Grafana Cloud with credentials. Useful for centralized token management, retries, relabeling, and metadata enrichment. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to the collector endpoint your deployment provides.
 
 ### Provider setup snippets
 

@@ -45,7 +45,7 @@ See the [credentials section in the SDK README](../../README.md#grafana-cloud-cr
 The SDK emits OpenTelemetry spans and metrics (`gen_ai.client.operation.duration`, `gen_ai.client.token.usage`, etc.). These need an OTLP endpoint:
 
 - **Direct to Cloud** — set `OTEL_EXPORTER_OTLP_ENDPOINT` to your Cloud OTLP gateway URL (find it in the Grafana Cloud portal → stack Details page, [docs](https://grafana.com/docs/grafana-cloud/send-data/otlp/send-data-otlp)) and `OTEL_EXPORTER_OTLP_HEADERS` with Basic auth credentials.
-- **Via Alloy** — set `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` if you have a local Alloy/collector forwarding to Cloud.
+- **Via Alloy or an OTel Collector** — set `OTEL_EXPORTER_OTLP_ENDPOINT` to the collector endpoint your deployment provides, with the collector forwarding to Grafana Cloud.
 
 Set all values as environment variables before running an example.
 
