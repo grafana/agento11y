@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.17.0] - 2026-06-23
+
+### Features
+
+- **plugins/sigil**: add Settings tab to the local viewer (#345)
+
+### Bug Fixes
+
+- **plugins/sigil**: stop local daemons started with go run (#344)
+
 ## [0.16.0] - 2026-06-19
 
 ### Features
