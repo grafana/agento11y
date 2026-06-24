@@ -1,8 +1,8 @@
 """A deliberately tiny LangGraph agent: one node that answers a question.
 
 When ``OPENAI_API_KEY`` is set, the node uses a real ``ChatOpenAI`` model.
-Otherwise it falls back to a deterministic fake chat model so the example runs
-offline (the fake returns the supplied ``canned_answers`` in order).
+Otherwise it falls back to a deterministic fake chat model that returns the
+supplied ``canned_answers`` in order.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def _build_model(canned_answers: list[str]):
 
         return ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-    # Offline fallback: returns canned answers in order, one per invocation.
+    # Deterministic fallback: returns canned answers in order, one per invocation.
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
     return FakeListChatModel(responses=list(canned_answers))

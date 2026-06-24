@@ -1,4 +1,4 @@
-"""Experiment control plane and score export transport tests."""
+"""Experiment lifecycle and score export transport tests."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from sigil_sdk import (
     AuthConfig,
     Client,
     ClientConfig,
-    ConflictError,
     CreateExperimentRequest,
     ExperimentStatus,
     GenerationExportConfig,
@@ -23,7 +22,6 @@ from sigil_sdk import (
     ScoreItem,
     ScoreSource,
     ScoreValue,
-    UpdateExperimentRequest,
     ValidationError,
 )
 
@@ -118,9 +116,9 @@ def _experiment_body(**overrides: object) -> dict[str, object]:
     return body
 
 
-def test_create_experiment_round_trip() -> None:
+def test_create_experiment_upserts_external_run() -> None:
     recorder = _Recorder()
-    recorder.push(200, _experiment_body(tags=["smoke"], metadata={"git_sha": "abc"}))
+    recorder.push(200, {"run": _experiment_body(tags=["smoke"], metadata={"git_sha": "abc"}), "created": True})
     server = _serve(recorder)
     client = _new_client(server)
     try:
@@ -135,11 +133,11 @@ def test_create_experiment_round_trip() -> None:
         )
         request = recorder.requests[0]
         assert request["method"] == "POST"
-        assert request["path"] == "/api/v1/eval/experiments"
+        assert request["path"] == "/api/v1/experiment-runs:upsert"
         assert request["headers"]["x-scope-orgid"] == "tenant-a"
         assert request["payload"] == {
             "name": "PR 123",
-            "source": "external",
+            "source": {"kind": "sdk", "id": "python"},
             "run_id": "run_1",
             "tags": ["smoke"],
             "metadata": {"git_sha": "abc"},
@@ -153,17 +151,21 @@ def test_create_experiment_round_trip() -> None:
         server.server_close()
 
 
-def test_complete_experiment_sends_status_patch() -> None:
+def test_complete_experiment_finalizes_run() -> None:
     recorder = _Recorder()
-    recorder.push(200, _experiment_body(status="succeeded", score_count=3))
+    recorder.push(200, {"run": _experiment_body(status="succeeded", score_count=3)})
     server = _serve(recorder)
     client = _new_client(server)
     try:
         run = client.complete_experiment("run_1", ExperimentStatus.SUCCEEDED, score_count=3)
         request = recorder.requests[0]
-        assert request["method"] == "PATCH"
-        assert request["path"] == "/api/v1/eval/experiments/run_1"
-        assert request["payload"] == {"status": "succeeded", "score_count": 3}
+        assert request["method"] == "POST"
+        assert request["path"] == "/api/v1/experiment-runs/run_1:finalize"
+        assert request["payload"] == {
+            "status": "succeeded",
+            "score_count": 3,
+            "source": {"kind": "sdk", "id": "python"},
+        }
         assert run.status == "succeeded"
         assert run.score_count == 3
     finally:
@@ -172,16 +174,12 @@ def test_complete_experiment_sends_status_patch() -> None:
         server.server_close()
 
 
-def test_cancel_experiment_hits_cancel_action() -> None:
-    recorder = _Recorder()
-    recorder.push(200, _experiment_body(status="canceled"))
-    server = _serve(recorder)
+def test_cancel_experiment_is_not_part_of_ingest_lifecycle() -> None:
+    server = _serve(_Recorder())
     client = _new_client(server)
     try:
-        run = client.cancel_experiment("run_1")
-        assert recorder.requests[0]["method"] == "POST"
-        assert recorder.requests[0]["path"] == "/api/v1/eval/experiments/run_1:cancel"
-        assert run.status == "canceled"
+        with pytest.raises(ValidationError):
+            client.cancel_experiment("run_1")
     finally:
         client.shutdown()
         server.shutdown()
@@ -275,20 +273,6 @@ def test_get_experiment_maps_not_found() -> None:
         server.server_close()
 
 
-def test_update_experiment_maps_conflict() -> None:
-    recorder = _Recorder()
-    recorder.push(409, {"error": "terminal"})
-    server = _serve(recorder)
-    client = _new_client(server)
-    try:
-        with pytest.raises(ConflictError):
-            client.update_experiment("run_1", UpdateExperimentRequest(status=ExperimentStatus.RUNNING))
-    finally:
-        client.shutdown()
-        server.shutdown()
-        server.server_close()
-
-
 def test_export_scores_retries_then_succeeds_on_5xx() -> None:
     recorder = _Recorder()
     recorder.push(503, {"error": "unavailable"})
@@ -343,26 +327,17 @@ def test_export_scores_exhausts_retries_and_raises() -> None:
         server.server_close()
 
 
-def test_eval_override_routes_experiments_via_proxy_but_scores_via_ingest(monkeypatch) -> None:
-    """The experiment control plane uses the plugin proxy + bearer SA token, while
-    score export stays on the ingest route with tenant/basic auth (scores are a
-    tenant-only ingest write, decoupled from the eval control-plane target)."""
+def test_experiment_lifecycle_and_scores_share_configured_auth() -> None:
     recorder = _Recorder()
-    recorder.push(200, _experiment_body())  # create_experiment
+    recorder.push(200, {"run": _experiment_body()})  # create_experiment
     recorder.push(202, {"results": [{"score_id": "sc1", "accepted": True}]})  # export_scores
     server = _serve(recorder)
-    base = f"http://127.0.0.1:{server.server_address[1]}"
-
-    monkeypatch.setenv("SIGIL_EVAL_ENDPOINT", base)
-    monkeypatch.setenv("SIGIL_EVAL_PATH_PREFIX", "/api/plugins/grafana-sigil-app/resources")
-    monkeypatch.setenv("SIGIL_EVAL_AUTH_TOKEN", "glsa_test_token")
-
     client = _new_client(server)
     try:
-        client.create_experiment(CreateExperimentRequest(run_id="run_1", name="cloud", source="external"))
+        client.create_experiment(CreateExperimentRequest(run_id="run_1", name="shared auth", source="external"))
         create_req = recorder.requests[0]
-        assert create_req["path"] == "/api/plugins/grafana-sigil-app/resources/eval/experiments"
-        assert create_req["headers"]["authorization"] == "Bearer glsa_test_token"
+        assert create_req["path"] == "/api/v1/experiment-runs:upsert"
+        assert create_req["headers"].get("x-scope-orgid") == "tenant-a"
 
         client.export_scores(
             [
@@ -378,7 +353,6 @@ def test_eval_override_routes_experiments_via_proxy_but_scores_via_ingest(monkey
             ]
         )
         score_req = recorder.requests[1]
-        # scores stay on the ingest route with tenant auth, not the eval proxy/token
         assert score_req["path"] == "/api/v1/scores:export"
         assert score_req["headers"].get("x-scope-orgid") == "tenant-a"
         assert "authorization" not in score_req["headers"]

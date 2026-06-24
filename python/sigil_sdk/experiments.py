@@ -1,14 +1,18 @@
-"""Experiment control plane and score export transport for the Sigil SDK.
+"""Experiment lifecycle and score export transport for the Sigil SDK.
 
-This module talks to the Sigil offline-evaluation HTTP API:
+External writes go through the ingest lifecycle on the same tenant token used
+for generation export:
 
-  POST   /api/v1/eval/experiments               create an experiment run
-  GET    /api/v1/eval/experiments/{run_id}       fetch a run
-  PATCH  /api/v1/eval/experiments/{run_id}       update / finalize a run
-  POST   /api/v1/eval/experiments/{run_id}:cancel  cancel a running run
-  GET    /api/v1/eval/experiments/{run_id}/scores  list run scores (paginated)
-  GET    /api/v1/eval/experiments/{run_id}/report  aggregated run report
-  POST   /api/v1/scores:export                   publish scores (attribute via run_id)
+  POST   /api/v1/experiment-runs:upsert              create or claim an external run
+  POST   /api/v1/experiment-runs/{run_id}:finalize   finalize an external run
+  POST   /api/v1/scores:export                       publish scores (attribute via run_id)
+
+Reads still hit the control-plane query routes (tenant scoped, no actor
+required):
+
+  GET    /api/v1/eval/experiments/{run_id}           fetch a run
+  GET    /api/v1/eval/experiments/{run_id}/scores    list run scores (paginated)
+  GET    /api/v1/eval/experiments/{run_id}/report    aggregated run report
 
 The functions here are thin; :class:`sigil_sdk.client.Client` wraps them with
 resolved endpoint, insecure flag, and auth headers.
@@ -39,26 +43,26 @@ from .models import (
     ExperimentEvaluator,
     ExperimentReport,
     ExperimentReportSummary,
+    ExperimentStatus,
     ExportScoreResult,
     ExportScoresResponse,
     ScoreItem,
     ScoreValue,
-    UpdateExperimentRequest,
 )
 
 _EVAL_EXPERIMENTS_SUFFIX = "/eval/experiments"
+_EXPERIMENT_RUNS_UPSERT_PATH = "/api/v1/experiment-runs:upsert"
+_EXPERIMENT_RUNS_PREFIX = "/api/v1/experiment-runs"
 _SCORES_EXPORT_PATH = "/api/v1/scores:export"
-# Default API path prefix for direct (self-hosted / dev) Sigil. Grafana Cloud
-# reaches the protected control plane through the Grafana plugin resource proxy,
-# so callers pass path_prefix="/api/plugins/grafana-sigil-app/resources" there.
 _DEFAULT_PATH_PREFIX = "/api/v1"
 _DEFAULT_TIMEOUT = 30.0
 _MAX_RESPONSE_BYTES = 8 << 20
+_EXPERIMENT_RUN_SOURCE = {"kind": "sdk", "id": "python"}
 
 
 @dataclass(slots=True)
 class RetryPolicy:
-    """Retry behavior for control-plane requests.
+    """Retry behavior for experiment and score requests.
 
     Retries cover request timeouts, connection errors, HTTP 429, and HTTP 5xx,
     using exponential backoff bounded by ``max_backoff``. 4xx responses other
@@ -82,19 +86,20 @@ def create_experiment(
     insecure: bool,
     headers: dict[str, str],
     request: CreateExperimentRequest,
-    path_prefix: str = _DEFAULT_PATH_PREFIX,
     retry: RetryPolicy | None = None,
 ) -> Experiment:
-    """Creates an experiment run."""
+    """Creates or idempotently claims an external experiment run."""
 
     name = (request.name or "").strip()
     if name == "":
         raise ValidationError("sigil experiment validation failed: name is required")
+    if _enum_value(request.source) != "external":
+        raise ValidationError("sigil experiment validation failed: experiment-run ingest requires source=external")
 
-    url = _experiments_url(api_endpoint, insecure, path_prefix)
-    payload = _serialize_create_request(request)
+    url = _base_url(api_endpoint, insecure) + _EXPERIMENT_RUNS_UPSERT_PATH
+    payload = _serialize_upsert_request(request)
     body = _request_json("POST", url, headers, payload, retry, ExperimentTransportError, "experiment create")
-    return _parse_experiment(body)
+    return _parse_experiment_run_response(body)
 
 
 def get_experiment(
@@ -113,39 +118,37 @@ def get_experiment(
     return _parse_experiment(body)
 
 
-def update_experiment(
+def finalize_experiment(
     *,
     api_endpoint: str,
     insecure: bool,
     headers: dict[str, str],
     run_id: str,
-    request: UpdateExperimentRequest,
-    path_prefix: str = _DEFAULT_PATH_PREFIX,
+    status: ExperimentStatus | str,
+    score_count: int | None = None,
+    error: str | None = None,
     retry: RetryPolicy | None = None,
 ) -> Experiment:
-    """Patches an experiment run (name/description/tags/status/metadata/error/score_count)."""
+    """Finalizes an external experiment run as ``succeeded`` or ``failed``."""
 
-    url = _experiment_url(api_endpoint, insecure, run_id, path_prefix)
-    payload = _serialize_update_request(request)
-    body = _request_json("PATCH", url, headers, payload, retry, ExperimentTransportError, "experiment update")
-    return _parse_experiment(body)
-
-
-def cancel_experiment(
-    *,
-    api_endpoint: str,
-    insecure: bool,
-    headers: dict[str, str],
-    run_id: str,
-    path_prefix: str = _DEFAULT_PATH_PREFIX,
-    retry: RetryPolicy | None = None,
-) -> Experiment:
-    """Cancels a running experiment (CAS: only transitions from ``running``)."""
-
-    base = _experiment_url(api_endpoint, insecure, run_id, path_prefix)
-    url = f"{base}:cancel"
-    body = _request_json("POST", url, headers, {}, retry, ExperimentTransportError, "experiment cancel")
-    return _parse_experiment(body)
+    normalized_status = _enum_value(status)
+    if normalized_status not in ("succeeded", "failed"):
+        raise ValidationError("sigil experiment validation failed: status must be succeeded or failed")
+    normalized_run_id = _validate_run_id(run_id)
+    url = (
+        _base_url(api_endpoint, insecure)
+        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(normalized_run_id, safe='')}:finalize"
+    )
+    payload: dict[str, Any] = {
+        "status": normalized_status,
+        "source": dict(_EXPERIMENT_RUN_SOURCE),
+    }
+    if score_count is not None:
+        payload["score_count"] = score_count
+    if error:
+        payload["error"] = error
+    body = _request_json("POST", url, headers, payload, retry, ExperimentTransportError, "experiment finalize")
+    return _parse_experiment_run_response(body)
 
 
 def export_scores(
@@ -222,10 +225,10 @@ def get_experiment_report(
 # --------------------------------------------------------------------------- #
 
 
-def _serialize_create_request(request: CreateExperimentRequest) -> dict[str, Any]:
+def _serialize_upsert_request(request: CreateExperimentRequest) -> dict[str, Any]:
     out: dict[str, Any] = {
         "name": request.name.strip(),
-        "source": _enum_value(request.source),
+        "source": dict(_EXPERIMENT_RUN_SOURCE),
     }
     if request.run_id:
         out["run_id"] = request.run_id
@@ -233,31 +236,8 @@ def _serialize_create_request(request: CreateExperimentRequest) -> dict[str, Any
         out["description"] = request.description
     if request.tags:
         out["tags"] = list(request.tags)
-    if request.collection_id:
-        out["collection_id"] = request.collection_id
-    if request.evaluators:
-        out["evaluators"] = [{"id": ev.id, "selector": ev.selector} for ev in request.evaluators]
     if request.metadata:
         out["metadata"] = dict(request.metadata)
-    return out
-
-
-def _serialize_update_request(request: UpdateExperimentRequest) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    if request.name is not None:
-        out["name"] = request.name
-    if request.description is not None:
-        out["description"] = request.description
-    if request.tags is not None:
-        out["tags"] = list(request.tags)
-    if request.status is not None:
-        out["status"] = _enum_value(request.status)
-    if request.metadata is not None:
-        out["metadata"] = dict(request.metadata)
-    if request.error is not None:
-        out["error"] = request.error
-    if request.score_count is not None:
-        out["score_count"] = request.score_count
     return out
 
 
@@ -353,6 +333,12 @@ def _parse_experiment(payload: Any) -> Experiment:
         started_at=_parse_ts(payload.get("started_at")),
         completed_at=_parse_ts(payload.get("completed_at")),
     )
+
+
+def _parse_experiment_run_response(payload: Any) -> Experiment:
+    if isinstance(payload, dict) and isinstance(payload.get("run"), dict):
+        return _parse_experiment(payload["run"])
+    return _parse_experiment(payload)
 
 
 def _parse_export_scores_response(payload: Any) -> ExportScoresResponse:
@@ -483,10 +469,15 @@ def _experiments_url(endpoint: str, insecure: bool, path_prefix: str) -> str:
 
 
 def _experiment_url(endpoint: str, insecure: bool, run_id: str, path_prefix: str) -> str:
+    normalized = _validate_run_id(run_id)
+    return f"{_experiments_url(endpoint, insecure, path_prefix)}/{urllib_parse.quote(normalized, safe='')}"
+
+
+def _validate_run_id(run_id: str) -> str:
     normalized = (run_id or "").strip()
     if normalized == "":
         raise ValidationError("sigil experiment validation failed: run_id is required")
-    return f"{_experiments_url(endpoint, insecure, path_prefix)}/{urllib_parse.quote(normalized, safe='')}"
+    return normalized
 
 
 def _base_url(endpoint: str, insecure: bool) -> str:

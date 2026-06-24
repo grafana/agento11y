@@ -98,7 +98,7 @@ class _FakeReadClient:
         self.conversation_calls.append(conversation_id)
         return self.conversations.get(conversation_id, {})
 
-    # Unused control-plane surface for the runner test below.
+    # Unused lifecycle surface for the runner test below.
     created: list[Any] = field(default_factory=list)
 
     def create_experiment(self, request):
@@ -111,7 +111,7 @@ class _FakeReadClient:
     def export_scores(self, scores):
         return ExportScoresResponse(results=[])
 
-    def complete_experiment(self, run_id, status, *, score_count=None, error=None, metadata=None):
+    def complete_experiment(self, run_id, status, *, score_count=None, error=None):
         return
 
     def cancel_experiment(self, run_id):

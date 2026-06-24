@@ -23,7 +23,7 @@ and Cloud `basic` auth.
 ## Setup
 
 ```bash
-pip install "sigil-sdk>=0.7.0" "sigil-sdk-langgraph>=0.7.0"
+pip install "sigil-sdk>=0.9.0" "sigil-sdk-langgraph>=0.9.0"
 ```
 
 Configure the client from env (works in CI):
@@ -33,16 +33,20 @@ import os
 from sigil_sdk import ApiConfig, AuthConfig, Client, ClientConfig, GenerationExportConfig
 
 endpoint = os.environ["SIGIL_ENDPOINT"].rstrip("/")
+tenant_id = os.environ["SIGIL_AUTH_TENANT_ID"]
+token = os.environ["SIGIL_AUTH_TOKEN"]
 client = Client(
     ClientConfig(
         api=ApiConfig(endpoint=endpoint),
         generation_export=GenerationExportConfig(
-            protocol="http",
+            protocol=os.environ.get("SIGIL_PROTOCOL", "http"),
             endpoint=f"{endpoint}/api/v1/generations:export",
             auth=AuthConfig(
-                mode="basic",
-                tenant_id=os.environ["SIGIL_AUTH_TENANT_ID"],
-                basic_password=os.environ["SIGIL_AUTH_TOKEN"],
+                mode=os.environ.get("SIGIL_AUTH_MODE", "basic"),
+                tenant_id=tenant_id,
+                basic_user=tenant_id,
+                basic_password=token,
+                bearer_token=token,
             ),
         ),
     )
@@ -119,7 +123,7 @@ with experiment(client=client, run_id="run-123", name="manual loop",
         out = graph.invoke({"question": item.input}, config=run.langgraph_config())
         run.add_scores(my_scores(item, out), item=item,
                        generation_ids=run.produced_generation_ids)
-# on exit: succeeded; on exception: failed; on Ctrl-C: canceled (all automatic)
+# on exit: succeeded; on exception or Ctrl-C: failed (automatic)
 ```
 
 ## LLM-as-judge scorer (optional)
@@ -213,4 +217,4 @@ finally:
   end), `manual` (publish + finalize only when you call `run.publish()` /
   `run.finalize()`). Users can delete experiments, so the default is to publish.
 - The run is finalized automatically: `succeeded` on clean exit, `failed` on
-  exception, `canceled` on Ctrl-C.
+  exception or Ctrl-C.

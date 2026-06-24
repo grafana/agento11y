@@ -131,6 +131,8 @@ class ClientConfig:
     user_id: str | None = None
     tags: dict[str, str] | None = None
 
+    ingest_actor: str | None = None
+
     # When True (and ``logger`` is not provided) the SDK constructs a default
     # logger at debug level. Read from ``SIGIL_DEBUG`` by ``resolve_config``.
     debug: bool | None = None
@@ -257,6 +259,8 @@ def resolve_config(
         out.agent_version = _env(env, "SIGIL_AGENT_VERSION") or ""
     if out.user_id is None:
         out.user_id = _env(env, "SIGIL_USER_ID") or ""
+    if out.ingest_actor is None:
+        out.ingest_actor = _env(env, "SIGIL_INGEST_ACTOR") or ""
     # Merge env-derived tags as a base layer; caller tags win on key collision.
     # Matches Go and JS SDK behavior.
     ev = _env(env, "SIGIL_TAGS")

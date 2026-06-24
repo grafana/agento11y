@@ -723,7 +723,7 @@ print(result.url)  # deep link to the experiment in Sigil
 
 The runner creates the run (`source="external"`), runs + grades each item,
 exports scores attributed to the `run_id`, and finalizes the run (`succeeded` on
-clean exit, `failed` on exception, `canceled` on Ctrl-C). For ad-hoc loops use
+clean exit, `failed` on exception or Ctrl-C). For ad-hoc loops use
 the lower-level `experiment(...)` context manager. A/B testing is two runs with
 different `run_id`/`tags`. Upload modes: `continuous` (default, publish per
 item), `bulk` (publish at the end), `manual` (publish + finalize only when you

@@ -74,14 +74,20 @@ def required_env(name: str) -> str:
 def build_client() -> Client:
     endpoint = required_env("SIGIL_ENDPOINT").rstrip("/")
     tenant_id = required_env("SIGIL_AUTH_TENANT_ID")
-    auth_token = required_env("SIGIL_AUTH_TOKEN")
+    token = required_env("SIGIL_AUTH_TOKEN")
     return Client(
         ClientConfig(
             api=ApiConfig(endpoint=endpoint),
             generation_export=GenerationExportConfig(
-                protocol="http",
+                protocol=os.environ.get("SIGIL_PROTOCOL", "http"),
                 endpoint=f"{endpoint}/api/v1/generations:export",
-                auth=AuthConfig(mode="basic", tenant_id=tenant_id, basic_password=auth_token),
+                auth=AuthConfig(
+                    mode=os.environ.get("SIGIL_AUTH_MODE", "basic"),
+                    tenant_id=tenant_id,
+                    basic_user=tenant_id,
+                    basic_password=token,
+                    bearer_token=token,
+                ),
             ),
         )
     )
@@ -125,13 +131,13 @@ def exact_match_scorer(item: DatasetItem, result: TargetResult) -> list[ScoreOut
 def main() -> None:
     load_dotenv()
     client = build_client()
-    run_id = os.environ.get("RUN_ID", f"experiment-example-{os.environ.get('GIT_SHA', 'local')}")
+    run_id = os.environ.get("RUN_ID", f"experiment-example-{os.environ.get('GIT_SHA', 'manual')}")
     runner = ExperimentRunner(
         client=client,
         run_id=run_id,
         name="Framework-free example experiment",
         dataset={"id": "experiment-example", "version": "2026-05-30"},
-        candidate={"git_sha": os.environ.get("GIT_SHA", "local")},
+        candidate={"git_sha": os.environ.get("GIT_SHA", "manual")},
         tags=["example"],
         agent_name="example-agent",
     )

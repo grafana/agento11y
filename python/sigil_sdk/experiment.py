@@ -11,7 +11,7 @@ over :meth:`Client.start_generation`).
 It provides:
 
 - :func:`experiment` — a context manager that creates the run, and finalizes it
-  on exit (``succeeded`` normally, ``failed`` on error, ``canceled`` on Ctrl-C).
+  on exit (``succeeded`` normally, ``failed`` on error or Ctrl-C).
 - :class:`ExperimentRunner` — a thin loop over a dataset that invokes a user
   target and one or more user scorers, exporting scores per item.
 
@@ -595,7 +595,7 @@ def experiment(
 
     On normal exit the run is finalized ``succeeded`` (buffered scores are
     published first in ``bulk`` mode). On an exception the run is finalized
-    ``failed``; on ``KeyboardInterrupt`` it is ``canceled``. In ``manual`` mode
+    ``failed``. In ``manual`` mode
     the run is left open on success so the caller can inspect, then call
     :meth:`ExperimentRun.publish` and :meth:`ExperimentRun.finalize` themselves.
 
@@ -645,8 +645,9 @@ def experiment(
     )
     try:
         yield run
-    except KeyboardInterrupt:
-        _safe(lambda: client.cancel_experiment(run_id))
+    except KeyboardInterrupt as exc:
+        error_text = str(exc) or "interrupted"
+        _safe(lambda: run.finalize(ExperimentStatus.FAILED, error=error_text))
         raise
     except BaseException as exc:  # noqa: BLE001 - finalize then re-raise
         error_text = str(exc)
@@ -792,11 +793,11 @@ def _run_metadata(
 
 
 def _safe(fn: Callable[[], Any]) -> Any:
-    """Runs ``fn`` and swallows exceptions (used on finalize/cancel paths)."""
+    """Runs ``fn`` and swallows exceptions for best-effort cleanup."""
 
     try:
         return fn()
-    except Exception:  # noqa: BLE001 - best-effort finalize/cancel/report
+    except Exception:  # noqa: BLE001 - best-effort cleanup
         return None
 
 

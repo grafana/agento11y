@@ -42,7 +42,7 @@ class ConflictError(SigilError):
 
 
 class ExperimentTransportError(SigilError):
-    """Raised when an experiment control-plane request fails."""
+    """Raised when an experiment request fails."""
 
 
 class ScoreExportError(SigilError):

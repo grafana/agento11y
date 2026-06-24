@@ -7,16 +7,15 @@ generations — with their input/output messages — that produced it. Turning a
 collection into a dataset means listing its members, then fetching each
 conversation to recover the initial user prompt.
 
-Endpoints share the same eval connection args as experiments (``/api/v1`` for
-self-hosted Sigil; the Grafana plugin resource proxy on Grafana Cloud, e.g.
-``/api/plugins/grafana-sigil-app/resources``):
+Endpoints use the same configured Sigil API endpoint and auth headers as
+experiment reads:
 
   GET {prefix}/eval/collections/{collection_id}/members  saved conversations in a collection
   GET {prefix}/query/conversations/{conversation_id}     one conversation with generations
 
 The functions here are thin; :class:`sigil_sdk.client.Client` wraps them with a
 resolved endpoint, insecure flag, auth headers, and path prefix (see
-``Client._eval_args``).
+``Client._experiment_api_args``).
 """
 
 from __future__ import annotations

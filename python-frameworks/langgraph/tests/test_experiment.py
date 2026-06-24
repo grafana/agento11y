@@ -35,12 +35,11 @@ from sigil_sdk_langgraph.handler import SigilLangGraphHandler
 
 @dataclass
 class _FakeClient:
-    """Captures experiment control-plane and score-export calls."""
+    """Captures experiment lifecycle and score-export calls."""
 
     created: list[Any] = field(default_factory=list)
     exported: list[list[ScoreItem]] = field(default_factory=list)
     completed: list[tuple[str, str, int | None, str | None]] = field(default_factory=list)
-    canceled: list[str] = field(default_factory=list)
     flushes: int = 0
     complete_failures: int = 0
     reject_scores: bool = False
@@ -61,15 +60,12 @@ class _FakeClient:
             ]
         )
 
-    def complete_experiment(self, run_id, status, *, score_count=None, error=None, metadata=None):
+    def complete_experiment(self, run_id, status, *, score_count=None, error=None):
         if self.complete_failures > 0:
             self.complete_failures -= 1
             raise RuntimeError("complete failed")
         status_value = getattr(status, "value", status)
         self.completed.append((run_id, status_value, score_count, error))
-
-    def cancel_experiment(self, run_id):
-        self.canceled.append(run_id)
 
     def experiment_url(self, run_id):
         return f"https://sigil.example/a/grafana-sigil-app/evaluation/experiments/{run_id}"
@@ -298,19 +294,16 @@ def test_exception_finalizes_failed_and_reraises() -> None:
     run_id, status, _score_count, error = client.completed[0]
     assert (run_id, status) == ("run_fail", "failed")
     assert error == "boom"
-    assert client.canceled == []
 
 
-def test_keyboard_interrupt_cancels_and_reraises() -> None:
+def test_keyboard_interrupt_finalizes_failed_and_reraises() -> None:
     client = _FakeClient()
 
     with pytest.raises(KeyboardInterrupt):
         with experiment(client=client, run_id="run_cancel", name="cancel", print_url=False):
             raise KeyboardInterrupt
 
-    assert client.canceled == ["run_cancel"]
-    # cancel path does not also complete the run
-    assert client.completed == []
+    assert client.completed == [("run_cancel", "failed", 0, "interrupted")]
 
 
 def test_manual_mode_leaves_run_open_until_publish() -> None:

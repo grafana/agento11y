@@ -15,18 +15,18 @@ callback.
 | `ExperimentRunner` | Loops a dataset, runs the target, grades, publishes scores, finalizes the run | `app/run_experiment.py` |
 | `run.start_generation(...)` | Records the agent's call tagged with the experiment `run_id`, capturing the generation id | `app/run_experiment.py` (`target`) |
 | User scorer | Local grading returning typed `ScoreOutput`s (swap in LLM-as-judge here) | `app/run_experiment.py` (`exact_match_scorer`) |
-| Tiny agent | A plain function that answers a question (real model or offline canned answers) | `app/agent.py` |
+| Tiny agent | A plain function that answers a question (real model or deterministic canned answers) | `app/agent.py` |
 
 ## How it works
 
-1. The runner calls `POST /api/v1/eval/experiments` to create an `external` run.
+1. The runner calls `POST /api/v1/experiment-runs:upsert` to create or claim an external run.
 2. For each dataset item it runs the agent inside `run.start_generation(...)`, so
    the generation the agent emits is exported through the normal Sigil path and
    tagged with `experiment.run_id`. The runner captures the produced generation
    id for you.
 3. It flushes generations, runs your scorer(s), and exports the scores with the
    same `run_id` (`POST /api/v1/scores:export`).
-4. When the dataset is done it finalizes the run (`succeeded`/`failed`/`canceled`)
+4. When the dataset is done it finalizes the run (`succeeded`/`failed`)
    and prints a deep link.
 
 A/B testing is just two runs with different `run_id`/`tags` over the same items.
@@ -36,7 +36,7 @@ A/B testing is just two runs with different `run_id`/`tags` over the same items.
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/)
 - Grafana Cloud AI Observability credentials from your stack's Connection page
 - Optional: `OPENAI_API_KEY` (without it, deterministic canned answers are used
-  so the example runs fully offline)
+  for the agent response)
 
 ## Run it
 
@@ -44,9 +44,11 @@ A/B testing is just two runs with different `run_id`/`tags` over the same items.
 uv sync
 
 # Grafana Cloud ingest plane: generations and scores.
-export SIGIL_ENDPOINT=https://<your-sigil-api-host>
-export SIGIL_AUTH_TENANT_ID=<your-tenant-id>
-export SIGIL_AUTH_TOKEN=<your-cloud-access-policy-token>
+export SIGIL_ENDPOINT=https://sigil-prod-<region>.grafana.net
+export SIGIL_PROTOCOL=http
+export SIGIL_AUTH_MODE=basic
+export SIGIL_AUTH_TENANT_ID=<your-stack-id>
+export SIGIL_AUTH_TOKEN=<your-grafana-cloud-access-policy-token>
 
 # Grafana Cloud eval control plane: experiment create/update/finalize/report.
 export SIGIL_EVAL_ENDPOINT=https://<your-stack>.grafana.net
