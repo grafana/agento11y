@@ -45,11 +45,12 @@ var sigil = new SigilClient(new SigilClientConfig
     GenerationExport = new GenerationExportConfig
     {
         Protocol = GenerationExportProtocol.Http,
-        Endpoint = "http://localhost:8080",
+        Endpoint = "https://sigil-prod-<region>.grafana.net",
         Auth = new AuthConfig
         {
-            Mode = ExportAuthMode.Tenant,
-            TenantId = "dev-tenant",
+            Mode = ExportAuthMode.Basic,
+            TenantId = Environment.GetEnvironmentVariable("SIGIL_AUTH_TENANT_ID"),
+            BasicPassword = Environment.GetEnvironmentVariable("SIGIL_AUTH_TOKEN"),
         },
         BatchSize = 100,
         FlushInterval = TimeSpan.FromSeconds(1),
@@ -57,7 +58,7 @@ var sigil = new SigilClient(new SigilClientConfig
     },
     Api = new ApiConfig
     {
-        Endpoint = "http://localhost:8080",
+        Endpoint = "https://sigil-prod-<region>.grafana.net",
     },
 });
 
@@ -126,6 +127,40 @@ Generation export transport protocols:
 - `GenerationExportProtocol.Grpc`
 - `GenerationExportProtocol.Http`
 - `GenerationExportProtocol.None` (instrumentation-only; no generation transport)
+
+## Secrets redaction
+
+Use the built-in secrets sanitizer to redact high-confidence secret formats
+before generation data is exported. It uses the same gitleaks-derived pattern
+set as the other Sigil SDKs and replaces matches with
+`[REDACTED:<category>]` placeholders.
+
+```csharp
+using Grafana.Sigil;
+
+var sigil = new SigilClient(new SigilClientConfig
+{
+    GenerationSanitizer = SecretRedactionSanitizer.Create(),
+});
+```
+
+By default, the sanitizer redacts assistant output, thinking blocks, tool call
+arguments, tool results, system prompts, conversation titles, provider call
+errors, and email addresses. User input messages are left unchanged unless you
+opt in:
+
+```csharp
+var sigil = new SigilClient(new SigilClientConfig
+{
+    GenerationSanitizer = SecretRedactionSanitizer.Create(new SecretRedactionOptions
+    {
+        RedactInputMessages = true,
+    }),
+});
+```
+
+You can also set `SIGIL_REDACT_INPUT_MESSAGES=true`. An explicit
+`RedactInputMessages` value takes precedence over the environment variable.
 
 ## Embedding observability
 
@@ -259,7 +294,7 @@ Resolution precedence for tool executions (highest to lowest):
 3. `SigilClientConfig.ContentCaptureResolver` return value
 4. `SigilClientConfig.ContentCapture` (defaults to `ContentCaptureMode.NoToolContent`)
 
-User-provided `Metadata` and `Tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content.
+User-provided `Metadata` and `Tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content. See [Tags and Metadata](../docs/concepts/tags-and-metadata.md) for where client tags, per-generation tags, metadata, and `UserId` each show up. .NET merges client tags into the generation export only; it does not emit `sigil.tag.<key>` on spans/metrics.
 
 ## Context defaults
 
@@ -295,7 +330,7 @@ var result = await client.SubmitConversationRatingAsync(
 Console.WriteLine($"{result.Rating.Rating} hasBad={result.Summary.HasBadRating}");
 ```
 
-`SubmitConversationRatingAsync(...)` sends requests to `SigilClientConfig.Api.Endpoint` (default `http://localhost:8080`) and uses the same generation-export auth headers (`tenant` or `bearer`) already configured on the SDK client.
+`SubmitConversationRatingAsync(...)` sends requests to `SigilClientConfig.Api.Endpoint`, which should be the Grafana Cloud Sigil API URL from AI Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
 
 ## .NET best practices
 
@@ -343,7 +378,7 @@ SDK schema defaults fill the rest.
 | `SIGIL_AGENT_NAME` | `SigilClientConfig.AgentName` |
 | `SIGIL_AGENT_VERSION` | `SigilClientConfig.AgentVersion` |
 | `SIGIL_USER_ID` | `SigilClientConfig.UserId` |
-| `SIGIL_TAGS` | `SigilClientConfig.Tags` (CSV; merged into generation export; Go/JS also emit `sigil.tag.<key>` on spans/metrics) |
+| `SIGIL_TAGS` | `SigilClientConfig.Tags` (CSV; merged into generation export only. Only Go/JS emit `sigil.tag.<key>` on spans/metrics; see [Tags and Metadata](../docs/concepts/tags-and-metadata.md)) |
 | `SIGIL_CONTENT_CAPTURE_MODE` | `SigilClientConfig.ContentCapture` |
 | `SIGIL_DEBUG` | `SigilClientConfig.Debug` (tri-state `bool?`) |
 

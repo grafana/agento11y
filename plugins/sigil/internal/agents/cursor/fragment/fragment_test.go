@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"testing"
 )
@@ -43,6 +44,34 @@ func TestUpdate_AppliesMutation(t *testing.T) {
 	}
 	if got.StartedAt != "2026-04-28T00:00:00Z" {
 		t.Errorf("StartedAt = %q; want %q", got.StartedAt, "2026-04-28T00:00:00Z")
+	}
+}
+
+func TestSave_CreatesPrivateConversationDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permissions only")
+	}
+	withTempState(t)
+	logger := newTestLogger()
+
+	if err := Update("conv", "gen1", logger, func(f *Fragment) bool { return true }); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	dirInfo, err := os.Stat(ConversationDir("conv"))
+	if err != nil {
+		t.Fatalf("stat conversation dir: %v", err)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0o700 {
+		t.Errorf("conversation dir mode = %o; want 700", got)
+	}
+
+	fileInfo, err := os.Stat(FragmentFilePath("conv", "gen1"))
+	if err != nil {
+		t.Fatalf("stat fragment: %v", err)
+	}
+	if got := fileInfo.Mode().Perm(); got != 0o600 {
+		t.Errorf("fragment file mode = %o; want 600", got)
 	}
 }
 
@@ -103,7 +132,7 @@ func TestLoadTolerant(t *testing.T) {
 			name: "corrupt fragment treated as missing",
 			setup: func(t *testing.T) {
 				path := FragmentFilePath("conv", "gen1")
-				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 					t.Fatalf("mkdir: %v", err)
 				}
 				if err := os.WriteFile(path, []byte("{not valid json"), 0o600); err != nil {

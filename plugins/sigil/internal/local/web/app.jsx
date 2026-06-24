@@ -1,4 +1,4 @@
-    const { useState, useEffect, useMemo, useCallback } = React;
+    const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
     // ============================================================
     // Formatters — all server responses ship raw numbers + RFC3339
@@ -253,6 +253,11 @@
         wrench:   <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>,
         alert:    <><path d="M12 9v4"/><circle cx="12" cy="16.5" r="0.6" fill="currentColor"/><path d="M10.3 4.1 2.7 17.4a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 4.1a2 2 0 0 0-3.4 0Z"/></>,
         empty:    <><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></>,
+        extlink:  <path d="M7 17 17 7M9 7h8v8"/>,
+        info:     <><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.6" r="0.6" fill="currentColor"/></>,
+        plus:     <path d="M12 5v14M5 12h14"/>,
+        times:    <path d="M6 6l12 12M18 6 6 18"/>,
+        check:    <path d="M5 12l4.5 4.5L19 7"/>,
       };
       return (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
@@ -277,12 +282,14 @@
 
     function Wordmark() {
       return (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, userSelect: "none" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 9, userSelect: "none" }}>
           <GrafanaMark size={22}/>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 14, letterSpacing: "0.02em", color: "var(--fg-max)", fontWeight: 500 }}>Grafana AI Observability</span>
-            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 10.5, color: "var(--fg3)", letterSpacing: "0.08em", textTransform: "uppercase" }}>local</span>
-          </div>
+          <span style={{ fontFamily: "var(--fontFamily)", fontSize: 15, fontWeight: 600, letterSpacing: "-0.01em", color: "var(--fg-max)", whiteSpace: "nowrap" }}>Grafana AI Observability</span>
+          <span style={{
+            fontFamily: "var(--fontFamily)", fontSize: 10, fontWeight: 600,
+            letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--fg2)",
+            border: "1px solid var(--border-medium)", borderRadius: 2, padding: "2px 6px", lineHeight: 1,
+          }}>Local</span>
         </div>
       );
     }
@@ -331,7 +338,36 @@
       color: "var(--fg2)", cursor: "pointer", borderRadius: 2,
     };
 
-    function TopBar({ breadcrumbs = [] }) {
+    // NavTab is a top-level header nav link. The current section gets a 2px
+    // brand underline bar and white text; other tabs render as faint links
+    // that brighten on hover and navigate on a plain left click (modifier
+    // clicks fall through so the anchor opens a new tab).
+    function NavTab({ label, href, onClick, state }) {
+      const current = state === "current";
+      return (
+        <a href={href}
+          onClick={e => {
+            if (!isPlainLeftClick(e)) return;
+            e.preventDefault();
+            onClick && onClick(e);
+          }}
+          onMouseEnter={e => { if (!current) e.currentTarget.style.color = "var(--fg-max)"; }}
+          onMouseLeave={e => { if (!current) e.currentTarget.style.color = "var(--fg2)"; }}
+          style={{
+            position: "relative", display: "inline-flex", alignItems: "center",
+            height: "100%", padding: "0 2px",
+            fontFamily: "var(--fontFamily)", fontSize: 13,
+            color: current ? "var(--fg-max)" : "var(--fg2)",
+            textDecoration: "none", whiteSpace: "nowrap", flexShrink: 0,
+            transition: "color .12s",
+          }}>
+          {label}
+          {current && <span style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 2, background: "var(--brandVertical)", borderRadius: 1 }}/>}
+        </a>
+      );
+    }
+
+    function TopBar({ tabs = [], trail = [] }) {
       return (
         <header style={{
           height: 48,
@@ -342,74 +378,35 @@
         }}>
           <Wordmark/>
           <div style={{ width: 1, height: 20, background: "var(--border-weak)", margin: "0 4px" }}/>
-          <nav style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1, overflow: "hidden" }}>
-            {breadcrumbs.map((b, i) => {
-              const last = i === breadcrumbs.length - 1;
-              return (
-                <React.Fragment key={i}>
-                  {i > 0 && <Icon name="cright" size={11} style={{ color: "var(--fg3)", flexShrink: 0 }}/>}
-                  {last
-                    ? <span style={{
-                        fontFamily: b.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)",
-                        fontSize: 13,
-                        color: "var(--fg-max)",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        minWidth: 0,
-                      }}>{b.label}</span>
-                    : b.href
-                      ? <a href={b.href}
-                          onClick={e => {
-                            if (!isPlainLeftClick(e)) return;
-                            e.preventDefault();
-                            b.onClick && b.onClick(e);
-                          }}
-                          style={{
-                            background: "transparent",
-                            padding: "2px 4px", cursor: "pointer",
-                            color: "var(--fg2)", fontSize: 13,
-                            fontFamily: b.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)",
-                            whiteSpace: "nowrap", flexShrink: 0,
-                            textDecoration: "none",
-                          }}
-                          onMouseEnter={e => e.currentTarget.style.color = "var(--fg-max)"}
-                          onMouseLeave={e => e.currentTarget.style.color = "var(--fg2)"}
-                        >{b.label}</a>
-                      : <button onClick={b.onClick} style={{
-                          background: "transparent", border: "none",
-                          padding: "2px 4px", cursor: b.onClick ? "pointer" : "default",
-                          color: "var(--fg2)", fontSize: 13,
-                          fontFamily: b.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)",
-                          whiteSpace: "nowrap", flexShrink: 0,
-                        }}
-                        onMouseEnter={e => b.onClick && (e.currentTarget.style.color = "var(--fg-max)")}
-                        onMouseLeave={e => b.onClick && (e.currentTarget.style.color = "var(--fg2)")}
-                        >{b.label}</button>
-                  }
-                </React.Fragment>
-              );
-            })}
+          <nav style={{ display: "flex", alignItems: "center", alignSelf: "stretch", gap: 14, minWidth: 0, flex: 1, overflow: "hidden" }}>
+            {tabs.map((t, i) => <NavTab key={i} {...t}/>)}
+            {trail.map((b, i) => (
+              <React.Fragment key={"trail-" + i}>
+                <Icon name="cright" size={11} style={{ color: "var(--fg3)", flexShrink: 0 }}/>
+                <span style={{
+                  fontFamily: b.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)",
+                  fontSize: 13, color: "var(--fg-max)",
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0,
+                }}>{b.label}</span>
+              </React.Fragment>
+            ))}
           </nav>
           <a
             href="https://grafana.com/auth/sign-up/create-user/?"
             target="_blank"
             rel="noreferrer"
             style={{
-              height: 30,
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              padding: "0 12px",
-              border: "1px solid var(--brand-orange)",
-              borderRadius: 2,
-              background: "var(--brand-orange)",
-              color: "#111217",
+              display: "inline-flex", alignItems: "center", gap: 5,
+              color: "var(--fg2)",
               textDecoration: "none",
               fontSize: 12,
-              fontWeight: 600,
               whiteSpace: "nowrap",
               flexShrink: 0,
-            }}>
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = "var(--fg-max)"}
+            onMouseLeave={e => e.currentTarget.style.color = "var(--fg2)"}>
             Sign up for Grafana Cloud
+            <Icon name="extlink" size={11}/>
           </a>
         </header>
       );
@@ -456,19 +453,55 @@
       ];
       return (
         <div style={{ display: "inline-flex", border: "1px solid var(--border-medium)", borderRadius: 2, overflow: "hidden" }}>
-          {opts.map(o => {
+          {opts.map((o, i) => {
             const active = o.value === value;
             return (
               <button key={o.value} onClick={() => onChange(o.value)} style={{
-                padding: "4px 10px",
-                background: active ? "rgba(204,204,220,0.08)" : "transparent",
+                padding: "4px 12px",
+                background: active ? "var(--action-selected)" : "transparent",
                 color: active ? "var(--fg-max)" : "var(--fg2)",
-                border: "none", cursor: active ? "default" : "pointer",
-                fontSize: 11, fontFamily: "var(--fontFamilyMonospace)",
+                border: "none", borderLeft: i > 0 ? "1px solid var(--border-medium)" : "none",
+                cursor: active ? "default" : "pointer",
+                fontSize: 12, fontWeight: active ? 500 : 400, fontFamily: "var(--fontFamily)",
               }}>{o.label}</button>
             );
           })}
         </div>
+      );
+    }
+
+    // ChartXLabels renders at most ~5 evenly-spaced bucket labels so the
+    // axis stays readable instead of becoming a wall of timestamps. Empty
+    // slots keep the flex columns aligned with the bars above them.
+    function ChartXLabels({ data }) {
+      const step = Math.max(1, Math.ceil(data.length / 5));
+      return (
+        <div style={{ display: "flex", marginLeft: 44, marginTop: 6, fontSize: 10, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)" }}>
+          {data.map((d, i) => {
+            const last = i === data.length - 1;
+            const show = i % step === 0 || last;
+            return <span key={i} style={{ flex: 1, textAlign: last ? "right" : "left", overflow: "hidden", whiteSpace: "nowrap" }}>{show ? d.t : ""}</span>;
+          })}
+        </div>
+      );
+    }
+
+    // ChartYAxis renders the three right-aligned scale labels (max, mid, 0)
+    // in the 44px gutter to the left of the plot. The plot is 130px tall, so
+    // the labels pin to the top, middle (65px), and baseline (130px).
+    function ChartYAxis({ top, mid }) {
+      const label = {
+        position: "absolute", left: 0, width: 34, textAlign: "right",
+        transform: "translateY(-50%)",
+        fontSize: 10, lineHeight: "10px", color: "var(--fg3)",
+        fontFamily: "var(--fontFamilyMonospace)", pointerEvents: "none",
+      };
+      return (
+        <React.Fragment>
+          <div style={{ ...label, top: 0 }}>{top}</div>
+          <div style={{ ...label, top: 65 }}>{mid}</div>
+          <div style={{ ...label, top: 130 }}>0</div>
+        </React.Fragment>
       );
     }
 
@@ -491,53 +524,54 @@
             </div>
           </div>
           <div style={{ position: "relative" }}>
-            <svg viewBox={`0 0 ${W} ${H + 8}`} preserveAspectRatio="none" style={{ width: "100%", height: 130, display: "block" }}>
-              {[0, 1, 2, 3, 4].map(g => (
-                <line key={g} x1={0} x2={W} y1={(H * g)/4} y2={(H * g)/4} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2"/>
-              ))}
-              {data.map((d, i) => {
-                const h = (d.c / max) * H;
-                const x = i * (W / data.length) + gap/2;
-                const y = H - h;
-                const isHover = hover === i;
-                // Midpoint containment, not overlap: the window shifts a
-                // little every render (now moves), so an overlap test can
-                // light up two adjacent bars.
-                const isSel = selection && (d.start + d.end) / 2 >= selection.start && (d.start + d.end) / 2 < selection.end;
-                const dim = selection && !isSel;
-                return (
-                  <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
-                    onClick={onBucketClick ? () => onBucketClick(d) : undefined}
-                    style={{ cursor: onBucketClick ? "pointer" : "default" }}>
-                    <rect x={x - 0.4} y={0} width={barW + 0.8} height={H} fill="transparent"/>
-                    <rect x={x} y={y} width={barW} height={Math.max(h, 0.4)} fill={isHover ? "var(--brand-orange-text)" : accent} opacity={isHover || isSel ? 1 : dim ? 0.3 : 0.85}/>
-                  </g>
-                );
-              })}
-            </svg>
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 10, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)" }}>
-              {data.map((d, i) => <span key={i} style={{ flex: 1, textAlign: "left" }}>{d.t}</span>)}
+            <ChartYAxis top={String(max)} mid={String(Math.round(max / 2))}/>
+            <div style={{ marginLeft: 44, position: "relative", borderBottom: "1px solid var(--border-medium)" }}>
+              <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: 130, display: "block" }}>
+                {[0, 0.5].map(g => (
+                  <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2"/>
+                ))}
+                {data.map((d, i) => {
+                  const h = (d.c / max) * H;
+                  const x = i * (W / data.length) + gap/2;
+                  const y = H - h;
+                  const isHover = hover === i;
+                  // Midpoint containment, not overlap: the window shifts a
+                  // little every render (now moves), so an overlap test can
+                  // light up two adjacent bars.
+                  const isSel = selection && (d.start + d.end) / 2 >= selection.start && (d.start + d.end) / 2 < selection.end;
+                  const dim = selection && !isSel;
+                  return (
+                    <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
+                      onClick={onBucketClick ? () => onBucketClick(d) : undefined}
+                      style={{ cursor: onBucketClick ? "pointer" : "default" }}>
+                      <rect x={x - 0.4} y={0} width={barW + 0.8} height={H} fill="transparent"/>
+                      <rect x={x} y={y} width={barW} height={Math.max(h, 0.4)} fill={isHover ? "var(--brand-orange-text)" : accent} opacity={isHover || isSel ? 1 : dim ? 0.3 : 0.85}/>
+                    </g>
+                  );
+                })}
+              </svg>
+              {hover !== null && (
+                <div style={{
+                  position: "absolute",
+                  left: chartTooltipLeft(hover, data.length),
+                  transform: "translate(-50%, -100%)",
+                  top: -4,
+                  background: "var(--bg-secondary)",
+                  border: "1px solid var(--border-medium)",
+                  borderRadius: 2,
+                  padding: "4px 8px",
+                  fontFamily: "var(--fontFamilyMonospace)",
+                  fontSize: 11,
+                  color: "var(--fg1)",
+                  whiteSpace: "nowrap",
+                  pointerEvents: "none",
+                  boxShadow: "var(--shadow-z2)",
+                }}>
+                  <span style={{ color: "var(--fg3)" }}>{data[hover].t}</span> · {data[hover].c} {data[hover].c === 1 ? "conversation" : "conversations"}
+                </div>
+              )}
             </div>
-            {hover !== null && (
-              <div style={{
-                position: "absolute",
-                left: chartTooltipLeft(hover, data.length),
-                transform: "translate(-50%, -100%)",
-                top: -4,
-                background: "var(--bg-secondary)",
-                border: "1px solid var(--border-medium)",
-                borderRadius: 2,
-                padding: "4px 8px",
-                fontFamily: "var(--fontFamilyMonospace)",
-                fontSize: 11,
-                color: "var(--fg1)",
-                whiteSpace: "nowrap",
-                pointerEvents: "none",
-                boxShadow: "var(--shadow-z2)",
-              }}>
-                <span style={{ color: "var(--fg3)" }}>{data[hover].t}</span> · {data[hover].c} {data[hover].c === 1 ? "conversation" : "conversations"}
-              </div>
-            )}
+            <ChartXLabels data={data}/>
           </div>
         </div>
       );
@@ -547,17 +581,11 @@
     // but stacks the five disjoint token series per bucket, with a
     // per-model filter and a click-to-toggle legend. data comes from
     // bucketTokenUsage.
-    function TokenChart({ data, bucketLabel, grandTotal, totals, models, model, onModelChange, switcher, selection, onBucketClick }) {
+    function TokenChart({ data, bucketLabel, grandTotal, models, model, onModelChange, hidden, onToggleSeries, switcher, selection, onBucketClick }) {
       const W = 100, H = 32;
       const barW = (W / Math.max(1, data.length)) * 0.7;
       const gap  = (W / Math.max(1, data.length)) * 0.3;
       const [hover, setHover] = useState(null);
-      const [hidden, setHidden] = useState(() => new Set());
-      const toggleSeries = key => setHidden(prev => {
-        const next = new Set(prev);
-        next.has(key) ? next.delete(key) : next.add(key);
-        return next;
-      });
       // Only show legend entries for series that actually appear, so a
       // pure-Anthropic store doesn't carry an always-zero "Reasoning"
       // swatch. Fall back to the full set when there's no data at all.
@@ -570,39 +598,16 @@
       const visibleTotal = d => visible.reduce((acc, s) => acc + (d[s.key] || 0), 0);
       const max = Math.max(1, ...data.map(visibleTotal));
       const empty = grandTotal === 0;
-      // The header total tracks the visible series so it always matches
-      // the stacked bars and the tooltip; hiding a series excludes it
-      // here too. The cache stat only renders while both of its inputs
-      // are visible — with cache read hidden it would claim "0% cached".
-      const shownTotal = totals ? visible.reduce((acc, s) => acc + (totals[s.key] || 0), 0) : grandTotal;
-      const cacheVisible = !hidden.has("fresh_input") && !hidden.has("cache_read");
-      const cacheDenom = totals ? (totals.fresh_input || 0) + (totals.cache_read || 0) : 0;
-      const cachePct = cacheVisible && cacheDenom > 0 ? Math.round(((totals.cache_read || 0) / cacheDenom) * 100) : null;
-      const yLabel = {
-        position: "absolute", left: 0, transform: "translateY(-50%)",
-        fontSize: 10, lineHeight: "10px", color: "var(--fg3)",
-        fontFamily: "var(--fontFamilyMonospace)",
-        background: "var(--bg-primary)", padding: "1px 4px 1px 0",
-        pointerEvents: "none",
-      };
 
       return (
         <div style={{ position: "relative", padding: "16px 20px 12px", background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 12, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              {switcher}
-              <span style={{ color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11 }}>
-                {formatTokens(shownTotal)} tok
-                {cachePct != null && (
-                  <span title="Share of input tokens served from the prompt cache: cache read / (fresh input + cache read)"> · {cachePct}% cached</span>
-                )}
-              </span>
-            </div>
+            {switcher}
             <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", flexWrap: "wrap" }}>
               {legend.map(s => {
                 const off = hidden.has(s.key);
                 return (
-                  <button key={s.key} onClick={() => toggleSeries(s.key)}
+                  <button key={s.key} onClick={() => onToggleSeries(s.key)}
                     title={off ? `Show ${s.label}` : `Hide ${s.label}`}
                     style={{
                       display: "inline-flex", alignItems: "center", gap: 6,
@@ -627,77 +632,73 @@
             </div>
           </div>
           <div style={{ position: "relative" }}>
-            <svg viewBox={`0 0 ${W} ${H + 8}`} preserveAspectRatio="none" style={{ width: "100%", height: 130, display: "block" }}>
-              {[0, 1, 2, 3, 4].map(g => (
-                <line key={g} x1={0} x2={W} y1={(H * g)/4} y2={(H * g)/4} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2"/>
-              ))}
-              {data.map((d, i) => {
-                const x = i * (W / data.length) + gap/2;
-                const isHover = hover === i;
-                // Midpoint containment, not overlap — see ActivityChart.
-                const isSel = selection && (d.start + d.end) / 2 >= selection.start && (d.start + d.end) / 2 < selection.end;
-                const dim = selection && !isSel;
-                const barOpacity = isHover || isSel ? 1 : dim ? 0.3 : 0.85;
-                let yTop = H;
-                const segs = [];
-                for (const s of visible) {
-                  const v = d[s.key] || 0;
-                  if (v <= 0) continue;
-                  const h = (v / max) * H;
-                  yTop -= h;
-                  segs.push(<rect key={s.key} x={x} y={yTop} width={barW} height={Math.max(h, 0.2)} fill={s.color} opacity={barOpacity}/>);
-                }
-                return (
-                  <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
-                    onClick={onBucketClick ? () => onBucketClick(d) : undefined}
-                    style={{ cursor: onBucketClick ? "pointer" : "default" }}>
-                    <rect x={x - 0.4} y={0} width={barW + 0.8} height={H} fill="transparent"/>
-                    {segs}
-                  </g>
-                );
-              })}
-            </svg>
-            {/* The svg stretches its viewBox, so the y-scale labels are
-                HTML overlays pinned to the top and middle gridlines (0px
-                and 52px of the 130px-tall plot). */}
-            {!empty && visible.length > 0 && <div style={{ ...yLabel, top: 0 }}>{formatTokens(max)}</div>}
-            {!empty && visible.length > 0 && <div style={{ ...yLabel, top: 52 }}>{formatTokens(Math.round(max / 2))}</div>}
-            {empty && (
-              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 130, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", pointerEvents: "none" }}>
-                No token usage {model !== "all" ? `for ${model} ` : ""}in this range
-              </div>
-            )}
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 10, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)" }}>
-              {data.map((d, i) => <span key={i} style={{ flex: 1, textAlign: "left" }}>{d.t}</span>)}
-            </div>
-            {hover !== null && visibleTotal(data[hover]) > 0 && (
-              <div style={{
-                position: "absolute",
-                left: chartTooltipLeft(hover, data.length),
-                transform: "translate(-50%, -100%)",
-                top: -4,
-                background: "var(--bg-secondary)",
-                border: "1px solid var(--border-medium)",
-                borderRadius: 2,
-                padding: "6px 8px",
-                fontFamily: "var(--fontFamilyMonospace)",
-                fontSize: 11,
-                color: "var(--fg1)",
-                whiteSpace: "nowrap",
-                pointerEvents: "none",
-                boxShadow: "var(--shadow-z2)",
-                zIndex: 1,
-              }}>
-                <div style={{ color: "var(--fg3)", marginBottom: 4 }}>{data[hover].t} · {formatTokens(visibleTotal(data[hover]))} tok</div>
-                {visible.filter(s => data[hover][s.key] > 0).map(s => (
-                  <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ width: 8, height: 8, background: s.color, borderRadius: 1 }}/>
-                    <span style={{ color: "var(--fg2)" }}>{s.label}</span>
-                    <span style={{ marginLeft: "auto", color: "var(--fg1)" }}>{formatTokens(data[hover][s.key])}</span>
-                  </div>
+            {!empty && visible.length > 0 && <ChartYAxis top={formatTokens(max)} mid={formatTokens(Math.round(max / 2))}/>}
+            <div style={{ marginLeft: 44, position: "relative", borderBottom: "1px solid var(--border-medium)" }}>
+              <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: 130, display: "block" }}>
+                {[0, 0.5].map(g => (
+                  <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2"/>
                 ))}
-              </div>
-            )}
+                {data.map((d, i) => {
+                  const x = i * (W / data.length) + gap/2;
+                  const isHover = hover === i;
+                  // Midpoint containment, not overlap — see ActivityChart.
+                  const isSel = selection && (d.start + d.end) / 2 >= selection.start && (d.start + d.end) / 2 < selection.end;
+                  const dim = selection && !isSel;
+                  const barOpacity = isHover || isSel ? 1 : dim ? 0.3 : 0.85;
+                  let yTop = H;
+                  const segs = [];
+                  for (const s of visible) {
+                    const v = d[s.key] || 0;
+                    if (v <= 0) continue;
+                    const h = (v / max) * H;
+                    yTop -= h;
+                    segs.push(<rect key={s.key} x={x} y={yTop} width={barW} height={Math.max(h, 0.2)} fill={s.color} opacity={barOpacity}/>);
+                  }
+                  return (
+                    <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
+                      onClick={onBucketClick ? () => onBucketClick(d) : undefined}
+                      style={{ cursor: onBucketClick ? "pointer" : "default" }}>
+                      <rect x={x - 0.4} y={0} width={barW + 0.8} height={H} fill="transparent"/>
+                      {segs}
+                    </g>
+                  );
+                })}
+              </svg>
+              {empty && (
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 130, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", pointerEvents: "none" }}>
+                  No token usage {model !== "all" ? `for ${model} ` : ""}in this range
+                </div>
+              )}
+              {hover !== null && visibleTotal(data[hover]) > 0 && (
+                <div style={{
+                  position: "absolute",
+                  left: chartTooltipLeft(hover, data.length),
+                  transform: "translate(-50%, -100%)",
+                  top: -4,
+                  background: "var(--bg-secondary)",
+                  border: "1px solid var(--border-medium)",
+                  borderRadius: 2,
+                  padding: "6px 8px",
+                  fontFamily: "var(--fontFamilyMonospace)",
+                  fontSize: 11,
+                  color: "var(--fg1)",
+                  whiteSpace: "nowrap",
+                  pointerEvents: "none",
+                  boxShadow: "var(--shadow-z2)",
+                  zIndex: 1,
+                }}>
+                  <div style={{ color: "var(--fg3)", marginBottom: 4 }}>{data[hover].t} · {formatTokens(visibleTotal(data[hover]))} tok</div>
+                  {visible.filter(s => data[hover][s.key] > 0).map(s => (
+                    <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ width: 8, height: 8, background: s.color, borderRadius: 1 }}/>
+                      <span style={{ color: "var(--fg2)" }}>{s.label}</span>
+                      <span style={{ marginLeft: "auto", color: "var(--fg1)" }}>{formatTokens(data[hover][s.key])}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <ChartXLabels data={data}/>
           </div>
         </div>
       );
@@ -708,8 +709,8 @@
         <div style={{ display: "flex", alignItems: "stretch", gap: 8, marginBottom: 16, fontSize: 13 }}>
           <div style={{
             flex: 1, display: "flex", alignItems: "center", gap: 8,
-            padding: "0 10px",
-            height: 32,
+            padding: "0 11px",
+            height: 34,
             border: "1px solid var(--border-medium)",
             borderRadius: 2,
             background: "var(--bg-primary)",
@@ -731,9 +732,9 @@
             onChange={e => onTimeRangeChange(e.target.value)}
             title="Time range"
             style={{
-              height: 32,
-              minWidth: 138,
-              padding: "0 30px 0 10px",
+              height: 34,
+              minWidth: 150,
+              padding: "0 30px 0 11px",
               border: "1px solid var(--border-medium)",
               borderRadius: 2,
               background: "var(--bg-primary)",
@@ -744,8 +745,10 @@
             {TIME_RANGES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
           </select>
           <button onClick={onRefresh} disabled={refreshing}
-            style={{ ...iconBtn, height: 32, width: 32, border: "1px solid var(--border-medium)", opacity: refreshing ? 0.5 : 1, cursor: refreshing ? "wait" : "pointer" }}
-            title="Refresh">
+            style={{ ...iconBtn, height: 34, width: 34, border: "1px solid var(--border-medium)", opacity: refreshing ? 0.5 : 1, cursor: refreshing ? "wait" : "pointer" }}
+            title="Refresh"
+            onMouseEnter={e => { if (!refreshing) { e.currentTarget.style.background = "var(--action-hover)"; e.currentTarget.style.color = "var(--fg1)"; } }}
+            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg2)"; }}>
             <Icon name="refresh" size={14}/>
           </button>
         </div>
@@ -766,10 +769,10 @@
            }}
            style={{
           display: "grid",
-          gridTemplateColumns: "90px minmax(280px, 1.4fr) 150px 100px minmax(180px, 1fr) minmax(160px, 1fr)",
+          gridTemplateColumns: "110px minmax(280px, 1.6fr) 150px 110px 130px 200px",
           alignItems: "center",
           gap: 16,
-          padding: "10px 16px",
+          padding: "12px 16px",
           borderBottom: "1px solid var(--border-weak)",
           borderLeft: `3px solid ${accent}`,
           background: "transparent",
@@ -784,7 +787,7 @@
         >
           <span style={{ color: "var(--fg2)" }}>{formatAgo(c.last_activity, now)}</span>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-            <span style={{ color: "var(--fg1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title || c.id}</span>
+            <span style={{ fontFamily: "var(--fontFamily)", color: "var(--fg1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title || c.id}</span>
             {c.title && c.title !== c.id && (
               <span style={{ color: "var(--fg3)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.id}</span>
             )}
@@ -794,7 +797,12 @@
             <span style={{ color: "var(--fg3)", padding: "0 6px" }}>·</span>
             <span style={{ color: "var(--fg1)" }}>{c.calls} {c.calls === 1 ? "call" : "calls"}</span>
           </span>
-          <span style={{ color: "var(--fg1)" }} title={tokenBreakdownTitle(c.token_buckets)}>{formatTokens(c.total_tokens)}</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }} title={tokenBreakdownTitle(c.token_buckets)}>
+            <span style={{ color: "var(--fg1)" }}>{formatTokens(c.total_tokens)}</span>
+            {c.status === "err" && (
+              <span style={{ display: "inline-flex", alignItems: "center", padding: "0 6px", height: 16, borderRadius: 2, background: "var(--error-transparent)", color: "var(--error-text)", fontSize: 10, letterSpacing: "0.04em" }}>ERR</span>
+            )}
+          </span>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {(c.agents || []).map(a => <AgentPill key={a} name={a} size="sm"/>)}
           </div>
@@ -815,11 +823,54 @@
             display: "inline-flex", alignItems: "center", gap: 4,
             background: "transparent", border: "none", padding: 0,
             cursor: "pointer", font: "inherit", textAlign: "left",
-            textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 500,
+            fontWeight: 500, whiteSpace: "nowrap",
             color: active ? "var(--fg1)" : "inherit",
           }}>
           {label}{active && <span style={{ fontSize: 8 }}>{sort.dir === "asc" ? "▲" : "▼"}</span>}
         </button>
+      );
+    }
+
+    // KpiTile is one cell of the KPI strip: a sentence-case label, a big
+    // mono value (optionally tinted, with a leading status dot), an
+    // optional progress bar, and a sub line.
+    function KpiTile({ label, value, valueColor, sub, dot, bar }) {
+      return (
+        <div style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 7 }}>
+          <span style={{ fontSize: 11, color: "var(--fg3)" }}>{label}</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {dot && <span style={{ width: 8, height: 8, borderRadius: "50%", background: dot, flexShrink: 0 }}/>}
+            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 24, fontWeight: 500, lineHeight: 1, color: valueColor || "var(--fg-max)" }}>{value}</span>
+          </span>
+          {bar != null && (
+            <span style={{ display: "block", height: 4, borderRadius: 2, background: "rgba(204,204,220,0.1)", overflow: "hidden", marginTop: 1 }}>
+              <span style={{ display: "block", height: "100%", width: `${bar}%`, background: "var(--viz-green)" }}/>
+            </span>
+          )}
+          {sub != null && <span style={{ fontSize: 11, color: "var(--fg2)" }}>{sub}</span>}
+        </div>
+      );
+    }
+
+    // KpiStrip surfaces the headline numbers for the in-view set: counts
+    // from the range + search conversations, token and cache rate from the
+    // chart's series (so they honour the model dropdown and legend
+    // toggles). "Tool calls" is the per-generation call count; "Errored
+    // conversations" counts conversations with a call error, since the
+    // list API exposes no per-tool-call breakdown.
+    function KpiStrip({ kpi }) {
+      const avg = kpi.avgCalls.toFixed(1).replace(/\.0$/, "");
+      return (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 16 }}>
+          <KpiTile label="Conversations" value={kpi.conversations} sub={kpi.conversationsSub}/>
+          <KpiTile label="Total tokens" value={formatTokens(kpi.tokens)} sub={`${kpi.models} ${kpi.models === 1 ? "model" : "models"}`}/>
+          <KpiTile label="Cache hit rate" value={kpi.cachePct == null ? "\u2014" : `${kpi.cachePct}%`} bar={kpi.cachePct == null ? 0 : kpi.cachePct}/>
+          <KpiTile label="Tool calls" value={kpi.calls} sub={`${avg} avg / conversation`}/>
+          <KpiTile label="Errored conversations" value={kpi.errConvs}
+            valueColor={kpi.errConvs > 0 ? "var(--error-text)" : "var(--fg-max)"}
+            dot={kpi.errConvs > 0 ? "var(--error-text)" : undefined}
+            sub={`${kpi.errPct}% of conversations`}/>
+        </div>
       );
     }
 
@@ -860,6 +911,15 @@
         () => effectiveModel === "all" ? points : points.filter(p => p.model === effectiveModel),
         [points, effectiveModel]
       );
+      // Legend visibility is shared with the KPI strip so hiding a series
+      // rescales the chart and drops it from the headline tokens in step.
+      // Lives here, not in TokenChart, so both read the one set.
+      const [hiddenSeries, setHiddenSeries] = useState(() => new Set());
+      const toggleSeries = useCallback(key => setHiddenSeries(prev => {
+        const next = new Set(prev);
+        next.has(key) ? next.delete(key) : next.add(key);
+        return next;
+      }), []);
       // Both metrics share one window so switching the chart between
       // them doesn't shift the time axis; with per-metric windows the
       // "All" range drifts when the datasets' extents differ.
@@ -875,6 +935,21 @@
         () => bucketTokenUsage(tokenFiltered, timeRange, now, { window: chartWindow }),
         [tokenFiltered, timeRange, now, chartWindow]
       );
+      // Distinct models that actually produced tokens inside the visible
+      // window. tokenModels spans the whole store (so the dropdown can
+      // still offer every model), but the headline count must agree with
+      // the windowed token total beside it — otherwise a 6h view reports
+      // models that only appear in older conversations.
+      const windowModelCount = useMemo(() => {
+        const seen = new Set();
+        for (const p of points) {
+          if (!p.model) continue;
+          const t = tokenPointTime(p);
+          if (!Number.isFinite(t) || t < chartWindow.start || t > chartWindow.end) continue;
+          seen.add(p.model);
+        }
+        return seen.size;
+      }, [points, chartWindow]);
 
       // Bucket drill-down from a chart bar click: the list narrows to
       // conversations active inside the picked bucket, while the charts
@@ -910,14 +985,59 @@
         return [...listFiltered].sort((a, b) => (val(a) - val(b)) * dir);
       }, [listFiltered, listSort]);
 
+      // KPI tiles read the range + search set (not the bucket drill-down).
+      // Conversation, tool-call and error counts come from that set; token
+      // and cache numbers come from the same series the chart draws, so the
+      // headline tokens always match the chart below, including its model
+      // dropdown and legend toggles. Conversation rows carry no per-model
+      // token breakdown, so that can only be honoured via the token series.
+      const kpi = useMemo(() => {
+        let calls = 0, errConvs = 0;
+        for (const c of filtered) {
+          calls += c.calls || 0;
+          if (c.status === "err") errConvs++;
+        }
+        // Sum only the series the chart is currently showing, so hiding one
+        // in the legend pulls it out of the headline total too.
+        let tokens = 0;
+        for (const s of TOKEN_SERIES) {
+          if (!hiddenSeries.has(s.key)) tokens += tokenUsage.totals[s.key] || 0;
+        }
+        const fresh = tokenUsage.totals.fresh_input || 0;
+        const cacheRead = tokenUsage.totals.cache_read || 0;
+        const cacheDenom = fresh + cacheRead;
+        // Hiding either side of the ratio makes the rate meaningless, so
+        // blank it out the way the old chart header did. Otherwise only
+        // report a flat 100% when there is literally no fresh input; cap at
+        // 99% so 99.99% (a few fresh tokens against a huge cache) doesn't
+        // round up and read as a perfect cache.
+        const cacheHidden = hiddenSeries.has("fresh_input") || hiddenSeries.has("cache_read");
+        const cachePct = cacheHidden || cacheDenom === 0 ? null
+          : cacheRead === cacheDenom ? 100
+          : Math.min(99, Math.round((cacheRead / cacheDenom) * 100));
+        return {
+          conversations: filtered.length,
+          conversationsSub: query ? "matching filter" : "active in range",
+          tokens,
+          models: effectiveModel === "all" ? windowModelCount : 1,
+          cachePct,
+          calls,
+          avgCalls: filtered.length ? calls / filtered.length : 0,
+          errConvs,
+          errPct: filtered.length ? Math.round((errConvs / filtered.length) * 100) : 0,
+        };
+      }, [filtered, tokenUsage, windowModelCount, effectiveModel, query, hiddenSeries]);
+
       return (
         <div style={{ padding: 24, maxWidth: 1600, margin: "0 auto" }}>
           <FilterBar query={query} onQueryChange={setQuery} timeRange={timeRange} onTimeRangeChange={setTimeRange} onRefresh={onRefresh} refreshing={refreshing}/>
+          <KpiStrip kpi={kpi}/>
           {chartMetric === "activity"
             ? <ActivityChart data={activity.buckets} bucketLabel={activity.bucketLabel}
                 selection={bucketSel} onBucketClick={onBucketClick}
                 switcher={<ChartSwitch value={chartMetric} onChange={setChartMetric}/>}/>
-            : <TokenChart data={tokenUsage.buckets} bucketLabel={tokenUsage.bucketLabel} grandTotal={tokenUsage.grandTotal} totals={tokenUsage.totals} models={tokenModels} model={effectiveModel} onModelChange={setTokenModel}
+            : <TokenChart data={tokenUsage.buckets} bucketLabel={tokenUsage.bucketLabel} grandTotal={tokenUsage.grandTotal} models={tokenModels} model={effectiveModel} onModelChange={setTokenModel}
+                hidden={hiddenSeries} onToggleSeries={toggleSeries}
                 selection={bucketSel} onBucketClick={onBucketClick}
                 switcher={<ChartSwitch value={chartMetric} onChange={setChartMetric}/>}/>}
 
@@ -942,12 +1062,12 @@
           }}>
             <div style={{
               display: "grid",
-              gridTemplateColumns: "90px minmax(280px, 1.4fr) 150px 100px minmax(180px, 1fr) minmax(160px, 1fr)",
+              gridTemplateColumns: "110px minmax(280px, 1.6fr) 150px 110px 130px 200px",
               alignItems: "center", gap: 16,
-              padding: "10px 16px 10px 19px",
+              padding: "11px 16px 11px 19px",
               borderBottom: "1px solid var(--border-weak)",
               background: "var(--bg-secondary)",
-              fontSize: 11, color: "var(--fg3)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 500,
+              fontFamily: "var(--fontFamily)", fontSize: 12, color: "var(--fg3)", fontWeight: 500,
             }}>
               <SortHeader label="Last activity" sortKey="last_activity" sort={listSort} onSort={handleSort}/>
               <span>Conversation</span>
@@ -994,7 +1114,7 @@
             fontSize: 11, color: "var(--fg3)",
             fontFamily: "var(--fontFamilyMonospace)",
           }}>
-            {sorted.length} of {conversations.length} {conversations.length === 1 ? "conversation" : "conversations"}
+            {sorted.length} of {filtered.length} {filtered.length === 1 ? "conversation" : "conversations"}
           </div>
         </div>
       );
@@ -1022,7 +1142,7 @@
       // palette: green for the user (input side), purple for tool
       // results, orange for the assistant so the primary brand colour
       // attaches to the agent's own output.
-      const labelColor = isUser ? "var(--brand-green)" : (isTool ? "var(--brand-purple)" : (isToolCall ? "var(--warning-text)" : "var(--brand-orange-text)"));
+      const labelColor = isUser ? "var(--viz-green)" : (isTool ? "var(--viz-purple)" : (isToolCall ? "var(--warning-text)" : "var(--brand-orange)"));
       const label = isTool ? "TOOL RESULT" : (isToolCall ? "TOOL CALL" : ((msg.role || "").toUpperCase() || "MESSAGE"));
       return (
         <div style={{
@@ -1044,6 +1164,45 @@
       );
     }
 
+    // ThinkingPart collapses a thinking block to a single toggle line so
+    // an empty or long chain-of-thought doesn't take over the turn. The
+    // SDK doesn't record a per-part token count, so the line is just the
+    // label; expanding reveals the captured text.
+    function ThinkingPart({ text }) {
+      const [open, setOpen] = useState(false);
+      return (
+        <div style={{ marginTop: 4 }}>
+          <div onClick={() => setOpen(o => !o)} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", color: "var(--fg3)", fontSize: 11, fontFamily: "var(--fontFamilyMonospace)" }}>
+            <Icon name={open ? "chevron" : "cright"} size={10} style={{ color: "var(--fg3)" }}/>
+            Thinking
+          </div>
+          {open && <div style={{ fontSize: 12, color: "var(--fg2)", whiteSpace: "pre-wrap", marginTop: 4, fontStyle: "italic" }}>{text}</div>}
+        </div>
+      );
+    }
+
+    // CappedBlock renders a <pre> capped to ~208px with a bottom fade and
+    // a "Show all N lines" toggle once the content runs past the cap, so a
+    // single huge tool result (an ls/tree dump) can't stretch the page to
+    // thousands of pixels.
+    function CappedBlock({ children, lineCount, preStyle }) {
+      const [open, setOpen] = useState(false);
+      const base = { background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "8px 10px", margin: "4px 0 0", fontFamily: "var(--fontFamilyMonospace)", fontSize: 12, lineHeight: 1.6, color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-all", ...(preStyle || {}) };
+      if (lineCount <= 14 || open) {
+        return <pre style={base}>{children}</pre>;
+      }
+      return (
+        <div style={{ position: "relative" }}>
+          <pre style={{ ...base, maxHeight: 208, overflow: "hidden" }}>{children}</pre>
+          <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 96, background: "linear-gradient(to bottom, transparent, var(--bg-primary))", display: "flex", alignItems: "flex-end", justifyContent: "center", paddingBottom: 8, pointerEvents: "none" }}>
+            <span onClick={() => setOpen(true)} style={{ pointerEvents: "auto", display: "inline-flex", alignItems: "center", gap: 6, height: 26, padding: "0 12px", background: "var(--bg-secondary)", border: "1px solid var(--border-medium)", borderRadius: 2, fontSize: 11, color: "var(--fg1)", cursor: "pointer" }}>
+              <Icon name="chevron" size={11} style={{ color: "var(--fg3)" }}/>Show all {lineCount} lines
+            </span>
+          </div>
+        </div>
+      );
+    }
+
     // MessagePart picks a renderer per part kind. Text and thinking are
     // wrapped pre-line so newlines from the model render naturally;
     // tool calls and tool results show a compact label + payload so the
@@ -1056,12 +1215,7 @@
         );
       }
       if (kind === "thinking" && part.thinking) {
-        return (
-          <details style={{ marginTop: 2 }}>
-            <summary style={{ cursor: "pointer", color: "var(--fg3)", fontSize: 11, fontFamily: "var(--fontFamilyMonospace)", textTransform: "uppercase", letterSpacing: "0.06em" }}>thinking</summary>
-            <div style={{ fontSize: 12, color: "var(--fg2)", whiteSpace: "pre-wrap", marginTop: 4, fontStyle: "italic" }}>{part.thinking}</div>
-          </details>
-        );
+        return <ThinkingPart text={part.thinking}/>;
       }
       if (kind === "tool_call" && part.tool_call) {
         const tc = part.tool_call;
@@ -1076,9 +1230,9 @@
             </div>
             {description && <div style={{ marginTop: 4, color: "var(--fg2)", fontSize: 12 }}>{description}</div>}
             {command ? (
-              <pre style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "6px 8px", margin: "4px 0 0", fontSize: 12, color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-all", overflowX: "auto" }}><span style={{ color: "var(--warning-text)" }}>$</span> {command}</pre>
+              <CappedBlock lineCount={command.split("\n").length}><span style={{ color: "var(--warning-text)" }}>$</span> {command}</CappedBlock>
             ) : args && (
-              <pre style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "6px 8px", margin: "4px 0 0", fontSize: 11, color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-all", overflowX: "auto" }}>{args}</pre>
+              <CappedBlock lineCount={args.split("\n").length} preStyle={{ fontSize: 11 }}>{args}</CappedBlock>
             )}
           </div>
         );
@@ -1087,14 +1241,13 @@
         const tr = part.tool_result;
         const body = tr.content || (tr.content_json ? (typeof tr.content_json === "string" ? tr.content_json : JSON.stringify(tr.content_json)) : "");
         const isErr = !!tr.is_error;
+        const lineCount = body ? body.split("\n").length : 0;
         return (
           <div style={{ marginTop: 4 }}>
             <div style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: isErr ? "var(--error-text)" : "var(--fg2)" }}>
-              ← result{tr.tool_call_id ? <span style={{ color: "var(--fg3)" }}> · {tr.tool_call_id}</span> : null}{isErr ? <span style={{ color: "var(--error-text)" }}> · error</span> : null}
+              ← result{tr.tool_call_id ? <span style={{ color: "var(--fg3)" }}> · {tr.tool_call_id}</span> : null}{lineCount > 0 ? <span style={{ color: "var(--fg3)" }}> · {lineCount} {lineCount === 1 ? "line" : "lines"}</span> : null}{isErr ? <span style={{ color: "var(--error-text)" }}> · error</span> : null}
             </div>
-            {body && (
-              <pre style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "6px 8px", margin: "4px 0 0", fontSize: 11, color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-all", overflowX: "auto" }}>{body}</pre>
-            )}
+            {body && <CappedBlock lineCount={lineCount} preStyle={{ fontSize: 11 }}>{body}</CappedBlock>}
           </div>
         );
       }
@@ -1155,12 +1308,13 @@
       );
     }
 
-    function StepCard({ step, n, expanded, onToggle }) {
+    function StepCard({ step, n, expanded, onToggle, innerRef, flash }) {
       const hasError = !!step.call_error;
       const dotColor = hasError ? "var(--error-text)" : "#73BF69";
       return (
-        <div style={{
+        <div ref={innerRef} className={flash ? "sigil-step-flash" : undefined} style={{
           border: "1px solid var(--border-weak)",
+          borderLeft: hasError ? "2px solid var(--error-main)" : "1px solid var(--border-weak)",
           borderRadius: 2,
           background: "var(--bg-primary)",
           marginBottom: 12,
@@ -1186,6 +1340,9 @@
                 <span style={{ fontFamily: "var(--fontFamilyMonospace)", color: "var(--fg2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{step.model}</span>
               )}
             </span>
+            {hasError && (
+              <span style={{ display: "inline-flex", alignItems: "center", height: 16, padding: "0 6px", borderRadius: 2, background: "var(--error-transparent)", color: "var(--error-text)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, letterSpacing: "0.04em" }}>error</span>
+            )}
             <span style={{ flex: 1 }}/>
             <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg2)", display: "flex", gap: 12, whiteSpace: "nowrap", flexShrink: 0 }}>
               <span>{formatDuration(step.duration_seconds)}</span>
@@ -1240,31 +1397,136 @@
       );
     }
 
+    // stepRailSummary picks a one-line label for a rail row: the first
+    // tool call's name + preview when the step ran a tool, otherwise
+    // "Initial prompt" for the opening step and "Final response" for a
+    // trailing text-only step. mono renders the tool form in Roboto Mono;
+    // prose labels stay in Inter. There is no "initial/final" flag in the
+    // data, so the position heuristic is the best we can do.
+    function stepRailSummary(step, i, total) {
+      const tool = (step.tools && step.tools[0]) || "";
+      if (tool) {
+        const preview = step.tool_preview ? ` · ${step.tool_preview}` : "";
+        return { label: `${tool}${preview}`, mono: true };
+      }
+      if (i === 0) return { label: "Initial prompt", mono: false };
+      if (i === total - 1) return { label: "Final response", mono: false };
+      return { label: "Response", mono: false };
+    }
+
+    // StepRail is the sticky left navigator for long traces. Each row
+    // mirrors a StepCard: number, a tool/prose summary, duration · tokens
+    // (warning on the slowest step, error on a failed one), and a status
+    // dot. Clicking a row expands and scrolls to that step.
+    function StepRail({ steps, activeStep, peakIdx, onSelect }) {
+      if (!steps || steps.length === 0) return null;
+      return (
+        <aside style={{ flex: "none", width: 248, position: "sticky", top: 72 }}>
+          <div style={{ fontSize: 11, color: "var(--fg3)", fontWeight: 500, padding: "0 4px 10px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span>Steps</span>
+            <span style={{ fontFamily: "var(--fontFamilyMonospace)" }}>{steps.length}</span>
+          </div>
+          <div style={{ border: "1px solid var(--border-weak)", borderRadius: 2, overflow: "hidden", background: "var(--bg-primary)" }}>
+            {steps.map((s, i) => {
+              const n = i + 1;
+              const active = n === activeStep;
+              const hasError = !!s.call_error;
+              const summary = stepRailSummary(s, i, steps.length);
+              const isPeak = i === peakIdx;
+              const subColor = hasError ? "var(--error-text)" : (isPeak ? "var(--warning-text)" : "var(--fg3)");
+              return (
+                <div key={s.generation_id || i} onClick={() => onSelect(n)} style={{
+                  display: "grid", gridTemplateColumns: "24px 1fr auto", alignItems: "center", gap: 8,
+                  padding: "9px 11px",
+                  borderBottom: i === steps.length - 1 ? "none" : "1px solid var(--border-weak)",
+                  borderLeft: active ? "2px solid var(--brand-orange)" : "2px solid transparent",
+                  background: active ? "var(--action-selected)" : "transparent",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={e => { if (!active) e.currentTarget.style.background = "rgba(204,204,220,0.03)"; }}
+                onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}>
+                  <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>{n}</span>
+                  <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                    <span style={{ fontFamily: summary.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)", fontSize: 12, color: active ? "var(--fg-max)" : "var(--fg1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary.label}</span>
+                    <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, color: subColor, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {formatDuration(s.duration_seconds)} · {formatTokens(s.total_tokens)}{isPeak ? " · peak" : ""}
+                    </span>
+                  </span>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: hasError ? "var(--error-text)" : "var(--viz-green)" }}/>
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+      );
+    }
+
     function ConversationThread({ steps }) {
       // First 4 cards default to expanded — the typical attention zone.
       const [expanded, setExpanded] = useState(() => new Set(steps.slice(0, 4).map((_, i) => i + 1)));
+      const [activeStep, setActiveStep] = useState(1);
+      const [flashStep, setFlashStep] = useState(null);
+      const cardRefs = useRef({});
+      const flashTimer = useRef(null);
+
+      useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
+
+      // Toggling a card header is also a focus signal, so keep the rail's
+      // active marker in sync with it — otherwise the highlight stays on
+      // the last rail-clicked step while the user works elsewhere.
       const toggle = n => {
+        setActiveStep(n);
         const next = new Set(expanded);
         next.has(n) ? next.delete(n) : next.add(n);
         setExpanded(next);
       };
 
+      // Rail click: expand the step, mark it active, smooth-scroll its card
+      // just below the sticky top bar, and trigger a brief orange glow. The
+      // page scrolls on the window (no ancestor has a definite height, so
+      // the inner main never becomes a scroll container), and 72px clears
+      // the 48px header plus a gap, matching the rail's sticky offset.
+      // Clearing flashStep before re-setting it restarts the animation when
+      // the same step is clicked twice; the nested rAF lets the expand
+      // reflow settle so the scroll target is measured against the final
+      // layout.
+      const selectStep = n => {
+        setExpanded(prev => prev.has(n) ? prev : new Set(prev).add(n));
+        setActiveStep(n);
+        setFlashStep(null);
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const card = cardRefs.current[n];
+          if (card) {
+            const top = window.scrollY + card.getBoundingClientRect().top - 72;
+            window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+          }
+          setFlashStep(n);
+        }));
+        if (flashTimer.current) clearTimeout(flashTimer.current);
+        flashTimer.current = setTimeout(() => setFlashStep(null), 1400);
+      };
+
       const totalSec = steps.reduce((acc, s) => acc + (s.duration_seconds || 0), 0);
       const peakSec  = steps.reduce((acc, s) => Math.max(acc, s.duration_seconds || 0), 0);
       const totalTok = steps.reduce((acc, s) => acc + (s.total_tokens || 0), 0);
+      let peakIdx = -1;
+      steps.forEach((s, i) => { if (peakSec > 0 && peakIdx === -1 && (s.duration_seconds || 0) === peakSec) peakIdx = i; });
 
       return (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ borderBottom: "1px solid var(--border-weak)", paddingBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
-            <Icon name="list" size={12} style={{ color: "var(--fg3)" }}/>
-            <span style={{ fontSize: 11, color: "var(--fg3)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Conversation thread</span>
-            <span style={{ flex: 1 }}/>
-            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg2)" }}>
-              {steps.length} {steps.length === 1 ? "call" : "calls"} · peak {formatDuration(peakSec)} · {formatTokens(totalTok)} tok · {formatDuration(totalSec)} aggregate
-            </span>
-          </div>
-          <div>
-            {steps.map((s, i) => <StepCard key={s.generation_id || i} step={s} n={i + 1} expanded={expanded.has(i + 1)} onToggle={() => toggle(i + 1)}/>)}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 24 }}>
+          <StepRail steps={steps} activeStep={activeStep} peakIdx={peakIdx} onSelect={selectStep}/>
+          <div style={{ flex: 1, minWidth: 0, maxWidth: 920, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ borderBottom: "1px solid var(--border-weak)", paddingBottom: 9, display: "flex", alignItems: "center", gap: 8 }}>
+              <Icon name="list" size={13} style={{ color: "var(--fg3)" }}/>
+              <span style={{ fontSize: 13, color: "var(--fg1)", fontWeight: 500 }}>Conversation thread</span>
+              <span style={{ flex: 1 }}/>
+              <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg2)" }}>
+                {steps.length} {steps.length === 1 ? "call" : "calls"} · peak {formatDuration(peakSec)} · {formatTokens(totalTok)} tok · {formatDuration(totalSec)} aggregate
+              </span>
+            </div>
+            <div>
+              {steps.map((s, i) => <StepCard key={s.generation_id || i} step={s} n={i + 1} expanded={expanded.has(i + 1)} onToggle={() => toggle(i + 1)} innerRef={el => { cardRefs.current[i + 1] = el; }} flash={flashStep === i + 1}/>)}
+            </div>
           </div>
         </div>
       );
@@ -1273,10 +1535,28 @@
     function DetailStats({ conv, steps }) {
       const wallSec = durationBetweenSeconds(conv.started_at, conv.last_activity);
       const errStatus = conv.status === "err";
+
+      // Cache rate from the per-step buckets: the conversation summary is
+      // synthesised from the detail on a deep link and omits the aggregate
+      // buckets, so the steps are the reliable source. Mirror the list
+      // KPI: cache reads over cache reads + fresh input, capped at 99% so a
+      // near-perfect cache doesn't round up to a misleading 100%.
+      const cache = (steps || []).reduce((a, s) => {
+        const b = s.token_buckets || {};
+        a.read += b.cache_read || 0;
+        a.fresh += b.fresh_input || 0;
+        return a;
+      }, { read: 0, fresh: 0 });
+      const cacheDenom = cache.read + cache.fresh;
+      const cachePct = cacheDenom === 0 ? null
+        : cache.read === cacheDenom ? 100
+        : Math.min(99, Math.round((cache.read / cacheDenom) * 100));
+
       const stats = [
-        { icon: "clock", label: formatDuration(wallSec),                       sub: "elapsed" },
-        { icon: "swap",  label: `${conv.calls} ${conv.calls === 1 ? "call" : "calls"}`, sub: "calls" },
-        { icon: "bolt",  label: formatTokens(conv.total_tokens),               sub: "tok" },
+        { value: formatDuration(wallSec),         unit: "elapsed" },
+        { value: String(conv.calls),              unit: conv.calls === 1 ? "call" : "calls" },
+        { value: formatTokens(conv.total_tokens), unit: "tokens" },
+        ...(cachePct != null ? [{ value: `${cachePct}%`, unit: "cached", color: "var(--viz-green)" }] : []),
       ];
       const onExport = () => {
         const blob = new Blob([JSON.stringify({ ...conv, generations: steps }, null, 2)], { type: "application/json" });
@@ -1288,12 +1568,16 @@
       };
 
       return (
-        <div style={{ display: "flex", gap: 18, alignItems: "center", padding: "12px 24px", borderBottom: "1px solid var(--border-weak)", background: "var(--bg-primary)", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "11px 24px", borderBottom: "1px solid var(--border-weak)", background: "var(--bg-primary)", flexWrap: "wrap" }}>
           {stats.map((s, i) => (
-            <div key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--fg2)", fontSize: 12, fontFamily: "var(--fontFamilyMonospace)", whiteSpace: "nowrap" }}>
-              <Icon name={s.icon} size={13} style={{ color: "var(--fg3)" }}/>
-              <span style={{ color: "var(--fg1)" }}>{s.label}</span>
-              <span style={{ color: "var(--fg3)" }}>{s.sub}</span>
+            <div key={i} style={{
+              display: "inline-flex", alignItems: "baseline", gap: 6,
+              paddingRight: 14,
+              borderRight: i === stats.length - 1 ? "none" : "1px solid var(--border-weak)",
+              whiteSpace: "nowrap",
+            }}>
+              <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 14, color: s.color || "var(--fg-max)" }}>{s.value}</span>
+              <span style={{ fontSize: 11, color: "var(--fg3)" }}>{s.unit}</span>
             </div>
           ))}
           {errStatus && (
@@ -1312,13 +1596,15 @@
           <span style={{ flex: 1 }}/>
           <button title="Download trace as JSON" onClick={onExport} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
-            padding: "4px 10px", height: 26,
+            padding: "0 11px", height: 28,
             background: "transparent", color: "var(--fg1)",
             border: "1px solid var(--border-medium)",
-            borderRadius: 2, fontSize: 11, cursor: "pointer", fontFamily: "var(--fontFamily)", fontWeight: 500,
+            borderRadius: 2, fontSize: 12, cursor: "pointer", fontFamily: "var(--fontFamily)", fontWeight: 500,
             whiteSpace: "nowrap",
-          }}>
-            <Icon name="download" size={11}/> Export JSON
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = "var(--action-hover)"}
+          onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+            <Icon name="download" size={12}/> Export JSON
           </button>
         </div>
       );
@@ -1328,13 +1614,414 @@
       return (
         <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, background: "var(--bg-canvas)" }}>
           <DetailStats conv={conv} steps={detail ? detail.generations : []}/>
-          <main style={{ padding: "24px 32px", overflowY: "auto", flex: 1 }}>
-            <div style={{ maxWidth: 880, margin: "0 auto" }}>
+          <main style={{ padding: 24 }}>
+            <div style={{ maxWidth: 1392, margin: "0 auto" }}>
               {error && <Notice kind="error" title="Failed to load conversation">{error}</Notice>}
               {!error && loading && <div style={{ color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 12 }}>Loading…</div>}
               {!error && !loading && detail && <ConversationThread steps={detail.generations}/>}
             </div>
           </main>
+        </div>
+      );
+    }
+
+    // ============================================================
+    // Settings — edits config.env via the daemon's /api/v1/config endpoints
+    // ============================================================
+
+    // Mono renders inline code in the monospace face used across the viewer.
+    function Mono({ children }) {
+      return <code style={{ fontFamily: "var(--fontFamilyMonospace)", color: "var(--fg2)" }}>{children}</code>;
+    }
+
+    // sameSettings is a field-wise deep compare for dirty tracking. Tag order
+    // is significant (it survives a round-trip), so it is compared positionally.
+    function sameSettings(a, b) {
+      if (!a || !b) return a === b;
+      if (a.endpoint !== b.endpoint || a.tenantId !== b.tenantId || a.otlpEndpoint !== b.otlpEndpoint
+        || a.token !== b.token || a.tokenCleared !== b.tokenCleared) return false;
+      if (a.capture !== b.capture || a.guards !== b.guards || a.guardTimeout !== b.guardTimeout
+        || a.debug !== b.debug || a.autoUpdate !== b.autoUpdate || a.userId !== b.userId) return false;
+      const at = a.tags || [], bt = b.tags || [];
+      if (at.length !== bt.length) return false;
+      for (let i = 0; i < at.length; i++) {
+        if (at[i].key !== bt[i].key || at[i].value !== bt[i].value) return false;
+      }
+      return true;
+    }
+
+    // cloneSettings deep-copies so the form and the saved snapshot never share
+    // the tags array (editing one must not mutate the other).
+    function cloneSettings(s) {
+      return { ...s, tags: (s.tags || []).map(t => ({ ...t })) };
+    }
+
+    function Segmented({ value, onChange, options }) {
+      return (
+        <div style={{ display: "inline-flex", padding: 3, gap: 3, background: "var(--bg-canvas)", border: "1px solid var(--border-medium)", borderRadius: 2 }}>
+          {options.map(o => {
+            const active = o.value === value;
+            return (
+              <button key={o.value} onClick={() => onChange(o.value)} style={{
+                padding: "6px 14px", borderRadius: 2, fontSize: 13, border: "none", cursor: "pointer",
+                background: active ? "var(--secondary-main)" : "transparent",
+                color: active ? "var(--fg-max)" : "var(--fg2)",
+                fontWeight: active ? 500 : 400, transition: "background .12s, color .12s",
+              }}>{o.label}</button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    function Toggle({ checked, onChange }) {
+      return (
+        <button role="switch" aria-checked={checked} onClick={() => onChange(!checked)} style={{
+          position: "relative", width: 38, height: 22, borderRadius: 9999, border: "none",
+          cursor: "pointer", padding: 0, flexShrink: 0,
+          background: checked ? "var(--primary-main)" : "rgba(204,204,220,0.25)", transition: "background .15s",
+        }}>
+          <span style={{
+            position: "absolute", top: 3, left: 3, width: 16, height: 16, borderRadius: "50%",
+            background: "#fff", transform: checked ? "translateX(16px)" : "translateX(0)", transition: "transform .15s",
+          }}/>
+        </button>
+      );
+    }
+
+    function MonoInput({ value, onChange, placeholder, width, align, type }) {
+      return (
+        <input type={type || "text"} value={value} placeholder={placeholder}
+          onChange={e => onChange(e.target.value)}
+          onFocus={e => e.currentTarget.style.borderColor = "var(--primary-border)"}
+          onBlur={e => e.currentTarget.style.borderColor = "var(--border-medium)"}
+          style={{
+            height: 32, width: width || "auto", background: "var(--bg-canvas)",
+            border: "1px solid var(--border-medium)", borderRadius: 2, color: "var(--fg1)",
+            padding: "0 10px", fontFamily: "var(--fontFamilyMonospace)", fontSize: 12,
+            textAlign: align || "left", outline: "none",
+          }}/>
+      );
+    }
+
+    function PrimaryButton({ onClick, children }) {
+      return (
+        <button onClick={onClick}
+          onMouseEnter={e => { e.currentTarget.style.background = "var(--primary-shade)"; e.currentTarget.style.borderColor = "var(--primary-shade)"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "var(--primary-main)"; e.currentTarget.style.borderColor = "var(--primary-main)"; }}
+          style={{ height: 32, padding: "0 14px", background: "var(--primary-main)", border: "1px solid var(--primary-main)", color: "#fff", borderRadius: 2, fontSize: 13, fontWeight: 500, cursor: "pointer" }}>{children}</button>
+      );
+    }
+
+    function GhostButton({ onClick, children }) {
+      return (
+        <button onClick={onClick}
+          onMouseEnter={e => e.currentTarget.style.background = "var(--action-hover)"}
+          onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+          style={{ height: 32, padding: "0 14px", background: "transparent", border: "1px solid var(--secondary-border)", color: "var(--fg1)", borderRadius: 2, fontSize: 13, cursor: "pointer" }}>{children}</button>
+      );
+    }
+
+    function SettingsCard({ children }) {
+      return <div style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "4px 20px 10px", marginBottom: 16 }}>{children}</div>;
+    }
+
+    function SectionLabel({ children }) {
+      return <div style={{ padding: "16px 0 2px", fontSize: 11, fontWeight: 600, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--fg3)" }}>{children}</div>;
+    }
+
+    // SettingRow is one label/help + control line inside a card. `full` stacks
+    // the control under the label for wide controls (the tags editor).
+    function SettingRow({ label, help, children, full }) {
+      const left = (
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 500, color: "var(--fg1)" }}>{label}</div>
+          {help && <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg3)", maxWidth: 460, marginTop: 4 }}>{help}</div>}
+        </div>
+      );
+      if (full) {
+        return (
+          <div style={{ padding: "16px 0", borderTop: "1px solid var(--border-weak)" }}>
+            {left}
+            <div style={{ marginTop: 12 }}>{children}</div>
+          </div>
+        );
+      }
+      return (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 32, padding: "16px 0", borderTop: "1px solid var(--border-weak)" }}>
+          {left}
+          <div style={{ flexShrink: 0 }}>{children}</div>
+        </div>
+      );
+    }
+
+    // PreviewBody renders the rendered config.env with key/value colouring:
+    // comments and `=` are dimmed, keys are blue, values green.
+    function PreviewBody({ text }) {
+      const lines = (text || "").split("\n");
+      if (lines.length && lines[lines.length - 1] === "") lines.pop();
+      return (
+        <div style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 12, lineHeight: 1.9, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+          {lines.map((line, i) => {
+            if (line.startsWith("#")) return <div key={i} style={{ color: "var(--fg3)" }}>{line}</div>;
+            const eq = line.indexOf("=");
+            if (eq < 0) return <div key={i} style={{ color: "var(--fg1)" }}>{line || "\u00a0"}</div>;
+            return (
+              <div key={i}>
+                <span style={{ color: "var(--primary-text)" }}>{line.slice(0, eq)}</span>
+                <span style={{ color: "var(--fg3)" }}>=</span>
+                <span style={{ color: "var(--viz-green)" }}>{line.slice(eq + 1)}</span>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    function UnsavedBar({ onReset, onSave }) {
+      return (
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: 24, display: "flex", justifyContent: "center", pointerEvents: "none", zIndex: 20 }}>
+          <div style={{ pointerEvents: "auto", display: "flex", alignItems: "center", gap: 12, background: "var(--bg-secondary)", border: "1px solid var(--border-medium)", borderRadius: 2, padding: "9px 12px 9px 16px", boxShadow: "var(--shadow-z2)", animation: "sigil-barin .16s ease-out" }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--brand-orange)" }}/>
+            <span style={{ fontSize: 13, color: "var(--fg2)" }}>Unsaved changes</span>
+            <GhostButton onClick={onReset}>Reset</GhostButton>
+            <PrimaryButton onClick={onSave}>Save to config.env</PrimaryButton>
+          </div>
+        </div>
+      );
+    }
+
+    function Toast({ message }) {
+      return (
+        <div style={{ position: "fixed", top: 60, right: 20, zIndex: 30, display: "flex", alignItems: "center", gap: 8, background: "var(--bg-secondary)", border: "1px solid var(--border-medium)", borderLeft: "3px solid var(--success-border)", borderRadius: 2, padding: "10px 14px", boxShadow: "var(--shadow-z2)", animation: "sigil-tin .2s ease-out" }}>
+          <Icon name="check" size={16} style={{ color: "var(--success-text)" }}/>
+          <span style={{ fontSize: 13, color: "var(--fg1)" }}>{message}</span>
+        </div>
+      );
+    }
+
+    const CAPTURE_OPTIONS = [{ value: "metadata_only", label: "Metadata only" }, { value: "full", label: "Full" }];
+    const GUARD_OPTIONS = [{ value: "off", label: "Disabled" }, { value: "failopen", label: "Fail-open" }, { value: "failclosed", label: "Fail-closed" }];
+
+    function SettingsView() {
+      const [form, setForm] = useState(null);
+      const [saved, setSaved] = useState(null);
+      const [preview, setPreview] = useState("");
+      const [path, setPath] = useState("~/.config/sigil/config.env");
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(null);
+      const [toast, setToast] = useState(null);
+      const toastTimer = useRef(null);
+
+      const showToast = useCallback((msg) => {
+        setToast(msg);
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setToast(null), 2600);
+      }, []);
+      useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+
+      // Hydrate the form from config.env on mount.
+      useEffect(() => {
+        let alive = true;
+        setLoading(true);
+        setError(null);
+        fetch("/api/v1/config")
+          .then(r => r.ok ? r.json() : r.text().then(t => Promise.reject(new Error(t || `HTTP ${r.status}`))))
+          .then(body => {
+            if (!alive) return;
+            setForm(cloneSettings(body.settings));
+            setSaved(cloneSettings(body.settings));
+            setPreview(body.preview || "");
+            if (body.path) setPath(body.path);
+          })
+          .catch(e => { if (alive) setError(String(e.message || e)); })
+          .finally(() => { if (alive) setLoading(false); });
+        return () => { alive = false; };
+      }, []);
+
+      // Live preview: the daemon renders exactly what it would write, so the
+      // panel never drifts from the file. Debounced to coalesce keystrokes.
+      // Each run aborts the prior in-flight request and ignores its result, so
+      // a slow older response can never overwrite a newer one.
+      useEffect(() => {
+        if (!form) return;
+        let ignore = false;
+        const controller = new AbortController();
+        const t = setTimeout(() => {
+          fetch("/api/v1/config:preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: form }), signal: controller.signal })
+            .then(r => r.ok ? r.json() : null)
+            .then(b => { if (!ignore && b && typeof b.preview === "string") setPreview(b.preview); })
+            .catch(() => {});
+        }, 180);
+        return () => { ignore = true; controller.abort(); clearTimeout(t); };
+      }, [form]);
+
+      const page = { maxWidth: 1300, margin: "0 auto", padding: "28px 24px 110px", width: "100%" };
+      if (loading && !form) {
+        return <div style={page}><Notice kind="info" title="Loading settings…">Reading config.env.</Notice></div>;
+      }
+      if (!form) {
+        return <div style={page}><Notice kind="error" title="Failed to load settings">{error}</Notice></div>;
+      }
+
+      const dirty = !sameSettings(form, saved);
+      const captureUnset = form.capture === "";
+      const advanced = form.capture === "no_tool_content" || form.capture === "full_with_metadata_spans";
+      const guardsOn = form.guards !== "off";
+      const set = (patch) => setForm(f => ({ ...f, ...patch }));
+      const setTag = (i, patch) => setForm(f => ({ ...f, tags: f.tags.map((t, j) => j === i ? { ...t, ...patch } : t) }));
+      const addTag = () => setForm(f => ({ ...f, tags: [...f.tags, { key: "", value: "" }] }));
+      const removeTag = (i) => setForm(f => ({ ...f, tags: f.tags.filter((_, j) => j !== i) }));
+      const reset = () => setForm(cloneSettings(saved));
+
+      const save = () => {
+        setError(null);
+        fetch("/api/v1/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: form }) })
+          .then(r => r.ok ? r.json() : r.text().then(t => Promise.reject(new Error(t || `HTTP ${r.status}`))))
+          .then(body => {
+            setForm(cloneSettings(body.settings));
+            setSaved(cloneSettings(body.settings));
+            if (typeof body.preview === "string") setPreview(body.preview);
+            showToast("Settings saved to config.env.");
+          })
+          .catch(e => setError(String(e.message || e)));
+      };
+      const copy = () => {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(preview).then(() => showToast("Copied to clipboard.")).catch(() => {});
+        }
+      };
+
+      return (
+        <div style={page}>
+          <h1 style={{ fontSize: 20, fontWeight: 500, color: "var(--fg-max)", margin: "0 0 20px" }}>Settings</h1>
+
+          {error && <div style={{ marginBottom: 16 }}><Notice kind="error" title="Couldn’t save settings">{error}</Notice></div>}
+
+          <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
+            <div style={{ flex: "1 1 0", minWidth: 0 }}>
+              <SettingsCard>
+                <SectionLabel>Connection</SectionLabel>
+                <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg3)", padding: "0 0 10px" }}>
+                  These values apply to your Grafana Cloud sessions.
+                </div>
+                <SettingRow label="Endpoint" help={<>Grafana AI Observability ingest URL.</>}>
+                  <MonoInput value={form.endpoint} onChange={v => set({ endpoint: v })} placeholder="https://sigil-prod-….grafana.net" width={320}/>
+                </SettingRow>
+                <SettingRow label="Tenant ID" help={<>Your stack instance ID.</>}>
+                  <MonoInput value={form.tenantId} onChange={v => set({ tenantId: v })} placeholder="123456" width={200}/>
+                </SettingRow>
+                <SettingRow label="Auth token" help={<>Stored locally with <Mono>0600</Mono> perms. Reset to replace or remove the saved token.</>}>
+                  {form.tokenSet && !form.tokenCleared && form.token === "" ? (
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                      <input value="" disabled placeholder="configured" style={{ height: 32, width: 200, background: "var(--bg-canvas)", border: "1px solid var(--border-medium)", borderRadius: 2, color: "var(--fg3)", padding: "0 10px", fontFamily: "var(--fontFamilyMonospace)", fontSize: 12, cursor: "not-allowed" }}/>
+                      <GhostButton onClick={() => set({ tokenCleared: true, token: "" })}>Reset</GhostButton>
+                    </div>
+                  ) : (
+                    <MonoInput type="password" value={form.token}
+                      onChange={v => set({ token: v, tokenCleared: form.tokenSet && v === "" })}
+                      placeholder={form.tokenSet ? "new token, or blank to remove" : "glc_…"} width={260}/>
+                  )}
+                </SettingRow>
+                <SettingRow label="OTLP endpoint" help={<>For SDK traces and metrics.</>}>
+                  <MonoInput value={form.otlpEndpoint} onChange={v => set({ otlpEndpoint: v })} placeholder="https://otlp-gateway-….grafana.net/otlp" width={320}/>
+                </SettingRow>
+                <SettingRow
+                  label="Content capture mode"
+                  help={<>
+                    What content sigil sends to Grafana Cloud for each generation. <Mono>--local</Mono> sessions always capture full content on this machine.
+                    {captureUnset && <div style={{ color: "var(--fg3)", marginTop: 6 }}>Not set: Grafana Cloud sessions capture metadata only. Pick a mode to pin it.</div>}
+                    {advanced && <div style={{ color: "var(--warning-text)", marginTop: 6 }}>Advanced mode <Mono>{form.capture}</Mono> is set in config.env and will be preserved.</div>}
+                  </>}
+                >
+                  <Segmented value={form.capture} onChange={v => set({ capture: v })} options={CAPTURE_OPTIONS}/>
+                </SettingRow>
+              </SettingsCard>
+
+              <SettingsCard>
+                <SectionLabel>Tags</SectionLabel>
+                <SettingRow full label="Session tags" help={<>Applied to every generation as <Mono>key=value</Mono>. Empty pairs are dropped on save.</>}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {form.tags.map((t, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <MonoInput value={t.key} onChange={v => setTag(i, { key: v })} placeholder="key" width={200}/>
+                        <span style={{ color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)" }}>=</span>
+                        <MonoInput value={t.value} onChange={v => setTag(i, { value: v })} placeholder="value" width={200}/>
+                        <button onClick={() => removeTag(i)} title="Remove tag" aria-label="Remove tag" style={{
+                          width: 28, height: 28, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                          background: "transparent", border: "1px solid transparent", color: "var(--fg3)", cursor: "pointer", borderRadius: 2,
+                        }}
+                          onMouseEnter={e => e.currentTarget.style.color = "var(--fg1)"}
+                          onMouseLeave={e => e.currentTarget.style.color = "var(--fg3)"}>
+                          <Icon name="times" size={14}/>
+                        </button>
+                      </div>
+                    ))}
+                    <button onClick={addTag} style={{
+                      alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 6,
+                      height: 30, padding: "0 12px", background: "transparent", border: "1px dashed var(--border-medium)",
+                      borderRadius: 2, color: "var(--fg2)", fontSize: 13, cursor: "pointer",
+                    }}
+                      onMouseEnter={e => e.currentTarget.style.borderColor = "var(--border-strong)"}
+                      onMouseLeave={e => e.currentTarget.style.borderColor = "var(--border-medium)"}>
+                      <Icon name="plus" size={13}/>Add tag
+                    </button>
+                  </div>
+                </SettingRow>
+              </SettingsCard>
+
+              <SettingsCard>
+                <SectionLabel>Guards</SectionLabel>
+                <SettingRow label="Pre-tool-use guards" help={<>Run safety checks before each tool call. <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Fail-open</b> allows the action if a check errors or times out; <b style={{ fontWeight: 500, color: "var(--fg2)" }}>fail-closed</b> blocks it.</>}>
+                  <Segmented value={form.guards} onChange={v => set({ guards: v })} options={GUARD_OPTIONS}/>
+                </SettingRow>
+                {guardsOn && (
+                  <SettingRow label="Guard timeout" help={<>Max time for a guard check to respond. Clear the field to use the default of 1500 ms.</>}>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <MonoInput value={form.guardTimeout} onChange={v => set({ guardTimeout: v })} placeholder="1500" width={110} align="right"/>
+                      <span style={{ fontSize: 12, color: "var(--fg3)" }}>ms</span>
+                    </div>
+                  </SettingRow>
+                )}
+              </SettingsCard>
+
+              <SettingsCard>
+                <SectionLabel>Runtime</SectionLabel>
+                <SettingRow label="Debug logging" help={<>Write a verbose log to <Mono>~/.local/state/sigil/logs/sigil.log</Mono>.</>}>
+                  <Toggle checked={form.debug} onChange={v => set({ debug: v })}/>
+                </SettingRow>
+                <SettingRow label="Automatic updates" help={<>Keep host agent plugins refreshed automatically. Turn off to pin the current versions.</>}>
+                  <Toggle checked={form.autoUpdate} onChange={v => set({ autoUpdate: v })}/>
+                </SettingRow>
+              </SettingsCard>
+
+              <SettingsCard>
+                <SectionLabel>Identity · Optional</SectionLabel>
+                <SettingRow label="User ID" help={<>Override the resolved user id used to attribute generations. Leave blank to auto-resolve.</>}>
+                  <MonoInput value={form.userId} onChange={v => set({ userId: v })} placeholder="auto" width={260}/>
+                </SettingRow>
+              </SettingsCard>
+            </div>
+
+            <div style={{ width: 440, flexShrink: 0, position: "sticky", top: 72 }}>
+              <div style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderBottom: "1px solid var(--border-weak)" }}>
+                  <span style={{ fontSize: 12, color: "var(--fg2)", fontFamily: "var(--fontFamilyMonospace)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>
+                  <button onClick={copy} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "transparent", border: "1px solid var(--secondary-border)", color: "var(--fg1)", borderRadius: 2, height: 26, padding: "0 8px", fontSize: 12, cursor: "pointer" }}
+                    onMouseEnter={e => e.currentTarget.style.background = "var(--action-hover)"}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    <Icon name="copy" size={13}/>Copy
+                  </button>
+                </div>
+                <div style={{ background: "var(--bg-canvas)", padding: "14px 16px", maxHeight: "calc(100vh - 220px)", overflow: "auto" }}>
+                  <PreviewBody text={preview}/>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {dirty && <UnsavedBar onReset={reset} onSave={save}/>}
+          {toast && <Toast message={toast}/>}
         </div>
       );
     }
@@ -1358,6 +2045,14 @@
 
     function conversationPath(id) {
       return `/conversations/${encodeURIComponent(id)}`;
+    }
+
+    // settingsRouteActive reports whether the URL is the Settings tab. It is
+    // the only non-conversation route; every other path is the conversations
+    // section (the list, or a detail when conversationIDFromPath matches).
+    function settingsRouteActive() {
+      if (typeof window === "undefined") return false;
+      return window.location.pathname.replace(/\/$/, "") === "/settings";
     }
 
     // Returns true for a plain primary-button click with no modifier keys.
@@ -1427,6 +2122,7 @@
 
     function App() {
       const [selectedID, setSelectedID] = useState(conversationIDFromPath);
+      const [showSettings, setShowSettings] = useState(settingsRouteActive);
       const [conversations, setConversations] = useState([]);
       const [tokenPoints, setTokenPoints] = useState([]);
       const [loadingList, setLoadingList] = useState(true);
@@ -1444,7 +2140,7 @@
       const [loadingDetail, setLoadingDetail] = useState(false);
       const [errDetail, setErrDetail] = useState(null);
 
-      const view = selectedID ? "conversation" : "conversations";
+      const view = showSettings ? "settings" : (selectedID ? "conversation" : "conversations");
       const selected = selectedID
         ? conversations.find(c => c.id === selectedID) || summaryFromDetail(detail, selectedID)
         : null;
@@ -1456,9 +2152,11 @@
         setTimeRange(v);
       }, [setTimeRange]);
 
-      const pageTitle = view === "conversation" && selected
-        ? `${selected.title || selected.id} — sigil local`
-        : "sigil — local";
+      const pageTitle = view === "settings"
+        ? "Settings — sigil local"
+        : view === "conversation" && selected
+          ? `${selected.title || selected.id} — sigil local`
+          : "sigil — local";
       useEffect(() => { document.title = pageTitle; }, [pageTitle]);
 
       const fetchList = useCallback(() => {
@@ -1506,7 +2204,10 @@
       useEffect(() => { refreshAll(); }, [refreshAll]);
 
       useEffect(() => {
-        const onPopState = () => setSelectedID(conversationIDFromPath());
+        const onPopState = () => {
+          setSelectedID(conversationIDFromPath());
+          setShowSettings(settingsRouteActive());
+        };
         window.addEventListener("popstate", onPopState);
         return () => window.removeEventListener("popstate", onPopState);
       }, []);
@@ -1533,26 +2234,33 @@
 
       const openConv = (c) => {
         window.history.pushState({}, "", conversationPath(c.id));
+        setShowSettings(false);
         setSelectedID(c.id);
       };
       const goHome = () => {
         window.history.pushState({}, "", "/");
+        setShowSettings(false);
         setSelectedID(null);
       };
+      const goSettings = () => {
+        window.history.pushState({}, "", "/settings");
+        setSelectedID(null);
+        setShowSettings(true);
+      };
 
-      const breadcrumbs = selected
-        ? [
-            { label: "Conversations", href: "/", onClick: goHome },
-            { label: selected.title || selected.id, mono: true },
-          ]
-        : [
-            { label: "Conversations" },
-          ];
+      const tabs = [
+        { label: "Conversations", href: "/", onClick: goHome, state: view === "conversations" ? "current" : "link" },
+        { label: "Settings", href: "/settings", onClick: goSettings, state: view === "settings" ? "current" : "link" },
+      ];
+      const trail = view === "conversation" && selected
+        ? [{ label: selected.title || selected.id, mono: true }]
+        : [];
 
       return (
         <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-          <TopBar breadcrumbs={breadcrumbs}/>
+          <TopBar tabs={tabs} trail={trail}/>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            {view === "settings" && <SettingsView/>}
             {view === "conversations" && (
               <ConversationsView
                 conversations={conversations}

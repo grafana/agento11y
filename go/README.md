@@ -112,12 +112,13 @@ cfg := sigil.DefaultConfig()
 // cfg.Tracer = myTracer
 // cfg.Meter = myMeter
 
-// Generation export (custom ingest)
-cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolGRPC // default; or sigil.GenerationExportProtocolHTTP / sigil.GenerationExportProtocolNone
-cfg.GenerationExport.Endpoint = "localhost:4317" // HTTP parity: "http://localhost:8080" (SDK auto-appends /api/v1/generations:export)
+// Generation export to Grafana Cloud.
+cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolHTTP
+cfg.GenerationExport.Endpoint = "https://sigil-prod-<region>.grafana.net"
 cfg.GenerationExport.Auth = sigil.AuthConfig{
-	Mode:     sigil.ExportAuthModeTenant,
-	TenantID: "dev-tenant",
+	Mode:          sigil.ExportAuthModeBasic,
+	TenantID:      os.Getenv("SIGIL_AUTH_TENANT_ID"),
+	BasicPassword: os.Getenv("SIGIL_AUTH_TOKEN"),
 }
 cfg.GenerationExport.BatchSize = 100
 cfg.GenerationExport.FlushInterval = time.Second
@@ -130,7 +131,7 @@ cfg.GenerationExport.GRPCMaxReceiveMessageBytes = 16 << 20
 cfg.GenerationExport.PayloadMaxBytes = 16 << 20
 
 // Sigil API base used by helpers like SubmitConversationRating.
-cfg.API.Endpoint = "http://localhost:8080"
+cfg.API.Endpoint = "https://sigil-prod-<region>.grafana.net"
 
 client := sigil.NewClient(cfg)
 defer func() {
@@ -334,7 +335,7 @@ Resolution precedence for tool executions (highest to lowest):
 3. `ContentCaptureResolver` return value
 4. `Config.ContentCapture` (defaults to `ContentCaptureModeNoToolContent`)
 
-User-provided `Metadata` and `Tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content.
+User-provided `Metadata` and `Tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content. See [Tags and Metadata](../docs/concepts/tags-and-metadata.md) for where client tags, per-generation tags, metadata, and `user_id` each show up (export vs spans vs metrics).
 
 ## Pre-Ingest Redaction
 
@@ -401,7 +402,7 @@ if err != nil {
 fmt.Printf("rating=%s has_bad=%v\n", rating.Rating.Rating, rating.Summary.HasBadRating)
 ```
 
-`SubmitConversationRating` sends requests to `cfg.API.Endpoint` (default `http://localhost:8080`) and uses the same generation-export auth headers (`tenant` or `bearer`) that your client config already resolves.
+`SubmitConversationRating` sends requests to `cfg.API.Endpoint`, which should be the Grafana Cloud Sigil API URL from AI Observability configuration, and uses the same generation-export auth headers that your client config already resolves.
 
 ## Lifecycle requirement
 

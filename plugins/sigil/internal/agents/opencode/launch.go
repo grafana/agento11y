@@ -26,8 +26,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/launcher"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
-	"github.com/grafana/sigil-sdk/plugins/sigil/internal/updatecheck"
 	"github.com/tailscale/hujson"
 )
 
@@ -35,8 +35,8 @@ const (
 	// PluginSource is the npm spec passed to `opencode plugin <pkg>`.
 	PluginSource = "@grafana/sigil-opencode"
 	// PluginName is the package.json `name` of the plugin. Used to detect
-	// versioned npm specs (e.g. `@grafana/sigil-opencode@0.6.0`) and to
-	// stamp update-check state.
+	// versioned npm specs (e.g. `@grafana/sigil-opencode@0.6.0`) in the
+	// config probe.
 	PluginName = "@grafana/sigil-opencode"
 
 	updateCheckTTL = 24 * time.Hour
@@ -64,75 +64,46 @@ var configFileNames = []string{"opencode.json", "opencode.jsonc"}
 // SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT and placeholder auth values so it
 // talks to the in-process receiver instead of Sigil Cloud.
 func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, sigilVersion string) error {
-	bin, err := lookPath("opencode")
-	if err != nil {
-		return fmt.Errorf("opencode CLI not found on PATH: %w", err)
-	}
-
-	installed, err := pluginInstalled()
-	if err != nil {
-		// Surface the probe failure so the user can see why we're falling
-		// through to install on a config file we couldn't read. Treat the
-		// case like a missing plugin — opencode's installer will fail loudly
-		// if the file is genuinely broken.
-		logger.Printf("opencode config probe: %v", err)
-		_, _ = fmt.Fprintf(stderr, "sigil: opencode config probe failed: %v\n", err)
-		installed = false
-	}
-	if !installed {
-		_, _ = fmt.Fprintf(stderr, "sigil: installing %s into opencode\n", PluginSource)
-		if err := runInstall(ctx, bin, stderr); err != nil {
-			// Don't block the user's opencode session on a failed install
-			// (offline machine, npm rate-limit, sandboxed CI, etc.). Log
-			// for SIGIL_DEBUG, point the user at the manual command, and
-			// fall through to exec. opencode still runs, just without
-			// Sigil capture.
-			logger.Printf("install %s: %v", PluginSource, err)
-			_, _ = fmt.Fprintf(stderr,
-				"sigil: install of %s failed: %v\n"+
-					"sigil: continuing without Sigil capture. To retry manually:\n"+
-					"          opencode plugin %s --global\n",
-				PluginSource, err, PluginSource)
-		}
-	} else if updatecheck.ShouldRun(PluginName, updateCheckTTL, sigilVersion) {
-		_, _ = fmt.Fprintf(stderr, "sigil: refreshing %s in opencode\n", PluginSource)
-		if err := runUpdate(ctx, bin, stderr); err != nil {
-			logger.Printf("update %s: %v", PluginSource, err)
-			_, _ = fmt.Fprintf(stderr,
-				"sigil: update of %s failed: %v\n"+
-					"sigil: continuing with the installed version. To retry manually:\n"+
-					"          opencode plugin %s --global --force\n",
-				PluginSource, err, PluginSource)
-		}
-		updatecheck.Record(PluginName, sigilVersion)
-	}
-
-	env := local.Environ(localEnv)
-	argv := append([]string{bin}, args...)
-	if err := execFn(bin, argv, env); err != nil {
-		return fmt.Errorf("exec opencode: %w", err)
-	}
-	return nil
+	return launcher.Bootstrap(ctx, launcher.BootstrapSpec{
+		BinName:     "opencode",
+		PluginLabel: PluginSource,
+		LookPath:    lookPath,
+		ExecFn:      execFn,
+		Args:        args,
+		Env:         local.Environ(localEnv),
+		Logger:      logger,
+		Stderr:      stderr,
+		// Surface a config-file probe failure on stderr too so the user can
+		// see why we're falling through to install on a file we couldn't
+		// read. Treat the case like a missing plugin — opencode's installer
+		// will fail loudly if the file is genuinely broken.
+		Probe:           func(context.Context, string) (bool, error) { return pluginInstalled() },
+		ProbeErrLog:     "opencode config probe",
+		ProbeErrEcho:    true,
+		RegisterMessage: fmt.Sprintf("sigil: installing %s into opencode\n", PluginSource),
+		Install:         runInstall,
+		InstallRecoveryHint: func(w io.Writer) {
+			fmt.Fprintf(w, "          opencode plugin %s --global\n", PluginSource)
+		},
+		Update: runUpdate,
+		UpdateRecoveryHint: func(w io.Writer) {
+			fmt.Fprintf(w, "          opencode plugin %s --global --force\n", PluginSource)
+		},
+		UpdateTTL:    updateCheckTTL,
+		SigilVersion: sigilVersion,
+	})
 }
 
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
-	cmd := exec.CommandContext(ctx, bin, "plugin", PluginSource, "--global")
-	cmd.Stdout = w
-	cmd.Stderr = w
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("opencode plugin %s --global: %w", PluginSource, err)
-	}
-	return nil
+	return launcher.RunSteps(ctx, bin, w, [][]string{
+		{"plugin", PluginSource, "--global"},
+	})
 }
 
 func defaultRunUpdate(ctx context.Context, bin string, w io.Writer) error {
-	cmd := exec.CommandContext(ctx, bin, "plugin", PluginSource, "--global", "--force")
-	cmd.Stdout = w
-	cmd.Stderr = w
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("opencode plugin %s --global --force: %w", PluginSource, err)
-	}
-	return nil
+	return launcher.RunSteps(ctx, bin, w, [][]string{
+		{"plugin", PluginSource, "--global", "--force"},
+	})
 }
 
 // opencodeConfig is the subset of opencode's global config this launcher
@@ -154,9 +125,36 @@ type opencodeConfig struct {
 // in the docs has a trailing comma), so a strict json.Unmarshal would
 // reject perfectly valid configs and trap us in a reinstall loop.
 func pluginInstalled() (bool, error) {
+	_, found, err := installedPluginSource()
+	return found, err
+}
+
+// Status reports whether the @grafana/sigil-opencode plugin is registered in
+// opencode's global config. It reuses the read-only config probe and never
+// installs or updates — `sigil doctor` relies on this. When the registered
+// spec pins a version (`@grafana/sigil-opencode@1.2.3`) that version is
+// reported; an unpinned spec yields an empty (unknown) version.
+func Status(_ context.Context) (installed bool, version string, err error) {
+	source, found, err := installedPluginSource()
+	if err != nil {
+		return false, "", err
+	}
+	if !found {
+		return false, "", nil
+	}
+	return true, versionFromNpmSpec(source), nil
+}
+
+// installedPluginSource reads opencode's global config and returns the plugin
+// entry source string that matches @grafana/sigil-opencode, if any. The config
+// lives in $XDG_CONFIG_HOME/opencode (default $HOME/.config/opencode) as either
+// opencode.json or opencode.jsonc; a missing file means no plugins are
+// configured. The file is parsed as JSONC because opencode's docs allow
+// comments and trailing commas.
+func installedPluginSource() (source string, found bool, err error) {
 	dir, err := configDirFn()
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	var (
 		data []byte
@@ -173,24 +171,24 @@ func pluginInstalled() (bool, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		return false, fmt.Errorf("read %s: %w", candidate, err)
+		return "", false, fmt.Errorf("read %s: %w", candidate, err)
 	}
 	if data == nil {
-		return false, nil
+		return "", false, nil
 	}
 	std, err := hujson.Standardize(data)
 	if err != nil {
-		return false, fmt.Errorf("parse %s: %w", path, err)
+		return "", false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	var c opencodeConfig
 	if err := json.Unmarshal(std, &c); err != nil {
-		return false, fmt.Errorf("parse %s: %w", path, err)
+		return "", false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	for _, raw := range c.Plugin {
 		var asString string
 		if err := json.Unmarshal(raw, &asString); err == nil {
 			if sourceMatchesPlugin(asString) {
-				return true, nil
+				return asString, true, nil
 			}
 			continue
 		}
@@ -207,10 +205,22 @@ func pluginInstalled() (bool, error) {
 			continue
 		}
 		if sourceMatchesPlugin(name) {
-			return true, nil
+			return name, true, nil
 		}
 	}
-	return false, nil
+	return "", false, nil
+}
+
+// versionFromNpmSpec returns the pinned version of a scoped npm spec, e.g.
+// "1.2.3" from "@grafana/sigil-opencode@1.2.3". The leading `@` of a scoped
+// package is part of the name, so only a later `@` separates the version.
+// Returns "" for an unpinned spec.
+func versionFromNpmSpec(spec string) string {
+	at := strings.LastIndex(spec, "@")
+	if at <= 0 {
+		return ""
+	}
+	return spec[at+1:]
 }
 
 // sourceMatchesPlugin returns true when a plugin entry identifies the

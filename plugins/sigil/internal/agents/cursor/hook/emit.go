@@ -2,12 +2,7 @@ package hook
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log"
-	"os"
-	"strings"
-	"time"
 
 	"github.com/grafana/sigil-sdk/go/sigil"
 
@@ -15,6 +10,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/cursor/fragment"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/cursor/mapper"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/sigilemit"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/useragent"
 )
 
@@ -31,45 +27,22 @@ const otelInstrumentationName = "sigil.cursor"
 // natively; the plugin only provides convenience auth-header injection from
 // SIGIL_AUTH_*.
 func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.Logger) *otel.Providers {
-	endpoint := otel.EndpointFromEnv()
-	if endpoint == "" {
-		return nil
-	}
-	providers, err := otel.Setup(ctx, instanceID)
-	if err != nil {
-		logger.Printf("otel: setup: %v", err)
-		return nil
-	}
-	if providers != nil {
-		logger.Printf("otel: endpoint=%s", endpoint)
-	}
-	return providers
+	return sigilemit.SetupOTel(ctx, instanceID, logger)
 }
 
 // buildClient constructs the Sigil client. Endpoint, tenant ID, and token
 // come from the SDK's automatic SIGIL_* env resolution (config.ApplyEnv has
 // already injected dotenv values into the OS env). The plugin only owns the
 // pieces the SDK can't infer: HTTP protocol, the `/api/v1/generations:export`
-// path suffix, basic-auth mode, and the OTel tracer/meter wiring.
-func exportConfig() sigil.GenerationExportConfig {
-	return sigil.GenerationExportConfig{
-		Protocol: sigil.GenerationExportProtocolHTTP,
-		Endpoint: strings.TrimRight(os.Getenv("SIGIL_ENDPOINT"), "/") + "/api/v1/generations:export",
-		Headers:  map[string]string{"User-Agent": useragent.For("cursor")},
-		Auth:     sigil.AuthConfig{Mode: sigil.ExportAuthModeBasic},
-	}
-}
-
+// path suffix, basic-auth mode, and the OTel tracer/meter wiring. cursor does
+// not pass a logger, so the SDK client stays silent.
 func buildClient(cfg config.Config, providers *otel.Providers) *sigil.Client {
-	c := sigil.Config{
-		ContentCapture:   cfg.ContentCapture,
-		GenerationExport: exportConfig(),
-	}
-	if providers != nil {
-		c.Tracer = providers.Tracer(otelInstrumentationName)
-		c.Meter = providers.Meter(otelInstrumentationName)
-	}
-	return sigil.NewClient(c)
+	return sigilemit.NewClient(sigilemit.ClientOptions{
+		InstrumentationName: otelInstrumentationName,
+		ContentCapture:      cfg.ContentCapture,
+		Providers:           providers,
+		UserAgent:           useragent.For("cursor"),
+	})
 }
 
 // emitGeneration pushes one mapped Generation through the SDK: starts the
@@ -79,17 +52,9 @@ func buildClient(cfg config.Config, providers *otel.Providers) *sigil.Client {
 // Flushing/shutdown is the caller's responsibility — sessionEnd batches
 // multiple generations through one client.
 func emitGeneration(ctx context.Context, client *sigil.Client, frag *fragment.Fragment, mapped mapper.Mapped, logger *log.Logger) error {
-	genCtx, rec := client.StartGeneration(ctx, mapped.Start)
-	rec.SetResult(mapped.Generation, nil)
-	if mapped.CallError != nil {
-		rec.SetCallError(mapped.CallError)
-	}
-	emitToolSpans(genCtx, client, frag, mapped.Generation, logger)
-	rec.End()
-	if err := rec.Err(); err != nil {
-		return fmt.Errorf("recorder: %w", err)
-	}
-	return nil
+	return sigilemit.Record(ctx, client, mapped.Start, mapped.Generation, mapped.CallError, func(genCtx context.Context) {
+		emitToolSpans(genCtx, client, frag, mapped.Generation, logger)
+	})
 }
 
 // emitToolSpans creates one execute_tool span per tool invocation in the
@@ -108,7 +73,7 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fra
 		if t.ToolName == "" {
 			continue
 		}
-		startedAt, completedAt := toolSpanWindow(*t, gen.CompletedAt)
+		startedAt, completedAt := sigilemit.ToolSpanWindow(t.CompletedAt, t.DurationMs, gen.CompletedAt)
 		_, toolRec := client.StartToolExecution(ctx, sigil.ToolExecutionStart{
 			ToolName:        t.ToolName,
 			ToolCallID:      t.ToolUseID,
@@ -129,7 +94,7 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fra
 			end.Result = string(t.ToolOutput)
 		}
 		if t.Status == "error" {
-			toolRec.SetExecError(toolErrorOr(t.ErrorMessage))
+			toolRec.SetExecError(sigilemit.ToolError(t.ErrorMessage))
 		}
 		toolRec.SetResult(end)
 		toolRec.End()
@@ -138,43 +103,3 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fra
 		}
 	}
 }
-
-// toolSpanWindow returns the (startedAt, completedAt) wall-clock window for a
-// tool span. completedAt comes from the tool's own postToolUse timestamp so
-// spans land in real order on the timeline; startedAt subtracts the reported
-// duration when available. Both fall back to genCompletedAt when the
-// per-tool timestamp is missing or unparseable.
-func toolSpanWindow(t fragment.ToolRecord, genCompletedAt time.Time) (startedAt, completedAt time.Time) {
-	completedAt = parseToolTimestamp(t.CompletedAt, genCompletedAt)
-	startedAt = completedAt
-	if t.DurationMs != nil && !completedAt.IsZero() {
-		startedAt = completedAt.Add(-time.Duration(*t.DurationMs) * time.Millisecond)
-	}
-	return startedAt, completedAt
-}
-
-// parseToolTimestamp parses an ISO-8601 timestamp recorded in a ToolRecord,
-// falling back to def when empty or unparseable.
-func parseToolTimestamp(s string, def time.Time) time.Time {
-	if s == "" {
-		return def
-	}
-	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
-		return t
-	}
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t
-	}
-	return def
-}
-
-// toolErrorOr wraps an error message string into an error value, with a
-// generic sentinel when the message is empty.
-func toolErrorOr(msg string) error {
-	if msg == "" {
-		return errToolError
-	}
-	return errors.New(msg)
-}
-
-var errToolError = errors.New("tool returned error")

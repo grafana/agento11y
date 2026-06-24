@@ -38,7 +38,7 @@ Verify the install with `sigil --version`.
 
 ## Configure
 
-All hosts read the same config file at `~/.config/sigil/config.env`. The first run of `sigil claude`, `sigil opencode`, or `sigil pi` prompts for your endpoint, tenant ID, token, and OTLP endpoint and writes them there; run `sigil login` to re-enter them later.
+All hosts read the same config file at `~/.config/sigil/config.env`. The first run of `sigil claude`, `sigil opencode`, or `sigil pi` prompts for your endpoint, tenant ID, token, and OTLP endpoint and writes them there; run `sigil login` to re-enter them later. After the connection details, `sigil login` shows an optional preferences step for content capture mode, session tags, and guards — leave it at the defaults to keep the current behaviour. Cursor has no launcher, so wire it once with `sigil cursor install` (which also prompts on first run) and remove it with `sigil cursor uninstall`.
 
 To preconfigure without the prompt, create the file:
 
@@ -91,4 +91,29 @@ A plugin can only export fields the host agent passes through to it, so individu
 
 ## Troubleshooting
 
-Hooks always exit 0, so problems only show up in the debug log. Set `SIGIL_DEBUG=true` in `~/.config/sigil/config.env` and tail `~/.local/state/sigil/logs/sigil.log`.
+Run `sigil doctor` first. It's a read-only diagnostic that reports both export pipelines, config, and installed host-agent plugins in one place:
+
+```sh
+sigil doctor
+```
+
+The two pipelines are independent and fail independently:
+
+- **Conversations** (the chat transcripts) export over `SIGIL_ENDPOINT` + `SIGIL_AUTH_TENANT_ID` + `SIGIL_AUTH_TOKEN`. The token needs the `sigil:write` scope.
+- **Analytics** (the AI Observability metrics and traces) export over `SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`). The token needs `metrics:write` and `traces:write`.
+
+The common failure is conversations showing up while the analytics page stays empty: the OTLP endpoint is unset, or the token lacks the metrics/traces scopes. `sigil doctor` flags that case explicitly and exits non-zero when a pipeline is broken.
+
+Add `--probe` to send a lightweight request to each endpoint and report the HTTP status (a 401/403 on the OTLP path means the token is missing `metrics:write`/`traces:write`):
+
+```sh
+sigil doctor --probe
+```
+
+For support, capture the machine-readable report — it never includes the auth token value:
+
+```sh
+sigil doctor --json
+```
+
+If you need lower-level detail, hooks always exit 0, so problems only show up in the debug log. Set `SIGIL_DEBUG=true` in `~/.config/sigil/config.env` and tail `~/.local/state/sigil/logs/sigil.log`.

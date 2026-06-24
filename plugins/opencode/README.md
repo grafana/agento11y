@@ -92,6 +92,25 @@ Run one OpenCode turn, then open **AI Observability → Conversations** in Grafa
 
 If nothing shows up, set `SIGIL_DEBUG=true` in `~/.config/sigil/config.env`, run another turn, and check OpenCode stderr.
 
+## Tagging sessions
+
+Launch with `--tag key=value` (repeatable) to attach tags to every generation the plugin exports:
+
+```sh
+sigil opencode --tag project=hackathon --tag team=ai
+# forward args to opencode after `--`
+sigil opencode --tag team=ai -- run "say hi"
+```
+
+`--tag` is shorthand for `SIGIL_TAGS`; flag tags merge onto (and override) any `SIGIL_TAGS` already in the environment or `~/.config/sigil/config.env`. The merge happens in the SDK, so user tags reach every generation without the plugin reparsing them.
+
+The plugin always attaches two built-in tags to every generation:
+
+- `git.branch` — current branch from the opencode project directory, or a 12-char short SHA on detached HEAD. Omitted when not inside a git checkout.
+- `cwd` — the opencode project directory (from `PluginInput.directory`).
+
+Built-in tags win collisions with user tags, matching the claude-code and cursor launchers.
+
 ## All options
 
 `~/.config/sigil/config.env` is the only configuration file. Every option is set via env var.

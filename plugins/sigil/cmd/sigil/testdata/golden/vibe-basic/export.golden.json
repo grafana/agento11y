@@ -1,0 +1,99 @@
+[
+  {
+    "path": "/api/v1/generations:export",
+    "generations": [
+      {
+        "agent_name": "mistral-vibe",
+        "completed_at": "\u003cNORMALIZED\u003e",
+        "conversation_id": "vibe-sess-1",
+        "id": "vibe-ff98755dad42d4f999849fec",
+        "input": [
+          {
+            "parts": [
+              {
+                "text": "how many cats are sitting on my keyboard?"
+              }
+            ],
+            "role": "MESSAGE_ROLE_USER"
+          },
+          {
+            "parts": [
+              {
+                "tool_result": {
+                  "content": "mittens waffles",
+                  "name": "bash",
+                  "tool_call_id": "tc1"
+                }
+              }
+            ],
+            "role": "MESSAGE_ROLE_TOOL"
+          }
+        ],
+        "metadata": {
+          "sigil.conversation.title": "cats on the keyboard",
+          "sigil.sdk.content_capture_mode": "full",
+          "sigil.sdk.name": "sdk-go",
+          "sigil.user.id": "test-user",
+          "vibe.cost_usd": 0.0625
+        },
+        "mode": "GENERATION_MODE_SYNC",
+        "model": {
+          "name": "mistral-medium-3.5",
+          "provider": "mistral"
+        },
+        "operation_name": "generateText",
+        "output": [
+          {
+            "parts": [
+              {
+                "thinking": "Count the cats on the keyboard."
+              },
+              {
+                "tool_call": {
+                  "id": "tc1",
+                  "input_json": "eyJjb21tYW5kIjoibHMgL2tleWJvYXJkL2NhdHMifQ==",
+                  "name": "bash"
+                }
+              }
+            ],
+            "role": "MESSAGE_ROLE_ASSISTANT"
+          },
+          {
+            "parts": [
+              {
+                "thinking": "Two entries, so two cats."
+              },
+              {
+                "text": "Two cats are on your keyboard: Mittens and Waffles."
+              }
+            ],
+            "role": "MESSAGE_ROLE_ASSISTANT"
+          }
+        ],
+        "response_model": "mistral-vibe-cli-latest",
+        "started_at": "\u003cNORMALIZED\u003e",
+        "stop_reason": "completed",
+        "system_prompt": "You are a helpful assistant that keeps tabs on the cats on the user's keyboard.",
+        "tags": {
+          "cwd": "/repo/keyboard-cats",
+          "entrypoint": "vibe",
+          "vibe.turn_seq": "1"
+        },
+        "thinking_enabled": true,
+        "tools": [
+          {
+            "description": "Run shell commands",
+            "input_schema_json": "eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX19",
+            "name": "bash",
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "input_tokens": "100",
+          "output_tokens": "25",
+          "total_tokens": "125"
+        }
+      }
+    ]
+  }
+]

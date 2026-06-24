@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/launcher"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
-	"github.com/grafana/sigil-sdk/plugins/sigil/internal/updatecheck"
 )
 
 const (
@@ -49,81 +49,58 @@ var (
 // and placeholder auth values so it talks to the in-process receiver
 // instead of Sigil Cloud.
 func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, sigilVersion string) error {
-	bin, err := lookPath("claude")
-	if err != nil {
-		return fmt.Errorf("claude CLI not found on PATH: %w", err)
-	}
-
-	installed, err := pluginInstalled()
-	if err != nil {
-		// Treat a broken installed_plugins.json the same as missing: log the
-		// parse failure for SIGIL_DEBUG, then let `claude plugin install`
-		// run. claude's own CLI is the source of truth and will fail loudly
-		// if something is genuinely wrong.
-		logger.Printf("installed_plugins.json probe: %v", err)
-		installed = false
-	}
-	if !installed {
-		_, _ = fmt.Fprintf(stderr, "sigil: registering %s with claude\n", PluginName)
-		if err := runInstall(ctx, bin, stderr); err != nil {
-			// Don't block the user's claude session on a failed install
-			// (offline machine, sandboxed CI, marketplace hiccup, etc.).
-			// Log for SIGIL_DEBUG, point the user at the manual command,
-			// and fall through to exec. claude still runs, just without
-			// the sigil-cc plugin installed.
-			logger.Printf("install %s: %v", PluginName, err)
-			_, _ = fmt.Fprintf(stderr,
-				"sigil: install of %s failed: %v\n"+
-					"sigil: continuing without Sigil capture. To retry manually:\n"+
-					"          claude plugin install %s@%s\n",
-				PluginName, err, PluginName, marketplaceAlias)
-		}
-	} else if updatecheck.ShouldRun(PluginName, updateCheckTTL, sigilVersion) {
-		_, _ = fmt.Fprintf(stderr, "sigil: refreshing %s in claude\n", PluginName)
-		if err := runUpdate(ctx, bin, stderr); err != nil {
-			logger.Printf("update %s: %v", PluginName, err)
-			_, _ = fmt.Fprintf(stderr,
-				"sigil: update of %s failed: %v\n"+
-					"sigil: continuing with the installed version. To retry manually:\n"+
-					"          claude plugin marketplace update %s\n"+
+	return launcher.Bootstrap(ctx, launcher.BootstrapSpec{
+		BinName:     "claude",
+		PluginLabel: PluginName,
+		LookPath:    lookPath,
+		ExecFn:      execFn,
+		Args:        args,
+		Env:         local.Environ(localEnv),
+		Logger:      logger,
+		Stderr:      stderr,
+		// Treat a broken installed_plugins.json the same as missing:
+		// claude's own CLI is the source of truth and will fail loudly if
+		// something is genuinely wrong.
+		Probe:       func(context.Context, string) (bool, error) { return pluginInstalled() },
+		ProbeErrLog: "installed_plugins.json probe",
+		Install:     runInstall,
+		InstallRecoveryHint: func(w io.Writer) {
+			fmt.Fprintf(w, "          claude plugin install %s@%s\n", PluginName, marketplaceAlias)
+		},
+		Update: runUpdate,
+		UpdateRecoveryHint: func(w io.Writer) {
+			fmt.Fprintf(w,
+				"          claude plugin marketplace update %s\n"+
 					"          claude plugin update %s@%s\n",
-				PluginName, err, marketplaceAlias, PluginName, marketplaceAlias)
-		}
-		updatecheck.Record(PluginName, sigilVersion)
-	}
+				marketplaceAlias, PluginName, marketplaceAlias)
+		},
+		UpdateTTL:    updateCheckTTL,
+		SigilVersion: sigilVersion,
+	})
+}
 
-	env := local.Environ(localEnv)
-	argv := append([]string{bin}, args...)
-	if err := execFn(bin, argv, env); err != nil {
-		return fmt.Errorf("exec claude: %w", err)
-	}
-	return nil
+// Status reports whether the sigil-cc plugin is installed for the current
+// working directory. It reuses the read-only pluginInstalled probe and never
+// installs, updates, or writes update-check state — `sigil doctor` relies on
+// this. installed_plugins.json carries no version, so version is always empty
+// (best-effort).
+func Status(_ context.Context) (installed bool, version string, err error) {
+	installed, err = pluginInstalled()
+	return installed, "", err
 }
 
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
-	return runSteps(ctx, bin, w, [][]string{
+	return launcher.RunSteps(ctx, bin, w, [][]string{
 		{"plugin", "marketplace", "add", marketplaceRepo},
 		{"plugin", "install", PluginName + "@" + marketplaceAlias},
 	})
 }
 
 func defaultRunUpdate(ctx context.Context, bin string, w io.Writer) error {
-	return runSteps(ctx, bin, w, [][]string{
+	return launcher.RunSteps(ctx, bin, w, [][]string{
 		{"plugin", "marketplace", "update", marketplaceAlias},
 		{"plugin", "update", PluginName + "@" + marketplaceAlias},
 	})
-}
-
-func runSteps(ctx context.Context, bin string, w io.Writer, steps [][]string) error {
-	for _, argv := range steps {
-		cmd := exec.CommandContext(ctx, bin, argv...)
-		cmd.Stdout = w
-		cmd.Stderr = w
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("claude %s: %w", strings.Join(argv, " "), err)
-		}
-	}
-	return nil
 }
 
 // installedPluginsFile is the JSON shape Claude Code writes to

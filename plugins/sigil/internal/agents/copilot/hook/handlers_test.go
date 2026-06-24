@@ -32,15 +32,22 @@ func TestHookSequenceExportsOnStop(t *testing.T) {
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
 	logger := log.New(io.Discard, "", 0)
-	var gotPath, gotAuth, gotBody string
+	var gotPath, gotAuth, gotUA, gotBody string
 	var requestCount atomic.Int64
-	server := newAcceptedGenerationServer(t, func(body string) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
-		gotBody = body
-	})
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotUA = r.Header.Get("User-Agent")
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		gotBody = string(body)
+		writeAcceptedGenerationResponse(t, w, body)
+	}))
 	defer server.Close()
-	gotPath = "/api/v1/generations:export"
-	gotAuth = "Basic " + base64.StdEncoding.EncodeToString([]byte("tenant:token"))
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
@@ -61,6 +68,9 @@ func TestHookSequenceExportsOnStop(t *testing.T) {
 	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("tenant:token"))
 	if gotAuth != wantAuth {
 		t.Fatalf("auth = %q, want %q", gotAuth, wantAuth)
+	}
+	if !strings.HasPrefix(gotUA, "sigil-plugin-copilot/") {
+		t.Fatalf("User-Agent = %q, want sigil-plugin-copilot/ prefix", gotUA)
 	}
 	if strings.Contains(gotBody, "glc_abcdefghijklmnopqrstuvwxyz") {
 		t.Fatalf("export leaked unredacted secret: %s", gotBody)
@@ -394,27 +404,31 @@ func newAcceptedGenerationServer(t *testing.T, capture ...func(string)) *httptes
 		if len(capture) > 0 && capture[0] != nil {
 			capture[0](string(body))
 		}
-
-		var request map[string]any
-		if err := json.Unmarshal(body, &request); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
-			return
-		}
-		generations, _ := request["generations"].([]any)
-		results := make([]map[string]any, 0, len(generations))
-		for _, raw := range generations {
-			generation, _ := raw.(map[string]any)
-			id, _ := generation["id"].(string)
-			results = append(results, map[string]any{
-				"generation_id": id,
-				"accepted":      true,
-			})
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]any{"results": results}); err != nil {
-			http.Error(w, "encode response", http.StatusInternalServerError)
-		}
+		writeAcceptedGenerationResponse(t, w, body)
 	}))
+}
+
+func writeAcceptedGenerationResponse(t *testing.T, w http.ResponseWriter, body []byte) {
+	t.Helper()
+	var request map[string]any
+	if err := json.Unmarshal(body, &request); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	generations, _ := request["generations"].([]any)
+	results := make([]map[string]any, 0, len(generations))
+	for _, raw := range generations {
+		generation, _ := raw.(map[string]any)
+		id, _ := generation["id"].(string)
+		results = append(results, map[string]any{
+			"generation_id": id,
+			"accepted":      true,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"results": results}); err != nil {
+		http.Error(w, "encode response", http.StatusInternalServerError)
+	}
 }
 
 func TestStopWaitsForCurrentCLITranscriptTurnInsteadOfReusingPreviousTurn(t *testing.T) {
@@ -488,11 +502,23 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 		// the request fails at transport.
 		useClosedServer bool
 		// clearCreds blanks SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/SIGIL_AUTH_TOKEN.
-		clearCreds          bool
-		wantServerCalled    bool
-		wantStdoutContains  []string
-		wantStdoutEmpty     bool
-		wantToolRecordCount int
+		clearCreds bool
+		// surface is stamped onto the payload the way the dispatcher would.
+		surface string
+		// toolInput overrides the payload tool arguments; empty uses a bare
+		// object. The Copilot CLI delivers args as a JSON-encoded string, so
+		// transform cases use that real wire shape.
+		toolInput string
+		// wantSentArgsContains asserts a substring of the guard request body,
+		// to verify the handler decodes string-encoded args to a JSON object.
+		wantSentArgsContains  string
+		wantServerCalled      bool
+		wantStdoutContains    []string
+		wantStdoutNotContains []string
+		wantStdoutEmpty       bool
+		wantToolRecordCount   int
+		// wantToolInput asserts the recorded tool input when non-empty.
+		wantToolInput string
 	}{
 		{
 			name:                "disabled stays stdout-empty and records pending tool",
@@ -509,12 +535,65 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			wantToolRecordCount: 1,
 		},
 		{
-			name:                "deny writes copilot deny JSON and skips record",
-			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
-			hookResponse:        `{"action":"deny","reason":"blocked tool"}`,
+			name:         "deny writes combined flat and nested deny JSON and skips record",
+			guards:       envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			hookResponse: `{"action":"deny","reason":"blocked tool"}`,
+			// The flat fields are what the Copilot CLI reads; the nested
+			// envelope is what Copilot Chat in VS Code reads. The leading
+			// `{"permissionDecision"` matches only the flat copy.
 			wantServerCalled:    true,
-			wantStdoutContains:  []string{`"hookSpecificOutput"`, `"hookEventName":"PreToolUse"`, `"permissionDecision":"deny"`, `A Grafana AI Observability policy`, `blocked tool`},
+			wantStdoutContains:  []string{`{"permissionDecision":"deny"`, `"hookSpecificOutput"`, `"hookEventName":"PreToolUse"`, `A Grafana AI Observability policy`, `blocked tool`},
 			wantToolRecordCount: 0,
+		},
+		{
+			// Reproduces the live Copilot CLI flow: args arrive as a
+			// JSON-encoded string. The handler decodes them to an object before
+			// the guard call (the server only transforms objects), and the
+			// server returns base64 of the redacted object.
+			name:                  "allow with transform on copilot-cli writes flat modifiedArgs and records redacted args",
+			guards:                envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			toolInput:             `"{\"cmd\":\"echo SK-TEST-123\"}"`,
+			hookResponse:          `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"","name":"bash","input_json":"eyJjbWQiOiJlY2hvIFtSRURBQ1RFRF0ifQ=="}}]}]}}`,
+			surface:               "copilot-cli",
+			wantServerCalled:      true,
+			wantSentArgsContains:  `"input_json":{"cmd":"echo SK-TEST-123"}`,
+			wantStdoutContains:    []string{`{"modifiedArgs":{"cmd":"echo [REDACTED]"}}`},
+			wantStdoutNotContains: []string{`hookSpecificOutput`, `permissionDecision`},
+			wantToolRecordCount:   1,
+			wantToolInput:         `{"cmd":"echo [REDACTED]"}`,
+		},
+		{
+			name:                 "allow with transform on vscode stays stdout-empty and keeps original args",
+			guards:               envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			toolInput:            `"{\"cmd\":\"echo SK-TEST-123\"}"`,
+			hookResponse:         `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"","name":"bash","input_json":"eyJjbWQiOiJlY2hvIFtSRURBQ1RFRF0ifQ=="}}]}]}}`,
+			surface:              "vscode",
+			wantServerCalled:     true,
+			wantSentArgsContains: `"input_json":{"cmd":"echo SK-TEST-123"}`,
+			wantStdoutEmpty:      true,
+			wantToolRecordCount:  1,
+			wantToolInput:        `"{\"cmd\":\"echo SK-TEST-123\"}"`,
+		},
+		{
+			name:                 "allow with transform on unknown surface stays stdout-empty and keeps original args",
+			guards:               envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			toolInput:            `"{\"cmd\":\"echo SK-TEST-123\"}"`,
+			hookResponse:         `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"","name":"bash","input_json":"eyJjbWQiOiJlY2hvIFtSRURBQ1RFRF0ifQ=="}}]}]}}`,
+			wantServerCalled:     true,
+			wantSentArgsContains: `"input_json":{"cmd":"echo SK-TEST-123"}`,
+			wantStdoutEmpty:      true,
+			wantToolRecordCount:  1,
+			wantToolInput:        `"{\"cmd\":\"echo SK-TEST-123\"}"`,
+		},
+		{
+			name:                  "deny with transform writes deny envelope without modifiedArgs",
+			guards:                envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			hookResponse:          `{"action":"deny","reason":"blocked tool","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"","name":"bash","input_json":{"cmd":"echo [REDACTED]"}}}]}]}}`,
+			surface:               "copilot-cli",
+			wantServerCalled:      true,
+			wantStdoutContains:    []string{`{"permissionDecision":"deny"`, `"hookSpecificOutput"`, `blocked tool`},
+			wantStdoutNotContains: []string{`modifiedArgs`},
+			wantToolRecordCount:   0,
 		},
 		{
 			name:                "fail-open transport error allows tool and records it",
@@ -527,7 +606,7 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			name:                "fail-closed transport error denies tool and skips record",
 			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: false},
 			useClosedServer:     true,
-			wantStdoutContains:  []string{`"permissionDecision":"deny"`, `could not evaluate`},
+			wantStdoutContains:  []string{`{"permissionDecision":"deny"`, `"hookSpecificOutput"`, `could not evaluate`},
 			wantToolRecordCount: 0,
 		},
 		{
@@ -541,7 +620,7 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			name:                "fail-closed missing credentials denies tool and skips record",
 			guards:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: false},
 			clearCreds:          true,
-			wantStdoutContains:  []string{`"permissionDecision":"deny"`, `could not evaluate`, `missing SIGIL_ENDPOINT`},
+			wantStdoutContains:  []string{`{"permissionDecision":"deny"`, `"hookSpecificOutput"`, `could not evaluate`, `missing SIGIL_ENDPOINT`},
 			wantToolRecordCount: 0,
 		},
 	}
@@ -552,8 +631,10 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			logger := log.New(io.Discard, "", 0)
 
 			var calls atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			var sentBody []byte
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
+				sentBody, _ = io.ReadAll(r.Body)
 				body := tt.hookResponse
 				if body == "" {
 					body = `{"action":"allow"}`
@@ -586,13 +667,18 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			}
 			UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "hello"}, cfg, logger)
 
+			toolInput := tt.toolInput
+			if toolInput == "" {
+				toolInput = `{"cmd":"echo hi"}`
+			}
 			var stdout bytes.Buffer
 			PreToolUse(context.Background(), &stdout, Payload{
 				HookEventNameJSON: "PreToolUse",
 				SessionIDJSON:     "sess",
 				Timestamp:         []byte(`"2026-05-18T12:00:02Z"`),
 				ToolNameJSON:      "bash",
-				ToolInputJSON:     []byte(`{"cmd":"echo hi"}`),
+				ToolInputJSON:     []byte(toolInput),
+				SurfaceMarker:     tt.surface,
 			}, cfg, logger)
 
 			if tt.wantServerCalled && calls.Load() == 0 {
@@ -600,6 +686,9 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			}
 			if !tt.wantServerCalled && !tt.useClosedServer && calls.Load() != 0 {
 				t.Errorf("expected no sigil hook server call, got %d", calls.Load())
+			}
+			if tt.wantSentArgsContains != "" && !strings.Contains(string(sentBody), tt.wantSentArgsContains) {
+				t.Errorf("guard request body = %q, want substring %q", sentBody, tt.wantSentArgsContains)
 			}
 			if tt.wantStdoutEmpty && stdout.Len() != 0 {
 				t.Errorf("stdout not empty: %q", stdout.String())
@@ -609,6 +698,11 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 					t.Errorf("stdout = %q, want substring %q", stdout.String(), want)
 				}
 			}
+			for _, notWant := range tt.wantStdoutNotContains {
+				if strings.Contains(stdout.String(), notWant) {
+					t.Errorf("stdout = %q, must not contain %q", stdout.String(), notWant)
+				}
+			}
 
 			frag := fragment.LoadTolerant("sess", "turn-000001", logger)
 			if frag == nil {
@@ -616,6 +710,9 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			}
 			if len(frag.Tools) != tt.wantToolRecordCount {
 				t.Fatalf("len(frag.Tools) = %d, want %d", len(frag.Tools), tt.wantToolRecordCount)
+			}
+			if tt.wantToolInput != "" && string(frag.Tools[0].ToolInput) != tt.wantToolInput {
+				t.Errorf("recorded tool input = %q, want %q", frag.Tools[0].ToolInput, tt.wantToolInput)
 			}
 		})
 	}

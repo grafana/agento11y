@@ -18,6 +18,11 @@ flow is generation-first and publishes continuously: create the run, then per
 item run the agent (recording generations tagged with the `run_id`), grade, and
 export scores under the same `run_id`.
 
+Sigil is a Grafana Cloud-only product for user-facing setup. Do not suggest
+non-Cloud or development-only endpoints in docs, examples, or generated
+instructions. Use the Grafana Cloud API URL from AI Observability configuration
+and Cloud `basic` auth.
+
 If the project already uses a supported framework (LangGraph, LangChain, OpenAI
 Agents, LlamaIndex, Strands, Google ADK, LiteLLM), prefer that framework's
 experiments skill — it auto-captures generation ids from the framework callback.
@@ -35,7 +40,7 @@ Configure the client from env (works in CI):
 import os
 from sigil_sdk import ApiConfig, AuthConfig, Client, ClientConfig, GenerationExportConfig
 
-endpoint = os.environ["SIGIL_ENDPOINT"]
+endpoint = os.environ["SIGIL_ENDPOINT"].rstrip("/")
 tenant_id = os.environ["SIGIL_AUTH_TENANT_ID"]
 token = os.environ["SIGIL_AUTH_TOKEN"]
 client = Client(
@@ -55,6 +60,11 @@ client = Client(
     )
 )
 ```
+
+For Grafana Cloud experiments, also set `SIGIL_EVAL_ENDPOINT`,
+`SIGIL_EVAL_PATH_PREFIX=/api/plugins/grafana-sigil-app/resources`, and
+`SIGIL_EVAL_AUTH_TOKEN` so the experiment lifecycle uses the Grafana plugin
+resource proxy.
 
 ## Pattern 1 — Run a new experiment over a dataset (recommended)
 

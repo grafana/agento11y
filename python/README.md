@@ -172,14 +172,19 @@ client.shutdown()
 Explicit configuration form:
 
 ```python
+import os
 from sigil_sdk import AuthConfig, Client, ClientConfig, GenerationExportConfig
 
 client = Client(
     ClientConfig(
         generation_export=GenerationExportConfig(
             protocol="http",
-            endpoint="http://localhost:8080",
-            auth=AuthConfig(mode="tenant", tenant_id="dev-tenant"),
+            endpoint="https://sigil-prod-<region>.grafana.net",
+            auth=AuthConfig(
+                mode="basic",
+                tenant_id=os.environ["SIGIL_AUTH_TENANT_ID"],
+                basic_password=os.environ["SIGIL_AUTH_TOKEN"],
+            ),
         ),
     )
 )
@@ -433,7 +438,7 @@ with with_conversation_id("conv-ctx"), with_agent_name("planner"), with_agent_ve
 
 `FULL_WITH_METADATA_SPANS` is the right mode when the gRPC ingest destination is private but the OTel trace/metric destination is shared and must not receive any content. Tool execution and embedding spans behave like `METADATA_ONLY` under this mode because they have no separate gRPC export.
 
-User-provided `metadata` and `tags` are **not** stripped by any capture mode; callers must avoid putting sensitive content in those dicts when using `METADATA_ONLY` or `FULL_WITH_METADATA_SPANS`. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content.
+User-provided `metadata` and `tags` are **not** stripped by any capture mode; callers must avoid putting sensitive content in those dicts when using `METADATA_ONLY` or `FULL_WITH_METADATA_SPANS`. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content. See [Tags and Metadata](../docs/concepts/tags-and-metadata.md) for where client tags, per-generation tags, metadata, and `user_id` each show up (Python merges client tags into the generation export only, not onto spans/metrics).
 
 ### Client-level default
 
@@ -516,29 +521,20 @@ Exceptions in the resolver are caught and treated as `METADATA_ONLY` (fail-close
 ### HTTP generation export
 
 ```python
+import os
 from sigil_sdk import ApiConfig, AuthConfig, ClientConfig, GenerationExportConfig
 
 cfg = ClientConfig(
     generation_export=GenerationExportConfig(
         protocol="http",
-        endpoint="http://localhost:8080",
-        auth=AuthConfig(mode="tenant", tenant_id="dev-tenant"),
+        endpoint="https://sigil-prod-<region>.grafana.net",
+        auth=AuthConfig(
+            mode="basic",
+            tenant_id=os.environ["SIGIL_AUTH_TENANT_ID"],
+            basic_password=os.environ["SIGIL_AUTH_TOKEN"],
+        ),
     ),
-    api=ApiConfig(endpoint="http://localhost:8080"),
-)
-```
-
-### gRPC generation export
-
-```python
-cfg = ClientConfig(
-    generation_export=GenerationExportConfig(
-        protocol="grpc",
-        endpoint="localhost:50051",
-        insecure=True,
-        auth=AuthConfig(mode="tenant", tenant_id="dev-tenant"),
-    ),
-    api=ApiConfig(endpoint="http://localhost:8080"),
+    api=ApiConfig(endpoint="https://sigil-prod-<region>.grafana.net"),
 )
 ```
 
@@ -556,15 +552,20 @@ Invalid mode/field combinations fail fast in `resolve_config(...)`.
 If explicit `headers` already include `Authorization` or `X-Scope-OrgID`, explicit headers win.
 
 ```python
+import os
 from sigil_sdk import ApiConfig, AuthConfig, ClientConfig, GenerationExportConfig
 
 cfg = ClientConfig(
     generation_export=GenerationExportConfig(
         protocol="http",
-        endpoint="http://localhost:8080",
-        auth=AuthConfig(mode="tenant", tenant_id="prod-tenant"),
+        endpoint="https://sigil-prod-<region>.grafana.net",
+        auth=AuthConfig(
+            mode="basic",
+            tenant_id=os.environ["SIGIL_AUTH_TENANT_ID"],
+            basic_password=os.environ["SIGIL_AUTH_TOKEN"],
+        ),
     ),
-    api=ApiConfig(endpoint="http://localhost:8080"),
+    api=ApiConfig(endpoint="https://sigil-prod-<region>.grafana.net"),
 )
 ```
 
@@ -643,7 +644,7 @@ result = client.submit_conversation_rating(
 print(result.rating.rating, result.summary.has_bad_rating)
 ```
 
-`submit_conversation_rating(...)` sends requests to `ClientConfig.api.endpoint` (default `http://localhost:8080`) and uses the same generation-export auth headers (`tenant` or `bearer`) already configured on the SDK client.
+`submit_conversation_rating(...)` sends requests to `ClientConfig.api.endpoint`, which should be the Grafana Cloud Sigil API URL from AI Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
 
 ## Instrumentation-only mode (no generation send)
 
@@ -732,7 +733,7 @@ If you use a supported framework, prefer its adapter (e.g. `sigil-sdk-langgraph`
 — it auto-captures generation ids from the framework callback so you don't wrap
 `start_generation` yourself. See the `sigil-experiments` skill
 (`python/skills/sigil-experiments/SKILL.md`) and the runnable example at
-`examples/python-experiment/` for grading patterns (including LLM-as-judge) and
+`examples/experiments/python/` for grading patterns (including LLM-as-judge) and
 uploading older runs.
 
 ## Public API Overview

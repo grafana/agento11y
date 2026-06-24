@@ -133,6 +133,26 @@ shapes.
 
 Captured prompt, assistant, and tool content is redacted before export. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the cross-SDK reference.
 
+## Guards
+
+Guards do two things when enabled: block tool calls that match a deny rule, and apply Transform rules to redact sensitive tool arguments. They're off by default:
+
+```sh
+SIGIL_GUARDS_ENABLED=true sigil copilot
+```
+
+By default, transport errors and timeouts let the tool call through. Set `SIGIL_GUARDS_FAIL_OPEN=false` to block tool calls on errors instead. Raise or lower `SIGIL_GUARDS_TIMEOUT_MS` (default `1500`) to trade latency against tolerance for slow evaluators.
+
+### Transform guards (redaction)
+
+When guards are enabled and a [Transform rule](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/guides/guards/) matches a tool call, the redacted arguments replace what the tool receives.
+
+Limits:
+
+- Transforms apply in `copilot-cli`. Copilot Chat in VS Code expects a different hook response shape for argument rewrites that has not been verified end to end, so no rewrite is sent there and VS Code tool calls run with their original arguments. Deny rules work on both surfaces.
+- Each guarded tool call adds one synchronous hook round-trip (`SIGIL_GUARDS_TIMEOUT_MS`). Transform redaction fails open: when the transform cannot be applied, the original arguments pass through unchanged. Transport errors follow `SIGIL_GUARDS_FAIL_OPEN`.
+- When arguments are redacted, the exported tool record carries the redacted arguments the tool actually ran with.
+
 ## All options
 
 | Variable | Default | Description |
@@ -146,7 +166,7 @@ Captured prompt, assistant, and tool content is redacted before export. See [Con
 | `SIGIL_TAGS` | — | `key=value,key=value` tags on every generation and as `sigil.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
 | `SIGIL_USER_ID` | — | Override the user id. |
 | `SIGIL_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
-| `SIGIL_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Copilot `preToolUse` hook is evaluated against Sigil and tool calls denied by guard rules are blocked. |
+| `SIGIL_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Copilot `preToolUse` hook is evaluated against Sigil: tool calls denied by guard rules are blocked, and Transform rules redact tool arguments in `copilot-cli`. |
 | `SIGIL_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |
 | `SIGIL_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout. Lower = less added latency on every tool call, higher = better tolerance for slow `llm_judge` evaluators. |
 | `SIGIL_COPILOT_HOOK_SURFACE` | _(auto)_ | Override the detected host surface (`copilot-cli` or `vscode`). Normally inferred at runtime; set explicitly only when driving capture through a custom hooks config. |

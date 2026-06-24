@@ -7,7 +7,6 @@ package mapper
 import (
 	"encoding/json"
 	"errors"
-	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +14,8 @@ import (
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/cursor/fragment"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/cursor/tags"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/gitbranch"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/mapperutil"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/timeutil"
 )
 
@@ -76,7 +77,7 @@ func MapFragment(in Inputs) Mapped {
 	// Provider/model fallback: SDK validation requires both to be non-empty.
 	provider := frag.Provider
 	if provider == "" {
-		provider = inferProviderFromModel(frag.Model)
+		provider = mapperutil.InferProvider(frag.Model)
 	}
 	if provider == "" {
 		provider = "cursor"
@@ -105,7 +106,7 @@ func MapFragment(in Inputs) Mapped {
 	tagMap := tags.Build(tags.BuiltinInputs{
 		WorkspaceRoot:     workspaceRoot,
 		Cwd:               firstToolCwd(frag.Tools),
-		GitBranch:         tags.ResolveGitBranch(workspaceRoot),
+		GitBranch:         gitbranch.Resolve(workspaceRoot),
 		IsBackgroundAgent: isBackgroundAgent,
 	})
 
@@ -222,25 +223,6 @@ func resolveUserID(override, payloadEmail string) string {
 	return strings.TrimSpace(payloadEmail)
 }
 
-func inferProviderFromModel(model string) string {
-	if model == "" {
-		return ""
-	}
-	m := strings.ToLower(model)
-	switch {
-	case strings.Contains(m, "claude"):
-		return "anthropic"
-	case strings.HasPrefix(m, "gpt"),
-		strings.HasPrefix(m, "o1"),
-		strings.HasPrefix(m, "o3"),
-		strings.HasPrefix(m, "o4"):
-		return "openai"
-	case strings.Contains(m, "gemini"):
-		return "google"
-	}
-	return ""
-}
-
 func firstToolCwd(tools []fragment.ToolRecord) string {
 	for i := range tools {
 		if tools[i].Cwd != "" {
@@ -253,48 +235,21 @@ func firstToolCwd(tools []fragment.ToolRecord) string {
 // buildToolDefinitions deduplicates tool names across the fragment and emits
 // a sorted slice for stable output (tests, log diffing, dashboards).
 func buildToolDefinitions(tools []fragment.ToolRecord) []sigil.ToolDefinition {
-	if len(tools) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(tools))
-	names := make([]string, 0, len(tools))
+	names := make([]string, len(tools))
 	for i := range tools {
-		name := tools[i].ToolName
-		if name == "" {
-			continue
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
+		names[i] = tools[i].ToolName
 	}
-	if len(names) == 0 {
-		return nil
-	}
-	sort.Strings(names)
-	out := make([]sigil.ToolDefinition, len(names))
-	for i, n := range names {
-		out[i] = sigil.ToolDefinition{Name: n, Type: "function"}
-	}
-	return out
+	return mapperutil.SortedToolDefinitions(names)
 }
 
 func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (input, output []sigil.Message) {
 	// Normalize so the rest of this function only deals with the three real
-	// content-gating modes. envconfig.ResolveContentMode also maps Default →
-	// MetadataOnly, but doing it again here keeps the gating below internally
-	// consistent regardless of caller. FullWithMetadataSpans differs from
-	// Full only in what the OTel span exposes; the gRPC payload that
-	// buildMessages produces carries the same full content in both modes.
-	switch mode {
-	case sigil.ContentCaptureModeDefault:
-		mode = sigil.ContentCaptureModeMetadataOnly
-	case sigil.ContentCaptureModeFullWithMetadataSpans:
-		mode = sigil.ContentCaptureModeFull
-	default:
-		// Full, NoToolContent, MetadataOnly pass through unchanged.
-	}
+	// content-gating modes. envconfig.ResolveContentMode does this at the
+	// config layer too, but mappers re-apply it for callers (including tests)
+	// that build Inputs directly. NormalizePayloadContentMode also collapses
+	// FullWithMetadataSpans to Full because the two modes differ only in OTel
+	// span exposure; the gRPC payload buildMessages produces is identical.
+	mode = mapperutil.NormalizePayloadContentMode(mode)
 
 	// User prompt → user input message. Dropped in metadata-only mode.
 	if mode != sigil.ContentCaptureModeMetadataOnly && strings.TrimSpace(frag.UserPrompt) != "" {

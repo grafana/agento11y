@@ -24,19 +24,36 @@ go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
 
 The script installs `sigil` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`sigil` binary README](../sigil/README.md#install) for all install options.
 
-Cursor does not have a `sigil cursor` launcher. Install the binary, register the Cursor plugin, then use `sigil login` or `~/.config/sigil/config.env` for credentials.
+Cursor is a GUI app with no `sigil cursor` launcher, so after installing the binary you wire the hooks once with `sigil cursor install` (next step), then add credentials.
 
-## 2. Register the plugin
+## 2. Wire the hooks
 
-In Cursor:
+Run this once from a terminal:
+
+```sh
+sigil cursor install
+```
+
+It registers `sigil cursor hook` for the Cursor events Sigil captures in `~/.cursor/hooks.json`, merging with any hooks other tools already added. Re-running is safe: it updates Sigil's entry in place instead of adding a duplicate. On first run it also prompts for credentials (the same prompt as `sigil login`).
+
+To undo the wiring later, run `sigil cursor uninstall` — it removes only Sigil's entries and leaves other tools' hooks alone.
+
+<details>
+<summary>Alternative: register the plugin inside Cursor</summary>
+
+Instead of `sigil cursor install`, you can register the plugin from Cursor's command palette:
 
 ```
 /add-plugin grafana/sigil-sdk
 ```
 
+Do not use both. `/add-plugin` and `sigil cursor install` write to the same `~/.cursor/hooks.json`, so running both captures every turn twice. Pick one.
+
+</details>
+
 ## 3. Add your credentials
 
-Run `sigil login` from a terminal. The prompt asks for values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+`sigil cursor install` already prompts for these on first run; run `sigil login` from a terminal to enter or change them later. The prompt asks for values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -96,6 +113,9 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 | `SIGIL_TAGS` | — | `key=value,key=value` tags on every generation and as `sigil.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). Built-ins (`git.branch`, `cwd`, `subagent`) win on generation-export tag collision. |
 | `SIGIL_USER_ID` | from Cursor | Override the user id. |
 | `SIGIL_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
+| `SIGIL_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Cursor `preToolUse` hook is evaluated against Sigil: tool calls denied by guard rules are blocked, and Transform rules rewrite the tool arguments before execution. |
+| `SIGIL_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |
+| `SIGIL_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout. Lower = less added latency on every tool call, higher = better tolerance for slow `llm_judge` evaluators. |
 | `SIGIL_BIN` | auto | Override the binary path if you installed `sigil` somewhere unusual. |
 
 If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.

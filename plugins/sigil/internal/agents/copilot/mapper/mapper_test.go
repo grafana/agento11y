@@ -2,6 +2,8 @@ package mapper
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -83,6 +85,27 @@ func TestMapFullModeIncludesRedactedPromptAndToolContent(t *testing.T) {
 	}
 }
 
+func TestMapFullWithMetadataSpansPreservesStartModeAndFullPayload(t *testing.T) {
+	frag := basicFragment()
+	frag.Model = "gpt-5.4"
+	frag.AssistantText = "done"
+
+	got := Map(Inputs{
+		Fragment:       frag,
+		ContentCapture: sigil.ContentCaptureModeFullWithMetadataSpans,
+		Now:            fixedTime,
+	})
+	if got.Start.ContentCapture != sigil.ContentCaptureModeFullWithMetadataSpans {
+		t.Fatalf("Start.ContentCapture = %v; want FullWithMetadataSpans", got.Start.ContentCapture)
+	}
+	if len(got.Generation.Input) == 0 || got.Generation.Input[0].Parts[0].Text == "" {
+		t.Fatalf("full_with_metadata_spans should keep full gRPC input payload: %+v", got.Generation.Input)
+	}
+	if len(got.Generation.Output) == 0 || got.Generation.Output[0].Parts[0].ToolCall == nil || len(got.Generation.Output[0].Parts[0].ToolCall.InputJSON) == 0 {
+		t.Fatalf("full_with_metadata_spans should keep full gRPC tool payload: %+v", got.Generation.Output)
+	}
+}
+
 func TestMapMetadataOnlyStripsPromptAndToolResultContent(t *testing.T) {
 	got := Map(Inputs{
 		Fragment:       basicFragment(),
@@ -130,6 +153,75 @@ func TestMapUsesHookStopReasonWhenSuccessful(t *testing.T) {
 	})
 	if got.Generation.StopReason != "end_turn" {
 		t.Fatalf("StopReason = %q", got.Generation.StopReason)
+	}
+}
+
+func TestMapResolvesGitBranchFromCwd(t *testing.T) {
+	// Fragment cwd points at a temp dir containing a `.git/HEAD` symbolic
+	// ref, so the gitbranch resolver finds the branch without shelling
+	// out. The second case verifies the session.Cwd fallback when the
+	// fragment cwd is empty (copilot's normal resolution).
+	cases := []struct {
+		name               string
+		headRaw            string
+		useSessionFallback bool // place root in Session.Cwd instead of Fragment.Cwd
+		wantBr             string
+	}{
+		{name: "frag.Cwd direct", headRaw: "ref: refs/heads/feature/copilot\n", wantBr: "feature/copilot"},
+		{name: "session.Cwd fallback", headRaw: "ref: refs/heads/sess-branch\n", useSessionFallback: true, wantBr: "sess-branch"},
+		{name: "detached HEAD", headRaw: "abcdef0123456789abcdef0123456789abcdef01\n", wantBr: "abcdef012345"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			gitHead := filepath.Join(root, ".git", "HEAD")
+			if err := os.MkdirAll(filepath.Dir(gitHead), 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(gitHead, []byte(tc.headRaw), 0o644); err != nil {
+				t.Fatalf("write head: %v", err)
+			}
+
+			frag := basicFragment()
+			frag.Model = "gpt-5.4"
+			var session *fragment.Session
+			if tc.useSessionFallback {
+				frag.Cwd = ""
+				session = &fragment.Session{Cwd: root}
+			} else {
+				frag.Cwd = root
+			}
+			got := Map(Inputs{
+				Fragment:       frag,
+				Session:        session,
+				ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+				Now:            fixedTime,
+			})
+			if got.Generation.Tags["git.branch"] != tc.wantBr {
+				t.Fatalf("git.branch = %q, want %q (tags=%+v)", got.Generation.Tags["git.branch"], tc.wantBr, got.Generation.Tags)
+			}
+			if got.Generation.Tags["cwd"] != root {
+				t.Fatalf("cwd = %q, want %q", got.Generation.Tags["cwd"], root)
+			}
+		})
+	}
+}
+
+func TestMapOmitsGitBranchWhenNoCheckout(t *testing.T) {
+	root := t.TempDir()
+	frag := basicFragment()
+	frag.Cwd = root
+	frag.Model = "gpt-5.4"
+	got := Map(Inputs{
+		Fragment:       frag,
+		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		Now:            fixedTime,
+	})
+	if _, ok := got.Generation.Tags["git.branch"]; ok {
+		t.Fatalf("git.branch should be absent when no .git found; got %+v", got.Generation.Tags)
+	}
+	if got.Generation.Tags["cwd"] != root {
+		t.Fatalf("cwd should still be present; got %q", got.Generation.Tags["cwd"])
 	}
 }
 

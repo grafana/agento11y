@@ -1,6 +1,6 @@
 # @grafana/sigil-pi
 
-[Pi](https://github.com/badlogic/pi) agent extension that sends LLM generations to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
+[Pi](https://github.com/earendil-works/pi) agent extension that sends LLM generations to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
 
 By default only metadata is sent (token counts, cost, model, tool names, durations). Set `SIGIL_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
 
@@ -89,6 +89,25 @@ SIGIL_CONTENT_CAPTURE_MODE=full
 Run one pi turn, then open **AI Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
 
 If nothing shows up, set `SIGIL_DEBUG=true` in `~/.config/sigil/config.env`, run another turn, and check the debug log at `~/.local/state/sigil/logs/sigil.log` (honors `XDG_STATE_HOME`).
+
+## Tagging sessions
+
+Launch with `--tag key=value` (repeatable) to attach tags to every generation pi exports:
+
+```sh
+sigil pi --tag project=hackathon --tag team=ai
+# forward args to pi after `--`
+sigil pi --tag team=ai -- --resume
+```
+
+`--tag` is shorthand for `SIGIL_TAGS`; flag tags merge onto (and override) any `SIGIL_TAGS` already in the environment or `~/.config/sigil/config.env`. The merge happens in the SDK, so user tags reach every generation without the plugin reparsing them.
+
+The plugin always attaches two built-in tags to every generation:
+
+- `git.branch` — current branch from the working directory, or a 12-char short SHA on detached HEAD. Omitted when not inside a git checkout.
+- `cwd` — the process working directory.
+
+Built-in tags win collisions with user tags, matching the claude-code and cursor launchers.
 
 ## Redaction
 

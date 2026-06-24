@@ -19,12 +19,12 @@ SIGIL_ENDPOINT=https://your-sigil.grafana.net \
   docker compose up --build
 ```
 
-The proxy starts on `http://localhost:4000`.
+The proxy starts on the published Docker Compose port `4000`.
 
 ## Make a request
 
 ```bash
-curlie POST http://localhost:4000/chat/completions \
+curlie POST http://<proxy-host>:4000/chat/completions \
   model=gpt-4o-mini \
   messages:='[{"role":"user","content":"What is 2+2?"}]'
 ```
@@ -32,7 +32,7 @@ curlie POST http://localhost:4000/chat/completions \
 Or with streaming:
 
 ```bash
-curlie POST http://localhost:4000/chat/completions \
+curlie POST http://<proxy-host>:4000/chat/completions \
   model=gpt-4o-mini \
   messages:='[{"role":"user","content":"Give me three reliability tips."}]' \
   stream:=true
@@ -40,7 +40,7 @@ curlie POST http://localhost:4000/chat/completions \
 
 ## Verify in Sigil
 
-Open `http://localhost:3000/a/grafana-sigil-app/conversations`. Generations appear with:
+Open `https://<your-stack>.grafana.net/a/grafana-sigil-app/conversations`. Generations appear with:
 
 - `agent_name`: `litellm-proxy-integration-test`
 - `sigil.framework.name`: `litellm`

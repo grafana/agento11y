@@ -1,9 +1,17 @@
 {
   "name": "grafana-ai-observability",
-  "version": "0.2.0",
-  "description": "Send Cursor agent telemetry to Grafana Sigil",
-  "author": { "name": "Grafana Labs" },
+  "displayName": "Grafana AI Observability",
+  "version": "0.3.0",
+  "description": "Send Cursor agent prompts, replies, tool calls, and token usage to Grafana AI Observability.",
+  "author": {
+    "name": "Grafana Labs",
+    "email": "machine-learning@grafana.com"
+  },
+  "homepage": "https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/",
+  "repository": "https://github.com/grafana/sigil-sdk",
   "license": "Apache-2.0",
-  "keywords": ["telemetry", "observability", "sigil", "grafana", "cursor"],
-  "hooks": "hooks/hooks.json"
+  "keywords": ["telemetry", "observability", "sigil", "grafana", "cursor", "ai", "llm"],
+  "category": "developer-tools",
+  "tags": ["ai-observability", "telemetry", "monitoring", "llm"],
+  "hooks": "./hooks/hooks.json"
 }

@@ -1,7 +1,7 @@
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SigilOpencodeConfig } from "./config.js";
-import { createSigilHooks } from "./hooks.js";
+import { _resetHookState, createSigilHooks } from "./hooks.js";
 
 const SIGIL_OPENCODE_SCOPE = "sigil-opencode";
 const SIGIL_OPERATION_DURATION_METRIC = "gen_ai.client.operation.duration";
@@ -186,6 +186,7 @@ describe("createSigilHooks OTLP wiring", () => {
   let savedEnv: Record<string, string | undefined> = {};
 
   beforeEach(async () => {
+    _resetHookState();
     for (const k of ENV_KEYS) {
       savedEnv[k] = process.env[k];
       delete process.env[k];
@@ -202,6 +203,7 @@ describe("createSigilHooks OTLP wiring", () => {
       else process.env[k] = v;
     }
     savedEnv = {};
+    _resetHookState();
   });
 
   async function runOneTurn(otlpEnabled: boolean) {
@@ -372,5 +374,122 @@ describe("createSigilHooks OTLP wiring", () => {
   it("does not contact the OTLP endpoint when config.otlp is absent", async () => {
     await runOneTurn(false);
     expect(otlp.requests).toEqual([]);
+  });
+
+  // A tool that fires tool.execute.before but never tool.execute.after
+  // (errored or denied upstream). In metadata_only the terminal parts are not
+  // fetched, so the only source for a span is the drained active entry.
+  async function runNeverCompletedTurn() {
+    const sessionID = "otlp-sess-fail";
+    const userMessage = {
+      id: "user-fail-1",
+      sessionID,
+      role: "user",
+      time: { created: 1_700_000_000_000 },
+      system: "you are a helpful assistant",
+      tools: { bash: true },
+    };
+    const assistantMessage = {
+      id: "otlp-msg-fail",
+      sessionID,
+      role: "assistant",
+      time: { created: 1_700_000_001_000, completed: 1_700_000_002_500 },
+      parentID: "user-fail-1",
+      modelID: "claude-sonnet-4-opencode",
+      providerID: "anthropic",
+      mode: "build",
+      tokens: {
+        input: 10,
+        output: 5,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+      finish: "end_turn",
+    };
+
+    const config: SigilOpencodeConfig = {
+      endpoint: sigil.baseUrl,
+      auth: { mode: "none" },
+      agentName: "opencode",
+      agentVersion: "test-version",
+      contentCapture: "metadata_only",
+      debug: false,
+      otlp: {
+        endpoint: otlp.endpoint,
+        headers: { "X-Test-Header": "present" },
+      },
+    };
+
+    const fakeClient = {
+      session: { message: async () => ({ data: { parts: [] } }) },
+    } as any;
+
+    const hooks = await createSigilHooks(config, fakeClient);
+    if (!hooks) throw new Error("expected createSigilHooks to return hooks");
+
+    hooks.chatMessage(
+      { sessionID },
+      { message: userMessage as any, parts: [] as any },
+    );
+    await hooks.toolExecuteBefore(
+      { sessionID, callID: "tc-fail-1", tool: "bash" },
+      { args: { command: "false" } },
+    );
+    // No toolExecuteAfter.
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: { info: assistantMessage as any },
+      },
+    });
+    await hooks.event({
+      event: {
+        type: "session.idle",
+        properties: { info: { id: sessionID } },
+      },
+    });
+    await hooks.event({
+      event: { type: "global.disposed", properties: {} },
+    });
+  }
+
+  it("exports an error execute_tool span for a tool that never completes in metadata_only", async () => {
+    await runNeverCompletedTurn();
+
+    const traceReqs = otlp.requests.filter((r) => r.url === "/otlp/v1/traces");
+    expect(traceReqs.length).toBeGreaterThan(0);
+
+    type AttributeKV = { key?: string; value?: { stringValue?: string } };
+    type Span = { name?: string; attributes?: AttributeKV[] };
+    const spans: Span[] = [];
+    for (const req of traceReqs) {
+      const payload = JSON.parse(req.body) as {
+        resourceSpans?: Array<{
+          scopeSpans?: Array<{ spans?: Span[] }>;
+        }>;
+      };
+      for (const rs of payload.resourceSpans ?? []) {
+        for (const ss of rs.scopeSpans ?? []) {
+          for (const sp of ss.spans ?? []) spans.push(sp);
+        }
+      }
+    }
+
+    const toolSpans = spans.filter((sp) =>
+      sp.attributes?.some(
+        (a) =>
+          a.key === "gen_ai.operation.name" &&
+          a.value?.stringValue === "execute_tool",
+      ),
+    );
+    expect(toolSpans).toHaveLength(1);
+
+    const toolSpan = toolSpans[0]!;
+    const callId = toolSpan.attributes?.find(
+      (a) => a.key === "gen_ai.tool.call.id",
+    );
+    expect(callId?.value?.stringValue).toBe("tc-fail-1");
+    const errorType = toolSpan.attributes?.find((a) => a.key === "error.type");
+    expect(errorType?.value?.stringValue).toBe("tool_execution_error");
   });
 });

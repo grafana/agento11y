@@ -3,11 +3,8 @@ package hook
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"log"
-	"os"
 	"strings"
 	"time"
 
@@ -21,7 +18,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
-	"github.com/grafana/sigil-sdk/plugins/sigil/internal/timeutil"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/sigilemit"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/useragent"
 )
 
@@ -215,7 +212,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	tokenSnapshot := tokenSnapshotForStop(p, frag, logger)
 	ctx, cancel := context.WithTimeout(context.Background(), stopExportTimeout)
 	defer cancel()
-	providers := setupOTelIfConfigured(ctx, p.SessionID, logger)
+	providers := sigilemit.SetupOTel(ctx, p.SessionID, logger)
 	if providers != nil {
 		defer func() {
 			if err := providers.Shutdown(ctx); err != nil {
@@ -468,60 +465,24 @@ func applySessionDefaults(f *fragment.Fragment, s *fragment.Session) {
 	}
 }
 
-func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.Logger) *otel.Providers {
-	if otel.EndpointFromEnv() == "" {
-		return nil
-	}
-	providers, err := otel.Setup(ctx, instanceID)
-	if err != nil {
-		logger.Printf("otel: setup: %v", err)
-		return nil
-	}
-	return providers
-}
-
-func exportConfig() sigil.GenerationExportConfig {
-	return sigil.GenerationExportConfig{
-		Protocol:       sigil.GenerationExportProtocolHTTP,
-		Endpoint:       strings.TrimRight(os.Getenv("SIGIL_ENDPOINT"), "/") + "/api/v1/generations:export",
-		Headers:        map[string]string{"User-Agent": useragent.For("codex")},
-		BatchSize:      100,
-		FlushInterval:  100 * time.Millisecond,
-		QueueSize:      16,
-		MaxRetries:     1,
-		InitialBackoff: 50 * time.Millisecond,
-		MaxBackoff:     100 * time.Millisecond,
-		Auth: sigil.AuthConfig{
-			Mode:          sigil.ExportAuthModeBasic,
-			BasicUser:     os.Getenv("SIGIL_AUTH_TENANT_ID"),
-			BasicPassword: os.Getenv("SIGIL_AUTH_TOKEN"),
-			TenantID:      os.Getenv("SIGIL_AUTH_TENANT_ID"),
-		},
-	}
-}
-
+// buildClient constructs the Sigil client with the shared HTTP/basic-auth
+// export defaults. Endpoint, tenant ID, and token come from the SDK's automatic
+// SIGIL_* env resolution, matching copilot and cursor.
 func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logger) *sigil.Client {
-	c := sigil.Config{
-		ContentCapture:   cfg.ContentCapture,
-		Logger:           logger,
-		GenerationExport: exportConfig(),
-	}
-	if providers != nil {
-		c.Tracer = providers.Tracer(otelInstrumentationName)
-		c.Meter = providers.Meter(otelInstrumentationName)
-	}
-	return sigil.NewClient(c)
+	return sigilemit.NewClient(sigilemit.ClientOptions{
+		InstrumentationName: otelInstrumentationName,
+		ContentCapture:      cfg.ContentCapture,
+		Logger:              logger,
+		Providers:           providers,
+		UserAgent:           useragent.For("codex"),
+	})
 }
 
 func emitGeneration(ctx context.Context, client *sigil.Client, frag *fragment.Fragment, mapped mapper.Mapped, mode sigil.ContentCaptureMode, logger *log.Logger) error {
-	genCtx, rec := client.StartGeneration(ctx, mapped.Start)
-	rec.SetResult(mapped.Generation, nil)
-	emitToolSpans(genCtx, client, frag, mapped.Generation, mode, logger)
-	rec.End()
-	if err := rec.Err(); err != nil {
-		return fmt.Errorf("recorder: %w", err)
-	}
-	return nil
+	// codex never promotes a call error, so callErr is always nil here.
+	return sigilemit.Record(ctx, client, mapped.Start, mapped.Generation, nil, func(genCtx context.Context) {
+		emitToolSpans(genCtx, client, frag, mapped.Generation, mode, logger)
+	})
 }
 
 func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fragment, gen sigil.Generation, mode sigil.ContentCaptureMode, logger *log.Logger) {
@@ -534,7 +495,7 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fra
 		if t.ToolName == "" {
 			continue
 		}
-		startedAt, completedAt := toolSpanWindow(*t, gen.CompletedAt)
+		startedAt, completedAt := sigilemit.ToolSpanWindow(t.CompletedAt, t.DurationMs, gen.CompletedAt)
 		_, rec := client.StartToolExecution(ctx, sigil.ToolExecutionStart{
 			ToolName:        t.ToolName,
 			ToolCallID:      t.ToolUseID,
@@ -554,7 +515,7 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fra
 			end.Result = redactSpanContent(red, t.ToolResponse)
 		}
 		if t.Status == "error" {
-			rec.SetExecError(toolErrorOr(t.ErrorMessage))
+			rec.SetExecError(sigilemit.ToolError(t.ErrorMessage))
 		}
 		rec.SetResult(end)
 		rec.End()
@@ -569,15 +530,6 @@ func redactSpanContent(red *redact.Redactor, raw json.RawMessage) string {
 		return ""
 	}
 	return red.RedactJSONForText(raw)
-}
-
-func toolSpanWindow(t fragment.ToolRecord, genCompletedAt time.Time) (time.Time, time.Time) {
-	completedAt := timeutil.ParseTimestamp(t.CompletedAt, genCompletedAt)
-	startedAt := completedAt
-	if t.DurationMs != nil && !completedAt.IsZero() {
-		startedAt = completedAt.Add(-time.Duration(*t.DurationMs) * time.Millisecond)
-	}
-	return startedAt, completedAt
 }
 
 func normalizeStatus(p Payload, response json.RawMessage) string {
@@ -766,11 +718,4 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
-}
-
-func toolErrorOr(msg string) error {
-	if msg == "" {
-		return errors.New("tool returned error")
-	}
-	return errors.New(msg)
 }

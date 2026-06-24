@@ -1,10 +1,6 @@
 package mapper
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"maps"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +9,8 @@ import (
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/codexlog"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/agents/codex/fragment"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/gitbranch"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/mapperutil"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/timeutil"
 )
@@ -43,16 +41,14 @@ func Map(in Inputs) Mapped {
 	}
 	completedAt := timeutil.ParseTimestamp(frag.CompletedAt, timeutil.ParseTimestamp(frag.LastEventAt, now))
 	startedAt := timeutil.ParseTimestamp(frag.StartedAt, completedAt)
-	mode := in.ContentCapture
-	if mode == sigil.ContentCaptureModeDefault {
-		mode = sigil.ContentCaptureModeMetadataOnly
-	}
+	startMode := mapperutil.NormalizeStartContentMode(in.ContentCapture)
+	payloadMode := mapperutil.NormalizePayloadContentMode(in.ContentCapture)
 
 	modelName := strings.TrimSpace(frag.Model)
 	if modelName == "" {
 		modelName = "unknown"
 	}
-	model := sigil.ModelRef{Provider: inferProviderFromModel(modelName), Name: modelName}
+	model := sigil.ModelRef{Provider: mapperutil.InferProvider(modelName), Name: modelName}
 	if model.Provider == "" {
 		model.Provider = "codex"
 	}
@@ -62,13 +58,16 @@ func Map(in Inputs) Mapped {
 	if frag.Cwd != "" {
 		tags["cwd"] = frag.Cwd
 	}
+	if branch := gitbranch.Resolve(frag.Cwd); branch != "" {
+		tags["git.branch"] = branch
+	}
 	if frag.Source != "" {
 		tags["hook.source"] = frag.Source
 	}
 	tags["codex.stop_hook_active"] = strconv.FormatBool(frag.StopHookActive)
 
 	tools := buildToolDefinitions(frag.Tools)
-	input, output := buildMessages(frag, mode)
+	input, output := buildMessages(frag, payloadMode)
 	conversationID, agentName, parentIDs, metadata := linkFields(frag, in.SubagentLink, tags)
 	usage, metadata := usageFields(in.TokenSnapshot, metadata)
 
@@ -81,10 +80,10 @@ func Map(in Inputs) Mapped {
 		Model:               model,
 		Tools:               tools,
 		ParentGenerationIDs: parentIDs,
-		Tags:                cloneStringMap(tags),
-		Metadata:            cloneAnyMap(metadata),
+		Tags:                mapperutil.Clone(tags),
+		Metadata:            mapperutil.Clone(metadata),
 		StartedAt:           startedAt,
-		ContentCapture:      mode,
+		ContentCapture:      startMode,
 	}
 	gen := sigil.Generation{
 		ID:                  id,
@@ -102,8 +101,8 @@ func Map(in Inputs) Mapped {
 		StopReason:          "completed",
 		StartedAt:           startedAt,
 		CompletedAt:         completedAt,
-		Tags:                cloneStringMap(tags),
-		Metadata:            cloneAnyMap(metadata),
+		Tags:                mapperutil.Clone(tags),
+		Metadata:            mapperutil.Clone(metadata),
 	}
 	return Mapped{Start: start, Generation: gen}
 }
@@ -192,28 +191,8 @@ func hasPositiveCodexUsage(u codexlog.TokenUsage) bool {
 		u.TotalTokens > 0
 }
 
-func cloneStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	maps.Copy(out, in)
-	return out
-}
-
-func cloneAnyMap(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	maps.Copy(out, in)
-	return out
-}
-
 func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (input, output []sigil.Message) {
-	if mode == sigil.ContentCaptureModeDefault {
-		mode = sigil.ContentCaptureModeMetadataOnly
-	}
+	mode = mapperutil.NormalizePayloadContentMode(mode)
 	red := redact.New()
 	cleanText := func(s string) string {
 		if mode == sigil.ContentCaptureModeFull || mode == sigil.ContentCaptureModeNoToolContent {
@@ -251,40 +230,13 @@ func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (inpu
 }
 
 func buildToolDefinitions(tools []fragment.ToolRecord) []sigil.ToolDefinition {
-	seen := map[string]struct{}{}
-	names := make([]string, 0, len(tools))
-	for _, t := range tools {
-		if t.ToolName == "" {
-			continue
-		}
-		if _, ok := seen[t.ToolName]; ok {
-			continue
-		}
-		seen[t.ToolName] = struct{}{}
-		names = append(names, t.ToolName)
+	names := make([]string, len(tools))
+	for i := range tools {
+		names[i] = tools[i].ToolName
 	}
-	sort.Strings(names)
-	out := make([]sigil.ToolDefinition, 0, len(names))
-	for _, name := range names {
-		out = append(out, sigil.ToolDefinition{Name: name, Type: "function"})
-	}
-	return out
+	return mapperutil.SortedToolDefinitions(names)
 }
 
 func GenerationID(sessionID, turnID string) string {
-	sum := sha256.Sum256([]byte(sessionID + "\x00" + turnID))
-	return "codex-" + hex.EncodeToString(sum[:])[:24]
-}
-
-func inferProviderFromModel(model string) string {
-	m := strings.ToLower(model)
-	switch {
-	case strings.Contains(m, "claude"):
-		return "anthropic"
-	case strings.HasPrefix(m, "gpt"), strings.HasPrefix(m, "o1"), strings.HasPrefix(m, "o3"), strings.HasPrefix(m, "o4"):
-		return "openai"
-	case strings.Contains(m, "gemini"):
-		return "google"
-	}
-	return ""
+	return mapperutil.DeterministicID("codex", sessionID, turnID)
 }

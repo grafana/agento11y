@@ -45,17 +45,17 @@ uv run uvicorn app.main:app --reload --port 8000
 
 ```bash
 # On-topic: agent uses the tool, classifier returns ON_TOPIC
-curl -s localhost:8000/chat \
+curl -s http://<app-host>:8000/chat \
   -H 'content-type: application/json' \
   -d '{"message": "Whats the weather in Paris on 2026-04-18?"}' | jq
 
 # Off-topic: agent declines, classifier returns OFF_TOPIC
-curl -s localhost:8000/chat \
+curl -s http://<app-host>:8000/chat \
   -H 'content-type: application/json' \
   -d '{"message": "Write me a limerick about kubernetes."}' | jq
 ```
 
-FastAPI also serves interactive docs at [http://localhost:8000/docs](http://localhost:8000/docs).
+FastAPI also serves interactive docs at `http://<app-host>:8000/docs`.
 
 ## What to look for in Sigil
 
@@ -87,13 +87,12 @@ See `[.env.example](./.env.example)`.
 | Variable                           | Purpose                                                                                                                               |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `ANTHROPIC_API_KEY`                | Required. Used by both the agent and the classifier.                                                                                  |
-| `SIGIL_ENDPOINT`                   | API URL from AI Observability → Configuration. Default `http://localhost:8080`.                                                       |
-| `SIGIL_API_ENDPOINT`               | Sigil REST API base used by helper endpoints such as ratings. Default `http://localhost:8080`.                                        |
+| `SIGIL_ENDPOINT`                   | API URL from AI Observability → Configuration. Required for Grafana Cloud.                                                            |
+| `SIGIL_API_ENDPOINT`               | Sigil REST API base used by helper endpoints such as ratings. Same host as `SIGIL_ENDPOINT` for Grafana Cloud.                       |
 | `SIGIL_AUTH_TENANT_ID`             | Numeric instance ID. Sent as `X-Scope-OrgID` and used as basic-auth user.                                                             |
 | `SIGIL_AUTH_TOKEN`                 | Cloud Access Policy Token (`glc_…`) with `sigil:write` scope. Required for Cloud.                                                     |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`      | OTLP gRPC target for traces + metrics. Default `http://localhost:4317`.                                                               |
-| `OTEL_EXPORTER_OTLP_INSECURE`      | `true` for plaintext gRPC (local dev).                                                                                                |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`      | OTLP target for traces + metrics. Use the Grafana Cloud OTLP gateway URL or your collector endpoint.                                  |
+| `OTEL_EXPORTER_OTLP_INSECURE`      | Set only when your collector endpoint explicitly requires plaintext gRPC.                                                             |
 | `OTEL_SERVICE_NAME`                | Service name tag on spans / metrics.                                                                                                  |
 | `AGENT_MODEL` / `CLASSIFIER_MODEL` | Anthropic model IDs.                                                                                                                  |
-
 

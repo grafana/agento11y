@@ -896,7 +896,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.83.14"
+version = "1.89.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -912,9 +912,9 @@ dependencies = [
     { name = "tiktoken" },
     { name = "tokenizers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8d/7c/c095649380adc96c8630273c1768c2ad1e74aa2ee1dd8dd05d218a60569f/litellm-1.83.14.tar.gz", hash = "sha256:24aef9b47cdc424c833e32f3727f411741c690832cd1fe4405e0077144fe09c9", size = 14836599, upload-time = "2026-04-26T03:16:10.176Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/1b/de398e6cef46d4cbc4395c895330f30eab05439bf6d0c5c53b0203661eeb/litellm-1.89.1.tar.gz", hash = "sha256:eb9292f90afe46dcce4bfef6bbeaa54494945813763e1c0917f4e9a1c584c1a4", size = 14071586, upload-time = "2026-06-16T03:12:52.997Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7f/5c/1b5691575420135e90578543b2bf219497caa33cfd0af64cb38f30288450/litellm-1.83.14-py3-none-any.whl", hash = "sha256:92b11ba2a32cf80707ddf388d18526696c7999a21b418c5e3b6eda1243d2cfdb", size = 16457054, upload-time = "2026-04-26T03:16:05.72Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/24/81f03088876a13b628fdbaf746ee746e1dff127d63f339ef72f1a3801c91/litellm-1.89.1-py3-none-any.whl", hash = "sha256:a52a67625d89cb1787ef48c4b3c1ab9c2574ea304f56900bc631844297a13bd4", size = 15484855, upload-time = "2026-06-16T03:12:49.457Z" },
 ]
 
 [[package]]
@@ -1970,7 +1970,7 @@ wheels = [
 
 [[package]]
 name = "sigil-sdk"
-version = "0.1.2"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
@@ -1981,14 +1981,14 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e2/7b/3ee9bdc43c8eb9b9bbdc646f68985be5a773abbfdc34c92f56ee58689b23/sigil_sdk-0.1.2.tar.gz", hash = "sha256:333a034ca0bd223f4b651f7bb19896ddb14386b45735809f1ac69a14c2b4562f", size = 57124, upload-time = "2026-03-24T12:48:44.693Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/13/e9/0b10c59026fa0a8c709bca2331a920633d827ae5c745f0228369c7a7f414/sigil_sdk-0.9.0.tar.gz", hash = "sha256:8ddefb7e69cbbae8dfea25399af8a89f5f5029b19ec64c97dc5ca42dde9d082a", size = 142466, upload-time = "2026-06-12T21:21:53.047Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2f/49/4dc0308393da6bbc44a1275fc9dd89f6e530d22ba22cd0df0f111d7e403b/sigil_sdk-0.1.2-py3-none-any.whl", hash = "sha256:c4e5735e4451a9851a01d466ee1cac30679712864deb05c417b493c9c797860a", size = 42179, upload-time = "2026-03-24T12:48:43.08Z" },
+    { url = "https://files.pythonhosted.org/packages/46/54/3fa80cb60c4e02c82427b3b9f1b99abf7d04ab5a816435e088d6cec5cb00/sigil_sdk-0.9.0-py3-none-any.whl", hash = "sha256:aa223574d0f2082ea00b3c67a90497189ab5c4ab2ca99303f774fa48bab432e6", size = 94039, upload-time = "2026-06-12T21:21:51.903Z" },
 ]
 
 [[package]]
 name = "sigil-sdk-litellm"
-version = "0.1.2"
+version = "0.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "litellm" },
@@ -2006,7 +2006,7 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.82.3,!=1.82.7,!=1.82.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24.0" },
-    { name = "sigil-sdk", specifier = ">=0.1.2" },
+    { name = "sigil-sdk", specifier = ">=0.9.0" },
 ]
 provides-extras = ["dev"]
 

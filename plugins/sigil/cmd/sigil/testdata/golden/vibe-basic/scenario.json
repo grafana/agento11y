@@ -1,0 +1,56 @@
+{
+  "agent": "vibe",
+  "transcripts": {
+    "messages": [
+      "{\"role\":\"user\",\"content\":\"how many cats are sitting on my keyboard?\",\"injected\":false,\"message_id\":\"m1\"}",
+      "{\"role\":\"assistant\",\"reasoning_content\":\"Count the cats on the keyboard.\",\"tool_calls\":[{\"id\":\"tc1\",\"index\":0,\"type\":\"function\",\"function\":{\"name\":\"bash\",\"arguments\":\"{\\\"command\\\":\\\"ls /keyboard/cats\\\"}\"}}],\"message_id\":\"m2\"}",
+      "{\"role\":\"tool\",\"content\":\"mittens waffles\",\"name\":\"bash\",\"tool_call_id\":\"tc1\"}",
+      "{\"role\":\"assistant\",\"content\":\"Two cats are on your keyboard: Mittens and Waffles.\",\"reasoning_content\":\"Two entries, so two cats.\",\"message_id\":\"m3\"}"
+    ]
+  },
+  "sibling_files": {
+    "meta.json": "{\"session_id\":\"vibe-sess-1\",\"title\":\"cats on the keyboard\",\"stats\":{\"steps\":1,\"session_prompt_tokens\":100,\"session_completion_tokens\":25,\"last_turn_prompt_tokens\":100,\"last_turn_completion_tokens\":25,\"last_turn_duration\":1.5,\"context_tokens\":100,\"session_total_llm_tokens\":125,\"input_price_per_million\":1.5,\"output_price_per_million\":7.5,\"session_cost\":0.0625,\"tool_calls_succeeded\":1},\"config\":{\"active_model\":\"mistral-medium-3.5\",\"models\":[{\"name\":\"mistral-vibe-cli-latest\",\"provider\":\"mistral\",\"alias\":\"mistral-medium-3.5\"}]},\"tools_available\":[{\"type\":\"function\",\"function\":{\"name\":\"bash\",\"description\":\"Run shell commands\",\"parameters\":{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}}}}}],\"system_prompt\":{\"role\":\"system\",\"content\":\"You are a helpful assistant that keeps tabs on the cats on the user's keyboard.\"}}\n"
+  },
+  "events": [
+    {
+      "hook_event_name": "before_tool",
+      "session_id": "vibe-sess-1",
+      "transcript_path": "{{transcript:messages}}",
+      "cwd": "/repo/keyboard-cats",
+      "tool_name": "bash",
+      "tool_call_id": "tc1",
+      "tool_input": {"command": "ls /keyboard/cats"}
+    },
+    {
+      "hook_event_name": "after_tool",
+      "session_id": "vibe-sess-1",
+      "transcript_path": "{{transcript:messages}}",
+      "tool_name": "bash",
+      "tool_call_id": "tc1",
+      "tool_status": "success",
+      "duration_ms": 42.0
+    },
+    {
+      "hook_event_name": "post_agent_turn",
+      "session_id": "vibe-sess-1",
+      "transcript_path": "{{transcript:messages}}",
+      "cwd": "/repo/keyboard-cats"
+    }
+  ],
+  "raw_secrets": [],
+  "invariants": {
+    "export_count": 1,
+    "generations": 1,
+    "any_generation": [
+      "\"agent_name\":\"mistral-vibe\"",
+      "\"conversation_id\":\"vibe-sess-1\"",
+      "\"provider\":\"mistral\"",
+      "\"name\":\"mistral-medium-3.5\"",
+      "\"response_model\":\"mistral-vibe-cli-latest\"",
+      "\"input_tokens\":\"100\"",
+      "\"output_tokens\":\"25\"",
+      "\"thinking_enabled\":true",
+      "\"vibe.cost_usd\":0.0625"
+    ]
+  }
+}

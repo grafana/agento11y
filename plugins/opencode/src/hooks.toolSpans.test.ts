@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SigilOpencodeConfig } from "./config.js";
 import {
   _peekToolExecutionState,
+  _resetHookState,
   _resetToolExecutionState,
   createSigilHooks,
+  drainActiveToolExecutions,
   emitToolSpans,
   mergeToolSpanRecords,
   type ToolExecutionRecord,
@@ -303,6 +305,164 @@ describe("mergeToolSpanRecords", () => {
     const merged = mergeToolSpanRecords(term, hook);
     expect(merged).toHaveLength(2);
   });
+
+  it("keeps a term error record over a drained record with the same key", () => {
+    const term = [
+      makeRecord({
+        toolCallId: "c1",
+        startedAt: 1,
+        completedAt: 2,
+        isError: true,
+        error: "ENOENT",
+      }),
+    ];
+    const drained = [
+      makeRecord({
+        toolCallId: "c1",
+        startedAt: 100,
+        completedAt: 200,
+        isError: true,
+        error: "tool did not complete (errored, denied, or interrupted)",
+      }),
+    ];
+
+    const merged = mergeToolSpanRecords(term, drained);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({
+      toolCallId: "c1",
+      startedAt: 1,
+      completedAt: 2,
+      error: "ENOENT",
+    });
+  });
+
+  it("keeps a drained record whose key is not covered by term records", () => {
+    const term = [makeRecord({ toolCallId: "c1" })];
+    const drained = [
+      makeRecord({
+        toolCallId: "c2",
+        startedAt: 100,
+        completedAt: 200,
+        isError: true,
+        error: "tool did not complete (errored, denied, or interrupted)",
+      }),
+    ];
+
+    const merged = mergeToolSpanRecords(term, drained);
+    expect(merged).toHaveLength(2);
+    expect(merged[1]).toMatchObject({ toolCallId: "c2", isError: true });
+  });
+});
+
+function metadataOnlyConfig(): SigilOpencodeConfig {
+  return {
+    endpoint: "http://127.0.0.1:1",
+    auth: { mode: "none" },
+    agentName: "opencode",
+    agentVersion: "test-version",
+    contentCapture: "metadata_only",
+    debug: false,
+  };
+}
+
+async function makeHooks(config: SigilOpencodeConfig) {
+  const hooks = await createSigilHooks(config, {
+    session: { message: async () => ({ data: { parts: [] } }) },
+  } as never);
+  if (!hooks) throw new Error("expected hooks");
+  return hooks;
+}
+
+describe("drainActiveToolExecutions", () => {
+  beforeEach(() => _resetToolExecutionState());
+  afterEach(() => _resetToolExecutionState());
+
+  it("turns active entries into error records, removes them, scoped by session", async () => {
+    const hooks = await makeHooks(metadataOnlyConfig());
+
+    await hooks.toolExecuteBefore(
+      { sessionID: "s1", callID: "c1", tool: "bash" },
+      { args: { command: "false" } },
+    );
+    await hooks.toolExecuteBefore(
+      { sessionID: "s1", callID: "c2", tool: "read" },
+      { args: { path: "/x" } },
+    );
+    await hooks.toolExecuteBefore(
+      { sessionID: "s2", callID: "c3", tool: "grep" },
+      { args: { pattern: "x" } },
+    );
+
+    const drained = drainActiveToolExecutions("s1");
+
+    expect(drained).toHaveLength(2);
+    for (const rec of drained) {
+      expect(rec.isError).toBe(true);
+      expect(rec.error).toBeTruthy();
+      expect(rec.completedAt).toBeGreaterThan(0);
+    }
+    expect(drained.map((r) => r.toolCallId).sort()).toEqual(["c1", "c2"]);
+
+    // Only s1 is drained; the unrelated session keeps its active entry.
+    const active = _peekToolExecutionState().active;
+    expect(active).toHaveLength(1);
+    expect(active[0]).toMatchObject({ sessionID: "s2", toolCallId: "c3" });
+  });
+
+  it("returns nothing and mutates nothing when the session has no active entries", async () => {
+    const hooks = await makeHooks(metadataOnlyConfig());
+    await hooks.toolExecuteBefore(
+      { sessionID: "s2", callID: "c3", tool: "grep" },
+      { args: {} },
+    );
+
+    expect(drainActiveToolExecutions("s1")).toEqual([]);
+    expect(_peekToolExecutionState().active).toHaveLength(1);
+  });
+});
+
+describe("synthesized error spans for never-completed tools", () => {
+  beforeEach(() => _resetToolExecutionState());
+  afterEach(() => {
+    _resetToolExecutionState();
+    vi.useRealTimers();
+  });
+
+  it("emits exactly one error span with real startedAt in metadata_only", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+
+    const hooks = await makeHooks(metadataOnlyConfig());
+    await hooks.toolExecuteBefore(
+      { sessionID: "s1", callID: "c1", tool: "bash" },
+      { args: { command: "false" } },
+    );
+    // The tool errored or was denied upstream: tool.execute.after never fires.
+    vi.setSystemTime(5000);
+
+    // Reproduce recordAssistantMessage's span assembly in metadata_only: parts
+    // are not fetched, so termRecords is empty and the drained record is the
+    // only source.
+    const termRecords = toolSpansFromParts("s1", []);
+    const drained = drainActiveToolExecutions("s1");
+    const merged = mergeToolSpanRecords(termRecords, drained);
+
+    const { client, recorders } = mockSigilClient();
+    emitToolSpans(client, merged, {
+      ...defaultOpts(),
+      conversationId: "s1",
+      contentCapture: "metadata_only",
+    });
+
+    expect(recorders).toHaveLength(1);
+    expect(recorders[0]!.start).toMatchObject({
+      toolName: "bash",
+      toolCallId: "c1",
+      startedAt: new Date(1000),
+    });
+    expect(recorders[0]!.callError).toBeInstanceOf(Error);
+    expect(_peekToolExecutionState().active).toHaveLength(0);
+  });
 });
 
 function startResponseServer(
@@ -333,12 +493,12 @@ describe("hook lifecycle records and guard denial", () => {
   const servers: Server[] = [];
 
   beforeEach(() => {
-    _resetToolExecutionState();
+    _resetHookState();
   });
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map(closeServer));
-    _resetToolExecutionState();
+    _resetHookState();
   });
 
   it("toolExecuteBefore/After move an active record into completed", async () => {
@@ -431,6 +591,173 @@ describe("hook lifecycle records and guard denial", () => {
       { title: "ls", output: "ignored", metadata: {} },
     );
     expect(_peekToolExecutionState().completed).toHaveLength(0);
+
+    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+  });
+
+  it("drains an incomplete tool execution when the assistant message records (metadata_only)", async () => {
+    const sigilSrv = await startResponseServer({ results: [] });
+    servers.push(sigilSrv.server);
+
+    const config: SigilOpencodeConfig = {
+      endpoint: sigilSrv.baseUrl,
+      auth: { mode: "none" },
+      agentName: "opencode",
+      agentVersion: "test-version",
+      contentCapture: "metadata_only",
+      debug: false,
+    };
+
+    const hooks = await createSigilHooks(config, {
+      session: { message: async () => ({ data: { parts: [] } }) },
+    } as never);
+    if (!hooks) throw new Error("expected hooks");
+
+    const sessionID = "sess-1";
+    hooks.chatMessage(
+      { sessionID },
+      {
+        message: {
+          id: "user-1",
+          sessionID,
+          role: "user",
+          time: { created: 1_700_000_000_000 },
+          system: "sys",
+          tools: { bash: true },
+        } as never,
+        parts: [] as never,
+      },
+    );
+
+    // Tool starts but never completes (errored or denied upstream): opencode
+    // skips tool.execute.after, so no after hook fires.
+    await hooks.toolExecuteBefore(
+      { sessionID, callID: "call-1", tool: "bash" },
+      { args: { command: "false" } },
+    );
+    expect(_peekToolExecutionState().active).toHaveLength(1);
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-1",
+            sessionID,
+            role: "assistant",
+            time: {
+              created: 1_700_000_001_000,
+              completed: 1_700_000_002_000,
+            },
+            modelID: "claude-sonnet-4-opencode",
+            providerID: "anthropic",
+            mode: "build",
+            tokens: {
+              input: 10,
+              output: 5,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+            finish: "end_turn",
+          },
+        },
+      },
+    });
+
+    expect(_peekToolExecutionState().active).toHaveLength(0);
+
+    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+  });
+
+  it("removes the stranded active entry in full mode when the error part is present", async () => {
+    const sigilSrv = await startResponseServer({ results: [] });
+    servers.push(sigilSrv.server);
+
+    const sessionID = "sess-full";
+    const messageID = "msg-full";
+    const errorPart = {
+      id: "p-err",
+      sessionID,
+      messageID,
+      type: "tool",
+      callID: "call-1",
+      tool: "bash",
+      state: {
+        status: "error",
+        input: { command: "false" },
+        error: "exit status 1",
+        time: { start: 1_700_000_001_200, end: 1_700_000_001_400 },
+      },
+    };
+
+    const config: SigilOpencodeConfig = {
+      endpoint: sigilSrv.baseUrl,
+      auth: { mode: "none" },
+      agentName: "opencode",
+      agentVersion: "test-version",
+      contentCapture: "full",
+      debug: false,
+    };
+
+    const hooks = await createSigilHooks(config, {
+      session: { message: async () => ({ data: { parts: [errorPart] } }) },
+    } as never);
+    if (!hooks) throw new Error("expected hooks");
+
+    hooks.chatMessage(
+      { sessionID },
+      {
+        message: {
+          id: "user-full",
+          sessionID,
+          role: "user",
+          time: { created: 1_700_000_000_000 },
+          system: "sys",
+          tools: { bash: true },
+        } as never,
+        parts: [] as never,
+      },
+    );
+
+    // Native tool errored: tool.execute.after never fires, leaving an active
+    // entry, but the error is captured in the fetched parts.
+    await hooks.toolExecuteBefore(
+      { sessionID, callID: "call-1", tool: "bash" },
+      { args: { command: "false" } },
+    );
+    expect(_peekToolExecutionState().active).toHaveLength(1);
+
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: messageID,
+            sessionID,
+            role: "assistant",
+            time: {
+              created: 1_700_000_001_000,
+              completed: 1_700_000_002_000,
+            },
+            modelID: "claude-sonnet-4-opencode",
+            providerID: "anthropic",
+            mode: "build",
+            tokens: {
+              input: 10,
+              output: 5,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+            finish: "end_turn",
+          },
+        },
+      },
+    });
+
+    // Drained in full mode too, so the entry never leaks. The merge keeps the
+    // accurate terminal record over the synthesized drained one; that
+    // precedence is pinned by the mergeToolSpanRecords cases above.
+    expect(_peekToolExecutionState().active).toHaveLength(0);
 
     await hooks.event({ event: { type: "global.disposed", properties: {} } });
   });

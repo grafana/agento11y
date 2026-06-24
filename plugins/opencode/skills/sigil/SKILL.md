@@ -17,6 +17,11 @@ You are acting as a coding agent inside this repository. Your goal is to add or 
 4. Add or update tests for changed instrumentation behavior.
 5. Explain what was instrumented and why.
 
+Sigil is a Grafana Cloud-only product for user-facing setup. Do not suggest
+non-Cloud or development-only endpoints in docs, examples, or generated
+instructions. Use the Grafana Cloud API URL from AI Observability configuration
+and Cloud `basic` auth.
+
 ## Output contract (required)
 
 Return:
@@ -68,11 +73,11 @@ The OTel SDK exporters read these env vars automatically — no extra code neede
 
 ### Option B — Via Alloy / OTel Collector (optional)
 
-Run a local Alloy or OTel Collector that receives unauthenticated OTLP and forwards to Cloud with credentials. Useful for centralized token management, retries, relabeling, and metadata enrichment. Common local ports: 4318 (OTLP/HTTP), 4317 (OTLP/gRPC).
+Run Alloy or an OTel Collector in the user's deployment and forward telemetry to Grafana Cloud with credentials. Useful for centralized token management, retries, relabeling, and metadata enrichment.
 
 Env vars:
 ```
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+OTEL_EXPORTER_OTLP_ENDPOINT=<your-collector-otlp-endpoint>
 ```
 
 ### Provider setup (required for both options)

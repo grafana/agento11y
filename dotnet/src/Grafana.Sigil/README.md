@@ -17,12 +17,13 @@ var client = new SigilClient(new SigilClientConfig
 {
     GenerationExport = new GenerationExportConfig
     {
-        Protocol = GenerationExportProtocol.Grpc,
-        Endpoint = "localhost:4317",
+        Protocol = GenerationExportProtocol.Http,
+        Endpoint = "https://sigil-prod-<region>.grafana.net",
         Auth = new AuthConfig
         {
-            Mode = ExportAuthMode.Tenant,
-            TenantId = "dev-tenant",
+            Mode = ExportAuthMode.Basic,
+            TenantId = Environment.GetEnvironmentVariable("SIGIL_AUTH_TENANT_ID"),
+            BasicPassword = Environment.GetEnvironmentVariable("SIGIL_AUTH_TOKEN"),
         },
         BatchSize = 100,
         FlushInterval = TimeSpan.FromSeconds(1),
@@ -33,7 +34,7 @@ var client = new SigilClient(new SigilClientConfig
     },
     Api = new ApiConfig
     {
-        Endpoint = "http://localhost:8080",
+        Endpoint = "https://sigil-prod-<region>.grafana.net",
     },
 });
 ```
@@ -77,6 +78,33 @@ var client = new SigilClient(new SigilClientConfig
     },
 });
 ```
+
+## Secrets redaction
+
+Use the built-in sanitizer to redact high-confidence secret formats before
+generation data is exported:
+
+```csharp
+var client = new SigilClient(new SigilClientConfig
+{
+    GenerationSanitizer = SecretRedactionSanitizer.Create(),
+});
+```
+
+User input messages are not redacted by default. To opt in:
+
+```csharp
+var client = new SigilClient(new SigilClientConfig
+{
+    GenerationSanitizer = SecretRedactionSanitizer.Create(new SecretRedactionOptions
+    {
+        RedactInputMessages = true,
+    }),
+});
+```
+
+You can also set `SIGIL_REDACT_INPUT_MESSAGES=true`. Explicit options take
+precedence over the environment variable.
 
 ## Manual generation instrumentation (sync)
 

@@ -49,7 +49,10 @@ func TestStop_EndpointDeadButProcessAlive(t *testing.T) {
 	}{
 		{name: "signals daemon-looking process", cmdline: "/usr/local/bin/sigil local serve", wantStop: true},
 		{name: "signals daemon-looking process with spaces in path", cmdline: "/tmp/Sigil Dev/sigil local serve", wantStop: true},
+		{name: "signals go run dev daemon", cmdline: "/Users/x/Library/Caches/go-build/ab/cd-d/main local serve", wantStop: true},
 		{name: "does not signal unrelated live pid", cmdline: "sleep 60", wantAlive: true},
+		{name: "does not signal main without local serve suffix", cmdline: "/tmp/main serve", wantAlive: true},
+		{name: "does not signal non-sigil binary with local serve suffix", cmdline: "/tmp/python local serve", wantAlive: true},
 		{name: "does not signal unrelated live pid with healthy endpoint", cmdline: "sleep 60", liveEndpoint: true, wantAlive: true},
 		{name: "keeps status when pid identity cannot be checked", cmdlineError: errors.New("ps failed"), wantAlive: true, wantErr: "identify recorded daemon", wantStatus: true},
 	} {

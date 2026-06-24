@@ -64,7 +64,7 @@ The script installs to `~/.local/bin`; `go install` puts the binary in `go env G
 
 Then launch your agent with `sigil <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, or `pi`. On first run it installs the plugin, prompts for credentials, writes `~/.config/sigil/config.env`, and launches the agent.
 
-Cursor has no launcher; see [`plugins/cursor/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/cursor) for setup.
+Cursor has no launcher (it is a GUI app). After installing the binary, wire its hooks once with `sigil cursor install` (it merges into `~/.cursor/hooks.json` and prompts for credentials on first run); `sigil cursor uninstall` removes them. See [`plugins/cursor/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/cursor) for details.
 
 To skip the prompt, write the config file by hand:
 
@@ -109,7 +109,8 @@ SIGIL_PROTOCOL=http
 SIGIL_AUTH_MODE=basic
 SIGIL_AUTH_TENANT_ID=<your-instance-id>
 SIGIL_AUTH_TOKEN=<glc_... token>
-SIGIL_TAGS=project=my-app,env=dev   # optional; also sigil.tag.<key> on OTel spans/metrics
+SIGIL_TAGS=team=checkout,env=prod   # optional client tags; on Go/JS also emitted as sigil.tag.<key> on OTel spans/metrics
+SIGIL_USER_ID=<end-user id>          # optional; sets the user.id span attribute (all SDKs)
 
 # OTel traces and metrics (separate channel; same token)
 OTEL_EXPORTER_OTLP_ENDPOINT=<from stack OpenTelemetry card>
@@ -125,6 +126,16 @@ The core SDK clients default to `no_tool_content`: generation content (prompts, 
 Use the cross-language reference at [`docs/concepts/content-capture-modes.md`](https://github.com/grafana/sigil-sdk/blob/main/docs/concepts/content-capture-modes.md) and the per-language READMEs for examples. Modes supported by the SDKs: `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. User-provided `metadata` and `tags` are not stripped by capture modes; do not put sensitive content there.
 
 This default differs from coding-agent plugin defaults (Path A), which ship `metadata_only`. Do not mix the two.
+
+### Tags, metadata, and user id
+
+To attach custom key/values, pick the mechanism by where it must show up. See [`docs/concepts/tags-and-metadata.md`](https://github.com/grafana/sigil-sdk/blob/main/docs/concepts/tags-and-metadata.md) for the full table.
+
+- **Client tags** (`SIGIL_TAGS` / config `tags`): merged into every generation export; on **Go/JS** also emitted as `sigil.tag.<key>` on OTel spans and metrics (Python/Java/.NET are export-only). Use for low-cardinality values you want to slice metrics/traces by (team, project, env). Do not put high-cardinality values (user, request id) here, they blow up metric label cardinality.
+- **Per-generation `tags` / `metadata`**: export-only, never on spans/metrics. Use for searchable per-request data.
+- **`user_id`** (`SIGIL_USER_ID` / per-call / context): sets the `user.id` span attribute (all SDKs) plus the export; not a metric label. Use this for end-user identity instead of a tag.
+
+Capture modes do not strip `tags`/`metadata`/`user_id`; do not put secrets there.
 
 ## Mission
 
@@ -172,7 +183,7 @@ Send OTLP straight to the Grafana Cloud OTLP gateway. Authentication uses Basic 
 
 ### Option B: Via Alloy / OTel Collector (optional)
 
-Run a local Alloy or OTel Collector that receives unauthenticated OTLP and forwards to Cloud with credentials. Useful for centralized token management, retries, relabeling, and metadata enrichment. Common local ports: 4318 (OTLP/HTTP), 4317 (OTLP/gRPC). In this mode set `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` and skip the headers.
+Run Alloy or an OTel Collector in your deployment and forward telemetry to Grafana Cloud with credentials. Useful for centralized token management, retries, relabeling, and metadata enrichment. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to the collector endpoint your deployment provides.
 
 ### Provider setup snippets
 
@@ -436,7 +447,7 @@ In the grafana/sigil-sdk repo:
   - `stop_reason` / `finish_reason`
   - Full token usage including `cache_read_input_tokens`, `cache_write_input_tokens`, and `reasoning_tokens` when the provider returns them
 - Always check `rec.err()` / `Err()` after the generation recorder closes; SDK validation or enqueue errors are otherwise silent.
-- Use `SIGIL_TAGS` (client-level) or `tags` on `GenerationStart` for filtering: export tags on generations; client-level tags also appear as `sigil.tag.<key>` on OTel spans and metrics (e.g. `project=my-app`).
+- Use `SIGIL_TAGS` (client-level) or `tags` on `GenerationStart` for filtering: both export tags on generations. Client-level tags also appear as `sigil.tag.<key>` on OTel spans and metrics on Go/JS only (Python/Java/.NET are export-only); per-generation tags and `metadata` are export-only everywhere. For end-user identity use `user_id` (sets `user.id` span attribute), not a tag. See [`docs/concepts/tags-and-metadata.md`](https://github.com/grafana/sigil-sdk/blob/main/docs/concepts/tags-and-metadata.md).
 
 ## Validation checklist
 

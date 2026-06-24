@@ -14,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/dotenv"
 )
 
 // Status describes the running local receiver daemon.
@@ -237,7 +239,7 @@ func Serve(ctx context.Context, dir string, port int, logger *log.Logger) error 
 		return fmt.Errorf("listen: %w", err)
 	}
 	actualPort := listener.Addr().(*net.TCPAddr).Port
-	srv := NewServer(storage, logger)
+	srv := NewServer(storage, logger, dotenv.FilePath("sigil"))
 	httpSrv := &http.Server{
 		Handler:           srv,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -294,7 +296,12 @@ func processLooksLikeDaemon(pid int) (bool, error) {
 	if exe == "" {
 		return false, nil
 	}
-	return strings.HasPrefix(filepath.Base(exe), "sigil"), nil
+	base := filepath.Base(exe)
+	// Release builds and `go build` name the binary "sigil"; `go run`
+	// compiles it to "main" in the build cache. Accept both, otherwise a
+	// daemon started from a dev build fails this check, Stop deletes the
+	// status file, and the daemon is orphaned on its port.
+	return strings.HasPrefix(base, "sigil") || base == "main", nil
 }
 
 // endpointAlive returns true when GET <endpoint>/healthz responds within

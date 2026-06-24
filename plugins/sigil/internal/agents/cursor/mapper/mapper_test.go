@@ -165,22 +165,23 @@ func TestResolveStopStatus(t *testing.T) {
 	}
 }
 
-func TestInferProviderFromModel(t *testing.T) {
+// Cursor infers the provider via the shared mapperutil.InferProvider helper.
+// MapFragment must keep wiring it into Model.Provider for the documented cases;
+// the helper's own edge cases are covered in internal/mapperutil.
+func TestMapFragment_InfersProviderFromModel(t *testing.T) {
 	cases := []struct{ model, want string }{
 		{"claude-sonnet-4-6", "anthropic"},
-		{"claude-opus", "anthropic"},
 		{"gpt-5", "openai"},
-		{"o1-preview", "openai"},
 		{"o3-mini", "openai"},
-		{"o4-fast", "openai"},
 		{"gemini-2.5-pro", "google"},
-		{"some-random-model", ""},
-		{"", ""},
+		{"some-random-model", "cursor"}, // no match → cursor fallback
 	}
 	for _, tc := range cases {
 		t.Run(tc.model, func(t *testing.T) {
-			if got := inferProviderFromModel(tc.model); got != tc.want {
-				t.Errorf("inferProviderFromModel(%q) = %q; want %q", tc.model, got, tc.want)
+			frag := &fragment.Fragment{ConversationID: "c", GenerationID: "g", Model: tc.model}
+			got := MapFragment(Inputs{Fragment: frag, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: fixedTime})
+			if got.Generation.Model.Provider != tc.want {
+				t.Errorf("provider for model %q = %q; want %q", tc.model, got.Generation.Model.Provider, tc.want)
 			}
 		})
 	}

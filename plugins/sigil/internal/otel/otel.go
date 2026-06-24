@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 	"time"
@@ -172,6 +173,51 @@ func Setup(ctx context.Context, instanceID string) (*Providers, error) {
 // SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT over OTEL_EXPORTER_OTLP_ENDPOINT.
 func EndpointFromEnv() string {
 	return envOr("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+}
+
+// ProbeTarget is one OTLP signal's resolved probe destination: the full
+// signal URL plus the auth headers a real export would carry.
+type ProbeTarget struct {
+	URL     string
+	Headers map[string]string
+}
+
+// ProbeConfig resolves the OTLP endpoint and returns the per-signal probe
+// targets for metrics and traces, reusing the same endpoint resolution,
+// signal-URL construction, and auth-header synthesis as Setup. ok is false
+// when no OTLP endpoint is configured. Used by `sigil doctor --probe` to send
+// a lightweight request to each signal and report the HTTP status without
+// standing up the full exporter pipeline.
+func ProbeConfig() (metrics, traces ProbeTarget, ok bool) {
+	endpoint := EndpointFromEnv()
+	if endpoint == "" {
+		return ProbeTarget{}, ProbeTarget{}, false
+	}
+	cfg := exporterConfigFromEnv(endpoint)
+	return ProbeTarget{URL: probeSignalURL(cfg, "metrics"), Headers: cloneHeaders(cfg.headers)},
+		ProbeTarget{URL: probeSignalURL(cfg, "traces"), Headers: cloneHeaders(cfg.headers)},
+		true
+}
+
+// probeSignalURL is signalEndpointURL adjusted for the insecure setting. When
+// the exporter is configured insecure, the SDK's WithInsecure() forces
+// cleartext to the same host:port regardless of the endpoint scheme, so a
+// probe over https would exercise a different transport than real export. Drop
+// to http here to match what export actually does.
+func probeSignalURL(cfg exporterConfig, signal string) string {
+	u := signalEndpointURL(cfg.endpoint, signal)
+	if cfg.insecure {
+		if rest, ok := strings.CutPrefix(u, "https://"); ok {
+			return "http://" + rest
+		}
+	}
+	return u
+}
+
+func cloneHeaders(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	maps.Copy(out, in)
+	return out
 }
 
 func exporterConfigFromEnv(endpoint string) exporterConfig {

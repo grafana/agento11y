@@ -9,10 +9,12 @@ import type {
 } from "@opencode-ai/sdk";
 import { createSigilClient } from "./client.js";
 import type { SigilOpencodeConfig } from "./config.js";
+import { resolveGitBranch } from "./git.js";
 import { runToolCallGuard } from "./guard.js";
 import { stableOpencodeGenerationId } from "./lineage.js";
 import { mapError, mapGeneration, mapToolDefinitions } from "./mappers.js";
 import { Redactor } from "./redact.js";
+import { buildBuiltinTags } from "./tags.js";
 import {
   createTelemetryProviders,
   type TelemetryProviders,
@@ -83,6 +85,25 @@ export function _resetToolExecutionState(): void {
   completedToolExecutions.clear();
 }
 
+/**
+ * Resets every module-level map: the dedup/generation tracking plus the
+ * tool-execution maps. Integration tests that drive the full record path
+ * (`chat.message` -> `message.updated`) need this between cases. Without it, a
+ * reused session/message id hits the dedup early-return in
+ * `recordAssistantMessage`, silently skips recording, and produces a
+ * misleading green.
+ *
+ * @internal Exported for testing.
+ */
+export function _resetHookState(): void {
+  recordedMessages.clear();
+  lastGenerationIdBySession.clear();
+  firstPartAtByMessage.clear();
+  pendingGenerations.clear();
+  sessionContexts.clear();
+  _resetToolExecutionState();
+}
+
 /** @internal Exported for testing. */
 export function _peekToolExecutionState(): {
   active: ToolExecutionRecord[];
@@ -140,6 +161,7 @@ async function handleEvent(
   client: OpencodeClient,
   redactor: Redactor,
   debugLog: (msg: string, ...args: unknown[]) => void,
+  projectDir: string,
   event: { type: string; properties: unknown },
 ): Promise<void> {
   if (event.type === "message.part.updated") {
@@ -149,6 +171,7 @@ async function handleEvent(
       client,
       redactor,
       debugLog,
+      projectDir,
       event.properties,
     );
     return;
@@ -191,6 +214,7 @@ async function handleEvent(
     client,
     redactor,
     debugLog,
+    projectDir,
     assistantMsg,
     fetchedParts,
   );
@@ -202,6 +226,7 @@ async function handleMessagePartUpdated(
   client: OpencodeClient,
   redactor: Redactor,
   debugLog: (msg: string, ...args: unknown[]) => void,
+  projectDir: string,
   properties: unknown,
 ): Promise<void> {
   const part = recordField(properties, "part");
@@ -222,6 +247,7 @@ async function handleMessagePartUpdated(
       client,
       redactor,
       debugLog,
+      projectDir,
       response.data.info as AssistantMessage,
       response.data.parts ?? [],
     );
@@ -264,6 +290,7 @@ async function recordAssistantMessage(
   client: OpencodeClient,
   redactor: Redactor,
   debugLog: (msg: string, ...args: unknown[]) => void,
+  projectDir: string,
   assistantMsg: AssistantMessage,
   fetchedParts?: Part[],
 ): Promise<void> {
@@ -322,6 +349,14 @@ async function recordAssistantMessage(
   }
 
   const tools = mapToolDefinitions(pending?.tools);
+  // Resolved per turn so a mid-session checkout lands on the next
+  // generation. Always sent regardless of content capture mode:
+  // `git.branch` and `cwd` are low-cardinality session metadata, not
+  // message content, matching claude-code/cursor.
+  const builtinTags = buildBuiltinTags({
+    cwd: projectDir,
+    gitBranch: resolveGitBranch(projectDir),
+  });
   const seed = {
     id: genId,
     conversationId: assistantMsg.sessionID,
@@ -334,6 +369,7 @@ async function recordAssistantMessage(
     ...(parent && { parentGenerationIds: [parent] }),
     ...(tools.length > 0 && { tools }),
     ...(includeMessageBodies && { systemPrompt: pending?.systemPrompt }),
+    ...(builtinTags && { tags: builtinTags }),
   };
 
   const result = mapGeneration(
@@ -353,7 +389,16 @@ async function recordAssistantMessage(
     assistantParts,
   );
   const hookRecords = completedToolExecutions.get(assistantMsg.sessionID) ?? [];
-  const spanRecords = mergeToolSpanRecords(termRecords, hookRecords);
+  // Tools that started but never fired `tool.execute.after` (errored, denied,
+  // or interrupted) become error records here, so they surface as spans even
+  // in metadata_only and stop leaking from activeToolExecutions. termRecords
+  // win on key collision, so a native tool with an error part keeps the
+  // accurate terminal record while the active entry is still deleted.
+  const drainedRecords = drainActiveToolExecutions(assistantMsg.sessionID);
+  const spanRecords = mergeToolSpanRecords(termRecords, [
+    ...hookRecords,
+    ...drainedRecords,
+  ]);
   const spanOpts = {
     conversationId: assistantMsg.sessionID,
     agentName: buildAgentName(config.agentName, assistantMsg.mode),
@@ -661,6 +706,39 @@ export function toolSpansFromParts(
 }
 
 /**
+ * Convert tool executions that started but never completed for this session
+ * into error records, removing them from the active map. opencode skips
+ * `tool.execute.after` when a tool throws or a permission deny aborts it, so
+ * an entry still active when the assistant message goes terminal is a failed,
+ * denied, or interrupted call. Without this it produces no span (in
+ * `metadata_only`, where terminal parts aren't fetched) and leaks from
+ * `activeToolExecutions` until `session.deleted`.
+ *
+ * `startedAt` is the real value from the before hook; `completedAt` is
+ * approximate (we have no real end time) and the reason is generic because the
+ * hook can't tell an error from a deny from an interrupt.
+ *
+ * @internal Exported for testing.
+ */
+export function drainActiveToolExecutions(
+  sessionID: string,
+): ToolExecutionRecord[] {
+  const drained: ToolExecutionRecord[] = [];
+  const now = Date.now();
+  for (const [key, record] of activeToolExecutions) {
+    if (record.sessionID !== sessionID) continue;
+    activeToolExecutions.delete(key);
+    drained.push({
+      ...record,
+      completedAt: now,
+      isError: true,
+      error: "tool did not complete (errored, denied, or interrupted)",
+    });
+  }
+  return drained;
+}
+
+/**
  * Merge tool execution records from terminal `ToolPart` values with
  * hook-recorded records, preferring terminal-part timing and state. Hook
  * records survive only when the terminal parts don't already cover them.
@@ -779,7 +857,12 @@ export type SigilHooks = {
 export async function createSigilHooks(
   config: SigilOpencodeConfig,
   client: OpencodeClient,
+  options: { projectDir?: string } = {},
 ): Promise<SigilHooks | null> {
+  // Prefer the opencode plugin's project directory (PluginInput.directory)
+  // because the opencode server can run from a directory different from the
+  // project root. Fall back to `process.cwd()` for older callers and tests.
+  const projectDir = options.projectDir || process.cwd();
   function debugLog(msg: string, ...args: unknown[]) {
     if (config.debug) console.error(`[sigil-opencode] ${msg}`, ...args);
   }
@@ -821,7 +904,15 @@ export async function createSigilHooks(
 
   return {
     event: async (input) => {
-      await handleEvent(sigil, config, client, redactor, debugLog, input.event);
+      await handleEvent(
+        sigil,
+        config,
+        client,
+        redactor,
+        debugLog,
+        projectDir,
+        input.event,
+      );
       await handleLifecycle(sigil, telemetry, debugLog, input.event);
     },
     chatMessage: (input, output) => {

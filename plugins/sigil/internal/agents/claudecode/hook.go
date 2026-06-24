@@ -22,6 +22,7 @@ import (
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/envconfig"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/otel"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/redact"
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/sigilemit"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/useragent"
 )
 
@@ -212,14 +213,9 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 			Metadata:            gen.Metadata,
 		}
 
-		genCtx, rec := client.StartGeneration(hookCtx, genStart)
-		rec.SetResult(gen, nil)
-
-		emitToolSpans(genCtx, client, gen, toolResults)
-
-		rec.End()
-
-		if err := rec.Err(); err != nil {
+		if err := sigilemit.Record(hookCtx, client, genStart, gen, nil, func(genCtx context.Context) {
+			emitToolSpans(genCtx, client, gen, toolResults)
+		}); err != nil {
 			logger.Printf("enqueue: %v", err)
 		}
 	}

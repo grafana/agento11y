@@ -44,7 +44,7 @@ public sealed class GenerationExportConfig
     public GenerationExportProtocol? Protocol { get; set; }
     /// <summary>
     /// Export endpoint. Empty string means "not set" — env layer or
-    /// <c>ConfigResolver</c> resolves it to <c>localhost:4317</c>. An explicit
+    /// <c>ConfigResolver</c> resolves it from <c>SIGIL_ENDPOINT</c> when configured. An explicit
     /// non-empty value is preserved (caller-wins) and not overridden by
     /// <c>SIGIL_ENDPOINT</c>.
     /// </summary>
@@ -80,6 +80,12 @@ public sealed class SigilClientConfig
     public EmbeddingCaptureConfig EmbeddingCapture { get; set; } = new();
     public ContentCaptureMode ContentCapture { get; set; } = ContentCaptureMode.Default;
     public Func<IReadOnlyDictionary<string, object?>?, ContentCaptureMode>? ContentCaptureResolver { get; set; }
+    /// <summary>
+    /// Optional hook invoked for each generation after normalization and before
+    /// content-capture stripping/export. Use <see cref="SecretRedactionSanitizer"/>
+    /// to create the built-in regex-based secrets redactor.
+    /// </summary>
+    public GenerationSanitizer? GenerationSanitizer { get; set; }
     public Action<string>? Logger { get; set; }
     public Func<DateTimeOffset>? UtcNow { get; set; }
     public Func<TimeSpan, CancellationToken, Task>? SleepAsync { get; set; }

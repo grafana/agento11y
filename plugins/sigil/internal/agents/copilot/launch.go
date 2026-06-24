@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/launcher"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
 )
 
@@ -262,17 +264,36 @@ func defaultRunUninstall(ctx context.Context, bin string, w io.Writer) error {
 // `Installed plugins:` header followed by one `  • <plugin> (v<ver>)` line
 // per plugin.
 func defaultPluginList(ctx context.Context, bin string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, bin, "plugin", "list")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	return launcher.Output(ctx, bin, "plugin", "list")
+}
+
+// Status reports whether Sigil capture is configured for Copilot. Capture is
+// driven by the shared user-level hooks file the launcher writes (see
+// writeUserHooks), NOT by a plugin — the launcher deliberately avoids
+// registering a plugin and removes any legacy one — so doctor must check for
+// that file. The hooks file has no version, so version is always empty. It
+// never installs, updates, or removes anything — `sigil doctor` relies on this.
+func Status(_ context.Context) (installed bool, version string, err error) {
+	installed, err = HooksInstalled()
+	return installed, "", err
+}
+
+// HooksInstalled reports whether the shared user-level Copilot hooks file that
+// drives capture is present. Read-only, and reuses copilotHooksDir so it
+// honors COPILOT_HOME exactly like the launcher's write path. The CLI need not
+// be on PATH: Copilot Chat in VS Code reads this file without it.
+func HooksInstalled() (bool, error) {
+	dir, err := copilotHooksDir()
 	if err != nil {
-		if msg := bytes.TrimSpace(stderr.Bytes()); len(msg) > 0 {
-			return nil, fmt.Errorf("%w: %s", err, msg)
-		}
-		return nil, err
+		return false, err
 	}
-	return out, nil
+	if _, err := os.Stat(filepath.Join(dir, userHooksFileName)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // pluginInstalled reports whether `sigil-copilot` is registered in copilot's
@@ -284,17 +305,42 @@ func pluginInstalled(ctx context.Context, bin string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	installed, _ := parsePluginListStatus(out)
+	return installed, nil
+}
+
+// parsePluginListStatus scans `copilot plugin list` output for the sigil
+// plugin line and returns whether it's present plus the version from the
+// trailing `(vX.Y.Z)`, if any.
+//
+// Lines look like `  • sigil-copilot (v0.1.0)`. Leading whitespace and the
+// bullet glyph are stripped, then the first remaining token is exact-matched.
+// This rejects the `Installed plugins:` header, a bare bullet line, and suffix
+// collisions like `my-sigil-copilot`.
+func parsePluginListStatus(out []byte) (installed bool, version string) {
 	needle := []byte(PluginName)
-	// Lines look like `  • sigil-copilot (v0.1.0)`. Strip leading whitespace
-	// and the bullet glyph, then exact-match the first remaining token. This
-	// rejects the `Installed plugins:` header, a bare bullet line, and
-	// suffix collisions like `my-sigil-copilot`.
 	for line := range bytes.SplitSeq(out, []byte{'\n'}) {
 		trimmed := bytes.TrimLeft(bytes.TrimSpace(line), "•*-+ \t")
 		fields := bytes.Fields(trimmed)
-		if len(fields) > 0 && bytes.Equal(fields[0], needle) {
-			return true, nil
+		if len(fields) == 0 || !bytes.Equal(fields[0], needle) {
+			continue
 		}
+		return true, parseParenVersion(line)
 	}
-	return false, nil
+	return false, ""
+}
+
+// parseParenVersion extracts the version from a trailing `(vX.Y.Z)` on a
+// plugin list line, returning the version without the leading `v`. Returns ""
+// when no parenthesised version is present.
+func parseParenVersion(line []byte) string {
+	_, afterOpen, ok := bytes.Cut(line, []byte("("))
+	if !ok {
+		return ""
+	}
+	inner, _, ok := bytes.Cut(afterOpen, []byte(")"))
+	if !ok {
+		return ""
+	}
+	return strings.TrimPrefix(strings.TrimSpace(string(inner)), "v")
 }

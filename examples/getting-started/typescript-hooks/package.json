@@ -1,0 +1,23 @@
+{
+  "name": "sigil-getting-started-typescript-hooks",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "npx tsx main.ts"
+  },
+  "dependencies": {
+    "@grafana/sigil-sdk-js": "file:../../../js",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/exporter-metrics-otlp-http": "0.57.2",
+    "@opentelemetry/exporter-trace-otlp-http": "0.57.2",
+    "@opentelemetry/resources": "1.30.1",
+    "@opentelemetry/sdk-metrics": "1.30.1",
+    "@opentelemetry/sdk-trace-base": "1.30.1",
+    "@opentelemetry/sdk-trace-node": "1.30.1",
+    "dotenv": "16.6.1",
+    "openai": "4.104.0",
+    "tsx": "4.22.3",
+    "typescript": "5.9.3"
+  }
+}

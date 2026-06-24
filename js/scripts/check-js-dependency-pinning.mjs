@@ -16,6 +16,7 @@ const publishedManifests = [
 const privateManifests = [
   "package.json",
   "examples/getting-started/typescript/package.json",
+  "examples/getting-started/typescript-hooks/package.json",
   "examples/getting-started/typescript-strands/package.json",
 ];
 

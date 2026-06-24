@@ -67,11 +67,16 @@ import (
 // Events are loose JSON objects so each agent can supply its own payload
 // schema without leaking the schema into the harness.
 type scenario struct {
-	Agent       string                       `json:"agent"`
-	Env         map[string]string            `json:"env,omitempty"`
-	Transcripts map[string][]string          `json:"transcripts,omitempty"`
-	Events      []map[string]json.RawMessage `json:"events"`
-	RawSecrets  []string                     `json:"raw_secrets,omitempty"`
+	Agent       string              `json:"agent"`
+	Env         map[string]string   `json:"env,omitempty"`
+	Transcripts map[string][]string `json:"transcripts,omitempty"`
+	// SiblingFiles is an optional {basename -> body} map of plain files
+	// dropped next to every transcript so agents that read transcript
+	// siblings (e.g. vibe needs meta.json beside messages.jsonl) work
+	// against a realistic on-disk layout.
+	SiblingFiles map[string]string            `json:"sibling_files,omitempty"`
+	Events       []map[string]json.RawMessage `json:"events"`
+	RawSecrets   []string                     `json:"raw_secrets,omitempty"`
 	// Invariants documents the per-scenario field invariants asserted in
 	// addition to the golden comparison. Only the subset of fields each
 	// scenario needs to anchor is listed.
@@ -150,7 +155,7 @@ func runGoldenScenario(t *testing.T, name string) {
 	t.Setenv("HOME", stateDir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(stateDir, "config"))
 
-	transcriptPaths := writeTranscripts(t, sc.Transcripts)
+	transcriptPaths := writeTranscripts(t, sc.Transcripts, sc.SiblingFiles)
 
 	capture := &exportCapture{}
 	server := newGoldenServer(t, capture)
@@ -278,10 +283,14 @@ func loadScenario(t *testing.T, dir string) scenario {
 // test's tempdir and returns the {name -> absolute path} map. Lines are
 // joined with newlines; a trailing newline is added so JSONL readers that
 // split on '\n' treat the last line as complete.
-func writeTranscripts(t *testing.T, transcripts map[string][]string) map[string]string {
+//
+// Each entry in siblings is written verbatim into the same tempdir under
+// its basename, so an agent reading e.g. <transcript_dir>/meta.json finds
+// it next to the JSONL transcript.
+func writeTranscripts(t *testing.T, transcripts map[string][]string, siblings map[string]string) map[string]string {
 	t.Helper()
 	out := make(map[string]string, len(transcripts))
-	if len(transcripts) == 0 {
+	if len(transcripts) == 0 && len(siblings) == 0 {
 		return out
 	}
 	dir := t.TempDir()
@@ -295,6 +304,12 @@ func writeTranscripts(t *testing.T, transcripts map[string][]string) map[string]
 			t.Fatalf("write transcript %s: %v", name, err)
 		}
 		out[name] = path
+	}
+	for basename, body := range siblings {
+		path := filepath.Join(dir, basename)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write sibling %s: %v", basename, err)
+		}
 	}
 	return out
 }

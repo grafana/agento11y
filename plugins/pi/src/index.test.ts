@@ -1740,55 +1740,18 @@ describe("extension lifecycle", () => {
     });
   });
 
-  it("emits git.branch tag when contentCapture=full", async () => {
+  it("emits git.branch and cwd tags regardless of content capture mode", async () => {
+    // git.branch + cwd are low-cardinality session metadata, not message
+    // content; they ship in every content-capture mode (matches
+    // claude-code/cursor).
     resolveGitBranchMock.mockReturnValue("feature-x");
 
-    let capturedSeed: { tags?: Record<string, string> } | undefined;
-    const recorder = {
-      setResult: vi.fn(),
-      setCallError: vi.fn(),
-      setFirstTokenAt: vi.fn(),
-    };
-    const sigil: SigilLike = {
-      startStreamingGeneration: vi.fn(async (seed, run) => {
-        capturedSeed = seed as { tags?: Record<string, string> };
-        await run(recorder);
-      }),
-      startToolExecution: vi.fn(() => ({
-        setResult: vi.fn(),
-        setCallError: vi.fn(),
-        end: vi.fn(),
-        getError: vi.fn(),
-      })),
-      shutdown: vi.fn(async () => {}),
-    };
-
-    loadConfigMock.mockResolvedValue({
-      endpoint: "http://localhost:8080/api/v1/generations:export",
-      auth: { mode: "none" },
-      agentName: "pi",
-      contentCapture: "full",
-    });
-    createSigilClientMock.mockReturnValue(sigil);
-
-    const pi = new FakePi();
-    registerExtension(pi as any);
-
-    await pi.emit("session_start");
-    await pi.emit("turn_start");
-    await pi.emit("turn_end", {
-      message: assistantMessage(),
-      toolResults: [],
-    });
-
-    expect(resolveGitBranchMock).toHaveBeenCalledTimes(1);
-    expect(capturedSeed!.tags).toEqual({ "git.branch": "feature-x" });
-  });
-
-  it("omits git.branch tag (and skips the subprocess) when contentCapture is not full", async () => {
-    resolveGitBranchMock.mockReturnValue("feature-x");
-
-    for (const mode of ["metadata_only", "no_tool_content"] as const) {
+    for (const mode of [
+      "full",
+      "metadata_only",
+      "no_tool_content",
+      "full_with_metadata_spans",
+    ] as const) {
       resolveGitBranchMock.mockClear();
 
       let capturedSeed: { tags?: Record<string, string> } | undefined;
@@ -1829,12 +1792,15 @@ describe("extension lifecycle", () => {
         toolResults: [],
       });
 
-      expect(resolveGitBranchMock, `mode=${mode}`).not.toHaveBeenCalled();
-      expect(capturedSeed!.tags, `mode=${mode}`).toBeUndefined();
+      expect(resolveGitBranchMock, `mode=${mode}`).toHaveBeenCalledTimes(1);
+      expect(capturedSeed!.tags, `mode=${mode}`).toEqual({
+        "git.branch": "feature-x",
+        cwd: process.cwd(),
+      });
     }
   });
 
-  it("omits git.branch tag when not in a git repo even with contentCapture=full", async () => {
+  it("emits cwd tag without git.branch when not in a git repo", async () => {
     resolveGitBranchMock.mockReturnValue(undefined);
 
     let capturedSeed: { tags?: Record<string, string> } | undefined;
@@ -1876,7 +1842,7 @@ describe("extension lifecycle", () => {
     });
 
     expect(resolveGitBranchMock).toHaveBeenCalledTimes(1);
-    expect(capturedSeed!.tags).toBeUndefined();
+    expect(capturedSeed!.tags).toEqual({ cwd: process.cwd() });
   });
 
   describe("systemPrompt capture", () => {

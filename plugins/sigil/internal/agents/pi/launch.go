@@ -20,6 +20,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/launcher"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
 )
 
@@ -54,43 +55,29 @@ var (
 // auto-update checks (pi's own installer handles upgrades) so it is
 // accepted to satisfy the launcher signature and ignored.
 func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, _ string) error {
-	bin, err := lookPath("pi")
-	if err != nil {
-		return fmt.Errorf("pi CLI not found on PATH: %w", err)
-	}
-
-	installed, err := pluginInstalled()
-	if err != nil {
-		logger.Printf("settings probe: %v", err)
-		// Surface the probe failure so the user can see why we're falling
-		// through to install on a settings file we couldn't read. Treat the
-		// case like a missing extension — pi's installer will fail loudly if
-		// the file is genuinely broken.
-		_, _ = fmt.Fprintf(stderr, "sigil: pi settings probe failed: %v\n", err)
-		installed = false
-	}
-	if !installed {
-		_, _ = fmt.Fprintf(stderr, "sigil: installing %s into pi\n", PluginSource)
-		if err := runInstall(ctx, bin, stderr); err != nil {
-			// Don't block the user's pi session on a failed install (offline
-			// machine, npm rate-limit, sandboxed CI, etc.). Log the failure for
-			// SIGIL_DEBUG, point the user at the manual command, and fall
-			// through to exec. pi still runs, just without Sigil capture.
-			logger.Printf("install %s: %v", PluginSource, err)
-			_, _ = fmt.Fprintf(stderr,
-				"sigil: install of %s failed: %v\n"+
-					"sigil: continuing without Sigil capture. To retry manually:\n"+
-					"          pi install %s\n",
-				PluginSource, err, PluginSource)
-		}
-	}
-
-	env := local.Environ(localEnv)
-	argv := append([]string{bin}, args...)
-	if err := execFn(bin, argv, env); err != nil {
-		return fmt.Errorf("exec pi: %w", err)
-	}
-	return nil
+	return launcher.Bootstrap(ctx, launcher.BootstrapSpec{
+		BinName:     "pi",
+		PluginLabel: PluginSource,
+		LookPath:    lookPath,
+		ExecFn:      execFn,
+		Args:        args,
+		Env:         local.Environ(localEnv),
+		Logger:      logger,
+		Stderr:      stderr,
+		// Surface a settings-file probe failure on stderr too so the user
+		// can see why we're falling through to install on a file we couldn't
+		// read. Treat the case like a missing extension — pi's installer
+		// will fail loudly if the file is genuinely broken.
+		Probe:           func(context.Context, string) (bool, error) { return pluginInstalled() },
+		ProbeErrLog:     "pi settings probe",
+		ProbeErrEcho:    true,
+		RegisterMessage: fmt.Sprintf("sigil: installing %s into pi\n", PluginSource),
+		Install:         runInstall,
+		InstallRecoveryHint: func(w io.Writer) {
+			fmt.Fprintf(w, "          pi install %s\n", PluginSource)
+		},
+		// No Update: pi's own installer handles upgrades.
+	})
 }
 
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
@@ -118,59 +105,97 @@ type piSettings struct {
 // A missing settings file means that scope is unused — treat as not
 // installed in that scope and move on.
 func pluginInstalled() (bool, error) {
+	_, found, err := installedPluginSource()
+	return found, err
+}
+
+// Status reports whether the @grafana/sigil-pi extension is registered in pi's
+// settings. It reuses the read-only settings probe and never installs — `sigil
+// doctor` relies on this. When the registered source is a pinned npm spec
+// (`npm:@grafana/sigil-pi@0.1.1`) that version is reported; bare specs and
+// local-path installs yield an empty (unknown) version.
+func Status(_ context.Context) (installed bool, version string, err error) {
+	source, found, err := installedPluginSource()
+	if err != nil {
+		return false, "", err
+	}
+	if !found {
+		return false, "", nil
+	}
+	return true, versionFromPiSource(source), nil
+}
+
+// installedPluginSource returns the settings source string registering the
+// @grafana/sigil-pi extension, checking the global settings first and then the
+// project-scoped settings (<cwd>/.pi/settings.json, written by `pi install -l`).
+func installedPluginSource() (source string, found bool, err error) {
 	globalPath, err := settingsPath()
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	if found, err := readSettingsAndCheck(globalPath); err != nil {
-		return false, err
+	if src, found, err := readSettingsAndCheck(globalPath); err != nil {
+		return "", false, err
 	} else if found {
-		return true, nil
+		return src, true, nil
 	}
 
-	// Project-scoped install (`pi install -l`) writes to <cwd>/.pi/settings.json.
 	// Pi only consults the literal cwd, no parent walking, so we mirror that.
 	// A failure to resolve cwd is exceptionally rare; treat it as "no project
 	// settings available" rather than blocking the launch.
 	projectPath, err := projectSettingsPath()
 	if err != nil {
-		return false, nil
+		return "", false, nil
 	}
 	return readSettingsAndCheck(projectPath)
 }
 
-// readSettingsAndCheck loads one pi settings file and returns whether the
-// @grafana/sigil-pi extension is registered in it. A missing file is not
-// an error — that scope is just unused.
-func readSettingsAndCheck(path string) (bool, error) {
+// readSettingsAndCheck loads one pi settings file and returns the source
+// string registering the @grafana/sigil-pi extension, if any. A missing file
+// is not an error — that scope is just unused.
+func readSettingsAndCheck(path string) (source string, found bool, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
+			return "", false, nil
 		}
-		return false, fmt.Errorf("read %s: %w", path, err)
+		return "", false, fmt.Errorf("read %s: %w", path, err)
 	}
 	var s piSettings
 	if err := json.Unmarshal(data, &s); err != nil {
-		return false, fmt.Errorf("parse %s: %w", path, err)
+		return "", false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	settingsDir := filepath.Dir(path)
 	for _, raw := range s.Packages {
-		var source string
-		if err := json.Unmarshal(raw, &source); err != nil {
+		var src string
+		if err := json.Unmarshal(raw, &src); err != nil {
 			var asObj struct {
 				Source string `json:"source"`
 			}
 			if err := json.Unmarshal(raw, &asObj); err != nil {
 				continue
 			}
-			source = asObj.Source
+			src = asObj.Source
 		}
-		if sourceMatchesPlugin(source, settingsDir) {
-			return true, nil
+		if sourceMatchesPlugin(src, settingsDir) {
+			return src, true, nil
 		}
 	}
-	return false, nil
+	return "", false, nil
+}
+
+// versionFromPiSource returns the pinned version of an npm-spec source, e.g.
+// "0.1.1" from "npm:@grafana/sigil-pi@0.1.1". Bare specs and local-path
+// sources yield "".
+func versionFromPiSource(source string) string {
+	after, ok := strings.CutPrefix(source, npmPrefix)
+	if !ok {
+		return ""
+	}
+	at := strings.LastIndex(after, "@")
+	if at <= 0 {
+		return ""
+	}
+	return after[at+1:]
 }
 
 // sourceMatchesPlugin returns true when a pi settings source identifies the

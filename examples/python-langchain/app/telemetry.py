@@ -9,8 +9,8 @@ Send traces and metrics to Grafana Cloud either:
   A) Direct — set OTEL_EXPORTER_OTLP_ENDPOINT to your Cloud OTLP gateway
      URL (from Cloud portal → stack Details) and OTEL_EXPORTER_OTLP_HEADERS
      with Basic auth.
-  B) Via Alloy — set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
-     and let Alloy handle Cloud auth.
+  B) Via Alloy or an OTel Collector — set OTEL_EXPORTER_OTLP_ENDPOINT to
+     your collector endpoint and let the collector forward to Cloud.
 """
 
 from __future__ import annotations

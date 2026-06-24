@@ -192,7 +192,7 @@ func TestLaunch_LocalEnv(t *testing.T) {
 		wantMode   string
 	}{
 		{name: "defaults full capture", wantMode: "full"},
-		{name: "preserves user capture mode", presetMode: "metadata_only", wantMode: "metadata_only"},
+		{name: "forces full even when a capture mode is set", presetMode: "metadata_only", wantMode: "full"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.com")
@@ -435,4 +435,53 @@ func TestRenderUserHooks_IsStableAndValid(t *testing.T) {
 	assert.Contains(t, string(a), "\"sigil copilot hook\"")
 	// The shared file must not pin a surface marker.
 	assert.NotContains(t, string(a), "SIGIL_COPILOT_HOOK_SURFACE")
+}
+
+func TestParsePluginListStatus_Version(t *testing.T) {
+	cases := []struct {
+		name          string
+		out           string
+		wantInstalled bool
+		wantVersion   string
+	}{
+		{name: "with version", out: "Installed plugins:\n  • sigil-copilot (v0.1.0)\n", wantInstalled: true, wantVersion: "0.1.0"},
+		{name: "no parenthesised version", out: "Installed plugins:\n  • sigil-copilot\n", wantInstalled: true, wantVersion: ""},
+		{name: "absent", out: "Installed plugins:\n", wantInstalled: false, wantVersion: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			installed, version := parsePluginListStatus([]byte(tc.out))
+			require.Equal(t, tc.wantInstalled, installed)
+			require.Equal(t, tc.wantVersion, version)
+		})
+	}
+}
+
+// Status detects the shared hooks file (capture is hook-based, not plugin
+// based), so it never consults `plugin list` or PATH.
+func TestStatus(t *testing.T) {
+	tests := []struct {
+		name          string
+		writeHooks    bool
+		wantInstalled bool
+	}{
+		{name: "hooks file present", writeHooks: true, wantInstalled: true},
+		{name: "hooks file absent", writeHooks: false, wantInstalled: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("COPILOT_HOME", home)
+			if tc.writeHooks {
+				dir := filepath.Join(home, "hooks")
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "sigil.json"), []byte("{}"), 0o644))
+			}
+
+			installed, version, err := Status(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, tc.wantInstalled, installed)
+			require.Empty(t, version, "hooks file carries no version")
+		})
+	}
 }

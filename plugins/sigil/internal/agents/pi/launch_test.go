@@ -144,7 +144,8 @@ func TestLaunch_LocalInjectsEnvAndForwardsArgs(t *testing.T) {
 	// covered in TestLaunch_NormalModeDoesNotInjectLocalEnv.
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
 	t.Setenv("SIGIL_AUTH_TOKEN", "")
-	// Ensure the user's existing capture-mode preference flows through.
+	// Local forces full content on this machine regardless of the configured
+	// Cloud capture mode, so a preset value here must be overridden to full.
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "no_tool_content")
 
 	var execEnv []string
@@ -175,9 +176,10 @@ func TestLaunch_LocalInjectsEnvAndForwardsArgs(t *testing.T) {
 	if got["SIGIL_AUTH_TENANT_ID"] != "local" || got["SIGIL_AUTH_TOKEN"] != "local" {
 		t.Errorf("placeholder auth missing: tenant=%q token=%q", got["SIGIL_AUTH_TENANT_ID"], got["SIGIL_AUTH_TOKEN"])
 	}
-	// User pre-set capture mode must not be overwritten.
-	if got["SIGIL_CONTENT_CAPTURE_MODE"] != "no_tool_content" {
-		t.Errorf("SIGIL_CONTENT_CAPTURE_MODE = %q, want preserved no_tool_content", got["SIGIL_CONTENT_CAPTURE_MODE"])
+	// Local always captures full content; the configured Cloud capture mode is
+	// overridden for the local session.
+	if got["SIGIL_CONTENT_CAPTURE_MODE"] != "full" {
+		t.Errorf("SIGIL_CONTENT_CAPTURE_MODE = %q, want full (local forces full content)", got["SIGIL_CONTENT_CAPTURE_MODE"])
 	}
 }
 
@@ -576,4 +578,55 @@ func withExecFn(t *testing.T, fn func(string, []string, []string) error) {
 
 func nopLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
+}
+
+func TestVersionFromPiSource(t *testing.T) {
+	cases := []struct {
+		source string
+		want   string
+	}{
+		{source: "npm:@grafana/sigil-pi", want: ""},
+		{source: "npm:@grafana/sigil-pi@0.1.1", want: "0.1.1"},
+		{source: "npm:@grafana/sigil-pi@1.0.0-rc.3", want: "1.0.0-rc.3"},
+		{source: "npm:@grafana/sigil-pi@next", want: "next"},
+		{source: "./local-plugin", want: ""},
+		{source: "/abs/path", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.source, func(t *testing.T) {
+			if got := versionFromPiSource(tc.source); got != tc.want {
+				t.Fatalf("versionFromPiSource(%q) = %q, want %q", tc.source, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStatus(t *testing.T) {
+	tests := []struct {
+		name          string
+		settings      string
+		wantInstalled bool
+		wantVersion   string
+	}{
+		{name: "installed reports version", settings: `{"packages":["npm:@grafana/sigil-pi@0.1.1"]}`, wantInstalled: true, wantVersion: "0.1.1"},
+		{name: "not installed", settings: `{"packages":[]}`, wantInstalled: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("PI_CODING_AGENT_DIR", dir)
+			writeSettings(t, dir, tc.settings)
+
+			installed, version, err := Status(context.Background())
+			if err != nil {
+				t.Fatalf("Status err: %v", err)
+			}
+			if installed != tc.wantInstalled {
+				t.Fatalf("installed = %v, want %v", installed, tc.wantInstalled)
+			}
+			if version != tc.wantVersion {
+				t.Fatalf("version = %q, want %q", version, tc.wantVersion)
+			}
+		})
+	}
 }

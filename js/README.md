@@ -40,11 +40,15 @@ import { SigilClient } from "@grafana/sigil-sdk-js";
 const client = new SigilClient({
   generationExport: {
     protocol: "http",
-    endpoint: "http://localhost:8080",
-    auth: { mode: "tenant", tenantId: "dev-tenant" },
+    endpoint: "https://sigil-prod-<region>.grafana.net",
+    auth: {
+      mode: "basic",
+      tenantId: process.env.SIGIL_AUTH_TENANT_ID,
+      basicPassword: process.env.SIGIL_AUTH_TOKEN,
+    },
   },
   api: {
-    endpoint: "http://localhost:8080",
+    endpoint: "https://sigil-prod-<region>.grafana.net",
   },
 });
 
@@ -128,7 +132,7 @@ Resolution precedence (highest to lowest):
 
 Unlike the Go, Python, Java, and .NET SDKs, the JS SDK does not propagate the resolved capture mode through async context, so tool executions started inside a generation block do not automatically inherit the generation's mode. Set `contentCapture` on each `ToolExecutionStart` when you need a tool to follow a non-default policy.
 
-User-provided `metadata` and `tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content.
+User-provided `metadata` and `tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `sigil.conversation.title`) are stripped along with the matching content. See [Tags and Metadata](../docs/concepts/tags-and-metadata.md) for where client tags, per-generation tags, metadata, and `userId` each show up (export vs spans vs metrics).
 
 ## Pre-Ingest Redaction
 
@@ -461,11 +465,15 @@ If explicit headers already contain `Authorization` or `X-Scope-OrgID`, explicit
 const client = new SigilClient({
   generationExport: {
     protocol: "http",
-    endpoint: "http://localhost:8080",
-    auth: { mode: "tenant", tenantId: "prod-tenant" },
+    endpoint: "https://sigil-prod-<region>.grafana.net",
+    auth: {
+      mode: "basic",
+      tenantId: process.env.SIGIL_AUTH_TENANT_ID,
+      basicPassword: process.env.SIGIL_AUTH_TOKEN,
+    },
   },
   api: {
-    endpoint: "http://localhost:8080",
+    endpoint: "https://sigil-prod-<region>.grafana.net",
   },
 });
 ```
@@ -509,14 +517,18 @@ const generationBearerToken = (process.env.MY_APP_SIGIL_TOKEN ?? "").trim();
 const client = new SigilClient({
   generationExport: {
     protocol: "http",
-    endpoint: "http://localhost:8080",
+    endpoint: "https://sigil-prod-<region>.grafana.net",
     auth:
       generationBearerToken.length > 0
         ? { mode: "bearer", bearerToken: generationBearerToken }
-        : { mode: "tenant", tenantId: "dev-tenant" },
+        : {
+            mode: "basic",
+            tenantId: process.env.SIGIL_AUTH_TENANT_ID,
+            basicPassword: process.env.SIGIL_AUTH_TOKEN,
+          },
   },
   api: {
-    endpoint: "http://localhost:8080",
+    endpoint: "https://sigil-prod-<region>.grafana.net",
   },
 });
 ```
@@ -544,4 +556,4 @@ const result = await client.submitConversationRating("conv-123", {
 console.log(result.rating.rating, result.summary.hasBadRating);
 ```
 
-`submitConversationRating` sends requests to `api.endpoint` (default `http://localhost:8080`) and uses the same generation-export auth headers (`tenant` or `bearer`) already configured on the SDK client.
+`submitConversationRating` sends requests to `api.endpoint`, which should be the Grafana Cloud Sigil API URL from AI Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
