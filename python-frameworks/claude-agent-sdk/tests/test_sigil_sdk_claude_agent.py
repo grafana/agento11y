@@ -285,6 +285,61 @@ async def test_handler_start_failure_can_be_retried() -> None:
 
 
 @pytest.mark.asyncio
+async def test_claude_sdk_client_start_failure_can_be_retried() -> None:
+    class _Recorder:
+        def __init__(self) -> None:
+            self.generation = None
+
+        def set_call_error(self, _error) -> None:
+            return
+
+        def set_result(self, generation) -> None:
+            self.generation = generation
+
+        def end(self) -> None:
+            return
+
+        def err(self):
+            return None
+
+    class _FlakySigilClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.recorder = _Recorder()
+
+        def start_streaming_generation(self, _start):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("start failed")
+            return self.recorder
+
+    sigil_client = _FlakySigilClient()
+    claude = _FakeClaudeSDKClient()
+    claude.responses.append(
+        [AssistantMessage(content=[TextBlock("Recovered.")], model="claude-sonnet-4-5"), _success_result()]
+    )
+
+    sigil_claude = SigilClaudeSDKClient(
+        client=sigil_client,  # type: ignore[arg-type]
+        _claude_client=claude,  # type: ignore[arg-type]
+        options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
+        conversation_id="conv-client",
+        agent_name="claude-agent",
+    )
+
+    with pytest.raises(RuntimeError, match="start failed"):
+        await sigil_claude.query("First prompt.")
+
+    await sigil_claude.query("Retry prompt.")
+    _ = [message async for message in sigil_claude.receive_response()]
+
+    assert sigil_client.calls == 2
+    assert claude.queries == [("Retry prompt.", "default")]
+    assert sigil_client.recorder.generation.input[0].parts[0].text == "Retry prompt."
+    assert sigil_client.recorder.generation.output[0].parts[0].text == "Recovered."
+
+
+@pytest.mark.asyncio
 async def test_sigil_query_reuses_finished_handler_for_new_generation() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)

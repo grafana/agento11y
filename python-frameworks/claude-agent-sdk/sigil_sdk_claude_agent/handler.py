@@ -440,7 +440,11 @@ class SigilClaudeSDKClient:
             raise RuntimeError("cannot start a new Claude query before the previous response stream finishes")
         handler = create_sigil_claude_agent_handler(client=self._sigil_client, **self._handler_kwargs)
         self._active_handler = handler
-        await handler.start(prompt=prompt, options=self._options)
+        try:
+            await handler.start(prompt=prompt, options=self._options)
+        except BaseException:
+            self._active_handler = None
+            raise
         try:
             await self._claude.query(prompt, session_id=session_id)
         except BaseException as exc:
