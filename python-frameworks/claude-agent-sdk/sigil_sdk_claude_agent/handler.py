@@ -92,6 +92,9 @@ class SigilClaudeAgentHandler:
         self._extra_tags = dict(extra_tags or {})
         self._extra_metadata = dict(extra_metadata or {})
 
+        self._reset_run_state()
+
+    def _reset_run_state(self) -> None:
         self._run_id = str(uuid4())
         self._recorder: Any | None = None
         self._started = False
@@ -122,8 +125,10 @@ class SigilClaudeAgentHandler:
     async def start(self, *, prompt: str | AsyncIterable[dict[str, Any]] | None, options: ClaudeAgentOptions) -> None:
         """Start recording the Claude Agent SDK query if it has not started yet."""
 
-        if self._started:
+        if self._started and not self._finished:
             return
+        if self._finished:
+            self._reset_run_state()
         self._started = True
         self._model = self._model or (options.model or "")
         conversation_id = self._resolve_conversation_id(options)
@@ -197,7 +202,11 @@ class SigilClaudeAgentHandler:
                 self._usage = message.usage
             elif message.model_usage:
                 self._usage = _merge_model_usage(message.model_usage)
-            if self._capture_outputs and message.result and not self._output_messages:
+            if (
+                self._capture_outputs
+                and message.result
+                and not _messages_contain_text(self._output_messages, message.result)
+            ):
                 self._output_messages.append(assistant_text_message(message.result))
             error = RuntimeError(message.stop_reason or "claude agent query failed") if message.is_error else None
             self.finish(error=error)
@@ -603,6 +612,13 @@ def _message_text(message: Message) -> str:
     if part.kind != PartKind.TEXT:
         return ""
     return part.text.strip()
+
+
+def _messages_contain_text(messages: list[Message], text: str) -> bool:
+    target = text.strip()
+    if target == "":
+        return True
+    return any(_message_text(message) == target for message in messages)
 
 
 def _part_from_block(block: Any) -> Part | None:

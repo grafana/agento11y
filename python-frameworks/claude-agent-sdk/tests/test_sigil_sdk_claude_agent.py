@@ -132,6 +132,7 @@ async def test_sigil_query_records_claude_agent_stream() -> None:
             session_id="session-42",
             stop_reason="end_turn",
             total_cost_usd=0.01,
+            result="Final answer.",
         )
 
     try:
@@ -162,11 +163,60 @@ async def test_sigil_query_records_claude_agent_stream() -> None:
         assert generation.output[0].parts[0].text == "I'll use a tool."
         assert generation.output[0].parts[1].kind == PartKind.TOOL_CALL
         assert generation.output[0].parts[1].tool_call.name == "Read"
+        assert generation.output[1].parts[0].text == "Final answer."
         assert generation.usage.input_tokens == 100
         assert generation.usage.output_tokens == 25
         assert generation.usage.cache_read_input_tokens == 20
         assert generation.usage.cache_write_input_tokens == 10
         assert generation.stop_reason == "end_turn"
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_sigil_query_reuses_finished_handler_for_new_generation() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    handler = create_sigil_claude_agent_handler(client=client, conversation_id="conv-42", agent_name="claude-agent")
+
+    async def first_query(**_kwargs) -> AsyncIterator[object]:
+        yield AssistantMessage(content=[TextBlock("First.")], model="claude-sonnet-4-5", session_id="session-1")
+        yield _success_result("session-1")
+
+    async def second_query(**_kwargs) -> AsyncIterator[object]:
+        yield AssistantMessage(content=[TextBlock("Second.")], model="claude-sonnet-4-5", session_id="session-2")
+        yield _success_result("session-2")
+
+    try:
+        _ = [
+            message
+            async for message in sigil_query(
+                prompt="First prompt.",
+                client=client,
+                handler=handler,
+                options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
+                _query_fn=first_query,
+            )
+        ]
+        _ = [
+            message
+            async for message in sigil_query(
+                prompt="Second prompt.",
+                client=client,
+                handler=handler,
+                options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
+                _query_fn=second_query,
+            )
+        ]
+
+        client.flush()
+        generations = exporter.requests[0].generations
+        assert [generation.input[0].parts[0].text for generation in generations] == ["First prompt.", "Second prompt."]
+        assert [generation.output[0].parts[0].text for generation in generations] == ["First.", "Second."]
+        assert [generation.metadata["sigil.framework.session_id"] for generation in generations] == [
+            "session-1",
+            "session-2",
+        ]
     finally:
         client.shutdown()
 
