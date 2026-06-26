@@ -86,7 +86,8 @@ class SigilClaudeAgentHandler:
         self._conversation_id = self._configured_conversation_id
         self._agent_name = agent_name.strip()
         self._agent_version = agent_version.strip()
-        self._model = model.strip()
+        self._configured_model = model.strip()
+        self._model = self._configured_model
         self._provider = provider.strip() or "anthropic"
         self._capture_inputs = capture_inputs
         self._capture_outputs = capture_outputs
@@ -99,6 +100,7 @@ class SigilClaudeAgentHandler:
     def _reset_run_state(self) -> None:
         self._run_id = str(uuid4())
         self._conversation_id = self._configured_conversation_id
+        self._model = self._configured_model
         self._recorder: Any | None = None
         self._started = False
         self._finished = False
@@ -132,7 +134,7 @@ class SigilClaudeAgentHandler:
             return
         if self._finished:
             self._reset_run_state()
-        self._model = self._model or (options.model or "")
+        self._model = self._configured_model or (options.model or "")
         conversation_id = self._resolve_conversation_id(options)
         metadata = dict(self._extra_metadata)
         metadata[_metadata_run_id] = self._run_id
@@ -435,7 +437,7 @@ class SigilClaudeSDKClient:
         """Start a Claude query and the matching Sigil generation."""
 
         if self._active_handler is not None:
-            self._finish_active()
+            raise RuntimeError("cannot start a new Claude query before the previous response stream finishes")
         handler = create_sigil_claude_agent_handler(client=self._sigil_client, **self._handler_kwargs)
         self._active_handler = handler
         await handler.start(prompt=prompt, options=self._options)

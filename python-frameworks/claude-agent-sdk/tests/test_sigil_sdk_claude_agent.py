@@ -376,6 +376,49 @@ async def test_reused_handler_resolves_conversation_id_per_run() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reused_handler_resolves_model_per_run() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    handler = create_sigil_claude_agent_handler(client=client, conversation_id="conv-42", agent_name="claude-agent")
+
+    async def first_query(**_kwargs) -> AsyncIterator[object]:
+        yield AssistantMessage(content=[TextBlock("First.")], model="claude-model-a", session_id="session-1")
+        yield _success_result("session-1")
+
+    async def second_query(**_kwargs) -> AsyncIterator[object]:
+        yield AssistantMessage(content=[TextBlock("Second.")], model="claude-model-b", session_id="session-2")
+        yield _success_result("session-2")
+
+    try:
+        _ = [
+            message
+            async for message in sigil_query(
+                prompt="First prompt.",
+                client=client,
+                handler=handler,
+                options=ClaudeAgentOptions(model="claude-model-a"),
+                _query_fn=first_query,
+            )
+        ]
+        _ = [
+            message
+            async for message in sigil_query(
+                prompt="Second prompt.",
+                client=client,
+                handler=handler,
+                options=ClaudeAgentOptions(model="claude-model-b"),
+                _query_fn=second_query,
+            )
+        ]
+
+        client.flush()
+        generations = exporter.requests[0].generations
+        assert [generation.model.name for generation in generations] == ["claude-model-a", "claude-model-b"]
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_sigil_query_skips_replayed_initial_user_message() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
@@ -476,6 +519,27 @@ async def test_sigil_claude_sdk_client_records_multiple_queries() -> None:
         generations = exporter.requests[0].generations
         assert [generation.output[0].parts[0].text for generation in generations] == ["First.", "Second."]
         assert [generation.metadata["sigil.framework.session_id"] for generation in generations] == ["s1", "s2"]
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_sigil_claude_sdk_client_rejects_overlapping_queries() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    claude = _FakeClaudeSDKClient()
+
+    try:
+        async with SigilClaudeSDKClient(
+            client=client,
+            _claude_client=claude,  # type: ignore[arg-type]
+            options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
+            conversation_id="conv-client",
+            agent_name="claude-agent",
+        ) as sigil_claude:
+            await sigil_claude.query("First prompt.")
+            with pytest.raises(RuntimeError, match="previous response stream finishes"):
+                await sigil_claude.query("Second prompt.")
     finally:
         client.shutdown()
 
