@@ -327,6 +327,38 @@ async def test_sigil_claude_sdk_client_records_multiple_queries() -> None:
 
 
 @pytest.mark.asyncio
+async def test_sigil_claude_sdk_client_uses_stable_fallback_conversation() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    claude = _FakeClaudeSDKClient()
+    claude.responses.extend(
+        [
+            [AssistantMessage(content=[TextBlock("First.")], model="claude-sonnet-4-5"), _success_result("s1")],
+            [AssistantMessage(content=[TextBlock("Second.")], model="claude-sonnet-4-5"), _success_result("s2")],
+        ]
+    )
+
+    try:
+        async with SigilClaudeSDKClient(
+            client=client,
+            _claude_client=claude,  # type: ignore[arg-type]
+            options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
+            agent_name="claude-agent",
+        ) as sigil_claude:
+            await sigil_claude.query("First prompt.")
+            _ = [message async for message in sigil_claude.receive_response()]
+            await sigil_claude.query("Second prompt.")
+            _ = [message async for message in sigil_claude.receive_response()]
+
+        client.flush()
+        generations = exporter.requests[0].generations
+        assert len({generation.conversation_id for generation in generations}) == 1
+        assert generations[0].conversation_id.startswith("sigil:framework:claude-agent-sdk:client:")
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_sigil_claude_sdk_client_passthrough_methods() -> None:
     claude = _FakeClaudeSDKClient()
     exporter = _CapturingExporter()

@@ -100,6 +100,10 @@ Conversation ID precedence:
 3. `ClaudeAgentOptions.resume`
 4. unique fallback `sigil:framework:claude-agent-sdk:<run_id>`
 
+`SigilClaudeSDKClient` uses the same explicit `conversation_id`, `session_id`, and `resume` precedence. If none are
+set, it creates one client-level fallback conversation ID and reuses it for every query in that client session so
+multi-query sessions stay grouped.
+
 When Claude returns a session ID in the stream, the handler also records it in generation metadata as `sigil.framework.session_id`.
 
 ## Metadata

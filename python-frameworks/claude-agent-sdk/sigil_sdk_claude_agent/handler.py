@@ -411,6 +411,8 @@ class SigilClaudeSDKClient:
         self._handler_kwargs = dict(handler_kwargs)
         self._active_handler: SigilClaudeAgentHandler | None = None
         self._options = self._instrument_options(options)
+        if not _as_string(self._handler_kwargs.get("conversation_id")):
+            self._handler_kwargs["conversation_id"] = self._client_conversation_id(self._options)
         self._claude = _claude_client or _client_factory(options=self._options)
 
     async def __aenter__(self) -> SigilClaudeSDKClient:
@@ -476,6 +478,13 @@ class SigilClaudeSDKClient:
         self._append_hook(hooks, "PostToolUseFailure", self._on_post_tool_use_failure)
         self._append_hook(hooks, "Stop", self._on_stop)
         return replace(options, hooks=hooks)
+
+    def _client_conversation_id(self, options: ClaudeAgentOptions) -> str:
+        return (
+            _as_string(options.session_id)
+            or _as_string(options.resume)
+            or f"sigil:framework:{_framework_name}:client:{uuid4()}"
+        )
 
     def _append_hook(self, hooks: dict[str, list[HookMatcher]], event: str, callback: Any) -> None:
         matchers = hooks.setdefault(event, [])
