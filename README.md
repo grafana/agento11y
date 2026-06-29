@@ -95,7 +95,7 @@ rec.SetResult(sigil.Generation{
 
 | Language | Frameworks | Where |
 |----------|------------|-------|
-| Python | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands Agents, LiteLLM, Pydantic AI | [`python-frameworks/`](python-frameworks/) |
+| Python | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands Agents, Claude Agent SDK, LiteLLM, Pydantic AI | [`python-frameworks/`](python-frameworks/) |
 | TypeScript/JavaScript | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands, Vercel AI SDK | Subpath exports of `@grafana/sigil-sdk-js`. See [`js/README.md`](js/README.md). |
 | Go | Google ADK | [`go-frameworks/`](go-frameworks/) |
 | Java | Google ADK | [`java/frameworks/`](java/frameworks/) |
@@ -115,6 +115,7 @@ The getting-started quickstarts each make a real LLM call and record the generat
 | Python (multi-agent) | [`examples/getting-started/python-multi-agent/`](examples/getting-started/python-multi-agent/) |
 | Python + Pydantic AI | [`examples/getting-started/python-pydantic-ai/`](examples/getting-started/python-pydantic-ai/) |
 | Python + Strands | [`examples/getting-started/python-strands/`](examples/getting-started/python-strands/) |
+| Python + Claude Agent SDK | [`examples/getting-started/python-claude-agent-sdk/`](examples/getting-started/python-claude-agent-sdk/) |
 | TypeScript | [`examples/getting-started/typescript/`](examples/getting-started/typescript/) |
 | TypeScript hooks and guards | [`examples/getting-started/typescript-hooks/`](examples/getting-started/typescript-hooks/) |
 | TypeScript + Strands | [`examples/getting-started/typescript-strands/`](examples/getting-started/typescript-strands/) |

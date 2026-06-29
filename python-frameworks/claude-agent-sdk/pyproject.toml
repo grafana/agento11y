@@ -1,0 +1,31 @@
+[project]
+name = "sigil-sdk-claude-agent-sdk"
+version = "0.9.0"
+description = "Claude Agent SDK hooks for Sigil Python SDK"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+  "sigil-sdk>=0.9.0",
+  "claude-agent-sdk>=0.2.110",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=9.0.3",
+  "pytest-asyncio>=1.3.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sigil_sdk_claude_agent*"]
+
+[tool.setuptools.package-data]
+sigil_sdk_claude_agent = ["py.typed"]

@@ -264,7 +264,7 @@ Provider wrappers (use these before hand-instrumenting an SDK call):
 
 Framework adapters:
 
-- Python: `python-frameworks/{langchain,langgraph,openai-agents,llamaindex,google-adk,strands,litellm,pydantic-ai}`; each is its own pip package (e.g. `sigil-sdk-langgraph`).
+- Python: `python-frameworks/{langchain,langgraph,openai-agents,llamaindex,google-adk,strands,claude-agent-sdk,litellm,pydantic-ai}`; each is its own pip package (e.g. `sigil-sdk-langgraph`).
 - JS/TS: subpath exports like `@grafana/sigil-sdk-js/langgraph`, `@grafana/sigil-sdk-js/vercel-ai-sdk`; single npm package, multiple entry points.
 - Go: `go-frameworks/google-adk`.
 - Java: `java/frameworks/google-adk`.

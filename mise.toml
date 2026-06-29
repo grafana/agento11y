@@ -296,6 +296,10 @@ run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with './python-f
 description = "Run Python Strands framework handler tests"
 run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with './python-frameworks/strands[dev]' pytest python-frameworks/strands/tests"
 
+[tasks."test:py:sdk-claude-agent-sdk"]
+description = "Run Python Claude Agent SDK framework handler tests"
+run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with-editable './python-frameworks/claude-agent-sdk[dev]' pytest python-frameworks/claude-agent-sdk/tests"
+
 [tasks."test:py:sdk-litellm"]
 description = "Run Python LiteLLM framework handler tests"
 run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with './python-frameworks/litellm[dev]' pytest python-frameworks/litellm/tests"
@@ -321,6 +325,7 @@ mise run test:py:sdk-openai-agents
 mise run test:py:sdk-llamaindex
 mise run test:py:sdk-google-adk
 mise run test:py:sdk-strands
+mise run test:py:sdk-claude-agent-sdk
 mise run test:py:sdk-litellm
 """
 
@@ -516,6 +521,7 @@ PACKAGE_DIRS=(
   python-frameworks/litellm
   python-frameworks/pydantic-ai
   python-frameworks/strands
+  python-frameworks/claude-agent-sdk
 )
 
 for dir in "${PACKAGE_DIRS[@]}"; do
