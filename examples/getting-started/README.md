@@ -57,6 +57,8 @@ After running an example, open the AI Observability plugin in your Grafana Cloud
 - A new generation under the conversation ID used in the example.
 - Model name, provider, token usage, and latency filled in.
 - The input prompt and assistant response visible in the conversation drilldown.
+- The **Dependencies** tab in the conversation drilldown. Multi-agent examples add `parent_generation_ids`, so this tab shows edges between LLM calls; single-generation examples show one independent node.
+- The **Workflow** tab when you use a framework example that enables workflow-step capture. This tab shows framework steps and the generations linked to each step.
 - Traces in your Grafana Cloud Traces datasource and metrics in Grafana Cloud Metrics.
 
 ## Custom tags and metadata

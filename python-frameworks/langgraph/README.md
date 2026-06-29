@@ -82,8 +82,9 @@ client.shutdown()
 ## Workflow step capture
 
 Enable `capture_workflow_steps=True` to record each graph node as a Sigil workflow step.
-This builds a visual DAG in the Sigil UI showing node execution order, duration, input/output state,
-and which LLM generations ran inside each node.
+This enables the **Workflow** tab in the conversation detail view, showing node execution order,
+duration, input/output state, and which LLM generations ran inside each node. The **Dependencies**
+tab remains available for the generation-level DAG built from `parent_generation_ids`.
 
 Always set `conversation_title` to a short human-readable label — it appears as the conversation
 name in the Sigil UI. Without it, the title falls back to an opaque auto-generated ID.
