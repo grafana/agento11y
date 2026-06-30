@@ -554,13 +554,6 @@ func (c *Client) ExportScores(ctx context.Context, scores []ScoreItem) (*ExportS
 	payload := map[string]any{"scores": payloadScores}
 	var out ExportScoresResponse
 	if err := c.requestEvalJSON(ctx, http.MethodPost, endpoint, c.config.GenerationExport.Headers, payload, &out, ErrScoreExportFailed, "score export"); err != nil {
-		if shouldRetryScoresWithoutEvaluatorKind(err, scores) {
-			fallbackPayload := map[string]any{"scores": serializeScoresWithoutEvaluatorKind(scores)}
-			var fallbackOut ExportScoresResponse
-			if fallbackErr := c.requestEvalJSON(ctx, http.MethodPost, endpoint, c.config.GenerationExport.Headers, fallbackPayload, &fallbackOut, ErrScoreExportFailed, "score export"); fallbackErr == nil {
-				return &fallbackOut, nil
-			}
-		}
 		return nil, err
 	}
 	return &out, nil
@@ -1045,45 +1038,6 @@ func serializeScore(score ScoreItem) map[string]any {
 		out["source"] = map[string]any{"kind": score.Source.Kind, "id": score.Source.ID}
 	}
 	return out
-}
-
-func serializeScoresWithoutEvaluatorKind(scores []ScoreItem) []map[string]any {
-	out := make([]map[string]any, 0, len(scores))
-	for _, score := range scores {
-		evaluatorKind := strings.TrimSpace(score.EvaluatorKind)
-		if evaluatorKind != "" {
-			metadata := cloneMetadata(score.Metadata)
-			if metadata == nil {
-				metadata = map[string]any{}
-			}
-			if _, exists := metadata["evaluator_kind"]; !exists {
-				metadata["evaluator_kind"] = evaluatorKind
-			}
-			score.Metadata = metadata
-			score.EvaluatorKind = ""
-		}
-		out = append(out, serializeScore(score))
-	}
-	return out
-}
-
-func shouldRetryScoresWithoutEvaluatorKind(err error, scores []ScoreItem) bool {
-	if err == nil || !errors.Is(err, ErrScoreValidationFailed) {
-		return false
-	}
-	hasEvaluatorKind := false
-	for _, score := range scores {
-		if strings.TrimSpace(score.EvaluatorKind) != "" {
-			hasEvaluatorKind = true
-			break
-		}
-	}
-	if !hasEvaluatorKind {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "evaluator_kind") &&
-		(strings.Contains(message, "unknown field") || strings.Contains(message, "unknown json field"))
 }
 
 func serializeScoreValue(value ScoreValue) map[string]any {

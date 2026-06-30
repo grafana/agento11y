@@ -349,12 +349,22 @@ func (r *ExperimentRun) Enter(ctx context.Context) error {
 	return err
 }
 
-func WithExperiment(ctx context.Context, opts ExperimentOptions, fn func(context.Context, *ExperimentRun) error) (*ExperimentRun, error) {
-	run := NewExperimentRun(opts)
+func WithExperiment(ctx context.Context, opts ExperimentOptions, fn func(context.Context, *ExperimentRun) error) (run *ExperimentRun, err error) {
+	run = NewExperimentRun(opts)
 	if err := run.Enter(ctx); err != nil {
 		return run, err
 	}
-	err := fn(run.Context(ctx), run)
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		if run.autoFinalize {
+			_ = run.Finalize(ctx, ExperimentStatusFailed, fmt.Sprint(recovered))
+		}
+		panic(recovered)
+	}()
+	err = fn(run.Context(ctx), run)
 	if !run.autoFinalize {
 		return run, err
 	}
@@ -869,6 +879,9 @@ type ScoreOptions struct {
 }
 
 func (t *Trial) Score(scoreKey string, value ScoreValue, opts ScoreOptions) ScoreItem {
+	if scoreKey == "final" {
+		opts.Passed = inferFinalPassed(value, opts.Passed)
+	}
 	ev := t.defaultEvaluator
 	if opts.Evaluator != nil {
 		ev = opts.Evaluator.normalized()
@@ -915,16 +928,19 @@ func (t *Trial) Score(scoreKey string, value ScoreValue, opts ScoreOptions) Scor
 	return item
 }
 
+// FinalScore records the headline score. Boolean scores infer the trial verdict
+// from the value; numeric and string scores require ScoreOptions.Passed.
 func (t *Trial) FinalScore(value ScoreValue, opts ScoreOptions) ScoreItem {
-	if opts.Passed == nil && value.Bool != nil {
-		passed := *value.Bool
-		opts.Passed = &passed
-	}
-	if opts.Passed == nil && value.Number != nil {
-		passed := *value.Number > 0
-		opts.Passed = &passed
-	}
+	opts.Passed = inferFinalPassed(value, opts.Passed)
 	return t.Score("final", value, opts)
+}
+
+func inferFinalPassed(value ScoreValue, passed *bool) *bool {
+	if passed == nil && value.Bool != nil {
+		passed := *value.Bool
+		return &passed
+	}
+	return passed
 }
 
 func (t *Trial) CheckScore(name string, passed bool, opts ScoreOptions) ScoreItem {

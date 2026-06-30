@@ -304,15 +304,14 @@ func TestExportScoresRetriesThenSucceedsOn5xx(t *testing.T) {
 	}
 }
 
-func TestExportScoresRetriesWithoutEvaluatorKindForStrictBackends(t *testing.T) {
+func TestExportScoresDoesNotRetryWithoutEvaluatorKind(t *testing.T) {
 	recorder := &experimentRecorder{}
 	recorder.push(http.StatusBadRequest, map[string]any{"error": `json: unknown field "evaluator_kind"`})
-	recorder.push(http.StatusAccepted, map[string]any{"results": []map[string]any{{"score_id": "sc1", "accepted": true}}})
 	server := httptest.NewServer(recorder.handler(t))
 	defer server.Close()
 
 	client := newExperimentTestClient(t, server.URL)
-	response, err := client.ExportScores(context.Background(), []ScoreItem{{
+	_, err := client.ExportScores(context.Background(), []ScoreItem{{
 		ScoreID:          "sc1",
 		TrialID:          "trial-1",
 		EvaluatorID:      "ev",
@@ -321,26 +320,15 @@ func TestExportScoresRetriesWithoutEvaluatorKindForStrictBackends(t *testing.T) 
 		ScoreKey:         "reward",
 		Value:            NumberScoreValue(1),
 	}})
-	if err != nil {
-		t.Fatalf("export scores: %v", err)
+	if !errors.Is(err, ErrScoreValidationFailed) {
+		t.Fatalf("expected validation error, got %v", err)
 	}
-	if response.AcceptedCount() != 1 {
-		t.Fatalf("expected accepted count 1, got %d", response.AcceptedCount())
-	}
-	if recorder.requestCount() != 2 {
-		t.Fatalf("expected evaluator_kind compatibility retry, got %d request(s)", recorder.requestCount())
+	if recorder.requestCount() != 1 {
+		t.Fatalf("expected no evaluator_kind fallback retry, got %d request(s)", recorder.requestCount())
 	}
 	first := recorder.request(0).Payload["scores"].([]any)[0].(map[string]any)
 	if first["evaluator_kind"] != "deterministic" {
 		t.Fatalf("expected first request to include evaluator_kind, got %#v", first)
-	}
-	second := recorder.request(1).Payload["scores"].([]any)[0].(map[string]any)
-	if _, ok := second["evaluator_kind"]; ok {
-		t.Fatalf("fallback request must omit evaluator_kind: %#v", second)
-	}
-	metadata := second["metadata"].(map[string]any)
-	if metadata["evaluator_kind"] != "deterministic" {
-		t.Fatalf("fallback request must preserve evaluator_kind in metadata: %#v", second)
 	}
 }
 
@@ -529,21 +517,65 @@ func TestExperimentRunTrialStringWithoutSuiteDoesNotPanic(t *testing.T) {
 	}
 }
 
-func TestFinalScoreNumberInfersPassed(t *testing.T) {
+func TestFinalScoreBoolInfersPassed(t *testing.T) {
 	trial := NewTrial(nil, TrialRef{ExperimentID: "run-1", TestCaseID: "case-1"})
-	score := trial.FinalScore(NumberScoreValue(1), ScoreOptions{})
+	score := trial.FinalScore(BoolScoreValue(true), ScoreOptions{})
 	if score.Passed == nil || !*score.Passed {
-		t.Fatalf("expected numeric final score 1 to infer passed, got %#v", score.Passed)
+		t.Fatalf("expected bool final score to infer passed, got %#v", score.Passed)
 	}
 	if trial.finalPassed == nil || !*trial.finalPassed {
 		t.Fatalf("expected trial final verdict to be true, got %#v", trial.finalPassed)
 	}
 
 	trial = NewTrial(nil, TrialRef{ExperimentID: "run-1", TestCaseID: "case-2"})
-	score = trial.FinalScore(NumberScoreValue(0), ScoreOptions{})
+	score = trial.Score("final", BoolScoreValue(false), ScoreOptions{})
 	if score.Passed == nil || *score.Passed {
-		t.Fatalf("expected numeric final score 0 to infer failed, got %#v", score.Passed)
+		t.Fatalf("expected Score(\"final\", bool) to infer failed, got %#v", score.Passed)
 	}
+	if trial.finalPassed == nil || *trial.finalPassed {
+		t.Fatalf("expected trial final verdict to be false, got %#v", trial.finalPassed)
+	}
+}
+
+func TestFinalScoreNumberRequiresExplicitPassed(t *testing.T) {
+	trial := NewTrial(nil, TrialRef{ExperimentID: "run-1", TestCaseID: "case-1"})
+	score := trial.FinalScore(NumberScoreValue(0.2), ScoreOptions{})
+	if score.Passed != nil {
+		t.Fatalf("expected numeric final score to require explicit passed, got %#v", score.Passed)
+	}
+	if trial.finalPassed != nil {
+		t.Fatalf("expected trial final verdict to remain nil, got %#v", trial.finalPassed)
+	}
+}
+
+func TestWithExperimentFinalizesFailedOnPanic(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusOK, map[string]any{"run": experimentBody(map[string]any{"experiment_id": "run-panic"})})
+	recorder.push(http.StatusOK, map[string]any{"run": experimentBody(map[string]any{"experiment_id": "run-panic", "status": "failed"})})
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	defer func() {
+		recovered := recover()
+		if recovered != "boom" {
+			t.Fatalf("expected panic to be rethrown, got %#v", recovered)
+		}
+		if recorder.requestCount() != 2 {
+			t.Fatalf("expected create and failed finalize requests, got %d", recorder.requestCount())
+		}
+		finalizeReq := recorder.request(1)
+		if finalizeReq.Method != http.MethodPost || finalizeReq.Path != "/api/v1/experiment-runs/run-panic:finalize" {
+			t.Fatalf("unexpected finalize request: %#v", finalizeReq)
+		}
+		if finalizeReq.Payload["status"] != "failed" || finalizeReq.Payload["error"] != "boom" {
+			t.Fatalf("expected failed finalize payload, got %#v", finalizeReq.Payload)
+		}
+	}()
+
+	_, _ = WithExperiment(context.Background(), ExperimentOptions{Client: client, RunID: "run-panic", Name: "panic"}, func(context.Context, *ExperimentRun) error {
+		panic("boom")
+	})
 }
 
 func TestTrialRefEnvRoundTrip(t *testing.T) {
