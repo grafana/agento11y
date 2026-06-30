@@ -99,6 +99,12 @@ def _event_value(value: ScoreValue) -> float | bool | str | None:
     return None
 
 
+def _infer_final_passed(value: ScoreValue) -> bool | None:
+    if value.boolean is not None:
+        return value.boolean
+    return None
+
+
 def _kind_from_mime(mime: str) -> str:
     """Maps a MIME type to a Sigil artifact kind."""
 
@@ -484,6 +490,8 @@ class Trial:
 
         ev = evaluator or self._default_evaluator
         sv = _coerce_value(value)
+        if score_key == "final" and passed is None:
+            passed = _infer_final_passed(sv)
         score_id = stable_id("score", self.ref.experiment_id, self.trial_id, score_key, ev.evaluator_id)
         # The score carries the typed trial_id so the backend attributes it and the
         # report rolls up per case; metadata mirrors the ids for grouping.
@@ -549,8 +557,7 @@ class Trial:
 
         if passed is None:
             coerced = _coerce_value(value)
-            if coerced.boolean is not None:
-                passed = coerced.boolean
+            passed = _infer_final_passed(coerced)
         return self.score(
             "final",
             value,

@@ -396,6 +396,19 @@ def test_experiment_factory_uses_supplied_client() -> None:
     assert client.finalized and client.finalized[0][0] == "run-f"
 
 
+def test_final_score_primitive_derives_boolean_verdict() -> None:
+    client = FakeClient()
+    suite = _suite()
+
+    with Experiment(client, experiment_id="run-primitive-final", name="x", suite=suite) as exp:
+        with exp.trial(suite.test_cases[0]) as trial:
+            final = trial.score("final", value=True)
+
+    assert final.passed is True
+    assert trial.status == "passed"
+    assert client.scores[0].passed is True
+
+
 def test_artifact_content_kind_inference() -> None:
     from sigil_sdk.experiments.experiment import _artifact_content, _kind_from_mime
 
