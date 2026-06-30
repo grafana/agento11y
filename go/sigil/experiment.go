@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -360,7 +361,9 @@ func WithExperiment(ctx context.Context, opts ExperimentOptions, fn func(context
 			return
 		}
 		if run.autoFinalize {
-			_ = run.Finalize(ctx, ExperimentStatusFailed, fmt.Sprint(recovered))
+			finalizeCtx, cancel := experimentCleanupContext(ctx)
+			_ = run.Finalize(finalizeCtx, ExperimentStatusFailed, fmt.Sprint(recovered))
+			cancel()
 		}
 		panic(recovered)
 	}()
@@ -368,14 +371,25 @@ func WithExperiment(ctx context.Context, opts ExperimentOptions, fn func(context
 	if !run.autoFinalize {
 		return run, err
 	}
+	finalizeCtx, cancel := experimentCleanupContext(ctx)
+	defer cancel()
 	if err != nil {
-		_ = run.Finalize(ctx, ExperimentStatusFailed, err.Error())
+		if finalizeErr := run.Finalize(finalizeCtx, ExperimentStatusFailed, err.Error()); finalizeErr != nil {
+			return run, errors.Join(err, finalizeErr)
+		}
 		return run, err
 	}
-	if finalizeErr := run.Finalize(ctx, ExperimentStatusCompleted, ""); finalizeErr != nil {
+	if finalizeErr := run.Finalize(finalizeCtx, ExperimentStatusCompleted, ""); finalizeErr != nil {
 		return run, finalizeErr
 	}
 	return run, nil
+}
+
+func experimentCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), defaultExperimentRetryTimeout)
 }
 
 func (r *ExperimentRun) Context(ctx context.Context) context.Context {
@@ -723,8 +737,10 @@ func (t *Trial) End(ctx context.Context, err error) error {
 			t.errorText = "trial exited without a final score"
 		}
 	}
-	_, flushErr := t.Flush(ctx)
-	finalizeErr := t.finalizeTrial(ctx)
+	cleanupCtx, cancel := experimentCleanupContext(ctx)
+	defer cancel()
+	_, flushErr := t.Flush(cleanupCtx)
+	finalizeErr := t.finalizeTrial(cleanupCtx)
 	if flushErr != nil {
 		return flushErr
 	}

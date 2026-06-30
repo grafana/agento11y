@@ -506,6 +506,37 @@ func TestTrialLifecycleCreatesTypedTrialAndFinalScore(t *testing.T) {
 	}
 }
 
+func TestTrialEndUsesCleanupContextAfterCallerContextCanceled(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusOK, map[string]any{"trial_id": "trial-canceled"})
+	recorder.push(http.StatusAccepted, map[string]any{"results": []map[string]any{{"score_id": "score-1", "accepted": true}}})
+	recorder.push(http.StatusOK, map[string]any{"trial_id": "trial-canceled"})
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	trial := NewTrial(client, TrialRef{ExperimentID: "run-canceled", TestCaseID: "case-canceled"})
+	if err := trial.Start(context.Background()); err != nil {
+		t.Fatalf("start trial: %v", err)
+	}
+	trial.FinalScore(BoolScoreValue(true), ScoreOptions{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := trial.End(ctx, nil); err != nil {
+		t.Fatalf("end trial with canceled context: %v", err)
+	}
+	if recorder.requestCount() != 3 {
+		t.Fatalf("expected create, score export, and update requests, got %d", recorder.requestCount())
+	}
+	if req := recorder.request(1); req.Method != http.MethodPost || req.Path != "/api/v1/scores:export" {
+		t.Fatalf("unexpected score export request: %#v", req)
+	}
+	if req := recorder.request(2); req.Method != http.MethodPatch || req.Path != "/api/v1/experiment-runs/run-canceled/trials/"+trial.trialID {
+		t.Fatalf("unexpected trial update request: %#v", req)
+	}
+}
+
 func TestExperimentRunTrialStringWithoutSuiteDoesNotPanic(t *testing.T) {
 	exp := NewExperimentRun(ExperimentOptions{RunID: "run-no-suite", Name: "no suite"})
 	trial := exp.Trial("case-1")
@@ -576,6 +607,34 @@ func TestWithExperimentFinalizesFailedOnPanic(t *testing.T) {
 	_, _ = WithExperiment(context.Background(), ExperimentOptions{Client: client, RunID: "run-panic", Name: "panic"}, func(context.Context, *ExperimentRun) error {
 		panic("boom")
 	})
+}
+
+func TestWithExperimentFinalizesWithCleanupContextAfterCancel(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusOK, map[string]any{"run": experimentBody(map[string]any{"experiment_id": "run-canceled"})})
+	recorder.push(http.StatusOK, map[string]any{"run": experimentBody(map[string]any{"experiment_id": "run-canceled", "status": "failed"})})
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := WithExperiment(ctx, ExperimentOptions{Client: client, RunID: "run-canceled", Name: "canceled"}, func(context.Context, *ExperimentRun) error {
+		cancel()
+		return context.Canceled
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if recorder.requestCount() != 2 {
+		t.Fatalf("expected create and failed finalize requests, got %d", recorder.requestCount())
+	}
+	finalizeReq := recorder.request(1)
+	if finalizeReq.Method != http.MethodPost || finalizeReq.Path != "/api/v1/experiment-runs/run-canceled:finalize" {
+		t.Fatalf("unexpected finalize request: %#v", finalizeReq)
+	}
+	if finalizeReq.Payload["status"] != "failed" || finalizeReq.Payload["error"] != context.Canceled.Error() {
+		t.Fatalf("expected failed finalize payload, got %#v", finalizeReq.Payload)
+	}
 }
 
 func TestTrialRefEnvRoundTrip(t *testing.T) {
