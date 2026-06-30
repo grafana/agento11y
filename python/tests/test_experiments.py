@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from opentelemetry import trace
@@ -290,6 +291,7 @@ def test_trial_cleanup_runs_when_flush_fails() -> None:
             with exp.trial(suite.test_cases[0]) as trial:
                 trial.final_score(1.0, passed=True)
     assert client.trial_updates and client.trial_updates[0][2] == "completed"
+    assert len(trial._buffer) == 1
 
 
 def test_score_value_helpers() -> None:
@@ -440,8 +442,11 @@ def test_parse_report_matches_backend_shape() -> None:
     assert report.rows and report.rows[0]["test_case_id"] == "add"
 
 
-def test_example_json_fallbacks_handle_malformed_slices() -> None:
+def test_example_json_fallbacks_handle_malformed_slices(monkeypatch: pytest.MonkeyPatch) -> None:
     example_root = Path(__file__).resolve().parents[2] / "examples" / "experiments" / "python"
+    fake_anthropic = ModuleType("anthropic")
+    fake_anthropic.Anthropic = object
+    monkeypatch.setitem(sys.modules, "anthropic", fake_anthropic)
     sys.path.insert(0, str(example_root))
     try:
         from app.agent import _parse_grade

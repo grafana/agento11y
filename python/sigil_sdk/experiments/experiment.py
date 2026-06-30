@@ -741,9 +741,9 @@ class Trial:
         if not self._buffer:
             return 0
         self._ensure_generation()
-        pending = self._buffer
-        self._buffer = []
+        pending = list(self._buffer)
         accepted = self._client.export_scores(pending)
+        del self._buffer[: len(pending)]
         self._accepted += accepted
         if self._experiment is not None:
             self._experiment._record_accepted(accepted)
