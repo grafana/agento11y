@@ -842,10 +842,6 @@ type RecordIOOptions struct {
 }
 
 func (t *Trial) RecordIO(opts RecordIOOptions) *Trial {
-	t.hasGeneration = true
-	if t.conversationID == "" {
-		t.conversationID = StableID("conv", t.ref.ExperimentID, t.ref.TestCaseID, t.ref.Attempt)
-	}
 	if opts.Input != nil {
 		t.io["input_text"] = fmt.Sprint(opts.Input)
 	}
@@ -867,7 +863,24 @@ func (t *Trial) RecordIO(opts RecordIOOptions) *Trial {
 	if opts.OutputTokens != nil {
 		t.io["output_tokens"] = *opts.OutputTokens
 	}
+	if t.hasRecordedGenerationData() {
+		t.hasGeneration = true
+		if t.conversationID == "" {
+			t.conversationID = StableID("conv", t.ref.ExperimentID, t.ref.TestCaseID, t.ref.Attempt)
+		}
+	}
 	return t
+}
+
+func (t *Trial) hasRecordedGenerationData() bool {
+	if t == nil {
+		return false
+	}
+	_, hasInput := t.io["input_text"]
+	_, hasOutput := t.io["output_text"]
+	_, hasInputTokens := t.io["input_tokens"]
+	_, hasOutputTokens := t.io["output_tokens"]
+	return hasInput || hasOutput || hasInputTokens || hasOutputTokens
 }
 
 func (t *Trial) SetUsage(inputTokens, outputTokens *int, cost *float64) *Trial {
@@ -1050,7 +1063,7 @@ func (t *Trial) Fail(errorText string) *Trial {
 }
 
 func (t *Trial) ensureGeneration(ctx context.Context) error {
-	if t.generationExported || t.generationBound || len(t.io) == 0 {
+	if t.generationExported || t.generationBound || !t.hasRecordedGenerationData() {
 		return nil
 	}
 	caseInput := ""

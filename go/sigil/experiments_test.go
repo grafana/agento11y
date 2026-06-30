@@ -697,6 +697,41 @@ func (e *capturingExperimentExporter) hasGeneration(generationID string) bool {
 	return false
 }
 
+func TestRecordIOWithoutIOOrUsageDoesNotAttachGenerationID(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusAccepted, map[string]any{"results": []map[string]any{{"score_id": "score-1", "accepted": true}}})
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	trial := NewTrial(client, TrialRef{ExperimentID: "run-empty-io", TestCaseID: "case-empty-io"})
+	trial.RecordIO(RecordIOOptions{
+		ModelProvider: "example",
+		ModelName:     "agent",
+		AgentName:     "support-agent",
+	})
+	score := trial.FinalScore(BoolScoreValue(true), ScoreOptions{})
+	if score.GenerationID != "" {
+		t.Fatalf("expected score without recorded IO or usage to omit generation_id, got %q", score.GenerationID)
+	}
+
+	accepted, err := trial.Flush(context.Background())
+	if err != nil {
+		t.Fatalf("flush trial: %v", err)
+	}
+	if accepted != 1 {
+		t.Fatalf("expected one accepted score, got %d", accepted)
+	}
+	if recorder.requestCount() != 1 {
+		t.Fatalf("expected only score export request, got %d", recorder.requestCount())
+	}
+	req := recorder.request(0)
+	scorePayload := req.Payload["scores"].([]any)[0].(map[string]any)
+	if _, ok := scorePayload["generation_id"]; ok {
+		t.Fatalf("score without recorded IO or usage must not send generation_id: %#v", scorePayload)
+	}
+}
+
 func TestTrialFlushFlushesBoundGenerationBeforeScores(t *testing.T) {
 	exporter := &capturingExperimentExporter{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
