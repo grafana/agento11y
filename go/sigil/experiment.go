@@ -5,10 +5,12 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,198 +19,351 @@ import (
 const (
 	ExperimentRunIDTag         = "experiment.run_id"
 	ExperimentRunIDMetadataKey = "experiment_run_id"
+
+	EnvExperimentID = "SIGIL_EXPERIMENT_ID"
+	EnvRunID        = "SIGIL_RUN_ID"
+	EnvTestCaseID   = "SIGIL_TEST_CASE_ID"
+	EnvAttempt      = "SIGIL_ATTEMPT"
+	EnvSuiteID      = "SIGIL_SUITE_ID"
+	EnvSuiteVersion = "SIGIL_SUITE_VERSION"
+	EnvTrajectoryID = "SIGIL_TRAJECTORY_ID"
 )
 
-type UploadMode string
+type TrialStatus string
 
 const (
-	UploadModeContinuous UploadMode = "continuous"
-	UploadModeBulk       UploadMode = "bulk"
-	UploadModeManual     UploadMode = "manual"
+	TrialStatusRunning TrialStatus = "running"
+	TrialStatusPassed  TrialStatus = "passed"
+	TrialStatusFailed  TrialStatus = "failed"
+	TrialStatusErrored TrialStatus = "errored"
+	TrialStatusSkipped TrialStatus = "skipped"
 )
 
-type DatasetItem struct {
-	ID       string
-	Input    any
-	Expected any
-	Metadata map[string]any
+type EvaluatorKind string
+
+const (
+	EvaluatorKindLLMJudge      EvaluatorKind = "llm_judge"
+	EvaluatorKindDeterministic EvaluatorKind = "deterministic"
+	EvaluatorKindHuman         EvaluatorKind = "human"
+	EvaluatorKindCustom        EvaluatorKind = "custom"
+)
+
+type TestCase struct {
+	TestCaseID  string
+	Name        string
+	Description string
+	Tags        []string
+	Category    string
+	Input       any
+	Expected    any
+	Weight      float64
+	Metadata    map[string]any
 }
 
-type TargetResult struct {
-	Output         any
-	GenerationIDs  []string
-	ConversationID string
-	Metadata       map[string]any
+type TestSuite struct {
+	SuiteID     string
+	Name        string
+	Version     string
+	Description string
+	Tags        []string
+	Changelog   string
+	TestCases   []TestCase
 }
 
-type ScoreOutput struct {
-	EvaluatorID      string
-	EvaluatorVersion string
-	ScoreKey         string
-	Value            ScoreValue
-	GenerationID     string
-	Passed           *bool
-	Explanation      string
-	Metadata         map[string]any
+func (s *TestSuite) Cases() []TestCase {
+	if s == nil {
+		return nil
+	}
+	return s.TestCases
 }
 
-type ExperimentResult struct {
-	RunID          string
-	AcceptedScores int
-	URL            string
-	Report         *ExperimentReport
+func (s *TestSuite) Case(testCaseID string) *TestCase {
+	if s == nil {
+		return nil
+	}
+	for i := range s.TestCases {
+		if s.TestCases[i].TestCaseID == testCaseID {
+			return &s.TestCases[i]
+		}
+	}
+	return nil
 }
 
-type DatasetTarget func(ctx context.Context, item DatasetItem) (TargetResult, error)
-type DatasetScorer func(ctx context.Context, item DatasetItem, result TargetResult) ([]ScoreOutput, error)
-
-type ExperimentOptions struct {
-	Client        *Client
-	RunID         string
-	Name          string
-	Description   string
-	Tags          []string
-	Metadata      map[string]any
-	Dataset       map[string]any
-	Candidate     map[string]any
-	Upload        UploadMode
-	PrintURL      bool
+type Candidate struct {
 	AgentName     string
 	AgentVersion  string
-	ExtraTags     map[string]string
-	ExtraMetadata map[string]any
+	PromptVersion string
+	ModelProvider string
+	ModelName     string
+	GitSHA        string
+}
+
+func (c Candidate) AsMetadata() map[string]any {
+	out := map[string]any{}
+	if c.AgentName != "" {
+		out["agent_name"] = c.AgentName
+	}
+	if c.AgentVersion != "" {
+		out["agent_version"] = c.AgentVersion
+	}
+	if c.PromptVersion != "" {
+		out["prompt_version"] = c.PromptVersion
+	}
+	if c.ModelProvider != "" {
+		out["model_provider"] = c.ModelProvider
+	}
+	if c.ModelName != "" {
+		out["model_name"] = c.ModelName
+	}
+	if c.GitSHA != "" {
+		out["git_sha"] = c.GitSHA
+	}
+	return out
+}
+
+type Evaluator struct {
+	EvaluatorID         string
+	Version             string
+	Kind                EvaluatorKind
+	ReferenceSetID      string
+	ReferenceSetVersion string
+}
+
+func (e Evaluator) normalized() Evaluator {
+	if e.EvaluatorID == "" {
+		e.EvaluatorID = "sdk"
+	}
+	if e.Version == "" {
+		e.Version = "0"
+	}
+	e.Kind = NormalizeEvaluatorKind(string(e.Kind))
+	return e
+}
+
+func NormalizeEvaluatorKind(kind string) EvaluatorKind {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "llm_judge", "llm-judge", "llm", "judge", "rubric":
+		return EvaluatorKindLLMJudge
+	case "deterministic", "check", "rule", "exact", "code":
+		return EvaluatorKindDeterministic
+	case "human", "manual", "annotator":
+		return EvaluatorKindHuman
+	default:
+		return EvaluatorKindCustom
+	}
+}
+
+type TrialRef struct {
+	ExperimentID string
+	TestCaseID   string
+	Attempt      int
+	SuiteID      string
+	SuiteVersion string
+	SuiteName    string
+	TestCaseName string
+	TrajectoryID string
+}
+
+func (r TrialRef) RunID() string {
+	return r.ExperimentID
+}
+
+func (r TrialRef) ToJSON() map[string]any {
+	attempt := r.Attempt
+	if attempt == 0 {
+		attempt = 1
+	}
+	return map[string]any{
+		"experiment_id":  r.ExperimentID,
+		"test_case_id":   r.TestCaseID,
+		"attempt":        attempt,
+		"suite_id":       r.SuiteID,
+		"suite_version":  r.SuiteVersion,
+		"suite_name":     r.SuiteName,
+		"test_case_name": r.TestCaseName,
+		"trajectory_id":  r.TrajectoryID,
+	}
+}
+
+func TrialRefFromJSON(payload map[string]any) TrialRef {
+	attempt := 1
+	switch raw := payload["attempt"].(type) {
+	case int:
+		attempt = raw
+	case float64:
+		attempt = int(raw)
+	case string:
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			attempt = parsed
+		}
+	}
+	return TrialRef{
+		ExperimentID: strings.TrimSpace(firstString(payload["experiment_id"], payload["run_id"])),
+		TestCaseID:   strings.TrimSpace(firstString(payload["test_case_id"])),
+		Attempt:      attempt,
+		SuiteID:      strings.TrimSpace(firstString(payload["suite_id"])),
+		SuiteVersion: strings.TrimSpace(firstString(payload["suite_version"])),
+		SuiteName:    strings.TrimSpace(firstString(payload["suite_name"])),
+		TestCaseName: strings.TrimSpace(firstString(payload["test_case_name"])),
+		TrajectoryID: strings.TrimSpace(firstString(payload["trajectory_id"])),
+	}
+}
+
+func (r TrialRef) ToEnv() map[string]string {
+	attempt := r.Attempt
+	if attempt == 0 {
+		attempt = 1
+	}
+	env := map[string]string{
+		EnvExperimentID: r.ExperimentID,
+		EnvTestCaseID:   r.TestCaseID,
+		EnvAttempt:      strconv.Itoa(attempt),
+	}
+	if r.SuiteID != "" {
+		env[EnvSuiteID] = r.SuiteID
+	}
+	if r.SuiteVersion != "" {
+		env[EnvSuiteVersion] = r.SuiteVersion
+	}
+	if r.TrajectoryID != "" {
+		env[EnvTrajectoryID] = r.TrajectoryID
+	}
+	return env
+}
+
+func TrialRefFromEnv() (*TrialRef, bool) {
+	experimentID := strings.TrimSpace(firstNonBlank(os.Getenv(EnvExperimentID), os.Getenv(EnvRunID)))
+	testCaseID := strings.TrimSpace(os.Getenv(EnvTestCaseID))
+	if experimentID == "" || testCaseID == "" {
+		return nil, false
+	}
+	attempt := 1
+	if parsed, err := strconv.Atoi(os.Getenv(EnvAttempt)); err == nil && parsed > 0 {
+		attempt = parsed
+	}
+	return &TrialRef{
+		ExperimentID: experimentID,
+		TestCaseID:   testCaseID,
+		Attempt:      attempt,
+		SuiteID:      strings.TrimSpace(os.Getenv(EnvSuiteID)),
+		SuiteVersion: strings.TrimSpace(os.Getenv(EnvSuiteVersion)),
+		TrajectoryID: strings.TrimSpace(os.Getenv(EnvTrajectoryID)),
+	}, true
+}
+
+type ExperimentOptions struct {
+	Client              *Client
+	ExperimentID        string
+	RunID               string
+	Name                string
+	Suite               *TestSuite
+	Candidate           *Candidate
+	DefaultEvaluator    *Evaluator
+	Description         string
+	Tags                []string
+	Metadata            map[string]any
+	AutoFinalize        *bool
+	UseExperimentalOTel bool
 }
 
 type ExperimentRun struct {
-	client *Client
-
-	RunID string
-	Name  string
-
-	dataset       map[string]any
-	candidate     map[string]any
-	upload        UploadMode
-	agentName     string
-	agentVersion  string
-	extraTags     map[string]string
-	extraMetadata map[string]any
+	client           *Client
+	ExperimentID     string
+	Name             string
+	Suite            *TestSuite
+	candidate        *Candidate
+	defaultEvaluator Evaluator
+	description      string
+	tags             []string
+	metadata         map[string]any
+	autoFinalize     bool
 
 	mu                   sync.Mutex
-	buffer               []ScoreItem
 	accepted             int
 	finalized            bool
 	recorders            []*GenerationRecorder
 	trackedIDs           []string
 	activeConversationID string
-}
-
-type AddScoresOptions struct {
-	Item           *DatasetItem
-	GenerationIDs  []string
-	ConversationID string
-	TrialID        string
-}
-
-type ExperimentRunner struct {
-	Client        *Client
-	RunID         string
-	Name          string
-	Description   string
-	Tags          []string
-	Metadata      map[string]any
-	Dataset       map[string]any
-	Candidate     map[string]any
-	Upload        UploadMode
-	PrintURL      bool
-	FetchReport   bool
-	AgentName     string
-	AgentVersion  string
-	ExtraTags     map[string]string
-	ExtraMetadata map[string]any
-}
-
-func StableID(prefix string, parts ...any) string {
-	values := make([]string, len(parts))
-	for i, part := range parts {
-		if part != nil {
-			values[i] = fmt.Sprint(part)
-		}
-	}
-	digest := sha1.Sum([]byte(strings.Join(values, "\x1f")))
-	return prefix + "-" + hex.EncodeToString(digest[:])[:16]
+	status               string
 }
 
 func NewExperimentRun(opts ExperimentOptions) *ExperimentRun {
-	upload := opts.Upload
-	if upload == "" {
-		upload = UploadModeContinuous
+	experimentID := firstNonBlank(opts.ExperimentID, opts.RunID)
+	if experimentID == "" {
+		experimentID = StableID("exp", opts.Name, experimentRandomHex(8))
+	}
+	name := opts.Name
+	if name == "" {
+		name = experimentID
+	}
+	defaultEvaluator := Evaluator{EvaluatorID: "sdk", Version: "0", Kind: EvaluatorKindCustom}
+	if opts.DefaultEvaluator != nil {
+		defaultEvaluator = opts.DefaultEvaluator.normalized()
+	}
+	autoFinalize := true
+	if opts.AutoFinalize != nil {
+		autoFinalize = *opts.AutoFinalize
 	}
 	return &ExperimentRun{
-		client:        opts.Client,
-		RunID:         opts.RunID,
-		Name:          opts.Name,
-		dataset:       cloneMetadata(opts.Dataset),
-		candidate:     cloneMetadata(opts.Candidate),
-		upload:        upload,
-		agentName:     opts.AgentName,
-		agentVersion:  opts.AgentVersion,
-		extraTags:     cloneTags(opts.ExtraTags),
-		extraMetadata: cloneMetadata(opts.ExtraMetadata),
+		client:           opts.Client,
+		ExperimentID:     experimentID,
+		Name:             name,
+		Suite:            opts.Suite,
+		candidate:        opts.Candidate,
+		defaultEvaluator: defaultEvaluator,
+		description:      opts.Description,
+		tags:             append([]string(nil), opts.Tags...),
+		metadata:         cloneMetadata(opts.Metadata),
+		autoFinalize:     autoFinalize,
+		status:           string(ExperimentStatusRunning),
 	}
 }
 
-func WithExperiment(ctx context.Context, opts ExperimentOptions, fn func(context.Context, *ExperimentRun) error) (*ExperimentRun, error) {
-	if opts.Client == nil {
-		return nil, ErrNilClient
+func (r *ExperimentRun) Enter(ctx context.Context) error {
+	if r == nil || r.client == nil {
+		return ErrNilClient
 	}
-	if opts.Upload == "" {
-		opts.Upload = UploadModeContinuous
+	metadata := cloneMetadata(r.metadata)
+	if metadata == nil {
+		metadata = map[string]any{}
 	}
-	if opts.RunID = strings.TrimSpace(opts.RunID); opts.RunID == "" {
-		return nil, fmt.Errorf("%w: run_id is required", ErrExperimentValidationFailed)
+	if r.Suite != nil {
+		if r.Suite.SuiteID != "" {
+			metadata["suite_id"] = r.Suite.SuiteID
+		}
+		if r.Suite.Version != "" {
+			metadata["suite_version"] = r.Suite.Version
+		}
 	}
-	if opts.Name = strings.TrimSpace(opts.Name); opts.Name == "" {
-		return nil, fmt.Errorf("%w: name is required", ErrExperimentValidationFailed)
+	if r.candidate != nil {
+		maps.Copy(metadata, r.candidate.AsMetadata())
 	}
-	if _, err := opts.Client.CreateExperiment(ctx, CreateExperimentRequest{
-		RunID:       opts.RunID,
-		Name:        opts.Name,
+	_, err := r.client.CreateExperiment(ctx, CreateExperimentRequest{
+		RunID:       r.ExperimentID,
+		Name:        r.Name,
 		Source:      ExperimentSourceExternal,
-		Description: opts.Description,
-		Tags:        append([]string(nil), opts.Tags...),
-		Metadata:    runMetadata(opts.Metadata, opts.Dataset, opts.Candidate),
-	}); err != nil {
-		return nil, err
-	}
+		Description: r.description,
+		Tags:        append([]string(nil), r.tags...),
+		Metadata:    metadata,
+	})
+	return err
+}
 
+func WithExperiment(ctx context.Context, opts ExperimentOptions, fn func(context.Context, *ExperimentRun) error) (*ExperimentRun, error) {
 	run := NewExperimentRun(opts)
+	if err := run.Enter(ctx); err != nil {
+		return run, err
+	}
 	err := fn(run.Context(ctx), run)
+	if !run.autoFinalize {
+		return run, err
+	}
 	if err != nil {
-		if errorsIsContextCanceled(err) {
-			cancelCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			_, _ = opts.Client.CancelExperiment(cancelCtx, opts.RunID)
-			cancel()
-			return run, err
-		}
 		_ = run.Finalize(ctx, ExperimentStatusFailed, err.Error())
 		return run, err
 	}
-
-	if opts.Upload == UploadModeManual {
-		if opts.PrintURL {
-			opts.Client.config.Logger.Printf("[sigil] experiment %q left open (manual mode): %d score(s) buffered. Call run.Publish() then run.Finalize() to upload.", opts.RunID, run.BufferedScoreCount())
-		}
-		return run, nil
-	}
-	if _, err := run.Publish(ctx); err != nil {
-		_ = run.Finalize(ctx, ExperimentStatusFailed, err.Error())
-		return run, err
-	}
-	if err := run.Finalize(ctx, ExperimentStatusSucceeded, ""); err != nil {
-		return run, err
-	}
-	if opts.PrintURL {
-		opts.Client.config.Logger.Printf("[sigil] experiment %q finished (%d scores): %s", opts.RunID, run.AcceptedScores(), run.URL())
+	if finalizeErr := run.Finalize(ctx, ExperimentStatusCompleted, ""); finalizeErr != nil {
+		return run, finalizeErr
 	}
 	return run, nil
 }
@@ -223,6 +378,100 @@ func (r *ExperimentRun) Context(ctx context.Context) context.Context {
 	return withExperimentRun(ctx, r)
 }
 
+func (r *ExperimentRun) Trial(testCase any, opts ...TrialOption) *Trial {
+	testCaseID, testCaseName := r.resolveTestCase(testCase)
+	ref := TrialRef{
+		ExperimentID: r.ExperimentID,
+		TestCaseID:   testCaseID,
+		Attempt:      1,
+		SuiteName:    r.Name,
+		TestCaseName: testCaseName,
+	}
+	if r.Suite != nil {
+		ref.SuiteID = r.Suite.SuiteID
+		ref.SuiteVersion = r.Suite.Version
+		ref.SuiteName = firstNonBlank(r.Suite.Name, r.Name)
+	}
+	t := NewTrial(r.client, ref, opts...)
+	t.experiment = r
+	t.candidate = r.candidate
+	t.defaultEvaluator = r.defaultEvaluator
+	return t
+}
+
+func (r *ExperimentRun) resolveTestCase(testCase any) (string, string) {
+	switch tc := testCase.(type) {
+	case TestCase:
+		return tc.TestCaseID, firstNonBlank(tc.Name, tc.TestCaseID)
+	case *TestCase:
+		if tc == nil {
+			return "", ""
+		}
+		return tc.TestCaseID, firstNonBlank(tc.Name, tc.TestCaseID)
+	case string:
+		if r != nil && r.Suite != nil {
+			if existing := r.Suite.Case(tc); existing != nil {
+				return tc, firstNonBlank(existing.Name, tc)
+			}
+		}
+		return tc, tc
+	default:
+		id := fmt.Sprint(testCase)
+		return id, id
+	}
+}
+
+func (r *ExperimentRun) Finalize(ctx context.Context, status ExperimentStatus, errorText string) error {
+	if r == nil || r.client == nil {
+		return ErrNilClient
+	}
+	r.mu.Lock()
+	if r.finalized {
+		r.mu.Unlock()
+		return nil
+	}
+	scoreCount := r.accepted
+	r.status = string(status)
+	r.mu.Unlock()
+	_, err := r.client.FinalizeExperiment(ctx, r.ExperimentID, status, CompleteExperimentOptions{ScoreCount: &scoreCount, Error: errorText})
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.finalized = true
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *ExperimentRun) Report(ctx context.Context) (*ExperimentReport, error) {
+	if r == nil || r.client == nil {
+		return nil, ErrNilClient
+	}
+	return r.client.GetExperimentReport(ctx, r.ExperimentID)
+}
+
+func (r *ExperimentRun) URL() string {
+	if r == nil || r.client == nil {
+		return ""
+	}
+	return r.client.ExperimentURL(r.ExperimentID)
+}
+
+func (r *ExperimentRun) AcceptedScores() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.accepted
+}
+
+func (r *ExperimentRun) recordAccepted(n int) {
+	r.mu.Lock()
+	r.accepted += n
+	r.mu.Unlock()
+}
+
 func (r *ExperimentRun) TrackGenerationID(generationID string) {
 	if r == nil {
 		return
@@ -233,7 +482,7 @@ func (r *ExperimentRun) TrackGenerationID(generationID string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !containsString(r.trackedIDs, generationID) {
+	if !slices.Contains(r.trackedIDs, generationID) {
 		r.trackedIDs = append(r.trackedIDs, generationID)
 	}
 }
@@ -264,12 +513,12 @@ func (r *ExperimentRun) ProducedGenerationIDs() []string {
 		recorder.mu.Lock()
 		id := recorder.lastGeneration.ID
 		recorder.mu.Unlock()
-		if id != "" && !containsString(ids, id) {
+		if id != "" && !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
 	}
 	for _, id := range r.trackedIDs {
-		if id != "" && !containsString(ids, id) {
+		if id != "" && !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
 	}
@@ -294,226 +543,6 @@ func (r *ExperimentRun) captureRecorder(recorder *GenerationRecorder) {
 	r.mu.Unlock()
 }
 
-func (r *ExperimentRun) AddScores(ctx context.Context, scores []ScoreOutput, opts AddScoresOptions) (int, error) {
-	if r == nil || r.client == nil {
-		return 0, ErrNilClient
-	}
-	if len(scores) == 0 {
-		return 0, nil
-	}
-	generationIDs := append([]string(nil), opts.GenerationIDs...)
-	if len(generationIDs) == 0 {
-		generationIDs = r.ProducedGenerationIDs()
-	}
-	conversationID := strings.TrimSpace(opts.ConversationID)
-	if conversationID == "" {
-		conversationID = r.ActiveConversationID()
-	}
-
-	items := make([]ScoreItem, 0, len(scores))
-	for _, score := range scores {
-		item, err := r.buildScoreItem(score, opts.Item, generationIDs, conversationID, opts.TrialID)
-		if err != nil {
-			return 0, err
-		}
-		items = append(items, item)
-	}
-
-	r.mu.Lock()
-	upload := r.upload
-	if upload != UploadModeContinuous {
-		r.buffer = append(r.buffer, items...)
-		r.mu.Unlock()
-		return len(items), nil
-	}
-	r.mu.Unlock()
-
-	if err := r.client.Flush(ctx); err != nil {
-		return 0, err
-	}
-	response, err := r.client.ExportScores(ctx, items)
-	if err != nil {
-		return 0, err
-	}
-	accepted, err := acceptedOrError(response)
-	if err != nil {
-		return 0, err
-	}
-	r.mu.Lock()
-	r.accepted += accepted
-	r.mu.Unlock()
-	return accepted, nil
-}
-
-func (r *ExperimentRun) Publish(ctx context.Context) (int, error) {
-	if r == nil || r.client == nil {
-		return 0, ErrNilClient
-	}
-	r.mu.Lock()
-	if len(r.buffer) == 0 {
-		r.mu.Unlock()
-		return 0, nil
-	}
-	items := append([]ScoreItem(nil), r.buffer...)
-	r.mu.Unlock()
-
-	if err := r.client.Flush(ctx); err != nil {
-		return 0, err
-	}
-	response, err := r.client.ExportScores(ctx, items)
-	if err != nil {
-		return 0, err
-	}
-	accepted, err := acceptedOrError(response)
-	if err != nil {
-		return 0, err
-	}
-
-	r.mu.Lock()
-	r.accepted += accepted
-	r.buffer = nil
-	r.mu.Unlock()
-	return accepted, nil
-}
-
-func (r *ExperimentRun) AcceptedScores() int {
-	if r == nil {
-		return 0
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.accepted
-}
-
-func (r *ExperimentRun) BufferedScoreCount() int {
-	if r == nil {
-		return 0
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.buffer)
-}
-
-func (r *ExperimentRun) URL() string {
-	if r == nil || r.client == nil {
-		return ""
-	}
-	return r.client.ExperimentURL(r.RunID)
-}
-
-func (r *ExperimentRun) Report(ctx context.Context) (*ExperimentReport, error) {
-	if r == nil || r.client == nil {
-		return nil, ErrNilClient
-	}
-	return r.client.GetExperimentReport(ctx, r.RunID)
-}
-
-func (r *ExperimentRun) Finalize(ctx context.Context, status ExperimentStatus, errorText string) error {
-	if r == nil || r.client == nil {
-		return ErrNilClient
-	}
-	r.mu.Lock()
-	if r.finalized {
-		r.mu.Unlock()
-		return nil
-	}
-	scoreCount := r.accepted
-	r.mu.Unlock()
-
-	_, err := r.client.CompleteExperiment(ctx, r.RunID, status, CompleteExperimentOptions{
-		ScoreCount: &scoreCount,
-		Error:      errorText,
-	})
-	if err != nil {
-		return err
-	}
-	r.mu.Lock()
-	r.finalized = true
-	r.mu.Unlock()
-	return nil
-}
-
-func (r *ExperimentRunner) Run(ctx context.Context, items []DatasetItem, target DatasetTarget, scorers []DatasetScorer) (ExperimentResult, error) {
-	if r == nil {
-		return ExperimentResult{}, ErrNilClient
-	}
-	fetchReport := r.FetchReport
-	opts := ExperimentOptions{
-		Client:        r.Client,
-		RunID:         r.RunID,
-		Name:          r.Name,
-		Description:   r.Description,
-		Tags:          append([]string(nil), r.Tags...),
-		Metadata:      cloneMetadata(r.Metadata),
-		Dataset:       cloneMetadata(r.Dataset),
-		Candidate:     cloneMetadata(r.Candidate),
-		Upload:        r.Upload,
-		PrintURL:      r.PrintURL,
-		AgentName:     r.AgentName,
-		AgentVersion:  r.AgentVersion,
-		ExtraTags:     cloneTags(r.ExtraTags),
-		ExtraMetadata: cloneMetadata(r.ExtraMetadata),
-	}
-	var completedRun *ExperimentRun
-	run, err := WithExperiment(ctx, opts, func(ctx context.Context, run *ExperimentRun) error {
-		completedRun = run
-		for _, item := range items {
-			run.ResetCapture(StableID("conv", run.RunID, item.ID))
-			itemCtx := run.Context(ctx)
-			result, err := target(itemCtx, item)
-			if err != nil {
-				return err
-			}
-			generationIDs := append([]string(nil), result.GenerationIDs...)
-			if len(generationIDs) == 0 {
-				generationIDs = run.ProducedGenerationIDs()
-			}
-			var outputs []ScoreOutput
-			for _, scorer := range scorers {
-				produced, err := scorer(ctx, item, result)
-				if err != nil {
-					return err
-				}
-				outputs = append(outputs, produced...)
-			}
-			if _, err := run.AddScores(ctx, outputs, AddScoresOptions{
-				Item:           &item,
-				GenerationIDs:  generationIDs,
-				ConversationID: firstNonBlank(result.ConversationID, run.ActiveConversationID()),
-			}); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if run != nil {
-		completedRun = run
-	}
-	if err != nil {
-		if completedRun == nil {
-			return ExperimentResult{}, err
-		}
-		return ExperimentResult{
-			RunID:          completedRun.RunID,
-			AcceptedScores: completedRun.AcceptedScores(),
-			URL:            completedRun.URL(),
-		}, err
-	}
-	var report *ExperimentReport
-	if fetchReport && completedRun != nil {
-		report, _ = completedRun.Report(ctx)
-	}
-	if completedRun == nil {
-		return ExperimentResult{}, nil
-	}
-	return ExperimentResult{
-		RunID:          completedRun.RunID,
-		AcceptedScores: completedRun.AcceptedScores(),
-		URL:            completedRun.URL(),
-		Report:         report,
-	}, nil
-}
-
 func (r *ExperimentRun) prepareGeneration(start GenerationStart) GenerationStart {
 	r.mu.Lock()
 	conversationID := strings.TrimSpace(start.ConversationID)
@@ -521,145 +550,570 @@ func (r *ExperimentRun) prepareGeneration(start GenerationStart) GenerationStart
 		conversationID = strings.TrimSpace(r.activeConversationID)
 	}
 	if conversationID == "" {
-		conversationID = StableID("conv", r.RunID, experimentRandomHex(8))
+		conversationID = StableID("conv", r.ExperimentID, experimentRandomHex(8))
 	}
 	r.activeConversationID = conversationID
 	r.mu.Unlock()
 	start.ConversationID = conversationID
 
-	tags := cloneTags(r.extraTags)
+	tags := cloneTags(start.Tags)
 	if tags == nil {
 		tags = map[string]string{}
 	}
-	maps.Copy(tags, start.Tags)
-	tags[ExperimentRunIDTag] = r.RunID
+	tags[ExperimentRunIDTag] = r.ExperimentID
 	start.Tags = tags
 
-	metadata := cloneMetadata(r.extraMetadata)
+	metadata := cloneMetadata(start.Metadata)
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
-	maps.Copy(metadata, start.Metadata)
-	metadata[ExperimentRunIDMetadataKey] = r.RunID
+	metadata[ExperimentRunIDMetadataKey] = r.ExperimentID
 	start.Metadata = metadata
 
-	if start.AgentName == "" && r.agentName != "" {
-		start.AgentName = r.agentName
+	if start.AgentName == "" && r.candidate != nil {
+		start.AgentName = r.candidate.AgentName
 	}
-	if start.AgentVersion == "" && r.agentVersion != "" {
-		start.AgentVersion = r.agentVersion
+	if start.AgentVersion == "" && r.candidate != nil {
+		start.AgentVersion = r.candidate.AgentVersion
 	}
 	return start
 }
 
 func prepareGenerationForExperimentRunID(start GenerationStart, runID string) GenerationStart {
 	seed := cloneGenerationStart(start)
-
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
 		return seed
 	}
-
 	tags := cloneTags(seed.Tags)
 	if tags == nil {
 		tags = map[string]string{}
 	}
 	tags[ExperimentRunIDTag] = runID
 	seed.Tags = tags
-
 	metadata := cloneMetadata(seed.Metadata)
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
 	metadata[ExperimentRunIDMetadataKey] = runID
 	seed.Metadata = metadata
-
 	return seed
 }
 
-func (r *ExperimentRun) buildScoreItem(score ScoreOutput, item *DatasetItem, generationIDs []string, conversationID string, trialID string) (ScoreItem, error) {
-	generationID := strings.TrimSpace(score.GenerationID)
-	if generationID == "" {
-		if len(generationIDs) == 1 {
-			generationID = generationIDs[0]
-		} else if len(generationIDs) > 1 {
-			return ScoreItem{}, fmt.Errorf("%w: target produced multiple generations; scorer %q must set ScoreOutput.GenerationID explicitly", ErrScoreValidationFailed, score.EvaluatorID)
+type TrialOption func(*Trial)
+
+func WithTrialAttempt(attempt int) TrialOption {
+	return func(t *Trial) {
+		if attempt > 0 {
+			t.ref.Attempt = attempt
+			t.trialID = StableID("trial", t.ref.ExperimentID, t.ref.TestCaseID, t.ref.Attempt)
+			t.generationID = StableID("gen", t.ref.ExperimentID, t.ref.TestCaseID, t.ref.Attempt)
 		}
 	}
-	scoreItemID := ""
-	if item != nil {
-		scoreItemID = item.ID
-	}
-	scoreID := StableID("score", r.RunID, scoreItemID, generationID, score.EvaluatorID, score.EvaluatorVersion, score.ScoreKey, trialID)
-	return ScoreItem{
-		ScoreID:          scoreID,
-		GenerationID:     generationID,
-		ConversationID:   strings.TrimSpace(conversationID),
-		RunID:            r.RunID,
-		EvaluatorID:      score.EvaluatorID,
-		EvaluatorVersion: score.EvaluatorVersion,
-		ScoreKey:         score.ScoreKey,
-		Value:            score.Value,
-		Passed:           score.Passed,
-		Explanation:      score.Explanation,
-		Metadata:         r.scoreMetadata(score, item, trialID),
-		Source:           &ScoreSource{Kind: "experiment", ID: r.RunID},
-	}, nil
 }
 
-func (r *ExperimentRun) scoreMetadata(score ScoreOutput, item *DatasetItem, trialID string) map[string]any {
+func WithTrialMetadata(metadata map[string]any) TrialOption {
+	return func(t *Trial) {
+		maps.Copy(t.metadata, metadata)
+	}
+}
+
+func WithTrialDefaultEvaluator(evaluator Evaluator) TrialOption {
+	return func(t *Trial) {
+		t.defaultEvaluator = evaluator.normalized()
+	}
+}
+
+type Trial struct {
+	client *Client
+	ref    TrialRef
+
+	experiment       *ExperimentRun
+	candidate        *Candidate
+	defaultEvaluator Evaluator
+	metadata         map[string]any
+
+	trialID        string
+	status         TrialStatus
+	conversationID string
+	traceID        string
+	spanID         string
+	errorText      string
+	generationID   string
+
+	generationBound    bool
+	generationExported bool
+	hasGeneration      bool
+	io                 map[string]any
+	trialCreated       bool
+	usage              map[string]any
+	started            time.Time
+
+	buffer      []ScoreItem
+	accepted    int
+	hasFinal    bool
+	finalPassed *bool
+	artifacts   []map[string]any
+}
+
+func NewTrial(client *Client, ref TrialRef, opts ...TrialOption) *Trial {
+	if ref.Attempt == 0 {
+		ref.Attempt = 1
+	}
+	t := &Trial{
+		client:           client,
+		ref:              ref,
+		defaultEvaluator: Evaluator{EvaluatorID: "sdk", Version: "0", Kind: EvaluatorKindCustom},
+		metadata:         map[string]any{},
+		trialID:          StableID("trial", ref.ExperimentID, ref.TestCaseID, ref.Attempt),
+		status:           TrialStatusRunning,
+		generationID:     StableID("gen", ref.ExperimentID, ref.TestCaseID, ref.Attempt),
+		io:               map[string]any{},
+		usage:            map[string]any{},
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(t)
+		}
+	}
+	return t
+}
+
+func NewTrialFromRef(client *Client, ref *TrialRef, opts ...TrialOption) (*Trial, error) {
+	if ref == nil {
+		return nil, fmt.Errorf("%w: trial ref is required; set SIGIL_EXPERIMENT_ID and SIGIL_TEST_CASE_ID", ErrExperimentValidationFailed)
+	}
+	return NewTrial(client, *ref, opts...), nil
+}
+
+func (t *Trial) Start(ctx context.Context) error {
+	if t == nil || t.client == nil {
+		return ErrNilClient
+	}
+	t.started = time.Now()
+	return t.createTrial(ctx)
+}
+
+func (t *Trial) End(ctx context.Context, err error) error {
+	if t == nil {
+		return ErrNilClient
+	}
+	if err != nil && t.status == TrialStatusRunning {
+		t.status = TrialStatusErrored
+		t.errorText = err.Error()
+	} else if t.status == TrialStatusRunning {
+		if t.hasFinal {
+			if t.finalPassed != nil && *t.finalPassed {
+				t.status = TrialStatusPassed
+			} else {
+				t.status = TrialStatusFailed
+			}
+		} else {
+			t.status = TrialStatusFailed
+			t.errorText = "trial exited without a final score"
+		}
+	}
+	_, flushErr := t.Flush(ctx)
+	finalizeErr := t.finalizeTrial(ctx)
+	if flushErr != nil {
+		return flushErr
+	}
+	return finalizeErr
+}
+
+func (t *Trial) createTrial(ctx context.Context) error {
+	if t.trialCreated {
+		return nil
+	}
 	metadata := map[string]any{}
-	if item != nil {
-		maps.Copy(metadata, item.Metadata)
+	if t.ref.TestCaseName != "" {
+		metadata["test_case_name"] = t.ref.TestCaseName
 	}
-	maps.Copy(metadata, score.Metadata)
-	if id, ok := stringMetadataValue(r.dataset, "id"); ok {
-		metadata["dataset_id"] = id
+	if len(metadata) == 0 {
+		metadata = nil
 	}
-	if version, ok := stringMetadataValue(r.dataset, "version"); ok {
-		metadata["dataset_version"] = version
+	_, err := t.client.UpsertTrial(ctx, t.ref.ExperimentID, UpsertTrialRequest{
+		TrialID:        t.trialID,
+		TestCaseID:     t.ref.TestCaseID,
+		Attempt:        t.ref.Attempt,
+		Status:         string(TrialStatusRunning),
+		ConversationID: t.conversationID,
+		TraceID:        t.traceID,
+		SpanID:         t.spanID,
+		Metadata:       metadata,
+	})
+	if err != nil {
+		return err
 	}
-	if len(r.candidate) > 0 {
-		metadata["candidate"] = cloneMetadata(r.candidate)
-	}
-	if item != nil {
-		metadata["item_id"] = item.ID
-	}
-	if strings.TrimSpace(trialID) != "" {
-		metadata["trial_id"] = strings.TrimSpace(trialID)
-	}
-	return metadata
+	t.trialCreated = true
+	return nil
 }
 
-func runMetadata(metadata, dataset, candidate map[string]any) map[string]any {
-	out := cloneMetadata(metadata)
-	if out == nil {
-		out = map[string]any{}
+func (t *Trial) finalizeTrial(ctx context.Context) error {
+	if !t.trialCreated {
+		return nil
 	}
-	if id, ok := stringMetadataValue(dataset, "id"); ok {
-		if _, exists := out["dataset_id"]; !exists {
-			out["dataset_id"] = id
+	backendStatus := "completed"
+	if t.status == TrialStatusErrored {
+		backendStatus = "failed"
+	}
+	req := UpdateTrialRequest{
+		Status:         backendStatus,
+		Error:          t.errorText,
+		ConversationID: t.conversationID,
+		TraceID:        t.traceID,
+	}
+	if v, ok := t.usage["cost"].(float64); ok {
+		req.Cost = &v
+	}
+	if v, ok := t.usage["input_tokens"].(int); ok {
+		req.InputTokens = &v
+	}
+	if v, ok := t.usage["output_tokens"].(int); ok {
+		req.OutputTokens = &v
+	}
+	if !t.started.IsZero() {
+		ms := int(time.Since(t.started).Milliseconds())
+		req.DurationMillis = &ms
+	}
+	_, err := t.client.UpdateTrial(ctx, t.ref.ExperimentID, t.trialID, req)
+	return err
+}
+
+func (t *Trial) BindTrace(traceID, spanID string) *Trial {
+	t.traceID = strings.TrimSpace(traceID)
+	t.spanID = strings.TrimSpace(spanID)
+	return t
+}
+
+func (t *Trial) BindConversation(conversationID string) *Trial {
+	t.conversationID = strings.TrimSpace(conversationID)
+	return t
+}
+
+func (t *Trial) BindGeneration(generationID, conversationID string) *Trial {
+	generationID = strings.TrimSpace(generationID)
+	if generationID != "" {
+		t.generationID = generationID
+		t.generationBound = true
+		t.generationExported = true
+		t.hasGeneration = true
+	}
+	if strings.TrimSpace(conversationID) != "" {
+		t.conversationID = strings.TrimSpace(conversationID)
+	}
+	return t
+}
+
+type RecordIOOptions struct {
+	Input         any
+	Output        any
+	ModelProvider string
+	ModelName     string
+	AgentName     string
+	InputTokens   *int
+	OutputTokens  *int
+}
+
+func (t *Trial) RecordIO(opts RecordIOOptions) *Trial {
+	t.hasGeneration = true
+	if t.conversationID == "" {
+		t.conversationID = StableID("conv", t.ref.ExperimentID, t.ref.TestCaseID, t.ref.Attempt)
+	}
+	if opts.Input != nil {
+		t.io["input_text"] = fmt.Sprint(opts.Input)
+	}
+	if opts.Output != nil {
+		t.io["output_text"] = fmt.Sprint(opts.Output)
+	}
+	if opts.ModelProvider != "" {
+		t.io["model_provider"] = opts.ModelProvider
+	}
+	if opts.ModelName != "" {
+		t.io["model_name"] = opts.ModelName
+	}
+	if opts.AgentName != "" {
+		t.io["agent_name"] = opts.AgentName
+	}
+	if opts.InputTokens != nil {
+		t.io["input_tokens"] = *opts.InputTokens
+	}
+	if opts.OutputTokens != nil {
+		t.io["output_tokens"] = *opts.OutputTokens
+	}
+	return t
+}
+
+func (t *Trial) SetUsage(inputTokens, outputTokens *int, cost *float64) *Trial {
+	if inputTokens != nil {
+		t.usage["input_tokens"] = *inputTokens
+	}
+	if outputTokens != nil {
+		t.usage["output_tokens"] = *outputTokens
+	}
+	if cost != nil {
+		t.usage["cost"] = *cost
+	}
+	return t
+}
+
+type ScoreOptions struct {
+	Evaluator            *Evaluator
+	Passed               *bool
+	Explanation          string
+	GenerationID         string
+	GraderConversationID string
+	GraderGenerationID   string
+	GraderTraceID        string
+	Metadata             map[string]any
+}
+
+func (t *Trial) Score(scoreKey string, value ScoreValue, opts ScoreOptions) ScoreItem {
+	ev := t.defaultEvaluator
+	if opts.Evaluator != nil {
+		ev = opts.Evaluator.normalized()
+	}
+	scoreID := StableID("score", t.ref.ExperimentID, t.trialID, scoreKey, ev.EvaluatorID)
+	metadata := map[string]any{
+		"task_id":  t.ref.TestCaseID,
+		"trial_id": t.trialID,
+		"attempt":  t.ref.Attempt,
+	}
+	maps.Copy(metadata, t.metadata)
+	maps.Copy(metadata, opts.Metadata)
+	generationID := strings.TrimSpace(opts.GenerationID)
+	if generationID == "" && t.hasGeneration {
+		generationID = t.generationID
+	}
+	item := ScoreItem{
+		ScoreID:              scoreID,
+		EvaluatorID:          ev.EvaluatorID,
+		EvaluatorVersion:     ev.Version,
+		EvaluatorKind:        string(ev.Kind),
+		ScoreKey:             scoreKey,
+		Value:                value,
+		GenerationID:         generationID,
+		TrialID:              t.trialID,
+		ConversationID:       t.conversationID,
+		TraceID:              t.traceID,
+		SpanID:               t.spanID,
+		ExperimentID:         t.ref.ExperimentID,
+		TestCaseID:           t.ref.TestCaseID,
+		GraderConversationID: opts.GraderConversationID,
+		GraderGenerationID:   opts.GraderGenerationID,
+		GraderTraceID:        opts.GraderTraceID,
+		Passed:               opts.Passed,
+		Explanation:          opts.Explanation,
+		Metadata:             metadata,
+		Source:               &ScoreSource{Kind: "experiment", ID: t.ref.ExperimentID},
+	}
+	t.buffer = append(t.buffer, item)
+	if scoreKey == "final" {
+		t.hasFinal = true
+		t.finalPassed = opts.Passed
+	}
+	return item
+}
+
+func (t *Trial) FinalScore(value ScoreValue, opts ScoreOptions) ScoreItem {
+	if opts.Passed == nil && value.Bool != nil {
+		passed := *value.Bool
+		opts.Passed = &passed
+	}
+	if opts.Passed == nil && value.Number != nil {
+		passed := *value.Number > 0
+		opts.Passed = &passed
+	}
+	return t.Score("final", value, opts)
+}
+
+func (t *Trial) CheckScore(name string, passed bool, opts ScoreOptions) ScoreItem {
+	if opts.Evaluator == nil {
+		ev := Evaluator{
+			EvaluatorID: t.defaultEvaluator.EvaluatorID + "." + name,
+			Version:     t.defaultEvaluator.Version,
+			Kind:        EvaluatorKindDeterministic,
+		}
+		opts.Evaluator = &ev
+	}
+	opts.Passed = &passed
+	return t.Score(name, BoolScoreValue(passed), opts)
+}
+
+func (t *Trial) RubricScore(name string, value ScoreValue, opts ScoreOptions) ScoreItem {
+	if opts.Evaluator == nil {
+		ev := Evaluator{
+			EvaluatorID: t.defaultEvaluator.EvaluatorID + "." + name,
+			Version:     t.defaultEvaluator.Version,
+			Kind:        EvaluatorKindLLMJudge,
+		}
+		opts.Evaluator = &ev
+	}
+	return t.Score(name, value, opts)
+}
+
+type ArtifactOptions struct {
+	Name    string
+	Kind    string
+	MIME    string
+	Content []byte
+	Data    any
+	Text    string
+}
+
+func (t *Trial) Artifact(ctx context.Context, opts ArtifactOptions) (*TrialArtifact, error) {
+	content := opts.Content
+	kind := opts.Kind
+	mime := opts.MIME
+	if len(content) == 0 && opts.Data != nil {
+		raw, err := json.Marshal(opts.Data)
+		if err != nil {
+			return nil, err
+		}
+		content = raw
+		if kind == "" {
+			kind = "json"
+		}
+		if mime == "" {
+			mime = "application/json"
 		}
 	}
-	if version, ok := stringMetadataValue(dataset, "version"); ok {
-		if _, exists := out["dataset_version"]; !exists {
-			out["dataset_version"] = version
+	if len(content) == 0 && opts.Text != "" {
+		content = []byte(opts.Text)
+		if kind == "" {
+			kind = "text"
+		}
+		if mime == "" {
+			mime = "text/plain"
 		}
 	}
-	if uri, ok := stringMetadataValue(dataset, "uri"); ok {
-		if _, exists := out["dataset_uri"]; !exists {
-			out["dataset_uri"] = uri
+	record, err := t.client.UploadTrialArtifact(ctx, t.ref.ExperimentID, t.trialID, TrialArtifactUpload{
+		Name:    opts.Name,
+		Kind:    kind,
+		MIME:    mime,
+		Content: content,
+	})
+	if err != nil {
+		return nil, err
+	}
+	artifactID := ""
+	if record != nil {
+		artifactID = record.ArtifactID
+	}
+	t.artifacts = append(t.artifacts, map[string]any{"name": opts.Name, "kind": kind, "artifact_id": artifactID})
+	return record, nil
+}
+
+func (t *Trial) Succeed() *Trial {
+	t.status = TrialStatusPassed
+	return t
+}
+
+func (t *Trial) Fail(errorText string) *Trial {
+	t.status = TrialStatusFailed
+	if errorText != "" {
+		t.errorText = errorText
+	}
+	return t
+}
+
+func (t *Trial) ensureGeneration(ctx context.Context) error {
+	if t.generationExported || t.generationBound || len(t.io) == 0 {
+		return nil
+	}
+	caseInput := ""
+	if t.experiment != nil && t.experiment.Suite != nil {
+		if tc := t.experiment.Suite.Case(t.ref.TestCaseID); tc != nil && tc.Input != nil {
+			caseInput = fmt.Sprint(tc.Input)
 		}
 	}
-	if len(candidate) > 0 {
-		if _, exists := out["candidate"]; !exists {
-			out["candidate"] = cloneMetadata(candidate)
+	provider := firstNonBlank(firstString(t.io["model_provider"]), candidateModelProvider(t.candidate), "eval")
+	model := firstNonBlank(firstString(t.io["model_name"]), candidateModelName(t.candidate), "experiment")
+	agentName := firstNonBlank(firstString(t.io["agent_name"]), candidateAgentName(t.candidate))
+	ctx, recorder := t.client.StartGeneration(ctx, GenerationStart{
+		ID:             t.generationID,
+		ConversationID: t.conversationID,
+		Model:          ModelRef{Provider: provider, Name: model},
+		AgentName:      agentName,
+		OperationName:  "invoke_agent",
+		Tags:           map[string]string{"experiment.run_id": t.ref.ExperimentID, "task_id": t.ref.TestCaseID},
+		Metadata: map[string]any{
+			"experiment_run_id": t.ref.ExperimentID,
+			"task_id":           t.ref.TestCaseID,
+			"trial_id":          t.trialID,
+			"attempt":           t.ref.Attempt,
+		},
+	})
+	usage := TokenUsage{}
+	if v, ok := t.io["input_tokens"].(int); ok {
+		usage.InputTokens = int64(v)
+	}
+	if v, ok := t.io["output_tokens"].(int); ok {
+		usage.OutputTokens = int64(v)
+	}
+	recorder.SetResult(Generation{
+		ID:             t.generationID,
+		ConversationID: t.conversationID,
+		Model:          ModelRef{Provider: provider, Name: model},
+		AgentName:      agentName,
+		Input:          textMessages(RoleUser, firstNonBlank(firstString(t.io["input_text"]), caseInput)),
+		Output:         textMessages(RoleAssistant, firstString(t.io["output_text"])),
+		Usage:          usage,
+	}, nil)
+	recorder.End()
+	if err := recorder.Err(); err != nil {
+		return err
+	}
+	if err := t.client.Flush(ctx); err != nil {
+		return err
+	}
+	t.generationExported = true
+	return nil
+}
+
+func (t *Trial) Flush(ctx context.Context) (int, error) {
+	if t == nil || t.client == nil {
+		return 0, ErrNilClient
+	}
+	if len(t.buffer) == 0 {
+		return 0, nil
+	}
+	if err := t.ensureGeneration(ctx); err != nil {
+		return 0, err
+	}
+	pending := append([]ScoreItem(nil), t.buffer...)
+	response, err := t.client.ExportScores(ctx, pending)
+	if err != nil {
+		return 0, err
+	}
+	accepted, err := acceptedOrError(response)
+	if err != nil {
+		return 0, err
+	}
+	t.buffer = t.buffer[len(pending):]
+	t.accepted += accepted
+	if t.experiment != nil {
+		t.experiment.recordAccepted(accepted)
+	}
+	return accepted, nil
+}
+
+func (t *Trial) AcceptedScores() int {
+	if t == nil {
+		return 0
+	}
+	return t.accepted
+}
+
+func StableID(prefix string, parts ...any) string {
+	values := make([]string, len(parts))
+	for i, part := range parts {
+		if part != nil {
+			values[i] = fmt.Sprint(part)
 		}
 	}
-	if _, exists := out["created_at"]; !exists {
-		out["created_at"] = time.Now().UTC().Format(time.RFC3339)
-	}
-	return out
+	digest := sha1.Sum([]byte(strings.Join(values, "\x1f")))
+	return prefix + "-" + hex.EncodeToString(digest[:])[:16]
 }
 
 func acceptedOrError(response *ExportScoresResponse) (int, error) {
@@ -668,7 +1122,7 @@ func acceptedOrError(response *ExportScoresResponse) (int, error) {
 	}
 	rejected := response.Rejected()
 	if len(rejected) == 0 {
-		return response.AcceptedCount(), nil
+		return response.AcceptedCount() + response.DuplicateCount(), nil
 	}
 	parts := make([]string, len(rejected))
 	for i, result := range rejected {
@@ -679,22 +1133,6 @@ func acceptedOrError(response *ExportScoresResponse) (int, error) {
 		parts[i] = result.ScoreID + ": " + detail
 	}
 	return 0, fmt.Errorf("%w: rejected %d score(s): %s", ErrScoreExportFailed, len(rejected), strings.Join(parts, "; "))
-}
-
-func stringMetadataValue(metadata map[string]any, key string) (string, bool) {
-	if len(metadata) == 0 {
-		return "", false
-	}
-	value, ok := metadata[key]
-	if !ok {
-		return "", false
-	}
-	text, ok := value.(string)
-	if !ok {
-		return "", false
-	}
-	text = strings.TrimSpace(text)
-	return text, text != ""
 }
 
 func experimentRandomHex(n int) string {
@@ -708,10 +1146,6 @@ func experimentRandomHex(n int) string {
 	return hex.EncodeToString(buf)
 }
 
-func containsString(values []string, target string) bool {
-	return slices.Contains(values, target)
-}
-
 func firstNonBlank(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -721,6 +1155,49 @@ func firstNonBlank(values ...string) string {
 	return ""
 }
 
-func errorsIsContextCanceled(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+func firstString(values ...any) string {
+	for _, value := range values {
+		switch typed := value.(type) {
+		case string:
+			if typed != "" {
+				return typed
+			}
+		case fmt.Stringer:
+			if typed.String() != "" {
+				return typed.String()
+			}
+		}
+	}
+	return ""
+}
+
+func textMessages(role Role, text string) []Message {
+	if text == "" {
+		return nil
+	}
+	if role == RoleAssistant {
+		return []Message{AssistantTextMessage(text)}
+	}
+	return []Message{UserTextMessage(text)}
+}
+
+func candidateModelProvider(c *Candidate) string {
+	if c == nil {
+		return ""
+	}
+	return c.ModelProvider
+}
+
+func candidateModelName(c *Candidate) string {
+	if c == nil {
+		return ""
+	}
+	return c.ModelName
+}
+
+func candidateAgentName(c *Candidate) string {
+	if c == nil {
+		return ""
+	}
+	return c.AgentName
 }
