@@ -124,7 +124,6 @@ The experiments are offline evals: run an agent over a dataset, grade it, and pu
 | Stack | Example |
 |-------|---------|
 | Python | [`examples/experiments/python/`](examples/experiments/python/) |
-| Python + LangGraph | [`examples/experiments/python-langgraph/`](examples/experiments/python-langgraph/) |
 | Go | [`examples/experiments/go/`](examples/experiments/go/) |
 
 The reference app is a fuller FastAPI service with framework callbacks and manual instrumentation side by side.

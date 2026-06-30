@@ -17,6 +17,7 @@ def _check_no_env(cfg: ClientConfig) -> None:
     assert cfg.generation_export.auth.mode == "none"
     assert cfg.agent_name == ""
     assert cfg.debug is False
+    assert cfg.use_experimental_otel is False
 
 
 def _check_transport(cfg: ClientConfig) -> None:
@@ -49,6 +50,10 @@ def _check_content_capture_metadata(cfg: ClientConfig) -> None:
 
 def _check_content_capture_full_with_metadata_spans(cfg: ClientConfig) -> None:
     assert cfg.content_capture == ContentCaptureMode.FULL_WITH_METADATA_SPANS
+
+
+def _check_experimental_otel(cfg: ClientConfig) -> None:
+    assert cfg.use_experimental_otel is True
 
 
 def _check_invalid_auth_mode_preserves_valid(cfg: ClientConfig) -> None:
@@ -104,6 +109,11 @@ def _check_stray_tenant_does_not_error(cfg: ClientConfig) -> None:
             {"SIGIL_CONTENT_CAPTURE_MODE": "full_with_metadata_spans"},
             _check_content_capture_full_with_metadata_spans,
             id="full_with_metadata_spans content capture mode from env",
+        ),
+        pytest.param(
+            {"SIGIL_USE_EXPERIMENTAL_OTEL": "true"},
+            _check_experimental_otel,
+            id="experimental otel opt-in from env",
         ),
         pytest.param(
             {

@@ -1,276 +1,167 @@
 ---
 name: sigil-experiments
 description: >-
-  Run any Python LLM agent as a Sigil offline-evaluation experiment using the
-  core sigil-sdk (no framework adapter required): record generations, run over a
-  dataset (or A/B two versions), grade locally, and publish scores to Sigil. Use
-  when a user wants to evaluate/compare agent runs, gate a PR on agent quality,
-  or upload an old eval run to Sigil and is NOT using a supported framework
-  adapter (LangGraph, LangChain, etc.) — for those, prefer the framework skill.
+  Run any Python LLM agent as a Sigil experiment using the public
+  sigil_sdk.experiments package: define a test suite, run an existing agent
+  through typed trials, bind or record generation I/O, grade outputs, and
+  publish scores to Grafana Cloud Sigil with one ingestion API key.
 ---
 
-# Sigil experiments (framework-free)
+# Sigil experiments
 
-You are a coding agent adding **experiment tracking** to a Python project using
-the core `sigil-sdk` only — no framework adapter. Keep changes minimal and ride
-on the existing generation instrumentation (`client.start_generation(...)`). The
-flow is generation-first and publishes continuously: create the run, then per
-item run the agent (recording generations tagged with the `run_id`), grade, and
-export scores under the same `run_id`.
+Use this skill when adding framework-free offline evaluation to a Python project.
+The public SDK surface is `sigil_sdk.experiments`; do not use removed v0 runner
+APIs.
 
-Sigil is a Grafana Cloud-only product for user-facing setup. Do not suggest
-non-Cloud or development-only endpoints in docs, examples, or generated
-instructions. Use the Grafana Cloud API URL from AI Observability configuration
-and Cloud `basic` auth.
+The normal setup cost for an already instrumented agent should be small:
 
-If the project already uses a supported framework (LangGraph, LangChain, OpenAI
-Agents, LlamaIndex, Strands, Google ADK, LiteLLM), prefer that framework's
-experiments skill — it auto-captures generation ids from the framework callback.
-This skill is the generic fallback that works with raw SDK recording.
+1. Import `sigil_sdk.experiments` as `sigil`.
+2. Define a `TestSuite` with `TestCase`s.
+3. Wrap the existing agent call in `with exp.trial(case) as trial:`.
+4. Bind the generation/conversation ids your normal instrumentation already
+   produced, or call `trial.record_io(...)` when the harness owns the call.
+5. Emit one final score and any supporting scores.
 
 ## Setup
 
 ```bash
-pip install "sigil-sdk>=0.7.0"
+pip install "sigil-sdk>=0.9.0"
 ```
 
-Configure the client from env (works in CI):
+Required environment:
 
-```python
-import os
-from sigil_sdk import ApiConfig, AuthConfig, Client, ClientConfig, GenerationExportConfig
+```bash
+export SIGIL_ENDPOINT=https://sigil-prod-<region>.grafana.net
+export SIGIL_AUTH_TOKEN=<grafana-cloud-ingestion-api-key>
 
-endpoint = os.environ["SIGIL_ENDPOINT"].rstrip("/")
-client = Client(
-    ClientConfig(
-        api=ApiConfig(endpoint=endpoint),
-        generation_export=GenerationExportConfig(
-            protocol="http",
-            endpoint=f"{endpoint}/api/v1/generations:export",
-            auth=AuthConfig(
-                mode="basic",
-                tenant_id=os.environ["SIGIL_AUTH_TENANT_ID"],
-                basic_password=os.environ["SIGIL_AUTH_TOKEN"],
-            ),
-        ),
-    )
-)
+# Optional when the endpoint requires tenant-scoped basic auth.
+export SIGIL_AUTH_TENANT_ID=<stack-id>
+
+# Optional UI host for deep links when it differs from SIGIL_ENDPOINT.
+export SIGIL_GRAFANA_URL=https://<your-stack>.grafana.net
 ```
 
-For Grafana Cloud experiments, also set `SIGIL_EVAL_ENDPOINT`,
-`SIGIL_EVAL_PATH_PREFIX=/api/plugins/grafana-sigil-app/resources`, and
-`SIGIL_EVAL_AUTH_TOKEN` so the experiment lifecycle uses the Grafana plugin
-resource proxy.
+Experiment ingest uses the Cloud ingestion API key. Do not add a separate
+control-plane URL or eval API key.
 
-## Pattern 1 — Run a new experiment over a dataset (recommended)
-
-Use `ExperimentRunner`. You supply a **dataset**, a **target** (run your agent,
-recording its generation(s) via `run.start_generation(...)`), and one or more
-**scorers** (return typed `ScoreOutput`s). The runner creates the run, tags every
-generation with the `run_id`, grades, publishes scores, finalizes, and prints a
-link.
+Experimental OTel eval spans/events are disabled by default. Opt in only when
+asked:
 
 ```python
-from sigil_sdk import (
-    DatasetItem, ExperimentRun, ExperimentRunner, Generation, GenerationStart,
-    ModelRef, ScoreOutput, ScoreValue, TargetResult, assistant_text_message,
-    user_text_message,
+with sigil.experiment("nightly", use_experimental_otel=True) as exp:
+    ...
+```
+
+## Recommended Pattern
+
+```python
+from sigil_sdk import experiments as sigil
+
+suite = sigil.TestSuite(
+    suite_id="smoke",
+    name="Smoke",
+    version="2026-06-29",
+    test_cases=[
+        sigil.TestCase(test_case_id="capital-fr", input="Capital of France?", expected="Paris"),
+    ],
 )
+verifier = sigil.Evaluator(evaluator_id="exact_match", version="2026-06-29", kind="deterministic")
 
-dataset = [
-    DatasetItem(id="capital-fr", input="Capital of France?", expected="Paris",
-                metadata={"task_id": "capital", "task_category": "trivia"}),
-    # ...
-]
-
-def target(item, run):
-    # IMPORTANT: record the agent's call through run.start_generation(...) so the
-    # generation carries the experiment run_id and its id is captured for scoring.
-    with run.start_generation(GenerationStart(
-        model=ModelRef(provider="openai", name="gpt-4o-mini"),
-    )) as rec:
-        answer = call_your_agent(item.input)  # your code: returns the model output
-        rec.set_result(Generation(
-            model=ModelRef(provider="openai", name="gpt-4o-mini"),
-            input=[user_text_message(str(item.input))],
-            output=[assistant_text_message(answer)],
-        ))
-    return TargetResult(output=answer)  # generation ids captured automatically
-
-def exact_match(item, result):
-    passed = str(item.expected).lower() in str(result.output).lower()
-    return [ScoreOutput(
-        evaluator_id="my_suite.exact_match", evaluator_version="2026-05-30",
-        score_key="exact_match", value=ScoreValue(number=1.0 if passed else 0.0),
-        passed=passed, explanation=f"expected '{item.expected}', got '{result.output}'",
-    )]
-
-runner = ExperimentRunner(
-    client=client,
-    run_id=f"pr-{os.environ.get('GIT_SHA', 'local')}",  # stable id => idempotent retries
-    name="PR experiment",
-    dataset={"id": "my_dataset", "version": "2026-05-30"},
-    candidate={"git_sha": os.environ.get("GIT_SHA", "local")},
+with sigil.experiment(
+    "PR experiment",
+    experiment_id=f"pr-{git_sha}",
+    suite=suite,
+    candidate={"git_sha": git_sha, "model_name": "gpt-4o-mini"},
     tags=["ci"],
-    agent_name="my-agent",
+) as exp:
+    for case in suite.test_cases:
+        with exp.trial(case) as trial:
+            answer = call_your_agent(case.input)
+
+            # If normal instrumentation already created a conversation/generation,
+            # bind those ids instead of recording duplicate I/O.
+            # trial.bind_conversation(conversation_id)
+            # trial.bind_generation(generation_id, conversation_id=conversation_id)
+            trial.record_io(
+                input=case.input,
+                output=answer,
+                model_provider="openai",
+                model_name="gpt-4o-mini",
+            )
+
+            passed = str(case.expected).lower() in answer.lower()
+            trial.final_score(
+                1.0 if passed else 0.0,
+                passed=passed,
+                explanation=f"expected {case.expected!r}, got {answer!r}",
+                evaluator=verifier,
+            )
+
+print(exp.url)
+```
+
+The context manager upserts the run on enter, creates a typed trial per case,
+exports buffered scores when each trial exits, and finalizes the run as
+`completed` or `failed`.
+
+## Scoring
+
+Use `trial.final_score(...)` for the headline result. Add supporting scores with
+`trial.check_score(...)`, `trial.rubric_score(...)`, or `trial.score(...)`.
+
+```python
+trial.check_score("json_valid", passed=is_valid_json(answer))
+trial.rubric_score("helpfulness", 0.82, explanation="Useful but missed one constraint")
+```
+
+An LLM judge is just another model call plus a score. If the judge call should be
+auditable, instrument it normally or record it as generation I/O before emitting
+the score.
+
+```python
+verdict = call_judge(case.input, answer)
+trial.rubric_score(
+    "correctness",
+    verdict["score"],
+    passed=verdict["score"] >= 0.7,
+    explanation=verdict["reason"],
+    evaluator=sigil.Evaluator(evaluator_id="judge.correctness", version="2026-06-29", kind="llm_judge"),
 )
-result = runner.run(dataset, target, [exact_match])
-print(result.url)
-if result.report and result.report.summary.pass_rate < 0.9:
-    raise SystemExit(1)  # gate the PR
 ```
 
-**A/B testing**: run two `ExperimentRunner`s with different `run_id`/`tags`
-(e.g. `candidate={"prompt":"v1"}` vs `"v2"`) over the same dataset and scorers,
-then compare the two runs in the Sigil UI.
+## Cross-Process Evaluation
 
-## Pattern 2 — Lower-level context manager
-
-When you want to drive the loop yourself (custom ordering, multiple calls per
-item, streaming), use `experiment(...)`:
+Use `TrialRef` when a verifier runs in a separate process or container.
 
 ```python
-from sigil_sdk import experiment
-
-with experiment(client=client, run_id="run-123", name="manual loop",
-                agent_name="my-agent") as run:
-    for item in dataset:
-        run.reset_capture(conversation_id=f"conv-{item.id}")  # one conversation per item
-        with run.start_generation(GenerationStart(model=ModelRef(provider="openai", name="gpt-4o-mini"))) as rec:
-            answer = call_your_agent(item.input)
-            rec.set_result(Generation(output=[assistant_text_message(answer)]))
-        run.add_scores(my_scores(item, answer), item=item,
-                       generation_ids=run.produced_generation_ids)
-# on exit: succeeded; on exception: failed; on Ctrl-C: canceled (all automatic)
+ref = trial.ref
+env = ref.to_env()
 ```
 
-If you record generations somewhere the run can't see (e.g. a provider wrapper),
-call `run.track_generation_id(gen_id)` so scores still attach automatically.
-
-## LLM-as-judge scorer (optional)
-
-A judge is just a scorer that calls a model. Record the judge's own call as a
-Sigil generation so the grade is auditable:
+In the verifier:
 
 ```python
-def llm_judge(item, result):
-    prompt = f"Question: {item.input}\nAnswer: {result.output}\nScore 0-1 for correctness."
-    with client.start_generation(GenerationStart(
-        model=ModelRef(provider="openai", name="gpt-4o-mini"),
-        agent_name="judge", operation_name="llm-judge",
-    )) as rec:
-        verdict = call_your_model(prompt)  # -> {"score": 0.8, "reason": "..."}
-        rec.set_result(Generation(
-            model=ModelRef(provider="openai", name="gpt-4o-mini"),
-            input=[user_text_message(prompt)],
-            output=[assistant_text_message(verdict["reason"])],
-        ))
-    return [ScoreOutput(
-        evaluator_id="llm_judge.correctness", evaluator_version="2026-05-30",
-        score_key="correctness", value=ScoreValue(number=verdict["score"]),
-        passed=verdict["score"] >= 0.5, explanation=verdict["reason"],
-    )]
-```
+from sigil_sdk import experiments as sigil
 
-## Pattern 3 — Upload an OLD experiment (no first-class importer yet)
-
-The first iteration has **no built-in uploader**. Simulate one by replaying
-stored transcripts conversation-by-conversation: create the run, then for each
-stored conversation export a generation, flush, and export its score.
-
-```python
-from sigil_sdk import (CreateExperimentRequest, Generation, GenerationStart, ModelRef,
-                       ScoreItem, ScoreSource, ScoreValue, assistant_text_message,
-                       stable_id, user_text_message)
-
-run_id = "backfill-2026-05-30"
-client.create_experiment(CreateExperimentRequest(
-    run_id=run_id, name="Backfilled run", source="external",
-    tags=["backfill"], metadata={"imported_from": "old_results.jsonl"}))
-
-accepted = 0
-try:
-    for row in load_old_results():  # your stored transcripts + grades
-        gen_id = stable_id("gen", run_id, row["id"])
-        conv_id = stable_id("conv", run_id, row["id"])
-        with client.start_generation(GenerationStart(
-            id=gen_id, conversation_id=conv_id,
-            model=ModelRef(provider=row["provider"], name=row["model"]),
-            agent_name=row.get("agent", "agent"),
-            tags={"experiment.run_id": run_id},
-            metadata={"experiment_run_id": run_id, "task_id": row["task_id"]},
-        )) as rec:
-            rec.set_result(Generation(
-                id=gen_id, conversation_id=conv_id,
-                model=ModelRef(provider=row["provider"], name=row["model"]),
-                input=[user_text_message(row["prompt"])],
-                output=[assistant_text_message(row["answer"])],
-            ))
-        client.flush()  # so strict score ingest can find the generation
-        resp = client.export_scores([ScoreItem(
-            score_id=stable_id("score", run_id, row["id"], "reward"),
-            generation_id=gen_id, conversation_id=conv_id, run_id=run_id,
-            evaluator_id="backfill.reward", evaluator_version="2026-05-30",
-            score_key="reward", value=ScoreValue(number=row["score"]),
-            passed=row["score"] >= 0.5, metadata={"task_id": row["task_id"]},
-            source=ScoreSource(kind="experiment", id=run_id),
-        )])
-        accepted += resp.accepted_count
-    client.complete_experiment(run_id, "succeeded", score_count=accepted)
-except Exception as exc:
-    client.complete_experiment(run_id, "failed", score_count=accepted, error=str(exc))
-    raise
-finally:
-    client.shutdown()
-```
-
-## Pattern 4 — Build a dataset from a Sigil collection
-
-Instead of hand-writing a dataset, pull one from an existing **collection** of
-saved conversations and re-run the agent from each conversation's *initial user
-prompt* (the "user-prompt kickoff"). `dataset_from_collection` lists the
-collection's members, fetches each conversation, and returns `DatasetItem`s
-keyed by the recovered prompt:
-
-```python
-from sigil_sdk import ExperimentRunner, dataset_from_collection
-
-collection_id = "0324f4c9-..."           # from `gcx aio11y collections list`
-dataset = dataset_from_collection(client, collection_id)  # -> list[DatasetItem]
-# item.input = initial user prompt; item.metadata has collection_id / conversation_id
-
-runner = ExperimentRunner(
-    client=client, run_id=run_id, name="collection replay",
-    collection_id=collection_id,         # links the run + adds a `collectionId:<id>` tag
+client = sigil.Client(
+    endpoint=os.environ["SIGIL_ENDPOINT"],
+    tenant_id=os.environ.get("SIGIL_AUTH_TENANT_ID", ""),
+    ingest_token=os.environ["SIGIL_AUTH_TOKEN"],
 )
-runner.run(dataset, target, [my_scorer]) # target re-runs the agent on item.input
+ref = sigil.TrialRef.from_env()
+if ref is None:
+    raise RuntimeError("missing Sigil trial environment")
+trial = sigil.Trial.from_ref(client, ref)
+trial.final_score(0.9, passed=True)
+trial.flush()
 ```
 
-Notes:
-- `mode="user_prompt"` (default) sets `input` to the initial prompt and leaves
-  `expected=None`. `mode="golden"` (capture the original answer as a reference
-  for an LLM-judge) is reserved and raises `NotImplementedError` for now.
-- Passing `collection_id` to `ExperimentRunner`/`experiment(...)` sets the run's
-  `collection_id`, adds a `collectionId:<id>` tag, and stamps `collection_id`
-  into the run metadata (durable even where the tag/field columns aren't yet
-  persisted), so the run is discoverable from the collection.
-- Reading collections/conversations uses the protected eval control plane (same
-  `SIGIL_EVAL_*` config as experiments). `limit=` caps how many members are
-  pulled; `skip_empty=False` keeps conversations with no recoverable prompt.
+## Gotchas
 
-## Rules / gotchas
-
-- Always record the agent's call through `run.start_generation(...)` (or call
-  `run.track_generation_id(...)`) — that is what tags generations with the
-  `run_id` and lets scores attach to them.
-- Use a **stable `run_id`** (e.g. derived from the git SHA) so CI retries are
-  idempotent; score IDs are derived deterministically too.
-- Always `flush()` before exporting scores (the runner does this for you).
-- Score metadata keys read by the Sigil report: `dataset_id`, `dataset_version`,
-  `item_id`, `task_id`, `task_category`, `trial_id`. The runner copies these from
-  the run spec and `DatasetItem.metadata` automatically.
-- Upload modes: `continuous` (default, publish per item), `bulk` (publish at the
-  end), `manual` (publish + finalize only when you call `run.publish()` /
-  `run.finalize()`). Users can delete experiments, so the default is to publish.
-- The run is finalized automatically: `succeeded` on clean exit, `failed` on
-  exception, `canceled` on Ctrl-C.
+- Use a stable `experiment_id` for CI retries.
+- Prefer binding existing conversation/generation ids when the agent is already
+  instrumented; use `record_io(...)` when the experiment harness is the only
+  instrumentation around the agent call.
+- Keep “offline evaluation” wording for batch eval workflows and UI routes.
+- The Grafana UI route is
+  `/a/grafana-sigil-app/offline-experiments/experiments/{experiment_id}`.

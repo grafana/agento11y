@@ -122,6 +122,7 @@ class ClientConfig:
     now: Callable[[], datetime] | None = None
     sleep: Callable[[float], None] | None = None
     generation_exporter: GenerationExporter | None = None
+    use_experimental_otel: bool | None = None
 
     # Default identity / tags merged into each GenerationStart when the per-call
     # field is unset. Read from SIGIL_AGENT_NAME / SIGIL_AGENT_VERSION /
@@ -130,6 +131,8 @@ class ClientConfig:
     agent_version: str | None = None
     user_id: str | None = None
     tags: dict[str, str] | None = None
+
+    ingest_actor: str | None = None
 
     # When True (and ``logger`` is not provided) the SDK constructs a default
     # logger at debug level. Read from ``SIGIL_DEBUG`` by ``resolve_config``.
@@ -257,6 +260,8 @@ def resolve_config(
         out.agent_version = _env(env, "SIGIL_AGENT_VERSION") or ""
     if out.user_id is None:
         out.user_id = _env(env, "SIGIL_USER_ID") or ""
+    if out.ingest_actor is None:
+        out.ingest_actor = _env(env, "SIGIL_INGEST_ACTOR") or ""
     # Merge env-derived tags as a base layer; caller tags win on key collision.
     # Matches Go and JS SDK behavior.
     ev = _env(env, "SIGIL_TAGS")
@@ -281,6 +286,9 @@ def resolve_config(
     if out.debug is None:
         ev = _env(env, "SIGIL_DEBUG")
         out.debug = _parse_bool(ev) if ev is not None else False
+    if out.use_experimental_otel is None:
+        ev = _env(env, "SIGIL_USE_EXPERIMENTAL_OTEL")
+        out.use_experimental_otel = _parse_bool(ev) if ev is not None else False
 
     if out.generation_export_endpoint:
         out.generation_export.endpoint = out.generation_export_endpoint

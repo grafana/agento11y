@@ -1,20 +1,18 @@
 [project]
 name = "sigil-experiment-example"
 version = "0.1.0"
-description = "Run a framework-free agent over a dataset as a Sigil experiment, grade locally, and publish scores."
+description = "Run a framework-free agent over a dataset as a Sigil experiment, grade outputs, and publish scores."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=0.40",
+    "matplotlib>=3.8",
     "python-dotenv>=1.0",
-    # Optional: only used when OPENAI_API_KEY is set. Otherwise a built-in dict
-    # of canned answers is used so the example runs offline.
-    "openai>=1.0",
-
-    "sigil-sdk>=0.7.0",
+    "sigil-sdk>=0.9.0",
 ]
 
 [tool.uv.sources]
-# Point at the local package in this monorepo so the example runs against the
+# Point at the workspace package in this monorepo so the example runs against the
 # code in this checkout. Remove this entry to consume the published PyPI release.
 sigil-sdk = { path = "../../../python", editable = true }
 

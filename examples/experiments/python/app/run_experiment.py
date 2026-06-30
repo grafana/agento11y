@@ -1,148 +1,139 @@
 """Run a framework-free agent over a dataset as a Sigil experiment.
 
-This is the shape a CI job or local script would take when you are NOT using a
-supported framework adapter (LangGraph, LangChain, ...):
+This is the shape a CI job or benchmark harness takes when your agent is already
+instrumented normally and you want to publish experiment results to Sigil:
 
-  1. Build a Sigil client pointed at the target stack.
-  2. Hand a dataset, a target (run the agent, recording its generation via
-     ``run.start_generation(...)``), and scorer(s) to the runner.
-  3. The runner creates the experiment, runs+grades each item, exports scores
-     attributed to the run, finalizes the run, and prints a link.
+  1. Open an experiment with the Grafana Cloud ingestion API key.
+  2. For each case, open a trial and run the agent.
+  3. Bind or record the real conversation/generation when available.
+  4. Emit scores and artifacts, then let the context managers flush/finalize.
 
-Config via env: SIGIL_ENDPOINT, SIGIL_AUTH_TENANT_ID, SIGIL_AUTH_TOKEN, RUN_ID,
-GIT_SHA. With no OPENAI_API_KEY the agent uses deterministic canned answers.
+Config via env: SIGIL_ENDPOINT, SIGIL_AUTH_TOKEN, optional SIGIL_AUTH_TENANT_ID,
+SIGIL_EXPERIMENT_ID, ANTHROPIC_API_KEY, AGENT_MODEL, GRADER_MODEL, GIT_SHA.
 """
 
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from sigil_sdk import (
-    ApiConfig,
-    AuthConfig,
-    Client,
-    ClientConfig,
-    DatasetItem,
-    ExperimentRun,
-    ExperimentRunner,
-    Generation,
-    GenerationExportConfig,
-    GenerationStart,
-    ModelRef,
-    ScoreOutput,
-    ScoreValue,
-    TargetResult,
-    assistant_text_message,
-    user_text_message,
-)
+from sigil_sdk import experiments as sigil
 
-from app.agent import answer_question
+from app.agent import answer_question, grade_answer
 
-DATASET: list[DatasetItem] = [
-    DatasetItem(
-        id="capital-france",
-        input="What is the capital of France?",
-        expected="Paris",
-        metadata={"task_id": "capital_lookup", "task_category": "trivia"},
-    ),
-    DatasetItem(
-        id="two-plus-two",
-        input="What is 2 + 2? Answer with just the number.",
-        expected="4",
-        metadata={"task_id": "arithmetic", "task_category": "math"},
-    ),
-    DatasetItem(
-        id="largest-planet",
-        input="What is the largest planet in our solar system?",
-        expected="Jupiter",
-        metadata={"task_id": "astronomy", "task_category": "trivia"},
-    ),
+
+@dataclass(frozen=True)
+class Case:
+    id: str
+    input: str
+    expected: str
+    category: str
+
+
+CASES: list[Case] = [
+    Case("capital-france", "What is the capital of France?", "Paris", "trivia"),
+    Case("two-plus-two", "What is 2 + 2? Answer with just the number.", "4", "math"),
+    Case("largest-planet", "What is the largest planet in our solar system?", "Jupiter", "trivia"),
 ]
-
-# Offline canned answers, keyed by question, used when OPENAI_API_KEY is unset.
-CANNED = {str(item.input): str(item.expected) for item in DATASET}
-
-
-def required_env(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if value == "":
-        raise RuntimeError(f"{name} is required; copy it from Grafana Cloud AI Observability")
-    return value
-
-
-def build_client() -> Client:
-    endpoint = required_env("SIGIL_ENDPOINT").rstrip("/")
-    tenant_id = required_env("SIGIL_AUTH_TENANT_ID")
-    auth_token = required_env("SIGIL_AUTH_TOKEN")
-    return Client(
-        ClientConfig(
-            api=ApiConfig(endpoint=endpoint),
-            generation_export=GenerationExportConfig(
-                protocol="http",
-                endpoint=f"{endpoint}/api/v1/generations:export",
-                auth=AuthConfig(mode="basic", tenant_id=tenant_id, basic_password=auth_token),
-            ),
-        )
-    )
-
-
-def target(item: DatasetItem, run: ExperimentRun) -> TargetResult:
-    """Run the agent, recording its call so the generation carries the run_id."""
-
-    question = str(item.input)
-    # Recording through run.start_generation(...) tags the generation with the
-    # experiment run_id and captures its id so the score below attaches to it.
-    with run.start_generation(GenerationStart(model=ModelRef(provider="openai", name="gpt-4o-mini"))) as rec:
-        answer = answer_question(question, canned=CANNED)
-        rec.set_result(
-            Generation(
-                model=ModelRef(provider="openai", name="gpt-4o-mini"),
-                input=[user_text_message(question)],
-                output=[assistant_text_message(answer)],
-            )
-        )
-    # generation_ids are captured by the run automatically; the runner fills them in.
-    return TargetResult(output=answer)
-
-
-def exact_match_scorer(item: DatasetItem, result: TargetResult) -> list[ScoreOutput]:
-    """A trivial substring grader. Swap in an LLM-as-judge scorer here if desired."""
-
-    passed = str(item.expected).lower() in str(result.output).lower()
-    return [
-        ScoreOutput(
-            evaluator_id="example.exact_match",
-            evaluator_version="2026-05-30",
-            score_key="exact_match",
-            value=ScoreValue(number=1.0 if passed else 0.0),
-            passed=passed,
-            explanation=f"expected '{item.expected}', got '{result.output}'",
-        )
-    ]
 
 
 def main() -> None:
     load_dotenv()
-    client = build_client()
-    run_id = os.environ.get("RUN_ID", f"experiment-example-{os.environ.get('GIT_SHA', 'local')}")
-    runner = ExperimentRunner(
-        client=client,
-        run_id=run_id,
+    experiment_id = os.environ.get("SIGIL_EXPERIMENT_ID", f"experiment-example-{os.environ.get('GIT_SHA', 'manual')}")
+    suite = sigil.TestSuite(
+        suite_id="experiment-example",
         name="Framework-free example experiment",
-        dataset={"id": "experiment-example", "version": "2026-05-30"},
-        candidate={"git_sha": os.environ.get("GIT_SHA", "local")},
-        tags=["example"],
-        agent_name="example-agent",
+        version="2026-05-30",
+        test_cases=[
+            sigil.TestCase(
+                test_case_id=case.id,
+                input=case.input,
+                expected=case.expected,
+                category=case.category,
+            )
+            for case in CASES
+        ],
     )
-    try:
-        result = runner.run(DATASET, target, [exact_match_scorer])
-        print(f"\nExperiment '{result.run_id}' finished: {result.accepted_scores} score(s) accepted.")
-        if result.report is not None:
-            print(f"pass_rate={result.report.summary.pass_rate:.2f} mean_score={result.report.summary.mean_score:.2f}")
-        print(f"View in Sigil: {result.url}")
-    finally:
-        client.shutdown()
+    verifier = sigil.Evaluator(evaluator_id="example.llm_judge", version="2026-05-30", kind="llm_judge")
+
+    with sigil.experiment(
+        name="Framework-free example experiment",
+        experiment_id=experiment_id,
+        suite=suite,
+        candidate={"git_sha": os.environ.get("GIT_SHA", "manual"), "agent_name": "example-agent"},
+        tags=["example"],
+    ) as exp:
+        for case in CASES:
+            with exp.trial(case.id) as trial:
+                answer = answer_question(case.input)
+                agent_conversation_id = f"{trial.trial_id}-agent"
+                exp.client.record_generation(
+                    trial.generation_id,
+                    conversation_id=agent_conversation_id,
+                    input_text=case.input,
+                    output_text=answer.text,
+                    model_provider="anthropic",
+                    model_name=answer.model,
+                    agent_name="example-agent",
+                    operation_name="answer_question",
+                    input_tokens=answer.usage.input_tokens,
+                    output_tokens=answer.usage.output_tokens,
+                    tags={"experiment.run_id": exp.experiment_id, "task_id": case.id, "role": "candidate"},
+                    metadata={"response_id": answer.response_id, "stop_reason": answer.stop_reason},
+                )
+                trial.bind_generation(trial.generation_id, conversation_id=agent_conversation_id)
+
+                grade = grade_answer(question=case.input, expected=case.expected, actual=answer.text)
+                grader_generation_id = f"grader-{trial.trial_id}"
+                grader_conversation_id = f"{trial.trial_id}-grader"
+                exp.client.record_generation(
+                    grader_generation_id,
+                    conversation_id=grader_conversation_id,
+                    input_text=grade.prompt,
+                    output_text=grade.call.text,
+                    model_provider="anthropic",
+                    model_name=grade.call.model,
+                    agent_name="example-grader",
+                    operation_name="grade_answer",
+                    input_tokens=grade.call.usage.input_tokens,
+                    output_tokens=grade.call.usage.output_tokens,
+                    tags={"experiment.run_id": exp.experiment_id, "task_id": case.id, "role": "grader"},
+                    metadata={"response_id": grade.call.response_id, "stop_reason": grade.call.stop_reason},
+                )
+                trial.score(
+                    "final",
+                    grade.score,
+                    passed=grade.passed,
+                    explanation=grade.explanation,
+                    evaluator=verifier,
+                    generation_id=trial.generation_id,
+                    grader_conversation_id=grader_conversation_id,
+                    grader_generation_id=grader_generation_id,
+                )
+                trial.artifact(
+                    "grading-details",
+                    data={
+                        "test_case_id": case.id,
+                        "expected": case.expected,
+                        "actual": answer.text,
+                        "passed": grade.passed,
+                        "score": grade.score,
+                        "explanation": grade.explanation,
+                        "agent_generation_id": trial.generation_id,
+                        "agent_conversation_id": agent_conversation_id,
+                        "grader_generation_id": grader_generation_id,
+                        "grader_conversation_id": grader_conversation_id,
+                    },
+                    kind="json",
+                )
+                trial.artifact("agent-output", text=answer.text or "(empty)")
+                trial.artifact("grader-output", text=grade.call.text or "(empty)")
+
+    report = exp.report()
+    print(f"\nExperiment '{exp.experiment_id}' finished: {exp.accepted_scores} score(s) accepted.")
+    print(f"pass_rate={report.summary.pass_rate:.2f} mean_score={report.summary.final_score_avg:.2f}")
+    print(f"View in Sigil: {exp.url}")
 
 
 if __name__ == "__main__":

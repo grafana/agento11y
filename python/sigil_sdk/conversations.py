@@ -1,22 +1,16 @@
 """Read-only access to Sigil conversations and eval collections.
 
-This module backs the experiment *dataset* builder in
-:mod:`sigil_sdk.experiment`: a Sigil collection groups "saved conversations"
-(bookmarks of live conversations), and each conversation carries the
-generations — with their input/output messages — that produced it. Turning a
-collection into a dataset means listing its members, then fetching each
-conversation to recover the initial user prompt.
+Sigil collections group saved conversations. These helpers list collection
+members and fetch conversations with their generations.
 
-Endpoints share the same eval connection args as experiments (``/api/v1`` for
-self-hosted Sigil; the Grafana plugin resource proxy on Grafana Cloud, e.g.
-``/api/plugins/grafana-sigil-app/resources``):
+Endpoints use the configured Sigil API endpoint and auth headers:
 
   GET {prefix}/eval/collections/{collection_id}/members  saved conversations in a collection
   GET {prefix}/query/conversations/{conversation_id}     one conversation with generations
 
 The functions here are thin; :class:`sigil_sdk.client.Client` wraps them with a
 resolved endpoint, insecure flag, auth headers, and path prefix (see
-``Client._eval_args``).
+``Client._api_args``).
 """
 
 from __future__ import annotations
@@ -24,8 +18,8 @@ from __future__ import annotations
 from typing import Any
 from urllib import parse as urllib_parse
 
+from ._experiments_transport import RetryPolicy, _base_url, _request_json
 from .errors import ExperimentTransportError, ValidationError
-from .experiments import RetryPolicy, _base_url, _request_json
 
 _DEFAULT_PATH_PREFIX = "/api/v1"
 

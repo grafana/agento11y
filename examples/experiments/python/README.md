@@ -1,9 +1,14 @@
 # Sigil framework-free experiment example
 
-A minimal, runnable example of an **offline evaluation experiment** using the
-core `sigil-sdk` only — **no framework adapter**. It runs a tiny agent over a
-small dataset, grades each answer locally, and publishes the results to Sigil as
-an experiment you can browse and compare.
+A minimal, runnable set of Sigil **experiment** examples using the core
+`sigil-sdk` only — **no framework adapter**.
+
+There are two entry points:
+
+| Example | Command | What it demonstrates |
+| --- | --- | --- |
+| Easy transcript eval | `uv run python -m app.run_experiment` | Candidate transcript, grader transcript, score links, JSON/text artifacts |
+| Dashboard image eval | `uv run python -m app.run_dashboard_experiment` | Candidate dashboard spec transcript, rendered pyplot PNG artifact, grader transcript |
 
 Use this shape when your agent is *not* built on a supported framework
 (LangGraph, LangChain, OpenAI Agents, ...). For those, prefer the matching
@@ -12,72 +17,88 @@ callback.
 
 | Piece | What it shows | Where |
 | --- | --- | --- |
-| `ExperimentRunner` | Loops a dataset, runs the target, grades, publishes scores, finalizes the run | `app/run_experiment.py` |
-| `run.start_generation(...)` | Records the agent's call tagged with the experiment `run_id`, capturing the generation id | `app/run_experiment.py` (`target`) |
-| User scorer | Local grading returning typed `ScoreOutput`s (swap in LLM-as-judge here) | `app/run_experiment.py` (`exact_match_scorer`) |
-| Tiny agent | A plain function that answers a question (real model or offline canned answers) | `app/agent.py` |
+| `experiments.experiment(...)` | Creates/finalizes the run with one ingestion API key | `app/run_experiment.py` |
+| `exp.trial(...)` | Creates a typed trial per test case | `app/run_experiment.py` |
+| `exp.client.record_generation(...)` | Publishes candidate and grader transcripts as Sigil generations | `app/run_experiment.py` |
+| `trial.bind_generation(...)` | Links the candidate transcript to the typed trial | `app/run_experiment.py` |
+| LLM judge | Publishes a grader transcript and emits the final score with grader IDs | `app/run_experiment.py` |
+| Tiny agent | Plain Anthropic calls for the candidate and grader | `app/agent.py` |
+| Pyplot artifact | Renders dashboard specs and uploads PNG artifacts | `app/run_dashboard_experiment.py` |
 
 ## How it works
 
-1. The runner calls `POST /api/v1/eval/experiments` to create an `external` run.
-2. For each dataset item it runs the agent inside `run.start_generation(...)`, so
-   the generation the agent emits is exported through the normal Sigil path and
-   tagged with `experiment.run_id`. The runner captures the produced generation
-   id for you.
-3. It flushes generations, runs your scorer(s), and exports the scores with the
-   same `run_id` (`POST /api/v1/scores:export`).
-4. When the dataset is done it finalizes the run (`succeeded`/`failed`/`canceled`)
-   and prints a deep link.
+1. `experiments.experiment(...)` calls `POST /api/v1/experiment-runs:upsert`.
+2. For each dataset item, `exp.trial(...)` creates a typed trial.
+3. The candidate agent runs through Anthropic and the example publishes that
+   request/response transcript as a Sigil generation.
+4. The grader runs through Anthropic and the example publishes the grader
+   prompt/response transcript as a second Sigil generation.
+5. The final score links to the candidate generation plus the grader generation,
+   then uploads small JSON/text artifacts for inspection.
+6. When the dataset is done the experiment finalizes (`completed`/`failed`) and
+   prints a deep link.
 
-A/B testing is just two runs with different `run_id`/`tags` over the same items.
+The dashboard example follows the same flow, but the candidate output is a JSON
+dashboard spec. The script renders that spec with `matplotlib.pyplot` and uploads
+the PNG as a `dashboard-image` artifact on the trial.
+
+A/B testing is just two runs with different `SIGIL_EXPERIMENT_ID`/`tags` over the same items.
 
 ## Prerequisites
 
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/)
-- Grafana Cloud AI Observability credentials from your stack's Connection page
-- Optional: `OPENAI_API_KEY` (without it, deterministic canned answers are used
-  so the example runs fully offline)
+- Grafana Cloud AI Observability endpoint, stack ID, and access policy token
+- `ANTHROPIC_API_KEY`
 
 ## Run it
 
 ```bash
 uv sync
 
-# Grafana Cloud ingest plane: generations and scores.
-export SIGIL_ENDPOINT=https://<your-sigil-api-host>
-export SIGIL_AUTH_TENANT_ID=<your-tenant-id>
-export SIGIL_AUTH_TOKEN=<your-cloud-access-policy-token>
+# Grafana Cloud AI Observability ingest API URL.
+export SIGIL_ENDPOINT=https://sigil-prod-<region>.grafana.net
+export SIGIL_PROTOCOL=http
+export SIGIL_AUTH_TENANT_ID=<your-stack-id>
+export SIGIL_AUTH_TOKEN=<your-grafana-cloud-access-policy-token>
+export SIGIL_GRAFANA_URL=https://<your-stack>.grafana.net
 
-# Grafana Cloud eval control plane: experiment create/update/finalize/report.
-export SIGIL_EVAL_ENDPOINT=https://<your-stack>.grafana.net
-export SIGIL_EVAL_PATH_PREFIX=/api/plugins/grafana-sigil-app/resources
-export SIGIL_EVAL_AUTH_TOKEN=<your-grafana-service-account-token>
-
-# Optional: stable run id for CI retries / a real model
-export RUN_ID=experiment-example-$(git rev-parse --short HEAD 2>/dev/null || echo dev)
-# export OPENAI_API_KEY=sk-...
+# Optional: stable experiment id for CI retries / a real model.
+export SIGIL_EXPERIMENT_ID=experiment-example-${GIT_SHA:-manual}
+export ANTHROPIC_API_KEY=<your-anthropic-api-key>
+export AGENT_MODEL=${AGENT_MODEL:-claude-3-5-haiku-latest}
+export GRADER_MODEL=${GRADER_MODEL:-$AGENT_MODEL}
 
 uv run python -m app.run_experiment
+```
+
+For the dashboard/image artifact example, use a different experiment id if you
+already finalized the easy run:
+
+```bash
+export SIGIL_EXPERIMENT_ID=dashboard-example-${GIT_SHA:-manual}
+uv run python -m app.run_dashboard_experiment
 ```
 
 You should see output like:
 
 ```
-Experiment 'experiment-example-abc123' finished: 3 score(s) accepted.
+Experiment 'experiment-example-manual' finished: 3 score(s) accepted.
 pass_rate=1.00 mean_score=1.00
-View in Sigil: https://<your-stack>.grafana.net/a/grafana-sigil-app/evaluation/experiments/experiment-example-abc123
+View in Sigil: https://<your-stack>.grafana.net/a/grafana-sigil-app/offline-experiments/experiments/experiment-example-manual
 ```
 
-> The deep link is derived from `SIGIL_EVAL_ENDPOINT`. Set
-> `SIGIL_EXPERIMENT_URL_TEMPLATE` only if your UI needs a custom URL shape.
+> The deep link uses `SIGIL_GRAFANA_URL`; keep it pointed at your Grafana stack
+> UI host. This can differ from `SIGIL_ENDPOINT` when API and UI hosts differ.
 
 ## Adapt it
 
-- **Real agent:** replace `app/agent.py` with your agent and have `target` record
-  its call via `run.start_generation(...)`. If you record generations elsewhere
-  (e.g. a provider wrapper), call `run.track_generation_id(gen_id)` instead.
-- **Real grading:** replace `exact_match_scorer` with your own scorer — including
-  an LLM-as-judge that itself records a generation (see the
-  `python/skills/sigil-experiments/` skill in this repo).
-- **CI gate:** inspect `result.report.summary.pass_rate` and exit non-zero to
+- **Real agent:** replace `answer_question(...)` with your agent. If your normal
+  instrumentation already publishes generations, bind its generation id with
+  `trial.bind_generation(...)` instead of calling `record_generation(...)`.
+- **Real grading:** replace `grade_answer(...)` with your evaluator. If it uses
+  an LLM, publish that grader transcript and pass `grader_conversation_id` /
+  `grader_generation_id` on the score.
+- **Image artifacts:** use `trial.artifact("name", path="/tmp/file.png")` after
+  rendering the file before upload. The dashboard example uses this for pyplot PNGs.
+- **CI gate:** inspect `report.summary.pass_rate` and exit non-zero to
   fail a pull request.

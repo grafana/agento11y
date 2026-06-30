@@ -41,36 +41,9 @@ def with_sigil_langgraph_callbacks(
     return merged
 
 
-# Imported after the helpers above so experiment.py can rely on this module
-# being partially initialized without a circular-import failure.
-from .experiment import (  # noqa: E402
-    DatasetItem,
-    DatasetScorer,
-    DatasetTarget,
-    ExperimentResult,
-    ExperimentRun,
-    ExperimentRunner,
-    ScoreOutput,
-    TargetResult,
-    UploadMode,
-    experiment,
-    stable_id,
-)
-
 __all__ = [
     "SigilLangGraphHandler",
     "SigilAsyncLangGraphHandler",
     "create_sigil_langgraph_handler",
     "with_sigil_langgraph_callbacks",
-    "DatasetItem",
-    "DatasetScorer",
-    "DatasetTarget",
-    "ExperimentResult",
-    "ExperimentRun",
-    "ExperimentRunner",
-    "ScoreOutput",
-    "TargetResult",
-    "UploadMode",
-    "experiment",
-    "stable_id",
 ]

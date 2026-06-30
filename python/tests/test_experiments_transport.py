@@ -1,30 +1,23 @@
-"""Experiment control plane and score export transport tests."""
+"""Experiment lifecycle and score export transport tests."""
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
-from datetime import timedelta, timezone
+from datetime import timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
-from opentelemetry import trace
-from sigil_sdk import (
-    ApiConfig,
-    AuthConfig,
-    Client,
-    ClientConfig,
-    ConflictError,
+from sigil_sdk import _experiments_transport as transport
+from sigil_sdk.errors import NotFoundError, ScoreExportError, ValidationError
+from sigil_sdk.experiments import Client as ExperimentClient
+from sigil_sdk.models import (
     CreateExperimentRequest,
     ExperimentStatus,
-    GenerationExportConfig,
-    NotFoundError,
-    ScoreExportError,
     ScoreItem,
     ScoreSource,
     ScoreValue,
-    UpdateExperimentRequest,
-    ValidationError,
 )
 
 
@@ -56,7 +49,10 @@ def _make_handler(recorder: _Recorder):
                     "method": self.command,
                     "path": self.path,
                     "headers": {k.lower(): v for k, v in self.headers.items()},
-                    "payload": json.loads(raw.decode("utf-8")) if raw else None,
+                    "raw_payload": raw,
+                    "payload": json.loads(raw.decode("utf-8"))
+                    if raw and self.headers.get("Content-Type") == "application/json"
+                    else raw,
                 }
             )
             status, body = recorder.take()
@@ -84,29 +80,22 @@ def _serve(recorder: _Recorder) -> HTTPServer:
     return server
 
 
-def _new_client(server: HTTPServer, *, auth: AuthConfig | None = None) -> Client:
-    return Client(
-        ClientConfig(
-            generation_export=GenerationExportConfig(
-                protocol="grpc",
-                endpoint="localhost:4317",
-                auth=auth or AuthConfig(mode="tenant", tenant_id="tenant-a"),
-                batch_size=1,
-                flush_interval=timedelta(seconds=1),
-                max_retries=2,
-                initial_backoff=timedelta(milliseconds=1),
-                max_backoff=timedelta(milliseconds=5),
-            ),
-            api=ApiConfig(endpoint=f"http://127.0.0.1:{server.server_address[1]}"),
-            tracer=trace.get_tracer("sigil-sdk-python-experiments-test"),
-        )
-    )
+def _args(server: HTTPServer) -> dict:
+    return {
+        "api_endpoint": f"http://127.0.0.1:{server.server_address[1]}",
+        "insecure": True,
+        "headers": {
+            "X-Scope-OrgID": "tenant-a",
+            "Authorization": _basic("tenant-a", "ingest-token-a"),
+        },
+        "retry": transport.RetryPolicy(max_retries=2, initial_backoff=0.001, max_backoff=0.005),
+    }
 
 
 def _experiment_body(**overrides: object) -> dict[str, object]:
     body = {
         "tenant_id": "tenant-a",
-        "run_id": "run_1",
+        "experiment_id": "run_1",
         "name": "PR 123",
         "source": "external",
         "status": "running",
@@ -118,29 +107,30 @@ def _experiment_body(**overrides: object) -> dict[str, object]:
     return body
 
 
-def test_create_experiment_round_trip() -> None:
+def test_create_experiment_upserts_external_run() -> None:
     recorder = _Recorder()
-    recorder.push(200, _experiment_body(tags=["smoke"], metadata={"git_sha": "abc"}))
+    recorder.push(200, {"run": _experiment_body(tags=["smoke"], metadata={"git_sha": "abc"}), "created": True})
     server = _serve(recorder)
-    client = _new_client(server)
     try:
-        run = client.create_experiment(
-            CreateExperimentRequest(
+        run = transport.create_experiment(
+            **_args(server),
+            request=CreateExperimentRequest(
                 run_id="run_1",
                 name="PR 123",
                 source="external",
                 tags=["smoke"],
                 metadata={"git_sha": "abc"},
-            )
+            ),
         )
         request = recorder.requests[0]
         assert request["method"] == "POST"
-        assert request["path"] == "/api/v1/eval/experiments"
+        assert request["path"] == "/api/v1/experiment-runs:upsert"
         assert request["headers"]["x-scope-orgid"] == "tenant-a"
+        assert request["headers"]["authorization"] == _basic("tenant-a", "ingest-token-a")
         assert request["payload"] == {
             "name": "PR 123",
-            "source": "external",
-            "run_id": "run_1",
+            "source": {"kind": "sdk", "id": "python"},
+            "experiment_id": "run_1",
             "tags": ["smoke"],
             "metadata": {"git_sha": "abc"},
         }
@@ -148,42 +138,33 @@ def test_create_experiment_round_trip() -> None:
         assert run.status == "running"
         assert run.created_at is not None and run.created_at.tzinfo == timezone.utc
     finally:
-        client.shutdown()
         server.shutdown()
         server.server_close()
 
 
-def test_complete_experiment_sends_status_patch() -> None:
+def test_complete_experiment_finalizes_run() -> None:
     recorder = _Recorder()
-    recorder.push(200, _experiment_body(status="succeeded", score_count=3))
+    recorder.push(200, {"run": _experiment_body(status="completed", score_count=3)})
     server = _serve(recorder)
-    client = _new_client(server)
     try:
-        run = client.complete_experiment("run_1", ExperimentStatus.SUCCEEDED, score_count=3)
+        # SUCCEEDED is a friendly alias; the backend's terminal status is `completed`.
+        run = transport.finalize_experiment(
+            **_args(server),
+            run_id="run_1",
+            status=ExperimentStatus.SUCCEEDED,
+            score_count=3,
+        )
         request = recorder.requests[0]
-        assert request["method"] == "PATCH"
-        assert request["path"] == "/api/v1/eval/experiments/run_1"
-        assert request["payload"] == {"status": "succeeded", "score_count": 3}
-        assert run.status == "succeeded"
+        assert request["method"] == "POST"
+        assert request["path"] == "/api/v1/experiment-runs/run_1:finalize"
+        assert request["payload"] == {
+            "status": "completed",
+            "score_count": 3,
+            "source": {"kind": "sdk", "id": "python"},
+        }
+        assert run.status == "completed"
         assert run.score_count == 3
     finally:
-        client.shutdown()
-        server.shutdown()
-        server.server_close()
-
-
-def test_cancel_experiment_hits_cancel_action() -> None:
-    recorder = _Recorder()
-    recorder.push(200, _experiment_body(status="canceled"))
-    server = _serve(recorder)
-    client = _new_client(server)
-    try:
-        run = client.cancel_experiment("run_1")
-        assert recorder.requests[0]["method"] == "POST"
-        assert recorder.requests[0]["path"] == "/api/v1/eval/experiments/run_1:cancel"
-        assert run.status == "canceled"
-    finally:
-        client.shutdown()
         server.shutdown()
         server.server_close()
 
@@ -195,10 +176,10 @@ def test_export_scores_round_trip_and_accepted_count() -> None:
         {"results": [{"score_id": "sc1", "accepted": True}, {"score_id": "sc2", "accepted": False, "error": "bad"}]},
     )
     server = _serve(recorder)
-    client = _new_client(server)
     try:
-        response = client.export_scores(
-            [
+        response = transport.export_scores(
+            **_args(server),
+            scores=[
                 ScoreItem(
                     score_id="sc1",
                     generation_id="gen1",
@@ -221,30 +202,60 @@ def test_export_scores_round_trip_and_accepted_count() -> None:
                     score_key="pass",
                     value=ScoreValue(boolean=True),
                 ),
-            ]
+            ],
         )
         request = recorder.requests[0]
         assert request["path"] == "/api/v1/scores:export"
         scores = request["payload"]["scores"]
         assert scores[0]["value"] == {"number": 0.82}
-        assert scores[0]["run_id"] == "run_1"
+        assert scores[0]["experiment_id"] == "run_1"
+        assert "run_id" not in scores[0]  # backend has no run_id field
         assert scores[0]["source"] == {"kind": "experiment", "id": "run_1"}
         assert scores[1]["value"] == {"bool": True}
         assert response.accepted_count == 1
         assert [r.score_id for r in response.rejected] == ["sc2"]
     finally:
-        client.shutdown()
+        server.shutdown()
+        server.server_close()
+
+
+def test_experiment_client_uploads_trial_artifact_to_ingest_route() -> None:
+    recorder = _Recorder()
+    recorder.push(200, {"artifact_id": "art-1", "name": "details", "kind": "json"})
+    server = _serve(recorder)
+    endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        client = ExperimentClient(endpoint, tenant_id="tenant-a", ingest_token="ingest-token-a")
+        record = client.upload_artifact(
+            experiment_id="run_1",
+            parent_id="trial_1",
+            name="details",
+            kind="json",
+            mime="application/json",
+            content=b'{"ok":true}',
+        )
+        request = recorder.requests[0]
+        assert request["method"] == "POST"
+        expected_path = (
+            "/api/v1/experiment-runs/run_1/trials/trial_1/artifacts:upload"
+            "?name=details&kind=json&mime=application%2Fjson"
+        )
+        assert request["path"] == expected_path
+        assert request["headers"]["authorization"] == _basic("tenant-a", "ingest-token-a")
+        assert request["raw_payload"] == b'{"ok":true}'
+        assert record["artifact_id"] == "art-1"
+    finally:
         server.shutdown()
         server.server_close()
 
 
 def test_export_scores_validates_missing_value() -> None:
     server = _serve(_Recorder())
-    client = _new_client(server)
     try:
         with pytest.raises(ValidationError):
-            client.export_scores(
-                [
+            transport.export_scores(
+                **_args(server),
+                scores=[
                     ScoreItem(
                         score_id="sc1",
                         generation_id="gen1",
@@ -253,10 +264,9 @@ def test_export_scores_validates_missing_value() -> None:
                         score_key="reward",
                         value=ScoreValue(),
                     )
-                ]
+                ],
             )
     finally:
-        client.shutdown()
         server.shutdown()
         server.server_close()
 
@@ -265,26 +275,10 @@ def test_get_experiment_maps_not_found() -> None:
     recorder = _Recorder()
     recorder.push(404, {"error": "missing"})
     server = _serve(recorder)
-    client = _new_client(server)
     try:
         with pytest.raises(NotFoundError):
-            client.get_experiment("run_missing")
+            transport.get_experiment(**_args(server), run_id="run_missing")
     finally:
-        client.shutdown()
-        server.shutdown()
-        server.server_close()
-
-
-def test_update_experiment_maps_conflict() -> None:
-    recorder = _Recorder()
-    recorder.push(409, {"error": "terminal"})
-    server = _serve(recorder)
-    client = _new_client(server)
-    try:
-        with pytest.raises(ConflictError):
-            client.update_experiment("run_1", UpdateExperimentRequest(status=ExperimentStatus.RUNNING))
-    finally:
-        client.shutdown()
         server.shutdown()
         server.server_close()
 
@@ -294,10 +288,10 @@ def test_export_scores_retries_then_succeeds_on_5xx() -> None:
     recorder.push(503, {"error": "unavailable"})
     recorder.push(202, {"results": [{"score_id": "sc1", "accepted": True}]})
     server = _serve(recorder)
-    client = _new_client(server)
     try:
-        response = client.export_scores(
-            [
+        response = transport.export_scores(
+            **_args(server),
+            scores=[
                 ScoreItem(
                     score_id="sc1",
                     generation_id="gen1",
@@ -306,12 +300,11 @@ def test_export_scores_retries_then_succeeds_on_5xx() -> None:
                     score_key="reward",
                     value=ScoreValue(number=1.0),
                 )
-            ]
+            ],
         )
         assert response.accepted_count == 1
         assert len(recorder.requests) == 2  # one retry after the 503
     finally:
-        client.shutdown()
         server.shutdown()
         server.server_close()
 
@@ -320,11 +313,11 @@ def test_export_scores_exhausts_retries_and_raises() -> None:
     recorder = _Recorder()
     recorder.push(500, {"error": "boom"})  # single scripted response reused for all attempts
     server = _serve(recorder)
-    client = _new_client(server)
     try:
         with pytest.raises(ScoreExportError):
-            client.export_scores(
-                [
+            transport.export_scores(
+                **_args(server),
+                scores=[
                     ScoreItem(
                         score_id="sc1",
                         generation_id="gen1",
@@ -333,39 +326,33 @@ def test_export_scores_exhausts_retries_and_raises() -> None:
                         score_key="reward",
                         value=ScoreValue(number=1.0),
                     )
-                ]
+                ],
             )
         # initial attempt + max_retries (2) = 3 requests
         assert len(recorder.requests) == 3
     finally:
-        client.shutdown()
         server.shutdown()
         server.server_close()
 
 
-def test_eval_override_routes_experiments_via_proxy_but_scores_via_ingest(monkeypatch) -> None:
-    """The experiment control plane uses the plugin proxy + bearer SA token, while
-    score export stays on the ingest route with tenant/basic auth (scores are a
-    tenant-only ingest write, decoupled from the eval control-plane target)."""
+def test_experiment_lifecycle_and_scores_share_configured_auth() -> None:
     recorder = _Recorder()
-    recorder.push(200, _experiment_body())  # create_experiment
+    recorder.push(200, {"run": _experiment_body()})  # create_experiment
     recorder.push(202, {"results": [{"score_id": "sc1", "accepted": True}]})  # export_scores
     server = _serve(recorder)
-    base = f"http://127.0.0.1:{server.server_address[1]}"
-
-    monkeypatch.setenv("SIGIL_EVAL_ENDPOINT", base)
-    monkeypatch.setenv("SIGIL_EVAL_PATH_PREFIX", "/api/plugins/grafana-sigil-app/resources")
-    monkeypatch.setenv("SIGIL_EVAL_AUTH_TOKEN", "glsa_test_token")
-
-    client = _new_client(server)
     try:
-        client.create_experiment(CreateExperimentRequest(run_id="run_1", name="cloud", source="external"))
+        transport.create_experiment(
+            **_args(server),
+            request=CreateExperimentRequest(run_id="run_1", name="shared auth", source="external"),
+        )
         create_req = recorder.requests[0]
-        assert create_req["path"] == "/api/plugins/grafana-sigil-app/resources/eval/experiments"
-        assert create_req["headers"]["authorization"] == "Bearer glsa_test_token"
+        assert create_req["path"] == "/api/v1/experiment-runs:upsert"
+        assert create_req["headers"].get("x-scope-orgid") == "tenant-a"
+        assert create_req["headers"].get("authorization") == _basic("tenant-a", "ingest-token-a")
 
-        client.export_scores(
-            [
+        transport.export_scores(
+            **_args(server),
+            scores=[
                 ScoreItem(
                     score_id="sc1",
                     generation_id="gen1",
@@ -375,17 +362,19 @@ def test_eval_override_routes_experiments_via_proxy_but_scores_via_ingest(monkey
                     value=ScoreValue(number=1.0),
                     run_id="run_1",
                 )
-            ]
+            ],
         )
         score_req = recorder.requests[1]
-        # scores stay on the ingest route with tenant auth, not the eval proxy/token
         assert score_req["path"] == "/api/v1/scores:export"
         assert score_req["headers"].get("x-scope-orgid") == "tenant-a"
-        assert "authorization" not in score_req["headers"]
+        assert score_req["headers"].get("authorization") == _basic("tenant-a", "ingest-token-a")
     finally:
-        client.shutdown()
         server.shutdown()
         server.server_close()
+
+
+def _basic(user: str, password: str) -> str:
+    return "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
 
 
 def test_get_experiment_report_parses_summary() -> None:
@@ -393,32 +382,34 @@ def test_get_experiment_report_parses_summary() -> None:
     recorder.push(
         200,
         {
-            "run": _experiment_body(status="succeeded"),
+            # Backend keys the run under `experiment`, rows under `rows`, cost as `total_cost`.
+            "experiment": _experiment_body(status="completed"),
             "summary": {
-                "n_conversations": 2,
-                "n_generations": 3,
-                "n_scores": 3,
+                "test_case_count": 2,
+                "trial_count": 3,
+                "completed_count": 3,
                 "pass_rate": 0.66,
-                "mean_score": 0.8,
-                "total_cost_usd": 0.5,
+                "pass_at_k": {"1": 0.66},
+                "pass_power_k": {"1": 0.66},
+                "final_score_avg": 0.8,
+                "total_cost": 0.5,
                 "total_tokens": 1200,
             },
-            "breakdowns": {"by_task": [{"key": "t1", "count": 2}]},
-            "points": [{"score_id": "sc1"}],
+            "rows": [{"test_case_id": "t1", "trials": []}],
         },
     )
     server = _serve(recorder)
-    client = _new_client(server)
     try:
-        report = client.get_experiment_report("run_1")
+        report = transport.get_experiment_report(**_args(server), run_id="run_1")
         assert recorder.requests[0]["path"] == "/api/v1/eval/experiments/run_1/report"
-        assert report.run.status == "succeeded"
-        assert report.summary.n_generations == 3
+        assert report.run.status == "completed"
+        assert report.summary.test_case_count == 2
         assert report.summary.pass_rate == pytest.approx(0.66)
+        assert report.summary.final_score_avg == pytest.approx(0.8)
+        assert report.summary.total_cost == pytest.approx(0.5)
         assert report.summary.total_tokens == 1200
-        assert report.breakdowns["by_task"][0]["key"] == "t1"
-        assert report.points[0]["score_id"] == "sc1"
+        assert report.summary.pass_at_k == {"1": 0.66}
+        assert report.rows[0]["test_case_id"] == "t1"
     finally:
-        client.shutdown()
         server.shutdown()
         server.server_close()

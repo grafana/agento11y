@@ -493,11 +493,10 @@ def tool_result_message(tool_call_id: str, content: str) -> Message:
 # ---------------------------------------------------------------------------
 # Offline evaluation: experiments and scores
 #
-# These models map to the Sigil eval control plane (HTTP):
-#   POST   /api/v1/eval/experiments
+# These models map to the Sigil experiment and score APIs (HTTP):
+#   POST   /api/v1/experiment-runs:upsert
+#   POST   /api/v1/experiment-runs/{run_id}:finalize
 #   GET    /api/v1/eval/experiments/{run_id}
-#   PATCH  /api/v1/eval/experiments/{run_id}
-#   POST   /api/v1/eval/experiments/{run_id}:cancel
 #   POST   /api/v1/scores:export
 #   GET    /api/v1/eval/experiments/{run_id}/report
 # ---------------------------------------------------------------------------
@@ -549,53 +548,90 @@ class ScoreSource:
 class ScoreItem:
     """A score to export via ``POST /api/v1/scores:export``.
 
-    Set ``run_id`` to attribute the score to an experiment report.
+    The backend keys scores on ``experiment_id`` (the canonical run identifier);
+    set it to attach the score to an experiment report. A score must reference a
+    ``generation_id`` **or** a ``trial_id``. ``run_id`` is accepted as a
+    client-side alias for ``experiment_id`` and is mapped to ``experiment_id`` on
+    the wire — the backend has no ``run_id`` field and rejects unknown fields.
     """
 
     score_id: str
-    generation_id: str
     evaluator_id: str
     evaluator_version: str
     score_key: str
     value: ScoreValue
+    generation_id: str = ""
     conversation_id: str = ""
     trace_id: str = ""
     span_id: str = ""
     rule_id: str = ""
-    run_id: str = ""
+    experiment_id: str = ""
+    trial_id: str = ""
+    test_case_id: str = ""
+    grader_conversation_id: str = ""
+    grader_generation_id: str = ""
+    grader_trace_id: str = ""
+    run_id: str = ""  # client-side alias for experiment_id (mapped on the wire)
+    evaluator_kind: str = ""
     passed: bool | None = None
     explanation: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime | None = None
     source: ScoreSource | None = None
 
+    @property
+    def resolved_experiment_id(self) -> str:
+        """The experiment id to send on the wire (``experiment_id`` or ``run_id``)."""
+
+        return (self.experiment_id or self.run_id or "").strip()
+
 
 @dataclass(slots=True)
 class ExportScoreResult:
-    """Per-score outcome from a score export request."""
+    """Per-score outcome from a score export request.
+
+    ``accepted`` is true only for a fresh insert. A re-sent ``score_id`` returns
+    ``accepted=False`` with ``status="duplicate"`` — inspect ``status`` (one of
+    ``accepted`` / ``duplicate`` / ``rejected``) for the precise outcome.
+    """
 
     score_id: str
     accepted: bool
+    status: str = ""
     error: str = ""
 
 
 @dataclass(slots=True)
 class ExportScoresResponse:
-    """Response envelope from ``POST /api/v1/scores:export``."""
+    """Response envelope from ``POST /api/v1/scores:export``.
+
+    The aggregate counts come straight from the server so a runner can assert
+    ``accepted + duplicates == requested`` and detect undercounted exports
+    without re-tallying per item.
+    """
 
     results: list[ExportScoreResult] = field(default_factory=list)
+    accepted: int = 0
+    duplicates: int = 0
+    rejected_count: int = 0
 
     @property
     def accepted_count(self) -> int:
-        """Number of scores the server accepted."""
+        """Number of fresh scores the server accepted."""
 
-        return sum(1 for result in self.results if result.accepted)
+        return self.accepted or sum(1 for r in self.results if r.accepted)
+
+    @property
+    def duplicate_count(self) -> int:
+        """Number of scores the server treated as idempotent duplicates."""
+
+        return self.duplicates or sum(1 for r in self.results if r.status == "duplicate")
 
     @property
     def rejected(self) -> list[ExportScoreResult]:
         """Scores the server rejected, with their error detail."""
 
-        return [result for result in self.results if not result.accepted]
+        return [r for r in self.results if not r.accepted and r.status != "duplicate"]
 
 
 @dataclass(slots=True)
@@ -611,7 +647,7 @@ class ExperimentEvaluator:
 
 @dataclass(slots=True)
 class CreateExperimentRequest:
-    """Request body for ``POST /api/v1/eval/experiments``."""
+    """Request body for ``POST /api/v1/experiment-runs:upsert``."""
 
     name: str
     source: ExperimentSource | str = ExperimentSource.EXTERNAL
@@ -624,25 +660,8 @@ class CreateExperimentRequest:
 
 
 @dataclass(slots=True)
-class UpdateExperimentRequest:
-    """Request body for ``PATCH /api/v1/eval/experiments/{run_id}``.
-
-    Every field is optional; ``None`` fields are omitted from the PATCH body so
-    callers can update only what they intend to change.
-    """
-
-    name: str | None = None
-    description: str | None = None
-    tags: list[str] | None = None
-    status: ExperimentStatus | str | None = None
-    metadata: dict[str, Any] | None = None
-    error: str | None = None
-    score_count: int | None = None
-
-
-@dataclass(slots=True)
 class Experiment:
-    """An experiment run as returned by the Sigil eval control plane."""
+    """An experiment run as returned by Sigil."""
 
     run_id: str
     name: str
@@ -665,26 +684,35 @@ class Experiment:
 
 @dataclass(slots=True)
 class ExperimentReportSummary:
-    """Aggregate summary block of an experiment report."""
+    """Aggregate summary block of an experiment report.
 
-    n_conversations: int = 0
-    n_generations: int = 0
-    n_scores: int = 0
+    Mirrors the backend's typed trial rollup (``sigil/internal/eval/types.go``):
+    trial counts, pass-rate, pass@k / pass^k, and average final score, plus the
+    derived ``total_cost`` and ``total_tokens``.
+    """
+
+    test_case_count: int = 0
+    trial_count: int = 0
+    completed_count: int = 0
+    failed_count: int = 0
+    canceled_count: int = 0
     pass_rate: float = 0.0
-    mean_score: float = 0.0
-    total_cost_usd: float = 0.0
+    pass_at_k: dict[str, float] = field(default_factory=dict)
+    pass_power_k: dict[str, float] = field(default_factory=dict)
+    final_score_avg: float = 0.0
+    total_cost: float = 0.0
     total_tokens: int = 0
 
 
 @dataclass(slots=True)
 class ExperimentReport:
-    """Aggregated experiment report from ``GET .../{run_id}/report``.
+    """Aggregated experiment report from
+    ``GET /api/v1/eval/experiments/{experiment_id}/report``.
 
-    ``breakdowns`` and ``points`` are kept as raw decoded JSON for this first
-    iteration; only the run and summary are promoted to typed objects.
+    ``rows`` is the raw per-test-case result list (kept as decoded JSON); ``run``
+    and ``summary`` are promoted to typed objects.
     """
 
     run: Experiment
     summary: ExperimentReportSummary
-    breakdowns: dict[str, Any] = field(default_factory=dict)
-    points: list[dict[str, Any]] = field(default_factory=list)
+    rows: list[dict[str, Any]] = field(default_factory=list)

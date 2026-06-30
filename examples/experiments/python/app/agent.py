@@ -1,34 +1,113 @@
-"""A deliberately tiny, framework-free agent: it answers a question.
-
-When ``OPENAI_API_KEY`` is set, the agent calls a real OpenAI chat model.
-Otherwise it falls back to a deterministic offline "model" (a dict of canned
-answers).
-
-The point of the example is the *experiment plumbing*, not the agent — swap this
-out for your real agent and record its call via ``run.start_generation(...)``.
-"""
+"""Tiny Anthropic-backed agent and grader used by the experiment example."""
 
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import dataclass
+from typing import Any
+
+from anthropic import Anthropic
+from sigil_sdk.models import TokenUsage
+from sigil_sdk.usage import from_anthropic
 
 
-def answer_question(question: str, *, canned: dict[str, str]) -> str:
-    """Returns an answer for ``question``.
+@dataclass(frozen=True)
+class ModelCall:
+    text: str
+    model: str
+    response_id: str
+    stop_reason: str
+    usage: TokenUsage
 
-    Uses OpenAI when ``OPENAI_API_KEY`` is set; otherwise returns the canned
-    answer for the question (falling back to an empty string).
-    """
 
-    if os.environ.get("OPENAI_API_KEY"):
-        from openai import OpenAI
+@dataclass(frozen=True)
+class Grade:
+    score: float
+    passed: bool
+    explanation: str
+    prompt: str
+    call: ModelCall
 
-        client = OpenAI()
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            temperature=0,
-            messages=[{"role": "user", "content": question}],
-        )
-        return (response.choices[0].message.content or "").strip()
 
-    return canned.get(question, "")
+def answer_question(question: str) -> ModelCall:
+    """Runs the candidate agent."""
+
+    model = os.environ.get("AGENT_MODEL", "claude-3-5-haiku-latest")
+    response = Anthropic().messages.create(
+        model=model,
+        max_tokens=256,
+        messages=[{"role": "user", "content": question}],
+    )
+    return ModelCall(
+        text=_message_text(response),
+        model=model,
+        response_id=str(getattr(response, "id", "")),
+        stop_reason=str(getattr(response, "stop_reason", "")),
+        usage=from_anthropic(getattr(response, "usage", None)),
+    )
+
+
+def grade_answer(*, question: str, expected: str, actual: str) -> Grade:
+    """Uses an LLM grader and returns a parsed final score."""
+
+    model = os.environ.get("GRADER_MODEL", os.environ.get("AGENT_MODEL", "claude-3-5-haiku-latest"))
+    prompt = f"""Grade the candidate answer against the expected answer.
+
+Return only JSON with this shape:
+{{"passed": true, "score": 1.0, "explanation": "short reason"}}
+
+Question:
+{question}
+
+Expected answer:
+{expected}
+
+Candidate answer:
+{actual}
+"""
+    response = Anthropic().messages.create(
+        model=model,
+        max_tokens=256,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    call = ModelCall(
+        text=_message_text(response),
+        model=model,
+        response_id=str(getattr(response, "id", "")),
+        stop_reason=str(getattr(response, "stop_reason", "")),
+        usage=from_anthropic(getattr(response, "usage", None)),
+    )
+    parsed = _parse_grade(call.text)
+    return Grade(
+        score=parsed["score"],
+        passed=parsed["passed"],
+        explanation=parsed["explanation"],
+        prompt=prompt,
+        call=call,
+    )
+
+
+def _message_text(response: Any) -> str:
+    parts: list[str] = []
+    for block in getattr(response, "content", []) or []:
+        if getattr(block, "type", "") == "text":
+            parts.append(str(getattr(block, "text", "")))
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _parse_grade(text: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        payload = json.loads(text[start : end + 1]) if start >= 0 and end > start else {}
+
+    score = float(payload.get("score", 0.0))
+    score = max(0.0, min(1.0, score))
+    return {
+        "score": score,
+        "passed": bool(payload.get("passed", score >= 0.5)),
+        "explanation": str(payload.get("explanation", "")).strip() or "graded by LLM judge",
+    }

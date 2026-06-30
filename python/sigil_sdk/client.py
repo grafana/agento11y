@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import json
 import logging
-import os
 import re
 import secrets
 import threading
@@ -21,8 +20,8 @@ from opentelemetry import metrics, trace
 from opentelemetry.metrics import Histogram
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode, use_span
 
+from . import _experiments_transport
 from . import conversations as _conversations
-from . import experiments as _experiments
 from .config import ClientConfig, resolve_config
 from .context import (
     _pop_capture_mode,
@@ -51,15 +50,10 @@ from .models import (
     ConversationRatingInput,
     ConversationRatingSummary,
     ConversationRatingValue,
-    CreateExperimentRequest,
     EmbeddingResult,
     EmbeddingStart,
     ExecuteToolCallsOptions,
-    Experiment,
-    ExperimentReport,
-    ExperimentStatus,
     ExportGenerationsRequest,
-    ExportScoresResponse,
     ExportWorkflowStepsRequest,
     Generation,
     GenerationMode,
@@ -67,12 +61,10 @@ from .models import (
     Message,
     MessageRole,
     PartKind,
-    ScoreItem,
     SubmitConversationRatingResponse,
     ToolExecutionEnd,
     ToolExecutionStart,
     ToolResult,
-    UpdateExperimentRequest,
     WorkflowStep,
     _metadata_key_content_capture_mode,
     tool_result_part,
@@ -716,224 +708,53 @@ class Client:
 
         return _parse_submit_conversation_rating_response(parsed)
 
-    # ----------------------------------------------------------------- #
-    # Offline evaluation: experiments and scores
-    # ----------------------------------------------------------------- #
-
-    def create_experiment(self, request: CreateExperimentRequest) -> Experiment:
-        """Creates an experiment run via the Sigil eval control plane."""
-
-        self._assert_open()
-        return _experiments.create_experiment(
-            **self._eval_args(),
-            request=request,
-            retry=self._experiment_retry_policy(),
-        )
-
-    def get_experiment(self, run_id: str) -> Experiment:
-        """Fetches a single experiment run by id."""
-
-        self._assert_open()
-        return _experiments.get_experiment(
-            **self._eval_args(),
-            run_id=run_id,
-            retry=self._experiment_retry_policy(),
-        )
-
-    def update_experiment(self, run_id: str, request: UpdateExperimentRequest) -> Experiment:
-        """Patches an experiment run (name/description/tags/status/metadata/error/score_count)."""
-
-        self._assert_open()
-        return _experiments.update_experiment(
-            **self._eval_args(),
-            run_id=run_id,
-            request=request,
-            retry=self._experiment_retry_policy(),
-        )
-
-    def complete_experiment(
-        self,
-        run_id: str,
-        status: ExperimentStatus | str,
-        *,
-        score_count: int | None = None,
-        error: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> Experiment:
-        """Finalizes an experiment run with a terminal ``status``.
-
-        Convenience wrapper over :meth:`update_experiment` for the common
-        finalize path (``succeeded``/``failed``/``canceled``).
-        """
-
-        return self.update_experiment(
-            run_id,
-            UpdateExperimentRequest(
-                status=status,
-                score_count=score_count,
-                error=error,
-                metadata=metadata,
-            ),
-        )
-
-    def cancel_experiment(self, run_id: str) -> Experiment:
-        """Cancels a running experiment (only transitions from ``running``)."""
-
-        self._assert_open()
-        return _experiments.cancel_experiment(
-            **self._eval_args(),
-            run_id=run_id,
-            retry=self._experiment_retry_policy(),
-        )
-
-    def export_scores(self, scores: list[ScoreItem]) -> ExportScoresResponse:
-        """Publishes scores; set ``run_id`` on each score to attribute it to a run.
-
-        Call :meth:`flush` first so strict score ingest can find the
-        generations the scores reference. Scores are an ingest write (tenant
-        only), so they use the generation-export endpoint/auth, not the eval
-        control-plane target.
-        """
-
-        self._assert_open()
-        return _experiments.export_scores(
-            **self._score_args(),
-            scores=scores,
-            retry=self._experiment_retry_policy(),
-        )
-
-    def list_experiment_scores(
-        self,
-        run_id: str,
-        *,
-        limit: int = 50,
-        cursor: str | None = None,
-    ) -> tuple[list[dict[str, Any]], str | None]:
-        """Lists stored scores for a run. Returns ``(items, next_cursor)``."""
-
-        self._assert_open()
-        return _experiments.list_experiment_scores(
-            **self._eval_args(),
-            run_id=run_id,
-            limit=limit,
-            cursor=cursor,
-            retry=self._experiment_retry_policy(),
-        )
-
-    def get_experiment_report(self, run_id: str) -> ExperimentReport:
-        """Fetches the aggregated report for a run."""
-
-        self._assert_open()
-        return _experiments.get_experiment_report(
-            **self._eval_args(),
-            run_id=run_id,
-            retry=self._experiment_retry_policy(),
-        )
-
     def list_collection_members(self, collection_id: str) -> list[dict[str, Any]]:
         """Lists the saved conversations belonging to an eval collection.
 
-        Uses the protected eval control plane (see :meth:`_eval_args`). Returns
+        Uses the configured Sigil API endpoint and auth headers. Returns
         raw member dicts (``saved_id``, ``conversation_id``, ``name``, ...).
-        Pair with :func:`sigil_sdk.dataset_from_collection` to turn a collection
-        into experiment dataset items.
         """
 
         self._assert_open()
         return _conversations.list_collection_members(
-            **self._eval_args(),
+            **self._api_args(),
             collection_id=collection_id,
-            retry=self._experiment_retry_policy(),
+            retry=self._api_retry_policy(),
         )
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         """Fetches a single conversation (with its generations) by id.
 
-        Uses the protected eval control plane (see :meth:`_eval_args`). Returns
-        the raw conversation dict; use :func:`sigil_sdk.initial_user_prompt` to
-        recover the prompt that started it.
+        Uses the configured Sigil API endpoint and auth headers. Returns
+        the raw conversation dict.
         """
 
         self._assert_open()
         return _conversations.get_conversation(
-            **self._eval_args(),
+            **self._api_args(),
             conversation_id=conversation_id,
-            retry=self._experiment_retry_policy(),
+            retry=self._api_retry_policy(),
         )
 
-    def _eval_args(self) -> dict[str, Any]:
-        """Connection args for the protected eval control plane.
+    def _api_args(self, *, include_path_prefix: bool = True) -> dict[str, Any]:
+        """Connection args for Sigil HTTP helper APIs."""
 
-        On Grafana Cloud the ``/api/v1/eval/*`` endpoints are reachable only
-        through the Grafana plugin resource proxy (which injects the trusted
-        actor identity), authenticated with a Grafana service-account token.
-        Configure that via env:
-
-        - ``SIGIL_EVAL_ENDPOINT``    base URL, e.g. ``https://<stack>.grafana.net``
-        - ``SIGIL_EVAL_PATH_PREFIX`` e.g. ``/api/plugins/grafana-sigil-app/resources``
-        - ``SIGIL_EVAL_AUTH_TOKEN``  service-account token (sent as ``Bearer``)
-
-        When unset, calls go directly to ``api.endpoint`` with ``/api/v1`` and the
-        generation-export auth headers (self-hosted / dev with tenant auth).
-        """
-
-        endpoint = (os.environ.get("SIGIL_EVAL_ENDPOINT") or "").strip() or self._config.api.endpoint
-        path_prefix = (os.environ.get("SIGIL_EVAL_PATH_PREFIX") or "").strip() or "/api/v1"
-        token = (os.environ.get("SIGIL_EVAL_AUTH_TOKEN") or "").strip()
-        if token != "":
-            value = token if token.lower().startswith("bearer ") else f"Bearer {token}"
-            headers = {"Authorization": value}
-        else:
-            headers = dict(self._config.generation_export.headers)
-        return {
-            "api_endpoint": endpoint,
-            "insecure": bool(self._config.generation_export.insecure),
-            "headers": headers,
-            "path_prefix": path_prefix,
-        }
-
-    def _score_args(self) -> dict[str, Any]:
-        """Connection args for score export.
-
-        Scores are a tenant-only ingest write, published to the generation-export
-        endpoint/auth at ``/api/v1/scores:export`` — the same door as generation
-        ingest. This is intentionally independent of the eval control-plane
-        target (``SIGIL_EVAL_*``), which is only used for the protected
-        experiment lifecycle.
-        """
-
-        return {
+        headers = dict(self._config.generation_export.headers)
+        actor = (self._config.ingest_actor or "").strip()
+        if actor:
+            headers["X-Sigil-Ingest-Actor"] = actor
+        args: dict[str, Any] = {
             "api_endpoint": self._config.api.endpoint,
             "insecure": bool(self._config.generation_export.insecure),
-            "headers": self._config.generation_export.headers,
-            "scores_path": "/api/v1/scores:export",
+            "headers": headers,
         }
+        if include_path_prefix:
+            args["path_prefix"] = "/api/v1"
+        return args
 
-    def experiment_url(self, run_id: str) -> str:
-        """Returns a best-effort deep link to the experiment in the Sigil UI.
-
-        Override the link with the ``SIGIL_EXPERIMENT_URL_TEMPLATE`` env var,
-        which may contain ``{run_id}`` and ``{base}`` placeholders (``{base}``
-        resolves to the eval-endpoint origin). Without a template, the link is
-        derived from the eval-endpoint origin (``SIGIL_EVAL_ENDPOINT`` when set,
-        which on Grafana Cloud is your stack URL), falling back to the API
-        endpoint origin.
-        """
-
-        normalized = (run_id or "").strip()
-        template = os.environ.get("SIGIL_EXPERIMENT_URL_TEMPLATE", "").strip()
-        link_endpoint = (os.environ.get("SIGIL_EVAL_ENDPOINT") or "").strip() or self._config.api.endpoint
-        try:
-            base = _base_url_from_api_endpoint(link_endpoint, bool(self._config.generation_export.insecure))
-        except RatingTransportError:
-            base = ""
-        if template != "":
-            return template.replace("{run_id}", normalized).replace("{base}", base)
-        return f"{base}/a/grafana-sigil-app/evaluation/experiments/{urllib_parse.quote(normalized, safe='')}"
-
-    def _experiment_retry_policy(self) -> _experiments.RetryPolicy:
+    def _api_retry_policy(self) -> _experiments_transport.RetryPolicy:
         export = self._config.generation_export
-        return _experiments.RetryPolicy(
+        return _experiments_transport.RetryPolicy(
             max_retries=max(export.max_retries, 0),
             initial_backoff=max(export.initial_backoff.total_seconds(), 0.0),
             max_backoff=max(export.max_backoff.total_seconds(), 0.0),
