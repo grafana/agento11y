@@ -476,52 +476,21 @@ func (t *Trial) ensureGeneration(ctx context.Context) error {
 	if t.generationExported || !t.hasRecordedGenerationData() {
 		return nil
 	}
+	generation := t.recordedGeneration()
 	if t.client.hasRecordedGenerationID(t.generationID) {
+		if t.client.hasRecordedGenerationIO(t.generationID, generationIOFingerprint(generation)) {
+			if err := t.client.Flush(ctx); err != nil {
+				return err
+			}
+			t.generationExported = true
+			return nil
+		}
 		if err := t.client.Flush(ctx); err != nil {
 			return err
 		}
-		t.generationExported = true
-		return nil
 	}
-	caseInput := ""
-	if t.experiment != nil && t.experiment.suite != nil {
-		if tc, ok := t.experiment.suite.Case(t.ref.TestCaseID); ok && tc.Input != nil {
-			caseInput = fmt.Sprint(tc.Input)
-		}
-	}
-	provider := firstNonBlank(firstString(t.io["model_provider"]), candidateModelProvider(t.candidate), "eval")
-	model := firstNonBlank(firstString(t.io["model_name"]), candidateModelName(t.candidate), "experiment")
-	agentName := firstNonBlank(firstString(t.io["agent_name"]), candidateAgentName(t.candidate))
-	ctx, recorder := t.client.StartGeneration(ctx, GenerationStart{
-		ID:             t.generationID,
-		ConversationID: t.conversationID,
-		Model:          ModelRef{Provider: provider, Name: model},
-		AgentName:      agentName,
-		OperationName:  "invoke_agent",
-		Tags:           map[string]string{"experiment.run_id": t.ref.RunID, "task_id": t.ref.TestCaseID},
-		Metadata: map[string]any{
-			"experiment_run_id": t.ref.RunID,
-			"task_id":           t.ref.TestCaseID,
-			"trial_id":          t.trialID,
-			"attempt":           t.ref.Attempt,
-		},
-	})
-	usage := TokenUsage{}
-	if v, ok := t.io["input_tokens"].(int); ok {
-		usage.InputTokens = int64(v)
-	}
-	if v, ok := t.io["output_tokens"].(int); ok {
-		usage.OutputTokens = int64(v)
-	}
-	recorder.SetResult(Generation{
-		ID:             t.generationID,
-		ConversationID: t.conversationID,
-		Model:          ModelRef{Provider: provider, Name: model},
-		AgentName:      agentName,
-		Input:          textMessages(RoleUser, firstNonBlank(firstString(t.io["input_text"]), caseInput)),
-		Output:         textMessages(RoleAssistant, firstString(t.io["output_text"])),
-		Usage:          usage,
-	}, nil)
+	ctx, recorder := t.client.StartGeneration(ctx, t.recordedGenerationStart(generation))
+	recorder.SetResult(generation, nil)
 	recorder.End()
 	if err := recorder.Err(); err != nil {
 		return err
@@ -531,6 +500,51 @@ func (t *Trial) ensureGeneration(ctx context.Context) error {
 	}
 	t.generationExported = true
 	return nil
+}
+
+func (t *Trial) recordedGenerationStart(generation Generation) GenerationStart {
+	return GenerationStart{
+		ID:             generation.ID,
+		ConversationID: generation.ConversationID,
+		Model:          generation.Model,
+		AgentName:      generation.AgentName,
+		OperationName:  "invoke_agent",
+		Tags:           map[string]string{"experiment.run_id": t.ref.RunID, "task_id": t.ref.TestCaseID},
+		Metadata: map[string]any{
+			"experiment_run_id": t.ref.RunID,
+			"task_id":           t.ref.TestCaseID,
+			"trial_id":          t.trialID,
+			"attempt":           t.ref.Attempt,
+		},
+	}
+}
+
+func (t *Trial) recordedGeneration() Generation {
+	caseInput := ""
+	if t.experiment != nil && t.experiment.suite != nil {
+		if tc, ok := t.experiment.suite.Case(t.ref.TestCaseID); ok && tc.Input != nil {
+			caseInput = fmt.Sprint(tc.Input)
+		}
+	}
+	provider := firstNonBlank(firstString(t.io["model_provider"]), candidateModelProvider(t.candidate), "eval")
+	model := firstNonBlank(firstString(t.io["model_name"]), candidateModelName(t.candidate), "experiment")
+	agentName := firstNonBlank(firstString(t.io["agent_name"]), candidateAgentName(t.candidate))
+	usage := TokenUsage{}
+	if v, ok := t.io["input_tokens"].(int); ok {
+		usage.InputTokens = int64(v)
+	}
+	if v, ok := t.io["output_tokens"].(int); ok {
+		usage.OutputTokens = int64(v)
+	}
+	return Generation{
+		ID:             t.generationID,
+		ConversationID: t.conversationID,
+		Model:          ModelRef{Provider: provider, Name: model},
+		AgentName:      agentName,
+		Input:          textMessages(RoleUser, firstNonBlank(firstString(t.io["input_text"]), caseInput)),
+		Output:         textMessages(RoleAssistant, firstString(t.io["output_text"])),
+		Usage:          usage,
+	}
 }
 
 func (t *Trial) Flush(ctx context.Context) (int, error) {

@@ -308,6 +308,7 @@ type Client struct {
 
 	generationMu      sync.RWMutex
 	generationIDs     map[string]struct{}
+	generationIO      map[string]string
 	generationIDOrder []string
 }
 
@@ -457,6 +458,7 @@ func NewClient(config Config) *Client {
 		flushReq:      make(chan chan error),
 		workerDone:    make(chan struct{}),
 		generationIDs: make(map[string]struct{}),
+		generationIO:  make(map[string]string),
 	}
 
 	if cfg.Tracer != nil {
@@ -1449,12 +1451,12 @@ func (c *Client) persistGeneration(generation Generation) error {
 	if err := c.enqueueGeneration(generation); err != nil {
 		return fmt.Errorf("%w: %w", errGenerationEnqueue, err)
 	}
-	c.recordGenerationID(generation.ID)
+	c.recordGeneration(generation)
 	return nil
 }
 
-func (c *Client) recordGenerationID(generationID string) {
-	if c == nil || generationID == "" {
+func (c *Client) recordGeneration(generation Generation) {
+	if c == nil || generation.ID == "" {
 		return
 	}
 	c.generationMu.Lock()
@@ -1462,16 +1464,21 @@ func (c *Client) recordGenerationID(generationID string) {
 	if c.generationIDs == nil {
 		c.generationIDs = make(map[string]struct{})
 	}
-	if _, ok := c.generationIDs[generationID]; ok {
+	if c.generationIO == nil {
+		c.generationIO = make(map[string]string)
+	}
+	c.generationIO[generation.ID] = generationIOFingerprint(generation)
+	if _, ok := c.generationIDs[generation.ID]; ok {
 		return
 	}
-	c.generationIDs[generationID] = struct{}{}
-	c.generationIDOrder = append(c.generationIDOrder, generationID)
+	c.generationIDs[generation.ID] = struct{}{}
+	c.generationIDOrder = append(c.generationIDOrder, generation.ID)
 	for len(c.generationIDOrder) > c.recordedGenerationLimit() {
 		oldest := c.generationIDOrder[0]
 		c.generationIDOrder[0] = ""
 		c.generationIDOrder = c.generationIDOrder[1:]
 		delete(c.generationIDs, oldest)
+		delete(c.generationIO, oldest)
 	}
 }
 
@@ -1483,6 +1490,15 @@ func (c *Client) hasRecordedGenerationID(generationID string) bool {
 	defer c.generationMu.RUnlock()
 	_, ok := c.generationIDs[generationID]
 	return ok
+}
+
+func (c *Client) hasRecordedGenerationIO(generationID string, fingerprint string) bool {
+	if c == nil || generationID == "" || fingerprint == "" {
+		return false
+	}
+	c.generationMu.RLock()
+	defer c.generationMu.RUnlock()
+	return c.generationIO[generationID] == fingerprint
 }
 
 func (c *Client) recordedGenerationLimit() int {
