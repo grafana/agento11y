@@ -229,6 +229,73 @@ func TestTrialFlushFlushesBoundGenerationBeforeScores(t *testing.T) {
 	}
 }
 
+func TestTrialFlushUsesRecordedGenerationWithoutDuplicate(t *testing.T) {
+	exporter := &capturingExperimentExporter{}
+	generationID := StableID("gen", "run-recorded-unbound", "case-recorded-unbound", 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/api/v1/scores:export" {
+			http.NotFound(w, req)
+			return
+		}
+		if !exporter.hasGeneration(generationID) {
+			http.Error(w, "generation was not flushed before score export", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{{"score_id": "score-1", "accepted": true}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		Tracer: noop.NewTracerProvider().Tracer("sigil-go-recorded-generation-test"),
+		GenerationExport: GenerationExportConfig{
+			Protocol:        GenerationExportProtocolHTTP,
+			Endpoint:        server.URL + "/api/v1/generations:export",
+			Auth:            AuthConfig{Mode: ExportAuthModeTenant, TenantID: "tenant-a"},
+			Insecure:        BoolPtr(true),
+			BatchSize:       10,
+			FlushInterval:   time.Hour,
+			QueueSize:       100,
+			MaxRetries:      0,
+			PayloadMaxBytes: 1 << 20,
+		},
+		API:                    APIConfig{Endpoint: server.URL},
+		testGenerationExporter: exporter,
+	})
+	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+	ctx, recorder := client.StartGeneration(context.Background(), GenerationStart{
+		ID:             generationID,
+		ConversationID: "conv-recorded-unbound",
+		Model:          ModelRef{Provider: "example", Name: "agent"},
+	})
+	recorder.SetResult(Generation{
+		ID:             generationID,
+		ConversationID: "conv-recorded-unbound",
+		Model:          ModelRef{Provider: "example", Name: "agent"},
+		Input:          []Message{UserTextMessage("question")},
+		Output:         []Message{AssistantTextMessage("answer")},
+	}, nil)
+	recorder.End()
+
+	trial := NewTrial(client, TrialRef{RunID: "run-recorded-unbound", TestCaseID: "case-recorded-unbound"})
+	trial.RecordIO(RecordIOOptions{Input: "question", Output: "answer", ModelProvider: "example", ModelName: "agent"})
+	trial.FinalScore(BoolScoreValue(true), ScoreOptions{Evaluator: &Evaluator{EvaluatorID: "exact", Version: "1", Kind: EvaluatorKindDeterministic}})
+	accepted, err := trial.Flush(ctx)
+	if err != nil {
+		t.Fatalf("flush trial: %v", err)
+	}
+	if accepted != 1 {
+		t.Fatalf("expected one accepted score, got %d", accepted)
+	}
+	if got := exporter.generationCount(generationID); got != 1 {
+		t.Fatalf("expected recorded generation to be exported once, got %d", got)
+	}
+}
+
 func TestExperimentContextTagsExistingInstrumentationAndCapturesIDs(t *testing.T) {
 	exporter := &capturingExperimentExporter{}
 	client := NewClient(Config{

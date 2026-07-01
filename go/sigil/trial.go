@@ -473,7 +473,7 @@ func (t *Trial) ensureGeneration(ctx context.Context) error {
 	if t.generationExported || !t.hasRecordedGenerationData() {
 		return nil
 	}
-	if t.generationBound && t.client.hasRecordedGenerationID(t.generationID) {
+	if t.client.hasRecordedGenerationID(t.generationID) {
 		if err := t.client.Flush(ctx); err != nil {
 			return err
 		}
