@@ -1489,11 +1489,9 @@ func (c *Client) recordedGenerationLimit() int {
 	if c == nil {
 		return minRecordedGenerationIDs
 	}
-	limit := c.config.GenerationExport.QueueSize * 2
-	if limit < minRecordedGenerationIDs {
-		return minRecordedGenerationIDs
-	}
-	return limit
+	queueSize := c.config.GenerationExport.QueueSize
+	batchSize := c.config.GenerationExport.BatchSize
+	return max(minRecordedGenerationIDs, queueSize*2, queueSize+batchSize)
 }
 
 func (c *Client) now() time.Time {
