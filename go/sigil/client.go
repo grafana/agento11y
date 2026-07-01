@@ -174,6 +174,7 @@ const (
 	defaultGRPCMaxSendMessageBytes    = 16 << 20
 	defaultGRPCMaxReceiveMessageBytes = 16 << 20
 	defaultGenerationPayloadMaxBytes  = 16 << 20
+	minRecordedGenerationIDs          = 1024
 
 	sdkMetadataKeyName  = "sigil.sdk.name"
 	metadataUserIDKey   = "sigil.user.id"
@@ -304,6 +305,11 @@ type Client struct {
 	workerOnce   sync.Once
 	shutdownOnce sync.Once
 	workerDone   chan struct{}
+
+	generationMu      sync.RWMutex
+	generationIDs     map[string]struct{}
+	generationIO      map[string]string
+	generationIDOrder []string
 }
 
 // GenerationRecorder records and closes one in-flight generation span.
@@ -448,9 +454,11 @@ func NewClient(config Config) *Client {
 	}
 
 	client := &Client{
-		config:     cfg,
-		flushReq:   make(chan chan error),
-		workerDone: make(chan struct{}),
+		config:        cfg,
+		flushReq:      make(chan chan error),
+		workerDone:    make(chan struct{}),
+		generationIDs: make(map[string]struct{}),
+		generationIO:  make(map[string]string),
 	}
 
 	if cfg.Tracer != nil {
@@ -1443,7 +1451,63 @@ func (c *Client) persistGeneration(generation Generation) error {
 	if err := c.enqueueGeneration(generation); err != nil {
 		return fmt.Errorf("%w: %w", errGenerationEnqueue, err)
 	}
+	c.recordGeneration(generation)
 	return nil
+}
+
+func (c *Client) recordGeneration(generation Generation) {
+	if c == nil || generation.ID == "" {
+		return
+	}
+	c.generationMu.Lock()
+	defer c.generationMu.Unlock()
+	if c.generationIDs == nil {
+		c.generationIDs = make(map[string]struct{})
+	}
+	if c.generationIO == nil {
+		c.generationIO = make(map[string]string)
+	}
+	c.generationIO[generation.ID] = generationIOFingerprint(generation)
+	if _, ok := c.generationIDs[generation.ID]; ok {
+		return
+	}
+	c.generationIDs[generation.ID] = struct{}{}
+	c.generationIDOrder = append(c.generationIDOrder, generation.ID)
+	for len(c.generationIDOrder) > c.recordedGenerationLimit() {
+		oldest := c.generationIDOrder[0]
+		c.generationIDOrder[0] = ""
+		c.generationIDOrder = c.generationIDOrder[1:]
+		delete(c.generationIDs, oldest)
+		delete(c.generationIO, oldest)
+	}
+}
+
+func (c *Client) hasRecordedGenerationID(generationID string) bool {
+	if c == nil || generationID == "" {
+		return false
+	}
+	c.generationMu.RLock()
+	defer c.generationMu.RUnlock()
+	_, ok := c.generationIDs[generationID]
+	return ok
+}
+
+func (c *Client) hasRecordedGenerationIO(generationID string, fingerprint string) bool {
+	if c == nil || generationID == "" || fingerprint == "" {
+		return false
+	}
+	c.generationMu.RLock()
+	defer c.generationMu.RUnlock()
+	return c.generationIO[generationID] == fingerprint
+}
+
+func (c *Client) recordedGenerationLimit() int {
+	if c == nil {
+		return minRecordedGenerationIDs
+	}
+	queueSize := c.config.GenerationExport.QueueSize
+	batchSize := c.config.GenerationExport.BatchSize
+	return max(minRecordedGenerationIDs, queueSize*2, queueSize+batchSize)
 }
 
 func (c *Client) now() time.Time {

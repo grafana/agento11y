@@ -4,16 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	sigilv1 "github.com/grafana/sigil-sdk/go/proto/sigil/v1"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -86,14 +83,14 @@ func (r *experimentRecorder) requestCount() int {
 
 func experimentBody(overrides map[string]any) map[string]any {
 	body := map[string]any{
-		"tenant_id":   "tenant-a",
-		"run_id":      "run_1",
-		"name":        "PR 123",
-		"source":      "external",
-		"status":      "running",
-		"score_count": float64(0),
-		"created_at":  "2026-05-28T12:00:00Z",
-		"updated_at":  "2026-05-28T12:00:00Z",
+		"tenant_id":     "tenant-a",
+		"experiment_id": "run_1",
+		"name":          "PR 123",
+		"source":        "external",
+		"status":        "running",
+		"score_count":   float64(0),
+		"created_at":    "2026-05-28T12:00:00Z",
+		"updated_at":    "2026-05-28T12:00:00Z",
 	}
 	maps.Copy(body, overrides)
 	return body
@@ -125,12 +122,12 @@ func newExperimentTestClient(t *testing.T, serverURL string) *Client {
 	return client
 }
 
-func TestCreateExperimentRoundTrip(t *testing.T) {
+func TestCreateExperimentUpsertsExternalRun(t *testing.T) {
 	recorder := &experimentRecorder{}
-	recorder.push(http.StatusOK, experimentBody(map[string]any{
+	recorder.push(http.StatusOK, map[string]any{"run": experimentBody(map[string]any{
 		"tags":     []string{"smoke"},
 		"metadata": map[string]any{"git_sha": "abc"},
-	}))
+	})})
 	server := httptest.NewServer(recorder.handler(t))
 	defer server.Close()
 
@@ -147,50 +144,80 @@ func TestCreateExperimentRoundTrip(t *testing.T) {
 	}
 
 	req := recorder.request(0)
-	if req.Method != http.MethodPost || req.Path != "/api/v1/eval/experiments" {
+	if req.Method != http.MethodPost || req.Path != "/api/v1/experiment-runs:upsert" {
 		t.Fatalf("unexpected request %s %s", req.Method, req.Path)
 	}
 	if got := req.Headers.Get("X-Scope-OrgID"); got != "tenant-a" {
 		t.Fatalf("expected tenant header, got %q", got)
 	}
-	if req.Payload["run_id"] != "run_1" || req.Payload["name"] != "PR 123" || req.Payload["source"] != "external" {
+	if req.Payload["experiment_id"] != "run_1" || req.Payload["name"] != "PR 123" {
 		t.Fatalf("unexpected payload: %#v", req.Payload)
+	}
+	if _, ok := req.Payload["run_id"]; ok {
+		t.Fatalf("upsert payload must not send run_id: %#v", req.Payload)
+	}
+	source := req.Payload["source"].(map[string]any)
+	if source["kind"] != "sdk" || source["id"] != "go" {
+		t.Fatalf("unexpected source: %#v", source)
 	}
 	if run.RunID != "run_1" || run.Status != "running" || run.CreatedAt == nil {
 		t.Fatalf("unexpected run: %#v", run)
 	}
 }
 
-func TestCompleteExperimentSendsStatusPatch(t *testing.T) {
+func TestCreateExperimentDecodesSourceObject(t *testing.T) {
 	recorder := &experimentRecorder{}
-	recorder.push(http.StatusOK, experimentBody(map[string]any{"status": "succeeded", "score_count": float64(3)}))
+	recorder.push(http.StatusOK, map[string]any{"run": experimentBody(map[string]any{
+		"source": map[string]any{"kind": "sdk", "id": "go"},
+	})})
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	run, err := client.CreateExperiment(context.Background(), CreateExperimentRequest{
+		RunID:  "run_1",
+		Name:   "PR 123",
+		Source: ExperimentSourceExternal,
+	})
+	if err != nil {
+		t.Fatalf("create experiment: %v", err)
+	}
+	if run.Source != "sdk" {
+		t.Fatalf("expected source kind from object response, got %q", run.Source)
+	}
+}
+
+func TestFinalizeExperimentPostsCompleted(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusOK, map[string]any{"run": experimentBody(map[string]any{"status": "completed", "score_count": float64(3)})})
 	server := httptest.NewServer(recorder.handler(t))
 	defer server.Close()
 
 	client := newExperimentTestClient(t, server.URL)
 	scoreCount := 3
-	run, err := client.CompleteExperiment(context.Background(), "run_1", ExperimentStatusSucceeded, CompleteExperimentOptions{ScoreCount: &scoreCount})
+	run, err := client.FinalizeExperiment(context.Background(), "run_1", ExperimentStatusSucceeded, CompleteExperimentOptions{ScoreCount: &scoreCount})
 	if err != nil {
-		t.Fatalf("complete experiment: %v", err)
+		t.Fatalf("finalize experiment: %v", err)
 	}
 	req := recorder.request(0)
-	if req.Method != http.MethodPatch || req.Path != "/api/v1/eval/experiments/run_1" {
+	if req.Method != http.MethodPost || req.Path != "/api/v1/experiment-runs/run_1:finalize" {
 		t.Fatalf("unexpected request %s %s", req.Method, req.Path)
 	}
-	if req.Payload["status"] != "succeeded" || req.Payload["score_count"] != float64(3) {
+	if req.Payload["status"] != "completed" || req.Payload["score_count"] != float64(3) {
 		t.Fatalf("unexpected payload: %#v", req.Payload)
 	}
-	if run.Status != "succeeded" || run.ScoreCount != 3 {
+	if run.Status != "completed" || run.ScoreCount != 3 {
 		t.Fatalf("unexpected run: %#v", run)
 	}
 }
 
-func TestExportScoresRoundTripAndAcceptedCount(t *testing.T) {
+func TestExportScoresUsesExperimentIDAndTrialID(t *testing.T) {
 	recorder := &experimentRecorder{}
 	recorder.push(http.StatusAccepted, map[string]any{
 		"results": []map[string]any{
-			{"score_id": "sc1", "accepted": true},
-			{"score_id": "sc2", "accepted": false, "error": "bad"},
+			{"score_id": "sc1", "accepted": true, "status": "accepted"},
+			{"score_id": "sc2", "accepted": false, "status": "duplicate"},
+			{"score_id": "sc3", "accepted": false, "status": "rejected", "error": "bad"},
 		},
 	})
 	server := httptest.NewServer(recorder.handler(t))
@@ -201,25 +228,35 @@ func TestExportScoresRoundTripAndAcceptedCount(t *testing.T) {
 	response, err := client.ExportScores(context.Background(), []ScoreItem{
 		{
 			ScoreID:          "sc1",
-			GenerationID:     "gen1",
-			ConversationID:   "conv1",
+			TrialID:          "trial-1",
+			TestCaseID:       "case-1",
 			RunID:            "run_1",
 			EvaluatorID:      "smoke.reward",
 			EvaluatorVersion: "2026-05-28",
+			EvaluatorKind:    "deterministic",
 			ScoreKey:         "reward",
 			Value:            NumberScoreValue(0.82),
 			Passed:           &passed,
-			Metadata:         map[string]any{"task_id": "t1"},
+			Metadata:         map[string]any{"task_id": "case-1"},
 			Source:           &ScoreSource{Kind: "experiment", ID: "run_1"},
 		},
 		{
 			ScoreID:          "sc2",
-			GenerationID:     "gen2",
+			TrialID:          "trial-1",
 			RunID:            "run_1",
 			EvaluatorID:      "smoke.reward",
 			EvaluatorVersion: "2026-05-28",
 			ScoreKey:         "pass",
 			Value:            BoolScoreValue(true),
+		},
+		{
+			ScoreID:          "sc3",
+			TrialID:          "trial-1",
+			RunID:            "run_1",
+			EvaluatorID:      "smoke.reward",
+			EvaluatorVersion: "2026-05-28",
+			ScoreKey:         "bad",
+			Value:            StringScoreValue("bad"),
 		},
 	})
 	if err != nil {
@@ -231,14 +268,45 @@ func TestExportScoresRoundTripAndAcceptedCount(t *testing.T) {
 	}
 	scores := req.Payload["scores"].([]any)
 	first := scores[0].(map[string]any)
-	if first["run_id"] != "run_1" {
-		t.Fatalf("expected run_id in score payload, got %#v", first)
+	if first["experiment_id"] != "run_1" || first["trial_id"] != "trial-1" || first["test_case_id"] != "case-1" {
+		t.Fatalf("unexpected score payload: %#v", first)
+	}
+	if _, ok := first["run_id"]; ok {
+		t.Fatalf("score payload must not send run_id: %#v", first)
 	}
 	if value := first["value"].(map[string]any); value["number"] != 0.82 {
 		t.Fatalf("unexpected score value: %#v", value)
 	}
-	if response.AcceptedCount() != 1 || len(response.Rejected()) != 1 || response.Rejected()[0].ScoreID != "sc2" {
+	if response.AcceptedCount() != 1 || response.DuplicateCount() != 1 || len(response.Rejected()) != 1 || response.Rejected()[0].ScoreID != "sc3" {
 		t.Fatalf("unexpected response: %#v", response)
+	}
+}
+
+func TestAcceptedOrErrorDoesNotCountDuplicatesAsAccepted(t *testing.T) {
+	accepted, err := acceptedOrError(&ExportScoresResponse{
+		Results: []ExportScoreResult{
+			{ScoreID: "sc1", Accepted: true, Status: "accepted"},
+			{ScoreID: "sc2", Accepted: false, Status: "duplicate"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("accepted or error: %v", err)
+	}
+	if accepted != 1 {
+		t.Fatalf("expected only newly accepted scores to count, got %d", accepted)
+	}
+}
+
+func TestAcceptedOrErrorFailsAggregateRejections(t *testing.T) {
+	accepted, err := acceptedOrError(&ExportScoresResponse{
+		Accepted:      1,
+		RejectedCount: 2,
+	})
+	if !errors.Is(err, ErrScoreExportFailed) {
+		t.Fatalf("expected score export failure, got accepted=%d err=%v", accepted, err)
+	}
+	if accepted != 0 {
+		t.Fatalf("expected no accepted count on rejection, got %d", accepted)
 	}
 }
 
@@ -253,8 +321,7 @@ func TestExperimentErrorsMapNotFoundAndConflict(t *testing.T) {
 	if _, err := client.GetExperiment(context.Background(), "run_missing"); !errors.Is(err, ErrExperimentNotFound) {
 		t.Fatalf("expected ErrExperimentNotFound, got %v", err)
 	}
-	status := ExperimentStatusRunning
-	if _, err := client.UpdateExperiment(context.Background(), "run_1", UpdateExperimentRequest{Status: &status}); !errors.Is(err, ErrExperimentConflict) {
+	if _, err := client.FinalizeExperiment(context.Background(), "run_1", ExperimentStatusCompleted, CompleteExperimentOptions{}); !errors.Is(err, ErrExperimentConflict) {
 		t.Fatalf("expected ErrExperimentConflict, got %v", err)
 	}
 }
@@ -269,7 +336,7 @@ func TestExportScoresRetriesThenSucceedsOn5xx(t *testing.T) {
 	client := newExperimentTestClient(t, server.URL)
 	response, err := client.ExportScores(context.Background(), []ScoreItem{{
 		ScoreID:          "sc1",
-		GenerationID:     "gen1",
+		TrialID:          "trial-1",
 		EvaluatorID:      "ev",
 		EvaluatorVersion: "v1",
 		ScoreKey:         "reward",
@@ -286,67 +353,97 @@ func TestExportScoresRetriesThenSucceedsOn5xx(t *testing.T) {
 	}
 }
 
-func TestEvalOverrideRoutesExperimentsViaProxyButScoresViaIngest(t *testing.T) {
+func TestExportScoresDoesNotRetryWithoutEvaluatorKind(t *testing.T) {
 	recorder := &experimentRecorder{}
-	recorder.push(http.StatusOK, experimentBody(nil))
-	recorder.push(http.StatusAccepted, map[string]any{"results": []map[string]any{{"score_id": "sc1", "accepted": true}}})
+	recorder.push(http.StatusBadRequest, map[string]any{"error": `json: unknown field "evaluator_kind"`})
 	server := httptest.NewServer(recorder.handler(t))
 	defer server.Close()
 
-	t.Setenv(envEvalEndpoint, server.URL)
-	t.Setenv(envEvalPathPrefix, "/api/plugins/grafana-sigil-app/resources")
-	t.Setenv(envEvalAuthToken, "glsa_test_token")
-
 	client := newExperimentTestClient(t, server.URL)
-	if _, err := client.CreateExperiment(context.Background(), CreateExperimentRequest{RunID: "run_1", Name: "cloud"}); err != nil {
-		t.Fatalf("create experiment: %v", err)
-	}
-	createReq := recorder.request(0)
-	if createReq.Path != "/api/plugins/grafana-sigil-app/resources/eval/experiments" {
-		t.Fatalf("unexpected create path: %s", createReq.Path)
-	}
-	if got := createReq.Headers.Get("Authorization"); got != "Bearer glsa_test_token" {
-		t.Fatalf("expected eval bearer token, got %q", got)
-	}
-
-	if _, err := client.ExportScores(context.Background(), []ScoreItem{{
+	_, err := client.ExportScores(context.Background(), []ScoreItem{{
 		ScoreID:          "sc1",
-		GenerationID:     "gen1",
-		RunID:            "run_1",
+		TrialID:          "trial-1",
 		EvaluatorID:      "ev",
 		EvaluatorVersion: "v1",
+		EvaluatorKind:    "deterministic",
 		ScoreKey:         "reward",
 		Value:            NumberScoreValue(1),
-	}}); err != nil {
-		t.Fatalf("export scores: %v", err)
+	}})
+	if !errors.Is(err, ErrScoreValidationFailed) {
+		t.Fatalf("expected validation error, got %v", err)
 	}
-	scoreReq := recorder.request(1)
-	if scoreReq.Path != "/api/v1/scores:export" {
-		t.Fatalf("unexpected score path: %s", scoreReq.Path)
+	if recorder.requestCount() != 1 {
+		t.Fatalf("expected no evaluator_kind fallback retry, got %d request(s)", recorder.requestCount())
 	}
-	if got := scoreReq.Headers.Get("X-Scope-OrgID"); got != "tenant-a" {
-		t.Fatalf("expected tenant header, got %q", got)
-	}
-	if got := scoreReq.Headers.Get("Authorization"); got != "" {
-		t.Fatalf("score export should not use eval bearer token, got %q", got)
+	first := recorder.request(0).Payload["scores"].([]any)[0].(map[string]any)
+	if first["evaluator_kind"] != "deterministic" {
+		t.Fatalf("expected first request to include evaluator_kind, got %#v", first)
 	}
 }
 
-func TestGetExperimentReportParsesSummary(t *testing.T) {
+func TestGetExperimentReportParsesTypedTrialSummary(t *testing.T) {
 	recorder := &experimentRecorder{}
 	recorder.push(http.StatusOK, map[string]any{
-		"run": experimentBody(map[string]any{"status": "succeeded"}),
+		"experiment": experimentBody(map[string]any{"status": "completed"}),
 		"summary": map[string]any{
-			"n_conversations": float64(2),
-			"n_generations":   float64(3),
-			"n_scores":        float64(3),
+			"test_case_count": float64(2),
+			"trial_count":     float64(3),
+			"completed_count": float64(3),
 			"pass_rate":       0.66,
-			"mean_score":      0.8,
-			"total_cost_usd":  0.5,
+			"pass_at_k":       map[string]float64{"1": 0.66},
+			"pass_power_k":    map[string]float64{"1": 0.66},
+			"final_score_avg": 0.8,
+			"total_cost":      0.5,
 			"total_tokens":    float64(1200),
 		},
-		"breakdowns": map[string]any{"by_task": []map[string]any{{"key": "t1", "count": float64(2)}}},
-		"points":     []map[string]any{{"score_id": "sc1"}},
+		"rows": []map[string]any{{
+			"test_case_id": "t1",
+			"test_case_snapshot": map[string]any{
+				"test_case_id": "t1",
+				"name":         "Case 1",
+				"input":        "2+2",
+				"expected":     "4",
+			},
+			"summary": map[string]any{
+				"trial_count":     float64(1),
+				"completed_count": float64(1),
+				"pass_at_k":       map[string]bool{"1": true},
+				"trial_pass_rate": 1.0,
+			},
+			"trials": []map[string]any{{
+				"trial": map[string]any{
+					"trial_id":      "trial-1",
+					"experiment_id": "run_1",
+					"test_case_id":  "t1",
+					"attempt":       float64(1),
+					"status":        "completed",
+				},
+				"final_score": map[string]any{
+					"score_id":          "score-final",
+					"evaluator_id":      "exact",
+					"evaluator_version": "1",
+					"score_key":         "final",
+					"score_type":        "number",
+					"value":             map[string]any{"number": 1.0},
+					"passed":            true,
+				},
+				"scores": []map[string]any{{
+					"score_id":          "score-final",
+					"evaluator_id":      "exact",
+					"evaluator_version": "1",
+					"score_key":         "final",
+					"score_type":        "number",
+					"value":             map[string]any{"number": 1.0},
+				}},
+				"artifacts": []map[string]any{{
+					"artifact_id": "artifact-1",
+					"parent_kind": "test_case_trial",
+					"parent_id":   "trial-1",
+					"name":        "output",
+					"kind":        "json",
+				}},
+			}},
+		}},
 	})
 	server := httptest.NewServer(recorder.handler(t))
 	defer server.Close()
@@ -359,355 +456,63 @@ func TestGetExperimentReportParsesSummary(t *testing.T) {
 	if recorder.request(0).Path != "/api/v1/eval/experiments/run_1/report" {
 		t.Fatalf("unexpected path: %s", recorder.request(0).Path)
 	}
-	if report.Run.Status != "succeeded" || report.Summary.NGenerations != 3 || report.Summary.TotalTokens != 1200 {
+	if report.Run.Status != "completed" || report.Summary.TestCaseCount != 2 || report.Summary.TotalTokens != 1200 || len(report.Rows) != 1 {
 		t.Fatalf("unexpected report: %#v", report)
 	}
-}
-
-type capturingExperimentExporter struct {
-	mu       sync.Mutex
-	requests []*sigilv1.ExportGenerationsRequest
-}
-
-func (e *capturingExperimentExporter) Export(_ context.Context, request *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error) {
-	e.mu.Lock()
-	e.requests = append(e.requests, request)
-	e.mu.Unlock()
-	response := &sigilv1.ExportGenerationsResponse{}
-	for _, generation := range request.GetGenerations() {
-		response.Results = append(response.Results, &sigilv1.ExportGenerationResult{
-			GenerationId: generation.GetId(),
-			Accepted:     true,
-		})
+	row := report.Rows[0]
+	if row.TestCaseID != "t1" || row.TestCaseSnapshot == nil || row.TestCaseSnapshot.Name != "Case 1" || row.TestCaseSnapshot.Input != "2+2" || row.TestCaseSnapshot.Expected != "4" {
+		t.Fatalf("unexpected typed row: %#v", row)
 	}
-	return response, nil
-}
-
-func (e *capturingExperimentExporter) Shutdown(context.Context) error { return nil }
-
-func (e *capturingExperimentExporter) firstGeneration() *sigilv1.Generation {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if len(e.requests) == 0 || len(e.requests[0].GetGenerations()) == 0 {
-		return nil
+	if len(row.Trials) != 1 || row.Trials[0].Trial.TrialID != "trial-1" || row.Trials[0].FinalScore == nil {
+		t.Fatalf("unexpected typed trial result: %#v", row.Trials)
 	}
-	return e.requests[0].GetGenerations()[0]
-}
-
-func TestExperimentContextTagsExistingInstrumentationAndCapturesIDs(t *testing.T) {
-	exporter := &capturingExperimentExporter{}
-	client := NewClient(Config{
-		Tracer: noop.NewTracerProvider().Tracer("sigil-go-experiment-context-test"),
-		GenerationExport: GenerationExportConfig{
-			Protocol:        GenerationExportProtocolHTTP,
-			Endpoint:        "http://example.invalid/api/v1/generations:export",
-			Auth:            AuthConfig{Mode: ExportAuthModeTenant, TenantID: "tenant-a"},
-			Insecure:        BoolPtr(true),
-			BatchSize:       10,
-			FlushInterval:   time.Hour,
-			QueueSize:       100,
-			MaxRetries:      1,
-			InitialBackoff:  time.Millisecond,
-			MaxBackoff:      time.Millisecond,
-			PayloadMaxBytes: 1 << 20,
-		},
-		testGenerationExporter: exporter,
-	})
-	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
-
-	run := NewExperimentRun(ExperimentOptions{
-		Client:        client,
-		RunID:         "run_existing",
-		Name:          "existing",
-		Upload:        UploadModeContinuous,
-		AgentName:     "support-bot",
-		ExtraTags:     map[string]string{"suite": "smoke"},
-		ExtraMetadata: map[string]any{"candidate": "abc"},
-	})
-	ctx := WithConversationID(context.Background(), "ctx-conv")
-	ctx = WithAgentName(ctx, "ctx-agent")
-	ctx = run.Context(ctx)
-
-	ctx, recorder := client.StartGeneration(ctx, GenerationStart{
-		Model: sigilModelRef("openai", "gpt-5"),
-	})
-	recorder.SetResult(Generation{
-		Input:  []Message{UserTextMessage("hello")},
-		Output: []Message{AssistantTextMessage("world")},
-	}, nil)
-	recorder.End()
-	if err := client.Flush(ctx); err != nil {
-		t.Fatalf("flush: %v", err)
+	if row.Trials[0].FinalScore.Value.Number == nil || *row.Trials[0].FinalScore.Value.Number != 1 {
+		t.Fatalf("unexpected typed final score: %#v", row.Trials[0].FinalScore)
 	}
-
-	generation := exporter.firstGeneration()
-	if generation == nil {
-		t.Fatal("expected exported generation")
-	}
-	if generation.GetTags()[ExperimentRunIDTag] != "run_existing" {
-		t.Fatalf("expected experiment run tag, got %#v", generation.GetTags())
-	}
-	if generation.GetMetadata().GetFields()[ExperimentRunIDMetadataKey].GetStringValue() != "run_existing" {
-		t.Fatalf("expected experiment run metadata, got %#v", generation.GetMetadata())
-	}
-	if got := generation.GetConversationId(); got != "ctx-conv" {
-		t.Fatalf("expected context conversation id to win, got %q", got)
-	}
-	if got := generation.GetAgentName(); got != "ctx-agent" {
-		t.Fatalf("expected context agent name to win, got %q", got)
-	}
-	if ids := run.ProducedGenerationIDs(); len(ids) != 1 || ids[0] != generation.GetId() {
-		t.Fatalf("unexpected captured ids: %#v", ids)
+	if len(row.Trials[0].Artifacts) != 1 || row.Trials[0].Artifacts[0].ArtifactID != "artifact-1" {
+		t.Fatalf("unexpected typed artifacts: %#v", row.Trials[0].Artifacts)
 	}
 }
 
-func TestWithExperimentPassesExperimentContext(t *testing.T) {
+func TestListExperimentScoresParsesTypedScores(t *testing.T) {
 	recorder := &experimentRecorder{}
-	recorder.push(http.StatusOK, experimentBody(map[string]any{"run_id": "run_ctx"}))
-	recorder.push(http.StatusOK, experimentBody(map[string]any{"run_id": "run_ctx", "status": "succeeded"}))
+	recorder.push(http.StatusOK, map[string]any{
+		"items": []map[string]any{{
+			"tenant_id":         "tenant-a",
+			"score_id":          "score-1",
+			"generation_id":     "gen-1",
+			"experiment_id":     "run_1",
+			"trial_id":          "trial-1",
+			"test_case_id":      "case-1",
+			"evaluator_id":      "exact",
+			"evaluator_version": "1",
+			"score_key":         "final",
+			"score_type":        "number",
+			"value":             map[string]any{"number": 0.75},
+			"passed":            true,
+			"source_kind":       "experiment",
+			"source_id":         "run_1",
+			"agent_name":        "agent",
+			"effective_version": "v1",
+		}},
+		"next_cursor": "42",
+	})
 	server := httptest.NewServer(recorder.handler(t))
 	defer server.Close()
 
 	client := newExperimentTestClient(t, server.URL)
-	sawExperimentContext := false
-	_, err := WithExperiment(context.Background(), ExperimentOptions{
-		Client: client,
-		RunID:  "run_ctx",
-		Name:   "context",
-	}, func(ctx context.Context, run *ExperimentRun) error {
-		got, ok := experimentRunFromContext(ctx)
-		sawExperimentContext = ok && got == run
-		return nil
-	})
+	response, err := client.ListExperimentScores(context.Background(), "run_1", 25, "")
 	if err != nil {
-		t.Fatalf("with experiment: %v", err)
+		t.Fatalf("list scores: %v", err)
 	}
-	if !sawExperimentContext {
-		t.Fatal("expected callback context to carry experiment run")
+	if recorder.request(0).Path != "/api/v1/eval/experiments/run_1/scores?limit=25" {
+		t.Fatalf("unexpected path: %s", recorder.request(0).Path)
 	}
-}
-
-func TestWithExperimentRunIDTagsExistingInstrumentation(t *testing.T) {
-	exporter := &capturingExperimentExporter{}
-	client := NewClient(Config{
-		Tracer: noop.NewTracerProvider().Tracer("sigil-go-experiment-run-id-test"),
-		GenerationExport: GenerationExportConfig{
-			Protocol:        GenerationExportProtocolHTTP,
-			Endpoint:        "http://example.invalid/api/v1/generations:export",
-			Auth:            AuthConfig{Mode: ExportAuthModeTenant, TenantID: "tenant-a"},
-			Insecure:        BoolPtr(true),
-			BatchSize:       10,
-			FlushInterval:   time.Hour,
-			QueueSize:       100,
-			MaxRetries:      1,
-			InitialBackoff:  time.Millisecond,
-			MaxBackoff:      time.Millisecond,
-			PayloadMaxBytes: 1 << 20,
-		},
-		testGenerationExporter: exporter,
-	})
-	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
-
-	ctx := WithExperimentRunID(context.Background(), "run_remote")
-	ctx, recorder := client.StartGeneration(ctx, GenerationStart{
-		Model:    sigilModelRef("anthropic", "claude-sonnet"),
-		Metadata: map[string]any{"service": "assistant-api"},
-		Tags:     map[string]string{"surface": "a2a"},
-	})
-	recorder.SetResult(Generation{
-		Input:  []Message{UserTextMessage("hello")},
-		Output: []Message{AssistantTextMessage("world")},
-	}, nil)
-	recorder.End()
-	if err := client.Flush(ctx); err != nil {
-		t.Fatalf("flush: %v", err)
+	if response.NextCursor != "42" || len(response.Items) != 1 {
+		t.Fatalf("unexpected score list: %#v", response)
 	}
-
-	generation := exporter.firstGeneration()
-	if generation == nil {
-		t.Fatal("expected exported generation")
+	score := response.Items[0]
+	if score.ScoreID != "score-1" || score.ScoreType != ScoreTypeNumber || score.Value.Number == nil || *score.Value.Number != 0.75 {
+		t.Fatalf("unexpected typed score: %#v", score)
 	}
-	if generation.GetTags()[ExperimentRunIDTag] != "run_remote" || generation.GetTags()["surface"] != "a2a" {
-		t.Fatalf("expected experiment and existing tags, got %#v", generation.GetTags())
-	}
-	fields := generation.GetMetadata().GetFields()
-	if fields[ExperimentRunIDMetadataKey].GetStringValue() != "run_remote" || fields["service"].GetStringValue() != "assistant-api" {
-		t.Fatalf("expected experiment and existing metadata, got %#v", generation.GetMetadata())
-	}
-}
-
-func TestExperimentRunnerExportsScoresAndFinalizesSucceeded(t *testing.T) {
-	recorder := &experimentRecorder{}
-	recorder.push(http.StatusOK, experimentBody(map[string]any{"run_id": "run_1"}))
-	recorder.push(http.StatusAccepted, map[string]any{"results": []map[string]any{{"score_id": "score-1", "accepted": true}}})
-	recorder.push(http.StatusOK, experimentBody(map[string]any{"run_id": "run_1", "status": "succeeded", "score_count": float64(1)}))
-	server := httptest.NewServer(recorder.handler(t))
-	defer server.Close()
-
-	client := newExperimentTestClient(t, server.URL)
-	runner := ExperimentRunner{
-		Client:      client,
-		RunID:       "run_1",
-		Name:        "smoke",
-		Dataset:     map[string]any{"id": "support_smoke", "version": "2026-05-28"},
-		Candidate:   map[string]any{"git_sha": "abc123"},
-		Tags:        []string{"smoke"},
-		Upload:      UploadModeContinuous,
-		FetchReport: false,
-	}
-	result, err := runner.Run(
-		context.Background(),
-		[]DatasetItem{{ID: "it1", Input: "2+2", Expected: "4", Metadata: map[string]any{"task_id": "math"}}},
-		func(_ context.Context, item DatasetItem) (TargetResult, error) {
-			return TargetResult{Output: item.Expected, GenerationIDs: []string{"gen-it1"}, ConversationID: "conv-it1"}, nil
-		},
-		[]DatasetScorer{
-			func(_ context.Context, item DatasetItem, result TargetResult) ([]ScoreOutput, error) {
-				passed := result.Output == item.Expected
-				return []ScoreOutput{{
-					EvaluatorID:      "smoke.reward",
-					EvaluatorVersion: "2026-05-28",
-					ScoreKey:         "reward",
-					Value:            NumberScoreValue(1),
-					Passed:           &passed,
-					Metadata:         map[string]any{"task_id": item.Metadata["task_id"]},
-				}}, nil
-			},
-		},
-	)
-	if err != nil {
-		t.Fatalf("run experiment: %v", err)
-	}
-	if result.RunID != "run_1" || result.AcceptedScores != 1 || !strings.Contains(result.URL, "run_1") {
-		t.Fatalf("unexpected result: %#v", result)
-	}
-	createReq := recorder.request(0)
-	if createReq.Payload["source"] != "external" || createReq.Payload["run_id"] != "run_1" {
-		t.Fatalf("unexpected create payload: %#v", createReq.Payload)
-	}
-	scoreReq := recorder.request(1)
-	scores := scoreReq.Payload["scores"].([]any)
-	score := scores[0].(map[string]any)
-	if score["run_id"] != "run_1" || score["generation_id"] != "gen-it1" || score["conversation_id"] != "conv-it1" {
-		t.Fatalf("unexpected score payload: %#v", score)
-	}
-	metadata := score["metadata"].(map[string]any)
-	if metadata["dataset_id"] != "support_smoke" || metadata["item_id"] != "it1" {
-		t.Fatalf("unexpected score metadata: %#v", metadata)
-	}
-	completeReq := recorder.request(2)
-	if completeReq.Method != http.MethodPatch || completeReq.Payload["status"] != "succeeded" || completeReq.Payload["score_count"] != float64(1) {
-		t.Fatalf("unexpected complete request: %#v", completeReq)
-	}
-}
-
-func TestExperimentScoreMetadataPreservesStructuralKeys(t *testing.T) {
-	run := NewExperimentRun(ExperimentOptions{
-		RunID:     "run_1",
-		Dataset:   map[string]any{"id": "dataset-a", "version": "2026-06-02"},
-		Candidate: map[string]any{"git_sha": "abc123"},
-	})
-	item := DatasetItem{
-		ID: "item-a",
-		Metadata: map[string]any{
-			"dataset_id":      "wrong-dataset",
-			"dataset_version": "wrong-version",
-			"item_id":         "wrong-item",
-			"trial_id":        "wrong-trial",
-			"candidate":       "wrong-candidate",
-			"custom":          "item-custom",
-		},
-	}
-	score := ScoreOutput{
-		EvaluatorID:      "eval",
-		EvaluatorVersion: "v1",
-		ScoreKey:         "quality",
-		Value:            NumberScoreValue(1),
-		Metadata: map[string]any{
-			"dataset_id":      "score-dataset",
-			"dataset_version": "score-version",
-			"item_id":         "score-item",
-			"trial_id":        "score-trial",
-			"candidate":       "score-candidate",
-			"custom":          "score-custom",
-		},
-	}
-
-	scoreItem, err := run.buildScoreItem(score, &item, []string{"gen-a"}, "conv-a", "trial-a")
-	if err != nil {
-		t.Fatalf("build score item: %v", err)
-	}
-
-	metadata := scoreItem.Metadata
-	if metadata["dataset_id"] != "dataset-a" ||
-		metadata["dataset_version"] != "2026-06-02" ||
-		metadata["item_id"] != "item-a" ||
-		metadata["trial_id"] != "trial-a" {
-		t.Fatalf("structural metadata was not preserved: %#v", metadata)
-	}
-	candidate, ok := metadata["candidate"].(map[string]any)
-	if !ok || candidate["git_sha"] != "abc123" {
-		t.Fatalf("candidate metadata was not preserved: %#v", metadata["candidate"])
-	}
-	if metadata["custom"] != "score-custom" {
-		t.Fatalf("expected user metadata to keep non-structural keys, got %#v", metadata)
-	}
-}
-
-func TestExperimentRunnerPassesContextForExistingInstrumentation(t *testing.T) {
-	recorder := &experimentRecorder{}
-	recorder.push(http.StatusOK, experimentBody(map[string]any{"run_id": "run_ctx"}))
-	recorder.push(http.StatusAccepted, map[string]any{"results": []map[string]any{{"score_id": "score-1", "accepted": true}}})
-	recorder.push(http.StatusOK, experimentBody(map[string]any{"run_id": "run_ctx", "status": "succeeded", "score_count": float64(1)}))
-	server := httptest.NewServer(recorder.handler(t))
-	defer server.Close()
-
-	client := newExperimentTestClient(t, server.URL)
-	runner := ExperimentRunner{
-		Client:      client,
-		RunID:       "run_ctx",
-		Name:        "context",
-		Upload:      UploadModeContinuous,
-		FetchReport: false,
-	}
-	_, err := runner.Run(
-		context.Background(),
-		[]DatasetItem{{ID: "it1", Input: "question", Expected: "answer"}},
-		func(ctx context.Context, item DatasetItem) (TargetResult, error) {
-			_, rec := client.StartGeneration(ctx, GenerationStart{Model: sigilModelRef("example", "existing-agent")})
-			rec.SetResult(Generation{
-				Input:  []Message{UserTextMessage(fmt.Sprint(item.Input))},
-				Output: []Message{AssistantTextMessage(fmt.Sprint(item.Expected))},
-			}, nil)
-			rec.End()
-			return TargetResult{Output: item.Expected}, nil
-		},
-		[]DatasetScorer{
-			func(context.Context, DatasetItem, TargetResult) ([]ScoreOutput, error) {
-				passed := true
-				return []ScoreOutput{{
-					EvaluatorID:      "example.exact_match",
-					EvaluatorVersion: "2026-06-02",
-					ScoreKey:         "exact_match",
-					Value:            NumberScoreValue(1),
-					Passed:           &passed,
-				}}, nil
-			},
-		},
-	)
-	if err != nil {
-		t.Fatalf("run experiment: %v", err)
-	}
-	scoreReq := recorder.request(1)
-	score := scoreReq.Payload["scores"].([]any)[0].(map[string]any)
-	if score["generation_id"] == "" {
-		t.Fatalf("expected score to attach to captured generation id: %#v", score)
-	}
-	if score["conversation_id"] != StableID("conv", "run_ctx", "it1") {
-		t.Fatalf("unexpected score conversation id: %#v", score)
-	}
-}
-
-func sigilModelRef(provider string, name string) ModelRef {
-	return ModelRef{Provider: provider, Name: name}
 }
