@@ -271,13 +271,16 @@ func (r *ExperimentRun) Finalize(ctx context.Context, status ExperimentStatus, e
 		return nil
 	}
 	scoreCount := r.accepted
-	r.status = string(status)
 	r.mu.Unlock()
+	if err := r.client.Flush(ctx); err != nil {
+		return err
+	}
 	_, err := r.client.FinalizeExperiment(ctx, r.RunID, status, CompleteExperimentOptions{ScoreCount: &scoreCount, Error: errorText})
 	if err != nil {
 		return err
 	}
 	r.mu.Lock()
+	r.status = string(status)
 	r.finalized = true
 	r.mu.Unlock()
 	return nil

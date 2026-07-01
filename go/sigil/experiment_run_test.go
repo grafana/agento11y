@@ -209,6 +209,47 @@ func TestExperimentRunWithTrialRequiresTestCaseID(t *testing.T) {
 	}
 }
 
+func TestExperimentFinalizeFlushesContextGenerations(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusOK, map[string]any{"run": experimentBody(map[string]any{"experiment_id": "run-flush-generations"})})
+	recorder.push(http.StatusOK, map[string]any{"run": experimentBody(map[string]any{"experiment_id": "run-flush-generations", "status": "completed"})})
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	exporter := &capturingGenerationExporter{}
+	client := newExperimentTestClient(t, server.URL)
+	client.exporter = exporter
+
+	_, err := WithExperiment(context.Background(), ExperimentOptions{Client: client, RunID: "run-flush-generations", Name: "flush"}, func(ctx context.Context, _ *ExperimentRun) error {
+		_, generation := client.StartGeneration(ctx, GenerationStart{
+			ID:    "gen-context",
+			Model: ModelRef{Provider: "openai", Name: "gpt-5"},
+		})
+		generation.SetResult(Generation{
+			Input:  []Message{UserTextMessage("hello")},
+			Output: []Message{AssistantTextMessage("hi")},
+		}, nil)
+		generation.End()
+		if err := generation.Err(); err != nil {
+			t.Fatalf("end generation: %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("with experiment: %v", err)
+	}
+	if exporter.requestCount() != 1 {
+		t.Fatalf("expected experiment finalize to flush one generation batch, got %d", exporter.requestCount())
+	}
+	if recorder.requestCount() != 2 {
+		t.Fatalf("expected enter and finalize requests, got %d", recorder.requestCount())
+	}
+	finalizeReq := recorder.request(1)
+	if finalizeReq.Method != http.MethodPost || finalizeReq.Path != "/api/v1/experiment-runs/run-flush-generations:finalize" {
+		t.Fatalf("unexpected finalize request: %#v", finalizeReq)
+	}
+}
+
 func TestExperimentRunTrialDefaultEvaluatorCanBeOverridden(t *testing.T) {
 	runEvaluator := Evaluator{EvaluatorID: "run-default", Version: "1", Kind: EvaluatorKindCustom}
 	trialEvaluator := Evaluator{EvaluatorID: "trial-default", Version: "2", Kind: EvaluatorKindHuman}
