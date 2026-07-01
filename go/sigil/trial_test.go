@@ -2,6 +2,7 @@ package sigil
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -92,6 +93,45 @@ func TestTrialEndCreatesTrialWhenStartWasSkipped(t *testing.T) {
 	}
 	if req := recorder.request(2); req.Method != http.MethodPatch || req.Path != "/api/v1/experiment-runs/run-no-start/trials/"+trial.trialID {
 		t.Fatalf("unexpected trial update request: %#v", req)
+	}
+}
+
+func TestTrialScoreIDIncludesGenerationAndEvaluatorVersion(t *testing.T) {
+	trial := NewTrial(nil, TrialRef{RunID: "run-score-id", TestCaseID: "case-score-id"})
+	evV1 := Evaluator{EvaluatorID: "judge", Version: "v1", Kind: EvaluatorKindCustom}
+	evV2 := Evaluator{EvaluatorID: "judge", Version: "v2", Kind: EvaluatorKindCustom}
+
+	first := trial.Score("quality", NumberScoreValue(1), ScoreOptions{GenerationID: "gen-a", Evaluator: &evV1})
+	same := trial.Score("quality", NumberScoreValue(1), ScoreOptions{GenerationID: "gen-a", Evaluator: &evV1})
+	differentGeneration := trial.Score("quality", NumberScoreValue(1), ScoreOptions{GenerationID: "gen-b", Evaluator: &evV1})
+	differentVersion := trial.Score("quality", NumberScoreValue(1), ScoreOptions{GenerationID: "gen-a", Evaluator: &evV2})
+
+	if first.ScoreID != same.ScoreID {
+		t.Fatalf("expected same score dimensions to produce stable ID, got %q and %q", first.ScoreID, same.ScoreID)
+	}
+	if first.ScoreID == differentGeneration.ScoreID {
+		t.Fatalf("expected generation ID to affect score ID, got %q", first.ScoreID)
+	}
+	if first.ScoreID == differentVersion.ScoreID {
+		t.Fatalf("expected evaluator version to affect score ID, got %q", first.ScoreID)
+	}
+}
+
+func TestTrialArtifactWithoutClientReturnsErrNilClient(t *testing.T) {
+	tests := []struct {
+		name  string
+		trial *Trial
+	}{
+		{name: "nil trial"},
+		{name: "nil client", trial: NewTrial(nil, TrialRef{RunID: "run-artifact", TestCaseID: "case-artifact"})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.trial.Artifact(context.Background(), ArtifactOptions{Name: "output", Text: "hello"})
+			if !errors.Is(err, ErrNilClient) {
+				t.Fatalf("expected ErrNilClient, got %v", err)
+			}
+		})
 	}
 }
 

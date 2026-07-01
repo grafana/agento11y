@@ -323,17 +323,17 @@ func (t *Trial) Score(scoreKey string, value ScoreValue, opts ScoreOptions) Scor
 	if opts.Evaluator != nil {
 		ev = opts.Evaluator.normalized()
 	}
-	scoreID := StableID("score", t.ref.RunID, t.trialID, scoreKey, ev.EvaluatorID)
+	generationID := strings.TrimSpace(opts.GenerationID)
+	if generationID == "" && t.hasGeneration {
+		generationID = t.generationID
+	}
+	scoreID := StableID("score", t.ref.RunID, t.trialID, scoreKey, generationID, ev.EvaluatorID, ev.Version)
 	metadata := map[string]any{}
 	maps.Copy(metadata, t.metadata)
 	maps.Copy(metadata, opts.Metadata)
 	metadata["task_id"] = t.ref.TestCaseID
 	metadata["trial_id"] = t.trialID
 	metadata["attempt"] = t.ref.Attempt
-	generationID := strings.TrimSpace(opts.GenerationID)
-	if generationID == "" && t.hasGeneration {
-		generationID = t.generationID
-	}
 	item := ScoreItem{
 		ScoreID:              scoreID,
 		EvaluatorID:          ev.EvaluatorID,
@@ -414,6 +414,9 @@ type ArtifactOptions struct {
 }
 
 func (t *Trial) Artifact(ctx context.Context, opts ArtifactOptions) (*TrialArtifact, error) {
+	if t == nil || t.client == nil {
+		return nil, ErrNilClient
+	}
 	content := opts.Content
 	kind := opts.Kind
 	mime := opts.MIME
