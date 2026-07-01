@@ -54,6 +54,7 @@ type Trial struct {
 	generationBound    bool
 	generationExported bool
 	hasGeneration      bool
+	flushFailed        bool
 	io                 map[string]any
 	trialCreated       bool
 	usage              map[string]any
@@ -116,21 +117,7 @@ func (t *Trial) End(ctx context.Context, err error) error {
 	if t == nil {
 		return ErrNilClient
 	}
-	if err != nil {
-		t.status = TrialStatusErrored
-		t.errorText = err.Error()
-	} else if !t.hasFinal {
-		t.status = TrialStatusFailed
-		if t.errorText == "" {
-			t.errorText = "trial exited without a final score"
-		}
-	} else if t.status == TrialStatusRunning {
-		if t.finalPassed != nil && *t.finalPassed {
-			t.status = TrialStatusPassed
-		} else {
-			t.status = TrialStatusFailed
-		}
-	}
+	t.resolveEndStatus(err)
 	cleanupCtx, cancel := experimentCleanupContext(ctx)
 	defer cancel()
 	if err := t.createTrial(cleanupCtx); err != nil {
@@ -140,12 +127,39 @@ func (t *Trial) End(ctx context.Context, err error) error {
 	if flushErr != nil {
 		t.status = TrialStatusErrored
 		t.errorText = flushErr.Error()
+		t.flushFailed = true
 		if finalizeErr := t.finalizeTrial(cleanupCtx); finalizeErr != nil {
 			return errors.Join(flushErr, fmt.Errorf("finalize trial %q: %w", t.trialID, finalizeErr))
 		}
 		return flushErr
 	}
 	return t.finalizeTrial(cleanupCtx)
+}
+
+func (t *Trial) resolveEndStatus(err error) {
+	if err != nil {
+		t.status = TrialStatusErrored
+		t.errorText = err.Error()
+		t.flushFailed = false
+		return
+	}
+	if !t.hasFinal {
+		t.status = TrialStatusFailed
+		if t.errorText == "" || t.flushFailed {
+			t.errorText = "trial exited without a final score"
+		}
+		t.flushFailed = false
+		return
+	}
+	if t.status == TrialStatusRunning || t.flushFailed {
+		if t.finalPassed != nil && *t.finalPassed {
+			t.status = TrialStatusPassed
+		} else {
+			t.status = TrialStatusFailed
+		}
+		t.errorText = ""
+	}
+	t.flushFailed = false
 }
 
 func (t *Trial) createTrial(ctx context.Context) error {
@@ -461,11 +475,13 @@ func (t *Trial) Artifact(ctx context.Context, opts ArtifactOptions) (*TrialArtif
 
 func (t *Trial) Succeed() *Trial {
 	t.status = TrialStatusPassed
+	t.flushFailed = false
 	return t
 }
 
 func (t *Trial) Fail(errorText string) *Trial {
 	t.status = TrialStatusFailed
+	t.flushFailed = false
 	if errorText != "" {
 		t.errorText = errorText
 	}

@@ -226,6 +226,46 @@ func TestTrialEndFinalizesFailedWhenScoreFlushFails(t *testing.T) {
 	}
 }
 
+func TestTrialEndRetryRecomputesStatusAfterScoreFlushFailure(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusOK, map[string]any{"trial_id": "trial-flush-retry"})
+	recorder.push(http.StatusInternalServerError, map[string]any{"error": "score export failed"})
+	recorder.push(http.StatusOK, map[string]any{"trial_id": "trial-flush-retry"})
+	recorder.push(http.StatusAccepted, map[string]any{"results": []map[string]any{{"score_id": "score-1", "accepted": true}}})
+	recorder.push(http.StatusOK, map[string]any{"trial_id": "trial-flush-retry"})
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	client.config.GenerationExport.MaxRetries = 0
+	trial := NewTrial(client, TrialRef{RunID: "run-flush-retry", TestCaseID: "case-flush-retry"})
+	if err := trial.Start(context.Background()); err != nil {
+		t.Fatalf("start trial: %v", err)
+	}
+	trial.FinalScore(BoolScoreValue(true), ScoreOptions{})
+
+	if err := trial.End(context.Background(), nil); err == nil {
+		t.Fatal("expected first end to fail score export")
+	}
+	if err := trial.End(context.Background(), nil); err != nil {
+		t.Fatalf("retry end: %v", err)
+	}
+	if recorder.requestCount() != 5 {
+		t.Fatalf("expected create, failed score export, failed update, retried score export, completed update; got %d requests", recorder.requestCount())
+	}
+	failedUpdate := recorder.request(2)
+	if failedUpdate.Payload["status"] != "failed" || failedUpdate.Payload["error"] == "" {
+		t.Fatalf("expected failed trial update after first end, got %#v", failedUpdate.Payload)
+	}
+	completedUpdate := recorder.request(4)
+	if completedUpdate.Payload["status"] != "completed" {
+		t.Fatalf("expected completed trial update after retry, got %#v", completedUpdate.Payload)
+	}
+	if _, ok := completedUpdate.Payload["error"]; ok {
+		t.Fatalf("expected retry to clear stale flush error, got %#v", completedUpdate.Payload)
+	}
+}
+
 func TestTrialSucceedWithoutFinalScoreFinalizesFailed(t *testing.T) {
 	recorder := &experimentRecorder{}
 	recorder.push(http.StatusOK, map[string]any{"trial_id": "trial-succeed-no-score"})
