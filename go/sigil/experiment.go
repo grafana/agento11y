@@ -785,7 +785,7 @@ func (t *Trial) End(ctx context.Context, err error) error {
 	if t == nil {
 		return ErrNilClient
 	}
-	if err != nil && t.status == TrialStatusRunning {
+	if err != nil {
 		t.status = TrialStatusErrored
 		t.errorText = err.Error()
 	} else if t.status == TrialStatusRunning {
