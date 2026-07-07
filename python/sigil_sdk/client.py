@@ -579,8 +579,17 @@ class Client:
                         content_capture=opts.content_capture,
                     )
                 )
+                # Run the executor inside the execute_tool span's context so any spans the
+                # executor creates (e.g. downstream RPCs) nest under it rather than becoming
+                # flat siblings of it in the trace. NoopToolExecutionRecorder has no span, so
+                # fall back to running without an active span in that case.
+                exec_span = getattr(rec, "span", None)
                 try:
-                    result = executor(name, arguments)
+                    if exec_span is not None:
+                        with use_span(exec_span, end_on_exit=False):
+                            result = executor(name, arguments)
+                    else:
+                        result = executor(name, arguments)
                     rec.set_result(arguments=arguments, result=result)
                     out.append(_build_tool_result_message(name, call_id, result, is_error=False))
                 except Exception as exc:  # noqa: BLE001
