@@ -1,12 +1,12 @@
 [project]
 name = "sigil-sdk-google-adk"
-version = "0.9.0"
+version = "0.9.1"
 description = "Google ADK callback handlers for Sigil Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "sigil-sdk>=0.9.0",
+  "sigil-sdk>=0.9.1",
   "google-adk>=1.31.0",
 ]
 
