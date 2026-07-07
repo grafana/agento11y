@@ -11,8 +11,8 @@ type WorkflowStep struct {
 	ConversationID      string            `json:"conversation_id,omitempty"`
 	StepName            string            `json:"step_name,omitempty"`
 	Framework           string            `json:"framework,omitempty"`
-	StartedAt           time.Time         `json:"started_at,omitempty"`
-	CompletedAt         time.Time         `json:"completed_at,omitempty"`
+	StartedAt           time.Time         `json:"started_at"`
+	CompletedAt         time.Time         `json:"completed_at"`
 	InputState          map[string]any    `json:"input_state,omitempty"`
 	OutputState         map[string]any    `json:"output_state,omitempty"`
 	Error               string            `json:"error,omitempty"`
