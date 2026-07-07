@@ -95,6 +95,11 @@ func TestNormalizeWorkflowStepExportURL(t *testing.T) {
 			want:     "https://sigil.example.com" + wire.WorkflowStepExportHTTPPath,
 		},
 		{
+			name:     "generation path with trailing slash rewrites to workflow-step path",
+			endpoint: "https://sigil.example.com" + wire.GenerationExportHTTPPath + "/",
+			want:     "https://sigil.example.com" + wire.WorkflowStepExportHTTPPath,
+		},
+		{
 			name:     "custom path is preserved",
 			endpoint: "https://sigil.example.com/custom/path",
 			want:     "https://sigil.example.com/custom/path",

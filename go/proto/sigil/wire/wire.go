@@ -72,7 +72,10 @@ func normalizeExportURL(endpoint string, insecure bool, defaultPath string, sibl
 	}
 	if parsed.Path == "" || parsed.Path == "/" {
 		parsed.Path = defaultPath
-	} else if siblingPath != "" && parsed.Path == siblingPath {
+	} else if siblingPath != "" && strings.TrimRight(parsed.Path, "/") == siblingPath {
+		// Trim trailing slashes before the sibling comparison so an endpoint
+		// like ".../generations:export/" is still rewritten to the
+		// workflow-step path, matching the JS and Python SDKs.
 		parsed.Path = defaultPath
 	}
 	return parsed.String(), nil
