@@ -1,12 +1,12 @@
 [project]
 name = "sigil-sdk-strands"
-version = "0.9.1"
+version = "0.9.2"
 description = "Strands Agents hooks for Sigil Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "sigil-sdk>=0.9.1",
+  "sigil-sdk>=0.9.2",
   "strands-agents>=1.0.0",
 ]
 

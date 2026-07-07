@@ -1,12 +1,12 @@
 [project]
 name = "sigil-sdk-pydantic-ai"
-version = "0.9.1"
+version = "0.9.2"
 description = "Pydantic AI capability for Sigil Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "sigil-sdk>=0.9.1",
+  "sigil-sdk>=0.9.2",
   "pydantic-ai>=1.86.0,<2.0.0",
 ]
 
