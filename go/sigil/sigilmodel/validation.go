@@ -21,6 +21,11 @@ func (g Generation) Validate() error {
 	return ValidateGeneration(g)
 }
 
+// Validate enforces the workflow-step invariants required by ingest.
+func (s WorkflowStep) Validate() error {
+	return ValidateWorkflowStep(s)
+}
+
 // ValidateGeneration is the package-level form of Generation.Validate.
 func ValidateGeneration(g Generation) error {
 	contentStripped := isContentStripped(g)
@@ -60,6 +65,23 @@ func ValidateGeneration(g Generation) error {
 		}
 	}
 
+	return nil
+}
+
+// ValidateWorkflowStep is the package-level form of WorkflowStep.Validate.
+func ValidateWorkflowStep(step WorkflowStep) error {
+	if strings.TrimSpace(step.ID) == "" {
+		return errors.New("workflow step id is required")
+	}
+	if strings.TrimSpace(step.ConversationID) == "" {
+		return errors.New("workflow step conversation_id is required")
+	}
+	if strings.TrimSpace(step.StepName) == "" {
+		return errors.New("workflow step step_name is required")
+	}
+	if !step.StartedAt.IsZero() && !step.CompletedAt.IsZero() && step.CompletedAt.Before(step.StartedAt) {
+		return errors.New("workflow step completed_at must not be earlier than started_at")
+	}
 	return nil
 }
 

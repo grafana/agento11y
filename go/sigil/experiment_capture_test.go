@@ -32,6 +32,19 @@ func (e *capturingExperimentExporter) Export(_ context.Context, request *sigilv1
 	return response, nil
 }
 
+func (e *capturingExperimentExporter) ExportWorkflowSteps(_ context.Context, request *sigilv1.ExportWorkflowStepsRequest) (*sigilv1.ExportWorkflowStepsResponse, error) {
+	response := &sigilv1.ExportWorkflowStepsResponse{
+		Results: make([]*sigilv1.ExportWorkflowStepResult, 0, len(request.GetWorkflowSteps())),
+	}
+	for _, step := range request.GetWorkflowSteps() {
+		response.Results = append(response.Results, &sigilv1.ExportWorkflowStepResult{
+			StepId:   step.GetId(),
+			Accepted: true,
+		})
+	}
+	return response, nil
+}
+
 func (e *capturingExperimentExporter) Shutdown(context.Context) error { return nil }
 
 func (e *capturingExperimentExporter) firstGeneration() *sigilv1.Generation {

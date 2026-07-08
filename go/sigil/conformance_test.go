@@ -467,6 +467,76 @@ func TestConformance_FullGenerationRoundtrip(t *testing.T) {
 	}
 }
 
+func TestConformance_WorkflowStepRoundtrip(t *testing.T) {
+	now := time.Date(2026, time.March, 12, 12, 0, 0, 0, time.UTC)
+	env := newConformanceEnv(t, withConformanceConfig(func(cfg *sigil.Config) {
+		cfg.Now = func() time.Time { return now }
+		cfg.Tags = map[string]string{
+			"client": "tag",
+			"shared": "client",
+		}
+	}))
+
+	if err := env.Client.EnqueueWorkflowStep(sigil.WorkflowStep{
+		ID:                  "wfs-roundtrip",
+		ConversationID:      "conv-workflow",
+		StepName:            "route",
+		Framework:           "custom",
+		InputState:          map[string]any{"prompt": "hello", "count": 1},
+		OutputState:         map[string]any{"route": "answer"},
+		Tags:                map[string]string{"shared": "step"},
+		LinkedGenerationIDs: []string{"gen-roundtrip"},
+		ParentStepIDs:       []string{"wfs-root"},
+		AgentName:           "agent-workflow",
+		AgentVersion:        "v1",
+		TraceID:             "0123456789abcdef0123456789abcdef",
+		SpanID:              "0123456789abcdef",
+		Metadata:            map[string]any{"run_id": "run-1"},
+	}); err != nil {
+		t.Fatalf("enqueue workflow step: %v", err)
+	}
+
+	env.Shutdown(t)
+
+	step := env.Ingest.SingleWorkflowStep(t)
+	if got := step.GetId(); got != "wfs-roundtrip" {
+		t.Fatalf("workflow step id = %q, want wfs-roundtrip", got)
+	}
+	if got := step.GetConversationId(); got != "conv-workflow" {
+		t.Fatalf("conversation id = %q, want conv-workflow", got)
+	}
+	if got := step.GetStepName(); got != "route" {
+		t.Fatalf("step name = %q, want route", got)
+	}
+	if got := step.GetStartedAt().AsTime(); !got.Equal(now) {
+		t.Fatalf("started_at = %s, want %s", got, now)
+	}
+	if got := step.GetCompletedAt().AsTime(); !got.Equal(now) {
+		t.Fatalf("completed_at = %s, want %s", got, now)
+	}
+	if got := step.GetTags()["client"]; got != "tag" {
+		t.Fatalf("client tag = %q, want tag", got)
+	}
+	if got := step.GetTags()["shared"]; got != "step" {
+		t.Fatalf("shared tag = %q, want step", got)
+	}
+	if got := step.GetInputState().GetFields()["prompt"].GetStringValue(); got != "hello" {
+		t.Fatalf("input_state.prompt = %q, want hello", got)
+	}
+	if got := step.GetOutputState().GetFields()["route"].GetStringValue(); got != "answer" {
+		t.Fatalf("output_state.route = %q, want answer", got)
+	}
+	if got := step.GetMetadata().GetFields()["run_id"].GetStringValue(); got != "run-1" {
+		t.Fatalf("metadata.run_id = %q, want run-1", got)
+	}
+	if got := step.GetLinkedGenerationIds(); !slices.Equal(got, []string{"gen-roundtrip"}) {
+		t.Fatalf("linked_generation_ids = %#v, want gen-roundtrip", got)
+	}
+	if got := step.GetParentStepIds(); !slices.Equal(got, []string{"wfs-root"}) {
+		t.Fatalf("parent_step_ids = %#v, want wfs-root", got)
+	}
+}
+
 func TestConformance_ConversationTitleSemantics(t *testing.T) {
 	testCases := []struct {
 		name          string

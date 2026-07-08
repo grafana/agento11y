@@ -112,6 +112,7 @@ func newConformanceEnv(t *testing.T, opts ...conformanceEnvOption) *conformanceE
 	ingest := &fakeIngestServer{}
 	grpcServer := grpc.NewServer()
 	sigilv1.RegisterGenerationIngestServiceServer(grpcServer, ingest)
+	sigilv1.RegisterWorkflowStepIngestServiceServer(grpcServer, ingest)
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -242,14 +243,21 @@ func (e *conformanceEnv) CollectMetrics(t *testing.T) metricdata.ResourceMetrics
 
 type fakeIngestServer struct {
 	sigilv1.UnimplementedGenerationIngestServiceServer
+	sigilv1.UnimplementedWorkflowStepIngestServiceServer
 
-	mu       sync.Mutex
-	requests []*sigilv1.ExportGenerationsRequest
+	mu                   sync.Mutex
+	requests             []*sigilv1.ExportGenerationsRequest
+	workflowStepRequests []*sigilv1.ExportWorkflowStepsRequest
 }
 
 func (s *fakeIngestServer) ExportGenerations(_ context.Context, req *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error) {
 	s.capture(req)
 	return acceptanceResponse(req), nil
+}
+
+func (s *fakeIngestServer) ExportWorkflowSteps(_ context.Context, req *sigilv1.ExportWorkflowStepsRequest) (*sigilv1.ExportWorkflowStepsResponse, error) {
+	s.captureWorkflowSteps(req)
+	return workflowStepAcceptanceResponse(req), nil
 }
 
 func (s *fakeIngestServer) capture(req *sigilv1.ExportGenerationsRequest) {
@@ -281,6 +289,21 @@ func (s *fakeIngestServer) SingleGeneration(t *testing.T) *sigilv1.Generation {
 		t.Fatalf("expected exactly one generation in request, got %d", len(s.requests[0].Generations))
 	}
 	return s.requests[0].Generations[0]
+}
+
+func (s *fakeIngestServer) SingleWorkflowStep(t *testing.T) *sigilv1.WorkflowStep {
+	t.Helper()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.workflowStepRequests) != 1 {
+		t.Fatalf("expected exactly one workflow step export request, got %d", len(s.workflowStepRequests))
+	}
+	if len(s.workflowStepRequests[0].WorkflowSteps) != 1 {
+		t.Fatalf("expected exactly one workflow step in request, got %d", len(s.workflowStepRequests[0].WorkflowSteps))
+	}
+	return s.workflowStepRequests[0].WorkflowSteps[0]
 }
 
 func (s *fakeIngestServer) RequestCount() int {
@@ -321,12 +344,39 @@ func (s *fakeIngestServer) GenerationCount() int {
 	return total
 }
 
+func (s *fakeIngestServer) captureWorkflowSteps(req *sigilv1.ExportWorkflowStepsRequest) {
+	if req == nil {
+		return
+	}
+
+	clone := proto.Clone(req)
+	typed, ok := clone.(*sigilv1.ExportWorkflowStepsRequest)
+	if !ok {
+		return
+	}
+
+	s.mu.Lock()
+	s.workflowStepRequests = append(s.workflowStepRequests, typed)
+	s.mu.Unlock()
+}
+
 func acceptanceResponse(req *sigilv1.ExportGenerationsRequest) *sigilv1.ExportGenerationsResponse {
 	response := &sigilv1.ExportGenerationsResponse{Results: make([]*sigilv1.ExportGenerationResult, len(req.GetGenerations()))}
 	for i := range req.GetGenerations() {
 		response.Results[i] = &sigilv1.ExportGenerationResult{
 			GenerationId: req.Generations[i].GetId(),
 			Accepted:     true,
+		}
+	}
+	return response
+}
+
+func workflowStepAcceptanceResponse(req *sigilv1.ExportWorkflowStepsRequest) *sigilv1.ExportWorkflowStepsResponse {
+	response := &sigilv1.ExportWorkflowStepsResponse{Results: make([]*sigilv1.ExportWorkflowStepResult, len(req.GetWorkflowSteps()))}
+	for i := range req.GetWorkflowSteps() {
+		response.Results[i] = &sigilv1.ExportWorkflowStepResult{
+			StepId:   req.WorkflowSteps[i].GetId(),
+			Accepted: true,
 		}
 	}
 	return response

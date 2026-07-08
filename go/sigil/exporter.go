@@ -30,8 +30,13 @@ type queuedGeneration struct {
 	generation *sigilv1.Generation
 }
 
+type queuedWorkflowStep struct {
+	workflowStep *sigilv1.WorkflowStep
+}
+
 type generationExporter interface {
 	Export(ctx context.Context, request *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error)
+	ExportWorkflowSteps(ctx context.Context, request *sigilv1.ExportWorkflowStepsRequest) (*sigilv1.ExportWorkflowStepsResponse, error)
 	Shutdown(ctx context.Context) error
 }
 
@@ -62,14 +67,34 @@ func (e *noopGenerationExporter) Export(_ context.Context, request *sigilv1.Expo
 	return response, nil
 }
 
+func (e *noopGenerationExporter) ExportWorkflowSteps(_ context.Context, request *sigilv1.ExportWorkflowStepsRequest) (*sigilv1.ExportWorkflowStepsResponse, error) {
+	if e.err != nil {
+		return nil, e.err
+	}
+	if request == nil {
+		return &sigilv1.ExportWorkflowStepsResponse{}, nil
+	}
+	response := &sigilv1.ExportWorkflowStepsResponse{
+		Results: make([]*sigilv1.ExportWorkflowStepResult, 0, len(request.GetWorkflowSteps())),
+	}
+	for _, step := range request.GetWorkflowSteps() {
+		response.Results = append(response.Results, &sigilv1.ExportWorkflowStepResult{
+			StepId:   step.GetId(),
+			Accepted: true,
+		})
+	}
+	return response, nil
+}
+
 func (e *noopGenerationExporter) Shutdown(_ context.Context) error {
 	return nil
 }
 
 type grpcGenerationExporter struct {
-	client  sigilv1.GenerationIngestServiceClient
-	conn    *grpc.ClientConn
-	headers map[string]string
+	client             sigilv1.GenerationIngestServiceClient
+	workflowStepClient sigilv1.WorkflowStepIngestServiceClient
+	conn               *grpc.ClientConn
+	headers            map[string]string
 }
 
 func newGRPCGenerationExporter(cfg GenerationExportConfig) (generationExporter, error) {
@@ -113,9 +138,10 @@ func newGRPCGenerationExporter(cfg GenerationExportConfig) (generationExporter, 
 	}
 
 	return &grpcGenerationExporter{
-		client:  sigilv1.NewGenerationIngestServiceClient(conn),
-		conn:    conn,
-		headers: headers,
+		client:             sigilv1.NewGenerationIngestServiceClient(conn),
+		workflowStepClient: sigilv1.NewWorkflowStepIngestServiceClient(conn),
+		conn:               conn,
+		headers:            headers,
 	}, nil
 }
 
@@ -143,6 +169,13 @@ func (e *grpcGenerationExporter) Export(ctx context.Context, request *sigilv1.Ex
 	return e.client.ExportGenerations(ctx, request)
 }
 
+func (e *grpcGenerationExporter) ExportWorkflowSteps(ctx context.Context, request *sigilv1.ExportWorkflowStepsRequest) (*sigilv1.ExportWorkflowStepsResponse, error) {
+	if len(e.headers) > 0 {
+		ctx = metadata.NewOutgoingContext(ctx, metadata.New(e.headers))
+	}
+	return e.workflowStepClient.ExportWorkflowSteps(ctx, request)
+}
+
 func (e *grpcGenerationExporter) Shutdown(_ context.Context) error {
 	if e.conn != nil {
 		return e.conn.Close()
@@ -151,14 +184,19 @@ func (e *grpcGenerationExporter) Shutdown(_ context.Context) error {
 }
 
 type httpGenerationExporter struct {
-	endpoint  string
-	userAgent string
-	headers   map[string]string
-	client    *http.Client
+	endpoint             string
+	workflowStepEndpoint string
+	userAgent            string
+	headers              map[string]string
+	client               *http.Client
 }
 
 func newHTTPGenerationExporter(cfg GenerationExportConfig) (generationExporter, error) {
 	urlString, err := wire.NormalizeGenerationExportURL(cfg.Endpoint, insecureValue(cfg.Insecure))
+	if err != nil {
+		return nil, err
+	}
+	workflowStepURLString, err := wire.NormalizeWorkflowStepExportURL(cfg.Endpoint, insecureValue(cfg.Insecure))
 	if err != nil {
 		return nil, err
 	}
@@ -168,9 +206,10 @@ func newHTTPGenerationExporter(cfg GenerationExportConfig) (generationExporter, 
 	// User-Agent entry removed so it can't blank out the resolved value below.
 	userAgent, headers := splitUserAgent(cfg.Headers)
 	return &httpGenerationExporter{
-		endpoint:  urlString,
-		userAgent: userAgent,
-		headers:   headers,
+		endpoint:             urlString,
+		workflowStepEndpoint: workflowStepURLString,
+		userAgent:            userAgent,
+		headers:              headers,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -212,6 +251,46 @@ func (e *httpGenerationExporter) Export(ctx context.Context, request *sigilv1.Ex
 	exportResponse, err := wire.UnmarshalExportGenerationsResponseJSON(body)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal generation response: %w", err)
+	}
+
+	return exportResponse, nil
+}
+
+func (e *httpGenerationExporter) ExportWorkflowSteps(ctx context.Context, request *sigilv1.ExportWorkflowStepsRequest) (*sigilv1.ExportWorkflowStepsResponse, error) {
+	payload, err := wire.MarshalExportWorkflowStepsJSON(request)
+	if err != nil {
+		return nil, fmt.Errorf("marshal workflow step request: %w", err)
+	}
+
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, e.workflowStepEndpoint, strings.NewReader(string(payload)))
+	if err != nil {
+		return nil, fmt.Errorf("build workflow step request: %w", err)
+	}
+	httpRequest.Header.Set("Content-Type", wire.ContentTypeJSON)
+	httpRequest.Header.Set("User-Agent", e.userAgent)
+	for key, value := range e.headers {
+		httpRequest.Header.Set(key, value)
+	}
+
+	response, err := e.client.Do(httpRequest)
+	if err != nil {
+		return nil, fmt.Errorf("http workflow step export failed: %w", err)
+	}
+	defer func() {
+		_ = response.Body.Close()
+	}()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read workflow step response: %w", err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("http workflow step export status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	exportResponse, err := wire.UnmarshalExportWorkflowStepsResponseJSON(body)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal workflow step response: %w", err)
 	}
 
 	return exportResponse, nil
@@ -442,55 +521,92 @@ func (c *Client) startWorker() {
 func (c *Client) runExportWorker() {
 	defer close(c.workerDone)
 
-	batch := make([]*sigilv1.Generation, 0, c.config.GenerationExport.BatchSize)
+	generationBatch := make([]*sigilv1.Generation, 0, c.config.GenerationExport.BatchSize)
+	workflowStepBatch := make([]*sigilv1.WorkflowStep, 0, c.config.GenerationExport.BatchSize)
 	flushInterval := c.config.GenerationExport.FlushInterval
 	timer := time.NewTimer(flushInterval)
 	defer timer.Stop()
 
-	flush := func() error {
-		if len(batch) == 0 {
+	flushGenerations := func() error {
+		if len(generationBatch) == 0 {
 			return nil
 		}
 
-		request := &sigilv1.ExportGenerationsRequest{Generations: batch}
+		request := &sigilv1.ExportGenerationsRequest{Generations: generationBatch}
 		err := c.exportWithRetry(request)
-		batch = batch[:0]
+		generationBatch = generationBatch[:0]
 		return err
 	}
-
-	// pendingErr captures the first failure from an async flush (timer or
-	// batch-size triggered) since the last explicit Flush call. It's
-	// returned to and cleared by the next flushReq handler so callers who
-	// use Flush as a durability checkpoint can detect silent data loss
-	// instead of treating an empty post-failure batch as success.
-	var pendingErr error
-	recordAsyncErr := func(err error) {
-		if err == nil || pendingErr != nil {
-			return
+	flushWorkflowSteps := func() error {
+		if len(workflowStepBatch) == 0 {
+			return nil
 		}
-		pendingErr = err
+
+		request := &sigilv1.ExportWorkflowStepsRequest{WorkflowSteps: workflowStepBatch}
+		err := c.exportWorkflowStepsWithRetry(request)
+		workflowStepBatch = workflowStepBatch[:0]
+		return err
+	}
+	flushAll := func() error {
+		return errors.Join(flushGenerations(), flushWorkflowSteps())
 	}
 
+	// pendingErr captures failures from async flushes (timer or batch-size
+	// triggered) since the last explicit Flush call. It's returned to and
+	// cleared by the next flushReq handler so callers who use Flush as a
+	// durability checkpoint can detect silent data loss instead of treating an
+	// empty post-failure batch as success. Errors are joined rather than
+	// keeping only the first: a single timer tick flushes the generation and
+	// workflow-step queues separately, so both can fail in the same cycle and
+	// neither failure should be dropped.
+	var pendingErr error
+	recordAsyncErr := func(err error) {
+		if err == nil {
+			return
+		}
+		pendingErr = errors.Join(pendingErr, err)
+	}
+
+	generationQueue := c.queue
+	workflowStepQueue := c.workflowStepQueue
 	for {
-		select {
-		case queued, ok := <-c.queue:
-			if !ok {
-				if err := flush(); err != nil {
-					c.logf("sigil generation export flush on shutdown failed: %v", err)
-				}
-				return
+		if generationQueue == nil && workflowStepQueue == nil {
+			if err := flushAll(); err != nil {
+				c.logf("sigil export flush on shutdown failed: %v", err)
 			}
-			batch = append(batch, queued.generation)
-			if len(batch) >= c.config.GenerationExport.BatchSize {
-				if err := flush(); err != nil {
+			return
+		}
+
+		select {
+		case queued, ok := <-generationQueue:
+			if !ok {
+				generationQueue = nil
+				continue
+			}
+			generationBatch = append(generationBatch, queued.generation)
+			if len(generationBatch) >= c.config.GenerationExport.BatchSize {
+				if err := flushGenerations(); err != nil {
 					c.logf("sigil generation export failed: %v", err)
 					recordAsyncErr(err)
 				}
 				resetTimer(timer, flushInterval)
 			}
+		case queued, ok := <-workflowStepQueue:
+			if !ok {
+				workflowStepQueue = nil
+				continue
+			}
+			workflowStepBatch = append(workflowStepBatch, queued.workflowStep)
+			if len(workflowStepBatch) >= c.config.GenerationExport.BatchSize {
+				if err := flushWorkflowSteps(); err != nil {
+					c.logf("sigil workflow step export failed: %v", err)
+					recordAsyncErr(err)
+				}
+				resetTimer(timer, flushInterval)
+			}
 		case ack := <-c.flushReq:
-			// Drain anything the worker hadn't yet pulled off c.queue so
-			// that an explicit Flush sees every generation enqueued before
+			// Drain anything the worker hadn't yet pulled off its queues so
+			// that an explicit Flush sees every export enqueued before
 			// the call. Without this, the worker's select can service
 			// flushReq before an already-queued item, returning nil while
 			// the item still lingers on the channel.
@@ -510,38 +626,60 @@ func (c *Client) runExportWorker() {
 				}
 				flushErr = errors.Join(flushErr, err)
 			}
-			queueClosed := false
+			generationClosed := false
+			workflowStepClosed := false
 		draining:
 			for {
 				select {
-				case queued, ok := <-c.queue:
+				case queued, ok := <-generationQueue:
 					if !ok {
-						queueClosed = true
-						break draining
+						generationQueue = nil
+						generationClosed = true
+						if workflowStepQueue == nil {
+							break draining
+						}
+						continue
 					}
-					batch = append(batch, queued.generation)
-					if len(batch) >= c.config.GenerationExport.BatchSize {
-						joinFlush(flush())
+					generationBatch = append(generationBatch, queued.generation)
+					if len(generationBatch) >= c.config.GenerationExport.BatchSize {
+						joinFlush(flushGenerations())
+					}
+				case queued, ok := <-workflowStepQueue:
+					if !ok {
+						workflowStepQueue = nil
+						workflowStepClosed = true
+						if generationQueue == nil {
+							break draining
+						}
+						continue
+					}
+					workflowStepBatch = append(workflowStepBatch, queued.workflowStep)
+					if len(workflowStepBatch) >= c.config.GenerationExport.BatchSize {
+						joinFlush(flushWorkflowSteps())
 					}
 				default:
 					break draining
 				}
 			}
-			joinFlush(flush())
+			joinFlush(flushAll())
 			if pendingErr != nil {
 				joinFlush(pendingErr)
 				pendingErr = nil
 			}
 			ack <- flushErr
-			if queueClosed {
+			if generationClosed && workflowStepClosed {
 				// Shutdown raced with Flush — caller has been acked, exit
 				// the worker like the regular shutdown path.
 				return
 			}
 			resetTimer(timer, flushInterval)
 		case <-timer.C:
-			if err := flush(); err != nil {
+			if err := flushGenerations(); err != nil {
 				c.logf("sigil generation export failed: %v", err)
+				recordAsyncErr(err)
+			}
+			if err := flushWorkflowSteps(); err != nil {
+				c.logf("sigil workflow step export failed: %v", err)
 				recordAsyncErr(err)
 			}
 			resetTimer(timer, flushInterval)
@@ -608,6 +746,55 @@ func (c *Client) exportWithRetry(request *sigilv1.ExportGenerationsRequest) erro
 	return lastErr
 }
 
+func (c *Client) exportWorkflowStepsWithRetry(request *sigilv1.ExportWorkflowStepsRequest) error {
+	attempts := c.config.GenerationExport.MaxRetries + 1
+	backoff := c.config.GenerationExport.InitialBackoff
+	if backoff <= 0 {
+		backoff = 100 * time.Millisecond
+	}
+
+	var lastErr error
+	for attempt := range attempts {
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		response, err := c.exporter.ExportWorkflowSteps(timeoutCtx, request)
+		cancel()
+		if err == nil {
+			resultsCount := 0
+			if response != nil {
+				resultsCount = len(response.GetResults())
+			}
+			c.logf(
+				"sigil workflow step export response requested=%d results=%d",
+				len(request.GetWorkflowSteps()),
+				resultsCount,
+			)
+			logRejectedWorkflowStepExportResults(c, response)
+			validateErr := validateWorkflowStepExportResponse(request, response)
+			if validateErr == nil {
+				return nil
+			}
+			lastErr = validateErr
+			if !isRetryableExportValidationError(validateErr) {
+				return validateErr
+			}
+		} else {
+			lastErr = err
+		}
+		if attempt == attempts-1 {
+			break
+		}
+		time.Sleep(backoff)
+		if backoff < c.config.GenerationExport.MaxBackoff {
+			backoff *= 2
+			if backoff > c.config.GenerationExport.MaxBackoff {
+				backoff = c.config.GenerationExport.MaxBackoff
+			}
+		}
+	}
+
+	return lastErr
+}
+
 type exportValidationError struct {
 	err       error
 	retryable bool
@@ -632,6 +819,15 @@ func logRejectedExportResults(c *Client, response *sigilv1.ExportGenerationsResp
 			continue
 		}
 		c.logf("sigil generation rejected id=%s error=%s", result.GenerationId, result.Error)
+	}
+}
+
+func logRejectedWorkflowStepExportResults(c *Client, response *sigilv1.ExportWorkflowStepsResponse) {
+	for _, result := range response.GetResults() {
+		if result == nil || result.Accepted {
+			continue
+		}
+		c.logf("sigil workflow step rejected id=%s error=%s", result.StepId, result.Error)
 	}
 }
 
@@ -669,6 +865,40 @@ func validateExportResponse(request *sigilv1.ExportGenerationsRequest, response 
 	return nil
 }
 
+func validateWorkflowStepExportResponse(request *sigilv1.ExportWorkflowStepsRequest, response *sigilv1.ExportWorkflowStepsResponse) error {
+	if response == nil {
+		return &exportValidationError{err: errors.New("nil workflow step export response"), retryable: true}
+	}
+	requested := len(request.GetWorkflowSteps())
+	results := response.GetResults()
+	if len(results) != requested {
+		return &exportValidationError{err: fmt.Errorf("workflow step export result count mismatch: requested=%d results=%d", requested, len(results)), retryable: true}
+	}
+	malformed := make([]string, 0, len(results))
+	rejected := make([]string, 0, len(results))
+	for _, result := range results {
+		if result == nil {
+			malformed = append(malformed, "<nil result>")
+			continue
+		}
+		if result.Accepted {
+			continue
+		}
+		msg := strings.TrimSpace(result.Error)
+		if msg == "" {
+			msg = "rejected without error"
+		}
+		rejected = append(rejected, fmt.Sprintf("%s: %s", result.StepId, msg))
+	}
+	if len(rejected) > 0 {
+		return &exportValidationError{err: fmt.Errorf("workflow step export rejected: %s", strings.Join(rejected, "; "))}
+	}
+	if len(malformed) > 0 {
+		return &exportValidationError{err: fmt.Errorf("workflow step export malformed response: %s", strings.Join(malformed, "; ")), retryable: true}
+	}
+	return nil
+}
+
 func (c *Client) enqueueGeneration(generation Generation) error {
 	protoGeneration, err := generationToProto(generation)
 	if err != nil {
@@ -693,6 +923,33 @@ func (c *Client) enqueueGeneration(generation Generation) error {
 		return nil
 	default:
 		return ErrQueueFull
+	}
+}
+
+func (c *Client) enqueueWorkflowStep(step WorkflowStep) error {
+	protoStep, err := workflowStepToProto(step)
+	if err != nil {
+		return err
+	}
+
+	if maxPayload := c.config.GenerationExport.PayloadMaxBytes; maxPayload > 0 {
+		if payloadSize := proto.Size(protoStep); payloadSize > maxPayload {
+			return fmt.Errorf("workflow step payload exceeds max bytes (%d > %d)", payloadSize, maxPayload)
+		}
+	}
+
+	c.queueMu.RLock()
+	defer c.queueMu.RUnlock()
+
+	if c.shutdown {
+		return ErrClientShutdown
+	}
+
+	select {
+	case c.workflowStepQueue <- queuedWorkflowStep{workflowStep: protoStep}:
+		return nil
+	default:
+		return ErrWorkflowStepQueueFull
 	}
 }
 
@@ -738,6 +995,7 @@ func (c *Client) Shutdown(ctx context.Context) error {
 		c.queueMu.Lock()
 		c.shutdown = true
 		close(c.queue)
+		close(c.workflowStepQueue)
 		c.queueMu.Unlock()
 
 		select {

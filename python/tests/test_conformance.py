@@ -7,6 +7,7 @@ import copy
 import json
 import socket
 import threading
+from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -40,6 +41,7 @@ from sigil_sdk import (
     ToolExecutionEnd,
     ToolExecutionStart,
     ToolResult,
+    WorkflowStep,
     with_agent_name,
     with_agent_version,
     with_conversation_title,
@@ -55,9 +57,13 @@ _span_attr_conversation_title = "sigil.conversation.title"
 _span_attr_user_id = "user.id"
 
 
-class _CapturingGenerationServicer(sigil_pb2_grpc.GenerationIngestServiceServicer):
+class _CapturingGenerationServicer(
+    sigil_pb2_grpc.GenerationIngestServiceServicer,
+    sigil_pb2_grpc.WorkflowStepIngestServiceServicer,
+):
     def __init__(self) -> None:
         self.requests: list[sigil_pb2.ExportGenerationsRequest] = []
+        self.workflow_step_requests: list[sigil_pb2.ExportWorkflowStepsRequest] = []
         self._lock = threading.Lock()
 
     def ExportGenerations(self, request, _context):  # noqa: N802
@@ -70,10 +76,24 @@ class _CapturingGenerationServicer(sigil_pb2_grpc.GenerationIngestServiceService
             ]
         )
 
+    def ExportWorkflowSteps(self, request, _context):  # noqa: N802
+        with self._lock:
+            self.workflow_step_requests.append(copy.deepcopy(request))
+        return sigil_pb2.ExportWorkflowStepsResponse(
+            results=[
+                sigil_pb2.ExportWorkflowStepResult(step_id=step.id, accepted=True) for step in request.workflow_steps
+            ]
+        )
+
     def single_generation(self) -> sigil_pb2.Generation:
         assert len(self.requests) == 1
         assert len(self.requests[0].generations) == 1
         return self.requests[0].generations[0]
+
+    def single_workflow_step(self) -> sigil_pb2.WorkflowStep:
+        assert len(self.workflow_step_requests) == 1
+        assert len(self.workflow_step_requests[0].workflow_steps) == 1
+        return self.workflow_step_requests[0].workflow_steps[0]
 
 
 class _RatingCaptureServer:
@@ -133,10 +153,18 @@ class _RatingCaptureServer:
 
 
 class _ConformanceEnv:
-    def __init__(self, *, batch_size: int = 1, flush_interval: timedelta | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        batch_size: int = 1,
+        flush_interval: timedelta | None = None,
+        now: Callable[[], datetime] | None = None,
+        tags: dict[str, str] | None = None,
+    ) -> None:
         self.servicer = _CapturingGenerationServicer()
         self.grpc_server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=2))
         sigil_pb2_grpc.add_GenerationIngestServiceServicer_to_server(self.servicer, self.grpc_server)
+        sigil_pb2_grpc.add_WorkflowStepIngestServiceServicer_to_server(self.servicer, self.grpc_server)
 
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
@@ -169,6 +197,8 @@ class _ConformanceEnv:
                 meter=self.meter_provider.get_meter("sigil-conformance-test"),
                 generation_export=export_config,
                 api=ApiConfig(endpoint=self.rating_server.endpoint),
+                now=now,
+                tags=tags,
             )
         )
         self._closed = False
@@ -332,6 +362,56 @@ def test_conformance_sync_roundtrip_semantics() -> None:
             and point.attributes.get("gen_ai.token.type") == "input"
             for point in metrics["gen_ai.client.token.usage"].data_points
         )
+    finally:
+        env.shutdown()
+
+
+def test_conformance_workflow_step_roundtrip_semantics() -> None:
+    # Mirror the Go and JS conformance inputs exactly: no timestamps (to exercise
+    # enqueue-time defaulting to the client clock) and client-level tags that the
+    # step's own tags override on conflict.
+    now = datetime(2026, 3, 12, 12, 0, 0, tzinfo=timezone.utc)
+    env = _ConformanceEnv(
+        now=lambda: now,
+        tags={"client": "tag", "shared": "client"},
+    )
+    try:
+        env.client.enqueue_workflow_step(
+            WorkflowStep(
+                id="wfs-roundtrip",
+                conversation_id="conv-workflow",
+                step_name="route",
+                framework="custom",
+                input_state={"prompt": "hello", "count": 1},
+                output_state={"route": "answer"},
+                tags={"shared": "step"},
+                linked_generation_ids=["gen-roundtrip"],
+                parent_step_ids=["wfs-root"],
+                agent_name="agent-workflow",
+                agent_version="v1",
+                trace_id="0123456789abcdef0123456789abcdef",
+                span_id="0123456789abcdef",
+                metadata={"run_id": "run-1"},
+            )
+        )
+        env.shutdown()
+
+        step = env.servicer.single_workflow_step()
+        assert step.id == "wfs-roundtrip"
+        assert step.conversation_id == "conv-workflow"
+        assert step.step_name == "route"
+        assert step.framework == "custom"
+        assert step.started_at.ToDatetime(tzinfo=timezone.utc) == now
+        assert step.completed_at.ToDatetime(tzinfo=timezone.utc) == now
+        assert step.tags["client"] == "tag"
+        assert step.tags["shared"] == "step"
+        assert step.input_state.fields["prompt"].string_value == "hello"
+        assert step.output_state.fields["route"].string_value == "answer"
+        assert list(step.linked_generation_ids) == ["gen-roundtrip"]
+        assert list(step.parent_step_ids) == ["wfs-root"]
+        assert step.agent_name == "agent-workflow"
+        assert step.agent_version == "v1"
+        assert step.metadata.fields["run_id"].string_value == "run-1"
     finally:
         env.shutdown()
 

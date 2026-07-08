@@ -123,6 +123,23 @@ export interface ExportGenerationsResponse {
   results: ExportGenerationResult[];
 }
 
+/** Per-workflow-step ingest result. */
+export interface ExportWorkflowStepResult {
+  stepId: string;
+  accepted: boolean;
+  error?: string;
+}
+
+/** Workflow-step export request payload. */
+export interface ExportWorkflowStepsRequest {
+  workflowSteps: WorkflowStep[];
+}
+
+/** Workflow-step export response payload. */
+export interface ExportWorkflowStepsResponse {
+  results: ExportWorkflowStepResult[];
+}
+
 /** Allowed conversation rating values. */
 export type ConversationRatingValue = 'CONVERSATION_RATING_VALUE_GOOD' | 'CONVERSATION_RATING_VALUE_BAD';
 
@@ -170,6 +187,7 @@ export interface SubmitConversationRatingResponse {
 /** Pluggable generation exporter interface. */
 export interface GenerationExporter {
   exportGenerations(request: ExportGenerationsRequest): Promise<ExportGenerationsResponse>;
+  exportWorkflowSteps(request: ExportWorkflowStepsRequest): Promise<ExportWorkflowStepsResponse>;
   shutdown?(): Promise<void> | void;
 }
 
@@ -447,6 +465,27 @@ export interface Generation {
   callError?: string;
 }
 
+/** Workflow execution node exported beside generations. */
+export interface WorkflowStep {
+  id: string;
+  conversationId: string;
+  stepName: string;
+  framework?: string;
+  startedAt?: Date;
+  completedAt?: Date;
+  inputState?: Record<string, unknown>;
+  outputState?: Record<string, unknown>;
+  error?: string;
+  tags?: Record<string, string>;
+  linkedGenerationIds?: string[];
+  parentStepIds?: string[];
+  agentName?: string;
+  agentVersion?: string;
+  traceId?: string;
+  spanId?: string;
+  metadata?: Record<string, unknown>;
+}
+
 /** Tool execution start seed fields. */
 export interface ToolExecutionStart {
   toolName: string;
@@ -542,8 +581,10 @@ export interface ToolExecutionRecorder {
 /** In-memory snapshot for tests/debugging. */
 export interface SigilDebugSnapshot {
   generations: Generation[];
+  workflowSteps: WorkflowStep[];
   toolExecutions: ToolExecution[];
   queueSize: number;
+  workflowStepQueueSize: number;
 }
 
 /** Callback form used by recorder helper APIs. */

@@ -38,6 +38,9 @@ export type {
   ExportGenerationResult,
   ExportGenerationsRequest,
   ExportGenerationsResponse,
+  ExportWorkflowStepResult,
+  ExportWorkflowStepsRequest,
+  ExportWorkflowStepsResponse,
   Generation,
   GenerationExportConfig,
   GenerationExporter,
@@ -74,6 +77,7 @@ export type {
   ToolExecutionResult,
   ToolExecutionStart,
   ToolResultPart,
+  WorkflowStep,
 } from './types.js';
 export { SDK_VERSION, userAgent } from './version.js';
 

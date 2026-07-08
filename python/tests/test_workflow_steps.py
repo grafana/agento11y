@@ -12,7 +12,9 @@ from uuid import uuid4
 from sigil_sdk import (
     Client,
     ClientConfig,
+    EnqueueError,
     GenerationExportConfig,
+    ValidationError,
     WorkflowStep,
 )
 from sigil_sdk.exporters.http import HTTPGenerationExporter, _normalize_endpoint
@@ -255,6 +257,113 @@ def test_client_retries_workflow_step_export() -> None:
 
     assert len(exporter.wf_batches) == 1
     assert exporter.wf_batches[0][0].id == "wfs_b"
+
+
+def test_enqueue_workflow_step_defaults_timestamps_and_merges_tags() -> None:
+    now = datetime(2026, 3, 12, 12, 0, 0, tzinfo=timezone.utc)
+    exporter = _RecordingExporter()
+    client = Client(
+        ClientConfig(
+            now=lambda: now,
+            tags={"client": "tag", "shared": "client"},
+            generation_export=GenerationExportConfig(
+                batch_size=10,
+                flush_interval=timedelta(0),
+            ),
+            generation_exporter=exporter,
+        )
+    )
+    try:
+        # No timestamps supplied: both default to the client clock. The step's
+        # own tag overrides the client-level tag on conflict.
+        client.enqueue_workflow_step(
+            WorkflowStep(id="wfs_a", conversation_id="c1", step_name="route", tags={"shared": "step"})
+        )
+        client.flush()
+    finally:
+        client.shutdown()
+
+    step = exporter.wf_batches[0][0]
+    assert step.started_at == now
+    assert step.completed_at == now
+    assert step.tags == {"client": "tag", "shared": "step"}
+
+
+def test_enqueue_workflow_step_rejects_invalid_step() -> None:
+    exporter = _RecordingExporter()
+    client = _client_with_exporter(exporter)
+    try:
+        # Missing step_name fails validation before it is queued.
+        try:
+            client.enqueue_workflow_step(WorkflowStep(id="wfs_a", conversation_id="c1"))
+            raise AssertionError("expected ValidationError")
+        except ValidationError:
+            pass
+        client.flush()
+    finally:
+        client.shutdown()
+
+    assert exporter.wf_batches == []
+
+
+def test_enqueue_workflow_step_validates_raw_input_before_defaulting() -> None:
+    # A step with only completed_at (started_at unset) is valid: the
+    # completed < started rule only applies when the caller supplied both.
+    # Validation runs on the raw input, so defaulting started_at to now() must
+    # not turn this into a spurious rejection. Matches Go and JS.
+    now = datetime(2026, 3, 12, 12, 0, 0, tzinfo=timezone.utc)
+    completed = datetime(2020, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    exporter = _RecordingExporter()
+    client = Client(
+        ClientConfig(
+            now=lambda: now,
+            generation_export=GenerationExportConfig(batch_size=10, flush_interval=timedelta(0)),
+            generation_exporter=exporter,
+        )
+    )
+    try:
+        client.enqueue_workflow_step(
+            WorkflowStep(id="wfs_a", conversation_id="c1", step_name="route", completed_at=completed)
+        )
+        client.flush()
+    finally:
+        client.shutdown()
+
+    step = exporter.wf_batches[0][0]
+    assert step.started_at == now  # defaulted
+    assert step.completed_at == completed  # caller-supplied, preserved
+
+
+def test_enqueue_workflow_step_rejects_oversized_payload() -> None:
+    exporter = _RecordingExporter()
+    client = Client(
+        ClientConfig(
+            generation_export=GenerationExportConfig(
+                batch_size=10,
+                flush_interval=timedelta(0),
+                payload_max_bytes=32,
+            ),
+            generation_exporter=exporter,
+        )
+    )
+    try:
+        try:
+            client.enqueue_workflow_step(
+                WorkflowStep(
+                    id="wfs_a",
+                    conversation_id="c1",
+                    step_name="route",
+                    input_state={"blob": "x" * 1000},
+                )
+            )
+            raise AssertionError("expected EnqueueError")
+        except EnqueueError:
+            pass
+        client.flush()
+    finally:
+        client.shutdown()
+
+    assert exporter.wf_batches == []
 
 
 def test_noop_exporter_accepts_workflow_steps() -> None:

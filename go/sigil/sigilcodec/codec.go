@@ -82,6 +82,48 @@ func ToProto(g sigilmodel.Generation) (*sigilv1.Generation, error) {
 	return out, nil
 }
 
+// WorkflowStepToProto converts a sigilmodel.WorkflowStep into the wire-level
+// proto used by the workflow-step ingest service.
+func WorkflowStepToProto(step sigilmodel.WorkflowStep) (*sigilv1.WorkflowStep, error) {
+	inputState, err := metadataToStruct(step.InputState)
+	if err != nil {
+		return nil, fmt.Errorf("map input_state: %w", err)
+	}
+	outputState, err := metadataToStruct(step.OutputState)
+	if err != nil {
+		return nil, fmt.Errorf("map output_state: %w", err)
+	}
+	metadata, err := metadataToStruct(step.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("map metadata: %w", err)
+	}
+
+	out := &sigilv1.WorkflowStep{
+		Id:                  step.ID,
+		ConversationId:      step.ConversationID,
+		StepName:            step.StepName,
+		Framework:           step.Framework,
+		InputState:          inputState,
+		OutputState:         outputState,
+		Error:               step.Error,
+		Tags:                cloneTags(step.Tags),
+		LinkedGenerationIds: cloneStringSlice(step.LinkedGenerationIDs),
+		ParentStepIds:       cloneStringSlice(step.ParentStepIDs),
+		AgentName:           step.AgentName,
+		AgentVersion:        step.AgentVersion,
+		TraceId:             step.TraceID,
+		SpanId:              step.SpanID,
+		Metadata:            metadata,
+	}
+	if !step.StartedAt.IsZero() {
+		out.StartedAt = timestamppb.New(step.StartedAt)
+	}
+	if !step.CompletedAt.IsZero() {
+		out.CompletedAt = timestamppb.New(step.CompletedAt)
+	}
+	return out, nil
+}
+
 func metadataToStruct(metadata map[string]any) (*structpb.Struct, error) {
 	if len(metadata) == 0 {
 		return nil, nil

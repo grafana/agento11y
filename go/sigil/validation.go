@@ -14,6 +14,12 @@ func ValidateGeneration(g Generation) error {
 	return sigilmodel.ValidateGeneration(g)
 }
 
+// ValidateWorkflowStep enforces the Sigil workflow-step invariants required by
+// the ingest pipeline.
+func ValidateWorkflowStep(step WorkflowStep) error {
+	return sigilmodel.ValidateWorkflowStep(step)
+}
+
 func ValidateEmbeddingStart(start EmbeddingStart) error {
 	if strings.TrimSpace(start.Model.Provider) == "" {
 		return errors.New("embedding.model.provider is required")

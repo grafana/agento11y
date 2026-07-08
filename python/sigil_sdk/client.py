@@ -69,7 +69,7 @@ from .models import (
     _metadata_key_content_capture_mode,
     tool_result_part,
 )
-from .proto_mapping import generation_to_proto
+from .proto_mapping import generation_to_proto, workflow_step_to_proto
 from .validation import validate_embedding_result, validate_embedding_start, validate_generation
 
 _span_attr_generation_id = "sigil.generation.id"
@@ -921,26 +921,50 @@ class Client:
             self._trigger_async_flush()
 
     def enqueue_workflow_step(self, step: WorkflowStep) -> None:
-        """Enqueues a fully-built ``WorkflowStep`` for background export.
+        """Enqueues a workflow execution node for background export.
 
-        This is a low-level primitive intended for advanced cases such as
-        forwarding pre-built steps from another system. For general use, prefer
-        a framework adapter (LangGraph, LangChain) or the upcoming
-        ``Client.start_workflow_step`` recorder API, which automatically
-        handles step IDs, timestamps, identity inheritance, and
-        ``linked_generation_ids`` for nested generations.
+        The step is normalized the same way generations are: timestamps default
+        to the client clock (UTC), client-level ``tags`` are merged in (the
+        step's own tags win on conflict), and the step is validated before it is
+        queued. This matches the Go and JS SDKs, so an identical input produces
+        an identical exported step across languages.
 
-        Design doc:
-        ``sigil/docs/design-docs/2026-05-07-workflow-step-recorder-api.md``
-        in the grafana/sigil repository.
+        For framework-driven capture prefer a framework adapter (LangGraph,
+        LangChain), which additionally handles step IDs, identity inheritance,
+        and ``linked_generation_ids`` for nested generations.
         """
         if self._shutting_down or self._closed:
             raise ClientShutdownError("sigil: client is shutting down")
+
+        # Validate the raw input before defaulting timestamps, matching Go and
+        # JS. The completed_at < started_at rule only fires when the caller
+        # supplied both; defaulting started_at to now() first would spuriously
+        # reject a step for which the caller only provided completed_at.
+        normalized = copy.deepcopy(step)
+        _validate_workflow_step(normalized)
+
+        normalized.started_at = (
+            _to_utc(normalized.started_at) if normalized.started_at is not None else _to_utc(self._now())
+        )
+        normalized.completed_at = (
+            _to_utc(normalized.completed_at) if normalized.completed_at is not None else normalized.started_at
+        )
+        if self._config.tags:
+            merged: dict[str, str] = dict(self._config.tags)
+            merged.update(normalized.tags)
+            normalized.tags = merged
+
+        max_payload_bytes = self._config.generation_export.payload_max_bytes
+        if max_payload_bytes > 0:
+            payload_size = workflow_step_to_proto(normalized).ByteSize()
+            if payload_size > max_payload_bytes:
+                raise EnqueueError(f"workflow step payload exceeds max bytes ({payload_size} > {max_payload_bytes})")
+
         should_trigger_flush = False
         with self._pending_lock:
             if len(self._pending_workflow_steps) >= self._config.generation_export.queue_size:
                 raise QueueFullError("sigil: workflow step queue is full")
-            self._pending_workflow_steps.append(copy.deepcopy(step))
+            self._pending_workflow_steps.append(normalized)
             if len(self._pending_workflow_steps) >= self._config.generation_export.batch_size:
                 should_trigger_flush = True
         if should_trigger_flush:
@@ -2102,6 +2126,17 @@ def _to_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _validate_workflow_step(step: WorkflowStep) -> None:
+    if not step.id.strip():
+        raise ValidationError("sigil workflow step validation failed: id is required")
+    if not step.conversation_id.strip():
+        raise ValidationError("sigil workflow step validation failed: conversation_id is required")
+    if not step.step_name.strip():
+        raise ValidationError("sigil workflow step validation failed: step_name is required")
+    if step.started_at is not None and step.completed_at is not None and step.completed_at < step.started_at:
+        raise ValidationError("sigil workflow step validation failed: completed_at must not be earlier than started_at")
 
 
 def _datetime_to_ns(value: datetime) -> int:

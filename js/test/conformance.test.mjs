@@ -160,6 +160,56 @@ test('conformance sync roundtrip semantics', async () => {
   }
 });
 
+test('conformance workflow step roundtrip semantics', async () => {
+  const now = new Date(Date.UTC(2026, 2, 12, 12, 0, 0));
+  const env = await createConformanceEnv({
+    clientConfig: {
+      now: () => new Date(now),
+      tags: {
+        client: 'tag',
+        shared: 'client',
+      },
+    },
+  });
+
+  try {
+    env.client.enqueueWorkflowStep({
+      id: 'wfs-roundtrip',
+      conversationId: 'conv-workflow',
+      stepName: 'route',
+      framework: 'custom',
+      inputState: { prompt: 'hello', count: 1 },
+      outputState: { route: 'answer' },
+      tags: { shared: 'step' },
+      linkedGenerationIds: ['gen-roundtrip'],
+      parentStepIds: ['wfs-root'],
+      agentName: 'agent-workflow',
+      agentVersion: 'v1',
+      traceId: '0123456789abcdef0123456789abcdef',
+      spanId: '0123456789abcdef',
+      metadata: { run_id: 'run-1' },
+    });
+
+    await env.client.shutdown();
+
+    const step = env.singleWorkflowStep();
+    assert.equal(step.id, 'wfs-roundtrip');
+    assert.equal(step.conversationId, 'conv-workflow');
+    assert.equal(step.stepName, 'route');
+    assert.equal(toDate(step.startedAt).toISOString(), now.toISOString());
+    assert.equal(toDate(step.completedAt).toISOString(), now.toISOString());
+    assert.equal(step.tags?.client, 'tag');
+    assert.equal(step.tags?.shared, 'step');
+    assert.equal(step.inputState?.fields?.prompt?.stringValue, 'hello');
+    assert.equal(step.outputState?.fields?.route?.stringValue, 'answer');
+    assert.equal(step.metadata?.fields?.run_id?.stringValue, 'run-1');
+    assert.deepEqual(step.linkedGenerationIds, ['gen-roundtrip']);
+    assert.deepEqual(step.parentStepIds, ['wfs-root']);
+  } finally {
+    await env.close();
+  }
+});
+
 for (const testCase of [
   {
     name: 'explicit wins',
@@ -676,8 +726,14 @@ test('conformance shutdown flush semantics', async () => {
 
 async function createConformanceEnv(options = {}) {
   const receivedRequests = [];
-  const grpcServer = await startGRPCServer((request) => {
-    receivedRequests.push(request);
+  const receivedWorkflowStepRequests = [];
+  const grpcServer = await startGRPCServer({
+    onGenerationRequest(request) {
+      receivedRequests.push(request);
+    },
+    onWorkflowStepRequest(request) {
+      receivedWorkflowStepRequests.push(request);
+    },
   });
 
   let ratingPath = '';
@@ -732,6 +788,7 @@ async function createConformanceEnv(options = {}) {
   const client = new SigilClient({
     tracer: tracerProvider.getTracer('sigil-conformance-test'),
     meter: meterProvider.getMeter('sigil-conformance-test'),
+    ...(options.clientConfig ?? {}),
     generationExport: {
       ...defaults.generationExport,
       protocol: 'grpc',
@@ -753,6 +810,7 @@ async function createConformanceEnv(options = {}) {
   return {
     client,
     receivedRequests,
+    receivedWorkflowStepRequests,
     get ratingPath() {
       return ratingPath;
     },
@@ -763,6 +821,11 @@ async function createConformanceEnv(options = {}) {
       assert.equal(receivedRequests.length, 1);
       assert.equal(receivedRequests[0].generations?.length, 1);
       return receivedRequests[0].generations[0];
+    },
+    singleWorkflowStep() {
+      assert.equal(receivedWorkflowStepRequests.length, 1);
+      assert.equal(receivedWorkflowStepRequests[0].workflowSteps?.length, 1);
+      return receivedWorkflowStepRequests[0].workflowSteps[0];
     },
     latestGenerationSpan() {
       const spans = spanExporter.getFinishedSpans().filter((span) => {
@@ -851,18 +914,36 @@ function close(server) {
   });
 }
 
-async function startGRPCServer(onRequest) {
+function toDate(timestamp) {
+  const seconds = Number(timestamp?.seconds ?? 0);
+  const nanos = Number(timestamp?.nanos ?? 0);
+  return new Date(seconds * 1000 + Math.floor(nanos / 1_000_000));
+}
+
+async function startGRPCServer({ onGenerationRequest, onWorkflowStepRequest }) {
   const packageDefinition = await protoLoader.load(protoPath, protoLoadOptions);
   const loaded = grpc.loadPackageDefinition(packageDefinition);
-  const service = loaded.sigil.v1.GenerationIngestService;
+  const generationService = loaded.sigil.v1.GenerationIngestService;
+  const workflowStepService = loaded.sigil.v1.WorkflowStepIngestService;
 
   const server = new grpc.Server();
-  server.addService(service.service, {
+  server.addService(generationService.service, {
     ExportGenerations(call, callback) {
-      onRequest(call.request, call.metadata.getMap());
+      onGenerationRequest(call.request, call.metadata.getMap());
       callback(null, {
         results: (call.request.generations ?? []).map((generation) => ({
           generationId: generation.id,
+          accepted: true,
+        })),
+      });
+    },
+  });
+  server.addService(workflowStepService.service, {
+    ExportWorkflowSteps(call, callback) {
+      onWorkflowStepRequest(call.request, call.metadata.getMap());
+      callback(null, {
+        results: (call.request.workflowSteps ?? []).map((step) => ({
+          stepId: step.id,
           accepted: true,
         })),
       });

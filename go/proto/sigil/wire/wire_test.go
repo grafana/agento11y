@@ -77,6 +77,54 @@ func TestNormalizeGenerationExportURL(t *testing.T) {
 	}
 }
 
+func TestNormalizeWorkflowStepExportURL(t *testing.T) {
+	cases := []struct {
+		name     string
+		endpoint string
+		insecure bool
+		want     string
+	}{
+		{
+			name:     "https host without path",
+			endpoint: "https://sigil.example.com",
+			want:     "https://sigil.example.com" + wire.WorkflowStepExportHTTPPath,
+		},
+		{
+			name:     "generation path rewrites to workflow-step path",
+			endpoint: "https://sigil.example.com" + wire.GenerationExportHTTPPath,
+			want:     "https://sigil.example.com" + wire.WorkflowStepExportHTTPPath,
+		},
+		{
+			name:     "generation path with trailing slash rewrites to workflow-step path",
+			endpoint: "https://sigil.example.com" + wire.GenerationExportHTTPPath + "/",
+			want:     "https://sigil.example.com" + wire.WorkflowStepExportHTTPPath,
+		},
+		{
+			name:     "custom path is preserved",
+			endpoint: "https://sigil.example.com/custom/path",
+			want:     "https://sigil.example.com/custom/path",
+		},
+		{
+			name:     "scheme-less with insecure picks http",
+			endpoint: "sigil.example.com",
+			insecure: true,
+			want:     "http://sigil.example.com" + wire.WorkflowStepExportHTTPPath,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := wire.NormalizeWorkflowStepExportURL(tc.endpoint, tc.insecure)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("want %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
 func TestJSONRoundTripUsesProtoNames(t *testing.T) {
 	req := &sigilv1.ExportGenerationsRequest{
 		Generations: []*sigilv1.Generation{{
@@ -109,6 +157,39 @@ func TestJSONRoundTripUsesProtoNames(t *testing.T) {
 	}
 }
 
+func TestWorkflowStepJSONRoundTripUsesProtoNames(t *testing.T) {
+	req := &sigilv1.ExportWorkflowStepsRequest{
+		WorkflowSteps: []*sigilv1.WorkflowStep{{
+			Id:             "wfs-1",
+			ConversationId: "conv-1",
+			StepName:       "route",
+			AgentName:      "test-agent",
+		}},
+	}
+
+	data, err := wire.MarshalExportWorkflowStepsJSON(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	encoded := string(data)
+	for _, name := range []string{"workflow_steps", "conversation_id", "step_name", "agent_name"} {
+		if !strings.Contains(encoded, name) {
+			t.Errorf("expected proto field %q in JSON payload, got %s", name, encoded)
+		}
+	}
+	if strings.Contains(encoded, "workflowSteps") || strings.Contains(encoded, "stepName") {
+		t.Errorf("expected snake_case field names, got camelCase: %s", encoded)
+	}
+
+	decoded, err := wire.UnmarshalExportWorkflowStepsJSON(data)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !proto.Equal(decoded, req) {
+		t.Fatalf("round-trip mismatch: want %v, got %v", req, decoded)
+	}
+}
+
 func TestJSONResponseRoundTrip(t *testing.T) {
 	resp := &sigilv1.ExportGenerationsResponse{
 		Results: []*sigilv1.ExportGenerationResult{
@@ -124,6 +205,29 @@ func TestJSONResponseRoundTrip(t *testing.T) {
 		t.Fatalf("expected proto field generation_id in payload, got %s", data)
 	}
 	decoded, err := wire.UnmarshalExportGenerationsResponseJSON(data)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !proto.Equal(decoded, resp) {
+		t.Fatalf("round-trip mismatch: want %v, got %v", resp, decoded)
+	}
+}
+
+func TestWorkflowStepJSONResponseRoundTrip(t *testing.T) {
+	resp := &sigilv1.ExportWorkflowStepsResponse{
+		Results: []*sigilv1.ExportWorkflowStepResult{
+			{StepId: "wfs-1", Accepted: true},
+			{StepId: "wfs-2", Accepted: false, Error: "bad payload"},
+		},
+	}
+	data, err := wire.MarshalExportWorkflowStepsResponseJSON(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(data), "step_id") {
+		t.Fatalf("expected proto field step_id in payload, got %s", data)
+	}
+	decoded, err := wire.UnmarshalExportWorkflowStepsResponseJSON(data)
 	if err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -198,6 +302,22 @@ func TestMarshalNilReturnsError(t *testing.T) {
 			wantErr: "nil ExportGenerationsResponse",
 		},
 		{
+			name: "workflow request JSON marshal",
+			marshal: func() error {
+				_, err := wire.MarshalExportWorkflowStepsJSON(nil)
+				return err
+			},
+			wantErr: "nil ExportWorkflowStepsRequest",
+		},
+		{
+			name: "workflow response JSON marshal",
+			marshal: func() error {
+				_, err := wire.MarshalExportWorkflowStepsResponseJSON(nil)
+				return err
+			},
+			wantErr: "nil ExportWorkflowStepsResponse",
+		},
+		{
 			name: "response proto marshal",
 			marshal: func() error {
 				_, err := wire.MarshalExportGenerationsResponseProto(nil)
@@ -229,6 +349,7 @@ func TestConstants(t *testing.T) {
 		{name: "tenant header", got: wire.TenantHeaderName, want: "X-Scope-OrgID"},
 		{name: "authorization header", got: wire.AuthorizationHeaderName, want: "Authorization"},
 		{name: "generation export path", got: wire.GenerationExportHTTPPath, want: "/api/v1/generations:export"},
+		{name: "workflow step export path", got: wire.WorkflowStepExportHTTPPath, want: "/api/v1/workflow-steps:export"},
 		{name: "JSON content type", got: wire.ContentTypeJSON, want: "application/json"},
 		{name: "protobuf content type", got: wire.ContentTypeProto, want: "application/x-protobuf"},
 	}

@@ -100,6 +100,83 @@ func TestToProtoRolesAndParts(t *testing.T) {
 	}
 }
 
+func TestWorkflowStepToProtoMapsAllFields(t *testing.T) {
+	startedAt := time.Date(2026, 2, 11, 12, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(time.Second)
+
+	got, err := sigilcodec.WorkflowStepToProto(sigilmodel.WorkflowStep{
+		ID:                  "wfs-route",
+		ConversationID:      "conv-workflow",
+		StepName:            "route",
+		Framework:           "custom",
+		StartedAt:           startedAt,
+		CompletedAt:         completedAt,
+		InputState:          map[string]any{"prompt": "hello", "count": 1},
+		OutputState:         map[string]any{"route": "answer"},
+		Error:               "boom",
+		Tags:                map[string]string{"env": "test"},
+		LinkedGenerationIDs: []string{"gen-1", "gen-2"},
+		ParentStepIDs:       []string{"wfs-root"},
+		AgentName:           "agent-workflow",
+		AgentVersion:        "v1",
+		TraceID:             "trace-1",
+		SpanID:              "span-1",
+		Metadata:            map[string]any{"run_id": "run-1"},
+	})
+	if err != nil {
+		t.Fatalf("WorkflowStepToProto: %v", err)
+	}
+
+	if got.GetId() != "wfs-route" {
+		t.Fatalf("expected id wfs-route, got %q", got.GetId())
+	}
+	if got.GetConversationId() != "conv-workflow" {
+		t.Fatalf("expected conversation id conv-workflow, got %q", got.GetConversationId())
+	}
+	if got.GetStepName() != "route" {
+		t.Fatalf("expected step name route, got %q", got.GetStepName())
+	}
+	if got.GetFramework() != "custom" {
+		t.Fatalf("expected framework custom, got %q", got.GetFramework())
+	}
+	if got.GetStartedAt().AsTime() != startedAt {
+		t.Fatalf("expected startedAt %s, got %s", startedAt, got.GetStartedAt().AsTime())
+	}
+	if got.GetCompletedAt().AsTime() != completedAt {
+		t.Fatalf("expected completedAt %s, got %s", completedAt, got.GetCompletedAt().AsTime())
+	}
+	if got.GetInputState().GetFields()["prompt"].GetStringValue() != "hello" {
+		t.Fatalf("expected input_state.prompt=hello, got %#v", got.GetInputState())
+	}
+	if got.GetInputState().GetFields()["count"].GetNumberValue() != 1 {
+		t.Fatalf("expected input_state.count=1, got %#v", got.GetInputState())
+	}
+	if got.GetOutputState().GetFields()["route"].GetStringValue() != "answer" {
+		t.Fatalf("expected output_state.route=answer, got %#v", got.GetOutputState())
+	}
+	if got.GetError() != "boom" {
+		t.Fatalf("expected error boom, got %q", got.GetError())
+	}
+	if got.GetTags()["env"] != "test" {
+		t.Fatalf("expected env tag, got %#v", got.GetTags())
+	}
+	if strings.Join(got.GetLinkedGenerationIds(), ",") != "gen-1,gen-2" {
+		t.Fatalf("unexpected linked generation ids: %#v", got.GetLinkedGenerationIds())
+	}
+	if strings.Join(got.GetParentStepIds(), ",") != "wfs-root" {
+		t.Fatalf("unexpected parent step ids: %#v", got.GetParentStepIds())
+	}
+	if got.GetAgentName() != "agent-workflow" || got.GetAgentVersion() != "v1" {
+		t.Fatalf("unexpected agent fields: %q %q", got.GetAgentName(), got.GetAgentVersion())
+	}
+	if got.GetTraceId() != "trace-1" || got.GetSpanId() != "span-1" {
+		t.Fatalf("unexpected trace fields: %q %q", got.GetTraceId(), got.GetSpanId())
+	}
+	if got.GetMetadata().GetFields()["run_id"].GetStringValue() != "run-1" {
+		t.Fatalf("expected metadata.run_id=run-1, got %#v", got.GetMetadata())
+	}
+}
+
 func TestToProtoArtifacts(t *testing.T) {
 	g := sigilmodel.Generation{
 		Artifacts: []sigilmodel.Artifact{

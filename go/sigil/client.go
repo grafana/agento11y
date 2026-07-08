@@ -297,8 +297,9 @@ type Client struct {
 	instruments telemetryInstruments
 	exporter    generationExporter
 
-	queue    chan queuedGeneration
-	flushReq chan chan error
+	queue             chan queuedGeneration
+	workflowStepQueue chan queuedWorkflowStep
+	flushReq          chan chan error
 
 	queueMu      sync.RWMutex
 	shutdown     bool
@@ -489,6 +490,7 @@ func NewClient(config Config) *Client {
 	}
 	client.exporter = exporter
 	client.queue = make(chan queuedGeneration, cfg.GenerationExport.QueueSize)
+	client.workflowStepQueue = make(chan queuedWorkflowStep, cfg.GenerationExport.QueueSize)
 
 	if !cfg.testDisableWorker {
 		client.startWorker()
@@ -516,6 +518,34 @@ func (c *Client) StartGeneration(ctx context.Context, start GenerationStart) (co
 // If the client is nil a no-op recorder is returned (instrumentation never crashes business logic).
 func (c *Client) StartStreamingGeneration(ctx context.Context, start GenerationStart) (context.Context, *GenerationRecorder) {
 	return c.startGeneration(ctx, start, GenerationModeStream)
+}
+
+// EnqueueWorkflowStep enqueues a workflow execution node for export.
+func (c *Client) EnqueueWorkflowStep(step WorkflowStep) error {
+	if c == nil {
+		return ErrNilClient
+	}
+	normalized := cloneWorkflowStep(step)
+	if err := ValidateWorkflowStep(normalized); err != nil {
+		return fmt.Errorf("%w: %v", ErrWorkflowStepValidationFailed, err)
+	}
+	if normalized.StartedAt.IsZero() {
+		normalized.StartedAt = c.now().UTC()
+	} else {
+		normalized.StartedAt = normalized.StartedAt.UTC()
+	}
+	if normalized.CompletedAt.IsZero() {
+		normalized.CompletedAt = normalized.StartedAt
+	} else {
+		normalized.CompletedAt = normalized.CompletedAt.UTC()
+	}
+	if len(c.config.Tags) > 0 {
+		normalized.Tags = mergeTags(c.config.Tags, normalized.Tags)
+	}
+	if err := c.enqueueWorkflowStep(normalized); err != nil {
+		return fmt.Errorf("%w: %w", ErrWorkflowStepEnqueueFailed, err)
+	}
+	return nil
 }
 
 func (c *Client) startGeneration(ctx context.Context, start GenerationStart, defaultMode GenerationMode) (context.Context, *GenerationRecorder) {

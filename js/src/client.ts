@@ -63,6 +63,7 @@ import type {
   ToolExecutionRecorder,
   ToolExecutionResult,
   ToolExecutionStart,
+  WorkflowStep,
 } from './types.js';
 import {
   asError,
@@ -78,6 +79,7 @@ import {
   cloneToolExecution,
   cloneToolExecutionResult,
   cloneToolExecutionStart,
+  cloneWorkflowStep,
   defaultOperationNameForMode,
   defaultSleep,
   encodedSizeBytes,
@@ -87,6 +89,7 @@ import {
   validateEmbeddingStart,
   validateGeneration,
   validateToolExecution,
+  validateWorkflowStep,
 } from './utils.js';
 
 const spanAttrGenerationID = 'sigil.generation.id';
@@ -228,8 +231,10 @@ export class SigilClient {
   private readonly ttftHistogram: Histogram;
   private readonly toolCallsHistogram: Histogram;
   private readonly generations: Generation[] = [];
+  private readonly workflowSteps: WorkflowStep[] = [];
   private readonly toolExecutions: ToolExecution[] = [];
   private readonly pendingGenerations: Generation[] = [];
+  private readonly pendingWorkflowSteps: WorkflowStep[] = [];
 
   private flushPromise: Promise<void> | undefined;
   private flushRequested = false;
@@ -272,6 +277,26 @@ export class SigilClient {
       }, this.config.generationExport.flushIntervalMs);
       maybeUnref(this.flushTimer);
     }
+  }
+
+  /** Enqueues a workflow execution node for export. */
+  enqueueWorkflowStep(step: WorkflowStep): void {
+    this.assertOpen();
+    // Validate the raw input before defaulting timestamps, matching Go and
+    // Python. The completedAt < startedAt rule only fires when the caller
+    // supplied both; defaulting startedAt to now() first would spuriously
+    // reject a step for which the caller only provided completedAt.
+    const validationError = validateWorkflowStep(step);
+    if (validationError !== undefined) {
+      throw new Error(`sigil workflow step validation failed: ${validationError.message}`);
+    }
+    const normalized = this.normalizeWorkflowStep(step);
+    // Enqueue first: internalEnqueueWorkflowStep throws on a payload/queue
+    // rejection, and enqueueWorkflowStep propagates it. Recording into the
+    // debug buffer only after a successful enqueue keeps debugSnapshot from
+    // listing a step the caller was told failed to enqueue.
+    this.internalEnqueueWorkflowStep(normalized);
+    this.workflowSteps.push(cloneWorkflowStep(normalized));
   }
 
   /**
@@ -589,8 +614,10 @@ export class SigilClient {
   debugSnapshot(): SigilDebugSnapshot {
     return {
       generations: this.generations.map(cloneGeneration),
+      workflowSteps: this.workflowSteps.map(cloneWorkflowStep),
       toolExecutions: this.toolExecutions.map(cloneToolExecution),
       queueSize: this.pendingGenerations.length,
+      workflowStepQueueSize: this.pendingWorkflowSteps.length,
     };
   }
 
@@ -646,6 +673,41 @@ export class SigilClient {
     if (this.pendingGenerations.length >= batchSize) {
       this.triggerAsyncFlush();
     }
+  }
+
+  internalEnqueueWorkflowStep(step: WorkflowStep): void {
+    if (this.shuttingDown || this.closed) {
+      throw new Error('sigil client is shutdown');
+    }
+
+    const payloadMaxBytes = this.config.generationExport.payloadMaxBytes;
+    if (payloadMaxBytes > 0) {
+      const payloadBytes = encodedSizeBytes(step);
+      if (payloadBytes > payloadMaxBytes) {
+        throw new Error(`workflow step payload exceeds max bytes (${payloadBytes} > ${payloadMaxBytes})`);
+      }
+    }
+
+    const queueSize = Math.max(1, this.config.generationExport.queueSize);
+    if (this.pendingWorkflowSteps.length >= queueSize) {
+      throw new Error('workflow step queue is full');
+    }
+
+    this.pendingWorkflowSteps.push(cloneWorkflowStep(step));
+
+    const batchSize = Math.max(1, this.config.generationExport.batchSize);
+    if (this.pendingWorkflowSteps.length >= batchSize) {
+      this.triggerAsyncFlush();
+    }
+  }
+
+  private normalizeWorkflowStep(step: WorkflowStep): WorkflowStep {
+    const normalized = cloneWorkflowStep(step);
+    const startedAt = normalized.startedAt ?? this.internalNow();
+    normalized.startedAt = new Date(startedAt);
+    normalized.completedAt = new Date(normalized.completedAt ?? normalized.startedAt);
+    normalized.tags = mergeStringRecords(this.config.tags, normalized.tags);
+    return normalized;
   }
 
   internalLogWarn(message: string, error?: unknown): void {
@@ -1105,23 +1167,45 @@ export class SigilClient {
       return this.flushPromise;
     }
 
-    this.flushPromise = this.drainPendingGenerations().finally(() => {
+    this.flushPromise = this.drainPendingExports().finally(() => {
       this.flushPromise = undefined;
     });
 
     return this.flushPromise;
   }
 
-  private async drainPendingGenerations(): Promise<void> {
+  private async drainPendingExports(): Promise<void> {
+    const errors: Error[] = [];
     do {
       this.flushRequested = false;
 
       while (this.pendingGenerations.length > 0) {
         const batchSize = Math.max(1, this.config.generationExport.batchSize);
         const batch = this.pendingGenerations.splice(0, batchSize).map(cloneGeneration);
-        await this.exportWithRetry(batch);
+        try {
+          await this.exportWithRetry(batch);
+        } catch (error) {
+          errors.push(asError(error));
+        }
       }
-    } while (this.flushRequested || this.pendingGenerations.length > 0);
+
+      while (this.pendingWorkflowSteps.length > 0) {
+        const batchSize = Math.max(1, this.config.generationExport.batchSize);
+        const batch = this.pendingWorkflowSteps.splice(0, batchSize).map(cloneWorkflowStep);
+        try {
+          await this.exportWorkflowStepsWithRetry(batch);
+        } catch (error) {
+          errors.push(asError(error));
+        }
+      }
+    } while (this.flushRequested || this.pendingGenerations.length > 0 || this.pendingWorkflowSteps.length > 0);
+
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, 'sigil export failed');
+    }
   }
 
   private async exportWithRetry(generations: Generation[]): Promise<void> {
@@ -1156,10 +1240,50 @@ export class SigilClient {
     throw lastError ?? new Error('generation export failed');
   }
 
+  private async exportWorkflowStepsWithRetry(workflowSteps: WorkflowStep[]): Promise<void> {
+    const maxRetries = Math.max(0, this.config.generationExport.maxRetries);
+    const attempts = maxRetries + 1;
+    const baseBackoffMs =
+      this.config.generationExport.initialBackoffMs > 0 ? this.config.generationExport.initialBackoffMs : 100;
+    const maxBackoffMs =
+      this.config.generationExport.maxBackoffMs > 0 ? this.config.generationExport.maxBackoffMs : baseBackoffMs;
+
+    let backoffMs = baseBackoffMs;
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        const response = await this.generationExporter.exportWorkflowSteps({
+          workflowSteps: workflowSteps.map(cloneWorkflowStep),
+        });
+        this.logRejectedWorkflowStepResults(response.results);
+        return;
+      } catch (error) {
+        lastError = asError(error);
+        if (attempt === attempts - 1) {
+          break;
+        }
+
+        await this.sleepFn(backoffMs);
+        backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+      }
+    }
+
+    throw lastError ?? new Error('workflow step export failed');
+  }
+
   private logRejectedResults(results: Array<{ generationId: string; accepted: boolean; error?: string }>): void {
     for (const result of results) {
       if (!result.accepted) {
         this.logWarn(`sigil generation rejected id=${result.generationId}`, result.error);
+      }
+    }
+  }
+
+  private logRejectedWorkflowStepResults(results: Array<{ stepId: string; accepted: boolean; error?: string }>): void {
+    for (const result of results) {
+      if (!result.accepted) {
+        this.logWarn(`sigil workflow step rejected id=${result.stepId}`, result.error);
       }
     }
   }

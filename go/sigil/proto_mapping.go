@@ -12,3 +12,9 @@ import (
 func generationToProto(g Generation) (*sigilv1.Generation, error) {
 	return sigilcodec.ToProto(g)
 }
+
+// workflowStepToProto translates the SDK's WorkflowStep value into the
+// wire-level protobuf message.
+func workflowStepToProto(step WorkflowStep) (*sigilv1.WorkflowStep, error) {
+	return sigilcodec.WorkflowStepToProto(step)
+}

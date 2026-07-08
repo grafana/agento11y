@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeHTTPGenerationEndpoint } from '../.test-dist/exporters/http.js';
+import { normalizeHTTPGenerationEndpoint, normalizeHTTPWorkflowStepEndpoint } from '../.test-dist/exporters/http.js';
 
 const cases = [
   {
@@ -55,4 +55,23 @@ for (const tc of cases) {
 test('normalizeHTTPGenerationEndpoint: empty input throws', () => {
   assert.throws(() => normalizeHTTPGenerationEndpoint(''), /endpoint is required/);
   assert.throws(() => normalizeHTTPGenerationEndpoint('   '), /endpoint is required/);
+});
+
+test('normalizeHTTPWorkflowStepEndpoint: appends and rewrites workflow-step path', () => {
+  assert.equal(
+    normalizeHTTPWorkflowStepEndpoint('http://localhost:8080'),
+    'http://localhost:8080/api/v1/workflow-steps:export',
+  );
+  assert.equal(
+    normalizeHTTPWorkflowStepEndpoint('http://localhost:8080/api/v1/generations:export'),
+    'http://localhost:8080/api/v1/workflow-steps:export',
+  );
+  assert.equal(
+    normalizeHTTPWorkflowStepEndpoint('http://localhost:8080/api/v1/generations:export/'),
+    'http://localhost:8080/api/v1/workflow-steps:export',
+  );
+  assert.equal(
+    normalizeHTTPWorkflowStepEndpoint('http://localhost:8080/custom/ingest'),
+    'http://localhost:8080/custom/ingest',
+  );
 });

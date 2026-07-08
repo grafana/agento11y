@@ -3,22 +3,28 @@ import type {
   ExportGenerationResult,
   ExportGenerationsRequest,
   ExportGenerationsResponse,
+  ExportWorkflowStepResult,
+  ExportWorkflowStepsRequest,
+  ExportWorkflowStepsResponse,
   Generation,
   GenerationExporter,
   Message,
   MessagePart,
   TokenUsage,
   ToolDefinition,
+  WorkflowStep,
 } from '../types.js';
 import { canonicalEffectiveVersion, isRecord } from '../utils.js';
 import { userAgent } from '../version.js';
 
 export class HTTPGenerationExporter implements GenerationExporter {
-  private readonly endpoint: string;
+  private readonly generationEndpoint: string;
+  private readonly workflowStepEndpoint: string;
   private readonly headers: Record<string, string>;
 
   constructor(endpoint: string, headers?: Record<string, string>) {
-    this.endpoint = normalizeHTTPGenerationEndpoint(endpoint);
+    this.generationEndpoint = normalizeHTTPGenerationEndpoint(endpoint);
+    this.workflowStepEndpoint = normalizeHTTPWorkflowStepEndpoint(endpoint);
     // Resolve the User-Agent like the gRPC exporter: a non-blank caller override
     // (case-insensitive) wins, otherwise the SDK default. A blank/whitespace
     // override is dropped so it can't blank out the default.
@@ -37,7 +43,7 @@ export class HTTPGenerationExporter implements GenerationExporter {
   }
 
   async exportGenerations(request: ExportGenerationsRequest): Promise<ExportGenerationsResponse> {
-    const response = await fetch(this.endpoint, {
+    const response = await fetch(this.generationEndpoint, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -55,6 +61,27 @@ export class HTTPGenerationExporter implements GenerationExporter {
 
     const payload = (await response.json()) as unknown;
     return parseExportGenerationsResponse(payload, request);
+  }
+
+  async exportWorkflowSteps(request: ExportWorkflowStepsRequest): Promise<ExportWorkflowStepsResponse> {
+    const response = await fetch(this.workflowStepEndpoint, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...this.headers,
+      },
+      body: JSON.stringify({
+        workflow_steps: request.workflowSteps.map(mapWorkflowStepToProtoJSON),
+      }),
+    });
+
+    if (!response.ok) {
+      const responseText = (await response.text()).trim();
+      throw new Error(`http workflow step export status ${response.status}: ${responseText}`);
+    }
+
+    const payload = (await response.json()) as unknown;
+    return parseExportWorkflowStepsResponse(payload, request);
   }
 }
 
@@ -88,9 +115,19 @@ function parseExportGenerationsResponse(
 }
 
 const HTTP_GENERATION_EXPORT_PATH = '/api/v1/generations:export';
+const HTTP_WORKFLOW_STEP_EXPORT_PATH = '/api/v1/workflow-steps:export';
 
 /** @internal Exported for tests; not part of the public API. */
 export function normalizeHTTPGenerationEndpoint(endpoint: string): string {
+  return normalizeHTTPEndpoint(endpoint, HTTP_GENERATION_EXPORT_PATH);
+}
+
+/** @internal Exported for tests; not part of the public API. */
+export function normalizeHTTPWorkflowStepEndpoint(endpoint: string): string {
+  return normalizeHTTPEndpoint(endpoint, HTTP_WORKFLOW_STEP_EXPORT_PATH, HTTP_GENERATION_EXPORT_PATH);
+}
+
+function normalizeHTTPEndpoint(endpoint: string, defaultPath: string, siblingPath?: string): string {
   const trimmed = endpoint.trim();
   if (trimmed.length === 0) {
     throw new Error('generation export endpoint is required');
@@ -107,8 +144,11 @@ export function normalizeHTTPGenerationEndpoint(endpoint: string): string {
     const detail = e instanceof Error ? e.message : String(e);
     throw new Error(`parse generation export endpoint "${endpoint}": ${detail}`);
   }
+  const comparablePath = url.pathname.replace(/\/+$/, '');
   if (url.pathname === '' || url.pathname === '/') {
-    url.pathname = HTTP_GENERATION_EXPORT_PATH;
+    url.pathname = defaultPath;
+  } else if (siblingPath !== undefined && comparablePath === siblingPath) {
+    url.pathname = defaultPath;
   }
   return url.toString();
 }
@@ -166,6 +206,62 @@ function mapGenerationToProtoJSON(generation: Generation): Record<string, unknow
     proto.effective_version = effectiveVersion;
   }
 
+  return proto;
+}
+
+function parseExportWorkflowStepsResponse(
+  payload: unknown,
+  request: ExportWorkflowStepsRequest,
+): ExportWorkflowStepsResponse {
+  if (!isRecord(payload) || !Array.isArray(payload.results)) {
+    throw new Error('invalid workflow step export response payload');
+  }
+
+  const results: ExportWorkflowStepResult[] = payload.results.map((result, index) => {
+    if (!isRecord(result)) {
+      throw new Error('invalid workflow step export result payload');
+    }
+
+    const fallbackStepID = request.workflowSteps[index]?.id ?? '';
+    return {
+      stepId:
+        typeof result.stepId === 'string'
+          ? result.stepId
+          : typeof result.step_id === 'string'
+            ? result.step_id
+            : fallbackStepID,
+      accepted: Boolean(result.accepted),
+      error: typeof result.error === 'string' ? result.error : undefined,
+    };
+  });
+
+  return { results };
+}
+
+function mapWorkflowStepToProtoJSON(step: WorkflowStep): Record<string, unknown> {
+  const proto: Record<string, unknown> = {
+    id: step.id,
+    conversation_id: step.conversationId,
+    step_name: step.stepName,
+    framework: step.framework ?? '',
+    input_state: normalizeMetadata(step.inputState),
+    output_state: normalizeMetadata(step.outputState),
+    error: step.error ?? '',
+    tags: step.tags ?? {},
+    linked_generation_ids: step.linkedGenerationIds ?? [],
+    parent_step_ids: step.parentStepIds ?? [],
+    agent_name: step.agentName ?? '',
+    agent_version: step.agentVersion ?? '',
+    trace_id: step.traceId ?? '',
+    span_id: step.spanId ?? '',
+    metadata: normalizeMetadata(step.metadata),
+  };
+  if (step.startedAt !== undefined) {
+    proto.started_at = step.startedAt.toISOString();
+  }
+  if (step.completedAt !== undefined) {
+    proto.completed_at = step.completedAt.toISOString();
+  }
   return proto;
 }
 

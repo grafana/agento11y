@@ -1,6 +1,8 @@
 import type {
   ExportGenerationsRequest,
   ExportGenerationsResponse,
+  ExportWorkflowStepsRequest,
+  ExportWorkflowStepsResponse,
   GenerationExportConfig,
   GenerationExporter,
 } from '../types.js';
@@ -30,12 +32,25 @@ class NoopGenerationExporter implements GenerationExporter {
       })),
     };
   }
+
+  async exportWorkflowSteps(request: ExportWorkflowStepsRequest): Promise<ExportWorkflowStepsResponse> {
+    return {
+      results: request.workflowSteps.map((step) => ({
+        stepId: step.id,
+        accepted: true,
+      })),
+    };
+  }
 }
 
 class UnavailableGenerationExporter implements GenerationExporter {
   constructor(private readonly reason: Error) {}
 
   async exportGenerations(): Promise<never> {
+    throw this.reason;
+  }
+
+  async exportWorkflowSteps(): Promise<never> {
     throw this.reason;
   }
 }
@@ -59,6 +74,11 @@ class LazyGRPCGenerationExporter implements GenerationExporter {
   async exportGenerations(request: ExportGenerationsRequest): Promise<ExportGenerationsResponse> {
     const exporter = await this.getExporter();
     return exporter.exportGenerations(request);
+  }
+
+  async exportWorkflowSteps(request: ExportWorkflowStepsRequest): Promise<ExportWorkflowStepsResponse> {
+    const exporter = await this.getExporter();
+    return exporter.exportWorkflowSteps(request);
   }
 
   async shutdown(): Promise<void> {

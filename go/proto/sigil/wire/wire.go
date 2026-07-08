@@ -25,6 +25,8 @@ const (
 	AuthorizationHeaderName = "Authorization"
 	// GenerationExportHTTPPath is the HTTP path for ExportGenerations.
 	GenerationExportHTTPPath = "/api/v1/generations:export"
+	// WorkflowStepExportHTTPPath is the HTTP path for ExportWorkflowSteps.
+	WorkflowStepExportHTTPPath = "/api/v1/workflow-steps:export"
 	// ContentTypeJSON identifies the protojson body shape.
 	ContentTypeJSON = "application/json"
 	// ContentTypeProto identifies the binary protobuf body shape.
@@ -36,6 +38,17 @@ const (
 // exporter behavior. If endpoint has no scheme, https is assumed unless
 // insecure is true (in which case http is used).
 func NormalizeGenerationExportURL(endpoint string, insecure bool) (string, error) {
+	return normalizeExportURL(endpoint, insecure, GenerationExportHTTPPath, "")
+}
+
+// NormalizeWorkflowStepExportURL returns endpoint with the Sigil workflow-step
+// export HTTP path applied when no path is present. If the generation export
+// path is supplied, it is rewritten to the workflow-step sibling path.
+func NormalizeWorkflowStepExportURL(endpoint string, insecure bool) (string, error) {
+	return normalizeExportURL(endpoint, insecure, WorkflowStepExportHTTPPath, GenerationExportHTTPPath)
+}
+
+func normalizeExportURL(endpoint string, insecure bool, defaultPath string, siblingPath string) (string, error) {
 	trimmed := strings.TrimSpace(endpoint)
 	if trimmed == "" {
 		return "", errors.New("endpoint is required")
@@ -58,7 +71,12 @@ func NormalizeGenerationExportURL(endpoint string, insecure bool) (string, error
 		return "", fmt.Errorf("endpoint %q has empty host", endpoint)
 	}
 	if parsed.Path == "" || parsed.Path == "/" {
-		parsed.Path = GenerationExportHTTPPath
+		parsed.Path = defaultPath
+	} else if siblingPath != "" && strings.TrimRight(parsed.Path, "/") == siblingPath {
+		// Trim trailing slashes before the sibling comparison so an endpoint
+		// like ".../generations:export/" is still rewritten to the
+		// workflow-step path, matching the JS and Python SDKs.
+		parsed.Path = defaultPath
 	}
 	return parsed.String(), nil
 }
@@ -96,6 +114,45 @@ func MarshalExportGenerationsResponseJSON(resp *sigilv1.ExportGenerationsRespons
 // an ExportGenerationsResponse.
 func UnmarshalExportGenerationsResponseJSON(data []byte) (*sigilv1.ExportGenerationsResponse, error) {
 	var resp sigilv1.ExportGenerationsResponse
+	if err := protojson.Unmarshal(data, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// MarshalExportWorkflowStepsJSON marshals an ExportWorkflowStepsRequest with
+// proto field names, matching the SDK's HTTP wire format.
+func MarshalExportWorkflowStepsJSON(req *sigilv1.ExportWorkflowStepsRequest) ([]byte, error) {
+	if req == nil {
+		return nil, errors.New("nil ExportWorkflowStepsRequest")
+	}
+	return protojson.MarshalOptions{UseProtoNames: true}.Marshal(req)
+}
+
+// UnmarshalExportWorkflowStepsJSON decodes a protojson-encoded
+// ExportWorkflowStepsRequest produced by MarshalExportWorkflowStepsJSON or the
+// SDK exporter.
+func UnmarshalExportWorkflowStepsJSON(data []byte) (*sigilv1.ExportWorkflowStepsRequest, error) {
+	var req sigilv1.ExportWorkflowStepsRequest
+	if err := protojson.Unmarshal(data, &req); err != nil {
+		return nil, err
+	}
+	return &req, nil
+}
+
+// MarshalExportWorkflowStepsResponseJSON marshals an ExportWorkflowStepsResponse
+// with proto field names.
+func MarshalExportWorkflowStepsResponseJSON(resp *sigilv1.ExportWorkflowStepsResponse) ([]byte, error) {
+	if resp == nil {
+		return nil, errors.New("nil ExportWorkflowStepsResponse")
+	}
+	return protojson.MarshalOptions{UseProtoNames: true}.Marshal(resp)
+}
+
+// UnmarshalExportWorkflowStepsResponseJSON decodes an HTTP response body into
+// an ExportWorkflowStepsResponse.
+func UnmarshalExportWorkflowStepsResponseJSON(data []byte) (*sigilv1.ExportWorkflowStepsResponse, error) {
+	var resp sigilv1.ExportWorkflowStepsResponse
 	if err := protojson.Unmarshal(data, &resp); err != nil {
 		return nil, err
 	}

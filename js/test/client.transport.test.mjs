@@ -139,6 +139,106 @@ test('gRPC transport roundtrip preserves full generation payload shape', async (
   }
 });
 
+test('HTTP transport roundtrip exports workflow steps to sibling endpoint', async () => {
+  const receivedWorkflowSteps = [];
+  const receivedPaths = [];
+
+  const server = createServer(async (request, response) => {
+    receivedPaths.push(request.url);
+    const chunks = [];
+    for await (const chunk of request) {
+      chunks.push(chunk);
+    }
+
+    const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    for (const step of payload.workflow_steps ?? []) {
+      receivedWorkflowSteps.push(step);
+    }
+
+    response.writeHead(202, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        results: (payload.workflow_steps ?? []).map((step) => ({
+          step_id: step.id,
+          accepted: true,
+        })),
+      }),
+    );
+  });
+
+  await listen(server);
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('failed to resolve transport test server address');
+  }
+
+  const defaults = defaultConfig();
+  const client = new SigilClient({
+    tracer: trace.getTracer('sigil-sdk-js-test'),
+    generationExport: {
+      ...defaults.generationExport,
+      protocol: 'http',
+      endpoint: `http://127.0.0.1:${address.port}/api/v1/generations:export`,
+      batchSize: 1,
+      flushIntervalMs: 60_000,
+      maxRetries: 1,
+      initialBackoffMs: 1,
+      maxBackoffMs: 1,
+    },
+  });
+
+  try {
+    const step = workflowStepFromSeed(1);
+    client.enqueueWorkflowStep(step);
+    await waitFor(() => receivedWorkflowSteps.length === 1, 2_000);
+
+    assert.equal(receivedPaths[0], '/api/v1/workflow-steps:export');
+    assert.deepEqual(canonicalizeProtoJSONWorkflowStep(receivedWorkflowSteps[0]), canonicalizeSDKWorkflowStep(step));
+  } finally {
+    await client.shutdown();
+    await close(server);
+  }
+});
+
+test('gRPC transport roundtrip exports workflow steps through workflow service', async () => {
+  const receivedWorkflowSteps = [];
+  const grpcServer = await startGRPCServer(
+    () => {},
+    (request) => {
+      for (const step of request.workflowSteps ?? []) {
+        receivedWorkflowSteps.push(step);
+      }
+    },
+  );
+
+  const defaults = defaultConfig();
+  const client = new SigilClient({
+    tracer: trace.getTracer('sigil-sdk-js-test'),
+    generationExport: {
+      ...defaults.generationExport,
+      protocol: 'grpc',
+      endpoint: `127.0.0.1:${grpcServer.port}`,
+      insecure: true,
+      batchSize: 1,
+      flushIntervalMs: 60_000,
+      maxRetries: 1,
+      initialBackoffMs: 1,
+      maxBackoffMs: 1,
+    },
+  });
+
+  try {
+    const step = workflowStepFromSeed(2);
+    client.enqueueWorkflowStep(step);
+    await waitFor(() => receivedWorkflowSteps.length === 1, 2_000);
+
+    assert.deepEqual(canonicalizeProtoWorkflowStep(receivedWorkflowSteps[0]), canonicalizeSDKWorkflowStep(step));
+  } finally {
+    await client.shutdown();
+    await stopGRPCServer(grpcServer.server);
+  }
+});
+
 test('gRPC transport maps typed message parts to proto payloads', async () => {
   const receivedGenerations = [];
   const grpcServer = await startGRPCServer((request) => {
@@ -502,6 +602,39 @@ function payloadFromSeed(seed) {
   };
 }
 
+function workflowStepFromSeed(seed) {
+  return {
+    id: `wfs-${seed}`,
+    conversationId: `conv-${seed}`,
+    stepName: `step-${seed}`,
+    framework: 'custom',
+    startedAt: new Date(Date.UTC(2026, 1, 12, 11, seed, 0)),
+    completedAt: new Date(Date.UTC(2026, 1, 12, 11, seed, 1)),
+    inputState: {
+      input: `input-${seed}`,
+      nested: { seed },
+    },
+    outputState: {
+      output: `output-${seed}`,
+    },
+    error: seed % 2 === 0 ? `error-${seed}` : undefined,
+    tags: {
+      env: 'test',
+      seed: String(seed),
+    },
+    linkedGenerationIds: [`gen-${seed}`],
+    parentStepIds: seed > 1 ? [`wfs-${seed - 1}`] : [],
+    agentName: `agent-${seed}`,
+    agentVersion: `v-${seed}`,
+    traceId: `trace-${seed}`,
+    spanId: `span-${seed}`,
+    metadata: {
+      source: 'transport-test',
+      seed,
+    },
+  };
+}
+
 function canonicalizeSDKGeneration(generation) {
   const usage = generation.usage ?? {};
   const inputTokens = asNumber(usage.inputTokens);
@@ -699,6 +832,75 @@ function canonicalizeProtoGeneration(generation) {
       uri: artifact.uri ?? '',
     })),
     callError: generation.callError ?? '',
+  };
+}
+
+function canonicalizeSDKWorkflowStep(step) {
+  return {
+    id: step.id,
+    conversationId: step.conversationId,
+    stepName: step.stepName,
+    framework: step.framework ?? '',
+    startedAt: new Date(step.startedAt).toISOString(),
+    completedAt: new Date(step.completedAt).toISOString(),
+    inputState: step.inputState ?? {},
+    outputState: step.outputState ?? {},
+    error: step.error ?? '',
+    tags: step.tags ?? {},
+    linkedGenerationIds: step.linkedGenerationIds ?? [],
+    parentStepIds: step.parentStepIds ?? [],
+    agentName: step.agentName ?? '',
+    agentVersion: step.agentVersion ?? '',
+    traceId: step.traceId ?? '',
+    spanId: step.spanId ?? '',
+    metadata: step.metadata ?? {},
+  };
+}
+
+function canonicalizeProtoJSONWorkflowStep(step) {
+  if (!isRecord(step)) {
+    throw new Error('invalid proto-json workflow step payload');
+  }
+  return {
+    id: asString(step.id),
+    conversationId: asString(step.conversation_id),
+    stepName: asString(step.step_name),
+    framework: asString(step.framework),
+    startedAt: timestampStringToISO(step.started_at),
+    completedAt: timestampStringToISO(step.completed_at),
+    inputState: normalizeProtoJSONMetadata(step.input_state),
+    outputState: normalizeProtoJSONMetadata(step.output_state),
+    error: asString(step.error),
+    tags: normalizeProtoJSONStringMap(step.tags),
+    linkedGenerationIds: Array.isArray(step.linked_generation_ids) ? step.linked_generation_ids.map(asString) : [],
+    parentStepIds: Array.isArray(step.parent_step_ids) ? step.parent_step_ids.map(asString) : [],
+    agentName: asString(step.agent_name),
+    agentVersion: asString(step.agent_version),
+    traceId: asString(step.trace_id),
+    spanId: asString(step.span_id),
+    metadata: normalizeProtoJSONMetadata(step.metadata),
+  };
+}
+
+function canonicalizeProtoWorkflowStep(step) {
+  return {
+    id: step.id ?? '',
+    conversationId: step.conversationId ?? '',
+    stepName: step.stepName ?? '',
+    framework: step.framework ?? '',
+    startedAt: timestampToISO(step.startedAt),
+    completedAt: timestampToISO(step.completedAt),
+    inputState: normalizeProtoMetadata(step.inputState),
+    outputState: normalizeProtoMetadata(step.outputState),
+    error: step.error ?? '',
+    tags: step.tags ?? {},
+    linkedGenerationIds: step.linkedGenerationIds ?? [],
+    parentStepIds: step.parentStepIds ?? [],
+    agentName: step.agentName ?? '',
+    agentVersion: step.agentVersion ?? '',
+    traceId: step.traceId ?? '',
+    spanId: step.spanId ?? '',
+    metadata: normalizeProtoMetadata(step.metadata),
   };
 }
 
@@ -945,18 +1147,30 @@ function close(server) {
   });
 }
 
-async function startGRPCServer(onRequest) {
+async function startGRPCServer(onRequest, onWorkflowStepRequest = () => {}) {
   const packageDefinition = await protoLoader.load(protoPath, protoLoadOptions);
   const loaded = grpc.loadPackageDefinition(packageDefinition);
-  const service = loaded.sigil.v1.GenerationIngestService;
+  const generationService = loaded.sigil.v1.GenerationIngestService;
+  const workflowStepService = loaded.sigil.v1.WorkflowStepIngestService;
 
   const server = new grpc.Server();
-  server.addService(service.service, {
+  server.addService(generationService.service, {
     ExportGenerations(call, callback) {
       onRequest(call.request, call.metadata.getMap());
       callback(null, {
         results: (call.request.generations ?? []).map((generation) => ({
           generationId: generation.id,
+          accepted: true,
+        })),
+      });
+    },
+  });
+  server.addService(workflowStepService.service, {
+    ExportWorkflowSteps(call, callback) {
+      onWorkflowStepRequest(call.request, call.metadata.getMap());
+      callback(null, {
+        results: (call.request.workflowSteps ?? []).map((step) => ({
+          stepId: step.id,
           accepted: true,
         })),
       });

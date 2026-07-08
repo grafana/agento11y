@@ -1656,6 +1656,242 @@ func TestSentinelErrorsAreMatchable(t *testing.T) {
 	}
 }
 
+func TestEnqueueWorkflowStepFlushesExport(t *testing.T) {
+	exporter := &capturingGenerationExporter{}
+	client, _, _ := newTestClient(t, Config{
+		GenerationExport: GenerationExportConfig{
+			BatchSize:     10,
+			FlushInterval: time.Hour,
+		},
+		testGenerationExporter: exporter,
+	})
+
+	startedAt := time.Date(2026, 2, 11, 12, 0, 0, 0, time.UTC)
+	err := client.EnqueueWorkflowStep(WorkflowStep{
+		ID:                  "wfs-route",
+		ConversationID:      "conv-workflow",
+		StepName:            "route",
+		Framework:           "custom",
+		StartedAt:           startedAt,
+		CompletedAt:         startedAt.Add(time.Second),
+		InputState:          map[string]any{"prompt": "hello"},
+		OutputState:         map[string]any{"route": "answer"},
+		Tags:                map[string]string{"env": "test"},
+		LinkedGenerationIDs: []string{"gen-route"},
+		ParentStepIDs:       []string{"wfs-root"},
+		AgentName:           "agent-workflow",
+		AgentVersion:        "v1",
+		TraceID:             "trace-1",
+		SpanID:              "span-1",
+		Metadata:            map[string]any{"run_id": "run-1"},
+	})
+	if err != nil {
+		t.Fatalf("enqueue workflow step: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Flush(ctx); err != nil {
+		t.Fatalf("flush workflow step: %v", err)
+	}
+
+	if got := exporter.workflowStepRequestCount(); got != 1 {
+		t.Fatalf("workflowStepRequestCount = %d, want 1", got)
+	}
+	exporter.mu.Lock()
+	request := exporter.workflowStepRequests[0]
+	exporter.mu.Unlock()
+	if len(request.WorkflowSteps) != 1 {
+		t.Fatalf("expected 1 workflow step, got %d", len(request.WorkflowSteps))
+	}
+	step := request.WorkflowSteps[0]
+	if step.GetId() != "wfs-route" {
+		t.Fatalf("expected workflow step id wfs-route, got %q", step.GetId())
+	}
+	if step.GetConversationId() != "conv-workflow" {
+		t.Fatalf("expected conversation id conv-workflow, got %q", step.GetConversationId())
+	}
+	if step.GetInputState().GetFields()["prompt"].GetStringValue() != "hello" {
+		t.Fatalf("expected input_state.prompt=hello, got %#v", step.GetInputState())
+	}
+}
+
+func TestShutdownFlushesPendingWorkflowStepExport(t *testing.T) {
+	exporter := &capturingGenerationExporter{}
+	client, _, _ := newTestClient(t, Config{
+		GenerationExport: GenerationExportConfig{
+			BatchSize:     10,
+			FlushInterval: time.Hour,
+		},
+		testGenerationExporter: exporter,
+	})
+
+	if err := client.EnqueueWorkflowStep(WorkflowStep{
+		ID:             "wfs-shutdown",
+		ConversationID: "conv-workflow",
+		StepName:       "finalize",
+	}); err != nil {
+		t.Fatalf("enqueue workflow step: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown client: %v", err)
+	}
+
+	if got := exporter.workflowStepRequestCount(); got != 1 {
+		t.Fatalf("workflowStepRequestCount = %d, want 1", got)
+	}
+	exporter.mu.Lock()
+	request := exporter.workflowStepRequests[0]
+	exporter.mu.Unlock()
+	if len(request.WorkflowSteps) != 1 {
+		t.Fatalf("expected 1 workflow step, got %d", len(request.WorkflowSteps))
+	}
+	if got := request.WorkflowSteps[0].GetId(); got != "wfs-shutdown" {
+		t.Fatalf("workflow step id = %q, want wfs-shutdown", got)
+	}
+}
+
+func TestFlushRetriesWorkflowStepExport(t *testing.T) {
+	attempts := 0
+	exporter := &capturingGenerationExporter{
+		exportWorkflowSteps: func(_ context.Context, req *sigilv1.ExportWorkflowStepsRequest) (*sigilv1.ExportWorkflowStepsResponse, error) {
+			attempts++
+			if attempts < 3 {
+				return nil, errors.New("transient")
+			}
+			results := make([]*sigilv1.ExportWorkflowStepResult, len(req.WorkflowSteps))
+			for i := range req.WorkflowSteps {
+				results[i] = &sigilv1.ExportWorkflowStepResult{
+					StepId:   req.WorkflowSteps[i].Id,
+					Accepted: true,
+				}
+			}
+			return &sigilv1.ExportWorkflowStepsResponse{Results: results}, nil
+		},
+	}
+	client, _, _ := newTestClient(t, Config{
+		GenerationExport: GenerationExportConfig{
+			MaxRetries:     2,
+			InitialBackoff: time.Millisecond,
+			MaxBackoff:     time.Millisecond,
+			FlushInterval:  time.Hour,
+		},
+		testGenerationExporter: exporter,
+	})
+
+	if err := client.EnqueueWorkflowStep(WorkflowStep{
+		ID:             "wfs-retry",
+		ConversationID: "conv-workflow",
+		StepName:       "answer",
+	}); err != nil {
+		t.Fatalf("enqueue workflow step: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Flush(ctx); err != nil {
+		t.Fatalf("flush workflow step: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+}
+
+func TestEnqueueWorkflowStepValidationErrorIsMatchable(t *testing.T) {
+	client, _, _ := newTestClient(t, Config{})
+
+	err := client.EnqueueWorkflowStep(WorkflowStep{
+		ID:             "wfs-invalid",
+		ConversationID: "conv-workflow",
+	})
+	if err == nil {
+		t.Fatal("expected workflow step validation error")
+	}
+	if !errors.Is(err, ErrWorkflowStepValidationFailed) {
+		t.Fatalf("expected errors.Is(err, ErrWorkflowStepValidationFailed), got %v", err)
+	}
+}
+
+func TestEnqueueWorkflowStepQueueFullMessageNamesWorkflowStep(t *testing.T) {
+	client, _, _ := newTestClient(t, Config{
+		GenerationExport:  GenerationExportConfig{QueueSize: 1},
+		testDisableWorker: true,
+	})
+
+	step := WorkflowStep{ID: "wfs", ConversationID: "conv-workflow", StepName: "route"}
+	if err := client.EnqueueWorkflowStep(step); err != nil {
+		t.Fatalf("first enqueue: %v", err)
+	}
+	// Worker is disabled, so the second enqueue fills the queue of size 1.
+	err := client.EnqueueWorkflowStep(step)
+	if err == nil {
+		t.Fatal("expected queue-full error")
+	}
+	if !errors.Is(err, ErrWorkflowStepQueueFull) {
+		t.Fatalf("expected errors.Is(err, ErrWorkflowStepQueueFull), got %v", err)
+	}
+	if !errors.Is(err, ErrWorkflowStepEnqueueFailed) {
+		t.Fatalf("expected errors.Is(err, ErrWorkflowStepEnqueueFailed), got %v", err)
+	}
+	if strings.Contains(err.Error(), "generation queue") {
+		t.Fatalf("queue-full message should not name the generation queue, got %q", err.Error())
+	}
+}
+
+func TestFlushReportsBothGenerationAndWorkflowStepAsyncErrors(t *testing.T) {
+	genErr := errors.New("generation boom")
+	wfErr := errors.New("workflow step boom")
+	exporter := &capturingGenerationExporter{err: genErr, workflowStepErr: wfErr}
+
+	// BatchSize 1 makes each enqueue flush asynchronously in the worker, so
+	// both the generation and the workflow-step export fail before the
+	// explicit Flush. Both async failures must survive to the Flush result.
+	client, _, _ := newTestClient(t, Config{
+		GenerationExport: GenerationExportConfig{
+			BatchSize:      1,
+			MaxRetries:     0,
+			FlushInterval:  time.Hour,
+			InitialBackoff: time.Millisecond,
+			MaxBackoff:     time.Millisecond,
+		},
+		testGenerationExporter: exporter,
+	})
+
+	ctx, rec := client.StartGeneration(context.Background(), GenerationStart{
+		ConversationID: "conv-async",
+		Model:          ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-6"},
+	})
+	rec.SetResult(Generation{
+		Input:  []Message{UserTextMessage("hi")},
+		Output: []Message{AssistantTextMessage("yo")},
+	}, nil)
+	rec.End()
+	_ = ctx
+
+	if err := client.EnqueueWorkflowStep(WorkflowStep{
+		ID:             "wfs-async",
+		ConversationID: "conv-async",
+		StepName:       "route",
+	}); err != nil {
+		t.Fatalf("enqueue workflow step: %v", err)
+	}
+
+	flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := client.Flush(flushCtx)
+	if err == nil {
+		t.Fatal("expected Flush to report async export failures")
+	}
+	if !errors.Is(err, genErr) {
+		t.Fatalf("Flush error should include the generation failure, got %v", err)
+	}
+	if !errors.Is(err, wfErr) {
+		t.Fatalf("Flush error should include the workflow-step failure, got %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -1686,12 +1922,17 @@ func newTestClient(t *testing.T, config Config) (*Client, *tracetest.SpanRecorde
 }
 
 type capturingGenerationExporter struct {
-	mu       sync.Mutex
-	requests []*sigilv1.ExportGenerationsRequest
-	attempts int
-	err      error
-	response *sigilv1.ExportGenerationsResponse
-	export   func(context.Context, *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error)
+	mu                   sync.Mutex
+	requests             []*sigilv1.ExportGenerationsRequest
+	workflowStepRequests []*sigilv1.ExportWorkflowStepsRequest
+	attempts             int
+	workflowStepAttempts int
+	err                  error
+	workflowStepErr      error
+	response             *sigilv1.ExportGenerationsResponse
+	workflowStepResponse *sigilv1.ExportWorkflowStepsResponse
+	export               func(context.Context, *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error)
+	exportWorkflowSteps  func(context.Context, *sigilv1.ExportWorkflowStepsRequest) (*sigilv1.ExportWorkflowStepsResponse, error)
 }
 
 func (e *capturingGenerationExporter) Export(ctx context.Context, req *sigilv1.ExportGenerationsRequest) (*sigilv1.ExportGenerationsResponse, error) {
@@ -1724,6 +1965,36 @@ func (e *capturingGenerationExporter) Export(ctx context.Context, req *sigilv1.E
 	return &sigilv1.ExportGenerationsResponse{Results: results}, nil
 }
 
+func (e *capturingGenerationExporter) ExportWorkflowSteps(ctx context.Context, req *sigilv1.ExportWorkflowStepsRequest) (*sigilv1.ExportWorkflowStepsResponse, error) {
+	e.mu.Lock()
+	e.workflowStepAttempts++
+	err := e.workflowStepErr
+	if err == nil {
+		e.workflowStepRequests = append(e.workflowStepRequests, req)
+	}
+	e.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	if e.exportWorkflowSteps != nil {
+		return e.exportWorkflowSteps(ctx, req)
+	}
+
+	if e.workflowStepResponse != nil {
+		return e.workflowStepResponse, nil
+	}
+
+	results := make([]*sigilv1.ExportWorkflowStepResult, len(req.WorkflowSteps))
+	for i := range req.WorkflowSteps {
+		results[i] = &sigilv1.ExportWorkflowStepResult{
+			StepId:   req.WorkflowSteps[i].Id,
+			Accepted: true,
+		}
+	}
+	return &sigilv1.ExportWorkflowStepsResponse{Results: results}, nil
+}
+
 func (e *capturingGenerationExporter) Shutdown(_ context.Context) error {
 	return nil
 }
@@ -1732,6 +2003,12 @@ func (e *capturingGenerationExporter) requestCount() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return len(e.requests)
+}
+
+func (e *capturingGenerationExporter) workflowStepRequestCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.workflowStepRequests)
 }
 
 func TestFlushReturnsErrorOnRejectedGenerationResult(t *testing.T) {

@@ -24,8 +24,16 @@ var (
 	ErrEmbeddingValidationFailed = errors.New("sigil: embedding validation failed")
 	// ErrEnqueueFailed wraps generation enqueue failures.
 	ErrEnqueueFailed = errors.New("sigil: generation enqueue failed")
+	// ErrWorkflowStepValidationFailed wraps workflow-step validation failures.
+	ErrWorkflowStepValidationFailed = errors.New("sigil: workflow step validation failed")
+	// ErrWorkflowStepEnqueueFailed wraps workflow-step enqueue failures.
+	ErrWorkflowStepEnqueueFailed = errors.New("sigil: workflow step enqueue failed")
 	// ErrQueueFull is returned when the generation queue is at capacity.
 	ErrQueueFull = errors.New("sigil: generation queue is full")
+	// ErrWorkflowStepQueueFull is returned when the workflow-step queue is at
+	// capacity. It is a distinct sentinel from ErrQueueFull (which names the
+	// generation queue), mirroring the JS and Python SDKs' separate messages.
+	ErrWorkflowStepQueueFull = errors.New("sigil: workflow step queue is full")
 	// ErrClientShutdown is returned when enqueue happens after shutdown starts.
 	ErrClientShutdown = errors.New("sigil: client is shutting down")
 	// ErrMappingFailed wraps provider-to-generation mapping failures.

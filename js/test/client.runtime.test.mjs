@@ -6,7 +6,9 @@ import { defaultConfig, SigilClient } from '../.test-dist/index.js';
 
 class MockGenerationExporter {
   requests = [];
+  workflowStepRequests = [];
   attempts = 0;
+  workflowStepAttempts = 0;
   shutdownCalls = 0;
 
   constructor(failuresBeforeSuccess = 0) {
@@ -25,6 +27,23 @@ class MockGenerationExporter {
     return {
       results: request.generations.map((generation) => ({
         generationId: generation.id,
+        accepted: true,
+      })),
+    };
+  }
+
+  async exportWorkflowSteps(request) {
+    this.workflowStepAttempts++;
+    this.workflowStepRequests.push(structuredClone(request));
+
+    if (this.workflowStepFailuresBeforeSuccess > 0) {
+      this.workflowStepFailuresBeforeSuccess--;
+      throw new Error('forced workflow-step export failure');
+    }
+
+    return {
+      results: request.workflowSteps.map((step) => ({
+        stepId: step.id,
         accepted: true,
       })),
     };
@@ -91,6 +110,184 @@ test('flush retries failed exports with backoff and succeeds', async () => {
   }
 });
 
+test('flushes workflow step exports and records debug snapshots', async () => {
+  const exporter = new MockGenerationExporter();
+  const client = newClient(exporter, {
+    batchSize: 10,
+    flushIntervalMs: 60_000,
+  });
+
+  try {
+    client.enqueueWorkflowStep({
+      id: 'wfs-route',
+      conversationId: 'conv-workflow',
+      stepName: 'route',
+      framework: 'custom',
+      startedAt: new Date(Date.UTC(2026, 1, 12, 10, 0, 0)),
+      completedAt: new Date(Date.UTC(2026, 1, 12, 10, 0, 1)),
+      linkedGenerationIds: ['gen-route'],
+    });
+
+    assert.equal(client.debugSnapshot().workflowSteps.length, 1);
+    assert.equal(client.debugSnapshot().workflowStepQueueSize, 1);
+
+    await client.flush();
+
+    assert.equal(exporter.workflowStepRequests.length, 1);
+    assert.equal(exporter.workflowStepRequests[0].workflowSteps[0].id, 'wfs-route');
+    assert.equal(client.debugSnapshot().workflowStepQueueSize, 0);
+  } finally {
+    await client.shutdown();
+  }
+});
+
+test('workflow step enqueue defaults timestamps with client clock and merges tags', async () => {
+  const exporter = new MockGenerationExporter();
+  const now = new Date(Date.UTC(2026, 1, 12, 10, 0, 0));
+  const client = newClient(
+    exporter,
+    {
+      batchSize: 10,
+      flushIntervalMs: 60_000,
+    },
+    {
+      now: () => new Date(now),
+      tags: {
+        client: 'tag',
+        shared: 'client',
+      },
+    },
+  );
+
+  try {
+    client.enqueueWorkflowStep({
+      id: 'wfs-defaults',
+      conversationId: 'conv-workflow',
+      stepName: 'route',
+      tags: {
+        shared: 'step',
+      },
+    });
+
+    const snapshotStep = client.debugSnapshot().workflowSteps[0];
+    assert.equal(snapshotStep.startedAt.toISOString(), now.toISOString());
+    assert.equal(snapshotStep.completedAt.toISOString(), now.toISOString());
+    assert.deepEqual(snapshotStep.tags, {
+      client: 'tag',
+      shared: 'step',
+    });
+
+    await client.flush();
+
+    const exportedStep = exporter.workflowStepRequests[0].workflowSteps[0];
+    assert.equal(exportedStep.startedAt.toISOString(), now.toISOString());
+    assert.equal(exportedStep.completedAt.toISOString(), now.toISOString());
+    assert.deepEqual(exportedStep.tags, {
+      client: 'tag',
+      shared: 'step',
+    });
+  } finally {
+    await client.shutdown();
+  }
+});
+
+test('workflow step enqueue validates raw input before defaulting timestamps', async () => {
+  const exporter = new MockGenerationExporter();
+  const now = new Date(Date.UTC(2026, 1, 12, 10, 0, 0));
+  const completedAt = new Date(Date.UTC(2020, 0, 1, 0, 0, 0));
+  const client = newClient(exporter, { batchSize: 10, flushIntervalMs: 60_000 }, { now: () => new Date(now) });
+
+  try {
+    // Only completedAt is supplied. The completed < started rule must not fire
+    // (started is unset), and defaulting started to now() must not retroactively
+    // reject it. Matches Go and Python.
+    client.enqueueWorkflowStep({
+      id: 'wfs-completed-only',
+      conversationId: 'conv-workflow',
+      stepName: 'route',
+      completedAt,
+    });
+
+    await client.flush();
+
+    const exportedStep = exporter.workflowStepRequests[0].workflowSteps[0];
+    assert.equal(exportedStep.startedAt.toISOString(), now.toISOString());
+    assert.equal(exportedStep.completedAt.toISOString(), completedAt.toISOString());
+  } finally {
+    await client.shutdown();
+  }
+});
+
+test('workflow step enqueue rejection does not record the step in the debug snapshot', async () => {
+  const exporter = new MockGenerationExporter();
+  const client = newClient(exporter, { batchSize: 10, flushIntervalMs: 60_000, queueSize: 1 });
+
+  try {
+    client.enqueueWorkflowStep({ id: 'wfs-1', conversationId: 'c1', stepName: 'route' });
+    // Queue size is 1 and the worker has not flushed, so the second enqueue
+    // is rejected. The rejected step must not appear in the debug snapshot.
+    assert.throws(
+      () => client.enqueueWorkflowStep({ id: 'wfs-2', conversationId: 'c1', stepName: 'answer' }),
+      /workflow step queue is full/,
+    );
+    assert.equal(client.debugSnapshot().workflowSteps.length, 1);
+    assert.equal(client.debugSnapshot().workflowSteps[0].id, 'wfs-1');
+  } finally {
+    await client.shutdown();
+  }
+});
+
+test('flush retries failed workflow step exports with backoff and succeeds', async () => {
+  const exporter = new MockGenerationExporter();
+  exporter.workflowStepFailuresBeforeSuccess = 2;
+  const client = newClient(exporter, {
+    batchSize: 10,
+    flushIntervalMs: 60_000,
+    maxRetries: 2,
+    initialBackoffMs: 1,
+    maxBackoffMs: 1,
+  });
+
+  try {
+    client.enqueueWorkflowStep({
+      id: 'wfs-retry',
+      conversationId: 'conv-workflow',
+      stepName: 'answer',
+    });
+
+    await client.flush();
+    assert.equal(exporter.workflowStepAttempts, 3);
+    assert.equal(exporter.workflowStepRequests.length, 3);
+  } finally {
+    await client.shutdown();
+  }
+});
+
+test('flush attempts workflow steps even when generation export fails', async () => {
+  const exporter = new MockGenerationExporter(1);
+  const client = newClient(exporter, {
+    batchSize: 10,
+    flushIntervalMs: 60_000,
+    maxRetries: 0,
+  });
+
+  try {
+    endWithSuccess(client.startGeneration(seedGeneration(11)), 11);
+    client.enqueueWorkflowStep({
+      id: 'wfs-isolated',
+      conversationId: 'conv-workflow',
+      stepName: 'route',
+    });
+
+    await assert.rejects(client.flush(), /forced export failure/);
+    assert.equal(exporter.requests.length, 1);
+    assert.equal(exporter.workflowStepRequests.length, 1);
+    assert.equal(exporter.workflowStepRequests[0].workflowSteps[0].id, 'wfs-isolated');
+  } finally {
+    await client.shutdown();
+  }
+});
+
 test('shutdown flushes pending generation batch', async () => {
   const exporter = new MockGenerationExporter();
   const client = newClient(exporter, {
@@ -104,6 +301,26 @@ test('shutdown flushes pending generation batch', async () => {
 
   assert.equal(exporter.requests.length, 1);
   assert.equal(exporter.requests[0].generations.length, 1);
+  assert.equal(exporter.shutdownCalls, 1);
+});
+
+test('shutdown flushes pending workflow step batch', async () => {
+  const exporter = new MockGenerationExporter();
+  const client = newClient(exporter, {
+    batchSize: 10,
+    flushIntervalMs: 60_000,
+  });
+
+  client.enqueueWorkflowStep({
+    id: 'wfs-shutdown',
+    conversationId: 'conv-workflow',
+    stepName: 'finalize',
+  });
+
+  await client.shutdown();
+
+  assert.equal(exporter.workflowStepRequests.length, 1);
+  assert.equal(exporter.workflowStepRequests[0].workflowSteps.length, 1);
   assert.equal(exporter.shutdownCalls, 1);
 });
 
@@ -132,6 +349,56 @@ test('queue-full recorder local error is exposed and callback style throws', asy
     );
   } finally {
     await client.shutdown();
+  }
+});
+
+test('workflow step queue full and payload size errors are surfaced locally', async () => {
+  const exporter = new MockGenerationExporter();
+  const queueClient = newClient(exporter, {
+    batchSize: 10,
+    queueSize: 1,
+    flushIntervalMs: 60_000,
+  });
+
+  try {
+    queueClient.enqueueWorkflowStep({
+      id: 'wfs-queued',
+      conversationId: 'conv-workflow',
+      stepName: 'route',
+    });
+    assert.throws(
+      () =>
+        queueClient.enqueueWorkflowStep({
+          id: 'wfs-overflow',
+          conversationId: 'conv-workflow',
+          stepName: 'answer',
+        }),
+      /workflow step queue is full/,
+    );
+  } finally {
+    await queueClient.shutdown();
+  }
+
+  const payloadClient = newClient(new MockGenerationExporter(), {
+    batchSize: 10,
+    payloadMaxBytes: 10,
+    flushIntervalMs: 60_000,
+  });
+  try {
+    assert.throws(
+      () =>
+        payloadClient.enqueueWorkflowStep({
+          id: 'wfs-large',
+          conversationId: 'conv-workflow',
+          stepName: 'route',
+          inputState: {
+            prompt: 'this payload is intentionally too large',
+          },
+        }),
+      /workflow step payload exceeds max bytes/,
+    );
+  } finally {
+    await payloadClient.shutdown();
   }
 });
 
@@ -251,10 +518,11 @@ test('embedding recorder does not enqueue generation exports', async () => {
   }
 });
 
-function newClient(generationExporter, overrides) {
+function newClient(generationExporter, overrides, clientOverrides = {}) {
   const defaults = defaultConfig();
   return new SigilClient({
     tracer: trace.getTracer('sigil-sdk-js-test'),
+    ...clientOverrides,
     generationExport: {
       ...defaults.generationExport,
       ...overrides,
