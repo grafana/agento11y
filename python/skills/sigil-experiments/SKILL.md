@@ -13,6 +13,12 @@ Use this skill when adding framework-free offline evaluation to a Python project
 The public SDK surface is `sigil_sdk.experiments`; do not use removed v0 runner
 APIs.
 
+This is the reference for the run-side API. If you don't yet know which evaluators
+you need or have no test cases, start with the `sigil-eval-starter` skill — it reads
+your agent, recommends evaluators, writes a starter suite, and generates a minimal
+runner; come here for the deeper patterns (binding existing generations, auditable
+LLM judges, cross-process verifiers, pass@k/pass^k).
+
 The normal setup cost for an already instrumented agent should be small:
 
 1. Import `sigil_sdk.experiments` as `sigil`.

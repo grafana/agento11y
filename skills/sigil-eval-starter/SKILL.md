@@ -175,7 +175,15 @@ cases:
 The suite YAML alone does not run anything. The Sigil SDK stores and aggregates scores, but
 it does **not** run the agent or compute the evaluators — the developer writes both. Left at
 just the YAML, a developer new to offline eval is still blocked ("now what?"). So generate a
-runner — but what you generate depends on the runnability you assessed in Step 1:
+**minimal bootstrap runner** — just enough to get one experiment running.
+
+This is deliberately the simplest path, not the full run-side API. The `sigil-experiments`
+skill is the reference for everything beyond bootstrap — binding an already-instrumented
+agent's real generations/conversations, auditable LLM-judge grading, cross-process verifiers
+(`TrialRef`), pass@k/pass^k. Don't reproduce those patterns here; generate the minimal runner
+and point to `sigil-experiments` for depth.
+
+What you generate depends on the runnability you assessed in Step 1:
 
 - **easy** → generate the full `evals/run_experiment.py` below. One hole to fill
   (`run_agent`).
@@ -302,9 +310,10 @@ Output, in this order:
    and add real ones.
 3. The three things they still do to run it: fill `run_agent(case)`, tune the sketched judge
    (and add the other recommended evaluators the same way), and set credentials
-   (`SIGIL_ENDPOINT` + `SIGIL_AUTH_TOKEN`). For the full run-side patterns (binding existing
-   generations, LLM-judge grading, cross-process verifiers), point to the `sigil-experiments`
-   skill.
+   (`SIGIL_ENDPOINT` + `SIGIL_AUTH_TOKEN`). State the boundary explicitly: this skill only
+   bootstraps the first run; for anything past that — binding an already-instrumented agent's
+   real generations, auditable LLM-judge grading, cross-process verifiers, repeated-sampling
+   metrics — the `sigil-experiments` skill is the reference.
 4. One line confirming nothing was created in Sigil — recommendations and draft files only.
 
 ## Step 6 — Offer to run it (optional, only with permission)
