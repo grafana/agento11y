@@ -171,6 +171,19 @@ func mapResponseMessages(content []asdk.BetaContentBlockUnion) []sigil.Message {
 	return out
 }
 
+// thinkingPart builds a thinking Part, skipping blocks with empty content.
+// Adaptive thinking (e.g. Claude Sonnet 5) can emit signature-only thinking
+// blocks with no text; a Part without a payload fails generation validation,
+// so empty blocks are dropped like empty text blocks.
+func thinkingPart(content, providerType string) (sigil.Part, bool) {
+	if content == "" {
+		return sigil.Part{}, false
+	}
+	part := sigil.ThinkingPart(content)
+	part.Metadata.ProviderType = providerType
+	return part, true
+}
+
 func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	if block.OfText != nil {
 		text := block.OfText.Text
@@ -180,14 +193,10 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 		return sigil.TextPart(text), true
 	}
 	if block.OfThinking != nil {
-		part := sigil.ThinkingPart(block.OfThinking.Thinking)
-		part.Metadata.ProviderType = "thinking"
-		return part, true
+		return thinkingPart(block.OfThinking.Thinking, "thinking")
 	}
 	if block.OfRedactedThinking != nil {
-		part := sigil.ThinkingPart(block.OfRedactedThinking.Data)
-		part.Metadata.ProviderType = "redacted_thinking"
-		return part, true
+		return thinkingPart(block.OfRedactedThinking.Data, "redacted_thinking")
 	}
 	if block.OfToolUse != nil {
 		inputJSON, _ := marshalAny(block.OfToolUse.Input)
@@ -304,13 +313,9 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 		}
 		return sigil.TextPart(text), true
 	case "thinking":
-		part := sigil.ThinkingPart(derefString(block.GetThinking()))
-		part.Metadata.ProviderType = typ
-		return part, true
+		return thinkingPart(derefString(block.GetThinking()), typ)
 	case "redacted_thinking":
-		part := sigil.ThinkingPart(derefString(block.GetData()))
-		part.Metadata.ProviderType = typ
-		return part, true
+		return thinkingPart(derefString(block.GetData()), typ)
 	case "tool_use", "server_tool_use", "mcp_tool_use":
 		inputJSON, _ := marshalAny(derefAny(block.GetInput()))
 		providerType := providerTypeForToolUse(typ, derefString(block.GetName()))
@@ -353,13 +358,9 @@ func mapResponseBlock(block asdk.BetaContentBlockUnion) (sigil.Part, bool) {
 		}
 		return sigil.TextPart(text), true
 	case "thinking":
-		part := sigil.ThinkingPart(block.Thinking)
-		part.Metadata.ProviderType = block.Type
-		return part, true
+		return thinkingPart(block.Thinking, block.Type)
 	case "redacted_thinking":
-		part := sigil.ThinkingPart(block.Data)
-		part.Metadata.ProviderType = block.Type
-		return part, true
+		return thinkingPart(block.Data, block.Type)
 	case "tool_use", "server_tool_use", "mcp_tool_use":
 		inputJSON, _ := marshalAny(block.Input)
 		providerType := providerTypeForToolUse(block.Type, block.Name)
