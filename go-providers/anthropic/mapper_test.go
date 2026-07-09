@@ -1026,3 +1026,59 @@ func testRequest() asdk.BetaMessageNewParams {
 		Tools: []asdk.BetaToolUnionParam{weatherTool},
 	}
 }
+
+func TestFromRequestResponseSkipsEmptyThinkingBlocks(t *testing.T) {
+	// Adaptive thinking (e.g. Claude Sonnet 5) can emit signature-only
+	// thinking blocks with empty text. They must be skipped: a thinking Part
+	// without a payload fails generation validation and would previously
+	// zero out the whole generation.
+	req := testRequest()
+	req.Messages = append(req.Messages, asdk.BetaMessageParam{
+		Role: asdk.BetaMessageParamRoleAssistant,
+		Content: []asdk.BetaContentBlockParamUnion{
+			{OfThinking: &asdk.BetaThinkingBlockParam{Thinking: "", Signature: "sig-1"}},
+			{OfRedactedThinking: &asdk.BetaRedactedThinkingBlockParam{Data: ""}},
+			{OfText: &asdk.BetaTextBlockParam{Text: "prior turn", Type: "text"}},
+		},
+	})
+
+	resp := &asdk.BetaMessage{
+		ID:         "msg_1",
+		Model:      asdk.Model("claude-sonnet-5"),
+		StopReason: asdk.BetaStopReasonEndTurn,
+		Content: []asdk.BetaContentBlockUnion{
+			{Type: "thinking", Thinking: "", Signature: "sig-2"},
+			{Type: "redacted_thinking", Data: ""},
+			{Type: "thinking", Thinking: "kept", Signature: "sig-3"},
+			{Type: "text", Text: "done"},
+		},
+	}
+
+	generation, err := FromRequestResponse(req, resp)
+	if err != nil {
+		t.Fatalf("from request/response: %v", err)
+	}
+
+	for _, message := range append(generation.Input, generation.Output...) {
+		for _, part := range message.Parts {
+			if part.Kind == sigil.PartKindThinking && part.Thinking == "" {
+				t.Fatalf("empty thinking part leaked into generation: %+v", part)
+			}
+		}
+	}
+
+	if len(generation.Output) == 0 {
+		t.Fatal("expected output messages")
+	}
+	parts := generation.Output[0].Parts
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 output parts (non-empty thinking + text), got %d: %+v", len(parts), parts)
+	}
+	if parts[0].Thinking != "kept" || parts[1].Text != "done" {
+		t.Fatalf("unexpected output parts: %+v", parts)
+	}
+
+	if verr := sigil.ValidateGeneration(generation); verr != nil {
+		t.Fatalf("generation failed validation: %v", verr)
+	}
+}
