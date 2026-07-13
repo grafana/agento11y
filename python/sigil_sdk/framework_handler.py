@@ -86,6 +86,8 @@ class _RunState:
     recorder: Any
     input_messages: list[Message]
     capture_outputs: bool
+    request_model: str = ""
+    request_provider: str = ""
     output_chunks: list[str] = field(default_factory=list)
     first_token_recorded: bool = False
 
@@ -386,6 +388,8 @@ class SigilFrameworkHandlerBase:
             recorder=recorder,
             input_messages=input_messages,
             capture_outputs=self._capture_outputs,
+            request_model=model_name,
+            request_provider=provider_name,
         )
 
     def _on_chat_model_start(
@@ -497,6 +501,8 @@ class SigilFrameworkHandlerBase:
             recorder=recorder,
             input_messages=input_messages,
             capture_outputs=self._capture_outputs,
+            request_model=model_name,
+            request_provider=provider_name,
         )
 
     def _on_llm_new_token(self, *, token: str, run_id: UUID) -> None:
@@ -550,11 +556,26 @@ class SigilFrameworkHandlerBase:
                         )
                     ]
 
+            # Some frameworks (e.g. LangChain/LangGraph with Bedrock inference
+            # profiles) do not surface the model at request start, so it was
+            # recorded as "unknown"/"custom". The real model only arrives on the
+            # response. Backfill it here so the generation and, critically, the
+            # token-usage metric (which drives cost) carry the resolvable model
+            # instead of "unknown". Only override when the request model was not
+            # already known, so an explicit request model is never clobbered.
+            backfill_model: ModelRef | None = None
+            if _is_unknown_model(run_state.request_model) and response_model != "":
+                provider = run_state.request_provider
+                if _is_unknown_provider(provider):
+                    provider = _infer_provider_from_model_name(response_model)
+                backfill_model = ModelRef(provider=provider, name=response_model)
+
             run_state.recorder.set_result(
                 Generation(
                     input=run_state.input_messages,
                     output=output_messages,
                     usage=usage,
+                    model=backfill_model if backfill_model is not None else ModelRef(),
                     response_model=response_model,
                     stop_reason=stop_reason,
                 )
@@ -1022,7 +1043,30 @@ def _resolve_model_name(serialized: dict[str, Any] | None, invocation_params: di
     return "unknown"
 
 
+_BEDROCK_VENDOR_PROVIDERS = {
+    "anthropic": "anthropic",
+    "amazon": "amazon",
+    "cohere": "cohere",
+    "meta": "meta-llama",
+    "mistral": "mistralai",
+}
+
+
+def _is_unknown_model(model_name: str) -> bool:
+    normalized = model_name.strip().lower()
+    return normalized == "" or normalized == "unknown"
+
+
+def _is_unknown_provider(provider: str) -> bool:
+    normalized = provider.strip().lower()
+    return normalized == "" or normalized == "custom"
+
+
 def _infer_provider_from_model_name(model_name: str) -> str:
+    # Called from two places: the request-start provider fallback in
+    # `_resolve_provider` (so a Bedrock-style model surfaced at start resolves to
+    # its vendor instead of "custom") and the `_on_llm_end` model backfill. Both
+    # rely on the Bedrock branch below, so keep it consistent with the backend.
     normalized = model_name.strip().lower()
     if (
         normalized.startswith("gpt-")
@@ -1035,7 +1079,45 @@ def _infer_provider_from_model_name(model_name: str) -> str:
         return "anthropic"
     if normalized.startswith("gemini-"):
         return "gemini"
+    # Bedrock inference-profile IDs / ARNs carry the vendor in a fixed dotted
+    # position (e.g. "global.anthropic.claude-sonnet-4-6" or an
+    # ".../inference-profile/..." ARN), so the plain prefix checks above miss them.
+    bedrock_provider = _infer_provider_from_bedrock_id(normalized)
+    if bedrock_provider != "":
+        return bedrock_provider
     return "custom"
+
+
+_BEDROCK_RESOURCE_MARKERS = (
+    # Longest markers first so a partial marker never matches ahead of the full one.
+    "application-inference-profile/",
+    "inference-profile/",
+    "foundation-model/",
+)
+
+_BEDROCK_REGIONAL_PREFIXES = frozenset({"us", "eu", "apac", "jp", "global"})
+
+
+def _infer_provider_from_bedrock_id(model_name: str) -> str:
+    # Mirror the backend's positional parse (sigil parseBedrockModelID): strip the
+    # resource-ARN prefix, then read the vendor from a FIXED position — segment 0,
+    # or segment 1 when segment 0 is a known regional prefix (us/eu/apac/jp/global).
+    # Scanning every dotted segment (an earlier approach) misclassified custom names
+    # that merely contain a vendor word (e.g. "my-team.anthropic.foo") and diverged
+    # from the backend, so we match its positional logic exactly.
+    trimmed = model_name.strip().lower()
+    for marker in _BEDROCK_RESOURCE_MARKERS:
+        _, sep, after = trimmed.partition(marker)
+        if sep != "":
+            trimmed = after.strip()
+            break
+    parts = trimmed.split(".")
+    if len(parts) < 2:
+        return ""
+    vendor_idx = 0
+    if len(parts) >= 3 and parts[0] in _BEDROCK_REGIONAL_PREFIXES:
+        vendor_idx = 1
+    return _BEDROCK_VENDOR_PROVIDERS.get(parts[vendor_idx], "")
 
 
 def _normalize_provider_name(value: str) -> str:
