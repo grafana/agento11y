@@ -190,6 +190,26 @@ test('langgraph provider mapping covers openai anthopic gemini and fallback', as
   assert.deepEqual(providers, ['openai', 'anthropic', 'gemini', 'custom']);
 });
 
+test('langgraph backfills Bedrock inference-profile model from the response', async () => {
+  // langgraph delegates to the shared handler, so the Bedrock backfill applies here too.
+  const arnModel = 'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6-v1:0';
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new SigilLangGraphHandler(client);
+
+    await handler.handleChatModelStart({ name: 'ChatBedrock' }, [[{ type: 'human', content: 'hi' }]], 'run-bedrock');
+    await handler.handleLLMEnd(
+      {
+        generations: [[{ text: 'ok' }]],
+        llm_output: { model_name: arnModel, token_usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } },
+      },
+      'run-bedrock',
+    );
+  });
+
+  assert.equal(generation.model.name, arnModel);
+  assert.equal(generation.model.provider, 'anthropic');
+});
+
 test('langgraph handler sets call_error on llm error', async () => {
   const generation = await captureSingleGeneration(async (client) => {
     const handler = new SigilLangGraphHandler(client);

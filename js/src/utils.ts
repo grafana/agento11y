@@ -207,6 +207,7 @@ export function cloneGeneration(generation: Generation): Generation {
 export function cloneGenerationResult(result: GenerationResult): GenerationResult {
   return {
     ...result,
+    model: result.model ? cloneModelRef(result.model) : undefined,
     input: result.input?.map(cloneMessage),
     output: result.output?.map(cloneMessage),
     tools: result.tools?.map(cloneToolDefinition),

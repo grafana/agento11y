@@ -1,6 +1,13 @@
 import { type Span, SpanKind, SpanStatusCode, type Tracer, trace } from '@opentelemetry/api';
 import type { SigilClient } from '../client.js';
-import type { GenerationRecorder, GenerationResult, Message, TokenUsage, ToolExecutionRecorder } from '../types.js';
+import type {
+  GenerationRecorder,
+  GenerationResult,
+  Message,
+  ModelRef,
+  TokenUsage,
+  ToolExecutionRecorder,
+} from '../types.js';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -43,6 +50,8 @@ interface RunState {
   recorder: GenerationRecorder;
   input: Message[];
   captureOutputs: boolean;
+  requestModel: string;
+  requestProvider: string;
   outputChunks: string[];
   firstTokenRecorded: boolean;
 }
@@ -135,6 +144,8 @@ export class SigilFrameworkHandler {
       recorder,
       input,
       captureOutputs: this.captureOutputs,
+      requestModel: modelName,
+      requestProvider: provider,
       outputChunks: [],
       firstTokenRecorded: false,
     });
@@ -179,6 +190,8 @@ export class SigilFrameworkHandler {
       recorder,
       input,
       captureOutputs: this.captureOutputs,
+      requestModel: modelName,
+      requestProvider: provider,
       outputChunks: [],
       firstTokenRecorded: false,
     });
@@ -213,9 +226,28 @@ export class SigilFrameworkHandler {
 
     try {
       const llmOutput = asRecord(read(output, 'llm_output'));
-      const responseModel = asString(read(llmOutput, 'model_name'));
-      const stopReason = asString(read(llmOutput, 'finish_reason'));
-      const usage = mapUsage(read(llmOutput, 'token_usage'));
+      // Streaming (and some integrations, e.g. ChatBedrock) don't populate
+      // `llm_output.model_name`/`finish_reason`; the model and stop reason land on the
+      // first generation message's `response_metadata` instead. Fall back to it so the
+      // backfill below fires for the streaming path, mirroring the Python handler.
+      const responseMessage = firstGenerationMessage(output);
+      const responseMetadata = asRecord(read(responseMessage, 'response_metadata'));
+      const responseModel = asString(read(llmOutput, 'model_name')) || asString(read(responseMetadata, 'model_name'));
+      const stopReason =
+        asString(read(llmOutput, 'finish_reason')) ||
+        asString(read(llmOutput, 'stop_reason')) ||
+        asString(read(responseMetadata, 'finish_reason')) ||
+        asString(read(responseMetadata, 'stop_reason'));
+      // Streaming reports token counts on the message's `usage_metadata`, not on
+      // `llm_output.token_usage`. Cost needs tokens, so fall back to the first source
+      // that actually yields counts, otherwise a resolved model still yields $0 for
+      // streams. `mapUsage` returns undefined for missing/all-zero input, so this also
+      // steps past a present-but-empty `token_usage` (which JS treats as truthy),
+      // matching the Python `or` chain that falls through an empty dict.
+      const usage =
+        mapUsage(read(llmOutput, 'token_usage')) ??
+        mapUsage(read(llmOutput, 'usage')) ??
+        mapUsage(read(responseMessage, 'usage_metadata'));
 
       let mappedOutput: Message[] | undefined;
       if (runState.captureOutputs) {
@@ -225,10 +257,26 @@ export class SigilFrameworkHandler {
         }
       }
 
+      // Some frameworks (e.g. LangChain/LangGraph with Bedrock inference profiles)
+      // do not surface the model at request start, so it was recorded as
+      // "unknown"/"custom". The real model only arrives on the response. Backfill it
+      // here so the generation and, critically, the token-usage metric (which drives
+      // cost) carry the resolvable model instead of "unknown". Only override when the
+      // request model was not already known, so an explicit request model is never
+      // clobbered.
+      let backfillModel: ModelRef | undefined;
+      if (isUnknownModel(runState.requestModel) && responseModel.length > 0) {
+        const provider = isUnknownProvider(runState.requestProvider)
+          ? inferProviderFromModelName(responseModel)
+          : runState.requestProvider;
+        backfillModel = { provider, name: responseModel };
+      }
+
       const result: GenerationResult = {
         input: runState.input,
         output: mappedOutput,
         usage,
+        model: backfillModel,
         responseModel: responseModel.length > 0 ? responseModel : undefined,
         stopReason: stopReason.length > 0 ? stopReason : undefined,
       };
@@ -1095,6 +1143,28 @@ function mapOutputMessages(output: unknown): Message[] {
   return [{ role: 'assistant', content: texts.join('\n') }];
 }
 
+// Returns the first generation's `message` object, mirroring the Python
+// `_first_generation_message`. Streaming responses carry the model / stop reason on
+// this message's `response_metadata` rather than on `llm_output`.
+function firstGenerationMessage(output: unknown): unknown {
+  const generations = read(output, 'generations');
+  if (!Array.isArray(generations)) {
+    return undefined;
+  }
+  for (const candidates of generations) {
+    if (!Array.isArray(candidates)) {
+      continue;
+    }
+    for (const candidate of candidates) {
+      const message = read(candidate, 'message');
+      if (message !== undefined && message !== null) {
+        return message;
+      }
+    }
+  }
+  return undefined;
+}
+
 function extractGenerationText(candidate: unknown): string {
   const text = asString(read(candidate, 'text'));
   if (text.length > 0) {
@@ -1177,6 +1247,62 @@ function mapUsage(rawUsage: unknown): TokenUsage | undefined {
   };
 }
 
+function isUnknownModel(modelName: string): boolean {
+  const normalized = modelName.trim().toLowerCase();
+  return normalized === '' || normalized === 'unknown';
+}
+
+function isUnknownProvider(provider: string): boolean {
+  const normalized = provider.trim().toLowerCase();
+  return normalized === '' || normalized === 'custom';
+}
+
+// Vendor->provider map for Bedrock model IDs. Matches the backend
+// `providerFromBedrockVendor` (sigil parseBedrockModelID) so SDK and backend agree.
+const BEDROCK_VENDOR_PROVIDERS: Record<string, string> = {
+  anthropic: 'anthropic',
+  amazon: 'amazon',
+  cohere: 'cohere',
+  meta: 'meta-llama',
+  mistral: 'mistralai',
+};
+
+// Longest markers first so a partial marker never matches ahead of the full one.
+const BEDROCK_RESOURCE_MARKERS = ['application-inference-profile/', 'inference-profile/', 'foundation-model/'];
+
+const BEDROCK_REGIONAL_PREFIXES = new Set(['us', 'eu', 'apac', 'jp', 'global']);
+
+// Mirror the backend's positional parse (sigil parseBedrockModelID): strip the
+// resource-ARN prefix, then read the vendor from a FIXED position — segment 0, or
+// segment 1 when segment 0 is a known regional prefix (us/eu/apac/jp/global).
+// Scanning every dotted segment would misclassify custom names that merely contain a
+// vendor word (e.g. "my-team.anthropic.foo") and diverge from the backend, so we
+// match its positional logic exactly.
+function inferProviderFromBedrockId(modelName: string): string {
+  let trimmed = modelName.trim().toLowerCase();
+  for (const marker of BEDROCK_RESOURCE_MARKERS) {
+    const idx = trimmed.indexOf(marker);
+    if (idx !== -1) {
+      trimmed = trimmed.slice(idx + marker.length).trim();
+      break;
+    }
+  }
+  const parts = trimmed.split('.');
+  if (parts.length < 2) {
+    return '';
+  }
+  let vendorIdx = 0;
+  if (parts.length >= 3 && BEDROCK_REGIONAL_PREFIXES.has(parts[0] ?? '')) {
+    vendorIdx = 1;
+  }
+  const vendor = parts[vendorIdx] ?? '';
+  return BEDROCK_VENDOR_PROVIDERS[vendor] ?? '';
+}
+
+// Called from two places: the request-start provider fallback in `resolveProvider`
+// (so a Bedrock-style model surfaced at start resolves to its vendor instead of
+// "custom") and the `onLLMEnd` model backfill. Both rely on the Bedrock branch below,
+// so keep it consistent with the backend.
 function inferProviderFromModelName(modelName: string): string {
   const normalized = modelName.trim().toLowerCase();
   if (
@@ -1192,6 +1318,13 @@ function inferProviderFromModelName(modelName: string): string {
   }
   if (normalized.startsWith('gemini-')) {
     return 'gemini';
+  }
+  // Bedrock inference-profile IDs / ARNs carry the vendor in a fixed dotted position
+  // (e.g. "global.anthropic.claude-sonnet-4-6" or an ".../inference-profile/..." ARN),
+  // so the plain prefix checks above miss them.
+  const bedrockProvider = inferProviderFromBedrockId(normalized);
+  if (bedrockProvider !== '') {
+    return bedrockProvider;
   }
   return 'custom';
 }

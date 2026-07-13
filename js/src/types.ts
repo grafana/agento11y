@@ -396,6 +396,12 @@ export interface GenerationResult {
   parentGenerationIds?: string[];
   /** See {@link GenerationStart.effectiveVersion}. */
   effectiveVersion?: string;
+  /**
+   * Overrides the request model captured at start. Set when a framework only surfaces
+   * the model on the response (e.g. Bedrock inference profiles), so the token-usage
+   * metric carries a resolvable model instead of "unknown".
+   */
+  model?: ModelRef;
   input?: Message[];
   output?: Message[];
   tools?: ToolDefinition[];

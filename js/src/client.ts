@@ -1431,7 +1431,7 @@ class GenerationRecorderImpl implements GenerationRecorder {
       agentVersion: firstNonEmptyString(this.result?.agentVersion, this.seed.agentVersion),
       mode: this.mode,
       operationName: this.result?.operationName ?? this.seed.operationName ?? defaultOperationNameForMode(this.mode),
-      model: cloneModelRef(this.seed.model),
+      model: cloneModelRef(this.result?.model ?? this.seed.model),
       systemPrompt: this.seed.systemPrompt,
       responseId: this.result?.responseId,
       responseModel: this.result?.responseModel,

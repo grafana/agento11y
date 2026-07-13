@@ -232,6 +232,162 @@ test('langchain provider mapping covers openai anthopic gemini and fallback', as
   assert.deepEqual(providers, ['openai', 'anthropic', 'gemini', 'custom']);
 });
 
+test('langchain backfills Bedrock inference-profile model from the response', async () => {
+  // Customer case: ChatBedrock with an inference profile does not surface the model at
+  // start (resolves to unknown/custom); the real model only arrives on the response.
+  // Backfill must land on generation.model so the token-usage metric is priceable.
+  const arnModel = 'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6-v1:0';
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new SigilLangChainHandler(client);
+
+    await handler.handleChatModelStart({ name: 'ChatBedrock' }, [[{ type: 'human', content: 'hello' }]], 'run-bedrock');
+    await handler.handleLLMEnd(
+      {
+        generations: [[{ text: 'world' }]],
+        llm_output: {
+          model_name: arnModel,
+          token_usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        },
+      },
+      'run-bedrock',
+    );
+  });
+
+  assert.equal(generation.model.name, arnModel);
+  assert.equal(generation.model.provider, 'anthropic');
+  assert.equal(generation.responseModel, arnModel);
+});
+
+test('langchain backfills Bedrock plain inference-profile id from the response', async () => {
+  const idModel = 'global.anthropic.claude-sonnet-4-6';
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new SigilLangChainHandler(client);
+
+    await handler.handleChatModelStart({ name: 'ChatBedrock' }, [[{ type: 'human', content: 'hi' }]], 'run-bedrock-id');
+    await handler.handleLLMEnd(
+      { generations: [[{ text: 'ok' }]], llm_output: { model_name: idModel } },
+      'run-bedrock-id',
+    );
+  });
+
+  assert.equal(generation.model.name, idModel);
+  assert.equal(generation.model.provider, 'anthropic');
+});
+
+test('langchain backfills streaming Bedrock model+usage from generation response_metadata', async () => {
+  // Real langchain-core streaming shape: the model, stop reason, and token counts land
+  // on the first generation message (response_metadata / usage_metadata), NOT on
+  // llm_output. This is the actual customer scenario (streaming ChatBedrock).
+  const arnModel = 'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6-v1:0';
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new SigilLangChainHandler(client);
+
+    await handler.handleChatModelStart(
+      { name: 'ChatBedrock' },
+      [[{ type: 'human', content: 'hello' }]],
+      'run-stream-bedrock',
+      undefined,
+      { invocation_params: { streaming: true } },
+    );
+    await handler.handleLLMNewToken('wor', undefined, 'run-stream-bedrock');
+    await handler.handleLLMNewToken('ld', undefined, 'run-stream-bedrock');
+    await handler.handleLLMEnd(
+      {
+        generations: [
+          [
+            {
+              text: 'world',
+              message: {
+                response_metadata: { model_name: arnModel, stop_reason: 'end_turn' },
+                usage_metadata: { input_tokens: 12, output_tokens: 8, total_tokens: 20 },
+              },
+            },
+          ],
+        ],
+        // llm_output carries no model / usage on the streaming path.
+        llm_output: {},
+      },
+      'run-stream-bedrock',
+    );
+  });
+
+  assert.equal(generation.model.name, arnModel);
+  assert.equal(generation.model.provider, 'anthropic');
+  assert.equal(generation.responseModel, arnModel);
+  assert.equal(generation.stopReason, 'end_turn');
+  assert.equal(generation.usage.inputTokens, 12);
+  assert.equal(generation.usage.outputTokens, 8);
+  assert.equal(generation.usage.totalTokens, 20);
+});
+
+test('langchain falls through an empty llm_output.token_usage to usage_metadata', async () => {
+  // A present-but-empty token_usage must not short-circuit the usage fallback, or a
+  // streaming response that also carries usage_metadata would report zero tokens ($0).
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new SigilLangChainHandler(client);
+
+    await handler.handleChatModelStart(
+      { name: 'ChatBedrock' },
+      [[{ type: 'human', content: 'hi' }]],
+      'run-empty-usage',
+    );
+    await handler.handleLLMEnd(
+      {
+        generations: [
+          [{ text: 'ok', message: { usage_metadata: { input_tokens: 4, output_tokens: 3, total_tokens: 7 } } }],
+        ],
+        llm_output: { model_name: 'global.anthropic.claude-sonnet-4-6', token_usage: {} },
+      },
+      'run-empty-usage',
+    );
+  });
+
+  assert.equal(generation.usage.inputTokens, 4);
+  assert.equal(generation.usage.outputTokens, 3);
+  assert.equal(generation.usage.totalTokens, 7);
+});
+
+test('langchain does not clobber an explicit request model with the response model', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new SigilLangChainHandler(client);
+
+    await handler.handleLLMStart({}, ['x'], 'run-known', undefined, { invocation_params: { model: 'gpt-5' } });
+    // Response reports a different model — the known request model must win.
+    await handler.handleLLMEnd(
+      { generations: [[{ text: 'ok' }]], llm_output: { model_name: 'claude-sonnet-4-5' } },
+      'run-known',
+    );
+  });
+
+  assert.equal(generation.model.name, 'gpt-5');
+  assert.equal(generation.model.provider, 'openai');
+});
+
+test('langchain infers Bedrock provider at request start and keeps custom for lookalikes', async () => {
+  const providers = [];
+
+  await captureGenerations(
+    async (client) => {
+      const handler = new SigilLangChainHandler(client);
+
+      // Bedrock-style id surfaced at start resolves to its vendor, not "custom".
+      await handler.handleLLMStart({}, ['x'], 'run-bedrock-start', undefined, {
+        invocation_params: { model: 'us.anthropic.claude-sonnet-4-6-v1:0' },
+      });
+      await handler.handleLLMEnd({ generations: [[{ text: 'ok' }]] }, 'run-bedrock-start');
+
+      // A custom name that merely contains a vendor word must stay "custom" (positional parse).
+      await handler.handleLLMStart({}, ['x'], 'run-lookalike', undefined, {
+        invocation_params: { model: 'my-team.anthropic.foo' },
+      });
+      await handler.handleLLMEnd({ generations: [[{ text: 'ok' }]] }, 'run-lookalike');
+    },
+    (generation) => providers.push(generation.model.provider),
+  );
+
+  assert.deepEqual(providers, ['anthropic', 'custom']);
+});
+
 test('langchain handler sets call_error on llm error', async () => {
   const generation = await captureSingleGeneration(async (client) => {
     const handler = new SigilLangChainHandler(client);
