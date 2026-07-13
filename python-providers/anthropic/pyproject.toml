@@ -1,12 +1,12 @@
 [project]
 name = "sigil-sdk-anthropic"
-version = "0.9.2"
+version = "0.9.3"
 description = "Anthropic helper wrappers for Sigil Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "sigil-sdk>=0.9.2",
+  "sigil-sdk>=0.9.3",
   "anthropic>=0.79.0,<1",
 ]
 
