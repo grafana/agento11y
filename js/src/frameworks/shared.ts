@@ -681,18 +681,31 @@ function resolveProvider(
     return resolved.length > 0 ? resolved : 'custom';
   }
 
+  // A framework hint (`provider`/`ls_provider`) wins only when it is a canonical
+  // provider. LangChain often reports a non-canonical hint for Bedrock (e.g.
+  // `ls_provider: 'amazon_bedrock'`), which `normalizeProvider` collapses to `custom`;
+  // treating that as authoritative would short-circuit the model-name inference that
+  // can recover the real vendor from a Bedrock id. So a `custom` hint is only kept as a
+  // last resort — model-name inference is tried first.
+  let hintProvider = '';
   for (const payload of [asRecord(invocationParams), asRecord(serialized)]) {
-    const fromProvider = normalizeProvider(asString(read(payload, 'provider')));
-    if (fromProvider.length > 0) {
-      return fromProvider;
-    }
-    const fromLsProvider = normalizeProvider(asString(read(payload, 'ls_provider')));
-    if (fromLsProvider.length > 0) {
-      return fromLsProvider;
+    for (const key of ['provider', 'ls_provider']) {
+      const normalized = normalizeProvider(asString(read(payload, key)));
+      if (normalized.length === 0) {
+        continue;
+      }
+      if (normalized !== 'custom') {
+        return normalized;
+      }
+      hintProvider = normalized;
     }
   }
 
-  return inferProviderFromModelName(modelName);
+  const inferred = inferProviderFromModelName(modelName);
+  if (inferred !== 'custom') {
+    return inferred;
+  }
+  return hintProvider.length > 0 ? hintProvider : inferred;
 }
 
 function resolveModelName(serialized: unknown, invocationParams: unknown): string {
