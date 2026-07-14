@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.13.0] - 2026-07-14
+
+### Features
+
+- **plugins/opencode**: capture system prompt (#382)
+- **plugins**: add git.branch and cwd built-in tags to pi, opencode, codex, copilot (#328)
+
+### Bug Fixes
+
+- **plugins/opencode**: apply guard tool-call argument transforms (#379)
+- **plugins/opencode**: link subagent sessions to the spawning parent (#378)
+- **sigil-sdk**: address fixable npm CVEs (#366)
+- **plugins/opencode**: record error spans for tools that never complete (#317)
+
 ## [0.12.0] - 2026-06-16
 
 ### Features
