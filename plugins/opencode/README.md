@@ -127,7 +127,7 @@ Built-in tags win collisions with user tags, matching the claude-code and cursor
 | `SIGIL_GUARDS_TIMEOUT_MS` | `1500` | Per-evaluation guard timeout in milliseconds. |
 | `SIGIL_GUARDS_FAIL_OPEN` | `true` | Allow tool calls if guard evaluation fails. Set to `false` to fail closed. |
 | `SIGIL_AGENT_NAME` | `opencode` | Agent name reported to Sigil. The plugin appends `:<mode>` for OpenCode's UI mode, such as `build` or `plan`. |
-| `SIGIL_AGENT_VERSION` | — | Optional version string reported with the agent. |
+| `SIGIL_AGENT_VERSION` | OpenCode version | Version string reported with the agent. |
 | `SIGIL_DEBUG` | `false` | Log lifecycle events to stderr. |
 
 File format: one `KEY=value` per line, `#` line comments, optional `export ` prefix, optional matching single or double quotes around the value. Only `SIGIL_*` keys plus `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_INSECURE`, and `OTEL_SERVICE_NAME` are honored — anything else (including stray `PATH=…` lines) is ignored.

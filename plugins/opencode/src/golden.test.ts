@@ -92,14 +92,13 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
-// opencodeMessageFixture builds an OpenCode AssistantMessage + Part list
-// representing a single turn that includes both an assistant text reply
-// and a completed tool call. New tool scenarios are a small extension of
-// this fixture: add another ToolPart to assistantParts with the desired
-// state.
+// Build one assistant reply with a completed tool call and the composed
+// system prompt OpenCode delivers through `experimental.chat.system.transform`.
 function opencodeMessageFixture() {
   const sessionID = "opencode-sess-1";
   const messageID = "msg-1";
+  // Leave `system` and `tools` unset. Real OpenCode sessions rarely set these
+  // per-request overrides.
   const userMessage = {
     id: "user-1",
     sessionID,
@@ -107,9 +106,11 @@ function opencodeMessageFixture() {
     time: { created: 1_700_000_000_000 },
     agent: "build",
     model: { providerID: "anthropic", modelID: "claude-sonnet-4-opencode" },
-    system: "you are a helpful assistant",
-    tools: { Bash: true, Read: true },
   } as const;
+  const effectiveSystem = [
+    "you are a helpful assistant",
+    "<env>cwd: /repo/oc-app</env>",
+  ];
   const userParts = [
     {
       id: "user-text-1",
@@ -169,6 +170,7 @@ function opencodeMessageFixture() {
     userParts,
     assistantMessage,
     assistantParts,
+    effectiveSystem,
   };
 }
 
@@ -223,6 +225,7 @@ describe("opencode plugin: real-SDK golden export", () => {
       userParts,
       assistantMessage,
       assistantParts,
+      effectiveSystem,
     } = opencodeMessageFixture();
 
     const config: SigilOpencodeConfig = {
@@ -252,13 +255,15 @@ describe("opencode plugin: real-SDK golden export", () => {
     const hooks = await createSigilHooks(config, fakeClient);
     if (!hooks) throw new Error("expected createSigilHooks to return hooks");
 
-    // chat.message stores the user-side context. message.updated fires
-    // once the assistant turn is terminal; the plugin then issues a
-    // session.message REST call to fetch assistant parts and exports the
-    // generation through the SDK.
+    // Store the user message, capture the composed system prompt, then
+    // export when the assistant message completes.
     hooks.chatMessage(
       { sessionID },
       { message: userMessage as any, parts: userParts as any },
+    );
+    hooks.systemTransform(
+      { sessionID, model: { id: assistantMessage.modelID } },
+      { system: effectiveSystem },
     );
     await hooks.event({
       event: {
@@ -346,11 +351,26 @@ describe("opencode plugin: real-SDK golden export", () => {
       contentCapture,
     );
     expect(messageFetches).toBe(contentCapture === "metadata_only" ? 0 : 1);
+    // Tool names come from the tools the turn used. This fixture never
+    // drives the tool.execute hooks, so in metadata_only (no parts fetch)
+    // there is no tool source at all.
     if (contentCapture === "metadata_only") {
-      expect(turn.tools.map((tool: any) => tool.name)).toEqual([
-        "Bash",
-        "Read",
-      ]);
+      expect(turn.tools ?? []).toEqual([]);
+    } else {
+      expect(turn.tools.map((tool: any) => tool.name)).toEqual(["Bash"]);
+      for (const tool of turn.tools) {
+        expect(tool.type).toBe("function");
+        expect(tool.description ?? "").toBe("");
+        expect(tool.input_schema_json ?? "").toBe("");
+      }
+    }
+    // metadata_only omits the system prompt.
+    if (contentCapture === "metadata_only") {
+      expect(turn.system_prompt ?? "").toBe("");
+    } else {
+      expect(turn.system_prompt).toBe(
+        "you are a helpful assistant\n<env>cwd: /repo/oc-app</env>",
+      );
     }
     // full_with_metadata_spans must keep tool bodies in the proto export
     // (the SDK splits content only on the OTel span side); see
