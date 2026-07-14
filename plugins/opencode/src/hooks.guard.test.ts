@@ -136,6 +136,164 @@ describe("opencode guards", () => {
     await hooks.event({ event: { type: "global.disposed", properties: {} } });
   });
 
+  it("replaces frozen tool.execute.before args with the redacted set", async () => {
+    const hookServer = await startHookServer({
+      action: "allow",
+      evaluations: [],
+      transformed_input: {
+        output: [
+          {
+            role: "assistant",
+            parts: [
+              {
+                type: "tool_call",
+                toolCall: {
+                  id: "call-1",
+                  name: "bash",
+                  inputJSON: JSON.stringify({ command: "echo [REDACTED]" }),
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    servers.push(hookServer.server);
+
+    const hooks = await createSigilHooks(config(hookServer.baseUrl), {
+      session: { message: async () => ({ data: { parts: [] } }) },
+    } as any);
+    if (!hooks) throw new Error("expected hooks");
+
+    // opencode >=1.14 freezes output.args. A secret key sits alongside the
+    // command; the server drops it and rewrites command. The redacted set must
+    // replace output.args even though the original is frozen — an in-place
+    // mutation would throw and silently leak the original.
+    const output = {
+      args: Object.freeze({
+        command: "echo sonia@grafana.com",
+        apiKey: "sk-secret",
+      }) as Record<string, unknown>,
+    };
+
+    // Must not throw (allow + transform, not a block).
+    await hooks.toolExecuteBefore(
+      { sessionID: "sess-1", callID: "call-1", tool: "bash" },
+      output,
+    );
+
+    // Wholesale replacement: dropped key gone, command redacted.
+    expect(output.args).toEqual({ command: "echo [REDACTED]" });
+    expect(output.args.apiKey).toBeUndefined();
+
+    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+  });
+
+  it("leaves tool.execute.before args unchanged when Sigil allows without a transform", async () => {
+    const hookServer = await startHookServer({
+      action: "allow",
+      evaluations: [],
+    });
+    servers.push(hookServer.server);
+
+    const hooks = await createSigilHooks(config(hookServer.baseUrl), {
+      session: { message: async () => ({ data: { parts: [] } }) },
+    } as any);
+    if (!hooks) throw new Error("expected hooks");
+
+    const args: Record<string, unknown> = { command: "ls" };
+    await hooks.toolExecuteBefore(
+      { sessionID: "sess-1", callID: "call-1", tool: "bash" },
+      { args },
+    );
+
+    expect(args).toEqual({ command: "ls" });
+
+    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+  });
+
+  it("strips all args when Sigil returns an empty-object transform", async () => {
+    const hookServer = await startHookServer({
+      action: "allow",
+      evaluations: [],
+      transformed_input: {
+        output: [
+          {
+            role: "assistant",
+            parts: [
+              {
+                type: "tool_call",
+                toolCall: { id: "call-1", name: "bash", inputJSON: "{}" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    servers.push(hookServer.server);
+
+    const hooks = await createSigilHooks(config(hookServer.baseUrl), {
+      session: { message: async () => ({ data: { parts: [] } }) },
+    } as any);
+    if (!hooks) throw new Error("expected hooks");
+
+    const output: { args: Record<string, unknown> } = {
+      args: { command: "secret", apiKey: "x" },
+    };
+    await hooks.toolExecuteBefore(
+      { sessionID: "sess-1", callID: "call-1", tool: "bash" },
+      output,
+    );
+
+    // An intentional "strip all arguments" transform empties the object.
+    expect(output.args).toEqual({});
+
+    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+  });
+
+  it("fails open and leaves args untouched when args are not a plain object", async () => {
+    const hookServer = await startHookServer({
+      action: "allow",
+      evaluations: [],
+      transformed_input: {
+        output: [
+          {
+            role: "assistant",
+            parts: [
+              {
+                type: "tool_call",
+                toolCall: {
+                  id: "call-1",
+                  name: "bash",
+                  inputJSON: JSON.stringify({ 0: "x" }),
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    servers.push(hookServer.server);
+
+    const hooks = await createSigilHooks(config(hookServer.baseUrl), {
+      session: { message: async () => ({ data: { parts: [] } }) },
+    } as any);
+    if (!hooks) throw new Error("expected hooks");
+
+    // opencode hands tool args as an object; an array here stands in for any
+    // non-plain-object value the apply path must refuse to mutate.
+    const args: unknown[] = ["ls", "-la"];
+    await hooks.toolExecuteBefore(
+      { sessionID: "sess-1", callID: "call-1", tool: "bash" },
+      { args },
+    );
+
+    // Fail open: the original (unmutated) args are preserved.
+    expect(args).toEqual(["ls", "-la"]);
+
+    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+  });
+
   it("sets permission.ask output to deny when Sigil denies", async () => {
     const hookServer = await startHookServer({
       action: "deny",
