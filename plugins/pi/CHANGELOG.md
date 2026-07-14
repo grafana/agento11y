@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.17.0] - 2026-07-14
+
+### Features
+
+- **plugins**: add git.branch and cwd built-in tags to pi, opencode, codex, copilot (#328)
+- **plugins**: log when a guard redaction transform is applied (#322)
+- **plugins/sigil**: add install script for prebuilt binaries (#298)
+- **plugins/pi**: apply transform/redact guards (#292)
+
+### Bug Fixes
+
+- **sigil-sdk**: address fixable npm CVEs (#366)
+
+### Documentation
+
+- **plugins**: fix Pi repo link (#341)
+- **plugins**: add go install path for Linux and Windows (#289)
+
 ## [0.16.0] - 2026-06-01
 
 ### Features
