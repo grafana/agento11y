@@ -283,6 +283,52 @@ def test_langchain_infers_bedrock_provider_at_request_start() -> None:
         client.shutdown()
 
 
+def test_langchain_non_canonical_provider_hint_does_not_block_bedrock_inference() -> None:
+    """LangChain reports Bedrock as ls_provider="amazon_bedrock" (and sometimes
+    "provider"). That hint normalizes to "custom" and must NOT short-circuit the
+    model-name inference that recovers the real vendor from the Bedrock id. A canonical
+    hint still wins, and a genuinely custom model keeps "custom"."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    cases = [
+        # (run label, invocation_params, expected provider)
+        ("ls", {"model": "us.anthropic.claude-sonnet-4-6-v1:0", "ls_provider": "amazon_bedrock"}, "anthropic"),
+        ("prov", {"model": "us.anthropic.claude-sonnet-4-6-v1:0", "provider": "amazon_bedrock"}, "anthropic"),
+        ("canonical", {"model": "claude-sonnet-4-5", "ls_provider": "openai"}, "openai"),
+        ("genuine_custom", {"model": "my-inhouse-model", "ls_provider": "my_platform"}, "custom"),
+    ]
+
+    try:
+        handler = SigilLangChainHandler(client=client, provider_resolver="auto")
+        run_ids = {}
+        for label, invocation_params, _ in cases:
+            run_id = uuid4()
+            run_ids[label] = run_id
+            handler.on_chat_model_start(
+                {"name": "ChatBedrock"},
+                [[{"type": "human", "content": "hello"}]],
+                run_id=run_id,
+                invocation_params=invocation_params,
+            )
+            handler.on_llm_end(
+                {
+                    "generations": [[{"text": "world"}]],
+                    "llm_output": {"model_name": invocation_params["model"]},
+                },
+                run_id=run_id,
+            )
+
+        client.flush()
+        generations = exporter.requests[0].generations
+        by_model = {g.model.name: g for g in generations}
+        for label, invocation_params, expected in cases:
+            gen = by_model[invocation_params["model"]]
+            assert gen.model.provider == expected, f"{label}: got {gen.model.provider}, want {expected}"
+    finally:
+        client.shutdown()
+
+
 def test_langchain_sync_lifecycle_extracts_anthropic_style_usage_and_stop_reason() -> None:
     """ChatAnthropic puts token usage under 'usage' (not 'token_usage') and
     stop reason under 'stop_reason' (not 'finish_reason')."""

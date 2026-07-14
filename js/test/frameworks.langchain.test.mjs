@@ -388,6 +388,46 @@ test('langchain infers Bedrock provider at request start and keeps custom for lo
   assert.deepEqual(providers, ['anthropic', 'custom']);
 });
 
+test('langchain non-canonical provider hint does not block Bedrock model inference', async () => {
+  // LangChain reports Bedrock as `ls_provider: 'amazon_bedrock'` (and sometimes
+  // `provider`). That hint normalizes to "custom" and must NOT short-circuit the
+  // model-name inference that recovers the real vendor from the Bedrock id.
+  const providers = [];
+
+  await captureGenerations(
+    async (client) => {
+      const handler = new SigilLangChainHandler(client);
+
+      // ls_provider hint -> still resolves anthropic from the model id.
+      await handler.handleLLMStart({}, ['x'], 'run-ls', undefined, {
+        invocation_params: { model: 'us.anthropic.claude-sonnet-4-6-v1:0', ls_provider: 'amazon_bedrock' },
+      });
+      await handler.handleLLMEnd({ generations: [[{ text: 'ok' }]] }, 'run-ls');
+
+      // provider hint -> same.
+      await handler.handleLLMStart({}, ['x'], 'run-prov', undefined, {
+        invocation_params: { model: 'us.anthropic.claude-sonnet-4-6-v1:0', provider: 'amazon_bedrock' },
+      });
+      await handler.handleLLMEnd({ generations: [[{ text: 'ok' }]] }, 'run-prov');
+
+      // Canonical hint still wins over model-name inference.
+      await handler.handleLLMStart({}, ['x'], 'run-canon', undefined, {
+        invocation_params: { model: 'claude-sonnet-4-5', ls_provider: 'openai' },
+      });
+      await handler.handleLLMEnd({ generations: [[{ text: 'ok' }]] }, 'run-canon');
+
+      // Genuinely custom model + non-canonical hint -> stays custom (no invented provider).
+      await handler.handleLLMStart({}, ['x'], 'run-custom', undefined, {
+        invocation_params: { model: 'my-inhouse-model', ls_provider: 'my_platform' },
+      });
+      await handler.handleLLMEnd({ generations: [[{ text: 'ok' }]] }, 'run-custom');
+    },
+    (generation) => providers.push(generation.model.provider),
+  );
+
+  assert.deepEqual(providers, ['anthropic', 'anthropic', 'openai', 'custom']);
+});
+
 test('langchain handler sets call_error on llm error', async () => {
   const generation = await captureSingleGeneration(async (client) => {
     const handler = new SigilLangChainHandler(client);
