@@ -150,14 +150,28 @@ export function mapOutputMessages(
   return messages;
 }
 
-/** Convert opencode tool name map to Sigil ToolDefinition array. Only includes enabled tools. */
-export function mapToolDefinitions(
+/** Return the enabled tool names from legacy `UserMessage.tools` overrides. */
+export function legacyToolOverrideNames(
   tools: Record<string, boolean> | undefined,
-): ToolDefinition[] {
+): string[] {
   if (!tools) return [];
   return Object.entries(tools)
     .filter(([, enabled]) => enabled)
-    .map(([name]) => ({ name }));
+    .map(([name]) => name);
+}
+
+/**
+ * Name-only function tool definitions, deduplicated and sorted by name.
+ * OpenCode does not expose tool descriptions or schemas to the plugin, so
+ * this matches the claude-code plugin: the catalog builds up over time from
+ * the tools each generation used.
+ */
+export function mapToolDefinitions(names: Iterable<string>): ToolDefinition[] {
+  const uniq = new Set<string>();
+  for (const name of names) {
+    if (typeof name === "string" && name.length > 0) uniq.add(name);
+  }
+  return [...uniq].sort().map((name) => ({ name, type: "function" }));
 }
 
 /** Map an AssistantMessage + parts to a Sigil GenerationResult with content. */

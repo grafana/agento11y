@@ -12,99 +12,18 @@ vi.mock("./telemetry.js", () => ({
   createTelemetryProviders: createTelemetryProvidersMock,
 }));
 
-import type { SigilOpencodeConfig } from "./config.js";
 import { createSigilHooks } from "./hooks.js";
+import {
+  assistantMessage,
+  baseConfig,
+  emitMessageUpdated,
+  emitPartUpdated,
+  emitSessionCreated,
+  emitSessionDeleted,
+  makeOpencodeClient,
+  makeSigilMock,
+} from "./hooks.testutil.js";
 import { stableOpencodeGenerationId } from "./lineage.js";
-
-type CapturedGeneration = {
-  seed: any;
-  firstTokenAt: Date | undefined;
-  result: unknown;
-  callError: unknown;
-};
-
-function makeSigilMock() {
-  const generations: CapturedGeneration[] = [];
-  const startStreamingGeneration = vi.fn(async (seed: any, run: any) => {
-    const entry: CapturedGeneration = {
-      seed,
-      firstTokenAt: undefined,
-      result: undefined,
-      callError: undefined,
-    };
-    generations.push(entry);
-    await run({
-      setResult: (r: unknown) => {
-        entry.result = r;
-      },
-      setCallError: (e: unknown) => {
-        entry.callError = e;
-      },
-      setFirstTokenAt: (d: Date) => {
-        entry.firstTokenAt = d;
-      },
-      setCacheDiagnostics: vi.fn(),
-      end: vi.fn(),
-      getError: () => undefined,
-    });
-  });
-  const startGeneration = vi.fn();
-  const sigil = {
-    startStreamingGeneration,
-    startGeneration,
-    startToolExecution: vi.fn(() => ({
-      setResult: vi.fn(),
-      setCallError: vi.fn(),
-      end: vi.fn(),
-      getError: vi.fn(),
-    })),
-    flush: vi.fn(async () => {}),
-    shutdown: vi.fn(async () => {}),
-  };
-  return { sigil, generations, startStreamingGeneration, startGeneration };
-}
-
-function makeOpencodeClient(parts: any[] = []) {
-  return {
-    session: { message: vi.fn(async () => ({ data: { parts } })) },
-  } as any;
-}
-
-function baseConfig(
-  overrides: Partial<SigilOpencodeConfig> = {},
-): SigilOpencodeConfig {
-  return {
-    endpoint: "http://127.0.0.1:1/api/v1/generations:export",
-    auth: { mode: "none" },
-    agentName: "opencode",
-    agentVersion: "test-version",
-    contentCapture: "full",
-    debug: false,
-    ...overrides,
-  };
-}
-
-function assistantMessage(sessionID: string, messageID: string) {
-  return {
-    id: messageID,
-    sessionID,
-    role: "assistant",
-    time: { created: 1_700_000_001_000, completed: 1_700_000_002_500 },
-    parentID: "user-1",
-    modelID: "claude-sonnet-4",
-    providerID: "anthropic",
-    mode: "build",
-    path: { cwd: "/repo", root: "/repo" },
-    cost: 0.001,
-    tokens: {
-      input: 10,
-      output: 5,
-      reasoning: 0,
-      cache: { read: 0, write: 0 },
-    },
-    finish: "end_turn",
-  } as const;
-}
 
 function textPart(
   sessionID: string,
@@ -119,43 +38,6 @@ function textPart(
     text: "hello",
     time: { start },
   };
-}
-
-async function emitMessageUpdated(
-  hooks: NonNullable<Awaited<ReturnType<typeof createSigilHooks>>>,
-  msg: unknown,
-): Promise<void> {
-  await hooks.event({
-    event: { type: "message.updated", properties: { info: msg } },
-  });
-}
-
-async function emitPartUpdated(
-  hooks: NonNullable<Awaited<ReturnType<typeof createSigilHooks>>>,
-  part: unknown,
-): Promise<void> {
-  await hooks.event({
-    event: { type: "message.part.updated", properties: { part } },
-  });
-}
-
-async function emitSessionDeleted(
-  hooks: NonNullable<Awaited<ReturnType<typeof createSigilHooks>>>,
-  sessionID: string,
-): Promise<void> {
-  await hooks.event({
-    event: { type: "session.deleted", properties: { info: { id: sessionID } } },
-  });
-}
-
-async function emitSessionCreated(
-  hooks: NonNullable<Awaited<ReturnType<typeof createSigilHooks>>>,
-  id: string,
-  parentID?: string,
-): Promise<void> {
-  await hooks.event({
-    event: { type: "session.created", properties: { info: { id, parentID } } },
-  });
 }
 
 describe("opencode generation lineage and streaming", () => {

@@ -12,7 +12,12 @@ import type { SigilOpencodeConfig } from "./config.js";
 import { resolveGitBranch } from "./git.js";
 import { runToolCallGuard } from "./guard.js";
 import { stableOpencodeGenerationId } from "./lineage.js";
-import { mapError, mapGeneration, mapToolDefinitions } from "./mappers.js";
+import {
+  legacyToolOverrideNames,
+  mapError,
+  mapGeneration,
+  mapToolDefinitions,
+} from "./mappers.js";
 import { Redactor } from "./redact.js";
 import { buildBuiltinTags } from "./tags.js";
 import {
@@ -73,6 +78,19 @@ type PendingGeneration = {
 };
 const pendingGenerations = new Map<string, PendingGeneration>();
 
+// Effective system prompt per session, captured from OpenCode's
+// `experimental.chat.system.transform` hook. The hook fires during request
+// preparation, after OpenCode composes the agent, runtime, and override
+// prompts, so this is what the model receives. The latest value wins and
+// stays until the session is deleted, because the prompt normally repeats
+// across turns. Title requests share the session ID; they are filtered out
+// by comparing the request model against the session's chat model.
+const latestSystemPromptBySession = new Map<string, string>();
+
+// OpenCode host version from `session.created`/`session.updated` events.
+// Used as the default agent and effective version, matching claude-code.
+let hostVersion: string | undefined;
+
 type SessionContext = {
   agent: string | undefined;
   model: { provider: string; name: string } | undefined;
@@ -120,6 +138,8 @@ export function _resetHookState(): void {
   parentGenerationByChildSession.clear();
   firstPartAtByMessage.clear();
   pendingGenerations.clear();
+  latestSystemPromptBySession.clear();
+  hostVersion = undefined;
   sessionContexts.clear();
   _resetToolExecutionState();
 }
@@ -175,6 +195,42 @@ function handleChatMessage(
   });
 }
 
+/**
+ * Called from the `experimental.chat.system.transform` hook. Stores the
+ * composed system prompt for the session. Read-only: this transform hook is
+ * shared with the host and other plugins, so `output.system` is never
+ * mutated here.
+ *
+ * The hook also fires for auxiliary requests such as title generation, which
+ * share the session ID but use OpenCode's small model. When the request
+ * model differs from the session's chat model (stored by `chat.message`),
+ * the prompt is skipped. If both requests use the same model the title
+ * prompt can win the race; this only affects a session's first turn.
+ */
+function handleSystemTransform(
+  input: { sessionID?: string; model?: { id?: string } },
+  output: { system: string[] },
+  debugLog: (msg: string, ...args: unknown[]) => void,
+): void {
+  const sessionID = input.sessionID;
+  if (!sessionID || !Array.isArray(output.system)) return;
+
+  const sessionModel = sessionContexts.get(sessionID)?.model?.name;
+  const requestModel = input.model?.id;
+  if (sessionModel && requestModel && sessionModel !== requestModel) {
+    debugLog(
+      `ignoring system prompt for session=${sessionID}: request model ${requestModel} differs from chat model ${sessionModel}`,
+    );
+    return;
+  }
+
+  const prompt = joinSystemPrompt(
+    output.system.filter((entry): entry is string => typeof entry === "string"),
+  );
+  if (prompt === undefined) return;
+  latestSystemPromptBySession.set(sessionID, prompt);
+}
+
 async function handleEvent(
   sigil: SigilClient,
   config: SigilOpencodeConfig,
@@ -184,8 +240,11 @@ async function handleEvent(
   projectDir: string,
   event: { type: string; properties: unknown },
 ): Promise<void> {
-  if (event.type === "session.created") {
-    recordSessionParent(event.properties);
+  if (event.type === "session.created" || event.type === "session.updated") {
+    recordHostVersion(event.properties);
+    if (event.type === "session.created") {
+      recordSessionParent(event.properties);
+    }
     return;
   }
   if (event.type === "message.part.updated") {
@@ -372,42 +431,20 @@ async function recordAssistantMessage(
     }
   }
 
-  const tools = mapToolDefinitions(pending?.tools);
-  // Resolved per turn so a mid-session checkout lands on the next
-  // generation. Always sent regardless of content capture mode:
-  // `git.branch` and `cwd` are low-cardinality session metadata, not
-  // message content, matching claude-code/cursor.
-  const builtinTags = buildBuiltinTags({
-    cwd: projectDir,
-    gitBranch: resolveGitBranch(projectDir),
-  });
-  const seed = {
-    id: genId,
-    conversationId: assistantMsg.sessionID,
-    agentName: buildAgentName(config.agentName, assistantMsg.mode),
-    agentVersion: config.agentVersion,
-    effectiveVersion: config.agentVersion,
-    model: { provider: assistantMsg.providerID, name: assistantMsg.modelID },
-    startedAt: new Date(assistantMsg.time.created),
-    contentCapture: config.contentCapture,
-    ...(parent && { parentGenerationIds: [parent] }),
-    ...(tools.length > 0 && { tools }),
-    ...(includeMessageBodies && { systemPrompt: pending?.systemPrompt }),
-    ...(builtinTags && { tags: builtinTags }),
-  };
+  // Prefer the composed prompt from the system transform hook; fall back to
+  // the optional legacy override from chat.message.
+  const systemPrompt =
+    latestSystemPromptBySession.get(assistantMsg.sessionID) ??
+    pending?.systemPrompt;
+  if (systemPrompt === undefined) {
+    debugLog(
+      `no system prompt captured for session=${assistantMsg.sessionID} message=${assistantMsg.id}`,
+    );
+  }
 
-  const result = mapGeneration(
-    assistantMsg,
-    includeMessageBodies ? (pending?.userParts ?? []) : [],
-    assistantParts,
-    redactor,
-    config.contentCapture,
-  );
-
-  // Span records prefer terminal `ToolPart.state.time` when assistant parts
-  // are already available. `assistantParts` is empty in `metadata_only` (we
-  // intentionally skip the REST fetch there), so hook records take over and
-  // give us per-tool spans without forcing a body fetch.
+  // Tool spans double as the tool catalog source. Prefer terminal
+  // `ToolPart.state.time` when assistant parts are available; hook records
+  // cover metadata_only, where parts are never fetched.
   const termRecords = toolSpansFromParts(
     assistantMsg.sessionID,
     assistantParts,
@@ -423,10 +460,51 @@ async function recordAssistantMessage(
     ...hookRecords,
     ...drainedRecords,
   ]);
+
+  // Name-only tool definitions, like claude-code: the tools this generation
+  // used plus any legacy overrides. OpenCode does not tell the plugin which
+  // tools were offered to the model.
+  const tools = mapToolDefinitions([
+    ...spanRecords.map((record) => record.toolName),
+    ...legacyToolOverrideNames(pending?.tools),
+  ]);
+
+  const agentVersion = config.agentVersion || hostVersion;
+  // Resolved per turn so a mid-session checkout shows up on the next
+  // generation. Always sent regardless of content capture mode:
+  // `git.branch` and `cwd` are low-cardinality session metadata, not
+  // message content, matching claude-code/cursor.
+  const builtinTags = buildBuiltinTags({
+    cwd: projectDir,
+    gitBranch: resolveGitBranch(projectDir),
+  });
+  const seed = {
+    id: genId,
+    conversationId: assistantMsg.sessionID,
+    agentName: buildAgentName(config.agentName, assistantMsg.mode),
+    agentVersion,
+    effectiveVersion: agentVersion,
+    model: { provider: assistantMsg.providerID, name: assistantMsg.modelID },
+    startedAt: new Date(assistantMsg.time.created),
+    contentCapture: config.contentCapture,
+    ...(parent && { parentGenerationIds: [parent] }),
+    ...(tools.length > 0 && { tools }),
+    ...(includeMessageBodies && { systemPrompt }),
+    ...(builtinTags && { tags: builtinTags }),
+  };
+
+  const result = mapGeneration(
+    assistantMsg,
+    includeMessageBodies ? (pending?.userParts ?? []) : [],
+    assistantParts,
+    redactor,
+    config.contentCapture,
+  );
+
   const spanOpts = {
     conversationId: assistantMsg.sessionID,
     agentName: buildAgentName(config.agentName, assistantMsg.mode),
-    agentVersion: config.agentVersion,
+    agentVersion,
     requestProvider: assistantMsg.providerID,
     requestModel: assistantMsg.modelID,
     contentCapture: config.contentCapture,
@@ -474,6 +552,19 @@ async function recordAssistantMessage(
 
 function isTerminalMessageUpdate(msg: MessageUpdatedInfo): boolean {
   return Boolean(msg.finish || msg.error || msg.time?.completed);
+}
+
+/** Join OpenCode's system entries. Omit the field when all are empty. */
+function joinSystemPrompt(system: string[]): string | undefined {
+  const joined = system.filter((entry) => entry.length > 0).join("\n");
+  return joined.length > 0 ? joined : undefined;
+}
+
+/** Remember the OpenCode host version from a session event. */
+function recordHostVersion(properties: unknown): void {
+  const info = recordField(properties, "info");
+  const version = stringField(info, "version");
+  if (version) hostVersion = version;
 }
 
 /**
@@ -550,6 +641,7 @@ async function handleLifecycle(
       lastGenerationIdBySession.delete(sessionId);
       parentGenerationByChildSession.delete(sessionId);
       pendingGenerations.delete(sessionId);
+      latestSystemPromptBySession.delete(sessionId);
       sessionContexts.delete(sessionId);
       completedToolExecutions.delete(sessionId);
       for (const key of activeToolExecutions.keys()) {
@@ -568,6 +660,7 @@ async function handleLifecycle(
   if (type === "global.disposed") {
     activeToolExecutions.clear();
     completedToolExecutions.clear();
+    latestSystemPromptBySession.clear();
     try {
       await sigil.shutdown();
     } catch {
@@ -606,7 +699,7 @@ async function handleToolExecuteBefore(
   const res = await runToolCallGuard({
     client: sigil,
     agentName: agentNameForSession(config, input.sessionID),
-    agentVersion: config.agentVersion,
+    agentVersion: config.agentVersion || hostVersion,
     model: modelForSession(input.sessionID),
     toolCallId: input.callID,
     toolName: input.tool,
@@ -682,7 +775,7 @@ async function handlePermissionAsk(
   const res = await runToolCallGuard({
     client: sigil,
     agentName: agentNameForSession(config, input.sessionID),
-    agentVersion: config.agentVersion,
+    agentVersion: config.agentVersion || hostVersion,
     model: modelForSession(input.sessionID),
     toolCallId: input.callID,
     toolName: input.type,
@@ -943,6 +1036,10 @@ export type SigilHooks = {
     },
     output: { message: UserMessage; parts: Part[] },
   ) => void;
+  systemTransform: (
+    input: { sessionID?: string; model?: { id?: string } },
+    output: { system: string[] },
+  ) => void;
   toolExecuteBefore: (
     input: { tool: string; sessionID: string; callID: string },
     output: { args: unknown },
@@ -1020,6 +1117,9 @@ export async function createSigilHooks(
     },
     chatMessage: (input, output) => {
       handleChatMessage(input, output);
+    },
+    systemTransform: (input, output) => {
+      handleSystemTransform(input, output, debugLog);
     },
     toolExecuteBefore: async (input, output) => {
       await handleToolExecuteBefore(sigil, config, debugLog, input, output);

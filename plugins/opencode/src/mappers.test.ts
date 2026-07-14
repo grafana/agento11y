@@ -1,6 +1,7 @@
 import type { AssistantMessage, Part } from "@opencode-ai/sdk";
 import { describe, expect, it } from "vitest";
 import {
+  legacyToolOverrideNames,
   mapGeneration,
   mapInputMessages,
   mapOutputMessages,
@@ -359,18 +360,42 @@ describe("mapOutputMessages", () => {
   });
 });
 
-describe("mapToolDefinitions", () => {
-  it("maps enabled tools to ToolDefinition array, excludes disabled", () => {
-    const tools = { bash: true, read: true, write: false };
-    const result = mapToolDefinitions(tools);
-    expect(result).toHaveLength(2);
-    expect(result.map((t) => t.name)).toContain("bash");
-    expect(result.map((t) => t.name)).toContain("read");
-    expect(result.map((t) => t.name)).not.toContain("write");
+describe("legacyToolOverrideNames", () => {
+  it("returns enabled names and drops disabled ones", () => {
+    expect(
+      legacyToolOverrideNames({ bash: true, read: true, write: false }),
+    ).toEqual(["bash", "read"]);
   });
 
   it("returns empty array for undefined", () => {
-    expect(mapToolDefinitions(undefined)).toEqual([]);
+    expect(legacyToolOverrideNames(undefined)).toEqual([]);
+  });
+});
+
+describe("mapToolDefinitions", () => {
+  it("builds sorted name-only function definitions", () => {
+    expect(mapToolDefinitions(["write", "bash", "read"])).toEqual([
+      { name: "bash", type: "function" },
+      { name: "read", type: "function" },
+      { name: "write", type: "function" },
+    ]);
+  });
+
+  it("deduplicates names", () => {
+    expect(mapToolDefinitions(["bash", "bash", "read"])).toEqual([
+      { name: "bash", type: "function" },
+      { name: "read", type: "function" },
+    ]);
+  });
+
+  it("skips empty and non-string names", () => {
+    expect(mapToolDefinitions(["", "bash", 42 as unknown as string])).toEqual([
+      { name: "bash", type: "function" },
+    ]);
+  });
+
+  it("returns no definitions for no names", () => {
+    expect(mapToolDefinitions([])).toEqual([]);
   });
 });
 

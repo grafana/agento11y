@@ -15,7 +15,7 @@
         },
         "response_id": "",
         "response_model": "claude-sonnet-4-opencode",
-        "system_prompt": "you are a helpful assistant",
+        "system_prompt": "you are a helpful assistant\n<env>cwd: /repo/oc-app</env>",
         "input": [
           {
             "role": "MESSAGE_ROLE_USER",
@@ -70,13 +70,7 @@
           {
             "name": "Bash",
             "description": "",
-            "type": "",
-            "input_schema_json": ""
-          },
-          {
-            "name": "Read",
-            "description": "",
-            "type": "",
+            "type": "function",
             "input_schema_json": ""
           }
         ],
