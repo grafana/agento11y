@@ -586,18 +586,20 @@ async function handleLifecycle(
 async function handleToolExecuteBefore(
   sigil: SigilClient,
   config: SigilOpencodeConfig,
+  debugLog: (msg: string, ...args: unknown[]) => void,
   input: { tool: string; sessionID: string; callID: string },
   output: { args: unknown },
 ): Promise<void> {
   const key = toolExecutionKey(input.sessionID, input.callID);
-  activeToolExecutions.set(key, {
+  const record: ToolExecutionRecord = {
     sessionID: input.sessionID,
     toolName: input.tool,
     toolCallId: input.callID,
     startedAt: Date.now(),
     completedAt: 0,
     input: output.args,
-  });
+  };
+  activeToolExecutions.set(key, record);
 
   const guards = config.guards;
   if (guards?.enabled !== true) return;
@@ -610,10 +612,39 @@ async function handleToolExecuteBefore(
     toolName: input.tool,
     input: output.args ?? {},
     failOpen: guards.failOpen,
+    logger: { warn: (msg: string) => debugLog(msg) },
   });
-  if (res?.block) {
+  if (!res) return;
+  if ("block" in res) {
     activeToolExecutions.delete(key);
     throw new Error(res.reason);
+  }
+  // Postflight transform: the server returned the complete redacted argument
+  // set, so replace the tool input wholesale. A plain Object.assign would merge
+  // instead, leaving any key the server dropped (an unredacted original) in
+  // place. opencode reads the mutated `output.args` at execution time. Redaction
+  // fails open: if the patch cannot be applied (args not a plain object, frozen,
+  // etc.) log and let the original arguments through rather than throwing, which
+  // opencode would treat as a tool failure.
+  try {
+    const args = output.args;
+    if (args && typeof args === "object" && !Array.isArray(args)) {
+      const argsObj = args as Record<string, unknown>;
+      for (const argKey of Object.keys(argsObj)) {
+        if (!Object.hasOwn(res.transform, argKey)) {
+          delete argsObj[argKey];
+        }
+      }
+      Object.assign(argsObj, res.transform);
+      // Keep the recorded span consistent with what actually runs.
+      record.input = argsObj;
+    } else {
+      debugLog(
+        `tool-call transform for ${input.callID} dropped: args are not a plain object`,
+      );
+    }
+  } catch (err) {
+    debugLog(`tool-call transform apply failed for ${input.callID}`, err);
   }
 }
 
@@ -658,8 +689,11 @@ async function handlePermissionAsk(
       metadata: input.metadata,
     },
     failOpen: guards.failOpen,
+    logger: { warn: (msg: string) => debugLog(msg) },
   });
-  if (res?.block) {
+  // permission.ask carries no tool arguments to rewrite, so only a block is
+  // actionable here; a transform result (if any) is ignored.
+  if (res && "block" in res) {
     output.status = "deny";
     // Log the reason so it's recoverable from the debug log; opencode's
     // permission.ask output API has no field to surface it to the model or
@@ -985,7 +1019,7 @@ export async function createSigilHooks(
       handleChatMessage(input, output);
     },
     toolExecuteBefore: async (input, output) => {
-      await handleToolExecuteBefore(sigil, config, input, output);
+      await handleToolExecuteBefore(sigil, config, debugLog, input, output);
     },
     toolExecuteAfter: (input, output) => {
       handleToolExecuteAfter(input, output);

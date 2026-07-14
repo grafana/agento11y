@@ -1,4 +1,8 @@
-import type { HookEvaluateRequest, SigilClient } from "@grafana/sigil-sdk-js";
+import type {
+  HookEvaluateRequest,
+  Message,
+  SigilClient,
+} from "@grafana/sigil-sdk-js";
 
 export interface GuardArgs {
   client: SigilClient;
@@ -9,9 +13,19 @@ export interface GuardArgs {
   toolName: string;
   input: unknown;
   failOpen: boolean;
+  logger?: { warn: (msg: string) => void };
 }
 
 export type GuardBlockResult = { block: true; reason: string };
+
+/**
+ * A postflight transform the server applied to the tool call's arguments. The
+ * caller replaces the tool input with this redacted/sanitized argument set
+ * before the tool runs.
+ */
+export type GuardTransformResult = { transform: Record<string, unknown> };
+
+export type GuardResult = GuardBlockResult | GuardTransformResult | undefined;
 
 /**
  * Instructs the model how to react to a guard deny verdict, so the reason is
@@ -63,13 +77,12 @@ function formatEvalFailure(
 
 /**
  * Evaluates the Sigil postflight hook for a tool call. Returns a block result
- * when the server denies the call. On transport/timeout/serialization errors,
- * returns `undefined` (allow) when `failOpen` is true and a block result when
- * `failOpen` is false.
+ * when the server denies the call, or a transform result when the server
+ * redacted/sanitized the call's arguments. On transport/timeout/serialization
+ * errors, returns `undefined` (allow) when `failOpen` is true and a block
+ * result when `failOpen` is false.
  */
-export async function runToolCallGuard(
-  args: GuardArgs,
-): Promise<GuardBlockResult | undefined> {
+export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
   try {
     const req: HookEvaluateRequest = {
       phase: "postflight",
@@ -107,8 +120,17 @@ export async function runToolCallGuard(
         reason: formatPolicyDeny(args.toolName, resp.reason),
       };
     }
+    const transform = extractToolCallTransform(
+      resp.transformedInput?.output,
+      args.toolCallId,
+      args.logger,
+    );
+    if (transform) {
+      return { transform };
+    }
     return undefined;
   } catch (err) {
+    args.logger?.warn(`guard eval failed: ${err}`);
     if (!args.failOpen) {
       return {
         block: true,
@@ -117,4 +139,54 @@ export async function runToolCallGuard(
     }
     return undefined;
   }
+}
+
+/**
+ * Walks the server-returned `transformed_input.output` for the tool_call part
+ * matching `toolCallId` and parses its `inputJSON` into an object. Returns
+ * `undefined` on any mismatch or parse failure so the caller falls through to
+ * the original tool input unchanged.
+ *
+ * Mirrors `extractToolCallTransform` in `plugins/pi/src/guard.ts`; keep the two
+ * aligned so both plugins consume the server transform identically.
+ */
+function extractToolCallTransform(
+  output: Message[] | undefined,
+  toolCallId: string | undefined,
+  logger?: { warn: (msg: string) => void },
+): Record<string, unknown> | undefined {
+  if (!output || output.length === 0 || !toolCallId) return undefined;
+  for (const msg of output) {
+    if (!msg.parts) continue;
+    for (const part of msg.parts) {
+      if (part.type !== "tool_call") continue;
+      const tc = part.toolCall;
+      if (!tc || tc.id !== toolCallId) continue;
+      const raw = tc.inputJSON;
+      if (typeof raw !== "string" || raw.length === 0) {
+        logger?.warn(
+          `tool-call transform for ${toolCallId} dropped: empty arguments`,
+        );
+        return undefined;
+      }
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          logger?.warn(`tool-call transform for ${toolCallId} applied`);
+          return parsed as Record<string, unknown>;
+        }
+        logger?.warn(
+          `tool-call transform for ${toolCallId} dropped: arguments were not a JSON object`,
+        );
+        return undefined;
+      } catch {
+        logger?.warn(
+          `tool-call transform for ${toolCallId} dropped: invalid JSON arguments`,
+        );
+        return undefined;
+      }
+    }
+  }
+  logger?.warn(`tool-call transform present but no part matched ${toolCallId}`);
+  return undefined;
 }
