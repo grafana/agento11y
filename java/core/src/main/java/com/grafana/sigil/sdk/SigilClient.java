@@ -27,6 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -77,6 +78,7 @@ public final class SigilClient implements AutoCloseable {
     static final String SPAN_ATTR_TOOL_DESCRIPTION = "gen_ai.tool.description";
     static final String SPAN_ATTR_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments";
     static final String SPAN_ATTR_TOOL_CALL_RESULT = "gen_ai.tool.call.result";
+    static final String SPAN_ATTR_TAG_PREFIX = "sigil.tag.";
     private static final int MAX_RATING_CONVERSATION_ID_LEN = 255;
     private static final int MAX_RATING_ID_LEN = 128;
     private static final int MAX_RATING_GENERATION_ID_LEN = 255;
@@ -252,6 +254,7 @@ public final class SigilClient implements AutoCloseable {
                 .setStartTimestamp(startedAt)
                 .startSpan();
         setEmbeddingStartSpanAttributes(span, seed);
+        span.setAllAttributes(clientTagAttributes());
 
         return new EmbeddingRecorder(this, seed, span, startedAt, embeddingMode);
     }
@@ -375,6 +378,7 @@ public final class SigilClient implements AutoCloseable {
                 .setStartTimestamp(startedAt)
                 .startSpan();
         setToolSpanAttributes(span, seed);
+        span.setAllAttributes(clientTagAttributes());
 
         return new ToolExecutionRecorder(this, seed, span, startedAt, resolvedToolMode, legacyIncludeContent);
     }
@@ -730,6 +734,7 @@ public final class SigilClient implements AutoCloseable {
             initial.setConversationTitle("");
         }
         setGenerationSpanAttributes(span, initial);
+        span.setAllAttributes(clientTagAttributes());
 
         Scope contentCaptureScope = SigilContext.withContentCaptureMode(ccMode);
         return new GenerationRecorder(this, seed, span, startedAt, ccMode, contentCaptureScope);
@@ -1237,6 +1242,29 @@ public final class SigilClient implements AutoCloseable {
         }
     }
 
+    static Attributes tagAttributes(Map<String, String> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return Attributes.empty();
+        }
+        Map<String, String> normalized = new TreeMap<>();
+        for (Map.Entry<String, String> entry : tags.entrySet()) {
+            String key = entry.getKey() == null ? "" : entry.getKey().trim();
+            if (key.isEmpty()) {
+                continue;
+            }
+            normalized.put(key, entry.getValue() == null ? "" : entry.getValue().trim());
+        }
+        AttributesBuilder builder = Attributes.builder();
+        for (Map.Entry<String, String> entry : normalized.entrySet()) {
+            builder.put(SPAN_ATTR_TAG_PREFIX + entry.getKey(), entry.getValue());
+        }
+        return builder.build();
+    }
+
+    Attributes clientTagAttributes() {
+        return tagAttributes(config.getTags());
+    }
+
     private static AttributesBuilder metricIdentityAttributes(String provider, String model, String agentName, String agentVersion) {
         AttributesBuilder builder = Attributes.builder()
                 .put(SPAN_ATTR_PROVIDER_NAME, provider == null ? "" : provider.trim())
@@ -1263,10 +1291,12 @@ public final class SigilClient implements AutoCloseable {
                 generation.getAgentName(),
                 generation.getAgentVersion()
         ).build();
+        Attributes tagAttributes = clientTagAttributes();
         operationDurationHistogram.record(
                 durationSeconds,
                 identityAttributes.toBuilder()
                         .put(SPAN_ATTR_OPERATION_NAME, operationName(generation))
+                        .putAll(tagAttributes)
                         .put(SPAN_ATTR_ERROR_TYPE, errorType == null ? "" : errorType)
                         .put(SPAN_ATTR_ERROR_CATEGORY, errorCategory == null ? "" : errorCategory)
                         .build()
@@ -1283,7 +1313,7 @@ public final class SigilClient implements AutoCloseable {
 
         toolCallsHistogram.record(
                 (double) countToolCalls(generation.getOutput()),
-                identityAttributes
+                identityAttributes.toBuilder().putAll(tagAttributes).build()
         );
 
         if (defaultOperationName(GenerationMode.STREAM).equals(operationName(generation)) && firstTokenAt != null) {
@@ -1291,7 +1321,7 @@ public final class SigilClient implements AutoCloseable {
             if (ttftSeconds >= 0d) {
                 ttftHistogram.record(
                         ttftSeconds,
-                        identityAttributes
+                        identityAttributes.toBuilder().putAll(tagAttributes).build()
                 );
             }
         }
@@ -1315,10 +1345,12 @@ public final class SigilClient implements AutoCloseable {
                 seed.getAgentName(),
                 seed.getAgentVersion()
         ).build();
+        Attributes tagAttributes = clientTagAttributes();
         operationDurationHistogram.record(
                 durationSeconds,
                 identityAttributes.toBuilder()
                         .put(SPAN_ATTR_OPERATION_NAME, DEFAULT_EMBEDDING_OPERATION_NAME)
+                        .putAll(tagAttributes)
                         .put(SPAN_ATTR_ERROR_TYPE, errorType == null ? "" : errorType)
                         .put(SPAN_ATTR_ERROR_CATEGORY, errorCategory == null ? "" : errorCategory)
                         .build()
@@ -1329,6 +1361,7 @@ public final class SigilClient implements AutoCloseable {
                     (double) result.getInputTokens(),
                     identityAttributes.toBuilder()
                             .put(SPAN_ATTR_OPERATION_NAME, DEFAULT_EMBEDDING_OPERATION_NAME)
+                            .putAll(tagAttributes)
                             .put(METRIC_ATTR_TOKEN_TYPE, METRIC_TOKEN_TYPE_INPUT)
                             .build()
             );
@@ -1348,6 +1381,7 @@ public final class SigilClient implements AutoCloseable {
                         generation.getAgentVersion()
                 )
                         .put(SPAN_ATTR_OPERATION_NAME, operationName(generation))
+                        .putAll(clientTagAttributes())
                         .put(METRIC_ATTR_TOKEN_TYPE, tokenType)
                         .build()
         );
@@ -1371,6 +1405,7 @@ public final class SigilClient implements AutoCloseable {
                 metricIdentityAttributes(seed.getRequestProvider(), seed.getRequestModel(), seed.getAgentName(), seed.getAgentVersion())
                         .put(SPAN_ATTR_OPERATION_NAME, TOOL_EXECUTION_OPERATION_NAME)
                         .put(SPAN_ATTR_TOOL_NAME, seed.getToolName().trim())
+                        .putAll(clientTagAttributes())
                         .put(SPAN_ATTR_ERROR_TYPE, errorType)
                         .put(SPAN_ATTR_ERROR_CATEGORY, errorCategory)
                         .build()

@@ -608,6 +608,35 @@ public sealed class ConformanceTests
     }
 
     [Fact]
+    public async Task ClientTagAttributes()
+    {
+        await using var env = new ConformanceEnv(tags: new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["team"] = "payments",
+        });
+        var recorder = env.Client.StartGeneration(new GenerationStart
+        {
+            Model = new ModelRef { Provider = "openai", Name = "gpt-5" },
+            Tags = new Dictionary<string, string>(StringComparer.Ordinal) { ["call_only"] = "yes" },
+        });
+        recorder.SetResult(new Generation
+        {
+            Usage = new TokenUsage { InputTokens = 4, OutputTokens = 2 },
+        });
+        recorder.End();
+        await env.ShutdownAsync();
+
+        var span = env.GenerationSpan();
+        Assert.Equal("payments", span.GetTagItem("sigil.tag.team")?.ToString());
+        Assert.Null(span.GetTagItem("sigil.tag.call_only"));
+
+        Assert.True(
+            env.HasMetricTag("gen_ai.client.operation.duration", "sigil.tag.team", "payments"),
+            "operation duration metrics should include the client tag"
+        );
+    }
+
+    [Fact]
     public async Task ShutdownFlushSemantics()
     {
         await using var env = new ConformanceEnv(batchSize: 10);
@@ -643,7 +672,7 @@ public sealed class ConformanceTests
         public ConcurrentDictionary<string, byte> MetricNames { get; } = new(StringComparer.Ordinal);
         public ConcurrentQueue<MetricMeasurement> MetricMeasurements { get; } = new();
 
-        public ConformanceEnv(int batchSize = 1)
+        public ConformanceEnv(int batchSize = 1, Dictionary<string, string>? tags = null)
         {
             _activityListener = new ActivityListener
             {
@@ -703,7 +732,7 @@ public sealed class ConformanceTests
                     )
                 )
             );
-            Client = new SigilClient(new SigilClientConfig
+            var config = new SigilClientConfig
             {
                 Api = new ApiConfig
                 {
@@ -721,7 +750,12 @@ public sealed class ConformanceTests
                     InitialBackoff = TimeSpan.FromMilliseconds(1),
                     MaxBackoff = TimeSpan.FromMilliseconds(2),
                 },
-            });
+            };
+            if (tags != null)
+            {
+                config.Tags = tags;
+            }
+            Client = new SigilClient(config);
         }
 
         public async Task ShutdownAsync()

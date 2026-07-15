@@ -117,6 +117,7 @@ _span_attr_tool_description = "gen_ai.tool.description"
 _span_attr_tool_call_arguments = "gen_ai.tool.call.arguments"
 _span_attr_tool_call_result = "gen_ai.tool.call.result"
 _span_attr_parent_generation_ids = "sigil.generation.parent_generation_ids"
+_span_attr_tag_prefix = "sigil.tag."
 _max_rating_conversation_id_len = 255
 _max_rating_id_len = 128
 _max_rating_generation_id_len = 255
@@ -439,6 +440,7 @@ class Client:
             start_time=_datetime_to_ns(started_at),
         )
         _set_embedding_start_span_attributes(span, seed)
+        self._set_client_tag_attributes(span)
 
         return EmbeddingRecorder(
             client=self,
@@ -508,6 +510,7 @@ class Client:
             start_time=_datetime_to_ns(started_at),
         )
         _set_tool_span_attributes(span, seed)
+        self._set_client_tag_attributes(span)
 
         return ToolExecutionRecorder(
             client=self,
@@ -888,6 +891,7 @@ class Client:
                 parent_generation_ids=list(seed.parent_generation_ids),
             ),
         )
+        self._set_client_tag_attributes(span)
 
         recorder = GenerationRecorder(
             client=self,
@@ -1095,6 +1099,14 @@ class Client:
             return
         self._logger.warning("%s: %s", message, error)
 
+    def _client_tag_attributes(self) -> dict[str, str]:
+        return _tag_attributes(self._config.tags)
+
+    def _set_client_tag_attributes(self, span: Span) -> None:
+        tag_attrs = self._client_tag_attributes()
+        if tag_attrs:
+            span.set_attributes(tag_attrs)
+
     def _record_generation_metrics(
         self,
         generation: Generation,
@@ -1114,11 +1126,13 @@ class Client:
             generation.agent_name,
             generation.agent_version,
         )
+        tag_attributes = self._client_tag_attributes()
         self._operation_duration_histogram.record(
             duration_seconds,
             attributes={
                 _span_attr_operation_name: generation.operation_name,
                 **identity_attributes,
+                **tag_attributes,
                 _span_attr_error_type: error_type,
                 _span_attr_error_category: error_category,
             },
@@ -1135,6 +1149,7 @@ class Client:
             _count_tool_call_parts(generation.output),
             attributes={
                 **identity_attributes,
+                **tag_attributes,
             },
         )
 
@@ -1145,6 +1160,7 @@ class Client:
                     ttft_seconds,
                     attributes={
                         **identity_attributes,
+                        **tag_attributes,
                     },
                 )
 
@@ -1164,11 +1180,13 @@ class Client:
             seed.agent_name,
             seed.agent_version,
         )
+        tag_attributes = self._client_tag_attributes()
         self._operation_duration_histogram.record(
             duration_seconds,
             attributes={
                 _span_attr_operation_name: _default_embedding_operation_name,
                 **identity_attributes,
+                **tag_attributes,
                 _span_attr_error_type: error_type,
                 _span_attr_error_category: error_category,
             },
@@ -1180,6 +1198,7 @@ class Client:
                 attributes={
                     _span_attr_operation_name: _default_embedding_operation_name,
                     **identity_attributes,
+                    **tag_attributes,
                     _metric_attr_token_type: _metric_token_type_input,
                 },
             )
@@ -1197,6 +1216,7 @@ class Client:
                     generation.agent_name,
                     generation.agent_version,
                 ),
+                **self._client_tag_attributes(),
                 _metric_attr_token_type: token_type,
             },
         )
@@ -1226,6 +1246,7 @@ class Client:
                     seed.agent_name,
                     seed.agent_version,
                 ),
+                **self._client_tag_attributes(),
                 _span_attr_error_type: error_type,
                 _span_attr_error_category: error_category,
             },
@@ -2100,6 +2121,19 @@ def _default_operation_name(mode: GenerationMode | None) -> str:
     if mode == GenerationMode.STREAM:
         return "streamText"
     return "generateText"
+
+
+def _tag_attributes(tags: dict[str, str] | None) -> dict[str, str]:
+    if not tags:
+        return {}
+    pairs: list[tuple[str, str]] = []
+    for k, v in tags.items():
+        key = k.strip()
+        if not key:
+            continue
+        pairs.append((key, (v or "").strip()))
+    pairs.sort()
+    return {f"{_span_attr_tag_prefix}{key}": value for key, value in pairs}
 
 
 def _metric_identity_attributes(

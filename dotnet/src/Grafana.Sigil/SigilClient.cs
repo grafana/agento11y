@@ -52,6 +52,7 @@ public sealed partial class SigilClient : IAsyncDisposable
     internal const string SpanAttrToolDescription = "gen_ai.tool.description";
     internal const string SpanAttrToolCallArguments = "gen_ai.tool.call.arguments";
     internal const string SpanAttrToolCallResult = "gen_ai.tool.call.result";
+    internal const string SpanAttrTagPrefix = "sigil.tag.";
     private const int MaxRatingConversationIdLen = 255;
     private const int MaxRatingIdLen = 128;
     private const int MaxRatingGenerationIdLen = 255;
@@ -233,6 +234,7 @@ public sealed partial class SigilClient : IAsyncDisposable
         if (activity != null)
         {
             ApplyEmbeddingStartSpanAttributes(activity, seed);
+            ApplyClientTagAttributes(activity);
         }
 
         return new EmbeddingRecorder(this, seed, seed.StartedAt.Value, activity, embeddingMode);
@@ -323,6 +325,7 @@ public sealed partial class SigilClient : IAsyncDisposable
         if (activity != null)
         {
             ApplyToolSpanAttributes(activity, seed);
+            ApplyClientTagAttributes(activity);
         }
 
         // Tools have no proto export; under both stripped modes the span
@@ -617,6 +620,7 @@ public sealed partial class SigilClient : IAsyncDisposable
         if (activity != null)
         {
             ApplyGenerationSpanAttributes(activity, spanGeneration);
+            ApplyClientTagAttributes(activity);
         }
 
         var recorder = new GenerationRecorder(this, seed, seed.StartedAt!.Value, ccMode, activity);
@@ -1480,7 +1484,7 @@ public sealed partial class SigilClient : IAsyncDisposable
 
         _operationDurationHistogram.Record(
             durationSeconds,
-            WithAgentVersionTag(generation.AgentVersion, [
+            WithMetricTags(generation.AgentVersion, [
                 new(SpanAttrOperationName, OperationName(generation)),
                 new(SpanAttrProviderName, generation.Model.Provider ?? string.Empty),
                 new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
@@ -1497,7 +1501,7 @@ public sealed partial class SigilClient : IAsyncDisposable
 
         _toolCallsHistogram.Record(
             CountToolCallParts(generation.Output),
-            WithAgentVersionTag(generation.AgentVersion, [
+            WithMetricTags(generation.AgentVersion, [
                 new(SpanAttrProviderName, generation.Model.Provider ?? string.Empty),
                 new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
                 new(SpanAttrAgentName, generation.AgentName ?? string.Empty),
@@ -1511,7 +1515,7 @@ public sealed partial class SigilClient : IAsyncDisposable
             {
                 _ttftHistogram.Record(
                     ttftSeconds,
-                    WithAgentVersionTag(generation.AgentVersion, [
+                    WithMetricTags(generation.AgentVersion, [
                         new(SpanAttrProviderName, generation.Model.Provider ?? string.Empty),
                         new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
                         new(SpanAttrAgentName, generation.AgentName ?? string.Empty),
@@ -1532,7 +1536,7 @@ public sealed partial class SigilClient : IAsyncDisposable
         var durationSeconds = Math.Max(0d, (completedAt - startedAt).TotalSeconds);
         _operationDurationHistogram.Record(
             durationSeconds,
-            WithAgentVersionTag(seed.AgentVersion, [
+            WithMetricTags(seed.AgentVersion, [
                 new(SpanAttrOperationName, DefaultOperationNameEmbedding),
                 new(SpanAttrProviderName, seed.Model.Provider ?? string.Empty),
                 new(SpanAttrRequestModel, seed.Model.Name ?? string.Empty),
@@ -1545,7 +1549,7 @@ public sealed partial class SigilClient : IAsyncDisposable
         {
             _tokenUsageHistogram.Record(
                 result.InputTokens,
-                WithAgentVersionTag(seed.AgentVersion, [
+                WithMetricTags(seed.AgentVersion, [
                     new(SpanAttrOperationName, DefaultOperationNameEmbedding),
                     new(SpanAttrProviderName, seed.Model.Provider ?? string.Empty),
                     new(SpanAttrRequestModel, seed.Model.Name ?? string.Empty),
@@ -1568,7 +1572,7 @@ public sealed partial class SigilClient : IAsyncDisposable
 
         _operationDurationHistogram.Record(
             durationSeconds,
-            WithAgentVersionTag(seed.AgentVersion, [
+            WithMetricTags(seed.AgentVersion, [
                 new(SpanAttrOperationName, "execute_tool"),
                 new(SpanAttrProviderName, (seed.RequestProvider ?? string.Empty).Trim()),
                 new(SpanAttrRequestModel, (seed.RequestModel ?? string.Empty).Trim()),
@@ -1636,7 +1640,7 @@ public sealed partial class SigilClient : IAsyncDisposable
 
         _tokenUsageHistogram.Record(
             value,
-            WithAgentVersionTag(generation.AgentVersion, [
+            WithMetricTags(generation.AgentVersion, [
                 new(SpanAttrOperationName, OperationName(generation)),
                 new(SpanAttrProviderName, generation.Model.Provider ?? string.Empty),
                 new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
@@ -1645,20 +1649,72 @@ public sealed partial class SigilClient : IAsyncDisposable
             ]));
     }
 
-    private static KeyValuePair<string, object?>[] WithAgentVersionTag(
+    internal static KeyValuePair<string, object?>[] TagAttributes(IReadOnlyDictionary<string, string>? tags)
+    {
+        if (tags == null || tags.Count == 0)
+        {
+            return [];
+        }
+
+        var pairs = new List<KeyValuePair<string, string>>(tags.Count);
+        foreach (var entry in tags)
+        {
+            var key = (entry.Key ?? string.Empty).Trim();
+            if (key.Length == 0)
+            {
+                continue;
+            }
+
+            pairs.Add(new KeyValuePair<string, string>(key, (entry.Value ?? string.Empty).Trim()));
+        }
+
+        pairs.Sort(static (a, b) => string.CompareOrdinal(a.Key, b.Key));
+        var attributes = new KeyValuePair<string, object?>[pairs.Count];
+        for (var i = 0; i < pairs.Count; i++)
+        {
+            attributes[i] = new KeyValuePair<string, object?>(SpanAttrTagPrefix + pairs[i].Key, pairs[i].Value);
+        }
+
+        return attributes;
+    }
+
+    // Recomputed on every call: SigilClientConfig.Tags exposes the live
+    // dictionary, so post-construction mutation must stay visible.
+    private KeyValuePair<string, object?>[] ClientTagAttributes()
+    {
+        return TagAttributes(_config.Tags);
+    }
+
+    private void ApplyClientTagAttributes(Activity activity)
+    {
+        foreach (var attribute in ClientTagAttributes())
+        {
+            activity.SetTag(attribute.Key, attribute.Value);
+        }
+    }
+
+    private KeyValuePair<string, object?>[] WithMetricTags(
         string? agentVersion,
         KeyValuePair<string, object?>[] tags
     )
     {
         var version = (agentVersion ?? string.Empty).Trim();
-        if (version.Length == 0)
+        var clientTags = ClientTagAttributes();
+        var extra = clientTags.Length + (version.Length == 0 ? 0 : 1);
+        if (extra == 0)
         {
             return tags;
         }
 
-        var outTags = new KeyValuePair<string, object?>[tags.Length + 1];
+        var outTags = new KeyValuePair<string, object?>[tags.Length + extra];
         Array.Copy(tags, outTags, tags.Length);
-        outTags[tags.Length] = new KeyValuePair<string, object?>(SpanAttrAgentVersion, version);
+        var index = tags.Length;
+        if (version.Length != 0)
+        {
+            outTags[index++] = new KeyValuePair<string, object?>(SpanAttrAgentVersion, version);
+        }
+
+        Array.Copy(clientTags, 0, outTags, index, clientTags.Length);
         return outTags;
     }
 

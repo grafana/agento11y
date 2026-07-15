@@ -1646,6 +1646,37 @@ func TestConformance_RatingHelper(t *testing.T) {
 	}
 }
 
+func TestConformance_ClientTagAttributes(t *testing.T) {
+	env := newConformanceEnv(t, withConformanceConfig(func(cfg *sigil.Config) {
+		cfg.Tags = map[string]string{"team": "payments"}
+	}))
+
+	_, recorder := env.Client.StartGeneration(context.Background(), sigil.GenerationStart{
+		Model: conformanceModel,
+		Tags:  map[string]string{"call_only": "yes"},
+	})
+	recorder.SetResult(sigil.Generation{
+		Usage: sigil.TokenUsage{InputTokens: 4, OutputTokens: 2},
+	}, nil)
+	recorder.End()
+	if err := recorder.Err(); err != nil {
+		t.Fatalf("record generation: %v", err)
+	}
+
+	span := findSpan(t, env.Spans.Ended(), conformanceOperationName)
+	attrs := spanAttrs(span)
+	requireSpanAttr(t, attrs, "sigil.tag.team", "payments")
+	requireSpanAttrAbsent(t, attrs, "sigil.tag.call_only")
+
+	metrics := env.CollectMetrics(t)
+	duration := findHistogram[float64](t, metrics, metricOperationDuration)
+	requireHistogramPointWithAttrs(t, duration, map[string]string{
+		"sigil.tag.team": "payments",
+	})
+
+	env.Shutdown(t)
+}
+
 func TestConformance_ShutdownFlushesPendingGeneration(t *testing.T) {
 	env := newConformanceEnv(t, withConformanceConfig(func(cfg *sigil.Config) {
 		cfg.GenerationExport.BatchSize = 10

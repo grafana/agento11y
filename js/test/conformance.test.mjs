@@ -699,6 +699,38 @@ test('conformance effective_version result overrides start', async () => {
   }
 });
 
+test('conformance client tag attributes', async () => {
+  const env = await createConformanceEnv({
+    clientConfig: {
+      tags: { team: 'payments' },
+    },
+  });
+
+  try {
+    const recorder = env.client.startGeneration({
+      model: { provider: 'openai', name: 'gpt-5' },
+      tags: { call_only: 'yes' },
+    });
+    recorder.setResult({
+      usage: { inputTokens: 4, outputTokens: 2 },
+    });
+    recorder.end();
+    assert.equal(recorder.getError(), undefined);
+
+    const span = env.latestGenerationSpan();
+    assert.equal(span.attributes['sigil.tag.team'], 'payments');
+    assert.equal(span.attributes['sigil.tag.call_only'], undefined);
+
+    const durationAttributes = await env.metricDataPointAttributes('gen_ai.client.operation.duration');
+    assert.ok(
+      durationAttributes.some((attributes) => attributes['sigil.tag.team'] === 'payments'),
+      'expected sigil.tag.team on operation.duration data point',
+    );
+  } finally {
+    await env.close();
+  }
+});
+
 test('conformance shutdown flush semantics', async () => {
   const env = await createConformanceEnv({ batchSize: 10 });
 

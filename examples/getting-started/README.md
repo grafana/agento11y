@@ -63,7 +63,7 @@ After running an example, open the AI Observability plugin in your Grafana Cloud
 
 ## Custom tags and metadata
 
-The Python, TypeScript, and Go single-generation examples set a client-level tag, a per-generation tag, `metadata`, and `user_id` so you can see where each one shows up. Client tags reach the generation plus (on Go/JS) OTel spans/metrics as `sigil.tag.<key>`; per-generation tags and metadata are export-only; `user_id` becomes the `user.id` span attribute. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md) for the full routing table and cardinality rules.
+The Python, TypeScript, and Go single-generation examples set a client-level tag, a per-generation tag, `metadata`, and `user_id` so you can see where each one shows up. Client tags show up on the generation and as `sigil.tag.<key>` on OTel spans/metrics; per-generation tags and metadata are export-only; `user_id` becomes the `user.id` span attribute. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md) for the full routing table and cardinality rules.
 
 ## Next steps
 

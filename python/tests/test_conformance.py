@@ -911,6 +911,32 @@ def test_conformance_rating_submission_semantics() -> None:
         env.shutdown()
 
 
+def test_conformance_client_tag_attributes() -> None:
+    env = _ConformanceEnv(tags={"team": "payments"})
+    try:
+        recorder = env.client.start_generation(
+            GenerationStart(
+                model=ModelRef(provider="openai", name="gpt-5"),
+                tags={"call_only": "yes"},
+            )
+        )
+        recorder.set_result(Generation(usage=TokenUsage(input_tokens=4, output_tokens=2)))
+        recorder.end()
+        env.shutdown()
+
+        span = env.generation_span()
+        assert span.attributes["sigil.tag.team"] == "payments"
+        assert "sigil.tag.call_only" not in span.attributes
+
+        metrics = env.metrics()
+        assert any(
+            point.attributes.get("sigil.tag.team") == "payments"
+            for point in metrics["gen_ai.client.operation.duration"].data_points
+        )
+    finally:
+        env.shutdown()
+
+
 def test_conformance_shutdown_flush_semantics() -> None:
     env = _ConformanceEnv(batch_size=10)
     try:

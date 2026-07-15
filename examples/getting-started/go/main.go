@@ -57,9 +57,9 @@ func main() {
 		TenantID:      os.Getenv("SIGIL_AUTH_TENANT_ID"),
 		BasicPassword: os.Getenv("SIGIL_AUTH_TOKEN"),
 	}
-	// Client tags attach to every generation. On Go/JS they also become
-	// sigil.tag.<key> attributes on OTel spans and metrics, so keep them
-	// low-cardinality (team, env). See docs/concepts/tags-and-metadata.md.
+	// Client tags attach to every generation and become sigil.tag.<key>
+	// attributes on OTel spans and metrics, so keep them low-cardinality
+	// (team, env). See docs/concepts/tags-and-metadata.md.
 	cfg.Tags = map[string]string{"team": "checkout", "env": "dev"}
 	sigilClient := sigil.NewClient(cfg)
 	defer func() { _ = sigilClient.Shutdown(ctx) }()

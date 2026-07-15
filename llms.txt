@@ -109,7 +109,7 @@ SIGIL_PROTOCOL=http
 SIGIL_AUTH_MODE=basic
 SIGIL_AUTH_TENANT_ID=<your-instance-id>
 SIGIL_AUTH_TOKEN=<glc_... token>
-SIGIL_TAGS=team=checkout,env=prod   # optional client tags; on Go/JS also emitted as sigil.tag.<key> on OTel spans/metrics
+SIGIL_TAGS=team=checkout,env=prod   # optional client tags; also emitted as sigil.tag.<key> on OTel spans/metrics
 SIGIL_USER_ID=<end-user id>          # optional; sets the user.id span attribute (all SDKs)
 
 # OTel traces and metrics (separate channel; same token)
@@ -131,7 +131,7 @@ This default differs from coding-agent plugin defaults (Path A), which ship `met
 
 To attach custom key/values, pick the mechanism by where it must show up. See [`docs/concepts/tags-and-metadata.md`](https://github.com/grafana/sigil-sdk/blob/main/docs/concepts/tags-and-metadata.md) for the full table.
 
-- **Client tags** (`SIGIL_TAGS` / config `tags`): merged into every generation export; on **Go/JS** also emitted as `sigil.tag.<key>` on OTel spans and metrics (Python/Java/.NET are export-only). Use for low-cardinality values you want to slice metrics/traces by (team, project, env). Do not put high-cardinality values (user, request id) here, they blow up metric label cardinality.
+- **Client tags** (`SIGIL_TAGS` / config `tags`): merged into every generation export; also emitted as `sigil.tag.<key>` on OTel spans and metrics in all SDKs. Use for low-cardinality values you want to slice metrics/traces by (team, project, env). Do not put high-cardinality values (user, request id) here, they blow up metric label cardinality.
 - **Per-generation `tags` / `metadata`**: export-only, never on spans/metrics. Use for searchable per-request data.
 - **`user_id`** (`SIGIL_USER_ID` / per-call / context): sets the `user.id` span attribute (all SDKs) plus the export; not a metric label. Use this for end-user identity instead of a tag.
 
@@ -447,7 +447,7 @@ In the grafana/sigil-sdk repo:
   - `stop_reason` / `finish_reason`
   - Full token usage including `cache_read_input_tokens`, `cache_write_input_tokens`, and `reasoning_tokens` when the provider returns them
 - Always check `rec.err()` / `Err()` after the generation recorder closes; SDK validation or enqueue errors are otherwise silent.
-- Use `SIGIL_TAGS` (client-level) or `tags` on `GenerationStart` for filtering: both export tags on generations. Client-level tags also appear as `sigil.tag.<key>` on OTel spans and metrics on Go/JS only (Python/Java/.NET are export-only); per-generation tags and `metadata` are export-only everywhere. For end-user identity use `user_id` (sets `user.id` span attribute), not a tag. See [`docs/concepts/tags-and-metadata.md`](https://github.com/grafana/sigil-sdk/blob/main/docs/concepts/tags-and-metadata.md).
+- Use `SIGIL_TAGS` (client-level) or `tags` on `GenerationStart` for filtering: both export tags on generations. Client-level tags also appear as `sigil.tag.<key>` on OTel spans and metrics in all SDKs; per-generation tags and `metadata` are export-only everywhere. For end-user identity use `user_id` (sets `user.id` span attribute), not a tag. See [`docs/concepts/tags-and-metadata.md`](https://github.com/grafana/sigil-sdk/blob/main/docs/concepts/tags-and-metadata.md).
 
 ## Validation checklist
 

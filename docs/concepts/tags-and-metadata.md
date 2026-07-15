@@ -8,7 +8,7 @@ Each SDK README links here for the language-specific config fields.
 
 | Mechanism | Set where | Cardinality | Generation export (Sigil UI) | OTel spans (traces) | OTel metrics |
 | --- | --- | --- | --- | --- | --- |
-| **Client tags** (`SIGIL_TAGS` / config `tags`) | Once, on the client | Keep low | Yes, merged into every generation | Yes, as `sigil.tag.<key>` (Go/JS only) | Yes, as `sigil.tag.<key>` (Go/JS only) |
+| **Client tags** (`SIGIL_TAGS` / config `tags`) | Once, on the client | Keep low | Yes, merged into every generation | Yes, as `sigil.tag.<key>` | Yes, as `sigil.tag.<key>` |
 | **Per-generation `tags`** | Per `startGeneration` call | Any | Yes | No | No |
 | **`metadata`** (struct/dict) | Per `startGeneration` call | Any | Yes | No | No |
 
@@ -18,9 +18,9 @@ There is also a dedicated **`user_id`** field (`SIGIL_USER_ID` / config / per-ca
 
 `user.id` is emitted on the generation span by all five SDKs (Go, Python, JS, Java, .NET).
 
-Client tags are merged into the generation export by all five SDKs, but only **Go and JS** also emit them as `sigil.tag.<key>` attributes on OTel spans and metrics. In Python, Java, and .NET, client tags are export-only today. If you need a tag as a metric/trace label in those languages, set it on the OTel `Resource` (for example `service.name`, or a custom resource attribute) when you configure the providers.
+All five SDKs merge client tags into the generation export and emit them as `sigil.tag.<key>` attributes on OTel spans and metrics.
 
-Client tags become OTel metric attributes on Go/JS, which become Prometheus label values: one time series per distinct value.
+Client tags become OTel metric attributes, which become Prometheus label values: one time series per distinct value.
 
 ## Setting them
 

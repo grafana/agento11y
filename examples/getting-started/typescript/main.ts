@@ -44,9 +44,9 @@ const sigil = createSigilClient({
       basicPassword: process.env.SIGIL_AUTH_TOKEN!,
     },
   },
-  // Client tags attach to every generation. On Go/JS they also become
-  // sigil.tag.<key> attributes on OTel spans and metrics, so keep them
-  // low-cardinality (team, env). See docs/concepts/tags-and-metadata.md.
+  // Client tags attach to every generation and become sigil.tag.<key>
+  // attributes on OTel spans and metrics, so keep them low-cardinality
+  // (team, env). See docs/concepts/tags-and-metadata.md.
   tags: { team: "checkout", env: "dev" },
 });
 

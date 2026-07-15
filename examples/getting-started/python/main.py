@@ -52,9 +52,9 @@ sigil = Client(
                 basic_password=os.environ["SIGIL_AUTH_TOKEN"],
             ),
         ),
-        # Client tags attach to every generation. In Python they are merged
-        # into the generation export only (Go/JS also emit sigil.tag.<key> on
-        # spans/metrics). See docs/concepts/tags-and-metadata.md.
+        # Client tags attach to every generation and become sigil.tag.<key>
+        # attributes on OTel spans and metrics, so keep them low-cardinality
+        # (team, env). See docs/concepts/tags-and-metadata.md.
         tags={"team": "checkout", "env": "dev"},
     )
 )

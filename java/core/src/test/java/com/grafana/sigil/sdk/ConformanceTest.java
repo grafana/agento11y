@@ -531,6 +531,29 @@ class ConformanceTest {
     }
 
     @Test
+    void clientTagAttributes() throws Exception {
+        try (ConformanceEnv env = new ConformanceEnv(1, Map.of("team", "payments"))) {
+            GenerationRecorder recorder = env.client.startGeneration(new GenerationStart()
+                    .setModel(new ModelRef().setProvider("openai").setName("gpt-5"))
+                    .setTags(Map.of("call_only", "yes")));
+            recorder.setResult(new GenerationResult()
+                    .setUsage(new TokenUsage().setInputTokens(4).setOutputTokens(2)));
+            recorder.end();
+            env.client.shutdown();
+
+            SpanData span = env.latestGenerationSpan();
+            assertThat(span.getAttributes().get(AttributeKey.stringKey("sigil.tag.team"))).isEqualTo("payments");
+            assertThat(span.getAttributes().get(AttributeKey.stringKey("sigil.tag.call_only"))).isNull();
+
+            MetricData duration = env.metricData(SigilClient.METRIC_OPERATION_DURATION);
+            boolean tagged = duration.getHistogramData().getPoints().stream()
+                    .anyMatch(point -> "payments".equals(
+                            point.getAttributes().get(AttributeKey.stringKey("sigil.tag.team"))));
+            assertThat(tagged).as("expected sigil.tag.team on operation.duration data point").isTrue();
+        }
+    }
+
+    @Test
     void shutdownFlushSemantics() throws Exception {
         try (ConformanceEnv env = new ConformanceEnv(10)) {
             GenerationRecorder recorder = env.client.startGeneration(new GenerationStart()
@@ -602,6 +625,10 @@ class ConformanceTest {
         private final SigilClient client;
 
         ConformanceEnv(int batchSize) throws Exception {
+            this(batchSize, null);
+        }
+
+        ConformanceEnv(int batchSize, Map<String, String> tags) throws Exception {
             GenerationIngestServiceGrpc.GenerationIngestServiceImplBase service =
                     new GenerationIngestServiceGrpc.GenerationIngestServiceImplBase() {
                         @Override
@@ -655,7 +682,7 @@ class ConformanceTest {
             });
             ratingServer.start();
 
-            client = new SigilClient(new SigilClientConfig()
+            SigilClientConfig config = new SigilClientConfig()
                     .setTracer(tracerProvider.get("sigil-conformance-test"))
                     .setMeter(meterProvider.get("sigil-conformance-test"))
                     .setApi(new ApiConfig().setEndpoint("http://127.0.0.1:" + ratingServer.getAddress().getPort()))
@@ -668,7 +695,11 @@ class ConformanceTest {
                             .setFlushInterval(Duration.ofHours(1))
                             .setMaxRetries(1)
                             .setInitialBackoff(Duration.ofMillis(1))
-                            .setMaxBackoff(Duration.ofMillis(2))));
+                            .setMaxBackoff(Duration.ofMillis(2)));
+            if (tags != null) {
+                config.setTags(tags);
+            }
+            client = new SigilClient(config);
         }
 
         GenerationIngest.Generation singleGeneration() {
