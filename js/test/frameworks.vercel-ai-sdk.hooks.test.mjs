@@ -65,6 +65,47 @@ test('vercel ai sdk preflight allows step when hook returns allow', async () => 
   }
 });
 
+test('vercel ai sdk preflight retains prepareStep input when experimental step start omits messages', async () => {
+  let receivedBody;
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) {
+      chunks.push(chunk);
+    }
+    receivedBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ action: 'allow', evaluations: [] }));
+  });
+  await listen(server);
+  const address = server.address();
+
+  const client = newClient({
+    apiEndpoint: `http://127.0.0.1:${address.port}`,
+    hooksEnabled: true,
+  });
+
+  try {
+    const sigil = createSigilVercelAiSdk(client, { agentName: 'guarded-agent' });
+    const hooks = sigil.generateTextHooks({ conversationId: 'conv-prepare-step' });
+
+    hooks.prepareStep({
+      stepNumber: 0,
+      model: { provider: 'openai', modelId: 'gpt-4o' },
+      messages: [{ role: 'user', content: 'keep this prompt' }],
+    });
+    await hooks.experimental_onStepStart({
+      stepNumber: 0,
+      model: { provider: 'openai', modelId: 'gpt-4o' },
+    });
+
+    assert.equal(receivedBody.input.messages[0].role, 'user');
+    assert.equal(receivedBody.input.messages[0].content, 'keep this prompt');
+  } finally {
+    await client.shutdown();
+    await close(server);
+  }
+});
+
 test('vercel ai sdk preflight throws HookDeniedError on deny', async () => {
   const server = createServer(async (request, response) => {
     for await (const _ of request) {

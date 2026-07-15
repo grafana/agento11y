@@ -87,6 +87,11 @@ test('vercel ai sdk captures step input through the v5 and early-v6 prepareStep 
     });
     assert.deepEqual(prepareResult, {});
 
+    hooks.experimental_onStepStart?.({
+      stepNumber: 0,
+      model: { provider: 'openai', modelId: 'gpt-5' },
+    });
+
     await hooks.onStepFinish?.({
       stepNumber: 0,
       finishReason: 'stop',

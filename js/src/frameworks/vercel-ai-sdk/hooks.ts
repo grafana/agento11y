@@ -39,6 +39,7 @@ interface StepState {
   recorder?: GenerationRecorder;
   startedAt: Date;
   inputMessages: Message[];
+  observedInputMessages: Message[];
   conversation: ConversationResolution;
   fallbackSeed: string;
   firstTokenRecorded: boolean;
@@ -216,7 +217,8 @@ export class SigilVercelAiSdkInstrumentation {
               })
             : undefined,
         startedAt: params.startedAt,
-        inputMessages: params.inputMessages,
+        inputMessages: this.captureInputs ? params.inputMessages : [],
+        observedInputMessages: params.inputMessages,
         conversation,
         fallbackSeed: `${callID}:step-${params.stepNumber}`,
         firstTokenRecorded: false,
@@ -259,18 +261,19 @@ export class SigilVercelAiSdkInstrumentation {
       noteStreamObservedStartAt(observedAt);
       const stepNumber = extractStepNumber(event, state.nextSyntheticStepNumber);
       state.nextSyntheticStepNumber = Math.max(state.nextSyntheticStepNumber, stepNumber + 1);
-      const inputMessages = mapInputMessages(event.messages);
+      const inputMessages = event.messages !== undefined ? mapInputMessages(event.messages) : undefined;
       const existingState = state.stepStates.get(stepNumber);
       if (existingState === undefined) {
+        const observedInputMessages = inputMessages ?? [];
         return {
           stepNumber,
           stepState: createStepState({
             stepNumber,
             stepStartEvent: event,
             startedAt: observedAt,
-            inputMessages: this.captureInputs ? inputMessages : [],
+            inputMessages: observedInputMessages,
           }),
-          inputMessages,
+          inputMessages: observedInputMessages,
         };
       }
 
@@ -279,7 +282,8 @@ export class SigilVercelAiSdkInstrumentation {
         ...existingState.stepStartEvent,
         ...event,
       };
-      if (event.messages !== undefined) {
+      if (inputMessages !== undefined) {
+        existingState.observedInputMessages = inputMessages;
         existingState.inputMessages = this.captureInputs ? inputMessages : [];
       }
       if (event.output !== undefined && event.output !== previousOutput) {
@@ -288,7 +292,11 @@ export class SigilVercelAiSdkInstrumentation {
         existingState.outputSchemaResolved = false;
         kickOffOutputSchemaExtraction(existingState);
       }
-      return { stepNumber, stepState: existingState, inputMessages };
+      return {
+        stepNumber,
+        stepState: existingState,
+        inputMessages: inputMessages ?? existingState.observedInputMessages,
+      };
     };
     const resolveOrCreateStepStateForFinish = (params: {
       eventStepNumber: unknown;
@@ -576,6 +584,7 @@ export class SigilVercelAiSdkInstrumentation {
       experimental_onStepStart: (event) => {
         const { stepState, inputMessages } = captureStepStart(event, new Date());
         const finalize = (resolvedMessages: Message[]): void => {
+          stepState.observedInputMessages = resolvedMessages;
           stepState.inputMessages = this.captureInputs ? resolvedMessages : [];
         };
 
