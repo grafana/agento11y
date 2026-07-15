@@ -297,6 +297,11 @@ func sanitizeMessage(m *Message, mode textMode, includeEmail bool) {
 					p.ToolResult.ContentJSON = redactFullBytes(p.ToolResult.ContentJSON, includeEmail)
 				}
 			}
+		case PartKindMedia:
+			// Media URLs and data URLs are generation content, but this sanitizer
+			// only redacts textual and JSON payloads. Metadata-only capture strips
+			// media URLs before export when content capture is disabled.
+			continue
 		}
 	}
 }
