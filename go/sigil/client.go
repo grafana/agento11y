@@ -98,7 +98,9 @@ type Config struct {
 	UserID string
 	// Tags are merged into every GenerationStart.Tags (per-call tags win on
 	// key conflict) and emitted on OTel spans/metrics as sigil.tag.<key>.
-	// Read from SIGIL_TAGS (CSV) by ConfigFromEnv.
+	// Read from SIGIL_TAGS (CSV) by ConfigFromEnv. These are static, process-
+	// level tags; for per-request dimensions that also reach spans and metrics
+	// use WithTag / WithTags on the request context.
 	Tags map[string]string
 	// Debug, when set, signals downstream consumers (plugins, telemetry) that
 	// the SDK is running in verbose mode. Read from SIGIL_DEBUG by ConfigFromEnv.
@@ -604,8 +606,14 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 	if seed.AgentVersion == "" && c.config.AgentVersion != "" {
 		seed.AgentVersion = c.config.AgentVersion
 	}
-	if len(c.config.Tags) > 0 {
-		merged := cloneTags(c.config.Tags)
+	// dimensionalTags are the static client tags plus any per-request context
+	// tags set via WithTag / WithTags. They are emitted on the generation span
+	// and metrics as sigil.tag.<key> and merged into the exported generation's
+	// tags. The explicit GenerationStart.Tags field stays export-only and wins
+	// on key conflict.
+	dimensionalTags := mergeTags(c.config.Tags, TagsFromContext(ctx))
+	if len(dimensionalTags) > 0 {
+		merged := cloneTags(dimensionalTags)
 		maps.Copy(merged, seed.Tags)
 		seed.Tags = merged
 	}
@@ -646,7 +654,7 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 
 	callCtx, span := c.startSpan(ctx, spanGeneration, trace.SpanKindClient, startedAt)
 	span.SetAttributes(generationSpanAttributes(spanGeneration)...)
-	setSpanTagAttributes(span, c.config.Tags)
+	setSpanTagAttributes(span, dimensionalTags)
 
 	callCtx = withContentCaptureMode(callCtx, ccMode)
 
@@ -1994,7 +2002,10 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 		generation.AgentName,
 		generation.AgentVersion,
 	)
-	tagAttrs := c.clientTagMetricAttributes()
+	// Include per-request context tags (WithTag/WithTags) as metric dimensions
+	// alongside the static client tags. Callers are responsible for keeping
+	// context-tag values low-cardinality since they become metric labels.
+	tagAttrs := tagAttributes(mergeTags(c.config.Tags, TagsFromContext(ctx)))
 	durationAttrs := append(
 		[]attribute.KeyValue{attribute.String(spanAttrOperationName, operationName(generation))},
 		identityAttrs...,
