@@ -28,11 +28,14 @@ import type {
   CallOptions,
   ConversationResolution,
   GenerateTextHooks,
+  PrepareStepEvent,
+  PrepareStepResult,
   SigilVercelAiSdkOptions,
   StepStartEvent,
   StreamTextHooks,
   ToolCallFinishEvent,
   ToolCallStartEvent,
+  VercelAiSdkModelMessage,
 } from './types.js';
 
 interface StepState {
@@ -490,7 +493,10 @@ export class SigilVercelAiSdkInstrumentation {
       return firstError;
     };
 
-    const runPreflight = async (event: StepStartEvent, inputMessages: Message[]): Promise<Message[]> => {
+    const runPreflight = async (
+      event: StepStartEvent,
+      inputMessages: Message[],
+    ): Promise<{ messages: Message[]; providerMessages?: VercelAiSdkModelMessage[]; transformed: boolean }> => {
       const model = mapModelFromStepStart(event);
       // evaluateHook honors fail-open internally; an exception here means
       // fail_open=false and the LLM call should be aborted.
@@ -520,43 +526,82 @@ export class SigilVercelAiSdkInstrumentation {
       }
       const ti = response.transformedInput?.messages;
       if (ti !== undefined && ti.length > 0) {
-        return ti;
+        return {
+          messages: ti,
+          providerMessages: toVercelAiSdkModelMessages(ti),
+          transformed: true,
+        };
       }
-      return inputMessages;
+      return { messages: inputMessages, transformed: false };
+    };
+
+    const handleStepStart = (
+      event: StepStartEvent,
+      returnPreparedMessages: boolean,
+    ): PrepareStepResult | PromiseLike<PrepareStepResult> => {
+      noteStreamObservedStartAt(new Date());
+      const fallbackStep = state.nextSyntheticStepNumber;
+      const stepNumber = extractStepNumber(event, fallbackStep);
+      if (state.stepStates.has(stepNumber)) {
+        state.nextSyntheticStepNumber = Math.max(state.nextSyntheticStepNumber, stepNumber + 1);
+        return undefined;
+      }
+      state.nextSyntheticStepNumber = Math.max(state.nextSyntheticStepNumber + 1, stepNumber + 1);
+
+      const inputMessages = mapInputMessages(event.messages);
+      const finalize = (
+        resolvedMessages: Message[],
+        providerMessages: VercelAiSdkModelMessage[] | undefined,
+        transformed: boolean,
+      ): PrepareStepResult => {
+        if (transformed) {
+          if (!returnPreparedMessages) {
+            throw new Error(
+              'sigil preflight transformed_input.messages cannot be applied by experimental_onStepStart; use prepareStep-capable AI SDK instrumentation',
+            );
+          }
+          if (providerMessages === undefined) {
+            throw new Error(
+              'sigil preflight transformed_input.messages could not be converted to Vercel AI SDK model messages',
+            );
+          }
+        }
+
+        createStepState({
+          stepNumber,
+          stepStartEvent: event,
+          startedAt: new Date(),
+          inputMessages: this.captureInputs ? resolvedMessages : [],
+        });
+        if (returnPreparedMessages && providerMessages !== undefined) {
+          return { messages: providerMessages };
+        }
+        return undefined;
+      };
+
+      if (!this.preflightEnabled()) {
+        return finalize(inputMessages, undefined, false);
+      }
+
+      // Preflight evaluates against the actual prompt/messages even when
+      // captureInputs is disabled — the hook server only sees them in
+      // memory and never persists them.
+      return runPreflight(event, inputMessages).then(({ messages, providerMessages, transformed }) =>
+        finalize(messages, providerMessages, transformed),
+      );
     };
 
     const hooks: StreamTextHooks = {
+      prepareStep: (event: PrepareStepEvent) => handleStepStart(event, true),
       // Returns Promise<void> when preflight is enabled, void otherwise.
       // The Vercel AI SDK awaits both shapes; keeping the sync path avoids
       // microtask scheduling for callers that don't use hooks.
       experimental_onStepStart: (event) => {
-        noteStreamObservedStartAt(new Date());
-        const fallbackStep = state.nextSyntheticStepNumber;
-        const stepNumber = extractStepNumber(event, fallbackStep);
-        state.nextSyntheticStepNumber = Math.max(state.nextSyntheticStepNumber + 1, stepNumber + 1);
-        if (state.stepStates.has(stepNumber)) {
-          return;
+        const result = handleStepStart(event, false);
+        if (isPromiseLike(result)) {
+          return Promise.resolve(result).then(() => undefined);
         }
-
-        const inputMessages = mapInputMessages(event.messages);
-        const finalize = (resolvedMessages: Message[]): void => {
-          createStepState({
-            stepNumber,
-            stepStartEvent: event,
-            startedAt: new Date(),
-            inputMessages: this.captureInputs ? resolvedMessages : [],
-          });
-        };
-
-        if (!this.preflightEnabled()) {
-          finalize(inputMessages);
-          return;
-        }
-
-        // Preflight evaluates against the actual prompt/messages even when
-        // captureInputs is disabled — the hook server only sees them in
-        // memory and never persists them.
-        return runPreflight(event, inputMessages).then(finalize);
+        return undefined;
       },
       onStepFinish: (event) => {
         const response = mapResponseFromStepFinish(event);
@@ -951,4 +996,145 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
+  return value !== null && typeof value === 'object' && typeof (value as { then?: unknown }).then === 'function';
+}
+
+type VercelAiSdkRole = VercelAiSdkModelMessage['role'];
+
+function toVercelAiSdkModelMessages(messages: Message[]): VercelAiSdkModelMessage[] | undefined {
+  const output: VercelAiSdkModelMessage[] = [];
+
+  for (const message of messages) {
+    const role = toVercelAiSdkRole(message.role);
+    if (role === undefined) {
+      return undefined;
+    }
+    const content = toVercelAiSdkMessageContent(role, message);
+    if (content === undefined) {
+      return undefined;
+    }
+    output.push({ role, content } as VercelAiSdkModelMessage);
+  }
+
+  return output.length > 0 ? output : undefined;
+}
+
+function toVercelAiSdkRole(role: string): VercelAiSdkRole | undefined {
+  const normalized = role.trim().toLowerCase();
+  if (normalized === 'system' || normalized === 'user' || normalized === 'assistant' || normalized === 'tool') {
+    return normalized;
+  }
+  return undefined;
+}
+
+function toVercelAiSdkMessageContent(role: VercelAiSdkRole, message: Message): unknown | undefined {
+  const textContent = normalizeOptionalString(message.content);
+  if (message.parts === undefined || message.parts.length === 0) {
+    return role === 'tool' ? undefined : textContent;
+  }
+
+  const parts: unknown[] = [];
+  for (const part of message.parts) {
+    if (part.type === 'text') {
+      if (role === 'tool') {
+        return undefined;
+      }
+      parts.push({ type: 'text', text: part.text });
+      continue;
+    }
+
+    if (part.type === 'thinking') {
+      if (role !== 'assistant') {
+        return undefined;
+      }
+      parts.push({ type: 'reasoning', text: part.thinking });
+      continue;
+    }
+
+    if (part.type === 'tool_call') {
+      if (role !== 'assistant') {
+        return undefined;
+      }
+      const toolCallId = normalizeOptionalString(part.toolCall.id);
+      if (toolCallId === undefined) {
+        return undefined;
+      }
+      parts.push({
+        type: 'tool-call',
+        toolCallId,
+        toolName: part.toolCall.name,
+        input: parseOptionalJSON(part.toolCall.inputJSON) ?? {},
+      });
+      continue;
+    }
+
+    if (part.type === 'tool_result') {
+      if (role !== 'assistant' && role !== 'tool') {
+        return undefined;
+      }
+      const toolCallId = normalizeOptionalString(part.toolResult.toolCallId);
+      const toolName = normalizeOptionalString(part.toolResult.name);
+      if (toolCallId === undefined || toolName === undefined) {
+        return undefined;
+      }
+      parts.push({
+        type: 'tool-result',
+        toolCallId,
+        toolName,
+        output: toVercelAiSdkToolOutput(part.toolResult.content, part.toolResult.contentJSON, part.toolResult.isError),
+      });
+    }
+  }
+
+  if (role === 'system') {
+    const text = parts
+      .map((part) => (isTextPart(part) ? part.text.trim() : ''))
+      .filter((text) => text.length > 0)
+      .join(' ')
+      .trim();
+    return text.length > 0 ? text : textContent;
+  }
+
+  return parts.length > 0 ? parts : textContent;
+}
+
+function toVercelAiSdkToolOutput(
+  content: string | undefined,
+  contentJSON: string | undefined,
+  isError: boolean | undefined,
+): unknown {
+  const parsedJSON = parseOptionalJSON(contentJSON);
+  if (parsedJSON !== undefined) {
+    return {
+      type: isError ? 'error-json' : 'json',
+      value: parsedJSON,
+    };
+  }
+
+  return {
+    type: isError ? 'error-text' : 'text',
+    value: content ?? '',
+  };
+}
+
+function parseOptionalJSON(value: string | undefined): unknown | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function isTextPart(value: unknown): value is { type: 'text'; text: string } {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const part = value as { type?: unknown; text?: unknown };
+  return part.type === 'text' && typeof part.text === 'string';
 }

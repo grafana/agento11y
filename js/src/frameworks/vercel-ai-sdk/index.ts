@@ -24,6 +24,8 @@ export type {
   CallOptions,
   ConversationResolution,
   GenerateTextHooks,
+  PrepareStepEvent,
+  PrepareStepResult,
   SigilVercelAiSdkOptions,
   StepFinishEvent,
   StepOutputMapping,
@@ -33,6 +35,7 @@ export type {
   StreamTextHooks,
   ToolCallFinishEvent,
   ToolCallStartEvent,
+  VercelAiSdkModelMessage,
 } from './types.js';
 
 export function createSigilVercelAiSdk(
