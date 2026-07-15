@@ -182,6 +182,45 @@ func TestFromRequestResponseMapsImageInput(t *testing.T) {
 	}
 }
 
+func TestFromRequestResponseInfersDataURLImageMIMEType(t *testing.T) {
+	const dataURL = "data:image/gif;base64,R0lGODlh"
+
+	req := testRequest()
+	req.Messages[0].Content = append(req.Messages[0].Content, asdk.NewBetaImageBlock(asdk.BetaURLImageSourceParam{
+		URL: dataURL,
+	}))
+	resp := &asdk.BetaMessage{
+		ID:         "msg_image_url",
+		Model:      asdk.Model("claude-sonnet-4-5"),
+		StopReason: asdk.BetaStopReasonEndTurn,
+		Content: []asdk.BetaContentBlockUnion{
+			{Type: "text", Text: "I can see it."},
+		},
+	}
+
+	generation, err := FromRequestResponse(req, resp)
+	if err != nil {
+		t.Fatalf("from request/response: %v", err)
+	}
+
+	if len(generation.Input) == 0 || len(generation.Input[0].Parts) != 2 {
+		t.Fatalf("expected text and media input parts, got %#v", generation.Input)
+	}
+	media := generation.Input[0].Parts[1]
+	if media.Kind != sigil.PartKindMedia {
+		t.Fatalf("expected media part, got %q", media.Kind)
+	}
+	if media.Media == nil {
+		t.Fatal("expected media payload")
+	}
+	if media.Media.URL != dataURL {
+		t.Fatalf("unexpected media URL %q", media.Media.URL)
+	}
+	if media.Media.MIMEType != "image/gif" {
+		t.Fatalf("unexpected media MIME type %q", media.Media.MIMEType)
+	}
+}
+
 func TestFromStream(t *testing.T) {
 	req := testRequest()
 	summary := StreamSummary{

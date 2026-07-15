@@ -368,6 +368,9 @@ func imageBlockPart(block *asdk.BetaImageBlockParam) (sigil.Part, bool) {
 func imagePartFromSource(base64Data, mediaType, sourceURL string) (sigil.Part, bool) {
 	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
 	url := strings.TrimSpace(sourceURL)
+	if mediaType == "" {
+		mediaType = mediaTypeFromDataURL(url)
+	}
 	if url == "" {
 		data := strings.TrimSpace(base64Data)
 		if mediaType == "" || data == "" {
@@ -383,6 +386,22 @@ func imagePartFromSource(base64Data, mediaType, sourceURL string) (sigil.Part, b
 	})
 	part.Metadata.ProviderType = "image"
 	return part, true
+}
+
+func mediaTypeFromDataURL(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if !strings.HasPrefix(strings.ToLower(trimmed), "data:") {
+		return ""
+	}
+
+	payload := trimmed[len("data:"):]
+	if before, _, ok := strings.Cut(payload, ";"); ok {
+		return strings.ToLower(strings.TrimSpace(before))
+	}
+	if before, _, ok := strings.Cut(payload, ","); ok {
+		return strings.ToLower(strings.TrimSpace(before))
+	}
+	return ""
 }
 
 func mapResponseBlock(block asdk.BetaContentBlockUnion) (sigil.Part, bool) {
