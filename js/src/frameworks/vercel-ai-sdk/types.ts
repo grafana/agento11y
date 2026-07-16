@@ -21,6 +21,25 @@ export interface StepStartEvent {
   output?: unknown;
 }
 
+export interface PrepareStepEvent extends StepStartEvent {
+  steps?: unknown;
+  experimental_context?: unknown;
+}
+
+export type VercelAiSdkModelMessage =
+  | { role: 'system'; content: any; providerOptions?: Record<string, unknown> }
+  | { role: 'user'; content: any; providerOptions?: Record<string, unknown> }
+  | { role: 'assistant'; content: any; providerOptions?: Record<string, unknown> }
+  | { role: 'tool'; content: any; providerOptions?: Record<string, unknown> };
+
+export type PrepareStepResult =
+  | {
+      messages?: VercelAiSdkModelMessage[];
+    }
+  | undefined;
+
+type PrepareStepHookResult = PrepareStepResult | PromiseLike<PrepareStepResult>;
+
 export interface StepFinishResponseRef {
   id?: unknown;
   modelId?: unknown;
@@ -122,6 +141,7 @@ export interface CallOptions {
 }
 
 export interface GenerateTextHooks {
+  prepareStep?: (event: PrepareStepEvent) => PrepareStepHookResult;
   experimental_onStepStart?: (event: StepStartEvent) => HookResult;
   onStepFinish?: (event: StepFinishEvent) => HookResult;
   experimental_onToolCallStart?: (event: ToolCallStartEvent) => HookResult;

@@ -1,13 +1,14 @@
 # Vercel AI SDK Hooks (`@grafana/sigil-sdk-js/vercel-ai-sdk`)
 
-Use `createSigilVercelAiSdk(...)` to instrument Vercel AI SDK v5 calls with Sigil generation export, spans, metrics, tool execution spans, and streaming TTFT.
+Use `createSigilVercelAiSdk(...)` to instrument Vercel AI SDK calls with Sigil generation export, spans, metrics, tool execution spans, and streaming TTFT.
 
 Supported AI SDK line:
 
-- `ai` v5 (`generateText`, `streamText`)
+- `ai` v5 and v6 (`generateText`, `streamText`)
 - Baseline generation export uses `onStepFinish` (and `onError` for streams). This path is v5-compatible and records tool executions from step `toolResults`.
-- When `experimental_onStepStart`, `experimental_onToolCallStart`, and `experimental_onToolCallFinish` are available (v6+), Sigil also captures richer per-step input messages and tool timing correlation.
-- Experimental callbacks can change in patch releases. Keep `ai` pinned to a tested minor line (`v5.x` or `v6.x`) in production.
+- Step input capture uses `prepareStep` when available. The older `experimental_onStepStart` callback is still emitted for AI SDK versions that call it.
+- When `experimental_onToolCallStart` and `experimental_onToolCallFinish` are available, Sigil also captures richer tool timing correlation.
+- Experimental callbacks can change in patch releases. Keep `ai` pinned to a tested minor line in production.
 
 ## Install
 
@@ -77,7 +78,7 @@ try {
 }
 ```
 
-The adapter sends the step messages, model, agent name/version, and conversation preview to Sigil. If a guard returns `action: "deny"`, the adapter throws `HookDeniedError` and the provider call is aborted. If a guard returns `transformed_input.messages`, the adapter sends those transformed messages to the provider and records the transformed input in the generation.
+The adapter sends the step messages, model, agent name/version, and conversation preview to Sigil. If a guard returns `action: "deny"`, the adapter throws `HookDeniedError` and the provider call is aborted. If a guard returns `transformed_input.messages`, the adapter records the transformed input in the generation; when the AI SDK calls `prepareStep` and the transformed messages can be represented as AI SDK model messages, the adapter also returns those transformed messages to the provider. If a transform is requested but cannot be applied to the provider call, the adapter aborts rather than sending the original messages.
 
 `enableHooks` overrides the client-level switch for this instrumentation. Leave it unset to use `client.config.hooks.enabled`, or set it to `false` to disable hook evaluation for calls made through this adapter. With `failOpen: true`, hook transport errors resolve to allow; set `failOpen: false` for strict paths that should fail closed.
 
@@ -118,7 +119,7 @@ const result = await generateText({
 Each model step emits one generation with:
 
 - `metadata["sigil.framework.step_type"]` (`initial`, `continue`, `tool-result`)
-- per-step input captured when `experimental_onStepStart` is available (including prior tool result messages)
+- per-step input captured from `prepareStep` or `experimental_onStepStart` (including prior tool result messages)
 
 ## Streaming (`streamText`) and TTFT
 

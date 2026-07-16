@@ -75,6 +75,71 @@ test('vercel ai sdk generateText hooks record single-step success', async () => 
   assert.equal(generation.metadata['sigil.framework.reasoning_text'], 'reasoning detail');
 });
 
+test('vercel ai sdk prepareStep records input messages for ai sdk v6', async () => {
+  const { generations } = await captureSession(async (client) => {
+    const sigil = createSigilVercelAiSdk(client);
+    const hooks = sigil.generateTextHooks({ conversationId: 'conv-v6-prepare-step' });
+
+    const prepareResult = hooks.prepareStep?.({
+      stepNumber: 0,
+      model: { provider: 'openai', modelId: 'gpt-5' },
+      messages: [{ role: 'user', content: 'hello from v6' }],
+      steps: [],
+      experimental_context: undefined,
+    });
+    assert.equal(prepareResult, undefined);
+
+    hooks.onStepFinish?.({
+      stepNumber: 0,
+      stepType: 'initial',
+      text: 'hello back',
+      finishReason: 'stop',
+      response: { id: 'resp-v6-prepare-step', modelId: 'gpt-5' },
+    });
+  });
+
+  assert.equal(generations.length, 1);
+  assert.equal(generations[0].conversationId, 'conv-v6-prepare-step');
+  assert.equal(generations[0].input[0].content, 'hello from v6');
+  assert.equal(generations[0].output[0].content, 'hello back');
+});
+
+test('vercel ai sdk streamText prepareStep records input messages for ai sdk v6', async () => {
+  const { generations } = await captureSession(async (client) => {
+    const sigil = createSigilVercelAiSdk(client);
+    const hooks = sigil.streamTextHooks({ conversationId: 'conv-v6-stream-prepare-step' });
+
+    const prepareResult = hooks.prepareStep?.({
+      stepNumber: 0,
+      model: { provider: 'anthropic', modelId: 'claude-sonnet-4-5' },
+      messages: [{ role: 'user', content: 'stream from v6' }],
+      steps: [],
+      experimental_context: undefined,
+    });
+    assert.equal(prepareResult, undefined);
+
+    hooks.onChunk?.({
+      stepNumber: 0,
+      chunk: {
+        type: 'text-delta',
+        text: 'hel',
+      },
+    });
+    hooks.onStepFinish?.({
+      stepNumber: 0,
+      stepType: 'initial',
+      text: 'hello stream',
+      finishReason: 'stop',
+      response: { id: 'resp-v6-stream-prepare-step', modelId: 'claude-sonnet-4-5' },
+    });
+  });
+
+  assert.equal(generations.length, 1);
+  assert.equal(generations[0].mode, 'STREAM');
+  assert.equal(generations[0].input[0].content, 'stream from v6');
+  assert.equal(generations[0].output[0].content, 'hello stream');
+});
+
 test('vercel ai sdk generateText hooks record single-step error', async () => {
   const { generations } = await captureSession(async (client) => {
     const sigil = createSigilVercelAiSdk(client);
