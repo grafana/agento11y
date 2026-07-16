@@ -203,6 +203,11 @@ func cloneParts(in []Part) []Part {
 			result.ContentJSON = append([]byte(nil), result.ContentJSON...)
 			out[i].ToolResult = &result
 		}
+
+		if in[i].Media != nil {
+			media := *in[i].Media
+			out[i].Media = &media
+		}
 	}
 
 	return out
