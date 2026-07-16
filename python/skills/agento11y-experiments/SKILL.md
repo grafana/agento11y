@@ -1,5 +1,5 @@
 ---
-name: sigil-experiments
+name: agento11y-experiments
 description: >-
   Run any Python LLM agent as a Sigil experiment using the public
   sigil_sdk.experiments package: define a test suite, run an existing agent
@@ -14,7 +14,7 @@ The public SDK surface is `sigil_sdk.experiments`; do not use removed v0 runner
 APIs.
 
 This is the reference for the run-side API. If you don't yet know which evaluators
-you need or have no test cases, start with the `sigil-eval-starter` skill — it reads
+you need or have no test cases, start with the `agento11y-eval-starter` skill — it reads
 your agent, recommends evaluators, writes a starter suite, and generates a minimal
 runner; come here for the deeper patterns (binding existing generations, auditable
 LLM judges, cross-process verifiers, pass@k/pass^k).

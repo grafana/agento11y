@@ -733,8 +733,8 @@ Experimental OTel eval spans/events are disabled by default; opt in with
 If you use a supported framework, prefer its adapter (e.g. `sigil-sdk-langgraph`)
 — it can expose conversation or generation ids that you bind to the trial, so
 the experiment points at the same trace your agent already emits. See the
-`sigil-experiments` skill
-(`python/skills/sigil-experiments/SKILL.md`) and the runnable example at
+`agento11y-experiments` skill
+(`python/skills/agento11y-experiments/SKILL.md`) and the runnable example at
 `examples/experiments/python/` for grading patterns, including LLM-as-judge.
 
 ## Public API Overview
