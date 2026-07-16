@@ -46,7 +46,7 @@ func loadUserIDFromClaudeJSON(path, source string) string {
 		} `json:"oauthAccount"`
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		fmt.Fprintln(os.Stderr, "sigil claude-code: malformed ~/.claude.json, cannot resolve user id:", err)
+		fmt.Fprintln(os.Stderr, "agento11y claude-code: malformed ~/.claude.json, cannot resolve user id:", err)
 		return ""
 	}
 

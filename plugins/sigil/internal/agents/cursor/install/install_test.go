@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/execpath"
 )
 
 const testBin = "/opt/homebrew/bin/sigil"
@@ -376,6 +378,10 @@ func TestIsSigilHook(t *testing.T) {
 	}{
 		{"/opt/homebrew/bin/sigil cursor hook", true},
 		{"sigil cursor hook", true},
+		{"/opt/homebrew/bin/agento11y cursor hook", true},
+		{"agento11y cursor hook", true},
+		{"agento11y.exe cursor hook", true},
+		{"'/Users/me/with space/bin/agento11y' cursor hook", true},
 		{"/Users/me/.local/bin/sigil cursor hook", true},
 		{"'/Users/me/with space/bin/sigil' cursor hook", true},
 		{"/Users/me/projects/sigil-sdk/plugins/cursor/scripts/run.sh", true},
@@ -396,25 +402,6 @@ func TestIsSigilHook(t *testing.T) {
 	}
 }
 
-func TestShellQuote(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"/opt/homebrew/bin/sigil", "/opt/homebrew/bin/sigil"},
-		{"/Users/me/.local/bin/sigil", "/Users/me/.local/bin/sigil"},
-		{"/Users/me/my apps/sigil", "'/Users/me/my apps/sigil'"},
-		{"/has/dollar$ign/sigil", "'/has/dollar$ign/sigil'"},
-		{"/quote'd/sigil", `'/quote'\''d/sigil'`},
-		{"", "''"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.in, func(t *testing.T) {
-			assert.Equal(t, tc.want, shellQuote(tc.in))
-		})
-	}
-}
-
 // --- helpers ---
 
 func withHome(t *testing.T, home string) {
@@ -426,9 +413,9 @@ func withHome(t *testing.T, home string) {
 
 func withExecutable(t *testing.T, path string) {
 	t.Helper()
-	prev := executable
-	t.Cleanup(func() { executable = prev })
-	executable = func() (string, error) { return path, nil }
+	prev := execpath.Executable
+	t.Cleanup(func() { execpath.Executable = prev })
+	execpath.Executable = func() (string, error) { return path, nil }
 }
 
 func hooksPath(home string) string {

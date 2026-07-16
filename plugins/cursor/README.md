@@ -13,47 +13,47 @@ curl -fsSL https://raw.githubusercontent.com/grafana/sigil-sdk/main/plugins/sigi
 **Homebrew (macOS):**
 
 ```sh
-brew install grafana/grafana/sigil
+brew install grafana/grafana/agento11y
 ```
 
 **Go install (Windows, or any platform with Go 1.25+):**
 
 ```sh
-go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
+go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/agento11y@latest
 ```
 
-The script installs `sigil` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`sigil` binary README](../sigil/README.md#install) for all install options.
+The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../sigil/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-Cursor is a GUI app with no `sigil cursor` launcher, so after installing the binary you wire the hooks once with `sigil cursor install` (next step), then add credentials.
+Cursor is a GUI app with no `agento11y cursor` launcher, so after installing the binary you wire the hooks once with `agento11y cursor install` (next step), then add credentials.
 
 ## 2. Wire the hooks
 
 Run this once from a terminal:
 
 ```sh
-sigil cursor install
+agento11y cursor install
 ```
 
-It registers `sigil cursor hook` for the Cursor events Sigil captures in `~/.cursor/hooks.json`, merging with any hooks other tools already added. Re-running is safe: it updates Sigil's entry in place instead of adding a duplicate. On first run it also prompts for credentials (the same prompt as `sigil login`).
+It registers `agento11y cursor hook` for the Cursor events Sigil captures in `~/.cursor/hooks.json`, merging with any hooks other tools already added. Re-running is safe: it updates Sigil's entry in place instead of adding a duplicate. On first run it also prompts for credentials (the same prompt as `agento11y login`).
 
-To undo the wiring later, run `sigil cursor uninstall` — it removes only Sigil's entries and leaves other tools' hooks alone.
+To undo the wiring later, run `agento11y cursor uninstall` — it removes only Sigil's entries and leaves other tools' hooks alone.
 
 <details>
 <summary>Alternative: register the plugin inside Cursor</summary>
 
-Instead of `sigil cursor install`, you can register the plugin from Cursor's command palette:
+Instead of `agento11y cursor install`, you can register the plugin from Cursor's command palette:
 
 ```
 /add-plugin grafana/sigil-sdk
 ```
 
-Do not use both. `/add-plugin` and `sigil cursor install` write to the same `~/.cursor/hooks.json`, so running both captures every turn twice. Pick one.
+Do not use both. `/add-plugin` and `agento11y cursor install` write to the same `~/.cursor/hooks.json`, so running both captures every turn twice. Pick one.
 
 </details>
 
 ## 3. Add your credentials
 
-`sigil cursor install` already prompts for these on first run; run `sigil login` from a terminal to enter or change them later. The prompt asks for values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+`agento11y cursor install` already prompts for these on first run; run `agento11y login` from a terminal to enter or change them later. The prompt asks for values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -116,6 +116,6 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Cursor `preToolUse` hook is evaluated against Sigil: tool calls denied by guard rules are blocked, and Transform rules rewrite the tool arguments before execution. |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout. Lower = less added latency on every tool call, higher = better tolerance for slow `llm_judge` evaluators. |
-| `AGENTO11Y_BIN` | auto | Override the binary path if you installed `sigil` somewhere unusual. |
+| `AGENTO11Y_BIN` | auto | Override the binary path if you installed `agento11y` (or the legacy `sigil`) somewhere unusual. |
 
 If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.

@@ -10,42 +10,42 @@ By default only metadata is sent (token counts, cost, model, tool names, duratio
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/grafana/sigil-sdk/main/plugins/sigil/scripts/install.sh | sh
-sigil opencode
+agento11y opencode
 ```
 
 **Homebrew (macOS):**
 
 ```sh
-brew install grafana/grafana/sigil
-sigil opencode
+brew install grafana/grafana/agento11y
+agento11y opencode
 ```
 
 **Go install (Windows, or any platform with Go 1.25+):**
 
 ```sh
-go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
-sigil opencode
+go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/agento11y@latest
+agento11y opencode
 ```
 
-The script installs `sigil` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`sigil` binary README](../sigil/README.md#install) for all install options.
+The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../sigil/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`sigil opencode` installs `@grafana/sigil-opencode` into OpenCode on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches OpenCode. Pass arguments to OpenCode after `--`, e.g. `sigil opencode -- run "say hi"`.
+`agento11y opencode` installs `@grafana/sigil-opencode` into OpenCode on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches OpenCode. Pass arguments to OpenCode after `--`, e.g. `agento11y opencode -- run "say hi"`.
 
 <details>
 <summary>Manual plugin registration</summary>
 
 ```sh
 opencode plugin @grafana/sigil-opencode --global
-sigil login
+agento11y login
 ```
 
-The plugin reads `~/.config/sigil/config.env` on every session start, whether you start OpenCode with `sigil opencode` or plain `opencode`.
+The plugin reads `~/.config/sigil/config.env` on every session start, whether you start OpenCode with `agento11y opencode` or plain `opencode`.
 
 </details>
 
 ## 2. Credentials
 
-When `sigil opencode` or `sigil login` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+When `agento11y opencode` or `agento11y login` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -60,7 +60,7 @@ You need values from three Grafana Cloud pages:
 3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
    - **OTLP endpoint URL** → `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT`
 
-Run `sigil login` later to update saved credentials.
+Run `agento11y login` later to update saved credentials.
 
 <details>
 <summary>Non-interactive config.env</summary>
@@ -97,9 +97,9 @@ If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/sigil/config.env`,
 Launch with `--tag key=value` (repeatable) to attach tags to every generation the plugin exports:
 
 ```sh
-sigil opencode --tag project=hackathon --tag team=ai
+agento11y opencode --tag project=hackathon --tag team=ai
 # forward args to opencode after `--`
-sigil opencode --tag team=ai -- run "say hi"
+agento11y opencode --tag team=ai -- run "say hi"
 ```
 
 `--tag` is shorthand for `AGENTO11Y_TAGS`; flag tags merge onto (and override) any `AGENTO11Y_TAGS` already in the environment or `~/.config/sigil/config.env`. The merge happens in the SDK, so user tags reach every generation without the plugin reparsing them.

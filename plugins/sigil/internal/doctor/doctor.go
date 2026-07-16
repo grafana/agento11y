@@ -246,7 +246,7 @@ func Run(ctx context.Context, args []string, p Params) int {
 	report := Collect(ctx, opts, p)
 	if opts.JSON {
 		if err := renderJSON(p.Stdout, report); err != nil {
-			_, _ = fmt.Fprintf(p.Stderr, "sigil: doctor: %v\n", err)
+			_, _ = fmt.Fprintf(p.Stderr, "agento11y: doctor: %v\n", err)
 			return 2
 		}
 	} else {
@@ -259,7 +259,7 @@ func parseFlags(args []string, stderr io.Writer) (Options, error) {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "usage: sigil doctor [--json] [--probe] [--no-color]")
+		_, _ = fmt.Fprintln(stderr, "usage: agento11y doctor [--json] [--probe] [--no-color]")
 		_, _ = fmt.Fprintln(stderr)
 		_, _ = fmt.Fprintln(stderr, "Report the health of the conversations and analytics export pipelines,")
 		_, _ = fmt.Fprintln(stderr, "config validity, and installed host-agent plugins.")
@@ -334,7 +334,7 @@ func collectConversations(osEnv, fileEnv map[string]string) ConversationsSection
 	case 0:
 		sec.Health = HealthWarn
 		sec.Messages = append(sec.Messages,
-			"not configured — run `sigil login` or set AGENTO11Y_ENDPOINT, AGENTO11Y_AUTH_TENANT_ID and AGENTO11Y_AUTH_TOKEN")
+			"not configured — run `agento11y login` or set AGENTO11Y_ENDPOINT, AGENTO11Y_AUTH_TENANT_ID and AGENTO11Y_AUTH_TOKEN")
 	default:
 		sec.Health = HealthError
 		var missing []string

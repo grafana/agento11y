@@ -1,4 +1,4 @@
-class Sigil < Formula
+class Agento11y < Formula
   desc "CLI for the Grafana AI Observability (Sigil) agent plugins"
   homepage "https://github.com/grafana/sigil-sdk/tree/main/plugins/sigil"
   url "https://github.com/grafana/sigil-sdk/archive/refs/tags/plugins/sigil/v${VERSION}.tar.gz"
@@ -24,13 +24,16 @@ class Sigil < Formula
 
       system "go", "build",
         "-buildvcs=false",
-        *std_go_args(ldflags: ldflags, output: bin/"sigil"),
-        "./cmd/sigil"
+        *std_go_args(ldflags: ldflags, output: bin/"agento11y"),
+        "./cmd/agento11y"
     end
+
+    bin.install_symlink "agento11y" => "sigil"
   end
 
   test do
     expected = build.head? ? "dev-" : "v#{version}"
+    assert_match expected, shell_output("#{bin}/agento11y --version")
     assert_match expected, shell_output("#{bin}/sigil --version")
   end
 end

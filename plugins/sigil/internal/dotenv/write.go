@@ -106,7 +106,7 @@ func renderDotenv(m map[string]string) ([]byte, error) {
 	sort.Strings(keys)
 
 	var b strings.Builder
-	b.WriteString("# Managed by `sigil login`. Hand-edits to known keys persist\n")
+	b.WriteString("# Managed by `agento11y login`. Hand-edits to known keys persist\n")
 	b.WriteString("# across re-runs; comments and ordering do not.\n")
 	for _, k := range keys {
 		quoted, err := quoteDotenvValue(m[k])

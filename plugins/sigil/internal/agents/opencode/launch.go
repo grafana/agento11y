@@ -80,7 +80,7 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 		Probe:           func(context.Context, string) (bool, error) { return pluginInstalled() },
 		ProbeErrLog:     "opencode config probe",
 		ProbeErrEcho:    true,
-		RegisterMessage: fmt.Sprintf("sigil: installing %s into opencode\n", PluginSource),
+		RegisterMessage: fmt.Sprintf("agento11y: installing %s into opencode\n", PluginSource),
 		Install:         runInstall,
 		InstallRecoveryHint: func(w io.Writer) {
 			fmt.Fprintf(w, "          opencode plugin %s --global\n", PluginSource)

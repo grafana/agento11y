@@ -48,6 +48,8 @@ func TestStop_EndpointDeadButProcessAlive(t *testing.T) {
 		wantStatus   bool
 	}{
 		{name: "signals daemon-looking process", cmdline: "/usr/local/bin/sigil local serve", wantStop: true},
+		{name: "signals agento11y daemon", cmdline: "/usr/local/bin/agento11y local serve", wantStop: true},
+		{name: "signals agento11y.exe daemon", cmdline: "/usr/local/bin/agento11y.exe local serve", wantStop: true},
 		{name: "signals daemon-looking process with spaces in path", cmdline: "/tmp/Sigil Dev/sigil local serve", wantStop: true},
 		{name: "signals go run dev daemon", cmdline: "/Users/x/Library/Caches/go-build/ab/cd-d/main local serve", wantStop: true},
 		{name: "does not signal unrelated live pid", cmdline: "sleep 60", wantAlive: true},

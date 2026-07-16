@@ -1,6 +1,6 @@
 {
   "name": "sigil-cc",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Send Claude Code session telemetry to Grafana Sigil",
   "author": {
     "name": "Grafana Labs"
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil claude-code hook",
+            "command": "agento11y claude-code hook || sigil claude-code hook",
             "timeout": 2000
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil claude-code hook",
+            "command": "agento11y claude-code hook || sigil claude-code hook",
             "timeout": 2000
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil claude-code hook",
+            "command": "agento11y claude-code hook || sigil claude-code hook",
             "timeout": 10000
           }
         ]
@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil claude-code hook",
+            "command": "agento11y claude-code hook || sigil claude-code hook",
             "timeout": 10000
           }
         ]

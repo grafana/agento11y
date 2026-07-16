@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil codex hook",
+            "command": "agento11y codex hook || sigil codex hook",
             "timeout": 10,
             "statusMessage": "Preparing Sigil telemetry"
           }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil codex hook",
+            "command": "agento11y codex hook || sigil codex hook",
             "timeout": 10
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil codex hook",
+            "command": "agento11y codex hook || sigil codex hook",
             "timeout": 10,
             "statusMessage": "Checking Sigil guard"
           }
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil codex hook",
+            "command": "agento11y codex hook || sigil codex hook",
             "timeout": 10
           }
         ]
@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil codex hook",
+            "command": "agento11y codex hook || sigil codex hook",
             "timeout": 30
           }
         ]

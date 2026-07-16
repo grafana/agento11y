@@ -13,7 +13,7 @@ import (
 // signal-based liveness and termination) that have no portable equivalent
 // here, so `--local` capture mode is unavailable. Default Cloud mode never
 // touches this code path.
-var errLocalUnsupported = errors.New("sigil local receiver is not supported on Windows")
+var errLocalUnsupported = errors.New("agento11y local receiver is not supported on Windows")
 
 type daemonLock struct{}
 

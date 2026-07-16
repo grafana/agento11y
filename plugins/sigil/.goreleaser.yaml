@@ -1,11 +1,11 @@
 version: 2
 
-project_name: sigil
+project_name: agento11y
 
 builds:
-  - id: sigil
-    binary: sigil
-    main: ./cmd/sigil
+  - id: agento11y
+    binary: agento11y
+    main: ./cmd/agento11y
     dir: plugins/sigil
     env:
       - CGO_ENABLED=0
@@ -24,8 +24,8 @@ builds:
       - -X main.version=v{{ .Version }}
 
 archives:
-  - id: sigil
-    ids: [sigil]
+  - id: agento11y
+    ids: [agento11y]
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:

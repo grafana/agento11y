@@ -1,6 +1,6 @@
 # @grafana/sigil-vibe
 
-[Mistral Vibe](https://github.com/mistralai/vibe) is sent to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/) by registering hooks in Mistral Vibe's `hooks.toml` that forward each turn to the `sigil` binary. `post_agent_turn` exports one generation per turn; `before_tool` enforces Sigil guard policy (when enabled); `after_tool` records per-tool timing for tool spans.
+[Mistral Vibe](https://github.com/mistralai/vibe) is sent to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/) by registering hooks in Mistral Vibe's `hooks.toml` that forward each turn to the `agento11y` binary. `post_agent_turn` exports one generation per turn; `before_tool` enforces Sigil guard policy (when enabled); `after_tool` records per-tool timing for tool spans.
 
 > Status: **Experimental.** Mistral Vibe's hook contract is itself marked experimental and may change between releases; the launcher pins to the shape verified at build time.
 
@@ -12,24 +12,26 @@ By default only metadata is sent (token counts, model, tool names). Set `AGENTO1
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/grafana/sigil-sdk/main/plugins/sigil/scripts/install.sh | sh
-sigil vibe
+agento11y vibe
 ```
 
 **Homebrew (macOS):**
 
 ```sh
-brew install grafana/grafana/sigil
-sigil vibe
+brew install grafana/grafana/agento11y
+agento11y vibe
 ```
 
 **Go install (Windows, or any platform with Go 1.25+):**
 
 ```sh
-go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
-sigil vibe
+go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/agento11y@latest
+agento11y vibe
 ```
 
-`sigil vibe` resolves the `vibe` binary on `PATH`, upserts the three sigil-owned `[[hooks]]` entries into `~/.vibe/hooks.toml` (or `$VIBE_HOME/hooks.toml`) on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then execs it. Repeated runs are no-ops: each entry is matched by name (`sigil`, `sigil-before-tool`, `sigil-after-tool`) and any hand-authored hooks in the same file are preserved.
+The command was renamed from `sigil`; the old name still works but will be removed in a future release.
+
+`agento11y vibe` resolves the `vibe` binary on `PATH`, upserts the three sigil-owned `[[hooks]]` entries into `~/.vibe/hooks.toml` (or `$VIBE_HOME/hooks.toml`) on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then execs it. Repeated runs are no-ops: each entry is matched by name (`sigil`, `sigil-before-tool`, `sigil-after-tool`) and any hand-authored hooks in the same file are preserved.
 
 The launcher always sets `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` in Mistral Vibe's environment because these events are gated behind that flag.
 
@@ -42,31 +44,31 @@ Add these blocks to `~/.vibe/hooks.toml`:
 [[hooks]]
 name = "sigil"
 type = "post_agent_turn"
-command = "sigil vibe hook"
+command = "agento11y vibe hook"
 timeout = 30
 
 [[hooks]]
 name = "sigil-before-tool"
 type = "before_tool"
-command = "sigil vibe hook"
+command = "agento11y vibe hook"
 timeout = 30
 match = "*"
 
 [[hooks]]
 name = "sigil-after-tool"
 type = "after_tool"
-command = "sigil vibe hook"
+command = "agento11y vibe hook"
 timeout = 30
 match = "*"
 ```
 
-Then export `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` in the shell where you run `vibe`, and run `sigil login` once for credentials.
+Then export `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` in the shell where you run `vibe`, and run `agento11y login` once for credentials.
 
 </details>
 
 ## 2. Credentials
 
-Credentials are shared with every other `sigil` launcher; see [`pi/README.md`](../pi/README.md#2-credentials) for the field-by-field walkthrough. Once `~/.config/sigil/config.env` exists, every launcher (and the Mistral Vibe hook) picks it up.
+Credentials are shared with every other `agento11y` launcher; see [`pi/README.md`](../pi/README.md#2-credentials) for the field-by-field walkthrough. Once `~/.config/sigil/config.env` exists, every launcher (and the Mistral Vibe hook) picks it up.
 
 ## 3. Verify
 

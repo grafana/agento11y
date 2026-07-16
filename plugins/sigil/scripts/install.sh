@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh - Download and install the latest sigil binary.
+# install.sh - Download and install the latest agento11y binary.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/grafana/sigil-sdk/main/plugins/sigil/scripts/install.sh | sh
@@ -12,7 +12,10 @@
 set -eu
 
 GITHUB_REPO="grafana/sigil-sdk"
-BINARY_NAME="sigil"
+BINARY_NAME="agento11y"
+# Old command name, installed as a symlink to agento11y so existing
+# setups keep working.
+LEGACY_BINARY_NAME="sigil"
 # Binary releases are tagged plugins/sigil/v<ver> in the monorepo.
 TAG_PREFIX="plugins/sigil/v"
 DEFAULT_INSTALL_DIR="${HOME}/.local/bin"
@@ -171,7 +174,6 @@ main() {
     fi
 
     install_dir="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
-    archive="${BINARY_NAME}_${version}_${os}_${arch}.tar.gz"
     base_url="https://github.com/${GITHUB_REPO}/releases/download/${TAG_PREFIX}${version}"
 
     info "Installing ${BINARY_NAME} ${version} (${os}/${arch})"
@@ -179,12 +181,25 @@ main() {
     tmpdir=$(mktemp -d)
     trap 'rm -rf "$tmpdir"' EXIT
 
-    # Download archive and checksums.
+    # Download the archive. Releases older than the agento11y rename only
+    # ship sigil_* assets, so on a 404 retry with the old asset name. Any
+    # other failure is fatal.
+    asset_prefix="${BINARY_NAME}"
+    archive="${asset_prefix}_${version}_${os}_${arch}.tar.gz"
     info "Downloading ${archive}..."
-    curl -fsSL "${base_url}/${archive}" -o "${tmpdir}/${archive}" ||
+    status=$(curl -sSL -o "${tmpdir}/${archive}" -w '%{http_code}' "${base_url}/${archive}") ||
         err "Failed to download ${base_url}/${archive}"
+    if [ "$status" = "404" ]; then
+        asset_prefix="${LEGACY_BINARY_NAME}"
+        archive="${asset_prefix}_${version}_${os}_${arch}.tar.gz"
+        info "Not found; this release predates the agento11y rename. Downloading ${archive}..."
+        curl -fsSL "${base_url}/${archive}" -o "${tmpdir}/${archive}" ||
+            err "Failed to download ${base_url}/${archive}"
+    elif [ "$status" != "200" ]; then
+        err "Failed to download ${base_url}/${archive} (HTTP ${status})"
+    fi
 
-    checksums_file="${BINARY_NAME}_${version}_checksums.txt"
+    checksums_file="${asset_prefix}_${version}_checksums.txt"
     curl -fsSL "${base_url}/${checksums_file}" -o "${tmpdir}/${checksums_file}" ||
         err "Failed to download checksums file."
 
@@ -195,14 +210,17 @@ main() {
     fi
     verify_checksum "${tmpdir}/${archive}" "$expected"
 
-    # Extract binary.
-    tar xzf "${tmpdir}/${archive}" -C "${tmpdir}" "${BINARY_NAME}" ||
-        err "Failed to extract ${BINARY_NAME} from archive."
+    # Extract the binary. The executable inside the archive is named after
+    # the asset prefix (agento11y, or sigil in pre-rename releases).
+    tar xzf "${tmpdir}/${archive}" -C "${tmpdir}" "${asset_prefix}" ||
+        err "Failed to extract ${asset_prefix} from archive."
 
-    # Install binary.
+    # Install the binary as agento11y even if it came from an old sigil
+    # archive, and add a sigil symlink so the old name keeps working.
     mkdir -p "$install_dir"
-    mv "${tmpdir}/${BINARY_NAME}" "${install_dir}/${BINARY_NAME}"
+    mv "${tmpdir}/${asset_prefix}" "${install_dir}/${BINARY_NAME}"
     chmod +x "${install_dir}/${BINARY_NAME}"
+    ln -sf "${BINARY_NAME}" "${install_dir}/${LEGACY_BINARY_NAME}"
 
     # Remove macOS quarantine attribute if present.
     if [ "$os" = "darwin" ] && command -v xattr >/dev/null 2>&1; then
@@ -226,7 +244,7 @@ main() {
     esac
 
     echo ""
-    info "To uninstall: rm ${install_dir}/${BINARY_NAME}"
+    info "To uninstall: rm ${install_dir}/${BINARY_NAME} ${install_dir}/${LEGACY_BINARY_NAME}"
 }
 
 main "$@"

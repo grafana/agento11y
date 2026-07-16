@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil copilot hook",
+            "command": "agento11y copilot hook || sigil copilot hook",
             "env": {
               "AGENTO11Y_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
@@ -21,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil copilot hook",
+            "command": "agento11y copilot hook || sigil copilot hook",
             "env": {
               "AGENTO11Y_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil copilot hook",
+            "command": "agento11y copilot hook || sigil copilot hook",
             "env": {
               "AGENTO11Y_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
@@ -53,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil copilot hook",
+            "command": "agento11y copilot hook || sigil copilot hook",
             "env": {
               "AGENTO11Y_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
@@ -69,7 +69,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil copilot hook",
+            "command": "agento11y copilot hook || sigil copilot hook",
             "env": {
               "AGENTO11Y_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
@@ -85,7 +85,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil copilot hook",
+            "command": "agento11y copilot hook || sigil copilot hook",
             "env": {
               "AGENTO11Y_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
@@ -101,7 +101,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil copilot hook",
+            "command": "agento11y copilot hook || sigil copilot hook",
             "env": {
               "AGENTO11Y_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
@@ -117,7 +117,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil copilot hook",
+            "command": "agento11y copilot hook || sigil copilot hook",
             "env": {
               "AGENTO11Y_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
@@ -133,7 +133,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil copilot hook",
+            "command": "agento11y copilot hook || sigil copilot hook",
             "env": {
               "AGENTO11Y_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",
@@ -149,7 +149,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sigil copilot hook",
+            "command": "agento11y copilot hook || sigil copilot hook",
             "env": {
               "AGENTO11Y_COPILOT_HOOK_SURFACE": "copilot-cli",
               "SIGIL_COPILOT_HOOK_SURFACE": "copilot-cli",

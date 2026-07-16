@@ -1,4 +1,4 @@
-package main
+package entry
 
 // TestGoldenIntegration replays representative agent hook events through the
 // consolidated `sigil <agent> hook` dispatcher and asserts that the normalized

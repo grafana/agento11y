@@ -3,7 +3,7 @@
 Forwards completed GitHub Copilot turns, hook-visible tool calls, error
 metadata, subagent lifecycle metadata, and optional prompt/tool content to
 [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
-Powered by the shared `sigil` binary and driven by a single hooks file at
+Powered by the shared `agento11y` binary and driven by a single hooks file at
 `~/.copilot/hooks/sigil.json`, which is read by **both** the GitHub Copilot CLI
 and Copilot Chat in **VS Code**. Each exported turn is tagged with the host it
 came from (`hook.surface` = `copilot-cli` or `vscode`).
@@ -21,26 +21,26 @@ came from (`hook.surface` = `copilot-cli` or `vscode`).
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/grafana/sigil-sdk/main/plugins/sigil/scripts/install.sh | sh
-sigil copilot -- <copilot args>
+agento11y copilot -- <copilot args>
 ```
 
 **Homebrew (macOS):**
 
 ```sh
-brew install grafana/grafana/sigil
-sigil copilot -- <copilot args>
+brew install grafana/grafana/agento11y
+agento11y copilot -- <copilot args>
 ```
 
 **Go install (Windows, or any platform with Go 1.25+):**
 
 ```sh
-go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
-sigil copilot -- <copilot args>
+go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/agento11y@latest
+agento11y copilot -- <copilot args>
 ```
 
-The script installs `sigil` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`sigil` binary README](../sigil/README.md#install) for all install options.
+The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../sigil/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`sigil copilot` writes the shared hooks file to `~/.copilot/hooks/sigil.json`, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, removes any legacy `sigil-copilot` plugin left by older versions, and then launches Copilot CLI.
+`agento11y copilot` writes the shared hooks file to `~/.copilot/hooks/sigil.json`, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, removes any legacy `sigil-copilot` plugin left by older versions, and then launches Copilot CLI.
 
 For VS Code, no launch wrapper is needed — once `~/.copilot/hooks/sigil.json` exists, add `~/.copilot/hooks` to the `chat.hookFilesLocations` setting and Copilot Chat picks it up.
 
@@ -52,7 +52,7 @@ For VS Code, no launch wrapper is needed — once `~/.copilot/hooks/sigil.json` 
 
 ## 2. Credentials
 
-When `sigil copilot` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+When `agento11y copilot` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -67,7 +67,7 @@ You need values from three Grafana Cloud pages:
 3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
    - **OTLP endpoint URL** → `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT`
 
-Run `sigil login` later to update saved credentials.
+Run `agento11y login` later to update saved credentials.
 
 <details>
 <summary>Non-interactive config.env</summary>
@@ -99,7 +99,7 @@ generations with `agent_name=copilot`.
 If nothing shows up:
 
 ```sh
-AGENTO11Y_DEBUG=true sigil copilot   # one turn
+AGENTO11Y_DEBUG=true agento11y copilot   # one turn
 tail -f ~/.local/state/sigil/logs/sigil.log
 ```
 
@@ -138,7 +138,7 @@ Captured prompt, assistant, and tool content is redacted before export. See [Con
 Guards do two things when enabled: block tool calls that match a deny rule, and apply Transform rules to redact sensitive tool arguments. They're off by default:
 
 ```sh
-AGENTO11Y_GUARDS_ENABLED=true sigil copilot
+AGENTO11Y_GUARDS_ENABLED=true agento11y copilot
 ```
 
 By default, transport errors and timeouts let the tool call through. Set `AGENTO11Y_GUARDS_FAIL_OPEN=false` to block tool calls on errors instead. Raise or lower `AGENTO11Y_GUARDS_TIMEOUT_MS` (default `1500`) to trade latency against tolerance for slow evaluators.
@@ -227,9 +227,9 @@ field and the `AGENTO11Y_DEBUG` log line (`dispatch: event=… surface=…`).
 
 | Symptom | Try |
 |---|---|
-| Hooks file missing at `~/.copilot/hooks/sigil.json` | Re-run `sigil copilot -- <args>` (it writes the file before launching). For VS Code, also add `~/.copilot/hooks` to `chat.hookFilesLocations`. |
-| Turns appear twice in Sigil | A leftover `sigil-copilot` plugin is firing alongside the shared file. Remove it: `copilot plugin uninstall sigil-copilot` (newer `sigil copilot` runs do this automatically). |
-| Command not found | Reinstall `sigil` (see step 1). Check `sigil --version` and that its install dir is on `PATH`. |
+| Hooks file missing at `~/.copilot/hooks/sigil.json` | Re-run `agento11y copilot -- <args>` (it writes the file before launching). For VS Code, also add `~/.copilot/hooks` to `chat.hookFilesLocations`. |
+| Turns appear twice in Sigil | A leftover `sigil-copilot` plugin is firing alongside the shared file. Remove it: `copilot plugin uninstall sigil-copilot` (newer `agento11y copilot` runs do this automatically). |
+| Command not found | Reinstall `agento11y` (see step 1). Check `agento11y --version` and that its install dir is on `PATH`. |
 | Hooks run but nothing appears in Sigil | Check `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TENANT_ID`, and `AGENTO11Y_AUTH_TOKEN`. Without all three, the plugin discards the completed fragment. |
 | No latency/tool charts in AI Observability | Set `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` so the plugin can emit traces and metrics. |
 | Prompt or tool content is missing | Check `AGENTO11Y_CONTENT_CAPTURE_MODE`. The default is `metadata_only`. |

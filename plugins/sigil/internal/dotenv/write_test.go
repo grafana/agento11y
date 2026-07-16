@@ -142,7 +142,7 @@ func TestRenderManaged(t *testing.T) {
 			t.Fatalf("RenderManaged: %v", err)
 		}
 		got := string(out)
-		want := "# Managed by `sigil login`. Hand-edits to known keys persist\n" +
+		want := "# Managed by `agento11y login`. Hand-edits to known keys persist\n" +
 			"# across re-runs; comments and ordering do not.\n" +
 			"SIGIL_CONTENT_CAPTURE_MODE=full\n" +
 			"SIGIL_TAGS=team=ai\n" +

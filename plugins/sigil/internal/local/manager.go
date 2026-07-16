@@ -297,11 +297,12 @@ func processLooksLikeDaemon(pid int) (bool, error) {
 		return false, nil
 	}
 	base := filepath.Base(exe)
-	// Release builds and `go build` name the binary "sigil"; `go run`
-	// compiles it to "main" in the build cache. Accept both, otherwise a
-	// daemon started from a dev build fails this check, Stop deletes the
-	// status file, and the daemon is orphaned on its port.
-	return strings.HasPrefix(base, "sigil") || base == "main", nil
+	// Release builds and `go build` name the binary "agento11y" (or the
+	// legacy "sigil"); `go run` compiles it to "main" in the build cache.
+	// Accept all three, otherwise a daemon started under the other name or
+	// from a dev build fails this check, Stop deletes the status file, and
+	// the daemon is orphaned on its port.
+	return strings.HasPrefix(base, "agento11y") || strings.HasPrefix(base, "sigil") || base == "main", nil
 }
 
 // endpointAlive returns true when GET <endpoint>/healthz responds within

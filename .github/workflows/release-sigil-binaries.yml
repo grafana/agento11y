@@ -121,13 +121,13 @@ jobs:
           # Windows archives are .zip (format_overrides in the goreleaser
           # config); everything else is tar.gz.
           assets=(
-            "dist/sigil_${BARE_VERSION}_linux_amd64.tar.gz"
-            "dist/sigil_${BARE_VERSION}_linux_arm64.tar.gz"
-            "dist/sigil_${BARE_VERSION}_darwin_amd64.tar.gz"
-            "dist/sigil_${BARE_VERSION}_darwin_arm64.tar.gz"
-            "dist/sigil_${BARE_VERSION}_windows_amd64.zip"
-            "dist/sigil_${BARE_VERSION}_windows_arm64.zip"
-            "dist/sigil_${BARE_VERSION}_checksums.txt"
+            "dist/agento11y_${BARE_VERSION}_linux_amd64.tar.gz"
+            "dist/agento11y_${BARE_VERSION}_linux_arm64.tar.gz"
+            "dist/agento11y_${BARE_VERSION}_darwin_amd64.tar.gz"
+            "dist/agento11y_${BARE_VERSION}_darwin_arm64.tar.gz"
+            "dist/agento11y_${BARE_VERSION}_windows_amd64.zip"
+            "dist/agento11y_${BARE_VERSION}_windows_arm64.zip"
+            "dist/agento11y_${BARE_VERSION}_checksums.txt"
           )
           for asset in "${assets[@]}"; do
             if [[ ! -f "$asset" ]]; then

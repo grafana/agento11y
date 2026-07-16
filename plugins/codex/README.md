@@ -10,26 +10,26 @@ Sends Codex turns to [Grafana AI Observability](https://grafana.com/docs/grafana
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/grafana/sigil-sdk/main/plugins/sigil/scripts/install.sh | sh
-sigil codex
+agento11y codex
 ```
 
 **Homebrew (macOS):**
 
 ```sh
-brew install grafana/grafana/sigil
-sigil codex
+brew install grafana/grafana/agento11y
+agento11y codex
 ```
 
 **Go install (Windows, or any platform with Go 1.25+):**
 
 ```sh
-go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
-sigil codex
+go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/agento11y@latest
+agento11y codex
 ```
 
-The script installs `sigil` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`sigil` binary README](../sigil/README.md#install) for all install options.
+The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../sigil/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`sigil codex` registers `sigil-codex@grafana-sigil` on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches Codex.
+`agento11y codex` registers `sigil-codex@grafana-sigil` on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches Codex.
 
 On first launch only, open `/hooks` inside Codex and trust each `sigil-codex@grafana-sigil` hook. Codex requires this manual review after plugin install.
 
@@ -59,7 +59,7 @@ Restart Codex, open `/hooks`, and trust the five `sigil-codex@grafana-sigil` hoo
 
 ## 2. Credentials
 
-When `sigil codex` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+When `agento11y codex` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -74,7 +74,7 @@ You need values from three Grafana Cloud pages:
 3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
    - **OTLP endpoint URL** → `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT`
 
-Run `sigil login` later to update saved credentials.
+Run `agento11y login` later to update saved credentials.
 
 <details>
 <summary>Non-interactive config.env</summary>
@@ -103,7 +103,7 @@ Run one turn in Codex and let it finish — the plugin only exports completed tu
 If nothing shows up:
 
 ```sh
-AGENTO11Y_DEBUG=true sigil codex  # one turn
+AGENTO11Y_DEBUG=true agento11y codex  # one turn
 tail -f ~/.local/state/sigil/logs/sigil.log
 ```
 
@@ -135,6 +135,6 @@ If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Ob
 |---|---|
 | `/hooks` is empty | Enable the hook feature flags (`codex features list`), enable `plugins."sigil-codex@grafana-sigil"`, restart Codex. |
 | Hooks listed but inactive | Open `/hooks` and trust each one. |
-| Command not found | Reinstall `sigil` (see step 1). Check `sigil --version` and that its install dir is on `PATH`. |
+| Command not found | Reinstall `agento11y` (see step 1). Check `agento11y --version` and that its install dir is on `PATH`. |
 | No data appears | Let turns finish (interrupted turns are not exported). Then check the debug log. |
 | Subagent appears as a normal turn | Codex hook payloads don't always carry the parent link. Known limitation. |

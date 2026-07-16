@@ -10,42 +10,42 @@ By default only metadata is sent (token counts, cost, model, tool names, duratio
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/grafana/sigil-sdk/main/plugins/sigil/scripts/install.sh | sh
-sigil pi
+agento11y pi
 ```
 
 **Homebrew (macOS):**
 
 ```sh
-brew install grafana/grafana/sigil
-sigil pi
+brew install grafana/grafana/agento11y
+agento11y pi
 ```
 
 **Go install (Windows, or any platform with Go 1.25+):**
 
 ```sh
-go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest
-sigil pi
+go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/agento11y@latest
+agento11y pi
 ```
 
-The script installs `sigil` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`sigil` binary README](../sigil/README.md#install) for all install options.
+The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../sigil/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`sigil pi` installs the `@grafana/sigil-pi` extension on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches pi.
+`agento11y pi` installs the `@grafana/sigil-pi` extension on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches pi.
 
 <details>
 <summary>Manual extension registration</summary>
 
 ```sh
 pi install npm:@grafana/sigil-pi
-sigil login
+agento11y login
 ```
 
-The extension reads the same `~/.config/sigil/config.env` file whether you start pi with `sigil pi` or plain `pi`.
+The extension reads the same `~/.config/sigil/config.env` file whether you start pi with `agento11y pi` or plain `pi`.
 
 </details>
 
 ## 2. Credentials
 
-When `sigil pi` or `sigil login` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+When `agento11y pi` or `agento11y login` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -60,7 +60,7 @@ You need values from three Grafana Cloud pages:
 3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
    - **OTLP endpoint URL** → `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT`
 
-Run `sigil login` later to update saved credentials.
+Run `agento11y login` later to update saved credentials.
 
 <details>
 <summary>Non-interactive config.env</summary>
@@ -95,9 +95,9 @@ If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/sigil/config.env`,
 Launch with `--tag key=value` (repeatable) to attach tags to every generation pi exports:
 
 ```sh
-sigil pi --tag project=hackathon --tag team=ai
+agento11y pi --tag project=hackathon --tag team=ai
 # forward args to pi after `--`
-sigil pi --tag team=ai -- --resume
+agento11y pi --tag team=ai -- --resume
 ```
 
 `--tag` is shorthand for `AGENTO11Y_TAGS`; flag tags merge onto (and override) any `AGENTO11Y_TAGS` already in the environment or `~/.config/sigil/config.env`. The merge happens in the SDK, so user tags reach every generation without the plugin reparsing them.
@@ -118,7 +118,7 @@ Before any generation leaves the process, the SDK scrubs known token formats, PE
 Guards do two things when enabled: block tool calls that match a deny rule, and apply Transform rules to redact sensitive content. They're off by default:
 
 ```sh
-AGENTO11Y_GUARDS_ENABLED=true sigil pi
+AGENTO11Y_GUARDS_ENABLED=true agento11y pi
 ```
 
 By default, transport errors and timeouts let the request through. Set `AGENTO11Y_GUARDS_FAIL_OPEN=false` to block tool calls on errors instead. Raise or lower `AGENTO11Y_GUARDS_TIMEOUT_MS` (default `1500`) to trade latency against tolerance for slow evaluators.

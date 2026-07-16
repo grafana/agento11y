@@ -45,26 +45,26 @@ The user wants Grafana AI observability to capture sessions from their coding ag
 
 | Agent | Plugin | Mechanism |
 |-------|--------|-----------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [`plugins/claude-code/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/claude-code) | Shared `sigil` Go binary, plugin name `sigil-cc` |
-| [Codex](https://developers.openai.com/codex) | [`plugins/codex/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/codex) | Shared `sigil` Go binary via hooks |
-| [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`plugins/copilot/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/copilot) | Shared `sigil` Go binary via hooks |
-| [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/cursor) | Shared `sigil` Go binary via hooks |
-| [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/opencode) | Shared `sigil` Go binary, installs `@grafana/sigil-opencode` |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [`plugins/claude-code/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/claude-code) | Shared `agento11y` Go binary, plugin name `sigil-cc` |
+| [Codex](https://developers.openai.com/codex) | [`plugins/codex/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/codex) | Shared `agento11y` Go binary via hooks |
+| [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`plugins/copilot/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/copilot) | Shared `agento11y` Go binary via hooks |
+| [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/cursor) | Shared `agento11y` Go binary via hooks |
+| [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/opencode) | Shared `agento11y` Go binary, installs `@grafana/sigil-opencode` |
 | [Pi](https://github.com/badlogic/pi) | [`plugins/pi/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/pi) | Independent npm package `@grafana/sigil-pi` |
 
 ## Fast path
 
-Install the `sigil` binary:
+Install the `agento11y` binary (renamed from `sigil`; the old name still works but will be removed in a future release):
 
 - **Quick install (Linux/macOS):** `curl -fsSL https://raw.githubusercontent.com/grafana/sigil-sdk/main/plugins/sigil/scripts/install.sh | sh` (downloads the latest release, verifies the checksum, installs to `~/.local/bin`)
-- **Homebrew (macOS):** `brew install grafana/grafana/sigil`
-- **Go install (Windows, or any platform with Go 1.25+):** `go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/sigil@latest`
+- **Homebrew (macOS):** `brew install grafana/grafana/agento11y`
+- **Go install (Windows, or any platform with Go 1.25+):** `go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/agento11y@latest`
 
 The script installs to `~/.local/bin`; `go install` puts the binary in `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`.
 
-Then launch your agent with `sigil <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, or `pi`. On first run it installs the plugin, prompts for credentials, writes `~/.config/sigil/config.env`, and launches the agent.
+Then launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, or `pi`. On first run it installs the plugin, prompts for credentials, writes `~/.config/sigil/config.env`, and launches the agent.
 
-Cursor has no launcher (it is a GUI app). After installing the binary, wire its hooks once with `sigil cursor install` (it merges into `~/.cursor/hooks.json` and prompts for credentials on first run); `sigil cursor uninstall` removes them. See [`plugins/cursor/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/cursor) for details.
+Cursor has no launcher (it is a GUI app). After installing the binary, wire its hooks once with `agento11y cursor install` (it merges into `~/.cursor/hooks.json` and prompts for credentials on first run); `agento11y cursor uninstall` removes them. See [`plugins/cursor/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/cursor) for details.
 
 To skip the prompt, write the config file by hand:
 
@@ -75,7 +75,7 @@ AGENTO11Y_AUTH_TOKEN=glc_...
 AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=<otlp-gateway-url>
 ```
 
-To re-enter credentials later, run `sigil login`.
+To re-enter credentials later, run `agento11y login`.
 
 ## Content capture
 
@@ -83,7 +83,7 @@ Coding-agent plugins default to `metadata_only`: only model, tokens, tool names,
 
 Accepted values depend on the plugin surface:
 
-- Claude Code, Codex, Copilot, Cursor (shared `sigil` binary), OpenCode (`@grafana/sigil-opencode`), and Pi (`@grafana/sigil-pi`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
+- Claude Code, Codex, Copilot, Cursor (shared `agento11y` binary), OpenCode (`@grafana/sigil-opencode`), and Pi (`@grafana/sigil-pi`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
 
 Unknown values fall back to `metadata_only` with a warning. Secret redaction is plugin-specific. Capture modes choose which fields ship, not whether the shipped fields are scrubbed. Treat content capture as opt-in for shared/production machines.
 
@@ -91,7 +91,7 @@ Unknown values fall back to `metadata_only` with a warning. Secret redaction is 
 
 1. Run the agent normally for one turn (any prompt).
 2. Open Grafana Cloud → AI Observability → Conversations. A new conversation should appear within a few seconds.
-3. If it doesn't, check the launcher's stderr for `sigil:` warnings and confirm `~/.config/sigil/config.env` is readable.
+3. If it doesn't, check the launcher's stderr for `agento11y:` warnings and confirm `~/.config/sigil/config.env` is readable.
 
 ---
 

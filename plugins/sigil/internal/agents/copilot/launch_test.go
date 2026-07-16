@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/execpath"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -339,10 +340,19 @@ func userHooksPath(t *testing.T) string {
 	return filepath.Join(os.Getenv("COPILOT_HOME"), "hooks", "sigil.json")
 }
 
+// withExecutable pins the executable path hook commands are built from, so
+// tests can assert the exact generated command line.
+func withExecutable(t *testing.T, path string) {
+	t.Helper()
+	prev := execpath.Executable
+	t.Cleanup(func() { execpath.Executable = prev })
+	execpath.Executable = func() (string, error) { return path, nil }
+}
+
 // assertValidUserHooks checks the written file is the expected Copilot hooks
-// document: version 1, every wired event, and the shared `sigil copilot hook`
-// command carrying its event env var.
-func assertValidUserHooks(t *testing.T, path string) {
+// document: version 1, every wired event, and the shared executable-path
+// hook command carrying its event env var.
+func assertValidUserHooks(t *testing.T, path, wantCommand string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -373,7 +383,7 @@ func assertValidUserHooks(t *testing.T, path string) {
 		require.Len(t, groups[0].Hooks, 1)
 		cmd := groups[0].Hooks[0]
 		assert.Equal(t, "command", cmd.Type)
-		assert.Equal(t, "sigil copilot hook", cmd.Command)
+		assert.Equal(t, wantCommand, cmd.Command)
 		assert.Equal(t, ev, cmd.Env["SIGIL_COPILOT_HOOK_EVENT"])
 		// The shared user file must NOT pin a surface — runtime detection
 		// distinguishes VS Code from the copilot CLI for this same file.
@@ -387,6 +397,7 @@ func assertValidUserHooks(t *testing.T, path string) {
 // before surfacing the not-found error.
 func TestLaunch_MissingBinaryInstallsUserHooks(t *testing.T) {
 	t.Setenv("COPILOT_HOME", t.TempDir())
+	withExecutable(t, "/usr/local/bin/agento11y")
 	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
 	var stderr bytes.Buffer
@@ -394,7 +405,7 @@ func TestLaunch_MissingBinaryInstallsUserHooks(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "copilot CLI not found")
 
-	assertValidUserHooks(t, userHooksPath(t))
+	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
 	assert.Contains(t, stderr.String(), "installed Copilot hooks at")
 }
 
@@ -403,6 +414,7 @@ func TestLaunch_MissingBinaryInstallsUserHooks(t *testing.T) {
 // the same file, so it is the single source of truth.
 func TestLaunch_InstallsAndKeepsUserHooks(t *testing.T) {
 	t.Setenv("COPILOT_HOME", t.TempDir())
+	withExecutable(t, "/usr/local/bin/agento11y")
 	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/copilot", nil })
 	withPluginList(t, func(context.Context, string) ([]byte, error) {
 		return []byte("Installed plugins:\n  • sigil-copilot (v0.2.0)\n"), nil
@@ -422,17 +434,52 @@ func TestLaunch_InstallsAndKeepsUserHooks(t *testing.T) {
 	assert.True(t, execCalled, "should exec copilot")
 	assert.True(t, uninstalled, "stale plugin should be uninstalled")
 	// The shared file must remain after the run.
-	assertValidUserHooks(t, userHooksPath(t))
+	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
+}
+
+// A hooks file written by an older version with the literal `sigil copilot
+// hook` command must be replaced with the executable-path form, in place and
+// without duplicate entries (the whole file is sigil-owned).
+func TestLaunch_ReplacesLegacyLiteralHookCommand(t *testing.T) {
+	t.Setenv("COPILOT_HOME", t.TempDir())
+	withExecutable(t, "/usr/local/bin/agento11y")
+	legacy, err := renderUserHooks("sigil copilot hook")
+	require.NoError(t, err)
+	dir := filepath.Join(os.Getenv("COPILOT_HOME"), "hooks")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "sigil.json"), legacy, 0o644))
+
+	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+	err = launchWithLogger(t, nil, io.Discard, nopLogger())
+	require.Error(t, err, "copilot binary is absent; hooks must still be refreshed")
+
+	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
+	data, err := os.ReadFile(userHooksPath(t))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), `"sigil copilot hook"`)
+}
+
+// The generated hook command must shell-quote executable paths a shell would
+// otherwise split or interpret.
+func TestWriteUserHooks_QuotesExecutablePath(t *testing.T) {
+	t.Setenv("COPILOT_HOME", t.TempDir())
+	withExecutable(t, "/Users/Jane Doe/bin/agento11y")
+
+	path, wrote, err := writeUserHooks()
+	require.NoError(t, err)
+	assert.True(t, wrote)
+	assertValidUserHooks(t, path, "'/Users/Jane Doe/bin/agento11y' copilot hook")
 }
 
 func TestRenderUserHooks_IsStableAndValid(t *testing.T) {
-	a, err := renderUserHooks()
+	const command = "/usr/local/bin/agento11y copilot hook"
+	a, err := renderUserHooks(command)
 	require.NoError(t, err)
-	b, err := renderUserHooks()
+	b, err := renderUserHooks(command)
 	require.NoError(t, err)
 	assert.Equal(t, a, b, "render must be deterministic for idempotent writes")
 	assert.True(t, json.Valid(a))
-	assert.Contains(t, string(a), "\"sigil copilot hook\"")
+	assert.Contains(t, string(a), `"/usr/local/bin/agento11y copilot hook"`)
 	// The shared file must not pin a surface marker.
 	assert.NotContains(t, string(a), "SIGIL_COPILOT_HOOK_SURFACE")
 }

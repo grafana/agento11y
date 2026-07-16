@@ -6,11 +6,24 @@ import (
 	"testing"
 
 	toml "github.com/pelletier/go-toml/v2"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/execpath"
 )
+
+// withExecutable pins the executable path hook commands are built from, so
+// tests can assert the exact generated command line.
+func withExecutable(t *testing.T, path string) {
+	t.Helper()
+	prev := execpath.Executable
+	t.Cleanup(func() { execpath.Executable = prev })
+	execpath.Executable = func() (string, error) { return path, nil }
+}
 
 func TestEnsureHookInstalled_FreshWrite(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("VIBE_HOME", dir)
+	withExecutable(t, "/usr/local/bin/agento11y")
+	const wantCommand = "/usr/local/bin/agento11y vibe hook"
 
 	path, wrote, err := ensureHookInstalled()
 	if err != nil {
@@ -35,8 +48,8 @@ func TestEnsureHookInstalled_FreshWrite(t *testing.T) {
 	if post["type"] != "post_agent_turn" {
 		t.Errorf("type = %v, want post_agent_turn", post["type"])
 	}
-	if post["command"] != hookCommand {
-		t.Errorf("command = %v, want %q", post["command"], hookCommand)
+	if post["command"] != wantCommand {
+		t.Errorf("command = %v, want %q", post["command"], wantCommand)
 	}
 	for name, wantType := range map[string]string{"sigil-before-tool": "before_tool", "sigil-after-tool": "after_tool"} {
 		entry, ok := byName[name]
@@ -46,8 +59,8 @@ func TestEnsureHookInstalled_FreshWrite(t *testing.T) {
 		if entry["type"] != wantType {
 			t.Errorf("%s type = %v, want %q", name, entry["type"], wantType)
 		}
-		if entry["command"] != hookCommand {
-			t.Errorf("%s command = %v, want %q", name, entry["command"], hookCommand)
+		if entry["command"] != wantCommand {
+			t.Errorf("%s command = %v, want %q", name, entry["command"], wantCommand)
 		}
 		if entry["match"] != "*" {
 			t.Errorf("%s match = %v, want *", name, entry["match"])
@@ -111,15 +124,17 @@ timeout = 5
 }
 
 func TestEnsureHookInstalled_UpdatesStaleSigilEntry(t *testing.T) {
-	// A previous sigil version wrote a different command. The merge
-	// must overwrite our own entry (matched by name) without producing
-	// a duplicate.
+	// A previous sigil version wrote the literal `sigil vibe hook` command.
+	// The merge must overwrite our own entry (matched by name) with the
+	// executable-path command without producing a duplicate.
 	dir := t.TempDir()
 	t.Setenv("VIBE_HOME", dir)
+	withExecutable(t, "/usr/local/bin/agento11y")
+	const wantCommand = "/usr/local/bin/agento11y vibe hook"
 	pre := `[[hooks]]
 name = "sigil"
 type = "post_agent_turn"
-command = "old-binary vibe hook"
+command = "sigil vibe hook"
 timeout = 10
 `
 	path := filepath.Join(dir, "hooks.toml")
@@ -135,8 +150,26 @@ timeout = 10
 		t.Fatalf("hooks len = %d, want 3 (stale sigil entry updated in place + before/after appended)", len(hooks))
 	}
 	byName := hooksByName(hooks)
-	if byName["sigil"]["command"] != hookCommand {
-		t.Errorf("command = %v, want refreshed %q", byName["sigil"]["command"], hookCommand)
+	if byName["sigil"]["command"] != wantCommand {
+		t.Errorf("command = %v, want refreshed %q", byName["sigil"]["command"], wantCommand)
+	}
+}
+
+func TestEnsureHookInstalled_QuotesExecutablePath(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("VIBE_HOME", dir)
+	withExecutable(t, "/Users/Jane Doe/bin/agento11y")
+
+	path, _, err := ensureHookInstalled()
+	if err != nil {
+		t.Fatalf("ensureHookInstalled: %v", err)
+	}
+	got := readTOML(t, path)
+	hooks, _ := got["hooks"].([]any)
+	byName := hooksByName(hooks)
+	want := "'/Users/Jane Doe/bin/agento11y' vibe hook"
+	if byName["sigil"]["command"] != want {
+		t.Errorf("command = %v, want %q", byName["sigil"]["command"], want)
 	}
 }
 

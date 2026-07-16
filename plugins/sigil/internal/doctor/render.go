@@ -80,7 +80,7 @@ func renderHuman(w io.Writer, r *Report, color, probed bool) {
 	p := palette{color: color}
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "%s %s\n\n", p.heading("sigil doctor"), p.faint("v"+r.Sigil.Version))
+	fmt.Fprintf(&b, "%s %s\n\n", p.heading("agento11y doctor"), p.faint("v"+r.Sigil.Version))
 
 	// Conversations pipeline.
 	writeSection(&b, p, "Conversations (generation export)", r.Conversations.Health)
@@ -156,7 +156,7 @@ func writeProbeHint(b *strings.Builder, p palette, r *Report) {
 	if !r.Conversations.configured() && !r.Analytics.Endpoint.Set {
 		return
 	}
-	fmt.Fprintf(b, "\n%s\n", p.faint("Verdicts above check configuration only. Run `sigil doctor --probe` to test credentials against the endpoints."))
+	fmt.Fprintf(b, "\n%s\n", p.faint("Verdicts above check configuration only. Run `agento11y doctor --probe` to test credentials against the endpoints."))
 }
 
 func writeSection(b *strings.Builder, p palette, title string, h Health) {

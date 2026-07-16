@@ -42,7 +42,7 @@ func Load(sessionID string) Session {
 
 	var s Session
 	if err := json.Unmarshal(data, &s); err != nil {
-		fmt.Fprintln(os.Stderr, "sigil: corrupt state file, resetting:", err)
+		fmt.Fprintln(os.Stderr, "agento11y: corrupt state file, resetting:", err)
 		return Session{}
 	}
 

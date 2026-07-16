@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/execpath"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/launcher"
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/local"
 )
@@ -88,7 +89,7 @@ func installUserHooks(stderr io.Writer, logger *log.Logger) {
 	}
 	if wrote {
 		_, _ = fmt.Fprintf(stderr,
-			"sigil: installed Copilot hooks at %s (used by Copilot in VS Code and by the copilot CLI)\n",
+			"agento11y: installed Copilot hooks at %s (used by Copilot in VS Code and by the copilot CLI)\n",
 			path)
 	}
 }
@@ -115,13 +116,13 @@ func removeStalePlugin(bin string, stderr io.Writer, logger *log.Logger) {
 		return
 	}
 	_, _ = fmt.Fprintf(stderr,
-		"sigil: removing the legacy %s plugin (capture now runs from ~/.copilot/hooks)\n",
+		"agento11y: removing the legacy %s plugin (capture now runs from ~/.copilot/hooks)\n",
 		PluginName)
 	if err := runUninstall(context.Background(), bin, stderr); err != nil {
 		logger.Printf("uninstall %s: %v", PluginName, err)
 		_, _ = fmt.Fprintf(stderr,
-			"sigil: could not remove the %s plugin: %v\n"+
-				"sigil: to avoid duplicate capture, remove it manually:\n"+
+			"agento11y: could not remove the %s plugin: %v\n"+
+				"agento11y: to avoid duplicate capture, remove it manually:\n"+
 				"          copilot plugin uninstall %s\n",
 			PluginName, err, PluginName)
 	}
@@ -152,7 +153,16 @@ func writeUserHooks() (path string, wrote bool, err error) {
 		return "", false, err
 	}
 	path = filepath.Join(dir, userHooksFileName)
-	content, err := renderUserHooks()
+	// The hook command points at this executable's own path (a hardcoded
+	// binary name would break `go install` users who only have agento11y or
+	// only sigil on PATH). The whole file is sigil-owned and rewritten when
+	// content differs, so entries written by an older version with the
+	// literal `sigil copilot hook` command are replaced in place.
+	command, err := execpath.HookCommand("copilot hook")
+	if err != nil {
+		return "", false, err
+	}
+	content, err := renderUserHooks(command)
 	if err != nil {
 		return "", false, err
 	}
@@ -208,9 +218,10 @@ type userHooksFile struct {
 
 // renderUserHooks builds the shared user-level hooks JSON. It mirrors the
 // events and command wiring shipped in plugins/copilot/hooks.json so both
-// drive the exact same `sigil copilot hook` handler. Output is stable
-// (encoding/json sorts map keys) so writeUserHooks can skip no-op rewrites.
-func renderUserHooks() ([]byte, error) {
+// drive the exact same `copilot hook` handler; command is the executable-path
+// command line writeUserHooks resolved. Output is stable (encoding/json sorts
+// map keys) so writeUserHooks can skip no-op rewrites.
+func renderUserHooks(command string) ([]byte, error) {
 	events := []struct {
 		name    string
 		timeout int
@@ -231,7 +242,7 @@ func renderUserHooks() ([]byte, error) {
 		f.Hooks[e.name] = []hookGroup{{
 			Hooks: []hookCommand{{
 				Type:    "command",
-				Command: "sigil copilot hook",
+				Command: command,
 				// This single file is read by BOTH Copilot Chat in VS Code and
 				// the copilot CLI, so it deliberately does NOT pin
 				// AGENTO11Y_COPILOT_HOOK_SURFACE — the dispatcher infers the

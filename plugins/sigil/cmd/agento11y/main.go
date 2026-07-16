@@ -1,6 +1,6 @@
-// Command sigil is the old name of the agento11y binary. It is kept so
-// existing installs keep working and will be removed later. See
-// cmd/agento11y and internal/entry for the actual CLI.
+// Command agento11y is the single binary used by the Claude Code, Codex,
+// Copilot, Cursor, OpenCode, pi, and Vibe agent plugins. The CLI itself
+// lives in internal/entry so the legacy cmd/sigil entrypoint can share it.
 package main
 
 import "github.com/grafana/sigil-sdk/plugins/sigil/internal/entry"

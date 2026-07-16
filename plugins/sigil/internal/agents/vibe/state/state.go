@@ -65,7 +65,7 @@ func Load(sessionID string) (Session, bool) {
 	}
 	var s Session
 	if err := json.Unmarshal(data, &s); err != nil {
-		fmt.Fprintln(os.Stderr, "sigil: corrupt vibe state, resetting:", err)
+		fmt.Fprintln(os.Stderr, "agento11y: corrupt vibe state, resetting:", err)
 		return Session{}, false
 	}
 	return s, true

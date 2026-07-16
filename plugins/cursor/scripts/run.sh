@@ -1,12 +1,13 @@
 #!/bin/sh
-# Cursor hook entrypoint for macOS/Linux. Locates the sigil binary and
-# execs `sigil cursor hook`.
+# Cursor hook entrypoint for macOS/Linux. Locates the agento11y binary
+# (or its legacy sigil name) and execs `agento11y cursor hook`.
 #
 # Cursor inherits its parent process's PATH, which on macOS GUI launches is
 # launchd's default (/usr/bin:/bin:/usr/sbin:/sbin) and on Linux desktop
 # launches is whatever the .desktop launcher set — neither contains the
 # usual `go install` target ($HOME/go/bin) or Homebrew's bin. We probe the
-# common locations directly. Set AGENTO11Y_BIN (or the legacy SIGIL_BIN) to
+# common locations directly, preferring the canonical agento11y name over
+# the legacy sigil one. Set AGENTO11Y_BIN (or the legacy SIGIL_BIN) to
 # override.
 set -u
 
@@ -21,6 +22,10 @@ while IFS= read -r b; do
 done <<EOF
 ${AGENTO11Y_BIN:-}
 ${SIGIL_BIN:-}
+${HOME:-}/go/bin/agento11y
+/opt/homebrew/bin/agento11y
+/usr/local/bin/agento11y
+${HOME:-}/.local/bin/agento11y
 ${HOME:-}/go/bin/sigil
 /opt/homebrew/bin/sigil
 /usr/local/bin/sigil

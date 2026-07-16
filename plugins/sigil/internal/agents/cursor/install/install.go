@@ -26,6 +26,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/execpath"
 )
 
 // cursorEvents are the hook events Sigil wires, matching the set shipped in
@@ -44,11 +46,8 @@ var cursorEvents = []string{
 	"sessionEnd",
 }
 
-// Test seams.
-var (
-	userHomeDir = os.UserHomeDir
-	executable  = os.Executable
-)
+// Test seam.
+var userHomeDir = os.UserHomeDir
 
 // hookEntry is a single Cursor hook command entry. Cursor entries may carry
 // other fields, but Sigil only ever writes the command; extra fields on other
@@ -69,7 +68,7 @@ func Run(stdout, _ io.Writer, logger *log.Logger) error {
 	if err != nil {
 		return err
 	}
-	cmd, err := sigilCommand()
+	cmd, err := execpath.HookCommand("cursor hook")
 	if err != nil {
 		return err
 	}
@@ -93,9 +92,9 @@ func Run(stdout, _ io.Writer, logger *log.Logger) error {
 		return err
 	}
 	if wrote {
-		_, _ = fmt.Fprintf(stdout, "sigil: wired Cursor hooks at %s\n", path)
+		_, _ = fmt.Fprintf(stdout, "agento11y: wired Cursor hooks at %s\n", path)
 	} else {
-		_, _ = fmt.Fprintf(stdout, "sigil: Cursor hooks already up to date at %s\n", path)
+		_, _ = fmt.Fprintf(stdout, "agento11y: Cursor hooks already up to date at %s\n", path)
 	}
 	return nil
 }
@@ -112,7 +111,7 @@ func Uninstall(stdout, _ io.Writer, logger *log.Logger) error {
 	logger.Printf("cursor uninstall: hooks=%s", path)
 
 	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
-		_, _ = fmt.Fprintf(stdout, "sigil: no Cursor hooks to remove at %s\n", path)
+		_, _ = fmt.Fprintf(stdout, "agento11y: no Cursor hooks to remove at %s\n", path)
 		return nil
 	}
 
@@ -134,9 +133,9 @@ func Uninstall(stdout, _ io.Writer, logger *log.Logger) error {
 		return err
 	}
 	if wrote {
-		_, _ = fmt.Fprintf(stdout, "sigil: removed Cursor hooks from %s\n", path)
+		_, _ = fmt.Fprintf(stdout, "agento11y: removed Cursor hooks from %s\n", path)
 	} else {
-		_, _ = fmt.Fprintf(stdout, "sigil: no Cursor hooks to remove at %s\n", path)
+		_, _ = fmt.Fprintf(stdout, "agento11y: no Cursor hooks to remove at %s\n", path)
 	}
 	return nil
 }
@@ -156,22 +155,6 @@ func cursorHooksPath() (string, error) {
 	return filepath.Join(home, ".cursor", "hooks.json"), nil
 }
 
-// sigilCommand returns the hook command Cursor should run:
-// `<sigil-binary> cursor hook`. The binary path comes from os.Executable
-// WITHOUT resolving symlinks, so the stable ~/.local/bin/sigil or
-// /opt/homebrew/bin/sigil symlink is recorded rather than a versioned brew
-// Cellar path that changes on upgrade.
-//
-// Cursor parses the command through a shell, so a path containing spaces or
-// shell metacharacters is single-quoted.
-func sigilCommand() (string, error) {
-	bin, err := executable()
-	if err != nil {
-		return "", fmt.Errorf("resolve sigil binary path: %w", err)
-	}
-	return shellQuote(bin) + " cursor hook", nil
-}
-
 // legacyRunShLiteral is the hook command the bundled /add-plugin wiring
 // registers (plugins/cursor/hooks/hooks.json). Cursor usually expands
 // CURSOR_PLUGIN_ROOT when it copies the entry into the user-level hooks.json,
@@ -181,12 +164,12 @@ const legacyRunShLiteral = "${CURSOR_PLUGIN_ROOT}/scripts/run.sh"
 
 // isSigilHook reports whether an existing entry's command is one of ours, so
 // re-runs and the legacy /add-plugin run.sh wiring update in place instead of
-// double-firing. It matches any command of the form `<path-to-sigil> cursor
-// hook`, plus the legacy run.sh entry in both its bundled
-// "${CURSOR_PLUGIN_ROOT}/scripts/run.sh" form and the expanded form Cursor
-// writes once it resolves CURSOR_PLUGIN_ROOT. Legacy detection is best-effort:
-// an expanded path that no longer carries the plugins/cursor segment is not
-// recognised.
+// double-firing. It matches any command of the form `<binary> cursor hook`
+// where the binary's basename is agento11y or sigil, plus the legacy run.sh
+// entry in both its bundled "${CURSOR_PLUGIN_ROOT}/scripts/run.sh" form and
+// the expanded form Cursor writes once it resolves CURSOR_PLUGIN_ROOT. Legacy
+// detection is best-effort: an expanded path that no longer carries the
+// plugins/cursor segment is not recognised.
 func isSigilHook(cmd string) bool {
 	c := strings.TrimSpace(cmd)
 	if strings.Contains(c, legacyRunShLiteral) ||
@@ -198,7 +181,8 @@ func isSigilHook(cmd string) bool {
 		return false
 	}
 	bin = unquote(strings.TrimSpace(bin))
-	return bin != "" && strings.TrimSuffix(filepath.Base(bin), ".exe") == "sigil"
+	base := strings.TrimSuffix(filepath.Base(bin), ".exe")
+	return bin != "" && (base == "agento11y" || base == "sigil")
 }
 
 // upsertSigil replaces the first Sigil-owned entry in entries with cmd (in
@@ -353,32 +337,6 @@ func writeHooks(path string, doc *hooksDoc) (bool, error) {
 		return false, fmt.Errorf("rename to %s: %w", path, err)
 	}
 	return true, nil
-}
-
-// shellQuote single-quotes s for POSIX shells when it contains characters a
-// shell would interpret, and returns it unchanged otherwise.
-func shellQuote(s string) string {
-	if !needsShellQuote(s) {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// needsShellQuote reports whether s contains anything outside the set of
-// characters a shell leaves untouched in an unquoted word.
-func needsShellQuote(s string) bool {
-	if s == "" {
-		return true
-	}
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case strings.ContainsRune("@%+=:,./-_", r):
-		default:
-			return true
-		}
-	}
-	return false
 }
 
 // unquote strips a single matching pair of surrounding single or double

@@ -54,11 +54,11 @@ func installHook(stderr io.Writer, logger *log.Logger) {
 	path, wrote, err := ensureHookInstalled()
 	if err != nil {
 		logger.Printf("install vibe hook: %v", err)
-		_, _ = fmt.Fprintf(stderr, "sigil: could not install vibe hook (%v); continuing without capture\n", err)
+		_, _ = fmt.Fprintf(stderr, "agento11y: could not install vibe hook (%v); continuing without capture\n", err)
 		return
 	}
 	if wrote {
-		_, _ = fmt.Fprintf(stderr, "sigil: installed Vibe hook at %s\n", path)
+		_, _ = fmt.Fprintf(stderr, "agento11y: installed Vibe hook at %s\n", path)
 	}
 }
 

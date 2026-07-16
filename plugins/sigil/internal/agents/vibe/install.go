@@ -9,19 +9,15 @@ import (
 	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
+
+	"github.com/grafana/sigil-sdk/plugins/sigil/internal/execpath"
 )
 
-const (
-	// hookCommand is the shell command vibe runs for each fire. The
-	// shared launcher binary is always invoked via this exact verb so
-	// users can locate it with `which sigil` for debugging.
-	hookCommand = "sigil vibe hook"
-	// hookTimeoutSec is vibe's per-hook timeout in seconds. The handler
-	// already self-imposes a 20s SDK flush budget, but vibe's wrapper
-	// timeout is the safety net if the binary hangs before reaching the
-	// flush deadline.
-	hookTimeoutSec = 30
-)
+// hookTimeoutSec is vibe's per-hook timeout in seconds. The handler
+// already self-imposes a 20s SDK flush budget, but vibe's wrapper
+// timeout is the safety net if the binary hangs before reaching the
+// flush deadline.
+const hookTimeoutSec = 30
 
 // hooksFileEntry mirrors one [[hooks]] table in vibe's hooks.toml.
 // Kept as a typed value (rather than a bare map literal) so the desired
@@ -34,17 +30,24 @@ type hooksFileEntry struct {
 	Match   string `toml:"match,omitempty"`
 }
 
-// desiredHooks are the sigil-owned [[hooks]] entries vibe runs. Vibe defines
-// exactly three event types and we wire all three: post_agent_turn for the
-// per-turn generation export, before_tool for guard enforcement, and
+// desiredHooks returns the sigil-owned [[hooks]] entries vibe runs. Vibe
+// defines exactly three event types and we wire all three: post_agent_turn
+// for the per-turn generation export, before_tool for guard enforcement, and
 // after_tool for per-tool span timing. before_tool/after_tool take a "*"
 // matcher (every tool); match is forbidden on post_agent_turn. Each entry is
-// upserted by its unique name so repeated installs are idempotent and
-// hand-authored hooks in the same file are preserved.
-var desiredHooks = []hooksFileEntry{
-	{Name: "sigil", Type: "post_agent_turn", Command: hookCommand, Timeout: hookTimeoutSec},
-	{Name: "sigil-before-tool", Type: "before_tool", Command: hookCommand, Timeout: hookTimeoutSec, Match: "*"},
-	{Name: "sigil-after-tool", Type: "after_tool", Command: hookCommand, Timeout: hookTimeoutSec, Match: "*"},
+// upserted by its unique name so repeated installs are idempotent, old
+// entries written with the literal `sigil vibe hook` command are updated in
+// place, and hand-authored hooks in the same file are preserved.
+//
+// command is the shell command vibe runs for each fire, built from this
+// executable's own path so hooks keep working for users who installed only
+// the agento11y (or only the legacy sigil) command.
+func desiredHooks(command string) []hooksFileEntry {
+	return []hooksFileEntry{
+		{Name: "sigil", Type: "post_agent_turn", Command: command, Timeout: hookTimeoutSec},
+		{Name: "sigil-before-tool", Type: "before_tool", Command: command, Timeout: hookTimeoutSec, Match: "*"},
+		{Name: "sigil-after-tool", Type: "after_tool", Command: command, Timeout: hookTimeoutSec, Match: "*"},
+	}
 }
 
 // vibeHome returns the root vibe config directory. It honors VIBE_HOME
@@ -88,7 +91,11 @@ func ensureHookInstalled() (string, bool, error) {
 		return path, false, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	updated, changed, err := mergeHooksTOML(existing)
+	command, err := execpath.HookCommand("vibe hook")
+	if err != nil {
+		return path, false, err
+	}
+	updated, changed, err := mergeHooksTOML(existing, command)
 	if err != nil {
 		return path, false, err
 	}
@@ -135,7 +142,7 @@ func ensureHookInstalled() (string, bool, error) {
 //
 // Unknown top-level keys (vibe may add future settings to hooks.toml)
 // are preserved by round-tripping through a permissive map.
-func mergeHooksTOML(existing []byte) (out []byte, changed bool, err error) {
+func mergeHooksTOML(existing []byte, command string) (out []byte, changed bool, err error) {
 	// Use a permissive map so we keep anything we don't know about.
 	doc := map[string]any{}
 	if len(bytes.TrimSpace(existing)) > 0 {
@@ -145,7 +152,7 @@ func mergeHooksTOML(existing []byte) (out []byte, changed bool, err error) {
 	}
 
 	hooks, _ := doc["hooks"].([]any)
-	for _, desired := range desiredHooks {
+	for _, desired := range desiredHooks(command) {
 		hooks = upsertHook(hooks, desired)
 	}
 	doc["hooks"] = hooks

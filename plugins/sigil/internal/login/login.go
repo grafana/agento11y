@@ -336,9 +336,9 @@ func printNextStep(w io.Writer) {
 	link := lipgloss.NewStyle().Faint(true).Underline(true)
 	fmt.Fprintln(w,
 		faint.Render("Now you can try ")+
-			cmd.Render("sigil claude")+
+			cmd.Render("agento11y claude")+
 			faint.Render(" or ")+
-			cmd.Render("sigil pi")+
+			cmd.Render("agento11y pi")+
 			faint.Render(" to launch a coding agent."),
 	)
 	fmt.Fprintln(w, faint.Render("View observability data at ")+link.Render(observabilityURL))

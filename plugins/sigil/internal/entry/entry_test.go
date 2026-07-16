@@ -1,4 +1,4 @@
-package main
+package entry
 
 import (
 	"bytes"
@@ -27,9 +27,24 @@ import (
 // launcher dispatch tests don't accidentally drive the real huh form when
 // run from a TTY. Individual tests that exercise the login path can
 // override the stub via withStubLoginRun.
+//
+// It also points HOME/XDG_* at a throwaway dir for the whole package: run()
+// applies the dotenv config via os.Setenv, which t.Setenv cannot undo, so a
+// single hook or launcher dispatch test reading the developer's real
+// ~/.config/sigil/config.env would leak SIGIL_* values (e.g. guard flags)
+// into every later test in the package.
 func TestMain(m *testing.M) {
 	loginRun = func(context.Context, login.RunOpts) error { return login.ErrNotInteractive }
-	os.Exit(m.Run())
+	tmp, err := os.MkdirTemp("", "sigil-entry-test-home-*")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("HOME", tmp)
+	_ = os.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
+	_ = os.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	code := m.Run()
+	_ = os.RemoveAll(tmp)
+	os.Exit(code)
 }
 
 func TestRun_VersionFlag(t *testing.T) {
@@ -207,23 +222,23 @@ func TestRun_LauncherDispatch(t *testing.T) {
 		{name: "pi bare", agent: "pi", wantCalled: 1},
 		{name: "pi separator only", agent: "pi", argv: []string{"--"}, wantCalled: 1},
 		{name: "pi forwards args after separator", agent: "pi", argv: []string{"--", "--print", "hi"}, wantCalled: 1, wantArgs: []string{"--print", "hi"}},
-		{name: "pi missing separator exits 2", agent: "pi", argv: []string{"--print", "hi"}, wantExit: exitPtr(2), wantStderrContains: "use `sigil pi -- <args>`"},
+		{name: "pi missing separator exits 2", agent: "pi", argv: []string{"--print", "hi"}, wantExit: exitPtr(2), wantStderrContains: "use `agento11y pi -- <args>`"},
 		{name: "pi unknown options before separator exits 2", agent: "pi", argv: []string{"--debug", "--", "x"}, wantExit: exitPtr(2), wantStderrContains: "unknown options before `--`: [--debug]"},
-		{name: "pi launcher error exits 1", agent: "pi", argv: []string{"--"}, launcherErr: boom, wantCalled: 1, wantExit: exitPtr(1), wantStderrPrefix: "sigil:"},
+		{name: "pi launcher error exits 1", agent: "pi", argv: []string{"--"}, launcherErr: boom, wantCalled: 1, wantExit: exitPtr(1), wantStderrPrefix: "agento11y:"},
 
 		{name: "claude bare", agent: "claude", wantCalled: 1},
 		{name: "claude separator only", agent: "claude", argv: []string{"--"}, wantCalled: 1},
 		{name: "claude forwards args after separator", agent: "claude", argv: []string{"--", "--resume", "abc"}, wantCalled: 1, wantArgs: []string{"--resume", "abc"}},
-		{name: "claude missing separator exits 2", agent: "claude", argv: []string{"foo"}, wantExit: exitPtr(2), wantStderrContains: "use `sigil claude -- <args>`"},
+		{name: "claude missing separator exits 2", agent: "claude", argv: []string{"foo"}, wantExit: exitPtr(2), wantStderrContains: "use `agento11y claude -- <args>`"},
 		{name: "claude unknown options before separator exits 2", agent: "claude", argv: []string{"--foo", "--", "args"}, wantExit: exitPtr(2), wantStderrContains: "unknown options before `--`: [--foo]"},
-		{name: "claude launcher error exits 1", agent: "claude", argv: []string{"--"}, launcherErr: boom, wantCalled: 1, wantExit: exitPtr(1), wantStderrPrefix: "sigil:"},
+		{name: "claude launcher error exits 1", agent: "claude", argv: []string{"--"}, launcherErr: boom, wantCalled: 1, wantExit: exitPtr(1), wantStderrPrefix: "agento11y:"},
 
 		{name: "opencode bare", agent: "opencode", wantCalled: 1},
 		{name: "opencode separator only", agent: "opencode", argv: []string{"--"}, wantCalled: 1},
 		{name: "opencode forwards args after separator", agent: "opencode", argv: []string{"--", "run", "say hi"}, wantCalled: 1, wantArgs: []string{"run", "say hi"}},
-		{name: "opencode missing separator exits 2", agent: "opencode", argv: []string{"run", "hi"}, wantExit: exitPtr(2), wantStderrContains: "use `sigil opencode -- <args>`"},
+		{name: "opencode missing separator exits 2", agent: "opencode", argv: []string{"run", "hi"}, wantExit: exitPtr(2), wantStderrContains: "use `agento11y opencode -- <args>`"},
 		{name: "opencode unknown options before separator exits 2", agent: "opencode", argv: []string{"--debug", "--", "x"}, wantExit: exitPtr(2), wantStderrContains: "unknown options before `--`: [--debug]"},
-		{name: "opencode launcher error exits 1", agent: "opencode", argv: []string{"--"}, launcherErr: boom, wantCalled: 1, wantExit: exitPtr(1), wantStderrPrefix: "sigil:"},
+		{name: "opencode launcher error exits 1", agent: "opencode", argv: []string{"--"}, launcherErr: boom, wantCalled: 1, wantExit: exitPtr(1), wantStderrPrefix: "agento11y:"},
 	}
 
 	for _, tc := range cases {
@@ -271,7 +286,7 @@ func TestRun_LauncherDispatch(t *testing.T) {
 
 // `codex` is registered in both `agents` and `launchers`. The dispatcher
 // must prefer the hook branch when the second arg is the literal verb
-// `hook` so plugins/codex/hooks/hooks.json (which invokes `sigil codex hook`)
+// `hook` so plugins/codex/hooks/hooks.json (which invokes `<binary> codex hook`)
 // keeps working after the launcher was added.
 func TestRun_CodexHookDispatchesEvenWithLauncher(t *testing.T) {
 	hookCalls := 0
@@ -356,7 +371,7 @@ func TestRun_CodexLauncherMissingSeparatorExits2(t *testing.T) {
 	if gotExit == nil || *gotExit != 2 {
 		t.Fatalf("exit = %v, want 2", gotExit)
 	}
-	if !strings.Contains(stderr.String(), "use `sigil codex -- <args>`") {
+	if !strings.Contains(stderr.String(), "use `agento11y codex -- <args>`") {
 		t.Fatalf("stderr missing forward-args hint: %q", stderr.String())
 	}
 }
@@ -373,8 +388,8 @@ func TestRun_CodexLauncherErrorExits1(t *testing.T) {
 	if gotExit == nil || *gotExit != 1 {
 		t.Fatalf("exit = %v, want 1", gotExit)
 	}
-	if !strings.HasPrefix(stderr.String(), "sigil:") {
-		t.Fatalf("stderr does not start with sigil: %q", stderr.String())
+	if !strings.HasPrefix(stderr.String(), "agento11y:") {
+		t.Fatalf("stderr does not start with agento11y: %q", stderr.String())
 	}
 }
 
@@ -400,7 +415,7 @@ func TestRun_CursorInstallDispatch(t *testing.T) {
 		{name: "uninstall dispatches to seam", verb: "uninstall", wantUninstall: 1},
 		{name: "hook verb still dispatches to handler", verb: "hook", wantHook: 1},
 		{name: "unknown cursor verb exits 2", verb: "bogus", wantExit: exitPtr(2), wantStderrContains: `unknown verb "bogus"`},
-		{name: "install error exits 1", verb: "install", installErr: errors.New("boom"), wantInstall: 1, wantExit: exitPtr(1), wantStderrContains: "sigil: boom"},
+		{name: "install error exits 1", verb: "install", installErr: errors.New("boom"), wantInstall: 1, wantExit: exitPtr(1), wantStderrContains: "agento11y: boom"},
 	}
 
 	for _, tc := range cases {
@@ -735,7 +750,7 @@ func TestRun_LocalSubcommand(t *testing.T) {
 		{name: "status with no daemon prints friendly message", argv: []string{"local", "status"}, wantStdoutHas: "not running"},
 		{name: "stop with no daemon prints friendly message", argv: []string{"local", "stop"}, wantStdoutHas: "not running"},
 		{name: "unknown verb exits 2", argv: []string{"local", "bogus"}, wantExit: intPtr(2), wantStderrHas: `unknown local verb "bogus"`},
-		{name: "no verb exits 2 with usage hint", argv: []string{"local"}, wantExit: intPtr(2), wantStderrHas: "usage: sigil local"},
+		{name: "no verb exits 2 with usage hint", argv: []string{"local"}, wantExit: intPtr(2), wantStderrHas: "usage: agento11y local"},
 		{name: "usage hint lists restart", argv: []string{"local"}, wantExit: intPtr(2), wantStderrHas: "restart"},
 	}
 	for _, tc := range cases {
@@ -769,7 +784,7 @@ func TestRun_DoctorSubcommand(t *testing.T) {
 		wantExit      *int // nil = no exit
 		wantStdoutHas string
 	}{
-		{name: "unconfigured is healthy and exits 0", argv: []string{"doctor"}, wantStdoutHas: "sigil doctor"},
+		{name: "unconfigured is healthy and exits 0", argv: []string{"doctor"}, wantStdoutHas: "agento11y doctor"},
 		{name: "json mode emits sections", argv: []string{"doctor", "--json"}, wantStdoutHas: `"conversations"`},
 		{
 			name:     "conversations set but no OTLP exits 1",
@@ -886,7 +901,7 @@ func TestRun_LauncherLocalFlagInjectsOpts(t *testing.T) {
 			require.NotNil(t, gotEnv)
 			assert.Equal(t, daemonURL, gotEnv.Endpoint)
 			assert.Equal(t, daemonURL+"/otlp", gotEnv.OTLPEndpoint)
-			assert.Contains(t, stderr.String(), "sigil local mode")
+			assert.Contains(t, stderr.String(), "agento11y local mode")
 		})
 	}
 }
@@ -898,7 +913,7 @@ func TestRun_LauncherLocalFlagInvalidArgsDoNotStartDaemon(t *testing.T) {
 		argv              []string
 		wantStderrContain string
 	}{
-		{name: "missing separator", agent: "pi", argv: []string{"--local", "--bogus"}, wantStderrContain: "use `sigil pi -- <args>`"},
+		{name: "missing separator", agent: "pi", argv: []string{"--local", "--bogus"}, wantStderrContain: "use `agento11y pi -- <args>`"},
 		{name: "unknown before separator", agent: "claude", argv: []string{"--local", "--bogus", "--", "x"}, wantStderrContain: "unknown options before `--`: [--bogus]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -922,7 +937,7 @@ func TestRun_LauncherLocalFlagInvalidArgsDoNotStartDaemon(t *testing.T) {
 			assert.Equal(t, 2, *gotExit)
 			assert.Equal(t, 0, startCalls)
 			assert.Contains(t, stderr.String(), tc.wantStderrContain)
-			assert.NotContains(t, stderr.String(), "sigil local mode")
+			assert.NotContains(t, stderr.String(), "agento11y local mode")
 		})
 	}
 }

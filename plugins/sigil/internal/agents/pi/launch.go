@@ -71,7 +71,7 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 		Probe:           func(context.Context, string) (bool, error) { return pluginInstalled() },
 		ProbeErrLog:     "pi settings probe",
 		ProbeErrEcho:    true,
-		RegisterMessage: fmt.Sprintf("sigil: installing %s into pi\n", PluginSource),
+		RegisterMessage: fmt.Sprintf("agento11y: installing %s into pi\n", PluginSource),
 		Install:         runInstall,
 		InstallRecoveryHint: func(w io.Writer) {
 			fmt.Fprintf(w, "          pi install %s\n", PluginSource)

@@ -72,8 +72,8 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 		// sigil-codex hook on first run.
 		PostInstallHint: func(w io.Writer) {
 			fmt.Fprintf(w,
-				"sigil: first run only — open /hooks inside codex and trust the\n"+
-					"       %s hooks to start exporting turns.\n", PluginName)
+				"agento11y: first run only — open /hooks inside codex and trust the\n"+
+					"           %s hooks to start exporting turns.\n", PluginName)
 		},
 		Update: runUpdate,
 		UpdateRecoveryHint: func(w io.Writer) {

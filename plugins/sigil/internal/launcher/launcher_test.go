@@ -340,7 +340,7 @@ func TestBootstrap(t *testing.T) {
 				if !strings.Contains(h.logBuf.String(), "toy probe: parse fail") {
 					t.Errorf("log = %q; want probe error logged", h.logBuf.String())
 				}
-				if !strings.Contains(h.stderr.String(), "sigil: toy probe failed: parse fail") {
+				if !strings.Contains(h.stderr.String(), "agento11y: toy probe failed: parse fail") {
 					t.Errorf("stderr = %q; want probe error echoed when ProbeErrEcho is set", h.stderr.String())
 				}
 			},
@@ -378,7 +378,7 @@ func TestBootstrap(t *testing.T) {
 			name: "message overrides",
 			setup: func(t *testing.T, h *bootstrapHarness) {
 				h.spec.Probe = func(context.Context, string) (bool, error) { return false, nil }
-				h.spec.RegisterMessage = "sigil: installing custom into toy\n"
+				h.spec.RegisterMessage = "agento11y: installing custom into toy\n"
 			},
 			assert: func(t *testing.T, h *bootstrapHarness) {
 				if !strings.Contains(h.stderr.String(), "installing custom into toy") {

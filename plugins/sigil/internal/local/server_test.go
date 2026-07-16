@@ -557,7 +557,7 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	assert.Contains(t, string(onDisk), "SIGIL_CONTENT_CAPTURE_MODE=metadata_only")
 	assert.Contains(t, string(onDisk), "SIGIL_GUARDS_TIMEOUT_MS=2000")
 	assert.Contains(t, saved.Preview, "SIGIL_USER_ID=alice")
-	assert.True(t, strings.HasPrefix(saved.Preview, "# Managed by `sigil login`."))
+	assert.True(t, strings.HasPrefix(saved.Preview, "# Managed by `agento11y login`."))
 
 	// A fresh GET returns the same saved snapshot.
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)

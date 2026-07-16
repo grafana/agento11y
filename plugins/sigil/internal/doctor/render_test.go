@@ -71,7 +71,7 @@ func TestRenderHuman_NoColorIsPlain(t *testing.T) {
 }
 
 func TestRenderHuman_ProbeHint(t *testing.T) {
-	const hint = "sigil doctor --probe"
+	const hint = "agento11y doctor --probe"
 	nothingProbeable := func() *Report {
 		r := sampleReport()
 		r.Conversations = ConversationsSection{Health: HealthWarn}

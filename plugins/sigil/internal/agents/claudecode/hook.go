@@ -132,7 +132,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		},
 	)
 	if len(missing) > 0 {
-		fmt.Fprintf(os.Stderr, "sigil claude-code: not exporting: missing %s\n", strings.Join(missing, ", "))
+		fmt.Fprintf(os.Stderr, "agento11y claude-code: not exporting: missing %s\n", strings.Join(missing, ", "))
 		logger.Printf("not exporting: missing %s", strings.Join(missing, ", "))
 		return nil
 	}
@@ -147,7 +147,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 
 	otelProviders, err := otel.Setup(hookCtx, input.SessionID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sigil claude-code: otel setup failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "agento11y claude-code: otel setup failed: %v\n", err)
 		logger.Printf("otel setup: %v", err)
 	} else if otelProviders != nil {
 		logger.Printf("otel: endpoint=%s", otel.EndpointFromEnv())

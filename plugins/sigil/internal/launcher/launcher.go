@@ -118,7 +118,7 @@ type BootstrapSpec struct {
 	// so install runs and surfaces the real diagnostic.
 	Probe       func(ctx context.Context, bin string) (bool, error)
 	ProbeErrLog string // log prefix for probe failures ("<prefix>: <err>")
-	// ProbeErrEcho also echoes "sigil: <ProbeErrLog> failed: <err>" to
+	// ProbeErrEcho also echoes "agento11y: <ProbeErrLog> failed: <err>" to
 	// Stderr. pi uses this so a broken settings file shows up in the user's
 	// terminal, not just SIGIL_DEBUG.
 	ProbeErrEcho bool
@@ -142,8 +142,8 @@ type BootstrapSpec struct {
 	SigilVersion       string
 
 	// RegisterMessage overrides the default
-	// "sigil: registering <label> with <bin>\n" line printed before Install.
-	// pi and opencode override it to "sigil: installing <source> into <bin>\n".
+	// "agento11y: registering <label> with <bin>\n" line printed before Install.
+	// pi and opencode override it to "agento11y: installing <source> into <bin>\n".
 	RegisterMessage string
 }
 
@@ -165,7 +165,7 @@ func Bootstrap(ctx context.Context, spec BootstrapSpec) error {
 	if err != nil {
 		spec.Logger.Printf("%s: %v", spec.ProbeErrLog, err)
 		if spec.ProbeErrEcho {
-			fmt.Fprintf(spec.Stderr, "sigil: %s failed: %v\n", spec.ProbeErrLog, err)
+			fmt.Fprintf(spec.Stderr, "agento11y: %s failed: %v\n", spec.ProbeErrLog, err)
 		}
 		installed = false
 	}
@@ -176,8 +176,8 @@ func Bootstrap(ctx context.Context, spec BootstrapSpec) error {
 		if err := spec.Install(ctx, bin, spec.Stderr); err != nil {
 			spec.Logger.Printf("install %s: %v", spec.PluginLabel, err)
 			fmt.Fprintf(spec.Stderr,
-				"sigil: install of %s failed: %v\n"+
-					"sigil: continuing without Sigil capture. To retry manually:\n",
+				"agento11y: install of %s failed: %v\n"+
+					"agento11y: continuing without Sigil capture. To retry manually:\n",
 				spec.PluginLabel, err)
 			if spec.InstallRecoveryHint != nil {
 				spec.InstallRecoveryHint(spec.Stderr)
@@ -186,12 +186,12 @@ func Bootstrap(ctx context.Context, spec BootstrapSpec) error {
 			spec.PostInstallHint(spec.Stderr)
 		}
 	case spec.Update != nil && updatecheck.ShouldRun(spec.PluginLabel, spec.UpdateTTL, spec.SigilVersion):
-		fmt.Fprintf(spec.Stderr, "sigil: refreshing %s in %s\n", spec.PluginLabel, spec.BinName)
+		fmt.Fprintf(spec.Stderr, "agento11y: refreshing %s in %s\n", spec.PluginLabel, spec.BinName)
 		if err := spec.Update(ctx, bin, spec.Stderr); err != nil {
 			spec.Logger.Printf("update %s: %v", spec.PluginLabel, err)
 			fmt.Fprintf(spec.Stderr,
-				"sigil: update of %s failed: %v\n"+
-					"sigil: continuing with the installed version. To retry manually:\n",
+				"agento11y: update of %s failed: %v\n"+
+					"agento11y: continuing with the installed version. To retry manually:\n",
 				spec.PluginLabel, err)
 			if spec.UpdateRecoveryHint != nil {
 				spec.UpdateRecoveryHint(spec.Stderr)
@@ -207,5 +207,5 @@ func registerMessage(spec BootstrapSpec) string {
 	if spec.RegisterMessage != "" {
 		return spec.RegisterMessage
 	}
-	return fmt.Sprintf("sigil: registering %s with %s\n", spec.PluginLabel, spec.BinName)
+	return fmt.Sprintf("agento11y: registering %s with %s\n", spec.PluginLabel, spec.BinName)
 }
