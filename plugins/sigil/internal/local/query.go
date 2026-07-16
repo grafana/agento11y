@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -92,14 +93,21 @@ func (s *Storage) ListConversations(limit int) ([]ConversationSummary, error) {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
 			continue
 		}
-		sum, ok, err := summariseConversationFile(filepath.Join(dir, e.Name()))
+		info, err := e.Info()
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // file vanished between ReadDir and Info
+			}
+			return nil, err
+		}
+		agg, err := s.fileAggregateFor(filepath.Join(dir, e.Name()), info)
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
+		if !agg.hasSummary {
 			continue // empty or all-invalid file
 		}
-		out = append(out, sum)
+		out = append(out, agg.summary)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].LastActivity.After(out[j].LastActivity)
@@ -110,16 +118,41 @@ func (s *Storage) ListConversations(limit int) ([]ConversationSummary, error) {
 	return out, nil
 }
 
-// summariseConversationFile reads one per-conversation JSONL file and
-// returns its aggregated summary. Returns (_, false, nil) when the file
-// has no decodable records.
-func summariseConversationFile(path string) (ConversationSummary, bool, error) {
+// scanFileAggregate reads one per-conversation JSONL file once and
+// computes both its conversation summary and its token-usage points,
+// decoding only the metadata fields they need (see scanGenerationMeta).
+// hasSummary is false when the file has no decodable records, so the
+// caller can cache it as "no summary" and skip re-scanning empty files.
+//
+// The returned aggregate carries the mtime and size of exactly the bytes
+// scanned: it stats the open fd and reads only up to that size, so a
+// concurrent append that lands mid-scan can't make the cache key describe
+// content other than what was actually read. The next poll sees the
+// larger size and re-scans. A missing file yields an empty, no-summary
+// aggregate (zero mtime/size), mirroring the old IsNotExist tolerance.
+func scanFileAggregate(path string) (fileAggregate, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fileAggregate{}, nil
+		}
+		return fileAggregate{}, err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return fileAggregate{}, err
+	}
+
 	agents := map[string]struct{}{}
 	models := map[string]struct{}{}
 	var sum ConversationSummary
 	var hasError, seen bool
+	var points []TokenUsagePoint
 
-	err := scanGenerationRecords(path, func(r generationRecord, gen storedGeneration) {
+	err = scanGenerationMeta(io.LimitReader(f, info.Size()), func(r leanRecord) {
+		gen := r.Generation
 		seen = true
 		if sum.ID == "" {
 			sum.ID = r.ConversationID
@@ -160,12 +193,19 @@ func summariseConversationFile(path string) (ConversationSummary, bool, error) {
 		if gen.CallError != "" {
 			hasError = true
 		}
+
+		if p, ok := tokenUsagePoint(r); ok {
+			points = append(points, p)
+		}
 	})
 	if err != nil {
-		return ConversationSummary{}, false, err
+		return fileAggregate{}, err
 	}
 	if !seen {
-		return ConversationSummary{}, false, nil
+		// File exists but has no decodable records. Cache it with its
+		// real mtime/size so empty files validate and aren't re-scanned
+		// every poll.
+		return fileAggregate{mtime: info.ModTime(), size: info.Size()}, nil
 	}
 	sum.Agents = sortedKeys(agents)
 	sum.Models = sortedKeys(models)
@@ -173,7 +213,13 @@ func summariseConversationFile(path string) (ConversationSummary, bool, error) {
 	if hasError {
 		sum.Status = "err"
 	}
-	return sum, true, nil
+	return fileAggregate{
+		summary:    sum,
+		hasSummary: true,
+		points:     points,
+		mtime:      info.ModTime(),
+		size:       info.Size(),
+	}, nil
 }
 
 // ConversationDetail returns the chronological generation list for one
@@ -277,14 +323,20 @@ func (s *Storage) TokenUsagePoints() ([]TokenUsagePoint, error) {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
 			continue
 		}
-		err := scanGenerationRecords(filepath.Join(dir, e.Name()), func(r generationRecord, gen storedGeneration) {
-			if p, ok := tokenUsagePoint(r, gen); ok {
-				out = append(out, p)
+		info, err := e.Info()
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // file vanished between ReadDir and Info
 			}
-		})
+			return nil, err
+		}
+		agg, err := s.fileAggregateFor(filepath.Join(dir, e.Name()), info)
 		if err != nil {
 			return nil, err
 		}
+		// agg.points is owned by the cache; append into our own slice so
+		// the sort below never reorders the cached per-file order.
+		out = append(out, agg.points...)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Timestamp.Before(out[j].Timestamp)
@@ -295,7 +347,8 @@ func (s *Storage) TokenUsagePoints() ([]TokenUsagePoint, error) {
 // tokenUsagePoint builds a TokenUsagePoint from one record. ok is false
 // when the generation recorded no tokens or has no usable timestamp, so
 // the caller can skip it rather than plot a zero-height bar at the epoch.
-func tokenUsagePoint(r generationRecord, gen storedGeneration) (TokenUsagePoint, bool) {
+func tokenUsagePoint(r leanRecord) (TokenUsagePoint, bool) {
+	gen := r.Generation
 	buckets := disjointTokenUsage(gen.Usage.toSDK(), gen.Model.Provider)
 	if buckets == (TokenBuckets{}) {
 		return TokenUsagePoint{}, false
@@ -314,7 +367,7 @@ func tokenUsagePoint(r generationRecord, gen storedGeneration) (TokenUsagePoint,
 
 // generationTime is the wall-clock moment a generation ran, preferring
 // started_at, then completed_at, then the receiver's arrival time.
-func generationTime(gen storedGeneration, r generationRecord) time.Time {
+func generationTime(gen storedGenerationMeta, r leanRecord) time.Time {
 	if !gen.StartedAt.IsZero() {
 		return gen.StartedAt
 	}
@@ -488,6 +541,77 @@ func toolResultMatchesAny(msg sigil.Message, ids map[string]struct{}) bool {
 		}
 	}
 	return false
+}
+
+// storedGenerationMeta is storedGeneration without Input/Output. The
+// JSON decoder skips the (large) input/output values since there are no
+// matching struct fields, so the summary/token scans never allocate the
+// message/part trees they would otherwise decode and discard.
+type storedGenerationMeta struct {
+	ID                string         `json:"id,omitempty"`
+	ConversationID    string         `json:"conversation_id,omitempty"`
+	ConversationTitle string         `json:"conversation_title,omitempty"`
+	AgentName         string         `json:"agent_name,omitempty"`
+	Model             sigil.ModelRef `json:"model,omitzero"`
+	ResponseModel     string         `json:"response_model,omitempty"`
+	Usage             storedUsage    `json:"usage,omitzero"`
+	StartedAt         time.Time      `json:"started_at,omitzero"`
+	CompletedAt       time.Time      `json:"completed_at,omitzero"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+	CallError         string         `json:"call_error,omitempty"`
+}
+
+// title and modelName duplicate the storedGeneration logic in wire.go;
+// keep them in sync.
+func (g storedGenerationMeta) title() string {
+	if strings.TrimSpace(g.ConversationTitle) != "" {
+		return g.ConversationTitle
+	}
+	if g.Metadata == nil {
+		return ""
+	}
+	if title, ok := g.Metadata[metadataKeyConversationTitle].(string); ok {
+		return title
+	}
+	return ""
+}
+
+func (g storedGenerationMeta) modelName() string {
+	if g.ResponseModel != "" {
+		return g.ResponseModel
+	}
+	return g.Model.Name
+}
+
+// leanRecord decodes one JSONL line: the wrapper scalars plus the nested
+// generation metadata, in a single Unmarshal with no json.RawMessage copy
+// of the full generation.
+type leanRecord struct {
+	ReceivedAt     string               `json:"received_at"`
+	ConversationID string               `json:"conversation_id"`
+	Generation     storedGenerationMeta `json:"generation"`
+}
+
+// scanGenerationMeta walks the JSONL records in r calling visit for every
+// decodable record, decoding only the metadata fields. It mirrors
+// scanGenerationRecords' scanner buffer but does one json.Unmarshal per
+// line instead of two plus a copy. The caller owns the reader (and any
+// size limit); see scanFileAggregate.
+func scanGenerationMeta(r io.Reader, visit func(leanRecord)) error {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var rec leanRecord
+		if err := json.Unmarshal(line, &rec); err != nil {
+			continue
+		}
+		visit(rec)
+	}
+	return sc.Err()
 }
 
 func scanGenerationRecords(path string, visit func(generationRecord, storedGeneration)) error {

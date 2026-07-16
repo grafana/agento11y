@@ -69,6 +69,10 @@ func (u storedUsage) toSDK() sigil.TokenUsage {
 	}
 }
 
+// storedGeneration is the full on-disk generation. storedGenerationMeta
+// (query.go) is a field-for-field copy minus Input/Output used by the
+// aggregate scans; a field added here that the summary or token points
+// read must also be added there or it will read as zero in the cached path.
 type storedGeneration struct {
 	ID                string          `json:"id,omitempty"`
 	ConversationID    string          `json:"conversation_id,omitempty"`

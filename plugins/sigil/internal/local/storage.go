@@ -12,9 +12,19 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/grafana/sigil-sdk/plugins/sigil/internal/xdg"
 )
+
+// aggregateCacheTTL bounds how long a cached per-file aggregate is trusted
+// without re-checking the file. mtime+size is the primary validator —
+// conversation files are append-only, so any new generation grows the
+// file and invalidates the entry. The TTL is only a defensive backstop
+// for a same-size+same-mtime overwrite (which append-only capture won't
+// normally produce), and is set well above the viewer's 30s poll so idle
+// conversations stay cached across polls.
+const aggregateCacheTTL = 5 * time.Minute
 
 // File names under the local state root. Kept exported so tests and docs
 // can reference the canonical paths.
@@ -42,6 +52,33 @@ type Storage struct {
 	// need finer locking; this just stops interleaved JSON lines.
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+
+	// now is the clock used for aggregate-cache TTL checks; a seam so
+	// tests can advance time without sleeping.
+	now func() time.Time
+
+	// agg caches per-file conversation summaries and token points so the
+	// list/metrics endpoints don't re-parse unchanged files on every poll.
+	// Entries are keyed by path and never evicted: local capture has no
+	// deletion or rotation path, so a stale key can't accumulate in
+	// practice, and a dead entry never surfaces (the endpoints only read
+	// keys for files present in the current ReadDir).
+	aggMu sync.Mutex
+	agg   map[string]fileAggregate
+}
+
+// fileAggregate is one conversation file's cached summary and token
+// points, plus the mtime+size+cachedAt used to decide whether the cache
+// entry is still valid (see fileAggregateFor). hasSummary is false when
+// the file had no decodable records, so empty files are not re-scanned
+// every poll.
+type fileAggregate struct {
+	summary    ConversationSummary
+	hasSummary bool
+	points     []TokenUsagePoint
+	mtime      time.Time
+	size       int64
+	cachedAt   time.Time
 }
 
 // NewStorage returns a Storage rooted at dir. The directory, the
@@ -54,7 +91,47 @@ func NewStorage(dir string) (*Storage, error) {
 	if err := os.MkdirAll(filepath.Join(dir, ConversationsDir), 0o700); err != nil {
 		return nil, fmt.Errorf("local storage: mkdir %s: %w", dir, err)
 	}
-	return &Storage{dir: dir, locks: map[string]*sync.Mutex{}}, nil
+	return &Storage{
+		dir:   dir,
+		locks: map[string]*sync.Mutex{},
+		now:   time.Now,
+		agg:   map[string]fileAggregate{},
+	}, nil
+}
+
+// fileAggregateFor returns the cached aggregate for path when the file's
+// mtime and size still match the cached entry and the entry is younger
+// than aggregateCacheTTL; otherwise it re-scans the file once (computing
+// the summary and token points together), stores the result, and returns
+// it. The scan runs outside the lock, so two concurrent cold callers may
+// scan the same file once each — idempotent, last write wins.
+//
+// info is the caller's current view of the file (from ReadDir) and is used
+// only for the cache-hit check. The stored mtime/size come from
+// scanFileAggregate, which stats the fd it reads, so the cache key always
+// describes the exact bytes scanned even if the file grew between the
+// caller's stat and the scan.
+func (s *Storage) fileAggregateFor(path string, info os.FileInfo) (fileAggregate, error) {
+	s.aggMu.Lock()
+	if e, ok := s.agg[path]; ok &&
+		e.mtime.Equal(info.ModTime()) &&
+		e.size == info.Size() &&
+		s.now().Sub(e.cachedAt) < aggregateCacheTTL {
+		s.aggMu.Unlock()
+		return e, nil
+	}
+	s.aggMu.Unlock()
+
+	agg, err := scanFileAggregate(path)
+	if err != nil {
+		return fileAggregate{}, err
+	}
+	agg.cachedAt = s.now()
+
+	s.aggMu.Lock()
+	s.agg[path] = agg
+	s.aggMu.Unlock()
+	return agg, nil
 }
 
 // Dir returns the storage root directory.

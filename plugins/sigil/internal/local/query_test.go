@@ -1,7 +1,11 @@
 package local
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -685,4 +689,213 @@ func TestTokenUsagePoints_EmptyStore(t *testing.T) {
 	points, err := s.TokenUsagePoints()
 	require.NoError(t, err)
 	assert.Empty(t, points)
+}
+
+// TestAggregateCache_HitsAndInvalidates covers the per-file aggregate
+// cache: identical results on re-call, invalidation when a generation is
+// appended (size+mtime change), a cache hit served without re-reading the
+// file (proved by corrupting content under an unchanged mtime+size), and
+// a TTL-driven re-scan once the entry ages out.
+func TestAggregateCache_HitsAndInvalidates(t *testing.T) {
+	s := newStorage(t)
+	clock := mustParse(t, "2026-05-21T10:00:00Z")
+	s.now = func() time.Time { return clock }
+
+	writeGen(t, s, "conv-A", "g1", sigil.Generation{
+		AgentName:   "pi",
+		Model:       sigil.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
+		StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
+		CompletedAt: mustParse(t, "2026-05-21T10:00:03Z"),
+		Usage:       sigil.TokenUsage{InputTokens: 100, OutputTokens: 50},
+	}, "2026-05-21T10:00:03Z")
+
+	list1, err := s.ListConversations(0)
+	require.NoError(t, err)
+	pts1, err := s.TokenUsagePoints()
+	require.NoError(t, err)
+	require.Len(t, list1, 1)
+	require.Equal(t, 1, list1[0].Calls)
+	require.Len(t, pts1, 1)
+
+	// Re-call with no change: identical results, served from cache.
+	list2, err := s.ListConversations(0)
+	require.NoError(t, err)
+	pts2, err := s.TokenUsagePoints()
+	require.NoError(t, err)
+	assert.Equal(t, list1, list2)
+	assert.Equal(t, pts1, pts2)
+
+	// Append a second generation: size grows, so the cache invalidates and
+	// the new generation shows up in both the summary and the points.
+	writeGen(t, s, "conv-A", "g2", sigil.Generation{
+		AgentName:   "pi",
+		Model:       sigil.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
+		StartedAt:   mustParse(t, "2026-05-21T10:00:10Z"),
+		CompletedAt: mustParse(t, "2026-05-21T10:00:13Z"),
+		Usage:       sigil.TokenUsage{InputTokens: 200, OutputTokens: 80},
+	}, "2026-05-21T10:00:13Z")
+
+	list3, err := s.ListConversations(0)
+	require.NoError(t, err)
+	pts3, err := s.TokenUsagePoints()
+	require.NoError(t, err)
+	require.Len(t, list3, 1)
+	assert.Equal(t, 2, list3[0].Calls)
+	assert.Equal(t, int64(300), list3[0].InputTokens)
+	assert.Equal(t, int64(130), list3[0].OutputTokens)
+	assert.Len(t, pts3, 2)
+
+	// Corrupt the file while preserving its size and mtime. A cache hit
+	// must serve the prior aggregate without re-reading the now-garbage
+	// bytes.
+	path := filepath.Join(s.dir, ConversationsDir, "conv-A.jsonl")
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	orig, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, bytes.Repeat([]byte("x"), len(orig)), 0o600))
+	require.NoError(t, os.Chtimes(path, info.ModTime(), info.ModTime()))
+
+	list4, err := s.ListConversations(0)
+	require.NoError(t, err)
+	assert.Equal(t, list3, list4, "unchanged mtime+size must serve the cached summary")
+
+	// Advance past the TTL: the entry ages out and the file is re-scanned.
+	// The garbage has no decodable records, so the conversation drops out.
+	clock = clock.Add(aggregateCacheTTL + time.Minute)
+	list5, err := s.ListConversations(0)
+	require.NoError(t, err)
+	assert.Empty(t, list5, "TTL expiry forces a re-scan of the corrupted file")
+	pts5, err := s.TokenUsagePoints()
+	require.NoError(t, err)
+	assert.Empty(t, pts5)
+}
+
+// TestAggregateCache_ScanUsesFdStatNotCallerInfo pins that the cache key
+// describes the bytes actually scanned, not the caller's pre-scan stat. An
+// append that lands after ListConversations/TokenUsagePoints snapshot the
+// DirEntry info but before the scan runs must not leave the entry keyed by
+// the stale (smaller) size, which would let a later poll at the real size
+// serve content that omits the appended generation.
+func TestAggregateCache_ScanUsesFdStatNotCallerInfo(t *testing.T) {
+	// info picks which os.FileInfo a caller hands to fileAggregateFor,
+	// given the pre-append snapshot and the current on-disk stat. Whatever
+	// it returns, a cold scan must cache the real on-disk content keyed by
+	// the real size from the fd stat — a stale, smaller info must not key
+	// the entry and let a later poll serve a generation-short aggregate.
+	cases := []struct {
+		name string
+		info func(stale, current os.FileInfo) os.FileInfo
+	}{
+		{
+			name: "stale smaller info from before the append",
+			info: func(stale, _ os.FileInfo) os.FileInfo { return stale },
+		},
+		{
+			name: "current info matching disk",
+			info: func(_, current os.FileInfo) os.FileInfo { return current },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStorage(t)
+			clock := mustParse(t, "2026-05-21T10:00:00Z")
+			s.now = func() time.Time { return clock }
+
+			writeGen(t, s, "conv-A", "g1", sigil.Generation{
+				Model:     sigil.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
+				StartedAt: mustParse(t, "2026-05-21T10:00:00Z"),
+				Usage:     sigil.TokenUsage{InputTokens: 100, OutputTokens: 50},
+			}, "2026-05-21T10:00:00Z")
+
+			path := filepath.Join(s.dir, ConversationsDir, "conv-A.jsonl")
+			stale, err := os.Stat(path)
+			require.NoError(t, err)
+
+			// Append after capturing stale, mimicking a write that lands
+			// between the caller's ReadDir stat and the scan.
+			writeGen(t, s, "conv-A", "g2", sigil.Generation{
+				Model:     sigil.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
+				StartedAt: mustParse(t, "2026-05-21T10:00:10Z"),
+				Usage:     sigil.TokenUsage{InputTokens: 200, OutputTokens: 80},
+			}, "2026-05-21T10:00:10Z")
+
+			current, err := os.Stat(path)
+			require.NoError(t, err)
+			require.Greater(t, current.Size(), stale.Size())
+
+			// The aggregate must reflect both generations on disk, and the
+			// cached entry must carry the real size from the fd stat, not the
+			// info passed in.
+			agg, err := s.fileAggregateFor(path, tc.info(stale, current))
+			require.NoError(t, err)
+			assert.Equal(t, 2, agg.summary.Calls)
+			assert.Equal(t, current.Size(), agg.size)
+			assert.True(t, agg.mtime.Equal(current.ModTime()))
+
+			// The entry is keyed by the real size, so a poll at that size is
+			// a genuine cache hit: overwrite with same-size garbage, keep the
+			// mtime, and confirm the cached summary is served, not the garbage.
+			orig, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(path, bytes.Repeat([]byte("x"), len(orig)), 0o600))
+			require.NoError(t, os.Chtimes(path, current.ModTime(), current.ModTime()))
+
+			hit, err := s.fileAggregateFor(path, current)
+			require.NoError(t, err)
+			assert.Equal(t, 2, hit.summary.Calls, "real size must hit the cache, not re-scan garbage")
+		})
+	}
+}
+
+// TestAggregates_IgnoreInputOutput is the lean-decode equivalence guard:
+// a generation carrying large input/output message trees must produce the
+// same summary and token points as one with the scalar fields alone, since
+// the aggregate scans never read input/output.
+func TestAggregates_IgnoreInputOutput(t *testing.T) {
+	s := newStorage(t)
+
+	big := strings.Repeat("x", 4096)
+	withContent := sigil.Generation{
+		AgentName:   "pi",
+		Model:       sigil.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
+		StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
+		CompletedAt: mustParse(t, "2026-05-21T10:00:03Z"),
+		Usage:       sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, CacheWriteInputTokens: 20},
+		Input:       []sigil.Message{{Role: sigil.RoleUser, Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: big}}}},
+		Output:      []sigil.Message{{Role: sigil.RoleAssistant, Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: big}}}},
+	}
+	writeGen(t, s, "conv-A", "g1", withContent, "2026-05-21T10:00:03Z")
+
+	// Same scalars, no message content.
+	noContent := withContent
+	noContent.Input = nil
+	noContent.Output = nil
+	writeGen(t, s, "conv-B", "g2", noContent, "2026-05-21T10:00:03Z")
+
+	list, err := s.ListConversations(0)
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+
+	byID := map[string]ConversationSummary{}
+	for _, c := range list {
+		byID[c.ID] = c
+	}
+	a, b := byID["conv-A"], byID["conv-B"]
+	// Normalise the fields that legitimately differ between the two.
+	a.ID, b.ID = "", ""
+	assert.Equal(t, b, a, "input/output must not change the conversation summary")
+
+	pts, err := s.TokenUsagePoints()
+	require.NoError(t, err)
+	require.Len(t, pts, 2)
+	assert.Equal(t, pts[0].TokenBuckets, pts[1].TokenBuckets, "input/output must not change token points")
+
+	// The full-decode detail path still surfaces the message content.
+	detail, err := s.ConversationDetail("conv-A")
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	require.Len(t, detail.Generations, 1)
+	assert.NotEmpty(t, detail.Generations[0].Messages, "detail path still decodes input/output")
 }
