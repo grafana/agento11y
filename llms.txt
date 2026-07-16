@@ -257,14 +257,14 @@ metrics.setGlobalMeterProvider(mp);
 Provider wrappers (use these before hand-instrumenting an SDK call):
 
 - Go: `go-providers/openai`, `go-providers/anthropic`, `go-providers/gemini`
-- Python: `python-providers/openai`, `python-providers/anthropic`, `python-providers/gemini`
+- Python: `python-providers/openai`, `python-providers/anthropic`, `python-providers/gemini`, `python-providers/foundry`
 - JS/TS: subpath exports like `@grafana/sigil-sdk-js/openai` (see [`js/README.md`](https://github.com/grafana/sigil-sdk/blob/main/js/README.md))
 - Java: `java/providers/openai`, `java/providers/anthropic`, `java/providers/gemini`
 - .NET: `Grafana.Sigil.OpenAI`, `Grafana.Sigil.Anthropic`, `Grafana.Sigil.Gemini`
 
 Framework adapters:
 
-- Python: `python-frameworks/{langchain,langgraph,openai-agents,llamaindex,google-adk,strands,claude-agent-sdk,litellm,pydantic-ai}`; each is its own pip package (e.g. `sigil-sdk-langgraph`).
+- Python: `python-frameworks/{langchain,langgraph,openai-agents,agent-framework-foundry,llamaindex,google-adk,strands,claude-agent-sdk,litellm,pydantic-ai}`; each is its own pip package (e.g. `sigil-sdk-langgraph`).
 - JS/TS: subpath exports like `@grafana/sigil-sdk-js/langgraph`, `@grafana/sigil-sdk-js/vercel-ai-sdk`; single npm package, multiple entry points.
 - Go: `go-frameworks/google-adk`.
 - Java: `java/frameworks/google-adk`.

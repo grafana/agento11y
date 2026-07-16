@@ -4,7 +4,7 @@
 
 Use this package when you want:
 
-- A provider-agnostic generation record (same schema for OpenAI, Anthropic, Gemini, or custom adapters).
+- A provider-agnostic generation record (same schema for OpenAI, Anthropic, Gemini, Microsoft Foundry, or custom adapters).
 - OTel-aligned tracing attributes for generation and tool spans.
 - Async export with retry/backoff, queueing, batching, and explicit shutdown semantics.
 
@@ -36,6 +36,7 @@ Optional provider helper packages:
 pip install sigil-sdk-openai
 pip install sigil-sdk-anthropic
 pip install sigil-sdk-gemini
+pip install sigil-sdk-foundry
 ```
 
 Optional framework modules:
@@ -44,6 +45,7 @@ Optional framework modules:
 pip install sigil-sdk-langchain
 pip install sigil-sdk-langgraph
 pip install sigil-sdk-openai-agents
+pip install sigil-sdk-agent-framework-foundry
 pip install sigil-sdk-llamaindex
 pip install sigil-sdk-google-adk
 pip install sigil-sdk-strands
@@ -89,12 +91,12 @@ litellm.callbacks = [SigilLiteLLMLogger(client=client)]
 
 Framework handlers use the `Client` instance you pass in. If that client is configured with
 `generation_sanitizer`, the same redaction policy applies automatically to generations recorded
-through LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands, Claude Agent SDK, LiteLLM, and Pydantic AI integrations.
+through LangChain, LangGraph, OpenAI Agents, Microsoft Agent Framework Foundry, LlamaIndex, Google ADK, Strands, Claude Agent SDK, LiteLLM, and Pydantic AI integrations.
 
 Framework handlers inject framework tags/metadata on recorded generations:
 
-- `sigil.framework.name` (`langchain`, `langgraph`, `openai-agents`, `llamaindex`, `google-adk`, `strands`, `claude-agent-sdk`, `litellm`, or `pydantic-ai`)
-- `sigil.framework.source=handler` (or `hooks` for Strands Agents and Claude Agent SDK)
+- `sigil.framework.name` (`langchain`, `langgraph`, `openai-agents`, `agent-framework-foundry`, `llamaindex`, `google-adk`, `strands`, `claude-agent-sdk`, `litellm`, or `pydantic-ai`)
+- `sigil.framework.source=handler` (or `middleware` for Microsoft Agent Framework Foundry, or `hooks` for Strands Agents and Claude Agent SDK)
 - `sigil.framework.language=python`
 - `metadata["sigil.framework.run_id"]`
 - `metadata["sigil.framework.thread_id"]` (when present)
@@ -130,6 +132,7 @@ Full framework examples:
 - LangChain: `../python-frameworks/langchain/README.md`
 - LangGraph: `../python-frameworks/langgraph/README.md`
 - OpenAI Agents: `../python-frameworks/openai-agents/README.md`
+- Microsoft Agent Framework Foundry: `../python-frameworks/agent-framework-foundry/README.md`
 - LlamaIndex: `../python-frameworks/llamaindex/README.md`
 - Google ADK: `../python-frameworks/google-adk/README.md`
 - Strands Agents: `../python-frameworks/strands/README.md`
@@ -780,5 +783,6 @@ Provider wrappers are wrapper-first and mapper-explicit:
 - `sigil-sdk-openai`
 - `sigil-sdk-anthropic`
 - `sigil-sdk-gemini`
+- `sigil-sdk-foundry`
 
 Each package exposes sync + async wrappers and explicit mapper functions for custom integration points.

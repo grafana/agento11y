@@ -8,6 +8,8 @@ Minimal, self-contained examples that make a real LLM call and record the genera
 | Language             | Directory                                    | LLM provider                   |
 | -------------------- | -------------------------------------------- | ------------------------------ |
 | Python               | `[python/](python/)`                         | OpenAI                         |
+| Python + Microsoft Foundry | `[python-foundry/](python-foundry/)`   | Microsoft Foundry              |
+| Python + Microsoft Agent Framework Foundry | `[python-foundry-agent-framework/](python-foundry-agent-framework/)` | Microsoft Foundry Agent Framework |
 | Python + Strands     | `[python-strands/](python-strands/)`         | OpenAI by default, Sigil Cloud |
 | Python + Claude Agent SDK | `[python-claude-agent-sdk/](python-claude-agent-sdk/)` | Claude Code CLI, Sigil Cloud |
 | TypeScript           | `[typescript/](typescript/)`                 | OpenAI                         |
@@ -67,6 +69,6 @@ The Python, TypeScript, and Go single-generation examples set a client-level tag
 
 ## Next steps
 
-- **Provider wrappers** — reduce boilerplate by using pre-built wrappers for [OpenAI](../../go-providers/openai/), [Anthropic](../../python-providers/anthropic/), and [Gemini](../../go-providers/gemini/).
+- **Provider wrappers** — reduce boilerplate by using pre-built wrappers for [OpenAI](../../python-providers/openai/), [Anthropic](../../python-providers/anthropic/), [Gemini](../../python-providers/gemini/), and [Microsoft Foundry](../../python-providers/foundry/).
 - **Framework adapters** — instrument [LangChain](../../python-frameworks/langchain/), [Strands Agents for Python](../../python-frameworks/strands/), [Claude Agent SDK](../../python-frameworks/claude-agent-sdk/), [Strands Agents for TypeScript](../../js/docs/frameworks/strands.md), [Vercel AI SDK](../../js/docs/frameworks/vercel-ai-sdk.md), [Google ADK](../../go-frameworks/google-adk/), and more with a single line.
 - **Full example app** — see `[examples/python-langchain/](../python-langchain/)` for a FastAPI service with LangChain agent + manual instrumentation side by side.

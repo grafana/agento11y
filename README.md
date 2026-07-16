@@ -86,7 +86,7 @@ rec.SetResult(sigil.Generation{
 | Language | Providers | Where |
 |----------|-----------|-------|
 | Go | Anthropic, OpenAI, Gemini | [`go-providers/`](go-providers/) |
-| Python | Anthropic, OpenAI, Gemini | [`python-providers/`](python-providers/) |
+| Python | Anthropic, OpenAI, Gemini, Microsoft Foundry | [`python-providers/`](python-providers/) |
 | Java | Anthropic, OpenAI, Gemini | [`java/providers/`](java/providers/) |
 | .NET | Anthropic, OpenAI, Gemini | [`dotnet/src/`](dotnet/src/) |
 | TypeScript/JavaScript | Anthropic, OpenAI, Gemini | Subpath exports of `@grafana/sigil-sdk-js`. See [`js/README.md`](js/README.md). |
@@ -95,7 +95,7 @@ rec.SetResult(sigil.Generation{
 
 | Language | Frameworks | Where |
 |----------|------------|-------|
-| Python | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands Agents, Claude Agent SDK, LiteLLM, Pydantic AI | [`python-frameworks/`](python-frameworks/) |
+| Python | LangChain, LangGraph, OpenAI Agents, Microsoft Agent Framework Foundry, LlamaIndex, Google ADK, Strands Agents, Claude Agent SDK, LiteLLM, Pydantic AI | [`python-frameworks/`](python-frameworks/) |
 | TypeScript/JavaScript | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands, Vercel AI SDK | Subpath exports of `@grafana/sigil-sdk-js`. See [`js/README.md`](js/README.md). |
 | Go | Google ADK | [`go-frameworks/`](go-frameworks/) |
 | Java | Google ADK | [`java/frameworks/`](java/frameworks/) |
@@ -111,6 +111,8 @@ The getting-started quickstarts each make a real LLM call and record the generat
 | Go | [`examples/getting-started/go/`](examples/getting-started/go/) |
 | Go hooks and guards | [`examples/getting-started/go-hooks/`](examples/getting-started/go-hooks/) |
 | Python | [`examples/getting-started/python/`](examples/getting-started/python/) |
+| Python + Microsoft Foundry | [`examples/getting-started/python-foundry/`](examples/getting-started/python-foundry/) |
+| Python + Microsoft Agent Framework Foundry | [`examples/getting-started/python-foundry-agent-framework/`](examples/getting-started/python-foundry-agent-framework/) |
 | Python hooks and guards | [`examples/getting-started/python-hooks/`](examples/getting-started/python-hooks/) |
 | Python (multi-agent) | [`examples/getting-started/python-multi-agent/`](examples/getting-started/python-multi-agent/) |
 | Python + Pydantic AI | [`examples/getting-started/python-pydantic-ai/`](examples/getting-started/python-pydantic-ai/) |

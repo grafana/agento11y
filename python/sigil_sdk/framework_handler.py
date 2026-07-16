@@ -1133,7 +1133,7 @@ def _infer_provider_from_bedrock_id(model_name: str) -> str:
 
 def _normalize_provider_name(value: str) -> str:
     normalized = value.strip().lower()
-    if normalized in {"openai", "anthropic", "gemini"}:
+    if normalized in {"openai", "anthropic", "gemini", "azure_foundry"}:
         return normalized
     return "" if normalized == "" else "custom"
 

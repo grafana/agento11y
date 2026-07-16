@@ -272,6 +272,10 @@ run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with './python-p
 description = "Run Python Gemini provider helper tests"
 run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with './python-providers/gemini[dev]' pytest python-providers/gemini/tests"
 
+[tasks."test:py:sdk-foundry"]
+description = "Run Python Microsoft Foundry provider helper tests"
+run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with './python-providers/openai[dev]' --with './python-providers/foundry[dev]' pytest python-providers/foundry/tests"
+
 [tasks."test:py:sdk-langchain"]
 description = "Run Python LangChain framework handler tests"
 run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with './python-frameworks/langchain[dev]' pytest python-frameworks/langchain/tests"
@@ -283,6 +287,10 @@ run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with './python-f
 [tasks."test:py:sdk-openai-agents"]
 description = "Run Python OpenAI Agents framework handler tests"
 run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with './python-frameworks/openai-agents[dev]' pytest python-frameworks/openai-agents/tests"
+
+[tasks."test:py:sdk-agent-framework-foundry"]
+description = "Run Python Microsoft Agent Framework Foundry middleware tests"
+run = "uv run --python \"$PYTHON_BIN\" --with-editable './python[dev]' --with-editable './python-frameworks/agent-framework-foundry[dev]' pytest python-frameworks/agent-framework-foundry/tests"
 
 [tasks."test:py:sdk-llamaindex"]
 description = "Run Python LlamaIndex framework handler tests"
@@ -312,6 +320,7 @@ set -euo pipefail
 mise run test:py:sdk-openai
 mise run test:py:sdk-anthropic
 mise run test:py:sdk-gemini
+mise run test:py:sdk-foundry
 """
 
 [tasks."test:py:sdk-framework-conformance"]
@@ -322,6 +331,7 @@ set -euo pipefail
 mise run test:py:sdk-langchain
 mise run test:py:sdk-langgraph
 mise run test:py:sdk-openai-agents
+mise run test:py:sdk-agent-framework-foundry
 mise run test:py:sdk-llamaindex
 mise run test:py:sdk-google-adk
 mise run test:py:sdk-strands
@@ -513,9 +523,11 @@ PACKAGE_DIRS=(
   python-providers/openai
   python-providers/anthropic
   python-providers/gemini
+  python-providers/foundry
   python-frameworks/langchain
   python-frameworks/langgraph
   python-frameworks/openai-agents
+  python-frameworks/agent-framework-foundry
   python-frameworks/llamaindex
   python-frameworks/google-adk
   python-frameworks/litellm

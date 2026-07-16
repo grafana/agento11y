@@ -1,0 +1,31 @@
+[project]
+name = "sigil-sdk-agent-framework-foundry"
+version = "0.9.2"
+description = "Microsoft Agent Framework Foundry integration for Sigil Python SDK"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+  "sigil-sdk>=0.9.2",
+  "agent-framework-foundry>=1.0.0,<2",
+  "azure-identity>=1.17.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=9.0.3",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sigil_sdk_agent_framework_foundry*"]
+
+[tool.setuptools.package-data]
+sigil_sdk_agent_framework_foundry = ["py.typed"]

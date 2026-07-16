@@ -1,0 +1,32 @@
+[project]
+name = "sigil-sdk-foundry"
+version = "0.9.2"
+description = "Microsoft Foundry helper wrappers for Sigil Python SDK"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+  "sigil-sdk>=0.9.2",
+  "sigil-sdk-openai>=0.9.2",
+  "azure-ai-projects>=2.0.0,<3",
+  "azure-identity>=1.17.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=9.0.3",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sigil_sdk_foundry*"]
+
+[tool.setuptools.package-data]
+sigil_sdk_foundry = ["py.typed"]
