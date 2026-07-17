@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0] - 2026-07-17
+
+### Features
+
+- **plugins/sigil**: rename sigil CLI to agento11y (#393)
+- add AGENTO11Y_* env var aliases with SIGIL_* fallback (#395)
+
 ## [0.18.0] - 2026-07-13
 
 _No user-facing changes._
