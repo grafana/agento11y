@@ -9,7 +9,7 @@
     <PackageVersion Include="OpenAI" Version="2.9.1" />
     <PackageVersion Include="OpenTelemetry" Version="1.15.3" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
-    <PackageVersion Include="System.Text.Json" Version="10.0.0" />
+    <PackageVersion Include="System.Text.Json" Version="10.0.10" />
   </ItemGroup>
   <!-- Test dependencies -->
   <ItemGroup>
