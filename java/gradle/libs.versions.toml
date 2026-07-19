@@ -37,7 +37,7 @@ javax-annotation = { module = "javax.annotation:javax.annotation-api", version.r
 
 openai-java = { module = "com.openai:openai-java", version = "4.29.1" }
 anthropic-java = { module = "com.anthropic:anthropic-java", version = "2.18.0" }
-google-genai = { module = "com.google.genai:google-genai", version = "1.44.0" }
+google-genai = { module = "com.google.genai:google-genai", version = "1.62.0" }
 
 [plugins]
 protobuf = { id = "com.google.protobuf", version.ref = "protobufPlugin" }
