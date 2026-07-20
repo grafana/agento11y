@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { format } from "node:util";
@@ -6,14 +6,16 @@ import { format } from "node:util";
 // The pi plugin runs in-process inside pi's TUI. Anything written to the
 // terminal via console.* corrupts the live TUI frame (pi does not take over
 // stdout in interactive mode — see core/output-guard.ts). So all diagnostics
-// go to a file instead, matching the shared sigil binary, which writes its
-// debug log to $XDG_STATE_HOME/sigil/logs/sigil.log (see
+// go to a file instead, matching the shared agento11y binary, which writes
+// its debug log to $XDG_STATE_HOME/agento11y/logs/agento11y.log (see
 // plugins/agento11y/internal/xdg and internal/cli InitLogger). Logging is silent
 // unless AGENTO11Y_DEBUG (SIGIL_DEBUG fallback) is truthy.
-const APP_NAME = "sigil";
+const APP_NAME = "agento11y";
+// Pre-rename state directory, still used when it is the only one present so
+// existing installs keep their state in one place. Never moved or copied.
+const LEGACY_APP_NAME = "sigil";
 
-/** Mirrors plugins/agento11y/internal/xdg.StateRoot for app "sigil". */
-export function stateRoot(appName = APP_NAME): string {
+function stateRootFor(appName: string): string {
   const xdg = (process.env.XDG_STATE_HOME ?? "").trim();
   if (xdg && isAbsolute(xdg)) return join(xdg, appName);
   const home = homedir();
@@ -21,9 +23,22 @@ export function stateRoot(appName = APP_NAME): string {
   return join(tmpdir(), appName);
 }
 
-/** Mirrors plugins/agento11y/internal/xdg.LogFilePath for app "sigil". */
-export function logFilePath(appName = APP_NAME): string {
-  return join(stateRoot(appName), "logs", `${appName}.log`);
+/**
+ * Mirrors plugins/agento11y/internal/xdg.AppStateRoot: the agento11y state
+ * dir if it exists, otherwise the legacy sigil dir if it exists, otherwise
+ * the agento11y dir.
+ */
+export function stateRoot(): string {
+  const preferred = stateRootFor(APP_NAME);
+  if (existsSync(preferred)) return preferred;
+  const legacy = stateRootFor(LEGACY_APP_NAME);
+  if (existsSync(legacy)) return legacy;
+  return preferred;
+}
+
+/** Mirrors plugins/agento11y/internal/xdg.LogFilePath. */
+export function logFilePath(): string {
+  return join(stateRoot(), "logs", `${APP_NAME}.log`);
 }
 
 export interface Agento11yPiLogger {
@@ -62,12 +77,12 @@ function ensureLogDir(path: string): boolean {
 }
 
 function emit(level: string, message: string, args: unknown[]): void {
-  // Re-read the env per write: loadConfig() applies the sigil dotenv file,
+  // Re-read the env per write: loadConfig() applies the launcher dotenv file,
   // which may set the debug variable after the module first loads.
   if (!debugEnabled()) return;
   const path = logFilePath();
   if (!ensureLogDir(path)) return;
-  const line = `sigil[pi]: ${new Date().toISOString()} ${level} ${format(message, ...args)}\n`;
+  const line = `agento11y[pi]: ${new Date().toISOString()} ${level} ${format(message, ...args)}\n`;
   try {
     appendFileSync(path, line, { mode: 0o600 });
   } catch {

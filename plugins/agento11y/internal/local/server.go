@@ -70,7 +70,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/generations:export", s.handleGenerations)
 	mux.HandleFunc("POST /otlp/v1/traces", s.handleOTLP)
 	mux.HandleFunc("POST /otlp/v1/metrics", s.handleOTLP)
-	// Cloud-style hook endpoint with no run prefix. The Sigil SDK strips
+	// Cloud-style hook endpoint with no run prefix. The agento11y SDK strips
 	// the path from API.Endpoint before appending /api/v1/hooks:evaluate,
 	// so we must accept the bare path too — otherwise local hook
 	// evaluation 404s.
@@ -114,7 +114,7 @@ type generationsRequest struct {
 }
 
 // generationsResponse is the JSON shape the SDK's HTTP exporter parses.
-// Matches sigilv1.ExportGenerationsResponse / ExportGenerationResult.
+// Matches agento11y.v1 ExportGenerationsResponse / ExportGenerationResult.
 type generationsResponse struct {
 	Results []generationResult `json:"results"`
 }

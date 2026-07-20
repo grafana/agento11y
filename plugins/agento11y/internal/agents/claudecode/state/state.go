@@ -14,12 +14,12 @@ type Session struct {
 	Offset int64  `json:"offset"`
 	Title  string `json:"title,omitempty"`
 	// Model is captured from SessionStart so tool hooks can include model context
-	// when calling Sigil guards (PreToolUse events do not include model fields).
+	// when calling agento11y guards (PreToolUse events do not include model fields).
 	Model string `json:"model,omitempty"`
 }
 
 func dir() string {
-	return filepath.Join(xdg.StateRoot("sigil"), "claude-code")
+	return filepath.Join(xdg.AppStateRoot(), "claude-code")
 }
 
 // SanitizeSessionID delegates to xdg.SafeComponent so session-ID-derived

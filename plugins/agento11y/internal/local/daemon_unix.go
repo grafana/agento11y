@@ -37,7 +37,7 @@ func (l *daemonLock) release() {
 	_ = l.f.Close()
 }
 
-// startDaemon launches `sigil local serve` as a detached child process.
+// startDaemon launches `agento11y local serve` as a detached child process.
 // The parent waits for the child to write its status file, then returns
 // the recorded endpoint. The child detaches by setting its own session
 // (SysProcAttr.Setsid) so it survives the parent exiting.
@@ -47,7 +47,7 @@ func startDaemon(ctx context.Context, dir string, logger *log.Logger) (*Status, 
 	}
 	bin, err := os.Executable()
 	if err != nil {
-		return nil, fmt.Errorf("resolve sigil binary: %w", err)
+		return nil, fmt.Errorf("resolve agento11y binary: %w", err)
 	}
 
 	logPath := filepath.Join(dir, "server.log")

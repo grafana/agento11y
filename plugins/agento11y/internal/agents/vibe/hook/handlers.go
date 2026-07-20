@@ -36,7 +36,7 @@ const otelInstrumentationName = "agento11y.vibe"
 // replays on the next fire.
 //
 // The handler never returns an error. Every failure is logged and
-// swallowed so a Sigil outage cannot interrupt the user's vibe session.
+// swallowed so an agento11y outage cannot interrupt the user's vibe session.
 // The caller (vibe.Hook) writes nothing to stdout and always exits 0.
 func PostAgentTurn(ctx context.Context, p Payload, logger *log.Logger) {
 	if p.SessionID == "" {
@@ -66,7 +66,7 @@ func PostAgentTurn(ctx context.Context, p Payload, logger *log.Logger) {
 	}
 
 	// Resolve credentials. A user running the hook directly without
-	// Sigil creds (e.g. during testing) shouldn't have their session
+	// agento11y creds (e.g. during testing) shouldn't have their session
 	// crash; we just log and bail without advancing the offset.
 	envconfig.ApplyLocalAuthPlaceholders()
 	endpoint := envconfig.Getenv("ENDPOINT")

@@ -17,7 +17,7 @@ var (
 	execFn   = syscall.Exec
 )
 
-// Launch resolves the `vibe` binary on PATH, ensures the sigil-owned
+// Launch resolves the `vibe` binary on PATH, ensures the agento11y-owned
 // post_agent_turn hook is installed into vibe's hooks.toml, and then
 // execs vibe with the supplied args.
 //
@@ -29,7 +29,7 @@ var (
 //
 // When localEnv is non-nil, the child receives local-mode SIGIL_ENDPOINT,
 // SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT and placeholder auth values so it
-// talks to the in-process receiver instead of Sigil Cloud.
+// talks to the in-process receiver instead of Grafana Cloud.
 func Launch(_ context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, _ string) error {
 	bin, err := lookPath("vibe")
 	if err != nil {
@@ -48,7 +48,7 @@ func Launch(_ context.Context, args []string, localEnv *local.LaunchEnv, _ io.Re
 
 // installHook upserts the sigil entry into hooks.toml and reports the
 // outcome on stderr. Failures are logged but never block the launch:
-// the user explicitly asked to run vibe, so a Sigil install hiccup must
+// the user explicitly asked to run vibe, so an agento11y install hiccup must
 // not gate that.
 func installHook(stderr io.Writer, logger *log.Logger) {
 	path, wrote, err := ensureHookInstalled()

@@ -310,7 +310,7 @@ func TestBootstrap(t *testing.T) {
 				got := h.stderr.String()
 				for _, want := range []string{
 					"install of sigil-toy failed: network down",
-					"continuing without Sigil capture",
+					"continuing without agento11y capture",
 					"toy install sigil-toy",
 				} {
 					if !strings.Contains(got, want) {
@@ -351,7 +351,7 @@ func TestBootstrap(t *testing.T) {
 				h.spec.PluginLabel = fmt.Sprintf("sigil-bootstrap-update-%d", time.Now().UnixNano())
 				h.spec.Update = func(context.Context, string, io.Writer) error { h.updateCalls++; return nil }
 				h.spec.UpdateTTL = time.Hour
-				h.spec.SigilVersion = "v-test"
+				h.spec.BinaryVersion = "v-test"
 			},
 			run: func(t *testing.T, h *bootstrapHarness) error {
 				if err := Bootstrap(context.Background(), h.spec); err != nil {
@@ -393,7 +393,7 @@ func TestBootstrap(t *testing.T) {
 			name: "no update when update is nil",
 			setup: func(t *testing.T, h *bootstrapHarness) {
 				h.spec.UpdateTTL = time.Hour
-				h.spec.SigilVersion = "v-test"
+				h.spec.BinaryVersion = "v-test"
 			},
 			assert: func(t *testing.T, h *bootstrapHarness) {
 				if strings.Contains(h.stderr.String(), "refreshing") {

@@ -1,5 +1,5 @@
 // Package entry implements the shared CLI entrypoint behind the
-// cmd/agento11y and cmd/sigil binaries. Both commands are the same single
+// cmd/agento11y and cmd/agento11y binaries. Both commands are the same single
 // binary used by the Claude Code, Codex, Copilot, Cursor, OpenCode, pi, and
 // Vibe agent plugins. It accepts:
 //
@@ -97,9 +97,9 @@ type agentHook func(ctx context.Context, stdin io.Reader, stdout io.Writer, log 
 // unchanged to the underlying CLI via process replacement. localEnv is
 // non-nil when the caller requested `--local`, in which case the agent's
 // child inherits local-mode SIGIL_* env vars from local.LaunchEnv.Apply.
-// sigilVersion is the build version forwarded so launchers can stamp
+// binaryVersion is the build version forwarded so launchers can stamp
 // update-check state with the version that performed the refresh.
-type agentLauncher func(ctx context.Context, args []string, localEnv *local.LaunchEnv, stdin io.Reader, stdout, stderr io.Writer, log *log.Logger, sigilVersion string) error
+type agentLauncher func(ctx context.Context, args []string, localEnv *local.LaunchEnv, stdin io.Reader, stdout, stderr io.Writer, log *log.Logger, binaryVersion string) error
 
 // agents maps the argv agent name to its adapter Hook. The map is a package
 // var so tests can substitute mock hooks.
@@ -132,13 +132,13 @@ var exit = os.Exit
 var loginRun = login.Run
 
 // cursorInstall and cursorUninstall are package vars so tests can stub the
-// filesystem-touching `sigil cursor install`/`uninstall` flow.
+// filesystem-touching `agento11y cursor install`/`uninstall` flow.
 var (
 	cursorInstall   = cursorinstall.Run
 	cursorUninstall = cursorinstall.Uninstall
 )
 
-// Main is the entrypoint shared by cmd/agento11y and cmd/sigil.
+// Main is the entrypoint shared by cmd/agento11y and cmd/agento11y.
 // buildVersion is the caller's -ldflags-stamped main.version; each main
 // package declares its own variable so the -X flag does not depend on this
 // module's import path.
@@ -159,7 +159,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		return
 	}
 
-	// `sigil login` is a top-level subcommand handled before launcher and
+	// `agento11y login` is a top-level subcommand handled before launcher and
 	// hook dispatch so it can run without a verb argument and without an
 	// agent name. It owns its own flag parsing.
 	if args[0] == "login" {
@@ -172,7 +172,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		return
 	}
 
-	// `sigil doctor` is a read-only diagnostic, dispatched before launcher
+	// `agento11y doctor` is a read-only diagnostic, dispatched before launcher
 	// dispatch like `local`. It owns its own flag parsing.
 	if args[0] == "doctor" {
 		runDoctorCommand(args[1:], stdout, stderr)
@@ -185,7 +185,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	//
 	// One exception: when a name appears in both maps (today: `codex`,
 	// which is both a launcher and a hook agent), the literal verb `hook`
-	// always means hook dispatch. Without this guard `sigil codex hook`
+	// always means hook dispatch. Without this guard `agento11y codex hook`
 	// would hit the launcher branch, fail parseLauncherArgs because there
 	// is no `--`, and exit 2 — breaking every hook fired by
 	// plugins/codex/hooks/hooks.json.
@@ -202,7 +202,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 			return
 		}
 
-		logger := cli.InitLogger("sigil", args[0])
+		logger := cli.InitLogger(args[0])
 
 		// Auto-prompt for credentials on first run. login.Run returns
 		// ErrNotInteractive when stdin is not a TTY (e.g. CI, piped input);
@@ -214,7 +214,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		//
 		// In --local mode we never prompt: the launcher will inject
 		// placeholder credentials so the SDK proceeds without contacting
-		// Sigil Cloud.
+		// Grafana Cloud.
 		if localEnv == nil && !dotenv.HasCredentials() {
 			err := loginRun(context.Background(), login.RunOpts{
 				Stderr: stderr,
@@ -264,10 +264,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		return
 	}
 
-	// Cursor has no launcher (it is a GUI app), so `sigil cursor install`
+	// Cursor has no launcher (it is a GUI app), so `agento11y cursor install`
 	// wires its hooks directly. This branch sits before the generic
 	// non-`hook` verb rejection below so `install`/`uninstall` reach the
-	// installer while `sigil cursor hook` still falls through to dispatch.
+	// installer while `agento11y cursor hook` still falls through to dispatch.
 	if agent == "cursor" && (verb == "install" || verb == "uninstall") {
 		runCursorInstall(verb, stdout, stderr)
 		return
@@ -286,14 +286,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 
 	// Propagate the build version to the generation-export User-Agent so each
 	// agent plugin identifies itself, e.g. "agento11y-plugin-cursor/<ver> ...".
-	useragent.SigilVersion = version
+	useragent.Version = version
 
 	// Apply the dotenv file before initialising the logger so SIGIL_DEBUG=true
 	// set only in $XDG_CONFIG_HOME/agento11y/config.env still enables file logging.
 	// Cursor (and Codex headless) launch hooks under a stripped environment
 	// where the dotenv is the only place SIGIL_DEBUG could come from.
 	dotenv.ApplyEnv(nil)
-	logger := cli.InitLogger("sigil", agent)
+	logger := cli.InitLogger(agent)
 	defer cli.RecoverAndLog(logger)
 
 	if err := hook(context.Background(), stdin, stdout, logger); err != nil {
@@ -301,7 +301,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	}
 }
 
-// runLoginCommand handles `sigil login`. The flow is interactive-only: any
+// runLoginCommand handles `agento11y login`. The flow is interactive-only: any
 // args (including unknown flags) are rejected with exit 2. Non-interactive
 // callers should set SIGIL_* env vars or edit $XDG_CONFIG_HOME/agento11y/config.env
 // directly.
@@ -311,7 +311,7 @@ func runLoginCommand(args []string, stderr io.Writer) {
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: agento11y login")
 		_, _ = fmt.Fprintln(stderr)
-		_, _ = fmt.Fprintln(stderr, "Interactively save Sigil credentials to $XDG_CONFIG_HOME/agento11y/config.env")
+		_, _ = fmt.Fprintln(stderr, "Interactively save agento11y credentials to $XDG_CONFIG_HOME/agento11y/config.env")
 		_, _ = fmt.Fprintln(stderr, "(or the old $XDG_CONFIG_HOME/sigil/config.env if only that file exists).")
 	}
 	if err := fs.Parse(args); err != nil {
@@ -325,10 +325,10 @@ func runLoginCommand(args []string, stderr io.Writer) {
 	}
 
 	dotenv.ApplyEnv(nil)
-	logger := cli.InitLogger("sigil", "login")
+	logger := cli.InitLogger("login")
 
 	err := loginRun(context.Background(), login.RunOpts{
-		// Only the explicit `sigil login` shows the “Try sigil claude/pi”
+		// Only the explicit `agento11y login` shows the “Try sigil claude/pi”
 		// hint. The launcher auto-prompt path leaves this false because the
 		// launcher is about to exec the agent anyway.
 		ShowNextStep: true,
@@ -352,8 +352,8 @@ func runLoginCommand(args []string, stderr io.Writer) {
 	}
 }
 
-// runCursorInstall handles `sigil cursor install` and `sigil cursor
-// uninstall`. install wires Sigil's hook into ~/.cursor/hooks.json and, when
+// runCursorInstall handles `agento11y cursor install` and `sigil cursor
+// uninstall`. install wires agento11y's hook into ~/.cursor/hooks.json and, when
 // no credentials are configured yet, chains the interactive login prompt the
 // same way the launchers do; uninstall removes the hook entries.
 func runCursorInstall(verb string, stdout, stderr io.Writer) {
@@ -361,7 +361,7 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 	// $XDG_CONFIG_HOME/agento11y/config.env still enables file logging, and
 	// before HasCredentials so dotenv-supplied credentials are visible.
 	dotenv.ApplyEnv(nil)
-	logger := cli.InitLogger("sigil", "cursor")
+	logger := cli.InitLogger("cursor")
 
 	if verb == "uninstall" {
 		if err := cursorUninstall(stdout, stderr, logger); err != nil {
@@ -382,7 +382,7 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 	// Wiring the hook does nothing without credentials, so chain the login
 	// prompt on first install, mirroring the launcher auto-prompt. login.Run
 	// returns ErrNotInteractive when stdin is not a TTY (CI, piped input), in
-	// which case we skip silently and leave `sigil login` for later. A failed
+	// which case we skip silently and leave `agento11y login` for later. A failed
 	// or aborted login never fails the install: the hook is already wired.
 	if !dotenv.HasCredentials() {
 		err := loginRun(context.Background(), login.RunOpts{
@@ -401,7 +401,7 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 	}
 }
 
-// runDoctorCommand handles `sigil doctor`. doctor is strictly read-only and
+// runDoctorCommand handles `agento11y doctor`. doctor is strictly read-only and
 // owns its own flag parsing. The OS environment is snapshotted before dotenv
 // is applied so doctor can attribute each value to the OS env vs config.env.
 func runDoctorCommand(args []string, stdout, stderr io.Writer) {
@@ -435,7 +435,7 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) {
 //
 // Diagnostics distinguish two cases:
 //   - No `--` and there are unrecognised tokens: the user probably
-//     forgot the separator, so we point them at `sigil <name> -- <args>`.
+//     forgot the separator, so we point them at `agento11y <name> -- <args>`.
 //   - `--` is present but unrecognised tokens precede it: those are
 //     genuinely unknown sigil-side options, so we name them explicitly.
 func parseLauncherArgs(name string, rest []string, stderr io.Writer) ([]string, *local.LaunchEnv, bool) {
@@ -447,33 +447,33 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer) ([]string, 
 		}
 	}
 
-	var sigilSide []string
+	var launcherSide []string
 	var forwarded []string
 	if sep < 0 {
-		sigilSide = rest
+		launcherSide = rest
 	} else {
-		sigilSide = rest[:sep]
+		launcherSide = rest[:sep]
 		forwarded = rest[sep+1:]
 	}
 
 	localRequested := false
 	var flagTags []string
 	var unknown []string
-	for i := 0; i < len(sigilSide); i++ {
-		tok := sigilSide[i]
+	for i := 0; i < len(launcherSide); i++ {
+		tok := launcherSide[i]
 		switch {
 		case tok == "--local":
 			localRequested = true
 		case tok == "--tag":
-			if i+1 >= len(sigilSide) {
+			if i+1 >= len(launcherSide) {
 				_, _ = fmt.Fprintln(stderr, "agento11y: --tag requires a key=value argument")
 				exit(2)
 				return nil, nil, false
 			}
 			i++
-			kv, ok := normalizeTag(sigilSide[i])
+			kv, ok := normalizeTag(launcherSide[i])
 			if !ok {
-				_, _ = fmt.Fprintf(stderr, "agento11y: invalid --tag %q (want key=value)\n", sigilSide[i])
+				_, _ = fmt.Fprintf(stderr, "agento11y: invalid --tag %q (want key=value)\n", launcherSide[i])
 				exit(2)
 				return nil, nil, false
 			}
@@ -597,7 +597,7 @@ func setupLocalLaunch(stderr io.Writer) (endpoint, otlp string, err error) {
 	return endpoint, otlp, nil
 }
 
-// runLocalCommand dispatches `sigil local <verb>` subcommands.
+// runLocalCommand dispatches `agento11y local <verb>` subcommands.
 func runLocalCommand(args []string, stdout, stderr io.Writer) {
 	if len(args) == 0 {
 		_, _ = fmt.Fprintln(stderr, "usage: agento11y local start | status | stop | restart | serve")
@@ -663,7 +663,7 @@ func runLocalCommand(args []string, stdout, stderr io.Writer) {
 		_, _ = fmt.Fprintf(stdout, "agento11y local receiver running at %s (pid %d)\n", status.Endpoint, status.PID)
 	case "serve":
 		// Internal: invoked by the daemon child. Blocks until SIGTERM.
-		logger := cli.InitLogger("sigil", "local")
+		logger := cli.InitLogger("local")
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 		defer cancel()
 		if err := local.Serve(ctx, dir, local.DefaultPort, logger); err != nil {

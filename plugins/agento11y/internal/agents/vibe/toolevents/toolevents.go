@@ -55,7 +55,7 @@ func (e Event) ErrorOr() error {
 }
 
 func root() string {
-	return filepath.Join(xdg.StateRoot("sigil"), "vibe", "tools")
+	return filepath.Join(xdg.AppStateRoot(), "vibe", "tools")
 }
 
 func sessionDir(sessionID string) string {

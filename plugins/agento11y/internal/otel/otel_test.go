@@ -218,7 +218,7 @@ func newTestServer(t *testing.T, handler http.Handler) *httptest.Server {
 }
 
 func TestSetupAttachesServiceInstanceID(t *testing.T) {
-	t.Setenv("OTEL_SERVICE_NAME", "sigil")
+	t.Setenv("OTEL_SERVICE_NAME", "agento11y")
 
 	captured := newOTLPCapture(t)
 	defer captured.server.Close()
@@ -252,16 +252,16 @@ func TestSetupAttachesServiceInstanceID(t *testing.T) {
 	if got := findAttr(traceAttrs, "service.instance.id"); got != "sess-abc" {
 		t.Fatalf("trace service.instance.id = %q, want %q", got, "sess-abc")
 	}
-	if got := findAttr(traceAttrs, "service.name"); got != "sigil" {
-		t.Fatalf("trace service.name = %q, want %q", got, "sigil")
+	if got := findAttr(traceAttrs, "service.name"); got != "agento11y" {
+		t.Fatalf("trace service.name = %q, want %q", got, "agento11y")
 	}
 
 	metricAttrs := captured.metricResourceAttrs(t)
 	if got := findAttr(metricAttrs, "service.instance.id"); got != "sess-abc" {
 		t.Fatalf("metric service.instance.id = %q, want %q", got, "sess-abc")
 	}
-	if got := findAttr(metricAttrs, "service.name"); got != "sigil" {
-		t.Fatalf("metric service.name = %q, want %q", got, "sigil")
+	if got := findAttr(metricAttrs, "service.name"); got != "agento11y" {
+		t.Fatalf("metric service.name = %q, want %q", got, "agento11y")
 	}
 }
 

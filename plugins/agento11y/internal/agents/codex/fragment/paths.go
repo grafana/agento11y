@@ -6,14 +6,12 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
 )
 
-const appName = "sigil"
-
-// agentSubdir scopes codex fragments under the shared sigil state root so
-// agent-side data layouts can evolve independently.
+// agentSubdir scopes codex fragments under the shared agento11y state root
+// so agent-side data layouts can evolve independently.
 const agentSubdir = "codex"
 
 func StateRoot() string {
-	return filepath.Join(xdg.StateRoot(appName), agentSubdir)
+	return filepath.Join(xdg.AppStateRoot(), agentSubdir)
 }
 
 func TurnsDir(sessionID string) string {

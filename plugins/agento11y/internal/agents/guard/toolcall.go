@@ -1,4 +1,4 @@
-// Package guard evaluates tool calls against Sigil guard policy and
+// Package guard evaluates tool calls against agento11y guard policy and
 // returns a host-neutral result. Callers translate the result into their
 // own stdout response shape; convenience writers are provided for shapes
 // shared by more than one host agent (e.g. WriteHookSpecificOutputDeny
@@ -42,7 +42,7 @@ func formatPolicyDeny(toolName, reason string) string {
 // be evaluated (missing credentials or transport failure). It explicitly
 // distinguishes the infrastructure failure from a policy decision.
 func formatEvalFailure(toolName, detail string) string {
-	msg := fmt.Sprintf("Sigil could not evaluate the Grafana AI Observability guard for the %q tool call, so it was blocked as a safety measure.", toolName)
+	msg := fmt.Sprintf("agento11y could not evaluate the Grafana AI Observability guard for the %q tool call, so it was blocked as a safety measure.", toolName)
 	if d := strings.TrimSpace(detail); d != "" {
 		msg += " Details: " + d
 	}
@@ -50,7 +50,7 @@ func formatEvalFailure(toolName, detail string) string {
 }
 
 // ToolCallInput is the host-neutral set of fields needed to evaluate a
-// tool call against Sigil guards.
+// tool call against agento11y guards.
 type ToolCallInput struct {
 	// AgentName identifies the host agent (e.g. "copilot", "claude-code").
 	AgentName string
@@ -71,13 +71,13 @@ type ToolCallInput struct {
 type Result struct {
 	// Action is allow or deny.
 	Action agento11y.HookAction
-	// Reason is the deny reason from Sigil or the host-friendly description
+	// Reason is the deny reason from agento11y or the host-friendly description
 	// of a fail-closed transport/config error.
 	Reason string
 	// RuleID identifies the rule that produced a deny verdict, when known.
 	RuleID string
 	// UpdatedInputJSON carries the transformed (redacted) tool arguments
-	// when Sigil returned a usable Transform verdict for this tool call.
+	// when agento11y returned a usable Transform verdict for this tool call.
 	// Nil when no transform applies; always nil on deny.
 	UpdatedInputJSON json.RawMessage
 }
@@ -87,7 +87,7 @@ func (r Result) Blocked() bool {
 	return r.Action == agento11y.HookActionDeny
 }
 
-// EvaluateToolCall asks Sigil whether the tool call should proceed. It
+// EvaluateToolCall asks agento11y whether the tool call should proceed. It
 // reads the branded ENDPOINT / AUTH_TENANT_ID / AUTH_TOKEN families (either
 // spelling) from the process environment and honours envconfig.GuardsConfig
 // for the enabled/timeout/fail-open knobs. Callers are expected to gate this
@@ -97,16 +97,16 @@ func (r Result) Blocked() bool {
 //   - guards disabled or tool name empty: returns allow.
 //   - credentials missing and fail-open: returns allow.
 //   - credentials missing and fail-closed: returns deny with a credentials reason.
-//   - Sigil returns allow: returns allow. When the response carries a
+//   - agento11y returns allow: returns allow. When the response carries a
 //     transformed_input with redacted arguments for this tool call,
 //     UpdatedInputJSON is set so the host can rewrite the tool input.
-//   - Sigil returns deny: returns deny with the rule reason.
+//   - agento11y returns deny: returns deny with the rule reason.
 //   - transport error and fail-open: returns allow (matches SDK behaviour).
 //   - transport error and fail-closed: returns deny with a transport reason.
 //
 // A local-mode endpoint (http://127.0.0.1, http://localhost, http://[::1])
 // uses stand-in placeholder credentials for the credential check so that
-// running against a local Sigil instance does not require real cloud creds.
+// running against a local agento11y instance does not require real cloud creds.
 func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCallInput, logger *log.Logger) Result {
 	if !cfg.Enabled {
 		return Result{Action: agento11y.HookActionAllow}
@@ -314,7 +314,7 @@ func extractToolCallTransform(resp *agento11y.HookEvaluateResponse, toolCallID s
 }
 
 // unwrapProtoJSONBytes unwraps transform arguments that arrived as a JSON
-// string. The Sigil server marshals the proto `bytes input_json` field with
+// string. The agento11y server marshals the proto `bytes input_json` field with
 // encoding/json, which base64-encodes it; other emitters may put plain JSON
 // text in the string. Values that are not JSON strings pass through
 // unchanged. Same purpose as the JS SDK's maybeDecodeGoProtoJSONBytes, but
@@ -351,7 +351,7 @@ func WriteHookSpecificOutputDeny(stdout io.Writer, reason string) {
 		return
 	}
 	if strings.TrimSpace(reason) == "" {
-		reason = "tool call denied by Sigil guard"
+		reason = "tool call denied by agento11y guard"
 	}
 	_ = json.NewEncoder(stdout).Encode(hookSpecificOutputDeny{
 		HookSpecificOutput: hookSpecificOutputDenyBody{

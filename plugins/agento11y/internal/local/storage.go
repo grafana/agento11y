@@ -1,7 +1,7 @@
 // Package local implements the in-process HTTP receiver used by
-// `sigil pi --local` and `sigil claude --local`. It stores generation
-// exports to JSONL files under the Sigil state root so agent sessions can
-// be inspected with standard shell tools, without requiring a Sigil Cloud
+// `agento11y pi --local` and `agento11y claude --local`. It stores generation
+// exports to JSONL files under the agento11y state root so agent sessions can
+// be inspected with standard shell tools, without requiring a Grafana Cloud
 // or local stack deployment.
 package local
 
@@ -30,7 +30,7 @@ const (
 // StateDir returns the root directory for local capture data.
 // All JSONL files and the server status file live under this directory.
 func StateDir() string {
-	return filepath.Join(xdg.StateRoot("sigil"), "local")
+	return filepath.Join(xdg.AppStateRoot(), "local")
 }
 
 // Storage owns the JSONL files under StateDir and serialises writes so

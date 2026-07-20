@@ -8,17 +8,16 @@ import (
 )
 
 const (
-	appName        = "sigil"
 	agentSubdir    = "cursor"
 	fragmentPrefix = "gen-"
 	fragmentSuffix = ".json"
 )
 
 // StateRoot returns the root state directory for the cursor adapter.
-// Scoped under the shared sigil state root so agent data layouts can evolve
-// independently.
+// Scoped under the shared agento11y state root so agent data layouts can
+// evolve independently.
 func StateRoot() string {
-	return filepath.Join(xdg.StateRoot(appName), agentSubdir)
+	return filepath.Join(xdg.AppStateRoot(), agentSubdir)
 }
 
 // ConversationDir is the directory holding all fragments for one conversation.

@@ -177,7 +177,7 @@ func TestRun_DotenvSIGILDebugEnablesLogging(t *testing.T) {
 				run([]string{"claude-code", "hook"}, strings.NewReader(`{}`), &stdout, &stderr)
 			})
 
-			logPath := filepath.Join(dir, "state", "sigil", "logs", "sigil.log")
+			logPath := filepath.Join(dir, "state", "agento11y", "logs", "agento11y.log")
 			data, err := os.ReadFile(logPath)
 			if err != nil {
 				t.Fatalf("debug log not created at %s: %v", logPath, err)

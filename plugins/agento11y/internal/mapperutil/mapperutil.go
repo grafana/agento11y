@@ -1,5 +1,5 @@
 // Package mapperutil holds helpers shared by the per-agent mappers that turn
-// captured hook fragments into Sigil generations: deterministic ID hashing,
+// captured hook fragments into agento11y generations: deterministic ID hashing,
 // content-mode normalization, tool-definition building, map cloning, and
 // model→provider inference.
 //
@@ -97,7 +97,7 @@ func SortedToolDefinitions(names []string) []agento11y.ToolDefinition {
 	return out
 }
 
-// InferProvider maps a model name to a Sigil provider using loose substring
+// InferProvider maps a model name to an agento11y provider using loose substring
 // matching for Claude/Gemini and prefix matching for the OpenAI families.
 // Returns "" when nothing matches so callers can supply their own fallback.
 //

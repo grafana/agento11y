@@ -30,24 +30,32 @@ type hooksFileEntry struct {
 	Match   string `toml:"match,omitempty"`
 }
 
-// desiredHooks returns the sigil-owned [[hooks]] entries vibe runs. Vibe
+// desiredHooks returns the agento11y-owned [[hooks]] entries vibe runs. Vibe
 // defines exactly three event types and we wire all three: post_agent_turn
 // for the per-turn generation export, before_tool for guard enforcement, and
 // after_tool for per-tool span timing. before_tool/after_tool take a "*"
 // matcher (every tool); match is forbidden on post_agent_turn. Each entry is
-// upserted by its unique name so repeated installs are idempotent, old
-// entries written with the literal `sigil vibe hook` command are updated in
-// place, and hand-authored hooks in the same file are preserved.
+// upserted by its unique name so repeated installs are idempotent and
+// hand-authored hooks in the same file are preserved.
 //
 // command is the shell command vibe runs for each fire, built from this
 // executable's own path so hooks keep working for users who installed only
 // the agento11y (or only the legacy sigil) command.
 func desiredHooks(command string) []hooksFileEntry {
 	return []hooksFileEntry{
-		{Name: "sigil", Type: "post_agent_turn", Command: command, Timeout: hookTimeoutSec},
-		{Name: "sigil-before-tool", Type: "before_tool", Command: command, Timeout: hookTimeoutSec, Match: "*"},
-		{Name: "sigil-after-tool", Type: "after_tool", Command: command, Timeout: hookTimeoutSec, Match: "*"},
+		{Name: "agento11y", Type: "post_agent_turn", Command: command, Timeout: hookTimeoutSec},
+		{Name: "agento11y-before-tool", Type: "before_tool", Command: command, Timeout: hookTimeoutSec, Match: "*"},
+		{Name: "agento11y-after-tool", Type: "after_tool", Command: command, Timeout: hookTimeoutSec, Match: "*"},
 	}
+}
+
+// legacyHookNames are the pre-rename entry names. They are dropped on merge
+// so an install refreshed from an older version does not fire every hook
+// twice (once per name).
+var legacyHookNames = map[string]bool{
+	"sigil":             true,
+	"sigil-before-tool": true,
+	"sigil-after-tool":  true,
 }
 
 // vibeHome returns the root vibe config directory. It honors VIBE_HOME
@@ -73,7 +81,7 @@ func hooksFilePath() (string, error) {
 	return filepath.Join(home, "hooks.toml"), nil
 }
 
-// ensureHookInstalled merges a sigil-owned post_agent_turn entry into
+// ensureHookInstalled merges an agento11y-owned post_agent_turn entry into
 // vibe's hooks.toml. The write is atomic (temp file + rename), idempotent
 // (skipped when the entry already matches), and preserves any
 // hand-authored hooks that share the same file.
@@ -134,8 +142,9 @@ func ensureHookInstalled() (string, bool, error) {
 	return path, true, nil
 }
 
-// mergeHooksTOML decodes the existing hooks.toml bytes, upserts every
-// sigil-owned entry in desiredHooks (each by its unique name), and
+// mergeHooksTOML decodes the existing hooks.toml bytes, drops entries with
+// legacy pre-rename names, upserts every agento11y-owned entry in
+// desiredHooks (each by its unique name), and
 // re-encodes. If the result matches the input byte-for-byte after
 // re-encoding, changed is false and the original bytes are returned so we
 // never rewrite a file just to reformat whitespace.
@@ -152,6 +161,7 @@ func mergeHooksTOML(existing []byte, command string) (out []byte, changed bool, 
 	}
 
 	hooks, _ := doc["hooks"].([]any)
+	hooks = dropLegacyHooks(hooks)
 	for _, desired := range desiredHooks(command) {
 		hooks = upsertHook(hooks, desired)
 	}
@@ -193,4 +203,18 @@ func upsertHook(hooks []any, desired hooksFileEntry) []any {
 		}
 	}
 	return append(hooks, fields)
+}
+
+// dropLegacyHooks removes entries whose name matches a pre-rename hook name.
+func dropLegacyHooks(hooks []any) []any {
+	out := hooks[:0]
+	for _, raw := range hooks {
+		if entry, ok := raw.(map[string]any); ok {
+			if name, _ := entry["name"].(string); legacyHookNames[name] {
+				continue
+			}
+		}
+		out = append(out, raw)
+	}
+	return out
 }

@@ -97,7 +97,7 @@ Use Cursor's agent for one turn, then open **AI Observability → Conversations*
 If nothing shows up, add `AGENTO11Y_DEBUG=true` to `~/.config/agento11y/config.env` (Cursor launches from the GUI, so a shell env var won't reach the hooks) and tail the log:
 
 ```sh
-tail -f ~/.local/state/sigil/logs/sigil.log
+tail -f ~/.local/state/agento11y/logs/agento11y.log
 ```
 
 ## All options
@@ -112,7 +112,7 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). Built-ins (`git.branch`, `cwd`, `subagent`) win on generation-export tag collision. |
 | `AGENTO11Y_USER_ID` | from Cursor | Override the user id. |
-| `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
+| `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Cursor `preToolUse` hook is evaluated against Sigil: tool calls denied by guard rules are blocked, and Transform rules rewrite the tool arguments before execution. |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout. Lower = less added latency on every tool call, higher = better tolerance for slow `llm_judge` evaluators. |

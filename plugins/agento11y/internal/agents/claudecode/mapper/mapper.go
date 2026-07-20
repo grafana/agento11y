@@ -146,7 +146,7 @@ type agentCall struct {
 // Claude Code subagents do not produce their own transcript lines — the only
 // evidence of their execution is the Agent tool_use (spawn) and the matching
 // tool_result (output). Process synthesises a generation for each completed
-// Agent call so that the Sigil dependency graph can display the DAG.
+// Agent call so that the agento11y dependency graph can display the DAG.
 func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact.Redactor) []agento11y.Generation {
 	var (
 		gens []agento11y.Generation

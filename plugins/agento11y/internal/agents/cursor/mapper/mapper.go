@@ -1,5 +1,5 @@
 // Package mapper turns the on-disk Fragment + Session + StopPayload into a
-// Sigil Generation suitable for emission via the Go SDK. Unlike the
+// agento11y Generation suitable for emission via the Go SDK. Unlike the
 // claudecode mapper there is no redactor — content passes through verbatim
 // in `full` mode.
 package mapper
@@ -63,7 +63,7 @@ type Mapped struct {
 	CallError  error
 }
 
-// MapFragment builds the Sigil Generation for a finished turn.
+// MapFragment builds the agento11y Generation for a finished turn.
 func MapFragment(in Inputs) Mapped {
 	frag := in.Fragment
 	now := in.Now
@@ -174,7 +174,7 @@ func MapFragment(in Inputs) Mapped {
 	return mapped
 }
 
-// resolveStopStatus normalizes Cursor's stop.status to the subset Sigil uses.
+// resolveStopStatus normalizes Cursor's stop.status to the subset agento11y uses.
 // Unknown values (and missing payloads) → "completed" so we never silently
 // drop a turn.
 func resolveStopStatus(stop *StopInput) StopStatus {
@@ -261,7 +261,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (
 		})
 	}
 
-	// Tool calls + results, interleaved per Sigil's convention:
+	// Tool calls + results, interleaved per agento11y's convention:
 	// assistant → tool_call, then a tool message → tool_result.
 	for i := range frag.Tools {
 		t := &frag.Tools[i]

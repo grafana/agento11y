@@ -113,7 +113,7 @@ func TestLaunch_RunsInstallWhenPackageMissing(t *testing.T) {
 
 // A failed `pi install` should not block the user's session. The launcher
 // must print the failure and a manual-retry hint on stderr, then still exec
-// pi so the workflow keeps moving (just without Sigil capture).
+// pi so the workflow keeps moving (just without agento11y capture).
 func TestLaunch_InstallFailureContinuesToExec(t *testing.T) {
 	dir := t.TempDir()
 	writeSettings(t, dir, `{"packages":[]}`)

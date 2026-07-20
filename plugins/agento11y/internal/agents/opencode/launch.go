@@ -1,5 +1,5 @@
 // Package opencode implements the opencode launcher adapter for the
-// consolidated sigil binary. The dispatcher in cmd/sigil routes
+// consolidated agento11y binary. The dispatcher in cmd/agento11y routes
 // `sigil opencode [-- args...]` here.
 //
 // Unlike the hook adapters, this adapter owns the user's terminal: it
@@ -66,8 +66,8 @@ var configFileNames = []string{"opencode.json", "opencode.jsonc"}
 // once if it is not), and then exec's opencode with the supplied args.
 // When localEnv is non-nil, the child receives local-mode SIGIL_ENDPOINT,
 // SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT and placeholder auth values so it
-// talks to the in-process receiver instead of Sigil Cloud.
-func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, sigilVersion string) error {
+// talks to the in-process receiver instead of Grafana Cloud.
+func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, binaryVersion string) error {
 	// The periodic refresh installs PluginSource. When the config still
 	// references the legacy package name, that would register the plugin a
 	// second time under the new name, so skip the refresh for legacy installs
@@ -101,8 +101,8 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 		UpdateRecoveryHint: func(w io.Writer) {
 			fmt.Fprintf(w, "          opencode plugin %s --global --force\n", PluginSource)
 		},
-		UpdateTTL:    updateCheckTTL,
-		SigilVersion: sigilVersion,
+		UpdateTTL:     updateCheckTTL,
+		BinaryVersion: binaryVersion,
 	})
 }
 

@@ -397,7 +397,7 @@ func TestIsSigilHook(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.cmd, func(t *testing.T) {
-			assert.Equal(t, tc.want, isSigilHook(tc.cmd))
+			assert.Equal(t, tc.want, isOursHook(tc.cmd))
 		})
 	}
 }
@@ -455,7 +455,7 @@ func readEntries(t *testing.T, path string) map[string][]string {
 func sigilCommands(cmds []string) []string {
 	var out []string
 	for _, c := range cmds {
-		if isSigilHook(c) {
+		if isOursHook(c) {
 			out = append(out, c)
 		}
 	}
@@ -465,7 +465,7 @@ func sigilCommands(cmds []string) []string {
 func nonSigilCommands(cmds []string) []string {
 	var out []string
 	for _, c := range cmds {
-		if !isSigilHook(c) {
+		if !isOursHook(c) {
 			out = append(out, c)
 		}
 	}

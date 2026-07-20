@@ -276,12 +276,12 @@ func TestWriteHookSpecificOutputDeny(t *testing.T) {
 		{
 			name:    "blank reason falls back to generic",
 			reason:  "",
-			wantSub: []string{`"permissionDecisionReason":"tool call denied by Sigil guard"`},
+			wantSub: []string{`"permissionDecisionReason":"tool call denied by agento11y guard"`},
 		},
 		{
 			name:    "whitespace reason falls back to generic",
 			reason:  "   ",
-			wantSub: []string{`"permissionDecisionReason":"tool call denied by Sigil guard"`},
+			wantSub: []string{`"permissionDecisionReason":"tool call denied by agento11y guard"`},
 		},
 	}
 	for _, tt := range tests {

@@ -44,8 +44,8 @@ var (
 // and then exec's codex with the supplied args. When localEnv is non-nil,
 // the child receives local-mode SIGIL_ENDPOINT,
 // SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT and placeholder auth values so it talks
-// to the in-process receiver instead of Sigil Cloud.
-func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, sigilVersion string) error {
+// to the in-process receiver instead of Grafana Cloud.
+func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, binaryVersion string) error {
 	return launcher.Bootstrap(ctx, launcher.BootstrapSpec{
 		BinName:     "codex",
 		PluginLabel: PluginName,
@@ -82,14 +82,14 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 					"          codex plugin add %s@%s\n",
 				PluginName, marketplaceAlias)
 		},
-		UpdateTTL:    updateCheckTTL,
-		SigilVersion: sigilVersion,
+		UpdateTTL:     updateCheckTTL,
+		BinaryVersion: binaryVersion,
 	})
 }
 
 // Status reports whether the sigil-codex plugin is installed and enabled. It
 // reuses the read-only `codex plugin list` probe and never installs, updates,
-// or writes update-check state — `sigil doctor` relies on this. codex's plugin
+// or writes update-check state — `agento11y doctor` relies on this. codex's plugin
 // list does not expose a version, so version is always empty (best-effort).
 func Status(ctx context.Context) (installed bool, version string, err error) {
 	bin, err := lookPath("codex")

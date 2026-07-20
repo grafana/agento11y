@@ -15,10 +15,10 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
-	"github.com/grafana/agento11y/plugins/agento11y/internal/sigilemit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
 )
 
@@ -78,7 +78,7 @@ func UserPromptSubmit(p Payload, cfg config.Config, logger *log.Logger) {
 	}
 }
 
-// PreToolUse evaluates a Codex tool call against Sigil guard rules. It writes
+// PreToolUse evaluates a Codex tool call against agento11y guard rules. It writes
 // a PreToolUse deny envelope to stdout when the call must be blocked, an
 // allow+updatedInput envelope when a Transform rule redacted the tool
 // arguments, and stays silent on a plain allow. Transport setup, credential
@@ -212,7 +212,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	tokenSnapshot := tokenSnapshotForStop(p, frag, logger)
 	ctx, cancel := context.WithTimeout(context.Background(), stopExportTimeout)
 	defer cancel()
-	providers := sigilemit.SetupOTel(ctx, p.SessionID, logger)
+	providers := emit.SetupOTel(ctx, p.SessionID, logger)
 	if providers != nil {
 		defer func() {
 			if err := providers.Shutdown(ctx); err != nil {
@@ -239,7 +239,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	sweptPaths := sweepPendingRetries(ctx, client, cfg, p.SessionID, p.TurnID, logger)
 
 	if err := client.Flush(ctx); err != nil {
-		logger.Printf("stop: sigil flush: %v", err)
+		logger.Printf("stop: agento11y flush: %v", err)
 		markPendingRetry(p.SessionID, p.TurnID, logger)
 		return
 	}
@@ -465,11 +465,11 @@ func applySessionDefaults(f *fragment.Fragment, s *fragment.Session) {
 	}
 }
 
-// buildClient constructs the Sigil client with the shared HTTP/basic-auth
+// buildClient constructs the agento11y client with the shared HTTP/basic-auth
 // export defaults. Endpoint, tenant ID, and token come from the SDK's automatic
 // SIGIL_* env resolution, matching copilot and cursor.
 func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
-	return sigilemit.NewClient(sigilemit.ClientOptions{
+	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
 		Logger:              logger,
@@ -480,7 +480,7 @@ func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logge
 
 func emitGeneration(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, mapped mapper.Mapped, mode agento11y.ContentCaptureMode, logger *log.Logger) error {
 	// codex never promotes a call error, so callErr is always nil here.
-	return sigilemit.Record(ctx, client, mapped.Start, mapped.Generation, nil, func(genCtx context.Context) {
+	return emit.Record(ctx, client, mapped.Start, mapped.Generation, nil, func(genCtx context.Context) {
 		emitToolSpans(genCtx, client, frag, mapped.Generation, mode, logger)
 	})
 }
@@ -495,7 +495,7 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment
 		if t.ToolName == "" {
 			continue
 		}
-		startedAt, completedAt := sigilemit.ToolSpanWindow(t.CompletedAt, t.DurationMs, gen.CompletedAt)
+		startedAt, completedAt := emit.ToolSpanWindow(t.CompletedAt, t.DurationMs, gen.CompletedAt)
 		_, rec := client.StartToolExecution(ctx, agento11y.ToolExecutionStart{
 			ToolName:        t.ToolName,
 			ToolCallID:      t.ToolUseID,
@@ -515,7 +515,7 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment
 			end.Result = redactSpanContent(red, t.ToolResponse)
 		}
 		if t.Status == "error" {
-			rec.SetExecError(sigilemit.ToolError(t.ErrorMessage))
+			rec.SetExecError(emit.ToolError(t.ErrorMessage))
 		}
 		rec.SetResult(end)
 		rec.End()

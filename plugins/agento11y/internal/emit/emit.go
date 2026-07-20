@@ -1,5 +1,5 @@
-// Package sigilemit holds the Sigil emission mechanics shared by the agent
-// adapters: OTel provider setup, Sigil client construction, the generation
+// Package emit holds the agento11y emission mechanics shared by the agent
+// adapters: OTel provider setup, client construction, the generation
 // recorder lifecycle, and tool-span helpers.
 //
 // The per-turn adapters (codex, copilot, cursor) use all of it. claudecode
@@ -12,7 +12,7 @@
 // and content-capture mode. Content handling that is genuinely agent-specific
 // (redaction, capture-mode clamping) stays at the call site; this package
 // only owns the mechanics that are identical.
-package sigilemit
+package emit
 
 import (
 	"context"
@@ -68,7 +68,7 @@ func exportConfig(userAgent string) agento11y.GenerationExportConfig {
 	return export
 }
 
-// NewClient builds a Sigil client with the shared HTTP/basic-auth generation
+// NewClient builds an agento11y client with the shared HTTP/basic-auth generation
 // export defaults and optional OTel providers.
 func NewClient(opts ClientOptions) *agento11y.Client {
 	c := agento11y.Config{

@@ -8,15 +8,15 @@ import (
 
 func TestStateRoot_XDGOverride(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "/custom/state")
-	if got := StateRoot(); got != "/custom/state/sigil/cursor" {
-		t.Errorf("got %q want /custom/state/sigil/cursor", got)
+	if got := StateRoot(); got != "/custom/state/agento11y/cursor" {
+		t.Errorf("got %q want /custom/state/agento11y/cursor", got)
 	}
 }
 
 func TestFragmentFilePath_Layout(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "/x")
 	got := FragmentFilePath("conv-uuid", "gen-id")
-	prefix := filepath.Join("/x", "sigil", "cursor") + "/"
+	prefix := filepath.Join("/x", "agento11y", "cursor") + "/"
 	if !strings.HasPrefix(got, prefix) || !strings.HasSuffix(got, ".json") {
 		t.Errorf("got %q, want path under %s ending in .json", got, prefix)
 	}
@@ -25,7 +25,7 @@ func TestFragmentFilePath_Layout(t *testing.T) {
 func TestFragmentFilePath_PathTraversalNeutralised(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "/x")
 	got := FragmentFilePath("../../etc/passwd", "gen")
-	stateRoot := filepath.Join("/x", "sigil", "cursor")
+	stateRoot := filepath.Join("/x", "agento11y", "cursor")
 	rel, err := filepath.Rel(stateRoot, got)
 	if err != nil {
 		t.Fatalf("Rel error: %v", err)
@@ -61,7 +61,7 @@ func TestSessionFilePath_LooksRight(t *testing.T) {
 	if !strings.HasSuffix(got, "/session.json") {
 		t.Errorf("got %q does not end with /session.json", got)
 	}
-	if !strings.Contains(got, "/sigil/cursor/conv1") {
-		t.Errorf("got %q missing /sigil/cursor/conv1 segment", got)
+	if !strings.Contains(got, "/agento11y/cursor/conv1") {
+		t.Errorf("got %q missing /agento11y/cursor/conv1 segment", got)
 	}
 }

@@ -28,7 +28,7 @@ func FilePath() string {
 	return dotenv.FilePath()
 }
 
-// ApplyEnv loads the shared sigil dotenv config and writes keys whose OS
+// ApplyEnv loads the shared agento11y dotenv config and writes keys whose OS
 // env value is empty.
 func ApplyEnv(logger *log.Logger) map[string]string {
 	return dotenv.ApplyEnv(logger)

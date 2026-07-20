@@ -1,5 +1,5 @@
 // Package pi implements the pi launcher adapter for the consolidated sigil
-// binary. The dispatcher in cmd/sigil routes `sigil pi [-- args...]` here.
+// binary. The dispatcher in cmd/agento11y routes `sigil pi [-- args...]` here.
 //
 // Unlike the hook adapters, this adapter owns the user's terminal: it
 // bootstraps the @grafana/agento11y-pi extension in pi's settings file on first
@@ -54,7 +54,7 @@ var (
 // once if it is not), and then exec's pi with the supplied args. When
 // localEnv is non-nil, the child receives local-mode SIGIL_ENDPOINT,
 // SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT and placeholder auth values so it
-// talks to the in-process receiver instead of Sigil Cloud. The trailing
+// talks to the in-process receiver instead of Grafana Cloud. The trailing
 // string arg is the sigil build version; the pi adapter does not run
 // auto-update checks (pi's own installer handles upgrades) so it is
 // accepted to satisfy the launcher signature and ignored.

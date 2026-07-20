@@ -1,5 +1,5 @@
 // Package config resolves the cursor adapter's runtime knobs from OS env
-// and the shared sigil dotenv file.
+// and the shared agento11y dotenv file.
 //
 // Cursor launches hooks under a stripped environment (shell rc files do not
 // run), so the dotenv is the reliable place to put credentials. ApplyEnv
@@ -37,7 +37,7 @@ func FilePath() string {
 	return dotenv.FilePath()
 }
 
-// ApplyEnv loads the shared sigil dotenv config and writes keys whose OS
+// ApplyEnv loads the shared agento11y dotenv config and writes keys whose OS
 // env value is empty.
 func ApplyEnv(logger *log.Logger) map[string]string {
 	return dotenv.ApplyEnv(logger)

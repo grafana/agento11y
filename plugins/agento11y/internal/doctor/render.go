@@ -80,7 +80,7 @@ func renderHuman(w io.Writer, r *Report, color, probed bool) {
 	p := palette{color: color}
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "%s %s\n\n", p.heading("agento11y doctor"), p.faint("v"+r.Sigil.Version))
+	fmt.Fprintf(&b, "%s %s\n\n", p.heading("agento11y doctor"), p.faint("v"+r.Binary.Version))
 
 	// Conversations pipeline.
 	writeSection(&b, p, "Conversations (generation export)", r.Conversations.Health)

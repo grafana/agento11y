@@ -86,7 +86,7 @@ If nothing shows up:
 
 ```sh
 AGENTO11Y_DEBUG=true agento11y claude  # one turn
-tail -f ~/.local/state/sigil/logs/sigil.log
+tail -f ~/.local/state/agento11y/logs/agento11y.log
 ```
 
 Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a missing token, or a token without the `sigil:write` scope.
@@ -104,7 +104,7 @@ Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a mi
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
 | `AGENTO11Y_USER_ID` | from `~/.claude.json` | Override the user id. |
 | `AGENTO11Y_USER_ID_SOURCE` | `email` | Which field to read from `~/.claude.json`: `email` or `accountUuid`. |
-| `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
+| `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
 | `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `sigil-cc` plugin automatically. Set `false` to pin the installed version. |
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Claude Code `PreToolUse` hook calls Sigil's `/api/v1/hooks:evaluate` and blocks tool calls denied by guard rules. |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |

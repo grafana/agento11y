@@ -1,13 +1,14 @@
-// Package otel sets up OTLP HTTP trace + metric providers for the sigil
+// Package otel sets up OTLP HTTP trace + metric providers for the agento11y
 // plugin binary.
 //
 // Configuration precedence (high to low):
-//   - SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT — sigil-specific override
+//   - AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT (SIGIL_* fallback) — agento11y-specific override
 //   - OTEL_EXPORTER_OTLP_ENDPOINT — standard OTel env var
 //
 // When OTEL_EXPORTER_OTLP_HEADERS lacks an Authorization entry, the package
 // synthesizes `Authorization=Basic base64(tenant:token)` from
-// SIGIL_AUTH_TENANT_ID + (SIGIL_OTEL_AUTH_TOKEN or SIGIL_AUTH_TOKEN). Users
+// AGENTO11Y_AUTH_TENANT_ID + (AGENTO11Y_OTEL_AUTH_TOKEN or
+// AGENTO11Y_AUTH_TOKEN), each with the SIGIL_* spelling as fallback. Users
 // who want a different scheme can set the header themselves and the plugin
 // won't touch it.
 package otel
@@ -36,8 +37,9 @@ import (
 
 // DefaultServiceName is written to OTEL_SERVICE_NAME if unset before exporter
 // construction. Agents share this name so traces from any dispatched agent
-// land under a single service in the backend.
-const DefaultServiceName = "sigil"
+// end up under a single service in the backend. Renamed from "sigil";
+// dashboards filtering on the old service name need to update.
+const DefaultServiceName = "agento11y"
 
 // Providers holds initialized OTel providers. All methods are nil-safe.
 type Providers struct {
@@ -186,7 +188,7 @@ type ProbeTarget struct {
 // ProbeConfig resolves the OTLP endpoint and returns the per-signal probe
 // targets for metrics and traces, reusing the same endpoint resolution,
 // signal-URL construction, and auth-header synthesis as Setup. ok is false
-// when no OTLP endpoint is configured. Used by `sigil doctor --probe` to send
+// when no OTLP endpoint is configured. Used by `agento11y doctor --probe` to send
 // a lightweight request to each signal and report the HTTP status without
 // standing up the full exporter pipeline.
 func ProbeConfig() (metrics, traces ProbeTarget, ok bool) {

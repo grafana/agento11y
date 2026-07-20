@@ -418,7 +418,7 @@ func TestLaunch_RefreshesInstalledPluginWhenUpdateDue(t *testing.T) {
 	if !strings.Contains(stderr.String(), "refreshing "+PluginSource+" in opencode") {
 		t.Fatalf("stderr missing refresh message: %q", stderr.String())
 	}
-	stamp := filepath.Join(state, "sigil", "update-checks", PluginName+".stamp")
+	stamp := filepath.Join(state, "agento11y", "update-checks", PluginName+".stamp")
 	if _, err := os.Stat(stamp); err != nil {
 		t.Fatalf("expected update stamp: %v", err)
 	}

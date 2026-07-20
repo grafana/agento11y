@@ -7,7 +7,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
-// LaunchEnv encodes the env-var contract between the sigil launcher and
+// LaunchEnv encodes the env-var contract between the agento11y launcher and
 // a local-mode agent process. Endpoint and OTLPEndpoint are required;
 // the agent reads them via the branded ENDPOINT and
 // OTEL_EXPORTER_OTLP_ENDPOINT families (either spelling).
@@ -37,7 +37,7 @@ func Environ(e *LaunchEnv) []string {
 // downgrades local capture. The AUTH_TENANT_ID and AUTH_TOKEN families are
 // only filled when the user hasn't already configured either spelling, so a
 // user with Cloud credentials in their shell doesn't get them clobbered by
-// `sigil <agent> --local`.
+// `agento11y <agent> --local`.
 //
 // Placeholder auth values are injected so existing hook code (which
 // short-circuits when the tenant / token families are empty) still exports

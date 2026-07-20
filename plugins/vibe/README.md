@@ -31,7 +31,7 @@ agento11y vibe
 
 The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y vibe` resolves the `vibe` binary on `PATH`, upserts the three sigil-owned `[[hooks]]` entries into `~/.vibe/hooks.toml` (or `$VIBE_HOME/hooks.toml`) on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then execs it. Repeated runs are no-ops: each entry is matched by name (`sigil`, `sigil-before-tool`, `sigil-after-tool`) and any hand-authored hooks in the same file are preserved.
+`agento11y vibe` resolves the `vibe` binary on `PATH`, upserts the three agento11y-owned `[[hooks]]` entries into `~/.vibe/hooks.toml` (or `$VIBE_HOME/hooks.toml`) on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then execs it. Repeated runs are no-ops: each entry is matched by name (`agento11y`, `agento11y-before-tool`, `agento11y-after-tool`); entries under the pre-rename `sigil*` names are replaced and any hand-authored hooks in the same file are preserved.
 
 The launcher always sets `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` in Mistral Vibe's environment because these events are gated behind that flag.
 
@@ -42,20 +42,20 @@ Add these blocks to `~/.vibe/hooks.toml`:
 
 ```toml
 [[hooks]]
-name = "sigil"
+name = "agento11y"
 type = "post_agent_turn"
 command = "agento11y vibe hook"
 timeout = 30
 
 [[hooks]]
-name = "sigil-before-tool"
+name = "agento11y-before-tool"
 type = "before_tool"
 command = "agento11y vibe hook"
 timeout = 30
 match = "*"
 
 [[hooks]]
-name = "sigil-after-tool"
+name = "agento11y-after-tool"
 type = "after_tool"
 command = "agento11y vibe hook"
 timeout = 30

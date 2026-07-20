@@ -1,11 +1,11 @@
 // Package vibe implements the Mistral Vibe agent adapter for the
-// consolidated sigil binary. The dispatcher in cmd/sigil routes
-// `sigil vibe hook` here.
+// consolidated agento11y binary. The dispatcher in cmd/agento11y routes
+// `agento11y vibe hook` here.
 //
 // Vibe fires hooks for three event types, all wired here:
 //   - post_agent_turn exports one generation per turn from the on-disk
 //     <session_dir>/messages.jsonl plus the sibling meta.json.
-//   - before_tool evaluates the tool call against Sigil guard policy and may
+//   - before_tool evaluates the tool call against agento11y guard policy and may
 //     deny or rewrite it (when guards are enabled).
 //   - after_tool records the tool's timing/status for its execute_tool span.
 package vibe

@@ -91,7 +91,7 @@ func TestBeforeToolWriters(t *testing.T) {
 	t.Run("deny falls back to a default reason", func(t *testing.T) {
 		var out bytes.Buffer
 		writeBeforeToolDeny(&out, "  ")
-		if !strings.Contains(out.String(), "denied by Sigil guard") {
+		if !strings.Contains(out.String(), "denied by agento11y guard") {
 			t.Errorf("missing default reason: %s", out.String())
 		}
 	})

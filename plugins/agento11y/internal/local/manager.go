@@ -127,7 +127,7 @@ func IsRunning(dir string) (*Status, error) {
 // EnsureRunning returns the current daemon status, starting it if no
 // healthy daemon is recorded. Concurrent callers are serialised by an
 // exclusive flock on dir/LockFile so a race between two `--local`
-// launches (or `sigil local start`) cannot spawn duplicate daemons.
+// launches (or `agento11y local start`) cannot spawn duplicate daemons.
 func EnsureRunning(ctx context.Context, dir string, logger *log.Logger) (*Status, error) {
 	if s, err := IsRunning(dir); err != nil {
 		return nil, err
@@ -179,9 +179,9 @@ func SetStartDaemonForTesting(fn func(ctx context.Context, dir string, logger *l
 }
 
 // Stop sends SIGTERM to the recorded daemon after verifying the live PID
-// still looks like `sigil local serve`. Returns (false, nil) when no
+// still looks like `agento11y local serve`. Returns (false, nil) when no
 // daemon is recorded, the recorded process is gone, or the live PID is
-// not a sigil daemon. Endpoint health is not required: an alive process
+// not an agento11y daemon. Endpoint health is not required: an alive process
 // with a dead /healthz endpoint may be a wedged daemon, and leaving it
 // alive lets a later start orphan it. Returns a non-nil error when the
 // daemon identity cannot be checked or the daemon does not exit within

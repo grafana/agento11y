@@ -334,10 +334,10 @@ func nopLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
 }
 
-// userHooksPath returns the sigil.json path under the test's COPILOT_HOME.
+// userHooksPath returns the agento11y.json path under the test's COPILOT_HOME.
 func userHooksPath(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(os.Getenv("COPILOT_HOME"), "hooks", "sigil.json")
+	return filepath.Join(os.Getenv("COPILOT_HOME"), "hooks", "agento11y.json")
 }
 
 // withExecutable pins the executable path hook commands are built from, so
@@ -437,9 +437,9 @@ func TestLaunch_InstallsAndKeepsUserHooks(t *testing.T) {
 	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
 }
 
-// A hooks file written by an older version with the literal `sigil copilot
-// hook` command must be replaced with the executable-path form, in place and
-// without duplicate entries (the whole file is sigil-owned).
+// A legacy sigil.json hooks file written by an older version must be removed
+// and replaced by agento11y.json with the executable-path command, so Copilot
+// does not run both files and fire every hook twice.
 func TestLaunch_ReplacesLegacyLiteralHookCommand(t *testing.T) {
 	t.Setenv("COPILOT_HOME", t.TempDir())
 	withExecutable(t, "/usr/local/bin/agento11y")
@@ -457,6 +457,46 @@ func TestLaunch_ReplacesLegacyLiteralHookCommand(t *testing.T) {
 	data, err := os.ReadFile(userHooksPath(t))
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), `"sigil copilot hook"`)
+	assert.NoFileExists(t, filepath.Join(dir, "sigil.json"), "legacy hooks file must be removed")
+}
+
+// A failed write must leave the legacy sigil.json in place: it is the only
+// hooks file the install has, and removing it before the new file exists
+// would silently stop capture.
+func TestWriteUserHooks_KeepsLegacyFileOnFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("COPILOT_HOME", home)
+	dir := filepath.Join(home, "hooks")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	legacyPath := filepath.Join(dir, "sigil.json")
+	require.NoError(t, os.WriteFile(legacyPath, []byte("{}"), 0o644))
+
+	prev := execpath.Executable
+	t.Cleanup(func() { execpath.Executable = prev })
+	execpath.Executable = func() (string, error) { return "", errors.New("boom") }
+
+	_, _, err := writeUserHooks()
+	require.Error(t, err)
+	assert.FileExists(t, legacyPath, "legacy hooks file must survive a failed write")
+}
+
+// When agento11y.json is already up to date the write is skipped, but a
+// leftover legacy sigil.json must still be removed or every hook fires twice.
+func TestWriteUserHooks_RemovesLegacyFileWhenUpToDate(t *testing.T) {
+	t.Setenv("COPILOT_HOME", t.TempDir())
+	withExecutable(t, "/usr/local/bin/agento11y")
+
+	_, wrote, err := writeUserHooks()
+	require.NoError(t, err)
+	require.True(t, wrote)
+
+	legacyPath := filepath.Join(os.Getenv("COPILOT_HOME"), "hooks", "sigil.json")
+	require.NoError(t, os.WriteFile(legacyPath, []byte("{}"), 0o644))
+
+	_, wrote, err = writeUserHooks()
+	require.NoError(t, err)
+	require.False(t, wrote, "content already matches, no rewrite expected")
+	assert.NoFileExists(t, legacyPath)
 }
 
 // The generated hook command must shell-quote executable paths a shell would
@@ -509,20 +549,21 @@ func TestParsePluginListStatus_Version(t *testing.T) {
 func TestStatus(t *testing.T) {
 	tests := []struct {
 		name          string
-		writeHooks    bool
+		hooksFile     string
 		wantInstalled bool
 	}{
-		{name: "hooks file present", writeHooks: true, wantInstalled: true},
-		{name: "hooks file absent", writeHooks: false, wantInstalled: false},
+		{name: "hooks file present", hooksFile: "agento11y.json", wantInstalled: true},
+		{name: "legacy hooks file present", hooksFile: "sigil.json", wantInstalled: true},
+		{name: "hooks file absent", wantInstalled: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("COPILOT_HOME", home)
-			if tc.writeHooks {
+			if tc.hooksFile != "" {
 				dir := filepath.Join(home, "hooks")
 				require.NoError(t, os.MkdirAll(dir, 0o755))
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "sigil.json"), []byte("{}"), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, tc.hooksFile), []byte("{}"), 0o644))
 			}
 
 			installed, version, err := Status(context.Background())

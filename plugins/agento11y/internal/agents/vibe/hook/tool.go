@@ -20,7 +20,7 @@ import (
 // handler; the SDK's own timeout (cfg.TimeoutMs) does the real work.
 const guardEvalBuffer = 500 * time.Millisecond
 
-// BeforeTool evaluates a tool call against Sigil guard policy before vibe
+// BeforeTool evaluates a tool call against agento11y guard policy before vibe
 // runs it. With guards disabled (the default) it is a pass-through that
 // writes nothing, which vibe reads as "allow". A deny writes vibe's
 // structured deny response so the call never runs; a redaction transform
@@ -129,7 +129,7 @@ func writeBeforeToolDeny(stdout io.Writer, reason string) {
 		return
 	}
 	if strings.TrimSpace(reason) == "" {
-		reason = "tool call denied by Sigil guard"
+		reason = "tool call denied by agento11y guard"
 	}
 	_ = json.NewEncoder(stdout).Encode(beforeToolDeny{Decision: "deny", Reason: reason})
 }

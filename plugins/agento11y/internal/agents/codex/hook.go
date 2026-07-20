@@ -1,5 +1,5 @@
 // Package codex implements the Codex agent adapter for the consolidated
-// sigil binary. The dispatcher in cmd/sigil routes `sigil codex hook` here.
+// agento11y binary. The dispatcher in cmd/agento11y routes `agento11y codex hook` here.
 package codex
 
 import (

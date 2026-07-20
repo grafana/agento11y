@@ -1,4 +1,4 @@
-package sigilemit
+package emit
 
 import (
 	"testing"

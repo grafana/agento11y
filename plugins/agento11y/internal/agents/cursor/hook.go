@@ -1,5 +1,5 @@
 // Package cursor implements the Cursor agent adapter for the consolidated
-// sigil binary. The dispatcher in cmd/sigil routes `sigil cursor hook` here.
+// agento11y binary. The dispatcher in cmd/agento11y routes `agento11y cursor hook` here.
 //
 // Cursor expects a permissive JSON response on pre-execution events when the
 // plugin wants to allow the action — a missing or non-JSON stdout on those

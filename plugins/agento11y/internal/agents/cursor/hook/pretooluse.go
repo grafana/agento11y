@@ -22,10 +22,10 @@ type preToolUseResponse struct {
 	UpdatedInput json.RawMessage `json:"updated_input,omitempty"`
 }
 
-// PreToolUse evaluates the tool call against Sigil guards and writes exactly
+// PreToolUse evaluates the tool call against agento11y guards and writes exactly
 // one preToolUse response to stdout: deny with the policy reason when
 // blocked, allow with updated_input when a Transform rule redacted the
-// arguments, plain allow otherwise (including guards disabled). All Sigil
+// arguments, plain allow otherwise (including guards disabled). All agento11y
 // transport, credential, fail-open/closed, and transform-extraction
 // behaviour lives in the shared guard helper so this stays in lockstep with
 // the other agents.

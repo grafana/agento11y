@@ -4,7 +4,7 @@ Forwards completed GitHub Copilot turns, hook-visible tool calls, error
 metadata, subagent lifecycle metadata, and optional prompt/tool content to
 [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
 Powered by the shared `agento11y` binary and driven by a single hooks file at
-`~/.copilot/hooks/sigil.json`, which is read by **both** the GitHub Copilot CLI
+`~/.copilot/hooks/agento11y.json`, which is read by **both** the GitHub Copilot CLI
 and Copilot Chat in **VS Code**. Each exported turn is tagged with the host it
 came from (`hook.surface` = `copilot-cli` or `vscode`).
 
@@ -40,9 +40,9 @@ agento11y copilot -- <copilot args>
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y copilot` writes the shared hooks file to `~/.copilot/hooks/sigil.json`, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, removes any legacy `sigil-copilot` plugin left by older versions, and then launches Copilot CLI.
+`agento11y copilot` writes the shared hooks file to `~/.copilot/hooks/agento11y.json`, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, removes any legacy `sigil-copilot` plugin left by older versions, and then launches Copilot CLI.
 
-For VS Code, no launch wrapper is needed — once `~/.copilot/hooks/sigil.json` exists, add `~/.copilot/hooks` to the `chat.hookFilesLocations` setting and Copilot Chat picks it up.
+For VS Code, no launch wrapper is needed — once `~/.copilot/hooks/agento11y.json` exists, add `~/.copilot/hooks` to the `chat.hookFilesLocations` setting and Copilot Chat picks it up.
 
 > The integration deliberately does **not** register a Copilot CLI plugin. The
 > CLI runs hooks from the plugin store *and* `~/.copilot/hooks`, so a plugin
@@ -100,7 +100,7 @@ If nothing shows up:
 
 ```sh
 AGENTO11Y_DEBUG=true agento11y copilot   # one turn
-tail -f ~/.local/state/sigil/logs/sigil.log
+tail -f ~/.local/state/agento11y/logs/agento11y.log
 ```
 
 ## Supported Hook Events
@@ -165,7 +165,7 @@ Limits:
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. |
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
 | `AGENTO11Y_USER_ID` | — | Override the user id. |
-| `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
+| `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Copilot `preToolUse` hook is evaluated against Sigil: tool calls denied by guard rules are blocked, and Transform rules redact tool arguments in `copilot-cli`. |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout. Lower = less added latency on every tool call, higher = better tolerance for slow `llm_judge` evaluators. |
@@ -200,7 +200,7 @@ Exported generations are always tagged with:
 ### Surface detection (`copilot-cli` vs `vscode`)
 
 The Copilot hook payload carries no host identifier, and one shared
-`~/.copilot/hooks/sigil.json` serves both hosts, so the surface is resolved at
+`~/.copilot/hooks/agento11y.json` serves both hosts, so the surface is resolved at
 runtime:
 
 1. An explicit `AGENTO11Y_COPILOT_HOOK_SURFACE` env var wins (the in-repo
@@ -221,13 +221,13 @@ field and the `AGENTO11Y_DEBUG` log line (`dispatch: event=… surface=…`).
 - Current observed Copilot CLI transcripts expose assistant text, model, request ids, message ids, native turn ids, reasoning effort, and output token counts. They do not appear to expose input token counts, cache token counts, or reasoning token counts for completed turns, so usage and cost can still be partial.
 - Copilot does not document a stable native turn ID in these hook payloads. This plugin creates a local monotonic turn ID per session and hashes it into the Sigil generation id.
 - Subagent hooks do not currently expose enough durable identity to synthesize separate child generations safely, so subagent activity is exported as parent-turn metadata only.
-- This package targets the local Copilot CLI and Copilot Chat in VS Code via the shared `~/.copilot/hooks/sigil.json`. Copilot cloud agent uses repository-level `.github/hooks/*.json` instead, and GitHub documents cloud-agent outbound network access as restricted by the firewall by default.
+- This package targets the local Copilot CLI and Copilot Chat in VS Code via the shared `~/.copilot/hooks/agento11y.json`. Copilot cloud agent uses repository-level `.github/hooks/*.json` instead, and GitHub documents cloud-agent outbound network access as restricted by the firewall by default.
 
 ## Troubleshooting
 
 | Symptom | Try |
 |---|---|
-| Hooks file missing at `~/.copilot/hooks/sigil.json` | Re-run `agento11y copilot -- <args>` (it writes the file before launching). For VS Code, also add `~/.copilot/hooks` to `chat.hookFilesLocations`. |
+| Hooks file missing at `~/.copilot/hooks/agento11y.json` | Re-run `agento11y copilot -- <args>` (it writes the file before launching). For VS Code, also add `~/.copilot/hooks` to `chat.hookFilesLocations`. |
 | Turns appear twice in Sigil | A leftover `sigil-copilot` plugin is firing alongside the shared file. Remove it: `copilot plugin uninstall sigil-copilot` (newer `agento11y copilot` runs do this automatically). |
 | Command not found | Reinstall `agento11y` (see step 1). Check `agento11y --version` and that its install dir is on `PATH`. |
 | Hooks run but nothing appears in Sigil | Check `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TENANT_ID`, and `AGENTO11Y_AUTH_TOKEN`. Without all three, the plugin discards the completed fragment. |

@@ -1,6 +1,6 @@
 // Package claudecode implements the Claude Code agent adapter for the
-// consolidated sigil binary. The dispatcher in cmd/sigil routes
-// `sigil claude-code hook` here.
+// consolidated agento11y binary. The dispatcher in cmd/agento11y routes
+// `agento11y claude-code hook` here.
 package claudecode
 
 import (
@@ -19,10 +19,10 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
-	"github.com/grafana/agento11y/plugins/agento11y/internal/sigilemit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
 )
 
@@ -31,7 +31,7 @@ import (
 // it as a package var so tests can override it freely.
 var Version = "dev"
 
-// AgentName is the Sigil identity attached to every generation this agent
+// AgentName is the agent identity attached to every generation this agent
 // emits. Stable across versions so dashboards survive renames.
 const AgentName = "claude-code"
 
@@ -89,7 +89,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 
 	st := state.Load(input.SessionID)
 
-	// Route lightweight events that do not need real Sigil credentials first.
+	// Route lightweight events that do not need real agento11y credentials first.
 	// SessionStart only updates local state; PreToolUse calls into the shared
 	// guard helper which manages its own credentials, timeouts, and
 	// fail-open/closed behaviour. Routing these before the missing-creds
@@ -113,7 +113,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		return nil
 	}
 
-	sigilEndpoint := envconfig.Getenv("ENDPOINT")
+	endpoint := envconfig.Getenv("ENDPOINT")
 	tenantID := envconfig.Getenv("AUTH_TENANT_ID")
 	authToken := envconfig.Getenv("AUTH_TOKEN")
 
@@ -121,12 +121,12 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	// launcher injects placeholders, but a user running the hook
 	// directly (e.g. for testing) might leave them empty — fill in
 	// stand-ins so the SDK proceeds.
-	tenantID, authToken = envconfig.LocalAuthPlaceholders(sigilEndpoint, tenantID, authToken)
+	tenantID, authToken = envconfig.LocalAuthPlaceholders(endpoint, tenantID, authToken)
 
 	missing := envconfig.MissingEnvVars(
 		[]string{"AGENTO11Y_ENDPOINT", "AGENTO11Y_AUTH_TENANT_ID", "AGENTO11Y_AUTH_TOKEN"},
 		map[string]string{
-			"AGENTO11Y_ENDPOINT":       sigilEndpoint,
+			"AGENTO11Y_ENDPOINT":       endpoint,
 			"AGENTO11Y_AUTH_TENANT_ID": tenantID,
 			"AGENTO11Y_AUTH_TOKEN":     authToken,
 		},
@@ -184,7 +184,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	logger.Printf("produced %d generations", len(gens))
 
 	cfg := agento11y.Config{
-		GenerationExport: exportConfig(sigilEndpoint, tenantID, authToken),
+		GenerationExport: exportConfig(endpoint, tenantID, authToken),
 	}
 
 	if otelProviders != nil {
@@ -213,7 +213,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 			Metadata:            gen.Metadata,
 		}
 
-		if err := sigilemit.Record(hookCtx, client, genStart, gen, nil, func(genCtx context.Context) {
+		if err := emit.Record(hookCtx, client, genStart, gen, nil, func(genCtx context.Context) {
 			emitToolSpans(genCtx, client, gen, toolResults)
 		}); err != nil {
 			logger.Printf("enqueue: %v", err)
@@ -241,10 +241,10 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	return nil
 }
 
-// handlePreToolUse evaluates the tool call against Sigil guards and writes a
+// handlePreToolUse evaluates the tool call against agento11y guards and writes a
 // PreToolUse deny envelope to stdout when the call is blocked, or an
 // allow+updatedInput envelope when a Transform rule redacted the tool
-// arguments. A plain allow stays silent on stdout. All Sigil transport,
+// arguments. A plain allow stays silent on stdout. All agento11y transport,
 // credential, fail-open/closed, and local-endpoint placeholder behaviour
 // lives in the shared guard helper so this stays in lockstep with the codex
 // and copilot agents.

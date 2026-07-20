@@ -1,8 +1,8 @@
 // Package mapper turns a slice of new vibe transcript lines plus the
-// session's meta.json into a agento11y.Generation ready for export.
+// session's meta.json into an agento11y.Generation ready for export.
 //
 // One mapper.Map call produces exactly one generation per
-// post_agent_turn hook fire. Sigil groups records by ConversationID
+// post_agent_turn hook fire. agento11y groups records by ConversationID
 // (= vibe session_id), so multi-turn sessions get one generation per
 // turn under the same conversation.
 package mapper
@@ -25,7 +25,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
-// AgentName is the Sigil identity attached to every generation emitted
+// AgentName is the agento11y identity attached to every generation emitted
 // by the vibe agent adapter. Stable across versions.
 const AgentName = "mistral-vibe"
 
@@ -313,7 +313,7 @@ func latestTurnLines(lines []transcript.Line) []transcript.Line {
 	return lines
 }
 
-// buildMessages converts transcript lines into Sigil input/output messages.
+// buildMessages converts transcript lines into agento11y input/output messages.
 // Order convention matches the codex mapper: user prompts and tool
 // results land in Input; assistant text and tool calls land in Output.
 //
@@ -423,7 +423,7 @@ func buildMessages(lines []transcript.Line, mode agento11y.ContentCaptureMode) (
 }
 
 // buildToolDefinitions copies meta.json's tools_available[] to the
-// Sigil ToolDefinition shape. Parameters land in InputSchema verbatim.
+// agento11y ToolDefinition shape. Parameters land in InputSchema verbatim.
 func buildToolDefinitions(tools []meta.ToolDef) []agento11y.ToolDefinition {
 	if len(tools) == 0 {
 		return nil
@@ -451,7 +451,7 @@ func buildToolDefinitions(tools []meta.ToolDef) []agento11y.ToolDefinition {
 
 // GenerationID is a stable per-turn ID derived from session_id and the
 // turn sequence so reruns of the same hook against the same transcript
-// produce the same ID (and Sigil dedupes them on the server side).
+// produce the same ID (and agento11y dedupes them on the server side).
 func GenerationID(sessionID string, turnSeq int) string {
 	sum := sha256.Sum256([]byte(sessionID + "\x00" + strconv.Itoa(turnSeq)))
 	return "vibe-" + hex.EncodeToString(sum[:])[:24]

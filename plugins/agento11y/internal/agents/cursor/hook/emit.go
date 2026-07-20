@@ -9,8 +9,8 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
-	"github.com/grafana/agento11y/plugins/agento11y/internal/sigilemit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
 )
 
@@ -27,17 +27,17 @@ const otelInstrumentationName = "agento11y.cursor"
 // natively; the plugin only provides convenience auth-header injection from
 // SIGIL_AUTH_*.
 func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.Logger) *otel.Providers {
-	return sigilemit.SetupOTel(ctx, instanceID, logger)
+	return emit.SetupOTel(ctx, instanceID, logger)
 }
 
-// buildClient constructs the Sigil client. Endpoint, tenant ID, and token
+// buildClient constructs the agento11y client. Endpoint, tenant ID, and token
 // come from the SDK's automatic SIGIL_* env resolution (config.ApplyEnv has
 // already injected dotenv values into the OS env). The plugin only owns the
 // pieces the SDK can't infer: HTTP protocol, the `/api/v1/generations:export`
 // path suffix, basic-auth mode, and the OTel tracer/meter wiring. cursor does
 // not pass a logger, so the SDK client stays silent.
 func buildClient(cfg config.Config, providers *otel.Providers) *agento11y.Client {
-	return sigilemit.NewClient(sigilemit.ClientOptions{
+	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
 		Providers:           providers,
@@ -52,7 +52,7 @@ func buildClient(cfg config.Config, providers *otel.Providers) *agento11y.Client
 // Flushing/shutdown is the caller's responsibility — sessionEnd batches
 // multiple generations through one client.
 func emitGeneration(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, mapped mapper.Mapped, logger *log.Logger) error {
-	return sigilemit.Record(ctx, client, mapped.Start, mapped.Generation, mapped.CallError, func(genCtx context.Context) {
+	return emit.Record(ctx, client, mapped.Start, mapped.Generation, mapped.CallError, func(genCtx context.Context) {
 		emitToolSpans(genCtx, client, frag, mapped.Generation, logger)
 	})
 }
@@ -73,7 +73,7 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment
 		if t.ToolName == "" {
 			continue
 		}
-		startedAt, completedAt := sigilemit.ToolSpanWindow(t.CompletedAt, t.DurationMs, gen.CompletedAt)
+		startedAt, completedAt := emit.ToolSpanWindow(t.CompletedAt, t.DurationMs, gen.CompletedAt)
 		_, toolRec := client.StartToolExecution(ctx, agento11y.ToolExecutionStart{
 			ToolName:        t.ToolName,
 			ToolCallID:      t.ToolUseID,
@@ -94,7 +94,7 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment
 			end.Result = string(t.ToolOutput)
 		}
 		if t.Status == "error" {
-			toolRec.SetExecError(sigilemit.ToolError(t.ErrorMessage))
+			toolRec.SetExecError(emit.ToolError(t.ErrorMessage))
 		}
 		toolRec.SetResult(end)
 		toolRec.End()

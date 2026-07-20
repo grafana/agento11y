@@ -47,8 +47,8 @@ var (
 // exec's claude with the supplied args. When localEnv is non-nil, the
 // child receives local-mode SIGIL_ENDPOINT, SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT
 // and placeholder auth values so it talks to the in-process receiver
-// instead of Sigil Cloud.
-func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, sigilVersion string) error {
+// instead of Grafana Cloud.
+func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, binaryVersion string) error {
 	return launcher.Bootstrap(ctx, launcher.BootstrapSpec{
 		BinName:     "claude",
 		PluginLabel: PluginName,
@@ -74,14 +74,14 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 					"          claude plugin update %s@%s\n",
 				marketplaceAlias, PluginName, marketplaceAlias)
 		},
-		UpdateTTL:    updateCheckTTL,
-		SigilVersion: sigilVersion,
+		UpdateTTL:     updateCheckTTL,
+		BinaryVersion: binaryVersion,
 	})
 }
 
 // Status reports whether the sigil-cc plugin is installed for the current
 // working directory. It reuses the read-only pluginInstalled probe and never
-// installs, updates, or writes update-check state — `sigil doctor` relies on
+// installs, updates, or writes update-check state — `agento11y doctor` relies on
 // this. installed_plugins.json carries no version, so version is always empty
 // (best-effort).
 func Status(_ context.Context) (installed bool, version string, err error) {
@@ -128,7 +128,7 @@ type installedPluginEntry struct {
 // is active in every session, while `project` and `local` only apply when
 // the session's cwd matches the recorded `projectPath`. Treating any
 // `sigil-cc@*` key as installed would let a per-directory install for an
-// unrelated project suppress bootstrap here, leaving Sigil hooks inactive.
+// unrelated project suppress bootstrap here, leaving agento11y hooks inactive.
 // Marketplace alias is intentionally ignored so a foreign alias is not
 // reinstalled on top of.
 func pluginInstalled() (bool, error) {

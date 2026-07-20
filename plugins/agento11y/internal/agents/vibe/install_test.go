@@ -41,9 +41,9 @@ func TestEnsureHookInstalled_FreshWrite(t *testing.T) {
 		t.Fatalf("hooks len = %d, want 3 (post_agent_turn + before_tool + after_tool)", len(hooks))
 	}
 	byName := hooksByName(hooks)
-	post, ok := byName["sigil"]
+	post, ok := byName["agento11y"]
 	if !ok {
-		t.Fatalf("missing sigil post_agent_turn entry; got %v", keys(byName))
+		t.Fatalf("missing agento11y post_agent_turn entry; got %v", keys(byName))
 	}
 	if post["type"] != "post_agent_turn" {
 		t.Errorf("type = %v, want post_agent_turn", post["type"])
@@ -51,7 +51,7 @@ func TestEnsureHookInstalled_FreshWrite(t *testing.T) {
 	if post["command"] != wantCommand {
 		t.Errorf("command = %v, want %q", post["command"], wantCommand)
 	}
-	for name, wantType := range map[string]string{"sigil-before-tool": "before_tool", "sigil-after-tool": "after_tool"} {
+	for name, wantType := range map[string]string{"agento11y-before-tool": "before_tool", "agento11y-after-tool": "after_tool"} {
 		entry, ok := byName[name]
 		if !ok {
 			t.Fatalf("missing %q entry; got %v", name, keys(byName))
@@ -92,7 +92,7 @@ func TestEnsureHookInstalled_PreservesExistingHook(t *testing.T) {
 	t.Setenv("VIBE_HOME", dir)
 
 	// A user already has a hand-authored hook in hooks.toml. Install
-	// must keep it and add (not replace) the sigil entry.
+	// must keep it and add (not replace) the agento11y entry.
 	pre := `[[hooks]]
 name = "user-custom"
 type = "after_tool"
@@ -109,10 +109,10 @@ timeout = 5
 	got := readTOML(t, path)
 	hooks, _ := got["hooks"].([]any)
 	if len(hooks) != 4 {
-		t.Fatalf("hooks len = %d, want 4 (user-custom + 3 sigil)", len(hooks))
+		t.Fatalf("hooks len = %d, want 4 (user-custom + 3 agento11y)", len(hooks))
 	}
 	byName := hooksByName(hooks)
-	for _, want := range []string{"user-custom", "sigil", "sigil-before-tool", "sigil-after-tool"} {
+	for _, want := range []string{"user-custom", "agento11y", "agento11y-before-tool", "agento11y-after-tool"} {
 		if _, ok := byName[want]; !ok {
 			t.Errorf("missing hook %q; got %v", want, keys(byName))
 		}
@@ -123,10 +123,10 @@ timeout = 5
 	}
 }
 
-func TestEnsureHookInstalled_UpdatesStaleSigilEntry(t *testing.T) {
-	// A previous sigil version wrote the literal `sigil vibe hook` command.
-	// The merge must overwrite our own entry (matched by name) with the
-	// executable-path command without producing a duplicate.
+func TestEnsureHookInstalled_ReplacesLegacySigilEntries(t *testing.T) {
+	// A previous version wrote hooks under the pre-rename sigil names. The
+	// merge must drop those entries and install the agento11y-named ones so
+	// vibe does not fire every hook twice.
 	dir := t.TempDir()
 	t.Setenv("VIBE_HOME", dir)
 	withExecutable(t, "/usr/local/bin/agento11y")
@@ -136,6 +136,13 @@ name = "sigil"
 type = "post_agent_turn"
 command = "sigil vibe hook"
 timeout = 10
+
+[[hooks]]
+name = "sigil-before-tool"
+type = "before_tool"
+command = "sigil vibe hook"
+timeout = 10
+match = "*"
 `
 	path := filepath.Join(dir, "hooks.toml")
 	if err := os.WriteFile(path, []byte(pre), 0o644); err != nil {
@@ -147,11 +154,16 @@ timeout = 10
 	got := readTOML(t, path)
 	hooks, _ := got["hooks"].([]any)
 	if len(hooks) != 3 {
-		t.Fatalf("hooks len = %d, want 3 (stale sigil entry updated in place + before/after appended)", len(hooks))
+		t.Fatalf("hooks len = %d, want 3 (legacy entries dropped, agento11y entries installed)", len(hooks))
 	}
 	byName := hooksByName(hooks)
-	if byName["sigil"]["command"] != wantCommand {
-		t.Errorf("command = %v, want refreshed %q", byName["sigil"]["command"], wantCommand)
+	for _, legacy := range []string{"sigil", "sigil-before-tool", "sigil-after-tool"} {
+		if _, ok := byName[legacy]; ok {
+			t.Errorf("legacy hook %q still present; got %v", legacy, keys(byName))
+		}
+	}
+	if byName["agento11y"]["command"] != wantCommand {
+		t.Errorf("command = %v, want refreshed %q", byName["agento11y"]["command"], wantCommand)
 	}
 }
 
@@ -168,8 +180,8 @@ func TestEnsureHookInstalled_QuotesExecutablePath(t *testing.T) {
 	hooks, _ := got["hooks"].([]any)
 	byName := hooksByName(hooks)
 	want := "'/Users/Jane Doe/bin/agento11y' vibe hook"
-	if byName["sigil"]["command"] != want {
-		t.Errorf("command = %v, want %q", byName["sigil"]["command"], want)
+	if byName["agento11y"]["command"] != want {
+		t.Errorf("command = %v, want %q", byName["agento11y"]["command"], want)
 	}
 }
 

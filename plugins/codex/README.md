@@ -104,7 +104,7 @@ If nothing shows up:
 
 ```sh
 AGENTO11Y_DEBUG=true agento11y codex  # one turn
-tail -f ~/.local/state/sigil/logs/sigil.log
+tail -f ~/.local/state/agento11y/logs/agento11y.log
 ```
 
 ## All options
@@ -119,7 +119,7 @@ tail -f ~/.local/state/sigil/logs/sigil.log
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
 | `AGENTO11Y_USER_ID` | — | Override the user id. |
-| `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/sigil/logs/sigil.log`. |
+| `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable Codex `PreToolUse` guards against Sigil rules. |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | Allow the tool call when the guard request fails (set `false` for fail-closed). |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-call guard timeout. |

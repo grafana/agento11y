@@ -28,9 +28,15 @@ const (
 
 	// userHooksFileName is the file the launcher writes into the user-level
 	// Copilot hooks directory. This single file drives capture for both
-	// Copilot Chat in VS Code and the copilot CLI. A dedicated, sigil-owned
-	// filename lets us overwrite it without touching hand-authored hooks.
-	userHooksFileName = "sigil.json"
+	// Copilot Chat in VS Code and the copilot CLI. A dedicated,
+	// agento11y-owned filename lets us overwrite it without touching
+	// hand-authored hooks.
+	userHooksFileName = "agento11y.json"
+
+	// legacyUserHooksFileName is the pre-rename hooks file. It is removed
+	// when the new file is written so Copilot does not run both and fire
+	// every hook twice.
+	legacyUserHooksFileName = "sigil.json"
 )
 
 // Test seams.
@@ -47,7 +53,7 @@ var (
 // version, and exec's copilot with the supplied args. When localEnv is
 // non-nil, the child receives local-mode SIGIL_ENDPOINT,
 // SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT and placeholder auth values so it talks
-// to the in-process receiver instead of Sigil Cloud.
+// to the in-process receiver instead of Grafana Cloud.
 //
 // The launcher deliberately does NOT register the copilot plugin: the CLI
 // loads hooks from the plugin store AND ~/.copilot/hooks and runs both, so a
@@ -142,8 +148,8 @@ func copilotHooksDir() (string, error) {
 	return filepath.Join(home, ".copilot", "hooks"), nil
 }
 
-// writeUserHooks renders the Sigil hook config and writes it to
-// <copilot-hooks-dir>/sigil.json. The write is atomic (temp file + rename)
+// writeUserHooks renders the agento11y hook config and writes it to
+// <copilot-hooks-dir>/agento11y.json. The write is atomic (temp file + rename)
 // and idempotent: when the on-disk content already matches, it is left
 // untouched and wrote is false. It returns the target path so callers can
 // report where the hooks landed.
@@ -155,8 +161,8 @@ func writeUserHooks() (path string, wrote bool, err error) {
 	path = filepath.Join(dir, userHooksFileName)
 	// The hook command points at this executable's own path (a hardcoded
 	// binary name would break `go install` users who only have agento11y or
-	// only sigil on PATH). The whole file is sigil-owned and rewritten when
-	// content differs, so entries written by an older version with the
+	// only sigil on PATH). The whole file is agento11y-owned and rewritten
+	// when content differs, so entries written by an older version with the
 	// literal `sigil copilot hook` command are replaced in place.
 	command, err := execpath.HookCommand("copilot hook")
 	if err != nil {
@@ -167,6 +173,7 @@ func writeUserHooks() (path string, wrote bool, err error) {
 		return "", false, err
 	}
 	if existing, readErr := os.ReadFile(path); readErr == nil && bytes.Equal(existing, content) {
+		removeLegacyUserHooks(dir)
 		return path, false, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -196,7 +203,17 @@ func writeUserHooks() (path string, wrote bool, err error) {
 		cleanup()
 		return "", false, fmt.Errorf("rename to %s: %w", path, err)
 	}
+	removeLegacyUserHooks(dir)
 	return path, true, nil
+}
+
+// removeLegacyUserHooks deletes the pre-rename hooks file: Copilot runs every
+// file in the hooks directory, so leaving sigil.json next to agento11y.json
+// would double-fire each hook. Called only after the new file is confirmed on
+// disk, so a failed write never leaves the install with no hooks file at all.
+// Best-effort; a leftover file surfaces as duplicate capture, not breakage.
+func removeLegacyUserHooks(dir string) {
+	_ = os.Remove(filepath.Join(dir, legacyUserHooksFileName))
 }
 
 // hookCommand mirrors a single command-hook entry in a Copilot hooks file.
@@ -278,12 +295,12 @@ func defaultPluginList(ctx context.Context, bin string) ([]byte, error) {
 	return launcher.Output(ctx, bin, "plugin", "list")
 }
 
-// Status reports whether Sigil capture is configured for Copilot. Capture is
+// Status reports whether agento11y capture is configured for Copilot. Capture is
 // driven by the shared user-level hooks file the launcher writes (see
 // writeUserHooks), NOT by a plugin — the launcher deliberately avoids
 // registering a plugin and removes any legacy one — so doctor must check for
 // that file. The hooks file has no version, so version is always empty. It
-// never installs, updates, or removes anything — `sigil doctor` relies on this.
+// never installs, updates, or removes anything — `agento11y doctor` relies on this.
 func Status(_ context.Context) (installed bool, version string, err error) {
 	installed, err = HooksInstalled()
 	return installed, "", err
@@ -292,19 +309,22 @@ func Status(_ context.Context) (installed bool, version string, err error) {
 // HooksInstalled reports whether the shared user-level Copilot hooks file that
 // drives capture is present. Read-only, and reuses copilotHooksDir so it
 // honors COPILOT_HOME exactly like the launcher's write path. The CLI need not
-// be on PATH: Copilot Chat in VS Code reads this file without it.
+// be on PATH: Copilot Chat in VS Code reads this file without it. The legacy
+// sigil.json also counts: it keeps capturing until the next launch replaces
+// it, and doctor must not report a working install as broken.
 func HooksInstalled() (bool, error) {
 	dir, err := copilotHooksDir()
 	if err != nil {
 		return false, err
 	}
-	if _, err := os.Stat(filepath.Join(dir, userHooksFileName)); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
+	for _, name := range []string{userHooksFileName, legacyUserHooksFileName} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return true, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
 		}
-		return false, err
 	}
-	return true, nil
+	return false, nil
 }
 
 // pluginInstalled reports whether `sigil-copilot` is registered in copilot's

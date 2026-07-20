@@ -1,6 +1,6 @@
-// Package login owns the interactive Sigil credentials flow used by both
-// the explicit `sigil login` subcommand and the auto-prompt that runs
-// before `sigil claude` / `sigil pi` when no credentials are configured.
+// Package login owns the interactive agento11y credentials flow used by both
+// the explicit `agento11y login` subcommand and the auto-prompt that runs
+// before `agento11y claude` / `agento11y pi` when no credentials are configured.
 //
 // The flow prompts for the connection details (SIGIL_ENDPOINT,
 // SIGIL_AUTH_TENANT_ID, SIGIL_AUTH_TOKEN and an optional OTel OTLP endpoint)
@@ -42,7 +42,7 @@ const pluginURL = "https://<your-stack>.grafana.net/plugins/grafana-sigil-app"
 
 // observabilityURL points at the AI Observability plugin route on the
 // user’s Grafana stack — the page where captured generations, traces, and
-// scores show up after a `sigil claude` / `sigil pi` session.
+// scores show up after a `agento11y claude` / `agento11y pi` session.
 const observabilityURL = "https://<your-stack>.grafana.net/a/grafana-sigil-app"
 
 // docsURL points at the plugins directory so users can discover every
@@ -112,7 +112,7 @@ type RunOpts struct {
 
 	// ShowNextStep prints a `Try sigil claude or sigil pi.` hint after a
 	// successful save so users know what to run next. Set by the explicit
-	// `sigil login` command; left false when login auto-fires from a
+	// `agento11y login` command; left false when login auto-fires from a
 	// launcher (the launcher is about to start the agent anyway, so the
 	// hint would just be noise).
 	ShowNextStep bool

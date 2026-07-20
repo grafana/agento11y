@@ -1,4 +1,4 @@
-// Package doctor implements `sigil doctor`: a read-only diagnostic that
+// Package doctor implements `agento11y doctor`: a read-only diagnostic that
 // reports the health of the two export pipelines (conversations and
 // analytics), config validity, and installed host-agent plugins in one place.
 //
@@ -93,7 +93,7 @@ type Params struct {
 // Report is the full diagnostic. Field names and the `status` strings are the
 // stable contract for `--json` / support tooling.
 type Report struct {
-	Sigil              SigilSection         `json:"sigil"`
+	Binary             BinarySection        `json:"agento11y"`
 	Config             ConfigSection        `json:"config"`
 	Conversations      ConversationsSection `json:"conversations"`
 	Analytics          AnalyticsSection     `json:"analytics"`
@@ -101,8 +101,8 @@ type Report struct {
 	AutoUpdateDisabled bool                 `json:"auto_update_disabled"`
 }
 
-// SigilSection reports the binary's build version.
-type SigilSection struct {
+// BinarySection reports the binary's build version.
+type BinarySection struct {
 	Version string `json:"version"`
 }
 
@@ -170,7 +170,7 @@ type AnalyticsSection struct {
 }
 
 // AgentStatus reports one host agent's detection + install state. HookBased is
-// set for agents the sigil binary never installs (cursor): their capture is
+// set for agents the agento11y binary never installs (cursor): their capture is
 // wired into the host's own hook settings, so install state isn't something
 // doctor can read.
 type AgentStatus struct {
@@ -295,11 +295,11 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 	}
 
 	r := &Report{}
-	r.Sigil = SigilSection{Version: normalizeVersion(p.Version)}
+	r.Binary = BinarySection{Version: normalizeVersion(p.Version)}
 	r.Conversations = collectConversations(osEnv, fileEnv)
 	r.Analytics = collectAnalytics(osEnv, fileEnv, r.Conversations.configured())
 	r.Config = collectConfig(osEnv, fileEnv)
-	r.Agents = collectAgents(ctx, r.Sigil.Version)
+	r.Agents = collectAgents(ctx, r.Binary.Version)
 	r.AutoUpdateDisabled = updatecheck.Disabled()
 
 	if opts.Probe {
@@ -492,7 +492,7 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	if len(sec.DisallowedKeys) > 0 {
 		sec.Health = HealthWarn
 		sec.Messages = append(sec.Messages,
-			"config.env has keys sigil ignores: "+strings.Join(sec.DisallowedKeys, ", "))
+			"config.env has keys agento11y ignores: "+strings.Join(sec.DisallowedKeys, ", "))
 	}
 	if sec.ContentModeFellBack {
 		sec.Health = HealthWarn
@@ -620,7 +620,7 @@ func tokenPrefix(token string) string {
 	return ""
 }
 
-// disallowedKeys lists keys in config.env that sigil's dotenv loader ignores.
+// disallowedKeys lists keys in config.env that agento11y's dotenv loader ignores.
 // It mirrors dotenv.LoadDotenv's line handling so the same lines are parsed,
 // but reports the rejected keys the loader silently drops.
 func disallowedKeys(path string) []string {

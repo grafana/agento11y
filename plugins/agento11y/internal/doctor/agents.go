@@ -23,7 +23,7 @@ type agentProbe struct {
 	// bin is the executable looked up on PATH.
 	bin string
 	// status is the package's read-only install probe, or nil for hook-only
-	// agents (cursor) that the sigil binary never installs.
+	// agents (cursor) that the agento11y binary never installs.
 	status statusFn
 	// configBased is true when status reads install state from files and needs
 	// no binary on PATH (claude, opencode, pi, copilot). For these, doctor
@@ -42,7 +42,7 @@ var lookPath = exec.LookPath
 
 // agentProbes is the detection/probe table. cursor is hook-only (no launcher),
 // so it has no install probe: its capture is wired into Cursor's own hook
-// settings, and its effective version is the sigil binary's.
+// settings, and its effective version is the agento11y binary's.
 var agentProbes = []agentProbe{
 	{name: "claude", bin: "claude", status: claudecode.Status, configBased: true},
 	{name: "codex", bin: "codex", status: codex.Status},
@@ -53,31 +53,31 @@ var agentProbes = []agentProbe{
 }
 
 // defaultCollectAgents runs the PATH sweep and per-agent read-only status
-// probe. sigilVersion is reported as cursor's version (its hooks call the
-// sigil binary, so they move together).
-func defaultCollectAgents(ctx context.Context, sigilVersion string) []AgentStatus {
+// probe. binaryVersion is reported as cursor's version (its hooks call the
+// agento11y binary, so they move together).
+func defaultCollectAgents(ctx context.Context, binaryVersion string) []AgentStatus {
 	out := make([]AgentStatus, 0, len(agentProbes))
 	for _, probe := range agentProbes {
-		out = append(out, probeAgent(ctx, probe, sigilVersion))
+		out = append(out, probeAgent(ctx, probe, binaryVersion))
 	}
 	return out
 }
 
-func probeAgent(ctx context.Context, probe agentProbe, sigilVersion string) AgentStatus {
+func probeAgent(ctx context.Context, probe agentProbe, binaryVersion string) AgentStatus {
 	a := AgentStatus{Name: probe.name, Note: probe.note, notInstalledLabel: probe.notInstalledLabel}
 	_, lookErr := lookPath(probe.bin)
 	a.OnPath = lookErr == nil
 
 	// Hook-only agent (cursor): no install probe, detection is PATH presence.
-	// Capture is configured in the host's own settings, which the sigil binary
-	// doesn't manage, so report it as present with the sigil binary version.
+	// Capture is configured in the host's own settings, which the agento11y binary
+	// doesn't manage, so report it as present with the agento11y binary version.
 	if probe.status == nil {
 		if !a.OnPath {
 			a.Health = HealthSkipped
 			return a
 		}
 		a.HookBased = true
-		a.Version = sigilVersion
+		a.Version = binaryVersion
 		a.Health = HealthOK
 		return a
 	}

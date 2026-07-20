@@ -9,7 +9,7 @@ import (
 
 func sampleReport() *Report {
 	return &Report{
-		Sigil: SigilSection{Version: "1.2.3"},
+		Binary: BinarySection{Version: "1.2.3"},
 		Config: ConfigSection{
 			Path: "/tmp/agento11y/config.env", Exists: true,
 			ContentCaptureMode: "metadata_only", Health: HealthOK,

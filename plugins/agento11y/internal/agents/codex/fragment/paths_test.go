@@ -12,7 +12,7 @@ func TestFragmentFilePathSanitizesIDs(t *testing.T) {
 	if strings.Contains(got, "..") {
 		t.Fatalf("path was not sanitized: %q", got)
 	}
-	wantSuffix := filepath.Join(filepath.Join("sigil", "codex"), "turns", safeComponent("../session"), safeComponent("turn/one")+".json")
+	wantSuffix := filepath.Join(filepath.Join("agento11y", "codex"), "turns", safeComponent("../session"), safeComponent("turn/one")+".json")
 	if !strings.HasSuffix(got, wantSuffix) {
 		t.Fatalf("path = %q, want suffix %q", got, wantSuffix)
 	}
@@ -24,7 +24,7 @@ func TestSessionFilePathSanitizesID(t *testing.T) {
 	if strings.Contains(got, "..") {
 		t.Fatalf("path was not sanitized: %q", got)
 	}
-	wantSuffix := filepath.Join(filepath.Join("sigil", "codex"), "sessions", safeComponent("../session")+".json")
+	wantSuffix := filepath.Join(filepath.Join("agento11y", "codex"), "sessions", safeComponent("../session")+".json")
 	if !strings.HasSuffix(got, wantSuffix) {
 		t.Fatalf("path = %q, want suffix %q", got, wantSuffix)
 	}
@@ -36,7 +36,7 @@ func TestSubagentLinkFilePathSanitizesID(t *testing.T) {
 	if strings.Contains(got, "..") {
 		t.Fatalf("path was not sanitized: %q", got)
 	}
-	wantSuffix := filepath.Join(filepath.Join("sigil", "codex"), "subagents", safeComponent("../session")+".json")
+	wantSuffix := filepath.Join(filepath.Join("agento11y", "codex"), "subagents", safeComponent("../session")+".json")
 	if !strings.HasSuffix(got, wantSuffix) {
 		t.Fatalf("path = %q, want suffix %q", got, wantSuffix)
 	}

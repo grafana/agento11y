@@ -38,7 +38,7 @@ type Session struct {
 }
 
 func dir() string {
-	return filepath.Join(xdg.StateRoot("sigil"), "vibe")
+	return filepath.Join(xdg.AppStateRoot(), "vibe")
 }
 
 // SanitizeSessionID delegates to xdg.SafeComponent so session-ID-derived

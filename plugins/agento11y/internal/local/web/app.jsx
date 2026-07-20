@@ -1087,7 +1087,7 @@
             {!error && !loading && conversations.length === 0 && (
               <div style={{ padding: 16 }}>
                 <Notice kind="info" title="No conversations yet">
-                  Run an agent against this daemon with <code style={{ color: "var(--fg1)" }}>sigil pi --local</code> or <code style={{ color: "var(--fg1)" }}>sigil claude --local</code>. Captured generations appear here as soon as the agent emits its first one.
+                  Run an agent against this daemon with <code style={{ color: "var(--fg1)" }}>agento11y pi --local</code> or <code style={{ color: "var(--fg1)" }}>agento11y claude --local</code>. Captured generations appear here as soon as the agent emits its first one.
                 </Notice>
               </div>
             )}
@@ -1929,7 +1929,7 @@
                 <SettingRow
                   label="Content capture mode"
                   help={<>
-                    What content sigil sends to Grafana Cloud for each generation. <Mono>--local</Mono> sessions always capture full content on this machine.
+                    What content agento11y sends to Grafana Cloud for each generation. <Mono>--local</Mono> sessions always capture full content on this machine.
                     {captureUnset && <div style={{ color: "var(--fg3)", marginTop: 6 }}>Not set: Grafana Cloud sessions capture metadata only. Pick a mode to pin it.</div>}
                     {advanced && <div style={{ color: "var(--warning-text)", marginTop: 6 }}>Advanced mode <Mono>{form.capture}</Mono> is set in config.env and will be preserved.</div>}
                   </>}
@@ -1987,7 +1987,7 @@
 
               <SettingsCard>
                 <SectionLabel>Runtime</SectionLabel>
-                <SettingRow label="Debug logging" help={<>Write a verbose log to <Mono>~/.local/state/sigil/logs/sigil.log</Mono>.</>}>
+                <SettingRow label="Debug logging" help={<>Write a verbose log to <Mono>~/.local/state/agento11y/logs/agento11y.log</Mono>.</>}>
                   <Toggle checked={form.debug} onChange={v => set({ debug: v })}/>
                 </SettingRow>
                 <SettingRow label="Automatic updates" help={<>Keep host agent plugins refreshed automatically. Turn off to pin the current versions.</>}>
@@ -2153,10 +2153,10 @@
       }, [setTimeRange]);
 
       const pageTitle = view === "settings"
-        ? "Settings — sigil local"
+        ? "Settings — agento11y local"
         : view === "conversation" && selected
-          ? `${selected.title || selected.id} — sigil local`
-          : "sigil — local";
+          ? `${selected.title || selected.id} — agento11y local`
+          : "agento11y — local";
       useEffect(() => { document.title = pageTitle; }, [pageTitle]);
 
       const fetchList = useCallback(() => {

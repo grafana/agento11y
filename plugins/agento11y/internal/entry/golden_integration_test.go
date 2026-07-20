@@ -190,9 +190,9 @@ func runGoldenScenario(t *testing.T, name string) {
 		if !t.Failed() {
 			return
 		}
-		logPath := filepath.Join(stateDir, "sigil", "logs", "sigil.log")
+		logPath := filepath.Join(stateDir, "agento11y", "logs", "agento11y.log")
 		if data, err := os.ReadFile(logPath); err == nil {
-			t.Logf("sigil debug log (%s):\n%s", logPath, data)
+			t.Logf("agento11y debug log (%s):\n%s", logPath, data)
 		}
 		for _, line := range eventOutput {
 			t.Log(line)
@@ -740,7 +740,7 @@ func setHookExportEnv(t *testing.T, endpoint string) {
 		t.Setenv(envconfig.PreferredKey(suffix), "")
 	}
 	// Enable SIGIL_DEBUG so the dispatcher writes per-event logs into
-	// $XDG_STATE_HOME/sigil/logs/sigil.log. When a scenario fails the test
+	// $XDG_STATE_HOME/agento11y/logs/agento11y.log. When a scenario fails the test
 	// reads that file back so the failure message includes the trail.
 	t.Setenv("SIGIL_DEBUG", "true")
 }

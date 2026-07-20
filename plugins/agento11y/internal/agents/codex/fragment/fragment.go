@@ -64,7 +64,7 @@ type Fragment struct {
 	CompletedAt          string       `json:"completedAt,omitempty"`
 	LastEventAt          string       `json:"lastEventAt,omitempty"`
 	// PendingRetry is set when a Stop attempt completed the read-side work
-	// (mapping, etc.) but failed to export via Sigil. The next Stop event for
+	// (mapping, etc.) but failed to export via agento11y. The next Stop event for
 	// the same session sweeps these and tries again so a transient ingest
 	// hiccup doesn't silently lose a turn after the 24h cleanup.
 	PendingRetry bool `json:"pendingRetry,omitempty"`

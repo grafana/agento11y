@@ -127,7 +127,7 @@ type BootstrapSpec struct {
 	Install func(ctx context.Context, bin string, w io.Writer) error
 	// InstallRecoveryHint prints manual-retry commands to Stderr when Install
 	// fails. Bootstrap emits the generic "install of <label> failed" /
-	// "continuing without Sigil capture" lines before calling this; the hook
+	// "continuing without agento11y capture" lines before calling this; the hook
 	// only contributes the indented command lines.
 	InstallRecoveryHint func(w io.Writer)
 	// PostInstallHint, when non-nil, runs after a successful Install. codex
@@ -139,7 +139,7 @@ type BootstrapSpec struct {
 	Update             func(ctx context.Context, bin string, w io.Writer) error
 	UpdateRecoveryHint func(w io.Writer)
 	UpdateTTL          time.Duration
-	SigilVersion       string
+	BinaryVersion      string
 
 	// RegisterMessage overrides the default
 	// "agento11y: registering <label> with <bin>\n" line printed before Install.
@@ -177,7 +177,7 @@ func Bootstrap(ctx context.Context, spec BootstrapSpec) error {
 			spec.Logger.Printf("install %s: %v", spec.PluginLabel, err)
 			fmt.Fprintf(spec.Stderr,
 				"agento11y: install of %s failed: %v\n"+
-					"agento11y: continuing without Sigil capture. To retry manually:\n",
+					"agento11y: continuing without agento11y capture. To retry manually:\n",
 				spec.PluginLabel, err)
 			if spec.InstallRecoveryHint != nil {
 				spec.InstallRecoveryHint(spec.Stderr)
@@ -185,7 +185,7 @@ func Bootstrap(ctx context.Context, spec BootstrapSpec) error {
 		} else if spec.PostInstallHint != nil {
 			spec.PostInstallHint(spec.Stderr)
 		}
-	case spec.Update != nil && updatecheck.ShouldRun(spec.PluginLabel, spec.UpdateTTL, spec.SigilVersion):
+	case spec.Update != nil && updatecheck.ShouldRun(spec.PluginLabel, spec.UpdateTTL, spec.BinaryVersion):
 		fmt.Fprintf(spec.Stderr, "agento11y: refreshing %s in %s\n", spec.PluginLabel, spec.BinName)
 		if err := spec.Update(ctx, bin, spec.Stderr); err != nil {
 			spec.Logger.Printf("update %s: %v", spec.PluginLabel, err)
@@ -197,7 +197,7 @@ func Bootstrap(ctx context.Context, spec BootstrapSpec) error {
 				spec.UpdateRecoveryHint(spec.Stderr)
 			}
 		}
-		updatecheck.Record(spec.PluginLabel, spec.SigilVersion)
+		updatecheck.Record(spec.PluginLabel, spec.BinaryVersion)
 	}
 
 	return Exec(spec.ExecFn, bin, spec.BinName, spec.Args, spec.Env)

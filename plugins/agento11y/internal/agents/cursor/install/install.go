@@ -1,17 +1,17 @@
-// Package install wires Sigil's Cursor hook into the user-level
+// Package install wires agento11y's Cursor hook into the user-level
 // ~/.cursor/hooks.json from the command line.
 //
 // Cursor is a GUI app with no exec launch point, so unlike the other agents
-// there is no `sigil cursor` launcher to bootstrap capture on first run.
-// `sigil cursor install` writes the hook entry directly, the same way
-// `sigil copilot` writes Copilot's hooks file.
+// there is no `agento11y cursor` launcher to bootstrap capture on first run.
+// `agento11y cursor install` writes the hook entry directly, the same way
+// `agento11y copilot` writes Copilot's hooks file.
 //
 // hooks.json is shared with other tools (the live file holds superconductor
-// and superset entries alongside Sigil's), so install MERGES into it rather
+// and superset entries alongside agento11y's), so install MERGES into it rather
 // than overwriting: it keeps unknown top-level keys and every event entry it
 // does not own, and replaces its own entry in place so re-runs do not
 // double-fire. The legacy /add-plugin run.sh entry is recognised on a
-// best-effort basis (see isSigilHook), so users should not run direct install
+// best-effort basis (see isOursHook), so users should not run direct install
 // and /add-plugin together.
 package install
 
@@ -30,9 +30,9 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
 )
 
-// cursorEvents are the hook events Sigil wires, matching the set shipped in
+// cursorEvents are the hook events agento11y wires, matching the set shipped in
 // plugins/cursor/hooks/hooks.json. The Cursor dispatcher infers the event
-// from hook_event_name in the payload, so the same `sigil cursor hook`
+// from hook_event_name in the payload, so the same `agento11y cursor hook`
 // command serves all nine.
 var cursorEvents = []string{
 	"sessionStart",
@@ -50,16 +50,16 @@ var cursorEvents = []string{
 var userHomeDir = os.UserHomeDir
 
 // hookEntry is a single Cursor hook command entry. Cursor entries may carry
-// other fields, but Sigil only ever writes the command; extra fields on other
+// other fields, but agento11y only ever writes the command; extra fields on other
 // tools' entries are preserved as raw JSON, not through this type.
 type hookEntry struct {
 	Command string `json:"command"`
 }
 
-// Run wires `sigil cursor hook` into ~/.cursor/hooks.json for all eight
+// Run wires `agento11y cursor hook` into ~/.cursor/hooks.json for all eight
 // Cursor hook events, creating the file and parent directory when absent. It
 // merges into an existing file: unknown top-level keys and other tools'
-// entries are preserved, and a recognised pre-existing Sigil entry (a previous
+// entries are preserved, and a recognised pre-existing agento11y entry (a previous
 // install, or a legacy run.sh entry when detectable) is replaced in place to
 // avoid double-firing capture. The write is atomic and idempotent — when the
 // result already matches what is on disk, the file is left untouched.
@@ -84,7 +84,7 @@ func Run(stdout, _ io.Writer, logger *log.Logger) error {
 		return fmt.Errorf("encode cursor hook entry: %w", err)
 	}
 	for _, event := range cursorEvents {
-		doc.hooks[event] = upsertSigil(doc.hooks[event], entry)
+		doc.hooks[event] = upsertOurs(doc.hooks[event], entry)
 	}
 
 	wrote, err := writeHooks(path, doc)
@@ -99,9 +99,9 @@ func Run(stdout, _ io.Writer, logger *log.Logger) error {
 	return nil
 }
 
-// Uninstall removes Sigil's hook entries from ~/.cursor/hooks.json, leaving
+// Uninstall removes agento11y's hook entries from ~/.cursor/hooks.json, leaving
 // other tools' entries and unknown keys intact. Event arrays left empty are
-// dropped. The write is atomic and idempotent — a file with no Sigil entries
+// dropped. The write is atomic and idempotent — a file with no agento11y entries
 // is left untouched, and a missing file is a no-op (no file is created).
 func Uninstall(stdout, _ io.Writer, logger *log.Logger) error {
 	path, err := cursorHooksPath()
@@ -120,7 +120,7 @@ func Uninstall(stdout, _ io.Writer, logger *log.Logger) error {
 		return err
 	}
 	for event, entries := range doc.hooks {
-		kept := removeSigil(entries)
+		kept := removeOurs(entries)
 		if len(kept) == 0 {
 			delete(doc.hooks, event)
 			continue
@@ -159,10 +159,10 @@ func cursorHooksPath() (string, error) {
 // registers (plugins/cursor/hooks/hooks.json). Cursor usually expands
 // CURSOR_PLUGIN_ROOT when it copies the entry into the user-level hooks.json,
 // leaving the repo's plugins/cursor/scripts/run.sh tail in the path, but it may
-// also keep the literal, so isSigilHook checks for both.
+// also keep the literal, so isOursHook checks for both.
 const legacyRunShLiteral = "${CURSOR_PLUGIN_ROOT}/scripts/run.sh"
 
-// isSigilHook reports whether an existing entry's command is one of ours, so
+// isOursHook reports whether an existing entry's command is one of ours, so
 // re-runs and the legacy /add-plugin run.sh wiring update in place instead of
 // double-firing. It matches any command of the form `<binary> cursor hook`
 // where the binary's basename is agento11y or sigil, plus the legacy run.sh
@@ -170,7 +170,7 @@ const legacyRunShLiteral = "${CURSOR_PLUGIN_ROOT}/scripts/run.sh"
 // the expanded form Cursor writes once it resolves CURSOR_PLUGIN_ROOT. Legacy
 // detection is best-effort: an expanded path that no longer carries the
 // plugins/cursor segment is not recognised.
-func isSigilHook(cmd string) bool {
+func isOursHook(cmd string) bool {
 	c := strings.TrimSpace(cmd)
 	if strings.Contains(c, legacyRunShLiteral) ||
 		strings.Contains(c, filepath.Join("plugins", "cursor", "scripts", "run.sh")) {
@@ -185,14 +185,14 @@ func isSigilHook(cmd string) bool {
 	return bin != "" && (base == "agento11y" || base == "sigil")
 }
 
-// upsertSigil replaces the first Sigil-owned entry in entries with cmd (in
+// upsertOurs replaces the first agento11y-owned entry in entries with cmd (in
 // place, so other tools' entries keep their order) and drops any further
-// Sigil entries; when none is present it appends cmd.
-func upsertSigil(entries []json.RawMessage, cmd json.RawMessage) []json.RawMessage {
+// agento11y entries; when none is present it appends cmd.
+func upsertOurs(entries []json.RawMessage, cmd json.RawMessage) []json.RawMessage {
 	out := make([]json.RawMessage, 0, len(entries)+1)
 	inserted := false
 	for _, raw := range entries {
-		if isSigilHook(commandOf(raw)) {
+		if isOursHook(commandOf(raw)) {
 			if !inserted {
 				out = append(out, cmd)
 				inserted = true
@@ -207,11 +207,11 @@ func upsertSigil(entries []json.RawMessage, cmd json.RawMessage) []json.RawMessa
 	return out
 }
 
-// removeSigil returns entries with every Sigil-owned entry dropped.
-func removeSigil(entries []json.RawMessage) []json.RawMessage {
+// removeOurs returns entries with every agento11y-owned entry dropped.
+func removeOurs(entries []json.RawMessage) []json.RawMessage {
 	out := make([]json.RawMessage, 0, len(entries))
 	for _, raw := range entries {
-		if isSigilHook(commandOf(raw)) {
+		if isOursHook(commandOf(raw)) {
 			continue
 		}
 		out = append(out, raw)
@@ -221,7 +221,7 @@ func removeSigil(entries []json.RawMessage) []json.RawMessage {
 
 // commandOf extracts the "command" string from a hook entry, returning ""
 // when the entry is not an object or has no command (such entries are never
-// treated as Sigil's).
+// treated as agento11y's).
 func commandOf(raw json.RawMessage) string {
 	var e hookEntry
 	if err := json.Unmarshal(raw, &e); err != nil {

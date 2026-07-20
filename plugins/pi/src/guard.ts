@@ -63,7 +63,7 @@ function formatEvalFailure(
   toolName: string,
   detail: string | undefined,
 ): string {
-  let msg = `Sigil could not evaluate the Grafana AI Observability guard for the "${toolName}" tool call, so it was blocked as a safety measure.`;
+  let msg = `agento11y could not evaluate the Grafana AI Observability guard for the "${toolName}" tool call, so it was blocked as a safety measure.`;
   const trimmed = detail?.trim();
   if (trimmed) {
     msg += ` Details: ${trimmed}`;

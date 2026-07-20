@@ -9,9 +9,9 @@ import (
 )
 
 func TestFor(t *testing.T) {
-	old := SigilVersion
-	t.Cleanup(func() { SigilVersion = old })
-	SigilVersion = "1.2.3"
+	old := Version
+	t.Cleanup(func() { Version = old })
+	Version = "1.2.3"
 
 	for _, agent := range []string{"claude-code", "cursor", "codex", "copilot"} {
 		t.Run(agent, func(t *testing.T) {

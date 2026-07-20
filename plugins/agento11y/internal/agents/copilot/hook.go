@@ -1,6 +1,6 @@
 // Package copilot implements the GitHub Copilot CLI agent adapter for the
-// consolidated sigil binary. The dispatcher in cmd/sigil routes
-// `sigil copilot hook` here.
+// consolidated agento11y binary. The dispatcher in cmd/agento11y routes
+// `agento11y copilot hook` here.
 package copilot
 
 import (

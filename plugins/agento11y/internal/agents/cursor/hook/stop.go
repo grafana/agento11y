@@ -11,7 +11,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/mapper"
 )
 
-// Stop maps the accumulated fragment to a Sigil Generation and emits it.
+// Stop maps the accumulated fragment to an agento11y Generation and emits it.
 // On flush failure the fragment is preserved on disk (with the stop payload's
 // status/error stamped onto it) so the sessionEnd sweeper can retry rather
 // than silently drop the data.

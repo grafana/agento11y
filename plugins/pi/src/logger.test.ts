@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -22,14 +22,31 @@ describe("logFilePath", () => {
 
   it("honors an absolute XDG_STATE_HOME", () => {
     process.env.XDG_STATE_HOME = "/var/state";
-    expect(stateRoot()).toBe("/var/state/sigil");
-    expect(logFilePath()).toBe("/var/state/sigil/logs/sigil.log");
+    expect(stateRoot()).toBe("/var/state/agento11y");
+    expect(logFilePath()).toBe("/var/state/agento11y/logs/agento11y.log");
   });
 
   it("ignores a relative XDG_STATE_HOME and falls back to HOME", () => {
     process.env.XDG_STATE_HOME = "relative/path";
     process.env.HOME = "/home/alex";
-    expect(logFilePath()).toBe("/home/alex/.local/state/sigil/logs/sigil.log");
+    expect(logFilePath()).toBe(
+      "/home/alex/.local/state/agento11y/logs/agento11y.log",
+    );
+  });
+
+  it("falls back to an existing legacy sigil state dir", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agento11y-pi-state-"));
+    try {
+      process.env.XDG_STATE_HOME = dir;
+      mkdirSync(join(dir, "sigil"), { recursive: true });
+      expect(stateRoot()).toBe(join(dir, "sigil"));
+      expect(logFilePath()).toBe(join(dir, "sigil", "logs", "agento11y.log"));
+      // The new dir wins once it exists.
+      mkdirSync(join(dir, "agento11y"), { recursive: true });
+      expect(stateRoot()).toBe(join(dir, "agento11y"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -41,7 +58,7 @@ describe("logger", () => {
   };
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "sigil-pi-log-"));
+    dir = mkdtempSync(join(tmpdir(), "agento11y-pi-log-"));
     process.env.XDG_STATE_HOME = dir;
     delete process.env.SIGIL_DEBUG;
     delete process.env.AGENTO11Y_DEBUG;
@@ -58,7 +75,10 @@ describe("logger", () => {
   });
 
   function readLog(): string {
-    return readFileSync(join(dir, "sigil", "logs", "sigil.log"), "utf-8");
+    return readFileSync(
+      join(dir, "agento11y", "logs", "agento11y.log"),
+      "utf-8",
+    );
   }
 
   it("writes nothing when SIGIL_DEBUG is off", () => {
@@ -76,13 +96,13 @@ describe("logger", () => {
     logger.error("boom", new Error("nope"));
 
     const body = readLog();
-    expect(body).toContain("sigil[pi]:");
+    expect(body).toContain("agento11y[pi]:");
     expect(body).toContain("debug queued model=claude");
     expect(body).toContain("warn heads up");
     expect(body).toContain("error boom");
     expect(body).toContain("nope");
     // One line per call plus the Error's multi-line stack trace.
-    expect(body.split("sigil[pi]:")).toHaveLength(4);
+    expect(body.split("agento11y[pi]:")).toHaveLength(4);
   });
 
   it("re-reads SIGIL_DEBUG per call so dotenv-applied values take effect", () => {

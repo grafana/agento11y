@@ -18,10 +18,10 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
-	"github.com/grafana/agento11y/plugins/agento11y/internal/sigilemit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/timeutil"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
 )
@@ -127,7 +127,7 @@ func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Con
 		// fragment. Copilot's preToolUse payload doesn't carry model, but
 		// once enrichFromTranscript has run for a prior turn we may have
 		// it cached. The guard helper falls back to "unknown" when blank,
-		// which keeps the request well-formed for Sigil.
+		// which keeps the request well-formed for agento11y.
 		var provider, modelName string
 		if session := fragment.LoadSessionTolerant(sessionID, logger); session != nil && session.ActiveTurnID != "" {
 			if frag := loadFragment(sessionID, session.ActiveTurnID, logger); frag != nil {
@@ -138,7 +138,7 @@ func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Con
 		res := guard.EvaluateToolCall(ctx, cfg.Guards, guard.ToolCallInput{
 			AgentName: mapper.AgentName,
 			ToolName:  p.ToolName(),
-			// Copilot delivers tool args as a JSON-encoded string; the Sigil
+			// Copilot delivers tool args as a JSON-encoded string; the agento11y
 			// server only transforms tool-call input that is a JSON object, so
 			// decode the wrapper before evaluating or redaction never happens.
 			ToolInputJSON: decodeStringEncodedToolInput(toolArgs),
@@ -208,7 +208,7 @@ const surfaceCopilotCLI = "copilot-cli"
 
 // decodeStringEncodedToolInput unwraps tool arguments that the Copilot CLI
 // delivers as a JSON-encoded string (e.g. `"{\"command\":\"…\"}"`) into the
-// underlying JSON object. The Sigil server only applies Transform rules to
+// underlying JSON object. The agento11y server only applies Transform rules to
 // tool-call input that is a JSON object: given a JSON string it returns no
 // transform at all, so Copilot's arguments are never redacted without this.
 // Returns raw unchanged when it is already an object, or a string that does
@@ -259,7 +259,7 @@ func writeDeny(stdout io.Writer, reason string) {
 		return
 	}
 	if strings.TrimSpace(reason) == "" {
-		reason = "tool call denied by Sigil guard"
+		reason = "tool call denied by agento11y guard"
 	}
 	_ = json.NewEncoder(stdout).Encode(preToolUseDeny{
 		PermissionDecision:       "deny",
@@ -481,7 +481,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), stopExportTimeout)
 	defer cancel()
-	providers := sigilemit.SetupOTel(ctx, sessionID, logger)
+	providers := emit.SetupOTel(ctx, sessionID, logger)
 	if providers != nil {
 		defer func() {
 			if err := providers.Shutdown(ctx); err != nil {
@@ -514,7 +514,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		return
 	}
 	if err := client.Flush(ctx); err != nil {
-		logger.Printf("stop: sigil flush: %v", err)
+		logger.Printf("stop: agento11y flush: %v", err)
 		return
 	}
 	if providers != nil {
@@ -705,11 +705,11 @@ func shouldPreferTranscriptSnapshot(current transcript.Snapshot, haveCurrent boo
 	return false
 }
 
-// buildClient constructs the Sigil client. copilot leaves endpoint, tenant ID,
+// buildClient constructs the agento11y client. copilot leaves endpoint, tenant ID,
 // and token to the SDK's automatic SIGIL_* env resolution, so it only needs the
 // shared HTTP/basic-auth export defaults plus the OTel wiring.
 func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
-	return sigilemit.NewClient(sigilemit.ClientOptions{
+	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
 		Logger:              logger,
@@ -719,7 +719,7 @@ func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logge
 }
 
 func emitGeneration(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, mapped mapper.Mapped, logger *log.Logger) error {
-	return sigilemit.Record(ctx, client, mapped.Start, mapped.Generation, mapped.CallError, func(genCtx context.Context) {
+	return emit.Record(ctx, client, mapped.Start, mapped.Generation, mapped.CallError, func(genCtx context.Context) {
 		emitToolSpans(genCtx, client, frag, mapped.Generation, logger)
 	})
 }
@@ -788,7 +788,7 @@ func mappedContentCapture(gen agento11y.Generation) agento11y.ContentCaptureMode
 	return agento11y.ContentCaptureModeMetadataOnly
 }
 
-// toolSpanWindow differs from sigilemit.ToolSpanWindow: copilot records a
+// toolSpanWindow differs from emit.ToolSpanWindow: copilot records a
 // per-tool StartedAt at preToolUse, but the historical behavior gives a
 // reported DurationMs precedence when it is present. StartedAt is only used
 // when DurationMs is missing.
@@ -805,7 +805,7 @@ func toolSpanWindow(t fragment.ToolRecord, genCompletedAt time.Time) (startedAt,
 }
 
 // toolErrorOr trims whitespace before the empty check, unlike
-// sigilemit.ToolError, so a whitespace-only tool error message collapses to the
+// emit.ToolError, so a whitespace-only tool error message collapses to the
 // generic sentinel. Kept local to preserve that behavior.
 func toolErrorOr(msg string) error {
 	if strings.TrimSpace(msg) == "" {

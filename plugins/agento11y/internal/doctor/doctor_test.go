@@ -668,7 +668,7 @@ func TestRun(t *testing.T) {
 				if err := json.Unmarshal([]byte(stdout), &report); err != nil {
 					t.Fatalf("invalid JSON: %v", err)
 				}
-				for _, key := range []string{"sigil", "config", "conversations", "analytics", "agents"} {
+				for _, key := range []string{"agento11y", "config", "conversations", "analytics", "agents"} {
 					if _, ok := report[key]; !ok {
 						t.Fatalf("JSON missing section %q", key)
 					}
