@@ -1,7 +1,24 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { homedirOverride } = vi.hoisted(() => ({
+  homedirOverride: { value: undefined as string | undefined },
+}));
+
+// sigilConfigEnvPath stats files under the resolved config root, so tests
+// exercising the $HOME/.config fallback must not consult the developer's
+// real home (which may contain a live config.env). Overridable homedir,
+// pass-through otherwise.
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    homedir: () => homedirOverride.value ?? actual.homedir(),
+  };
+});
+
 import {
   applySigilDotenv,
   loadSigilDotenv,
@@ -98,19 +115,61 @@ OTEL_RESOURCE_ATTRIBUTES=service.name=other
 });
 
 describe("sigilConfigEnvPath", () => {
-  beforeEach(clearSigilEnv);
-  afterEach(clearSigilEnv);
+  let fakeHome: string;
+
+  beforeEach(() => {
+    clearSigilEnv();
+    fakeHome = mkdtempSync(join(tmpdir(), "sigil-opencode-home-"));
+    homedirOverride.value = fakeHome;
+  });
+
+  afterEach(() => {
+    homedirOverride.value = undefined;
+    rmSync(fakeHome, { recursive: true, force: true });
+    clearSigilEnv();
+  });
 
   it("honors an absolute XDG_CONFIG_HOME", () => {
-    process.env.XDG_CONFIG_HOME = "/tmp/custom-config";
-    expect(sigilConfigEnvPath()).toBe("/tmp/custom-config/sigil/config.env");
+    // Fresh dir, not a fixed /tmp path: resolution is stat-based, so a
+    // leftover sigil/config.env at a shared path would flip the result.
+    const xdg = join(fakeHome, "custom-config");
+    process.env.XDG_CONFIG_HOME = xdg;
+    expect(sigilConfigEnvPath()).toBe(join(xdg, "agento11y", "config.env"));
   });
 
-  it("falls back to $HOME/.config/sigil/config.env when XDG_CONFIG_HOME is unset", () => {
+  it("falls back to $HOME/.config/agento11y/config.env when XDG_CONFIG_HOME is unset", () => {
     expect(sigilConfigEnvPath()).toBe(
-      join(homedir(), ".config", "sigil", "config.env"),
+      join(fakeHome, ".config", "agento11y", "config.env"),
     );
   });
+
+  // Mirrors plugins/agento11y/internal/dotenv/dotenv_test.go::TestFilePathResolution.
+  const resolutionCases: {
+    name: string;
+    apps: string[];
+    wantApp: string;
+  }[] = [
+    { name: "neither exists defaults to new", apps: [], wantApp: "agento11y" },
+    { name: "only new exists", apps: ["agento11y"], wantApp: "agento11y" },
+    { name: "only legacy exists", apps: ["sigil"], wantApp: "sigil" },
+    {
+      name: "both exist prefers new",
+      apps: ["agento11y", "sigil"],
+      wantApp: "agento11y",
+    },
+  ];
+  for (const tc of resolutionCases) {
+    it(tc.name, () => {
+      process.env.XDG_CONFIG_HOME = fakeHome;
+      for (const app of tc.apps) {
+        mkdirSync(join(fakeHome, app), { recursive: true });
+        writeFileSync(join(fakeHome, app, "config.env"), "SIGIL_ENDPOINT=x\n");
+      }
+      expect(sigilConfigEnvPath()).toBe(
+        join(fakeHome, tc.wantApp, "config.env"),
+      );
+    });
+  }
 });
 
 describe("loadSigilDotenv", () => {

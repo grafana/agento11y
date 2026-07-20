@@ -25,13 +25,13 @@ func HasCredentials() bool {
 
 // FilePath returns the dotenv config path for the consolidated binary.
 func FilePath() string {
-	return dotenv.FilePath("sigil")
+	return dotenv.FilePath()
 }
 
 // ApplyEnv loads the shared sigil dotenv config and writes keys whose OS
 // env value is empty.
 func ApplyEnv(logger *log.Logger) map[string]string {
-	return dotenv.ApplyEnv("sigil", logger)
+	return dotenv.ApplyEnv(logger)
 }
 
 // LoadDotenv parses a dotenv file at path. Exported for tests that need

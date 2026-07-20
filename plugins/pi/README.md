@@ -29,7 +29,7 @@ agento11y pi
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y pi` installs the `@grafana/agento11y-pi` extension on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches pi.
+`agento11y pi` installs the `@grafana/agento11y-pi` extension on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches pi.
 
 <details>
 <summary>Manual extension registration</summary>
@@ -39,7 +39,7 @@ pi install npm:@grafana/agento11y-pi
 agento11y login
 ```
 
-The extension reads the same `~/.config/sigil/config.env` file whether you start pi with `agento11y pi` or plain `pi`.
+The extension reads the same `~/.config/agento11y/config.env` file whether you start pi with `agento11y pi` or plain `pi`. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
 
 </details>
 
@@ -65,7 +65,7 @@ Run `agento11y login` later to update saved credentials.
 <details>
 <summary>Non-interactive config.env</summary>
 
-Create or update `~/.config/sigil/config.env`:
+Create or update `~/.config/agento11y/config.env` (if you already have the old `~/.config/sigil/config.env`, edit that one instead):
 
 ```dotenv
 AGENTO11Y_ENDPOINT=https://sigil-prod-<region>.grafana.net
@@ -78,7 +78,7 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana
 
 When `AGENTO11Y_AUTH_TENANT_ID` and `AGENTO11Y_AUTH_TOKEN` are set, the extension uses them for Sigil and OTLP auth. If the OpenTelemetry card shows a different Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 
-To include conversation text (with automatic secret redaction), add this to `~/.config/sigil/config.env`:
+To include conversation text (with automatic secret redaction), add this to your `config.env`:
 
 ```dotenv
 AGENTO11Y_CONTENT_CAPTURE_MODE=full
@@ -88,7 +88,7 @@ AGENTO11Y_CONTENT_CAPTURE_MODE=full
 
 Run one pi turn, then open **AI Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
 
-If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/sigil/config.env`, run another turn, and check the debug log at `~/.local/state/sigil/logs/sigil.log` (honors `XDG_STATE_HOME`).
+If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/agento11y/config.env`, run another turn, and check the debug log at `~/.local/state/sigil/logs/sigil.log` (honors `XDG_STATE_HOME`).
 
 ## Tagging sessions
 
@@ -100,7 +100,7 @@ agento11y pi --tag project=hackathon --tag team=ai
 agento11y pi --tag team=ai -- --resume
 ```
 
-`--tag` is shorthand for `AGENTO11Y_TAGS`; flag tags merge onto (and override) any `AGENTO11Y_TAGS` already in the environment or `~/.config/sigil/config.env`. The merge happens in the SDK, so user tags reach every generation without the plugin reparsing them.
+`--tag` is shorthand for `AGENTO11Y_TAGS`; flag tags merge onto (and override) any `AGENTO11Y_TAGS` already in the environment or `~/.config/agento11y/config.env`. The merge happens in the SDK, so user tags reach every generation without the plugin reparsing them.
 
 The plugin always attaches two built-in tags to every generation:
 
@@ -123,7 +123,7 @@ AGENTO11Y_GUARDS_ENABLED=true agento11y pi
 
 By default, transport errors and timeouts let the request through. Set `AGENTO11Y_GUARDS_FAIL_OPEN=false` to block tool calls on errors instead. Raise or lower `AGENTO11Y_GUARDS_TIMEOUT_MS` (default `1500`) to trade latency against tolerance for slow evaluators.
 
-The same three variables are honored by the [Claude Code plugin](../claude-code/README.md); both plugins read them from `~/.config/sigil/config.env`.
+The same three variables are honored by the [Claude Code plugin](../claude-code/README.md); both plugins read them from `~/.config/agento11y/config.env`.
 
 ### Transform guards (redaction)
 
@@ -140,7 +140,7 @@ Limits:
 
 ## All options
 
-`~/.config/sigil/config.env` is the only configuration file. Every option is set via env var.
+`~/.config/agento11y/config.env` is the only configuration file. Every option is set via env var.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

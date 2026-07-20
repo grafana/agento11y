@@ -269,7 +269,7 @@ func seedGuards(enabledRaw, failOpenRaw string) string {
 }
 
 // displayConfigPath collapses the user's home prefix to ~ for display so the
-// viewer shows ~/.config/sigil/config.env rather than an absolute path.
+// viewer shows ~/.config/agento11y/config.env rather than an absolute path.
 func displayConfigPath(path string) string {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		if rel, ok := strings.CutPrefix(path, home+string(os.PathSeparator)); ok {

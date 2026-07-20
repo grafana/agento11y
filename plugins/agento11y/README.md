@@ -40,7 +40,7 @@ Verify the install with `agento11y --version`.
 
 ## Configure
 
-All hosts read the same config file at `~/.config/sigil/config.env`. The first run of `agento11y claude`, `agento11y opencode`, or `agento11y pi` prompts for your endpoint, tenant ID, token, and OTLP endpoint and writes them there; run `agento11y login` to re-enter them later. After the connection details, `agento11y login` shows an optional preferences step for content capture mode, session tags, and guards — leave it at the defaults to keep the current behaviour. Cursor has no launcher, so wire it once with `agento11y cursor install` (which also prompts on first run) and remove it with `agento11y cursor uninstall`.
+All hosts read the same config file at `~/.config/agento11y/config.env`. If you only have the old `~/.config/sigil/config.env`, that file is read and updated instead. The first run of `agento11y claude`, `agento11y opencode`, or `agento11y pi` prompts for your endpoint, tenant ID, token, and OTLP endpoint and writes them there; run `agento11y login` to re-enter them later. After the connection details, `agento11y login` shows an optional preferences step for content capture mode, session tags, and guards — leave it at the defaults to keep the current behaviour. Cursor has no launcher, so wire it once with `agento11y cursor install` (which also prompts on first run) and remove it with `agento11y cursor uninstall`.
 
 To preconfigure without the prompt, create the file:
 
@@ -76,7 +76,7 @@ The same flag works for every launcher (`claude`, `codex`, `copilot`, `opencode`
 
 ## Content capture
 
-The shared `agento11y` binary defaults to `metadata_only`: only model, tokens, tool names, timing, and cost ship to Grafana AI Observability. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/sigil/config.env`. The shared binary parser accepts every mode the SDKs support:
+The shared `agento11y` binary defaults to `metadata_only`: only model, tokens, tool names, timing, and cost ship to Grafana AI Observability. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`. The shared binary parser accepts every mode the SDKs support:
 
 ```dotenv
 # valid values: full | no_tool_content | metadata_only | full_with_metadata_spans
@@ -118,4 +118,4 @@ For support, capture the machine-readable report — it never includes the auth 
 agento11y doctor --json
 ```
 
-If you need lower-level detail, hooks always exit 0, so problems only show up in the debug log. Set `AGENTO11Y_DEBUG=true` in `~/.config/sigil/config.env` and tail `~/.local/state/sigil/logs/sigil.log`.
+If you need lower-level detail, hooks always exit 0, so problems only show up in the debug log. Set `AGENTO11Y_DEBUG=true` in `~/.config/agento11y/config.env` and tail `~/.local/state/sigil/logs/sigil.log`.

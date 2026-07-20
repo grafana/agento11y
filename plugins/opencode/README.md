@@ -29,7 +29,7 @@ agento11y opencode
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y opencode` installs `@grafana/agento11y-opencode` into OpenCode on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches OpenCode. Pass arguments to OpenCode after `--`, e.g. `agento11y opencode -- run "say hi"`.
+`agento11y opencode` installs `@grafana/agento11y-opencode` into OpenCode on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches OpenCode. Pass arguments to OpenCode after `--`, e.g. `agento11y opencode -- run "say hi"`.
 
 <details>
 <summary>Manual plugin registration</summary>
@@ -39,7 +39,7 @@ opencode plugin @grafana/agento11y-opencode --global
 agento11y login
 ```
 
-The plugin reads `~/.config/sigil/config.env` on every session start, whether you start OpenCode with `agento11y opencode` or plain `opencode`.
+The plugin reads `~/.config/agento11y/config.env` on every session start, whether you start OpenCode with `agento11y opencode` or plain `opencode`. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
 
 </details>
 
@@ -65,7 +65,7 @@ Run `agento11y login` later to update saved credentials.
 <details>
 <summary>Non-interactive config.env</summary>
 
-Create or update `~/.config/sigil/config.env`:
+Create or update `~/.config/agento11y/config.env` (if you already have the old `~/.config/sigil/config.env`, edit that one instead):
 
 ```dotenv
 AGENTO11Y_ENDPOINT=https://sigil-prod-<region>.grafana.net
@@ -78,7 +78,7 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana
 
 When `AGENTO11Y_AUTH_TENANT_ID` and `AGENTO11Y_AUTH_TOKEN` are set, the plugin uses them for Sigil and OTLP auth. If the OpenTelemetry card shows a different Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 
-To include conversation text, add this to `~/.config/sigil/config.env`:
+To include conversation text, add this to your `config.env`:
 
 ```dotenv
 AGENTO11Y_CONTENT_CAPTURE_MODE=full
@@ -90,7 +90,7 @@ OpenCode redacts assistant and tool content before export. User prompt text is s
 
 Run one OpenCode turn, then open **AI Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
 
-If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/sigil/config.env`, run another turn, and check OpenCode stderr.
+If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/agento11y/config.env`, run another turn, and check OpenCode stderr.
 
 ## Tagging sessions
 
@@ -102,7 +102,7 @@ agento11y opencode --tag project=hackathon --tag team=ai
 agento11y opencode --tag team=ai -- run "say hi"
 ```
 
-`--tag` is shorthand for `AGENTO11Y_TAGS`; flag tags merge onto (and override) any `AGENTO11Y_TAGS` already in the environment or `~/.config/sigil/config.env`. The merge happens in the SDK, so user tags reach every generation without the plugin reparsing them.
+`--tag` is shorthand for `AGENTO11Y_TAGS`; flag tags merge onto (and override) any `AGENTO11Y_TAGS` already in the environment or `~/.config/agento11y/config.env`. The merge happens in the SDK, so user tags reach every generation without the plugin reparsing them.
 
 The plugin always attaches two built-in tags to every generation:
 
@@ -113,7 +113,7 @@ Built-in tags win collisions with user tags, matching the claude-code and cursor
 
 ## All options
 
-`~/.config/sigil/config.env` is the only configuration file. Every option is set via env var.
+`~/.config/agento11y/config.env` is the only configuration file. Every option is set via env var.
 
 | Variable | Default | Description |
 |---|---|---|

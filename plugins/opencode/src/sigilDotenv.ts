@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { isMissingFileError } from "./fsErrors.js";
@@ -50,25 +50,49 @@ const ALIAS_SUFFIXES = [
   "GUARDS_TIMEOUT_MS",
 ];
 
-/**
- * Resolve the path the sigil dotenv loader reads. Mirrors
- * `plugins/agento11y/internal/xdg/xdg.go::ConfigRoot` so every Sigil agent reads
- * the same file:
- *
- * 1. `$XDG_CONFIG_HOME/sigil/config.env` when XDG_CONFIG_HOME is an absolute path.
- * 2. `$HOME/.config/sigil/config.env` when the user has a resolvable home.
- * 3. `<tmpdir>/sigil/config.env` as a last-resort fallback.
- */
-export function sigilConfigEnvPath(): string {
+// Preferred config directory name and the pre-rename fallback. The legacy
+// directory is still read during the transition so existing installs keep
+// working; the file is never moved or copied.
+const APP_NAME = "agento11y";
+const LEGACY_APP_NAME = "sigil";
+
+// Resolve the config root the same way as
+// `plugins/agento11y/internal/xdg/xdg.go::ConfigRoot`:
+//
+// 1. `$XDG_CONFIG_HOME` when it is an absolute path.
+// 2. `$HOME/.config` when the user has a resolvable home.
+// 3. `<tmpdir>` as a last-resort fallback.
+function configRoot(): string {
   const xdg = (process.env.XDG_CONFIG_HOME ?? "").trim();
   if (xdg && isAbsolute(xdg)) {
-    return join(xdg, "sigil", "config.env");
+    return xdg;
   }
   const home = homedir();
   if (home && isAbsolute(home)) {
-    return join(home, ".config", "sigil", "config.env");
+    return join(home, ".config");
   }
-  return join(tmpdir(), "sigil", "config.env");
+  return tmpdir();
+}
+
+/**
+ * Resolve the path the sigil dotenv loader reads. Mirrors
+ * `plugins/agento11y/internal/dotenv/dotenv.go::FilePath` so every Sigil
+ * agent reads the same file: `<config root>/agento11y/config.env` if that
+ * file exists, otherwise the legacy `<config root>/sigil/config.env` if that
+ * exists, otherwise the new path. Preferring the new path when both exist
+ * mirrors the AGENTO11Y_* > SIGIL_* env precedence.
+ */
+export function sigilConfigEnvPath(): string {
+  const root = configRoot();
+  const preferred = join(root, APP_NAME, "config.env");
+  if (existsSync(preferred)) {
+    return preferred;
+  }
+  const legacy = join(root, LEGACY_APP_NAME, "config.env");
+  if (existsSync(legacy)) {
+    return legacy;
+  }
+  return preferred;
 }
 
 /**

@@ -27,7 +27,7 @@ agento11y claude
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y claude` registers the `sigil-cc` plugin on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches Claude Code.
+`agento11y claude` registers the `sigil-cc` plugin on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches Claude Code.
 
 <details>
 <summary>Manual plugin registration</summary>
@@ -61,7 +61,7 @@ Run `agento11y login` later to update saved credentials.
 <details>
 <summary>Non-interactive config.env</summary>
 
-Create or update `~/.config/sigil/config.env`:
+Create or update `~/.config/agento11y/config.env` (if you already have the old `~/.config/sigil/config.env`, edit that one instead):
 
 ```dotenv
 AGENTO11Y_ENDPOINT=https://sigil-prod-<region>.grafana.net
@@ -72,7 +72,7 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana
 
 </details>
 
-To also send the conversation text (with automatic secret redaction), add this to `~/.config/sigil/config.env`:
+To also send the conversation text (with automatic secret redaction), add this to your `config.env`:
 
 ```dotenv
 AGENTO11Y_CONTENT_CAPTURE_MODE=full

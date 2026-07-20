@@ -6,13 +6,15 @@
 // SIGIL_AUTH_TENANT_ID, SIGIL_AUTH_TOKEN and an optional OTel OTLP endpoint)
 // followed by an optional preferences group (content capture mode, session
 // tags, and guards), then writes them to the standard dotenv at
-// $XDG_CONFIG_HOME/sigil/config.env. Existing allowed keys not covered by
+// $XDG_CONFIG_HOME/agento11y/config.env (or the legacy
+// $XDG_CONFIG_HOME/sigil/config.env when only that file exists; see
+// dotenv.FilePath). Existing allowed keys not covered by
 // prompts are preserved by the underlying writer.
 //
 // Prompts use github.com/charmbracelet/huh, the same library gcx uses. The
 // flow is interactive-only: callers without a TTY receive ErrNotInteractive
 // and should either run from a terminal or set SIGIL_* env vars / write
-// $XDG_CONFIG_HOME/sigil/config.env directly.
+// $XDG_CONFIG_HOME/agento11y/config.env directly.
 package login
 
 import (
@@ -105,7 +107,7 @@ func grafanaTheme() *huh.Theme {
 // RunOpts controls the login flow.
 type RunOpts struct {
 	// ConfigPath overrides the dotenv path; empty resolves to
-	// dotenv.FilePath("sigil").
+	// dotenv.FilePath().
 	ConfigPath string
 
 	// ShowNextStep prints a `Try sigil claude or sigil pi.` hint after a
@@ -149,7 +151,7 @@ func Run(_ context.Context, opts RunOpts) error {
 	}
 	configPath := opts.ConfigPath
 	if configPath == "" {
-		configPath = dotenv.FilePath("sigil")
+		configPath = dotenv.FilePath()
 	}
 
 	if !term.IsTerminal(int(opts.Stdin.Fd())) {

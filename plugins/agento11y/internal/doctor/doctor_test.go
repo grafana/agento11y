@@ -41,7 +41,12 @@ func stubSeams(t *testing.T) {
 
 func writeConfig(t *testing.T, content string) {
 	t.Helper()
-	path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "sigil", "config.env")
+	writeConfigApp(t, "agento11y", content)
+}
+
+func writeConfigApp(t *testing.T, app, content string) {
+	t.Helper()
+	path := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), app, "config.env")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -442,10 +447,45 @@ func TestDisallowedKeys(t *testing.T) {
 		"RANDOM_KEY=dup", // duplicate reported once
 	}, "\n"))
 
-	got := disallowedKeys(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "sigil", "config.env"))
+	got := disallowedKeys(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "agento11y", "config.env"))
 	want := []string{"RANDOM_KEY", "AWS_SECRET"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("disallowedKeys = %v, want %v", got, want)
+	}
+}
+
+// TestCollectConfig_PathResolution pins the reported config path to the
+// dotenv resolver: the new agento11y path wins when present, the legacy
+// sigil path is still reported while only it exists, and a missing config
+// reports the new default with Exists=false.
+func TestCollectConfig_PathResolution(t *testing.T) {
+	tests := []struct {
+		name       string
+		apps       []string
+		wantApp    string
+		wantExists bool
+	}{
+		{name: "no config reports new default", wantApp: "agento11y", wantExists: false},
+		{name: "new only", apps: []string{"agento11y"}, wantApp: "agento11y", wantExists: true},
+		{name: "legacy only", apps: []string{"sigil"}, wantApp: "sigil", wantExists: true},
+		{name: "both prefer new", apps: []string{"agento11y", "sigil"}, wantApp: "agento11y", wantExists: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnv(t)
+			for _, app := range tc.apps {
+				writeConfigApp(t, app, "SIGIL_ENDPOINT=https://x\n")
+			}
+
+			sec := collectConfig(nil, nil)
+			want := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), tc.wantApp, "config.env")
+			if sec.Path != want {
+				t.Fatalf("Path = %q, want %q", sec.Path, want)
+			}
+			if sec.Exists != tc.wantExists {
+				t.Fatalf("Exists = %v, want %v", sec.Exists, tc.wantExists)
+			}
+		})
 	}
 }
 

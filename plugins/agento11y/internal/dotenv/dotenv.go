@@ -1,5 +1,6 @@
-// Package dotenv loads KEY=value pairs from $XDG_CONFIG_HOME/<app>/config.env
-// and writes them into the process environment where the OS env is empty.
+// Package dotenv loads KEY=value pairs from the launcher config file
+// (see FilePath) and writes them into the process environment where the OS
+// env is empty.
 //
 // This lets hooks pick up branded credentials when the agent runs them under
 // a stripped environment (e.g. Cursor's hook runtime, Codex's headless mode).
@@ -15,10 +16,32 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
 )
 
-// FilePath returns the dotenv config path for an app:
-// $XDG_CONFIG_HOME/<appName>/config.env (with sensible fallbacks).
-func FilePath(appName string) string {
-	return xdg.ConfigFilePath(appName, "config.env")
+const (
+	// appName is the preferred config directory name.
+	appName = "agento11y"
+	// legacyAppName is the pre-rename config directory, still read during
+	// the transition so existing installs keep working. Old binaries only
+	// know this path, so the file is never moved or copied.
+	legacyAppName = "sigil"
+)
+
+// FilePath returns the dotenv config path:
+// $XDG_CONFIG_HOME/agento11y/config.env if that file exists, otherwise the
+// legacy $XDG_CONFIG_HOME/sigil/config.env if that exists, otherwise the new
+// path (with the usual xdg config-root fallbacks). Preferring the new path
+// when both exist mirrors the AGENTO11Y_* > SIGIL_* env precedence. Writers
+// (login, the local settings server) use the same resolution so reads and
+// writes stay on one file.
+func FilePath() string {
+	preferred := xdg.ConfigFilePath(appName, "config.env")
+	if _, err := os.Stat(preferred); err == nil {
+		return preferred
+	}
+	legacy := xdg.ConfigFilePath(legacyAppName, "config.env")
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy
+	}
+	return preferred
 }
 
 // HasCredentials reports whether the branded credentials are populated in the
@@ -30,8 +53,9 @@ func HasCredentials() bool {
 		envconfig.Getenv("AUTH_TOKEN") != ""
 }
 
-// ApplyEnv loads the dotenv file for appName and merges it into the process
-// environment. Supported alias families resolve source-first, spelling-second:
+// ApplyEnv loads the dotenv file (see FilePath) and merges it into the
+// process environment. Supported alias families resolve source-first,
+// spelling-second:
 //
 //	shell AGENTO11Y_* > shell SIGIL_* > file AGENTO11Y_* > file SIGIL_*
 //
@@ -42,8 +66,8 @@ func HasCredentials() bool {
 // step. Keys outside the alias registry keep the old exact-key semantics:
 // the file value is applied only where the OS env is empty. Returns the
 // parsed dotenv map for callers that need to introspect (tests).
-func ApplyEnv(appName string, logger *log.Logger) map[string]string {
-	fileEnv := LoadDotenv(FilePath(appName), logger)
+func ApplyEnv(logger *log.Logger) map[string]string {
+	fileEnv := LoadDotenv(FilePath(), logger)
 
 	aliasKeys := map[string]bool{}
 	for _, suffix := range envconfig.AliasSuffixes {
