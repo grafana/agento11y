@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { defaultConfig, SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
 class CapturingExporter {
   requests = [];
@@ -25,7 +25,7 @@ function newHarness() {
   });
   const tracer = traceProvider.getTracer('agento11y-sdk-js-test');
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     tracer,
     generationExport: {
       ...defaults.generationExport,

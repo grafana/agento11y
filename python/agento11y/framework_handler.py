@@ -131,7 +131,7 @@ def merge_framework_callback_kwargs(
     return merged
 
 
-class SigilFrameworkHandlerBase:
+class Agento11yFrameworkHandlerBase:
     def __init__(
         self,
         *,
@@ -263,7 +263,7 @@ class SigilFrameworkHandlerBase:
             orphan = self._workflow_step_runs.pop(run_key, None)
             if orphan is not None:
                 logger.warning(
-                    "sigil: dropping in-flight workflow step %s (node %s) — on_chain_end callback never fired",
+                    "agento11y: dropping in-flight workflow step %s (node %s) — on_chain_end callback never fired",
                     orphan.step_id,
                     orphan.step_name,
                 )
@@ -881,7 +881,7 @@ class SigilFrameworkHandlerBase:
         except Exception as exc:  # noqa: BLE001
             log_warn = getattr(self._client, "_log_warn", None)
             if log_warn is not None:
-                log_warn("sigil: failed to enqueue workflow step", exc)
+                log_warn("agento11y: failed to enqueue workflow step", exc)
             return
 
         if state.graph_root_key:
@@ -1188,7 +1188,7 @@ def _resolve_framework_conversation_id(
         return thread_id, thread_id
 
     # Deterministic fallback when framework context does not expose a stable conversation key.
-    return f"sigil:framework:{framework_name}:{run_key}", ""
+    return f"agento11y:framework:{framework_name}:{run_key}", ""
 
 
 def _thread_id_from_payload(payload: Any) -> str:

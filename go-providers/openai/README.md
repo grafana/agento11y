@@ -5,11 +5,11 @@ This module maps official OpenAI Go SDK request/response payloads into typed Sig
 ## Scope
 
 - One-liner wrappers:
-  - `ChatCompletionsNew(ctx, sigilClient, provider, req, opts...)`
-  - `ChatCompletionsNewStreaming(ctx, sigilClient, provider, req, opts...)`
-  - `ResponsesNew(ctx, sigilClient, provider, req, opts...)`
-  - `ResponsesNewStreaming(ctx, sigilClient, provider, req, opts...)`
-  - `EmbeddingsNew(ctx, sigilClient, provider, req, opts...)`
+  - `ChatCompletionsNew(ctx, agento11yClient, provider, req, opts...)`
+  - `ChatCompletionsNewStreaming(ctx, agento11yClient, provider, req, opts...)`
+  - `ResponsesNew(ctx, agento11yClient, provider, req, opts...)`
+  - `ResponsesNewStreaming(ctx, agento11yClient, provider, req, opts...)`
+  - `EmbeddingsNew(ctx, agento11yClient, provider, req, opts...)`
 - Mapper functions:
   - `ChatCompletionsFromRequestResponse(req, resp, opts...)`
   - `ChatCompletionsFromStream(req, summary, opts...)`
@@ -20,7 +20,7 @@ This module maps official OpenAI Go SDK request/response payloads into typed Sig
 ## Integration styles
 
 - Strict wrappers: use `ChatCompletionsNew*` / `ResponsesNew*` for one-call instrumentation.
-- Manual instrumentation: use `sigil.Client.StartGeneration` or `StartStreamingGeneration` and map strict OpenAI request/response payloads with `ChatCompletionsFrom*` or `ResponsesFrom*`.
+- Manual instrumentation: use `agento11y.Client.StartGeneration` or `StartStreamingGeneration` and map strict OpenAI request/response payloads with `ChatCompletionsFrom*` or `ResponsesFrom*`.
 
 ## SDK
 
@@ -29,7 +29,7 @@ This module maps official OpenAI Go SDK request/response payloads into typed Sig
 ## Chat Completions Wrapper
 
 ```go
-resp, err := openai.ChatCompletionsNew(ctx, sigilClient, providerClient, req,
+resp, err := openai.ChatCompletionsNew(ctx, agento11yClient, providerClient, req,
 	openai.WithConversationID("conv-1"),
 	openai.WithConversationTitle("Weather follow-up"),
 	openai.WithAgentName("assistant-openai"),
@@ -44,7 +44,7 @@ _ = resp.Choices[0].Message.Content
 ## Responses Wrapper
 
 ```go
-resp, err := openai.ResponsesNew(ctx, sigilClient, providerClient, req,
+resp, err := openai.ResponsesNew(ctx, agento11yClient, providerClient, req,
 	openai.WithConversationID("conv-1"),
 	openai.WithConversationTitle("Weather follow-up"),
 	openai.WithAgentName("assistant-openai"),
@@ -59,7 +59,7 @@ _ = resp.ID
 ## Embeddings Wrapper
 
 ```go
-embedResp, err := openai.EmbeddingsNew(ctx, sigilClient, providerClient, osdk.EmbeddingNewParams{
+embedResp, err := openai.EmbeddingsNew(ctx, agento11yClient, providerClient, osdk.EmbeddingNewParams{
 	Model: osdk.EmbeddingModel("text-embedding-3-small"),
 	Input: osdk.EmbeddingNewParamsInputUnion{
 		OfArrayOfStrings: []string{"hello", "world"},
@@ -74,11 +74,11 @@ _ = embedResp.Model
 ## Defer Pattern (explicit control)
 
 ```go
-ctx, rec := sigilClient.StartGeneration(ctx, sigil.GenerationStart{
+ctx, rec := agento11yClient.StartGeneration(ctx, agento11y.GenerationStart{
 	ConversationID: "conv-9b2f",
 	AgentName:      "assistant-openai",
 	AgentVersion:   "1.0.0",
-	Model:          sigil.ModelRef{Provider: "openai", Name: "gpt-5"},
+	Model:          agento11y.ModelRef{Provider: "openai", Name: "gpt-5"},
 })
 defer rec.End()
 
@@ -94,8 +94,8 @@ rec.SetResult(openai.ChatCompletionsFromRequestResponse(req, resp))
 ## Streaming Defer Pattern
 
 ```go
-ctx, rec := sigilClient.StartStreamingGeneration(ctx, sigil.GenerationStart{
-	Model: sigil.ModelRef{Provider: "openai", Name: "gpt-5"},
+ctx, rec := agento11yClient.StartStreamingGeneration(ctx, agento11y.GenerationStart{
+	Model: agento11y.ModelRef{Provider: "openai", Name: "gpt-5"},
 })
 defer rec.End()
 

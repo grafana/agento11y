@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class MetricExemplarTests
 {
@@ -64,7 +64,7 @@ public sealed class MetricExemplarTests
         {
             _activityListener = new ActivityListener
             {
-                ShouldListenTo = source => source.Name == SigilClient.InstrumentationName,
+                ShouldListenTo = source => source.Name == Agento11yClient.InstrumentationName,
                 Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
             };
             ActivitySource.AddActivityListener(_activityListener);
@@ -84,11 +84,11 @@ public sealed class MetricExemplarTests
             _meterListener.Start();
         }
 
-        public SigilClient NewClient()
+        public Agento11yClient NewClient()
         {
             var exporter = new CapturingGenerationExporter();
             var config = TestHelpers.TestConfig(exporter);
-            return new SigilClient(config);
+            return new Agento11yClient(config);
         }
 
         public void Dispose()

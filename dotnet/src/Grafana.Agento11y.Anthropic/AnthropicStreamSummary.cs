@@ -1,7 +1,7 @@
 using Anthropic.Models.Messages;
 using AnthropicMessage = Anthropic.Models.Messages.Message;
 
-namespace Grafana.Sigil.Anthropic;
+namespace Grafana.Agento11y.Anthropic;
 
 public sealed class AnthropicStreamSummary
 {

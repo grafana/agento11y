@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class EnvIntegrationTests
 {
@@ -28,7 +28,7 @@ public sealed class EnvIntegrationTests
     [Fact]
     public void ResolveFromEnvFillsConfigDefaults()
     {
-        var caller = new SigilClientConfig();
+        var caller = new Agento11yClientConfig();
         var env = new Dictionary<string, string?>
         {
             ["SIGIL_AGENT_NAME"] = "env-agent",
@@ -49,7 +49,7 @@ public sealed class EnvIntegrationTests
     [Fact]
     public void ResolveFromEnvFillsConfigDefaultsFromPreferredNames()
     {
-        var caller = new SigilClientConfig();
+        var caller = new Agento11yClientConfig();
         var env = new Dictionary<string, string?>
         {
             ["AGENTO11Y_AGENT_NAME"] = "env-agent",
@@ -70,7 +70,7 @@ public sealed class EnvIntegrationTests
     [Fact]
     public void CallerConfigOverridesEnv()
     {
-        var caller = new SigilClientConfig { AgentName = "caller-agent" };
+        var caller = new Agento11yClientConfig { AgentName = "caller-agent" };
         var env = new Dictionary<string, string?> { ["SIGIL_AGENT_NAME"] = "env-agent" };
 
         var (resolved, _) = EnvConfig.ResolveFromEnv(k => env.TryGetValue(k, out var v) ? v : null, caller);
@@ -86,7 +86,7 @@ public sealed class EnvIntegrationTests
         config.Tags["service"] = "demo";
         config.Tags["team"] = "ai";
 
-        await using (var client = new SigilClient(config))
+        await using (var client = new Agento11yClient(config))
         {
             var start = MinimalStart();
             start.Tags["team"] = "obs";
@@ -112,7 +112,7 @@ public sealed class EnvIntegrationTests
         config.AgentVersion = "1.2.3";
         config.UserId = "user-1";
 
-        await using (var client = new SigilClient(config))
+        await using (var client = new Agento11yClient(config))
         {
             var rec = client.StartGeneration(MinimalStart());
             rec.SetResult(BareResult());
@@ -135,7 +135,7 @@ public sealed class EnvIntegrationTests
         config.AgentName = "env-agent";
         config.UserId = "env-user";
 
-        await using (var client = new SigilClient(config))
+        await using (var client = new Agento11yClient(config))
         {
             var start = MinimalStart();
             start.AgentName = "call-agent";
@@ -155,7 +155,7 @@ public sealed class EnvIntegrationTests
     [Fact]
     public void ExplicitInsecureFalseBeatsEnvTrue()
     {
-        var caller = new SigilClientConfig();
+        var caller = new Agento11yClientConfig();
         caller.GenerationExport.Insecure = false;
         var env = new Dictionary<string, string?> { ["SIGIL_INSECURE"] = "true" };
 
@@ -167,7 +167,7 @@ public sealed class EnvIntegrationTests
     [Fact]
     public void NoEnvNoCallerInsecureResolvesToFalseAfterConfigResolver()
     {
-        var caller = new SigilClientConfig();
+        var caller = new Agento11yClientConfig();
         var resolved = ConfigResolverTestHook.Resolve(caller, _ => null);
         Assert.NotNull(resolved.GenerationExport.Insecure);
         Assert.False(resolved.GenerationExport.Insecure!.Value);
@@ -176,7 +176,7 @@ public sealed class EnvIntegrationTests
 
 internal static class ConfigResolverTestHook
 {
-    public static SigilClientConfig Resolve(SigilClientConfig? config, Func<string, string?> envLookup)
+    public static Agento11yClientConfig Resolve(Agento11yClientConfig? config, Func<string, string?> envLookup)
     {
         // Wrapper that goes through ConfigResolver.Resolve via internal access.
         return ConfigResolver.Resolve(config, envLookup);

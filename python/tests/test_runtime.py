@@ -130,7 +130,7 @@ def test_shutdown_flushes_pending_generation() -> None:
 
 def test_builtin_noop_generation_exporter_supports_instrumentation_only_mode() -> None:
     provider = TracerProvider()
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
     client = Client(
         ClientConfig(
             tracer=tracer,
@@ -179,7 +179,7 @@ def test_default_operation_name_is_mode_aware_and_mode_not_emitted_as_span_attri
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
 
     client = _new_client(exporter, tracer=tracer)
     try:
@@ -208,7 +208,7 @@ def test_call_error_sets_span_error_and_does_not_set_local_error() -> None:
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
 
     client = _new_client(exporter, tracer=tracer)
     try:
@@ -235,7 +235,7 @@ def test_embedding_span_sets_attributes_and_does_not_enqueue_generation() -> Non
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
 
     client = _new_client(exporter, tracer=tracer)
     try:
@@ -285,7 +285,7 @@ def test_embedding_input_capture_is_opt_in_with_truncation() -> None:
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
 
     client = _new_client(
         exporter,
@@ -323,7 +323,7 @@ def test_embedding_call_error_marks_provider_error_without_local_error() -> None
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
 
     client = _new_client(exporter, tracer=tracer)
     try:
@@ -349,7 +349,7 @@ def test_embedding_validation_error_sets_local_error() -> None:
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
 
     client = _new_client(exporter, tracer=tracer)
     try:
@@ -375,7 +375,7 @@ def test_embedding_context_defaults_apply_for_agent_fields() -> None:
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
 
     client = _new_client(exporter, tracer=tracer)
     try:
@@ -400,7 +400,7 @@ def test_request_controls_result_overrides_seed_and_sets_span_attrs() -> None:
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
 
     client = _new_client(exporter, tracer=tracer)
     try:
@@ -556,7 +556,7 @@ def test_tool_execution_attributes_and_content_capture() -> None:
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
 
     client = _new_client(exporter, tracer=tracer)
     try:

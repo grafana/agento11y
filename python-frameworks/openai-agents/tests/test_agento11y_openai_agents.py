@@ -10,11 +10,11 @@ import pytest
 from agento11y import Client, ClientConfig, GenerationExportConfig
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
 from agento11y_openai_agents import (
-    SigilAsyncOpenAIAgentsHandler,
-    SigilOpenAIAgentsHandler,
-    SigilOpenAIAgentsRunHooks,
-    create_sigil_openai_agents_handler,
-    with_sigil_openai_agents_hooks,
+    Agento11yAsyncOpenAIAgentsHandler,
+    Agento11yOpenAIAgentsHandler,
+    Agento11yOpenAIAgentsRunHooks,
+    create_agento11y_openai_agents_handler,
+    with_agento11y_openai_agents_hooks,
 )
 from agents import RunHooks
 from opentelemetry.sdk.trace import TracerProvider
@@ -55,7 +55,7 @@ def test_agento11y_openai_agents_sync_lifecycle_sets_framework_metadata() -> Non
     try:
         run_id = uuid4()
         parent_run_id = uuid4()
-        handler = SigilOpenAIAgentsHandler(client=client, provider_resolver="auto")
+        handler = Agento11yOpenAIAgentsHandler(client=client, provider_resolver="auto")
 
         handler.on_chat_model_start(
             {"name": "ChatModel"},
@@ -104,7 +104,7 @@ def test_agento11y_openai_agents_keeps_thread_metadata_when_ids_are_split_across
 
     try:
         run_id = uuid4()
-        handler = SigilOpenAIAgentsHandler(client=client, provider_resolver="auto")
+        handler = Agento11yOpenAIAgentsHandler(client=client, provider_resolver="auto")
 
         handler.on_chat_model_start(
             {"name": "ChatModel"},
@@ -140,7 +140,7 @@ def test_agento11y_openai_agents_fallback_conversation_is_deterministic() -> Non
 
     try:
         run_id = uuid4()
-        handler = SigilOpenAIAgentsHandler(client=client)
+        handler = Agento11yOpenAIAgentsHandler(client=client)
 
         handler.on_llm_start(
             {"kwargs": {"model": "gpt-5"}},
@@ -152,7 +152,7 @@ def test_agento11y_openai_agents_fallback_conversation_is_deterministic() -> Non
 
         client.flush()
         generation = exporter.requests[0].generations[0]
-        assert generation.conversation_id == f"sigil:framework:openai-agents:{run_id}"
+        assert generation.conversation_id == f"agento11y:framework:openai-agents:{run_id}"
     finally:
         client.shutdown()
 
@@ -163,7 +163,7 @@ def test_agento11y_openai_agents_stream_mode_uses_chunks_when_output_missing() -
 
     try:
         run_id = uuid4()
-        handler = SigilOpenAIAgentsHandler(client=client)
+        handler = Agento11yOpenAIAgentsHandler(client=client)
 
         handler.on_llm_start(
             {"kwargs": {"model": "claude-sonnet-4-5"}},
@@ -189,13 +189,13 @@ def test_agento11y_openai_agents_generation_span_tracks_active_parent_span_and_e
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-framework-test")
+    tracer = provider.get_tracer("agento11y-framework-test")
     client = _new_client(exporter, tracer=tracer)
 
     try:
         run_id = uuid4()
         with tracer.start_as_current_span("framework.request"):
-            handler = SigilOpenAIAgentsHandler(client=client, provider_resolver="auto")
+            handler = Agento11yOpenAIAgentsHandler(client=client, provider_resolver="auto")
             handler.on_chat_model_start(
                 {"name": "ChatModel"},
                 [[{"type": "human", "content": "hello"}]],
@@ -234,7 +234,7 @@ def test_agento11y_openai_agents_normalizes_extra_metadata() -> None:
 
     try:
         run_id = uuid4()
-        handler = SigilOpenAIAgentsHandler(
+        handler = Agento11yOpenAIAgentsHandler(
             client=client,
             extra_metadata={
                 "timestamp": "2026-02-20T00:00:00Z",
@@ -266,7 +266,7 @@ def test_agento11y_openai_agents_async_handler_records_generation() -> None:
 
     async def _run() -> None:
         run_id = uuid4()
-        handler = SigilAsyncOpenAIAgentsHandler(client=client)
+        handler = Agento11yAsyncOpenAIAgentsHandler(client=client)
         await handler.on_llm_start({}, ["hello"], run_id=run_id, invocation_params={"model": "gpt-5"})
         await handler.on_llm_end({"generations": [[{"text": "world"}]]}, run_id=run_id)
 
@@ -305,11 +305,11 @@ def test_agento11y_openai_agents_hook_helpers_append_handler() -> None:
         model = "gpt-5"
 
     try:
-        created = create_sigil_openai_agents_handler(client=client)
-        assert isinstance(created, SigilOpenAIAgentsHandler)
+        created = create_agento11y_openai_agents_handler(client=client)
+        assert isinstance(created, Agento11yOpenAIAgentsHandler)
 
         existing = _ExistingHooks()
-        run_options = with_sigil_openai_agents_hooks(
+        run_options = with_agento11y_openai_agents_hooks(
             {"hooks": existing, "max_turns": 3},
             client=client,
             agent_name="openai-agent-helper",
@@ -317,7 +317,7 @@ def test_agento11y_openai_agents_hook_helpers_append_handler() -> None:
 
         assert run_options["max_turns"] == 3
         hooks = run_options["hooks"]
-        assert isinstance(hooks, SigilOpenAIAgentsRunHooks)
+        assert isinstance(hooks, Agento11yOpenAIAgentsRunHooks)
         run_hooks_origin = getattr(RunHooks, "__origin__", None)
         assert run_hooks_origin is not None
         assert isinstance(hooks, run_hooks_origin)
@@ -346,7 +346,7 @@ def test_agento11y_openai_agents_hook_helpers_append_handler() -> None:
         assert existing.ended == 1
 
         with pytest.raises(TypeError):
-            with_sigil_openai_agents_hooks({"hooks": [existing]}, client=client)
+            with_agento11y_openai_agents_hooks({"hooks": [existing]}, client=client)
     finally:
         client.shutdown()
 
@@ -355,7 +355,7 @@ def test_agento11y_openai_agents_handler_explicitly_has_no_embedding_lifecycle()
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilOpenAIAgentsHandler(client=client)
+        handler = Agento11yOpenAIAgentsHandler(client=client)
         assert not hasattr(handler, "on_embedding_start")
         assert not hasattr(handler, "on_embedding_end")
         assert not hasattr(handler, "on_embedding_error")

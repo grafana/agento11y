@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
 
-namespace Grafana.Sigil;
+namespace Grafana.Agento11y;
 
 internal static class InternalUtils
 {

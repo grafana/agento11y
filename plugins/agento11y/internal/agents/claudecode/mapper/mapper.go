@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/mapperutil"
@@ -38,7 +38,7 @@ func (o Options) logf(format string, args ...any) {
 
 type userContext struct {
 	prompt      string
-	toolResults []sigil.Message
+	toolResults []agento11y.Message
 }
 
 // Coalesce merges consecutive assistant lines sharing the same RequestID
@@ -135,9 +135,9 @@ func mergeAssistantGroup(lines []transcript.Line) transcript.Line {
 
 // agentCall holds the metadata captured from an Agent tool_use block.
 type agentCall struct {
-	parentGenID  string           // generation that spawned this call
-	parentGen    sigil.Generation // copy for inheriting fields
-	subagentType string           // lowercased subagent_type from tool input; empty falls back to "subagent"
+	parentGenID  string               // generation that spawned this call
+	parentGen    agento11y.Generation // copy for inheriting fields
+	subagentType string               // lowercased subagent_type from tool input; empty falls back to "subagent"
 }
 
 // Process walks transcript lines and produces Generation records.
@@ -147,9 +147,9 @@ type agentCall struct {
 // evidence of their execution is the Agent tool_use (spawn) and the matching
 // tool_result (output). Process synthesises a generation for each completed
 // Agent call so that the Sigil dependency graph can display the DAG.
-func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact.Redactor) []sigil.Generation {
+func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact.Redactor) []agento11y.Generation {
 	var (
-		gens []sigil.Generation
+		gens []agento11y.Generation
 		uctx userContext
 		// agentCalls indexes Agent tool_use call IDs to the generation that
 		// emitted them, so we can synthesise subagent generations when the
@@ -222,8 +222,8 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 // synthesiseSubagentGens creates a generation for each Agent tool result in
 // the user line, using the Agent tool_use input for metadata (model,
 // description) and the tool_result content as output.
-func synthesiseSubagentGens(line transcript.Line, uctx *userContext, calls map[string]agentCall, opts Options) []sigil.Generation {
-	var gens []sigil.Generation
+func synthesiseSubagentGens(line transcript.Line, uctx *userContext, calls map[string]agentCall, opts Options) []agento11y.Generation {
+	var gens []agento11y.Generation
 	for _, msg := range uctx.toolResults {
 		for _, part := range msg.Parts {
 			if part.ToolResult == nil {
@@ -241,7 +241,7 @@ func synthesiseSubagentGens(line transcript.Line, uctx *userContext, calls map[s
 				suffix = "subagent"
 			}
 
-			gen := sigil.Generation{
+			gen := agento11y.Generation{
 				ID:                  subagentGenID(opts.SessionID, part.ToolResult.ToolCallID),
 				ConversationID:      opts.SessionID,
 				ConversationTitle:   opts.SessionID,
@@ -249,7 +249,7 @@ func synthesiseSubagentGens(line transcript.Line, uctx *userContext, calls map[s
 				AgentName:           agentName + "/" + suffix,
 				AgentVersion:        ac.parentGen.AgentVersion,
 				EffectiveVersion:    ac.parentGen.EffectiveVersion,
-				Mode:                sigil.GenerationModeSync,
+				Mode:                agento11y.GenerationModeSync,
 				OperationName:       "generateText",
 				Model:               ac.parentGen.Model,
 				StopReason:          "end_turn",
@@ -261,9 +261,9 @@ func synthesiseSubagentGens(line transcript.Line, uctx *userContext, calls map[s
 			// Use the tool result content as the output.
 			outputText := part.ToolResult.Content
 			if outputText != "" {
-				gen.Output = []sigil.Message{{
-					Role:  sigil.RoleAssistant,
-					Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: outputText}},
+				gen.Output = []agento11y.Message{{
+					Role:  agento11y.RoleAssistant,
+					Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: outputText}},
 				}}
 			}
 
@@ -301,7 +301,7 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 		return
 	}
 
-	var toolParts []sigil.Part
+	var toolParts []agento11y.Part
 	for _, b := range blocks {
 		if b.Type == "text" && b.Text != "" {
 			uctx.prompt = b.Text
@@ -315,9 +315,9 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 			if r != nil {
 				content = r.Redact(content)
 			}
-			toolParts = append(toolParts, sigil.Part{
-				Kind: sigil.PartKindToolResult,
-				ToolResult: &sigil.ToolResult{
+			toolParts = append(toolParts, agento11y.Part{
+				Kind: agento11y.PartKindToolResult,
+				ToolResult: &agento11y.ToolResult{
 					ToolCallID: b.ToolUseID,
 					Content:    content,
 					IsError:    b.IsError,
@@ -326,32 +326,32 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 		}
 	}
 	if len(toolParts) > 0 {
-		uctx.toolResults = []sigil.Message{{
-			Role:  sigil.RoleTool,
+		uctx.toolResults = []agento11y.Message{{
+			Role:  agento11y.RoleTool,
 			Parts: toolParts,
 		}}
 	}
 }
 
-func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Session, opts Options, r *redact.Redactor) (sigil.Generation, bool) {
+func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Session, opts Options, r *redact.Redactor) (agento11y.Generation, bool) {
 	var msg transcript.AssistantMessage
 	if err := json.Unmarshal(line.Message, &msg); err != nil {
 		opts.logf("unmarshal assistant message: %v", err)
-		return sigil.Generation{}, false
+		return agento11y.Generation{}, false
 	}
 
 	// Zero-token assistant lines are Claude Code's client-side socket-error
 	// recovery markers ("API Error: The socket connection was closed..."),
 	// not real LLM turns.
 	if msg.Usage.OutputTokens <= 0 {
-		return sigil.Generation{}, false
+		return agento11y.Generation{}, false
 	}
 
 	isSidechain := line.IsSidechain
 
 	completedAt, _ := time.Parse(time.RFC3339Nano, line.Timestamp)
 
-	usage := sigil.TokenUsage{
+	usage := agento11y.TokenUsage{
 		InputTokens:           msg.Usage.InputTokens,
 		OutputTokens:          msg.Usage.OutputTokens,
 		CacheReadInputTokens:  msg.Usage.CacheReadInputTokens,
@@ -359,16 +359,16 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 	}
 	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 
-	gen := sigil.Generation{
+	gen := agento11y.Generation{
 		ID:                generationID(line),
 		ConversationID:    opts.SessionID,
 		ConversationTitle: opts.SessionID,
 		AgentName:         agentName,
 		AgentVersion:      line.Version,
 		EffectiveVersion:  line.Version,
-		Mode:              sigil.GenerationModeSync,
+		Mode:              agento11y.GenerationModeSync,
 		OperationName:     "generateText",
-		Model: sigil.ModelRef{
+		Model: agento11y.ModelRef{
 			Provider: "anthropic",
 			Name:     msg.Model,
 		},
@@ -430,7 +430,7 @@ func buildTags(line transcript.Line, subagent bool, extras map[string]string) ma
 	return tags
 }
 
-func buildToolDefs(names map[string]bool) []sigil.ToolDefinition {
+func buildToolDefs(names map[string]bool) []agento11y.ToolDefinition {
 	keys := make([]string, 0, len(names))
 	for name := range names {
 		keys = append(keys, name)
@@ -438,7 +438,7 @@ func buildToolDefs(names map[string]bool) []sigil.ToolDefinition {
 	return mapperutil.SortedToolDefinitions(keys)
 }
 
-func buildInput(uctx *userContext, r *redact.Redactor) []sigil.Message {
+func buildInput(uctx *userContext, r *redact.Redactor) []agento11y.Message {
 	if len(uctx.toolResults) > 0 {
 		return uctx.toolResults
 	}
@@ -449,17 +449,17 @@ func buildInput(uctx *userContext, r *redact.Redactor) []sigil.Message {
 	if r != nil {
 		text = r.RedactLightweight(text)
 	}
-	return []sigil.Message{{
-		Role: sigil.RoleUser,
-		Parts: []sigil.Part{{
-			Kind: sigil.PartKindText,
+	return []agento11y.Message{{
+		Role: agento11y.RoleUser,
+		Parts: []agento11y.Part{{
+			Kind: agento11y.PartKindText,
 			Text: text,
 		}},
 	}}
 }
 
-func buildOutput(blocks []transcript.ContentBlock, r *redact.Redactor) []sigil.Message {
-	var parts []sigil.Part
+func buildOutput(blocks []transcript.ContentBlock, r *redact.Redactor) []agento11y.Message {
+	var parts []agento11y.Part
 
 	for _, block := range blocks {
 		switch block.Type {
@@ -468,23 +468,23 @@ func buildOutput(blocks []transcript.ContentBlock, r *redact.Redactor) []sigil.M
 			if r != nil {
 				text = r.RedactLightweight(text)
 			}
-			parts = append(parts, sigil.Part{
-				Kind: sigil.PartKindText,
+			parts = append(parts, agento11y.Part{
+				Kind: agento11y.PartKindText,
 				Text: text,
 			})
 
 		case "thinking":
 			// Omit content (can be 50KB+), just note presence
-			parts = append(parts, sigil.Part{
-				Kind:     sigil.PartKindThinking,
+			parts = append(parts, agento11y.Part{
+				Kind:     agento11y.PartKindThinking,
 				Thinking: "[thinking block omitted]",
 			})
 
 		case "tool_use":
 			inputJSON := truncateJSON(block.Input, maxToolInputLen, r)
-			parts = append(parts, sigil.Part{
-				Kind: sigil.PartKindToolCall,
-				ToolCall: &sigil.ToolCall{
+			parts = append(parts, agento11y.Part{
+				Kind: agento11y.PartKindToolCall,
+				ToolCall: &agento11y.ToolCall{
 					ID:        block.ID,
 					Name:      block.Name,
 					InputJSON: inputJSON,
@@ -497,8 +497,8 @@ func buildOutput(blocks []transcript.ContentBlock, r *redact.Redactor) []sigil.M
 		return nil
 	}
 
-	return []sigil.Message{{
-		Role:  sigil.RoleAssistant,
+	return []agento11y.Message{{
+		Role:  agento11y.RoleAssistant,
 		Parts: parts,
 	}}
 }

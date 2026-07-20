@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -187,19 +187,19 @@ func TestServer_APIConversations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
-	writeGen(t, storage, "conv-A", "g1", sigil.Generation{
+	writeGen(t, storage, "conv-A", "g1", agento11y.Generation{
 		AgentName:   "pi",
-		Model:       sigil.ModelRef{Name: "claude-opus-4-7"},
+		Model:       agento11y.ModelRef{Name: "claude-opus-4-7"},
 		StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
 		CompletedAt: mustParse(t, "2026-05-21T10:00:03Z"),
-		Usage:       sigil.TokenUsage{InputTokens: 100, OutputTokens: 50},
+		Usage:       agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50},
 	}, "2026-05-21T10:00:03Z")
-	writeGen(t, storage, "conv-B", "g2", sigil.Generation{
+	writeGen(t, storage, "conv-B", "g2", agento11y.Generation{
 		AgentName:   "claude-code",
-		Model:       sigil.ModelRef{Name: "claude-sonnet-4"},
+		Model:       agento11y.ModelRef{Name: "claude-sonnet-4"},
 		StartedAt:   mustParse(t, "2026-05-21T11:00:00Z"),
 		CompletedAt: mustParse(t, "2026-05-21T11:00:01Z"),
-		Usage:       sigil.TokenUsage{InputTokens: 10, OutputTokens: 5},
+		Usage:       agento11y.TokenUsage{InputTokens: 10, OutputTokens: 5},
 	}, "2026-05-21T11:00:01Z")
 
 	cases := []struct {
@@ -301,8 +301,8 @@ func TestServer_GenerationsExport_ProtoJSON(t *testing.T) {
 				assert.Equal(t, int64(20), gen.TotalTokens)
 				require.Len(t, gen.Input, 1)
 				require.Len(t, gen.Output, 1)
-				assert.Equal(t, sigil.RoleUser, gen.Input[0].Role)
-				assert.Equal(t, sigil.RoleAssistant, gen.Output[0].Role)
+				assert.Equal(t, agento11y.RoleUser, gen.Input[0].Role)
+				assert.Equal(t, agento11y.RoleAssistant, gen.Output[0].Role)
 				assert.Equal(t, "end_turn", gen.StopReason)
 				assert.Equal(t, "Local mode smoke test", detail.Title)
 			},
@@ -319,11 +319,11 @@ func TestServer_GenerationsExport_ProtoJSON(t *testing.T) {
 				gen := detail.Generations[0]
 				input := gen.Input
 				require.Len(t, input, 1)
-				assert.Equal(t, sigil.RoleTool, input[0].Role)
+				assert.Equal(t, agento11y.RoleTool, input[0].Role)
 				require.Len(t, input[0].Parts, 1)
 				part := input[0].Parts[0]
 				require.NotNil(t, part.ToolResult)
-				assert.Equal(t, sigil.PartKindToolResult, part.Kind)
+				assert.Equal(t, agento11y.PartKindToolResult, part.Kind)
 				assert.Equal(t, "tc1", part.ToolResult.ToolCallID)
 				assert.Equal(t, "ok", part.ToolResult.Content)
 				assert.Equal(t, []string{"bash"}, gen.Tools)
@@ -452,11 +452,11 @@ func TestServer_APITokenMetrics(t *testing.T) {
 	storage, err := NewStorage(dir)
 	require.NoError(t, err)
 
-	writeGen(t, storage, "conv-A", "g1", sigil.Generation{
-		Model:       sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
+	writeGen(t, storage, "conv-A", "g1", agento11y.Generation{
+		Model:       agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
 		StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
 		CompletedAt: mustParse(t, "2026-05-21T10:00:02Z"),
-		Usage:       sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, CacheWriteInputTokens: 20},
+		Usage:       agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, CacheWriteInputTokens: 20},
 	}, "2026-05-21T10:00:02Z")
 
 	t.Run("seeded store returns disjoint points", func(t *testing.T) {

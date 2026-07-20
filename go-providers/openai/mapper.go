@@ -10,40 +10,40 @@ import (
 	osdk "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 const thinkingBudgetMetadataKey = "agento11y.gen_ai.request.thinking.budget_tokens"
 
-// ChatCompletionsFromRequestResponse maps an OpenAI chat-completions request/response pair to sigil.Generation.
-func ChatCompletionsFromRequestResponse(req osdk.ChatCompletionNewParams, resp *osdk.ChatCompletion, opts ...Option) (sigil.Generation, error) {
+// ChatCompletionsFromRequestResponse maps an OpenAI chat-completions request/response pair to agento11y.Generation.
+func ChatCompletionsFromRequestResponse(req osdk.ChatCompletionNewParams, resp *osdk.ChatCompletion, opts ...Option) (agento11y.Generation, error) {
 	if resp == nil {
-		return sigil.Generation{}, errors.New("response is required")
+		return agento11y.Generation{}, errors.New("response is required")
 	}
 
 	options := applyOptions(opts)
 	input, systemPrompt := mapRequestMessages(req.Messages)
 	output := mapResponseMessages(resp.Choices)
 
-	artifacts := make([]sigil.Artifact, 0, 3)
+	artifacts := make([]agento11y.Artifact, 0, 3)
 	if options.includeRequestArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindRequest, "openai.chat.request", req)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindRequest, "openai.chat.request", req)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeResponseArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindResponse, "openai.chat.response", resp)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindResponse, "openai.chat.response", resp)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeToolsArtifact && len(req.Tools) > 0 {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindTools, "openai.chat.tools", req.Tools)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindTools, "openai.chat.tools", req.Tools)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
@@ -55,12 +55,12 @@ func ChatCompletionsFromRequestResponse(req osdk.ChatCompletionNewParams, resp *
 	}
 	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapRequestControls(req)
 
-	generation := sigil.Generation{
+	generation := agento11y.Generation{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: requestModel},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: requestModel},
 		ResponseID:        resp.ID,
 		ResponseModel:     responseModel,
 		SystemPrompt:      systemPrompt,
@@ -80,15 +80,15 @@ func ChatCompletionsFromRequestResponse(req osdk.ChatCompletionNewParams, resp *
 	}
 
 	if err := generation.Validate(); err != nil {
-		return sigil.Generation{}, err
+		return agento11y.Generation{}, err
 	}
 
 	return generation, nil
 }
 
-// EmbeddingsFromResponse maps an OpenAI embeddings request/response pair to sigil.EmbeddingResult.
-func EmbeddingsFromResponse(req osdk.EmbeddingNewParams, resp *osdk.CreateEmbeddingResponse) sigil.EmbeddingResult {
-	result := sigil.EmbeddingResult{
+// EmbeddingsFromResponse maps an OpenAI embeddings request/response pair to agento11y.EmbeddingResult.
+func EmbeddingsFromResponse(req osdk.EmbeddingNewParams, resp *osdk.CreateEmbeddingResponse) agento11y.EmbeddingResult {
+	result := agento11y.EmbeddingResult{
 		InputCount: embeddingInputCount(req.Input),
 		InputTexts: embeddingInputTexts(req.Input),
 	}
@@ -110,12 +110,12 @@ func EmbeddingsFromResponse(req osdk.EmbeddingNewParams, resp *osdk.CreateEmbedd
 	return result
 }
 
-func mapRequestMessages(messages []osdk.ChatCompletionMessageParamUnion) ([]sigil.Message, string) {
+func mapRequestMessages(messages []osdk.ChatCompletionMessageParamUnion) ([]agento11y.Message, string) {
 	if len(messages) == 0 {
 		return nil, ""
 	}
 
-	out := make([]sigil.Message, 0, len(messages))
+	out := make([]agento11y.Message, 0, len(messages))
 	systemPrompts := make([]string, 0, 2)
 
 	for i := range messages {
@@ -127,22 +127,22 @@ func mapRequestMessages(messages []osdk.ChatCompletionMessageParamUnion) ([]sigi
 		case messages[i].OfUser != nil:
 			parts := mapUserParts(messages[i].OfUser)
 			if len(parts) > 0 {
-				out = append(out, sigil.Message{Role: sigil.RoleUser, Parts: parts})
+				out = append(out, agento11y.Message{Role: agento11y.RoleUser, Parts: parts})
 			}
 		case messages[i].OfAssistant != nil:
 			parts := mapAssistantParamParts(messages[i].OfAssistant)
 			if len(parts) > 0 {
-				out = append(out, sigil.Message{Role: sigil.RoleAssistant, Parts: parts})
+				out = append(out, agento11y.Message{Role: agento11y.RoleAssistant, Parts: parts})
 			}
 		case messages[i].OfTool != nil:
 			part := mapToolMessage(messages[i].OfTool)
 			if part != nil {
-				out = append(out, sigil.Message{Role: sigil.RoleTool, Parts: []sigil.Part{*part}})
+				out = append(out, agento11y.Message{Role: agento11y.RoleTool, Parts: []agento11y.Part{*part}})
 			}
 		case messages[i].OfFunction != nil:
 			part := mapFunctionMessage(messages[i].OfFunction)
 			if part != nil {
-				out = append(out, sigil.Message{Role: sigil.RoleTool, Parts: []sigil.Part{*part}})
+				out = append(out, agento11y.Message{Role: agento11y.RoleTool, Parts: []agento11y.Part{*part}})
 			}
 		}
 	}
@@ -150,22 +150,22 @@ func mapRequestMessages(messages []osdk.ChatCompletionMessageParamUnion) ([]sigi
 	return out, strings.Join(systemPrompts, "\n\n")
 }
 
-func mapResponseMessages(choices []osdk.ChatCompletionChoice) []sigil.Message {
+func mapResponseMessages(choices []osdk.ChatCompletionChoice) []agento11y.Message {
 	if len(choices) == 0 {
 		return nil
 	}
 
 	message := choices[0].Message
-	parts := make([]sigil.Part, 0, 1+len(message.ToolCalls))
+	parts := make([]agento11y.Part, 0, 1+len(message.ToolCalls))
 
 	if text := message.Content; text != "" {
-		parts = append(parts, sigil.TextPart(text))
+		parts = append(parts, agento11y.TextPart(text))
 	}
 	if refusal := message.Refusal; refusal != "" {
-		parts = append(parts, sigil.TextPart(refusal))
+		parts = append(parts, agento11y.TextPart(refusal))
 	}
 	for _, call := range message.ToolCalls {
-		part := sigil.ToolCallPart(sigil.ToolCall{
+		part := agento11y.ToolCallPart(agento11y.ToolCall{
 			ID:        call.ID,
 			Name:      call.Function.Name,
 			InputJSON: parseJSONOrString(call.Function.Arguments),
@@ -178,48 +178,48 @@ func mapResponseMessages(choices []osdk.ChatCompletionChoice) []sigil.Message {
 		return nil
 	}
 
-	return []sigil.Message{
+	return []agento11y.Message{
 		{
-			Role:  sigil.RoleAssistant,
+			Role:  agento11y.RoleAssistant,
 			Parts: parts,
 		},
 	}
 }
 
-func mapUserParts(message *osdk.ChatCompletionUserMessageParam) []sigil.Part {
-	parts := make([]sigil.Part, 0, 2)
+func mapUserParts(message *osdk.ChatCompletionUserMessageParam) []agento11y.Part {
+	parts := make([]agento11y.Part, 0, 2)
 	if message.Content.OfString.Valid() {
 		if text := message.Content.OfString.Value; text != "" {
-			parts = append(parts, sigil.TextPart(text))
+			parts = append(parts, agento11y.TextPart(text))
 		}
 	}
 	for _, contentPart := range message.Content.OfArrayOfContentParts {
 		text := derefString(contentPart.GetText())
 		if text != "" {
-			parts = append(parts, sigil.TextPart(text))
+			parts = append(parts, agento11y.TextPart(text))
 		}
 	}
 	return parts
 }
 
-func mapAssistantParamParts(message *osdk.ChatCompletionAssistantMessageParam) []sigil.Part {
-	parts := make([]sigil.Part, 0, 2+len(message.ToolCalls))
+func mapAssistantParamParts(message *osdk.ChatCompletionAssistantMessageParam) []agento11y.Part {
+	parts := make([]agento11y.Part, 0, 2+len(message.ToolCalls))
 	if message.Content.OfString.Valid() {
 		if text := message.Content.OfString.Value; text != "" {
-			parts = append(parts, sigil.TextPart(text))
+			parts = append(parts, agento11y.TextPart(text))
 		}
 	}
 	for _, contentPart := range message.Content.OfArrayOfContentParts {
 		if text := derefString(contentPart.GetText()); text != "" {
-			parts = append(parts, sigil.TextPart(text))
+			parts = append(parts, agento11y.TextPart(text))
 		}
 		if refusal := derefString(contentPart.GetRefusal()); refusal != "" {
-			parts = append(parts, sigil.TextPart(refusal))
+			parts = append(parts, agento11y.TextPart(refusal))
 		}
 	}
 	if message.Refusal.Valid() {
 		if refusal := message.Refusal.Value; refusal != "" {
-			parts = append(parts, sigil.TextPart(refusal))
+			parts = append(parts, agento11y.TextPart(refusal))
 		}
 	}
 	for _, call := range message.ToolCalls {
@@ -227,7 +227,7 @@ func mapAssistantParamParts(message *osdk.ChatCompletionAssistantMessageParam) [
 		if function == nil {
 			continue
 		}
-		part := sigil.ToolCallPart(sigil.ToolCall{
+		part := agento11y.ToolCallPart(agento11y.ToolCall{
 			ID:        derefString(call.GetID()),
 			Name:      function.Name,
 			InputJSON: parseJSONOrString(function.Arguments),
@@ -238,7 +238,7 @@ func mapAssistantParamParts(message *osdk.ChatCompletionAssistantMessageParam) [
 	return parts
 }
 
-func mapToolMessage(message *osdk.ChatCompletionToolMessageParam) *sigil.Part {
+func mapToolMessage(message *osdk.ChatCompletionToolMessageParam) *agento11y.Part {
 	content := ""
 	if message.Content.OfString.Valid() {
 		content = message.Content.OfString.Value
@@ -253,7 +253,7 @@ func mapToolMessage(message *osdk.ChatCompletionToolMessageParam) *sigil.Part {
 		return nil
 	}
 
-	part := sigil.ToolResultPart(sigil.ToolResult{
+	part := agento11y.ToolResultPart(agento11y.ToolResult{
 		ToolCallID: message.ToolCallID,
 		Content:    content,
 	})
@@ -262,7 +262,7 @@ func mapToolMessage(message *osdk.ChatCompletionToolMessageParam) *sigil.Part {
 }
 
 //nolint:staticcheck // OpenAI API still exposes this deprecated message type in union payloads.
-func mapFunctionMessage(message *osdk.ChatCompletionFunctionMessageParam) *sigil.Part {
+func mapFunctionMessage(message *osdk.ChatCompletionFunctionMessageParam) *agento11y.Part {
 	if !message.Content.Valid() {
 		return nil
 	}
@@ -271,7 +271,7 @@ func mapFunctionMessage(message *osdk.ChatCompletionFunctionMessageParam) *sigil
 		return nil
 	}
 
-	part := sigil.ToolResultPart(sigil.ToolResult{
+	part := agento11y.ToolResultPart(agento11y.ToolResult{
 		Name:        message.Name,
 		Content:     content,
 		ContentJSON: parseJSONOrString(content),
@@ -280,12 +280,12 @@ func mapFunctionMessage(message *osdk.ChatCompletionFunctionMessageParam) *sigil
 	return &part
 }
 
-func mapTools(tools []osdk.ChatCompletionToolUnionParam) []sigil.ToolDefinition {
+func mapTools(tools []osdk.ChatCompletionToolUnionParam) []agento11y.ToolDefinition {
 	if len(tools) == 0 {
 		return nil
 	}
 
-	out := make([]sigil.ToolDefinition, 0, len(tools))
+	out := make([]agento11y.ToolDefinition, 0, len(tools))
 	for i := range tools {
 		function := tools[i].GetFunction()
 		if function == nil {
@@ -296,7 +296,7 @@ func mapTools(tools []osdk.ChatCompletionToolUnionParam) []sigil.ToolDefinition 
 			continue
 		}
 
-		definition := sigil.ToolDefinition{
+		definition := agento11y.ToolDefinition{
 			Name: name,
 		}
 		if toolType := tools[i].GetType(); toolType != nil {
@@ -325,8 +325,8 @@ func marshalFunctionSchema(function shared.FunctionDefinitionParam) []byte {
 	return data
 }
 
-func mapUsage(usage osdk.CompletionUsage) sigil.TokenUsage {
-	return sigil.TokenUsage{
+func mapUsage(usage osdk.CompletionUsage) agento11y.TokenUsage {
+	return agento11y.TokenUsage{
 		InputTokens:          usage.PromptTokens,
 		OutputTokens:         usage.CompletionTokens,
 		TotalTokens:          usage.TotalTokens,

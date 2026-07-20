@@ -120,7 +120,7 @@ test('vercel ai sdk mapping applies conversation precedence explicit resolver fa
     stepStartEvent: {},
     fallbackSeed: 'seed-3',
   });
-  assert.equal(fromSeedFallback.conversationId, 'sigil:framework:vercel-ai-sdk:seed-3');
+  assert.equal(fromSeedFallback.conversationId, 'agento11y:framework:vercel-ai-sdk:seed-3');
   assert.equal(fromSeedFallback.source, 'fallback');
 });
 

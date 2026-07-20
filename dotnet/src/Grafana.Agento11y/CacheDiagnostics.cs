@@ -1,4 +1,4 @@
-namespace Grafana.Sigil;
+namespace Grafana.Agento11y;
 
 /// <summary>Reserved generation metadata keys for cache diagnostics (Anthropic cache-diagnosis beta).</summary>
 public static class CacheDiagnostics

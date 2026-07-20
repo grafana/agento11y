@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient } from '../.test-dist/index.js';
 
 // Auth configs that produce specific headers. resolveHeadersWithAuth tolerates
 // mode-irrelevant fields silently (env layering can populate any field
@@ -43,7 +43,7 @@ const headerCases = [
 
 for (const tc of headerCases) {
   test(`auth config: ${tc.name}`, () => {
-    const client = new SigilClient({
+    const client = new Agento11yClient({
       generationExport: { auth: tc.auth },
     });
     try {
@@ -79,12 +79,12 @@ const throwCases = [
 
 for (const tc of throwCases) {
   test(`auth config throws: ${tc.name}`, () => {
-    assert.throws(() => new SigilClient({ generationExport: { auth: tc.auth } }), tc.pattern);
+    assert.throws(() => new Agento11yClient({ generationExport: { auth: tc.auth } }), tc.pattern);
   });
 }
 
 test('explicit headers win over auth-derived headers', () => {
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     generationExport: {
       headers: {
         Authorization: 'Basic override',

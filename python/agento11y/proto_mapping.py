@@ -7,7 +7,7 @@ from datetime import timezone
 
 from google.protobuf import json_format, struct_pb2, timestamp_pb2
 
-from .internal.gen.agento11y.v1 import generation_ingest_pb2 as sigil_pb2
+from .internal.gen.agento11y.v1 import generation_ingest_pb2 as agento11y_pb2
 from .models import (
     ArtifactKind,
     Generation,
@@ -18,17 +18,17 @@ from .models import (
 )
 
 
-def generation_to_proto(generation: Generation) -> sigil_pb2.Generation:
+def generation_to_proto(generation: Generation) -> agento11y_pb2.Generation:
     """Converts a `Generation` model into protobuf `agento11y.v1.Generation`."""
 
-    message = sigil_pb2.Generation(
+    message = agento11y_pb2.Generation(
         id=generation.id,
         conversation_id=generation.conversation_id,
         operation_name=generation.operation_name,
         mode=_map_generation_mode(generation.mode),
         trace_id=generation.trace_id,
         span_id=generation.span_id,
-        model=sigil_pb2.ModelRef(
+        model=agento11y_pb2.ModelRef(
             provider=generation.model.provider,
             name=generation.model.name,
         ),
@@ -38,7 +38,7 @@ def generation_to_proto(generation: Generation) -> sigil_pb2.Generation:
         input=[_map_message(msg) for msg in generation.input],
         output=[_map_message(msg) for msg in generation.output],
         tools=[_map_tool(tool) for tool in generation.tools],
-        usage=sigil_pb2.TokenUsage(
+        usage=agento11y_pb2.TokenUsage(
             input_tokens=generation.usage.input_tokens,
             output_tokens=generation.usage.output_tokens,
             total_tokens=generation.usage.total_tokens,
@@ -109,10 +109,10 @@ def workflow_step_to_proto_json(step: WorkflowStep) -> dict[str, object]:
     )
 
 
-def workflow_step_to_proto(step: WorkflowStep) -> sigil_pb2.WorkflowStep:
+def workflow_step_to_proto(step: WorkflowStep) -> agento11y_pb2.WorkflowStep:
     """Converts a WorkflowStep model into protobuf agento11y.v1.WorkflowStep."""
 
-    message = sigil_pb2.WorkflowStep(
+    message = agento11y_pb2.WorkflowStep(
         id=step.id,
         conversation_id=step.conversation_id,
         step_name=step.step_name,
@@ -157,16 +157,16 @@ def workflow_step_to_proto(step: WorkflowStep) -> sigil_pb2.WorkflowStep:
 
 def _map_generation_mode(mode: GenerationMode | None) -> int:
     if mode == GenerationMode.STREAM:
-        return sigil_pb2.GENERATION_MODE_STREAM
+        return agento11y_pb2.GENERATION_MODE_STREAM
     if mode == GenerationMode.SYNC:
-        return sigil_pb2.GENERATION_MODE_SYNC
-    return sigil_pb2.GENERATION_MODE_UNSPECIFIED
+        return agento11y_pb2.GENERATION_MODE_SYNC
+    return agento11y_pb2.GENERATION_MODE_UNSPECIFIED
 
 
-def _map_message(message: object) -> sigil_pb2.Message:
+def _map_message(message: object) -> agento11y_pb2.Message:
     role_value = message.role.value if hasattr(message.role, "value") else str(message.role)
     parts = [_map_part(part) for part in message.parts]
-    return sigil_pb2.Message(
+    return agento11y_pb2.Message(
         role=_map_message_role(role_value),
         name=message.name,
         parts=parts,
@@ -175,38 +175,38 @@ def _map_message(message: object) -> sigil_pb2.Message:
 
 def _map_message_role(role: str) -> int:
     if role == MessageRole.USER.value:
-        return sigil_pb2.MESSAGE_ROLE_USER
+        return agento11y_pb2.MESSAGE_ROLE_USER
     if role == MessageRole.ASSISTANT.value:
-        return sigil_pb2.MESSAGE_ROLE_ASSISTANT
+        return agento11y_pb2.MESSAGE_ROLE_ASSISTANT
     if role == MessageRole.TOOL.value:
-        return sigil_pb2.MESSAGE_ROLE_TOOL
-    return sigil_pb2.MESSAGE_ROLE_UNSPECIFIED
+        return agento11y_pb2.MESSAGE_ROLE_TOOL
+    return agento11y_pb2.MESSAGE_ROLE_UNSPECIFIED
 
 
-def _map_part(part: object) -> sigil_pb2.Part:
+def _map_part(part: object) -> agento11y_pb2.Part:
     metadata = None
     provider_type = getattr(part.metadata, "provider_type", "") if getattr(part, "metadata", None) is not None else ""
     if provider_type:
-        metadata = sigil_pb2.PartMetadata(provider_type=provider_type)
+        metadata = agento11y_pb2.PartMetadata(provider_type=provider_type)
 
     kind_value = part.kind.value if hasattr(part.kind, "value") else str(part.kind)
     if kind_value == PartKind.TEXT.value:
-        return sigil_pb2.Part(metadata=metadata, text=part.text)
+        return agento11y_pb2.Part(metadata=metadata, text=part.text)
     if kind_value == PartKind.THINKING.value:
-        return sigil_pb2.Part(metadata=metadata, thinking=part.thinking)
+        return agento11y_pb2.Part(metadata=metadata, thinking=part.thinking)
     if kind_value == PartKind.TOOL_CALL.value:
-        return sigil_pb2.Part(
+        return agento11y_pb2.Part(
             metadata=metadata,
-            tool_call=sigil_pb2.ToolCall(
+            tool_call=agento11y_pb2.ToolCall(
                 id=part.tool_call.id,
                 name=part.tool_call.name,
                 input_json=bytes(part.tool_call.input_json),
             ),
         )
     if kind_value == PartKind.TOOL_RESULT.value:
-        return sigil_pb2.Part(
+        return agento11y_pb2.Part(
             metadata=metadata,
-            tool_result=sigil_pb2.ToolResult(
+            tool_result=agento11y_pb2.ToolResult(
                 tool_call_id=part.tool_result.tool_call_id,
                 name=part.tool_result.name,
                 content=part.tool_result.content,
@@ -214,11 +214,11 @@ def _map_part(part: object) -> sigil_pb2.Part:
                 is_error=part.tool_result.is_error,
             ),
         )
-    return sigil_pb2.Part(metadata=metadata)
+    return agento11y_pb2.Part(metadata=metadata)
 
 
-def _map_tool(tool: object) -> sigil_pb2.ToolDefinition:
-    return sigil_pb2.ToolDefinition(
+def _map_tool(tool: object) -> agento11y_pb2.ToolDefinition:
+    return agento11y_pb2.ToolDefinition(
         name=tool.name,
         description=tool.description,
         type=tool.type,
@@ -227,8 +227,8 @@ def _map_tool(tool: object) -> sigil_pb2.ToolDefinition:
     )
 
 
-def _map_artifact(artifact: object) -> sigil_pb2.Artifact:
-    return sigil_pb2.Artifact(
+def _map_artifact(artifact: object) -> agento11y_pb2.Artifact:
+    return agento11y_pb2.Artifact(
         kind=_map_artifact_kind(artifact.kind),
         name=artifact.name,
         content_type=artifact.content_type,
@@ -240,11 +240,11 @@ def _map_artifact(artifact: object) -> sigil_pb2.Artifact:
 
 def _map_artifact_kind(kind: ArtifactKind) -> int:
     if kind == ArtifactKind.REQUEST:
-        return sigil_pb2.ARTIFACT_KIND_REQUEST
+        return agento11y_pb2.ARTIFACT_KIND_REQUEST
     if kind == ArtifactKind.RESPONSE:
-        return sigil_pb2.ARTIFACT_KIND_RESPONSE
+        return agento11y_pb2.ARTIFACT_KIND_RESPONSE
     if kind == ArtifactKind.TOOLS:
-        return sigil_pb2.ARTIFACT_KIND_TOOLS
+        return agento11y_pb2.ARTIFACT_KIND_TOOLS
     if kind == ArtifactKind.PROVIDER_EVENT:
-        return sigil_pb2.ARTIFACT_KIND_PROVIDER_EVENT
-    return sigil_pb2.ARTIFACT_KIND_UNSPECIFIED
+        return agento11y_pb2.ARTIFACT_KIND_PROVIDER_EVENT
+    return agento11y_pb2.ARTIFACT_KIND_UNSPECIFIED

@@ -494,7 +494,7 @@ describe("mapGenerationResult", () => {
 
   it("full_with_metadata_spans matches full for proto-export tool bodies", () => {
     // Per the SDK contract (ContentCaptureModeFullWithMetadataSpans in
-    // go/sigil/content_capture.go), the proto export gets full generation
+    // go/agento11y/content_capture.go), the proto export gets full generation
     // content under this mode; only the OTel span side is reduced.
     const msg = makeMsg({
       content: [

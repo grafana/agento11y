@@ -14,8 +14,8 @@ import {
 } from '@opentelemetry/sdk-metrics';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import {
+  Agento11yClient,
   defaultConfig,
-  SigilClient,
   withAgentName,
   withAgentVersion,
   withConversationTitle,
@@ -866,9 +866,9 @@ async function createConformanceEnv(options = {}) {
   });
 
   const defaults = defaultConfig();
-  const client = new SigilClient({
-    tracer: tracerProvider.getTracer('sigil-conformance-test'),
-    meter: meterProvider.getMeter('sigil-conformance-test'),
+  const client = new Agento11yClient({
+    tracer: tracerProvider.getTracer('agento11y-conformance-test'),
+    meter: meterProvider.getMeter('agento11y-conformance-test'),
     ...(options.clientConfig ?? {}),
     generationExport: {
       ...defaults.generationExport,

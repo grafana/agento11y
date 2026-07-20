@@ -69,7 +69,7 @@ Cursor has no launcher (it is a GUI app). After installing the binary, wire its 
 To skip the prompt, write the config file by hand:
 
 ```dotenv
-AGENTO11Y_ENDPOINT=<your-sigil-api-url>
+AGENTO11Y_ENDPOINT=<your-agento11y-api-url>
 AGENTO11Y_AUTH_TENANT_ID=<your-instance-id>
 AGENTO11Y_AUTH_TOKEN=glc_...
 AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=<otlp-gateway-url>
@@ -104,7 +104,7 @@ You are acting as a coding agent inside the user's repository. Your goal is to a
 The Sigil SDK reads these `AGENTO11Y_*` env vars automatically. Set them before the SDK starts:
 
 ```
-AGENTO11Y_ENDPOINT=<your-sigil-api-url>
+AGENTO11Y_ENDPOINT=<your-agento11y-api-url>
 AGENTO11Y_PROTOCOL=http
 AGENTO11Y_AUTH_MODE=basic
 AGENTO11Y_AUTH_TENANT_ID=<your-instance-id>
@@ -173,7 +173,7 @@ Return:
 
 The Sigil SDK internally emits OTel spans and metrics (`gen_ai.client.operation.duration`, `gen_ai.client.token.usage`, `gen_ai.client.time_to_first_token`, `gen_ai.client.tool_calls_per_operation`). **Without a configured TracerProvider and MeterProvider these go to the default no-op and are silently lost.**
 
-The SDK does not create OTel providers; that is the application's responsibility. Always configure providers before creating the Sigil client, and shut them down after `sigil.shutdown()`.
+The SDK does not create OTel providers; that is the application's responsibility. Always configure providers before creating the Sigil client, and shut them down after `agento11y.shutdown()`.
 
 Two delivery options. The OTel SDK exporters read `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS` automatically.
 
@@ -349,7 +349,7 @@ trace_id / span_id     — OTel correlation
 There are two layers:
 
 - **Manual SDK API** — use `enqueue_workflow_step(step)` when forwarding pre-built workflow steps or instrumenting custom execution graphs directly. You create step IDs, parent edges, timestamps, input/output state, and linked generation IDs yourself.
-- **Framework adapter** — use the adapter when one exists, such as `SigilLangGraphHandler` for LangGraph. The adapter creates workflow steps automatically from framework callbacks.
+- **Framework adapter** — use the adapter when one exists, such as `Agento11yLangGraphHandler` for LangGraph. The adapter creates workflow steps automatically from framework callbacks.
 
 Do not use both paths for the same LangGraph node, or you will record duplicate workflow steps.
 
@@ -380,13 +380,13 @@ client.enqueue_workflow_step(step)
 ### LangGraph adapter pattern
 
 For LangGraph, prefer the adapter instead of manually calling `enqueue_workflow_step`.
-The `SigilLangGraphHandler` automatically captures workflow steps when `capture_workflow_steps=True`.
+The `Agento11yLangGraphHandler` automatically captures workflow steps when `capture_workflow_steps=True`.
 Always set `conversation_title` to a short human-readable label. It appears as the conversation name in the Sigil UI; without it, the title falls back to an opaque auto-generated ID.
 
 ```python
-from agento11y_langgraph import SigilLangGraphHandler
+from agento11y_langgraph import Agento11yLangGraphHandler
 
-handler = SigilLangGraphHandler(
+handler = Agento11yLangGraphHandler(
     client=client,
     agent_name="my-pipeline",
     agent_version="1.0.0",
@@ -427,9 +427,9 @@ Example: an orchestrator spawns agents A, B, C where C depends on A and B:
 In the grafana/sigil-sdk repo:
 
 - Getting-started: [`examples/getting-started/`](https://github.com/grafana/sigil-sdk/tree/main/examples/getting-started) (Python, TypeScript, Go, plus multi-agent and framework variants)
-- Go explicit generation flow: [`go/sigil/example_test.go`](https://github.com/grafana/sigil-sdk/blob/main/go/sigil/example_test.go)
+- Go explicit generation flow: [`go/agento11y/example_test.go`](https://github.com/grafana/sigil-sdk/blob/main/go/agento11y/example_test.go)
 - Go provider wrapper examples: [`go-providers/openai/sdk_example_test.go`](https://github.com/grafana/sigil-sdk/blob/main/go-providers/openai/sdk_example_test.go), `…/anthropic/sdk_example_test.go`, `…/gemini/sdk_example_test.go`
-- .NET end-to-end emitter: [`dotnet/examples/Grafana.Sigil.DevExEmitter/Program.cs`](https://github.com/grafana/sigil-sdk/blob/main/dotnet/examples/Grafana.Sigil.DevExEmitter/Program.cs)
+- .NET end-to-end emitter: [`dotnet/examples/Grafana.Agento11y.DevExEmitter/Program.cs`](https://github.com/grafana/sigil-sdk/blob/main/dotnet/examples/Grafana.Agento11y.DevExEmitter/Program.cs)
 - JS transport and framework behavior: [`js/test/client.transport.test.mjs`](https://github.com/grafana/sigil-sdk/blob/main/js/test/client.transport.test.mjs), [`js/test/frameworks.vercel-ai-sdk.test.mjs`](https://github.com/grafana/sigil-sdk/blob/main/js/test/frameworks.vercel-ai-sdk.test.mjs)
 - Python framework integration tests: [`python-frameworks/*/tests/*.py`](https://github.com/grafana/sigil-sdk/tree/main/python-frameworks)
 

@@ -3,7 +3,7 @@ import type {
   MessageCreateParams,
   RawMessageStreamEvent,
 } from '@anthropic-ai/sdk/resources/messages';
-import type { SigilClient } from '../client.js';
+import type { Agento11yClient } from '../client.js';
 import type { GenerationResult, Message, TokenUsage, ToolDefinition } from '../types.js';
 
 const thinkingBudgetMetadataKey = 'agento11y.gen_ai.request.thinking.budget_tokens';
@@ -35,7 +35,7 @@ export interface MessagesStreamSummary {
 }
 
 async function anthropicMessagesCreate(
-  client: SigilClient,
+  client: Agento11yClient,
   request: MessagesCreateRequest,
   providerCall: (request: MessagesCreateRequest) => Promise<MessagesCreateResponse>,
   options: AnthropicOptions = {},
@@ -70,7 +70,7 @@ async function anthropicMessagesCreate(
 }
 
 async function anthropicMessagesStream(
-  client: SigilClient,
+  client: Agento11yClient,
   request: MessagesCreateRequest,
   providerCall: (request: MessagesCreateRequest) => Promise<MessagesStreamSummary>,
   options: AnthropicOptions = {},

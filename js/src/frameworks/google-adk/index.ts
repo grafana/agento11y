@@ -1,5 +1,5 @@
-import type { SigilClient } from '../../client.js';
-import { type FrameworkHandlerOptions, SigilFrameworkHandler } from '../shared.js';
+import type { Agento11yClient } from '../../client.js';
+import { Agento11yFrameworkHandler, type FrameworkHandlerOptions } from '../shared.js';
 
 export type { FrameworkHandlerOptions };
 
@@ -106,13 +106,13 @@ type GoogleAdkPlugin = {
   }): Promise<unknown>;
 };
 
-const sigilGoogleAdkPluginName = 'sigil_google_adk_plugin';
-const sigilGoogleAdkPluginMarker = Symbol.for('sigil.google_adk.plugin');
+const agento11yGoogleAdkPluginName = 'agento11y_google_adk_plugin';
+const agento11yGoogleAdkPluginMarker = Symbol.for('agento11y.google_adk.plugin');
 
-export class SigilGoogleAdkHandler extends SigilFrameworkHandler {
-  name = 'sigil_google_adk_handler';
+export class Agento11yGoogleAdkHandler extends Agento11yFrameworkHandler {
+  name = 'agento11y_google_adk_handler';
 
-  constructor(client: SigilClient, options: FrameworkHandlerOptions = {}) {
+  constructor(client: Agento11yClient, options: FrameworkHandlerOptions = {}) {
     super(client, 'google-adk', 'javascript', options);
   }
 
@@ -216,11 +216,11 @@ export class SigilGoogleAdkHandler extends SigilFrameworkHandler {
   }
 }
 
-class SigilGoogleAdkPlugin implements GoogleAdkPlugin {
-  readonly name = sigilGoogleAdkPluginName;
-  readonly [sigilGoogleAdkPluginMarker] = true;
+class Agento11yGoogleAdkPlugin implements GoogleAdkPlugin {
+  readonly name = agento11yGoogleAdkPluginName;
+  readonly [agento11yGoogleAdkPluginMarker] = true;
 
-  private readonly handler: SigilGoogleAdkHandler;
+  private readonly handler: Agento11yGoogleAdkHandler;
   private readonly invocationRunIds = new Map<string, string>();
   private readonly agentRunStacks = new Map<string, string[]>();
   private readonly llmRunStacks = new Map<string, string[]>();
@@ -231,8 +231,8 @@ class SigilGoogleAdkPlugin implements GoogleAdkPlugin {
   private readonly fallbackInvocationIds = new WeakMap<object, string>();
   private sequence = 0;
 
-  constructor(client: SigilClient, options: FrameworkHandlerOptions = {}) {
-    this.handler = new SigilGoogleAdkHandler(client, options);
+  constructor(client: Agento11yClient, options: FrameworkHandlerOptions = {}) {
+    this.handler = new Agento11yGoogleAdkHandler(client, options);
   }
 
   async onUserMessageCallback(params: {
@@ -629,26 +629,26 @@ class SigilGoogleAdkPlugin implements GoogleAdkPlugin {
   }
 }
 
-export function createSigilGoogleAdkHandler(
-  client: SigilClient,
+export function createAgento11yGoogleAdkHandler(
+  client: Agento11yClient,
   options: FrameworkHandlerOptions = {},
-): SigilGoogleAdkHandler {
-  return new SigilGoogleAdkHandler(client, options);
+): Agento11yGoogleAdkHandler {
+  return new Agento11yGoogleAdkHandler(client, options);
 }
 
-export function createSigilGoogleAdkPlugin(
-  client: SigilClient,
+export function createAgento11yGoogleAdkPlugin(
+  client: Agento11yClient,
   options: FrameworkHandlerOptions = {},
 ): GoogleAdkPlugin {
-  return new SigilGoogleAdkPlugin(client, options);
+  return new Agento11yGoogleAdkPlugin(client, options);
 }
 
-export function withSigilGoogleAdkPlugins<T extends PluginConfig>(
+export function withAgento11yGoogleAdkPlugins<T extends PluginConfig>(
   config: T | undefined,
-  client: SigilClient,
+  client: Agento11yClient,
   options: FrameworkHandlerOptions = {},
 ): T & { plugins: unknown[] } {
-  const plugin = createSigilGoogleAdkPlugin(client, options);
+  const plugin = createAgento11yGoogleAdkPlugin(client, options);
   const base = { ...(config ?? {}) } as PluginConfig;
   const existingValue = base.plugins;
   const plugins = Array.isArray(existingValue)
@@ -656,7 +656,7 @@ export function withSigilGoogleAdkPlugins<T extends PluginConfig>(
     : existingValue === undefined
       ? []
       : [existingValue];
-  if (!plugins.some(isSigilGoogleAdkPlugin)) {
+  if (!plugins.some(isAgento11yGoogleAdkPlugin)) {
     plugins.push(plugin);
   }
   return {
@@ -665,11 +665,11 @@ export function withSigilGoogleAdkPlugins<T extends PluginConfig>(
   } as T & { plugins: unknown[] };
 }
 
-function isSigilGoogleAdkPlugin(plugin: unknown): boolean {
+function isAgento11yGoogleAdkPlugin(plugin: unknown): boolean {
   if (!isRecord(plugin)) {
     return false;
   }
-  return (plugin as Record<PropertyKey, unknown>)[sigilGoogleAdkPluginMarker] === true;
+  return (plugin as Record<PropertyKey, unknown>)[agento11yGoogleAdkPluginMarker] === true;
 }
 
 function mapAdkContentsToChatMessages(contents: unknown): Array<{ role: string; content: string }> {

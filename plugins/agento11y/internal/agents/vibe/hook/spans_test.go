@@ -12,7 +12,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/toolevents"
 )
@@ -27,31 +27,31 @@ func TestEmitToolSpans(t *testing.T) {
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
 	logger := log.New(io.Discard, "", 0)
-	client := sigil.NewClient(sigil.Config{
-		ContentCapture: sigil.ContentCaptureModeFull,
+	client := agento11y.NewClient(agento11y.Config{
+		ContentCapture: agento11y.ContentCaptureModeFull,
 		Tracer:         tp.Tracer("test"),
 		Logger:         logger,
 	})
 	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
 
 	completed := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	gen := sigil.Generation{
+	gen := agento11y.Generation{
 		ID:             "vibe-x",
 		ConversationID: "sess",
 		AgentName:      "mistral-vibe",
-		Model:          sigil.ModelRef{Provider: "mistral", Name: "mistral-medium-3.5"},
+		Model:          agento11y.ModelRef{Provider: "mistral", Name: "mistral-medium-3.5"},
 		CompletedAt:    completed,
-		Output: []sigil.Message{{
-			Role: sigil.RoleAssistant,
-			Parts: []sigil.Part{
-				sigil.ToolCallPart(sigil.ToolCall{ID: "tc1", Name: "bash", InputJSON: []byte(`{"command":"ls"}`)}),
-				sigil.ToolCallPart(sigil.ToolCall{ID: "tc2", Name: "read", InputJSON: []byte(`{"file":"x"}`)}),
-				sigil.ToolCallPart(sigil.ToolCall{ID: "tc3", Name: "grep", InputJSON: []byte(`{"pattern":"y"}`)}),
+		Output: []agento11y.Message{{
+			Role: agento11y.RoleAssistant,
+			Parts: []agento11y.Part{
+				agento11y.ToolCallPart(agento11y.ToolCall{ID: "tc1", Name: "bash", InputJSON: []byte(`{"command":"ls"}`)}),
+				agento11y.ToolCallPart(agento11y.ToolCall{ID: "tc2", Name: "read", InputJSON: []byte(`{"file":"x"}`)}),
+				agento11y.ToolCallPart(agento11y.ToolCall{ID: "tc3", Name: "grep", InputJSON: []byte(`{"pattern":"y"}`)}),
 			},
 		}},
-		Input: []sigil.Message{{
-			Role:  sigil.RoleTool,
-			Parts: []sigil.Part{sigil.ToolResultPart(sigil.ToolResult{ToolCallID: "tc1", Name: "bash", Content: "ok"})},
+		Input: []agento11y.Message{{
+			Role:  agento11y.RoleTool,
+			Parts: []agento11y.Part{agento11y.ToolResultPart(agento11y.ToolResult{ToolCallID: "tc1", Name: "bash", Content: "ok"})},
 		}},
 	}
 	events := map[string]toolevents.Event{
@@ -60,15 +60,15 @@ func TestEmitToolSpans(t *testing.T) {
 		// tc3 intentionally has no after_tool event -> synthetic timing.
 	}
 
-	genCtx, rec := client.StartGeneration(context.Background(), sigil.GenerationStart{
+	genCtx, rec := client.StartGeneration(context.Background(), agento11y.GenerationStart{
 		ID:             gen.ID,
 		ConversationID: gen.ConversationID,
 		AgentName:      gen.AgentName,
 		Model:          gen.Model,
-		ContentCapture: sigil.ContentCaptureModeFull,
+		ContentCapture: agento11y.ContentCaptureModeFull,
 	})
 	rec.SetResult(gen, nil)
-	emitToolSpans(genCtx, client, gen, sigil.ContentCaptureModeFull, events, logger)
+	emitToolSpans(genCtx, client, gen, agento11y.ContentCaptureModeFull, events, logger)
 	rec.End()
 
 	_ = client.Shutdown(context.Background())

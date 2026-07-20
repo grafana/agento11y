@@ -15,8 +15,8 @@ import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { Agent, tool } from '@strands-agents/sdk';
 import { OpenAIModel } from '@strands-agents/sdk/models/openai';
-import { createSigilClient } from '@grafana/agento11y';
-import { withSigilStrandsHooks } from '@grafana/agento11y/strands';
+import { createAgento11yClient } from '@grafana/agento11y';
+import { withAgento11yStrandsHooks } from '@grafana/agento11y/strands';
 import { z } from 'zod';
 
 function env(name: string, fallback: string): string {
@@ -33,7 +33,7 @@ function requiredEnv(name: string): string {
 }
 
 const resource = resourceFromAttributes({
-  'service.name': env('OTEL_SERVICE_NAME', 'sigil-strands-typescript-example'),
+  'service.name': env('OTEL_SERVICE_NAME', 'agento11y-strands-typescript-example'),
 });
 
 const tracerProvider = new NodeTracerProvider({
@@ -63,7 +63,7 @@ const addNumbers = tool({
 });
 
 const tenantId = requiredEnv('AGENTO11Y_AUTH_TENANT_ID');
-const sigil = createSigilClient({
+const agento11y = createAgento11yClient({
   generationExport: {
     protocol: env('AGENTO11Y_PROTOCOL', 'http') as 'http' | 'grpc' | 'none',
     endpoint: requiredEnv('AGENTO11Y_ENDPOINT'),
@@ -74,7 +74,7 @@ const sigil = createSigilClient({
       basicPassword: requiredEnv('AGENTO11Y_AUTH_TOKEN'),
     },
   },
-  meter: meterProvider.getMeter('sigil-strands-typescript-example'),
+  meter: meterProvider.getMeter('agento11y-strands-typescript-example'),
 });
 
 const model = new OpenAIModel({
@@ -86,7 +86,7 @@ const model = new OpenAIModel({
 
 try {
   const agent = new Agent(
-    withSigilStrandsHooks(
+    withAgento11yStrandsHooks(
       {
         name: 'strands-demo',
         model,
@@ -94,10 +94,10 @@ try {
         systemPrompt: 'You are concise and show the final answer.',
         printer: false,
         appState: {
-          conversation_id: env('AGENTO11Y_CONVERSATION_ID', 'sigil-strands-demo'),
+          conversation_id: env('AGENTO11Y_CONVERSATION_ID', 'agento11y-strands-demo'),
         },
       },
-      sigil,
+      agento11y,
       { providerResolver: 'auto' },
     ),
   );
@@ -108,7 +108,7 @@ try {
 
   console.log(result.toString());
 } finally {
-  await sigil.shutdown();
+  await agento11y.shutdown();
   await tracerProvider.shutdown();
   await meterProvider.shutdown();
 }

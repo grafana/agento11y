@@ -1,4 +1,4 @@
-// Package anthropic maps Anthropic message payloads to sigil.Generation.
+// Package anthropic maps Anthropic message payloads to agento11y.Generation.
 //
 // Use FromRequestResponse for non-streaming calls and FromStream for streaming
 // calls. The resulting generation keeps request content in Input and model

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { configFromEnv, mergeConfig, SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient, configFromEnv, mergeConfig } from '../.test-dist/index.js';
 
 // configFromEnv table: env-only resolution with no caller-supplied config.
 const configFromEnvCases = [
@@ -303,8 +303,8 @@ test('mergeConfig: invalid preferred value warns with AGENTO11Y key', () => {
   assert.match(warnings[0], /AGENTO11Y_CONTENT_CAPTURE_MODE.*bogus/);
 });
 
-// SigilClient integration: env-driven defaults applied to generation seeds.
-test('SigilClient applies default agent / user / tags from config', async () => {
+// Agento11yClient integration: env-driven defaults applied to generation seeds.
+test('Agento11yClient applies default agent / user / tags from config', async () => {
   const original = process.env;
   try {
     process.env = {
@@ -315,7 +315,7 @@ test('SigilClient applies default agent / user / tags from config', async () => 
       SIGIL_USER_ID: 'alice',
       SIGIL_TAGS: 'service=orch',
     };
-    const client = new SigilClient();
+    const client = new Agento11yClient();
     try {
       const rec = client.startGeneration({
         model: { provider: 'openai', name: 'gpt-5' },
@@ -333,7 +333,7 @@ test('SigilClient applies default agent / user / tags from config', async () => 
   }
 });
 
-test('SigilClient: per-call args override env defaults', async () => {
+test('Agento11yClient: per-call args override env defaults', async () => {
   const original = process.env;
   try {
     process.env = {
@@ -342,7 +342,7 @@ test('SigilClient: per-call args override env defaults', async () => {
       SIGIL_AGENT_NAME: 'planner',
       SIGIL_TAGS: 'env=prod',
     };
-    const client = new SigilClient();
+    const client = new Agento11yClient();
     try {
       const rec = client.startGeneration({
         model: { provider: 'openai', name: 'gpt-5' },
@@ -359,7 +359,7 @@ test('SigilClient: per-call args override env defaults', async () => {
   }
 });
 
-test('SigilClient applies default agent identity to tool execution recorders', async () => {
+test('Agento11yClient applies default agent identity to tool execution recorders', async () => {
   const original = process.env;
   try {
     process.env = {
@@ -368,7 +368,7 @@ test('SigilClient applies default agent identity to tool execution recorders', a
       SIGIL_AGENT_NAME: 'planner',
       SIGIL_AGENT_VERSION: '1.0',
     };
-    const client = new SigilClient();
+    const client = new Agento11yClient();
     try {
       const rec = client.startToolExecution({ toolName: 'lookup' });
       assert.equal(rec.seed.agentName, 'planner');

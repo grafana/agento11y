@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class ClientTagsTests
 {
@@ -15,7 +15,7 @@ public sealed class ClientTagsTests
         private readonly MeterListener _meterListener;
 
         public CapturingGenerationExporter Exporter { get; } = new();
-        public SigilClient Client { get; }
+        public Agento11yClient Client { get; }
         public ConcurrentQueue<Activity> Spans { get; } = new();
         public ConcurrentQueue<(string Name, Dictionary<string, object?> Tags)> Measurements { get; } = new();
 
@@ -53,7 +53,7 @@ public sealed class ClientTagsTests
             {
                 config.Tags = tags;
             }
-            Client = new SigilClient(config);
+            Client = new Agento11yClient(config);
         }
 
         public void AssertMeasurementsCarryTag(string metricName, string key, string value)
@@ -156,7 +156,7 @@ public sealed class ClientTagsTests
     [Fact]
     public async Task ClientTags_AreNormalizedAndSorted()
     {
-        var attributes = SigilClient.TagAttributes(new Dictionary<string, string>(StringComparer.Ordinal)
+        var attributes = Agento11yClient.TagAttributes(new Dictionary<string, string>(StringComparer.Ordinal)
         {
             [" z "] = " last ",
             ["   "] = "discard",
@@ -217,7 +217,7 @@ public sealed class ClientTagsTests
             foreach (var tag in span.TagObjects)
             {
                 Assert.False(
-                    tag.Key.StartsWith(SigilClient.SpanAttrTagPrefix, StringComparison.Ordinal),
+                    tag.Key.StartsWith(Agento11yClient.SpanAttrTagPrefix, StringComparison.Ordinal),
                     $"unexpected {tag.Key} on span {span.DisplayName}"
                 );
             }
@@ -228,7 +228,7 @@ public sealed class ClientTagsTests
             foreach (var tag in measurement.Tags)
             {
                 Assert.False(
-                    tag.Key.StartsWith(SigilClient.SpanAttrTagPrefix, StringComparison.Ordinal),
+                    tag.Key.StartsWith(Agento11yClient.SpanAttrTagPrefix, StringComparison.Ordinal),
                     $"unexpected {tag.Key} on metric {measurement.Name}"
                 );
             }

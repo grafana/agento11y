@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Grafana.Agento11y.DevExEmitter</RootNamespace>
+    <AssemblyName>Grafana.Agento11y.DevExEmitter</AssemblyName>
+    <NoWarn>$(NoWarn);OPENAI001</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Grafana.Agento11y/Grafana.Agento11y.csproj" />
+    <ProjectReference Include="../../src/Grafana.Agento11y.OpenAI/Grafana.Agento11y.OpenAI.csproj" />
+    <ProjectReference Include="../../src/Grafana.Agento11y.Anthropic/Grafana.Agento11y.Anthropic.csproj" />
+    <ProjectReference Include="../../src/Grafana.Agento11y.Gemini/Grafana.Agento11y.Gemini.csproj" />
+  </ItemGroup>
+</Project>

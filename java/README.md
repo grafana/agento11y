@@ -50,10 +50,10 @@ For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance 
 
 ## Quick Start (sync)
 
-The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and call `new SigilClient()` with no arguments — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names.
+The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and call `new Agento11yClient()` with no arguments — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names.
 
 ```java
-SigilClient client = new SigilClient(new SigilClientConfig()
+Agento11yClient client = new Agento11yClient(new Agento11yClientConfig()
     .setApi(new ApiConfig()
         .setEndpoint("https://sigil-prod-<region>.grafana.net"))
     .setGenerationExport(new GenerationExportConfig()
@@ -82,7 +82,7 @@ try {
 }
 ```
 
-Configure OTEL exporters (traces/metrics) in your application OTEL SDK setup. You can optionally inject `Tracer` and `Meter` via `SigilClientConfig`.
+Configure OTEL exporters (traces/metrics) in your application OTEL SDK setup. You can optionally inject `Tracer` and `Meter` via `Agento11yClientConfig`.
 
 Quick OTEL setup pattern before creating the Sigil client:
 
@@ -137,7 +137,7 @@ See [Tool Calls vs Tool Executions](../docs/concepts/tool-call-vs-tool-execution
 Client-level default:
 
 ```java
-SigilClient client = new SigilClient(new SigilClientConfig()
+Agento11yClient client = new Agento11yClient(new Agento11yClientConfig()
     .setContentCapture(ContentCaptureMode.METADATA_ONLY));
 ```
 
@@ -175,7 +175,7 @@ try (ToolExecutionRecorder rec = client.startToolExecution(
 Dynamic resolution via `ContentCaptureResolver`:
 
 ```java
-SigilClient client = new SigilClient(new SigilClientConfig()
+Agento11yClient client = new Agento11yClient(new Agento11yClientConfig()
     .setContentCaptureResolver(metadata -> {
         if (metadata != null && "healthcare".equals(metadata.get("tenant"))) {
             return ContentCaptureMode.METADATA_ONLY;
@@ -190,14 +190,14 @@ Resolution precedence for generations (highest to lowest):
 
 1. Per-generation `ContentCapture`
 2. `ContentCaptureResolver` return value
-3. `SigilClientConfig.contentCapture` (defaults to `NO_TOOL_CONTENT`)
+3. `Agento11yClientConfig.contentCapture` (defaults to `NO_TOOL_CONTENT`)
 
 Resolution precedence for tool executions (highest to lowest):
 
 1. Per-tool `ContentCapture`
 2. Parent generation's resolved mode
 3. `ContentCaptureResolver` return value
-4. `SigilClientConfig.contentCapture` (defaults to `NO_TOOL_CONTENT`)
+4. `Agento11yClientConfig.contentCapture` (defaults to `NO_TOOL_CONTENT`)
 
 User-provided `metadata` and `tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `agento11y.conversation.title`) are stripped along with the matching content. See [Tags and Metadata](../docs/concepts/tags-and-metadata.md) for where client tags, per-generation tags, metadata, and `userId` each show up (export vs spans vs metrics).
 
@@ -226,7 +226,7 @@ client.withEmbedding(
 Input text capture is opt-in:
 
 ```java
-SigilClientConfig config = new SigilClientConfig()
+Agento11yClientConfig config = new Agento11yClientConfig()
     .setEmbeddingCapture(new EmbeddingCaptureConfig()
         .setCaptureInput(true)
         .setMaxInputItems(20)
@@ -284,7 +284,7 @@ Generation export transport protocols:
 You can set defaults via OTel context and override per-call in `GenerationStart`:
 
 ```java
-try (Scope ignored = SigilContext.withConversationId("conv-ctx")) {
+try (Scope ignored = Agento11yContext.withConversationId("conv-ctx")) {
     GenerationRecorder rec = client.startGeneration(new GenerationStart()
         .setModel(new ModelRef().setProvider("openai").setName("gpt-5")));
     // ...
@@ -294,9 +294,9 @@ try (Scope ignored = SigilContext.withConversationId("conv-ctx")) {
 
 Helpers:
 
-- `SigilContext.withConversationId(...)`
-- `SigilContext.withAgentName(...)`
-- `SigilContext.withAgentVersion(...)`
+- `Agento11yContext.withConversationId(...)`
+- `Agento11yContext.withAgentName(...)`
+- `Agento11yContext.withAgentVersion(...)`
 
 ## Conversation Ratings
 
@@ -326,7 +326,7 @@ System.out.println(result.getRating().getRating() + " hasBad=" + result.getSumma
 ## Instrumentation-only mode (no generation send)
 
 ```java
-SigilClient client = new SigilClient(new SigilClientConfig()
+Agento11yClient client = new Agento11yClient(new Agento11yClientConfig()
     .setGenerationExport(new GenerationExportConfig()
         .setProtocol(GenerationExportProtocol.NONE)));
 ```
@@ -355,7 +355,7 @@ Framework helpers:
 ## Environment variables
 
 The SDK reads `AGENTO11Y_*` environment variables at client construction. Caller-supplied
-fields on `SigilClientConfig` win; env vars fill anything left at the default;
+fields on `Agento11yClientConfig` win; env vars fill anything left at the default;
 SDK schema defaults fill the rest.
 
 | Env var | Field |
@@ -367,14 +367,14 @@ SDK schema defaults fill the rest.
 | `AGENTO11Y_AUTH_MODE` | `AuthConfig.mode` (`none`/`tenant`/`bearer`/`basic`) |
 | `AGENTO11Y_AUTH_TENANT_ID` | `AuthConfig.tenantId` |
 | `AGENTO11Y_AUTH_TOKEN` | `AuthConfig.bearerToken` and/or `basicPassword` (filled when empty) |
-| `AGENTO11Y_AGENT_NAME` | `SigilClientConfig.agentName` |
-| `AGENTO11Y_AGENT_VERSION` | `SigilClientConfig.agentVersion` |
-| `AGENTO11Y_USER_ID` | `SigilClientConfig.userId` |
-| `AGENTO11Y_TAGS` | `SigilClientConfig.tags` (CSV; applied to generations, spans, and metrics; see [Tags and Metadata](../docs/concepts/tags-and-metadata.md)) |
-| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `SigilClientConfig.contentCapture` |
-| `AGENTO11Y_DEBUG` | `SigilClientConfig.debug` (tri-state) |
+| `AGENTO11Y_AGENT_NAME` | `Agento11yClientConfig.agentName` |
+| `AGENTO11Y_AGENT_VERSION` | `Agento11yClientConfig.agentVersion` |
+| `AGENTO11Y_USER_ID` | `Agento11yClientConfig.userId` |
+| `AGENTO11Y_TAGS` | `Agento11yClientConfig.tags` (CSV; applied to generations, spans, and metrics; see [Tags and Metadata](../docs/concepts/tags-and-metadata.md)) |
+| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `Agento11yClientConfig.contentCapture` |
+| `AGENTO11Y_DEBUG` | `Agento11yClientConfig.debug` (tri-state) |
 
-Use `SigilEnvConfig.fromEnv()` to inspect the resolved config without
+Use `Agento11yEnvConfig.fromEnv()` to inspect the resolved config without
 constructing a client. Invalid values (bad auth mode, etc.) are skipped with a
 warning so a single typo does not discard the rest of the env layer.
 
@@ -395,7 +395,7 @@ warning so a single typo does not discard the rest of the env layer.
 
 - Keep raw artifacts disabled in production unless actively debugging.
 - Prefer callback APIs (`withGeneration` / `withStreamingGeneration`) to guarantee `end()` runs.
-- Configure traces/metrics in your OpenTelemetry SDK setup (or inject `Tracer`/`Meter` into `SigilClientConfig`).
+- Configure traces/metrics in your OpenTelemetry SDK setup (or inject `Tracer`/`Meter` into `Agento11yClientConfig`).
 - Keep `batchSize` and `queueSize` conservative first, then tune with benchmark data.
 
 ## Build, Test, Benchmark

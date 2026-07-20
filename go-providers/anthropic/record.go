@@ -6,7 +6,7 @@ import (
 
 	asdk "github.com/anthropics/anthropic-sdk-go"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 // Message calls the Anthropic messages API and records the generation.
@@ -14,7 +14,7 @@ import (
 // The native *asdk.BetaMessage response is returned unchanged.
 func Message(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	provider asdk.Client,
 	req asdk.BetaMessageNewParams,
 	opts ...Option,
@@ -26,19 +26,19 @@ func Message(
 
 func message(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	req asdk.BetaMessageNewParams,
 	invoke func(context.Context, asdk.BetaMessageNewParams) (*asdk.BetaMessage, error),
 	opts ...Option,
 ) (*asdk.BetaMessage, error) {
 	options := applyOptions(opts)
 
-	ctx, rec := client.StartGeneration(ctx, sigil.GenerationStart{
+	ctx, rec := client.StartGeneration(ctx, agento11y.GenerationStart{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: req.Model},
 	})
 	defer rec.End()
 
@@ -58,19 +58,19 @@ func message(
 // defer pattern directly with StartStreamingGeneration.
 func MessageStream(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	provider asdk.Client,
 	req asdk.BetaMessageNewParams,
 	opts ...Option,
 ) (*asdk.BetaMessage, StreamSummary, error) {
 	options := applyOptions(opts)
 
-	ctx, rec := client.StartStreamingGeneration(ctx, sigil.GenerationStart{
+	ctx, rec := client.StartStreamingGeneration(ctx, agento11y.GenerationStart{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: req.Model},
 	})
 	defer rec.End()
 

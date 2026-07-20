@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 func boolPtr(v bool) *bool {
@@ -44,7 +44,7 @@ func TestResolveConversationIDPrecedence(t *testing.T) {
 	}
 
 	conversationID, _ = resolveConversationID(RunStartEvent{RunID: "run-3"})
-	if conversationID != "sigil:framework:google-adk:run-3" {
+	if conversationID != "agento11y:framework:google-adk:run-3" {
 		t.Fatalf("unexpected fallback conversation id %q", conversationID)
 	}
 }
@@ -158,14 +158,14 @@ func TestBuildFrameworkMetadataRejectsOverflowUintValues(t *testing.T) {
 }
 
 func TestAdapterRunAndToolLifecycle(t *testing.T) {
-	cfg := sigil.DefaultConfig()
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolNone
-	client := sigil.NewClient(cfg)
+	cfg := agento11y.DefaultConfig()
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolNone
+	client := agento11y.NewClient(cfg)
 	t.Cleanup(func() {
 		_ = client.Shutdown(context.Background())
 	})
 
-	adapter := NewSigilAdapter(client, Options{
+	adapter := NewAgento11yAdapter(client, Options{
 		AgentName:      "adk-agent",
 		AgentVersion:   "1.0.0",
 		CaptureInputs:  boolPtr(true),
@@ -189,10 +189,10 @@ func TestAdapterRunAndToolLifecycle(t *testing.T) {
 
 	err = adapter.OnRunEnd("run-sync", RunEndEvent{
 		RunID:          "run-sync",
-		OutputMessages: []sigil.Message{sigil.AssistantTextMessage("world")},
+		OutputMessages: []agento11y.Message{agento11y.AssistantTextMessage("world")},
 		ResponseModel:  "gpt-5",
 		StopReason:     "stop",
-		Usage: sigil.TokenUsage{
+		Usage: agento11y.TokenUsage{
 			InputTokens:  4,
 			OutputTokens: 2,
 			TotalTokens:  6,
@@ -236,8 +236,8 @@ func TestAdapterRunAndToolLifecycle(t *testing.T) {
 
 func TestOnRunEndDropsOutputsWhenCaptureDisabled(t *testing.T) {
 	ingest := newGenerationCaptureServer(t)
-	cfg := sigil.DefaultConfig()
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolHTTP
+	cfg := agento11y.DefaultConfig()
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolHTTP
 	cfg.GenerationExport.Endpoint = ingest.server.URL + "/api/v1/generations:export"
 	cfg.GenerationExport.BatchSize = 1
 	cfg.GenerationExport.QueueSize = 10
@@ -245,12 +245,12 @@ func TestOnRunEndDropsOutputsWhenCaptureDisabled(t *testing.T) {
 	cfg.GenerationExport.MaxRetries = 1
 	cfg.GenerationExport.InitialBackoff = time.Millisecond
 	cfg.GenerationExport.MaxBackoff = 10 * time.Millisecond
-	client := sigil.NewClient(cfg)
+	client := agento11y.NewClient(cfg)
 	t.Cleanup(func() {
 		ingest.server.Close()
 	})
 
-	adapter := NewSigilAdapter(client, Options{
+	adapter := NewAgento11yAdapter(client, Options{
 		CaptureInputs:  boolPtr(true),
 		CaptureOutputs: boolPtr(false),
 	})
@@ -268,7 +268,7 @@ func TestOnRunEndDropsOutputsWhenCaptureDisabled(t *testing.T) {
 
 	if err := adapter.OnRunEnd("run-no-output", RunEndEvent{
 		RunID:          "run-no-output",
-		OutputMessages: []sigil.Message{sigil.AssistantTextMessage("should-not-export")},
+		OutputMessages: []agento11y.Message{agento11y.AssistantTextMessage("should-not-export")},
 		ResponseModel:  "gpt-5",
 	}); err != nil {
 		t.Fatalf("run end: %v", err)
@@ -300,15 +300,15 @@ func TestOnRunEndDropsOutputsWhenCaptureDisabled(t *testing.T) {
 	}
 }
 
-func TestNewSigilAdapterCaptureDefaultsAndExplicitDisable(t *testing.T) {
-	cfg := sigil.DefaultConfig()
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolNone
-	client := sigil.NewClient(cfg)
+func TestNewAgento11yAdapterCaptureDefaultsAndExplicitDisable(t *testing.T) {
+	cfg := agento11y.DefaultConfig()
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolNone
+	client := agento11y.NewClient(cfg)
 	t.Cleanup(func() {
 		_ = client.Shutdown(context.Background())
 	})
 
-	defaults := NewSigilAdapter(client, Options{})
+	defaults := NewAgento11yAdapter(client, Options{})
 	if !defaults.captureInputs {
 		t.Fatalf("expected capture inputs default true")
 	}
@@ -316,7 +316,7 @@ func TestNewSigilAdapterCaptureDefaultsAndExplicitDisable(t *testing.T) {
 		t.Fatalf("expected capture outputs default true")
 	}
 
-	explicitOff := NewSigilAdapter(client, Options{
+	explicitOff := NewAgento11yAdapter(client, Options{
 		CaptureInputs:  boolPtr(false),
 		CaptureOutputs: boolPtr(false),
 	})
@@ -327,7 +327,7 @@ func TestNewSigilAdapterCaptureDefaultsAndExplicitDisable(t *testing.T) {
 		t.Fatalf("expected explicit capture outputs=false to be preserved")
 	}
 
-	overrideOpts := NewSigilAdapter(client, Options{
+	overrideOpts := NewAgento11yAdapter(client, Options{
 		CaptureInputs:  boolPtr(false),
 		CaptureOutputs: boolPtr(true),
 	})
@@ -340,14 +340,14 @@ func TestNewSigilAdapterCaptureDefaultsAndExplicitDisable(t *testing.T) {
 }
 
 func TestOnToolStartDropsArgumentsWhenCaptureInputsDisabled(t *testing.T) {
-	cfg := sigil.DefaultConfig()
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolNone
-	client := sigil.NewClient(cfg)
+	cfg := agento11y.DefaultConfig()
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolNone
+	client := agento11y.NewClient(cfg)
 	t.Cleanup(func() {
 		_ = client.Shutdown(context.Background())
 	})
 
-	adapter := NewSigilAdapter(client, Options{
+	adapter := NewAgento11yAdapter(client, Options{
 		CaptureInputs:  boolPtr(false),
 		CaptureOutputs: boolPtr(true),
 	})
@@ -377,20 +377,20 @@ func TestOnToolStartDropsArgumentsWhenCaptureInputsDisabled(t *testing.T) {
 }
 
 func TestOnToolStartPropagatesToolCallFields(t *testing.T) {
-	cfg := sigil.DefaultConfig()
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolNone
-	client := sigil.NewClient(cfg)
+	cfg := agento11y.DefaultConfig()
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolNone
+	client := agento11y.NewClient(cfg)
 	t.Cleanup(func() {
 		_ = client.Shutdown(context.Background())
 	})
 
-	adapter := NewSigilAdapter(client, Options{
+	adapter := NewAgento11yAdapter(client, Options{
 		AgentName:    "adk-agent",
 		AgentVersion: "1.0.0",
 	})
 
-	var captured sigil.ToolExecutionStart
-	adapter.startTool = func(ctx context.Context, start sigil.ToolExecutionStart) *sigil.ToolExecutionRecorder {
+	var captured agento11y.ToolExecutionStart
+	adapter.startTool = func(ctx context.Context, start agento11y.ToolExecutionStart) *agento11y.ToolExecutionRecorder {
 		captured = start
 		_, rec := client.StartToolExecution(ctx, start)
 		return rec
@@ -472,17 +472,17 @@ func TestOnToolStartResolvesModelAndProvider(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := sigil.DefaultConfig()
-			cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolNone
-			client := sigil.NewClient(cfg)
+			cfg := agento11y.DefaultConfig()
+			cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolNone
+			client := agento11y.NewClient(cfg)
 			t.Cleanup(func() {
 				_ = client.Shutdown(context.Background())
 			})
 
-			adapter := NewSigilAdapter(client, Options{Provider: tt.adapterProvider})
+			adapter := NewAgento11yAdapter(client, Options{Provider: tt.adapterProvider})
 
-			var captured sigil.ToolExecutionStart
-			adapter.startTool = func(ctx context.Context, start sigil.ToolExecutionStart) *sigil.ToolExecutionRecorder {
+			var captured agento11y.ToolExecutionStart
+			adapter.startTool = func(ctx context.Context, start agento11y.ToolExecutionStart) *agento11y.ToolExecutionRecorder {
 				captured = start
 				_, rec := client.StartToolExecution(ctx, start)
 				return rec
@@ -577,16 +577,16 @@ func TestBuildFrameworkMetadataNormalizesStructAndPointerValues(t *testing.T) {
 }
 
 func TestOnRunStartDeduplicatesConcurrentStarts(t *testing.T) {
-	cfg := sigil.DefaultConfig()
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolNone
-	client := sigil.NewClient(cfg)
+	cfg := agento11y.DefaultConfig()
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolNone
+	client := agento11y.NewClient(cfg)
 	t.Cleanup(func() {
 		_ = client.Shutdown(context.Background())
 	})
 
-	adapter := NewSigilAdapter(client, Options{})
+	adapter := NewAgento11yAdapter(client, Options{})
 	var startCalls atomic.Int32
-	adapter.startRun = func(ctx context.Context, start sigil.GenerationStart, stream bool) *sigil.GenerationRecorder {
+	adapter.startRun = func(ctx context.Context, start agento11y.GenerationStart, stream bool) *agento11y.GenerationRecorder {
 		startCalls.Add(1)
 		if stream {
 			_, rec := client.StartStreamingGeneration(ctx, start)
@@ -624,16 +624,16 @@ func TestOnRunStartDeduplicatesConcurrentStarts(t *testing.T) {
 }
 
 func TestOnToolStartDeduplicatesConcurrentStarts(t *testing.T) {
-	cfg := sigil.DefaultConfig()
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolNone
-	client := sigil.NewClient(cfg)
+	cfg := agento11y.DefaultConfig()
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolNone
+	client := agento11y.NewClient(cfg)
 	t.Cleanup(func() {
 		_ = client.Shutdown(context.Background())
 	})
 
-	adapter := NewSigilAdapter(client, Options{})
+	adapter := NewAgento11yAdapter(client, Options{})
 	var startCalls atomic.Int32
-	adapter.startTool = func(ctx context.Context, start sigil.ToolExecutionStart) *sigil.ToolExecutionRecorder {
+	adapter.startTool = func(ctx context.Context, start agento11y.ToolExecutionStart) *agento11y.ToolExecutionRecorder {
 		startCalls.Add(1)
 		_, rec := client.StartToolExecution(ctx, start)
 		return rec
@@ -667,9 +667,9 @@ func TestOnToolStartDeduplicatesConcurrentStarts(t *testing.T) {
 }
 
 func TestNewCallbacksProvidesOneTimeLifecycleWiring(t *testing.T) {
-	cfg := sigil.DefaultConfig()
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolNone
-	client := sigil.NewClient(cfg)
+	cfg := agento11y.DefaultConfig()
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolNone
+	client := agento11y.NewClient(cfg)
 	t.Cleanup(func() {
 		_ = client.Shutdown(context.Background())
 	})
@@ -693,7 +693,7 @@ func TestNewCallbacksProvidesOneTimeLifecycleWiring(t *testing.T) {
 	callbacks.OnRunToken("run-callbacks", "hi")
 	if err := callbacks.OnRunEnd("run-callbacks", RunEndEvent{
 		RunID:          "run-callbacks",
-		OutputMessages: []sigil.Message{sigil.AssistantTextMessage("hello")},
+		OutputMessages: []agento11y.Message{agento11y.AssistantTextMessage("hello")},
 		ResponseModel:  "gpt-5",
 	}); err != nil {
 		t.Fatalf("run end: %v", err)

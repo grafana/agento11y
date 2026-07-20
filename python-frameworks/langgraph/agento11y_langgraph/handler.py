@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from agento11y import Client
-from agento11y.framework_handler import ProviderResolver, SigilFrameworkHandlerBase
+from agento11y.framework_handler import Agento11yFrameworkHandlerBase, ProviderResolver
 
 try:
     from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackHandler
@@ -42,7 +42,7 @@ def _merge_callback_kwargs(
     return callback_kwargs
 
 
-class _SigilLangGraphBase(SigilFrameworkHandlerBase):
+class _Agento11yLangGraphBase(Agento11yFrameworkHandlerBase):
     def __init__(
         self,
         *,
@@ -77,7 +77,7 @@ class _SigilLangGraphBase(SigilFrameworkHandlerBase):
         )
 
 
-class SigilLangGraphHandler(_SigilLangGraphBase, BaseCallbackHandler):
+class Agento11yLangGraphHandler(_Agento11yLangGraphBase, BaseCallbackHandler):
     """Sync LangGraph callback handler that records Sigil generations."""
 
     def on_llm_start(
@@ -213,7 +213,7 @@ class SigilLangGraphHandler(_SigilLangGraphBase, BaseCallbackHandler):
         self._on_retriever_error(error=error, run_id=run_id)
 
 
-class SigilAsyncLangGraphHandler(_SigilLangGraphBase, AsyncCallbackHandler):
+class Agento11yAsyncLangGraphHandler(_Agento11yLangGraphBase, AsyncCallbackHandler):
     """Async LangGraph callback handler that records Sigil generations."""
 
     async def on_llm_start(

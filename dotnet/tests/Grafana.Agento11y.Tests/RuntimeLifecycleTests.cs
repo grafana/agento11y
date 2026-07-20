@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class RuntimeLifecycleTests
 {
@@ -12,7 +12,7 @@ public sealed class RuntimeLifecycleTests
         var config = TestHelpers.TestConfig(exporter);
         config.EmbeddingCapture = null!;
 
-        await using var _ = new SigilClient(config);
+        await using var _ = new Agento11yClient(config);
 
         Assert.NotNull(config.EmbeddingCapture);
         Assert.Equal(20, config.EmbeddingCapture.MaxInputItems);
@@ -26,7 +26,7 @@ public sealed class RuntimeLifecycleTests
         var config = TestHelpers.TestConfig(exporter);
         config.GenerationExport.BatchSize = 2;
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         EndSuccessfulGeneration(client, "gen-1");
         EndSuccessfulGeneration(client, "gen-2");
@@ -46,7 +46,7 @@ public sealed class RuntimeLifecycleTests
         config.GenerationExport.BatchSize = 10;
         config.GenerationExport.FlushInterval = TimeSpan.FromMilliseconds(30);
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         EndSuccessfulGeneration(client, "gen-1");
 
@@ -77,7 +77,7 @@ public sealed class RuntimeLifecycleTests
             return Task.CompletedTask;
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         EndSuccessfulGeneration(client, "gen-1");
         await client.FlushAsync(TestContext.Current.CancellationToken);
@@ -103,7 +103,7 @@ public sealed class RuntimeLifecycleTests
         config.GenerationExport.BatchSize = 100;
         config.GenerationExport.FlushInterval = TimeSpan.FromHours(1);
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         var first = StartAndEnd(client, "gen-1");
         Assert.Null(first.Error);
@@ -121,7 +121,7 @@ public sealed class RuntimeLifecycleTests
         config.GenerationExport.BatchSize = 10;
         config.GenerationExport.FlushInterval = TimeSpan.FromHours(1);
 
-        var client = new SigilClient(config);
+        var client = new Agento11yClient(config);
         StartAndEnd(client, "gen-1");
 
         await client.ShutdownAsync(TestContext.Current.CancellationToken);
@@ -137,7 +137,7 @@ public sealed class RuntimeLifecycleTests
         var config = TestHelpers.TestConfig(exporter);
         config.GenerationExport.BatchSize = 1;
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         var recorder = client.StartGeneration(TestHelpers.CreateSeedStart("gen-idempotent"));
         recorder.SetResult(TestHelpers.CreateSeedResult("gen-idempotent"));
@@ -153,11 +153,11 @@ public sealed class RuntimeLifecycleTests
     public async Task ContextDefaults_AreAppliedWhenStartFieldsAreEmpty()
     {
         var exporter = new CapturingGenerationExporter();
-        await using var client = new SigilClient(TestHelpers.TestConfig(exporter));
+        await using var client = new Agento11yClient(TestHelpers.TestConfig(exporter));
 
-        using var conversationScope = SigilContext.WithConversationId("conv-context");
-        using var agentNameScope = SigilContext.WithAgentName("agent-context");
-        using var agentVersionScope = SigilContext.WithAgentVersion("v-context");
+        using var conversationScope = Agento11yContext.WithConversationId("conv-context");
+        using var agentNameScope = Agento11yContext.WithAgentName("agent-context");
+        using var agentVersionScope = Agento11yContext.WithAgentVersion("v-context");
 
         var recorder = client.StartGeneration(new GenerationStart
         {
@@ -185,11 +185,11 @@ public sealed class RuntimeLifecycleTests
     public async Task ExplicitStartValues_OverrideContextDefaults()
     {
         var exporter = new CapturingGenerationExporter();
-        await using var client = new SigilClient(TestHelpers.TestConfig(exporter));
+        await using var client = new Agento11yClient(TestHelpers.TestConfig(exporter));
 
-        using var conversationScope = SigilContext.WithConversationId("conv-context");
-        using var agentNameScope = SigilContext.WithAgentName("agent-context");
-        using var agentVersionScope = SigilContext.WithAgentVersion("v-context");
+        using var conversationScope = Agento11yContext.WithConversationId("conv-context");
+        using var agentNameScope = Agento11yContext.WithAgentName("agent-context");
+        using var agentVersionScope = Agento11yContext.WithAgentVersion("v-context");
 
         var recorder = client.StartGeneration(new GenerationStart
         {
@@ -220,7 +220,7 @@ public sealed class RuntimeLifecycleTests
     public async Task GenerationRecorder_OverridesConflictingSdkMetadataValues()
     {
         var exporter = new CapturingGenerationExporter();
-        await using var client = new SigilClient(TestHelpers.TestConfig(exporter));
+        await using var client = new Agento11yClient(TestHelpers.TestConfig(exporter));
 
         var start = TestHelpers.CreateSeedStart("gen-sdk-metadata");
         start.Metadata["agento11y.sdk.name"] = "seed-value";
@@ -258,7 +258,7 @@ public sealed class RuntimeLifecycleTests
         };
         ActivitySource.AddActivityListener(listener);
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         var recorder = client.StartGeneration(TestHelpers.CreateSeedStart("gen-span-sdk"));
         recorder.SetResult(TestHelpers.CreateSeedResult("gen-span-sdk"));
         recorder.End();
@@ -273,7 +273,7 @@ public sealed class RuntimeLifecycleTests
     public async Task ToolSpan_ContainsSdkIdentityTags()
     {
         var exporter = new CapturingGenerationExporter();
-        await using var client = new SigilClient(TestHelpers.TestConfig(exporter));
+        await using var client = new Agento11yClient(TestHelpers.TestConfig(exporter));
 
         var spans = new List<Activity>();
         using var listener = new ActivityListener
@@ -312,12 +312,12 @@ public sealed class RuntimeLifecycleTests
         Assert.Equal("sdk-dotnet", span.GetTagItem("agento11y.sdk.name"));
     }
 
-    private static void EndSuccessfulGeneration(SigilClient client, string id)
+    private static void EndSuccessfulGeneration(Agento11yClient client, string id)
     {
         StartAndEnd(client, id);
     }
 
-    private static GenerationRecorder StartAndEnd(SigilClient client, string id)
+    private static GenerationRecorder StartAndEnd(Agento11yClient client, string id)
     {
         var recorder = client.StartGeneration(TestHelpers.CreateSeedStart(id));
         recorder.SetResult(TestHelpers.CreateSeedResult(id));

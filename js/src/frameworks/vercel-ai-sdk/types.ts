@@ -115,7 +115,7 @@ export interface StreamErrorEvent {
   error?: unknown;
 }
 
-export interface SigilVercelAiSdkOptions {
+export interface Agento11yVercelAiSdkOptions {
   agentName?: string;
   agentVersion?: string;
   captureInputs?: boolean;

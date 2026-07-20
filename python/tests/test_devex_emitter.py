@@ -159,11 +159,11 @@ def test_emit_frameworks_invokes_all_framework_handlers_for_provider_sources(mon
         def on_llm_end(self, _response, *, run_id, **_kwargs):
             calls.append(("end", str(run_id)))
 
-    monkeypatch.setattr(emitter, "SigilLangChainHandler", _FakeHandler)
-    monkeypatch.setattr(emitter, "SigilLangGraphHandler", _FakeHandler)
-    monkeypatch.setattr(emitter, "SigilOpenAIAgentsHandler", _FakeHandler)
-    monkeypatch.setattr(emitter, "SigilLlamaIndexHandler", _FakeHandler)
-    monkeypatch.setattr(emitter, "SigilGoogleAdkHandler", _FakeHandler)
+    monkeypatch.setattr(emitter, "Agento11yLangChainHandler", _FakeHandler)
+    monkeypatch.setattr(emitter, "Agento11yLangGraphHandler", _FakeHandler)
+    monkeypatch.setattr(emitter, "Agento11yOpenAIAgentsHandler", _FakeHandler)
+    monkeypatch.setattr(emitter, "Agento11yLlamaIndexHandler", _FakeHandler)
+    monkeypatch.setattr(emitter, "Agento11yGoogleAdkHandler", _FakeHandler)
 
     context = emitter.EmitContext(
         conversation_id="conv-framework",
@@ -181,19 +181,19 @@ def test_emit_frameworks_invokes_all_framework_handlers_for_provider_sources(mon
 
 def test_emit_frameworks_skips_non_provider_sources(monkeypatch) -> None:
     monkeypatch.setattr(
-        emitter, "SigilLangChainHandler", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unexpected"))
+        emitter, "Agento11yLangChainHandler", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unexpected"))
     )
     monkeypatch.setattr(
-        emitter, "SigilLangGraphHandler", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unexpected"))
+        emitter, "Agento11yLangGraphHandler", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unexpected"))
     )
     monkeypatch.setattr(
-        emitter, "SigilOpenAIAgentsHandler", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unexpected"))
+        emitter, "Agento11yOpenAIAgentsHandler", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unexpected"))
     )
     monkeypatch.setattr(
-        emitter, "SigilLlamaIndexHandler", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unexpected"))
+        emitter, "Agento11yLlamaIndexHandler", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unexpected"))
     )
     monkeypatch.setattr(
-        emitter, "SigilGoogleAdkHandler", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unexpected"))
+        emitter, "Agento11yGoogleAdkHandler", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unexpected"))
     )
 
     context = emitter.EmitContext(

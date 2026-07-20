@@ -14,10 +14,10 @@ pip install litellm
 ```python
 import litellm
 from agento11y import Client
-from agento11y_litellm import SigilLiteLLMLogger
+from agento11y_litellm import Agento11yLiteLLMLogger
 
 client = Client()
-handler = SigilLiteLLMLogger(client=client)
+handler = Agento11yLiteLLMLogger(client=client)
 
 litellm.callbacks = [handler]
 
@@ -35,10 +35,10 @@ client.shutdown()
 ```python
 import litellm
 from agento11y import Client
-from agento11y_litellm import SigilLiteLLMLogger
+from agento11y_litellm import Agento11yLiteLLMLogger
 
 client = Client()
-litellm.callbacks = [SigilLiteLLMLogger(client=client)]
+litellm.callbacks = [Agento11yLiteLLMLogger(client=client)]
 
 response = litellm.completion(
     model="openai/gpt-4o-mini",
@@ -56,7 +56,7 @@ client.shutdown()
 
 ## Configuration
 
-All options are keyword-only on `SigilLiteLLMLogger`:
+All options are keyword-only on `Agento11yLiteLLMLogger`:
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -69,7 +69,7 @@ All options are keyword-only on `SigilLiteLLMLogger`:
 | `extra_tags` | `dict[str, str]` | `None` | Additional tags merged into every generation |
 | `extra_metadata` | `dict[str, Any]` | `None` | Additional metadata merged into every generation |
 
-The `create_sigil_litellm_logger` factory accepts the same parameters.
+The `create_agento11y_litellm_logger` factory accepts the same parameters.
 
 ## Per-Request Metadata
 
@@ -100,27 +100,27 @@ FROM ghcr.io/berriai/litellm:v1.82.3-stable.patch.2
 RUN pip install agento11y agento11y-litellm
 ```
 
-**2. Create a callback file** (`sigil_callback.py`, same directory as `config.yaml`):
+**2. Create a callback file** (`agento11y_callback.py`, same directory as `config.yaml`):
 
 ```python
 import os
 
 from agento11y import Client
 from agento11y.config import AuthConfig, ClientConfig, GenerationExportConfig
-from agento11y_litellm import SigilLiteLLMLogger
+from agento11y_litellm import Agento11yLiteLLMLogger
 
 client = Client(ClientConfig(
     generation_export=GenerationExportConfig(
         protocol="http",
-        endpoint=os.environ["SIGIL_ENDPOINT"],
+        endpoint=os.environ["AGENTO11Y_ENDPOINT"],
         auth=AuthConfig(
             mode="basic",
-            tenant_id=os.environ.get("SIGIL_AUTH_TENANT_ID", ""),
-            basic_password=os.environ.get("SIGIL_AUTH_TOKEN", ""),
+            tenant_id=os.environ.get("AGENTO11Y_AUTH_TENANT_ID", ""),
+            basic_password=os.environ.get("AGENTO11Y_AUTH_TOKEN", ""),
         ),
     ),
 ))
-sigil_handler = SigilLiteLLMLogger(
+agento11y_handler = Agento11yLiteLLMLogger(
     client=client,
     agent_name="litellm-proxy",
 )
@@ -135,20 +135,20 @@ model_list:
       model: openai/gpt-4o-mini
 
 litellm_settings:
-  callbacks: sigil_callback.sigil_handler
+  callbacks: agento11y_callback.agento11y_handler
 ```
 
-The proxy resolves `sigil_callback.sigil_handler` by importing `sigil_callback.py` from the config directory and using the `sigil_handler` instance.
+The proxy resolves `agento11y_callback.agento11y_handler` by importing `agento11y_callback.py` from the config directory and using the `agento11y_handler` instance.
 
 **4. Mount both files and run:**
 
 ```bash
 docker run -d \
   -v $(pwd)/config.yaml:/app/config.yaml \
-  -v $(pwd)/sigil_callback.py:/app/sigil_callback.py \
-  -e SIGIL_ENDPOINT=https://your-sigil-endpoint \
-  -e SIGIL_AUTH_TENANT_ID=your-tenant \
-  -e SIGIL_AUTH_TOKEN=your-key \
+  -v $(pwd)/agento11y_callback.py:/app/agento11y_callback.py \
+  -e AGENTO11Y_ENDPOINT=https://your-agento11y-endpoint \
+  -e AGENTO11Y_AUTH_TENANT_ID=your-tenant \
+  -e AGENTO11Y_AUTH_TOKEN=your-key \
   -p 4000:4000 \
   your-litellm-image \
   --config /app/config.yaml

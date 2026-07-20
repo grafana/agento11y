@@ -26,7 +26,7 @@ export function logFilePath(appName = APP_NAME): string {
   return join(stateRoot(appName), "logs", `${appName}.log`);
 }
 
-export interface SigilPiLogger {
+export interface Agento11yPiLogger {
   debug(message: string, ...args: unknown[]): void;
   warn(message: string, ...args: unknown[]): void;
   error(message: string, ...args: unknown[]): void;
@@ -75,7 +75,7 @@ function emit(level: string, message: string, args: unknown[]): void {
   }
 }
 
-export const logger: SigilPiLogger = {
+export const logger: Agento11yPiLogger = {
   debug: (message, ...args) => emit("debug", message, args),
   warn: (message, ...args) => emit("warn", message, args),
   error: (message, ...args) => emit("error", message, args),

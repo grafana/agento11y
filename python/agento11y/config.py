@@ -251,7 +251,7 @@ def resolve_config(
             if normalized in _VALID_AUTH_MODES:
                 auth.mode = normalized
             else:
-                log.warning("sigil: ignoring invalid %s %r", mode_key, env_mode)
+                log.warning("agento11y: ignoring invalid %s %r", mode_key, env_mode)
                 auth.mode = _DEFAULT_AUTH_MODE
     if not auth.tenant_id:
         ev, _ = _env(env, "AUTH_TENANT_ID")
@@ -299,7 +299,7 @@ def resolve_config(
             if normalized in _VALID_CONTENT_CAPTURE:
                 out.content_capture = _content_capture_from_str(normalized)
             else:
-                log.warning("sigil: ignoring invalid %s %r", capture_key, ev)
+                log.warning("agento11y: ignoring invalid %s %r", capture_key, ev)
                 out.content_capture = ContentCaptureMode.DEFAULT
 
     # Debug

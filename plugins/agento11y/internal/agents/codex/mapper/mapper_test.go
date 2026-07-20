@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/codexlog"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/fragment"
@@ -26,7 +26,7 @@ func TestMapMetadataOnlyStripsTextButKeepsToolStructure(t *testing.T) {
 		}},
 		LastAssistantMessage: "done",
 	}
-	got := Map(Inputs{Fragment: f, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
 	if len(got.Generation.Input) != 0 {
 		t.Fatalf("metadata_only input len = %d, want 0", len(got.Generation.Input))
 	}
@@ -51,7 +51,7 @@ func TestMapFullRedactsContent(t *testing.T) {
 			ToolResponse: raw,
 		}},
 	}
-	got := Map(Inputs{Fragment: f, ContentCapture: sigil.ContentCaptureModeFull, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, ContentCapture: agento11y.ContentCaptureModeFull, Now: time.Unix(1, 0)})
 	combined := got.Generation.Input[0].Parts[0].Text + got.Generation.Output[len(got.Generation.Output)-1].Parts[0].Text
 	toolInput := string(got.Generation.Output[0].Parts[0].ToolCall.InputJSON)
 	toolResult := string(got.Generation.Input[1].Parts[0].ToolResult.ContentJSON)
@@ -82,8 +82,8 @@ func TestMapFullWithMetadataSpansPreservesStartModeAndFullPayload(t *testing.T) 
 		}},
 	}
 
-	got := Map(Inputs{Fragment: f, ContentCapture: sigil.ContentCaptureModeFullWithMetadataSpans, Now: time.Unix(1, 0)})
-	if got.Start.ContentCapture != sigil.ContentCaptureModeFullWithMetadataSpans {
+	got := Map(Inputs{Fragment: f, ContentCapture: agento11y.ContentCaptureModeFullWithMetadataSpans, Now: time.Unix(1, 0)})
+	if got.Start.ContentCapture != agento11y.ContentCaptureModeFullWithMetadataSpans {
 		t.Fatalf("Start.ContentCapture = %v; want FullWithMetadataSpans", got.Start.ContentCapture)
 	}
 	if len(got.Generation.Input) == 0 || got.Generation.Input[0].Parts[0].Text == "" {
@@ -106,7 +106,7 @@ func TestMapFullRedactsInvalidJSONAsJSONString(t *testing.T) {
 			ToolResponse: json.RawMessage(`token=` + secret),
 		}},
 	}
-	got := Map(Inputs{Fragment: f, ContentCapture: sigil.ContentCaptureModeFull, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, ContentCapture: agento11y.ContentCaptureModeFull, Now: time.Unix(1, 0)})
 	toolResult := got.Generation.Input[0].Parts[0].ToolResult.ContentJSON
 	if !json.Valid(toolResult) {
 		t.Fatalf("redacted invalid JSON fallback must be valid JSON: %s", string(toolResult))
@@ -141,7 +141,7 @@ func TestMapFullRedactsSensitiveJSONKeys(t *testing.T) {
 			ToolResponse: raw,
 		}},
 	}
-	got := Map(Inputs{Fragment: f, ContentCapture: sigil.ContentCaptureModeFull, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, ContentCapture: agento11y.ContentCaptureModeFull, Now: time.Unix(1, 0)})
 	toolResult := string(got.Generation.Input[0].Parts[0].ToolResult.ContentJSON)
 	for _, secret := range []string{"hunter2", "short-secret", "short-token", "short-api-key", "short-camel-secret", "Bearer short", "short-access-key"} {
 		if strings.Contains(toolResult, secret) {
@@ -187,7 +187,7 @@ func TestMapResolvesGitBranchFromCwd(t *testing.T) {
 				Model:     "gpt-5.5",
 				Cwd:       root,
 			}
-			got := Map(Inputs{Fragment: f, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+			got := Map(Inputs{Fragment: f, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
 			if got.Generation.Tags["git.branch"] != tc.want {
 				t.Fatalf("git.branch = %q, want %q", got.Generation.Tags["git.branch"], tc.want)
 			}
@@ -206,7 +206,7 @@ func TestMapOmitsGitBranchWhenNoCheckout(t *testing.T) {
 		Model:     "gpt-5.5",
 		Cwd:       root,
 	}
-	got := Map(Inputs{Fragment: f, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
 	if _, ok := got.Generation.Tags["git.branch"]; ok {
 		t.Fatalf("git.branch should be absent when no .git found; got tags=%+v", got.Generation.Tags)
 	}
@@ -222,7 +222,7 @@ func TestMapAddsStopHookActiveTag(t *testing.T) {
 		Model:          "gpt-5.5",
 		StopHookActive: true,
 	}
-	got := Map(Inputs{Fragment: f, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
 	if got.Generation.Tags["codex.stop_hook_active"] != "true" {
 		t.Fatalf("stop hook tag = %q, want true", got.Generation.Tags["codex.stop_hook_active"])
 	}
@@ -240,7 +240,7 @@ func TestMapDoesNotShareTagOrMetadataMaps(t *testing.T) {
 		ParentGenerationID: "parent-gen",
 	}
 
-	got := Map(Inputs{Fragment: f, SubagentLink: link, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, SubagentLink: link, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
 	got.Start.Tags["start-only"] = "true"
 	got.Start.Metadata["start-only"] = "true"
 
@@ -270,7 +270,7 @@ func TestMapResolvedSubagentLink(t *testing.T) {
 		Source:             "transcript.session_meta",
 	}
 
-	got := Map(Inputs{Fragment: f, SubagentLink: link, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, SubagentLink: link, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
 
 	if got.Generation.AgentName != SubagentAgentName || got.Start.AgentName != SubagentAgentName {
 		t.Fatalf("AgentName = %q/%q, want %q", got.Start.AgentName, got.Generation.AgentName, SubagentAgentName)
@@ -309,7 +309,7 @@ func TestMapPartialSubagentLink(t *testing.T) {
 		AgentRole:       "default",
 	}
 
-	got := Map(Inputs{Fragment: f, SubagentLink: link, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, SubagentLink: link, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
 
 	if got.Generation.AgentName != SubagentAgentName {
 		t.Fatalf("AgentName = %q, want %q", got.Generation.AgentName, SubagentAgentName)
@@ -354,7 +354,7 @@ func TestMapSetsUsageFromTokenSnapshot(t *testing.T) {
 		Source:             "turn_context_delta",
 	}
 
-	got := Map(Inputs{Fragment: f, TokenSnapshot: snapshot, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, TokenSnapshot: snapshot, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
 
 	if got.Generation.Usage.InputTokens != 160 ||
 		got.Generation.Usage.CacheReadInputTokens != 120 ||
@@ -383,9 +383,9 @@ func TestMapWithoutTokenSnapshotPreservesExistingBehavior(t *testing.T) {
 		TurnID:    "turn",
 		Model:     "gpt-5.5",
 	}
-	got := Map(Inputs{Fragment: f, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
+	got := Map(Inputs{Fragment: f, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
 
-	if got.Generation.Usage != (sigil.TokenUsage{}) {
+	if got.Generation.Usage != (agento11y.TokenUsage{}) {
 		t.Fatalf("Usage = %+v, want zero", got.Generation.Usage)
 	}
 	if got.Generation.Metadata != nil {

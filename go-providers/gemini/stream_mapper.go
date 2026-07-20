@@ -7,7 +7,7 @@ import (
 
 	"google.golang.org/genai"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 // StreamSummary captures Gemini streamed responses.
@@ -16,28 +16,28 @@ type StreamSummary struct {
 	FirstChunkAt time.Time
 }
 
-// FromStream maps Gemini streaming output to sigil.Generation.
+// FromStream maps Gemini streaming output to agento11y.Generation.
 func FromStream(
 	model string,
 	contents []*genai.Content,
 	config *genai.GenerateContentConfig,
 	summary StreamSummary,
 	opts ...Option,
-) (sigil.Generation, error) {
+) (agento11y.Generation, error) {
 	if strings.TrimSpace(model) == "" {
-		return sigil.Generation{}, errors.New("request model is required")
+		return agento11y.Generation{}, errors.New("request model is required")
 	}
 	if len(summary.Responses) == 0 {
-		return sigil.Generation{}, errors.New("stream summary has no responses")
+		return agento11y.Generation{}, errors.New("stream summary has no responses")
 	}
 
 	options := applyOptions(opts)
 	input := mapContents(contents)
 	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapRequestControls(config)
 	thinkingLevel := extractThinkingLevel(config)
-	output := make([]sigil.Message, 0, len(summary.Responses))
+	output := make([]agento11y.Message, 0, len(summary.Responses))
 	stopReason := ""
-	usage := sigil.TokenUsage{}
+	usage := agento11y.TokenUsage{}
 	var usageMetadata *genai.GenerateContentResponseUsageMetadata
 	responseID := ""
 	responseModel := ""
@@ -64,30 +64,30 @@ func FromStream(
 		}
 	}
 
-	artifacts := make([]sigil.Artifact, 0, 3)
+	artifacts := make([]agento11y.Artifact, 0, 3)
 	if options.includeRequestArtifact {
 		requestPayload := map[string]any{
 			"model":    model,
 			"contents": contents,
 			"config":   config,
 		}
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindRequest, "gemini.generate_content.request", requestPayload)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindRequest, "gemini.generate_content.request", requestPayload)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeToolsArtifact && hasFunctionTools(config) {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindTools, "gemini.generate_content.tools", config.Tools)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindTools, "gemini.generate_content.tools", config.Tools)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeEventsArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindProviderEvent, "gemini.generate_content.stream", summary.Responses)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindProviderEvent, "gemini.generate_content.stream", summary.Responses)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
@@ -102,12 +102,12 @@ func FromStream(
 	metadata = mergeThinkingLevelMetadata(metadata, thinkingLevel)
 	metadata = mergeGeminiUsageMetadata(metadata, usageMetadata)
 
-	generation := sigil.Generation{
+	generation := agento11y.Generation{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: model},
 		ResponseID:        responseID,
 		ResponseModel:     responseModel,
 		SystemPrompt:      extractSystemPrompt(config),
@@ -127,7 +127,7 @@ func FromStream(
 	}
 
 	if err := generation.Validate(); err != nil {
-		return sigil.Generation{}, err
+		return agento11y.Generation{}, err
 	}
 
 	return generation, nil

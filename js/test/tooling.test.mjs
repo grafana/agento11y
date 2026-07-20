@@ -60,15 +60,15 @@ test('core entrypoint loads in runtimes without process or Buffer globals', () =
     delete globalThis.process;
     delete globalThis.Buffer;
     const mod = await import(${JSON.stringify(coreEntryUrl)});
-    if (typeof mod.SigilClient !== 'function') {
-      throw new Error('SigilClient missing from core export');
+    if (typeof mod.Agento11yClient !== 'function') {
+      throw new Error('Agento11yClient missing from core export');
     }
-    if (typeof mod.createSigilClient !== 'function') {
-      throw new Error('createSigilClient missing from core export');
+    if (typeof mod.createAgento11yClient !== 'function') {
+      throw new Error('createAgento11yClient missing from core export');
     }
     // Constructing the default-config client must not touch Buffer or read
     // process.env on its hot path.
-    new mod.SigilClient({ generationExport: { protocol: 'none', endpoint: 'http://localhost' } });
+    new mod.Agento11yClient({ generationExport: { protocol: 'none', endpoint: 'http://localhost' } });
   `;
 
   const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ContentCaptureMode, SigilClient } from "@grafana/agento11y";
+import type { Agento11yClient, ContentCaptureMode } from "@grafana/agento11y";
 import type { PluginInput } from "@opencode-ai/plugin";
 import type {
   AssistantMessage,
@@ -7,8 +7,8 @@ import type {
   Permission,
   UserMessage,
 } from "@opencode-ai/sdk";
-import { createSigilClient } from "./client.js";
-import type { SigilOpencodeConfig } from "./config.js";
+import { createAgento11yClient } from "./client.js";
+import type { Agento11yOpencodeConfig } from "./config.js";
 import { resolveGitBranch } from "./git.js";
 import { runToolCallGuard } from "./guard.js";
 import { stableOpencodeGenerationId } from "./lineage.js";
@@ -232,8 +232,8 @@ function handleSystemTransform(
 }
 
 async function handleEvent(
-  sigil: SigilClient,
-  config: SigilOpencodeConfig,
+  sigil: Agento11yClient,
+  config: Agento11yOpencodeConfig,
   client: OpencodeClient,
   redactor: Redactor,
   debugLog: (msg: string, ...args: unknown[]) => void,
@@ -304,8 +304,8 @@ async function handleEvent(
 }
 
 async function handleMessagePartUpdated(
-  sigil: SigilClient,
-  config: SigilOpencodeConfig,
+  sigil: Agento11yClient,
+  config: Agento11yOpencodeConfig,
   client: OpencodeClient,
   redactor: Redactor,
   debugLog: (msg: string, ...args: unknown[]) => void,
@@ -368,8 +368,8 @@ function recordFirstPartTime(part: Record<string, unknown> | undefined): void {
 }
 
 async function recordAssistantMessage(
-  sigil: SigilClient,
-  config: SigilOpencodeConfig,
+  sigil: Agento11yClient,
+  config: Agento11yOpencodeConfig,
   client: OpencodeClient,
   redactor: Redactor,
   debugLog: (msg: string, ...args: unknown[]) => void,
@@ -536,7 +536,7 @@ async function recordAssistantMessage(
       });
     }
   } catch (err) {
-    debugLog("sigil generation export failed", err);
+    debugLog("agento11y generation export failed", err);
     // Sigil recording failure should never break the plugin
   }
 
@@ -609,7 +609,7 @@ function resolveParentGenerationId(sessionID: string): string | undefined {
 }
 
 async function handleLifecycle(
-  sigil: SigilClient,
+  sigil: Agento11yClient,
   telemetry: TelemetryProviders | null,
   debugLog: (msg: string, ...args: unknown[]) => void,
   event: { type: string; properties: unknown },
@@ -623,7 +623,7 @@ async function handleLifecycle(
     //
     // Fire-and-forget: a stuck OTLP endpoint must not block session.idle for
     // up to ~30s (BatchSpanProcessor default) per turn.
-    void sigil.flush().catch((err) => debugLog("sigil flush failed", err));
+    void sigil.flush().catch((err) => debugLog("agento11y flush failed", err));
     if (telemetry) {
       void telemetry
         .forceFlush()
@@ -677,8 +677,8 @@ async function handleLifecycle(
 }
 
 async function handleToolExecuteBefore(
-  sigil: SigilClient,
-  config: SigilOpencodeConfig,
+  sigil: Agento11yClient,
+  config: Agento11yOpencodeConfig,
   debugLog: (msg: string, ...args: unknown[]) => void,
   input: { tool: string; sessionID: string; callID: string },
   output: { args: unknown },
@@ -764,8 +764,8 @@ function handleToolExecuteAfter(
 }
 
 async function handlePermissionAsk(
-  sigil: SigilClient,
-  config: SigilOpencodeConfig,
+  sigil: Agento11yClient,
+  config: Agento11yOpencodeConfig,
   debugLog: (msg: string, ...args: unknown[]) => void,
   input: Permission,
   output: { status: "ask" | "deny" | "allow" },
@@ -801,7 +801,7 @@ async function handlePermissionAsk(
 }
 
 function agentNameForSession(
-  config: SigilOpencodeConfig,
+  config: Agento11yOpencodeConfig,
   sessionID: string,
 ): string {
   return buildAgentName(
@@ -966,7 +966,7 @@ export function mergeToolSpanRecords(
  * @internal Exported for testing.
  */
 export function emitToolSpans(
-  client: SigilClient,
+  client: Agento11yClient,
   records: ToolExecutionRecord[],
   opts: {
     conversationId: string;
@@ -1024,7 +1024,7 @@ export function emitToolSpans(
   }
 }
 
-export type SigilHooks = {
+export type Agento11yHooks = {
   event: (input: {
     event: { type: string; properties: unknown };
   }) => Promise<void>;
@@ -1054,11 +1054,11 @@ export type SigilHooks = {
   ) => Promise<void>;
 };
 
-export async function createSigilHooks(
-  config: SigilOpencodeConfig,
+export async function createAgento11yHooks(
+  config: Agento11yOpencodeConfig,
   client: OpencodeClient,
   options: { projectDir?: string } = {},
-): Promise<SigilHooks | null> {
+): Promise<Agento11yHooks | null> {
   // Prefer the opencode plugin's project directory (PluginInput.directory)
   // because the opencode server can run from a directory different from the
   // project root. Fall back to `process.cwd()` for older callers and tests.
@@ -1076,7 +1076,7 @@ export async function createSigilHooks(
     }
   }
 
-  const sigil = createSigilClient(config, {
+  const sigil = createAgento11yClient(config, {
     tracer: telemetry?.tracer,
     meter: telemetry?.meter,
   });

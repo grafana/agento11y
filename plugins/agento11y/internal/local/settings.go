@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
@@ -176,7 +176,7 @@ func (s Settings) previewUpdates() map[string]string {
 }
 
 // parseCaptureMode maps a raw value onto one of the SDK's canonical capture
-// mode strings using sigil.ContentCaptureMode as the single source of truth,
+// mode strings using agento11y.ContentCaptureMode as the single source of truth,
 // or "" when the mode is unset, the "default" alias, or unrecognised.
 //
 // Returning "" for an unset mode is deliberate: Updates omits the key in that
@@ -188,8 +188,8 @@ func parseCaptureMode(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	var m sigil.ContentCaptureMode
-	if err := m.UnmarshalText([]byte(raw)); err != nil || m == sigil.ContentCaptureModeDefault {
+	var m agento11y.ContentCaptureMode
+	if err := m.UnmarshalText([]byte(raw)); err != nil || m == agento11y.ContentCaptureModeDefault {
 		return ""
 	}
 	return m.String()

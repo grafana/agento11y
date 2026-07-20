@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"log"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
@@ -48,7 +48,7 @@ func PostToolUse(p Payload, cfg config.Config, logger *log.Logger, isFailure boo
 	// would be silently dropped at emit time, but writing to disk first would
 	// leak content into the buffered fragment file (mode 0600 still — but
 	// avoidable disk-residency is avoidable disk-residency).
-	if cfg.ContentCapture == sigil.ContentCaptureModeFull {
+	if cfg.ContentCapture == agento11y.ContentCaptureModeFull {
 		rec.ToolInput = p.ToolInput
 		rec.ToolOutput = p.ToolOutput
 	}

@@ -36,11 +36,11 @@ dotnet add package OpenAI
 ## Responses Wrapper (Sync)
 
 ```csharp
-using Grafana.Sigil;
-using Grafana.Sigil.OpenAI;
+using Grafana.Agento11y;
+using Grafana.Agento11y.OpenAI;
 using OpenAI.Responses;
 
-var sigilConfig = new SigilClientConfig
+var agento11yConfig = new Agento11yClientConfig
 {
     GenerationExport = new GenerationExportConfig
     {
@@ -58,7 +58,7 @@ var sigilConfig = new SigilClientConfig
         Endpoint = "https://sigil-prod-<region>.grafana.net",
     },
 };
-var sigil = new SigilClient(sigilConfig);
+var agento11y = new Agento11yClient(agento11yConfig);
 
 var responsesClient = new ResponsesClient(
     "gpt-5",
@@ -77,11 +77,11 @@ var requestOptions = new CreateResponseOptions
 };
 
 ResponseResult response = await OpenAIRecorder.CreateResponseAsync(
-    sigil,
+    agento11y,
     responsesClient,
     inputItems,
     requestOptions: requestOptions,
-    options: new OpenAISigilOptions
+    options: new OpenAIAgento11yOptions
     {
         ConversationId = "conv-openai-responses-1",
         AgentName = "assistant-core",
@@ -95,11 +95,11 @@ ResponseResult response = await OpenAIRecorder.CreateResponseAsync(
 
 ```csharp
 OpenAIResponsesStreamSummary summary = await OpenAIRecorder.CreateResponseStreamingAsync(
-    sigil,
+    agento11y,
     responsesClient,
     inputItems,
     requestOptions: requestOptions,
-    options: new OpenAISigilOptions
+    options: new OpenAIAgento11yOptions
     {
         ConversationId = "conv-openai-responses-stream-1",
         AgentName = "assistant-core",
@@ -131,11 +131,11 @@ var messages = new List<ChatMessage>
 };
 
 ChatCompletion chat = await OpenAIRecorder.CompleteChatAsync(
-    sigil,
+    agento11y,
     chatClient,
     messages,
     requestOptions: null,
-    options: new OpenAISigilOptions
+    options: new OpenAIAgento11yOptions
     {
         ConversationId = "conv-openai-chat-1",
         AgentName = "assistant-core",
@@ -149,11 +149,11 @@ ChatCompletion chat = await OpenAIRecorder.CompleteChatAsync(
 
 ```csharp
 OpenAIChatCompletionsStreamSummary streamSummary = await OpenAIRecorder.CompleteChatStreamingAsync(
-    sigil,
+    agento11y,
     chatClient,
     messages,
     requestOptions: null,
-    options: new OpenAISigilOptions
+    options: new OpenAIAgento11yOptions
     {
         ConversationId = "conv-openai-chat-stream-1",
         AgentName = "assistant-core",
@@ -169,11 +169,11 @@ OpenAIChatCompletionsStreamSummary streamSummary = await OpenAIRecorder.Complete
 using OpenAI.Embeddings;
 
 OpenAIEmbeddingCollection embeddingResponse = await OpenAIRecorder.GenerateEmbeddingsAsync(
-    sigil,
+    agento11y,
     new EmbeddingClient(Environment.GetEnvironmentVariable("OPENAI_API_KEY")!),
     new[] { "hello", "world" },
     requestOptions: new EmbeddingGenerationOptions { Dimensions = 256 },
-    options: new OpenAISigilOptions
+    options: new OpenAIAgento11yOptions
     {
         ConversationId = "conv-openai-embeddings-1",
         AgentName = "assistant-core",
@@ -187,18 +187,18 @@ OpenAIEmbeddingCollection embeddingResponse = await OpenAIRecorder.GenerateEmbed
 ## Manual instrumentation example (strict mapper)
 
 ```csharp
-var sigilOptions = new OpenAISigilOptions
+var agento11yOptions = new OpenAIAgento11yOptions
 {
     ConversationId = "conv-openai-manual-1",
     AgentName = "assistant-core",
     AgentVersion = "1.0.0",
 };
 
-var recorder = sigil.StartGeneration(new GenerationStart
+var recorder = agento11y.StartGeneration(new GenerationStart
 {
-    ConversationId = sigilOptions.ConversationId,
-    AgentName = sigilOptions.AgentName,
-    AgentVersion = sigilOptions.AgentVersion,
+    ConversationId = agento11yOptions.ConversationId,
+    AgentName = agento11yOptions.AgentName,
+    AgentVersion = agento11yOptions.AgentVersion,
     Model = new ModelRef { Provider = "openai", Name = "gpt-5" },
 });
 
@@ -215,7 +215,7 @@ try
         inputItems,
         requestOptions,
         response,
-        sigilOptions
+        agento11yOptions
     ));
 }
 catch (Exception ex)
@@ -234,7 +234,7 @@ finally
 Raw provider request/response/tools/stream-events artifacts are disabled by default.
 
 ```csharp
-var sigilOptions = new OpenAISigilOptions
+var agento11yOptions = new OpenAIAgento11yOptions
 {
     ConversationId = "conv-openai-debug-1",
     AgentName = "assistant-core",

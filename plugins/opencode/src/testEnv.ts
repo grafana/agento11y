@@ -2,9 +2,9 @@
  * Reset every AGENTO11Y_*, SIGIL_*, and OTEL_* env var and XDG_CONFIG_HOME
  * between test cases so on-disk fixtures (config.env) and shell exports
  * cannot leak across cases. Used by both config.test.ts and
- * sigilDotenv.test.ts.
+ * agento11yDotenv.test.ts.
  */
-export function clearSigilEnv(): void {
+export function clearAgento11yEnv(): void {
   for (const key of Object.keys(process.env)) {
     if (
       key.startsWith("AGENTO11Y_") ||

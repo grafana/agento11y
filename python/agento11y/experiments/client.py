@@ -206,7 +206,7 @@ class Client:
         response = _transport.export_scores(**self._args(), scores=scores, retry=self._retry)
         if raise_on_reject and response.rejected:
             details = "; ".join(f"{r.score_id}: {r.error or 'rejected'}" for r in response.rejected)
-            raise ScoreExportError(f"sigil score export rejected {len(response.rejected)} score(s): {details}")
+            raise ScoreExportError(f"agento11y score export rejected {len(response.rejected)} score(s): {details}")
         return response.accepted_count + response.duplicate_count
 
     # --- generations (stdlib; for minimal/vendored environments) ---------- #

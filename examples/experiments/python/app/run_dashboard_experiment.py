@@ -7,7 +7,7 @@ import os
 from tempfile import TemporaryDirectory
 
 from dotenv import load_dotenv
-from agento11y import experiments as sigil
+from agento11y import experiments
 
 from app.dashboard_agent import (
     DashboardCase,
@@ -96,12 +96,12 @@ def main() -> None:
         "AGENTO11Y_EXPERIMENT_ID",
         f"dashboard-example-{os.environ.get('GIT_SHA', 'manual')}",
     )
-    suite = sigil.TestSuite(
+    suite = experiments.TestSuite(
         suite_id="dashboard-example",
         name="Dashboard generation example",
         version="2026-06-29",
         test_cases=[
-            sigil.TestCase(
+            experiments.TestCase(
                 test_case_id=case.id,
                 input={"prompt": case.prompt, "data": case.data},
                 expected={"required": case.required},
@@ -110,10 +110,10 @@ def main() -> None:
             for case in CASES
         ],
     )
-    verifier = sigil.Evaluator(evaluator_id="example.dashboard_judge", version="2026-06-29", kind="llm_judge")
+    verifier = experiments.Evaluator(evaluator_id="example.dashboard_judge", version="2026-06-29", kind="llm_judge")
 
     with TemporaryDirectory() as artifact_dir:
-        with sigil.experiment(
+        with experiments.experiment(
             name="Dashboard generation example",
             experiment_id=experiment_id,
             suite=suite,

@@ -13,10 +13,10 @@ pip install langchain-openai
 
 ```python
 from agento11y import Client
-from agento11y_langchain import with_sigil_langchain_callbacks
+from agento11y_langchain import with_agento11y_langchain_callbacks
 
 client = Client()
-config = with_sigil_langchain_callbacks(None, client=client, provider_resolver="auto")
+config = with_agento11y_langchain_callbacks(None, client=client, provider_resolver="auto")
 ```
 
 ## End-to-end example (invoke + stream)
@@ -24,10 +24,10 @@ config = with_sigil_langchain_callbacks(None, client=client, provider_resolver="
 ```python
 from langchain_openai import ChatOpenAI
 from agento11y import Client
-from agento11y_langchain import SigilLangChainHandler, with_sigil_langchain_callbacks
+from agento11y_langchain import Agento11yLangChainHandler, with_agento11y_langchain_callbacks
 
 client = Client()
-handler = SigilLangChainHandler(
+handler = Agento11yLangChainHandler(
     client=client,
     provider_resolver="auto",
     agent_name="langchain-example",
@@ -39,14 +39,14 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 # Non-stream call -> SYNC generation mode.
 result = llm.invoke(
     "Summarize why retry budgets matter.",
-    config=with_sigil_langchain_callbacks(None, client=client, provider_resolver="auto"),
+    config=with_agento11y_langchain_callbacks(None, client=client, provider_resolver="auto"),
 )
 print(result.content)
 
 # Stream call -> STREAM generation mode + TTFT tracking.
 for chunk in llm.stream(
     "Give me three short reliability tips.",
-    config=with_sigil_langchain_callbacks(None, client=client, provider_resolver="auto"),
+    config=with_agento11y_langchain_callbacks(None, client=client, provider_resolver="auto"),
 ):
     if chunk.content:
         print(chunk.content, end="", flush=True)

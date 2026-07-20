@@ -1,18 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createSigilClientMock, createTelemetryProvidersMock } = vi.hoisted(
+const { createAgento11yClientMock, createTelemetryProvidersMock } = vi.hoisted(
   () => ({
-    createSigilClientMock: vi.fn(),
+    createAgento11yClientMock: vi.fn(),
     createTelemetryProvidersMock: vi.fn(),
   }),
 );
 
-vi.mock("./client.js", () => ({ createSigilClient: createSigilClientMock }));
+vi.mock("./client.js", () => ({
+  createAgento11yClient: createAgento11yClientMock,
+}));
 vi.mock("./telemetry.js", () => ({
   createTelemetryProviders: createTelemetryProvidersMock,
 }));
 
-import { createSigilHooks } from "./hooks.js";
+import { createAgento11yHooks } from "./hooks.js";
 import {
   assistantMessage,
   baseConfig,
@@ -20,8 +22,8 @@ import {
   emitPartUpdated,
   emitSessionCreated,
   emitSessionDeleted,
+  makeAgento11yMock,
   makeOpencodeClient,
-  makeSigilMock,
 } from "./hooks.testutil.js";
 import { stableOpencodeGenerationId } from "./lineage.js";
 
@@ -46,9 +48,12 @@ describe("opencode generation lineage and streaming", () => {
   });
 
   it("assigns a deterministic opencode- generation id from session and message id", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
-    const hooks = await createSigilHooks(baseConfig(), makeOpencodeClient());
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
     if (!hooks) throw new Error("expected hooks");
 
     await emitMessageUpdated(hooks, assistantMessage("sess-det", "msg-1"));
@@ -61,9 +66,12 @@ describe("opencode generation lineage and streaming", () => {
 
   it("exports through startStreamingGeneration, not startGeneration", async () => {
     const { sigil, startStreamingGeneration, startGeneration } =
-      makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
-    const hooks = await createSigilHooks(baseConfig(), makeOpencodeClient());
+      makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
     if (!hooks) throw new Error("expected hooks");
 
     await emitMessageUpdated(hooks, assistantMessage("sess-stream", "msg-1"));
@@ -73,9 +81,12 @@ describe("opencode generation lineage and streaming", () => {
   });
 
   it("chains two sequential assistant generations via parentGenerationIds", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
-    const hooks = await createSigilHooks(baseConfig(), makeOpencodeClient());
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
     if (!hooks) throw new Error("expected hooks");
 
     await emitMessageUpdated(hooks, assistantMessage("sess-chain", "msg-1"));
@@ -91,9 +102,12 @@ describe("opencode generation lineage and streaming", () => {
   });
 
   it("re-exporting the same message after a restart keeps the same id and no parent", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
-    const hooks = await createSigilHooks(baseConfig(), makeOpencodeClient());
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
     if (!hooks) throw new Error("expected hooks");
 
     await emitMessageUpdated(hooks, assistantMessage("sess-restart", "msg-1"));
@@ -110,9 +124,12 @@ describe("opencode generation lineage and streaming", () => {
   });
 
   it("links a subagent child session's first generation to the parent session's latest generation", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
-    const hooks = await createSigilHooks(baseConfig(), makeOpencodeClient());
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
     if (!hooks) throw new Error("expected hooks");
 
     // Parent session runs a turn, then spawns a subagent (child session).
@@ -130,9 +147,12 @@ describe("opencode generation lineage and streaming", () => {
   });
 
   it("keeps intra-session chaining for a child session's later generations", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
-    const hooks = await createSigilHooks(baseConfig(), makeOpencodeClient());
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
     if (!hooks) throw new Error("expected hooks");
 
     await emitMessageUpdated(hooks, assistantMessage("sess-parent-2", "msg-1"));
@@ -148,9 +168,12 @@ describe("opencode generation lineage and streaming", () => {
   });
 
   it("freezes the parent link at session.created, not at child-record time", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
-    const hooks = await createSigilHooks(baseConfig(), makeOpencodeClient());
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
     if (!hooks) throw new Error("expected hooks");
 
     // Parent turn 1 is recorded, then the subagent is spawned. The parent then
@@ -175,9 +198,12 @@ describe("opencode generation lineage and streaming", () => {
   });
 
   it("does not link a subagent when the parent has no recorded generation yet", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
-    const hooks = await createSigilHooks(baseConfig(), makeOpencodeClient());
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
     if (!hooks) throw new Error("expected hooks");
 
     // session.created arrives before the parent has recorded any generation.
@@ -191,9 +217,12 @@ describe("opencode generation lineage and streaming", () => {
   });
 
   it("does not link a root session with no parentID", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
-    const hooks = await createSigilHooks(baseConfig(), makeOpencodeClient());
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
     if (!hooks) throw new Error("expected hooks");
 
     await emitSessionCreated(hooks, "sess-root");
@@ -204,9 +233,12 @@ describe("opencode generation lineage and streaming", () => {
   });
 
   it("records first-token time from the first streamed part", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
-    const hooks = await createSigilHooks(baseConfig(), makeOpencodeClient());
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
     if (!hooks) throw new Error("expected hooks");
 
     await emitPartUpdated(
@@ -225,10 +257,10 @@ describe("opencode generation lineage and streaming", () => {
   });
 
   it("records TTFT in metadata_only without fetching the message body", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const client = makeOpencodeClient();
-    const hooks = await createSigilHooks(
+    const hooks = await createAgento11yHooks(
       baseConfig({ contentCapture: "metadata_only" }),
       client,
     );

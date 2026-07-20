@@ -5,13 +5,13 @@ import (
 	"log"
 	"testing"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 func TestLoad_DefaultsContentCaptureToMetadataOnly(t *testing.T) {
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "")
 	cfg := Load(log.New(&bytes.Buffer{}, "", 0))
-	if cfg.ContentCapture != sigil.ContentCaptureModeMetadataOnly {
+	if cfg.ContentCapture != agento11y.ContentCaptureModeMetadataOnly {
 		t.Fatalf("ContentCapture = %v, want metadata_only", cfg.ContentCapture)
 	}
 }
@@ -19,7 +19,7 @@ func TestLoad_DefaultsContentCaptureToMetadataOnly(t *testing.T) {
 func TestLoad_InvalidContentCaptureFailsClosed(t *testing.T) {
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "surprise")
 	cfg := Load(log.New(&bytes.Buffer{}, "", 0))
-	if cfg.ContentCapture != sigil.ContentCaptureModeMetadataOnly {
+	if cfg.ContentCapture != agento11y.ContentCaptureModeMetadataOnly {
 		t.Fatalf("ContentCapture = %v, want metadata_only", cfg.ContentCapture)
 	}
 }

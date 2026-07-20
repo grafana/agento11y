@@ -211,7 +211,7 @@ def _call_content_capture_resolver(
         if not isinstance(result, ContentCaptureMode):
             if logger is not None:
                 logger.warning(
-                    "sigil: content capture resolver returned %s instead of ContentCaptureMode, "
+                    "agento11y: content capture resolver returned %s instead of ContentCaptureMode, "
                     "falling back to METADATA_ONLY",
                     type(result).__name__,
                 )
@@ -219,7 +219,7 @@ def _call_content_capture_resolver(
         return result
     except Exception:  # noqa: BLE001
         if logger is not None:
-            logger.warning("sigil: content capture resolver failed, falling back to METADATA_ONLY", exc_info=True)
+            logger.warning("agento11y: content capture resolver failed, falling back to METADATA_ONLY", exc_info=True)
         return ContentCaptureMode.METADATA_ONLY
 
 
@@ -638,9 +638,9 @@ class Client:
 
         normalized_conversation_id = conversation_id.strip()
         if normalized_conversation_id == "":
-            raise ValidationError("sigil conversation rating validation failed: conversation_id is required")
+            raise ValidationError("agento11y conversation rating validation failed: conversation_id is required")
         if len(normalized_conversation_id) > _max_rating_conversation_id_len:
-            raise ValidationError("sigil conversation rating validation failed: conversation_id is too long")
+            raise ValidationError("agento11y conversation rating validation failed: conversation_id is too long")
 
         resolver_mode = _call_content_capture_resolver(
             self._config.content_capture_resolver, rating.metadata, self._config.logger
@@ -694,28 +694,31 @@ class Client:
             raw_error = exc.read().decode("utf-8", errors="replace").strip()
             if exc.code == 400:
                 raise ValidationError(
-                    f"sigil conversation rating validation failed: {_rating_error_text(raw_error, exc.code)}"
+                    f"agento11y conversation rating validation failed: {_rating_error_text(raw_error, exc.code)}"
                 ) from exc
             if exc.code == 409:
                 raise RatingConflictError(
-                    f"sigil conversation rating conflict: {_rating_error_text(raw_error, exc.code)}"
+                    f"agento11y conversation rating conflict: {_rating_error_text(raw_error, exc.code)}"
                 ) from exc
             msg = _rating_error_text(raw_error, exc.code)
-            raise RatingTransportError(f"sigil conversation rating transport failed: status {exc.code}: {msg}") from exc
+            raise RatingTransportError(
+                f"agento11y conversation rating transport failed: status {exc.code}: {msg}"
+            ) from exc
         except Exception as exc:  # noqa: BLE001
-            raise RatingTransportError(f"sigil conversation rating transport failed: {exc}") from exc
+            raise RatingTransportError(f"agento11y conversation rating transport failed: {exc}") from exc
 
         if status < 200 or status >= 300:
             decoded = raw.decode("utf-8", errors="replace").strip()
             raise RatingTransportError(
-                f"sigil conversation rating transport failed: status {status}: {_rating_error_text(decoded, status)}"
+                f"agento11y conversation rating transport failed: "
+                f"status {status}: {_rating_error_text(decoded, status)}"
             )
 
         try:
             parsed = json.loads(raw.decode("utf-8"))
         except Exception as exc:  # noqa: BLE001
             raise RatingTransportError(
-                f"sigil conversation rating transport failed: invalid JSON response: {exc}"
+                f"agento11y conversation rating transport failed: invalid JSON response: {exc}"
             ) from exc
 
         return _parse_submit_conversation_rating_response(parsed)
@@ -776,7 +779,7 @@ class Client:
         """Flushes all queued generations immediately."""
 
         if self._shutting_down:
-            raise ClientShutdownError("sigil: client is shutting down")
+            raise ClientShutdownError("agento11y: client is shutting down")
         self._flush_internal()
 
     def shutdown(self) -> None:
@@ -794,14 +797,14 @@ class Client:
             try:
                 self._flush_internal()
             except Exception as exc:  # noqa: BLE001
-                self._log_warn("sigil generation export flush on shutdown failed", exc)
+                self._log_warn("agento11y generation export flush on shutdown failed", exc)
 
             try:
                 shutdown_fn = getattr(self._generation_exporter, "shutdown", None)
                 if callable(shutdown_fn):
                     shutdown_fn()
             except Exception as exc:  # noqa: BLE001
-                self._log_warn("sigil generation exporter shutdown failed", exc)
+                self._log_warn("agento11y generation exporter shutdown failed", exc)
 
             self._closed = True
 
@@ -905,7 +908,7 @@ class Client:
 
     def _enqueue_generation(self, generation: Generation) -> None:
         if self._shutting_down or self._closed:
-            raise ClientShutdownError("sigil: client is shutting down")
+            raise ClientShutdownError("agento11y: client is shutting down")
 
         max_payload_bytes = self._config.generation_export.payload_max_bytes
         if max_payload_bytes > 0:
@@ -916,7 +919,7 @@ class Client:
         should_trigger_flush = False
         with self._pending_lock:
             if len(self._pending_generations) >= self._config.generation_export.queue_size:
-                raise QueueFullError("sigil: generation queue is full")
+                raise QueueFullError("agento11y: generation queue is full")
             self._pending_generations.append(copy.deepcopy(generation))
             if len(self._pending_generations) >= self._config.generation_export.batch_size:
                 should_trigger_flush = True
@@ -938,7 +941,7 @@ class Client:
         and ``linked_generation_ids`` for nested generations.
         """
         if self._shutting_down or self._closed:
-            raise ClientShutdownError("sigil: client is shutting down")
+            raise ClientShutdownError("agento11y: client is shutting down")
 
         # Validate the raw input before defaulting timestamps, matching Go and
         # JS. The completed_at < started_at rule only fires when the caller
@@ -967,7 +970,7 @@ class Client:
         should_trigger_flush = False
         with self._pending_lock:
             if len(self._pending_workflow_steps) >= self._config.generation_export.queue_size:
-                raise QueueFullError("sigil: workflow step queue is full")
+                raise QueueFullError("agento11y: workflow step queue is full")
             self._pending_workflow_steps.append(normalized)
             if len(self._pending_workflow_steps) >= self._config.generation_export.batch_size:
                 should_trigger_flush = True
@@ -1029,10 +1032,10 @@ class Client:
                         for result in response.results:
                             if not result.accepted:
                                 self._log_warn(
-                                    f"sigil generation rejected id={result.generation_id} error={result.error}"
+                                    f"agento11y generation rejected id={result.generation_id} error={result.error}"
                                 )
                     except Exception as exc:  # noqa: BLE001
-                        self._log_warn("sigil generation export failed", exc)
+                        self._log_warn("agento11y generation export failed", exc)
                         first_error = first_error or exc
 
                 if wf_batch:
@@ -1043,9 +1046,11 @@ class Client:
                         )
                         for result in wf_response.results:
                             if not result.accepted:
-                                self._log_warn(f"sigil workflow step rejected id={result.step_id} error={result.error}")
+                                self._log_warn(
+                                    f"agento11y workflow step rejected id={result.step_id} error={result.error}"
+                                )
                     except Exception as exc:  # noqa: BLE001
-                        self._log_warn("sigil workflow step export failed", exc)
+                        self._log_warn("agento11y workflow step export failed", exc)
                         first_error = first_error or exc
 
                 if first_error is not None:
@@ -1089,7 +1094,7 @@ class Client:
 
     def _assert_open(self) -> None:
         if self._closed:
-            raise ClientShutdownError("sigil: client is shutting down")
+            raise ClientShutdownError("agento11y: client is shutting down")
 
     def _log_warn(self, message: str, error: Exception | None = None) -> None:
         if self._logger is None:
@@ -1374,7 +1379,7 @@ class GenerationRecorder:
                     _stamp_content_capture_metadata(generation, effective_content_capture_mode)
                     if self.client._config.logger is not None:
                         self.client._config.logger.warning(
-                            "sigil: generation sanitization failed, falling back to metadata_only",
+                            "agento11y: generation sanitization failed, falling back to metadata_only",
                             exc_info=True,
                         )
 
@@ -1407,7 +1412,7 @@ class GenerationRecorder:
             try:
                 validate_generation(validation_target)
             except Exception as exc:  # noqa: BLE001
-                local_error = ValidationError(f"sigil: generation validation failed: {exc}")
+                local_error = ValidationError(f"agento11y: generation validation failed: {exc}")
 
             if local_error is None:
                 try:
@@ -1417,7 +1422,7 @@ class GenerationRecorder:
                 except ClientShutdownError as exc:
                     local_error = exc
                 except Exception as exc:  # noqa: BLE001
-                    local_error = EnqueueError(f"sigil: generation enqueue failed: {exc}")
+                    local_error = EnqueueError(f"agento11y: generation enqueue failed: {exc}")
 
             # Redact span-side error text under both stripped modes. Proto
             # export under FULL_WITH_METADATA_SPANS still gets the raw
@@ -1661,13 +1666,13 @@ class EmbeddingRecorder:
         try:
             validate_embedding_start(self.seed)
         except Exception as exc:  # noqa: BLE001
-            local_error = ValidationError(f"sigil: embedding validation failed: {exc}")
+            local_error = ValidationError(f"agento11y: embedding validation failed: {exc}")
 
         if local_error is None:
             try:
                 validate_embedding_result(result)
             except Exception as exc:  # noqa: BLE001
-                local_error = ValidationError(f"sigil: embedding validation failed: {exc}")
+                local_error = ValidationError(f"agento11y: embedding validation failed: {exc}")
 
         # Redact span-side error text under both stripped modes. Embeddings
         # have no proto export, so the raw provider error never escapes the
@@ -2164,13 +2169,15 @@ def _to_utc(value: datetime) -> datetime:
 
 def _validate_workflow_step(step: WorkflowStep) -> None:
     if not step.id.strip():
-        raise ValidationError("sigil workflow step validation failed: id is required")
+        raise ValidationError("agento11y workflow step validation failed: id is required")
     if not step.conversation_id.strip():
-        raise ValidationError("sigil workflow step validation failed: conversation_id is required")
+        raise ValidationError("agento11y workflow step validation failed: conversation_id is required")
     if not step.step_name.strip():
-        raise ValidationError("sigil workflow step validation failed: step_name is required")
+        raise ValidationError("agento11y workflow step validation failed: step_name is required")
     if step.started_at is not None and step.completed_at is not None and step.completed_at < step.started_at:
-        raise ValidationError("sigil workflow step validation failed: completed_at must not be earlier than started_at")
+        raise ValidationError(
+            "agento11y workflow step validation failed: completed_at must not be earlier than started_at"
+        )
 
 
 def _datetime_to_ns(value: datetime) -> int:
@@ -2319,9 +2326,9 @@ def _as_status_code(value: Any) -> int | None:
 def _normalize_conversation_rating_input(input_value: ConversationRatingInput) -> ConversationRatingInput:
     rating_id = input_value.rating_id.strip()
     if rating_id == "":
-        raise ValidationError("sigil conversation rating validation failed: rating_id is required")
+        raise ValidationError("agento11y conversation rating validation failed: rating_id is required")
     if len(rating_id) > _max_rating_id_len:
-        raise ValidationError("sigil conversation rating validation failed: rating_id is too long")
+        raise ValidationError("agento11y conversation rating validation failed: rating_id is too long")
 
     rating_value = (
         input_value.rating.value if isinstance(input_value.rating, ConversationRatingValue) else str(input_value.rating)
@@ -2331,31 +2338,31 @@ def _normalize_conversation_rating_input(input_value: ConversationRatingInput) -
         ConversationRatingValue.BAD.value,
     }:
         raise ValidationError(
-            "sigil conversation rating validation failed:"
+            "agento11y conversation rating validation failed:"
             " rating must be CONVERSATION_RATING_VALUE_GOOD or CONVERSATION_RATING_VALUE_BAD"
         )
 
     comment = input_value.comment.strip()
     if len(comment.encode("utf-8")) > _max_rating_comment_bytes:
-        raise ValidationError("sigil conversation rating validation failed: comment is too long")
+        raise ValidationError("agento11y conversation rating validation failed: comment is too long")
 
     generation_id = input_value.generation_id.strip()
     if len(generation_id) > _max_rating_generation_id_len:
-        raise ValidationError("sigil conversation rating validation failed: generation_id is too long")
+        raise ValidationError("agento11y conversation rating validation failed: generation_id is too long")
 
     rater_id = input_value.rater_id.strip()
     if len(rater_id) > _max_rating_actor_id_len:
-        raise ValidationError("sigil conversation rating validation failed: rater_id is too long")
+        raise ValidationError("agento11y conversation rating validation failed: rater_id is too long")
 
     source = input_value.source.strip()
     if len(source) > _max_rating_source_len:
-        raise ValidationError("sigil conversation rating validation failed: source is too long")
+        raise ValidationError("agento11y conversation rating validation failed: source is too long")
 
     metadata = dict(input_value.metadata or {})
     if metadata:
         encoded = json.dumps(metadata)
         if len(encoded.encode("utf-8")) > _max_rating_metadata_bytes:
-            raise ValidationError("sigil conversation rating validation failed: metadata is too large")
+            raise ValidationError("agento11y conversation rating validation failed: metadata is too large")
 
     return ConversationRatingInput(
         rating_id=rating_id,
@@ -2376,30 +2383,30 @@ def _conversation_rating_endpoint(endpoint: str, insecure: bool, conversation_id
 def _base_url_from_api_endpoint(endpoint: str, insecure: bool) -> str:
     trimmed = endpoint.strip()
     if trimmed == "":
-        raise RatingTransportError("sigil conversation rating transport failed: api endpoint is required")
+        raise RatingTransportError("agento11y conversation rating transport failed: api endpoint is required")
 
     if trimmed.startswith("http://") or trimmed.startswith("https://"):
         parsed = urllib_parse.urlparse(trimmed)
         if parsed.scheme == "" or parsed.netloc == "":
-            raise RatingTransportError("sigil conversation rating transport failed: api endpoint host is required")
+            raise RatingTransportError("agento11y conversation rating transport failed: api endpoint host is required")
         return f"{parsed.scheme}://{parsed.netloc}"
 
     without_scheme = trimmed[7:] if trimmed.startswith("grpc://") else trimmed
     host = without_scheme.split("/", 1)[0].strip()
     if host == "":
-        raise RatingTransportError("sigil conversation rating transport failed: api endpoint host is required")
+        raise RatingTransportError("agento11y conversation rating transport failed: api endpoint host is required")
     scheme = "http" if insecure else "https"
     return f"{scheme}://{host}"
 
 
 def _parse_submit_conversation_rating_response(payload: Any) -> SubmitConversationRatingResponse:
     if not isinstance(payload, dict):
-        raise RatingTransportError("sigil conversation rating transport failed: invalid response payload")
+        raise RatingTransportError("agento11y conversation rating transport failed: invalid response payload")
 
     rating_payload = payload.get("rating")
     summary_payload = payload.get("summary")
     if not isinstance(rating_payload, dict) or not isinstance(summary_payload, dict):
-        raise RatingTransportError("sigil conversation rating transport failed: invalid response payload")
+        raise RatingTransportError("agento11y conversation rating transport failed: invalid response payload")
 
     return SubmitConversationRatingResponse(
         rating=_parse_conversation_rating(rating_payload),
@@ -2413,14 +2420,14 @@ def _parse_conversation_rating(payload: dict[str, Any]) -> ConversationRating:
     try:
         rating = ConversationRatingValue(_require_string(payload, "rating"))
     except ValueError as exc:
-        raise RatingTransportError("sigil conversation rating transport failed: invalid rating payload") from exc
+        raise RatingTransportError("agento11y conversation rating transport failed: invalid rating payload") from exc
     created_at = _parse_utc_timestamp(_require_string(payload, "created_at"))
 
     metadata = payload.get("metadata", {})
     if metadata is None:
         metadata = {}
     if not isinstance(metadata, dict):
-        raise RatingTransportError("sigil conversation rating transport failed: invalid rating payload")
+        raise RatingTransportError("agento11y conversation rating transport failed: invalid rating payload")
 
     generation_id = payload.get("generation_id", "")
     rater_id = payload.get("rater_id", "")
@@ -2432,7 +2439,7 @@ def _parse_conversation_rating(payload: dict[str, Any]) -> ConversationRating:
         or not isinstance(source, str)
         or not isinstance(comment, str)
     ):
-        raise RatingTransportError("sigil conversation rating transport failed: invalid rating payload")
+        raise RatingTransportError("agento11y conversation rating transport failed: invalid rating payload")
 
     return ConversationRating(
         rating_id=rating_id,
@@ -2458,19 +2465,19 @@ def _parse_conversation_rating_summary(payload: dict[str, Any]) -> ConversationR
     latest_rating: ConversationRatingValue | None = None
     if latest_rating_raw is not None:
         if not isinstance(latest_rating_raw, str) or latest_rating_raw.strip() == "":
-            raise RatingTransportError("sigil conversation rating transport failed: invalid rating summary payload")
+            raise RatingTransportError("agento11y conversation rating transport failed: invalid rating summary payload")
         try:
             latest_rating = ConversationRatingValue(latest_rating_raw)
         except ValueError as exc:
             raise RatingTransportError(
-                "sigil conversation rating transport failed: invalid rating summary payload"
+                "agento11y conversation rating transport failed: invalid rating summary payload"
             ) from exc
 
     latest_bad_at_raw = payload.get("latest_bad_at")
     latest_bad_at: datetime | None = None
     if latest_bad_at_raw is not None:
         if not isinstance(latest_bad_at_raw, str) or latest_bad_at_raw.strip() == "":
-            raise RatingTransportError("sigil conversation rating transport failed: invalid rating summary payload")
+            raise RatingTransportError("agento11y conversation rating transport failed: invalid rating summary payload")
         latest_bad_at = _parse_utc_timestamp(latest_bad_at_raw)
 
     return ConversationRatingSummary(
@@ -2492,28 +2499,28 @@ def _parse_utc_timestamp(value: str) -> datetime:
         return _to_utc(datetime.fromisoformat(normalized))
     except ValueError as exc:
         raise RatingTransportError(
-            "sigil conversation rating transport failed: invalid timestamp in response payload"
+            "agento11y conversation rating transport failed: invalid timestamp in response payload"
         ) from exc
 
 
 def _require_string(payload: dict[str, Any], key: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or value.strip() == "":
-        raise RatingTransportError("sigil conversation rating transport failed: invalid response payload")
+        raise RatingTransportError("agento11y conversation rating transport failed: invalid response payload")
     return value
 
 
 def _require_int(payload: dict[str, Any], key: str) -> int:
     value = payload.get(key)
     if not isinstance(value, int):
-        raise RatingTransportError("sigil conversation rating transport failed: invalid response payload")
+        raise RatingTransportError("agento11y conversation rating transport failed: invalid response payload")
     return value
 
 
 def _require_bool(payload: dict[str, Any], key: str) -> bool:
     value = payload.get(key)
     if not isinstance(value, bool):
-        raise RatingTransportError("sigil conversation rating transport failed: invalid response payload")
+        raise RatingTransportError("agento11y conversation rating transport failed: invalid response payload")
     return value
 
 

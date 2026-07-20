@@ -13,10 +13,10 @@ pip install langgraph langchain-openai
 
 ```python
 from agento11y import Client
-from agento11y_langgraph import with_sigil_langgraph_callbacks
+from agento11y_langgraph import with_agento11y_langgraph_callbacks
 
 client = Client()
-config = with_sigil_langgraph_callbacks(None, client=client, provider_resolver="auto")
+config = with_agento11y_langgraph_callbacks(None, client=client, provider_resolver="auto")
 ```
 
 ## End-to-end example (graph invoke + stream)
@@ -28,7 +28,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from agento11y import Client
-from agento11y_langgraph import with_sigil_langgraph_callbacks
+from agento11y_langgraph import with_agento11y_langgraph_callbacks
 
 
 class GraphState(TypedDict):
@@ -54,7 +54,7 @@ workflow.set_entry_point("model")
 workflow.add_edge("model", END)
 graph = workflow.compile()
 
-sigil_config = with_sigil_langgraph_callbacks(
+agento11y_config = with_agento11y_langgraph_callbacks(
     None,
     client=client,
     provider_resolver="auto",
@@ -65,14 +65,14 @@ sigil_config = with_sigil_langgraph_callbacks(
 # Non-stream graph invocation.
 out = graph.invoke(
     {"prompt": "Explain SLO burn rate in one paragraph.", "answer": ""},
-    config=sigil_config,
+    config=agento11y_config,
 )
 print(out["answer"])
 
 # Streamed graph events.
 for _event in graph.stream(
     {"prompt": "List three practical alerting tips.", "answer": ""},
-    config=sigil_config,
+    config=agento11y_config,
 ):
     pass
 
@@ -91,10 +91,10 @@ name in the Sigil UI. Without it, the title falls back to an opaque auto-generat
 
 ```python
 from agento11y import Client
-from agento11y_langgraph import SigilLangGraphHandler
+from agento11y_langgraph import Agento11yLangGraphHandler
 
 client = Client()
-handler = SigilLangGraphHandler(
+handler = Agento11yLangGraphHandler(
     client=client,
     agent_name="my-pipeline",
     conversation_title="My Pipeline Run",
@@ -125,7 +125,7 @@ checkpointer = MemorySaver()
 graph = workflow.compile(checkpointer=checkpointer)
 
 thread_config = {
-    **with_sigil_langgraph_callbacks(None, client=client, provider_resolver="auto"),
+    **with_agento11y_langgraph_callbacks(None, client=client, provider_resolver="auto"),
     "configurable": {"thread_id": "customer-42"},
 }
 

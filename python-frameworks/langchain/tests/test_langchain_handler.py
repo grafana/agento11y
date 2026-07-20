@@ -10,10 +10,10 @@ from agento11y import Client, ClientConfig, GenerationExportConfig
 from agento11y.client import GenerationRecorder
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
 from agento11y_langchain import (
-    SigilAsyncLangChainHandler,
-    SigilLangChainHandler,
-    create_sigil_langchain_handler,
-    with_sigil_langchain_callbacks,
+    Agento11yAsyncLangChainHandler,
+    Agento11yLangChainHandler,
+    create_agento11y_langchain_handler,
+    with_agento11y_langchain_callbacks,
 )
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -53,7 +53,7 @@ def test_langchain_sync_lifecycle_sets_framework_tags_and_metadata() -> None:
     try:
         run_id = uuid4()
         parent_run_id = uuid4()
-        handler = SigilLangChainHandler(
+        handler = Agento11yLangChainHandler(
             client=client,
             agent_name="agent-langchain",
             agent_version="v1",
@@ -132,7 +132,7 @@ def test_langchain_backfills_model_from_response_when_request_model_unknown() ->
 
     try:
         run_id = uuid4()
-        handler = SigilLangChainHandler(
+        handler = Agento11yLangChainHandler(
             client=client,
             agent_name="agent-langchain",
             agent_version="v1",
@@ -185,7 +185,7 @@ def test_langchain_does_not_override_explicit_request_model() -> None:
 
     try:
         run_id = uuid4()
-        handler = SigilLangChainHandler(
+        handler = Agento11yLangChainHandler(
             client=client,
             agent_name="agent-langchain",
             agent_version="v1",
@@ -231,7 +231,7 @@ def test_langchain_infers_bedrock_provider_at_request_start() -> None:
     try:
         # Bedrock inference-profile id surfaced at start -> provider inferred.
         run_id = uuid4()
-        handler = SigilLangChainHandler(
+        handler = Agento11yLangChainHandler(
             client=client,
             agent_name="agent-langchain",
             agent_version="v1",
@@ -300,7 +300,7 @@ def test_langchain_non_canonical_provider_hint_does_not_block_bedrock_inference(
     ]
 
     try:
-        handler = SigilLangChainHandler(client=client, provider_resolver="auto")
+        handler = Agento11yLangChainHandler(client=client, provider_resolver="auto")
         run_ids = {}
         for label, invocation_params, _ in cases:
             run_id = uuid4()
@@ -337,7 +337,7 @@ def test_langchain_sync_lifecycle_extracts_anthropic_style_usage_and_stop_reason
 
     try:
         run_id = uuid4()
-        handler = SigilLangChainHandler(
+        handler = Agento11yLangChainHandler(
             client=client,
             agent_name="agent-langchain",
             agent_version="v1",
@@ -385,7 +385,7 @@ def test_langchain_gemini_tool_calls_map_from_message_fields() -> None:
 
     try:
         run_id = uuid4()
-        handler = SigilLangChainHandler(
+        handler = Agento11yLangChainHandler(
             client=client,
             agent_name="agent-langchain",
             provider_resolver="auto",
@@ -483,7 +483,7 @@ def test_langchain_stream_lifecycle_uses_stream_mode_and_chunk_fallback() -> Non
 
     try:
         run_id = uuid4()
-        handler = SigilLangChainHandler(client=client)
+        handler = Agento11yLangChainHandler(client=client)
 
         handler.on_llm_start(
             {"kwargs": {"model": "claude-sonnet-4-5"}},
@@ -519,7 +519,7 @@ def test_langchain_stream_records_first_token_timestamp_once() -> None:
 
     try:
         run_id = uuid4()
-        handler = SigilLangChainHandler(client=client)
+        handler = Agento11yLangChainHandler(client=client)
 
         handler.on_llm_start(
             {"kwargs": {"model": "gpt-5"}},
@@ -542,13 +542,13 @@ def test_langchain_generation_span_tracks_active_parent_span_and_export_lineage(
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-framework-test")
+    tracer = provider.get_tracer("agento11y-framework-test")
     client = _new_client(exporter, tracer=tracer)
 
     try:
         run_id = uuid4()
         with tracer.start_as_current_span("framework.request"):
-            handler = SigilLangChainHandler(client=client)
+            handler = Agento11yLangChainHandler(client=client)
             handler.on_chat_model_start(
                 {"name": "ChatOpenAI"},
                 [[{"type": "human", "content": "hello"}]],
@@ -583,7 +583,7 @@ def test_langchain_provider_resolution_supports_known_models_and_fallback() -> N
     client = _new_client(exporter)
 
     try:
-        handler = SigilLangChainHandler(client=client)
+        handler = Agento11yLangChainHandler(client=client)
 
         run_openai = uuid4()
         handler.on_llm_start({}, ["x"], run_id=run_openai, invocation_params={"model": "gpt-5"})
@@ -614,7 +614,7 @@ def test_langchain_error_sets_call_error_and_preserves_framework_tags() -> None:
 
     try:
         run_id = uuid4()
-        handler = SigilLangChainHandler(client=client)
+        handler = Agento11yLangChainHandler(client=client)
 
         handler.on_llm_start({}, ["x"], run_id=run_id, invocation_params={"model": "gpt-5"})
         handler.on_llm_error(RuntimeError("provider unavailable"), run_id=run_id)
@@ -633,7 +633,7 @@ def test_langchain_async_handler_records_generation() -> None:
 
     async def _run() -> None:
         run_id = uuid4()
-        handler = SigilAsyncLangChainHandler(client=client)
+        handler = Agento11yAsyncLangChainHandler(client=client)
         await handler.on_llm_start({}, ["hello"], run_id=run_id, invocation_params={"model": "gpt-5"})
         await handler.on_llm_end({"generations": [[{"text": "world"}]]}, run_id=run_id)
 
@@ -652,11 +652,11 @@ def test_langchain_tool_chain_and_retriever_callbacks_emit_spans() -> None:
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
     client = _new_client(exporter, tracer=tracer)
 
     try:
-        handler = SigilLangChainHandler(client=client)
+        handler = Agento11yLangChainHandler(client=client)
         parent_run_id = uuid4()
 
         tool_run_id = uuid4()
@@ -719,11 +719,11 @@ def test_langchain_attach_helpers_preserve_existing_callbacks() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        created = create_sigil_langchain_handler(client=client)
-        assert isinstance(created, SigilLangChainHandler)
+        created = create_agento11y_langchain_handler(client=client)
+        assert isinstance(created, Agento11yLangChainHandler)
 
         existing = object()
-        config = with_sigil_langchain_callbacks(
+        config = with_agento11y_langchain_callbacks(
             {"callbacks": [existing], "retry": 2},
             client=client,
             agent_name="langchain-helper",
@@ -733,7 +733,7 @@ def test_langchain_attach_helpers_preserve_existing_callbacks() -> None:
         callbacks = config["callbacks"]
         assert isinstance(callbacks, list)
         assert callbacks[0] is existing
-        assert isinstance(callbacks[1], SigilLangChainHandler)
+        assert isinstance(callbacks[1], Agento11yLangChainHandler)
     finally:
         client.shutdown()
 
@@ -742,7 +742,7 @@ def test_langchain_handler_explicitly_has_no_embedding_lifecycle() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLangChainHandler(client=client)
+        handler = Agento11yLangChainHandler(client=client)
         assert not hasattr(handler, "on_embedding_start")
         assert not hasattr(handler, "on_embedding_end")
         assert not hasattr(handler, "on_embedding_error")
@@ -750,12 +750,12 @@ def test_langchain_handler_explicitly_has_no_embedding_lifecycle() -> None:
         client.shutdown()
 
 
-def test_langchain_attach_helpers_do_not_duplicate_existing_sigil_handler() -> None:
+def test_langchain_attach_helpers_do_not_duplicate_existing_agento11y_handler() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        existing = SigilLangChainHandler(client=client)
-        config = with_sigil_langchain_callbacks({"callbacks": [existing]}, client=client)
+        existing = Agento11yLangChainHandler(client=client)
+        config = with_agento11y_langchain_callbacks({"callbacks": [existing]}, client=client)
         callbacks = config["callbacks"]
         assert isinstance(callbacks, list)
         assert len(callbacks) == 1

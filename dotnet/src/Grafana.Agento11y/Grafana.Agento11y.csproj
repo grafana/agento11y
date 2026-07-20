@@ -1,11 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFrameworks>net10.0;net8.0;netstandard2.0</TargetFrameworks>
-    <!-- The assembly and namespace keep the pre-rename Grafana.Sigil identity
-         so existing consumers' `using Grafana.Sigil` code compiles unchanged;
-         only the NuGet PackageId moved to Grafana.Agento11y. -->
-    <AssemblyName>Grafana.Sigil</AssemblyName>
-    <RootNamespace>Grafana.Sigil</RootNamespace>
+    <AssemblyName>Grafana.Agento11y</AssemblyName>
+    <RootNamespace>Grafana.Agento11y</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>Grafana.Agento11y</PackageId>
     <Description>Grafana Agent Observability .NET SDK core runtime for normalized generation export and OTel-aligned instrumentation.</Description>

@@ -4,7 +4,7 @@
 // "agento11y-plugin-claude-code/<ver> agento11y-sdk-go/<ver>".
 package useragent
 
-import "github.com/grafana/agento11y/go/sigil"
+import "github.com/grafana/agento11y/go/agento11y"
 
 // SigilVersion is the sigil binary build version, set once from main.
 var SigilVersion = "dev"
@@ -12,5 +12,5 @@ var SigilVersion = "dev"
 // For returns the generation-export User-Agent for an agent plugin:
 // "agento11y-plugin-<agent>/<SigilVersion> agento11y-sdk-go/<sdkVersion>".
 func For(agent string) string {
-	return "agento11y-plugin-" + agent + "/" + SigilVersion + " " + sigil.UserAgent()
+	return "agento11y-plugin-" + agent + "/" + SigilVersion + " " + agento11y.UserAgent()
 }

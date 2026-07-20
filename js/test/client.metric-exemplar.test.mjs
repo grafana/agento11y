@@ -3,7 +3,7 @@ import test from 'node:test';
 import { context, metrics as metricsApi, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { defaultConfig, SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
 const contextManager = new AsyncLocalStorageContextManager();
 
@@ -173,9 +173,9 @@ function newHarness(overrides = {}) {
   const generationExporter = new CapturingExporter();
   const defaults = defaultConfig();
 
-  const capturingMeter = new SpanCapturingMeter(metricsApi.getMeter('sigil-test-exemplar'));
+  const capturingMeter = new SpanCapturingMeter(metricsApi.getMeter('agento11y-test-exemplar'));
 
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     tracer,
     meter: capturingMeter,
     generationExport: {

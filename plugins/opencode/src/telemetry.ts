@@ -1,6 +1,6 @@
 /**
  * Sets up OTel SDK providers for metrics and traces, exporting via OTLP/HTTP.
- * Returns a tracer and meter to pass into SigilClient so its internal
+ * Returns a tracer and meter to pass into Agento11yClient so its internal
  * instruments actually export data.
  */
 

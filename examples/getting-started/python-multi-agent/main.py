@@ -49,7 +49,7 @@ metrics.set_meter_provider(mp)
 openai_client = OpenAI()
 model = "gpt-4.1-mini"
 
-sigil = Client(
+agento11y = Client(
     ClientConfig(
         generation_export=GenerationExportConfig(
             protocol="http",
@@ -97,7 +97,7 @@ comp, research, usage = call_openai(
 )
 print(f"Researcher: {research}\n")
 
-with sigil.start_generation(
+with agento11y.start_generation(
     GenerationStart(
         conversation_id="getting-started-multi-agent",
         conversation_title="Multi-Agent Example",
@@ -116,7 +116,7 @@ comp, critique, usage = call_openai(
 )
 print(f"Critic: {critique}\n")
 
-with sigil.start_generation(
+with agento11y.start_generation(
     GenerationStart(
         conversation_id="getting-started-multi-agent",
         conversation_title="Multi-Agent Example",
@@ -138,7 +138,7 @@ comp, synthesis, usage = call_openai(
 )
 print(f"Synthesizer: {synthesis}\n")
 
-with sigil.start_generation(
+with agento11y.start_generation(
     GenerationStart(
         conversation_id="getting-started-multi-agent",
         conversation_title="Multi-Agent Example",
@@ -154,7 +154,7 @@ if synth_rec.err() is not None:
 
 # ── Shutdown ─────────────────────────────────────────────────────────────
 
-sigil.shutdown()
+agento11y.shutdown()
 tp.shutdown()
 mp.shutdown()
 print("Done — check the Graph tab in the conversation detail in AI Observability.")

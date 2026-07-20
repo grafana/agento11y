@@ -54,7 +54,7 @@ Experimental OTel eval spans/events are disabled by default. Opt in only when
 asked:
 
 ```python
-with sigil.experiment("nightly", use_experimental_otel=True) as exp:
+with agento11y.experiment("nightly", use_experimental_otel=True) as exp:
     ...
 ```
 
@@ -63,17 +63,17 @@ with sigil.experiment("nightly", use_experimental_otel=True) as exp:
 ```python
 from agento11y import experiments as sigil
 
-suite = sigil.TestSuite(
+suite = agento11y.TestSuite(
     suite_id="smoke",
     name="Smoke",
     version="2026-06-29",
     test_cases=[
-        sigil.TestCase(test_case_id="capital-fr", input="Capital of France?", expected="Paris"),
+        agento11y.TestCase(test_case_id="capital-fr", input="Capital of France?", expected="Paris"),
     ],
 )
-verifier = sigil.Evaluator(evaluator_id="exact_match", version="2026-06-29", kind="deterministic")
+verifier = agento11y.Evaluator(evaluator_id="exact_match", version="2026-06-29", kind="deterministic")
 
-with sigil.experiment(
+with agento11y.experiment(
     "PR experiment",
     experiment_id=f"pr-{git_sha}",
     suite=suite,
@@ -131,7 +131,7 @@ trial.rubric_score(
     verdict["score"],
     passed=verdict["score"] >= 0.7,
     explanation=verdict["reason"],
-    evaluator=sigil.Evaluator(evaluator_id="judge.correctness", version="2026-06-29", kind="llm_judge"),
+    evaluator=agento11y.Evaluator(evaluator_id="judge.correctness", version="2026-06-29", kind="llm_judge"),
 )
 ```
 
@@ -149,15 +149,15 @@ In the verifier:
 ```python
 from agento11y import experiments as sigil
 
-client = sigil.Client(
+client = agento11y.Client(
     endpoint=os.environ["AGENTO11Y_ENDPOINT"],
     tenant_id=os.environ.get("AGENTO11Y_AUTH_TENANT_ID", ""),
     ingest_token=os.environ["AGENTO11Y_AUTH_TOKEN"],
 )
-ref = sigil.TrialRef.from_env()
+ref = agento11y.TrialRef.from_env()
 if ref is None:
     raise RuntimeError("missing Sigil trial environment")
-trial = sigil.Trial.from_ref(client, ref)
+trial = agento11y.Trial.from_ref(client, ref)
 trial.final_score(0.9, passed=True)
 trial.flush()
 ```

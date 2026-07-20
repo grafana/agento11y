@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/gitbranch"
@@ -22,14 +22,14 @@ const AgentName = "copilot"
 type Inputs struct {
 	Fragment       *fragment.Fragment
 	Session        *fragment.Session
-	ContentCapture sigil.ContentCaptureMode
+	ContentCapture agento11y.ContentCaptureMode
 	UserIDOverride string
 	Now            time.Time
 }
 
 type Mapped struct {
-	Start      sigil.GenerationStart
-	Generation sigil.Generation
+	Start      agento11y.GenerationStart
+	Generation agento11y.Generation
 	CallError  error
 }
 
@@ -44,7 +44,7 @@ func Map(in Inputs) Mapped {
 	completedAt := timeutil.ParseTimestamp(frag.CompletedAt, timeutil.ParseTimestamp(frag.LastEventAt, now))
 	startedAt := timeutil.ParseTimestamp(frag.StartedAt, completedAt)
 
-	model := sigil.ModelRef{
+	model := agento11y.ModelRef{
 		Provider: strings.TrimSpace(frag.Provider),
 		Name:     strings.TrimSpace(frag.Model),
 	}
@@ -133,13 +133,13 @@ func Map(in Inputs) Mapped {
 		stopReason = "error"
 	}
 
-	start := sigil.GenerationStart{
+	start := agento11y.GenerationStart{
 		ID:             GenerationID(frag.SessionID, frag.TurnID),
 		ConversationID: frag.SessionID,
 		UserID:         strings.TrimSpace(in.UserIDOverride),
 		AgentName:      AgentName,
 		AgentVersion:   strings.TrimSpace(frag.AgentVersion),
-		Mode:           sigil.GenerationModeSync,
+		Mode:           agento11y.GenerationModeSync,
 		OperationName:  "generateText",
 		Model:          model,
 		Tools:          tools,
@@ -149,13 +149,13 @@ func Map(in Inputs) Mapped {
 		ContentCapture: startMode,
 	}
 
-	gen := sigil.Generation{
+	gen := agento11y.Generation{
 		ID:             GenerationID(frag.SessionID, frag.TurnID),
 		ConversationID: frag.SessionID,
 		UserID:         strings.TrimSpace(in.UserIDOverride),
 		AgentName:      AgentName,
 		AgentVersion:   strings.TrimSpace(frag.AgentVersion),
-		Mode:           sigil.GenerationModeSync,
+		Mode:           agento11y.GenerationModeSync,
 		OperationName:  "generateText",
 		Model:          model,
 		ResponseID:     strings.TrimSpace(frag.RequestID),
@@ -163,7 +163,7 @@ func Map(in Inputs) Mapped {
 		Input:          input,
 		Output:         output,
 		Tools:          tools,
-		Usage: sigil.TokenUsage{
+		Usage: agento11y.TokenUsage{
 			InputTokens:           derefInt64(frag.TokenUsage.InputTokens),
 			OutputTokens:          derefInt64(frag.TokenUsage.OutputTokens),
 			CacheReadInputTokens:  derefInt64(frag.TokenUsage.CacheReadInputTokens),
@@ -264,16 +264,16 @@ func derefInt64(v *int64) int64 {
 	return *v
 }
 
-func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (input, output []sigil.Message) {
+func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (input, output []agento11y.Message) {
 	mode = mapperutil.NormalizePayloadContentMode(mode)
 	red := redact.New()
-	if mode != sigil.ContentCaptureModeMetadataOnly {
+	if mode != agento11y.ContentCaptureModeMetadataOnly {
 		prompt := strings.TrimSpace(frag.Prompt)
 		if prompt == "" {
 			prompt = strings.TrimSpace(frag.InitialPrompt)
 		}
 		if prompt != "" {
-			input = append(input, sigil.UserTextMessage(red.Redact(prompt)))
+			input = append(input, agento11y.UserTextMessage(red.Redact(prompt)))
 		}
 	}
 
@@ -282,33 +282,33 @@ func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (inpu
 		if t.ToolName == "" {
 			continue
 		}
-		call := sigil.ToolCall{ID: t.ToolUseID, Name: t.ToolName}
-		if mode == sigil.ContentCaptureModeFull && len(t.ToolInput) > 0 {
+		call := agento11y.ToolCall{ID: t.ToolUseID, Name: t.ToolName}
+		if mode == agento11y.ContentCaptureModeFull && len(t.ToolInput) > 0 {
 			call.InputJSON = red.RedactJSON(t.ToolInput)
 		}
-		output = append(output, sigil.Message{Role: sigil.RoleAssistant, Parts: []sigil.Part{sigil.ToolCallPart(call)}})
-		if mode == sigil.ContentCaptureModeMetadataOnly {
+		output = append(output, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{agento11y.ToolCallPart(call)}})
+		if mode == agento11y.ContentCaptureModeMetadataOnly {
 			continue
 		}
-		result := sigil.ToolResult{ToolCallID: t.ToolUseID, Name: t.ToolName, IsError: t.Status == "error"}
-		if mode == sigil.ContentCaptureModeFull {
+		result := agento11y.ToolResult{ToolCallID: t.ToolUseID, Name: t.ToolName, IsError: t.Status == "error"}
+		if mode == agento11y.ContentCaptureModeFull {
 			if len(t.ToolResponse) > 0 {
 				result.ContentJSON = red.RedactJSON(t.ToolResponse)
 			} else if t.ErrorMessage != "" {
 				result.Content = red.Redact(t.ErrorMessage)
 			}
 		}
-		input = append(input, sigil.Message{Role: sigil.RoleTool, Parts: []sigil.Part{sigil.ToolResultPart(result)}})
+		input = append(input, agento11y.Message{Role: agento11y.RoleTool, Parts: []agento11y.Part{agento11y.ToolResultPart(result)}})
 	}
-	if mode != sigil.ContentCaptureModeMetadataOnly {
+	if mode != agento11y.ContentCaptureModeMetadataOnly {
 		if assistantText := strings.TrimSpace(frag.AssistantText); assistantText != "" {
-			output = append(output, sigil.AssistantTextMessage(red.Redact(assistantText)))
+			output = append(output, agento11y.AssistantTextMessage(red.Redact(assistantText)))
 		}
 	}
 	return input, output
 }
 
-func buildToolDefinitions(tools []fragment.ToolRecord) []sigil.ToolDefinition {
+func buildToolDefinitions(tools []fragment.ToolRecord) []agento11y.ToolDefinition {
 	names := make([]string, len(tools))
 	for i := range tools {
 		names[i] = tools[i].ToolName

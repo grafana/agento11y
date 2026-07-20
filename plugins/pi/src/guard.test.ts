@@ -1,9 +1,9 @@
 import type {
+  Agento11yClient,
   HookEvaluateRequest,
   HookEvaluateResponse,
   HookInput,
   Message,
-  SigilClient,
 } from "@grafana/agento11y";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -38,7 +38,7 @@ function makeClient(
     override?: unknown,
   ) => Promise<HookEvaluateResponse>,
 ): {
-  client: SigilClient;
+  client: Agento11yClient;
   calls: Array<{ req: HookEvaluateRequest; override: unknown }>;
 } {
   const calls: Array<{ req: HookEvaluateRequest; override: unknown }> = [];
@@ -49,13 +49,13 @@ function makeClient(
         return evaluateHook(req, override);
       },
     ),
-  } as unknown as SigilClient;
+  } as unknown as Agento11yClient;
   return { client, calls };
 }
 
 function makeArgs(overrides?: Partial<GuardArgs>): GuardArgs {
   return {
-    client: {} as SigilClient,
+    client: {} as Agento11yClient,
     agentName: "pi",
     agentVersion: "1.0.0",
     model: { provider: "anthropic", name: "claude-sonnet-4" },
@@ -359,7 +359,7 @@ function makePreflightArgs(
   overrides?: Partial<PreflightTransformArgs>,
 ): PreflightTransformArgs {
   return {
-    client: {} as SigilClient,
+    client: {} as Agento11yClient,
     agentName: "pi",
     agentVersion: "1.0.0",
     model: { provider: "anthropic", name: "claude-sonnet-4" },

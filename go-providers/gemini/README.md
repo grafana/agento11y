@@ -5,9 +5,9 @@ typed Sigil `Generation` model.
 
 ## Scope
 - One-liner wrappers:
-  - `GenerateContent(ctx, sigilClient, provider, model, contents, config, opts...)`
-  - `GenerateContentStream(ctx, sigilClient, provider, model, contents, config, opts...)`
-  - `EmbedContent(ctx, sigilClient, provider, model, contents, config, opts...)`
+  - `GenerateContent(ctx, agento11yClient, provider, model, contents, config, opts...)`
+  - `GenerateContentStream(ctx, agento11yClient, provider, model, contents, config, opts...)`
+  - `EmbedContent(ctx, agento11yClient, provider, model, contents, config, opts...)`
 - Request/response mapper:
   - `FromRequestResponse(model, contents, config, resp, opts...)`
   - `EmbeddingFromResponse(model, contents, config, resp)`
@@ -24,7 +24,7 @@ typed Sigil `Generation` model.
 
 ## Wrapper (one-liner)
 ```go
-resp, err := gemini.GenerateContent(ctx, sigilClient, providerClient, model, contents, config,
+resp, err := gemini.GenerateContent(ctx, agento11yClient, providerClient, model, contents, config,
 	gemini.WithConversationID("conv-1"),
 	gemini.WithConversationTitle("Weather follow-up"),
 	gemini.WithAgentName("assistant-gemini"),
@@ -39,7 +39,7 @@ _ = resp.Candidates[0].Content.Parts[0].Text
 ## Embedding Wrapper
 
 ```go
-embedResp, err := gemini.EmbedContent(ctx, sigilClient, providerClient, "gemini-embedding-001", contents, &genai.EmbedContentConfig{})
+embedResp, err := gemini.EmbedContent(ctx, agento11yClient, providerClient, "gemini-embedding-001", contents, &genai.EmbedContentConfig{})
 if err != nil {
 	return err
 }
@@ -48,11 +48,11 @@ _ = embedResp.Embeddings
 
 ## Defer Pattern (full control)
 ```go
-ctx, rec := sigilClient.StartGeneration(ctx, sigil.GenerationStart{
+ctx, rec := agento11yClient.StartGeneration(ctx, agento11y.GenerationStart{
 	ConversationID: "conv-9b2f",
 	AgentName:      "assistant-gemini",
 	AgentVersion:   "1.0.0",
-	Model:          sigil.ModelRef{Provider: "gemini", Name: "gemini-2.5-pro"},
+	Model:          agento11y.ModelRef{Provider: "gemini", Name: "gemini-2.5-pro"},
 })
 defer rec.End()
 
@@ -67,8 +67,8 @@ rec.SetResult(gemini.FromRequestResponse(model, contents, config, resp))
 
 ## Streaming Defer Pattern
 ```go
-ctx, rec := sigilClient.StartStreamingGeneration(ctx, sigil.GenerationStart{
-	Model: sigil.ModelRef{Provider: "gemini", Name: "gemini-2.5-pro"},
+ctx, rec := agento11yClient.StartStreamingGeneration(ctx, agento11y.GenerationStart{
+	Model: agento11y.ModelRef{Provider: "gemini", Name: "gemini-2.5-pro"},
 })
 defer rec.End()
 

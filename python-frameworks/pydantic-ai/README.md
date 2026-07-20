@@ -14,10 +14,10 @@ pip install pydantic-ai
 ```python
 from pydantic_ai import Agent
 from agento11y import Client
-from agento11y_pydantic_ai import create_sigil_pydantic_ai_capability
+from agento11y_pydantic_ai import create_agento11y_pydantic_ai_capability
 
 client = Client()
-capability = create_sigil_pydantic_ai_capability(client=client, provider_resolver="auto")
+capability = create_agento11y_pydantic_ai_capability(client=client, provider_resolver="auto")
 
 agent = Agent("openai:gpt-4o", capabilities=[capability])
 result = agent.run_sync("What is the weather?")
@@ -31,10 +31,10 @@ client.shutdown()
 ```python
 from pydantic_ai import Agent
 from agento11y import Client
-from agento11y_pydantic_ai import with_sigil_pydantic_ai_capability
+from agento11y_pydantic_ai import with_agento11y_pydantic_ai_capability
 
 client = Client()
-capabilities = with_sigil_pydantic_ai_capability(
+capabilities = with_agento11y_pydantic_ai_capability(
     None,
     client=client,
     provider_resolver="auto",
@@ -67,7 +67,7 @@ Primary mapping is Pydantic AI run identity:
 
 1. `conversation_id` / `session_id` from `ctx.deps` or `ctx.metadata`
 2. `thread_id` from `ctx.deps` or `ctx.metadata`
-3. fallback `sigil:framework:pydantic-ai:<run_id>`
+3. fallback `agento11y:framework:pydantic-ai:<run_id>`
 
 ## Metadata and lineage
 

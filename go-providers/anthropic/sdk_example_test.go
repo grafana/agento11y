@@ -6,11 +6,11 @@ import (
 
 	asdk "github.com/anthropics/anthropic-sdk-go"
 	asdkoption "github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
-// Example_withSigilWrapper shows the one-liner wrapper approach.
-func Example_withSigilWrapper() {
+// Example_withAgento11yWrapper shows the one-liner wrapper approach.
+func Example_withAgento11yWrapper() {
 	if os.Getenv("SIGIL_RUN_LIVE_EXAMPLES") != "1" {
 		return
 	}
@@ -20,7 +20,7 @@ func Example_withSigilWrapper() {
 		return
 	}
 
-	client := sigil.NewClient(sigil.DefaultConfig())
+	client := agento11y.NewClient(agento11y.DefaultConfig())
 	providerClient := asdk.NewClient(asdkoption.WithAPIKey(apiKey))
 	req := exampleAnthropicRequest()
 
@@ -36,8 +36,8 @@ func Example_withSigilWrapper() {
 	_ = resp.Content[0].Text
 }
 
-// Example_withSigilDefer shows the defer pattern for full control.
-func Example_withSigilDefer() {
+// Example_withAgento11yDefer shows the defer pattern for full control.
+func Example_withAgento11yDefer() {
 	if os.Getenv("SIGIL_RUN_LIVE_EXAMPLES") != "1" {
 		return
 	}
@@ -47,15 +47,15 @@ func Example_withSigilDefer() {
 		return
 	}
 
-	client := sigil.NewClient(sigil.DefaultConfig())
+	client := agento11y.NewClient(agento11y.DefaultConfig())
 	providerClient := asdk.NewClient(asdkoption.WithAPIKey(apiKey))
 	req := exampleAnthropicRequest()
 
-	ctx, rec := client.StartGeneration(context.Background(), sigil.GenerationStart{
+	ctx, rec := client.StartGeneration(context.Background(), agento11y.GenerationStart{
 		ConversationID: "conv-anthropic-2",
 		AgentName:      "assistant-anthropic",
 		AgentVersion:   "1.0.0",
-		Model:          sigil.ModelRef{Provider: "anthropic", Name: req.Model},
+		Model:          agento11y.ModelRef{Provider: "anthropic", Name: req.Model},
 	})
 	defer rec.End()
 
@@ -73,8 +73,8 @@ func Example_withSigilDefer() {
 	_ = resp.Content[0].Text
 }
 
-// Example_withSigilStreamingWrapper shows the streaming wrapper approach.
-func Example_withSigilStreamingWrapper() {
+// Example_withAgento11yStreamingWrapper shows the streaming wrapper approach.
+func Example_withAgento11yStreamingWrapper() {
 	if os.Getenv("SIGIL_RUN_LIVE_EXAMPLES") != "1" {
 		return
 	}
@@ -84,7 +84,7 @@ func Example_withSigilStreamingWrapper() {
 		return
 	}
 
-	client := sigil.NewClient(sigil.DefaultConfig())
+	client := agento11y.NewClient(agento11y.DefaultConfig())
 	providerClient := asdk.NewClient(asdkoption.WithAPIKey(apiKey))
 	req := exampleAnthropicRequest()
 
@@ -98,8 +98,8 @@ func Example_withSigilStreamingWrapper() {
 	}
 }
 
-// Example_withSigilStreamingDefer shows the defer pattern for streaming with per-event processing.
-func Example_withSigilStreamingDefer() {
+// Example_withAgento11yStreamingDefer shows the defer pattern for streaming with per-event processing.
+func Example_withAgento11yStreamingDefer() {
 	if os.Getenv("SIGIL_RUN_LIVE_EXAMPLES") != "1" {
 		return
 	}
@@ -109,15 +109,15 @@ func Example_withSigilStreamingDefer() {
 		return
 	}
 
-	client := sigil.NewClient(sigil.DefaultConfig())
+	client := agento11y.NewClient(agento11y.DefaultConfig())
 	providerClient := asdk.NewClient(asdkoption.WithAPIKey(apiKey))
 	req := exampleAnthropicRequest()
 
-	ctx, rec := client.StartStreamingGeneration(context.Background(), sigil.GenerationStart{
+	ctx, rec := client.StartStreamingGeneration(context.Background(), agento11y.GenerationStart{
 		ConversationID: "conv-anthropic-4",
 		AgentName:      "assistant-anthropic",
 		AgentVersion:   "1.0.0",
-		Model:          sigil.ModelRef{Provider: "anthropic", Name: req.Model},
+		Model:          agento11y.ModelRef{Provider: "anthropic", Name: req.Model},
 	})
 	defer rec.End()
 

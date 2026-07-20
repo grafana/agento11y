@@ -4,7 +4,7 @@ using System.Reflection;
 using Xunit;
 using GPart = Google.GenAI.Types.Part;
 
-namespace Grafana.Sigil.Gemini.Tests;
+namespace Grafana.Agento11y.Gemini.Tests;
 
 public sealed class GeminiConformanceTests
 {
@@ -22,7 +22,7 @@ public sealed class GeminiConformanceTests
             contents,
             config,
             response,
-            new GeminiSigilOptions
+            new GeminiAgento11yOptions
             {
                 ConversationId = "conv-1",
                 AgentName = "agent-gemini",
@@ -117,7 +117,7 @@ public sealed class GeminiConformanceTests
             },
         });
 
-        var generation = GeminiGenerationMapper.FromStream(DefaultModel, contents, config, summary, new GeminiSigilOptions().WithRawArtifacts());
+        var generation = GeminiGenerationMapper.FromStream(DefaultModel, contents, config, summary, new GeminiAgento11yOptions().WithRawArtifacts());
 
         Assert.Equal(GenerationMode.Stream, generation.Mode);
         Assert.Equal("resp_stream_2", generation.ResponseId);
@@ -138,7 +138,7 @@ public sealed class GeminiConformanceTests
     public async Task Recorder_SyncAndStreamModes_AreRecordedWithProviderErrorPropagation()
     {
         var exporter = new CapturingExporter();
-        var client = new SigilClient(new SigilClientConfig
+        var client = new Agento11yClient(new Agento11yClientConfig
         {
             GenerationExporter = exporter,
             GenerationExport = new GenerationExportConfig
@@ -158,7 +158,7 @@ public sealed class GeminiConformanceTests
             contents,
             (_, _, _, _) => throw new InvalidOperationException("provider failed"),
             config,
-            new GeminiSigilOptions
+            new GeminiAgento11yOptions
             {
                 ModelName = "gemini-2.5-pro",
             },
@@ -171,7 +171,7 @@ public sealed class GeminiConformanceTests
             contents,
             (_, _, _, _) => StreamResponses(),
             config,
-            new GeminiSigilOptions
+            new GeminiAgento11yOptions
             {
                 ModelName = "gemini-2.5-pro",
             },
@@ -197,7 +197,7 @@ public sealed class GeminiConformanceTests
         using var listener = NewGenerationListener(spans);
         ActivitySource.AddActivityListener(listener);
 
-        await using var client = new SigilClient(new SigilClientConfig
+        await using var client = new Agento11yClient(new Agento11yClientConfig
         {
             GenerationExporter = exporter,
             GenerationExport = new GenerationExportConfig
@@ -214,7 +214,7 @@ public sealed class GeminiConformanceTests
             CreateContents(),
             (_, _, _, _) => EmptyStreamResponses(),
             CreateConfig(),
-            new GeminiSigilOptions
+            new GeminiAgento11yOptions
             {
                 ModelName = DefaultModel,
             },
@@ -241,14 +241,14 @@ public sealed class GeminiConformanceTests
             CreateContents(),
             CreateConfig(),
             response: null!,
-            new GeminiSigilOptions()
+            new GeminiAgento11yOptions()
         ));
         Assert.Throws<ArgumentException>(() => GeminiGenerationMapper.FromStream(
             DefaultModel,
             CreateContents(),
             CreateConfig(),
             new GeminiStreamSummary(),
-            new GeminiSigilOptions()
+            new GeminiAgento11yOptions()
         ));
     }
 
@@ -279,7 +279,7 @@ public sealed class GeminiConformanceTests
     public async Task Recorder_EmbedContent_DoesNotEnqueueAndPropagatesProviderErrors()
     {
         var exporter = new CapturingExporter();
-        await using var client = new SigilClient(new SigilClientConfig
+        await using var client = new Agento11yClient(new Agento11yClientConfig
         {
             GenerationExporter = exporter,
             GenerationExport = new GenerationExportConfig
@@ -303,7 +303,7 @@ public sealed class GeminiConformanceTests
             contents,
             (_, _, _, _) => Task.FromException<EmbedContentResponse>(new InvalidOperationException("embedding provider failed")),
             config,
-            new GeminiSigilOptions
+            new GeminiAgento11yOptions
             {
                 ModelName = model,
             },
@@ -316,7 +316,7 @@ public sealed class GeminiConformanceTests
             contents,
             (_, _, _, _) => Task.FromResult(CreateEmbeddingResponse()),
             config,
-            new GeminiSigilOptions
+            new GeminiAgento11yOptions
             {
                 ModelName = model,
             },

@@ -10,7 +10,7 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 // ResponsesStreamSummary captures Responses API stream events and an optional final response.
@@ -20,10 +20,10 @@ type ResponsesStreamSummary struct {
 	FirstChunkAt  time.Time
 }
 
-// ResponsesFromRequestResponse maps an OpenAI responses request/response pair to sigil.Generation.
-func ResponsesFromRequestResponse(req responses.ResponseNewParams, resp *responses.Response, opts ...Option) (sigil.Generation, error) {
+// ResponsesFromRequestResponse maps an OpenAI responses request/response pair to agento11y.Generation.
+func ResponsesFromRequestResponse(req responses.ResponseNewParams, resp *responses.Response, opts ...Option) (agento11y.Generation, error) {
 	if resp == nil {
-		return sigil.Generation{}, errors.New("response is required")
+		return agento11y.Generation{}, errors.New("response is required")
 	}
 
 	options := applyOptions(opts)
@@ -39,35 +39,35 @@ func ResponsesFromRequestResponse(req responses.ResponseNewParams, resp *respons
 		responseModel = requestModel
 	}
 
-	artifacts := make([]sigil.Artifact, 0, 3)
+	artifacts := make([]agento11y.Artifact, 0, 3)
 	if options.includeRequestArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindRequest, "openai.responses.request", req)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindRequest, "openai.responses.request", req)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeResponseArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindResponse, "openai.responses.response", resp)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindResponse, "openai.responses.response", resp)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeToolsArtifact && len(tools) > 0 {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindTools, "openai.responses.tools", tools)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindTools, "openai.responses.tools", tools)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 
-	generation := sigil.Generation{
+	generation := agento11y.Generation{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: requestModel},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: requestModel},
 		ResponseID:        resp.ID,
 		ResponseModel:     responseModel,
 		SystemPrompt:      systemPrompt,
@@ -87,24 +87,24 @@ func ResponsesFromRequestResponse(req responses.ResponseNewParams, resp *respons
 	}
 
 	if err := generation.Validate(); err != nil {
-		return sigil.Generation{}, err
+		return agento11y.Generation{}, err
 	}
 
 	return generation, nil
 }
 
-// ResponsesFromStream maps OpenAI responses streaming output to sigil.Generation.
-func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStreamSummary, opts ...Option) (sigil.Generation, error) {
+// ResponsesFromStream maps OpenAI responses streaming output to agento11y.Generation.
+func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStreamSummary, opts ...Option) (agento11y.Generation, error) {
 	if summary.FinalResponse != nil {
 		generation, err := ResponsesFromRequestResponse(req, summary.FinalResponse, opts...)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		return appendResponsesStreamEventsArtifact(generation, summary.Events, opts)
 	}
 
 	if len(summary.Events) == 0 {
-		return sigil.Generation{}, errors.New("stream summary has no events and no final response")
+		return agento11y.Generation{}, errors.New("stream summary has no events and no final response")
 	}
 
 	requestPayload := marshalAny(req)
@@ -115,7 +115,7 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 
 	responseID := ""
 	responseModel := req.Model
-	usage := sigil.TokenUsage{}
+	usage := agento11y.TokenUsage{}
 	stopReason := ""
 	text := strings.Builder{}
 	toolCalls := map[string]*responsesStreamToolCall{}
@@ -202,41 +202,41 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 		}
 	}
 
-	output := []sigil.Message{}
+	output := []agento11y.Message{}
 	if generated := text.String(); generated != "" {
-		output = append(output, sigil.Message{Role: sigil.RoleAssistant, Parts: []sigil.Part{sigil.TextPart(generated)}})
+		output = append(output, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{agento11y.TextPart(generated)}})
 	}
 	output = append(output, mapResponsesStreamToolCalls(toolCalls, toolCallOrder)...)
 
-	artifacts := make([]sigil.Artifact, 0, 3)
+	artifacts := make([]agento11y.Artifact, 0, 3)
 	if options.includeRequestArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindRequest, "openai.responses.request", req)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindRequest, "openai.responses.request", req)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeToolsArtifact && len(tools) > 0 {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindTools, "openai.responses.tools", tools)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindTools, "openai.responses.tools", tools)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeEventsArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindProviderEvent, "openai.responses.stream_events", summary.Events)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindProviderEvent, "openai.responses.stream_events", summary.Events)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 
-	generation := sigil.Generation{
+	generation := agento11y.Generation{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: req.Model},
 		ResponseID:        responseID,
 		ResponseModel:     responseModel,
 		SystemPrompt:      systemPrompt,
@@ -256,7 +256,7 @@ func ResponsesFromStream(req responses.ResponseNewParams, summary ResponsesStrea
 	}
 
 	if err := generation.Validate(); err != nil {
-		return sigil.Generation{}, err
+		return agento11y.Generation{}, err
 	}
 
 	return generation, nil
@@ -293,7 +293,7 @@ func ensureResponsesStreamToolCall(calls map[string]*responsesStreamToolCall, or
 	return call
 }
 
-func mapResponsesStreamToolCalls(calls map[string]*responsesStreamToolCall, order []string) []sigil.Message {
+func mapResponsesStreamToolCalls(calls map[string]*responsesStreamToolCall, order []string) []agento11y.Message {
 	if len(order) == 0 {
 		return nil
 	}
@@ -313,24 +313,24 @@ func mapResponsesStreamToolCalls(calls map[string]*responsesStreamToolCall, orde
 		return ordered[i].outputIndex < ordered[j].outputIndex
 	})
 
-	out := make([]sigil.Message, 0, len(ordered))
+	out := make([]agento11y.Message, 0, len(ordered))
 	for _, call := range ordered {
 		callID := strings.TrimSpace(call.callID)
 		if callID == "" {
 			callID = call.itemID
 		}
-		part := sigil.ToolCallPart(sigil.ToolCall{
+		part := agento11y.ToolCallPart(agento11y.ToolCall{
 			ID:        callID,
 			Name:      call.name,
 			InputJSON: parseJSONOrString(call.arguments.String()),
 		})
 		part.Metadata.ProviderType = "tool_call"
-		out = append(out, sigil.Message{Role: sigil.RoleAssistant, Parts: []sigil.Part{part}})
+		out = append(out, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{part}})
 	}
 	return out
 }
 
-func appendResponsesStreamEventsArtifact(generation sigil.Generation, events []responses.ResponseStreamEventUnion, opts []Option) (sigil.Generation, error) {
+func appendResponsesStreamEventsArtifact(generation agento11y.Generation, events []responses.ResponseStreamEventUnion, opts []Option) (agento11y.Generation, error) {
 	if len(events) == 0 {
 		return generation, nil
 	}
@@ -340,16 +340,16 @@ func appendResponsesStreamEventsArtifact(generation sigil.Generation, events []r
 		return generation, nil
 	}
 
-	artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindProviderEvent, "openai.responses.stream_events", events)
+	artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindProviderEvent, "openai.responses.stream_events", events)
 	if err != nil {
-		return sigil.Generation{}, err
+		return agento11y.Generation{}, err
 	}
 	generation.Artifacts = append(generation.Artifacts, artifact)
 	return generation, nil
 }
 
-func mapResponsesRequestInput(payload map[string]any) ([]sigil.Message, string) {
-	input := make([]sigil.Message, 0, 4)
+func mapResponsesRequestInput(payload map[string]any) ([]agento11y.Message, string) {
+	input := make([]agento11y.Message, 0, 4)
 	systemPrompts := make([]string, 0, 2)
 
 	if instructions, ok := payload["instructions"].(string); ok {
@@ -364,7 +364,7 @@ func mapResponsesRequestInput(payload map[string]any) ([]sigil.Message, string) 
 	switch typed := rawInput.(type) {
 	case string:
 		if text := typed; text != "" {
-			input = append(input, sigil.Message{Role: sigil.RoleUser, Parts: []sigil.Part{sigil.TextPart(text)}})
+			input = append(input, agento11y.Message{Role: agento11y.RoleUser, Parts: []agento11y.Part{agento11y.TextPart(text)}})
 		}
 	case []any:
 		for i := range typed {
@@ -389,14 +389,14 @@ func mapResponsesRequestInput(payload map[string]any) ([]sigil.Message, string) 
 				if content == "" {
 					continue
 				}
-				part := sigil.ToolResultPart(sigil.ToolResult{
+				part := agento11y.ToolResultPart(agento11y.ToolResult{
 					ToolCallID:  responsesMapString(item, "call_id", "callId"),
 					Name:        responsesMapString(item, "name"),
 					Content:     content,
 					ContentJSON: parseJSONOrString(content),
 				})
 				part.Metadata.ProviderType = "tool_result"
-				input = append(input, sigil.Message{Role: sigil.RoleTool, Parts: []sigil.Part{part}})
+				input = append(input, agento11y.Message{Role: agento11y.RoleTool, Parts: []agento11y.Part{part}})
 				continue
 			}
 
@@ -406,15 +406,15 @@ func mapResponsesRequestInput(payload map[string]any) ([]sigil.Message, string) 
 					continue
 				}
 
-				mappedRole := sigil.RoleUser
+				mappedRole := agento11y.RoleUser
 				switch role {
 				case "assistant":
-					mappedRole = sigil.RoleAssistant
+					mappedRole = agento11y.RoleAssistant
 				case "tool":
-					mappedRole = sigil.RoleTool
+					mappedRole = agento11y.RoleTool
 				}
 
-				input = append(input, sigil.Message{Role: mappedRole, Parts: []sigil.Part{sigil.TextPart(content)}})
+				input = append(input, agento11y.Message{Role: mappedRole, Parts: []agento11y.Part{agento11y.TextPart(content)}})
 			}
 		}
 	}
@@ -422,12 +422,12 @@ func mapResponsesRequestInput(payload map[string]any) ([]sigil.Message, string) 
 	return input, strings.Join(systemPrompts, "\n\n")
 }
 
-func mapResponsesOutput(items []responses.ResponseOutputItemUnion) []sigil.Message {
+func mapResponsesOutput(items []responses.ResponseOutputItemUnion) []agento11y.Message {
 	if len(items) == 0 {
 		return nil
 	}
 
-	out := make([]sigil.Message, 0, len(items))
+	out := make([]agento11y.Message, 0, len(items))
 	for i := range items {
 		item := items[i]
 		switch item.Type {
@@ -436,22 +436,22 @@ func mapResponsesOutput(items []responses.ResponseOutputItemUnion) []sigil.Messa
 			if text == "" {
 				continue
 			}
-			out = append(out, sigil.Message{Role: sigil.RoleAssistant, Parts: []sigil.Part{sigil.TextPart(text)}})
+			out = append(out, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{agento11y.TextPart(text)}})
 		case "function_call":
 			if strings.TrimSpace(item.Name) == "" {
 				continue
 			}
-			part := sigil.ToolCallPart(sigil.ToolCall{
+			part := agento11y.ToolCallPart(agento11y.ToolCall{
 				ID:        item.CallID,
 				Name:      item.Name,
 				InputJSON: parseResponsesOutputArguments(item.Arguments),
 			})
 			part.Metadata.ProviderType = "tool_call"
-			out = append(out, sigil.Message{Role: sigil.RoleAssistant, Parts: []sigil.Part{part}})
+			out = append(out, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{part}})
 		default:
 			fallback := extractResponsesOutputFallback(item)
 			if fallback != "" {
-				out = append(out, sigil.Message{Role: sigil.RoleAssistant, Parts: []sigil.Part{sigil.TextPart(fallback)}})
+				out = append(out, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{agento11y.TextPart(fallback)}})
 			}
 		}
 	}
@@ -459,13 +459,13 @@ func mapResponsesOutput(items []responses.ResponseOutputItemUnion) []sigil.Messa
 	return out
 }
 
-func mapResponsesTools(value any) []sigil.ToolDefinition {
+func mapResponsesTools(value any) []agento11y.ToolDefinition {
 	tools, ok := value.([]any)
 	if !ok || len(tools) == 0 {
 		return nil
 	}
 
-	out := make([]sigil.ToolDefinition, 0, len(tools))
+	out := make([]agento11y.ToolDefinition, 0, len(tools))
 	for i := range tools {
 		tool, ok := tools[i].(map[string]any)
 		if !ok {
@@ -477,7 +477,7 @@ func mapResponsesTools(value any) []sigil.ToolDefinition {
 			if strings.TrimSpace(name) == "" {
 				continue
 			}
-			definition := sigil.ToolDefinition{
+			definition := agento11y.ToolDefinition{
 				Name:        name,
 				Description: fmt.Sprintf("%v", tool["description"]),
 				Type:        "function",
@@ -491,15 +491,15 @@ func mapResponsesTools(value any) []sigil.ToolDefinition {
 
 		name := fmt.Sprintf("%v", tool["name"])
 		if toolType != "" && strings.TrimSpace(name) != "" {
-			out = append(out, sigil.ToolDefinition{Name: name, Type: toolType})
+			out = append(out, agento11y.ToolDefinition{Name: name, Type: toolType})
 		}
 	}
 
 	return out
 }
 
-func mapResponsesUsage(usage responses.ResponseUsage) sigil.TokenUsage {
-	return sigil.TokenUsage{
+func mapResponsesUsage(usage responses.ResponseUsage) agento11y.TokenUsage {
+	return agento11y.TokenUsage{
 		InputTokens:          usage.InputTokens,
 		OutputTokens:         usage.OutputTokens,
 		TotalTokens:          usage.TotalTokens,

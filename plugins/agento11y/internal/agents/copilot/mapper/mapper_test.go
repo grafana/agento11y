@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/fragment"
 )
@@ -42,7 +42,7 @@ func TestMapFullModeIncludesRedactedPromptAndToolContent(t *testing.T) {
 	frag.TokenUsage.OutputTokens = &outTokens
 	got := Map(Inputs{
 		Fragment:       frag,
-		ContentCapture: sigil.ContentCaptureModeFull,
+		ContentCapture: agento11y.ContentCaptureModeFull,
 		Now:            fixedTime,
 	})
 	if len(got.Generation.Input) == 0 {
@@ -92,10 +92,10 @@ func TestMapFullWithMetadataSpansPreservesStartModeAndFullPayload(t *testing.T) 
 
 	got := Map(Inputs{
 		Fragment:       frag,
-		ContentCapture: sigil.ContentCaptureModeFullWithMetadataSpans,
+		ContentCapture: agento11y.ContentCaptureModeFullWithMetadataSpans,
 		Now:            fixedTime,
 	})
-	if got.Start.ContentCapture != sigil.ContentCaptureModeFullWithMetadataSpans {
+	if got.Start.ContentCapture != agento11y.ContentCaptureModeFullWithMetadataSpans {
 		t.Fatalf("Start.ContentCapture = %v; want FullWithMetadataSpans", got.Start.ContentCapture)
 	}
 	if len(got.Generation.Input) == 0 || got.Generation.Input[0].Parts[0].Text == "" {
@@ -109,7 +109,7 @@ func TestMapFullWithMetadataSpansPreservesStartModeAndFullPayload(t *testing.T) 
 func TestMapMetadataOnlyStripsPromptAndToolResultContent(t *testing.T) {
 	got := Map(Inputs{
 		Fragment:       basicFragment(),
-		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 		Now:            fixedTime,
 	})
 	for _, msg := range got.Generation.Input {
@@ -129,7 +129,7 @@ func TestMapErrorPromotesCallError(t *testing.T) {
 	frag.Errors = []fragment.ErrorRecord{{Context: "model_call", Name: "RateLimit", Message: "429 too many requests"}}
 	got := Map(Inputs{
 		Fragment:       frag,
-		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 		Now:            fixedTime,
 	})
 	if got.CallError == nil {
@@ -148,7 +148,7 @@ func TestMapUsesHookStopReasonWhenSuccessful(t *testing.T) {
 	frag.StopReason = "end_turn"
 	got := Map(Inputs{
 		Fragment:       frag,
-		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 		Now:            fixedTime,
 	})
 	if got.Generation.StopReason != "end_turn" {
@@ -194,7 +194,7 @@ func TestMapResolvesGitBranchFromCwd(t *testing.T) {
 			got := Map(Inputs{
 				Fragment:       frag,
 				Session:        session,
-				ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+				ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 				Now:            fixedTime,
 			})
 			if got.Generation.Tags["git.branch"] != tc.wantBr {
@@ -214,7 +214,7 @@ func TestMapOmitsGitBranchWhenNoCheckout(t *testing.T) {
 	frag.Model = "gpt-5.4"
 	got := Map(Inputs{
 		Fragment:       frag,
-		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 		Now:            fixedTime,
 	})
 	if _, ok := got.Generation.Tags["git.branch"]; ok {
@@ -228,7 +228,7 @@ func TestMapOmitsGitBranchWhenNoCheckout(t *testing.T) {
 func TestMapDoesNotSetConversationTitle(t *testing.T) {
 	got := Map(Inputs{
 		Fragment:       basicFragment(),
-		ContentCapture: sigil.ContentCaptureModeFull,
+		ContentCapture: agento11y.ContentCaptureModeFull,
 		Now:            fixedTime,
 	})
 	if got.Start.ConversationTitle != "" {

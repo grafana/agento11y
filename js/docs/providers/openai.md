@@ -32,13 +32,13 @@ This helper now mirrors official OpenAI SDK shapes for both Chat Completions and
 
 ```ts
 import OpenAI from 'openai';
-import { SigilClient, openai } from '@grafana/agento11y';
+import { Agento11yClient, openai } from '@grafana/agento11y';
 
-const sigil = new SigilClient();
+const agento11y = new Agento11yClient();
 const provider = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const response = await openai.responses.create(
-  sigil,
+  agento11y,
   {
     model: 'gpt-5',
     instructions: 'Be concise',
@@ -55,7 +55,7 @@ console.log(response.output_text);
 
 ```ts
 const summary = await openai.chat.completions.stream(
-  sigil,
+  agento11y,
   {
     model: 'gpt-5',
     stream: true,
@@ -87,7 +87,7 @@ const options = {
   agentVersion: '1.0.0',
 };
 
-const recorder = sigil.startGeneration({
+const recorder = agento11y.startGeneration({
   conversationId: options.conversationId,
   agentName: options.agentName,
   agentVersion: options.agentVersion,
@@ -109,7 +109,7 @@ try {
 
 ```ts
 const embeddingResponse = await openai.embeddings.create(
-  sigil,
+  agento11y,
   {
     model: 'text-embedding-3-small',
     input: ['hello', 'world'],

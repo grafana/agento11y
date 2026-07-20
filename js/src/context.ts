@@ -1,4 +1,4 @@
-type SigilContextValues = {
+type Agento11yContextValues = {
   conversationId?: string;
   conversationTitle?: string;
   userId?: string;
@@ -53,17 +53,17 @@ export function agentVersionFromContext(): string | undefined {
   return normalizedString(storage.getStore()?.agentVersion);
 }
 
-function runWithContext<T>(nextValues: SigilContextValues, callback: () => T): T {
+function runWithContext<T>(nextValues: Agento11yContextValues, callback: () => T): T {
   const currentValues = storage.getStore() ?? {};
-  const mergedValues: SigilContextValues = { ...currentValues };
+  const mergedValues: Agento11yContextValues = { ...currentValues };
 
   for (const [key, value] of Object.entries(nextValues)) {
     const normalized = normalizedString(value);
     if (normalized === undefined) {
-      delete mergedValues[key as keyof SigilContextValues];
+      delete mergedValues[key as keyof Agento11yContextValues];
       continue;
     }
-    mergedValues[key as keyof SigilContextValues] = normalized;
+    mergedValues[key as keyof Agento11yContextValues] = normalized;
   }
 
   return storage.run(mergedValues, callback);
@@ -103,14 +103,14 @@ class NoopContextStorage<T> implements ContextStorage<T> {
 }
 
 const AsyncLocalStorage = resolveNodeAsyncLocalStorage();
-const storage: ContextStorage<SigilContextValues> =
+const storage: ContextStorage<Agento11yContextValues> =
   AsyncLocalStorage !== undefined
-    ? new AsyncLocalStorage<SigilContextValues>()
-    : new NoopContextStorage<SigilContextValues>();
+    ? new AsyncLocalStorage<Agento11yContextValues>()
+    : new NoopContextStorage<Agento11yContextValues>();
 
 if (AsyncLocalStorage === undefined && typeof console !== 'undefined' && typeof console.warn === 'function') {
   console.warn(
-    'sigil: AsyncLocalStorage is not available in this runtime; context helpers ' +
+    'agento11y: AsyncLocalStorage is not available in this runtime; context helpers ' +
       '(withConversationId, withUserId, withAgentName, ...) are disabled. ' +
       'Pass identifiers explicitly on each startGeneration / startToolExecution call.',
   );

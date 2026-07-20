@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 // PreferredKey and LegacyKey are the two spellings of one branded variable.
@@ -250,20 +250,20 @@ func ParseExtraTags(s string) map[string]string {
 // non-nil so a typo doesn't silently downgrade behaviour. Hooks must not
 // write to stderr, so callers pass their adapter logger here — the helper
 // never touches stderr itself.
-func ResolveContentMode(logger *log.Logger) sigil.ContentCaptureMode {
+func ResolveContentMode(logger *log.Logger) agento11y.ContentCaptureMode {
 	v, key, ok := LookupEnv("CONTENT_CAPTURE_MODE")
 	if !ok {
-		return sigil.ContentCaptureModeMetadataOnly
+		return agento11y.ContentCaptureModeMetadataOnly
 	}
-	var mode sigil.ContentCaptureMode
+	var mode agento11y.ContentCaptureMode
 	if err := mode.UnmarshalText([]byte(v)); err != nil {
 		if logger != nil {
 			logger.Printf("config: unknown %s=%q; using metadata_only", key, v)
 		}
-		return sigil.ContentCaptureModeMetadataOnly
+		return agento11y.ContentCaptureModeMetadataOnly
 	}
-	if mode == sigil.ContentCaptureModeDefault {
-		return sigil.ContentCaptureModeMetadataOnly
+	if mode == agento11y.ContentCaptureModeDefault {
+		return agento11y.ContentCaptureModeMetadataOnly
 	}
 	return mode
 }

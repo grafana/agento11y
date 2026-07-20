@@ -1,6 +1,6 @@
 using global::OpenAI.Responses;
 
-namespace Grafana.Sigil.OpenAI;
+namespace Grafana.Agento11y.OpenAI;
 
 public sealed class OpenAIResponsesStreamSummary
 {

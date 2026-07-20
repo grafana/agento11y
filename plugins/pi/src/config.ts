@@ -1,8 +1,8 @@
 import type { ContentCaptureMode } from "@grafana/agento11y";
+import { applyAgento11yDotenv } from "./agento11yDotenv.js";
 import { logger } from "./logger.js";
-import { applySigilDotenv } from "./sigilDotenv.js";
 
-export type SigilAuthConfig =
+export type Agento11yAuthConfig =
   | {
       mode: "basic";
       basicUser: string;
@@ -22,9 +22,9 @@ export interface GuardsFeatureConfig {
   failOpen: boolean;
 }
 
-export interface SigilPiConfig {
+export interface Agento11yPiConfig {
   endpoint: string;
-  auth: SigilAuthConfig;
+  auth: Agento11yAuthConfig;
   agentName: string;
   agentVersion?: string;
   contentCapture: ContentCaptureMode;
@@ -33,15 +33,15 @@ export interface SigilPiConfig {
   guards: GuardsFeatureConfig;
 }
 
-export async function loadConfig(): Promise<SigilPiConfig | null> {
-  // Read the shared sigil dotenv file so plain `pi` and `sigil pi --` resolve
+export async function loadConfig(): Promise<Agento11yPiConfig | null> {
+  // Read the shared sigil dotenv file so plain `pi` and `agento11y pi --` resolve
   // credentials from the same place. Shell values in process.env always beat
   // config.env values, across both env-var spellings.
-  applySigilDotenv();
+  applyAgento11yDotenv();
   return resolveConfig();
 }
 
-export function resolveConfig(): SigilPiConfig | null {
+export function resolveConfig(): Agento11yPiConfig | null {
   const endpoint = normalizeBaseEndpoint(brandedEnv("ENDPOINT")?.value ?? "");
   if (!endpoint) return null;
 
@@ -63,7 +63,7 @@ export function resolveConfig(): SigilPiConfig | null {
   };
 }
 
-function resolveAuth(): SigilAuthConfig {
+function resolveAuth(): Agento11yAuthConfig {
   const tenant = brandedEnv("AUTH_TENANT_ID")?.value ?? "";
   const token = brandedEnv("AUTH_TOKEN")?.value ?? "";
   if (tenant && token) {

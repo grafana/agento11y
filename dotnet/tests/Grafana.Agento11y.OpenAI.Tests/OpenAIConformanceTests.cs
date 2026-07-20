@@ -6,7 +6,7 @@ using System.Diagnostics;
 using System.Reflection;
 using Xunit;
 
-namespace Grafana.Sigil.OpenAI.Tests;
+namespace Grafana.Agento11y.OpenAI.Tests;
 
 public sealed class OpenAIConformanceTests
 {
@@ -60,7 +60,7 @@ public sealed class OpenAIConformanceTests
             messages,
             options,
             response,
-            new OpenAISigilOptions
+            new OpenAIAgento11yOptions
             {
                 ConversationId = "conv-1",
                 AgentName = "agent-openai",
@@ -112,7 +112,7 @@ public sealed class OpenAIConformanceTests
             messages,
             options,
             response,
-            new OpenAISigilOptions().WithRawArtifacts()
+            new OpenAIAgento11yOptions().WithRawArtifacts()
         );
 
         Assert.Equal(3, generation.Artifacts.Count);
@@ -189,7 +189,7 @@ public sealed class OpenAIConformanceTests
             inputItems,
             requestOptions,
             response,
-            new OpenAISigilOptions
+            new OpenAIAgento11yOptions
             {
                 ConversationId = "conv-resp-1",
                 AgentName = "agent-openai",
@@ -256,7 +256,7 @@ public sealed class OpenAIConformanceTests
             inputItems,
             requestOptions,
             response,
-            new OpenAISigilOptions().WithRawArtifacts()
+            new OpenAIAgento11yOptions().WithRawArtifacts()
         );
 
         Assert.Equal(3, generation.Artifacts.Count);
@@ -316,7 +316,7 @@ public sealed class OpenAIConformanceTests
             inputItems,
             requestOptions,
             summary,
-            new OpenAISigilOptions().WithRawArtifacts()
+            new OpenAIAgento11yOptions().WithRawArtifacts()
         );
 
         Assert.Equal(GenerationMode.Stream, generation.Mode);
@@ -343,28 +343,28 @@ public sealed class OpenAIConformanceTests
             chatMessages,
             requestOptions: null,
             response: null!,
-            new OpenAISigilOptions()
+            new OpenAIAgento11yOptions()
         ));
         Assert.Throws<ArgumentNullException>(() => OpenAIGenerationMapper.ResponsesFromRequestResponse(
             "gpt-5",
             responseItems,
             requestOptions: null,
             response: null!,
-            new OpenAISigilOptions()
+            new OpenAIAgento11yOptions()
         ));
         Assert.Throws<ArgumentException>(() => OpenAIGenerationMapper.ChatCompletionsFromStream(
             "gpt-5",
             chatMessages,
             requestOptions: null,
             new OpenAIChatCompletionsStreamSummary(),
-            new OpenAISigilOptions()
+            new OpenAIAgento11yOptions()
         ));
         Assert.Throws<ArgumentException>(() => OpenAIGenerationMapper.ResponsesFromStream(
             "gpt-5",
             responseItems,
             requestOptions: null,
             new OpenAIResponsesStreamSummary(),
-            new OpenAISigilOptions()
+            new OpenAIAgento11yOptions()
         ));
     }
 
@@ -372,7 +372,7 @@ public sealed class OpenAIConformanceTests
     public async Task Recorder_RecordsChatAndResponsesModesAndPropagatesProviderErrors()
     {
         var exporter = new CapturingExporter();
-        var config = new SigilClientConfig
+        var config = new Agento11yClientConfig
         {
             GenerationExporter = exporter,
             GenerationExport = new GenerationExportConfig
@@ -383,7 +383,7 @@ public sealed class OpenAIConformanceTests
             },
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         var chatMessages = new List<ChatMessage>
         {
@@ -399,7 +399,7 @@ public sealed class OpenAIConformanceTests
             chatMessages,
             (_, _, _) => throw new InvalidOperationException("chat provider failed"),
             requestOptions: null,
-            options: new OpenAISigilOptions
+            options: new OpenAIAgento11yOptions
             {
                 ModelName = "gpt-5",
             },
@@ -411,7 +411,7 @@ public sealed class OpenAIConformanceTests
             chatMessages,
             (_, _, _) => StreamChatUpdates(),
             requestOptions: null,
-            options: new OpenAISigilOptions
+            options: new OpenAIAgento11yOptions
             {
                 ModelName = "gpt-5",
             },
@@ -423,7 +423,7 @@ public sealed class OpenAIConformanceTests
             responseItems,
             (_, _, _) => throw new InvalidOperationException("responses provider failed"),
             requestOptions: null,
-            options: new OpenAISigilOptions
+            options: new OpenAIAgento11yOptions
             {
                 ModelName = "gpt-5",
             },
@@ -438,7 +438,7 @@ public sealed class OpenAIConformanceTests
             {
                 Instructions = "Be concise.",
             },
-            options: new OpenAISigilOptions
+            options: new OpenAIAgento11yOptions
             {
                 ModelName = "gpt-5",
             },
@@ -466,7 +466,7 @@ public sealed class OpenAIConformanceTests
         using var listener = NewGenerationListener(spans);
         ActivitySource.AddActivityListener(listener);
 
-        await using var client = new SigilClient(new SigilClientConfig
+        await using var client = new Agento11yClient(new Agento11yClientConfig
         {
             GenerationExporter = exporter,
             GenerationExport = new GenerationExportConfig
@@ -482,7 +482,7 @@ public sealed class OpenAIConformanceTests
             [new UserChatMessage("hello")],
             (_, _, _) => EmptyChatUpdates(),
             requestOptions: null,
-            options: new OpenAISigilOptions
+            options: new OpenAIAgento11yOptions
             {
                 ModelName = "gpt-5",
             },
@@ -494,7 +494,7 @@ public sealed class OpenAIConformanceTests
             [ResponseItem.CreateUserMessageItem("hello")],
             (_, _, _) => EmptyResponsesUpdates(),
             requestOptions: new CreateResponseOptions(),
-            options: new OpenAISigilOptions
+            options: new OpenAIAgento11yOptions
             {
                 ModelName = "gpt-5",
             },
@@ -555,7 +555,7 @@ public sealed class OpenAIConformanceTests
     public async Task Recorder_EmbeddingsWrapper_DoesNotEnqueueAndPropagatesProviderErrors()
     {
         var exporter = new CapturingExporter();
-        await using var client = new SigilClient(new SigilClientConfig
+        await using var client = new Agento11yClient(new Agento11yClientConfig
         {
             GenerationExporter = exporter,
             GenerationExport = new GenerationExportConfig
@@ -577,7 +577,7 @@ public sealed class OpenAIConformanceTests
             inputs,
             (_, _, _) => Task.FromException<OpenAIEmbeddingCollection>(new InvalidOperationException("embedding provider failed")),
             requestOptions,
-            new OpenAISigilOptions
+            new OpenAIAgento11yOptions
             {
                 ModelName = "text-embedding-3-small",
             },
@@ -597,7 +597,7 @@ public sealed class OpenAIConformanceTests
             inputs,
             (_, _, _) => Task.FromResult(response),
             requestOptions,
-            new OpenAISigilOptions
+            new OpenAIAgento11yOptions
             {
                 ModelName = "text-embedding-3-small",
             },

@@ -15,7 +15,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from .agent import build_agent
 from .handlers import router
-from .sigil_client import setup_sigil
+from .agento11y_client import setup_agento11y
 from .telemetry import setup_opentelemetry
 
 
@@ -25,13 +25,13 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     otel = setup_opentelemetry()
-    sigil = setup_sigil(
+    agento11y = setup_agento11y(
         tracer_provider=otel.tracer_provider,
         meter_provider=otel.meter_provider,
     )
 
     app.state.otel = otel
-    app.state.sigil = sigil
+    app.state.agento11y = agento11y
     app.state.agent = build_agent(os.getenv("AGENT_MODEL", "claude-sonnet-4-5"))
     app.state.classifier_model = os.getenv("CLASSIFIER_MODEL", "claude-haiku-4-5")
 
@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
     finally:
         # Shut down Sigil first so in-flight generations finish exporting
         # before OTel tears down the gRPC channels underneath.
-        sigil.shutdown()
+        agento11y.shutdown()
         otel.shutdown()
 
 

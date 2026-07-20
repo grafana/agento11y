@@ -241,13 +241,13 @@ def test_invalid_preferred_capture_mode_warning_names_selected_key(caplog: pytes
     assert not any("SIGIL_CONTENT_CAPTURE_MODE" in r.getMessage() for r in caplog.records)
 
 
-def test_sigil_endpoint_also_defaults_api_endpoint() -> None:
+def test_agento11y_endpoint_also_defaults_api_endpoint() -> None:
     cfg = resolve_config(None, env={"SIGIL_ENDPOINT": "https://sigil.example"})
     assert cfg.generation_export.endpoint == "https://sigil.example"
     assert cfg.api.endpoint == "https://sigil.example"
 
 
-def test_explicit_api_endpoint_overrides_sigil_endpoint() -> None:
+def test_explicit_api_endpoint_overrides_agento11y_endpoint() -> None:
     explicit = ClientConfig(api=ApiConfig(endpoint="https://api.example"))
     cfg = resolve_config(explicit, env={"SIGIL_ENDPOINT": "https://ingest.example"})
     assert cfg.generation_export.endpoint == "https://ingest.example"

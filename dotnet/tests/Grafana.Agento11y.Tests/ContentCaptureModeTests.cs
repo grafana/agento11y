@@ -3,9 +3,9 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Xunit;
-using SigilProto = Agento11y.V1;
+using Agento11yProto = Agento11y.V1;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class ContentCaptureModeTests
 {
@@ -29,7 +29,7 @@ public sealed class ContentCaptureModeTests
         ContentCaptureMode @override,
         ContentCaptureMode expected)
     {
-        var got = SigilClient.ResolveContentCaptureMode(@override, fallback);
+        var got = Agento11yClient.ResolveContentCaptureMode(@override, fallback);
         Assert.Equal(expected, got);
     }
 
@@ -38,31 +38,31 @@ public sealed class ContentCaptureModeTests
     {
         Assert.Equal(
             ContentCaptureMode.MetadataOnly,
-            SigilClient.ResolveContentCaptureMode((ContentCaptureMode)99, ContentCaptureMode.Full));
+            Agento11yClient.ResolveContentCaptureMode((ContentCaptureMode)99, ContentCaptureMode.Full));
         Assert.Equal(
             ContentCaptureMode.MetadataOnly,
-            SigilClient.ResolveContentCaptureMode(ContentCaptureMode.Default, (ContentCaptureMode)99));
+            Agento11yClient.ResolveContentCaptureMode(ContentCaptureMode.Default, (ContentCaptureMode)99));
     }
 
     [Fact]
     public void ResolveClientContentCaptureMode_DefaultBecomesNoToolContent()
     {
-        Assert.Equal(ContentCaptureMode.NoToolContent, SigilClient.ResolveClientContentCaptureMode(ContentCaptureMode.Default));
-        Assert.Equal(ContentCaptureMode.Full, SigilClient.ResolveClientContentCaptureMode(ContentCaptureMode.Full));
-        Assert.Equal(ContentCaptureMode.MetadataOnly, SigilClient.ResolveClientContentCaptureMode(ContentCaptureMode.MetadataOnly));
+        Assert.Equal(ContentCaptureMode.NoToolContent, Agento11yClient.ResolveClientContentCaptureMode(ContentCaptureMode.Default));
+        Assert.Equal(ContentCaptureMode.Full, Agento11yClient.ResolveClientContentCaptureMode(ContentCaptureMode.Full));
+        Assert.Equal(ContentCaptureMode.MetadataOnly, Agento11yClient.ResolveClientContentCaptureMode(ContentCaptureMode.MetadataOnly));
     }
 
     [Fact]
     public void CallContentCaptureResolver_NilReturnsDefault()
     {
-        var got = SigilClient.CallContentCaptureResolver(null, null);
+        var got = Agento11yClient.CallContentCaptureResolver(null, null);
         Assert.Equal(ContentCaptureMode.Default, got);
     }
 
     [Fact]
     public void CallContentCaptureResolver_ReturnsResolverResult()
     {
-        var got = SigilClient.CallContentCaptureResolver(
+        var got = Agento11yClient.CallContentCaptureResolver(
             _ => ContentCaptureMode.MetadataOnly,
             new Dictionary<string, object?>());
         Assert.Equal(ContentCaptureMode.MetadataOnly, got);
@@ -71,7 +71,7 @@ public sealed class ContentCaptureModeTests
     [Fact]
     public void CallContentCaptureResolver_ReadsMetadata()
     {
-        var got = SigilClient.CallContentCaptureResolver(
+        var got = Agento11yClient.CallContentCaptureResolver(
             metadata =>
             {
                 if (metadata != null && metadata.TryGetValue("tenant_id", out var val) && val is string s && s == "opted-out")
@@ -86,7 +86,7 @@ public sealed class ContentCaptureModeTests
     public void CallContentCaptureResolver_PassesReadOnlyMetadata()
     {
         var metadata = new Dictionary<string, object?> { ["tenant_id"] = "original" };
-        var got = SigilClient.CallContentCaptureResolver(
+        var got = Agento11yClient.CallContentCaptureResolver(
             received =>
             {
                 Assert.NotNull(received);
@@ -103,7 +103,7 @@ public sealed class ContentCaptureModeTests
     [Fact]
     public void CallContentCaptureResolver_ExceptionFailsClosed()
     {
-        var got = SigilClient.CallContentCaptureResolver(
+        var got = Agento11yClient.CallContentCaptureResolver(
             _ => throw new InvalidOperationException("resolver bug"),
             null);
         Assert.Equal(ContentCaptureMode.MetadataOnly, got);
@@ -113,7 +113,7 @@ public sealed class ContentCaptureModeTests
     public void StripContent_StripsAllSensitiveContent()
     {
         var gen = MakeTestGeneration();
-        SigilClient.StripContent(gen, "rate_limit");
+        Agento11yClient.StripContent(gen, "rate_limit");
 
         Assert.Equal(string.Empty, gen.SystemPrompt);
         Assert.Equal(string.Empty, gen.Input[0].Parts[0].Text);
@@ -132,18 +132,18 @@ public sealed class ContentCaptureModeTests
     {
         var gen = MakeTestGeneration();
         gen.ConversationTitle = "Secret project discussion";
-        gen.Metadata[SigilClient.SpanAttrConversationTitle] = "Secret project discussion";
-        SigilClient.StripContent(gen, "rate_limit");
+        gen.Metadata[Agento11yClient.SpanAttrConversationTitle] = "Secret project discussion";
+        Agento11yClient.StripContent(gen, "rate_limit");
 
         Assert.Equal(string.Empty, gen.ConversationTitle);
-        Assert.False(gen.Metadata.ContainsKey(SigilClient.SpanAttrConversationTitle));
+        Assert.False(gen.Metadata.ContainsKey(Agento11yClient.SpanAttrConversationTitle));
     }
 
     [Fact]
     public void StripContent_PreservesMessageStructure()
     {
         var gen = MakeTestGeneration();
-        SigilClient.StripContent(gen, "rate_limit");
+        Agento11yClient.StripContent(gen, "rate_limit");
 
         Assert.Equal(2, gen.Input.Count);
         Assert.Single(gen.Output);
@@ -160,7 +160,7 @@ public sealed class ContentCaptureModeTests
     public void StripContent_PreservesOperationalMetadata()
     {
         var gen = MakeTestGeneration();
-        SigilClient.StripContent(gen, "rate_limit");
+        Agento11yClient.StripContent(gen, "rate_limit");
 
         Assert.Equal("weather", gen.Tools[0].Name);
         Assert.Equal(120L, gen.Usage.InputTokens);
@@ -174,7 +174,7 @@ public sealed class ContentCaptureModeTests
     public void StripContent_ReplacesCallErrorWithCategory()
     {
         var gen = MakeTestGeneration();
-        SigilClient.StripContent(gen, "rate_limit");
+        Agento11yClient.StripContent(gen, "rate_limit");
 
         Assert.Equal("rate_limit", gen.CallError);
         Assert.False(gen.Metadata.ContainsKey("call_error"));
@@ -184,7 +184,7 @@ public sealed class ContentCaptureModeTests
     public void StripContent_FallsBackToSdkError()
     {
         var gen = MakeTestGeneration();
-        SigilClient.StripContent(gen, "");
+        Agento11yClient.StripContent(gen, "");
 
         Assert.Equal("sdk_error", gen.CallError);
     }
@@ -208,7 +208,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var gen = env.SingleGeneration();
-        Assert.Equal("no_tool_content", gen.Metadata.Fields[SigilClient.MetadataKeyContentCaptureMode].StringValue);
+        Assert.Equal("no_tool_content", gen.Metadata.Fields[Agento11yClient.MetadataKeyContentCaptureMode].StringValue);
         Assert.Equal("hello", gen.Input[0].Parts[0].Text);
     }
 
@@ -231,7 +231,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var gen = env.SingleGeneration();
-        Assert.Equal("metadata_only", gen.Metadata.Fields[SigilClient.MetadataKeyContentCaptureMode].StringValue);
+        Assert.Equal("metadata_only", gen.Metadata.Fields[Agento11yClient.MetadataKeyContentCaptureMode].StringValue);
         Assert.Equal(string.Empty, gen.Input[0].Parts[0].Text);
         Assert.Equal(10L, gen.Usage.InputTokens);
     }
@@ -256,7 +256,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var span = env.Spans.Single(a => a.GetTagItem("gen_ai.operation.name")?.ToString() == "generateText");
-        Assert.Null(span.GetTagItem(SigilClient.SpanAttrConversationTitle));
+        Assert.Null(span.GetTagItem(Agento11yClient.SpanAttrConversationTitle));
     }
 
     [Fact]
@@ -337,7 +337,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var gen = env.SingleGeneration();
-        Assert.Equal("full", gen.Metadata.Fields[SigilClient.MetadataKeyContentCaptureMode].StringValue);
+        Assert.Equal("full", gen.Metadata.Fields[Agento11yClient.MetadataKeyContentCaptureMode].StringValue);
         Assert.Equal("hello", gen.Input[0].Parts[0].Text);
     }
 
@@ -361,7 +361,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var gen = env.SingleGeneration();
-        Assert.Equal("metadata_only", gen.Metadata.Fields[SigilClient.MetadataKeyContentCaptureMode].StringValue);
+        Assert.Equal("metadata_only", gen.Metadata.Fields[Agento11yClient.MetadataKeyContentCaptureMode].StringValue);
         Assert.Equal(string.Empty, gen.Input[0].Parts[0].Text);
     }
 
@@ -385,7 +385,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var gen = env.SingleGeneration();
-        Assert.Equal("full", gen.Metadata.Fields[SigilClient.MetadataKeyContentCaptureMode].StringValue);
+        Assert.Equal("full", gen.Metadata.Fields[Agento11yClient.MetadataKeyContentCaptureMode].StringValue);
         Assert.Equal("hello", gen.Input[0].Parts[0].Text);
     }
 
@@ -410,7 +410,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var gen = env.SingleGeneration();
-        Assert.Equal("metadata_only", gen.Metadata.Fields[SigilClient.MetadataKeyContentCaptureMode].StringValue);
+        Assert.Equal("metadata_only", gen.Metadata.Fields[Agento11yClient.MetadataKeyContentCaptureMode].StringValue);
         Assert.Equal(string.Empty, gen.Input[0].Parts[0].Text);
     }
 
@@ -436,7 +436,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var gen = env.SingleGeneration();
-        Assert.Equal("full", gen.Metadata.Fields[SigilClient.MetadataKeyContentCaptureMode].StringValue);
+        Assert.Equal("full", gen.Metadata.Fields[Agento11yClient.MetadataKeyContentCaptureMode].StringValue);
         Assert.Equal("hello", gen.Input[0].Parts[0].Text);
     }
 
@@ -468,7 +468,7 @@ public sealed class ContentCaptureModeTests
 
         var gen = env.SingleGeneration();
         Assert.Equal(0, calls);
-        Assert.Equal("full", gen.Metadata.Fields[SigilClient.MetadataKeyContentCaptureMode].StringValue);
+        Assert.Equal("full", gen.Metadata.Fields[Agento11yClient.MetadataKeyContentCaptureMode].StringValue);
     }
 
     [Fact]
@@ -492,7 +492,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var gen = env.SingleGeneration();
-        Assert.Equal("metadata_only", gen.Metadata.Fields[SigilClient.MetadataKeyContentCaptureMode].StringValue);
+        Assert.Equal("metadata_only", gen.Metadata.Fields[Agento11yClient.MetadataKeyContentCaptureMode].StringValue);
         Assert.Equal(string.Empty, gen.Input[0].Parts[0].Text);
     }
 
@@ -536,13 +536,13 @@ public sealed class ContentCaptureModeTests
     [Fact]
     public void ShouldIncludeToolContent_InvalidEnumFailsClosed()
     {
-        Assert.False(SigilClient.ShouldIncludeToolContent(
+        Assert.False(Agento11yClient.ShouldIncludeToolContent(
             (ContentCaptureMode)99,
             ContentCaptureMode.Full,
             true,
             ContentCaptureMode.Full,
             true));
-        Assert.False(SigilClient.ShouldIncludeToolContent(
+        Assert.False(Agento11yClient.ShouldIncludeToolContent(
             ContentCaptureMode.Default,
             (ContentCaptureMode)99,
             true,
@@ -563,7 +563,7 @@ public sealed class ContentCaptureModeTests
         bool legacyInclude,
         bool wantContent)
     {
-        var got = SigilClient.ShouldIncludeToolContent(
+        var got = Agento11yClient.ShouldIncludeToolContent(
             ContentCaptureMode.Default,
             ContentCaptureMode.Default,
             ctxSet,
@@ -584,7 +584,7 @@ public sealed class ContentCaptureModeTests
         bool legacyInclude,
         bool wantContent)
     {
-        var got = SigilClient.ShouldIncludeToolContent(
+        var got = Agento11yClient.ShouldIncludeToolContent(
             ContentCaptureMode.Default,
             ctxMode,
             ctxSet,
@@ -603,7 +603,7 @@ public sealed class ContentCaptureModeTests
         bool legacyInclude,
         bool wantContent)
     {
-        var got = SigilClient.ShouldIncludeToolContent(
+        var got = Agento11yClient.ShouldIncludeToolContent(
             toolMode,
             ctxMode,
             true,
@@ -630,7 +630,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var span = env.ToolSpan();
-        Assert.Null(span.GetTagItem(SigilClient.SpanAttrToolCallArguments));
+        Assert.Null(span.GetTagItem(Agento11yClient.SpanAttrToolCallArguments));
     }
 
     [Fact]
@@ -651,7 +651,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var span = env.ToolSpan();
-        Assert.NotNull(span.GetTagItem(SigilClient.SpanAttrToolCallArguments));
+        Assert.NotNull(span.GetTagItem(Agento11yClient.SpanAttrToolCallArguments));
     }
 
     [Fact]
@@ -675,7 +675,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var span = env.ToolSpan();
-        Assert.Null(span.GetTagItem(SigilClient.SpanAttrToolCallArguments));
+        Assert.Null(span.GetTagItem(Agento11yClient.SpanAttrToolCallArguments));
     }
 
     [Fact]
@@ -701,9 +701,9 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var span = env.ToolSpan();
-        Assert.Null(span.GetTagItem(SigilClient.SpanAttrToolDescription));
-        Assert.Null(span.GetTagItem(SigilClient.SpanAttrConversationTitle));
-        Assert.Null(span.GetTagItem(SigilClient.SpanAttrToolCallArguments));
+        Assert.Null(span.GetTagItem(Agento11yClient.SpanAttrToolDescription));
+        Assert.Null(span.GetTagItem(Agento11yClient.SpanAttrConversationTitle));
+        Assert.Null(span.GetTagItem(Agento11yClient.SpanAttrToolCallArguments));
     }
 
     [Fact]
@@ -727,7 +727,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var span = env.ToolSpan();
-        Assert.NotNull(span.GetTagItem(SigilClient.SpanAttrToolCallArguments));
+        Assert.NotNull(span.GetTagItem(Agento11yClient.SpanAttrToolCallArguments));
     }
 
     [Fact]
@@ -766,7 +766,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var span = env.ToolSpan();
-        Assert.Null(span.GetTagItem(SigilClient.SpanAttrToolCallArguments));
+        Assert.Null(span.GetTagItem(Agento11yClient.SpanAttrToolCallArguments));
     }
 
     [Fact]
@@ -806,7 +806,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var span = env.ToolSpan();
-        Assert.NotNull(span.GetTagItem(SigilClient.SpanAttrToolCallArguments));
+        Assert.NotNull(span.GetTagItem(Agento11yClient.SpanAttrToolCallArguments));
     }
 
     [Fact]
@@ -816,16 +816,16 @@ public sealed class ContentCaptureModeTests
         {
             Metadata = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                [SigilClient.MetadataKeyContentCaptureMode] = "metadata_only",
+                [Agento11yClient.MetadataKeyContentCaptureMode] = "metadata_only",
             },
         };
-        Assert.True(SigilClient.IsContentStripped(gen));
+        Assert.True(Agento11yClient.IsContentStripped(gen));
     }
 
     [Fact]
     public void IsContentStripped_FalseWithoutMarker()
     {
-        Assert.False(SigilClient.IsContentStripped(new Generation()));
+        Assert.False(Agento11yClient.IsContentStripped(new Generation()));
     }
 
     [Fact]
@@ -835,10 +835,10 @@ public sealed class ContentCaptureModeTests
         {
             Metadata = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                [SigilClient.MetadataKeyContentCaptureMode] = "full",
+                [Agento11yClient.MetadataKeyContentCaptureMode] = "full",
             },
         };
-        Assert.False(SigilClient.IsContentStripped(gen));
+        Assert.False(Agento11yClient.IsContentStripped(gen));
     }
 
     [Fact]
@@ -860,7 +860,7 @@ public sealed class ContentCaptureModeTests
         await env.ShutdownAsync(TestContext.Current.CancellationToken);
 
         var span = env.ToolSpan();
-        Assert.NotNull(span.GetTagItem(SigilClient.SpanAttrToolCallArguments));
+        Assert.NotNull(span.GetTagItem(Agento11yClient.SpanAttrToolCallArguments));
     }
 
     [Fact]
@@ -890,7 +890,7 @@ public sealed class ContentCaptureModeTests
 
         var span = env.ToolSpan();
         Assert.Equal(0, calls);
-        Assert.NotNull(span.GetTagItem(SigilClient.SpanAttrToolCallArguments));
+        Assert.NotNull(span.GetTagItem(Agento11yClient.SpanAttrToolCallArguments));
     }
 
     [Fact]
@@ -933,7 +933,7 @@ public sealed class ContentCaptureModeTests
 
         var span = env.ToolSpan();
         Assert.Equal(0, calls);
-        Assert.NotNull(span.GetTagItem(SigilClient.SpanAttrToolCallArguments));
+        Assert.NotNull(span.GetTagItem(Agento11yClient.SpanAttrToolCallArguments));
     }
 
     [Fact]
@@ -944,10 +944,10 @@ public sealed class ContentCaptureModeTests
         {
             Metadata = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                [SigilClient.MetadataKeyContentCaptureMode] = JsonDocument.Parse("\"metadata_only\"").RootElement,
+                [Agento11yClient.MetadataKeyContentCaptureMode] = JsonDocument.Parse("\"metadata_only\"").RootElement,
             },
         };
-        Assert.True(SigilClient.IsContentStripped(gen));
+        Assert.True(Agento11yClient.IsContentStripped(gen));
     }
 
     [Fact]
@@ -957,17 +957,17 @@ public sealed class ContentCaptureModeTests
         {
             Metadata = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                [SigilClient.MetadataKeyContentCaptureMode] = JsonDocument.Parse("\"full\"").RootElement,
+                [Agento11yClient.MetadataKeyContentCaptureMode] = JsonDocument.Parse("\"full\"").RootElement,
             },
         };
-        Assert.False(SigilClient.IsContentStripped(gen));
+        Assert.False(Agento11yClient.IsContentStripped(gen));
     }
 
     [Fact]
     public void CallContentCaptureResolver_PassesNullMetadataThrough()
     {
         IReadOnlyDictionary<string, object?>? received = new Dictionary<string, object?>();
-        SigilClient.CallContentCaptureResolver(
+        Agento11yClient.CallContentCaptureResolver(
             metadata =>
             {
                 received = metadata;
@@ -980,7 +980,7 @@ public sealed class ContentCaptureModeTests
     [Fact]
     public void CallContentCaptureResolver_InvalidEnumFailsClosed()
     {
-        var got = SigilClient.CallContentCaptureResolver(
+        var got = Agento11yClient.CallContentCaptureResolver(
             _ => (ContentCaptureMode)99,
             null);
         Assert.Equal(ContentCaptureMode.MetadataOnly, got);
@@ -990,7 +990,7 @@ public sealed class ContentCaptureModeTests
     public void CallContentCaptureResolver_LogsOnException()
     {
         List<string> logged = [];
-        SigilClient.CallContentCaptureResolver(
+        Agento11yClient.CallContentCaptureResolver(
             _ => throw new InvalidOperationException("resolver bug"),
             null,
             msg => logged.Add(msg));
@@ -1002,7 +1002,7 @@ public sealed class ContentCaptureModeTests
     public void CallContentCaptureResolver_LogsOnInvalidEnum()
     {
         List<string> logged = [];
-        SigilClient.CallContentCaptureResolver(
+        Agento11yClient.CallContentCaptureResolver(
             _ => (ContentCaptureMode)99,
             null,
             msg => logged.Add(msg));
@@ -1064,7 +1064,7 @@ public sealed class ContentCaptureModeTests
 
         // genB was Full, so tool content should have been included.
         var span = env.ToolSpan();
-        Assert.NotNull(span.GetTagItem(SigilClient.SpanAttrToolCallArguments));
+        Assert.NotNull(span.GetTagItem(Agento11yClient.SpanAttrToolCallArguments));
     }
 
     [Fact]
@@ -1176,7 +1176,7 @@ public sealed class ContentCaptureModeTests
 
         var gen = env.SingleGeneration();
         Assert.Equal(expect.Marker,
-            gen.Metadata.Fields[SigilClient.MetadataKeyContentCaptureMode].StringValue);
+            gen.Metadata.Fields[Agento11yClient.MetadataKeyContentCaptureMode].StringValue);
 
         // Content fields: stripped only under MetadataOnly.
         AssertProtoContent("system_prompt", gen.SystemPrompt, "You are helpful.", expect.ProtoContentStripped);
@@ -1196,16 +1196,16 @@ public sealed class ContentCaptureModeTests
         // Conversation title metadata mirror: present iff the proto keeps it.
         if (expect.ProtoContentStripped)
         {
-            Assert.False(gen.Metadata.Fields.ContainsKey(SigilClient.SpanAttrConversationTitle));
+            Assert.False(gen.Metadata.Fields.ContainsKey(Agento11yClient.SpanAttrConversationTitle));
         }
         else
         {
-            Assert.Equal(title, gen.Metadata.Fields[SigilClient.SpanAttrConversationTitle].StringValue);
+            Assert.Equal(title, gen.Metadata.Fields[Agento11yClient.SpanAttrConversationTitle].StringValue);
         }
 
         // Span path: title presence is what the mode advertises.
         var span = env.GenerationSpan();
-        var spanTitle = span.GetTagItem(SigilClient.SpanAttrConversationTitle)?.ToString();
+        var spanTitle = span.GetTagItem(Agento11yClient.SpanAttrConversationTitle)?.ToString();
         if (expect.SpanTitlePresent)
         {
             Assert.Equal(title, spanTitle);
@@ -1291,13 +1291,13 @@ public sealed class ContentCaptureModeTests
         var gen = env.SingleGeneration();
         Assert.Equal("Be helpful.", gen.SystemPrompt);
         Assert.Equal("hello", gen.Input[0].Parts[0].Text);
-        Assert.Equal(title, gen.Metadata.Fields[SigilClient.SpanAttrConversationTitle].StringValue);
+        Assert.Equal(title, gen.Metadata.Fields[Agento11yClient.SpanAttrConversationTitle].StringValue);
         Assert.Equal("full_with_metadata_spans",
-            gen.Metadata.Fields[SigilClient.MetadataKeyContentCaptureMode].StringValue);
+            gen.Metadata.Fields[Agento11yClient.MetadataKeyContentCaptureMode].StringValue);
 
         // Span uses streamText operation and still drops the title.
         var streamSpan = env.StreamingGenerationSpan();
-        Assert.Null(streamSpan.GetTagItem(SigilClient.SpanAttrConversationTitle));
+        Assert.Null(streamSpan.GetTagItem(Agento11yClient.SpanAttrConversationTitle));
     }
 
     private static Generation MatrixFixtureGeneration()
@@ -1398,7 +1398,7 @@ public sealed class ContentCaptureModeTests
         var span = env.ToolSpan();
         Assert.Null(span.GetTagItem("gen_ai.tool.call.arguments"));
         Assert.Null(span.GetTagItem("gen_ai.tool.call.result"));
-        Assert.Null(span.GetTagItem(SigilClient.SpanAttrConversationTitle));
+        Assert.Null(span.GetTagItem(Agento11yClient.SpanAttrConversationTitle));
         Assert.Null(span.GetTagItem("gen_ai.tool.description"));
         // Identity attributes still emitted.
         Assert.Equal("weather", span.GetTagItem("gen_ai.tool.name")?.ToString());
@@ -1556,7 +1556,7 @@ public sealed class ContentCaptureModeTests
             )
         );
 
-        await using var client = new SigilClient(new SigilClientConfig
+        await using var client = new Agento11yClient(new Agento11yClientConfig
         {
             ContentCapture = ContentCaptureMode.FullWithMetadataSpans,
             Api = new ApiConfig { Endpoint = $"http://127.0.0.1:{server.Port}" },
@@ -1596,7 +1596,7 @@ public sealed class ContentCaptureModeTests
         Assert.Null(span.GetTagItem("exception.stacktrace"));
         Assert.Equal(ActivityStatusCode.Error, span.Status);
         Assert.DoesNotContain(LeakMarker, span.StatusDescription ?? string.Empty);
-        Assert.Equal(expectedErrorType, span.GetTagItem(SigilClient.SpanAttrErrorType)?.ToString());
+        Assert.Equal(expectedErrorType, span.GetTagItem(Agento11yClient.SpanAttrErrorType)?.ToString());
     }
 
     private static Generation MakeTestGeneration()
@@ -1681,7 +1681,7 @@ public sealed class ContentCaptureModeTests
         private readonly ActivityListener _activityListener;
 
         public GrpcIngestServer Ingest { get; }
-        public SigilClient Client { get; }
+        public Agento11yClient Client { get; }
         public ConcurrentQueue<Activity> Spans { get; } = new();
 
         public ContentCaptureEnv(
@@ -1691,14 +1691,14 @@ public sealed class ContentCaptureModeTests
         {
             _activityListener = new ActivityListener
             {
-                ShouldListenTo = source => source.Name == SigilClient.InstrumentationName,
+                ShouldListenTo = source => source.Name == Agento11yClient.InstrumentationName,
                 Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
                 ActivityStopped = activity => Spans.Enqueue(activity),
             };
             ActivitySource.AddActivityListener(_activityListener);
 
             Ingest = new GrpcIngestServer();
-            Client = new SigilClient(new SigilClientConfig
+            Client = new Agento11yClient(new Agento11yClientConfig
             {
                 ContentCapture = clientMode,
                 ContentCaptureResolver = resolver,
@@ -1727,7 +1727,7 @@ public sealed class ContentCaptureModeTests
             Ingest.Dispose();
         }
 
-        public SigilProto.Generation SingleGeneration()
+        public Agento11yProto.Generation SingleGeneration()
         {
             Assert.Single(Ingest.Requests);
             Assert.Single(Ingest.Requests[0].Request.Generations);

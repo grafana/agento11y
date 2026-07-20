@@ -1,6 +1,6 @@
 # LangGraph Handler (`@grafana/agento11y/langgraph`)
 
-Use `SigilLangGraphHandler` to map LangGraph callback lifecycle events to Sigil generation records.
+Use `Agento11yLangGraphHandler` to map LangGraph callback lifecycle events to Sigil generation records.
 
 ## Install
 
@@ -11,11 +11,11 @@ pnpm add @grafana/agento11y @langchain/core @langchain/langgraph @langchain/open
 ## Usage
 
 ```ts
-import { SigilClient } from '@grafana/agento11y';
-import { withSigilLangGraphCallbacks } from '@grafana/agento11y/langgraph';
+import { Agento11yClient } from '@grafana/agento11y';
+import { withAgento11yLangGraphCallbacks } from '@grafana/agento11y/langgraph';
 
-const client = new SigilClient();
-const config = withSigilLangGraphCallbacks(undefined, client, { providerResolver: 'auto' });
+const client = new Agento11yClient();
+const config = withAgento11yLangGraphCallbacks(undefined, client, { providerResolver: 'auto' });
 ```
 
 ## End-to-end example (graph invoke + stream)
@@ -23,10 +23,10 @@ const config = withSigilLangGraphCallbacks(undefined, client, { providerResolver
 ```ts
 import { ChatOpenAI } from '@langchain/openai';
 import { END, START, StateGraph, Annotation } from '@langchain/langgraph';
-import { SigilClient } from '@grafana/agento11y';
+import { Agento11yClient } from '@grafana/agento11y';
 import {
-  SigilLangGraphHandler,
-  withSigilLangGraphCallbacks,
+  Agento11yLangGraphHandler,
+  withAgento11yLangGraphCallbacks,
 } from '@grafana/agento11y/langgraph';
 
 const GraphState = Annotation.Root({
@@ -34,8 +34,8 @@ const GraphState = Annotation.Root({
   answer: Annotation<string>(),
 });
 
-const client = new SigilClient();
-const handler = new SigilLangGraphHandler(client, {
+const client = new Agento11yClient();
+const handler = new Agento11yLangGraphHandler(client, {
   providerResolver: 'auto',
   agentName: 'langgraph-example',
   agentVersion: '1.0.0',
@@ -46,7 +46,7 @@ const graph = new StateGraph(GraphState)
   .addNode('model', async (state) => {
     const response = await llm.invoke(
       state.prompt,
-      withSigilLangGraphCallbacks(undefined, client, { providerResolver: 'auto' })
+      withAgento11yLangGraphCallbacks(undefined, client, { providerResolver: 'auto' })
     );
     return { answer: String(response.content) };
   })
@@ -64,7 +64,7 @@ for await (const _event of graph.stream({ prompt: 'List three practical alerting
 }
 
 // Advanced usage: instantiate and pass a handler manually.
-const handler = new SigilLangGraphHandler(client, { providerResolver: 'auto' });
+const handler = new Agento11yLangGraphHandler(client, { providerResolver: 'auto' });
 await llm.invoke('manual handler wiring', { callbacks: [handler] });
 
 await client.shutdown();
@@ -85,7 +85,7 @@ const persistedGraph = new StateGraph(GraphState)
   .addEdge('model', END)
   .compile({ checkpointer });
 const threadConfig = {
-  ...withSigilLangGraphCallbacks(undefined, client, { providerResolver: 'auto' }),
+  ...withAgento11yLangGraphCallbacks(undefined, client, { providerResolver: 'auto' }),
   configurable: { thread_id: 'customer-42' },
 };
 
@@ -128,7 +128,7 @@ Framework tags and metadata are always injected:
 - `metadata["agento11y.framework.langgraph.node"]=<node id>` (when callback context exposes it)
 - generation span attributes mirror low-cardinality framework metadata keys
 
-Fallback conversation mapping uses `sigil:framework:langgraph:<run_id>` when no framework session key is available.
+Fallback conversation mapping uses `agento11y:framework:langgraph:<run_id>` when no framework session key is available.
 
 Provider resolver behavior:
 

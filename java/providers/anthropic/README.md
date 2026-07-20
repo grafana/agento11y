@@ -35,7 +35,7 @@ MessageCreateParams request = MessageCreateParams.builder()
     .build();
 
 Message response = AnthropicAdapter.completion(
-    sigilClient,
+    agento11yClient,
     request,
     params -> anthropic.messages().create(params),
     new AnthropicOptions()
@@ -49,7 +49,7 @@ Message response = AnthropicAdapter.completion(
 
 ```java
 AnthropicStreamSummary summary = AnthropicAdapter.completionStream(
-    sigilClient,
+    agento11yClient,
     request,
     params -> anthropic.messages().createStreaming(params),
     new AnthropicOptions()

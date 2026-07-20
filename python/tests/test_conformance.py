@@ -42,8 +42,8 @@ from agento11y import (
     with_conversation_title,
     with_user_id,
 )
-from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2 as sigil_pb2
-from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2_grpc as sigil_pb2_grpc
+from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2 as agento11y_pb2
+from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2_grpc as agento11y_pb2_grpc
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
@@ -58,20 +58,20 @@ _span_attr_user_id = "user.id"
 
 
 class _CapturingGenerationServicer(
-    sigil_pb2_grpc.GenerationIngestServiceServicer,
-    sigil_pb2_grpc.WorkflowStepIngestServiceServicer,
+    agento11y_pb2_grpc.GenerationIngestServiceServicer,
+    agento11y_pb2_grpc.WorkflowStepIngestServiceServicer,
 ):
     def __init__(self) -> None:
-        self.requests: list[sigil_pb2.ExportGenerationsRequest] = []
-        self.workflow_step_requests: list[sigil_pb2.ExportWorkflowStepsRequest] = []
+        self.requests: list[agento11y_pb2.ExportGenerationsRequest] = []
+        self.workflow_step_requests: list[agento11y_pb2.ExportWorkflowStepsRequest] = []
         self._lock = threading.Lock()
 
     def ExportGenerations(self, request, _context):  # noqa: N802
         with self._lock:
             self.requests.append(copy.deepcopy(request))
-        return sigil_pb2.ExportGenerationsResponse(
+        return agento11y_pb2.ExportGenerationsResponse(
             results=[
-                sigil_pb2.ExportGenerationResult(generation_id=generation.id, accepted=True)
+                agento11y_pb2.ExportGenerationResult(generation_id=generation.id, accepted=True)
                 for generation in request.generations
             ]
         )
@@ -79,18 +79,19 @@ class _CapturingGenerationServicer(
     def ExportWorkflowSteps(self, request, _context):  # noqa: N802
         with self._lock:
             self.workflow_step_requests.append(copy.deepcopy(request))
-        return sigil_pb2.ExportWorkflowStepsResponse(
+        return agento11y_pb2.ExportWorkflowStepsResponse(
             results=[
-                sigil_pb2.ExportWorkflowStepResult(step_id=step.id, accepted=True) for step in request.workflow_steps
+                agento11y_pb2.ExportWorkflowStepResult(step_id=step.id, accepted=True)
+                for step in request.workflow_steps
             ]
         )
 
-    def single_generation(self) -> sigil_pb2.Generation:
+    def single_generation(self) -> agento11y_pb2.Generation:
         assert len(self.requests) == 1
         assert len(self.requests[0].generations) == 1
         return self.requests[0].generations[0]
 
-    def single_workflow_step(self) -> sigil_pb2.WorkflowStep:
+    def single_workflow_step(self) -> agento11y_pb2.WorkflowStep:
         assert len(self.workflow_step_requests) == 1
         assert len(self.workflow_step_requests[0].workflow_steps) == 1
         return self.workflow_step_requests[0].workflow_steps[0]
@@ -163,8 +164,8 @@ class _ConformanceEnv:
     ) -> None:
         self.servicer = _CapturingGenerationServicer()
         self.grpc_server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=2))
-        sigil_pb2_grpc.add_GenerationIngestServiceServicer_to_server(self.servicer, self.grpc_server)
-        sigil_pb2_grpc.add_WorkflowStepIngestServiceServicer_to_server(self.servicer, self.grpc_server)
+        agento11y_pb2_grpc.add_GenerationIngestServiceServicer_to_server(self.servicer, self.grpc_server)
+        agento11y_pb2_grpc.add_WorkflowStepIngestServiceServicer_to_server(self.servicer, self.grpc_server)
 
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
@@ -193,8 +194,8 @@ class _ConformanceEnv:
         )
         self.client = Client(
             ClientConfig(
-                tracer=self.tracer_provider.get_tracer("sigil-conformance-test"),
-                meter=self.meter_provider.get_meter("sigil-conformance-test"),
+                tracer=self.tracer_provider.get_tracer("agento11y-conformance-test"),
+                meter=self.meter_provider.get_meter("agento11y-conformance-test"),
                 generation_export=export_config,
                 api=ApiConfig(endpoint=self.rating_server.endpoint),
                 now=now,
@@ -323,7 +324,7 @@ def test_conformance_sync_roundtrip_semantics() -> None:
         span = env.generation_span()
         metrics = env.metrics()
 
-        assert generation.mode == sigil_pb2.GENERATION_MODE_SYNC
+        assert generation.mode == agento11y_pb2.GENERATION_MODE_SYNC
         assert generation.operation_name == "generateText"
         assert generation.conversation_id == "conv-roundtrip"
         assert generation.agent_name == "agent-roundtrip"
@@ -696,7 +697,7 @@ def test_conformance_streaming_telemetry_semantics() -> None:
         span = env.generation_span()
         metrics = env.metrics()
 
-        assert generation.mode == sigil_pb2.GENERATION_MODE_STREAM
+        assert generation.mode == agento11y_pb2.GENERATION_MODE_STREAM
         assert generation.operation_name == "streamText"
         assert generation.output[0].parts[0].text == "Hello world"
         assert span.name == "streamText gpt-5"
@@ -962,7 +963,7 @@ def test_conformance_shutdown_flush_semantics() -> None:
         env.shutdown()
 
 
-def test_conformance_no_sdk_owned_legacy_sigil_namespace() -> None:
+def test_conformance_no_sdk_owned_legacy_agento11y_namespace() -> None:
     """Guards the agento11y rename: the SDK emits only agento11y.* names for
     SDK-owned span attributes, metadata keys, and tag projections, while
     caller-supplied metadata and tags pass through untouched even when they

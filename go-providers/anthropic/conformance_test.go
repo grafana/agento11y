@@ -10,14 +10,14 @@ import (
 
 	asdk "github.com/anthropics/anthropic-sdk-go"
 
-	sigil "github.com/grafana/agento11y/go/sigil"
-	"github.com/grafana/agento11y/go/sigil/sigiltest"
+	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/go/agento11y/testkit"
 )
 
 const anthropicSpanErrorCategory = "error.category"
 
 func TestConformance_AnthropicSyncMapping(t *testing.T) {
-	env := sigiltest.NewEnv(t)
+	env := testkit.NewEnv(t)
 
 	req := testRequest()
 	resp := &asdk.BetaMessage{
@@ -40,12 +40,12 @@ func TestConformance_AnthropicSyncMapping(t *testing.T) {
 			},
 		},
 	}
-	start := sigil.GenerationStart{
+	start := agento11y.GenerationStart{
 		ConversationID:    "conv-anthropic-sync",
 		ConversationTitle: "Anthropic sync",
 		AgentName:         "agent-anthropic",
 		AgentVersion:      "v-anthropic",
-		Model:             sigil.ModelRef{Provider: "anthropic", Name: req.Model},
+		Model:             agento11y.ModelRef{Provider: "anthropic", Name: req.Model},
 	}
 
 	generation, err := FromRequestResponse(
@@ -57,42 +57,42 @@ func TestConformance_AnthropicSyncMapping(t *testing.T) {
 		WithAgentVersion(start.AgentVersion),
 		WithTag("tenant", "t-anthropic"),
 	)
-	sigiltest.RecordGeneration(t, env, start, generation, err)
+	testkit.RecordGeneration(t, env, start, generation, err)
 	env.Shutdown(t)
 
 	exported := env.SingleGenerationJSON(t)
 
-	if got := sigiltest.StringValue(t, exported, "mode"); got != "GENERATION_MODE_SYNC" {
-		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_SYNC", sigiltest.DebugJSON(exported))
+	if got := testkit.StringValue(t, exported, "mode"); got != "GENERATION_MODE_SYNC" {
+		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_SYNC", testkit.DebugJSON(exported))
 	}
-	if got := sigiltest.StringValue(t, exported, "stop_reason"); got != "tool_use" {
+	if got := testkit.StringValue(t, exported, "stop_reason"); got != "tool_use" {
 		t.Fatalf("unexpected stop_reason: got %q want %q", got, "tool_use")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 0, "parts", 0, "thinking"); got != "need weather tool" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 0, "thinking"); got != "need weather tool" {
 		t.Fatalf("unexpected thinking part: got %q want %q", got, "need weather tool")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 0, "parts", 1, "text"); got != "Checking weather." {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "text"); got != "Checking weather." {
 		t.Fatalf("unexpected text part: got %q want %q", got, "Checking weather.")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 0, "parts", 2, "tool_call", "name"); got != "weather" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 2, "tool_call", "name"); got != "weather" {
 		t.Fatalf("unexpected tool_call.name: got %q want %q", got, "weather")
 	}
-	if got := sigiltest.StringValue(t, exported, "input", 2, "role"); got != "MESSAGE_ROLE_TOOL" {
+	if got := testkit.StringValue(t, exported, "input", 2, "role"); got != "MESSAGE_ROLE_TOOL" {
 		t.Fatalf("unexpected tool input role: got %q want %q", got, "MESSAGE_ROLE_TOOL")
 	}
-	if got := sigiltest.StringValue(t, exported, "usage", "cache_read_input_tokens"); got != "30" {
+	if got := testkit.StringValue(t, exported, "usage", "cache_read_input_tokens"); got != "30" {
 		t.Fatalf("unexpected usage.cache_read_input_tokens: got %q want %q", got, "30")
 	}
-	if got := sigiltest.StringValue(t, exported, "usage", "cache_write_input_tokens"); got != "10" {
+	if got := testkit.StringValue(t, exported, "usage", "cache_write_input_tokens"); got != "10" {
 		t.Fatalf("unexpected usage.cache_write_input_tokens: got %q want %q", got, "10")
 	}
-	if got := sigiltest.FloatValue(t, exported, "metadata", "agento11y.gen_ai.usage.server_tool_use.total_requests"); got != 3 {
+	if got := testkit.FloatValue(t, exported, "metadata", "agento11y.gen_ai.usage.server_tool_use.total_requests"); got != 3 {
 		t.Fatalf("unexpected server tool total requests: got %v want %v", got, float64(3))
 	}
 }
 
 func TestConformance_AnthropicStreamMapping(t *testing.T) {
-	env := sigiltest.NewEnv(t)
+	env := testkit.NewEnv(t)
 
 	req := testRequest()
 	summary := StreamSummary{
@@ -152,11 +152,11 @@ func TestConformance_AnthropicStreamMapping(t *testing.T) {
 			},
 		},
 	}
-	start := sigil.GenerationStart{
+	start := agento11y.GenerationStart{
 		ConversationID: "conv-anthropic-stream",
 		AgentName:      "agent-anthropic-stream",
 		AgentVersion:   "v-anthropic-stream",
-		Model:          sigil.ModelRef{Provider: "anthropic", Name: req.Model},
+		Model:          agento11y.ModelRef{Provider: "anthropic", Name: req.Model},
 	}
 
 	generation, err := FromStream(
@@ -166,55 +166,55 @@ func TestConformance_AnthropicStreamMapping(t *testing.T) {
 		WithAgentName(start.AgentName),
 		WithAgentVersion(start.AgentVersion),
 	)
-	sigiltest.RecordStreamingGeneration(t, env, start, summary.FirstChunkAt, generation, err)
+	testkit.RecordStreamingGeneration(t, env, start, summary.FirstChunkAt, generation, err)
 	env.Shutdown(t)
 
 	exported := env.SingleGenerationJSON(t)
 
-	if got := sigiltest.StringValue(t, exported, "mode"); got != "GENERATION_MODE_STREAM" {
-		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_STREAM", sigiltest.DebugJSON(exported))
+	if got := testkit.StringValue(t, exported, "mode"); got != "GENERATION_MODE_STREAM" {
+		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_STREAM", testkit.DebugJSON(exported))
 	}
-	if got := sigiltest.StringValue(t, exported, "response_id"); got != "msg_conformance_stream" {
+	if got := testkit.StringValue(t, exported, "response_id"); got != "msg_conformance_stream" {
 		t.Fatalf("unexpected response_id: got %q want %q", got, "msg_conformance_stream")
 	}
-	if got := sigiltest.StringValue(t, exported, "stop_reason"); got != "tool_use" {
+	if got := testkit.StringValue(t, exported, "stop_reason"); got != "tool_use" {
 		t.Fatalf("unexpected stop_reason: got %q want %q", got, "tool_use")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 0, "parts", 0, "thinking"); got != "need weather" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 0, "thinking"); got != "need weather" {
 		t.Fatalf("unexpected streamed thinking part: got %q want %q", got, "need weather")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 0, "parts", 1, "text"); got != "Checking weather" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "text"); got != "Checking weather" {
 		t.Fatalf("unexpected streamed text part: got %q want %q", got, "Checking weather")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 0, "parts", 2, "tool_call", "name"); got != "weather" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 2, "tool_call", "name"); got != "weather" {
 		t.Fatalf("unexpected streamed tool_call.name: got %q want %q", got, "weather")
 	}
-	if got := sigiltest.StringValue(t, exported, "usage", "total_tokens"); got != "105" {
+	if got := testkit.StringValue(t, exported, "usage", "total_tokens"); got != "105" {
 		t.Fatalf("unexpected streamed usage.total_tokens: got %q want %q", got, "105")
 	}
 }
 
 func TestConformance_AnthropicErrorMapping(t *testing.T) {
-	env := sigiltest.NewEnv(t)
+	env := testkit.NewEnv(t)
 
 	callErr := &asdk.Error{
 		StatusCode: http.StatusTooManyRequests,
 		Request:    &http.Request{Method: http.MethodPost, URL: mustAnthropicURL(t, "https://api.anthropic.com/v1/messages")},
 		Response:   &http.Response{StatusCode: http.StatusTooManyRequests, Status: "429 Too Many Requests"},
 	}
-	sigiltest.RecordCallError(t, env, sigil.GenerationStart{
-		Model: sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-5"},
+	testkit.RecordCallError(t, env, agento11y.GenerationStart{
+		Model: agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-5"},
 	}, callErr)
 
-	span := sigiltest.FindSpan(t, env.Spans.Ended(), "generateText claude-sonnet-4-5")
-	attrs := sigiltest.SpanAttributes(span)
+	span := testkit.FindSpan(t, env.Spans.Ended(), "generateText claude-sonnet-4-5")
+	attrs := testkit.SpanAttributes(span)
 	if got := attrs[anthropicSpanErrorCategory].AsString(); got != "rate_limit" {
 		t.Fatalf("unexpected error.category: got %q want %q", got, "rate_limit")
 	}
 
 	env.Shutdown(t)
 	exported := env.SingleGenerationJSON(t)
-	callError := sigiltest.StringValue(t, exported, "call_error")
+	callError := testkit.StringValue(t, exported, "call_error")
 	if !strings.Contains(callError, "429") {
 		t.Fatalf("expected call_error to include status code, got %q", callError)
 	}
@@ -285,13 +285,13 @@ func TestConformance_MessageSyncNormalization(t *testing.T) {
 	if len(generation.Output) != 1 || len(generation.Output[0].Parts) != 3 {
 		t.Fatalf("expected text + thinking + tool call output, got %#v", generation.Output)
 	}
-	if generation.Output[0].Parts[0].Kind != sigil.PartKindText || generation.Output[0].Parts[0].Text != "It's 18C and sunny." {
+	if generation.Output[0].Parts[0].Kind != agento11y.PartKindText || generation.Output[0].Parts[0].Text != "It's 18C and sunny." {
 		t.Fatalf("unexpected text output: %#v", generation.Output[0].Parts[0])
 	}
-	if generation.Output[0].Parts[1].Kind != sigil.PartKindThinking || generation.Output[0].Parts[1].Thinking != "answer done" {
+	if generation.Output[0].Parts[1].Kind != agento11y.PartKindThinking || generation.Output[0].Parts[1].Thinking != "answer done" {
 		t.Fatalf("unexpected thinking output: %#v", generation.Output[0].Parts[1])
 	}
-	if generation.Output[0].Parts[2].Kind != sigil.PartKindToolCall {
+	if generation.Output[0].Parts[2].Kind != agento11y.PartKindToolCall {
 		t.Fatalf("expected tool call output, got %#v", generation.Output[0].Parts[2])
 	}
 	if generation.Output[0].Parts[2].ToolCall.ID != "toolu_2" || generation.Output[0].Parts[2].ToolCall.Name != "weather" {
@@ -301,9 +301,9 @@ func TestConformance_MessageSyncNormalization(t *testing.T) {
 		t.Fatalf("expected tenant tag")
 	}
 	requireAnthropicArtifactKinds(t, generation.Artifacts,
-		sigil.ArtifactKindRequest,
-		sigil.ArtifactKindResponse,
-		sigil.ArtifactKindTools,
+		agento11y.ArtifactKindRequest,
+		agento11y.ArtifactKindResponse,
+		agento11y.ArtifactKindTools,
 	)
 }
 
@@ -410,22 +410,22 @@ func TestConformance_MessageStreamNormalization(t *testing.T) {
 	if len(generation.Output) != 1 || len(generation.Output[0].Parts) != 3 {
 		t.Fatalf("expected thinking + text + tool call output, got %#v", generation.Output)
 	}
-	if generation.Output[0].Parts[0].Kind != sigil.PartKindThinking || generation.Output[0].Parts[0].Thinking != "let me think about this" {
+	if generation.Output[0].Parts[0].Kind != agento11y.PartKindThinking || generation.Output[0].Parts[0].Thinking != "let me think about this" {
 		t.Fatalf("unexpected thinking output: %#v", generation.Output[0].Parts[0])
 	}
-	if generation.Output[0].Parts[1].Kind != sigil.PartKindText || generation.Output[0].Parts[1].Text != "Hello, world!" {
+	if generation.Output[0].Parts[1].Kind != agento11y.PartKindText || generation.Output[0].Parts[1].Text != "Hello, world!" {
 		t.Fatalf("unexpected text output: %#v", generation.Output[0].Parts[1])
 	}
-	if generation.Output[0].Parts[2].Kind != sigil.PartKindToolCall {
+	if generation.Output[0].Parts[2].Kind != agento11y.PartKindToolCall {
 		t.Fatalf("expected tool call output, got %#v", generation.Output[0].Parts[2])
 	}
 	if string(generation.Output[0].Parts[2].ToolCall.InputJSON) != `{"city":"Berlin"}` {
 		t.Fatalf("unexpected streamed tool input: %q", string(generation.Output[0].Parts[2].ToolCall.InputJSON))
 	}
 	requireAnthropicArtifactKinds(t, generation.Artifacts,
-		sigil.ArtifactKindRequest,
-		sigil.ArtifactKindTools,
-		sigil.ArtifactKindProviderEvent,
+		agento11y.ArtifactKindRequest,
+		agento11y.ArtifactKindTools,
+		agento11y.ArtifactKindProviderEvent,
 	)
 }
 
@@ -457,7 +457,7 @@ func TestConformance_EmbeddingSupportStatus(t *testing.T) {
 	}
 }
 
-func requireAnthropicArtifactKinds(t *testing.T, artifacts []sigil.Artifact, want ...sigil.ArtifactKind) {
+func requireAnthropicArtifactKinds(t *testing.T, artifacts []agento11y.Artifact, want ...agento11y.ArtifactKind) {
 	t.Helper()
 
 	if len(artifacts) != len(want) {

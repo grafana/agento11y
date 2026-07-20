@@ -14,7 +14,7 @@ import {
 } from "@opentelemetry/sdk-metrics";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { Resource } from "@opentelemetry/resources";
-import { createSigilClient } from "@grafana/agento11y";
+import { createAgento11yClient } from "@grafana/agento11y";
 import type { GenerationRecorder } from "@grafana/agento11y";
 
 const resource = new Resource({ "service.name": "getting-started-typescript" });
@@ -34,7 +34,7 @@ metrics.setGlobalMeterProvider(mp);
 const openai = new OpenAI();
 const model = "gpt-4.1-mini";
 
-const sigil = createSigilClient({
+const agento11y = createAgento11yClient({
   generationExport: {
     protocol: "http",
     endpoint: process.env.AGENTO11Y_ENDPOINT!,
@@ -64,7 +64,7 @@ const responseText = completion.choices[0].message.content ?? "";
 const usage = completion.usage;
 console.log(`Response: ${responseText}\n`);
 
-await sigil.startGeneration(
+await agento11y.startGeneration(
   {
     conversationId: "getting-started-typescript",
     agentName: "getting-started",
@@ -93,7 +93,7 @@ await sigil.startGeneration(
   },
 );
 
-await sigil.shutdown();
+await agento11y.shutdown();
 await tp.shutdown();
 await mp.shutdown();
 console.log(

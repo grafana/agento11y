@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
@@ -41,7 +41,7 @@ type ClientOptions struct {
 	// InstrumentationName is the OTel scope name attached to spans/metrics.
 	InstrumentationName string
 	// ContentCapture is the resolved capture mode for the client.
-	ContentCapture sigil.ContentCaptureMode
+	ContentCapture agento11y.ContentCaptureMode
 	// Logger is forwarded to the SDK client. nil leaves the SDK silent
 	// (cursor relies on this).
 	Logger *log.Logger
@@ -56,11 +56,11 @@ type ClientOptions struct {
 // exportConfig builds the shared HTTP/basic-auth generation export config.
 // A non-empty userAgent sets the export User-Agent header (each agent passes
 // its own token via useragent.For); empty leaves the SDK default in place.
-func exportConfig(userAgent string) sigil.GenerationExportConfig {
-	export := sigil.GenerationExportConfig{
-		Protocol: sigil.GenerationExportProtocolHTTP,
+func exportConfig(userAgent string) agento11y.GenerationExportConfig {
+	export := agento11y.GenerationExportConfig{
+		Protocol: agento11y.GenerationExportProtocolHTTP,
 		Endpoint: ExportEndpoint(),
-		Auth:     sigil.AuthConfig{Mode: sigil.ExportAuthModeBasic},
+		Auth:     agento11y.AuthConfig{Mode: agento11y.ExportAuthModeBasic},
 	}
 	if userAgent != "" {
 		export.Headers = map[string]string{"User-Agent": userAgent}
@@ -70,8 +70,8 @@ func exportConfig(userAgent string) sigil.GenerationExportConfig {
 
 // NewClient builds a Sigil client with the shared HTTP/basic-auth generation
 // export defaults and optional OTel providers.
-func NewClient(opts ClientOptions) *sigil.Client {
-	c := sigil.Config{
+func NewClient(opts ClientOptions) *agento11y.Client {
+	c := agento11y.Config{
 		ContentCapture:   opts.ContentCapture,
 		Logger:           opts.Logger,
 		GenerationExport: exportConfig(opts.UserAgent),
@@ -80,7 +80,7 @@ func NewClient(opts ClientOptions) *sigil.Client {
 		c.Tracer = opts.Providers.Tracer(opts.InstrumentationName)
 		c.Meter = opts.Providers.Meter(opts.InstrumentationName)
 	}
-	return sigil.NewClient(c)
+	return agento11y.NewClient(c)
 }
 
 // SetupOTel builds OTel providers when an OTLP endpoint is configured
@@ -114,9 +114,9 @@ func SetupOTel(ctx context.Context, instanceID string, logger *log.Logger) *otel
 // validation/enqueue errors.
 func Record(
 	ctx context.Context,
-	client *sigil.Client,
-	start sigil.GenerationStart,
-	gen sigil.Generation,
+	client *agento11y.Client,
+	start agento11y.GenerationStart,
+	gen agento11y.Generation,
 	callErr error,
 	emitTools func(genCtx context.Context),
 ) error {

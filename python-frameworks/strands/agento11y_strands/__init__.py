@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 from agento11y import Client, ToolDefinition
 
-from .handler import SigilStrandsHandler
+from .handler import Agento11yStrandsHandler
 
 try:  # pragma: no cover - imported from strands-agents at runtime
     from strands.hooks import (
@@ -38,11 +38,11 @@ except Exception:  # pragma: no cover - lightweight fallback for local unit test
     HookRegistry = Any  # type: ignore[assignment]
 
 
-class SigilStrandsHookProvider:
+class Agento11yStrandsHookProvider:
     """HookProvider-compatible Strands bridge that records model and tool lifecycles."""
 
-    def __init__(self, *, sigil_handler: SigilStrandsHandler) -> None:
-        self._sigil_handler = sigil_handler
+    def __init__(self, *, agento11y_handler: Agento11yStrandsHandler) -> None:
+        self._agento11y_handler = agento11y_handler
         self._invocation_run_ids: dict[int, list[UUID]] = {}
         self._model_run_ids: dict[int, list[UUID]] = {}
         self._tool_run_ids: dict[str, UUID] = {}
@@ -68,8 +68,8 @@ class SigilStrandsHookProvider:
         self._stack_for(self._invocation_run_ids, event).append(run_id)
         agent = _read(event, "agent")
         run_name = _agent_name(agent)
-        self._sigil_handler.set_default_agent_name(run_name)
-        self._sigil_handler.on_chain_start(
+        self._agento11y_handler.set_default_agent_name(run_name)
+        self._agento11y_handler.on_chain_start(
             {"name": run_name},
             {},
             run_id=run_id,
@@ -83,16 +83,16 @@ class SigilStrandsHookProvider:
         run_id = self._pop_stack(self._invocation_run_ids, event)
         if run_id is None:
             return
-        self._sigil_handler.on_chain_end({"status": "completed"}, run_id=run_id)
+        self._agento11y_handler.on_chain_end({"status": "completed"}, run_id=run_id)
 
     def before_model_call(self, event: Any) -> None:
         run_id = uuid4()
         self._stack_for(self._model_run_ids, event).append(run_id)
         agent = _read(event, "agent")
-        self._sigil_handler.set_default_agent_name(_agent_name(agent))
+        self._agento11y_handler.set_default_agent_name(_agent_name(agent))
         model_name = _model_name(agent)
         invocation_params = _model_invocation_params(agent, model_name=model_name)
-        self._sigil_handler.on_chat_model_start(
+        self._agento11y_handler.on_chat_model_start(
             _serialized_agent(agent, model_name=model_name),
             [_agent_messages(agent)],
             run_id=run_id,
@@ -109,14 +109,14 @@ class SigilStrandsHookProvider:
 
         exception = _read(event, "exception")
         if exception is not None:
-            self._sigil_handler.on_llm_error(_as_exception(exception), run_id=run_id)
+            self._agento11y_handler.on_llm_error(_as_exception(exception), run_id=run_id)
             return
 
-        self._sigil_handler.on_llm_end(_llm_end_payload(event), run_id=run_id)
+        self._agento11y_handler.on_llm_end(_llm_end_payload(event), run_id=run_id)
 
     def before_tool_call(self, event: Any) -> None:
         agent = _read(event, "agent")
-        self._sigil_handler.set_default_agent_name(_agent_name(agent))
+        self._agento11y_handler.set_default_agent_name(_agent_name(agent))
         tool_use = _read(event, "tool_use") or {}
         tool_use_id = _as_string(_read(tool_use, "toolUseId"))
         run_id = uuid4()
@@ -132,7 +132,7 @@ class SigilStrandsHookProvider:
         if tool_use_id != "":
             metadata["event_id"] = tool_use_id
 
-        self._sigil_handler.on_tool_start(
+        self._agento11y_handler.on_tool_start(
             {"name": tool_name, "description": _tool_description(selected_tool)},
             _json_string(tool_input),
             run_id=run_id,
@@ -154,17 +154,17 @@ class SigilStrandsHookProvider:
 
         exception = _read(event, "exception")
         if exception is not None:
-            self._sigil_handler.on_tool_error(_as_exception(exception), run_id=run_id)
+            self._agento11y_handler.on_tool_error(_as_exception(exception), run_id=run_id)
             return
 
-        self._sigil_handler.on_tool_end(_read(event, "result"), run_id=run_id)
+        self._agento11y_handler.on_tool_end(_read(event, "result"), run_id=run_id)
 
     def before_multi_agent_invocation(self, event: Any) -> None:
         run_id = uuid4()
         self._stack_for(self._multi_agent_run_ids, event).append(run_id)
         source = _read(event, "source")
         run_name = _first_non_empty(_as_string(_read(source, "name")), _as_string(_read(source, "__class__.__name__")))
-        self._sigil_handler.on_chain_start(
+        self._agento11y_handler.on_chain_start(
             {"name": run_name or "multi_agent"},
             {},
             run_id=run_id,
@@ -177,14 +177,14 @@ class SigilStrandsHookProvider:
     def after_multi_agent_invocation(self, event: Any) -> None:
         run_id = self._pop_stack(self._multi_agent_run_ids, event)
         if run_id is not None:
-            self._sigil_handler.on_chain_end({"status": "completed"}, run_id=run_id)
+            self._agento11y_handler.on_chain_end({"status": "completed"}, run_id=run_id)
 
     def before_node_call(self, event: Any) -> None:
         run_id = uuid4()
         node_id = _as_string(_read(event, "node_id")) or "node"
         key = (self._source_key(event), node_id)
         self._node_run_ids.setdefault(key, []).append(run_id)
-        self._sigil_handler.on_chain_start(
+        self._agento11y_handler.on_chain_start(
             {"name": node_id},
             {},
             run_id=run_id,
@@ -202,7 +202,7 @@ class SigilStrandsHookProvider:
         if not stack:
             self._node_run_ids.pop(key, None)
         if run_id is not None:
-            self._sigil_handler.on_chain_end({"status": "completed"}, run_id=run_id)
+            self._agento11y_handler.on_chain_end({"status": "completed"}, run_id=run_id)
 
     def _stack_for(self, store: dict[int, list[UUID]], event: Any) -> list[UUID]:
         return store.setdefault(self._source_key(event), [])
@@ -230,31 +230,31 @@ class SigilStrandsHookProvider:
         return f"{self._source_key(event)}:{tool_use_id}"
 
 
-def create_sigil_strands_handler(*, client: Client, **handler_kwargs: Any) -> SigilStrandsHandler:
+def create_agento11y_strands_handler(*, client: Client, **handler_kwargs: Any) -> Agento11yStrandsHandler:
     """Create a Strands Sigil lifecycle handler."""
-    return SigilStrandsHandler(client=client, **handler_kwargs)
+    return Agento11yStrandsHandler(client=client, **handler_kwargs)
 
 
-def create_sigil_strands_hook_provider(*, client: Client, **handler_kwargs: Any) -> SigilStrandsHookProvider:
+def create_agento11y_strands_hook_provider(*, client: Client, **handler_kwargs: Any) -> Agento11yStrandsHookProvider:
     """Create a HookProvider-compatible Strands integration."""
-    return SigilStrandsHookProvider(
-        sigil_handler=create_sigil_strands_handler(client=client, **handler_kwargs),
+    return Agento11yStrandsHookProvider(
+        agento11y_handler=create_agento11y_strands_handler(client=client, **handler_kwargs),
     )
 
 
-def with_sigil_strands_hooks(
+def with_agento11y_strands_hooks(
     config_or_agent: dict[str, Any] | Any | None,
     *,
     client: Client,
     **handler_kwargs: Any,
 ) -> dict[str, Any] | Any:
     """Attach Sigil as a Strands hook provider on config dicts or agent instances."""
-    provider = create_sigil_strands_hook_provider(client=client, **handler_kwargs)
+    provider = create_agento11y_strands_hook_provider(client=client, **handler_kwargs)
 
     if config_or_agent is None or isinstance(config_or_agent, dict):
         merged = dict(config_or_agent or {})
         hooks = _as_list(merged.get("hooks"))
-        if not _contains_sigil_provider(hooks):
+        if not _contains_agento11y_provider(hooks):
             hooks.append(provider)
         merged["hooks"] = hooks
         return merged
@@ -262,13 +262,13 @@ def with_sigil_strands_hooks(
     agent = config_or_agent
     hooks_registry = getattr(agent, "hooks", None)
     if hooks_registry is not None and hasattr(hooks_registry, "add_hook"):
-        if not getattr(hooks_registry, "_sigil_instrumented", False):
+        if not getattr(hooks_registry, "_agento11y_instrumented", False):
             hooks_registry.add_hook(provider)
-            hooks_registry._sigil_instrumented = True
+            hooks_registry._agento11y_instrumented = True
         return agent
 
     hooks = _as_list(getattr(agent, "hooks", None))
-    if not _contains_sigil_provider(hooks):
+    if not _contains_agento11y_provider(hooks):
         hooks.append(provider)
     agent.hooks = hooks
     return agent
@@ -503,8 +503,8 @@ def _json_bytes(value: Any) -> bytes:
         return b""
 
 
-def _contains_sigil_provider(hooks: list[Any]) -> bool:
-    return any(isinstance(hook, SigilStrandsHookProvider) for hook in hooks)
+def _contains_agento11y_provider(hooks: list[Any]) -> bool:
+    return any(isinstance(hook, Agento11yStrandsHookProvider) for hook in hooks)
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -553,9 +553,9 @@ def _as_exception(value: Any) -> BaseException:
 
 
 __all__ = [
-    "SigilStrandsHandler",
-    "SigilStrandsHookProvider",
-    "create_sigil_strands_handler",
-    "create_sigil_strands_hook_provider",
-    "with_sigil_strands_hooks",
+    "Agento11yStrandsHandler",
+    "Agento11yStrandsHookProvider",
+    "create_agento11y_strands_handler",
+    "create_agento11y_strands_hook_provider",
+    "with_agento11y_strands_hooks",
 ]

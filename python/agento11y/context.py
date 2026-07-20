@@ -10,15 +10,15 @@ from typing import TYPE_CHECKING, NamedTuple
 if TYPE_CHECKING:
     from .models import ContentCaptureMode
 
-_conversation_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("sigil_conversation_id", default=None)
+_conversation_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("agento11y_conversation_id", default=None)
 _conversation_title: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "sigil_conversation_title", default=None
+    "agento11y_conversation_title", default=None
 )
-_user_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("sigil_user_id", default=None)
-_agent_name: contextvars.ContextVar[str | None] = contextvars.ContextVar("sigil_agent_name", default=None)
-_agent_version: contextvars.ContextVar[str | None] = contextvars.ContextVar("sigil_agent_version", default=None)
+_user_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("agento11y_user_id", default=None)
+_agent_name: contextvars.ContextVar[str | None] = contextvars.ContextVar("agento11y_agent_name", default=None)
+_agent_version: contextvars.ContextVar[str | None] = contextvars.ContextVar("agento11y_agent_version", default=None)
 _content_capture_mode: contextvars.ContextVar[ContentCaptureMode | None] = contextvars.ContextVar(
-    "sigil_content_capture_mode", default=None
+    "agento11y_content_capture_mode", default=None
 )
 
 
@@ -31,13 +31,13 @@ class _CaptureStackEntry(NamedTuple):
 # Used to correctly restore the ContextVar when overlapping generations end in
 # non-LIFO order.
 _capture_mode_stack: contextvars.ContextVar[tuple[_CaptureStackEntry, ...]] = contextvars.ContextVar(
-    "_sigil_capture_mode_stack", default=()
+    "_agento11y_capture_mode_stack", default=()
 )
 # Snapshot of _content_capture_mode before the first recorder pushed onto the
 # stack.  Restored when the stack empties so that a surrounding
 # with_content_capture_mode() block is not clobbered.
 _capture_mode_stack_base: contextvars.ContextVar[ContentCaptureMode | None] = contextvars.ContextVar(
-    "_sigil_capture_mode_stack_base", default=None
+    "_agento11y_capture_mode_stack_base", default=None
 )
 
 

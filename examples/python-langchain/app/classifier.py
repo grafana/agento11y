@@ -3,7 +3,7 @@
 Counterpoint to `agent.py`. When you're not using a framework Sigil
 has a callback for, the pattern is:
 
-    with sigil.start_generation(GenerationStart(...)) as rec:
+    with agento11y.start_generation(GenerationStart(...)) as rec:
         response = provider_call(...)
         rec.set_result(input=..., output=..., usage=...)
 
@@ -62,7 +62,7 @@ def _parse_label(raw: str) -> Label:
 
 def classify_message(
     *,
-    sigil: Client,
+    agento11y: Client,
     conversation_id: str,
     user_message: str,
     model_name: str,
@@ -71,7 +71,7 @@ def classify_message(
     prompt = _PROMPT_TEMPLATE.format(user_message=user_message)
 
     raw_text = ""
-    with sigil.start_generation(
+    with agento11y.start_generation(
         GenerationStart(
             conversation_id=conversation_id,
             agent_name="topic-classifier",

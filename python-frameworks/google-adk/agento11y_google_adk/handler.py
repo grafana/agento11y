@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from agento11y import Client
-from agento11y.framework_handler import ProviderResolver, SigilFrameworkHandlerBase, merge_framework_callback_kwargs
+from agento11y.framework_handler import Agento11yFrameworkHandlerBase, ProviderResolver, merge_framework_callback_kwargs
 
 _framework_name = "google-adk"
 _framework_source = "handler"
@@ -14,7 +14,7 @@ _framework_language = "python"
 _framework_instrumentation_name = "github.com/grafana/sigil/sdks/python-frameworks/google-adk"
 
 
-class _SigilGoogleAdkBase(SigilFrameworkHandlerBase):
+class _Agento11yGoogleAdkBase(Agento11yFrameworkHandlerBase):
     def __init__(
         self,
         *,
@@ -45,7 +45,7 @@ class _SigilGoogleAdkBase(SigilFrameworkHandlerBase):
         )
 
 
-class SigilGoogleAdkHandler(_SigilGoogleAdkBase):
+class Agento11yGoogleAdkHandler(_Agento11yGoogleAdkBase):
     """Sync Google ADK callback handler that records Sigil generations."""
 
     def on_llm_start(
@@ -180,7 +180,7 @@ class SigilGoogleAdkHandler(_SigilGoogleAdkBase):
         self._on_retriever_error(error=error, run_id=run_id)
 
 
-class SigilAsyncGoogleAdkHandler(_SigilGoogleAdkBase):
+class Agento11yAsyncGoogleAdkHandler(_Agento11yGoogleAdkBase):
     """Async Google ADK callback handler that records Sigil generations."""
 
     async def on_llm_start(

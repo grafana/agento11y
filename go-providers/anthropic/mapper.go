@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	asdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 const thinkingBudgetMetadataKey = "agento11y.gen_ai.request.thinking.budget_tokens"
@@ -20,10 +20,10 @@ const toolSearchBM25ToolUseType = "tool_search_tool_bm25"
 const toolSearchRegexToolResultType = "tool_search_tool_regex_tool_result"
 const toolSearchBM25ToolResultType = "tool_search_tool_bm25_tool_result"
 
-// FromRequestResponse maps an Anthropic request/response pair to sigil.Generation.
-func FromRequestResponse(req asdk.BetaMessageNewParams, resp *asdk.BetaMessage, opts ...Option) (sigil.Generation, error) {
+// FromRequestResponse maps an Anthropic request/response pair to agento11y.Generation.
+func FromRequestResponse(req asdk.BetaMessageNewParams, resp *asdk.BetaMessage, opts ...Option) (agento11y.Generation, error) {
 	if resp == nil {
-		return sigil.Generation{}, errors.New("response is required")
+		return agento11y.Generation{}, errors.New("response is required")
 	}
 
 	options := applyOptions(opts)
@@ -31,25 +31,25 @@ func FromRequestResponse(req asdk.BetaMessageNewParams, resp *asdk.BetaMessage, 
 	input := mapRequestMessages(req.Messages)
 	output := mapResponseMessages(resp.Content)
 
-	artifacts := make([]sigil.Artifact, 0, 3)
+	artifacts := make([]agento11y.Artifact, 0, 3)
 	if options.includeRequestArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindRequest, "anthropic.request", req)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindRequest, "anthropic.request", req)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeResponseArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindResponse, "anthropic.response", resp)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindResponse, "anthropic.response", resp)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeToolsArtifact && len(req.Tools) > 0 {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindTools, "anthropic.tools", req.Tools)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindTools, "anthropic.tools", req.Tools)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
@@ -63,12 +63,12 @@ func FromRequestResponse(req asdk.BetaMessageNewParams, resp *asdk.BetaMessage, 
 	metadata := mergeThinkingBudgetMetadata(options.metadata, thinkingBudget)
 	metadata = mergeServerToolUsageMetadata(metadata, resp.Usage.ServerToolUse)
 
-	generation := sigil.Generation{
+	generation := agento11y.Generation{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: requestModel},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: requestModel},
 		ResponseID:        resp.ID,
 		ResponseModel:     responseModel,
 		SystemPrompt:      mapSystemPrompt(req.System),
@@ -88,29 +88,29 @@ func FromRequestResponse(req asdk.BetaMessageNewParams, resp *asdk.BetaMessage, 
 	}
 
 	if err := generation.Validate(); err != nil {
-		return sigil.Generation{}, err
+		return agento11y.Generation{}, err
 	}
 
 	return generation, nil
 }
 
-func mapRequestMessages(messages []asdk.BetaMessageParam) []sigil.Message {
+func mapRequestMessages(messages []asdk.BetaMessageParam) []agento11y.Message {
 	if len(messages) == 0 {
 		return nil
 	}
 
-	out := make([]sigil.Message, 0, len(messages))
+	out := make([]agento11y.Message, 0, len(messages))
 	for i := range messages {
 		role := mapRequestRole(messages[i].Role)
-		normalParts := make([]sigil.Part, 0, len(messages[i].Content))
-		toolParts := make([]sigil.Part, 0, 1)
+		normalParts := make([]agento11y.Part, 0, len(messages[i].Content))
+		toolParts := make([]agento11y.Part, 0, 1)
 
 		for _, block := range messages[i].Content {
 			part, ok := mapRequestBlock(block)
 			if !ok {
 				continue
 			}
-			if part.Kind == sigil.PartKindToolResult {
+			if part.Kind == agento11y.PartKindToolResult {
 				toolParts = append(toolParts, part)
 				continue
 			}
@@ -118,14 +118,14 @@ func mapRequestMessages(messages []asdk.BetaMessageParam) []sigil.Message {
 		}
 
 		if len(normalParts) > 0 {
-			out = append(out, sigil.Message{
+			out = append(out, agento11y.Message{
 				Role:  role,
 				Parts: normalParts,
 			})
 		}
 		if len(toolParts) > 0 {
-			out = append(out, sigil.Message{
-				Role:  sigil.RoleTool,
+			out = append(out, agento11y.Message{
+				Role:  agento11y.RoleTool,
 				Parts: toolParts,
 			})
 		}
@@ -134,36 +134,36 @@ func mapRequestMessages(messages []asdk.BetaMessageParam) []sigil.Message {
 	return out
 }
 
-func mapResponseMessages(content []asdk.BetaContentBlockUnion) []sigil.Message {
+func mapResponseMessages(content []asdk.BetaContentBlockUnion) []agento11y.Message {
 	if len(content) == 0 {
 		return nil
 	}
 
-	assistantParts := make([]sigil.Part, 0, len(content))
-	toolParts := make([]sigil.Part, 0, 1)
+	assistantParts := make([]agento11y.Part, 0, len(content))
+	toolParts := make([]agento11y.Part, 0, 1)
 
 	for _, block := range content {
 		part, ok := mapResponseBlock(block)
 		if !ok {
 			continue
 		}
-		if part.Kind == sigil.PartKindToolResult {
+		if part.Kind == agento11y.PartKindToolResult {
 			toolParts = append(toolParts, part)
 			continue
 		}
 		assistantParts = append(assistantParts, part)
 	}
 
-	out := make([]sigil.Message, 0, 2)
+	out := make([]agento11y.Message, 0, 2)
 	if len(assistantParts) > 0 {
-		out = append(out, sigil.Message{
-			Role:  sigil.RoleAssistant,
+		out = append(out, agento11y.Message{
+			Role:  agento11y.RoleAssistant,
 			Parts: assistantParts,
 		})
 	}
 	if len(toolParts) > 0 {
-		out = append(out, sigil.Message{
-			Role:  sigil.RoleTool,
+		out = append(out, agento11y.Message{
+			Role:  agento11y.RoleTool,
 			Parts: toolParts,
 		})
 	}
@@ -175,22 +175,22 @@ func mapResponseMessages(content []asdk.BetaContentBlockUnion) []sigil.Message {
 // Adaptive thinking (e.g. Claude Sonnet 5) can emit signature-only thinking
 // blocks with no text; a Part without a payload fails generation validation,
 // so empty blocks are dropped like empty text blocks.
-func thinkingPart(content, providerType string) (sigil.Part, bool) {
+func thinkingPart(content, providerType string) (agento11y.Part, bool) {
 	if content == "" {
-		return sigil.Part{}, false
+		return agento11y.Part{}, false
 	}
-	part := sigil.ThinkingPart(content)
+	part := agento11y.ThinkingPart(content)
 	part.Metadata.ProviderType = providerType
 	return part, true
 }
 
-func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
+func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (agento11y.Part, bool) {
 	if block.OfText != nil {
 		text := block.OfText.Text
 		if text == "" {
-			return sigil.Part{}, false
+			return agento11y.Part{}, false
 		}
-		return sigil.TextPart(text), true
+		return agento11y.TextPart(text), true
 	}
 	if block.OfThinking != nil {
 		return thinkingPart(block.OfThinking.Thinking, "thinking")
@@ -203,7 +203,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	}
 	if block.OfToolUse != nil {
 		inputJSON, _ := marshalAny(block.OfToolUse.Input)
-		part := sigil.ToolCallPart(sigil.ToolCall{
+		part := agento11y.ToolCallPart(agento11y.ToolCall{
 			ID:        block.OfToolUse.ID,
 			Name:      block.OfToolUse.Name,
 			InputJSON: inputJSON,
@@ -214,7 +214,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	if block.OfServerToolUse != nil {
 		inputJSON, _ := marshalAny(block.OfServerToolUse.Input)
 		providerType := providerTypeForToolUse("server_tool_use", string(block.OfServerToolUse.Name))
-		part := sigil.ToolCallPart(sigil.ToolCall{
+		part := agento11y.ToolCallPart(agento11y.ToolCall{
 			ID:        block.OfServerToolUse.ID,
 			Name:      string(block.OfServerToolUse.Name),
 			InputJSON: inputJSON,
@@ -224,7 +224,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	}
 	if block.OfMCPToolUse != nil {
 		inputJSON, _ := marshalAny(block.OfMCPToolUse.Input)
-		part := sigil.ToolCallPart(sigil.ToolCall{
+		part := agento11y.ToolCallPart(agento11y.ToolCall{
 			ID:        block.OfMCPToolUse.ID,
 			Name:      block.OfMCPToolUse.Name,
 			InputJSON: inputJSON,
@@ -234,7 +234,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	}
 	if block.OfToolResult != nil {
 		contentJSON, _ := marshalAny(block.OfToolResult.Content)
-		part := sigil.ToolResultPart(sigil.ToolResult{
+		part := agento11y.ToolResultPart(agento11y.ToolResult{
 			ToolCallID:  block.OfToolResult.ToolUseID,
 			IsError:     block.OfToolResult.IsError.Value,
 			ContentJSON: contentJSON,
@@ -244,7 +244,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	}
 	if block.OfWebSearchToolResult != nil {
 		contentJSON, _ := marshalAny(block.OfWebSearchToolResult.Content)
-		part := sigil.ToolResultPart(sigil.ToolResult{
+		part := agento11y.ToolResultPart(agento11y.ToolResult{
 			ToolCallID:  block.OfWebSearchToolResult.ToolUseID,
 			ContentJSON: contentJSON,
 		})
@@ -253,7 +253,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	}
 	if block.OfWebFetchToolResult != nil {
 		contentJSON, _ := marshalAny(block.OfWebFetchToolResult.Content)
-		part := sigil.ToolResultPart(sigil.ToolResult{
+		part := agento11y.ToolResultPart(agento11y.ToolResult{
 			ToolCallID:  block.OfWebFetchToolResult.ToolUseID,
 			ContentJSON: contentJSON,
 		})
@@ -262,7 +262,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	}
 	if block.OfCodeExecutionToolResult != nil {
 		contentJSON, _ := marshalAny(block.OfCodeExecutionToolResult.Content)
-		part := sigil.ToolResultPart(sigil.ToolResult{
+		part := agento11y.ToolResultPart(agento11y.ToolResult{
 			ToolCallID:  block.OfCodeExecutionToolResult.ToolUseID,
 			ContentJSON: contentJSON,
 		})
@@ -271,7 +271,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	}
 	if block.OfBashCodeExecutionToolResult != nil {
 		contentJSON, _ := marshalAny(block.OfBashCodeExecutionToolResult.Content)
-		part := sigil.ToolResultPart(sigil.ToolResult{
+		part := agento11y.ToolResultPart(agento11y.ToolResult{
 			ToolCallID:  block.OfBashCodeExecutionToolResult.ToolUseID,
 			ContentJSON: contentJSON,
 		})
@@ -280,7 +280,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	}
 	if block.OfTextEditorCodeExecutionToolResult != nil {
 		contentJSON, _ := marshalAny(block.OfTextEditorCodeExecutionToolResult.Content)
-		part := sigil.ToolResultPart(sigil.ToolResult{
+		part := agento11y.ToolResultPart(agento11y.ToolResult{
 			ToolCallID:  block.OfTextEditorCodeExecutionToolResult.ToolUseID,
 			ContentJSON: contentJSON,
 		})
@@ -289,7 +289,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	}
 	if block.OfToolSearchToolResult != nil {
 		contentJSON, _ := marshalAny(block.OfToolSearchToolResult.Content)
-		part := sigil.ToolResultPart(sigil.ToolResult{
+		part := agento11y.ToolResultPart(agento11y.ToolResult{
 			ToolCallID:  block.OfToolSearchToolResult.ToolUseID,
 			ContentJSON: contentJSON,
 		})
@@ -298,7 +298,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	}
 	if block.OfMCPToolResult != nil {
 		contentJSON, _ := marshalAny(block.OfMCPToolResult.Content)
-		part := sigil.ToolResultPart(sigil.ToolResult{
+		part := agento11y.ToolResultPart(agento11y.ToolResult{
 			ToolCallID:  block.OfMCPToolResult.ToolUseID,
 			IsError:     block.OfMCPToolResult.IsError.Valid() && block.OfMCPToolResult.IsError.Value,
 			ContentJSON: contentJSON,
@@ -312,9 +312,9 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	case "text":
 		text := derefString(block.GetText())
 		if text == "" {
-			return sigil.Part{}, false
+			return agento11y.Part{}, false
 		}
-		return sigil.TextPart(text), true
+		return agento11y.TextPart(text), true
 	case "thinking":
 		return thinkingPart(derefString(block.GetThinking()), typ)
 	case "redacted_thinking":
@@ -324,7 +324,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 	case "tool_use", "server_tool_use", "mcp_tool_use":
 		inputJSON, _ := marshalAny(derefAny(block.GetInput()))
 		providerType := providerTypeForToolUse(typ, derefString(block.GetName()))
-		part := sigil.ToolCallPart(sigil.ToolCall{
+		part := agento11y.ToolCallPart(agento11y.ToolCall{
 			ID:        derefString(block.GetID()),
 			Name:      derefString(block.GetName()),
 			InputJSON: inputJSON,
@@ -342,7 +342,7 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 		toolSearchBM25ToolResultType,
 		"mcp_tool_result":
 		contentJSON, _ := marshalAny(block)
-		part := sigil.ToolResultPart(sigil.ToolResult{
+		part := agento11y.ToolResultPart(agento11y.ToolResult{
 			ToolCallID:  derefString(block.GetToolUseID()),
 			IsError:     derefBool(block.GetIsError()),
 			ContentJSON: contentJSON,
@@ -350,13 +350,13 @@ func mapRequestBlock(block asdk.BetaContentBlockParamUnion) (sigil.Part, bool) {
 		part.Metadata.ProviderType = typ
 		return part, true
 	default:
-		return sigil.Part{}, false
+		return agento11y.Part{}, false
 	}
 }
 
-func imageBlockPart(block *asdk.BetaImageBlockParam) (sigil.Part, bool) {
+func imageBlockPart(block *asdk.BetaImageBlockParam) (agento11y.Part, bool) {
 	if block == nil {
-		return sigil.Part{}, false
+		return agento11y.Part{}, false
 	}
 	return imagePartFromSource(
 		derefString(block.Source.GetData()),
@@ -365,7 +365,7 @@ func imageBlockPart(block *asdk.BetaImageBlockParam) (sigil.Part, bool) {
 	)
 }
 
-func imagePartFromSource(base64Data, mediaType, sourceURL string) (sigil.Part, bool) {
+func imagePartFromSource(base64Data, mediaType, sourceURL string) (agento11y.Part, bool) {
 	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
 	url := strings.TrimSpace(sourceURL)
 	if mediaType == "" {
@@ -374,12 +374,12 @@ func imagePartFromSource(base64Data, mediaType, sourceURL string) (sigil.Part, b
 	if url == "" {
 		data := strings.TrimSpace(base64Data)
 		if mediaType == "" || data == "" {
-			return sigil.Part{}, false
+			return agento11y.Part{}, false
 		}
 		url = "data:" + mediaType + ";base64," + data
 	}
 
-	part := sigil.MediaPart(sigil.Media{
+	part := agento11y.MediaPart(agento11y.Media{
 		Kind:     "image",
 		URL:      url,
 		MIMEType: mediaType,
@@ -404,14 +404,14 @@ func mediaTypeFromDataURL(value string) string {
 	return ""
 }
 
-func mapResponseBlock(block asdk.BetaContentBlockUnion) (sigil.Part, bool) {
+func mapResponseBlock(block asdk.BetaContentBlockUnion) (agento11y.Part, bool) {
 	switch block.Type {
 	case "text":
 		text := block.Text
 		if text == "" {
-			return sigil.Part{}, false
+			return agento11y.Part{}, false
 		}
-		return sigil.TextPart(text), true
+		return agento11y.TextPart(text), true
 	case "thinking":
 		return thinkingPart(block.Thinking, block.Type)
 	case "redacted_thinking":
@@ -419,7 +419,7 @@ func mapResponseBlock(block asdk.BetaContentBlockUnion) (sigil.Part, bool) {
 	case "tool_use", "server_tool_use", "mcp_tool_use":
 		inputJSON, _ := marshalAny(block.Input)
 		providerType := providerTypeForToolUse(block.Type, block.Name)
-		part := sigil.ToolCallPart(sigil.ToolCall{
+		part := agento11y.ToolCallPart(agento11y.ToolCall{
 			ID:        block.ID,
 			Name:      block.Name,
 			InputJSON: inputJSON,
@@ -437,7 +437,7 @@ func mapResponseBlock(block asdk.BetaContentBlockUnion) (sigil.Part, bool) {
 		toolSearchBM25ToolResultType,
 		"mcp_tool_result":
 		contentJSON, _ := marshalAny(block.Content)
-		part := sigil.ToolResultPart(sigil.ToolResult{
+		part := agento11y.ToolResultPart(agento11y.ToolResult{
 			ToolCallID:  block.ToolUseID,
 			IsError:     block.IsError,
 			ContentJSON: contentJSON,
@@ -445,23 +445,23 @@ func mapResponseBlock(block asdk.BetaContentBlockUnion) (sigil.Part, bool) {
 		part.Metadata.ProviderType = block.Type
 		return part, true
 	default:
-		return sigil.Part{}, false
+		return agento11y.Part{}, false
 	}
 }
 
-func mapTools(tools []asdk.BetaToolUnionParam) []sigil.ToolDefinition {
+func mapTools(tools []asdk.BetaToolUnionParam) []agento11y.ToolDefinition {
 	if len(tools) == 0 {
 		return nil
 	}
 
-	out := make([]sigil.ToolDefinition, 0, len(tools))
+	out := make([]agento11y.ToolDefinition, 0, len(tools))
 	for i := range tools {
 		name := derefString(tools[i].GetName())
 		if strings.TrimSpace(name) == "" {
 			continue
 		}
 
-		definition := sigil.ToolDefinition{
+		definition := agento11y.ToolDefinition{
 			Name:        name,
 			Description: derefString(tools[i].GetDescription()),
 			Type:        derefString(tools[i].GetType()),
@@ -508,8 +508,8 @@ func mapSystemPrompt(system []asdk.BetaTextBlockParam) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func mapUsage(usage asdk.BetaUsage) sigil.TokenUsage {
-	return sigil.TokenUsage{
+func mapUsage(usage asdk.BetaUsage) agento11y.TokenUsage {
+	return agento11y.TokenUsage{
 		InputTokens:           usage.InputTokens,
 		OutputTokens:          usage.OutputTokens,
 		TotalTokens:           usage.InputTokens + usage.OutputTokens,
@@ -518,8 +518,8 @@ func mapUsage(usage asdk.BetaUsage) sigil.TokenUsage {
 	}
 }
 
-func mapDeltaUsage(usage asdk.BetaMessageDeltaUsage) sigil.TokenUsage {
-	return sigil.TokenUsage{
+func mapDeltaUsage(usage asdk.BetaMessageDeltaUsage) agento11y.TokenUsage {
+	return agento11y.TokenUsage{
 		InputTokens:           usage.InputTokens,
 		OutputTokens:          usage.OutputTokens,
 		TotalTokens:           usage.InputTokens + usage.OutputTokens,
@@ -528,11 +528,11 @@ func mapDeltaUsage(usage asdk.BetaMessageDeltaUsage) sigil.TokenUsage {
 	}
 }
 
-func mapRequestRole(role asdk.BetaMessageParamRole) sigil.Role {
+func mapRequestRole(role asdk.BetaMessageParamRole) agento11y.Role {
 	if role == asdk.BetaMessageParamRoleAssistant {
-		return sigil.RoleAssistant
+		return agento11y.RoleAssistant
 	}
-	return sigil.RoleUser
+	return agento11y.RoleUser
 }
 
 func mapRequestControls(req asdk.BetaMessageNewParams) (*int64, *float64, *float64, *string, *bool, *int64) {

@@ -1,20 +1,20 @@
-import type { SigilLogger } from "@grafana/agento11y";
+import type { Agento11yLogger } from "@grafana/agento11y";
 import {
+  Agento11yClient,
   createSecretRedactionSanitizer,
-  SigilClient,
 } from "@grafana/agento11y";
 import type { Meter, Tracer } from "@opentelemetry/api";
-import type { SigilPiConfig } from "./config.js";
+import type { Agento11yPiConfig } from "./config.js";
 import { EXPORT_PATH } from "./config.js";
 import { logger } from "./logger.js";
 import { pluginUserAgent } from "./version.js";
 
-export interface SigilClientOptions {
+export interface Agento11yClientOptions {
   tracer?: Tracer;
   meter?: Meter;
 }
 
-function createSdkLogger(): SigilLogger {
+function createSdkLogger(): Agento11yLogger {
   return {
     debug: (message: string, ...args: unknown[]) => {
       logger.debug(message, ...args);
@@ -36,17 +36,17 @@ function createSdkLogger(): SigilLogger {
 
 function isBestEffortExportLog(message: string): boolean {
   return (
-    message.startsWith("sigil generation export failed") ||
-    message.startsWith("sigil generation rejected")
+    message.startsWith("agento11y generation export failed") ||
+    message.startsWith("agento11y generation rejected")
   );
 }
 
-export function createSigilClient(
-  config: SigilPiConfig,
-  options?: SigilClientOptions,
-): SigilClient | null {
+export function createAgento11yClient(
+  config: Agento11yPiConfig,
+  options?: Agento11yClientOptions,
+): Agento11yClient | null {
   try {
-    return new SigilClient({
+    return new Agento11yClient({
       generationExport: {
         protocol: "http",
         endpoint: appendExportPath(config.endpoint),
@@ -59,7 +59,7 @@ export function createSigilClient(
         // The pi plugin's default hook evaluations are postflight (tool-arg
         // redaction and deny). The preflight `context` path passes its own
         // `phases: ["preflight"]` override to `evaluateHook`, which fully
-        // replaces this list for that call (see `SigilClient.evaluateHook`
+        // replaces this list for that call (see `Agento11yClient.evaluateHook`
         // — `{ ...this.config.hooks, ...override }`), so preflight does not
         // need to be listed here.
         phases: ["postflight"],
@@ -75,7 +75,7 @@ export function createSigilClient(
       }),
     });
   } catch (err) {
-    logger.error("failed to create SigilClient", err);
+    logger.error("failed to create Agento11yClient", err);
     return null;
   }
 }

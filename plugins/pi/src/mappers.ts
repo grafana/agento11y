@@ -10,7 +10,7 @@ import type {
 // and tool description/schema are included in the proto export.
 //
 // Both `full` and `full_with_metadata_spans` ship full content in the proto
-// export per the SDK contract (see go/sigil/content_capture.go on
+// export per the SDK contract (see go/agento11y/content_capture.go on
 // ContentCaptureModeFullWithMetadataSpans). The two modes only differ on the
 // OTel span side, which is handled inside the SDK, not in this mapper.
 function includesToolBodies(contentCapture: ContentCaptureMode): boolean {
@@ -453,14 +453,14 @@ function mapToolResultForHook(tr: PiToolResult): Message {
  */
 export function applyRedactedText(
   piMessages: PiAgentMessage[],
-  redactedSigilMessages: Message[],
+  redactedAgento11yMessages: Message[],
 ): boolean {
-  if (piMessages.length !== redactedSigilMessages.length) {
+  if (piMessages.length !== redactedAgento11yMessages.length) {
     return false;
   }
   for (let i = 0; i < piMessages.length; i++) {
     const pi = piMessages[i];
-    const sig = redactedSigilMessages[i];
+    const sig = redactedAgento11yMessages[i];
     if (!sig) return false;
     // Null / non-object pi slot: nothing writable here. The mapper emitted a
     // placeholder to keep alignment, so skip it rather than dropping the
@@ -487,7 +487,7 @@ function applyRedactedToMessage(pi: PiAgentMessage, sig: Message): boolean {
   return true;
 }
 
-function extractTextFromSigilMessage(sig: Message): string | null {
+function extractTextFromAgento11yMessage(sig: Message): string | null {
   // Accept both shapes: legacy `content` shorthand and the typed `parts`
   // array. The Sigil server emits typed parts on the transformed payload,
   // but tolerate either to keep round-tripping robust to wire changes.
@@ -506,7 +506,7 @@ function extractTextFromSigilMessage(sig: Message): string | null {
 }
 
 function applyRedactedToUser(pi: PiUserMessage, sig: Message): boolean {
-  const redacted = extractTextFromSigilMessage(sig);
+  const redacted = extractTextFromAgento11yMessage(sig);
   if (redacted === null) {
     // Server stripped the message to nothing (e.g. image-only original).
     // Leave pi untouched — there is nothing meaningful to write back.
@@ -531,7 +531,7 @@ function applyRedactedToAssistant(
   pi: PiAssistantMessage,
   sig: Message,
 ): boolean {
-  const redacted = extractTextFromSigilMessage(sig);
+  const redacted = extractTextFromAgento11yMessage(sig);
   if (redacted === null) {
     // No text in the redacted payload (e.g. assistant turn had only tool
     // calls / thinking originally). Leave pi untouched.
@@ -550,7 +550,7 @@ function applyRedactedToToolResult(pi: PiToolResult, sig: Message): boolean {
   // and redacts `toolResult.content` in place (grafana/sigil
   // `internal/eval/hooks/transform.go`). The text part path is intentionally
   // ignored here: the SDK does not synthesize a standalone text part for
-  // redacted tool results, so falling back to `extractTextFromSigilMessage`
+  // redacted tool results, so falling back to `extractTextFromAgento11yMessage`
   // would silently miss the redaction.
   const redacted = extractToolResultContent(sig);
   if (redacted === null) return true;

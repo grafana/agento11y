@@ -1,9 +1,9 @@
 using Google.Protobuf;
 using System.Text;
 using Xunit;
-using SigilProto = Agento11y.V1;
+using Agento11yProto = Agento11y.V1;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class GenerationTransportTests
 {
@@ -12,14 +12,14 @@ public sealed class GenerationTransportTests
     {
         using var server = new HttpCaptureServer((_, body) =>
         {
-            var request = Google.Protobuf.JsonParser.Default.Parse<SigilProto.ExportGenerationsRequest>(
+            var request = Google.Protobuf.JsonParser.Default.Parse<Agento11yProto.ExportGenerationsRequest>(
                 Encoding.UTF8.GetString(body)
             );
 
-            var response = new SigilProto.ExportGenerationsResponse();
+            var response = new Agento11yProto.ExportGenerationsResponse();
             foreach (var generation in request.Generations)
             {
-                response.Results.Add(new SigilProto.ExportGenerationResult
+                response.Results.Add(new Agento11yProto.ExportGenerationResult
                 {
                     GenerationId = generation.Id,
                     Accepted = true,
@@ -29,7 +29,7 @@ public sealed class GenerationTransportTests
             return Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(response));
         });
 
-        var config = new SigilClientConfig
+        var config = new Agento11yClientConfig
         {
             GenerationExport = new GenerationExportConfig
             {
@@ -44,7 +44,7 @@ public sealed class GenerationTransportTests
             },
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         var recorder = client.StartGeneration(TestHelpers.CreateSeedStart("gen-http"));
         recorder.SetResult(TestHelpers.CreateSeedResult("gen-http"));
         recorder.End();
@@ -52,7 +52,7 @@ public sealed class GenerationTransportTests
         await client.ShutdownAsync(TestContext.Current.CancellationToken);
 
         Assert.True(server.Requests.TryDequeue(out var captured));
-        var request = Google.Protobuf.JsonParser.Default.Parse<SigilProto.ExportGenerationsRequest>(
+        var request = Google.Protobuf.JsonParser.Default.Parse<Agento11yProto.ExportGenerationsRequest>(
             Encoding.UTF8.GetString(captured.Body)
         );
 
@@ -65,14 +65,14 @@ public sealed class GenerationTransportTests
     {
         using var server = new HttpCaptureServer((_, body) =>
         {
-            var request = Google.Protobuf.JsonParser.Default.Parse<SigilProto.ExportGenerationsRequest>(
+            var request = Google.Protobuf.JsonParser.Default.Parse<Agento11yProto.ExportGenerationsRequest>(
                 Encoding.UTF8.GetString(body)
             );
 
-            var response = new SigilProto.ExportGenerationsResponse();
+            var response = new Agento11yProto.ExportGenerationsResponse();
             foreach (var generation in request.Generations)
             {
-                response.Results.Add(new SigilProto.ExportGenerationResult
+                response.Results.Add(new Agento11yProto.ExportGenerationResult
                 {
                     GenerationId = generation.Id,
                     Accepted = true,
@@ -82,7 +82,7 @@ public sealed class GenerationTransportTests
             return Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(response));
         });
 
-        var config = new SigilClientConfig
+        var config = new Agento11yClientConfig
         {
             GenerationExport = new GenerationExportConfig
             {
@@ -99,7 +99,7 @@ public sealed class GenerationTransportTests
             },
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         var recorder = client.StartGeneration(TestHelpers.CreateSeedStart("gen-http-auth"));
         recorder.SetResult(TestHelpers.CreateSeedResult("gen-http-auth"));
         recorder.End();
@@ -123,14 +123,14 @@ public sealed class GenerationTransportTests
 
         using var server = new HttpCaptureServer((_, body) =>
         {
-            var request = Google.Protobuf.JsonParser.Default.Parse<SigilProto.ExportGenerationsRequest>(
+            var request = Google.Protobuf.JsonParser.Default.Parse<Agento11yProto.ExportGenerationsRequest>(
                 Encoding.UTF8.GetString(body)
             );
 
-            var response = new SigilProto.ExportGenerationsResponse();
+            var response = new Agento11yProto.ExportGenerationsResponse();
             foreach (var generation in request.Generations)
             {
-                response.Results.Add(new SigilProto.ExportGenerationResult
+                response.Results.Add(new Agento11yProto.ExportGenerationResult
                 {
                     GenerationId = generation.Id,
                     Accepted = true,
@@ -140,7 +140,7 @@ public sealed class GenerationTransportTests
             return Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(response));
         });
 
-        var config = new SigilClientConfig
+        var config = new Agento11yClientConfig
         {
             GenerationExport = new GenerationExportConfig
             {
@@ -159,7 +159,7 @@ public sealed class GenerationTransportTests
             };
         }
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         var recorder = client.StartGeneration(TestHelpers.CreateSeedStart("gen-http-ua"));
         recorder.SetResult(TestHelpers.CreateSeedResult("gen-http-ua"));
         recorder.End();
@@ -174,14 +174,14 @@ public sealed class GenerationTransportTests
     {
         using var server = new HttpCaptureServer((_, body) =>
         {
-            var request = Google.Protobuf.JsonParser.Default.Parse<SigilProto.ExportGenerationsRequest>(
+            var request = Google.Protobuf.JsonParser.Default.Parse<Agento11yProto.ExportGenerationsRequest>(
                 Encoding.UTF8.GetString(body)
             );
 
-            var response = new SigilProto.ExportGenerationsResponse();
+            var response = new Agento11yProto.ExportGenerationsResponse();
             foreach (var generation in request.Generations)
             {
-                response.Results.Add(new SigilProto.ExportGenerationResult
+                response.Results.Add(new Agento11yProto.ExportGenerationResult
                 {
                     GenerationId = generation.Id,
                     Accepted = true,
@@ -191,7 +191,7 @@ public sealed class GenerationTransportTests
             return Encoding.UTF8.GetBytes(JsonFormatter.Default.Format(response));
         });
 
-        var config = new SigilClientConfig
+        var config = new Agento11yClientConfig
         {
             GenerationExport = new GenerationExportConfig
             {
@@ -213,7 +213,7 @@ public sealed class GenerationTransportTests
             },
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         var recorder = client.StartGeneration(TestHelpers.CreateSeedStart("gen-http-override"));
         recorder.SetResult(TestHelpers.CreateSeedResult("gen-http-override"));
         recorder.End();
@@ -229,7 +229,7 @@ public sealed class GenerationTransportTests
     {
         using var server = new GrpcIngestServer();
 
-        var config = new SigilClientConfig
+        var config = new Agento11yClientConfig
         {
             GenerationExport = new GenerationExportConfig
             {
@@ -245,7 +245,7 @@ public sealed class GenerationTransportTests
             },
         };
 
-        await using (var client = new SigilClient(config))
+        await using (var client = new Agento11yClient(config))
         {
             var recorder = client.StartGeneration(TestHelpers.CreateSeedStart("gen-grpc-ua"));
             recorder.SetResult(TestHelpers.CreateSeedResult("gen-grpc-ua"));
@@ -267,7 +267,7 @@ public sealed class GenerationTransportTests
     [Fact]
     public async Task GenerationTransport_NoneProtocol_RecordsWithoutSending()
     {
-        var config = new SigilClientConfig
+        var config = new Agento11yClientConfig
         {
             GenerationExport = new GenerationExportConfig
             {
@@ -282,7 +282,7 @@ public sealed class GenerationTransportTests
             },
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         var recorder = client.StartGeneration(TestHelpers.CreateSeedStart("gen-none"));
         recorder.SetResult(TestHelpers.CreateSeedResult("gen-none"));
         recorder.End();

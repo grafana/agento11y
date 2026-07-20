@@ -41,7 +41,7 @@ def list_collection_members(
 
     cid = (collection_id or "").strip()
     if cid == "":
-        raise ValidationError("sigil collection validation failed: collection_id is required")
+        raise ValidationError("agento11y collection validation failed: collection_id is required")
     url = _collection_members_url(api_endpoint, insecure, cid, path_prefix)
     body = _request_json("GET", url, headers, None, retry, ExperimentTransportError, "collection members list")
     return _as_member_list(body)
@@ -63,7 +63,7 @@ def get_conversation(
 
     cid = (conversation_id or "").strip()
     if cid == "":
-        raise ValidationError("sigil conversation validation failed: conversation_id is required")
+        raise ValidationError("agento11y conversation validation failed: conversation_id is required")
     url = _conversation_url(api_endpoint, insecure, cid, path_prefix)
     body = _request_json("GET", url, headers, None, retry, ExperimentTransportError, "conversation get")
     return body if isinstance(body, dict) else {}

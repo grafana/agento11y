@@ -6,7 +6,7 @@ import (
 
 	"google.golang.org/genai"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 func TestFromRequestResponse(t *testing.T) {
@@ -170,7 +170,7 @@ func TestFromRequestResponse(t *testing.T) {
 
 	hasToolRole := false
 	for _, message := range generation.Input {
-		if message.Role == sigil.RoleTool {
+		if message.Role == agento11y.RoleTool {
 			hasToolRole = true
 			if len(message.Parts) != 1 || message.Parts[0].ToolResult == nil {
 				t.Fatalf("expected single tool_result part, got %#v", message.Parts)

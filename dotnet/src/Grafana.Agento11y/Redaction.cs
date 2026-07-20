@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace Grafana.Sigil;
+namespace Grafana.Agento11y;
 
 /// <summary>
 /// Mutates a normalized generation before export. Sanitizers may redact strings
@@ -270,7 +270,7 @@ public static class SecretRedactionSanitizer
             return false;
         }
 
-        logger?.Invoke($"sigil: ignoring invalid {key}: {value}");
+        logger?.Invoke($"agento11y: ignoring invalid {key}: {value}");
         return false;
     }
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { trace } from '@opentelemetry/api';
-import { defaultConfig, SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
 class CapturingExporter {
   requests = [];
@@ -199,7 +199,7 @@ test('validation accepts artifacts with recordId and no payload', async () => {
 
 function newClient(generationExporter) {
   const defaults = defaultConfig();
-  return new SigilClient({
+  return new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-test'),
     generationExport: {
       ...defaults.generationExport,

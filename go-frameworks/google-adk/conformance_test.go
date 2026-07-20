@@ -12,7 +12,7 @@ import (
 	"time"
 
 	googleadk "github.com/grafana/agento11y/go-frameworks/google-adk"
-	sigil "github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -71,7 +71,7 @@ func TestConformance_RunLifecyclePropagatesFrameworkMetadataAndLinksSpans(t *tes
 		Prompts:        []string{"Summarize release status"},
 		Tags:           []string{"prod", "framework", "prod"},
 		Metadata:       map[string]any{"event_payload": map[string]any{"step": "validate"}},
-		InputMessages:  []sigil.Message{sigil.UserTextMessage("Summarize release status")},
+		InputMessages:  []agento11y.Message{agento11y.UserTextMessage("Summarize release status")},
 		ConversationID: "",
 	}); err != nil {
 		t.Fatalf("run start: %v", err)
@@ -79,10 +79,10 @@ func TestConformance_RunLifecyclePropagatesFrameworkMetadataAndLinksSpans(t *tes
 
 	if err := env.Callbacks.OnRunEnd("run-sync", googleadk.RunEndEvent{
 		RunID:          "run-sync",
-		OutputMessages: []sigil.Message{sigil.AssistantTextMessage("Release is healthy")},
+		OutputMessages: []agento11y.Message{agento11y.AssistantTextMessage("Release is healthy")},
 		ResponseModel:  "gpt-5",
 		StopReason:     "stop",
-		Usage: sigil.TokenUsage{
+		Usage: agento11y.TokenUsage{
 			InputTokens:  6,
 			OutputTokens: 4,
 			TotalTokens:  10,
@@ -176,7 +176,7 @@ func TestConformance_StreamingRunTriggersGenerationExport(t *testing.T) {
 	if err := env.Callbacks.OnRunEnd("run-stream", googleadk.RunEndEvent{
 		RunID:         "run-stream",
 		ResponseModel: "gemini-2.5-pro",
-		Usage: sigil.TokenUsage{
+		Usage: agento11y.TokenUsage{
 			InputTokens:  3,
 			OutputTokens: 2,
 			TotalTokens:  5,
@@ -248,13 +248,13 @@ func TestConformance_ToolCallOutputsAndToolLifecycleStayObservable(t *testing.T)
 
 	if err := env.Callbacks.OnRunEnd("run-tool-call", googleadk.RunEndEvent{
 		RunID: "run-tool-call",
-		OutputMessages: []sigil.Message{
+		OutputMessages: []agento11y.Message{
 			{
-				Role: sigil.RoleAssistant,
+				Role: agento11y.RoleAssistant,
 				Name: "assistant",
-				Parts: []sigil.Part{
-					sigil.TextPart("Calling weather lookup."),
-					sigil.ToolCallPart(sigil.ToolCall{
+				Parts: []agento11y.Part{
+					agento11y.TextPart("Calling weather lookup."),
+					agento11y.ToolCallPart(agento11y.ToolCall{
 						ID:        "call-weather",
 						Name:      "weather.lookup",
 						InputJSON: []byte(`{"city":"Paris"}`),
@@ -262,10 +262,10 @@ func TestConformance_ToolCallOutputsAndToolLifecycleStayObservable(t *testing.T)
 				},
 			},
 			{
-				Role: sigil.RoleTool,
+				Role: agento11y.RoleTool,
 				Name: "weather.lookup",
-				Parts: []sigil.Part{
-					sigil.ToolResultPart(sigil.ToolResult{
+				Parts: []agento11y.Part{
+					agento11y.ToolResultPart(agento11y.ToolResult{
 						ToolCallID:  "call-weather",
 						Name:        "weather.lookup",
 						Content:     "18C",
@@ -276,7 +276,7 @@ func TestConformance_ToolCallOutputsAndToolLifecycleStayObservable(t *testing.T)
 		},
 		ResponseModel: "gpt-5",
 		StopReason:    "tool_calls",
-		Usage: sigil.TokenUsage{
+		Usage: agento11y.TokenUsage{
 			InputTokens:  8,
 			OutputTokens: 3,
 			TotalTokens:  11,
@@ -350,7 +350,7 @@ func TestConformance_ToolCallOutputsAndToolLifecycleStayObservable(t *testing.T)
 }
 
 type conformanceEnv struct {
-	Client    *sigil.Client
+	Client    *agento11y.Client
 	Callbacks googleadk.Callbacks
 	Export    *generationCaptureServer
 	Spans     *tracetest.SpanRecorder
@@ -370,10 +370,10 @@ func newConformanceEnv(t *testing.T, opts googleadk.Options) *conformanceEnv {
 	metricReader := sdkmetric.NewManualReader()
 	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(metricReader))
 
-	cfg := sigil.DefaultConfig()
+	cfg := agento11y.DefaultConfig()
 	cfg.Tracer = tracerProvider.Tracer("google-adk-conformance-test")
 	cfg.Meter = meterProvider.Meter("google-adk-conformance-test")
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolHTTP
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolHTTP
 	cfg.GenerationExport.Endpoint = export.server.URL + "/api/v1/generations:export"
 	cfg.GenerationExport.BatchSize = 1
 	cfg.GenerationExport.QueueSize = 8
@@ -382,7 +382,7 @@ func newConformanceEnv(t *testing.T, opts googleadk.Options) *conformanceEnv {
 	cfg.GenerationExport.InitialBackoff = time.Millisecond
 	cfg.GenerationExport.MaxBackoff = 5 * time.Millisecond
 
-	client := sigil.NewClient(cfg)
+	client := agento11y.NewClient(cfg)
 	env := &conformanceEnv{
 		Client:         client,
 		Callbacks:      googleadk.NewCallbacks(client, opts),

@@ -5,7 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Proto = Agento11y.V1;
 
-namespace Grafana.Sigil;
+namespace Grafana.Agento11y;
 
 internal static class ProtoMapping
 {

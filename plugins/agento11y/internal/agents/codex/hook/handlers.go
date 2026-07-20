@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/codexlog"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/config"
@@ -70,7 +70,7 @@ func UserPromptSubmit(p Payload, cfg config.Config, logger *log.Logger) {
 		return
 	}
 	if err := updateCommon(p, logger, func(f *fragment.Fragment) {
-		if cfg.ContentCapture != sigil.ContentCaptureModeMetadataOnly {
+		if cfg.ContentCapture != agento11y.ContentCaptureModeMetadataOnly {
 			f.Prompt = p.Prompt
 		}
 	}); err != nil {
@@ -156,7 +156,7 @@ func PostToolUse(p Payload, cfg config.Config, logger *log.Logger) {
 		}
 		status := normalizeStatus(p, resp)
 		errMsg := errorMessageForMode(p.Error, cfg.ContentCapture)
-		if cfg.ContentCapture != sigil.ContentCaptureModeFull {
+		if cfg.ContentCapture != agento11y.ContentCaptureModeFull {
 			p.ToolInput = nil
 			resp = nil
 		}
@@ -188,7 +188,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	if err := updateCommon(p, logger, func(f *fragment.Fragment) {
 		f.CompletedAt = eventTime(p)
 		f.StopHookActive = p.StopHookActive
-		if p.LastAssistantMessage != nil && cfg.ContentCapture != sigil.ContentCaptureModeMetadataOnly {
+		if p.LastAssistantMessage != nil && cfg.ContentCapture != agento11y.ContentCaptureModeMetadataOnly {
 			f.LastAssistantMessage = *p.LastAssistantMessage
 		}
 	}); err != nil {
@@ -289,7 +289,7 @@ func markPendingRetry(sessionID, turnID string, logger *log.Logger) {
 // transcript path and turn id, which is enough for both helpers. Without
 // this, retried subagent turns would silently re-export as plain `codex`
 // turns with empty token usage.
-func sweepPendingRetries(ctx context.Context, client *sigil.Client, cfg config.Config, sessionID, currentTurnID string, logger *log.Logger) []string {
+func sweepPendingRetries(ctx context.Context, client *agento11y.Client, cfg config.Config, sessionID, currentTurnID string, logger *log.Logger) []string {
 	currentPath := fragment.FragmentFilePath(sessionID, currentTurnID)
 	paths := fragment.ListTurnFiles(sessionID, logger)
 	enqueued := make([]string, 0, len(paths))
@@ -468,7 +468,7 @@ func applySessionDefaults(f *fragment.Fragment, s *fragment.Session) {
 // buildClient constructs the Sigil client with the shared HTTP/basic-auth
 // export defaults. Endpoint, tenant ID, and token come from the SDK's automatic
 // SIGIL_* env resolution, matching copilot and cursor.
-func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logger) *sigil.Client {
+func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
 	return sigilemit.NewClient(sigilemit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
@@ -478,16 +478,16 @@ func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logge
 	})
 }
 
-func emitGeneration(ctx context.Context, client *sigil.Client, frag *fragment.Fragment, mapped mapper.Mapped, mode sigil.ContentCaptureMode, logger *log.Logger) error {
+func emitGeneration(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, mapped mapper.Mapped, mode agento11y.ContentCaptureMode, logger *log.Logger) error {
 	// codex never promotes a call error, so callErr is always nil here.
 	return sigilemit.Record(ctx, client, mapped.Start, mapped.Generation, nil, func(genCtx context.Context) {
 		emitToolSpans(genCtx, client, frag, mapped.Generation, mode, logger)
 	})
 }
 
-func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fragment, gen sigil.Generation, mode sigil.ContentCaptureMode, logger *log.Logger) {
+func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, gen agento11y.Generation, mode agento11y.ContentCaptureMode, logger *log.Logger) {
 	var red *redact.Redactor
-	if mode == sigil.ContentCaptureModeFull {
+	if mode == agento11y.ContentCaptureModeFull {
 		red = redact.New()
 	}
 	for i := range frag.Tools {
@@ -496,7 +496,7 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fra
 			continue
 		}
 		startedAt, completedAt := sigilemit.ToolSpanWindow(t.CompletedAt, t.DurationMs, gen.CompletedAt)
-		_, rec := client.StartToolExecution(ctx, sigil.ToolExecutionStart{
+		_, rec := client.StartToolExecution(ctx, agento11y.ToolExecutionStart{
 			ToolName:        t.ToolName,
 			ToolCallID:      t.ToolUseID,
 			ToolType:        "function",
@@ -507,7 +507,7 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fra
 			RequestProvider: gen.Model.Provider,
 			StartedAt:       startedAt,
 		})
-		end := sigil.ToolExecutionEnd{CompletedAt: completedAt}
+		end := agento11y.ToolExecutionEnd{CompletedAt: completedAt}
 		if len(t.ToolInput) > 0 && red != nil {
 			end.Arguments = redactSpanContent(red, t.ToolInput)
 		}
@@ -699,8 +699,8 @@ func errorMessage(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func errorMessageForMode(raw json.RawMessage, mode sigil.ContentCaptureMode) string {
-	if mode != sigil.ContentCaptureModeFull {
+func errorMessageForMode(raw json.RawMessage, mode agento11y.ContentCaptureMode) string {
+	if mode != agento11y.ContentCaptureModeFull {
 		return ""
 	}
 	return redact.New().Redact(errorMessage(raw))

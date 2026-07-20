@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { trace } from '@opentelemetry/api';
 import {
+  Agento11yClient,
   CACHE_DIAGNOSTICS_MISS_REASON_KEY,
   CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY,
   CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY,
   defaultConfig,
-  SigilClient,
   setCacheDiagnostics,
 } from '../.test-dist/index.js';
 
@@ -29,7 +29,7 @@ class MockGenerationExporter {
 test('setCacheDiagnostics stamps metadata on generation', async () => {
   const exporter = new MockGenerationExporter();
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-test'),
     generationExport: {
       ...defaults.generationExport,
@@ -65,7 +65,7 @@ test('setCacheDiagnostics stamps metadata on generation', async () => {
 test('setCacheDiagnostics ignores empty reason', async () => {
   const exporter = new MockGenerationExporter();
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-test'),
     generationExport: {
       ...defaults.generationExport,

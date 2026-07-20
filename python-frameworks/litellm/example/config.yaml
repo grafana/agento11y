@@ -8,4 +8,4 @@ model_list:
       model: anthropic/claude-sonnet-4-20250514
 
 litellm_settings:
-  callbacks: sigil_callback.sigil_handler
+  callbacks: agento11y_callback.agento11y_handler

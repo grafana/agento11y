@@ -34,11 +34,11 @@ from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from .errors import (
+    Agento11yError,
     ConflictError,
     ExperimentTransportError,
     NotFoundError,
     ScoreExportError,
-    SigilError,
     ValidationError,
 )
 from .models import (
@@ -96,9 +96,9 @@ def create_experiment(
 
     name = (request.name or "").strip()
     if name == "":
-        raise ValidationError("sigil experiment validation failed: name is required")
+        raise ValidationError("agento11y experiment validation failed: name is required")
     if _enum_value(request.source) != "external":
-        raise ValidationError("sigil experiment validation failed: experiment-run ingest requires source=external")
+        raise ValidationError("agento11y experiment validation failed: experiment-run ingest requires source=external")
 
     url = _base_url(api_endpoint, insecure) + _EXPERIMENT_RUNS_UPSERT_PATH
     payload = _serialize_upsert_request(request)
@@ -141,7 +141,7 @@ def finalize_experiment(
     if normalized_status in ("succeeded", "completed"):
         normalized_status = "completed"
     elif normalized_status != "failed":
-        raise ValidationError("sigil experiment validation failed: status must be completed or failed")
+        raise ValidationError("agento11y experiment validation failed: status must be completed or failed")
     normalized_run_id = _validate_run_id(run_id)
     url = (
         _base_url(api_endpoint, insecure)
@@ -225,10 +225,10 @@ def update_test_case_trial(
 
     normalized = (trial_id or "").strip()
     if normalized == "":
-        raise ValidationError("sigil test case trial validation failed: trial_id is required")
+        raise ValidationError("agento11y test case trial validation failed: trial_id is required")
     run_id = (experiment_id or "").strip()
     if run_id == "":
-        raise ValidationError("sigil test case trial validation failed: experiment_id is required for trial update")
+        raise ValidationError("agento11y test case trial validation failed: experiment_id is required for trial update")
     quoted_run_id = urllib_parse.quote(run_id, safe="")
     quoted_trial_id = urllib_parse.quote(normalized, safe="")
     url = _base_url(api_endpoint, insecure) + f"{_EXPERIMENT_RUNS_PREFIX}/{quoted_run_id}/trials/{quoted_trial_id}"
@@ -253,19 +253,19 @@ def upload_trial_artifact(
 
     run_id = (experiment_id or "").strip()
     if run_id == "":
-        raise ValidationError("sigil artifact validation failed: experiment_id is required")
+        raise ValidationError("agento11y artifact validation failed: experiment_id is required")
     normalized_trial_id = (trial_id or "").strip()
     if normalized_trial_id == "":
-        raise ValidationError("sigil artifact validation failed: trial_id is required")
+        raise ValidationError("agento11y artifact validation failed: trial_id is required")
     normalized_name = (name or "").strip()
     if normalized_name == "":
-        raise ValidationError("sigil artifact validation failed: name is required")
+        raise ValidationError("agento11y artifact validation failed: name is required")
     normalized_kind = (kind or "").strip()
     if normalized_kind == "":
-        raise ValidationError("sigil artifact validation failed: kind is required")
+        raise ValidationError("agento11y artifact validation failed: kind is required")
     body = content if isinstance(content, bytes) else bytes(content or b"")
     if not body:
-        raise ValidationError("sigil artifact validation failed: content is required")
+        raise ValidationError("agento11y artifact validation failed: content is required")
 
     query = urllib_parse.urlencode({"name": normalized_name, "kind": normalized_kind, "mime": (mime or "").strip()})
     url = (
@@ -404,7 +404,7 @@ def _serialize_score_value(value: ScoreValue) -> dict[str, Any]:
         return {"bool": value.boolean}
     if value.string is not None:
         return {"string": value.string}
-    raise ValidationError("sigil score validation failed: value must set one of number/boolean/string")
+    raise ValidationError("agento11y score validation failed: value must set one of number/boolean/string")
 
 
 def _validate_score(score: ScoreItem) -> None:
@@ -419,11 +419,11 @@ def _validate_score(score: ScoreItem) -> None:
         if not (raw or "").strip()
     ]
     if missing:
-        raise ValidationError(f"sigil score validation failed: missing required field(s): {', '.join(missing)}")
+        raise ValidationError(f"agento11y score validation failed: missing required field(s): {', '.join(missing)}")
     # The backend requires a generation_id OR a trial_id. Mirror that rule
     # client-side for a clearer error.
     if not (score.generation_id or "").strip() and not (score.trial_id or "").strip():
-        raise ValidationError("sigil score validation failed: generation_id or trial_id is required")
+        raise ValidationError("agento11y score validation failed: generation_id or trial_id is required")
     # Raises if no value field is set.
     _serialize_score_value(score.value)
 
@@ -435,7 +435,7 @@ def _validate_score(score: ScoreItem) -> None:
 
 def _parse_experiment(payload: Any) -> Experiment:
     if not isinstance(payload, dict):
-        raise ExperimentTransportError("sigil experiment transport failed: invalid response payload")
+        raise ExperimentTransportError("agento11y experiment transport failed: invalid response payload")
     evaluators = [
         ExperimentEvaluator(id=_str(ev.get("id")), selector=_str(ev.get("selector")))
         for ev in payload.get("evaluators", []) or []
@@ -470,7 +470,7 @@ def _parse_experiment_run_response(payload: Any) -> Experiment:
 
 def _parse_export_scores_response(payload: Any) -> ExportScoresResponse:
     if not isinstance(payload, dict):
-        raise ScoreExportError("sigil score export transport failed: invalid response payload")
+        raise ScoreExportError("agento11y score export transport failed: invalid response payload")
     results: list[ExportScoreResult] = []
     for entry in payload.get("results", []) or []:
         if not isinstance(entry, dict):
@@ -493,7 +493,7 @@ def _parse_export_scores_response(payload: Any) -> ExportScoresResponse:
 
 def _parse_report(payload: Any) -> ExperimentReport:
     if not isinstance(payload, dict):
-        raise ExperimentTransportError("sigil experiment report transport failed: invalid response payload")
+        raise ExperimentTransportError("agento11y experiment report transport failed: invalid response payload")
     # The backend keys the run under `experiment` (older drafts used `run`).
     run = _parse_experiment(payload.get("experiment") or payload.get("run") or {})
     summary_raw = payload.get("summary") or {}
@@ -529,7 +529,7 @@ def _request_json(
     headers: dict[str, str],
     payload: dict[str, Any] | None,
     retry: RetryPolicy | None,
-    transport_error_cls: type[SigilError],
+    transport_error_cls: type[Agento11yError],
     label: str,
 ) -> Any:
     policy = retry or RetryPolicy()
@@ -551,23 +551,23 @@ def _request_json(
         except urllib_error.HTTPError as exc:
             body = _read_error_body(exc)
             if exc.code in (400, 422):
-                raise ValidationError(f"sigil {label} validation failed: {body or exc.code}") from exc
+                raise ValidationError(f"agento11y {label} validation failed: {body or exc.code}") from exc
             if exc.code == 404:
-                raise NotFoundError(f"sigil {label} not found: {body or exc.code}") from exc
+                raise NotFoundError(f"agento11y {label} not found: {body or exc.code}") from exc
             if exc.code == 409:
-                raise ConflictError(f"sigil {label} conflict: {body or exc.code}") from exc
+                raise ConflictError(f"agento11y {label} conflict: {body or exc.code}") from exc
             last_detail = f"status {exc.code}: {body or 'unexpected status'}"
             if exc.code == 429 or 500 <= exc.code < 600:
                 if attempt < policy.max_retries:
                     attempt, backoff = _sleep_backoff(attempt, backoff, policy)
                     continue
-            raise transport_error_cls(f"sigil {label} transport failed: {last_detail}") from exc
+            raise transport_error_cls(f"agento11y {label} transport failed: {last_detail}") from exc
         except (urllib_error.URLError, TimeoutError, OSError) as exc:
             last_detail = str(getattr(exc, "reason", exc) or exc)
             if attempt < policy.max_retries:
                 attempt, backoff = _sleep_backoff(attempt, backoff, policy)
                 continue
-            raise transport_error_cls(f"sigil {label} transport failed: {last_detail}") from exc
+            raise transport_error_cls(f"agento11y {label} transport failed: {last_detail}") from exc
 
 
 def _request_bytes_json(
@@ -576,7 +576,7 @@ def _request_bytes_json(
     headers: dict[str, str],
     payload: bytes,
     retry: RetryPolicy | None,
-    transport_error_cls: type[SigilError],
+    transport_error_cls: type[Agento11yError],
     label: str,
 ) -> Any:
     policy = retry or RetryPolicy()
@@ -595,38 +595,40 @@ def _request_bytes_json(
         except urllib_error.HTTPError as exc:
             body = _read_error_body(exc)
             if exc.code in (400, 422):
-                raise ValidationError(f"sigil {label} validation failed: {body or exc.code}") from exc
+                raise ValidationError(f"agento11y {label} validation failed: {body or exc.code}") from exc
             if exc.code == 404:
-                raise NotFoundError(f"sigil {label} not found: {body or exc.code}") from exc
+                raise NotFoundError(f"agento11y {label} not found: {body or exc.code}") from exc
             if exc.code == 409:
-                raise ConflictError(f"sigil {label} conflict: {body or exc.code}") from exc
+                raise ConflictError(f"agento11y {label} conflict: {body or exc.code}") from exc
             last_detail = f"status {exc.code}: {body or 'unexpected status'}"
             if exc.code == 429 or 500 <= exc.code < 600:
                 if attempt < policy.max_retries:
                     attempt, backoff = _sleep_backoff(attempt, backoff, policy)
                     continue
-            raise transport_error_cls(f"sigil {label} transport failed: {last_detail}") from exc
+            raise transport_error_cls(f"agento11y {label} transport failed: {last_detail}") from exc
         except (urllib_error.URLError, TimeoutError, OSError) as exc:
             last_detail = str(getattr(exc, "reason", exc) or exc)
             if attempt < policy.max_retries:
                 attempt, backoff = _sleep_backoff(attempt, backoff, policy)
                 continue
-            raise transport_error_cls(f"sigil {label} transport failed: {last_detail}") from exc
+            raise transport_error_cls(f"agento11y {label} transport failed: {last_detail}") from exc
 
 
-def _decode_success(raw: bytes, status: int, transport_error_cls: type[SigilError], label: str) -> Any:
+def _decode_success(raw: bytes, status: int, transport_error_cls: type[Agento11yError], label: str) -> Any:
     if status < 200 or status >= 300:
         decoded = raw.decode("utf-8", errors="replace").strip()
-        raise transport_error_cls(f"sigil {label} transport failed: status {status}: {decoded or 'unexpected status'}")
+        raise transport_error_cls(
+            f"agento11y {label} transport failed: status {status}: {decoded or 'unexpected status'}"
+        )
     if len(raw) > _MAX_RESPONSE_BYTES:
-        raise transport_error_cls(f"sigil {label} transport failed: response too large")
+        raise transport_error_cls(f"agento11y {label} transport failed: response too large")
     text = raw.decode("utf-8", errors="replace").strip()
     if text == "":
         return {}
     try:
         return json.loads(text)
     except Exception as exc:  # noqa: BLE001
-        raise transport_error_cls(f"sigil {label} transport failed: invalid JSON response: {exc}") from exc
+        raise transport_error_cls(f"agento11y {label} transport failed: invalid JSON response: {exc}") from exc
 
 
 def _sleep_backoff(attempt: int, backoff: float, policy: RetryPolicy) -> tuple[int, float]:
@@ -661,23 +663,23 @@ def _experiment_url(endpoint: str, insecure: bool, run_id: str, path_prefix: str
 def _validate_run_id(run_id: str) -> str:
     normalized = (run_id or "").strip()
     if normalized == "":
-        raise ValidationError("sigil experiment validation failed: run_id is required")
+        raise ValidationError("agento11y experiment validation failed: run_id is required")
     return normalized
 
 
 def _base_url(endpoint: str, insecure: bool) -> str:
     trimmed = (endpoint or "").strip()
     if trimmed == "":
-        raise ExperimentTransportError("sigil experiment transport failed: api endpoint is required")
+        raise ExperimentTransportError("agento11y experiment transport failed: api endpoint is required")
     if trimmed.startswith("http://") or trimmed.startswith("https://"):
         parsed = urllib_parse.urlparse(trimmed)
         if not parsed.scheme or not parsed.netloc:
-            raise ExperimentTransportError("sigil experiment transport failed: api endpoint host is required")
+            raise ExperimentTransportError("agento11y experiment transport failed: api endpoint host is required")
         return f"{parsed.scheme}://{parsed.netloc}"
     without_scheme = trimmed[7:] if trimmed.startswith("grpc://") else trimmed
     host = without_scheme.split("/", 1)[0].strip()
     if host == "":
-        raise ExperimentTransportError("sigil experiment transport failed: api endpoint host is required")
+        raise ExperimentTransportError("agento11y experiment transport failed: api endpoint host is required")
     scheme = "http" if insecure else "https"
     return f"{scheme}://{host}"
 

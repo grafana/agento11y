@@ -3,19 +3,28 @@ import test from 'node:test';
 import { context, trace } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import {
-  createSigilGoogleAdkPlugin,
-  SigilGoogleAdkHandler,
-  withSigilGoogleAdkPlugins,
+  Agento11yGoogleAdkHandler,
+  createAgento11yGoogleAdkPlugin,
+  withAgento11yGoogleAdkPlugins,
 } from '../.test-dist/frameworks/google-adk/index.js';
-import { SigilLangChainHandler, withSigilLangChainCallbacks } from '../.test-dist/frameworks/langchain/index.js';
-import { SigilLangGraphHandler, withSigilLangGraphCallbacks } from '../.test-dist/frameworks/langgraph/index.js';
 import {
-  attachSigilLlamaIndexCallbacks,
-  SigilLlamaIndexHandler,
-  withSigilLlamaIndexCallbacks,
+  Agento11yLangChainHandler,
+  withAgento11yLangChainCallbacks,
+} from '../.test-dist/frameworks/langchain/index.js';
+import {
+  Agento11yLangGraphHandler,
+  withAgento11yLangGraphCallbacks,
+} from '../.test-dist/frameworks/langgraph/index.js';
+import {
+  Agento11yLlamaIndexHandler,
+  attachAgento11yLlamaIndexCallbacks,
+  withAgento11yLlamaIndexCallbacks,
 } from '../.test-dist/frameworks/llamaindex/index.js';
-import { SigilOpenAIAgentsHandler, withSigilOpenAIAgentsHooks } from '../.test-dist/frameworks/openai-agents/index.js';
-import { defaultConfig, SigilClient } from '../.test-dist/index.js';
+import {
+  Agento11yOpenAIAgentsHandler,
+  withAgento11yOpenAIAgentsHooks,
+} from '../.test-dist/frameworks/openai-agents/index.js';
+import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
 class CapturingExporter {
   requests = [];
@@ -34,15 +43,15 @@ class CapturingExporter {
 const frameworks = [
   {
     name: 'openai-agents',
-    handlerCtor: SigilOpenAIAgentsHandler,
+    handlerCtor: Agento11yOpenAIAgentsHandler,
   },
   {
     name: 'llamaindex',
-    handlerCtor: SigilLlamaIndexHandler,
+    handlerCtor: Agento11yLlamaIndexHandler,
   },
   {
     name: 'google-adk',
-    handlerCtor: SigilGoogleAdkHandler,
+    handlerCtor: Agento11yGoogleAdkHandler,
   },
 ];
 
@@ -148,7 +157,7 @@ for (const framework of frameworks) {
       );
     });
 
-    assert.equal(generation.conversationId, `sigil:framework:${framework.name}:run-fallback`);
+    assert.equal(generation.conversationId, `agento11y:framework:${framework.name}:run-fallback`);
   });
 
   test(`${framework.name} handler normalizes extra metadata to JSON-safe values`, async () => {
@@ -236,7 +245,7 @@ for (const framework of frameworks) {
     const tracerProvider = new BasicTracerProvider({
       spanProcessors: [new SimpleSpanProcessor(spanExporter)],
     });
-    const baseTracer = tracerProvider.getTracer('sigil-framework-test');
+    const baseTracer = tracerProvider.getTracer('agento11y-framework-test');
     let parentContext;
     const tracer = {
       startSpan(name, options, contextArg) {
@@ -248,7 +257,7 @@ for (const framework of frameworks) {
     };
     const defaults = defaultConfig();
     const exporter = new CapturingExporter();
-    const client = new SigilClient({
+    const client = new Agento11yClient({
       generationExport: {
         ...defaults.generationExport,
         batchSize: 10,
@@ -301,7 +310,7 @@ for (const framework of frameworks) {
   });
 
   test(`${framework.name} handler explicitly has no embedding lifecycle`, async () => {
-    const client = new SigilClient(defaultConfig());
+    const client = new Agento11yClient(defaultConfig());
     try {
       const handler = new framework.handlerCtor(client);
       assert.equal(typeof handler.handleEmbeddingStart, 'undefined');
@@ -320,26 +329,26 @@ async function captureSingleGeneration(run) {
   return generations[0];
 }
 
-test('withSigilLangChainCallbacks preserves existing callbacks and appends sigil handler', () => {
-  const client = new SigilClient(defaultConfig());
+test('withAgento11yLangChainCallbacks preserves existing callbacks and appends agento11y handler', () => {
+  const client = new Agento11yClient(defaultConfig());
   try {
     const existing = { name: 'existing' };
-    const config = withSigilLangChainCallbacks({ callbacks: [existing], retry: 1 }, client);
+    const config = withAgento11yLangChainCallbacks({ callbacks: [existing], retry: 1 }, client);
     assert.equal(config.retry, 1);
     assert.equal(Array.isArray(config.callbacks), true);
     assert.equal(config.callbacks.length, 2);
     assert.equal(config.callbacks[0], existing);
-    assert.equal(config.callbacks[1] instanceof SigilLangChainHandler, true);
+    assert.equal(config.callbacks[1] instanceof Agento11yLangChainHandler, true);
   } finally {
     void client.shutdown();
   }
 });
 
-test('withSigilLangChainCallbacks does not duplicate existing sigil handler', () => {
-  const client = new SigilClient(defaultConfig());
+test('withAgento11yLangChainCallbacks does not duplicate existing agento11y handler', () => {
+  const client = new Agento11yClient(defaultConfig());
   try {
-    const existingSigil = new SigilLangChainHandler(client, { providerResolver: 'auto' });
-    const config = withSigilLangChainCallbacks({ callbacks: [existingSigil] }, client);
+    const existingSigil = new Agento11yLangChainHandler(client, { providerResolver: 'auto' });
+    const config = withAgento11yLangChainCallbacks({ callbacks: [existingSigil] }, client);
     assert.equal(config.callbacks.length, 1);
     assert.equal(config.callbacks[0], existingSigil);
   } finally {
@@ -347,22 +356,22 @@ test('withSigilLangChainCallbacks does not duplicate existing sigil handler', ()
   }
 });
 
-test('withSigilLangGraphCallbacks creates callback list when config is empty', () => {
-  const client = new SigilClient(defaultConfig());
+test('withAgento11yLangGraphCallbacks creates callback list when config is empty', () => {
+  const client = new Agento11yClient(defaultConfig());
   try {
-    const config = withSigilLangGraphCallbacks(undefined, client);
+    const config = withAgento11yLangGraphCallbacks(undefined, client);
     assert.equal(Array.isArray(config.callbacks), true);
     assert.equal(config.callbacks.length, 1);
-    assert.equal(config.callbacks[0] instanceof SigilLangGraphHandler, true);
+    assert.equal(config.callbacks[0] instanceof Agento11yLangGraphHandler, true);
   } finally {
     void client.shutdown();
   }
 });
 
-test('withSigilOpenAIAgentsHooks wires to hook emitter lifecycle', async () => {
+test('withAgento11yOpenAIAgentsHooks wires to hook emitter lifecycle', async () => {
   const generation = await captureSingleGeneration(async (client) => {
     const hooks = new FakeHookEmitter();
-    const registration = withSigilOpenAIAgentsHooks(hooks, client);
+    const registration = withAgento11yOpenAIAgentsHooks(hooks, client);
 
     const context = {
       context: {
@@ -405,10 +414,10 @@ test('withSigilOpenAIAgentsHooks wires to hook emitter lifecycle', async () => {
   assert.equal(generation.usage.totalTokens, 18);
 });
 
-test('withSigilOpenAIAgentsHooks reads usage from output payload when context usage is missing', async () => {
+test('withAgento11yOpenAIAgentsHooks reads usage from output payload when context usage is missing', async () => {
   const generation = await captureSingleGeneration(async (client) => {
     const hooks = new FakeHookEmitter();
-    const registration = withSigilOpenAIAgentsHooks(hooks, client);
+    const registration = withAgento11yOpenAIAgentsHooks(hooks, client);
 
     const context = {
       context: {
@@ -439,12 +448,12 @@ test('withSigilOpenAIAgentsHooks reads usage from output payload when context us
   assert.equal(generation.usage.totalTokens, 8);
 });
 
-test('withSigilOpenAIAgentsHooks handles agent_error and clears stack state', async () => {
+test('withAgento11yOpenAIAgentsHooks handles agent_error and clears stack state', async () => {
   const generations = [];
   await captureGenerations(
     async (client) => {
       const hooks = new FakeHookEmitter();
-      const registration = withSigilOpenAIAgentsHooks(hooks, client);
+      const registration = withAgento11yOpenAIAgentsHooks(hooks, client);
 
       const context = {
         context: {
@@ -470,11 +479,11 @@ test('withSigilOpenAIAgentsHooks handles agent_error and clears stack state', as
   assert.equal(secondGeneration.metadata['agento11y.framework.parent_run_id'], undefined);
 });
 
-test('withSigilOpenAIAgentsHooks closes tool runs when tool call id is missing', async () => {
+test('withAgento11yOpenAIAgentsHooks closes tool runs when tool call id is missing', async () => {
   await captureGenerations(
     async (client) => {
       const hooks = new FakeHookEmitter();
-      const registration = withSigilOpenAIAgentsHooks(hooks, client);
+      const registration = withAgento11yOpenAIAgentsHooks(hooks, client);
 
       const startedRunIds = [];
       const endedRunIds = [];
@@ -516,10 +525,10 @@ test('withSigilOpenAIAgentsHooks closes tool runs when tool call id is missing',
   );
 });
 
-test('withSigilLlamaIndexCallbacks registers through callback manager API', async () => {
+test('withAgento11yLlamaIndexCallbacks registers through callback manager API', async () => {
   const generation = await captureSingleGeneration(async (client) => {
     const callbackManager = new FakeCallbackManager();
-    const config = withSigilLlamaIndexCallbacks({ callbackManager, retry: 2 }, client);
+    const config = withAgento11yLlamaIndexCallbacks({ callbackManager, retry: 2 }, client);
     assert.equal(config.retry, 2);
     assert.equal(config.callbackManager, callbackManager);
 
@@ -564,10 +573,10 @@ test('withSigilLlamaIndexCallbacks registers through callback manager API', asyn
   assert.equal(generation.mode, 'STREAM');
 });
 
-test('withSigilLlamaIndexCallbacks defaults non-streaming runs to sync mode', async () => {
+test('withAgento11yLlamaIndexCallbacks defaults non-streaming runs to sync mode', async () => {
   const generation = await captureSingleGeneration(async (client) => {
     const callbackManager = new FakeCallbackManager();
-    withSigilLlamaIndexCallbacks({ callbackManager }, client);
+    withAgento11yLlamaIndexCallbacks({ callbackManager }, client);
 
     callbackManager.emit('llm-start', {
       detail: {
@@ -589,10 +598,10 @@ test('withSigilLlamaIndexCallbacks defaults non-streaming runs to sync mode', as
   assert.equal(generation.mode, 'SYNC');
 });
 
-test('withSigilLlamaIndexCallbacks closes id-less llm runs', async () => {
+test('withAgento11yLlamaIndexCallbacks closes id-less llm runs', async () => {
   const generation = await captureSingleGeneration(async (client) => {
     const callbackManager = new FakeCallbackManager();
-    withSigilLlamaIndexCallbacks({ callbackManager }, client);
+    withAgento11yLlamaIndexCallbacks({ callbackManager }, client);
 
     callbackManager.emit('llm-start', {
       detail: {
@@ -630,12 +639,12 @@ test('withSigilLlamaIndexCallbacks closes id-less llm runs', async () => {
   assert.equal(extractFirstText(generation.output), 'world');
 });
 
-test('withSigilLlamaIndexCallbacks handles llm-error and clears run state', async () => {
+test('withAgento11yLlamaIndexCallbacks handles llm-error and clears run state', async () => {
   const generations = [];
   await captureGenerations(
     async (client) => {
       const callbackManager = new FakeCallbackManager();
-      withSigilLlamaIndexCallbacks({ callbackManager }, client);
+      withAgento11yLlamaIndexCallbacks({ callbackManager }, client);
 
       callbackManager.emit('llm-start', {
         detail: {
@@ -676,11 +685,11 @@ test('withSigilLlamaIndexCallbacks handles llm-error and clears run state', asyn
   assert.equal(secondGeneration.metadata['agento11y.framework.parent_run_id'], undefined);
 });
 
-test('withSigilLlamaIndexCallbacks closes id-less tool runs', async () => {
+test('withAgento11yLlamaIndexCallbacks closes id-less tool runs', async () => {
   await captureGenerations(
     async (client) => {
       const callbackManager = new FakeCallbackManager();
-      const registration = attachSigilLlamaIndexCallbacks(callbackManager, client);
+      const registration = attachAgento11yLlamaIndexCallbacks(callbackManager, client);
 
       const startedRunIds = [];
       const endedRunIds = [];
@@ -723,12 +732,12 @@ test('withSigilLlamaIndexCallbacks closes id-less tool runs', async () => {
   );
 });
 
-test('attachSigilLlamaIndexCallbacks reuses existing registration for same manager', () => {
-  const client = new SigilClient(defaultConfig());
+test('attachAgento11yLlamaIndexCallbacks reuses existing registration for same manager', () => {
+  const client = new Agento11yClient(defaultConfig());
   try {
     const callbackManager = new FakeCallbackManager();
-    const first = attachSigilLlamaIndexCallbacks(callbackManager, client);
-    const second = attachSigilLlamaIndexCallbacks(callbackManager, client);
+    const first = attachAgento11yLlamaIndexCallbacks(callbackManager, client);
+    const second = attachAgento11yLlamaIndexCallbacks(callbackManager, client);
     assert.equal(first, second);
     first.detach();
   } finally {
@@ -736,10 +745,10 @@ test('attachSigilLlamaIndexCallbacks reuses existing registration for same manag
   }
 });
 
-test('withSigilGoogleAdkPlugins appends an ADK plugin callback implementation', async () => {
+test('withAgento11yGoogleAdkPlugins appends an ADK plugin callback implementation', async () => {
   const generation = await captureSingleGeneration(async (client) => {
     const existing = { name: 'existing-plugin' };
-    const config = withSigilGoogleAdkPlugins({ plugins: [existing] }, client);
+    const config = withAgento11yGoogleAdkPlugins({ plugins: [existing] }, client);
     assert.equal(Array.isArray(config.plugins), true);
     assert.equal(config.plugins.length, 2);
     assert.equal(config.plugins[0], existing);
@@ -798,7 +807,7 @@ test('withSigilGoogleAdkPlugins appends an ADK plugin callback implementation', 
 test('google adk plugin closes tool runs when functionCallId is missing', async () => {
   await captureGenerations(
     async (client) => {
-      const plugin = createSigilGoogleAdkPlugin(client);
+      const plugin = createAgento11yGoogleAdkPlugin(client);
 
       const startedRunIds = [];
       const endedRunIds = [];
@@ -839,7 +848,7 @@ test('google adk plugin closes tool runs when functionCallId is missing', async 
 
 test('google adk plugin uses onUserMessageCallback when llmRequest has no contents', async () => {
   const generation = await captureSingleGeneration(async (client) => {
-    const config = withSigilGoogleAdkPlugins({}, client);
+    const config = withAgento11yGoogleAdkPlugins({}, client);
     const plugin = config.plugins[0];
 
     const invocationContext = {
@@ -882,7 +891,7 @@ test('google adk plugin uses onUserMessageCallback when llmRequest has no conten
 
 test('google adk plugin records partial tokens from onEventCallback and marks stream mode', async () => {
   const generation = await captureSingleGeneration(async (client) => {
-    const config = withSigilGoogleAdkPlugins({}, client);
+    const config = withAgento11yGoogleAdkPlugins({}, client);
     const plugin = config.plugins[0];
 
     const invocationContext = {
@@ -928,7 +937,7 @@ test('google adk plugin records partial tokens from onEventCallback and marks st
 
 test('google adk plugin emits agent chain spans that parent llm runs', async () => {
   const generation = await captureSingleGeneration(async (client) => {
-    const config = withSigilGoogleAdkPlugins({}, client);
+    const config = withAgento11yGoogleAdkPlugins({}, client);
     const plugin = config.plugins[0];
 
     const invocationContext = {
@@ -967,9 +976,9 @@ test('google adk plugin emits agent chain spans that parent llm runs', async () 
 });
 
 test('google adk plugin keeps fallback invocation ids stable without invocationId', async () => {
-  const client = new SigilClient(defaultConfig());
+  const client = new Agento11yClient(defaultConfig());
   try {
-    const plugin = createSigilGoogleAdkPlugin(client);
+    const plugin = createAgento11yGoogleAdkPlugin(client);
     const invocationContext = {
       session: { id: 'conversation-no-invocation-id' },
       agent: { name: 'root-agent' },
@@ -984,10 +993,10 @@ test('google adk plugin keeps fallback invocation ids stable without invocationI
   }
 });
 
-test('createSigilGoogleAdkPlugin exposes the ADK callback surface', () => {
-  const client = new SigilClient(defaultConfig());
+test('createAgento11yGoogleAdkPlugin exposes the ADK callback surface', () => {
+  const client = new Agento11yClient(defaultConfig());
   try {
-    const plugin = createSigilGoogleAdkPlugin(client);
+    const plugin = createAgento11yGoogleAdkPlugin(client);
     assert.equal(typeof plugin.beforeRunCallback, 'function');
     assert.equal(typeof plugin.onEventCallback, 'function');
     assert.equal(typeof plugin.afterRunCallback, 'function');
@@ -995,7 +1004,7 @@ test('createSigilGoogleAdkPlugin exposes the ADK callback surface', () => {
     assert.equal(typeof plugin.afterModelCallback, 'function');
     assert.equal(typeof plugin.beforeToolCallback, 'function');
     assert.equal(typeof plugin.afterToolCallback, 'function');
-    assert.equal(plugin.name, 'sigil_google_adk_plugin');
+    assert.equal(plugin.name, 'agento11y_google_adk_plugin');
   } finally {
     void client.shutdown();
   }
@@ -1058,7 +1067,7 @@ class FakeCallbackManager {
 async function captureGenerations(run, onGeneration) {
   const exporter = new CapturingExporter();
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     generationExport: {
       ...defaults.generationExport,
       batchSize: 10,

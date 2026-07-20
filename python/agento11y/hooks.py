@@ -198,7 +198,7 @@ def _allow_response() -> HookEvaluateResponse:
 def _fail_open_or_raise(fail_open: bool, detail: str) -> HookEvaluateResponse:
     if fail_open:
         return _allow_response()
-    raise HookTransportError(f"sigil hook evaluation failed: {detail}")
+    raise HookTransportError(f"agento11y hook evaluation failed: {detail}")
 
 
 def _serialize_request(request: HookEvaluateRequest) -> dict[str, Any]:

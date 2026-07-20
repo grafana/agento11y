@@ -6,7 +6,7 @@ import (
 
 	asdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 func TestFromRequestResponse(t *testing.T) {
@@ -123,7 +123,7 @@ func TestFromRequestResponse(t *testing.T) {
 
 	hasToolRole := false
 	for _, message := range generation.Input {
-		if message.Role == sigil.RoleTool {
+		if message.Role == agento11y.RoleTool {
 			hasToolRole = true
 			if len(message.Parts) != 1 || message.Parts[0].ToolResult == nil {
 				t.Fatalf("expected single tool_result part, got %#v", message.Parts)
@@ -162,7 +162,7 @@ func TestFromRequestResponseMapsImageInput(t *testing.T) {
 		t.Fatalf("expected text and media input parts, got %#v", generation.Input)
 	}
 	media := generation.Input[0].Parts[1]
-	if media.Kind != sigil.PartKindMedia {
+	if media.Kind != agento11y.PartKindMedia {
 		t.Fatalf("expected media part, got %q", media.Kind)
 	}
 	if media.Media == nil {
@@ -207,7 +207,7 @@ func TestFromRequestResponseInfersDataURLImageMIMEType(t *testing.T) {
 		t.Fatalf("expected text and media input parts, got %#v", generation.Input)
 	}
 	media := generation.Input[0].Parts[1]
-	if media.Kind != sigil.PartKindMedia {
+	if media.Kind != agento11y.PartKindMedia {
 		t.Fatalf("expected media part, got %q", media.Kind)
 	}
 	if media.Media == nil {
@@ -450,7 +450,7 @@ func TestFromStream_DeltaAccumulation(t *testing.T) {
 	}
 
 	output := generation.Output[0]
-	if output.Role != sigil.RoleAssistant {
+	if output.Role != agento11y.RoleAssistant {
 		t.Fatalf("expected assistant role, got %q", output.Role)
 	}
 	if len(output.Parts) != 3 {
@@ -458,7 +458,7 @@ func TestFromStream_DeltaAccumulation(t *testing.T) {
 	}
 
 	// Thinking part (accumulated from deltas)
-	if output.Parts[0].Kind != sigil.PartKindThinking {
+	if output.Parts[0].Kind != agento11y.PartKindThinking {
 		t.Fatalf("expected thinking part, got %q", output.Parts[0].Kind)
 	}
 	if output.Parts[0].Thinking != "let me think about this" {
@@ -466,7 +466,7 @@ func TestFromStream_DeltaAccumulation(t *testing.T) {
 	}
 
 	// Text part (accumulated from deltas)
-	if output.Parts[1].Kind != sigil.PartKindText {
+	if output.Parts[1].Kind != agento11y.PartKindText {
 		t.Fatalf("expected text part, got %q", output.Parts[1].Kind)
 	}
 	if output.Parts[1].Text != "Hello, world!" {
@@ -474,7 +474,7 @@ func TestFromStream_DeltaAccumulation(t *testing.T) {
 	}
 
 	// Tool use part (accumulated from partial_json deltas)
-	if output.Parts[2].Kind != sigil.PartKindToolCall {
+	if output.Parts[2].Kind != agento11y.PartKindToolCall {
 		t.Fatalf("expected tool_call part, got %q", output.Parts[2].Kind)
 	}
 	if output.Parts[2].ToolCall.Name != "weather" {
@@ -546,14 +546,14 @@ func TestFromStream_DeltaWithoutContentBlockStart(t *testing.T) {
 		t.Fatalf("expected 2 parts (text + thinking), got %d", len(output.Parts))
 	}
 
-	if output.Parts[0].Kind != sigil.PartKindText {
+	if output.Parts[0].Kind != agento11y.PartKindText {
 		t.Fatalf("expected text part at index 0, got %q", output.Parts[0].Kind)
 	}
 	if output.Parts[0].Text != "orphan text" {
 		t.Fatalf("expected 'orphan text', got %q", output.Parts[0].Text)
 	}
 
-	if output.Parts[1].Kind != sigil.PartKindThinking {
+	if output.Parts[1].Kind != agento11y.PartKindThinking {
 		t.Fatalf("expected thinking part at index 1, got %q", output.Parts[1].Kind)
 	}
 	if output.Parts[1].Thinking != "hmm" {
@@ -824,7 +824,7 @@ func TestFromRequestResponsePreservesToolSearchVariantToolResultTypes(t *testing
 	if len(generation.Output) != 1 {
 		t.Fatalf("expected 1 output message (tool), got %d", len(generation.Output))
 	}
-	if generation.Output[0].Role != sigil.RoleTool {
+	if generation.Output[0].Role != agento11y.RoleTool {
 		t.Fatalf("expected tool role, got %q", generation.Output[0].Role)
 	}
 	if len(generation.Output[0].Parts) != 2 {
@@ -894,7 +894,7 @@ func TestFromStreamPreservesToolSearchVariantToolResultTypes(t *testing.T) {
 	if len(generation.Output) != 1 {
 		t.Fatalf("expected 1 output message (tool), got %d", len(generation.Output))
 	}
-	if generation.Output[0].Role != sigil.RoleTool {
+	if generation.Output[0].Role != agento11y.RoleTool {
 		t.Fatalf("expected tool role, got %q", generation.Output[0].Role)
 	}
 	if len(generation.Output[0].Parts) != 2 {
@@ -938,7 +938,7 @@ func TestFromRequestResponsePreservesToolSearchVariantToolUseTypes(t *testing.T)
 	if len(generation.Output) != 1 {
 		t.Fatalf("expected 1 output assistant message, got %d", len(generation.Output))
 	}
-	if generation.Output[0].Role != sigil.RoleAssistant {
+	if generation.Output[0].Role != agento11y.RoleAssistant {
 		t.Fatalf("expected assistant role, got %q", generation.Output[0].Role)
 	}
 	if len(generation.Output[0].Parts) != 2 {
@@ -1008,7 +1008,7 @@ func TestFromStreamPreservesToolSearchVariantToolUseTypes(t *testing.T) {
 	if len(generation.Output) != 1 {
 		t.Fatalf("expected 1 output assistant message, got %d", len(generation.Output))
 	}
-	if generation.Output[0].Role != sigil.RoleAssistant {
+	if generation.Output[0].Role != agento11y.RoleAssistant {
 		t.Fatalf("expected assistant role, got %q", generation.Output[0].Role)
 	}
 	if len(generation.Output[0].Parts) != 2 {
@@ -1144,7 +1144,7 @@ func TestFromRequestResponseSkipsEmptyThinkingBlocks(t *testing.T) {
 
 	for _, message := range append(generation.Input, generation.Output...) {
 		for _, part := range message.Parts {
-			if part.Kind == sigil.PartKindThinking && part.Thinking == "" {
+			if part.Kind == agento11y.PartKindThinking && part.Thinking == "" {
 				t.Fatalf("empty thinking part leaked into generation: %+v", part)
 			}
 		}
@@ -1161,7 +1161,7 @@ func TestFromRequestResponseSkipsEmptyThinkingBlocks(t *testing.T) {
 		t.Fatalf("unexpected output parts: %+v", parts)
 	}
 
-	if verr := sigil.ValidateGeneration(generation); verr != nil {
+	if verr := agento11y.ValidateGeneration(generation); verr != nil {
 		t.Fatalf("generation failed validation: %v", verr)
 	}
 }

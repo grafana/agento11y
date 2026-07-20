@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class EnvConfigTests
 {
@@ -14,7 +14,7 @@ public sealed class EnvConfigTests
     [Fact]
     public void NoEnvKeepsBaseDefaults()
     {
-        var (cfg, warnings) = EnvConfig.ResolveFromEnv(EmptyLookup, new SigilClientConfig());
+        var (cfg, warnings) = EnvConfig.ResolveFromEnv(EmptyLookup, new Agento11yClientConfig());
 
         Assert.Equal(string.Empty, cfg.AgentName);
         Assert.Equal(string.Empty, cfg.AgentVersion);
@@ -37,7 +37,7 @@ public sealed class EnvConfigTests
             ["SIGIL_HEADERS"] = "X-A=1,X-B=two",
         };
 
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
 
         Assert.Equal("https://env:4318", cfg.GenerationExport.Endpoint);
         Assert.Equal(GenerationExportProtocol.Http, cfg.GenerationExport.Protocol);
@@ -56,7 +56,7 @@ public sealed class EnvConfigTests
             ["SIGIL_AUTH_TOKEN"] = "glc_xxx",
         };
 
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
         var auth = cfg.GenerationExport.Auth;
 
         Assert.Equal(ExportAuthMode.Basic, auth.Mode);
@@ -74,7 +74,7 @@ public sealed class EnvConfigTests
             ["SIGIL_AUTH_TOKEN"] = "tok",
         };
 
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
         var auth = cfg.GenerationExport.Auth;
 
         Assert.Equal(ExportAuthMode.Bearer, auth.Mode);
@@ -92,7 +92,7 @@ public sealed class EnvConfigTests
             ["SIGIL_USER_ID"] = "alice",
         };
 
-        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
 
         Assert.Equal("valid.example:4318", cfg.GenerationExport.Endpoint);
         Assert.Equal("valid-agent", cfg.AgentName);
@@ -110,7 +110,7 @@ public sealed class EnvConfigTests
             ["SIGIL_ENDPOINT"] = "valid.example:4318",
         };
 
-        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
 
         Assert.Equal(ContentCaptureMode.Default, cfg.ContentCapture);
         Assert.Equal("valid.example:4318", cfg.GenerationExport.Endpoint);
@@ -120,7 +120,7 @@ public sealed class EnvConfigTests
     [Fact]
     public void InvalidContentCaptureModeKeepsCallerBaseValue()
     {
-        var baseConfig = new SigilClientConfig { ContentCapture = ContentCaptureMode.MetadataOnly };
+        var baseConfig = new Agento11yClientConfig { ContentCapture = ContentCaptureMode.MetadataOnly };
         var env = new Dictionary<string, string?> { ["SIGIL_CONTENT_CAPTURE_MODE"] = "bogus" };
 
         var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), baseConfig);
@@ -132,7 +132,7 @@ public sealed class EnvConfigTests
     public void ContentCaptureModeFromEnv()
     {
         var env = new Dictionary<string, string?> { ["SIGIL_CONTENT_CAPTURE_MODE"] = "metadata_only" };
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
         Assert.Equal(ContentCaptureMode.MetadataOnly, cfg.ContentCapture);
     }
 
@@ -143,7 +143,7 @@ public sealed class EnvConfigTests
         {
             ["SIGIL_CONTENT_CAPTURE_MODE"] = "full_with_metadata_spans",
         };
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
         Assert.Equal(ContentCaptureMode.FullWithMetadataSpans, cfg.ContentCapture);
     }
 
@@ -159,7 +159,7 @@ public sealed class EnvConfigTests
             ["SIGIL_DEBUG"] = "true",
         };
 
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
 
         Assert.Equal("planner", cfg.AgentName);
         Assert.Equal("1.2.3", cfg.AgentVersion);
@@ -179,7 +179,7 @@ public sealed class EnvConfigTests
             ["SIGIL_USER_ID"] = "\t \n",
         };
 
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
 
         Assert.Empty(cfg.Tags);
         Assert.Equal(string.Empty, cfg.AgentName);
@@ -189,7 +189,7 @@ public sealed class EnvConfigTests
     [Fact]
     public void CallerEndpointWinsOverEnv()
     {
-        var baseConfig = new SigilClientConfig();
+        var baseConfig = new Agento11yClientConfig();
         baseConfig.GenerationExport.Endpoint = "https://caller-host";
         var env = new Dictionary<string, string?> { ["SIGIL_ENDPOINT"] = "https://env-host" };
 
@@ -201,7 +201,7 @@ public sealed class EnvConfigTests
     [Fact]
     public void CallerInsecureFalseBeatsEnvTrue()
     {
-        var baseConfig = new SigilClientConfig();
+        var baseConfig = new Agento11yClientConfig();
         baseConfig.GenerationExport.Insecure = false;
         var env = new Dictionary<string, string?> { ["SIGIL_INSECURE"] = "true" };
 
@@ -214,14 +214,14 @@ public sealed class EnvConfigTests
     public void EnvInsecureTrueLayersUnderUnsetCaller()
     {
         var env = new Dictionary<string, string?> { ["SIGIL_INSECURE"] = "true" };
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
         Assert.True(cfg.GenerationExport.Insecure);
     }
 
     [Fact]
     public void UnsetInsecureRemainsNull()
     {
-        var (cfg, _) = EnvConfig.ResolveFromEnv(EmptyLookup, new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(EmptyLookup, new Agento11yClientConfig());
         Assert.Null(cfg.GenerationExport.Insecure);
     }
 
@@ -229,7 +229,7 @@ public sealed class EnvConfigTests
     public void AuthTokenFillsBothBearerAndBasicWhenEmpty()
     {
         var env = new Dictionary<string, string?> { ["SIGIL_AUTH_TOKEN"] = "secret" };
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
         var auth = cfg.GenerationExport.Auth;
         Assert.Equal("secret", auth.BearerToken);
         Assert.Equal("secret", auth.BasicPassword);
@@ -238,7 +238,7 @@ public sealed class EnvConfigTests
     [Fact]
     public void AuthTokenSkipsAlreadyFilledFields()
     {
-        var baseConfig = new SigilClientConfig();
+        var baseConfig = new Agento11yClientConfig();
         baseConfig.GenerationExport.Auth.BearerToken = "caller-bearer";
         var env = new Dictionary<string, string?> { ["SIGIL_AUTH_TOKEN"] = "env-token" };
 
@@ -259,7 +259,7 @@ public sealed class EnvConfigTests
             ["SIGIL_AUTH_TOKEN"] = "secret",
         };
 
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
         var auth = cfg.GenerationExport.Auth;
 
         Assert.Equal(ExportAuthMode.Basic, auth.Mode);
@@ -271,7 +271,7 @@ public sealed class EnvConfigTests
     public void StrayTenantIdKeepsModeNone()
     {
         var env = new Dictionary<string, string?> { ["SIGIL_AUTH_TENANT_ID"] = "42" };
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
         Assert.Equal(ExportAuthMode.None, cfg.GenerationExport.Auth.Mode);
         Assert.Equal("42", cfg.GenerationExport.Auth.TenantId);
     }
@@ -290,7 +290,7 @@ public sealed class EnvConfigTests
     [Fact]
     public void EnvTagsMergeUnderCallerTags()
     {
-        var baseConfig = new SigilClientConfig
+        var baseConfig = new Agento11yClientConfig
         {
             Tags = new Dictionary<string, string>
             {
@@ -333,7 +333,7 @@ public sealed class EnvConfigTests
         // .NET's ConfigResolver mutates in-place to preserve the existing
         // contract where callers can read back the resolved Headers from the
         // config object they supplied.
-        var baseConfig = new SigilClientConfig { AgentName = "base-agent" };
+        var baseConfig = new Agento11yClientConfig { AgentName = "base-agent" };
         var env = new Dictionary<string, string?> { ["SIGIL_USER_ID"] = "alice" };
 
         var (resolved, _) = EnvConfig.ResolveFromEnv(MapLookup(env), baseConfig);
@@ -365,8 +365,8 @@ public sealed class EnvConfigTests
         var preferredEnv = values.ToDictionary(kv => "AGENTO11Y_" + kv.Key, kv => kv.Value);
         var legacyEnv = values.ToDictionary(kv => "SIGIL_" + kv.Key, kv => kv.Value);
 
-        var (preferred, preferredWarnings) = EnvConfig.ResolveFromEnv(MapLookup(preferredEnv), new SigilClientConfig());
-        var (legacy, legacyWarnings) = EnvConfig.ResolveFromEnv(MapLookup(legacyEnv), new SigilClientConfig());
+        var (preferred, preferredWarnings) = EnvConfig.ResolveFromEnv(MapLookup(preferredEnv), new Agento11yClientConfig());
+        var (legacy, legacyWarnings) = EnvConfig.ResolveFromEnv(MapLookup(legacyEnv), new Agento11yClientConfig());
 
         Assert.Empty(preferredWarnings);
         Assert.Empty(legacyWarnings);
@@ -397,7 +397,7 @@ public sealed class EnvConfigTests
             ["SIGIL_ENDPOINT"] = "legacy.example:4318",
         };
 
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
 
         Assert.Equal("preferred.example:4318", cfg.GenerationExport.Endpoint);
     }
@@ -411,7 +411,7 @@ public sealed class EnvConfigTests
             ["SIGIL_ENDPOINT"] = "legacy.example:4318",
         };
 
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
 
         Assert.Equal("legacy.example:4318", cfg.GenerationExport.Endpoint);
     }
@@ -425,7 +425,7 @@ public sealed class EnvConfigTests
             ["SIGIL_CONTENT_CAPTURE_MODE"] = "metadata_only",
         };
 
-        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
 
         Assert.Equal(ContentCaptureMode.Default, cfg.ContentCapture);
         Assert.Contains(warnings, w => w.Contains("AGENTO11Y_CONTENT_CAPTURE_MODE"));
@@ -440,7 +440,7 @@ public sealed class EnvConfigTests
             ["SIGIL_AUTH_MODE"] = "bearer",
         };
 
-        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
 
         Assert.Equal(ExportAuthMode.None, cfg.GenerationExport.Auth.Mode);
         Assert.Contains(warnings, w => w.Contains("AGENTO11Y_AUTH_MODE"));
@@ -449,7 +449,7 @@ public sealed class EnvConfigTests
     [Fact]
     public void CallerValueBeatsBothSpellings()
     {
-        var baseConfig = new SigilClientConfig();
+        var baseConfig = new Agento11yClientConfig();
         baseConfig.GenerationExport.Endpoint = "https://caller-host";
         var env = new Dictionary<string, string?>
         {
@@ -472,7 +472,7 @@ public sealed class EnvConfigTests
             ["SIGIL_AUTH_TOKEN"] = "glc_xxx",
         };
 
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
         var auth = cfg.GenerationExport.Auth;
 
         Assert.Equal(ExportAuthMode.Basic, auth.Mode);
@@ -490,7 +490,7 @@ public sealed class EnvConfigTests
             ["SIGIL_TAGS"] = "service=orch,env=prod",
         };
 
-        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new SigilClientConfig());
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
 
         Assert.Equal("ai", cfg.Tags["team"]);
         Assert.False(cfg.Tags.ContainsKey("service"));
@@ -498,7 +498,7 @@ public sealed class EnvConfigTests
     }
 
     [Fact]
-    public void LegacyConstantsKeepSigilValues()
+    public void LegacyConstantsKeepAgento11yValues()
     {
         Assert.Equal("SIGIL_ENDPOINT", EnvConfig.EnvEndpoint);
         Assert.Equal("SIGIL_PROTOCOL", EnvConfig.EnvProtocol);

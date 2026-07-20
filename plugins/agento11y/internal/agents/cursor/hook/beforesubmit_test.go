@@ -5,7 +5,7 @@ import (
 	"log"
 	"testing"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
@@ -17,13 +17,13 @@ import (
 func TestBeforeSubmit_GatesUserPromptByMode(t *testing.T) {
 	cases := []struct {
 		name string
-		mode sigil.ContentCaptureMode
+		mode agento11y.ContentCaptureMode
 		want string
 	}{
-		{"metadata_only drops prompt", sigil.ContentCaptureModeMetadataOnly, ""},
-		{"default drops prompt", sigil.ContentCaptureModeDefault, ""},
-		{"full keeps prompt", sigil.ContentCaptureModeFull, "hello"},
-		{"no_tool_content keeps prompt", sigil.ContentCaptureModeNoToolContent, "hello"},
+		{"metadata_only drops prompt", agento11y.ContentCaptureModeMetadataOnly, ""},
+		{"default drops prompt", agento11y.ContentCaptureModeDefault, ""},
+		{"full keeps prompt", agento11y.ContentCaptureModeFull, "hello"},
+		{"no_tool_content keeps prompt", agento11y.ContentCaptureModeNoToolContent, "hello"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -58,7 +58,7 @@ func TestBeforeSubmit_MissingIDsSilent(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	var buf bytes.Buffer
 	logger := log.New(&buf, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 	BeforeSubmit(Payload{HookEventName: "beforeSubmitPrompt"}, cfg, logger)
 	if !bytes.Contains(buf.Bytes(), []byte("skipping")) {
 		t.Errorf("expected 'skipping' log; got %q", buf.String())

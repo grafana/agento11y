@@ -1,7 +1,7 @@
 using System.Text;
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class AuthConfigTests
 {
@@ -93,7 +93,7 @@ public sealed class AuthConfigTests
         var config = TestHelpers.TestConfig(new CapturingGenerationExporter());
         config.GenerationExport.Auth = auth;
 
-        var error = Assert.Throws<ArgumentException>(() => new SigilClient(config));
+        var error = Assert.Throws<ArgumentException>(() => new Agento11yClient(config));
 
         Assert.Contains(expected, error.Message);
     }
@@ -108,7 +108,7 @@ public sealed class AuthConfigTests
             BearerToken = "token-a",
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         Assert.Equal("Bearer token-a", config.GenerationExport.Headers["Authorization"]);
     }
@@ -124,7 +124,7 @@ public sealed class AuthConfigTests
             BearerToken = "token-from-auth",
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         Assert.Equal("Bearer override-token", config.GenerationExport.Headers["authorization"]);
     }
@@ -140,7 +140,7 @@ public sealed class AuthConfigTests
             BasicPassword = "secret",
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         var expected = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("42:secret"));
         Assert.Equal(expected, config.GenerationExport.Headers["Authorization"]);
@@ -159,7 +159,7 @@ public sealed class AuthConfigTests
             BasicPassword = "secret",
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         var expected = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("probe-user:secret"));
         Assert.Equal(expected, config.GenerationExport.Headers["Authorization"]);
@@ -179,7 +179,7 @@ public sealed class AuthConfigTests
             BasicPassword = "secret",
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         Assert.Equal("Basic override", config.GenerationExport.Headers["Authorization"]);
         Assert.Equal("override-tenant", config.GenerationExport.Headers["X-Scope-OrgID"]);

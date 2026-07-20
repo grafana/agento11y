@@ -6,14 +6,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // writeGen writes one generation record the way handleGenerations would.
 // Tests don't need to go through HTTP to validate the aggregator.
-func writeGen(t *testing.T, s *Storage, convID, genID string, gen sigil.Generation, receivedAt string) {
+func writeGen(t *testing.T, s *Storage, convID, genID string, gen agento11y.Generation, receivedAt string) {
 	t.Helper()
 	if gen.ID == "" {
 		gen.ID = genID
@@ -75,35 +75,35 @@ func TestListConversations_Aggregates(t *testing.T) {
 	s := newStorage(t)
 
 	// conv-A: two generations, two models, error on the second.
-	writeGen(t, s, "conv-A", "g1", sigil.Generation{
+	writeGen(t, s, "conv-A", "g1", agento11y.Generation{
 		AgentName:   "pi",
-		Model:       sigil.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
+		Model:       agento11y.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
 		StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
 		CompletedAt: mustParse(t, "2026-05-21T10:00:03Z"),
-		Usage:       sigil.TokenUsage{InputTokens: 100, OutputTokens: 50},
+		Usage:       agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50},
 	}, "2026-05-21T10:00:03Z")
-	writeGen(t, s, "conv-A", "g2", sigil.Generation{
+	writeGen(t, s, "conv-A", "g2", agento11y.Generation{
 		AgentName:     "pi",
-		Model:         sigil.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
+		Model:         agento11y.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
 		ResponseModel: "claude-opus-4-7-20250901", // distinct from request name
 		StartedAt:     mustParse(t, "2026-05-21T10:00:10Z"),
 		CompletedAt:   mustParse(t, "2026-05-21T10:00:13Z"),
-		Usage:         sigil.TokenUsage{InputTokens: 200, OutputTokens: 80},
+		Usage:         agento11y.TokenUsage{InputTokens: 200, OutputTokens: 80},
 		CallError:     "rate limited",
 	}, "2026-05-21T10:00:13Z")
 
 	// conv-B: single generation, distinct agent.
-	writeGen(t, s, "conv-B", "g3", sigil.Generation{
+	writeGen(t, s, "conv-B", "g3", agento11y.Generation{
 		AgentName:   "claude-code",
-		Model:       sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
+		Model:       agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
 		StartedAt:   mustParse(t, "2026-05-21T11:00:00Z"),
 		CompletedAt: mustParse(t, "2026-05-21T11:00:01Z"),
-		Usage:       sigil.TokenUsage{InputTokens: 10, OutputTokens: 5},
+		Usage:       agento11y.TokenUsage{InputTokens: 10, OutputTokens: 5},
 	}, "2026-05-21T11:00:01Z")
 
 	// conv-C: only a received_at timestamp (no started/completed); the
 	// list should still surface it via the received_at fallback.
-	writeGen(t, s, "conv-C", "g5", sigil.Generation{AgentName: "vistra"}, "2026-05-21T11:10:00Z")
+	writeGen(t, s, "conv-C", "g5", agento11y.Generation{AgentName: "vistra"}, "2026-05-21T11:10:00Z")
 
 	got, err := s.ListConversations(0)
 	if err != nil {
@@ -184,9 +184,9 @@ func TestListConversations_LimitAndEmpty(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStorage(t)
 			for i := 0; i < tc.seed; i++ {
-				writeGen(t, s, "conv-"+string(rune('A'+i)), "g"+string(rune('0'+i)), sigil.Generation{
+				writeGen(t, s, "conv-"+string(rune('A'+i)), "g"+string(rune('0'+i)), agento11y.Generation{
 					AgentName:   "pi",
-					Model:       sigil.ModelRef{Name: "m"},
+					Model:       agento11y.ModelRef{Name: "m"},
 					StartedAt:   mustParse(t, "2026-05-21T10:00:00Z").Add(time.Duration(i) * time.Minute),
 					CompletedAt: mustParse(t, "2026-05-21T10:00:01Z").Add(time.Duration(i) * time.Minute),
 				}, "2026-05-21T10:00:01Z")
@@ -218,28 +218,28 @@ func TestConversationDetail(t *testing.T) {
 	bashInput, _ := json.Marshal(map[string]any{"command": "ls -la /var/log"})
 	readInput, _ := json.Marshal(map[string]any{"file_path": "/etc/hosts"})
 
-	writeGen(t, s, "conv-X", "g-second", sigil.Generation{
+	writeGen(t, s, "conv-X", "g-second", agento11y.Generation{
 		AgentName:   "pi",
-		Model:       sigil.ModelRef{Name: "claude-opus-4-7"},
+		Model:       agento11y.ModelRef{Name: "claude-opus-4-7"},
 		StartedAt:   mustParse(t, "2026-05-21T10:01:00Z"),
 		CompletedAt: mustParse(t, "2026-05-21T10:01:06.5Z"),
-		Usage:       sigil.TokenUsage{InputTokens: 20, OutputTokens: 10},
-		Output: []sigil.Message{{Role: sigil.RoleAssistant, Parts: []sigil.Part{
-			{Kind: sigil.PartKindToolCall, ToolCall: &sigil.ToolCall{Name: "read", InputJSON: readInput}},
+		Usage:       agento11y.TokenUsage{InputTokens: 20, OutputTokens: 10},
+		Output: []agento11y.Message{{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{
+			{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{Name: "read", InputJSON: readInput}},
 		}}},
 	}, "2026-05-21T10:01:06.5Z")
 
-	writeGen(t, s, "conv-X", "g-first", sigil.Generation{
+	writeGen(t, s, "conv-X", "g-first", agento11y.Generation{
 		AgentName:   "pi",
-		Model:       sigil.ModelRef{Name: "claude-opus-4-7"},
+		Model:       agento11y.ModelRef{Name: "claude-opus-4-7"},
 		StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
 		CompletedAt: mustParse(t, "2026-05-21T10:00:03.19Z"),
-		Usage:       sigil.TokenUsage{InputTokens: 10, OutputTokens: 5},
-		Output: []sigil.Message{{Role: sigil.RoleAssistant, Parts: []sigil.Part{
-			{Kind: sigil.PartKindText, Text: "thinking..."},
-			{Kind: sigil.PartKindToolCall, ToolCall: &sigil.ToolCall{Name: "bash", InputJSON: bashInput}},
+		Usage:       agento11y.TokenUsage{InputTokens: 10, OutputTokens: 5},
+		Output: []agento11y.Message{{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{
+			{Kind: agento11y.PartKindText, Text: "thinking..."},
+			{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{Name: "bash", InputJSON: bashInput}},
 			// Duplicate name to confirm dedup.
-			{Kind: sigil.PartKindToolCall, ToolCall: &sigil.ToolCall{Name: "bash", InputJSON: bashInput}},
+			{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{Name: "bash", InputJSON: bashInput}},
 		}}},
 	}, "2026-05-21T10:00:03.19Z")
 
@@ -311,58 +311,58 @@ func TestConversationDetail_ThreadMessages(t *testing.T) {
 	toolInput, _ := json.Marshal(map[string]any{"command": "ls"})
 	toolOutput, _ := json.Marshal([]string{"README.md"})
 	type wantMessage struct {
-		role       sigil.Role
-		partKind   sigil.PartKind
+		role       agento11y.Role
+		partKind   agento11y.PartKind
 		toolCallID string
 		text       string
 	}
 	for _, tc := range []struct {
 		name string
-		gen  sigil.Generation
+		gen  agento11y.Generation
 		want []wantMessage
 	}{
 		{
 			name: "tool result follows matching tool call",
-			gen: sigil.Generation{
+			gen: agento11y.Generation{
 				StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
 				CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
-				Input: []sigil.Message{
-					{Role: sigil.RoleUser, Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: "list files"}}},
-					{Role: sigil.RoleTool, Parts: []sigil.Part{{Kind: sigil.PartKindToolResult, ToolResult: &sigil.ToolResult{ToolCallID: "call-1", Name: "Bash", ContentJSON: toolOutput}}}},
+				Input: []agento11y.Message{
+					{Role: agento11y.RoleUser, Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "list files"}}},
+					{Role: agento11y.RoleTool, Parts: []agento11y.Part{{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "Bash", ContentJSON: toolOutput}}}},
 				},
-				Output: []sigil.Message{
-					{Role: sigil.RoleAssistant, Parts: []sigil.Part{{Kind: sigil.PartKindToolCall, ToolCall: &sigil.ToolCall{ID: "call-1", Name: "Bash", InputJSON: toolInput}}}},
-					{Role: sigil.RoleAssistant, Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: "README.md"}}},
+				Output: []agento11y.Message{
+					{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{ID: "call-1", Name: "Bash", InputJSON: toolInput}}}},
+					{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "README.md"}}},
 				},
 			},
 			want: []wantMessage{
-				{role: sigil.RoleUser, partKind: sigil.PartKindText, text: "list files"},
-				{role: sigil.RoleAssistant, partKind: sigil.PartKindToolCall, toolCallID: "call-1"},
-				{role: sigil.RoleTool, partKind: sigil.PartKindToolResult, toolCallID: "call-1"},
-				{role: sigil.RoleAssistant, partKind: sigil.PartKindText, text: "README.md"},
+				{role: agento11y.RoleUser, partKind: agento11y.PartKindText, text: "list files"},
+				{role: agento11y.RoleAssistant, partKind: agento11y.PartKindToolCall, toolCallID: "call-1"},
+				{role: agento11y.RoleTool, partKind: agento11y.PartKindToolResult, toolCallID: "call-1"},
+				{role: agento11y.RoleAssistant, partKind: agento11y.PartKindText, text: "README.md"},
 			},
 		},
 		{
 			name: "assistant text before tool call stays before tool call",
-			gen: sigil.Generation{
+			gen: agento11y.Generation{
 				StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
 				CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
-				Input: []sigil.Message{
-					{Role: sigil.RoleUser, Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: "list files"}}},
-					{Role: sigil.RoleTool, Parts: []sigil.Part{{Kind: sigil.PartKindToolResult, ToolResult: &sigil.ToolResult{ToolCallID: "call-1", Name: "Bash", ContentJSON: toolOutput}}}},
+				Input: []agento11y.Message{
+					{Role: agento11y.RoleUser, Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "list files"}}},
+					{Role: agento11y.RoleTool, Parts: []agento11y.Part{{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "Bash", ContentJSON: toolOutput}}}},
 				},
-				Output: []sigil.Message{
-					{Role: sigil.RoleAssistant, Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: "checking"}}},
-					{Role: sigil.RoleAssistant, Parts: []sigil.Part{{Kind: sigil.PartKindToolCall, ToolCall: &sigil.ToolCall{ID: "call-1", Name: "Bash", InputJSON: toolInput}}}},
-					{Role: sigil.RoleAssistant, Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: "README.md"}}},
+				Output: []agento11y.Message{
+					{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "checking"}}},
+					{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{ID: "call-1", Name: "Bash", InputJSON: toolInput}}}},
+					{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "README.md"}}},
 				},
 			},
 			want: []wantMessage{
-				{role: sigil.RoleUser, partKind: sigil.PartKindText, text: "list files"},
-				{role: sigil.RoleAssistant, partKind: sigil.PartKindText, text: "checking"},
-				{role: sigil.RoleAssistant, partKind: sigil.PartKindToolCall, toolCallID: "call-1"},
-				{role: sigil.RoleTool, partKind: sigil.PartKindToolResult, toolCallID: "call-1"},
-				{role: sigil.RoleAssistant, partKind: sigil.PartKindText, text: "README.md"},
+				{role: agento11y.RoleUser, partKind: agento11y.PartKindText, text: "list files"},
+				{role: agento11y.RoleAssistant, partKind: agento11y.PartKindText, text: "checking"},
+				{role: agento11y.RoleAssistant, partKind: agento11y.PartKindToolCall, toolCallID: "call-1"},
+				{role: agento11y.RoleTool, partKind: agento11y.PartKindToolResult, toolCallID: "call-1"},
+				{role: agento11y.RoleAssistant, partKind: agento11y.PartKindText, text: "README.md"},
 			},
 		},
 	} {
@@ -383,15 +383,15 @@ func TestConversationDetail_ThreadMessages(t *testing.T) {
 				assert.Equal(t, want.role, msg.Role, "message %d role", i)
 				assert.Equal(t, want.partKind, part.Kind, "message %d part kind", i)
 				switch want.partKind {
-				case sigil.PartKindToolCall:
+				case agento11y.PartKindToolCall:
 					require.NotNil(t, part.ToolCall, "message %d tool call", i)
 					assert.Equal(t, want.toolCallID, part.ToolCall.ID, "message %d tool call id", i)
-				case sigil.PartKindToolResult:
+				case agento11y.PartKindToolResult:
 					require.NotNil(t, part.ToolResult, "message %d tool result", i)
 					assert.Equal(t, want.toolCallID, part.ToolResult.ToolCallID, "message %d tool result id", i)
-				case sigil.PartKindText:
+				case agento11y.PartKindText:
 					assert.Equal(t, want.text, part.Text, "message %d text", i)
-				case sigil.PartKindThinking:
+				case agento11y.PartKindThinking:
 					// No thinking parts are used in this table; case included for exhaustiveness.
 				}
 			}
@@ -408,35 +408,35 @@ func TestConversationDetail_InputOutputPassThrough(t *testing.T) {
 	toolOutput, _ := json.Marshal([]string{"README.md"})
 	cases := []struct {
 		name  string
-		gen   sigil.Generation
+		gen   agento11y.Generation
 		check func(t *testing.T, view GenerationView)
 	}{
 		{
 			name: "full capture—both sides preserved verbatim",
-			gen: sigil.Generation{
+			gen: agento11y.Generation{
 				StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
 				CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
-				Input: []sigil.Message{{
-					Role:  sigil.RoleUser,
-					Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: "hey"}},
+				Input: []agento11y.Message{{
+					Role:  agento11y.RoleUser,
+					Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "hey"}},
 				}},
-				Output: []sigil.Message{{
-					Role:  sigil.RoleAssistant,
-					Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: "Hey! What are you working on?"}},
+				Output: []agento11y.Message{{
+					Role:  agento11y.RoleAssistant,
+					Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "Hey! What are you working on?"}},
 				}},
 			},
 			check: func(t *testing.T, v GenerationView) {
 				require.Len(t, v.Input, 1)
-				assert.Equal(t, sigil.RoleUser, v.Input[0].Role)
+				assert.Equal(t, agento11y.RoleUser, v.Input[0].Role)
 				assert.Equal(t, "hey", v.Input[0].Parts[0].Text)
 				require.Len(t, v.Output, 1)
-				assert.Equal(t, sigil.RoleAssistant, v.Output[0].Role)
+				assert.Equal(t, agento11y.RoleAssistant, v.Output[0].Role)
 				assert.Equal(t, "Hey! What are you working on?", v.Output[0].Parts[0].Text)
 			},
 		},
 		{
 			name: "metadata-only capture—empty messages don't synthesize content",
-			gen: sigil.Generation{
+			gen: agento11y.Generation{
 				StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
 				CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
 				// Input/Output left nil — the metadata-only mode.
@@ -448,14 +448,14 @@ func TestConversationDetail_InputOutputPassThrough(t *testing.T) {
 		},
 		{
 			name: "tool call in output kept alongside text",
-			gen: sigil.Generation{
+			gen: agento11y.Generation{
 				StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
 				CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
-				Output: []sigil.Message{{
-					Role: sigil.RoleAssistant,
-					Parts: []sigil.Part{
-						{Kind: sigil.PartKindText, Text: "running ls"},
-						{Kind: sigil.PartKindToolCall, ToolCall: &sigil.ToolCall{Name: "bash", InputJSON: toolInput}},
+				Output: []agento11y.Message{{
+					Role: agento11y.RoleAssistant,
+					Parts: []agento11y.Part{
+						{Kind: agento11y.PartKindText, Text: "running ls"},
+						{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{Name: "bash", InputJSON: toolInput}},
 					},
 				}},
 			},
@@ -463,25 +463,25 @@ func TestConversationDetail_InputOutputPassThrough(t *testing.T) {
 				require.Len(t, v.Output, 1)
 				parts := v.Output[0].Parts
 				require.Len(t, parts, 2)
-				assert.Equal(t, sigil.PartKindText, parts[0].Kind)
+				assert.Equal(t, agento11y.PartKindText, parts[0].Kind)
 				assert.Equal(t, "running ls", parts[0].Text)
-				assert.Equal(t, sigil.PartKindToolCall, parts[1].Kind)
+				assert.Equal(t, agento11y.PartKindToolCall, parts[1].Kind)
 				require.NotNil(t, parts[1].ToolCall)
 				assert.Equal(t, "bash", parts[1].ToolCall.Name)
 			},
 		},
 		{
 			name: "tool result stays in input and tool call stays in output",
-			gen: sigil.Generation{
+			gen: agento11y.Generation{
 				StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
 				CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
-				Input: []sigil.Message{
-					{Role: sigil.RoleUser, Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: "list files"}}},
-					{Role: sigil.RoleTool, Parts: []sigil.Part{{Kind: sigil.PartKindToolResult, ToolResult: &sigil.ToolResult{ToolCallID: "call-1", Name: "bash", ContentJSON: toolOutput}}}},
+				Input: []agento11y.Message{
+					{Role: agento11y.RoleUser, Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "list files"}}},
+					{Role: agento11y.RoleTool, Parts: []agento11y.Part{{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "bash", ContentJSON: toolOutput}}}},
 				},
-				Output: []sigil.Message{{
-					Role:  sigil.RoleAssistant,
-					Parts: []sigil.Part{{Kind: sigil.PartKindToolCall, ToolCall: &sigil.ToolCall{ID: "call-1", Name: "bash", InputJSON: toolInput}}},
+				Output: []agento11y.Message{{
+					Role:  agento11y.RoleAssistant,
+					Parts: []agento11y.Part{{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{ID: "call-1", Name: "bash", InputJSON: toolInput}}},
 				}},
 			},
 			check: func(t *testing.T, v GenerationView) {
@@ -518,25 +518,25 @@ func TestDisjointTokenUsage(t *testing.T) {
 	cases := []struct {
 		name                                                 string
 		provider                                             string
-		usage                                                sigil.TokenUsage
+		usage                                                agento11y.TokenUsage
 		freshInput, cacheRead, cacheWrite, output, reasoning int64
 	}{
 		{
 			name:       "anthropic keeps cache additive",
 			provider:   "anthropic",
-			usage:      sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, CacheWriteInputTokens: 20},
+			usage:      agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, CacheWriteInputTokens: 20},
 			freshInput: 100, cacheRead: 30, cacheWrite: 20, output: 50, reasoning: 0,
 		},
 		{
 			name:       "openai carves cache_read out of input and reasoning out of output",
 			provider:   "openai",
-			usage:      sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
+			usage:      agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
 			freshInput: 70, cacheRead: 30, cacheWrite: 0, output: 40, reasoning: 10,
 		},
 		{
 			name:       "gemini fully cached prompt leaves zero fresh input",
 			provider:   "gemini",
-			usage:      sigil.TokenUsage{InputTokens: 80, OutputTokens: 20, CacheReadInputTokens: 80},
+			usage:      agento11y.TokenUsage{InputTokens: 80, OutputTokens: 20, CacheReadInputTokens: 80},
 			freshInput: 0, cacheRead: 80, cacheWrite: 0, output: 20, reasoning: 0,
 		},
 		{
@@ -544,14 +544,14 @@ func TestDisjointTokenUsage(t *testing.T) {
 			// additive: output stays at the candidate count.
 			name:       "gemini keeps reasoning additive to output",
 			provider:   "gemini",
-			usage:      sigil.TokenUsage{InputTokens: 80, OutputTokens: 40, CacheReadInputTokens: 20, ReasoningTokens: 10},
+			usage:      agento11y.TokenUsage{InputTokens: 80, OutputTokens: 40, CacheReadInputTokens: 20, ReasoningTokens: 10},
 			freshInput: 60, cacheRead: 20, cacheWrite: 0, output: 40, reasoning: 10,
 		},
 		{
 			// Azure OpenAI shares OpenAI's subset semantics on both axes.
 			name:       "azure carves cache_read and reasoning out",
 			provider:   "azure",
-			usage:      sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
+			usage:      agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
 			freshInput: 70, cacheRead: 30, cacheWrite: 0, output: 40, reasoning: 10,
 		},
 		{
@@ -560,44 +560,44 @@ func TestDisjointTokenUsage(t *testing.T) {
 			// Responses API, so OpenAI subset semantics apply.
 			name:       "codex shares openai subset semantics",
 			provider:   "codex",
-			usage:      sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
+			usage:      agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
 			freshInput: 70, cacheRead: 30, cacheWrite: 0, output: 40, reasoning: 10,
 		},
 		{
 			// Unknown provider keeps reasoning additive (never hide output).
 			name:       "unknown provider keeps reasoning additive",
 			provider:   "openrouter",
-			usage:      sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, ReasoningTokens: 10},
+			usage:      agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50, ReasoningTokens: 10},
 			freshInput: 100, cacheRead: 0, cacheWrite: 0, output: 50, reasoning: 10,
 		},
 		{
 			name:       "unknown provider defaults to separate (no subtraction)",
 			provider:   "mystery-llm",
-			usage:      sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30},
+			usage:      agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30},
 			freshInput: 100, cacheRead: 30, cacheWrite: 0, output: 50, reasoning: 0,
 		},
 		{
 			name:       "empty provider defaults to separate",
 			provider:   "",
-			usage:      sigil.TokenUsage{InputTokens: 100, CacheReadInputTokens: 30},
+			usage:      agento11y.TokenUsage{InputTokens: 100, CacheReadInputTokens: 30},
 			freshInput: 100, cacheRead: 30, cacheWrite: 0, output: 0, reasoning: 0,
 		},
 		{
 			name:       "subset cache_read larger than input clamps fresh input to zero",
 			provider:   "openai",
-			usage:      sigil.TokenUsage{InputTokens: 10, OutputTokens: 5, CacheReadInputTokens: 30},
+			usage:      agento11y.TokenUsage{InputTokens: 10, OutputTokens: 5, CacheReadInputTokens: 30},
 			freshInput: 0, cacheRead: 30, cacheWrite: 0, output: 5, reasoning: 0,
 		},
 		{
 			name:       "reasoning larger than output clamps output to zero",
 			provider:   "openai",
-			usage:      sigil.TokenUsage{InputTokens: 20, OutputTokens: 5, ReasoningTokens: 10},
+			usage:      agento11y.TokenUsage{InputTokens: 20, OutputTokens: 5, ReasoningTokens: 10},
 			freshInput: 20, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 10,
 		},
 		{
 			name:       "negative values clamp to zero",
 			provider:   "anthropic",
-			usage:      sigil.TokenUsage{InputTokens: -5, OutputTokens: -1, CacheReadInputTokens: -3},
+			usage:      agento11y.TokenUsage{InputTokens: -5, OutputTokens: -1, CacheReadInputTokens: -3},
 			freshInput: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0,
 		},
 	}
@@ -622,30 +622,30 @@ func TestDisjointTokenUsage(t *testing.T) {
 func TestTokenUsagePoints(t *testing.T) {
 	s := newStorage(t)
 
-	writeGen(t, s, "conv-A", "g1", sigil.Generation{
-		Model:       sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
+	writeGen(t, s, "conv-A", "g1", agento11y.Generation{
+		Model:       agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
 		StartedAt:   mustParse(t, "2026-05-21T10:00:10Z"),
 		CompletedAt: mustParse(t, "2026-05-21T10:00:12Z"),
-		Usage:       sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, CacheWriteInputTokens: 20},
+		Usage:       agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, CacheWriteInputTokens: 20},
 	}, "2026-05-21T10:00:12Z")
 
 	// Earlier than g1 so it must sort first; OpenAI subset semantics.
-	writeGen(t, s, "conv-B", "g2", sigil.Generation{
-		Model:       sigil.ModelRef{Provider: "openai", Name: "gpt-5-omni"},
+	writeGen(t, s, "conv-B", "g2", agento11y.Generation{
+		Model:       agento11y.ModelRef{Provider: "openai", Name: "gpt-5-omni"},
 		StartedAt:   mustParse(t, "2026-05-21T09:00:00Z"),
 		CompletedAt: mustParse(t, "2026-05-21T09:00:01Z"),
-		Usage:       sigil.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
+		Usage:       agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
 	}, "2026-05-21T09:00:01Z")
 
 	// No started/completed: timestamp must fall back to received_at.
-	writeGen(t, s, "conv-C", "g3", sigil.Generation{
-		Model: sigil.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
-		Usage: sigil.TokenUsage{InputTokens: 5, OutputTokens: 3},
+	writeGen(t, s, "conv-C", "g3", agento11y.Generation{
+		Model: agento11y.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
+		Usage: agento11y.TokenUsage{InputTokens: 5, OutputTokens: 3},
 	}, "2026-05-21T12:00:00Z")
 
 	// Zero tokens: must be dropped entirely.
-	writeGen(t, s, "conv-D", "g4", sigil.Generation{
-		Model:     sigil.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
+	writeGen(t, s, "conv-D", "g4", agento11y.Generation{
+		Model:     agento11y.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
 		StartedAt: mustParse(t, "2026-05-21T08:00:00Z"),
 	}, "2026-05-21T08:00:00Z")
 

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/fragment"
@@ -53,7 +53,7 @@ func SessionStart(p Payload, cfg config.Config, logger *log.Logger) {
 		if surface := p.Surface(); surface != "" {
 			s.Surface = surface
 		}
-		if cfg.ContentCapture != sigil.ContentCaptureModeMetadataOnly {
+		if cfg.ContentCapture != agento11y.ContentCaptureModeMetadataOnly {
 			if initialPrompt := p.InitialPrompt(); initialPrompt != "" {
 				s.InitialPrompt = initialPrompt
 			}
@@ -106,7 +106,7 @@ func UserPromptSubmit(p Payload, cfg config.Config, logger *log.Logger) {
 			prompt = session.InitialPrompt
 		}
 		f.PromptHash = transcript.PromptHash(prompt)
-		if cfg.ContentCapture != sigil.ContentCaptureModeMetadataOnly {
+		if cfg.ContentCapture != agento11y.ContentCaptureModeMetadataOnly {
 			f.Prompt = prompt
 			f.InitialPrompt = session.InitialPrompt
 		}
@@ -184,7 +184,7 @@ func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Con
 	if err := updateCommon(sessionID, turnID, session, p, logger, func(f *fragment.Fragment) {
 		f.NextToolIndex++
 		input := toolArgs
-		if cfg.ContentCapture != sigil.ContentCaptureModeFull {
+		if cfg.ContentCapture != agento11y.ContentCaptureModeFull {
 			input = nil
 		}
 		f.Tools = append(f.Tools, fragment.ToolRecord{
@@ -303,11 +303,11 @@ func PostToolUse(p Payload, cfg config.Config, logger *log.Logger, failed bool) 
 			status = "error"
 		}
 		response := p.ToolResult()
-		if cfg.ContentCapture != sigil.ContentCaptureModeFull {
+		if cfg.ContentCapture != agento11y.ContentCaptureModeFull {
 			response = nil
 		}
 		errorMessage := ""
-		if failed && cfg.ContentCapture == sigil.ContentCaptureModeFull {
+		if failed && cfg.ContentCapture == agento11y.ContentCaptureModeFull {
 			errorMessage = redactor().RedactJSONForText(p.Error())
 		}
 		idx := findPendingToolIndex(f.Tools, p.ToolName())
@@ -359,7 +359,7 @@ func ErrorOccurred(p Payload, cfg config.Config, logger *log.Logger) {
 			Recoverable: p.Recoverable != nil && *p.Recoverable,
 			Timestamp:   p.ResolvedTimestamp(),
 		}
-		if cfg.ContentCapture == sigil.ContentCaptureModeFull {
+		if cfg.ContentCapture == agento11y.ContentCaptureModeFull {
 			item.Message = redactor().RedactJSONForText(p.Error())
 		}
 		f.Errors = append(f.Errors, item)
@@ -385,7 +385,7 @@ func SubagentStart(p Payload, cfg config.Config, logger *log.Logger) {
 			AgentDisplayName: p.AgentDisplayName(),
 			StartedAt:        p.ResolvedTimestamp(),
 		}
-		if cfg.ContentCapture != sigil.ContentCaptureModeMetadataOnly {
+		if cfg.ContentCapture != agento11y.ContentCaptureModeMetadataOnly {
 			record.AgentDescription = p.AgentDescription()
 		}
 		if transcriptPath := p.TranscriptPath(); transcriptPath != "" {
@@ -708,7 +708,7 @@ func shouldPreferTranscriptSnapshot(current transcript.Snapshot, haveCurrent boo
 // buildClient constructs the Sigil client. copilot leaves endpoint, tenant ID,
 // and token to the SDK's automatic SIGIL_* env resolution, so it only needs the
 // shared HTTP/basic-auth export defaults plus the OTel wiring.
-func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logger) *sigil.Client {
+func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
 	return sigilemit.NewClient(sigilemit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
@@ -718,20 +718,20 @@ func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logge
 	})
 }
 
-func emitGeneration(ctx context.Context, client *sigil.Client, frag *fragment.Fragment, mapped mapper.Mapped, logger *log.Logger) error {
+func emitGeneration(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, mapped mapper.Mapped, logger *log.Logger) error {
 	return sigilemit.Record(ctx, client, mapped.Start, mapped.Generation, mapped.CallError, func(genCtx context.Context) {
 		emitToolSpans(genCtx, client, frag, mapped.Generation, logger)
 	})
 }
 
-func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fragment, gen sigil.Generation, logger *log.Logger) {
+func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, gen agento11y.Generation, logger *log.Logger) {
 	for i := range frag.Tools {
 		t := &frag.Tools[i]
 		if t.ToolName == "" {
 			continue
 		}
 		startedAt, completedAt := toolSpanWindow(*t, gen.CompletedAt)
-		_, toolRec := client.StartToolExecution(ctx, sigil.ToolExecutionStart{
+		_, toolRec := client.StartToolExecution(ctx, agento11y.ToolExecutionStart{
 			ToolName:        t.ToolName,
 			ToolCallID:      t.ToolUseID,
 			ToolType:        "function",
@@ -744,7 +744,7 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fra
 			ContentCapture:  mappedContentCapture(gen),
 		})
 
-		end := sigil.ToolExecutionEnd{CompletedAt: completedAt}
+		end := agento11y.ToolExecutionEnd{CompletedAt: completedAt}
 		if len(t.ToolInput) > 0 {
 			end.Arguments = string(t.ToolInput)
 		}
@@ -764,28 +764,28 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fra
 	}
 }
 
-func mappedContentCapture(gen sigil.Generation) sigil.ContentCaptureMode {
+func mappedContentCapture(gen agento11y.Generation) agento11y.ContentCaptureMode {
 	if len(gen.Input) == 0 && len(gen.Output) == 0 {
-		return sigil.ContentCaptureModeMetadataOnly
+		return agento11y.ContentCaptureModeMetadataOnly
 	}
 	for _, msg := range gen.Output {
 		for _, part := range msg.Parts {
 			if part.ToolCall != nil && len(part.ToolCall.InputJSON) > 0 {
-				return sigil.ContentCaptureModeFull
+				return agento11y.ContentCaptureModeFull
 			}
 		}
 	}
 	for _, msg := range gen.Input {
-		if msg.Role == sigil.RoleUser {
-			return sigil.ContentCaptureModeNoToolContent
+		if msg.Role == agento11y.RoleUser {
+			return agento11y.ContentCaptureModeNoToolContent
 		}
 		for _, part := range msg.Parts {
 			if part.ToolResult != nil && (part.ToolResult.Content != "" || len(part.ToolResult.ContentJSON) > 0) {
-				return sigil.ContentCaptureModeFull
+				return agento11y.ContentCaptureModeFull
 			}
 		}
 	}
-	return sigil.ContentCaptureModeMetadataOnly
+	return agento11y.ContentCaptureModeMetadataOnly
 }
 
 // toolSpanWindow differs from sigilemit.ToolSpanWindow: copilot records a

@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { context, SpanStatusCode, trace } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { SigilLangGraphHandler } from '../.test-dist/frameworks/langgraph/index.js';
-import { defaultConfig, SigilClient } from '../.test-dist/index.js';
+import { Agento11yLangGraphHandler } from '../.test-dist/frameworks/langgraph/index.js';
+import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
 class CapturingExporter {
   requests = [];
@@ -21,7 +21,7 @@ class CapturingExporter {
 
 test('langgraph handler records sync lifecycle with framework tags', async () => {
   const generation = await captureSingleGeneration(async (client) => {
-    const handler = new SigilLangGraphHandler(client, {
+    const handler = new Agento11yLangGraphHandler(client, {
       agentName: 'agent-langgraph',
       agentVersion: 'v1',
       extraTags: { env: 'test', 'agento11y.framework.name': 'override' },
@@ -78,7 +78,7 @@ test('langgraph handler records sync lifecycle with framework tags', async () =>
 
 test('langgraph handler records stream mode and token fallback output', async () => {
   const generation = await captureSingleGeneration(async (client) => {
-    const handler = new SigilLangGraphHandler(client);
+    const handler = new Agento11yLangGraphHandler(client);
 
     await handler.handleLLMStart({ kwargs: { model: 'gemini-2.5-pro' } }, ['stream this'], 'run-stream', undefined, {
       invocation_params: { model: 'gemini-2.5-pro', streaming: true },
@@ -98,7 +98,7 @@ test('langgraph generation span tracks active parent span and preserves export l
   const tracerProvider = new BasicTracerProvider({
     spanProcessors: [new SimpleSpanProcessor(spanExporter)],
   });
-  const baseTracer = tracerProvider.getTracer('sigil-framework-test');
+  const baseTracer = tracerProvider.getTracer('agento11y-framework-test');
   let parentContext;
   const tracer = {
     startSpan(name, options, contextArg) {
@@ -110,7 +110,7 @@ test('langgraph generation span tracks active parent span and preserves export l
   };
   const defaults = defaultConfig();
   const exporter = new CapturingExporter();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     generationExport: {
       ...defaults.generationExport,
       batchSize: 10,
@@ -121,7 +121,7 @@ test('langgraph generation span tracks active parent span and preserves export l
   });
 
   try {
-    const handler = new SigilLangGraphHandler(client);
+    const handler = new Agento11yLangGraphHandler(client);
     const parentSpan = baseTracer.startSpan('framework.request');
     parentContext = trace.setSpan(context.active(), parentSpan);
     await handler.handleChatModelStart(
@@ -164,7 +164,7 @@ test('langgraph provider mapping covers openai anthopic gemini and fallback', as
 
   await captureGenerations(
     async (client) => {
-      const handler = new SigilLangGraphHandler(client);
+      const handler = new Agento11yLangGraphHandler(client);
 
       await handler.handleLLMStart({}, ['x'], 'run-openai', undefined, { invocation_params: { model: 'o3-mini' } });
       await handler.handleLLMEnd({ generations: [[{ text: 'ok' }]] }, 'run-openai');
@@ -194,7 +194,7 @@ test('langgraph backfills Bedrock inference-profile model from the response', as
   // langgraph delegates to the shared handler, so the Bedrock backfill applies here too.
   const arnModel = 'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6-v1:0';
   const generation = await captureSingleGeneration(async (client) => {
-    const handler = new SigilLangGraphHandler(client);
+    const handler = new Agento11yLangGraphHandler(client);
 
     await handler.handleChatModelStart({ name: 'ChatBedrock' }, [[{ type: 'human', content: 'hi' }]], 'run-bedrock');
     await handler.handleLLMEnd(
@@ -212,7 +212,7 @@ test('langgraph backfills Bedrock inference-profile model from the response', as
 
 test('langgraph handler sets call_error on llm error', async () => {
   const generation = await captureSingleGeneration(async (client) => {
-    const handler = new SigilLangGraphHandler(client);
+    const handler = new Agento11yLangGraphHandler(client);
 
     await handler.handleLLMStart({}, ['x'], 'run-error', undefined, { invocation_params: { model: 'gpt-5' } });
     await handler.handleLLMError(new Error('provider unavailable'), 'run-error');
@@ -223,9 +223,9 @@ test('langgraph handler sets call_error on llm error', async () => {
 });
 
 test('langgraph handler explicitly has no embedding lifecycle', async () => {
-  const client = new SigilClient(defaultConfig());
+  const client = new Agento11yClient(defaultConfig());
   try {
-    const handler = new SigilLangGraphHandler(client);
+    const handler = new Agento11yLangGraphHandler(client);
     assert.equal(typeof handler.handleEmbeddingStart, 'undefined');
     assert.equal(typeof handler.handleEmbeddingEnd, 'undefined');
     assert.equal(typeof handler.handleEmbeddingError, 'undefined');
@@ -239,10 +239,10 @@ test('langgraph handler maps tool callbacks and emits chain/retriever spans', as
   const tracerProvider = new BasicTracerProvider({
     spanProcessors: [new SimpleSpanProcessor(spanExporter)],
   });
-  const tracer = tracerProvider.getTracer('sigil-framework-test');
+  const tracer = tracerProvider.getTracer('agento11y-framework-test');
 
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     generationExport: {
       ...defaults.generationExport,
       batchSize: 10,
@@ -253,7 +253,7 @@ test('langgraph handler maps tool callbacks and emits chain/retriever spans', as
   });
 
   try {
-    const handler = new SigilLangGraphHandler(client);
+    const handler = new Agento11yLangGraphHandler(client);
     await handler.handleToolStart(
       { name: 'weather', description: 'Get weather' },
       '{"city":"Paris"}',
@@ -322,7 +322,7 @@ async function captureSingleGeneration(run) {
 async function captureGenerations(run, onGeneration) {
   const exporter = new CapturingExporter();
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     generationExport: {
       ...defaults.generationExport,
       batchSize: 10,

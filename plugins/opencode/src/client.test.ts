@@ -1,20 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SigilOpencodeConfig } from "./config.js";
+import type { Agento11yOpencodeConfig } from "./config.js";
 
-const { SigilClientMock } = vi.hoisted(() => ({
-  SigilClientMock: vi.fn(),
+const { Agento11yClientMock } = vi.hoisted(() => ({
+  Agento11yClientMock: vi.fn(),
 }));
 
 vi.mock("@grafana/agento11y", () => ({
-  SigilClient: SigilClientMock,
+  Agento11yClient: Agento11yClientMock,
   userAgent: () => "agento11y-sdk-js/0.0.0-test",
 }));
 
-import { createSigilClient } from "./client.js";
+import { createAgento11yClient } from "./client.js";
 
 function makeConfig(
-  overrides?: Partial<SigilOpencodeConfig>,
-): SigilOpencodeConfig {
+  overrides?: Partial<Agento11yOpencodeConfig>,
+): Agento11yOpencodeConfig {
   return {
     endpoint: "http://localhost:8080",
     auth: { mode: "none" },
@@ -25,29 +25,29 @@ function makeConfig(
   };
 }
 
-describe("createSigilClient", () => {
+describe("createAgento11yClient", () => {
   beforeEach(() => {
-    SigilClientMock.mockReset();
+    Agento11yClientMock.mockReset();
     // biome-ignore lint/complexity/useArrowFunction: must be a regular function for `new` to work
-    SigilClientMock.mockImplementation(function () {
+    Agento11yClientMock.mockImplementation(function () {
       return {};
     });
   });
 
   it("passes contentCapture to the SDK client", () => {
-    createSigilClient(makeConfig({ contentCapture: "full" }));
+    createAgento11yClient(makeConfig({ contentCapture: "full" }));
 
-    expect(SigilClientMock).toHaveBeenCalledWith(
+    expect(Agento11yClientMock).toHaveBeenCalledWith(
       expect.objectContaining({ contentCapture: "full" }),
     );
   });
 
   it("creates SDK client with export config", () => {
-    const client = createSigilClient(makeConfig());
+    const client = createAgento11yClient(makeConfig());
 
     expect(client).toEqual({});
-    expect(SigilClientMock).toHaveBeenCalledTimes(1);
-    expect(SigilClientMock).toHaveBeenCalledWith({
+    expect(Agento11yClientMock).toHaveBeenCalledTimes(1);
+    expect(Agento11yClientMock).toHaveBeenCalledWith({
       generationExport: {
         protocol: "http",
         endpoint: "http://localhost:8080/api/v1/generations:export",
@@ -70,22 +70,22 @@ describe("createSigilClient", () => {
   });
 
   it("sets the plugin User-Agent on the generation export", () => {
-    createSigilClient(makeConfig());
+    createAgento11yClient(makeConfig());
 
-    const [arg] = SigilClientMock.mock.calls[0];
+    const [arg] = Agento11yClientMock.mock.calls[0];
     const ua = arg.generationExport.headers["User-Agent"];
     expect(ua.startsWith("agento11y-plugin-opencode/")).toBe(true);
     expect(ua.endsWith("agento11y-sdk-js/0.0.0-test")).toBe(true);
   });
 
   it("passes guard config to the SDK client", () => {
-    createSigilClient(
+    createAgento11yClient(
       makeConfig({
         guards: { enabled: true, timeoutMs: 2500, failOpen: false },
       }),
     );
 
-    expect(SigilClientMock).toHaveBeenCalledWith(
+    expect(Agento11yClientMock).toHaveBeenCalledWith(
       expect.objectContaining({
         hooks: {
           enabled: true,
@@ -98,11 +98,11 @@ describe("createSigilClient", () => {
   });
 
   it("appends the export path for a prefix-mounted endpoint", () => {
-    createSigilClient(
+    createAgento11yClient(
       makeConfig({ endpoint: "https://sigil.example.com/sigil" }),
     );
 
-    expect(SigilClientMock).toHaveBeenCalledWith(
+    expect(Agento11yClientMock).toHaveBeenCalledWith(
       expect.objectContaining({
         generationExport: expect.objectContaining({
           endpoint: "https://sigil.example.com/sigil/api/v1/generations:export",
@@ -112,11 +112,11 @@ describe("createSigilClient", () => {
   });
 
   it("returns null when SDK constructor throws", () => {
-    SigilClientMock.mockImplementationOnce(() => {
+    Agento11yClientMock.mockImplementationOnce(() => {
       throw new Error("boom");
     });
 
-    const client = createSigilClient(makeConfig());
+    const client = createAgento11yClient(makeConfig());
 
     expect(client).toBeNull();
   });

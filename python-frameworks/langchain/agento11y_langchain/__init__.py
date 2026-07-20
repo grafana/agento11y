@@ -4,22 +4,22 @@ from typing import Any
 
 from agento11y import Client
 
-from .handler import SigilAsyncLangChainHandler, SigilLangChainHandler
+from .handler import Agento11yAsyncLangChainHandler, Agento11yLangChainHandler
 
 
-def create_sigil_langchain_handler(
+def create_agento11y_langchain_handler(
     *,
     client: Client,
     async_handler: bool = False,
     **handler_kwargs: Any,
-) -> SigilLangChainHandler | SigilAsyncLangChainHandler:
+) -> Agento11yLangChainHandler | Agento11yAsyncLangChainHandler:
     """Create a LangChain Sigil callback handler for sync or async flows."""
     if async_handler:
-        return SigilAsyncLangChainHandler(client=client, **handler_kwargs)
-    return SigilLangChainHandler(client=client, **handler_kwargs)
+        return Agento11yAsyncLangChainHandler(client=client, **handler_kwargs)
+    return Agento11yLangChainHandler(client=client, **handler_kwargs)
 
 
-def with_sigil_langchain_callbacks(
+def with_agento11y_langchain_callbacks(
     config: dict[str, Any] | None,
     *,
     client: Client,
@@ -35,15 +35,17 @@ def with_sigil_langchain_callbacks(
         callbacks = []
     else:
         callbacks = [existing]
-    if not any(isinstance(item, (SigilLangChainHandler, SigilAsyncLangChainHandler)) for item in callbacks):
-        callbacks.append(create_sigil_langchain_handler(client=client, async_handler=async_handler, **handler_kwargs))
+    if not any(isinstance(item, (Agento11yLangChainHandler, Agento11yAsyncLangChainHandler)) for item in callbacks):
+        callbacks.append(
+            create_agento11y_langchain_handler(client=client, async_handler=async_handler, **handler_kwargs)
+        )
     merged["callbacks"] = callbacks
     return merged
 
 
 __all__ = [
-    "SigilLangChainHandler",
-    "SigilAsyncLangChainHandler",
-    "create_sigil_langchain_handler",
-    "with_sigil_langchain_callbacks",
+    "Agento11yLangChainHandler",
+    "Agento11yAsyncLangChainHandler",
+    "create_agento11y_langchain_handler",
+    "with_agento11y_langchain_callbacks",
 ]

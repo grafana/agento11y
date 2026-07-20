@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type {
+  Agento11yClient,
   ContentCaptureMode,
   Message,
-  SigilClient,
 } from "@grafana/agento11y";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { createSigilClient } from "./client.js";
-import type { SigilPiConfig } from "./config.js";
+import { createAgento11yClient } from "./client.js";
+import type { Agento11yPiConfig } from "./config.js";
 import { loadConfig } from "./config.js";
 import { detectPiVersion } from "./detectPiVersion.js";
 import { resolveGitBranch } from "./git.js";
@@ -38,8 +38,8 @@ import {
 } from "./telemetry.js";
 
 export default function (pi: ExtensionAPI) {
-  let sigil: SigilClient | null = null;
-  let config: SigilPiConfig | null = null;
+  let sigil: Agento11yClient | null = null;
+  let config: Agento11yPiConfig | null = null;
   let telemetry: TelemetryProviders | null = null;
   // Cached from the latest assistant message. `tool_call` events carry no model
   // metadata, so guards read it from `message_end` before the tool runs.
@@ -155,7 +155,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      sigil = createSigilClient(config, {
+      sigil = createAgento11yClient(config, {
         tracer: telemetry?.tracer,
         meter: telemetry?.meter,
       });
@@ -536,15 +536,15 @@ export default function (pi: ExtensionAPI) {
 
           // sigil and config are guaranteed non-null by the guard at the top of this handler.
           emitToolSpans(
-            sigil as SigilClient,
+            sigil as Agento11yClient,
             msg,
             toolResults,
             turnToolTimings,
             {
               conversationId,
               conversationTitle,
-              agentName: (config as SigilPiConfig).agentName,
-              agentVersion: (config as SigilPiConfig).agentVersion,
+              agentName: (config as Agento11yPiConfig).agentName,
+              agentVersion: (config as Agento11yPiConfig).agentVersion,
               contentCapture,
             },
           );
@@ -587,7 +587,7 @@ export default function (pi: ExtensionAPI) {
 
 /** @internal Exported for testing. */
 export function emitToolSpans(
-  client: SigilClient,
+  client: Agento11yClient,
   msg: PiAssistantMessage,
   toolResults: PiToolResult[],
   timings: ToolTiming[],

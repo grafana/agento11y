@@ -18,5 +18,5 @@ dependencies {
 }
 
 application {
-    mainClass.set("com.grafana.sigil.sdk.devex.DevexEmitter")
+    mainClass.set("com.grafana.agento11y.sdk.devex.DevexEmitter")
 }

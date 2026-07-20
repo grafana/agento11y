@@ -1,9 +1,9 @@
 import type { Message, MessagePart, TokenUsage, ToolDefinition } from '../../types.js';
 import type {
+  Agento11yVercelAiSdkOptions,
   ConversationResolution,
   ParsedToolCall,
   ParsedToolResult,
-  SigilVercelAiSdkOptions,
   StepFinishEvent,
   StepOutputMapping,
   StepStartEvent,
@@ -12,7 +12,7 @@ import type {
   ToolCallStartEvent,
 } from './types.js';
 
-const frameworkConversationPrefix = 'sigil:framework:vercel-ai-sdk:';
+const frameworkConversationPrefix = 'agento11y:framework:vercel-ai-sdk:';
 const frameworkName = 'vercel-ai-sdk';
 const frameworkSource = 'framework';
 const frameworkLanguage = 'typescript';
@@ -65,7 +65,7 @@ export function fallbackConversationId(suffix: string): string {
 
 export function resolveConversationId(params: {
   explicitConversationId?: string;
-  resolver?: SigilVercelAiSdkOptions['resolveConversationId'];
+  resolver?: Agento11yVercelAiSdkOptions['resolveConversationId'];
   stepStartEvent: StepStartEvent;
   fallbackSeed: string;
 }): ConversationResolution {

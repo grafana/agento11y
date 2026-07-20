@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
 )
@@ -34,7 +34,7 @@ func basicFragment(t *testing.T) *fragment.Fragment {
 func TestMapFragment_BasicFields(t *testing.T) {
 	got := MapFragment(Inputs{
 		Fragment:       basicFragment(t),
-		ContentCapture: sigil.ContentCaptureModeFull,
+		ContentCapture: agento11y.ContentCaptureModeFull,
 		Now:            fixedTime,
 	})
 
@@ -66,18 +66,18 @@ func TestMapFragment_BasicFields(t *testing.T) {
 func TestMapFragment_ContentCaptureModes(t *testing.T) {
 	cases := []struct {
 		name            string
-		mode            sigil.ContentCaptureMode
+		mode            agento11y.ContentCaptureMode
 		wantUserPrompt  bool
 		wantAssistant   bool
 		wantToolInput   bool
 		wantToolResult  bool // tool_result message present in input
 		wantToolContent bool // tool_result carries ContentJSON or Content
 	}{
-		{"full", sigil.ContentCaptureModeFull, true, true, true, true, true},
-		{"full_with_metadata_spans", sigil.ContentCaptureModeFullWithMetadataSpans, true, true, true, true, true},
-		{"no_tool_content", sigil.ContentCaptureModeNoToolContent, true, true, false, true, false},
-		{"metadata_only", sigil.ContentCaptureModeMetadataOnly, false, false, false, false, false},
-		{"default", sigil.ContentCaptureModeDefault, false, false, false, false, false},
+		{"full", agento11y.ContentCaptureModeFull, true, true, true, true, true},
+		{"full_with_metadata_spans", agento11y.ContentCaptureModeFullWithMetadataSpans, true, true, true, true, true},
+		{"no_tool_content", agento11y.ContentCaptureModeNoToolContent, true, true, false, true, false},
+		{"metadata_only", agento11y.ContentCaptureModeMetadataOnly, false, false, false, false, false},
+		{"default", agento11y.ContentCaptureModeDefault, false, false, false, false, false},
 	}
 
 	for _, tc := range cases {
@@ -95,7 +95,7 @@ func TestMapFragment_ContentCaptureModes(t *testing.T) {
 						gotPrompt = true
 					}
 				}
-				if msg.Role == sigil.RoleTool {
+				if msg.Role == agento11y.RoleTool {
 					gotToolResult = true
 					for _, p := range msg.Parts {
 						if p.ToolResult != nil && (p.ToolResult.Content != "" || len(p.ToolResult.ContentJSON) > 0) {
@@ -179,7 +179,7 @@ func TestMapFragment_InfersProviderFromModel(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.model, func(t *testing.T) {
 			frag := &fragment.Fragment{ConversationID: "c", GenerationID: "g", Model: tc.model}
-			got := MapFragment(Inputs{Fragment: frag, ContentCapture: sigil.ContentCaptureModeMetadataOnly, Now: fixedTime})
+			got := MapFragment(Inputs{Fragment: frag, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: fixedTime})
 			if got.Generation.Model.Provider != tc.want {
 				t.Errorf("provider for model %q = %q; want %q", tc.model, got.Generation.Model.Provider, tc.want)
 			}
@@ -219,7 +219,7 @@ func TestMapFragment_MissingModelAndProvider_FallsBackToCursor(t *testing.T) {
 	}
 	got := MapFragment(Inputs{
 		Fragment:       frag,
-		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 		Now:            fixedTime,
 	})
 	if got.Generation.Model.Provider != "cursor" {
@@ -237,7 +237,7 @@ func TestMapFragment_ConversationTitleFromSession(t *testing.T) {
 			ConversationID:    "conv-1",
 			ConversationTitle: "list go files",
 		},
-		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 		Now:            fixedTime,
 	})
 	if got.Start.ConversationTitle != "list go files" {
@@ -251,7 +251,7 @@ func TestMapFragment_ConversationTitleFromSession(t *testing.T) {
 func TestMapFragment_ConversationTitleEmptyWithoutSession(t *testing.T) {
 	got := MapFragment(Inputs{
 		Fragment:       basicFragment(t),
-		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 		Now:            fixedTime,
 	})
 	if got.Start.ConversationTitle != "" {
@@ -269,7 +269,7 @@ func TestMapFragment_BuiltinTags(t *testing.T) {
 			ConversationID: "conv-1",
 			WorkspaceRoots: []string{"/no-such-dir-without-git"},
 		},
-		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 		Now:            fixedTime,
 	})
 	// No real .git → git.branch absent.
@@ -289,7 +289,7 @@ func TestMapFragment_TokenUsage(t *testing.T) {
 
 	got := MapFragment(Inputs{
 		Fragment:       frag,
-		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 		Now:            fixedTime,
 	})
 	if got.Generation.Usage.InputTokens != 100 {
@@ -330,7 +330,7 @@ func TestMapFragment_StopStatusError_PopulatesCallError(t *testing.T) {
 	got := MapFragment(Inputs{
 		Fragment:       basicFragment(t),
 		Stop:           &StopInput{Status: "error", Error: []byte(`"network failure"`)},
-		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 		Now:            fixedTime,
 	})
 	if got.StopStatus != StopStatusError {
@@ -373,8 +373,8 @@ func TestMapFragment_EffectiveVersionStableAcrossToolSubsets(t *testing.T) {
 	fragB := basicFragment(t)
 	fragB.Tools = []fragment.ToolRecord{{ToolName: "Bash", ToolUseID: "t2"}}
 
-	gotA := MapFragment(Inputs{Fragment: fragA, Session: session, ContentCapture: sigil.ContentCaptureModeFull, Now: fixedTime})
-	gotB := MapFragment(Inputs{Fragment: fragB, Session: session, ContentCapture: sigil.ContentCaptureModeFull, Now: fixedTime})
+	gotA := MapFragment(Inputs{Fragment: fragA, Session: session, ContentCapture: agento11y.ContentCaptureModeFull, Now: fixedTime})
+	gotB := MapFragment(Inputs{Fragment: fragB, Session: session, ContentCapture: agento11y.ContentCaptureModeFull, Now: fixedTime})
 
 	if gotA.Generation.EffectiveVersion == "" {
 		t.Fatalf("EffectiveVersion is empty; expected raw cursorVersion")

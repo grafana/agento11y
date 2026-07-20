@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { trace } from '@opentelemetry/api';
-import { createSecretRedactionSanitizer, defaultConfig, SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient, createSecretRedactionSanitizer, defaultConfig } from '../.test-dist/index.js';
 
 class CapturingExporter {
   requests = [];
@@ -20,7 +20,7 @@ class CapturingExporter {
 test('secret redaction sanitizer redacts assistant and tool content but leaves user input by default', async () => {
   const exporter = new CapturingExporter();
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-test'),
     generationExport: {
       ...defaults.generationExport,
@@ -155,7 +155,7 @@ test('generation sanitizer failure falls back to metadata_only stripping', async
   const exporter = new CapturingExporter();
   const defaults = defaultConfig();
   const warnings = [];
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-test'),
     generationExport: {
       ...defaults.generationExport,

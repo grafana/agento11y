@@ -3,7 +3,7 @@ using Grpc.Core;
 using Grpc.Net.Client;
 using Proto = Agento11y.V1;
 
-namespace Grafana.Sigil;
+namespace Grafana.Agento11y;
 
 public interface IGenerationExporter
 {

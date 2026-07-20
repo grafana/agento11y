@@ -89,12 +89,15 @@ export async function evaluateHook(params: {
       return failOpenOrThrow(
         params.hooks.failOpen,
         new Error(
-          `sigil hook evaluation failed: status ${response.status}: ${hookErrorText(responseText, response.status)}`,
+          `agento11y hook evaluation failed: status ${response.status}: ${hookErrorText(responseText, response.status)}`,
         ),
       );
     }
     if (responseText.length === 0) {
-      return failOpenOrThrow(params.hooks.failOpen, new Error('sigil hook evaluation failed: empty response payload'));
+      return failOpenOrThrow(
+        params.hooks.failOpen,
+        new Error('agento11y hook evaluation failed: empty response payload'),
+      );
     }
 
     let payload: unknown;
@@ -103,7 +106,7 @@ export async function evaluateHook(params: {
     } catch (error) {
       return failOpenOrThrow(
         params.hooks.failOpen,
-        new Error(`sigil hook evaluation failed: invalid JSON response: ${asError(error).message}`),
+        new Error(`agento11y hook evaluation failed: invalid JSON response: ${asError(error).message}`),
       );
     }
 
@@ -130,9 +133,9 @@ function formatDenyMessage(reason: string, ruleId: string | undefined): string {
   const trimmedReason = reason?.trim() ?? '';
   const baseReason = trimmedReason.length > 0 ? trimmedReason : 'request blocked by Sigil hook rule';
   if (ruleId !== undefined && ruleId.length > 0) {
-    return `sigil hook denied by rule ${ruleId}: ${baseReason}`;
+    return `agento11y hook denied by rule ${ruleId}: ${baseReason}`;
   }
-  return `sigil hook denied: ${baseReason}`;
+  return `agento11y hook denied: ${baseReason}`;
 }
 
 function buildHooksEvaluateEndpoint(endpoint: string, insecure: boolean): string {
@@ -143,7 +146,7 @@ function buildHooksEvaluateEndpoint(endpoint: string, insecure: boolean): string
 function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean): string {
   const trimmed = endpoint.trim();
   if (trimmed.length === 0) {
-    throw new Error('sigil hook evaluation failed: api endpoint is required');
+    throw new Error('agento11y hook evaluation failed: api endpoint is required');
   }
 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
@@ -157,7 +160,7 @@ function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean): string {
   const withoutScheme = trimmed.startsWith('grpc://') ? trimmed.slice('grpc://'.length) : trimmed;
   const host = withoutScheme.split('/')[0]?.trim();
   if (host === undefined || host.length === 0) {
-    throw new Error('sigil hook evaluation failed: api endpoint host is required');
+    throw new Error('agento11y hook evaluation failed: api endpoint host is required');
   }
   return `${insecure ? 'http' : 'https'}://${host}`;
 }
@@ -209,7 +212,7 @@ function serializeInput(input: HookEvaluateRequest['input']): Record<string, unk
 
 function parseEvaluateResponse(payload: unknown): HookEvaluateResponse {
   if (!isRecord(payload)) {
-    throw new Error('sigil hook evaluation failed: invalid response payload');
+    throw new Error('agento11y hook evaluation failed: invalid response payload');
   }
   const action = payload.action === 'deny' ? 'deny' : 'allow';
   const ruleId = typeof payload.rule_id === 'string' ? payload.rule_id : undefined;

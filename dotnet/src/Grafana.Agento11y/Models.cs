@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Grafana.Sigil;
+namespace Grafana.Agento11y;
 
 public enum GenerationMode
 {
@@ -344,7 +344,7 @@ public sealed class ToolExecutionEnd
     public DateTimeOffset? CompletedAt { get; set; }
 }
 
-/// <summary>Options for <see cref="SigilClient.ExecuteToolCalls"/>.</summary>
+/// <summary>Options for <see cref="Agento11yClient.ExecuteToolCalls"/>.</summary>
 public sealed class ExecuteToolCallsOptions
 {
     public string ConversationId { get; set; } = string.Empty;

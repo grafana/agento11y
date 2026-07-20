@@ -384,7 +384,7 @@ def _extract_detailed_usage(response_obj: Any, slo: dict[str, Any]) -> TokenUsag
     return usage
 
 
-class SigilLiteLLMLogger(CustomLogger):
+class Agento11yLiteLLMLogger(CustomLogger):
     """LiteLLM callback logger that exports generations to Sigil.
 
     Uses the Sigil SDK recorder pattern directly. The SDK handles
@@ -451,7 +451,7 @@ class SigilLiteLLMLogger(CustomLogger):
             else:
                 self._record_generation(kwargs, response_obj, slo, start_time, end_time, is_failure=is_failure)
         except Exception:
-            logger.exception("sigil: failed to record LiteLLM event")
+            logger.exception("agento11y: failed to record LiteLLM event")
 
     def _resolve_agent_name(self, kwargs: dict[str, Any]) -> str:
         """Resolve agent_name from per-request metadata, falling back to static."""
@@ -599,7 +599,7 @@ class SigilLiteLLMLogger(CustomLogger):
             recorder.end()
             err = recorder.err()
             if err is not None:
-                logger.warning("sigil: recorder error: %s", err)
+                logger.warning("agento11y: recorder error: %s", err)
 
     def _record_embedding(
         self,
@@ -668,4 +668,4 @@ class SigilLiteLLMLogger(CustomLogger):
             recorder.end()
             err = recorder.err()
             if err is not None:
-                logger.warning("sigil: embedding recorder error: %s", err)
+                logger.warning("agento11y: embedding recorder error: %s", err)

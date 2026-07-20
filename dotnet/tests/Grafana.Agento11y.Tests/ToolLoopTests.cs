@@ -3,14 +3,14 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class ToolLoopTests
 {
     [Fact]
     public async Task ExecuteToolCalls_HappyPath_TwoTools()
     {
-        await using var client = new SigilClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
+        await using var client = new Agento11yClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
 
         var messages = new List<Message>
         {
@@ -81,7 +81,7 @@ public sealed class ToolLoopTests
     [Fact]
     public async Task ExecuteToolCalls_ExecutorThrows_MarksError()
     {
-        await using var client = new SigilClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
+        await using var client = new Agento11yClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
         var messages = new List<Message>
         {
             new()
@@ -106,7 +106,7 @@ public sealed class ToolLoopTests
     [Fact]
     public async Task ExecuteToolCalls_NoToolParts_ReturnsEmpty()
     {
-        await using var client = new SigilClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
+        await using var client = new Agento11yClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
         var messages = new List<Message>
         {
             new() { Role = MessageRole.Assistant, Parts = [Part.TextPart("hi")] },
@@ -118,7 +118,7 @@ public sealed class ToolLoopTests
     [Fact]
     public async Task ExecuteToolCalls_SingleTool()
     {
-        await using var client = new SigilClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
+        await using var client = new Agento11yClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
         var messages = new List<Message>
         {
             new()
@@ -140,7 +140,7 @@ public sealed class ToolLoopTests
     [Fact]
     public async Task ExecuteToolCalls_NullMessages_ReturnsEmpty()
     {
-        await using var client = new SigilClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
+        await using var client = new Agento11yClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
         var outMsgs = client.ExecuteToolCalls(null, (_, _) => null);
         Assert.Empty(outMsgs);
     }
@@ -148,7 +148,7 @@ public sealed class ToolLoopTests
     [Fact]
     public async Task ExecuteToolCalls_SkipsBlankToolName()
     {
-        await using var client = new SigilClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
+        await using var client = new Agento11yClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
         var messages = new List<Message>
         {
             new()
@@ -164,7 +164,7 @@ public sealed class ToolLoopTests
     [Fact]
     public async Task ExecuteToolCalls_NullExecutor_Throws()
     {
-        await using var client = new SigilClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
+        await using var client = new Agento11yClient(TestHelpers.TestConfig(new CapturingGenerationExporter()));
         Assert.Throws<ArgumentNullException>(() => client.ExecuteToolCalls([], null!));
     }
 }

@@ -2,11 +2,11 @@
 // own vi.mock calls because Vitest hoists them.
 
 import { vi } from "vitest";
-import type { SigilOpencodeConfig } from "./config.js";
-import type { createSigilHooks } from "./hooks.js";
+import type { Agento11yOpencodeConfig } from "./config.js";
+import type { createAgento11yHooks } from "./hooks.js";
 
 export type TestHooks = NonNullable<
-  Awaited<ReturnType<typeof createSigilHooks>>
+  Awaited<ReturnType<typeof createAgento11yHooks>>
 >;
 
 export type CapturedGeneration = {
@@ -17,7 +17,7 @@ export type CapturedGeneration = {
 };
 
 // The explicit return type avoids TS2883 when declarations are generated.
-export function makeSigilMock(): {
+export function makeAgento11yMock(): {
   sigil: any;
   generations: CapturedGeneration[];
   startStreamingGeneration: any;
@@ -70,8 +70,8 @@ export function makeOpencodeClient(parts: any[] = []) {
 }
 
 export function baseConfig(
-  overrides: Partial<SigilOpencodeConfig> = {},
-): SigilOpencodeConfig {
+  overrides: Partial<Agento11yOpencodeConfig> = {},
+): Agento11yOpencodeConfig {
   return {
     endpoint: "http://127.0.0.1:1/api/v1/generations:export",
     auth: { mode: "none" },

@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 // ConversationSummary is one row in the viewer's list screen. Numeric
@@ -56,14 +56,14 @@ type GenerationView struct {
 	TotalTokens     int64     `json:"total_tokens"`
 	// TokenBuckets is this step's disjoint usage split, so the viewer
 	// can show where the step's tokens went (cache hit vs fresh input).
-	TokenBuckets TokenBuckets    `json:"token_buckets"`
-	Messages     []sigil.Message `json:"messages,omitempty"`
-	Input        []sigil.Message `json:"input,omitempty"`
-	Output       []sigil.Message `json:"output,omitempty"`
-	Tools        []string        `json:"tools,omitempty"`
-	ToolPreview  string          `json:"tool_preview,omitempty"`
-	StopReason   string          `json:"stop_reason,omitempty"`
-	CallError    string          `json:"call_error,omitempty"`
+	TokenBuckets TokenBuckets        `json:"token_buckets"`
+	Messages     []agento11y.Message `json:"messages,omitempty"`
+	Input        []agento11y.Message `json:"input,omitempty"`
+	Output       []agento11y.Message `json:"output,omitempty"`
+	Tools        []string            `json:"tools,omitempty"`
+	ToolPreview  string              `json:"tool_preview,omitempty"`
+	StopReason   string              `json:"stop_reason,omitempty"`
+	CallError    string              `json:"call_error,omitempty"`
 }
 
 // ConversationDetail is the payload for the detail screen — the
@@ -351,7 +351,7 @@ func generationTime(gen storedGeneration, r generationRecord) time.Time {
 // for). When a subset field exceeds its total, the nonNeg clamps keep
 // the subset and zero the remainder, so the sum can exceed what was
 // reported.
-func disjointTokenUsage(u sigil.TokenUsage, provider string) TokenBuckets {
+func disjointTokenUsage(u agento11y.TokenUsage, provider string) TokenBuckets {
 	b := TokenBuckets{
 		FreshInput: nonNeg(u.InputTokens),
 		CacheRead:  nonNeg(u.CacheReadInputTokens),
@@ -411,13 +411,13 @@ func nonNeg(n int64) int64 {
 // scanGenerationRecords walks one per-conversation JSONL file calling visit
 // for every decodable record. A missing file is not an error; lines that
 // fail to decode (truncated mid-append, future-schema, …) are skipped.
-func threadMessages(input, output []sigil.Message) []sigil.Message {
+func threadMessages(input, output []agento11y.Message) []agento11y.Message {
 	if len(input) == 0 && len(output) == 0 {
 		return nil
 	}
 
-	inputWithoutResults := make([]sigil.Message, 0, len(input))
-	toolResults := make([]sigil.Message, 0, len(input))
+	inputWithoutResults := make([]agento11y.Message, 0, len(input))
+	toolResults := make([]agento11y.Message, 0, len(input))
 	for _, msg := range input {
 		if messageHasToolResult(msg) {
 			toolResults = append(toolResults, msg)
@@ -427,13 +427,13 @@ func threadMessages(input, output []sigil.Message) []sigil.Message {
 	}
 
 	if len(toolResults) == 0 {
-		messages := make([]sigil.Message, 0, len(input)+len(output))
+		messages := make([]agento11y.Message, 0, len(input)+len(output))
 		messages = append(messages, input...)
 		messages = append(messages, output...)
 		return messages
 	}
 
-	messages := make([]sigil.Message, 0, len(input)+len(output))
+	messages := make([]agento11y.Message, 0, len(input)+len(output))
 	messages = append(messages, inputWithoutResults...)
 	usedResults := make([]bool, len(toolResults))
 	for _, outputMsg := range output {
@@ -458,19 +458,19 @@ func threadMessages(input, output []sigil.Message) []sigil.Message {
 	return messages
 }
 
-func messageHasToolResult(msg sigil.Message) bool {
+func messageHasToolResult(msg agento11y.Message) bool {
 	for _, part := range msg.Parts {
-		if part.Kind == sigil.PartKindToolResult && part.ToolResult != nil {
+		if part.Kind == agento11y.PartKindToolResult && part.ToolResult != nil {
 			return true
 		}
 	}
 	return false
 }
 
-func toolCallIDs(msg sigil.Message) map[string]struct{} {
+func toolCallIDs(msg agento11y.Message) map[string]struct{} {
 	ids := map[string]struct{}{}
 	for _, part := range msg.Parts {
-		if part.Kind != sigil.PartKindToolCall || part.ToolCall == nil || part.ToolCall.ID == "" {
+		if part.Kind != agento11y.PartKindToolCall || part.ToolCall == nil || part.ToolCall.ID == "" {
 			continue
 		}
 		ids[part.ToolCall.ID] = struct{}{}
@@ -478,9 +478,9 @@ func toolCallIDs(msg sigil.Message) map[string]struct{} {
 	return ids
 }
 
-func toolResultMatchesAny(msg sigil.Message, ids map[string]struct{}) bool {
+func toolResultMatchesAny(msg agento11y.Message, ids map[string]struct{}) bool {
 	for _, part := range msg.Parts {
-		if part.Kind != sigil.PartKindToolResult || part.ToolResult == nil || part.ToolResult.ToolCallID == "" {
+		if part.Kind != agento11y.PartKindToolResult || part.ToolResult == nil || part.ToolResult.ToolCallID == "" {
 			continue
 		}
 		if _, ok := ids[part.ToolResult.ToolCallID]; ok {
@@ -526,11 +526,11 @@ func scanGenerationRecords(path string, visit func(generationRecord, storedGener
 // snippet of the first call's input: we unwrap common single-field
 // shapes (`command`, `query`, `file_path`) and otherwise fall back to
 // the raw JSON, truncated.
-func extractTools(msgs []sigil.Message) (names []string, preview string) {
+func extractTools(msgs []agento11y.Message) (names []string, preview string) {
 	seen := map[string]struct{}{}
 	for _, m := range msgs {
 		for _, p := range m.Parts {
-			if p.Kind != sigil.PartKindToolCall || p.ToolCall == nil {
+			if p.Kind != agento11y.PartKindToolCall || p.ToolCall == nil {
 				continue
 			}
 			if _, ok := seen[p.ToolCall.Name]; !ok {

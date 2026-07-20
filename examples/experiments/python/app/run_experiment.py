@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from agento11y import experiments as sigil
+from agento11y import experiments
 
 from app.agent import answer_question, grade_answer
 
@@ -41,12 +41,12 @@ CASES: list[Case] = [
 def main() -> None:
     load_dotenv()
     experiment_id = os.environ.get("AGENTO11Y_EXPERIMENT_ID", f"experiment-example-{os.environ.get('GIT_SHA', 'manual')}")
-    suite = sigil.TestSuite(
+    suite = experiments.TestSuite(
         suite_id="experiment-example",
         name="Framework-free example experiment",
         version="2026-05-30",
         test_cases=[
-            sigil.TestCase(
+            experiments.TestCase(
                 test_case_id=case.id,
                 input=case.input,
                 expected=case.expected,
@@ -55,9 +55,9 @@ def main() -> None:
             for case in CASES
         ],
     )
-    verifier = sigil.Evaluator(evaluator_id="example.llm_judge", version="2026-05-30", kind="llm_judge")
+    verifier = experiments.Evaluator(evaluator_id="example.llm_judge", version="2026-05-30", kind="llm_judge")
 
-    with sigil.experiment(
+    with experiments.experiment(
         name="Framework-free example experiment",
         experiment_id=experiment_id,
         suite=suite,

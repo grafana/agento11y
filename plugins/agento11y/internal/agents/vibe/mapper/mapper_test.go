@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/meta"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/state"
@@ -33,7 +33,7 @@ func TestMap_GoldenFixture(t *testing.T) {
 		Lines:          lines,
 		Meta:           m,
 		PriorState:     state.Session{},
-		ContentCapture: sigil.ContentCaptureModeFull,
+		ContentCapture: agento11y.ContentCaptureModeFull,
 		Now:            now,
 	}, m.Stats.Steps)
 
@@ -90,7 +90,7 @@ func TestMap_GoldenFixture(t *testing.T) {
 	var sawUserText, sawToolResult bool
 	for _, msg := range g.Input {
 		for _, part := range msg.Parts {
-			if part.Text != "" && msg.Role == sigil.RoleUser {
+			if part.Text != "" && msg.Role == agento11y.RoleUser {
 				sawUserText = true
 			}
 			if part.ToolResult != nil {
@@ -181,7 +181,7 @@ func TestMap_TurnUsage(t *testing.T) {
 				Meta:            meta.Meta{Stats: tt.stats},
 				PriorState:      tt.prior,
 				PriorStateFound: tt.priorFound,
-				ContentCapture:  sigil.ContentCaptureModeFull,
+				ContentCapture:  agento11y.ContentCaptureModeFull,
 			}, tt.turnSeq).Generation.Usage
 			if got.InputTokens != tt.wantIn || got.OutputTokens != tt.wantOut {
 				t.Errorf("usage = %d/%d, want %d/%d", got.InputTokens, got.OutputTokens, tt.wantIn, tt.wantOut)
@@ -206,7 +206,7 @@ func TestMap_ContentCaptureModes(t *testing.T) {
 
 	tests := []struct {
 		name string
-		mode sigil.ContentCaptureMode
+		mode agento11y.ContentCaptureMode
 		// In MetadataOnly we still expect the structural assistant
 		// tool-call message (Sigil needs the call sequence to render
 		// the conversation), but no text content.
@@ -215,9 +215,9 @@ func TestMap_ContentCaptureModes(t *testing.T) {
 		wantToolArgs      bool
 		wantSystemPrompt  bool
 	}{
-		{name: "full", mode: sigil.ContentCaptureModeFull, wantUserText: true, wantAssistantText: true, wantToolArgs: true, wantSystemPrompt: true},
-		{name: "no_tool_content", mode: sigil.ContentCaptureModeNoToolContent, wantUserText: true, wantAssistantText: true, wantToolArgs: false, wantSystemPrompt: true},
-		{name: "metadata_only", mode: sigil.ContentCaptureModeMetadataOnly, wantUserText: false, wantAssistantText: false, wantToolArgs: false, wantSystemPrompt: false},
+		{name: "full", mode: agento11y.ContentCaptureModeFull, wantUserText: true, wantAssistantText: true, wantToolArgs: true, wantSystemPrompt: true},
+		{name: "no_tool_content", mode: agento11y.ContentCaptureModeNoToolContent, wantUserText: true, wantAssistantText: true, wantToolArgs: false, wantSystemPrompt: true},
+		{name: "metadata_only", mode: agento11y.ContentCaptureModeMetadataOnly, wantUserText: false, wantAssistantText: false, wantToolArgs: false, wantSystemPrompt: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -231,7 +231,7 @@ func TestMap_ContentCaptureModes(t *testing.T) {
 			var hasUserText, hasAssistantText, hasToolArgs bool
 			for _, msg := range g.Input {
 				for _, p := range msg.Parts {
-					if msg.Role == sigil.RoleUser && p.Text != "" {
+					if msg.Role == agento11y.RoleUser && p.Text != "" {
 						hasUserText = true
 					}
 				}
@@ -289,14 +289,14 @@ func TestMap_Reasoning(t *testing.T) {
 		t.Fatalf("load meta: %v", err)
 	}
 
-	full := Map(Inputs{SessionID: "s", Lines: lines, Meta: m, ContentCapture: sigil.ContentCaptureModeFull}, 1).Generation
+	full := Map(Inputs{SessionID: "s", Lines: lines, Meta: m, ContentCapture: agento11y.ContentCaptureModeFull}, 1).Generation
 	if full.ThinkingEnabled == nil || !*full.ThinkingEnabled {
 		t.Fatal("ThinkingEnabled not set in Full mode despite reasoning_content in the fixture")
 	}
 	sawThinking := false
 	for _, msg := range full.Output {
 		for _, p := range msg.Parts {
-			if p.Kind == sigil.PartKindThinking && strings.TrimSpace(p.Thinking) != "" {
+			if p.Kind == agento11y.PartKindThinking && strings.TrimSpace(p.Thinking) != "" {
 				sawThinking = true
 			}
 		}
@@ -306,13 +306,13 @@ func TestMap_Reasoning(t *testing.T) {
 	}
 
 	// metadata_only keeps the thinking_enabled signal but drops the text.
-	metaOnly := Map(Inputs{SessionID: "s", Lines: lines, Meta: m, ContentCapture: sigil.ContentCaptureModeMetadataOnly}, 1).Generation
+	metaOnly := Map(Inputs{SessionID: "s", Lines: lines, Meta: m, ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, 1).Generation
 	if metaOnly.ThinkingEnabled == nil || !*metaOnly.ThinkingEnabled {
 		t.Error("ThinkingEnabled not set in metadata_only mode")
 	}
 	for _, msg := range metaOnly.Output {
 		for _, p := range msg.Parts {
-			if p.Kind == sigil.PartKindThinking {
+			if p.Kind == agento11y.PartKindThinking {
 				t.Error("metadata_only must not emit thinking text")
 			}
 		}
@@ -334,7 +334,7 @@ func TestMap_CostAndFailureMetadata(t *testing.T) {
 			ToolCallsFailed: 1,
 		},
 		PriorStateFound: true,
-		ContentCapture:  sigil.ContentCaptureModeFull,
+		ContentCapture:  agento11y.ContentCaptureModeFull,
 	}
 	md := Map(in, 2).Generation.Metadata
 	if got, ok := md["vibe.cost_usd"].(float64); !ok || got <= 0.19 || got >= 0.21 {
@@ -357,7 +357,7 @@ func TestMap_ParentLinkage(t *testing.T) {
 		ParentSessionID:    "parent",
 		ParentGenerationID: "vibe-parentgen",
 		Meta:               meta.Meta{Stats: meta.Stats{Steps: 1}},
-		ContentCapture:     sigil.ContentCaptureModeFull,
+		ContentCapture:     agento11y.ContentCaptureModeFull,
 	}, 1).Generation
 	if resolved.ConversationID != "parent" {
 		t.Errorf("ConversationID = %q, want parent (reparented onto the parent session)", resolved.ConversationID)
@@ -383,7 +383,7 @@ func TestMap_ParentLinkage(t *testing.T) {
 		SessionID:       "child",
 		ParentSessionID: "parent",
 		Meta:            meta.Meta{Stats: meta.Stats{Steps: 1}},
-		ContentCapture:  sigil.ContentCaptureModeFull,
+		ContentCapture:  agento11y.ContentCaptureModeFull,
 	}, 1).Generation
 	if hintOnly.ConversationID != "child" {
 		t.Errorf("ConversationID = %q, want child when no parent gen resolved", hintOnly.ConversationID)
@@ -413,7 +413,7 @@ func TestMap_StateLossMidSessionUsesLatestTurnMessages(t *testing.T) {
 		SessionID:      "s",
 		Lines:          lines,
 		Meta:           meta.Meta{Stats: meta.Stats{Steps: 2}},
-		ContentCapture: sigil.ContentCaptureModeFull,
+		ContentCapture: agento11y.ContentCaptureModeFull,
 	}, 2).Generation
 
 	if got := messageText(g.Input); strings.Contains(got, "first prompt") || !strings.Contains(got, "second prompt") {
@@ -452,7 +452,7 @@ func TestMap_GitBranchTag(t *testing.T) {
 			g := Map(Inputs{
 				SessionID:      "s",
 				CWD:            root,
-				ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+				ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 				Now:            time.Unix(1, 0),
 			}, 1).Generation
 			if got := g.Tags["git.branch"]; got != tc.want {
@@ -465,7 +465,7 @@ func TestMap_GitBranchTag(t *testing.T) {
 	}
 }
 
-func messageText(messages []sigil.Message) string {
+func messageText(messages []agento11y.Message) string {
 	var b strings.Builder
 	for _, msg := range messages {
 		for _, part := range msg.Parts {

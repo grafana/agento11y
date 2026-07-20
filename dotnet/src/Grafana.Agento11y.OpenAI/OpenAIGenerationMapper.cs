@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using OpenAIResponses = global::OpenAI.Responses;
 
-namespace Grafana.Sigil.OpenAI;
+namespace Grafana.Agento11y.OpenAI;
 
 public static class OpenAIGenerationMapper
 {
@@ -15,12 +15,12 @@ public static class OpenAIGenerationMapper
         IReadOnlyList<ChatMessage> messages,
         ChatCompletionOptions? requestOptions,
         ChatCompletion response,
-        OpenAISigilOptions? options = null
+        OpenAIAgento11yOptions? options = null
     )
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var requestMessages = messages ?? [];
 
         var (input, systemPrompt) = MapRequestMessages(requestMessages);
@@ -76,12 +76,12 @@ public static class OpenAIGenerationMapper
         IReadOnlyList<OpenAIResponses.ResponseItem> inputItems,
         OpenAIResponses.CreateResponseOptions? requestOptions,
         OpenAIResponses.ResponseResult response,
-        OpenAISigilOptions? options = null
+        OpenAIAgento11yOptions? options = null
     )
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var requestItems = inputItems ?? [];
         var (input, mappedSystemPrompt) = MapResponsesInputItems(requestItems);
         var systemPrompt = OpenAIJsonHelpers.MergeSystemPrompt(
@@ -140,10 +140,10 @@ public static class OpenAIGenerationMapper
     public static EmbeddingStart EmbeddingsStart(
         string modelName,
         EmbeddingGenerationOptions? requestOptions,
-        OpenAISigilOptions? options = null
+        OpenAIAgento11yOptions? options = null
     )
     {
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
 
         var start = new EmbeddingStart
         {
@@ -223,7 +223,7 @@ public static class OpenAIGenerationMapper
         IReadOnlyList<OpenAIResponses.ResponseItem> inputItems,
         OpenAIResponses.CreateResponseOptions? requestOptions,
         OpenAIResponsesStreamSummary summary,
-        OpenAISigilOptions? options = null
+        OpenAIAgento11yOptions? options = null
     )
     {
         ArgumentNullException.ThrowIfNull(summary);
@@ -240,7 +240,7 @@ public static class OpenAIGenerationMapper
             throw new ArgumentException("stream summary must contain events or a final response", nameof(summary));
         }
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var requestItems = inputItems ?? [];
         var (input, mappedSystemPrompt) = MapResponsesInputItems(requestItems);
         var systemPrompt = OpenAIJsonHelpers.MergeSystemPrompt(
@@ -394,7 +394,7 @@ public static class OpenAIGenerationMapper
         IReadOnlyList<ChatMessage> messages,
         ChatCompletionOptions? requestOptions,
         OpenAIChatCompletionsStreamSummary summary,
-        OpenAISigilOptions? options = null
+        OpenAIAgento11yOptions? options = null
     )
     {
         ArgumentNullException.ThrowIfNull(summary);
@@ -411,7 +411,7 @@ public static class OpenAIGenerationMapper
             throw new ArgumentException("stream summary must contain updates or a final response", nameof(summary));
         }
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var requestMessages = messages ?? [];
         var (input, systemPrompt) = MapRequestMessages(requestMessages);
 
@@ -1052,7 +1052,7 @@ public static class OpenAIGenerationMapper
     }
 
     private static List<Artifact> BuildResponsesArtifactsForRequestResponse(
-        OpenAISigilOptions options,
+        OpenAIAgento11yOptions options,
         string modelName,
         string systemPrompt,
         IReadOnlyList<Message> input,
@@ -1095,7 +1095,7 @@ public static class OpenAIGenerationMapper
     }
 
     private static List<Artifact> BuildResponsesArtifactsForStream(
-        OpenAISigilOptions options,
+        OpenAIAgento11yOptions options,
         string modelName,
         string systemPrompt,
         IReadOnlyList<Message> input,
@@ -1136,10 +1136,10 @@ public static class OpenAIGenerationMapper
     private static Generation AppendResponsesStreamEventsArtifact(
         Generation generation,
         OpenAIResponsesStreamSummary summary,
-        OpenAISigilOptions? options
+        OpenAIAgento11yOptions? options
     )
     {
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         if (!effective.IncludeEventsArtifact || summary.Events.Count == 0)
         {
             return generation;
@@ -1424,7 +1424,7 @@ public static class OpenAIGenerationMapper
     }
 
     private static List<Artifact> BuildChatCompletionsArtifactsForRequestResponse(
-        OpenAISigilOptions options,
+        OpenAIAgento11yOptions options,
         string modelName,
         string systemPrompt,
         IReadOnlyList<Message> input,
@@ -1466,7 +1466,7 @@ public static class OpenAIGenerationMapper
     }
 
     private static List<Artifact> BuildChatCompletionsArtifactsForStream(
-        OpenAISigilOptions options,
+        OpenAIAgento11yOptions options,
         string modelName,
         string systemPrompt,
         IReadOnlyList<Message> input,
@@ -1507,10 +1507,10 @@ public static class OpenAIGenerationMapper
     private static Generation AppendChatCompletionsStreamEventsArtifact(
         Generation generation,
         OpenAIChatCompletionsStreamSummary summary,
-        OpenAISigilOptions? options
+        OpenAIAgento11yOptions? options
     )
     {
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         if (!effective.IncludeEventsArtifact || summary.Updates.Count == 0)
         {
             return generation;

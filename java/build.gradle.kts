@@ -21,8 +21,8 @@ subprojects {
             useJUnitPlatform()
             // Clear canonical AGENTO11Y_* and legacy SIGIL_* env vars so
             // individual tests don't pick up developer-machine config when
-            // they construct a SigilClient. Tests that exercise env layering
-            // should pass an explicit lookup to SigilEnvConfig.resolveFromEnv.
+            // they construct a Agento11yClient. Tests that exercise env layering
+            // should pass an explicit lookup to Agento11yEnvConfig.resolveFromEnv.
             listOf(
                 "ENDPOINT", "PROTOCOL", "INSECURE", "HEADERS",
                 "AUTH_MODE", "AUTH_TENANT_ID", "AUTH_TOKEN",
@@ -43,7 +43,7 @@ subprojects {
             pom {
                 name.set(project.name)
                 description.set("Grafana Agent Observability SDK for Java - ${project.name}")
-                url.set("https://github.com/grafana/sigil-sdk")
+                url.set("https://github.com/grafana/agento11y-sdk")
                 inceptionYear.set("2025")
 
                 licenses {
@@ -63,9 +63,9 @@ subprojects {
                 }
 
                 scm {
-                    url.set("https://github.com/grafana/sigil-sdk")
-                    connection.set("scm:git:git://github.com/grafana/sigil-sdk.git")
-                    developerConnection.set("scm:git:ssh://git@github.com/grafana/sigil-sdk.git")
+                    url.set("https://github.com/grafana/agento11y-sdk")
+                    connection.set("scm:git:git://github.com/grafana/agento11y-sdk.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/grafana/agento11y-sdk.git")
                 }
             }
         }

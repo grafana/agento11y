@@ -4,7 +4,7 @@
 // the handler-wiring unit tests (index.test.ts) the Sigil client here is the
 // real JS SDK pointed at a local HTTP server. Each test exercises the full
 // preflight (`context`) or postflight (`tool_call`) path end to end: real
-// SigilClient.evaluateHook -> HTTP hooks:evaluate round-trip -> wire parse ->
+// Agento11yClient.evaluateHook -> HTTP hooks:evaluate round-trip -> wire parse ->
 // in-place write-back into pi's messages / tool input.
 //
 // The unit suites already prove the mapper/guard branches; this suite adds the
@@ -22,10 +22,10 @@ import type {
 } from "./mappers.js";
 import { restoreEnv, snapshotAndClearTestEnv } from "./testEnv.js";
 import {
+  type Agento11yTestServer,
   closeServer,
   type HookResponse,
-  type SigilTestServer,
-  startSigilTestServer,
+  startAgento11yTestServer,
 } from "./testHttp.js";
 
 // Minimal pi host: registerExtension subscribes handlers; tests invoke a
@@ -115,13 +115,13 @@ function setGuardEnv(env: GuardEnv): void {
 }
 
 describe("pi guards: real-SDK over HTTP", () => {
-  let server: SigilTestServer;
+  let server: Agento11yTestServer;
   let savedEnv: Record<string, string | undefined> = {};
   // Set per-test before setup() runs the session_start that builds the client.
   let nextHook: (call: { phase: string }) => HookResponse = () => ALLOW;
 
   beforeEach(async () => {
-    server = await startSigilTestServer({ hook: (call) => nextHook(call) });
+    server = await startAgento11yTestServer({ hook: (call) => nextHook(call) });
     nextHook = () => ALLOW;
     savedEnv = snapshotAndClearTestEnv();
 
@@ -184,7 +184,7 @@ describe("pi guards: real-SDK over HTTP", () => {
       assert: (args: {
         result: unknown;
         event: { messages: PiAgentMessage[] };
-        server: SigilTestServer;
+        server: Agento11yTestServer;
       }) => void;
     }
 
@@ -376,7 +376,7 @@ describe("pi guards: real-SDK over HTTP", () => {
       assert: (args: {
         result: unknown;
         event: { input: Record<string, unknown> };
-        server: SigilTestServer;
+        server: Agento11yTestServer;
       }) => void;
     }
 

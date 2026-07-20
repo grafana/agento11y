@@ -1,5 +1,5 @@
 import type { Content, GenerateContentConfig, GenerateContentResponse } from '@google/genai';
-import type { SigilClient } from '../client.js';
+import type { Agento11yClient } from '../client.js';
 import type { EmbeddingResult, GenerationResult, Message, TokenUsage, ToolDefinition } from '../types.js';
 
 const thinkingBudgetMetadataKey = 'agento11y.gen_ai.request.thinking.budget_tokens';
@@ -33,7 +33,7 @@ export interface ModelsStreamSummary {
 }
 
 async function geminiGenerateContent(
-  client: SigilClient,
+  client: Agento11yClient,
   model: string,
   contents: GeminiContents,
   config: GeminiConfig | undefined,
@@ -70,7 +70,7 @@ async function geminiGenerateContent(
 }
 
 async function geminiGenerateContentStream(
-  client: SigilClient,
+  client: Agento11yClient,
   model: string,
   contents: GeminiContents,
   config: GeminiConfig | undefined,
@@ -115,7 +115,7 @@ async function geminiGenerateContentStream(
 }
 
 async function geminiEmbedContent(
-  client: SigilClient,
+  client: Agento11yClient,
   model: string,
   contents: GeminiContents,
   config: GeminiEmbedConfig | undefined,

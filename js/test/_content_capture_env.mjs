@@ -13,7 +13,7 @@ import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { defaultConfig, SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -109,8 +109,8 @@ export async function createContentCaptureEnv(options = {}) {
   });
 
   const defaults = defaultConfig();
-  const client = new SigilClient({
-    tracer: traceProvider.getTracer('sigil-content-capture-test'),
+  const client = new Agento11yClient({
+    tracer: traceProvider.getTracer('agento11y-content-capture-test'),
     contentCapture,
     contentCaptureResolver,
     embeddingCapture,

@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 from .handler import (
-    SigilClaudeAgentHandler,
-    SigilClaudeSDKClient,
-    create_sigil_claude_agent_handler,
-    sigil_query,
-    with_sigil_claude_agent_options,
+    Agento11yClaudeAgentHandler,
+    Agento11yClaudeSDKClient,
+    agento11y_query,
+    create_agento11y_claude_agent_handler,
+    with_agento11y_claude_agent_options,
 )
 
 __all__ = [
-    "SigilClaudeSDKClient",
-    "SigilClaudeAgentHandler",
-    "create_sigil_claude_agent_handler",
-    "sigil_query",
-    "with_sigil_claude_agent_options",
+    "Agento11yClaudeSDKClient",
+    "Agento11yClaudeAgentHandler",
+    "create_agento11y_claude_agent_handler",
+    "agento11y_query",
+    "with_agento11y_claude_agent_options",
 ]

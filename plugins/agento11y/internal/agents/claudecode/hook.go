@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
@@ -35,13 +35,13 @@ var Version = "dev"
 // emits. Stable across versions so dashboards survive renames.
 const AgentName = "claude-code"
 
-func exportConfig(endpoint, tenantID, authToken string) sigil.GenerationExportConfig {
-	return sigil.GenerationExportConfig{
-		Protocol: sigil.GenerationExportProtocolHTTP,
+func exportConfig(endpoint, tenantID, authToken string) agento11y.GenerationExportConfig {
+	return agento11y.GenerationExportConfig{
+		Protocol: agento11y.GenerationExportProtocolHTTP,
 		Endpoint: endpoint + "/api/v1/generations:export",
 		Headers:  map[string]string{"User-Agent": useragent.For("claude-code")},
-		Auth: sigil.AuthConfig{
-			Mode:          sigil.ExportAuthModeBasic,
+		Auth: agento11y.AuthConfig{
+			Mode:          agento11y.ExportAuthModeBasic,
 			BasicUser:     tenantID,
 			BasicPassword: authToken,
 			TenantID:      tenantID,
@@ -143,7 +143,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 
 	hookCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	hookCtx = sigil.WithUserID(hookCtx, userID)
+	hookCtx = agento11y.WithUserID(hookCtx, userID)
 
 	otelProviders, err := otel.Setup(hookCtx, input.SessionID)
 	if err != nil {
@@ -167,7 +167,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	logger.Printf("coalesced to %d lines, safe offset=%d", len(lines), safeOffset)
 
 	var r *redact.Redactor
-	if contentMode != sigil.ContentCaptureModeMetadataOnly {
+	if contentMode != agento11y.ContentCaptureModeMetadataOnly {
 		r = redact.New()
 	}
 
@@ -183,7 +183,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	}
 	logger.Printf("produced %d generations", len(gens))
 
-	cfg := sigil.Config{
+	cfg := agento11y.Config{
 		GenerationExport: exportConfig(sigilEndpoint, tenantID, authToken),
 	}
 
@@ -193,13 +193,13 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	}
 
 	cfg.ContentCapture = contentMode
-	client := sigil.NewClient(cfg)
+	client := agento11y.NewClient(cfg)
 	t0 := time.Now()
 
 	toolResults := buildToolResultMap(gens)
 
 	for _, gen := range gens {
-		genStart := sigil.GenerationStart{
+		genStart := agento11y.GenerationStart{
 			ID:                  gen.ID,
 			ConversationID:      gen.ConversationID,
 			ConversationTitle:   gen.ConversationTitle,
@@ -378,8 +378,8 @@ func parseHookInput(r io.Reader) (*hookInput, error) {
 
 // buildToolResultMap indexes tool results by their call ID across all generations.
 // Tool results appear in the Input of the generation that follows the tool call.
-func buildToolResultMap(gens []sigil.Generation) map[string]*sigil.ToolResult {
-	m := make(map[string]*sigil.ToolResult)
+func buildToolResultMap(gens []agento11y.Generation) map[string]*agento11y.ToolResult {
+	m := make(map[string]*agento11y.ToolResult)
 	for _, gen := range gens {
 		for _, msg := range gen.Input {
 			for i, part := range msg.Parts {
@@ -393,14 +393,14 @@ func buildToolResultMap(gens []sigil.Generation) map[string]*sigil.ToolResult {
 }
 
 // emitToolSpans creates execute_tool spans for each tool call in the generation output.
-func emitToolSpans(ctx context.Context, client *sigil.Client, gen sigil.Generation, results map[string]*sigil.ToolResult) {
+func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.Generation, results map[string]*agento11y.ToolResult) {
 	for _, msg := range gen.Output {
 		for _, part := range msg.Parts {
 			if part.ToolCall == nil {
 				continue
 			}
 			tc := part.ToolCall
-			start := sigil.ToolExecutionStart{
+			start := agento11y.ToolExecutionStart{
 				ToolName:        tc.Name,
 				ToolCallID:      tc.ID,
 				ToolType:        "function",
@@ -413,7 +413,7 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, gen sigil.Generati
 			}
 			_, toolRec := client.StartToolExecution(ctx, start)
 
-			end := sigil.ToolExecutionEnd{
+			end := agento11y.ToolExecutionEnd{
 				CompletedAt: gen.CompletedAt,
 				Arguments:   string(tc.InputJSON),
 			}

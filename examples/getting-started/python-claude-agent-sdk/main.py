@@ -16,7 +16,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from agento11y import AuthConfig, Client, ClientConfig, GenerationExportConfig
-from agento11y_claude_agent import SigilClaudeSDKClient
+from agento11y_claude_agent import Agento11yClaudeSDKClient
 
 load_dotenv()
 
@@ -49,7 +49,7 @@ def otlp_metrics_endpoint() -> str:
 
 
 def setup_otel() -> tuple[TracerProvider, MeterProvider]:
-    resource = Resource.create({"service.name": env("OTEL_SERVICE_NAME", "sigil-claude-agent-sdk-example")})
+    resource = Resource.create({"service.name": env("OTEL_SERVICE_NAME", "agento11y-claude-agent-sdk-example")})
 
     tracer_provider = TracerProvider(resource=resource)
     tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
@@ -68,7 +68,7 @@ def setup_otel() -> tuple[TracerProvider, MeterProvider]:
 async def main() -> None:
     tracer_provider, meter_provider = setup_otel()
     tenant_id = required_env("AGENTO11Y_AUTH_TENANT_ID")
-    sigil = Client(
+    agento11y = Client(
         ClientConfig(
             generation_export=GenerationExportConfig(
                 protocol=os.getenv("AGENTO11Y_PROTOCOL", "http"),
@@ -80,19 +80,19 @@ async def main() -> None:
                     basic_password=required_env("AGENTO11Y_AUTH_TOKEN"),
                 ),
             ),
-            meter=meter_provider.get_meter("sigil-claude-agent-sdk-example"),
+            meter=meter_provider.get_meter("agento11y-claude-agent-sdk-example"),
         )
     )
 
     try:
-        async with SigilClaudeSDKClient(
-            client=sigil,
+        async with Agento11yClaudeSDKClient(
+            client=agento11y,
             options=ClaudeAgentOptions(
                 model=env("CLAUDE_MODEL", "claude-sonnet-4-5"),
                 permission_mode="default",
                 allowed_tools=["Read", "Glob", "Grep"],
             ),
-            conversation_id=env("AGENTO11Y_CONVERSATION_ID", "sigil-claude-agent-sdk-demo"),
+            conversation_id=env("AGENTO11Y_CONVERSATION_ID", "agento11y-claude-agent-sdk-demo"),
             agent_name="claude-agent-sdk-demo",
             agent_version=env("AGENTO11Y_AGENT_VERSION", "dev"),
         ) as claude:
@@ -101,7 +101,7 @@ async def main() -> None:
                 if isinstance(message, ResultMessage) and message.result:
                     print(message.result)
     finally:
-        sigil.shutdown()
+        agento11y.shutdown()
         tracer_provider.shutdown()
         meter_provider.shutdown()
 

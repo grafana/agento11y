@@ -73,29 +73,29 @@ except ModuleNotFoundError as openai_import_error:  # pragma: no cover - exercis
     responses = _MissingProviderNamespace("agento11y_openai", openai_import_error)
 
 try:
-    from agento11y_langchain import SigilLangChainHandler
+    from agento11y_langchain import Agento11yLangChainHandler
 except ModuleNotFoundError as langchain_import_error:  # pragma: no cover - exercised by sdk-core tests
-    SigilLangChainHandler = _MissingProviderNamespace("agento11y_langchain", langchain_import_error)  # type: ignore[assignment]
+    Agento11yLangChainHandler = _MissingProviderNamespace("agento11y_langchain", langchain_import_error)  # type: ignore[assignment]
 
 try:
-    from agento11y_langgraph import SigilLangGraphHandler
+    from agento11y_langgraph import Agento11yLangGraphHandler
 except ModuleNotFoundError as langgraph_import_error:  # pragma: no cover - exercised by sdk-core tests
-    SigilLangGraphHandler = _MissingProviderNamespace("agento11y_langgraph", langgraph_import_error)  # type: ignore[assignment]
+    Agento11yLangGraphHandler = _MissingProviderNamespace("agento11y_langgraph", langgraph_import_error)  # type: ignore[assignment]
 
 try:
-    from agento11y_openai_agents import SigilOpenAIAgentsHandler
+    from agento11y_openai_agents import Agento11yOpenAIAgentsHandler
 except ModuleNotFoundError as openai_agents_import_error:  # pragma: no cover - exercised by sdk-core tests
-    SigilOpenAIAgentsHandler = _MissingProviderNamespace("agento11y_openai_agents", openai_agents_import_error)  # type: ignore[assignment]
+    Agento11yOpenAIAgentsHandler = _MissingProviderNamespace("agento11y_openai_agents", openai_agents_import_error)  # type: ignore[assignment]
 
 try:
-    from agento11y_llamaindex import SigilLlamaIndexHandler
+    from agento11y_llamaindex import Agento11yLlamaIndexHandler
 except ModuleNotFoundError as llamaindex_import_error:  # pragma: no cover - exercised by sdk-core tests
-    SigilLlamaIndexHandler = _MissingProviderNamespace("agento11y_llamaindex", llamaindex_import_error)  # type: ignore[assignment]
+    Agento11yLlamaIndexHandler = _MissingProviderNamespace("agento11y_llamaindex", llamaindex_import_error)  # type: ignore[assignment]
 
 try:
-    from agento11y_google_adk import SigilGoogleAdkHandler
+    from agento11y_google_adk import Agento11yGoogleAdkHandler
 except ModuleNotFoundError as google_adk_import_error:  # pragma: no cover - exercised by sdk-core tests
-    SigilGoogleAdkHandler = _MissingProviderNamespace("agento11y_google_adk", google_adk_import_error)  # type: ignore[assignment]
+    Agento11yGoogleAdkHandler = _MissingProviderNamespace("agento11y_google_adk", google_adk_import_error)  # type: ignore[assignment]
 
 LANGUAGE = "python"
 SOURCES = ("openai", "anthropic", "gemini", "mistral")
@@ -856,16 +856,16 @@ def emit_frameworks(client: Client, source: str, mode: str, context: EmitContext
     if source not in {"openai", "anthropic", "gemini"}:
         return
 
-    if callable(SigilLangChainHandler):
-        _emit_framework_handler(SigilLangChainHandler, client, source, mode, context)
-    if callable(SigilLangGraphHandler):
-        _emit_framework_handler(SigilLangGraphHandler, client, source, mode, context)
-    if callable(SigilOpenAIAgentsHandler):
-        _emit_framework_handler(SigilOpenAIAgentsHandler, client, source, mode, context)
-    if callable(SigilLlamaIndexHandler):
-        _emit_framework_handler(SigilLlamaIndexHandler, client, source, mode, context)
-    if callable(SigilGoogleAdkHandler):
-        _emit_framework_handler(SigilGoogleAdkHandler, client, source, mode, context)
+    if callable(Agento11yLangChainHandler):
+        _emit_framework_handler(Agento11yLangChainHandler, client, source, mode, context)
+    if callable(Agento11yLangGraphHandler):
+        _emit_framework_handler(Agento11yLangGraphHandler, client, source, mode, context)
+    if callable(Agento11yOpenAIAgentsHandler):
+        _emit_framework_handler(Agento11yOpenAIAgentsHandler, client, source, mode, context)
+    if callable(Agento11yLlamaIndexHandler):
+        _emit_framework_handler(Agento11yLlamaIndexHandler, client, source, mode, context)
+    if callable(Agento11yGoogleAdkHandler):
+        _emit_framework_handler(Agento11yGoogleAdkHandler, client, source, mode, context)
 
 
 def _request_stop(_signum: int, _frame: object) -> None:

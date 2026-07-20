@@ -24,11 +24,11 @@ dotnet add package Google.GenAI
 ```csharp
 using Google.GenAI;
 using Google.GenAI.Types;
-using Grafana.Sigil;
-using Grafana.Sigil.Gemini;
+using Grafana.Agento11y;
+using Grafana.Agento11y.Gemini;
 using GPart = Google.GenAI.Types.Part;
 
-var sigilConfig = new SigilClientConfig
+var agento11yConfig = new Agento11yClientConfig
 {
     GenerationExport = new GenerationExportConfig
     {
@@ -46,7 +46,7 @@ var sigilConfig = new SigilClientConfig
         Endpoint = "https://sigil-prod-<region>.grafana.net",
     },
 };
-var sigil = new SigilClient(sigilConfig);
+var agento11y = new Agento11yClient(agento11yConfig);
 
 var gemini = new Client(apiKey: Environment.GetEnvironmentVariable("GEMINI_API_KEY")!);
 
@@ -75,12 +75,12 @@ var config = new GenerateContentConfig
 };
 
 GenerateContentResponse response = await GeminiRecorder.GenerateContentAsync(
-    sigil,
+    agento11y,
     gemini,
     model,
     contents,
     config,
-    options: new GeminiSigilOptions
+    options: new GeminiAgento11yOptions
     {
         ConversationId = "conv-gemini-1",
         AgentName = "assistant-core",
@@ -94,12 +94,12 @@ GenerateContentResponse response = await GeminiRecorder.GenerateContentAsync(
 
 ```csharp
 GeminiStreamSummary summary = await GeminiRecorder.GenerateContentStreamAsync(
-    sigil,
+    agento11y,
     gemini,
     model,
     contents,
     config,
-    options: new GeminiSigilOptions
+    options: new GeminiAgento11yOptions
     {
         ConversationId = "conv-gemini-stream-1",
         AgentName = "assistant-core",
@@ -120,7 +120,7 @@ The wrapper records mode as `STREAM` and aggregates the normalized generation fr
 
 ```csharp
 EmbedContentResponse embeddingResponse = await GeminiRecorder.EmbedContentAsync(
-    sigil,
+    agento11y,
     gemini,
     "gemini-embedding-001",
     new List<Content>
@@ -129,7 +129,7 @@ EmbedContentResponse embeddingResponse = await GeminiRecorder.EmbedContentAsync(
         new() { Parts = new List<GPart> { new() { Text = "world" } } },
     },
     config: null,
-    options: new GeminiSigilOptions
+    options: new GeminiAgento11yOptions
     {
         ConversationId = "conv-gemini-embeddings-1",
         AgentName = "assistant-core",
@@ -142,7 +142,7 @@ EmbedContentResponse embeddingResponse = await GeminiRecorder.EmbedContentAsync(
 ## Raw artifacts (debug opt-in)
 
 ```csharp
-var sigilOptions = new GeminiSigilOptions
+var agento11yOptions = new GeminiAgento11yOptions
 {
     ConversationId = "conv-gemini-debug-1",
     AgentName = "assistant-core",
@@ -156,12 +156,12 @@ Raw artifacts are off by default and should be enabled only for diagnostics.
 
 ```csharp
 var response = await GeminiRecorder.GenerateContentAsync(
-    sigil,
+    agento11y,
     model,
     contents,
     (requestModel, requestContents, requestConfig, ct) => gemini.Models.GenerateContentAsync(requestModel, requestContents, requestConfig, ct),
     config,
-    options: new GeminiSigilOptions { ModelName = "gemini-2.5-pro" },
+    options: new GeminiAgento11yOptions { ModelName = "gemini-2.5-pro" },
     cancellationToken: CancellationToken.None
 );
 ```
@@ -172,7 +172,7 @@ var response = await GeminiRecorder.GenerateContentAsync(
 - Candidate text, tool calls, and function responses map to normalized Sigil message parts.
 - Stop reason and usage fields are normalized from Gemini responses.
 - Provider exceptions are captured as generation `CallError` and rethrown.
-- Call `SigilClient.ShutdownAsync(...)` during application shutdown to flush pending exports.
+- Call `Agento11yClient.ShutdownAsync(...)` during application shutdown to flush pending exports.
 
 ## Provider metadata mapping
 

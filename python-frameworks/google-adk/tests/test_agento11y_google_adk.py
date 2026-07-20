@@ -9,14 +9,14 @@ from uuid import UUID, uuid4
 from agento11y import Client, ClientConfig, GenerationExportConfig
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
 from agento11y_google_adk import (
-    SigilAsyncGoogleAdkHandler,
-    SigilGoogleAdkCallbacks,
-    SigilGoogleAdkHandler,
-    SigilGoogleAdkPlugin,
-    create_sigil_google_adk_handler,
-    create_sigil_google_adk_plugin,
-    with_sigil_google_adk_callbacks,
-    with_sigil_google_adk_plugins,
+    Agento11yAsyncGoogleAdkHandler,
+    Agento11yGoogleAdkCallbacks,
+    Agento11yGoogleAdkHandler,
+    Agento11yGoogleAdkPlugin,
+    create_agento11y_google_adk_handler,
+    create_agento11y_google_adk_plugin,
+    with_agento11y_google_adk_callbacks,
+    with_agento11y_google_adk_plugins,
 )
 from google.adk.plugins import BasePlugin
 from google.genai import types as genai_types
@@ -58,7 +58,7 @@ def test_agento11y_google_adk_sync_lifecycle_sets_framework_metadata() -> None:
     try:
         run_id = uuid4()
         parent_run_id = uuid4()
-        handler = SigilGoogleAdkHandler(client=client, provider_resolver="auto")
+        handler = Agento11yGoogleAdkHandler(client=client, provider_resolver="auto")
 
         handler.on_chat_model_start(
             {"name": "ChatModel"},
@@ -107,7 +107,7 @@ def test_agento11y_google_adk_keeps_thread_metadata_when_ids_are_split_across_pa
 
     try:
         run_id = uuid4()
-        handler = SigilGoogleAdkHandler(client=client, provider_resolver="auto")
+        handler = Agento11yGoogleAdkHandler(client=client, provider_resolver="auto")
 
         handler.on_chat_model_start(
             {"name": "ChatModel"},
@@ -143,7 +143,7 @@ def test_agento11y_google_adk_fallback_conversation_is_deterministic() -> None:
 
     try:
         run_id = uuid4()
-        handler = SigilGoogleAdkHandler(client=client)
+        handler = Agento11yGoogleAdkHandler(client=client)
 
         handler.on_llm_start(
             {"kwargs": {"model": "gpt-5"}},
@@ -155,7 +155,7 @@ def test_agento11y_google_adk_fallback_conversation_is_deterministic() -> None:
 
         client.flush()
         generation = exporter.requests[0].generations[0]
-        assert generation.conversation_id == f"sigil:framework:google-adk:{run_id}"
+        assert generation.conversation_id == f"agento11y:framework:google-adk:{run_id}"
     finally:
         client.shutdown()
 
@@ -166,7 +166,7 @@ def test_agento11y_google_adk_stream_mode_uses_chunks_when_output_missing() -> N
 
     try:
         run_id = uuid4()
-        handler = SigilGoogleAdkHandler(client=client)
+        handler = Agento11yGoogleAdkHandler(client=client)
 
         handler.on_llm_start(
             {"kwargs": {"model": "claude-sonnet-4-5"}},
@@ -192,13 +192,13 @@ def test_agento11y_google_adk_generation_span_tracks_active_parent_span_and_expo
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-framework-test")
+    tracer = provider.get_tracer("agento11y-framework-test")
     client = _new_client(exporter, tracer=tracer)
 
     try:
         run_id = uuid4()
         with tracer.start_as_current_span("framework.request"):
-            handler = SigilGoogleAdkHandler(client=client, provider_resolver="auto")
+            handler = Agento11yGoogleAdkHandler(client=client, provider_resolver="auto")
             handler.on_chat_model_start(
                 {"name": "ChatModel"},
                 [[{"type": "human", "content": "hello"}]],
@@ -237,7 +237,7 @@ def test_agento11y_google_adk_normalizes_extra_metadata() -> None:
 
     try:
         run_id = uuid4()
-        handler = SigilGoogleAdkHandler(
+        handler = Agento11yGoogleAdkHandler(
             client=client,
             extra_metadata={
                 "timestamp": "2026-02-20T00:00:00Z",
@@ -269,7 +269,7 @@ def test_agento11y_google_adk_async_handler_records_generation() -> None:
 
     async def _run() -> None:
         run_id = uuid4()
-        handler = SigilAsyncGoogleAdkHandler(client=client)
+        handler = Agento11yAsyncGoogleAdkHandler(client=client)
         await handler.on_llm_start({}, ["hello"], run_id=run_id, invocation_params={"model": "gpt-5"})
         await handler.on_llm_end({"generations": [[{"text": "world"}]]}, run_id=run_id)
 
@@ -336,10 +336,10 @@ def test_agento11y_google_adk_callback_helpers_attach_callback_fields() -> None:
                 await result
 
     try:
-        created = create_sigil_google_adk_handler(client=client)
-        assert isinstance(created, SigilGoogleAdkHandler)
+        created = create_agento11y_google_adk_handler(client=client)
+        assert isinstance(created, Agento11yGoogleAdkHandler)
 
-        config = with_sigil_google_adk_callbacks(
+        config = with_agento11y_google_adk_callbacks(
             {"name": "adk-runner", "plugins": ["existing-plugin"]},
             client=client,
             agent_name="google-adk-helper",
@@ -350,7 +350,7 @@ def test_agento11y_google_adk_callback_helpers_attach_callback_fields() -> None:
         assert "before_model_callback" in config
         callback = config["before_model_callback"]
         callback_items = callback if isinstance(callback, list) else [callback]
-        assert any(isinstance(getattr(item, "__self__", None), SigilGoogleAdkCallbacks) for item in callback_items)
+        assert any(isinstance(getattr(item, "__self__", None), Agento11yGoogleAdkCallbacks) for item in callback_items)
 
         async def _run() -> None:
             callback_context = _CallbackContext()
@@ -372,7 +372,7 @@ def test_agento11y_google_adk_callback_helpers_attach_callback_fields() -> None:
         assert generation.metadata["agento11y.framework.event_id"] == "adk-invocation-42"
 
         agent = _Agent()
-        returned_agent = with_sigil_google_adk_callbacks(agent, client=client)
+        returned_agent = with_agento11y_google_adk_callbacks(agent, client=client)
         assert returned_agent is agent
         assert agent.before_model_callback is not None
         assert agent.after_model_callback is not None
@@ -385,7 +385,7 @@ def test_agento11y_google_adk_handler_explicitly_has_no_embedding_lifecycle() ->
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilGoogleAdkHandler(client=client)
+        handler = Agento11yGoogleAdkHandler(client=client)
         assert not hasattr(handler, "on_embedding_start")
         assert not hasattr(handler, "on_embedding_end")
         assert not hasattr(handler, "on_embedding_error")
@@ -417,7 +417,7 @@ def test_agento11y_google_adk_callbacks_close_tool_runs_without_function_call_id
             self.function_call_id = None
 
     capture = _CapturingHandler()
-    callbacks = SigilGoogleAdkCallbacks(capture)  # type: ignore[arg-type]
+    callbacks = Agento11yGoogleAdkCallbacks(capture)  # type: ignore[arg-type]
     context_start = _ToolContext("adk-tool-invocation-42")
     context_end = _ToolContext("adk-tool-invocation-42")
 
@@ -468,14 +468,14 @@ def test_agento11y_google_adk_plugin_helpers_attach_plugin_list() -> None:
         model_version = "gemini-2.5-pro"
 
     try:
-        created = create_sigil_google_adk_plugin(client=client)
-        assert isinstance(created, SigilGoogleAdkPlugin)
+        created = create_agento11y_google_adk_plugin(client=client)
+        assert isinstance(created, Agento11yGoogleAdkPlugin)
 
-        config = with_sigil_google_adk_plugins({"name": "adk-runner"}, client=client)
+        config = with_agento11y_google_adk_plugins({"name": "adk-runner"}, client=client)
         assert config["name"] == "adk-runner"
         assert "plugins" in config
         assert isinstance(config["plugins"], list)
-        assert isinstance(config["plugins"][0], SigilGoogleAdkPlugin)
+        assert isinstance(config["plugins"][0], Agento11yGoogleAdkPlugin)
         assert isinstance(config["plugins"][0], BasePlugin)
 
         plugin = config["plugins"][0]
@@ -597,7 +597,7 @@ def test_agento11y_google_adk_plugin_maps_current_request_config_tools_and_usage
         finish_reason = "STOP"
 
     try:
-        plugin = create_sigil_google_adk_plugin(client=client)
+        plugin = create_agento11y_google_adk_plugin(client=client)
 
         async def _run() -> None:
             invocation_context = _InvocationContext()
@@ -687,7 +687,7 @@ def test_agento11y_google_adk_plugin_streams_partial_event_tokens() -> None:
         model_version = "gemini-2.5-pro"
 
     try:
-        plugin = create_sigil_google_adk_plugin(client=client)
+        plugin = create_agento11y_google_adk_plugin(client=client)
 
         async def _run() -> None:
             invocation_context = _InvocationContext()
@@ -740,7 +740,7 @@ def test_agento11y_google_adk_plugin_tracks_nested_agent_chain_runs() -> None:
             self.invocation_context = _InvocationContext()
 
     capture = _CapturingHandler()
-    plugin = SigilGoogleAdkPlugin(capture)  # type: ignore[arg-type]
+    plugin = Agento11yGoogleAdkPlugin(capture)  # type: ignore[arg-type]
 
     async def _run() -> None:
         invocation_context = _InvocationContext()

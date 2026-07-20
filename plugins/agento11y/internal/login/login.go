@@ -362,7 +362,7 @@ var seededSuffixes = []string{
 	"GUARDS_TIMEOUT_MS",
 }
 
-// Content capture mode labels mirror sigil.ContentCaptureMode.String() so
+// Content capture mode labels mirror agento11y.ContentCaptureMode.String() so
 // the value we persist round-trips through the SDK's UnmarshalText and the
 // plugin's envconfig.ResolveContentMode without translation.
 const (

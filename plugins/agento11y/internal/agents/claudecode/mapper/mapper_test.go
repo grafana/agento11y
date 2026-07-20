@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
@@ -126,7 +126,7 @@ func TestProcess_SinglePromptResponse(t *testing.T) {
 	if gen.AgentVersion != "1.0.0" {
 		t.Errorf("AgentVersion = %q", gen.AgentVersion)
 	}
-	if gen.Mode != sigil.GenerationModeSync {
+	if gen.Mode != agento11y.GenerationModeSync {
 		t.Errorf("Mode = %q", gen.Mode)
 	}
 }
@@ -465,7 +465,7 @@ func TestProcess_ToolResultsInInput(t *testing.T) {
 	}
 
 	// First gen: input is user prompt (redacted)
-	if gens[0].Input[0].Parts[0].Kind != sigil.PartKindText {
+	if gens[0].Input[0].Parts[0].Kind != agento11y.PartKindText {
 		t.Errorf("gen[0] input kind = %q, want text", gens[0].Input[0].Parts[0].Kind)
 	}
 
@@ -473,7 +473,7 @@ func TestProcess_ToolResultsInInput(t *testing.T) {
 	if len(gens[1].Input) == 0 {
 		t.Fatal("gen[1] has no input")
 	}
-	if gens[1].Input[0].Parts[0].Kind != sigil.PartKindToolResult {
+	if gens[1].Input[0].Parts[0].Kind != agento11y.PartKindToolResult {
 		t.Errorf("input kind = %q, want tool_result", gens[1].Input[0].Parts[0].Kind)
 	}
 }
@@ -767,7 +767,7 @@ func TestProcess_ToolResultContentFormats(t *testing.T) {
 			if len(gens[1].Input) == 0 {
 				t.Fatal("gen[1] has no input")
 			}
-			if gens[1].Input[0].Parts[0].Kind != sigil.PartKindToolResult {
+			if gens[1].Input[0].Parts[0].Kind != agento11y.PartKindToolResult {
 				t.Errorf("gen[1] input kind = %q, want tool_result", gens[1].Input[0].Parts[0].Kind)
 			}
 			content := gens[1].Input[0].Parts[0].ToolResult.Content

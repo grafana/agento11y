@@ -14,7 +14,7 @@ This example uses the production-style shape you would use for LLMSpec or A2A:
 
 1. The experiment harness owns the run, typed trials, and scores.
 2. The target sends only the `runID` across a simulated service boundary.
-3. The receiving service restores it with `sigil.WithExperimentRunID(ctx, runID)`.
+3. The receiving service restores it with `agento11y.WithExperimentRunID(ctx, runID)`.
 4. Existing `client.StartGeneration(ctx, ...)` instrumentation automatically tags generations with `experiment.run_id` and `experiment_run_id`.
 5. The service returns the generated `generationID` so scores can attach to the right generation.
 

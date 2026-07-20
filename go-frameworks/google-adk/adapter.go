@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 const (
@@ -66,7 +66,7 @@ type RunStartEvent struct {
 	Provider       string
 	Stream         bool
 	Prompts        []string
-	InputMessages  []sigil.Message
+	InputMessages  []agento11y.Message
 	Tags           []string
 	Metadata       map[string]any
 }
@@ -74,10 +74,10 @@ type RunStartEvent struct {
 // RunEndEvent is the adapter input for LLM run completion callbacks.
 type RunEndEvent struct {
 	RunID          string
-	OutputMessages []sigil.Message
+	OutputMessages []agento11y.Message
 	ResponseModel  string
 	StopReason     string
-	Usage          sigil.TokenUsage
+	Usage          agento11y.TokenUsage
 }
 
 // ToolStartEvent is the adapter input for tool start callbacks.
@@ -106,15 +106,15 @@ type ToolEndEvent struct {
 }
 
 type runState struct {
-	recorder       *sigil.GenerationRecorder
-	input          []sigil.Message
+	recorder       *agento11y.GenerationRecorder
+	input          []agento11y.Message
 	captureOutputs bool
 	firstTokenSet  bool
 	outputChunks   []string
 }
 
 type toolRunState struct {
-	recorder       *sigil.ToolExecutionRecorder
+	recorder       *agento11y.ToolExecutionRecorder
 	arguments      any
 	captureOutputs bool
 }
@@ -133,20 +133,20 @@ type Callbacks struct {
 
 // Adapter bridges Google ADK lifecycle events into Sigil recorder lifecycles.
 type Adapter struct {
-	client         *sigil.Client
+	client         *agento11y.Client
 	opts           Options
 	captureInputs  bool
 	captureOutputs bool
 	runs           map[string]*runState
 	toolRuns       map[string]*toolRunState
-	startRun       func(context.Context, sigil.GenerationStart, bool) *sigil.GenerationRecorder
-	startTool      func(context.Context, sigil.ToolExecutionStart) *sigil.ToolExecutionRecorder
+	startRun       func(context.Context, agento11y.GenerationStart, bool) *agento11y.GenerationRecorder
+	startTool      func(context.Context, agento11y.ToolExecutionStart) *agento11y.ToolExecutionRecorder
 	runsMu         sync.Mutex
 	toolRunsMu     sync.Mutex
 }
 
-// NewSigilAdapter creates a Google ADK adapter for a Sigil client.
-func NewSigilAdapter(client *sigil.Client, opts Options) *Adapter {
+// NewAgento11yAdapter creates a Google ADK adapter for a Sigil client.
+func NewAgento11yAdapter(client *agento11y.Client, opts Options) *Adapter {
 	captureInputs := true
 	if opts.CaptureInputs != nil {
 		captureInputs = *opts.CaptureInputs
@@ -171,7 +171,7 @@ func NewSigilAdapter(client *sigil.Client, opts Options) *Adapter {
 		captureOutputs: captureOutputs,
 		runs:           map[string]*runState{},
 		toolRuns:       map[string]*toolRunState{},
-		startRun: func(ctx context.Context, start sigil.GenerationStart, stream bool) *sigil.GenerationRecorder {
+		startRun: func(ctx context.Context, start agento11y.GenerationStart, stream bool) *agento11y.GenerationRecorder {
 			if stream {
 				_, rec := client.StartStreamingGeneration(ctx, start)
 				return rec
@@ -179,7 +179,7 @@ func NewSigilAdapter(client *sigil.Client, opts Options) *Adapter {
 			_, rec := client.StartGeneration(ctx, start)
 			return rec
 		},
-		startTool: func(ctx context.Context, start sigil.ToolExecutionStart) *sigil.ToolExecutionRecorder {
+		startTool: func(ctx context.Context, start agento11y.ToolExecutionStart) *agento11y.ToolExecutionRecorder {
 			_, rec := client.StartToolExecution(ctx, start)
 			return rec
 		},
@@ -200,8 +200,8 @@ func (a *Adapter) Callbacks() Callbacks {
 }
 
 // NewCallbacks creates a Sigil adapter and returns function-based lifecycle hooks.
-func NewCallbacks(client *sigil.Client, opts Options) Callbacks {
-	return NewSigilAdapter(client, opts).Callbacks()
+func NewCallbacks(client *agento11y.Client, opts Options) Callbacks {
+	return NewAgento11yAdapter(client, opts).Callbacks()
 }
 
 // OnRunStart starts a Sigil generation lifecycle for an ADK run.
@@ -243,12 +243,12 @@ func (a *Adapter) OnRunStart(ctx context.Context, event RunStartEvent) error {
 	tags["agento11y.framework.source"] = frameworkSource
 	tags["agento11y.framework.language"] = frameworkLanguage
 
-	start := sigil.GenerationStart{
+	start := agento11y.GenerationStart{
 		ConversationID: conversationID,
 		AgentName:      strings.TrimSpace(a.opts.AgentName),
 		AgentVersion:   strings.TrimSpace(a.opts.AgentVersion),
 		Mode:           modeFromEvent(event.Stream),
-		Model: sigil.ModelRef{
+		Model: agento11y.ModelRef{
 			Provider: provider,
 			Name:     normalizeModelName(event.ModelName),
 		},
@@ -256,7 +256,7 @@ func (a *Adapter) OnRunStart(ctx context.Context, event RunStartEvent) error {
 		Metadata: metadata,
 	}
 
-	input := []sigil.Message{}
+	input := []agento11y.Message{}
 	if a.captureInputs {
 		if len(event.InputMessages) > 0 {
 			input = append(input, event.InputMessages...)
@@ -266,7 +266,7 @@ func (a *Adapter) OnRunStart(ctx context.Context, event RunStartEvent) error {
 				if trimmed == "" {
 					continue
 				}
-				input = append(input, sigil.UserTextMessage(trimmed))
+				input = append(input, agento11y.UserTextMessage(trimmed))
 			}
 		}
 	}
@@ -325,15 +325,15 @@ func (a *Adapter) OnRunEnd(runID string, event RunEndEvent) error {
 	delete(a.runs, trimmedRunID)
 	a.runsMu.Unlock()
 
-	output := []sigil.Message{}
+	output := []agento11y.Message{}
 	if state.captureOutputs {
 		output = event.OutputMessages
 		if len(output) == 0 && len(state.outputChunks) > 0 {
-			output = []sigil.Message{sigil.AssistantTextMessage(strings.Join(state.outputChunks, ""))}
+			output = []agento11y.Message{agento11y.AssistantTextMessage(strings.Join(state.outputChunks, ""))}
 		}
 	}
 
-	state.recorder.SetResult(sigil.Generation{
+	state.recorder.SetResult(agento11y.Generation{
 		Input:         state.input,
 		Output:        output,
 		Usage:         event.Usage.Normalize(),
@@ -364,9 +364,9 @@ func (a *Adapter) OnRunError(runID string, runErr error) error {
 	a.runsMu.Unlock()
 
 	if state.captureOutputs && len(state.outputChunks) > 0 {
-		state.recorder.SetResult(sigil.Generation{
+		state.recorder.SetResult(agento11y.Generation{
 			Input:  state.input,
-			Output: []sigil.Message{sigil.AssistantTextMessage(strings.Join(state.outputChunks, ""))},
+			Output: []agento11y.Message{agento11y.AssistantTextMessage(strings.Join(state.outputChunks, ""))},
 		}, nil)
 	}
 	state.recorder.SetCallError(runErr)
@@ -400,7 +400,7 @@ func (a *Adapter) OnToolStart(ctx context.Context, event ToolStartEvent) error {
 		Provider:  event.Provider,
 	})
 
-	rec := a.startTool(ctx, sigil.ToolExecutionStart{
+	rec := a.startTool(ctx, agento11y.ToolExecutionStart{
 		ToolName:        strings.TrimSpace(event.ToolName),
 		ToolCallID:      strings.TrimSpace(event.ToolCallID),
 		ToolType:        strings.TrimSpace(event.ToolType),
@@ -440,7 +440,7 @@ func (a *Adapter) OnToolEnd(runID string, event ToolEndEvent) error {
 	delete(a.toolRuns, trimmedRunID)
 	a.toolRunsMu.Unlock()
 
-	end := sigil.ToolExecutionEnd{CompletedAt: event.CompletedAt}
+	end := agento11y.ToolExecutionEnd{CompletedAt: event.CompletedAt}
 	if state.arguments != nil {
 		end.Arguments = state.arguments
 	}
@@ -476,11 +476,11 @@ func (a *Adapter) OnToolError(runID string, toolErr error) error {
 	return state.recorder.Err()
 }
 
-func modeFromEvent(stream bool) sigil.GenerationMode {
+func modeFromEvent(stream bool) agento11y.GenerationMode {
 	if stream {
-		return sigil.GenerationModeStream
+		return agento11y.GenerationModeStream
 	}
-	return sigil.GenerationModeSync
+	return agento11y.GenerationModeSync
 }
 
 func normalizeModelName(modelName string) string {
@@ -504,7 +504,7 @@ func resolveConversationID(event RunStartEvent) (conversationID string, threadID
 	if trimmed := strings.TrimSpace(event.ThreadID); trimmed != "" {
 		return trimmed, trimmed
 	}
-	return fmt.Sprintf("sigil:framework:%s:%s", frameworkName, strings.TrimSpace(event.RunID)), ""
+	return fmt.Sprintf("agento11y:framework:%s:%s", frameworkName, strings.TrimSpace(event.RunID)), ""
 }
 
 func resolveProvider(explicitProvider string, eventProvider string, modelName string, resolver ProviderResolver, event RunStartEvent) string {

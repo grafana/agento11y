@@ -13,10 +13,10 @@ pip install google-adk
 
 ```python
 from agento11y import Client
-from agento11y_google_adk import with_sigil_google_adk_plugins
+from agento11y_google_adk import with_agento11y_google_adk_plugins
 
 client = Client()
-runner_config = with_sigil_google_adk_plugins(None, client=client, provider_resolver="auto")
+runner_config = with_agento11y_google_adk_plugins(None, client=client, provider_resolver="auto")
 # Runner(..., **runner_config)
 ```
 
@@ -24,10 +24,10 @@ runner_config = with_sigil_google_adk_plugins(None, client=client, provider_reso
 
 ```python
 from agento11y import Client
-from agento11y_google_adk import with_sigil_google_adk_callbacks
+from agento11y_google_adk import with_agento11y_google_adk_callbacks
 
 client = Client()
-agent_config = with_sigil_google_adk_callbacks(None, client=client, provider_resolver="auto")
+agent_config = with_agento11y_google_adk_callbacks(None, client=client, provider_resolver="auto")
 # LlmAgent(..., **agent_config)
 ```
 
@@ -37,7 +37,7 @@ Primary mapping is ADK session identity:
 
 1. `conversation_id` / `session_id` / `group_id`
 2. `thread_id`
-3. fallback `sigil:framework:google-adk:<run_id>`
+3. fallback `agento11y:framework:google-adk:<run_id>`
 
 ## Metadata and lineage
 

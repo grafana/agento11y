@@ -19,10 +19,10 @@ dotnet add package Anthropic
 ```csharp
 using Anthropic;
 using Anthropic.Models.Messages;
-using Grafana.Sigil;
-using Grafana.Sigil.Anthropic;
+using Grafana.Agento11y;
+using Grafana.Agento11y.Anthropic;
 
-var sigilConfig = new SigilClientConfig
+var agento11yConfig = new Agento11yClientConfig
 {
     GenerationExport = new GenerationExportConfig
     {
@@ -40,7 +40,7 @@ var sigilConfig = new SigilClientConfig
         Endpoint = "https://sigil-prod-<region>.grafana.net",
     },
 };
-var sigil = new SigilClient(sigilConfig);
+var agento11y = new Agento11yClient(agento11yConfig);
 
 var anthropic = new AnthropicClient(new Anthropic.Core.ClientOptions
 {
@@ -63,10 +63,10 @@ var request = new MessageCreateParams
 };
 
 var response = await AnthropicRecorder.MessageAsync(
-    sigil,
+    agento11y,
     anthropic,
     request,
-    options: new AnthropicSigilOptions
+    options: new AnthropicAgento11yOptions
     {
         ConversationId = "conv-anthropic-1",
         AgentName = "assistant-core",
@@ -80,10 +80,10 @@ var response = await AnthropicRecorder.MessageAsync(
 
 ```csharp
 AnthropicStreamSummary summary = await AnthropicRecorder.MessageStreamAsync(
-    sigil,
+    agento11y,
     anthropic,
     request,
-    options: new AnthropicSigilOptions
+    options: new AnthropicAgento11yOptions
     {
         ConversationId = "conv-anthropic-stream-1",
         AgentName = "assistant-core",
@@ -103,7 +103,7 @@ The wrapper records mode as `STREAM` and aggregates final usage/stop-reason/outp
 ## Raw artifacts (debug opt-in)
 
 ```csharp
-var sigilOptions = new AnthropicSigilOptions
+var agento11yOptions = new AnthropicAgento11yOptions
 {
     ConversationId = "conv-anthropic-debug-1",
     AgentName = "assistant-core",
@@ -117,10 +117,10 @@ Raw artifacts are off by default and should be enabled only for troubleshooting.
 
 ```csharp
 var response = await AnthropicRecorder.MessageAsync(
-    sigil,
+    agento11y,
     request,
     (payload, ct) => anthropic.Messages.Create(payload, ct),
-    options: new AnthropicSigilOptions { ModelName = "claude-sonnet-4-5" },
+    options: new AnthropicAgento11yOptions { ModelName = "claude-sonnet-4-5" },
     cancellationToken: CancellationToken.None
 );
 ```
@@ -131,7 +131,7 @@ var response = await AnthropicRecorder.MessageAsync(
 - `System` prompt is normalized into `Generation.SystemPrompt`.
 - Thinking blocks, tool-use blocks, and tool-result blocks map to typed Sigil parts.
 - Provider exceptions are captured as generation `CallError` and rethrown.
-- Call `SigilClient.ShutdownAsync(...)` during application shutdown to flush pending exports.
+- Call `Agento11yClient.ShutdownAsync(...)` during application shutdown to flush pending exports.
 
 ## Provider metadata mapping
 

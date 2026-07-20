@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
@@ -34,8 +34,8 @@ func BeforeSubmit(p Payload, cfg config.Config, logger *log.Logger) {
 		return
 	}
 	ts := p.ResolvedTimestamp()
-	keepPrompt := cfg.ContentCapture == sigil.ContentCaptureModeFull ||
-		cfg.ContentCapture == sigil.ContentCaptureModeNoToolContent
+	keepPrompt := cfg.ContentCapture == agento11y.ContentCaptureModeFull ||
+		cfg.ContentCapture == agento11y.ContentCaptureModeNoToolContent
 
 	err := fragment.Update(p.ConversationID, p.GenerationID, logger, func(f *fragment.Fragment) bool {
 		fragment.Touch(f, ts)

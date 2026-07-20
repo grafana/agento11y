@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class EmbeddingTelemetryTests
 {
@@ -15,7 +15,7 @@ public sealed class EmbeddingTelemetryTests
         var spans = new List<Activity>();
 
         using var listener = NewEmbeddingListener(spans);
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         var recorder = client.StartEmbedding(new EmbeddingStart
         {
@@ -73,7 +73,7 @@ public sealed class EmbeddingTelemetryTests
 
         var spans = new List<Activity>();
         using var listener = NewEmbeddingListener(spans);
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         var recorder = client.StartEmbedding(new EmbeddingStart
         {
@@ -118,7 +118,7 @@ public sealed class EmbeddingTelemetryTests
 
         var spans = new List<Activity>();
         using var listener = NewEmbeddingListener(spans);
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         var recorder = client.StartEmbedding(new EmbeddingStart
         {
@@ -148,7 +148,7 @@ public sealed class EmbeddingTelemetryTests
         var config = TestHelpers.TestConfig(new CapturingGenerationExporter());
         var spans = new List<Activity>();
         using var listener = NewEmbeddingListener(spans);
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         var recorder = client.StartEmbedding(new EmbeddingStart
         {
@@ -177,7 +177,7 @@ public sealed class EmbeddingTelemetryTests
         var config = TestHelpers.TestConfig(new CapturingGenerationExporter());
         var spans = new List<Activity>();
         using var listener = NewEmbeddingListener(spans);
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         var recorder = client.StartEmbedding(new EmbeddingStart
         {
@@ -211,10 +211,10 @@ public sealed class EmbeddingTelemetryTests
         var config = TestHelpers.TestConfig(new CapturingGenerationExporter());
         var spans = new List<Activity>();
         using var listener = NewEmbeddingListener(spans);
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
-        using var agentScope = SigilContext.WithAgentName("agent-context");
-        using var versionScope = SigilContext.WithAgentVersion("v-context");
+        using var agentScope = Agento11yContext.WithAgentName("agent-context");
+        using var versionScope = Agento11yContext.WithAgentVersion("v-context");
 
         var recorder = client.StartEmbedding(new EmbeddingStart
         {
@@ -260,7 +260,7 @@ public sealed class EmbeddingTelemetryTests
         meterListener.Start();
 
         var config = TestHelpers.TestConfig(new CapturingGenerationExporter());
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         var recorder = client.StartEmbedding(new EmbeddingStart
         {

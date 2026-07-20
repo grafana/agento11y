@@ -22,9 +22,9 @@ Set the [`AGENTO11Y_*` env vars](#grafana-cloud-credentials) and construct the c
 ### TypeScript
 
 ```ts
-import { SigilClient } from "@grafana/agento11y";
+import { Agento11yClient } from "@grafana/agento11y";
 
-const client = new SigilClient(); // reads AGENTO11Y_* env vars
+const client = new Agento11yClient(); // reads AGENTO11Y_* env vars
 
 await client.startGeneration(
   { conversationId: "conv-1", model: { provider: "openai", name: "gpt-5" } },
@@ -57,17 +57,17 @@ client.shutdown()
 ### Go
 
 ```go
-client := sigil.NewClient(sigil.Config{}) // reads AGENTO11Y_* env vars
+client := agento11y.NewClient(agento11y.Config{}) // reads AGENTO11Y_* env vars
 defer func() { _ = client.Shutdown(context.Background()) }()
 
-ctx, rec := client.StartGeneration(context.Background(), sigil.GenerationStart{
+ctx, rec := client.StartGeneration(context.Background(), agento11y.GenerationStart{
     ConversationID: "conv-1",
-    Model:          sigil.ModelRef{Provider: "openai", Name: "gpt-5"},
+    Model:          agento11y.ModelRef{Provider: "openai", Name: "gpt-5"},
 })
 defer rec.End()
 
-rec.SetResult(sigil.Generation{
-    Output: []sigil.Message{sigil.AssistantTextMessage("Hello from Grafana AI observability")},
+rec.SetResult(agento11y.Generation{
+    Output: []agento11y.Message{agento11y.AssistantTextMessage("Hello from Grafana AI observability")},
 }, nil)
 ```
 

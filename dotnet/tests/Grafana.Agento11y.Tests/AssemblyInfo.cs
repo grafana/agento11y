@@ -6,11 +6,11 @@ using Xunit;
 internal static class TestEnvCleanup
 {
     [ModuleInitializer]
-    internal static void ClearSigilEnvVars()
+    internal static void ClearAgento11yEnvVars()
     {
         // Clear canonical AGENTO11Y_* / SIGIL_* env vars so individual tests
         // don't pick up developer-machine config when they construct a
-        // SigilClient. Tests that exercise env layering should pass an
+        // Agento11yClient. Tests that exercise env layering should pass an
         // explicit lookup to EnvConfig.ResolveFromEnv.
         string[] suffixes =
         {

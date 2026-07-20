@@ -31,14 +31,14 @@ from agento11y import (
     ToolDefinition,
     ToolResult,
 )
-from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2 as sigil_pb2
-from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2_grpc as sigil_pb2_grpc
+from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2 as agento11y_pb2
+from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2_grpc as agento11y_pb2_grpc
 from opentelemetry.sdk.trace import TracerProvider
 
 
-class _CapturingGenerationServicer(sigil_pb2_grpc.GenerationIngestServiceServicer):
+class _CapturingGenerationServicer(agento11y_pb2_grpc.GenerationIngestServiceServicer):
     def __init__(self) -> None:
-        self.requests: list[sigil_pb2.ExportGenerationsRequest] = []
+        self.requests: list[agento11y_pb2.ExportGenerationsRequest] = []
         self.metadata: list[dict[str, str]] = []
         self._lock = threading.Lock()
 
@@ -46,9 +46,9 @@ class _CapturingGenerationServicer(sigil_pb2_grpc.GenerationIngestServiceService
         with self._lock:
             self.requests.append(request)
             self.metadata.append({item.key: item.value for item in context.invocation_metadata()})
-        return sigil_pb2.ExportGenerationsResponse(
+        return agento11y_pb2.ExportGenerationsResponse(
             results=[
-                sigil_pb2.ExportGenerationResult(generation_id=generation.id, accepted=True)
+                agento11y_pb2.ExportGenerationResult(generation_id=generation.id, accepted=True)
                 for generation in request.generations
             ]
         )
@@ -215,7 +215,7 @@ def test_sdk_exports_generation_over_http_base_url_only() -> None:
 def test_sdk_exports_generation_over_grpc_round_trip() -> None:
     servicer = _CapturingGenerationServicer()
     grpc_server = grpc.server(thread_pool=__import__("concurrent.futures").futures.ThreadPoolExecutor(max_workers=2))
-    sigil_pb2_grpc.add_GenerationIngestServiceServicer_to_server(servicer, grpc_server)
+    agento11y_pb2_grpc.add_GenerationIngestServiceServicer_to_server(servicer, grpc_server)
 
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
@@ -366,7 +366,7 @@ def test_sdk_generation_user_agent_over_http(headers, expected_user_agent) -> No
 def test_sdk_generation_user_agent_over_grpc(headers, expected_user_agent) -> None:
     servicer = _CapturingGenerationServicer()
     grpc_server = grpc.server(thread_pool=__import__("concurrent.futures").futures.ThreadPoolExecutor(max_workers=2))
-    sigil_pb2_grpc.add_GenerationIngestServiceServicer_to_server(servicer, grpc_server)
+    agento11y_pb2_grpc.add_GenerationIngestServiceServicer_to_server(servicer, grpc_server)
 
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
@@ -409,7 +409,7 @@ def test_sdk_generation_user_agent_over_grpc(headers, expected_user_agent) -> No
 def test_sdk_generation_auth_bearer_over_grpc_with_header_override() -> None:
     servicer = _CapturingGenerationServicer()
     grpc_server = grpc.server(thread_pool=__import__("concurrent.futures").futures.ThreadPoolExecutor(max_workers=2))
-    sigil_pb2_grpc.add_GenerationIngestServiceServicer_to_server(servicer, grpc_server)
+    agento11y_pb2_grpc.add_GenerationIngestServiceServicer_to_server(servicer, grpc_server)
 
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
@@ -453,7 +453,7 @@ def test_grpc_metadata_keys_are_lowercased() -> None:
     """Mixed-case header keys must be lowercased for gRPC metadata (grpcio rejects uppercase)."""
     servicer = _CapturingGenerationServicer()
     grpc_server = grpc.server(thread_pool=__import__("concurrent.futures").futures.ThreadPoolExecutor(max_workers=2))
-    sigil_pb2_grpc.add_GenerationIngestServiceServicer_to_server(servicer, grpc_server)
+    agento11y_pb2_grpc.add_GenerationIngestServiceServicer_to_server(servicer, grpc_server)
 
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
@@ -591,11 +591,11 @@ def _assert_generation_json_payload(generation: dict[str, Any]) -> None:
     assert generation["agent_version"] == "v1.2.3"
 
 
-def _assert_generation_proto_payload(generation: sigil_pb2.Generation) -> None:
+def _assert_generation_proto_payload(generation: agento11y_pb2.Generation) -> None:
     assert generation.id == "gen-fixture-1"
     assert generation.conversation_id == "conv-fixture-1"
     assert generation.operation_name == "streamText"
-    assert generation.mode == sigil_pb2.GENERATION_MODE_STREAM
+    assert generation.mode == agento11y_pb2.GENERATION_MODE_STREAM
 
     assert len(generation.trace_id) == 32
     assert len(generation.span_id) == 16
@@ -613,20 +613,20 @@ def _assert_generation_proto_payload(generation: sigil_pb2.Generation) -> None:
     assert generation.thinking_enabled is False
 
     assert len(generation.input) == 1
-    assert generation.input[0].role == sigil_pb2.MESSAGE_ROLE_USER
+    assert generation.input[0].role == agento11y_pb2.MESSAGE_ROLE_USER
     assert len(generation.input[0].parts) == 1
     assert generation.input[0].parts[0].text == "hello"
 
     assert len(generation.output) == 2
 
-    assert generation.output[0].role == sigil_pb2.MESSAGE_ROLE_ASSISTANT
+    assert generation.output[0].role == agento11y_pb2.MESSAGE_ROLE_ASSISTANT
     assert len(generation.output[0].parts) == 2
     assert generation.output[0].parts[0].thinking == "think"
     assert generation.output[0].parts[1].tool_call.id == "tool-call-1"
     assert generation.output[0].parts[1].tool_call.name == "weather"
     assert generation.output[0].parts[1].tool_call.input_json == b'{"city":"Paris"}'
 
-    assert generation.output[1].role == sigil_pb2.MESSAGE_ROLE_TOOL
+    assert generation.output[1].role == agento11y_pb2.MESSAGE_ROLE_TOOL
     assert len(generation.output[1].parts) == 1
     assert generation.output[1].parts[0].tool_result.tool_call_id == "tool-call-1"
     assert generation.output[1].parts[0].tool_result.name == "weather"
@@ -661,7 +661,7 @@ def _assert_generation_proto_payload(generation: sigil_pb2.Generation) -> None:
     assert len(generation.raw_artifacts) == 2
 
     request_artifact = generation.raw_artifacts[0]
-    assert request_artifact.kind == sigil_pb2.ARTIFACT_KIND_REQUEST
+    assert request_artifact.kind == agento11y_pb2.ARTIFACT_KIND_REQUEST
     assert request_artifact.name == "request"
     assert request_artifact.content_type == "application/json"
     assert request_artifact.payload == b'{"request":true}'
@@ -669,7 +669,7 @@ def _assert_generation_proto_payload(generation: sigil_pb2.Generation) -> None:
     assert request_artifact.uri == "sigil://artifact/1"
 
     provider_event_artifact = generation.raw_artifacts[1]
-    assert provider_event_artifact.kind == sigil_pb2.ARTIFACT_KIND_PROVIDER_EVENT
+    assert provider_event_artifact.kind == agento11y_pb2.ARTIFACT_KIND_PROVIDER_EVENT
     assert provider_event_artifact.name == "event"
     assert provider_event_artifact.content_type == "application/json"
     assert provider_event_artifact.payload == b'{"event":true}'

@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
@@ -36,7 +36,7 @@ func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.L
 // pieces the SDK can't infer: HTTP protocol, the `/api/v1/generations:export`
 // path suffix, basic-auth mode, and the OTel tracer/meter wiring. cursor does
 // not pass a logger, so the SDK client stays silent.
-func buildClient(cfg config.Config, providers *otel.Providers) *sigil.Client {
+func buildClient(cfg config.Config, providers *otel.Providers) *agento11y.Client {
 	return sigilemit.NewClient(sigilemit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
@@ -51,7 +51,7 @@ func buildClient(cfg config.Config, providers *otel.Providers) *sigil.Client {
 //
 // Flushing/shutdown is the caller's responsibility — sessionEnd batches
 // multiple generations through one client.
-func emitGeneration(ctx context.Context, client *sigil.Client, frag *fragment.Fragment, mapped mapper.Mapped, logger *log.Logger) error {
+func emitGeneration(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, mapped mapper.Mapped, logger *log.Logger) error {
 	return sigilemit.Record(ctx, client, mapped.Start, mapped.Generation, mapped.CallError, func(genCtx context.Context) {
 		emitToolSpans(genCtx, client, frag, mapped.Generation, logger)
 	})
@@ -67,14 +67,14 @@ func emitGeneration(ctx context.Context, client *sigil.Client, frag *fragment.Fr
 // mode other than `full`), so by the time we emit, t.ToolInput/Output are
 // already empty in metadata_only / no_tool_content. The SDK additionally
 // honors Generation.ContentCapture when serializing the span.
-func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fragment, gen sigil.Generation, logger *log.Logger) {
+func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, gen agento11y.Generation, logger *log.Logger) {
 	for i := range frag.Tools {
 		t := &frag.Tools[i]
 		if t.ToolName == "" {
 			continue
 		}
 		startedAt, completedAt := sigilemit.ToolSpanWindow(t.CompletedAt, t.DurationMs, gen.CompletedAt)
-		_, toolRec := client.StartToolExecution(ctx, sigil.ToolExecutionStart{
+		_, toolRec := client.StartToolExecution(ctx, agento11y.ToolExecutionStart{
 			ToolName:        t.ToolName,
 			ToolCallID:      t.ToolUseID,
 			ToolType:        "function",
@@ -86,7 +86,7 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, frag *fragment.Fra
 			StartedAt:       startedAt,
 		})
 
-		end := sigil.ToolExecutionEnd{CompletedAt: completedAt}
+		end := agento11y.ToolExecutionEnd{CompletedAt: completedAt}
 		if len(t.ToolInput) > 0 {
 			end.Arguments = string(t.ToolInput)
 		}

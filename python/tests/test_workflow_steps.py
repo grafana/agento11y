@@ -20,7 +20,7 @@ from agento11y import (
 from agento11y.exporters.http import HTTPGenerationExporter, _normalize_endpoint
 from agento11y.exporters.noop import NoopGenerationExporter
 from agento11y.framework_handler import (
-    SigilFrameworkHandlerBase,
+    Agento11yFrameworkHandlerBase,
     _safe_serializable_dict,
 )
 from agento11y.models import (
@@ -412,9 +412,9 @@ class _DummyRecorder:
         return None
 
 
-def _make_handler(*, capture_workflow_steps: bool = True) -> tuple[SigilFrameworkHandlerBase, _CollectingClient]:
+def _make_handler(*, capture_workflow_steps: bool = True) -> tuple[Agento11yFrameworkHandlerBase, _CollectingClient]:
     client = _CollectingClient()
-    handler = SigilFrameworkHandlerBase(
+    handler = Agento11yFrameworkHandlerBase(
         client=client,  # type: ignore[arg-type]
         framework_name="langgraph",
         agent_name="my-pipeline",

@@ -13,11 +13,11 @@ pip install strands-agents
 
 ```python
 from agento11y import Client
-from agento11y_strands import with_sigil_strands_hooks
+from agento11y_strands import with_agento11y_strands_hooks
 from strands import Agent
 
 client = Client()
-agent_config = with_sigil_strands_hooks(
+agent_config = with_agento11y_strands_hooks(
     {"name": "support-agent"},
     client=client,
     provider_resolver="auto",
@@ -36,10 +36,10 @@ client.shutdown()
 
 ```python
 from agento11y import Client
-from agento11y_strands import with_sigil_strands_hooks
+from agento11y_strands import with_agento11y_strands_hooks
 
 client = Client()
-with_sigil_strands_hooks(agent, client=client, provider_resolver="auto")
+with_agento11y_strands_hooks(agent, client=client, provider_resolver="auto")
 ```
 
 ## Conversation Mapping
@@ -48,7 +48,7 @@ Conversation ID precedence:
 
 1. `conversation_id` / `session_id` / `group_id` from Strands `invocation_state`
 2. `thread_id` from Strands `invocation_state`
-3. deterministic fallback `sigil:framework:strands:<run_id>`
+3. deterministic fallback `agento11y:framework:strands:<run_id>`
 
 Pass a stable value per user conversation:
 

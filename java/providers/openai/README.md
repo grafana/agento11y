@@ -45,7 +45,7 @@ ChatCompletionCreateParams request = ChatCompletionCreateParams.builder()
     .build();
 
 ChatCompletion response = OpenAiChatCompletions.create(
-    sigilClient,
+    agento11yClient,
     request,
     params -> openAI.chat().completions().create(params),
     new OpenAiOptions()
@@ -65,7 +65,7 @@ ResponseCreateParams request = ResponseCreateParams.builder()
     .build();
 
 Response response = OpenAiResponses.create(
-    sigilClient,
+    agento11yClient,
     request,
     params -> openAI.responses().create(params),
     new OpenAiOptions()
@@ -79,7 +79,7 @@ Response response = OpenAiResponses.create(
 
 ```java
 CreateEmbeddingResponse embeddingResponse = OpenAiEmbeddings.create(
-    sigilClient,
+    agento11yClient,
     EmbeddingCreateParams.builder()
         .model("text-embedding-3-small")
         .inputOfArrayOfStrings(java.util.List.of("hello", "world"))
@@ -100,7 +100,7 @@ OpenAiOptions options = new OpenAiOptions()
     .setAgentName("assistant-openai")
     .setAgentVersion("1.0.0");
 
-var recorder = sigilClient.startGeneration(new GenerationStart()
+var recorder = agento11yClient.startGeneration(new GenerationStart()
     .setConversationId(options.getConversationId())
     .setAgentName(options.getAgentName())
     .setAgentVersion(options.getAgentVersion())

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
@@ -54,12 +54,12 @@ func TestEmitGenerationSendsCursorUserAgent(t *testing.T) {
 	mapped := mapper.MapFragment(mapper.Inputs{
 		Fragment:       frag,
 		Stop:           &mapper.StopInput{Status: "completed"},
-		ContentCapture: sigil.ContentCaptureModeMetadataOnly,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 		Now:            time.Now(),
 	})
 
 	ctx := context.Background()
-	client := buildClient(config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}, nil)
+	client := buildClient(config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, nil)
 	if err := emitGeneration(ctx, client, frag, mapped, nil); err != nil {
 		t.Fatalf("emitGeneration: %v", err)
 	}

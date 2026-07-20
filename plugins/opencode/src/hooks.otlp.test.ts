@@ -1,7 +1,7 @@
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { SigilOpencodeConfig } from "./config.js";
-import { _resetHookState, createSigilHooks } from "./hooks.js";
+import type { Agento11yOpencodeConfig } from "./config.js";
+import { _resetHookState, createAgento11yHooks } from "./hooks.js";
 
 const SIGIL_OPENCODE_SCOPE = "sigil-opencode";
 const SIGIL_OPERATION_DURATION_METRIC = "gen_ai.client.operation.duration";
@@ -48,7 +48,7 @@ async function startOtlpServer(): Promise<OtlpServer> {
   };
 }
 
-async function startSigilServer(): Promise<{
+async function startAgento11yServer(): Promise<{
   server: Server;
   baseUrl: string;
 }> {
@@ -180,7 +180,7 @@ const ENV_KEYS = [
   "SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT",
 ] as const;
 
-describe("createSigilHooks OTLP wiring", () => {
+describe("createAgento11yHooks OTLP wiring", () => {
   let otlp: OtlpServer;
   let sigil: { server: Server; baseUrl: string };
   let savedEnv: Record<string, string | undefined> = {};
@@ -192,7 +192,7 @@ describe("createSigilHooks OTLP wiring", () => {
       delete process.env[k];
     }
     otlp = await startOtlpServer();
-    sigil = await startSigilServer();
+    sigil = await startAgento11yServer();
   });
 
   afterEach(async () => {
@@ -215,7 +215,7 @@ describe("createSigilHooks OTLP wiring", () => {
       assistantParts,
     } = opencodeMessageFixture();
 
-    const config: SigilOpencodeConfig = {
+    const config: Agento11yOpencodeConfig = {
       endpoint: sigil.baseUrl,
       auth: { mode: "none" },
       agentName: "opencode",
@@ -236,8 +236,9 @@ describe("createSigilHooks OTLP wiring", () => {
       },
     } as any;
 
-    const hooks = await createSigilHooks(config, fakeClient);
-    if (!hooks) throw new Error("expected createSigilHooks to return hooks");
+    const hooks = await createAgento11yHooks(config, fakeClient);
+    if (!hooks)
+      throw new Error("expected createAgento11yHooks to return hooks");
 
     hooks.chatMessage(
       { sessionID },
@@ -407,7 +408,7 @@ describe("createSigilHooks OTLP wiring", () => {
       finish: "end_turn",
     };
 
-    const config: SigilOpencodeConfig = {
+    const config: Agento11yOpencodeConfig = {
       endpoint: sigil.baseUrl,
       auth: { mode: "none" },
       agentName: "opencode",
@@ -424,8 +425,9 @@ describe("createSigilHooks OTLP wiring", () => {
       session: { message: async () => ({ data: { parts: [] } }) },
     } as any;
 
-    const hooks = await createSigilHooks(config, fakeClient);
-    if (!hooks) throw new Error("expected createSigilHooks to return hooks");
+    const hooks = await createAgento11yHooks(config, fakeClient);
+    if (!hooks)
+      throw new Error("expected createAgento11yHooks to return hooks");
 
     hooks.chatMessage(
       { sessionID },

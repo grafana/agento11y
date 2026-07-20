@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
 import { trace } from '@opentelemetry/api';
-import { defaultConfig, HookDeniedError, SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient, defaultConfig, HookDeniedError } from '../.test-dist/index.js';
 
 test('evaluateHook returns allow without contacting server when disabled', async () => {
   const client = newClient({
@@ -351,7 +351,7 @@ test('evaluateHook throws on HTTP error when failOpen is false', async () => {
           context: { model: { provider: 'openai', name: 'gpt-4o' } },
           input: {},
         }),
-      /sigil hook evaluation failed/,
+      /agento11y hook evaluation failed/,
     );
   } finally {
     await client.shutdown();
@@ -517,7 +517,7 @@ test('empty phases array falls back to default preflight phase', async () => {
 
 function newClient(options) {
   const defaults = defaultConfig();
-  return new SigilClient({
+  return new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-hooks-test'),
     generationExport: {
       ...defaults.generationExport,

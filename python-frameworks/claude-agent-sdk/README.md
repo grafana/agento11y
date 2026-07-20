@@ -18,13 +18,13 @@ import asyncio
 
 from claude_agent_sdk import ClaudeAgentOptions
 from agento11y import Client
-from agento11y_claude_agent import sigil_query
+from agento11y_claude_agent import agento11y_query
 
 
 async def main():
     client = Client()
     try:
-        async for message in sigil_query(
+        async for message in agento11y_query(
             prompt="List the files in this directory.",
             options=ClaudeAgentOptions(
                 permission_mode="default",
@@ -49,13 +49,13 @@ For bidirectional sessions, attach hooks to your `ClaudeAgentOptions` and pass e
 ```python
 from claude_agent_sdk import ClaudeAgentOptions
 from agento11y import Client
-from agento11y_claude_agent import SigilClaudeSDKClient
+from agento11y_claude_agent import Agento11yClaudeSDKClient
 
-sigil = Client()
+agento11y = Client()
 options = ClaudeAgentOptions(permission_mode="default")
 
-async with SigilClaudeSDKClient(
-    client=sigil,
+async with Agento11yClaudeSDKClient(
+    client=agento11y,
     options=options,
     conversation_id="customer-42",
     agent_name="support-agent",
@@ -66,12 +66,12 @@ async with SigilClaudeSDKClient(
 
     await claude.set_permission_mode("acceptEdits")
 
-sigil.shutdown()
+agento11y.shutdown()
 ```
 
-`SigilClaudeSDKClient` forwards `query()`, `receive_response()`, `receive_messages()`, `set_permission_mode()`,
-`rewind_files()`, `interrupt()`, and `disconnect()` to the wrapped Claude client. Use `sigil_query()` for simple
-single-query scripts and `SigilClaudeSDKClient` when you need Claude SDK session control such as permission mode changes,
+`Agento11yClaudeSDKClient` forwards `query()`, `receive_response()`, `receive_messages()`, `set_permission_mode()`,
+`rewind_files()`, `interrupt()`, and `disconnect()` to the wrapped Claude client. Use `agento11y_query()` for simple
+single-query scripts and `Agento11yClaudeSDKClient` when you need Claude SDK session control such as permission mode changes,
 resume/checkpoint flows, or multiple queries in one client session.
 
 ## Guards
@@ -95,12 +95,12 @@ client = Client(ClientConfig(hooks=HooksConfig(enabled=True)))
 
 Conversation ID precedence:
 
-1. Explicit `conversation_id` passed to the Sigil handler or `sigil_query`
+1. Explicit `conversation_id` passed to the Sigil handler or `agento11y_query`
 2. `ClaudeAgentOptions.session_id`
 3. `ClaudeAgentOptions.resume`
-4. unique fallback `sigil:framework:claude-agent-sdk:<run_id>`
+4. unique fallback `agento11y:framework:claude-agent-sdk:<run_id>`
 
-`SigilClaudeSDKClient` uses the same explicit `conversation_id`, `session_id`, and `resume` precedence. If none are
+`Agento11yClaudeSDKClient` uses the same explicit `conversation_id`, `session_id`, and `resume` precedence. If none are
 set, it creates one client-level fallback conversation ID and reuses it for every query in that client session so
 multi-query sessions stay grouped.
 
@@ -125,7 +125,7 @@ Metadata includes:
 
 ## Claude Native OpenTelemetry
 
-This package records Sigil generations and tool spans through the Sigil Python SDK. The Claude Agent SDK can also make the Claude Code CLI export its native OpenTelemetry spans, metrics, and logs directly to your OTLP collector. Configure those variables in the parent process before calling `sigil_query`; the Python Claude Agent SDK merges `options.env` on top of the inherited environment.
+This package records Sigil generations and tool spans through the Sigil Python SDK. The Claude Agent SDK can also make the Claude Code CLI export its native OpenTelemetry spans, metrics, and logs directly to your OTLP collector. Configure those variables in the parent process before calling `agento11y_query`; the Python Claude Agent SDK merges `options.env` on top of the inherited environment.
 
 For Grafana Cloud, the important Claude variables are:
 

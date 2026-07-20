@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/fragment"
@@ -32,7 +32,7 @@ import (
 func TestSessionStartWithoutTurnIDSeedsLaterTurn(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(io.Discard, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 
 	SessionStart(Payload{
 		HookEventName:  "SessionStart",
@@ -63,7 +63,7 @@ func TestSessionStartWithoutTurnIDSeedsLaterTurn(t *testing.T) {
 func TestSessionStartRecordsSubagentLink(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(io.Discard, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 	transcriptPath := writeHookTranscript(t, `{"type":"session_meta","payload":{"id":"child","thread_source":"subagent","agent_role":"reviewer","agent_nickname":"Dalton","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent","depth":1}}}}}`)
 
 	SessionStart(Payload{
@@ -114,7 +114,7 @@ func TestRedactSpanContentRedactsSensitiveJSONKeys(t *testing.T) {
 func TestPostToolUseLeavesStatusUnknownWhenCodexDoesNotProvideOne(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(io.Discard, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 
 	PostToolUse(Payload{
 		HookEventName: "PostToolUse",
@@ -148,7 +148,7 @@ func TestNormalizeStatusIgnoresFalsyErrorValues(t *testing.T) {
 func TestPostToolUseInfersKnownFailureShapes(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(io.Discard, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 
 	PostToolUse(Payload{
 		HookEventName: "PostToolUse",
@@ -171,7 +171,7 @@ func TestPostToolUseInfersKnownFailureShapes(t *testing.T) {
 func TestPostToolUseInfersStatusFromToolOutputFallback(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(io.Discard, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 
 	PostToolUse(Payload{
 		HookEventName: "PostToolUse",
@@ -194,7 +194,7 @@ func TestPostToolUseInfersStatusFromToolOutputFallback(t *testing.T) {
 func TestPostToolUseDropsErrorMessageOutsideFullMode(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(io.Discard, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 
 	PostToolUse(Payload{
 		HookEventName: "PostToolUse",
@@ -220,7 +220,7 @@ func TestPostToolUseDropsErrorMessageOutsideFullMode(t *testing.T) {
 func TestPostToolUseRedactsErrorMessageInFullMode(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(io.Discard, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 
 	PostToolUse(Payload{
 		HookEventName: "PostToolUse",
@@ -269,7 +269,7 @@ func TestStopSuccessfulExportDeletesFragmentAndUsesAuth(t *testing.T) {
 		t.Fatalf("Update: %v", err)
 	}
 
-	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: sigil.ContentCaptureModeFull}, logger)
+	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeFull}, logger)
 
 	if got := fragment.LoadTolerant("sess", "turn", logger); got != nil {
 		t.Fatalf("expected fragment deleted after successful export, got %+v", got)
@@ -321,7 +321,7 @@ func TestStopLocalEndpointAllowsMissingCredentials(t *testing.T) {
 				return true
 			}))
 
-			Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: sigil.ContentCaptureModeFull}, logger)
+			Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeFull}, logger)
 
 			assert.Equal(t, int64(1), requestCount.Load())
 			wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("local:local"))
@@ -370,7 +370,7 @@ func TestStopExportsRolloutTokenUsage(t *testing.T) {
 		t.Fatalf("Update: %v", err)
 	}
 
-	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}, logger)
+	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger)
 
 	if requestCount.Load() != 1 {
 		t.Fatalf("request count = %d, want 1", requestCount.Load())
@@ -418,7 +418,7 @@ func TestStopResolvesSubagentParentGeneration(t *testing.T) {
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 
 	parentTranscript := writeHookTranscript(t,
 		`{"type":"session_meta","payload":{"id":"parent"}}`,
@@ -462,7 +462,7 @@ func TestStopMissingCredentialsDiscardsFragment(t *testing.T) {
 		t.Fatalf("Update: %v", err)
 	}
 
-	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}, logger)
+	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger)
 
 	if got := fragment.LoadTolerant("sess", "turn", logger); got != nil {
 		t.Fatalf("expected fragment discarded without credentials, got %+v", got)
@@ -491,7 +491,7 @@ func TestStopExportFailureRetainsFragmentAndUsesSDKRetryDefaults(t *testing.T) {
 	}
 
 	start := time.Now()
-	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}, logger)
+	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger)
 
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("Stop took %s on immediate export failure", elapsed)
@@ -503,7 +503,7 @@ func TestStopExportFailureRetainsFragmentAndUsesSDKRetryDefaults(t *testing.T) {
 	if !got.PendingRetry {
 		t.Fatal("expected fragment marked PendingRetry after export failure")
 	}
-	wantAttempts := int64(sigil.DefaultConfig().GenerationExport.MaxRetries + 1)
+	wantAttempts := int64(agento11y.DefaultConfig().GenerationExport.MaxRetries + 1)
 	if requestCount.Load() != wantAttempts {
 		t.Fatalf("request count = %d, want %d attempts from SDK defaults", requestCount.Load(), wantAttempts)
 	}
@@ -547,7 +547,7 @@ func TestStopRetriesPendingFragmentsFromPriorTurns(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed new turn: %v", err)
 	}
-	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "new-turn"}, config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}, logger)
+	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "new-turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger)
 
 	if fragment.LoadTolerant("sess", "new-turn", logger) != nil {
 		t.Error("new-turn fragment should be deleted after successful Stop")
@@ -592,7 +592,7 @@ func TestStopFlushFailurePreservesSweptRetries(t *testing.T) {
 		t.Fatalf("seed new turn: %v", err)
 	}
 
-	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "new-turn"}, config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}, logger)
+	Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "new-turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger)
 
 	old := fragment.LoadTolerant("sess", "old-turn", logger)
 	if old == nil {
@@ -678,7 +678,7 @@ func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 		t.Fatalf("seed new turn: %v", err)
 	}
 
-	Stop(Payload{HookEventName: "Stop", SessionID: "child", TurnID: "new-turn"}, config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}, logger)
+	Stop(Payload{HookEventName: "Stop", SessionID: "child", TurnID: "new-turn"}, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, logger)
 
 	type exportedGen struct {
 		ID                  string         `json:"id"`

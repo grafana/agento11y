@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import type { SigilOpencodeConfig } from "./config.js";
-import { createSigilHooks } from "./hooks.js";
+import type { Agento11yOpencodeConfig } from "./config.js";
+import { createAgento11yHooks } from "./hooks.js";
 
 type HookServer = {
   server: Server;
@@ -45,7 +45,7 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
-function config(endpoint: string): SigilOpencodeConfig {
+function config(endpoint: string): Agento11yOpencodeConfig {
   return {
     endpoint,
     auth: { mode: "none" },
@@ -72,7 +72,7 @@ describe("opencode guards", () => {
     });
     servers.push(hookServer.server);
 
-    const hooks = await createSigilHooks(config(hookServer.baseUrl), {
+    const hooks = await createAgento11yHooks(config(hookServer.baseUrl), {
       session: { message: async () => ({ data: { parts: [] } }) },
     } as any);
     if (!hooks) throw new Error("expected hooks");
@@ -160,7 +160,7 @@ describe("opencode guards", () => {
     });
     servers.push(hookServer.server);
 
-    const hooks = await createSigilHooks(config(hookServer.baseUrl), {
+    const hooks = await createAgento11yHooks(config(hookServer.baseUrl), {
       session: { message: async () => ({ data: { parts: [] } }) },
     } as any);
     if (!hooks) throw new Error("expected hooks");
@@ -196,7 +196,7 @@ describe("opencode guards", () => {
     });
     servers.push(hookServer.server);
 
-    const hooks = await createSigilHooks(config(hookServer.baseUrl), {
+    const hooks = await createAgento11yHooks(config(hookServer.baseUrl), {
       session: { message: async () => ({ data: { parts: [] } }) },
     } as any);
     if (!hooks) throw new Error("expected hooks");
@@ -232,7 +232,7 @@ describe("opencode guards", () => {
     });
     servers.push(hookServer.server);
 
-    const hooks = await createSigilHooks(config(hookServer.baseUrl), {
+    const hooks = await createAgento11yHooks(config(hookServer.baseUrl), {
       session: { message: async () => ({ data: { parts: [] } }) },
     } as any);
     if (!hooks) throw new Error("expected hooks");
@@ -275,7 +275,7 @@ describe("opencode guards", () => {
     });
     servers.push(hookServer.server);
 
-    const hooks = await createSigilHooks(config(hookServer.baseUrl), {
+    const hooks = await createAgento11yHooks(config(hookServer.baseUrl), {
       session: { message: async () => ({ data: { parts: [] } }) },
     } as any);
     if (!hooks) throw new Error("expected hooks");
@@ -302,7 +302,7 @@ describe("opencode guards", () => {
     });
     servers.push(hookServer.server);
 
-    const hooks = await createSigilHooks(config(hookServer.baseUrl), {
+    const hooks = await createAgento11yHooks(config(hookServer.baseUrl), {
       session: { message: async () => ({ data: { parts: [] } }) },
     } as any);
     if (!hooks) throw new Error("expected hooks");

@@ -17,8 +17,8 @@ if err := anthropic.CheckEmbeddingsSupport(); err != nil {
 
 ## Scope
 - One-liner wrappers:
-  - `Message(ctx, sigilClient, provider, req, opts...)`
-  - `MessageStream(ctx, sigilClient, provider, req, opts...)`
+  - `Message(ctx, agento11yClient, provider, req, opts...)`
+  - `MessageStream(ctx, agento11yClient, provider, req, opts...)`
 - Embedding capability gate:
   - `CheckEmbeddingsSupport()`
 - Request/response mapper:
@@ -36,7 +36,7 @@ if err := anthropic.CheckEmbeddingsSupport(); err != nil {
 
 ## Wrapper (one-liner)
 ```go
-resp, err := anthropic.Message(ctx, sigilClient, providerClient, req,
+resp, err := anthropic.Message(ctx, agento11yClient, providerClient, req,
 	anthropic.WithConversationID("conv-1"),
 	anthropic.WithConversationTitle("Weather follow-up"),
 	anthropic.WithAgentName("assistant-anthropic"),
@@ -50,11 +50,11 @@ _ = resp.Content[0].Text
 
 ## Defer Pattern (full control)
 ```go
-ctx, rec := sigilClient.StartGeneration(ctx, sigil.GenerationStart{
+ctx, rec := agento11yClient.StartGeneration(ctx, agento11y.GenerationStart{
 	ConversationID: "conv-9b2f",
 	AgentName:      "assistant-anthropic",
 	AgentVersion:   "1.0.0",
-	Model:          sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-5"},
+	Model:          agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-5"},
 })
 defer rec.End()
 
@@ -69,8 +69,8 @@ rec.SetResult(anthropic.FromRequestResponse(req, resp))
 
 ## Streaming Defer Pattern
 ```go
-ctx, rec := sigilClient.StartStreamingGeneration(ctx, sigil.GenerationStart{
-	Model: sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-5"},
+ctx, rec := agento11yClient.StartStreamingGeneration(ctx, agento11y.GenerationStart{
+	Model: agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-5"},
 })
 defer rec.End()
 

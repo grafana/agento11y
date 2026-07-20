@@ -8,26 +8,26 @@ import (
 
 	"google.golang.org/genai"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 const thinkingBudgetMetadataKey = "agento11y.gen_ai.request.thinking.budget_tokens"
 const thinkingLevelMetadataKey = "agento11y.gen_ai.request.thinking.level"
 const usageToolUsePromptTokensMetadataKey = "agento11y.gen_ai.usage.tool_use_prompt_tokens"
 
-// FromRequestResponse maps a Gemini request/response pair to sigil.Generation.
+// FromRequestResponse maps a Gemini request/response pair to agento11y.Generation.
 func FromRequestResponse(
 	model string,
 	contents []*genai.Content,
 	config *genai.GenerateContentConfig,
 	resp *genai.GenerateContentResponse,
 	opts ...Option,
-) (sigil.Generation, error) {
+) (agento11y.Generation, error) {
 	if resp == nil {
-		return sigil.Generation{}, errors.New("response is required")
+		return agento11y.Generation{}, errors.New("response is required")
 	}
 	if strings.TrimSpace(model) == "" {
-		return sigil.Generation{}, errors.New("request model is required")
+		return agento11y.Generation{}, errors.New("request model is required")
 	}
 
 	options := applyOptions(opts)
@@ -36,30 +36,30 @@ func FromRequestResponse(
 	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapRequestControls(config)
 	thinkingLevel := extractThinkingLevel(config)
 
-	artifacts := make([]sigil.Artifact, 0, 3)
+	artifacts := make([]agento11y.Artifact, 0, 3)
 	if options.includeRequestArtifact {
 		requestPayload := map[string]any{
 			"model":    model,
 			"contents": contents,
 			"config":   config,
 		}
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindRequest, "gemini.generate_content.request", requestPayload)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindRequest, "gemini.generate_content.request", requestPayload)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeResponseArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindResponse, "gemini.generate_content.response", resp)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindResponse, "gemini.generate_content.response", resp)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeToolsArtifact && hasFunctionTools(config) {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindTools, "gemini.generate_content.tools", config.Tools)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindTools, "gemini.generate_content.tools", config.Tools)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
@@ -75,12 +75,12 @@ func FromRequestResponse(
 	metadata = mergeThinkingLevelMetadata(metadata, thinkingLevel)
 	metadata = mergeGeminiUsageMetadata(metadata, resp.UsageMetadata)
 
-	generation := sigil.Generation{
+	generation := agento11y.Generation{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: model},
 		ResponseID:        resp.ResponseID,
 		ResponseModel:     resp.ModelVersion,
 		SystemPrompt:      extractSystemPrompt(config),
@@ -100,22 +100,22 @@ func FromRequestResponse(
 	}
 
 	if err := generation.Validate(); err != nil {
-		return sigil.Generation{}, err
+		return agento11y.Generation{}, err
 	}
 
 	return generation, nil
 }
 
-// EmbeddingFromResponse maps a Gemini embed-content request/response pair to sigil.EmbeddingResult.
+// EmbeddingFromResponse maps a Gemini embed-content request/response pair to agento11y.EmbeddingResult.
 func EmbeddingFromResponse(
 	model string,
 	contents []*genai.Content,
 	config *genai.EmbedContentConfig,
 	resp *genai.EmbedContentResponse,
-) sigil.EmbeddingResult {
+) agento11y.EmbeddingResult {
 	_ = model
 
-	result := sigil.EmbeddingResult{
+	result := agento11y.EmbeddingResult{
 		InputCount: embeddingInputCount(contents),
 		InputTexts: embeddingInputTexts(contents),
 	}
@@ -151,21 +151,21 @@ func EmbeddingFromResponse(
 	return result
 }
 
-func mapContents(contents []*genai.Content) []sigil.Message {
+func mapContents(contents []*genai.Content) []agento11y.Message {
 	if len(contents) == 0 {
 		return nil
 	}
 
-	out := make([]sigil.Message, 0, len(contents)+1)
+	out := make([]agento11y.Message, 0, len(contents)+1)
 	for _, content := range contents {
 		if content == nil {
 			continue
 		}
 
 		role := mapRole(content.Role)
-		roleParts := make([]sigil.Part, 0, len(content.Parts))
-		assistantParts := make([]sigil.Part, 0, 1)
-		toolParts := make([]sigil.Part, 0, 1)
+		roleParts := make([]agento11y.Part, 0, len(content.Parts))
+		assistantParts := make([]agento11y.Part, 0, 1)
+		toolParts := make([]agento11y.Part, 0, 1)
 
 		for _, part := range content.Parts {
 			if part == nil {
@@ -173,21 +173,21 @@ func mapContents(contents []*genai.Content) []sigil.Message {
 			}
 
 			if text := part.Text; text != "" {
-				if part.Thought && role == sigil.RoleAssistant {
-					roleParts = append(roleParts, sigil.ThinkingPart(text))
+				if part.Thought && role == agento11y.RoleAssistant {
+					roleParts = append(roleParts, agento11y.ThinkingPart(text))
 				} else {
-					roleParts = append(roleParts, sigil.TextPart(text))
+					roleParts = append(roleParts, agento11y.TextPart(text))
 				}
 			}
 
 			if part.FunctionCall != nil {
-				call := sigil.ToolCallPart(sigil.ToolCall{
+				call := agento11y.ToolCallPart(agento11y.ToolCall{
 					ID:        part.FunctionCall.ID,
 					Name:      part.FunctionCall.Name,
 					InputJSON: marshalAny(part.FunctionCall.Args),
 				})
 				call.Metadata.ProviderType = "function_call"
-				if role == sigil.RoleAssistant {
+				if role == agento11y.RoleAssistant {
 					roleParts = append(roleParts, call)
 				} else {
 					assistantParts = append(assistantParts, call)
@@ -195,7 +195,7 @@ func mapContents(contents []*genai.Content) []sigil.Message {
 			}
 
 			if part.FunctionResponse != nil {
-				result := sigil.ToolResultPart(sigil.ToolResult{
+				result := agento11y.ToolResultPart(agento11y.ToolResult{
 					ToolCallID:  part.FunctionResponse.ID,
 					Name:        part.FunctionResponse.Name,
 					ContentJSON: marshalAny(part.FunctionResponse.Response),
@@ -206,13 +206,13 @@ func mapContents(contents []*genai.Content) []sigil.Message {
 		}
 
 		if len(roleParts) > 0 {
-			out = append(out, sigil.Message{Role: role, Parts: roleParts})
+			out = append(out, agento11y.Message{Role: role, Parts: roleParts})
 		}
 		if len(assistantParts) > 0 {
-			out = append(out, sigil.Message{Role: sigil.RoleAssistant, Parts: assistantParts})
+			out = append(out, agento11y.Message{Role: agento11y.RoleAssistant, Parts: assistantParts})
 		}
 		if len(toolParts) > 0 {
-			out = append(out, sigil.Message{Role: sigil.RoleTool, Parts: toolParts})
+			out = append(out, agento11y.Message{Role: agento11y.RoleTool, Parts: toolParts})
 		}
 	}
 
@@ -262,12 +262,12 @@ func embeddingContentText(content *genai.Content) string {
 	return strings.Join(chunks, "\n")
 }
 
-func mapCandidates(candidates []*genai.Candidate) ([]sigil.Message, string) {
+func mapCandidates(candidates []*genai.Candidate) ([]agento11y.Message, string) {
 	if len(candidates) == 0 {
 		return nil, ""
 	}
 
-	out := make([]sigil.Message, 0, len(candidates))
+	out := make([]agento11y.Message, 0, len(candidates))
 	stopReason := ""
 	for _, candidate := range candidates {
 		if candidate == nil {
@@ -284,12 +284,12 @@ func mapCandidates(candidates []*genai.Candidate) ([]sigil.Message, string) {
 	return out, stopReason
 }
 
-func mapTools(config *genai.GenerateContentConfig) []sigil.ToolDefinition {
+func mapTools(config *genai.GenerateContentConfig) []agento11y.ToolDefinition {
 	if config == nil || len(config.Tools) == 0 {
 		return nil
 	}
 
-	out := make([]sigil.ToolDefinition, 0, len(config.Tools))
+	out := make([]agento11y.ToolDefinition, 0, len(config.Tools))
 	for _, tool := range config.Tools {
 		if tool == nil {
 			continue
@@ -298,7 +298,7 @@ func mapTools(config *genai.GenerateContentConfig) []sigil.ToolDefinition {
 			if declaration == nil || strings.TrimSpace(declaration.Name) == "" {
 				continue
 			}
-			definition := sigil.ToolDefinition{
+			definition := agento11y.ToolDefinition{
 				Name:        declaration.Name,
 				Description: declaration.Description,
 				Type:        "function",
@@ -315,9 +315,9 @@ func mapTools(config *genai.GenerateContentConfig) []sigil.ToolDefinition {
 	return out
 }
 
-func mapUsage(usage *genai.GenerateContentResponseUsageMetadata) sigil.TokenUsage {
+func mapUsage(usage *genai.GenerateContentResponseUsageMetadata) agento11y.TokenUsage {
 	if usage == nil {
-		return sigil.TokenUsage{}
+		return agento11y.TokenUsage{}
 	}
 
 	totalTokens := int64(usage.TotalTokenCount)
@@ -327,7 +327,7 @@ func mapUsage(usage *genai.GenerateContentResponseUsageMetadata) sigil.TokenUsag
 		totalTokens = int64(usage.PromptTokenCount) + int64(usage.CandidatesTokenCount) + toolUsePromptTokens + reasoningTokens
 	}
 
-	return sigil.TokenUsage{
+	return agento11y.TokenUsage{
 		InputTokens:          int64(usage.PromptTokenCount),
 		OutputTokens:         int64(usage.CandidatesTokenCount),
 		TotalTokens:          totalTokens,
@@ -336,14 +336,14 @@ func mapUsage(usage *genai.GenerateContentResponseUsageMetadata) sigil.TokenUsag
 	}
 }
 
-func mapRole(role string) sigil.Role {
+func mapRole(role string) agento11y.Role {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case "model", "assistant":
-		return sigil.RoleAssistant
+		return agento11y.RoleAssistant
 	case "tool":
-		return sigil.RoleTool
+		return agento11y.RoleTool
 	default:
-		return sigil.RoleUser
+		return agento11y.RoleUser
 	}
 }
 

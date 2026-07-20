@@ -6,7 +6,7 @@ import (
 	"log"
 	"testing"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
@@ -19,7 +19,7 @@ import (
 func TestPostToolUse_DropsContentInMetadataOnly(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(&bytes.Buffer{}, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 
 	PostToolUse(Payload{
 		HookEventName:  "postToolUse",
@@ -55,7 +55,7 @@ func TestPostToolUse_DropsContentInMetadataOnly(t *testing.T) {
 func TestPostToolUse_KeepsContentInFullMode(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(&bytes.Buffer{}, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 
 	PostToolUse(Payload{
 		HookEventName:  "postToolUse",
@@ -83,7 +83,7 @@ func TestPostToolUse_KeepsContentInFullMode(t *testing.T) {
 func TestPostToolUseFailure_RecordsErrorStatusAndMessage(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(&bytes.Buffer{}, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 
 	cases := []struct {
 		name     string
@@ -125,7 +125,7 @@ func TestPostToolUse_MissingIDsSilent(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	var buf bytes.Buffer
 	logger := log.New(&buf, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 	PostToolUse(Payload{HookEventName: "postToolUse"}, cfg, logger, false)
 	if !bytes.Contains(buf.Bytes(), []byte("missing")) {
 		t.Errorf("expected 'missing' log; got %q", buf.String())

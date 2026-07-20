@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 const metadataKeyConversationTitle = "agento11y.conversation.title"
@@ -58,8 +58,8 @@ type storedUsage struct {
 	ReasoningTokens       protoInt64 `json:"reasoning_tokens,omitempty"`
 }
 
-func (u storedUsage) toSDK() sigil.TokenUsage {
-	return sigil.TokenUsage{
+func (u storedUsage) toSDK() agento11y.TokenUsage {
+	return agento11y.TokenUsage{
 		InputTokens:           u.InputTokens.int64(),
 		OutputTokens:          u.OutputTokens.int64(),
 		TotalTokens:           u.TotalTokens.int64(),
@@ -70,20 +70,20 @@ func (u storedUsage) toSDK() sigil.TokenUsage {
 }
 
 type storedGeneration struct {
-	ID                string          `json:"id,omitempty"`
-	ConversationID    string          `json:"conversation_id,omitempty"`
-	ConversationTitle string          `json:"conversation_title,omitempty"`
-	AgentName         string          `json:"agent_name,omitempty"`
-	Model             sigil.ModelRef  `json:"model,omitzero"`
-	ResponseModel     string          `json:"response_model,omitempty"`
-	Input             []storedMessage `json:"input,omitempty"`
-	Output            []storedMessage `json:"output,omitempty"`
-	Usage             storedUsage     `json:"usage,omitzero"`
-	StopReason        string          `json:"stop_reason,omitempty"`
-	StartedAt         time.Time       `json:"started_at,omitzero"`
-	CompletedAt       time.Time       `json:"completed_at,omitzero"`
-	Metadata          map[string]any  `json:"metadata,omitempty"`
-	CallError         string          `json:"call_error,omitempty"`
+	ID                string             `json:"id,omitempty"`
+	ConversationID    string             `json:"conversation_id,omitempty"`
+	ConversationTitle string             `json:"conversation_title,omitempty"`
+	AgentName         string             `json:"agent_name,omitempty"`
+	Model             agento11y.ModelRef `json:"model,omitzero"`
+	ResponseModel     string             `json:"response_model,omitempty"`
+	Input             []storedMessage    `json:"input,omitempty"`
+	Output            []storedMessage    `json:"output,omitempty"`
+	Usage             storedUsage        `json:"usage,omitzero"`
+	StopReason        string             `json:"stop_reason,omitempty"`
+	StartedAt         time.Time          `json:"started_at,omitzero"`
+	CompletedAt       time.Time          `json:"completed_at,omitzero"`
+	Metadata          map[string]any     `json:"metadata,omitempty"`
+	CallError         string             `json:"call_error,omitempty"`
 }
 
 func (g storedGeneration) title() string {
@@ -106,11 +106,11 @@ func (g storedGeneration) modelName() string {
 	return g.Model.Name
 }
 
-func (g storedGeneration) inputMessages() []sigil.Message {
+func (g storedGeneration) inputMessages() []agento11y.Message {
 	return storedMessagesToSDK(g.Input)
 }
 
-func (g storedGeneration) outputMessages() []sigil.Message {
+func (g storedGeneration) outputMessages() []agento11y.Message {
 	return storedMessagesToSDK(g.Output)
 }
 
@@ -120,15 +120,15 @@ type storedMessage struct {
 	Parts []storedPart `json:"parts"`
 }
 
-func storedMessagesToSDK(in []storedMessage) []sigil.Message {
+func storedMessagesToSDK(in []storedMessage) []agento11y.Message {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]sigil.Message, 0, len(in))
+	out := make([]agento11y.Message, 0, len(in))
 	for _, m := range in {
-		msg := sigil.Message{Role: storedRoleToSDK(m.Role), Name: m.Name}
+		msg := agento11y.Message{Role: storedRoleToSDK(m.Role), Name: m.Name}
 		if len(m.Parts) > 0 {
-			msg.Parts = make([]sigil.Part, 0, len(m.Parts))
+			msg.Parts = make([]agento11y.Part, 0, len(m.Parts))
 			for _, p := range m.Parts {
 				part, ok := p.toSDK()
 				if ok {
@@ -141,63 +141,63 @@ func storedMessagesToSDK(in []storedMessage) []sigil.Message {
 	return out
 }
 
-func storedRoleToSDK(role string) sigil.Role {
+func storedRoleToSDK(role string) agento11y.Role {
 	switch role {
-	case string(sigil.RoleUser), "MESSAGE_ROLE_USER":
-		return sigil.RoleUser
-	case string(sigil.RoleAssistant), "MESSAGE_ROLE_ASSISTANT":
-		return sigil.RoleAssistant
-	case string(sigil.RoleTool), "MESSAGE_ROLE_TOOL":
-		return sigil.RoleTool
+	case string(agento11y.RoleUser), "MESSAGE_ROLE_USER":
+		return agento11y.RoleUser
+	case string(agento11y.RoleAssistant), "MESSAGE_ROLE_ASSISTANT":
+		return agento11y.RoleAssistant
+	case string(agento11y.RoleTool), "MESSAGE_ROLE_TOOL":
+		return agento11y.RoleTool
 	default:
 		return ""
 	}
 }
 
 type storedPart struct {
-	Kind       sigil.PartKind     `json:"kind,omitempty"`
-	Text       *string            `json:"text,omitempty"`
-	Thinking   *string            `json:"thinking,omitempty"`
-	ToolCall   *storedToolCall    `json:"tool_call,omitempty"`
-	ToolResult *storedToolResult  `json:"tool_result,omitempty"`
-	Media      *sigil.Media       `json:"media,omitempty"`
-	Metadata   sigil.PartMetadata `json:"metadata,omitzero"`
+	Kind       agento11y.PartKind     `json:"kind,omitempty"`
+	Text       *string                `json:"text,omitempty"`
+	Thinking   *string                `json:"thinking,omitempty"`
+	ToolCall   *storedToolCall        `json:"tool_call,omitempty"`
+	ToolResult *storedToolResult      `json:"tool_result,omitempty"`
+	Media      *agento11y.Media       `json:"media,omitempty"`
+	Metadata   agento11y.PartMetadata `json:"metadata,omitzero"`
 }
 
-func (p storedPart) toSDK() (sigil.Part, bool) {
-	part := sigil.Part{Kind: p.Kind, Metadata: p.Metadata}
+func (p storedPart) toSDK() (agento11y.Part, bool) {
+	part := agento11y.Part{Kind: p.Kind, Metadata: p.Metadata}
 	switch {
-	case p.Kind == sigil.PartKindText || p.Text != nil:
-		part.Kind = sigil.PartKindText
+	case p.Kind == agento11y.PartKindText || p.Text != nil:
+		part.Kind = agento11y.PartKindText
 		if p.Text != nil {
 			part.Text = *p.Text
 		}
-	case p.Kind == sigil.PartKindThinking || p.Thinking != nil:
-		part.Kind = sigil.PartKindThinking
+	case p.Kind == agento11y.PartKindThinking || p.Thinking != nil:
+		part.Kind = agento11y.PartKindThinking
 		if p.Thinking != nil {
 			part.Thinking = *p.Thinking
 		}
-	case p.Kind == sigil.PartKindToolCall || p.ToolCall != nil:
+	case p.Kind == agento11y.PartKindToolCall || p.ToolCall != nil:
 		if p.ToolCall == nil {
-			return sigil.Part{}, false
+			return agento11y.Part{}, false
 		}
-		part.Kind = sigil.PartKindToolCall
+		part.Kind = agento11y.PartKindToolCall
 		part.ToolCall = p.ToolCall.toSDK()
-	case p.Kind == sigil.PartKindToolResult || p.ToolResult != nil:
+	case p.Kind == agento11y.PartKindToolResult || p.ToolResult != nil:
 		if p.ToolResult == nil {
-			return sigil.Part{}, false
+			return agento11y.Part{}, false
 		}
-		part.Kind = sigil.PartKindToolResult
+		part.Kind = agento11y.PartKindToolResult
 		part.ToolResult = p.ToolResult.toSDK()
-	case p.Kind == sigil.PartKindMedia || p.Media != nil:
+	case p.Kind == agento11y.PartKindMedia || p.Media != nil:
 		if p.Media == nil {
-			return sigil.Part{}, false
+			return agento11y.Part{}, false
 		}
-		part.Kind = sigil.PartKindMedia
+		part.Kind = agento11y.PartKindMedia
 		media := *p.Media
 		part.Media = &media
 	default:
-		return sigil.Part{}, false
+		return agento11y.Part{}, false
 	}
 	return part, true
 }
@@ -208,8 +208,8 @@ type storedToolCall struct {
 	InputJSON storedRawJSON `json:"input_json,omitempty"`
 }
 
-func (c storedToolCall) toSDK() *sigil.ToolCall {
-	return &sigil.ToolCall{ID: c.ID, Name: c.Name, InputJSON: c.InputJSON.raw()}
+func (c storedToolCall) toSDK() *agento11y.ToolCall {
+	return &agento11y.ToolCall{ID: c.ID, Name: c.Name, InputJSON: c.InputJSON.raw()}
 }
 
 type storedToolResult struct {
@@ -220,8 +220,8 @@ type storedToolResult struct {
 	ContentJSON storedRawJSON `json:"content_json,omitempty"`
 }
 
-func (r storedToolResult) toSDK() *sigil.ToolResult {
-	return &sigil.ToolResult{
+func (r storedToolResult) toSDK() *agento11y.ToolResult {
+	return &agento11y.ToolResult{
 		ToolCallID:  r.ToolCallID,
 		Name:        r.Name,
 		IsError:     r.IsError,

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/tags"
@@ -49,7 +49,7 @@ type Inputs struct {
 	Fragment       *fragment.Fragment
 	Session        *fragment.Session
 	Stop           *StopInput
-	ContentCapture sigil.ContentCaptureMode
+	ContentCapture agento11y.ContentCaptureMode
 	UserIDOverride string
 	Now            time.Time
 }
@@ -57,8 +57,8 @@ type Inputs struct {
 // Mapped is the mapper's output: the start seed, the full Generation for the
 // recorder's SetResult, and the resolved stop status / call error.
 type Mapped struct {
-	Start      sigil.GenerationStart
-	Generation sigil.Generation
+	Start      agento11y.GenerationStart
+	Generation agento11y.Generation
 	StopStatus StopStatus
 	CallError  error
 }
@@ -86,7 +86,7 @@ func MapFragment(in Inputs) Mapped {
 	if modelName == "" {
 		modelName = "unknown"
 	}
-	model := sigil.ModelRef{Provider: provider, Name: modelName}
+	model := agento11y.ModelRef{Provider: provider, Name: modelName}
 
 	stopStatus := resolveStopStatus(in.Stop)
 
@@ -120,7 +120,7 @@ func MapFragment(in Inputs) Mapped {
 		thinkingEnabled = &v
 	}
 
-	start := sigil.GenerationStart{
+	start := agento11y.GenerationStart{
 		ID:                frag.GenerationID,
 		ConversationID:    frag.ConversationID,
 		ConversationTitle: conversationTitle,
@@ -128,7 +128,7 @@ func MapFragment(in Inputs) Mapped {
 		AgentName:         AgentName,
 		AgentVersion:      cursorVersion,
 		EffectiveVersion:  cursorVersion,
-		Mode:              sigil.GenerationModeSync,
+		Mode:              agento11y.GenerationModeSync,
 		OperationName:     "generateText",
 		Model:             model,
 		Tools:             toolDefs,
@@ -140,7 +140,7 @@ func MapFragment(in Inputs) Mapped {
 
 	input, output := buildMessages(frag, in.ContentCapture)
 
-	gen := sigil.Generation{
+	gen := agento11y.Generation{
 		ID:                frag.GenerationID,
 		ConversationID:    frag.ConversationID,
 		ConversationTitle: conversationTitle,
@@ -148,7 +148,7 @@ func MapFragment(in Inputs) Mapped {
 		AgentName:         AgentName,
 		AgentVersion:      cursorVersion,
 		EffectiveVersion:  cursorVersion,
-		Mode:              sigil.GenerationModeSync,
+		Mode:              agento11y.GenerationModeSync,
 		OperationName:     "generateText",
 		Model:             model,
 		ResponseModel:     modelName,
@@ -234,7 +234,7 @@ func firstToolCwd(tools []fragment.ToolRecord) string {
 
 // buildToolDefinitions deduplicates tool names across the fragment and emits
 // a sorted slice for stable output (tests, log diffing, dashboards).
-func buildToolDefinitions(tools []fragment.ToolRecord) []sigil.ToolDefinition {
+func buildToolDefinitions(tools []fragment.ToolRecord) []agento11y.ToolDefinition {
 	names := make([]string, len(tools))
 	for i := range tools {
 		names[i] = tools[i].ToolName
@@ -242,7 +242,7 @@ func buildToolDefinitions(tools []fragment.ToolRecord) []sigil.ToolDefinition {
 	return mapperutil.SortedToolDefinitions(names)
 }
 
-func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (input, output []sigil.Message) {
+func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (input, output []agento11y.Message) {
 	// Normalize so the rest of this function only deals with the three real
 	// content-gating modes. envconfig.ResolveContentMode does this at the
 	// config layer too, but mappers re-apply it for callers (including tests)
@@ -252,11 +252,11 @@ func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (inpu
 	mode = mapperutil.NormalizePayloadContentMode(mode)
 
 	// User prompt → user input message. Dropped in metadata-only mode.
-	if mode != sigil.ContentCaptureModeMetadataOnly && strings.TrimSpace(frag.UserPrompt) != "" {
-		input = append(input, sigil.Message{
-			Role: sigil.RoleUser,
-			Parts: []sigil.Part{
-				sigil.TextPart(frag.UserPrompt),
+	if mode != agento11y.ContentCaptureModeMetadataOnly && strings.TrimSpace(frag.UserPrompt) != "" {
+		input = append(input, agento11y.Message{
+			Role: agento11y.RoleUser,
+			Parts: []agento11y.Part{
+				agento11y.TextPart(frag.UserPrompt),
 			},
 		})
 	}
@@ -268,14 +268,14 @@ func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (inpu
 		if t.ToolName == "" {
 			continue
 		}
-		assistantParts := []sigil.Part{
+		assistantParts := []agento11y.Part{
 			{
-				Kind: sigil.PartKindToolCall,
-				ToolCall: &sigil.ToolCall{
+				Kind: agento11y.PartKindToolCall,
+				ToolCall: &agento11y.ToolCall{
 					ID:   t.ToolUseID,
 					Name: t.ToolName,
 					InputJSON: func() []byte {
-						if mode == sigil.ContentCaptureModeFull {
+						if mode == agento11y.ContentCaptureModeFull {
 							return t.ToolInput
 						}
 						return nil
@@ -283,8 +283,8 @@ func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (inpu
 				},
 			},
 		}
-		output = append(output, sigil.Message{
-			Role:  sigil.RoleAssistant,
+		output = append(output, agento11y.Message{
+			Role:  agento11y.RoleAssistant,
 			Parts: assistantParts,
 		})
 
@@ -292,13 +292,13 @@ func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (inpu
 		// call completed) but strips content. metadata_only drops the result
 		// message entirely. full sends content as-is.
 		switch mode {
-		case sigil.ContentCaptureModeFull:
-			input = append(input, sigil.Message{
-				Role: sigil.RoleTool,
-				Parts: []sigil.Part{
+		case agento11y.ContentCaptureModeFull:
+			input = append(input, agento11y.Message{
+				Role: agento11y.RoleTool,
+				Parts: []agento11y.Part{
 					{
-						Kind: sigil.PartKindToolResult,
-						ToolResult: &sigil.ToolResult{
+						Kind: agento11y.PartKindToolResult,
+						ToolResult: &agento11y.ToolResult{
 							ToolCallID:  t.ToolUseID,
 							Name:        t.ToolName,
 							ContentJSON: t.ToolOutput,
@@ -307,13 +307,13 @@ func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (inpu
 					},
 				},
 			})
-		case sigil.ContentCaptureModeNoToolContent:
-			input = append(input, sigil.Message{
-				Role: sigil.RoleTool,
-				Parts: []sigil.Part{
+		case agento11y.ContentCaptureModeNoToolContent:
+			input = append(input, agento11y.Message{
+				Role: agento11y.RoleTool,
+				Parts: []agento11y.Part{
 					{
-						Kind: sigil.PartKindToolResult,
-						ToolResult: &sigil.ToolResult{
+						Kind: agento11y.PartKindToolResult,
+						ToolResult: &agento11y.ToolResult{
 							ToolCallID: t.ToolUseID,
 							Name:       t.ToolName,
 							IsError:    t.Status == "error",
@@ -321,7 +321,7 @@ func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (inpu
 					},
 				},
 			})
-		case sigil.ContentCaptureModeMetadataOnly:
+		case agento11y.ContentCaptureModeMetadataOnly:
 			// Drop the tool_result entirely.
 		default:
 			// Default and FullWithMetadataSpans are normalized away above.
@@ -330,16 +330,16 @@ func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (inpu
 
 	// Assistant text. Concatenate segments in arrival order. Dropped in
 	// metadata-only mode.
-	if mode != sigil.ContentCaptureModeMetadataOnly && len(frag.Assistant) > 0 {
+	if mode != agento11y.ContentCaptureModeMetadataOnly && len(frag.Assistant) > 0 {
 		var b strings.Builder
 		for _, seg := range frag.Assistant {
 			b.WriteString(seg.Text)
 		}
 		text := b.String()
 		if strings.TrimSpace(text) != "" {
-			output = append(output, sigil.Message{
-				Role:  sigil.RoleAssistant,
-				Parts: []sigil.Part{sigil.TextPart(text)},
+			output = append(output, agento11y.Message{
+				Role:  agento11y.RoleAssistant,
+				Parts: []agento11y.Part{agento11y.TextPart(text)},
 			})
 		}
 	}
@@ -347,11 +347,11 @@ func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (inpu
 	return input, output
 }
 
-func mapTokenUsage(t *fragment.TokenCounts) sigil.TokenUsage {
+func mapTokenUsage(t *fragment.TokenCounts) agento11y.TokenUsage {
 	if t == nil {
-		return sigil.TokenUsage{}
+		return agento11y.TokenUsage{}
 	}
-	var u sigil.TokenUsage
+	var u agento11y.TokenUsage
 	if t.InputTokens != nil {
 		u.InputTokens = *t.InputTokens
 	}

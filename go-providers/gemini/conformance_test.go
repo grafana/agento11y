@@ -8,8 +8,8 @@ import (
 
 	"google.golang.org/genai"
 
-	sigil "github.com/grafana/agento11y/go/sigil"
-	"github.com/grafana/agento11y/go/sigil/sigiltest"
+	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/go/agento11y/testkit"
 )
 
 const (
@@ -19,7 +19,7 @@ const (
 )
 
 func TestConformance_GeminiSyncMapping(t *testing.T) {
-	env := sigiltest.NewEnv(t)
+	env := testkit.NewEnv(t)
 
 	model, contents, config := geminiConformanceRequest()
 	resp := &genai.GenerateContentResponse{
@@ -50,12 +50,12 @@ func TestConformance_GeminiSyncMapping(t *testing.T) {
 			ToolUsePromptTokenCount: 9,
 		},
 	}
-	start := sigil.GenerationStart{
+	start := agento11y.GenerationStart{
 		ConversationID:    "conv-gemini-sync",
 		ConversationTitle: "Gemini sync",
 		AgentName:         "agent-gemini",
 		AgentVersion:      "v-gemini",
-		Model:             sigil.ModelRef{Provider: "gemini", Name: model},
+		Model:             agento11y.ModelRef{Provider: "gemini", Name: model},
 	}
 
 	generation, err := FromRequestResponse(
@@ -69,39 +69,39 @@ func TestConformance_GeminiSyncMapping(t *testing.T) {
 		WithAgentVersion(start.AgentVersion),
 		WithTag("tenant", "t-gemini"),
 	)
-	sigiltest.RecordGeneration(t, env, start, generation, err)
+	testkit.RecordGeneration(t, env, start, generation, err)
 	env.Shutdown(t)
 
 	exported := env.SingleGenerationJSON(t)
 
-	if got := sigiltest.StringValue(t, exported, "mode"); got != "GENERATION_MODE_SYNC" {
-		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_SYNC", sigiltest.DebugJSON(exported))
+	if got := testkit.StringValue(t, exported, "mode"); got != "GENERATION_MODE_SYNC" {
+		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_SYNC", testkit.DebugJSON(exported))
 	}
-	if got := sigiltest.StringValue(t, exported, "stop_reason"); got != "STOP" {
+	if got := testkit.StringValue(t, exported, "stop_reason"); got != "STOP" {
 		t.Fatalf("unexpected stop_reason: got %q want %q", got, "STOP")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 0, "parts", 0, "thinking"); got != "need weather tool" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 0, "thinking"); got != "need weather tool" {
 		t.Fatalf("unexpected thinking part: got %q want %q", got, "need weather tool")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 0, "parts", 1, "tool_call", "name"); got != "weather" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "tool_call", "name"); got != "weather" {
 		t.Fatalf("unexpected tool_call.name: got %q want %q", got, "weather")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 0, "parts", 2, "text"); got != "It is 18C and sunny." {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 2, "text"); got != "It is 18C and sunny." {
 		t.Fatalf("unexpected output text: got %q want %q", got, "It is 18C and sunny.")
 	}
-	if got := sigiltest.StringValue(t, exported, "input", 1, "role"); got != "MESSAGE_ROLE_TOOL" {
+	if got := testkit.StringValue(t, exported, "input", 1, "role"); got != "MESSAGE_ROLE_TOOL" {
 		t.Fatalf("unexpected tool input role: got %q want %q", got, "MESSAGE_ROLE_TOOL")
 	}
-	if got := sigiltest.StringValue(t, exported, "usage", "reasoning_tokens"); got != "10" {
+	if got := testkit.StringValue(t, exported, "usage", "reasoning_tokens"); got != "10" {
 		t.Fatalf("unexpected usage.reasoning_tokens: got %q want %q", got, "10")
 	}
-	if got := sigiltest.FloatValue(t, exported, "metadata", "agento11y.gen_ai.usage.tool_use_prompt_tokens"); got != 9 {
+	if got := testkit.FloatValue(t, exported, "metadata", "agento11y.gen_ai.usage.tool_use_prompt_tokens"); got != 9 {
 		t.Fatalf("unexpected tool_use_prompt_tokens: got %v want %v", got, float64(9))
 	}
 }
 
 func TestConformance_GeminiStreamMapping(t *testing.T) {
-	env := sigiltest.NewEnv(t)
+	env := testkit.NewEnv(t)
 
 	model, contents, config := geminiConformanceRequest()
 	summary := StreamSummary{
@@ -144,11 +144,11 @@ func TestConformance_GeminiStreamMapping(t *testing.T) {
 			},
 		},
 	}
-	start := sigil.GenerationStart{
+	start := agento11y.GenerationStart{
 		ConversationID: "conv-gemini-stream",
 		AgentName:      "agent-gemini-stream",
 		AgentVersion:   "v-gemini-stream",
-		Model:          sigil.ModelRef{Provider: "gemini", Name: model},
+		Model:          agento11y.ModelRef{Provider: "gemini", Name: model},
 	}
 
 	generation, err := FromStream(
@@ -160,57 +160,57 @@ func TestConformance_GeminiStreamMapping(t *testing.T) {
 		WithAgentName(start.AgentName),
 		WithAgentVersion(start.AgentVersion),
 	)
-	sigiltest.RecordStreamingGeneration(t, env, start, summary.FirstChunkAt, generation, err)
+	testkit.RecordStreamingGeneration(t, env, start, summary.FirstChunkAt, generation, err)
 	env.Shutdown(t)
 
 	exported := env.SingleGenerationJSON(t)
 
-	if got := sigiltest.StringValue(t, exported, "mode"); got != "GENERATION_MODE_STREAM" {
-		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_STREAM", sigiltest.DebugJSON(exported))
+	if got := testkit.StringValue(t, exported, "mode"); got != "GENERATION_MODE_STREAM" {
+		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_STREAM", testkit.DebugJSON(exported))
 	}
-	if got := sigiltest.StringValue(t, exported, "response_id"); got != "resp_gemini_stream_2" {
+	if got := testkit.StringValue(t, exported, "response_id"); got != "resp_gemini_stream_2" {
 		t.Fatalf("unexpected response_id: got %q want %q", got, "resp_gemini_stream_2")
 	}
-	if got := sigiltest.StringValue(t, exported, "stop_reason"); got != "STOP" {
+	if got := testkit.StringValue(t, exported, "stop_reason"); got != "STOP" {
 		t.Fatalf("unexpected stop_reason: got %q want %q", got, "STOP")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 0, "parts", 0, "thinking"); got != "need weather tool" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 0, "thinking"); got != "need weather tool" {
 		t.Fatalf("unexpected streamed thinking part: got %q want %q", got, "need weather tool")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 0, "parts", 1, "tool_call", "name"); got != "weather" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 1, "tool_call", "name"); got != "weather" {
 		t.Fatalf("unexpected streamed tool_call.name: got %q want %q", got, "weather")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 1, "parts", 0, "text"); got != "It is 18C and sunny." {
+	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "text"); got != "It is 18C and sunny." {
 		t.Fatalf("unexpected streamed output text: got %q want %q", got, "It is 18C and sunny.")
 	}
-	if got := sigiltest.StringValue(t, exported, "usage", "total_tokens"); got != "26" {
+	if got := testkit.StringValue(t, exported, "usage", "total_tokens"); got != "26" {
 		t.Fatalf("unexpected usage.total_tokens: got %q want %q", got, "26")
 	}
 }
 
 func TestConformance_GeminiErrorMapping(t *testing.T) {
-	env := sigiltest.NewEnv(t)
+	env := testkit.NewEnv(t)
 
-	sigiltest.RecordCallError(t, env, sigil.GenerationStart{
-		Model: sigil.ModelRef{Provider: "gemini", Name: "gemini-2.5-pro"},
+	testkit.RecordCallError(t, env, agento11y.GenerationStart{
+		Model: agento11y.ModelRef{Provider: "gemini", Name: "gemini-2.5-pro"},
 	}, genai.APIError{Code: 429, Message: "rate limited", Status: "RESOURCE_EXHAUSTED"})
 
-	span := sigiltest.FindSpan(t, env.Spans.Ended(), "generateText gemini-2.5-pro")
-	attrs := sigiltest.SpanAttributes(span)
+	span := testkit.FindSpan(t, env.Spans.Ended(), "generateText gemini-2.5-pro")
+	attrs := testkit.SpanAttributes(span)
 	if got := attrs[geminiSpanErrorCategory].AsString(); got != "rate_limit" {
 		t.Fatalf("unexpected error.category: got %q want %q", got, "rate_limit")
 	}
 
 	env.Shutdown(t)
 	exported := env.SingleGenerationJSON(t)
-	callError := sigiltest.StringValue(t, exported, "call_error")
+	callError := testkit.StringValue(t, exported, "call_error")
 	if !strings.Contains(callError, "429") {
 		t.Fatalf("expected call_error to include status code, got %q", callError)
 	}
 }
 
 func TestConformance_GeminiEmbeddingMapping(t *testing.T) {
-	env := sigiltest.NewEnv(t)
+	env := testkit.NewEnv(t)
 
 	model := "gemini-embedding-001"
 	contents := []*genai.Content{
@@ -238,15 +238,15 @@ func TestConformance_GeminiEmbeddingMapping(t *testing.T) {
 		},
 	}
 	startDimensions := int64(dimensions)
-	sigiltest.RecordEmbedding(t, env, sigil.EmbeddingStart{
-		Model:        sigil.ModelRef{Provider: "gemini", Name: model},
+	testkit.RecordEmbedding(t, env, agento11y.EmbeddingStart{
+		Model:        agento11y.ModelRef{Provider: "gemini", Name: model},
 		AgentName:    "agent-gemini-embed",
 		AgentVersion: "v-gemini-embed",
 		Dimensions:   &startDimensions,
 	}, EmbeddingFromResponse(model, contents, config, resp))
 
-	span := sigiltest.FindSpan(t, env.Spans.Ended(), "embeddings gemini-embedding-001")
-	attrs := sigiltest.SpanAttributes(span)
+	span := testkit.FindSpan(t, env.Spans.Ended(), "embeddings gemini-embedding-001")
+	attrs := testkit.SpanAttributes(span)
 	if got := attrs[geminiSpanInputCount].AsInt64(); got != 2 {
 		t.Fatalf("unexpected gen_ai.embeddings.input_count: got %d want %d", got, 2)
 	}
@@ -255,7 +255,7 @@ func TestConformance_GeminiEmbeddingMapping(t *testing.T) {
 	}
 
 	env.Shutdown(t)
-	sigiltest.RequireRequestCount(t, env, 0)
+	testkit.RequireRequestCount(t, env, 0)
 }
 
 func geminiConformanceRequest() (string, []*genai.Content, *genai.GenerateContentConfig) {
@@ -424,13 +424,13 @@ func TestConformance_GenerateContentSyncNormalization(t *testing.T) {
 	if len(generation.Output) != 1 || len(generation.Output[0].Parts) != 3 {
 		t.Fatalf("expected thinking + tool call + text output, got %#v", generation.Output)
 	}
-	if generation.Output[0].Parts[0].Kind != sigil.PartKindThinking || generation.Output[0].Parts[0].Thinking != "reasoning trace" {
+	if generation.Output[0].Parts[0].Kind != agento11y.PartKindThinking || generation.Output[0].Parts[0].Thinking != "reasoning trace" {
 		t.Fatalf("unexpected thinking output: %#v", generation.Output[0].Parts[0])
 	}
-	if generation.Output[0].Parts[1].Kind != sigil.PartKindToolCall {
+	if generation.Output[0].Parts[1].Kind != agento11y.PartKindToolCall {
 		t.Fatalf("expected tool call output, got %#v", generation.Output[0].Parts[1])
 	}
-	if generation.Output[0].Parts[2].Kind != sigil.PartKindText || generation.Output[0].Parts[2].Text != "It is 18C and sunny." {
+	if generation.Output[0].Parts[2].Kind != agento11y.PartKindText || generation.Output[0].Parts[2].Text != "It is 18C and sunny." {
 		t.Fatalf("unexpected text output: %#v", generation.Output[0].Parts[2])
 	}
 	if generation.Metadata["agento11y.gen_ai.request.thinking.level"] != "high" {
@@ -440,9 +440,9 @@ func TestConformance_GenerateContentSyncNormalization(t *testing.T) {
 		t.Fatalf("expected tenant tag")
 	}
 	requireGeminiArtifactKinds(t, generation.Artifacts,
-		sigil.ArtifactKindRequest,
-		sigil.ArtifactKindResponse,
-		sigil.ArtifactKindTools,
+		agento11y.ArtifactKindRequest,
+		agento11y.ArtifactKindResponse,
+		agento11y.ArtifactKindTools,
 	)
 }
 
@@ -545,19 +545,19 @@ func TestConformance_GenerateContentStreamNormalization(t *testing.T) {
 	if len(generation.Output) != 2 {
 		t.Fatalf("expected streamed thinking/tool output plus final text, got %#v", generation.Output)
 	}
-	if generation.Output[0].Parts[0].Kind != sigil.PartKindThinking || generation.Output[0].Parts[0].Thinking != "reasoning trace" {
+	if generation.Output[0].Parts[0].Kind != agento11y.PartKindThinking || generation.Output[0].Parts[0].Thinking != "reasoning trace" {
 		t.Fatalf("unexpected streamed thinking output: %#v", generation.Output[0].Parts[0])
 	}
-	if generation.Output[0].Parts[1].Kind != sigil.PartKindToolCall {
+	if generation.Output[0].Parts[1].Kind != agento11y.PartKindToolCall {
 		t.Fatalf("expected streamed tool call output, got %#v", generation.Output[0].Parts[1])
 	}
-	if generation.Output[1].Parts[0].Kind != sigil.PartKindText || generation.Output[1].Parts[0].Text != "It is 18C and sunny." {
+	if generation.Output[1].Parts[0].Kind != agento11y.PartKindText || generation.Output[1].Parts[0].Text != "It is 18C and sunny." {
 		t.Fatalf("unexpected streamed text output: %#v", generation.Output[1].Parts[0])
 	}
 	requireGeminiArtifactKinds(t, generation.Artifacts,
-		sigil.ArtifactKindRequest,
-		sigil.ArtifactKindTools,
-		sigil.ArtifactKindProviderEvent,
+		agento11y.ArtifactKindRequest,
+		agento11y.ArtifactKindTools,
+		agento11y.ArtifactKindProviderEvent,
 	)
 }
 
@@ -590,7 +590,7 @@ func TestConformance_GeminiMapperValidationErrors(t *testing.T) {
 	}
 }
 
-func requireGeminiArtifactKinds(t *testing.T, artifacts []sigil.Artifact, want ...sigil.ArtifactKind) {
+func requireGeminiArtifactKinds(t *testing.T, artifacts []agento11y.Artifact, want ...agento11y.ArtifactKind) {
 	t.Helper()
 
 	if len(artifacts) != len(want) {

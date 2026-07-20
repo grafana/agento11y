@@ -49,7 +49,7 @@ def chat(req: ChatRequest, request: Request) -> ChatResponse:
     conversation_id = req.conversation_id or f"conv-{uuid.uuid4().hex[:12]}"
 
     classification = classify_message(
-        sigil=state.sigil,
+        agento11y=state.agento11y,
         conversation_id=conversation_id,
         user_message=req.message,
         model_name=state.classifier_model,
@@ -60,7 +60,7 @@ def chat(req: ChatRequest, request: Request) -> ChatResponse:
     else:
         reply = run_agent(
             agent=state.agent,
-            sigil=state.sigil,
+            agento11y=state.agento11y,
             user_message=req.message,
             conversation_id=conversation_id,
         )

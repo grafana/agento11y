@@ -1,5 +1,5 @@
 // Package mapper turns a slice of new vibe transcript lines plus the
-// session's meta.json into a sigil.Generation ready for export.
+// session's meta.json into a agento11y.Generation ready for export.
 //
 // One mapper.Map call produces exactly one generation per
 // post_agent_turn hook fire. Sigil groups records by ConversationID
@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/meta"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/state"
@@ -50,7 +50,7 @@ type Inputs struct {
 	Meta               meta.Meta
 	PriorState         state.Session
 	PriorStateFound    bool
-	ContentCapture     sigil.ContentCaptureMode
+	ContentCapture     agento11y.ContentCaptureMode
 	Now                time.Time
 }
 
@@ -58,8 +58,8 @@ type Inputs struct {
 // the caller can call client.StartGeneration / rec.SetResult against the
 // same input.
 type Mapped struct {
-	Start      sigil.GenerationStart
-	Generation sigil.Generation
+	Start      agento11y.GenerationStart
+	Generation agento11y.Generation
 }
 
 // Map converts the new transcript slice plus meta.json into a single
@@ -72,8 +72,8 @@ func Map(in Inputs, turnSeq int) Mapped {
 		now = time.Now()
 	}
 	mode := in.ContentCapture
-	if mode == sigil.ContentCaptureModeDefault {
-		mode = sigil.ContentCaptureModeMetadataOnly
+	if mode == agento11y.ContentCaptureModeDefault {
+		mode = agento11y.ContentCaptureModeMetadataOnly
 	}
 
 	provider, apiName := in.Meta.ActiveModelRef()
@@ -84,7 +84,7 @@ func Map(in Inputs, turnSeq int) Mapped {
 	if displayName == "" {
 		displayName = "unknown"
 	}
-	model := sigil.ModelRef{Provider: provider, Name: displayName}
+	model := agento11y.ModelRef{Provider: provider, Name: displayName}
 
 	id := GenerationID(in.SessionID, turnSeq)
 
@@ -130,7 +130,7 @@ func Map(in Inputs, turnSeq int) Mapped {
 	usage := turnUsage(in.Meta.Stats, in.PriorState, in.PriorStateFound)
 	tools := buildToolDefinitions(in.Meta.ToolsAvailable)
 	systemPrompt := ""
-	if mode != sigil.ContentCaptureModeMetadataOnly {
+	if mode != agento11y.ContentCaptureModeMetadataOnly {
 		systemPrompt = strings.TrimSpace(in.Meta.SystemPrompt.Content)
 	}
 
@@ -141,12 +141,12 @@ func Map(in Inputs, turnSeq int) Mapped {
 	lines := linesForMapping(in.Lines, in.Meta.Stats, in.PriorStateFound)
 	input, output, thinkingEnabled := buildMessages(lines, mode)
 
-	start := sigil.GenerationStart{
+	start := agento11y.GenerationStart{
 		ID:                  id,
 		ConversationID:      conversationID,
 		ConversationTitle:   in.Meta.Title,
 		AgentName:           AgentName,
-		Mode:                sigil.GenerationModeSync,
+		Mode:                agento11y.GenerationModeSync,
 		OperationName:       "generateText",
 		Model:               model,
 		SystemPrompt:        systemPrompt,
@@ -158,12 +158,12 @@ func Map(in Inputs, turnSeq int) Mapped {
 		StartedAt:           startedAt,
 		ContentCapture:      mode,
 	}
-	gen := sigil.Generation{
+	gen := agento11y.Generation{
 		ID:                  id,
 		ConversationID:      conversationID,
 		ConversationTitle:   in.Meta.Title,
 		AgentName:           AgentName,
-		Mode:                sigil.GenerationModeSync,
+		Mode:                agento11y.GenerationModeSync,
 		OperationName:       "generateText",
 		Model:               model,
 		ResponseModel:       apiName,
@@ -196,7 +196,7 @@ func Map(in Inputs, turnSeq int) Mapped {
 //     stale/out-of-order snapshot); the delta is meaningless, so fall back
 //     to the last-turn figures rather than emit a silently under-counted
 //     turn.
-func turnUsage(stats meta.Stats, prior state.Session, priorFound bool) sigil.TokenUsage {
+func turnUsage(stats meta.Stats, prior state.Session, priorFound bool) agento11y.TokenUsage {
 	if !priorFound {
 		if stats.Steps > 1 {
 			return lastTurnUsage(stats)
@@ -211,18 +211,18 @@ func turnUsage(stats meta.Stats, prior state.Session, priorFound bool) sigil.Tok
 	return tokenUsage(in, out)
 }
 
-func lastTurnUsage(stats meta.Stats) sigil.TokenUsage {
+func lastTurnUsage(stats meta.Stats) agento11y.TokenUsage {
 	return tokenUsage(stats.LastTurnPromptTokens, stats.LastTurnCompletionTokens)
 }
 
-func tokenUsage(in, out int64) sigil.TokenUsage {
+func tokenUsage(in, out int64) agento11y.TokenUsage {
 	if in < 0 {
 		in = 0
 	}
 	if out < 0 {
 		out = 0
 	}
-	return sigil.TokenUsage{
+	return agento11y.TokenUsage{
 		InputTokens:  in,
 		OutputTokens: out,
 		TotalTokens:  in + out,
@@ -325,9 +325,9 @@ func latestTurnLines(lines []transcript.Line) []transcript.Line {
 // In MetadataOnly mode all message text, reasoning, and tool
 // arguments/results are dropped but the structural shape (assistant called
 // tool X, tool returned, assistant replied) is preserved.
-func buildMessages(lines []transcript.Line, mode sigil.ContentCaptureMode) (input, output []sigil.Message, thinkingEnabled *bool) {
+func buildMessages(lines []transcript.Line, mode agento11y.ContentCaptureMode) (input, output []agento11y.Message, thinkingEnabled *bool) {
 	red := redact.New()
-	contentMode := mode == sigil.ContentCaptureModeFull || mode == sigil.ContentCaptureModeNoToolContent
+	contentMode := mode == agento11y.ContentCaptureModeFull || mode == agento11y.ContentCaptureModeNoToolContent
 	cleanText := func(s string) string {
 		if contentMode {
 			return red.Redact(s)
@@ -344,10 +344,10 @@ func buildMessages(lines []transcript.Line, mode sigil.ContentCaptureMode) (inpu
 			if strings.TrimSpace(l.Content) == "" {
 				continue
 			}
-			if mode == sigil.ContentCaptureModeMetadataOnly {
+			if mode == agento11y.ContentCaptureModeMetadataOnly {
 				continue
 			}
-			input = append(input, sigil.UserTextMessage(cleanText(l.Content)))
+			input = append(input, agento11y.UserTextMessage(cleanText(l.Content)))
 		case "assistant":
 			// Assistant turns come in two shapes: a tool-call message
 			// (no Content, ToolCalls populated) or a final text message
@@ -356,62 +356,62 @@ func buildMessages(lines []transcript.Line, mode sigil.ContentCaptureMode) (inpu
 			if strings.TrimSpace(l.ReasoningContent) != "" {
 				anyReasoning = true
 			}
-			var parts []sigil.Part
+			var parts []agento11y.Part
 			if contentMode {
 				if r := strings.TrimSpace(l.ReasoningContent); r != "" {
-					parts = append(parts, sigil.ThinkingPart(red.Redact(l.ReasoningContent)))
+					parts = append(parts, agento11y.ThinkingPart(red.Redact(l.ReasoningContent)))
 				}
 			}
 			if len(l.ToolCalls) > 0 {
 				for _, tc := range l.ToolCalls {
-					call := sigil.ToolCall{ID: tc.ID, Name: tc.Function.Name}
-					if mode == sigil.ContentCaptureModeFull && tc.Function.Arguments != "" {
+					call := agento11y.ToolCall{ID: tc.ID, Name: tc.Function.Name}
+					if mode == agento11y.ContentCaptureModeFull && tc.Function.Arguments != "" {
 						// vibe encodes function.arguments as a JSON-encoded
 						// string already, so the raw bytes are valid JSON and
 						// go straight into InputJSON without re-encoding.
 						call.InputJSON = []byte(tc.Function.Arguments)
 					}
-					parts = append(parts, sigil.ToolCallPart(call))
+					parts = append(parts, agento11y.ToolCallPart(call))
 				}
-				output = append(output, sigil.Message{Role: sigil.RoleAssistant, Parts: parts})
+				output = append(output, agento11y.Message{Role: agento11y.RoleAssistant, Parts: parts})
 				continue
 			}
 			if strings.TrimSpace(l.Content) == "" {
 				// A reasoning-only assistant line still carries its thinking
 				// part in content modes; otherwise there is nothing to emit.
 				if len(parts) > 0 {
-					output = append(output, sigil.Message{Role: sigil.RoleAssistant, Parts: parts})
+					output = append(output, agento11y.Message{Role: agento11y.RoleAssistant, Parts: parts})
 				}
 				continue
 			}
-			if mode == sigil.ContentCaptureModeMetadataOnly {
+			if mode == agento11y.ContentCaptureModeMetadataOnly {
 				continue
 			}
-			parts = append(parts, sigil.TextPart(cleanText(l.Content)))
-			output = append(output, sigil.Message{Role: sigil.RoleAssistant, Parts: parts})
+			parts = append(parts, agento11y.TextPart(cleanText(l.Content)))
+			output = append(output, agento11y.Message{Role: agento11y.RoleAssistant, Parts: parts})
 		case "tool":
-			if mode == sigil.ContentCaptureModeMetadataOnly {
+			if mode == agento11y.ContentCaptureModeMetadataOnly {
 				// Still preserve the structural tool-result so the
 				// conversation does not look like an unfinished call.
-				input = append(input, sigil.Message{
-					Role: sigil.RoleTool,
-					Parts: []sigil.Part{sigil.ToolResultPart(sigil.ToolResult{
+				input = append(input, agento11y.Message{
+					Role: agento11y.RoleTool,
+					Parts: []agento11y.Part{agento11y.ToolResultPart(agento11y.ToolResult{
 						ToolCallID: l.ToolCallID,
 						Name:       l.Name,
 					})},
 				})
 				continue
 			}
-			result := sigil.ToolResult{
+			result := agento11y.ToolResult{
 				ToolCallID: l.ToolCallID,
 				Name:       l.Name,
 			}
-			if mode == sigil.ContentCaptureModeFull {
+			if mode == agento11y.ContentCaptureModeFull {
 				result.Content = red.Redact(l.Content)
 			}
-			input = append(input, sigil.Message{
-				Role:  sigil.RoleTool,
-				Parts: []sigil.Part{sigil.ToolResultPart(result)},
+			input = append(input, agento11y.Message{
+				Role:  agento11y.RoleTool,
+				Parts: []agento11y.Part{agento11y.ToolResultPart(result)},
 			})
 		}
 	}
@@ -424,16 +424,16 @@ func buildMessages(lines []transcript.Line, mode sigil.ContentCaptureMode) (inpu
 
 // buildToolDefinitions copies meta.json's tools_available[] to the
 // Sigil ToolDefinition shape. Parameters land in InputSchema verbatim.
-func buildToolDefinitions(tools []meta.ToolDef) []sigil.ToolDefinition {
+func buildToolDefinitions(tools []meta.ToolDef) []agento11y.ToolDefinition {
 	if len(tools) == 0 {
 		return nil
 	}
-	out := make([]sigil.ToolDefinition, 0, len(tools))
+	out := make([]agento11y.ToolDefinition, 0, len(tools))
 	for _, t := range tools {
 		if t.Function.Name == "" {
 			continue
 		}
-		def := sigil.ToolDefinition{
+		def := agento11y.ToolDefinition{
 			Name:        t.Function.Name,
 			Description: t.Function.Description,
 			Type:        t.Type,

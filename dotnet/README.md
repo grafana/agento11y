@@ -4,7 +4,7 @@ Sigil extends OpenTelemetry-style instrumentation with normalized AI generation 
 
 ## Packages
 
-- `Grafana.Agento11y`: core runtime (`SigilClient`, generation/tool recorders, generation export)
+- `Grafana.Agento11y`: core runtime (`Agento11yClient`, generation/tool recorders, generation export)
 - `Grafana.Agento11y.OpenAI`: OpenAI Responses + Chat Completions + Embeddings wrappers and mappers
 - `Grafana.Agento11y.Anthropic`: Anthropic Messages wrappers and mappers
 - `Grafana.Agento11y.Gemini`: Gemini GenerateContent + EmbedContent wrappers and mappers
@@ -33,14 +33,14 @@ For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance 
 
 ## Quickstart (OpenAI Responses wrapper)
 
-The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and call `new SigilClient()` with no arguments — refer to the [environment variables](#environment-variables) section.
+The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and call `new Agento11yClient()` with no arguments — refer to the [environment variables](#environment-variables) section.
 
 ```csharp
-using Grafana.Sigil;
-using Grafana.Sigil.OpenAI;
+using Grafana.Agento11y;
+using Grafana.Agento11y.OpenAI;
 using OpenAI.Responses;
 
-var sigil = new SigilClient(new SigilClientConfig
+var agento11y = new Agento11yClient(new Agento11yClientConfig
 {
     GenerationExport = new GenerationExportConfig
     {
@@ -90,11 +90,11 @@ var requestOptions = new CreateResponseOptions
 };
 
 var response = await OpenAIRecorder.CreateResponseAsync(
-    sigil,
+    agento11y,
     openAI,
     inputItems,
     requestOptions: requestOptions,
-    options: new OpenAISigilOptions
+    options: new OpenAIAgento11yOptions
     {
         ConversationId = "conv-9b2f",
         AgentName = "assistant-core",
@@ -103,7 +103,7 @@ var response = await OpenAIRecorder.CreateResponseAsync(
     cancellationToken: CancellationToken.None
 );
 
-await sigil.ShutdownAsync(CancellationToken.None);
+await agento11y.ShutdownAsync(CancellationToken.None);
 ```
 
 ## Core API
@@ -136,9 +136,9 @@ set as the other Sigil SDKs and replaces matches with
 `[REDACTED:<category>]` placeholders.
 
 ```csharp
-using Grafana.Sigil;
+using Grafana.Agento11y;
 
-var sigil = new SigilClient(new SigilClientConfig
+var agento11y = new Agento11yClient(new Agento11yClientConfig
 {
     GenerationSanitizer = SecretRedactionSanitizer.Create(),
 });
@@ -150,7 +150,7 @@ errors, and email addresses. User input messages are left unchanged unless you
 opt in:
 
 ```csharp
-var sigil = new SigilClient(new SigilClientConfig
+var agento11y = new Agento11yClient(new Agento11yClientConfig
 {
     GenerationSanitizer = SecretRedactionSanitizer.Create(new SecretRedactionOptions
     {
@@ -209,7 +209,7 @@ Provider helpers:
 Input text capture is opt-in:
 
 ```csharp
-var config = new SigilClientConfig
+var config = new Agento11yClientConfig
 {
     EmbeddingCapture = new EmbeddingCaptureConfig
     {
@@ -235,7 +235,7 @@ TraceQL examples:
 Client-level default:
 
 ```csharp
-var sigil = new SigilClient(new SigilClientConfig
+var agento11y = new Agento11yClient(new Agento11yClientConfig
 {
     ContentCapture = ContentCaptureMode.MetadataOnly,
 });
@@ -266,7 +266,7 @@ var tool = client.StartToolExecution(new ToolExecutionStart
 Dynamic resolution via `ContentCaptureResolver`:
 
 ```csharp
-var sigil = new SigilClient(new SigilClientConfig
+var agento11y = new Agento11yClient(new Agento11yClientConfig
 {
     ContentCaptureResolver = metadata =>
     {
@@ -284,25 +284,25 @@ Exception-throwing resolvers are caught and treated as `ContentCaptureMode.Metad
 Resolution precedence for generations (highest to lowest):
 
 1. Per-generation `GenerationStart.ContentCapture`
-2. `SigilClientConfig.ContentCaptureResolver` return value
-3. `SigilClientConfig.ContentCapture` (defaults to `ContentCaptureMode.NoToolContent`)
+2. `Agento11yClientConfig.ContentCaptureResolver` return value
+3. `Agento11yClientConfig.ContentCapture` (defaults to `ContentCaptureMode.NoToolContent`)
 
 Resolution precedence for tool executions (highest to lowest):
 
 1. Per-tool `ToolExecutionStart.ContentCapture`
 2. Parent generation's resolved mode
-3. `SigilClientConfig.ContentCaptureResolver` return value
-4. `SigilClientConfig.ContentCapture` (defaults to `ContentCaptureMode.NoToolContent`)
+3. `Agento11yClientConfig.ContentCaptureResolver` return value
+4. `Agento11yClientConfig.ContentCapture` (defaults to `ContentCaptureMode.NoToolContent`)
 
 User-provided `Metadata` and `Tags` are not stripped by any capture mode. SDK-internal metadata keys that carry content (e.g. `call_error`, `agento11y.conversation.title`) are stripped along with the matching content. See [Tags and Metadata](../docs/concepts/tags-and-metadata.md) for where client tags, per-generation tags, metadata, and `UserId` each show up (export vs spans vs metrics).
 
 ## Context defaults
 
-`SigilContext` uses async-local scopes:
+`Agento11yContext` uses async-local scopes:
 
-- `SigilContext.WithConversationId(...)`
-- `SigilContext.WithAgentName(...)`
-- `SigilContext.WithAgentVersion(...)`
+- `Agento11yContext.WithConversationId(...)`
+- `Agento11yContext.WithAgentName(...)`
+- `Agento11yContext.WithAgentVersion(...)`
 
 These defaults are used when a start payload omits those fields.
 
@@ -330,11 +330,11 @@ var result = await client.SubmitConversationRatingAsync(
 Console.WriteLine($"{result.Rating.Rating} hasBad={result.Summary.HasBadRating}");
 ```
 
-`SubmitConversationRatingAsync(...)` sends requests to `SigilClientConfig.Api.Endpoint`, which should be the Grafana Cloud Sigil API URL from AI Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
+`SubmitConversationRatingAsync(...)` sends requests to `Agento11yClientConfig.Api.Endpoint`, which should be the Grafana Cloud Sigil API URL from AI Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
 
 ## .NET best practices
 
-- Create one long-lived `SigilClient` per process (for example as a singleton in DI).
+- Create one long-lived `Agento11yClient` per process (for example as a singleton in DI).
 - Always call `ShutdownAsync(...)` during process shutdown.
 - Keep provider request/response payloads normalized; enable raw artifacts only for debug sessions.
 - Use explicit generation export auth config instead of sharing ad-hoc headers.
@@ -342,7 +342,7 @@ Console.WriteLine($"{result.Rating.Rating} hasBad={result.Summary.HasBadRating}"
 ## Instrumentation-only mode (no generation send)
 
 ```csharp
-var sigil = new SigilClient(new SigilClientConfig
+var agento11y = new Agento11yClient(new Agento11yClientConfig
 {
     GenerationExport = new GenerationExportConfig
     {
@@ -363,7 +363,7 @@ The SDK emits these OTel histograms through your configured OTel meter provider:
 ## Environment variables
 
 The SDK reads `AGENTO11Y_*` environment variables at client construction. Caller-supplied
-fields on `SigilClientConfig` win; environment variables fill anything left at the default;
+fields on `Agento11yClientConfig` win; environment variables fill anything left at the default;
 SDK schema defaults fill the rest.
 
 | Env var | Field |
@@ -375,12 +375,12 @@ SDK schema defaults fill the rest.
 | `AGENTO11Y_AUTH_MODE` | `AuthConfig.Mode` (`none`/`tenant`/`bearer`/`basic`) |
 | `AGENTO11Y_AUTH_TENANT_ID` | `AuthConfig.TenantId` |
 | `AGENTO11Y_AUTH_TOKEN` | `AuthConfig.BearerToken` and/or `BasicPassword` (filled when empty) |
-| `AGENTO11Y_AGENT_NAME` | `SigilClientConfig.AgentName` |
-| `AGENTO11Y_AGENT_VERSION` | `SigilClientConfig.AgentVersion` |
-| `AGENTO11Y_USER_ID` | `SigilClientConfig.UserId` |
-| `AGENTO11Y_TAGS` | `SigilClientConfig.Tags` (CSV; applied to generations, spans, and metrics; see [Tags and Metadata](../docs/concepts/tags-and-metadata.md)) |
-| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `SigilClientConfig.ContentCapture` |
-| `AGENTO11Y_DEBUG` | `SigilClientConfig.Debug` (tri-state `bool?`) |
+| `AGENTO11Y_AGENT_NAME` | `Agento11yClientConfig.AgentName` |
+| `AGENTO11Y_AGENT_VERSION` | `Agento11yClientConfig.AgentVersion` |
+| `AGENTO11Y_USER_ID` | `Agento11yClientConfig.UserId` |
+| `AGENTO11Y_TAGS` | `Agento11yClientConfig.Tags` (CSV; applied to generations, spans, and metrics; see [Tags and Metadata](../docs/concepts/tags-and-metadata.md)) |
+| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `Agento11yClientConfig.ContentCapture` |
+| `AGENTO11Y_DEBUG` | `Agento11yClientConfig.Debug` (tri-state `bool?`) |
 
 Use `EnvConfig.FromEnv()` to inspect the resolved config without constructing a
 client. Invalid values (bad auth mode, etc.) are skipped with a warning so a

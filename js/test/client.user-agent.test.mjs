@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { trace } from '@opentelemetry/api';
-import { defaultConfig, SDK_VERSION, SigilClient, userAgent } from '../.test-dist/index.js';
+import { Agento11yClient, defaultConfig, SDK_VERSION, userAgent } from '../.test-dist/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -105,7 +105,7 @@ async function captureGRPCUserAgent(headers) {
 
 function newClient(generationExportOverrides) {
   const defaults = defaultConfig();
-  return new SigilClient({
+  return new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-test'),
     generationExport: {
       ...defaults.generationExport,

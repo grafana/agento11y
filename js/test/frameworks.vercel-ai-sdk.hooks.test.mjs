@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
-import { createSigilVercelAiSdk } from '../.test-dist/frameworks/vercel-ai-sdk/index.js';
-import { defaultConfig, HookDeniedError, SigilClient } from '../.test-dist/index.js';
+import { createAgento11yVercelAiSdk } from '../.test-dist/frameworks/vercel-ai-sdk/index.js';
+import { Agento11yClient, defaultConfig, HookDeniedError } from '../.test-dist/index.js';
 
 class NoOpExporter {
   async exportGenerations(request) {
@@ -35,11 +35,11 @@ test('vercel ai sdk preflight allows step when hook returns allow', async () => 
   });
 
   try {
-    const sigil = createSigilVercelAiSdk(client, {
+    const agento11y = createAgento11yVercelAiSdk(client, {
       agentName: 'guarded-agent',
       agentVersion: '2.0.0',
     });
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-allow' });
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-allow' });
 
     await hooks.experimental_onStepStart({
       stepNumber: 0,
@@ -93,11 +93,11 @@ test('vercel ai sdk prepareStep preflight returns transformed messages for ai sd
   });
 
   try {
-    const sigil = createSigilVercelAiSdk(client, {
+    const agento11y = createAgento11yVercelAiSdk(client, {
       agentName: 'guarded-agent',
       agentVersion: '2.0.0',
     });
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-prepare-transform' });
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-prepare-transform' });
 
     const prepareResult = await hooks.prepareStep({
       stepNumber: 0,
@@ -148,8 +148,8 @@ test('vercel ai sdk prepareStep preflight rejects unsupported transformed messag
   });
 
   try {
-    const sigil = createSigilVercelAiSdk(client, { agentName: 'guarded-agent' });
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-prepare-unsupported-transform' });
+    const agento11y = createAgento11yVercelAiSdk(client, { agentName: 'guarded-agent' });
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-prepare-unsupported-transform' });
 
     await assert.rejects(
       () =>
@@ -193,8 +193,8 @@ test('vercel ai sdk legacy step-start preflight rejects transformed messages tha
   });
 
   try {
-    const sigil = createSigilVercelAiSdk(client, { agentName: 'guarded-agent' });
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-legacy-transform' });
+    const agento11y = createAgento11yVercelAiSdk(client, { agentName: 'guarded-agent' });
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-legacy-transform' });
 
     await assert.rejects(
       () =>
@@ -243,8 +243,8 @@ test('vercel ai sdk preflight throws HookDeniedError on deny', async () => {
   });
 
   try {
-    const sigil = createSigilVercelAiSdk(client, { agentName: 'guarded-agent' });
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-deny' });
+    const agento11y = createAgento11yVercelAiSdk(client, { agentName: 'guarded-agent' });
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-deny' });
 
     await assert.rejects(
       () =>
@@ -283,11 +283,11 @@ test('vercel ai sdk preflight does not call server when hooks disabled at instru
   });
 
   try {
-    const sigil = createSigilVercelAiSdk(client, {
+    const agento11y = createAgento11yVercelAiSdk(client, {
       agentName: 'guarded-agent',
       enableHooks: false,
     });
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-skip' });
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-skip' });
 
     await hooks.experimental_onStepStart({
       stepNumber: 0,
@@ -327,11 +327,11 @@ test('vercel ai sdk preflight calls server when enableHooks overrides client con
   });
 
   try {
-    const sigil = createSigilVercelAiSdk(client, {
+    const agento11y = createAgento11yVercelAiSdk(client, {
       agentName: 'guarded-agent',
       enableHooks: true,
     });
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-override' });
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-override' });
 
     await hooks.experimental_onStepStart({
       stepNumber: 0,
@@ -354,7 +354,7 @@ test('vercel ai sdk preflight calls server when enableHooks overrides client con
 
 function newClient(options) {
   const defaults = defaultConfig();
-  return new SigilClient({
+  return new Agento11yClient({
     generationExport: {
       ...defaults.generationExport,
       protocol: 'http',

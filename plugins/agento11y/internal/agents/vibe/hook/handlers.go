@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/meta"
@@ -30,7 +30,7 @@ const otelInstrumentationName = "agento11y.vibe"
 
 // PostAgentTurn handles a vibe post_agent_turn hook event end to end:
 // read state, read the new transcript slice, read meta.json, map to a
-// sigil.Generation, persist the advanced offset and session snapshot, then
+// agento11y.Generation, persist the advanced offset and session snapshot, then
 // export. State is saved before the export so a post-export save failure
 // cannot strand the offset; a failed export rolls the state back so the turn
 // replays on the next fire.
@@ -213,7 +213,7 @@ func restoreState(sessionID string, prior state.Session, priorFound bool, logger
 	}
 }
 
-func emit(ctx context.Context, client *sigil.Client, mapped mapper.Mapped, toolEvents map[string]toolevents.Event, logger *log.Logger) error {
+func emit(ctx context.Context, client *agento11y.Client, mapped mapper.Mapped, toolEvents map[string]toolevents.Event, logger *log.Logger) error {
 	genCtx, rec := client.StartGeneration(ctx, mapped.Start)
 	rec.SetResult(mapped.Generation, nil)
 	emitToolSpans(genCtx, client, mapped.Generation, mapped.Start.ContentCapture, toolEvents, logger)
@@ -230,7 +230,7 @@ func emit(ctx context.Context, client *sigil.Client, mapped mapper.Mapped, toolE
 // and error status from the after_tool event for that call (when present;
 // otherwise the span gets synthetic zero-duration timing off the generation
 // completion time, like claude-code's reconstructed spans).
-func emitToolSpans(ctx context.Context, client *sigil.Client, gen sigil.Generation, mode sigil.ContentCaptureMode, events map[string]toolevents.Event, logger *log.Logger) {
+func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.Generation, mode agento11y.ContentCaptureMode, events map[string]toolevents.Event, logger *log.Logger) {
 	results := buildToolResultMap(gen.Input)
 	for _, msg := range gen.Output {
 		for _, part := range msg.Parts {
@@ -240,7 +240,7 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, gen sigil.Generati
 			tc := part.ToolCall
 			ev, hasEvent := events[tc.ID]
 			startedAt, completedAt := toolSpanWindow(ev, hasEvent, gen.CompletedAt)
-			_, toolRec := client.StartToolExecution(ctx, sigil.ToolExecutionStart{
+			_, toolRec := client.StartToolExecution(ctx, agento11y.ToolExecutionStart{
 				ToolName:        tc.Name,
 				ToolCallID:      tc.ID,
 				ToolType:        "function",
@@ -251,7 +251,7 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, gen sigil.Generati
 				StartedAt:       startedAt,
 				ContentCapture:  mode,
 			})
-			end := sigil.ToolExecutionEnd{CompletedAt: completedAt}
+			end := agento11y.ToolExecutionEnd{CompletedAt: completedAt}
 			if len(tc.InputJSON) > 0 {
 				end.Arguments = string(tc.InputJSON)
 			}
@@ -276,8 +276,8 @@ func emitToolSpans(ctx context.Context, client *sigil.Client, gen sigil.Generati
 
 // buildToolResultMap indexes the turn's tool-result parts by tool_call_id so
 // each tool call's span can carry its result.
-func buildToolResultMap(input []sigil.Message) map[string]sigil.ToolResult {
-	out := map[string]sigil.ToolResult{}
+func buildToolResultMap(input []agento11y.Message) map[string]agento11y.ToolResult {
+	out := map[string]agento11y.ToolResult{}
 	for _, msg := range input {
 		for _, part := range msg.Parts {
 			if part.ToolResult != nil && part.ToolResult.ToolCallID != "" {
@@ -315,8 +315,8 @@ func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.L
 	return providers
 }
 
-func buildClient(mode sigil.ContentCaptureMode, providers *otel.Providers, endpoint, tenantID, authToken string, logger *log.Logger) *sigil.Client {
-	cfg := sigil.Config{
+func buildClient(mode agento11y.ContentCaptureMode, providers *otel.Providers, endpoint, tenantID, authToken string, logger *log.Logger) *agento11y.Client {
+	cfg := agento11y.Config{
 		ContentCapture:   mode,
 		Logger:           logger,
 		GenerationExport: exportConfig(endpoint, tenantID, authToken),
@@ -325,16 +325,16 @@ func buildClient(mode sigil.ContentCaptureMode, providers *otel.Providers, endpo
 		cfg.Tracer = providers.Tracer(otelInstrumentationName)
 		cfg.Meter = providers.Meter(otelInstrumentationName)
 	}
-	return sigil.NewClient(cfg)
+	return agento11y.NewClient(cfg)
 }
 
-func exportConfig(endpoint, tenantID, authToken string) sigil.GenerationExportConfig {
-	return sigil.GenerationExportConfig{
-		Protocol: sigil.GenerationExportProtocolHTTP,
+func exportConfig(endpoint, tenantID, authToken string) agento11y.GenerationExportConfig {
+	return agento11y.GenerationExportConfig{
+		Protocol: agento11y.GenerationExportProtocolHTTP,
 		Endpoint: strings.TrimRight(endpoint, "/") + "/api/v1/generations:export",
 		Headers:  map[string]string{"User-Agent": useragent.For("vibe")},
-		Auth: sigil.AuthConfig{
-			Mode:          sigil.ExportAuthModeBasic,
+		Auth: agento11y.AuthConfig{
+			Mode:          agento11y.ExportAuthModeBasic,
 			BasicUser:     tenantID,
 			BasicPassword: authToken,
 			TenantID:      tenantID,

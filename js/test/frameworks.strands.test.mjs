@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  createSigilStrandsPlugin,
-  SigilStrandsHookProvider,
-  withSigilStrandsHooks,
+  Agento11yStrandsHookProvider,
+  createAgento11yStrandsPlugin,
+  withAgento11yStrandsHooks,
 } from '../.test-dist/frameworks/strands/index.js';
-import { SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient } from '../.test-dist/index.js';
 
 class CapturingExporter {
   requests = [];
@@ -23,12 +23,12 @@ class CapturingExporter {
 
 test('strands hook provider records model, tool, and conversation metadata', async () => {
   const exporter = new CapturingExporter();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     generationExporter: exporter,
     generationExport: { protocol: 'none' },
   });
-  const provider = new SigilStrandsHookProvider(client, {
-    conversationId: 'local-sigil-strands-demo',
+  const provider = new Agento11yStrandsHookProvider(client, {
+    conversationId: 'local-agento11y-strands-demo',
     agentName: 'local-strands-demo',
     providerResolver: 'auto',
   });
@@ -84,7 +84,7 @@ test('strands hook provider records model, tool, and conversation metadata', asy
   assert.equal(snapshot.toolExecutions.length, 1);
 
   const generation = snapshot.generations[0];
-  assert.equal(generation.conversationId, 'local-sigil-strands-demo');
+  assert.equal(generation.conversationId, 'local-agento11y-strands-demo');
   assert.equal(generation.agentName, 'local-strands-demo');
   assert.equal(generation.model.provider, 'openai');
   assert.equal(generation.model.name, 'gpt-4o-mini');
@@ -106,11 +106,11 @@ test('strands hook provider records model, tool, and conversation metadata', asy
   assert.deepEqual(toolExecution.result.content, [{ text: '42' }]);
 });
 
-test('withSigilStrandsHooks appends a plugin for configs and registers existing agents once', () => {
-  const client = new SigilClient({ generationExport: { protocol: 'none' } });
-  const config = withSigilStrandsHooks({ name: 'agent' }, client, { conversationId: 'conversation-1' });
+test('withAgento11yStrandsHooks appends a plugin for configs and registers existing agents once', () => {
+  const client = new Agento11yClient({ generationExport: { protocol: 'none' } });
+  const config = withAgento11yStrandsHooks({ name: 'agent' }, client, { conversationId: 'conversation-1' });
   assert.equal(config.plugins.length, 1);
-  const configAgain = withSigilStrandsHooks(config, client, { conversationId: 'conversation-1' });
+  const configAgain = withAgento11yStrandsHooks(config, client, { conversationId: 'conversation-1' });
   assert.equal(configAgain.plugins.length, 1);
 
   const agent = {
@@ -120,15 +120,15 @@ test('withSigilStrandsHooks appends a plugin for configs and registers existing 
       return () => {};
     },
   };
-  withSigilStrandsHooks(agent, client, { conversationId: 'conversation-1' });
-  withSigilStrandsHooks(agent, client, { conversationId: 'conversation-1' });
+  withAgento11yStrandsHooks(agent, client, { conversationId: 'conversation-1' });
+  withAgento11yStrandsHooks(agent, client, { conversationId: 'conversation-1' });
   assert.equal(agent.addHookCalls.length, 7);
 });
 
-test('createSigilStrandsPlugin exposes a stable Strands plugin', () => {
-  const client = new SigilClient({ generationExport: { protocol: 'none' } });
-  const plugin = createSigilStrandsPlugin(client);
-  assert.equal(plugin.name, 'sigil-strands-plugin');
+test('createAgento11yStrandsPlugin exposes a stable Strands plugin', () => {
+  const client = new Agento11yClient({ generationExport: { protocol: 'none' } });
+  const plugin = createAgento11yStrandsPlugin(client);
+  assert.equal(plugin.name, 'agento11y-strands-plugin');
 });
 
 function fakeAgent() {

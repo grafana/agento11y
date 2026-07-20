@@ -1,7 +1,7 @@
 """LangChain agent instrumented via Sigil's callback handler.
 
 The entire Sigil integration is one line: wrap the runnable config with
-`with_sigil_langchain_callbacks(...)`. LLM calls, tool invocations, and
+`with_agento11y_langchain_callbacks(...)`. LLM calls, tool invocations, and
 chain spans are all recorded automatically — no manual `start_generation`
 needed. Compare with `classifier.py` for the raw-SDK pattern.
 """
@@ -17,7 +17,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.tools import tool
 
 from agento11y import Client
-from agento11y_langchain import with_sigil_langchain_callbacks
+from agento11y_langchain import with_agento11y_langchain_callbacks
 
 from .weather import known_cities, lookup_forecast
 
@@ -72,14 +72,14 @@ def build_agent(model_name: str) -> Any:
 def run_agent(
     *,
     agent: Any,
-    sigil: Client,
+    agento11y: Client,
     user_message: str,
     conversation_id: str,
 ) -> str:
     """Invoke the agent with Sigil callbacks attached, return the final reply."""
-    config = with_sigil_langchain_callbacks(
+    config = with_agento11y_langchain_callbacks(
         {"metadata": {"conversation_id": conversation_id}},
-        client=sigil,
+        client=agento11y,
         provider_resolver="auto",
         agent_name="weather-agent",
         agent_version="1.0.0",

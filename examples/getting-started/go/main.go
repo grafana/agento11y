@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/joho/godotenv"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -49,11 +49,11 @@ func main() {
 	otel.SetMeterProvider(mp)
 	defer func() { _ = mp.Shutdown(ctx) }()
 
-	cfg := sigil.DefaultConfig()
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolHTTP
+	cfg := agento11y.DefaultConfig()
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolHTTP
 	cfg.GenerationExport.Endpoint = os.Getenv("AGENTO11Y_ENDPOINT")
-	cfg.GenerationExport.Auth = sigil.AuthConfig{
-		Mode:          sigil.ExportAuthModeBasic,
+	cfg.GenerationExport.Auth = agento11y.AuthConfig{
+		Mode:          agento11y.ExportAuthModeBasic,
 		TenantID:      os.Getenv("AGENTO11Y_AUTH_TENANT_ID"),
 		BasicPassword: os.Getenv("AGENTO11Y_AUTH_TOKEN"),
 	}
@@ -61,8 +61,8 @@ func main() {
 	// attributes on OTel spans and metrics, so keep them low-cardinality
 	// (team, env). See docs/concepts/tags-and-metadata.md.
 	cfg.Tags = map[string]string{"team": "checkout", "env": "dev"}
-	sigilClient := sigil.NewClient(cfg)
-	defer func() { _ = sigilClient.Shutdown(ctx) }()
+	agento11yClient := agento11y.NewClient(cfg)
+	defer func() { _ = agento11yClient.Shutdown(ctx) }()
 
 	openaiClient := openai.NewClient(option.WithAPIKey(os.Getenv("OPENAI_API_KEY")))
 
@@ -82,11 +82,11 @@ func main() {
 	responseText := completion.Choices[0].Message.Content
 	fmt.Printf("Response: %s\n\n", responseText)
 
-	ctx, rec := sigilClient.StartGeneration(ctx, sigil.GenerationStart{
+	ctx, rec := agento11yClient.StartGeneration(ctx, agento11y.GenerationStart{
 		ConversationID: "getting-started-go",
 		AgentName:      "getting-started",
 		AgentVersion:   "1.0.0",
-		Model:          sigil.ModelRef{Provider: "openai", Name: model},
+		Model:          agento11y.ModelRef{Provider: "openai", Name: model},
 		// user_id sets the user.id span attribute (all SDKs); use it for
 		// end-user identity instead of a high-cardinality tag.
 		UserID: "demo-user",
@@ -98,13 +98,13 @@ func main() {
 	defer rec.End()
 	_ = ctx
 
-	rec.SetResult(sigil.Generation{
-		Input:         []sigil.Message{sigil.UserTextMessage(prompt)},
-		Output:        []sigil.Message{sigil.AssistantTextMessage(responseText)},
+	rec.SetResult(agento11y.Generation{
+		Input:         []agento11y.Message{agento11y.UserTextMessage(prompt)},
+		Output:        []agento11y.Message{agento11y.AssistantTextMessage(responseText)},
 		ResponseID:    completion.ID,
 		ResponseModel: completion.Model,
 		StopReason:    string(completion.Choices[0].FinishReason),
-		Usage: sigil.TokenUsage{
+		Usage: agento11y.TokenUsage{
 			InputTokens:  completion.Usage.PromptTokens,
 			OutputTokens: completion.Usage.CompletionTokens,
 		},

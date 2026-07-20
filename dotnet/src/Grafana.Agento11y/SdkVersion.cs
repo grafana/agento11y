@@ -1,4 +1,4 @@
-namespace Grafana.Sigil;
+namespace Grafana.Agento11y;
 
 /// <summary>
 /// SDK version and User-Agent product token.

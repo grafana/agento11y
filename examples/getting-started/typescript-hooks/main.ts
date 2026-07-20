@@ -18,14 +18,14 @@ import {
 } from "@opentelemetry/sdk-metrics";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { Resource } from "@opentelemetry/resources";
-import { createSigilClient } from "@grafana/agento11y";
+import { createAgento11yClient } from "@grafana/agento11y";
 import type {
   GenerationRecorder,
   HookEvaluateRequest,
   Message,
 } from "@grafana/agento11y";
 
-function sigilApiEndpoint(): string {
+function agento11yApiEndpoint(): string {
   const url = new URL(process.env.AGENTO11Y_ENDPOINT!);
   return `${url.protocol}//${url.host}`;
 }
@@ -76,7 +76,7 @@ metrics.setGlobalMeterProvider(mp);
 const openai = new OpenAI();
 const model = "gpt-4.1-mini";
 
-const sigil = createSigilClient({
+const agento11y = createAgento11yClient({
   generationExport: {
     protocol: "http",
     endpoint: process.env.AGENTO11Y_ENDPOINT!,
@@ -86,7 +86,7 @@ const sigil = createSigilClient({
       basicPassword: process.env.AGENTO11Y_AUTH_TOKEN!,
     },
   },
-  api: { endpoint: sigilApiEndpoint() },
+  api: { endpoint: agento11yApiEndpoint() },
   hooks: { enabled: true, phases: ["preflight"] },
 });
 
@@ -109,7 +109,7 @@ const hookRequest: HookEvaluateRequest = {
   },
 };
 
-const hookResponse = await sigil.evaluateHook(hookRequest);
+const hookResponse = await agento11y.evaluateHook(hookRequest);
 
 if (hookResponse.action === "deny") {
   console.log(
@@ -138,7 +138,7 @@ if (hookResponse.action === "deny") {
   const usage = completion.usage;
   console.log(`Response: ${responseText}\n`);
 
-  await sigil.startGeneration(
+  await agento11y.startGeneration(
     {
       conversationId: "getting-started-typescript-hooks",
       agentName: "getting-started-hooks",
@@ -166,6 +166,6 @@ if (hookResponse.action === "deny") {
   );
 }
 
-await sigil.shutdown();
+await agento11y.shutdown();
 await tp.shutdown();
 await mp.shutdown();

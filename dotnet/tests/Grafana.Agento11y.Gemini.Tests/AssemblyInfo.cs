@@ -3,11 +3,11 @@ using System.Runtime.CompilerServices;
 internal static class TestEnvCleanup
 {
     [ModuleInitializer]
-    internal static void ClearSigilEnvVars()
+    internal static void ClearAgento11yEnvVars()
     {
         // Clear canonical AGENTO11Y_* / SIGIL_* env vars so individual tests
         // don't pick up developer-machine config when they construct a
-        // SigilClient.
+        // Agento11yClient.
         string[] suffixes =
         {
             "ENDPOINT",

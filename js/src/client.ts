@@ -33,6 +33,10 @@ import {
 import { createDefaultGenerationExporter } from './exporters/default.js';
 import { evaluateHook as evaluateHookImpl } from './hooks.js';
 import type {
+  Agento11yDebugSnapshot,
+  Agento11yLogger,
+  Agento11ySdkConfig,
+  Agento11ySdkConfigInput,
   ContentCaptureMode,
   ConversationRating,
   ConversationRatingInput,
@@ -54,10 +58,6 @@ import type {
   Message,
   RecorderCallback,
   RecorderWithError,
-  SigilDebugSnapshot,
-  SigilLogger,
-  SigilSdkConfig,
-  SigilSdkConfigInput,
   SubmitConversationRatingResponse,
   ToolExecution,
   ToolExecutionRecorder,
@@ -218,11 +218,11 @@ function buildToolResultMessage(
   };
 }
 
-export class SigilClient {
-  private readonly config: SigilSdkConfig;
+export class Agento11yClient {
+  private readonly config: Agento11ySdkConfig;
   private readonly nowFn: () => Date;
   private readonly sleepFn: (durationMs: number) => Promise<void>;
-  private readonly logger: SigilLogger;
+  private readonly logger: Agento11yLogger;
   private readonly generationExporter: GenerationExporter;
   private readonly tracer: Tracer;
   private readonly meter: Meter;
@@ -248,7 +248,7 @@ export class SigilClient {
    *
    * `inputConfig` is merged with defaults.
    */
-  constructor(inputConfig: SigilSdkConfigInput = {}) {
+  constructor(inputConfig: Agento11ySdkConfigInput = {}) {
     this.config = mergeConfig(inputConfig);
     this.nowFn = this.config.now ?? (() => new Date());
     this.sleepFn = this.config.sleep ?? defaultSleep;
@@ -288,7 +288,7 @@ export class SigilClient {
     // reject a step for which the caller only provided completedAt.
     const validationError = validateWorkflowStep(step);
     if (validationError !== undefined) {
-      throw new Error(`sigil workflow step validation failed: ${validationError.message}`);
+      throw new Error(`agento11y workflow step validation failed: ${validationError.message}`);
     }
     const normalized = this.normalizeWorkflowStep(step);
     // Enqueue first: internalEnqueueWorkflowStep throws on a payload/queue
@@ -478,10 +478,10 @@ export class SigilClient {
 
     const normalizedConversationId = conversationId.trim();
     if (normalizedConversationId.length === 0) {
-      throw new Error('sigil conversation rating validation failed: conversationId is required');
+      throw new Error('agento11y conversation rating validation failed: conversationId is required');
     }
     if (normalizedConversationId.length > maxRatingConversationIdLen) {
-      throw new Error('sigil conversation rating validation failed: conversationId is too long');
+      throw new Error('agento11y conversation rating validation failed: conversationId is too long');
     }
 
     const normalizedInput = normalizeConversationRatingInput(input);
@@ -511,26 +511,30 @@ export class SigilClient {
 
     const responseText = (await response.text()).trim();
     if (response.status === 400) {
-      throw new Error(`sigil conversation rating validation failed: ${ratingErrorText(responseText, response.status)}`);
+      throw new Error(
+        `agento11y conversation rating validation failed: ${ratingErrorText(responseText, response.status)}`,
+      );
     }
     if (response.status === 409) {
-      throw new Error(`sigil conversation rating conflict: ${ratingErrorText(responseText, response.status)}`);
+      throw new Error(`agento11y conversation rating conflict: ${ratingErrorText(responseText, response.status)}`);
     }
     if (!response.ok) {
       throw new Error(
-        `sigil conversation rating transport failed: status ${response.status}: ${ratingErrorText(responseText, response.status)}`,
+        `agento11y conversation rating transport failed: status ${response.status}: ${ratingErrorText(responseText, response.status)}`,
       );
     }
 
     if (responseText.length === 0) {
-      throw new Error('sigil conversation rating transport failed: empty response payload');
+      throw new Error('agento11y conversation rating transport failed: empty response payload');
     }
 
     let payload: unknown;
     try {
       payload = JSON.parse(responseText);
     } catch (error) {
-      throw new Error(`sigil conversation rating transport failed: invalid JSON response: ${asError(error).message}`);
+      throw new Error(
+        `agento11y conversation rating transport failed: invalid JSON response: ${asError(error).message}`,
+      );
     }
 
     return parseSubmitConversationRatingResponse(payload);
@@ -595,13 +599,13 @@ export class SigilClient {
       try {
         await this.flushInternal();
       } catch (error) {
-        this.logWarn('sigil generation export flush on shutdown failed', error);
+        this.logWarn('agento11y generation export flush on shutdown failed', error);
       }
 
       try {
         await this.generationExporter.shutdown?.();
       } catch (error) {
-        this.logWarn('sigil generation exporter shutdown failed', error);
+        this.logWarn('agento11y generation exporter shutdown failed', error);
       }
 
       this.closed = true;
@@ -611,7 +615,7 @@ export class SigilClient {
   }
 
   /** Returns a cloned in-memory snapshot for debugging and tests. */
-  debugSnapshot(): SigilDebugSnapshot {
+  debugSnapshot(): Agento11yDebugSnapshot {
     return {
       generations: this.generations.map(cloneGeneration),
       workflowSteps: this.workflowSteps.map(cloneWorkflowStep),
@@ -651,7 +655,7 @@ export class SigilClient {
 
   internalEnqueueGeneration(generation: Generation): void {
     if (this.shuttingDown || this.closed) {
-      throw new Error('sigil client is shutdown');
+      throw new Error('agento11y client is shutdown');
     }
 
     const payloadMaxBytes = this.config.generationExport.payloadMaxBytes;
@@ -677,7 +681,7 @@ export class SigilClient {
 
   internalEnqueueWorkflowStep(step: WorkflowStep): void {
     if (this.shuttingDown || this.closed) {
-      throw new Error('sigil client is shutdown');
+      throw new Error('agento11y client is shutdown');
     }
 
     const payloadMaxBytes = this.config.generationExport.payloadMaxBytes;
@@ -1138,7 +1142,7 @@ export class SigilClient {
 
   private assertOpen(): void {
     if (this.shuttingDown || this.closed) {
-      throw new Error('sigil client is shutdown');
+      throw new Error('agento11y client is shutdown');
     }
   }
 
@@ -1157,7 +1161,7 @@ export class SigilClient {
 
   private triggerAsyncFlush(): void {
     void this.flushInternal().catch((error) => {
-      this.logWarn('sigil generation export failed', error);
+      this.logWarn('agento11y generation export failed', error);
     });
   }
 
@@ -1204,7 +1208,7 @@ export class SigilClient {
       throw errors[0];
     }
     if (errors.length > 1) {
-      throw new AggregateError(errors, 'sigil export failed');
+      throw new AggregateError(errors, 'agento11y export failed');
     }
   }
 
@@ -1275,7 +1279,7 @@ export class SigilClient {
   private logRejectedResults(results: Array<{ generationId: string; accepted: boolean; error?: string }>): void {
     for (const result of results) {
       if (!result.accepted) {
-        this.logWarn(`sigil generation rejected id=${result.generationId}`, result.error);
+        this.logWarn(`agento11y generation rejected id=${result.generationId}`, result.error);
       }
     }
   }
@@ -1283,7 +1287,7 @@ export class SigilClient {
   private logRejectedWorkflowStepResults(results: Array<{ stepId: string; accepted: boolean; error?: string }>): void {
     for (const result of results) {
       if (!result.accepted) {
-        this.logWarn(`sigil workflow step rejected id=${result.stepId}`, result.error);
+        this.logWarn(`agento11y workflow step rejected id=${result.stepId}`, result.error);
       }
     }
   }
@@ -1318,7 +1322,7 @@ class GenerationRecorderImpl implements GenerationRecorder {
   private extraMetadata?: Record<string, unknown>;
 
   constructor(
-    private readonly client: SigilClient,
+    private readonly client: Agento11yClient,
     seed: GenerationStart,
     defaultMode: GenerationMode,
   ) {
@@ -1508,7 +1512,7 @@ class GenerationRecorderImpl implements GenerationRecorder {
         effectiveContentCaptureMode = 'metadata_only';
         stripContent(generation, callErrorCategory);
         stampContentCaptureMetadata(generation, effectiveContentCaptureMode);
-        this.client.internalLogWarn('sigil generation sanitization failed; falling back to metadata_only', error);
+        this.client.internalLogWarn('agento11y generation sanitization failed; falling back to metadata_only', error);
       }
     }
 
@@ -1539,14 +1543,14 @@ class GenerationRecorderImpl implements GenerationRecorder {
     let enqueueError: Error | undefined;
     if (validationError !== undefined) {
       this.localError = validationError;
-      this.client.internalLogWarn('sigil generation validation failed', validationError);
+      this.client.internalLogWarn('agento11y generation validation failed', validationError);
     } else {
       try {
         this.client.internalEnqueueGeneration(generation);
       } catch (error) {
         enqueueError = asError(error);
         this.localError = enqueueError;
-        this.client.internalLogWarn('sigil generation enqueue failed', enqueueError);
+        this.client.internalLogWarn('agento11y generation enqueue failed', enqueueError);
       }
     }
 
@@ -1594,7 +1598,7 @@ class EmbeddingRecorderImpl implements EmbeddingRecorder {
   private localError?: Error;
 
   constructor(
-    private readonly client: SigilClient,
+    private readonly client: Agento11yClient,
     seed: EmbeddingStart,
   ) {
     this.seed = cloneEmbeddingStart(seed);
@@ -1662,7 +1666,7 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
   private localError?: Error;
 
   constructor(
-    private readonly client: SigilClient,
+    private readonly client: Agento11yClient,
     seed: ToolExecutionStart,
   ) {
     this.seed = cloneToolExecutionStart(seed);
@@ -1747,7 +1751,7 @@ class ToolExecutionRecorderImpl implements ToolExecutionRecorder {
     const validationError = validateToolExecution(toolExecution);
     if (validationError !== undefined) {
       this.localError = validationError;
-      this.client.internalLogWarn('sigil tool execution validation failed', validationError);
+      this.client.internalLogWarn('agento11y tool execution validation failed', validationError);
     } else {
       this.client.internalRecordToolExecution(toolExecution);
     }
@@ -2032,7 +2036,7 @@ function setEmbeddingEndSpanAttributes(
   span: Span,
   result: EmbeddingResult,
   hasResult: boolean,
-  captureConfig: SigilSdkConfig['embeddingCapture'],
+  captureConfig: Agento11ySdkConfig['embeddingCapture'],
   contentCaptureMode: ContentCaptureMode = 'default',
 ): void {
   if (hasResult) {
@@ -2154,30 +2158,30 @@ function normalizeConversationRatingInput(input: ConversationRatingInput): Conve
   };
 
   if (normalized.ratingId.length === 0) {
-    throw new Error('sigil conversation rating validation failed: ratingId is required');
+    throw new Error('agento11y conversation rating validation failed: ratingId is required');
   }
   if (normalized.ratingId.length > maxRatingIdLen) {
-    throw new Error('sigil conversation rating validation failed: ratingId is too long');
+    throw new Error('agento11y conversation rating validation failed: ratingId is too long');
   }
   if (normalized.rating !== 'CONVERSATION_RATING_VALUE_GOOD' && normalized.rating !== 'CONVERSATION_RATING_VALUE_BAD') {
     throw new Error(
-      'sigil conversation rating validation failed: rating must be CONVERSATION_RATING_VALUE_GOOD or CONVERSATION_RATING_VALUE_BAD',
+      'agento11y conversation rating validation failed: rating must be CONVERSATION_RATING_VALUE_GOOD or CONVERSATION_RATING_VALUE_BAD',
     );
   }
   if (normalized.comment !== undefined && encodedSizeBytes(normalized.comment) > maxRatingCommentBytes) {
-    throw new Error('sigil conversation rating validation failed: comment is too long');
+    throw new Error('agento11y conversation rating validation failed: comment is too long');
   }
   if (normalized.generationId !== undefined && normalized.generationId.length > maxRatingGenerationIdLen) {
-    throw new Error('sigil conversation rating validation failed: generationId is too long');
+    throw new Error('agento11y conversation rating validation failed: generationId is too long');
   }
   if (normalized.raterId !== undefined && normalized.raterId.length > maxRatingActorIdLen) {
-    throw new Error('sigil conversation rating validation failed: raterId is too long');
+    throw new Error('agento11y conversation rating validation failed: raterId is too long');
   }
   if (normalized.source !== undefined && normalized.source.length > maxRatingSourceLen) {
-    throw new Error('sigil conversation rating validation failed: source is too long');
+    throw new Error('agento11y conversation rating validation failed: source is too long');
   }
   if (normalized.metadata !== undefined && encodedSizeBytes(normalized.metadata) > maxRatingMetadataBytes) {
-    throw new Error('sigil conversation rating validation failed: metadata is too large');
+    throw new Error('agento11y conversation rating validation failed: metadata is too large');
   }
 
   return normalized;
@@ -2191,7 +2195,7 @@ function buildConversationRatingEndpoint(endpoint: string, insecure: boolean, co
 function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean): string {
   const trimmed = endpoint.trim();
   if (trimmed.length === 0) {
-    throw new Error('sigil conversation rating transport failed: api endpoint is required');
+    throw new Error('agento11y conversation rating transport failed: api endpoint is required');
   }
 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
@@ -2205,17 +2209,17 @@ function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean): string {
   const withoutScheme = trimmed.startsWith('grpc://') ? trimmed.slice('grpc://'.length) : trimmed;
   const host = withoutScheme.split('/')[0]?.trim();
   if (host === undefined || host.length === 0) {
-    throw new Error('sigil conversation rating transport failed: api endpoint host is required');
+    throw new Error('agento11y conversation rating transport failed: api endpoint host is required');
   }
   return `${insecure ? 'http' : 'https'}://${host}`;
 }
 
 function parseSubmitConversationRatingResponse(payload: unknown): SubmitConversationRatingResponse {
   if (!isObject(payload)) {
-    throw new Error('sigil conversation rating transport failed: invalid response payload');
+    throw new Error('agento11y conversation rating transport failed: invalid response payload');
   }
   if (!isObject(payload.rating) || !isObject(payload.summary)) {
-    throw new Error('sigil conversation rating transport failed: invalid response payload');
+    throw new Error('agento11y conversation rating transport failed: invalid response payload');
   }
 
   const rating = mapConversationRating(payload.rating);
@@ -2229,7 +2233,7 @@ function mapConversationRating(payload: Record<string, unknown>): ConversationRa
   const rating = asString(payload.rating) as ConversationRatingValue;
   const createdAt = asString(payload.created_at);
   if (ratingId === undefined || conversationId === undefined || rating === undefined || createdAt === undefined) {
-    throw new Error('sigil conversation rating transport failed: invalid rating payload');
+    throw new Error('agento11y conversation rating transport failed: invalid rating payload');
   }
 
   return {
@@ -2258,7 +2262,7 @@ function mapConversationRatingSummary(payload: Record<string, unknown>): Convers
     latestRatedAt === undefined ||
     hasBadRating === undefined
   ) {
-    throw new Error('sigil conversation rating transport failed: invalid rating summary payload');
+    throw new Error('agento11y conversation rating transport failed: invalid rating summary payload');
   }
 
   return {

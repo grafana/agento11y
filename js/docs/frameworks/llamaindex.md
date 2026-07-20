@@ -1,6 +1,6 @@
 # LlamaIndex Handler (`@grafana/agento11y/llamaindex`)
 
-Use `SigilLlamaIndexHandler` to map LlamaIndex workflow/agent callback lifecycles to Sigil generations.
+Use `Agento11yLlamaIndexHandler` to map LlamaIndex workflow/agent callback lifecycles to Sigil generations.
 
 ## Install
 
@@ -11,13 +11,13 @@ pnpm add @grafana/agento11y llamaindex
 ## Quickstart
 
 ```ts
-import { SigilClient } from '@grafana/agento11y';
-import { withSigilLlamaIndexCallbacks } from '@grafana/agento11y/llamaindex';
+import { Agento11yClient } from '@grafana/agento11y';
+import { withAgento11yLlamaIndexCallbacks } from '@grafana/agento11y/llamaindex';
 import { CallbackManager, Settings } from 'llamaindex';
 
-const client = new SigilClient();
+const client = new Agento11yClient();
 const callbackManager = new CallbackManager();
-const config = withSigilLlamaIndexCallbacks({ callbackManager }, client, {
+const config = withAgento11yLlamaIndexCallbacks({ callbackManager }, client, {
   providerResolver: 'auto',
   agentName: 'llamaindex-app',
 });
@@ -25,17 +25,17 @@ const config = withSigilLlamaIndexCallbacks({ callbackManager }, client, {
 Settings.callbackManager = config.callbackManager;
 ```
 
-`withSigilLlamaIndexCallbacks(...)` registers Sigil listeners through LlamaIndex's callback-manager API and returns the configured `callbackManager`.
-If you already own a manager instance, use `attachSigilLlamaIndexCallbacks(existingManager, client, options)`.
+`withAgento11yLlamaIndexCallbacks(...)` registers Sigil listeners through LlamaIndex's callback-manager API and returns the configured `callbackManager`.
+If you already own a manager instance, use `attachAgento11yLlamaIndexCallbacks(existingManager, client, options)`.
 
 ## Streaming snippet
 
 ```ts
-import { SigilClient } from '@grafana/agento11y';
-import { SigilLlamaIndexHandler } from '@grafana/agento11y/llamaindex';
+import { Agento11yClient } from '@grafana/agento11y';
+import { Agento11yLlamaIndexHandler } from '@grafana/agento11y/llamaindex';
 
-const client = new SigilClient();
-const handler = new SigilLlamaIndexHandler(client, { providerResolver: 'auto' });
+const client = new Agento11yClient();
+const handler = new Agento11yLlamaIndexHandler(client, { providerResolver: 'auto' });
 
 await handler.handleLLMStart(
   { kwargs: { model: 'claude-sonnet-4-5' } },
@@ -55,7 +55,7 @@ Conversation ID precedence:
 
 1. `conversation_id` / `session_id` / `group_id`
 2. `thread_id`
-3. fallback: `sigil:framework:llamaindex:<run_id>`
+3. fallback: `agento11y:framework:llamaindex:<run_id>`
 
 ## Metadata and lineage
 

@@ -1,5 +1,5 @@
 import { type EnvPair, envRedactInputMessages, envTrimmed } from './config.js';
-import type { GenerationSanitizer, Message, MessagePart, SigilLogger } from './types.js';
+import type { Agento11yLogger, GenerationSanitizer, Message, MessagePart } from './types.js';
 import { cloneGeneration } from './utils.js';
 
 /**
@@ -109,7 +109,7 @@ class SecretRedactor {
 export function createSecretRedactionSanitizer(
   options: SecretRedactionOptions = {},
   env: Record<string, string | undefined> = readProcessEnv(),
-  logger: SigilLogger = consoleLogger,
+  logger: Agento11yLogger = consoleLogger,
 ): GenerationSanitizer {
   const redactor = new SecretRedactor(options.redactEmailAddresses ?? true);
   const redactInputMessages = options.redactInputMessages ?? parseEnvBool(env, envRedactInputMessages, logger) ?? false;
@@ -230,14 +230,14 @@ const FALSE_VALUES = new Set(['0', 'false', 'no', 'off']);
 function parseEnvBool(
   env: Record<string, string | undefined>,
   pair: EnvPair,
-  logger: SigilLogger,
+  logger: Agento11yLogger,
 ): boolean | undefined {
   const selected = envTrimmed(env, pair);
   if (selected === undefined) return undefined;
   const normalized = selected.value.toLowerCase();
   if (TRUE_VALUES.has(normalized)) return true;
   if (FALSE_VALUES.has(normalized)) return false;
-  logger.warn?.(`sigil: ignoring invalid ${selected.key}: ${selected.value}`);
+  logger.warn?.(`agento11y: ignoring invalid ${selected.key}: ${selected.value}`);
   return undefined;
 }
 
@@ -248,7 +248,7 @@ function readProcessEnv(): Record<string, string | undefined> {
   return {};
 }
 
-const consoleLogger: SigilLogger = {
+const consoleLogger: Agento11yLogger = {
   warn(message: string, ...args: unknown[]) {
     console.warn(message, ...args);
   },

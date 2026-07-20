@@ -7,14 +7,14 @@ import (
 	"os"
 	"strings"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
-var suite = sigil.TestSuite{
+var suite = agento11y.TestSuite{
 	SuiteID: "go-experiment-example",
 	Name:    "Go example suite",
 	Version: "2026-06-02",
-	TestCases: []sigil.TestCase{
+	TestCases: []agento11y.TestCase{
 		{
 			TestCaseID: "capital-france",
 			Name:       "Capital of France",
@@ -45,9 +45,9 @@ func main() {
 	defer func() { _ = client.Shutdown(ctx) }()
 
 	runID := getenv("RUN_ID", "go-experiment-"+getenv("GIT_SHA", "local"))
-	candidate := &sigil.Candidate{AgentName: "go-example-agent", GitSHA: getenv("GIT_SHA", "local")}
-	evaluator := sigil.Evaluator{EvaluatorID: "example.exact_match", Version: "2026-06-02", Kind: sigil.EvaluatorKindDeterministic}
-	run, err := sigil.WithExperiment(ctx, sigil.ExperimentOptions{
+	candidate := &agento11y.Candidate{AgentName: "go-example-agent", GitSHA: getenv("GIT_SHA", "local")}
+	evaluator := agento11y.Evaluator{EvaluatorID: "example.exact_match", Version: "2026-06-02", Kind: agento11y.EvaluatorKindDeterministic}
+	run, err := agento11y.WithExperiment(ctx, agento11y.ExperimentOptions{
 		Client:           client,
 		RunID:            runID,
 		Name:             "Go example experiment",
@@ -55,7 +55,7 @@ func main() {
 		Candidate:        candidate,
 		DefaultEvaluator: &evaluator,
 		Tags:             []string{"example", "go"},
-	}, func(ctx context.Context, exp *sigil.ExperimentRun) error {
+	}, func(ctx context.Context, exp *agento11y.ExperimentRun) error {
 		for _, testCase := range suite.Cases() {
 			if err := runTestCase(ctx, client, exp, testCase, evaluator); err != nil {
 				return err
@@ -74,8 +74,8 @@ func main() {
 	log.Printf("View in Sigil: %s", run.URL())
 }
 
-func runTestCase(ctx context.Context, client *sigil.Client, exp *sigil.ExperimentRun, testCase sigil.TestCase, evaluator sigil.Evaluator) (err error) {
-	return exp.WithTrial(ctx, testCase, func(ctx context.Context, trial *sigil.Trial) error {
+func runTestCase(ctx context.Context, client *agento11y.Client, exp *agento11y.ExperimentRun, testCase agento11y.TestCase, evaluator agento11y.Evaluator) (err error) {
+	return exp.WithTrial(ctx, testCase, func(ctx context.Context, trial *agento11y.Trial) error {
 		response, err := callRemoteInstrumentedAgent(ctx, client, exp.RunID, testCase)
 		if err != nil {
 			return err
@@ -83,53 +83,53 @@ func runTestCase(ctx context.Context, client *sigil.Client, exp *sigil.Experimen
 		trial.BindGeneration(response.GenerationID, response.ConversationID)
 		exactMatchScore(trial, testCase, response.Answer, evaluator)
 		return nil
-	}, sigil.WithTrialMetadata(testCase.Metadata))
+	}, agento11y.WithTrialMetadata(testCase.Metadata))
 }
 
-func buildClient() *sigil.Client {
+func buildClient() *agento11y.Client {
 	endpoint := strings.TrimRight(requireEnv("AGENTO11Y_ENDPOINT"), "/")
-	authMode := sigil.ExportAuthMode(strings.ToLower(getenv("AGENTO11Y_AUTH_MODE", string(sigil.ExportAuthModeBasic))))
+	authMode := agento11y.ExportAuthMode(strings.ToLower(getenv("AGENTO11Y_AUTH_MODE", string(agento11y.ExportAuthModeBasic))))
 	authToken := strings.TrimSpace(os.Getenv("AGENTO11Y_AUTH_TOKEN"))
 	tenantID := requireEnv("AGENTO11Y_AUTH_TENANT_ID")
 
-	cfg := sigil.DefaultConfig()
+	cfg := agento11y.DefaultConfig()
 	cfg.API.Endpoint = endpoint
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolHTTP
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolHTTP
 	cfg.GenerationExport.Endpoint = endpoint
 	cfg.GenerationExport.Auth = authConfig(authMode, tenantID, authToken)
-	cfg.GenerationExport.Insecure = sigil.BoolPtr(false)
-	return sigil.NewClient(cfg)
+	cfg.GenerationExport.Insecure = agento11y.BoolPtr(false)
+	return agento11y.NewClient(cfg)
 }
 
-func authConfig(mode sigil.ExportAuthMode, tenantID string, token string) sigil.AuthConfig {
+func authConfig(mode agento11y.ExportAuthMode, tenantID string, token string) agento11y.AuthConfig {
 	switch mode {
-	case sigil.ExportAuthModeBasic:
+	case agento11y.ExportAuthModeBasic:
 		if token == "" {
 			log.Fatal("AGENTO11Y_AUTH_TOKEN is required when AGENTO11Y_AUTH_MODE=basic")
 		}
-		return sigil.AuthConfig{
-			Mode:          sigil.ExportAuthModeBasic,
+		return agento11y.AuthConfig{
+			Mode:          agento11y.ExportAuthModeBasic,
 			TenantID:      tenantID,
 			BasicPassword: token,
 		}
-	case sigil.ExportAuthModeBearer:
+	case agento11y.ExportAuthModeBearer:
 		if token == "" {
 			log.Fatal("AGENTO11Y_AUTH_TOKEN is required when AGENTO11Y_AUTH_MODE=bearer")
 		}
-		return sigil.AuthConfig{
-			Mode:        sigil.ExportAuthModeBearer,
+		return agento11y.AuthConfig{
+			Mode:        agento11y.ExportAuthModeBearer,
 			BearerToken: token,
 		}
-	case sigil.ExportAuthModeTenant:
-		return sigil.AuthConfig{
-			Mode:     sigil.ExportAuthModeTenant,
+	case agento11y.ExportAuthModeTenant:
+		return agento11y.AuthConfig{
+			Mode:     agento11y.ExportAuthModeTenant,
 			TenantID: tenantID,
 		}
-	case sigil.ExportAuthModeNone:
-		return sigil.AuthConfig{Mode: sigil.ExportAuthModeNone}
+	case agento11y.ExportAuthModeNone:
+		return agento11y.AuthConfig{Mode: agento11y.ExportAuthModeNone}
 	default:
 		log.Fatalf("unsupported AGENTO11Y_AUTH_MODE %q", mode)
-		return sigil.AuthConfig{}
+		return agento11y.AuthConfig{}
 	}
 }
 
@@ -139,32 +139,32 @@ type remoteAgentResponse struct {
 	ConversationID string
 }
 
-func callRemoteInstrumentedAgent(_ context.Context, client *sigil.Client, runID string, item sigil.TestCase) (remoteAgentResponse, error) {
+func callRemoteInstrumentedAgent(_ context.Context, client *agento11y.Client, runID string, item agento11y.TestCase) (remoteAgentResponse, error) {
 	// In a real A2A/HTTP runner, runID would be serialized into request
 	// metadata or a header, then restored by the receiving service.
 	return remoteInstrumentedAgent(context.Background(), client, runID, item)
 }
 
-func remoteInstrumentedAgent(ctx context.Context, client *sigil.Client, runID string, item sigil.TestCase) (remoteAgentResponse, error) {
+func remoteInstrumentedAgent(ctx context.Context, client *agento11y.Client, runID string, item agento11y.TestCase) (remoteAgentResponse, error) {
 	question := fmt.Sprint(item.Input)
-	generationID := sigil.StableID("gen", runID, item.TestCaseID)
-	conversationID := sigil.StableID("conv", runID, item.TestCaseID)
+	generationID := agento11y.StableID("gen", runID, item.TestCaseID)
+	conversationID := agento11y.StableID("conv", runID, item.TestCaseID)
 
-	ctx = sigil.WithExperimentRunID(ctx, runID)
-	ctx = sigil.WithConversationID(ctx, conversationID)
-	ctx = sigil.WithAgentName(ctx, "go-example-agent")
+	ctx = agento11y.WithExperimentRunID(ctx, runID)
+	ctx = agento11y.WithConversationID(ctx, conversationID)
+	ctx = agento11y.WithAgentName(ctx, "go-example-agent")
 
-	_, rec := client.StartGeneration(ctx, sigil.GenerationStart{
+	_, rec := client.StartGeneration(ctx, agento11y.GenerationStart{
 		ID:    generationID,
-		Model: sigil.ModelRef{Provider: "example", Name: "canned-answer"},
+		Model: agento11y.ModelRef{Provider: "example", Name: "canned-answer"},
 	})
 	defer rec.End()
 
 	answer := answerQuestion(question)
-	rec.SetResult(sigil.Generation{
-		Model:  sigil.ModelRef{Provider: "example", Name: "canned-answer"},
-		Input:  []sigil.Message{sigil.UserTextMessage(question)},
-		Output: []sigil.Message{sigil.AssistantTextMessage(answer)},
+	rec.SetResult(agento11y.Generation{
+		Model:  agento11y.ModelRef{Provider: "example", Name: "canned-answer"},
+		Input:  []agento11y.Message{agento11y.UserTextMessage(question)},
+		Output: []agento11y.Message{agento11y.AssistantTextMessage(answer)},
 	}, nil)
 	return remoteAgentResponse{
 		Answer:         answer,
@@ -173,7 +173,7 @@ func remoteInstrumentedAgent(ctx context.Context, client *sigil.Client, runID st
 	}, nil
 }
 
-func exactMatchScore(trial *sigil.Trial, item sigil.TestCase, output string, evaluator sigil.Evaluator) {
+func exactMatchScore(trial *agento11y.Trial, item agento11y.TestCase, output string, evaluator agento11y.Evaluator) {
 	expected := strings.ToLower(fmt.Sprint(item.Expected))
 	actual := strings.ToLower(output)
 	passed := strings.Contains(actual, expected)
@@ -182,7 +182,7 @@ func exactMatchScore(trial *sigil.Trial, item sigil.TestCase, output string, eva
 		value = 1.0
 	}
 
-	trial.FinalScore(sigil.NumberScoreValue(value), sigil.ScoreOptions{
+	trial.FinalScore(agento11y.NumberScoreValue(value), agento11y.ScoreOptions{
 		Passed:      &passed,
 		Explanation: fmt.Sprintf("expected %q, got %q", item.Expected, output),
 		Evaluator:   &evaluator,

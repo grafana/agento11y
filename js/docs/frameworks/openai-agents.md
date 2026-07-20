@@ -1,6 +1,6 @@
 # OpenAI Agents Handler (`@grafana/agento11y/openai-agents`)
 
-Use `SigilOpenAIAgentsHandler` to map OpenAI Agents lifecycle callbacks to Sigil generations.
+Use `Agento11yOpenAIAgentsHandler` to map OpenAI Agents lifecycle callbacks to Sigil generations.
 
 ## Install
 
@@ -11,32 +11,32 @@ pnpm add @grafana/agento11y @openai/agents
 ## Quickstart
 
 ```ts
-import { SigilClient } from '@grafana/agento11y';
-import { withSigilOpenAIAgentsHooks } from '@grafana/agento11y/openai-agents';
+import { Agento11yClient } from '@grafana/agento11y';
+import { withAgento11yOpenAIAgentsHooks } from '@grafana/agento11y/openai-agents';
 import { Runner } from '@openai/agents';
 
-const client = new SigilClient();
+const client = new Agento11yClient();
 const runner = new Runner();
-const sigilHooks = withSigilOpenAIAgentsHooks(runner, client, {
+const agento11yHooks = withAgento11yOpenAIAgentsHooks(runner, client, {
   providerResolver: 'auto',
   agentName: 'openai-agents-app',
   agentVersion: '1.0.0',
 });
 
 // optional cleanup if the runner lifecycle ends
-sigilHooks.detach();
+agento11yHooks.detach();
 ```
 
-`withSigilOpenAIAgentsHooks(...)` attaches Sigil listeners directly to OpenAI Agents `RunHooks`/`AgentHooks` emitters (`Runner` or `Agent`).
+`withAgento11yOpenAIAgentsHooks(...)` attaches Sigil listeners directly to OpenAI Agents `RunHooks`/`AgentHooks` emitters (`Runner` or `Agent`).
 
 ## Streaming snippet
 
 ```ts
-import { SigilClient } from '@grafana/agento11y';
-import { SigilOpenAIAgentsHandler } from '@grafana/agento11y/openai-agents';
+import { Agento11yClient } from '@grafana/agento11y';
+import { Agento11yOpenAIAgentsHandler } from '@grafana/agento11y/openai-agents';
 
-const client = new SigilClient();
-const handler = new SigilOpenAIAgentsHandler(client, { providerResolver: 'auto' });
+const client = new Agento11yClient();
+const handler = new Agento11yOpenAIAgentsHandler(client, { providerResolver: 'auto' });
 
 await handler.handleLLMStart(
   { kwargs: { model: 'gpt-5' } },
@@ -56,7 +56,7 @@ Conversation ID precedence:
 
 1. `conversation_id` / `session_id` / `group_id` from callback metadata or invocation payload
 2. framework thread id (`thread_id`)
-3. deterministic fallback: `sigil:framework:openai-agents:<run_id>`
+3. deterministic fallback: `agento11y:framework:openai-agents:<run_id>`
 
 ## Metadata and lineage
 
@@ -82,7 +82,7 @@ Order: explicit provider option -> framework payload provider -> model prefix in
 
 ## Troubleshooting
 
-- No events exported: ensure you passed a `Runner`/`Agent` instance (not run options) to `withSigilOpenAIAgentsHooks`.
+- No events exported: ensure you passed a `Runner`/`Agent` instance (not run options) to `withAgento11yOpenAIAgentsHooks`.
 - Missing conversation grouping: pass `conversation_id` or `session_id` in callback metadata/config.
 - Unknown provider: set `provider` explicitly in handler options.
 - No flush at shutdown: call `await client.shutdown()`.

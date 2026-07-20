@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
@@ -79,7 +79,7 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 // retry.
 func emitOneStranded(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	session *fragment.Session,
 	conversationID, generationID string,
 	cfg config.Config,

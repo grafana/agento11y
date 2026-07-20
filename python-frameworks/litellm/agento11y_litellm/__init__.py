@@ -4,10 +4,10 @@ from typing import Any
 
 from agento11y import Client
 
-from .handler import SigilLiteLLMLogger
+from .handler import Agento11yLiteLLMLogger
 
 
-def create_sigil_litellm_logger(
+def create_agento11y_litellm_logger(
     *,
     client: Client,
     capture_inputs: bool = True,
@@ -17,9 +17,9 @@ def create_sigil_litellm_logger(
     conversation_id: str = "",
     extra_tags: dict[str, str] | None = None,
     extra_metadata: dict[str, Any] | None = None,
-) -> SigilLiteLLMLogger:
+) -> Agento11yLiteLLMLogger:
     """Create a LiteLLM Sigil callback logger."""
-    return SigilLiteLLMLogger(
+    return Agento11yLiteLLMLogger(
         client=client,
         capture_inputs=capture_inputs,
         capture_outputs=capture_outputs,
@@ -32,6 +32,6 @@ def create_sigil_litellm_logger(
 
 
 __all__ = [
-    "SigilLiteLLMLogger",
-    "create_sigil_litellm_logger",
+    "Agento11yLiteLLMLogger",
+    "create_agento11y_litellm_logger",
 ]

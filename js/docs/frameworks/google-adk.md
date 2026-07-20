@@ -1,6 +1,6 @@
 # Google ADK Handler (`@grafana/agento11y/google-adk`)
 
-Use `SigilGoogleAdkHandler` to map Google ADK session/invocation callbacks to Sigil generations.
+Use `Agento11yGoogleAdkHandler` to map Google ADK session/invocation callbacks to Sigil generations.
 
 ## Install
 
@@ -11,11 +11,11 @@ pnpm add @grafana/agento11y @google/adk
 ## Quickstart
 
 ```ts
-import { SigilClient } from '@grafana/agento11y';
-import { withSigilGoogleAdkPlugins } from '@grafana/agento11y/google-adk';
+import { Agento11yClient } from '@grafana/agento11y';
+import { withAgento11yGoogleAdkPlugins } from '@grafana/agento11y/google-adk';
 
-const client = new SigilClient();
-const runnerConfig = withSigilGoogleAdkPlugins(undefined, client, {
+const client = new Agento11yClient();
+const runnerConfig = withAgento11yGoogleAdkPlugins(undefined, client, {
   providerResolver: 'auto',
   agentName: 'adk-app',
 });
@@ -24,23 +24,23 @@ const runnerConfig = withSigilGoogleAdkPlugins(undefined, client, {
 Or create the plugin explicitly:
 
 ```ts
-import { createSigilGoogleAdkPlugin } from '@grafana/agento11y/google-adk';
+import { createAgento11yGoogleAdkPlugin } from '@grafana/agento11y/google-adk';
 
-const sigilPlugin = createSigilGoogleAdkPlugin(client, { providerResolver: 'auto' });
-const runnerConfig = { plugins: [sigilPlugin] };
+const agento11yPlugin = createAgento11yGoogleAdkPlugin(client, { providerResolver: 'auto' });
+const runnerConfig = { plugins: [agento11yPlugin] };
 ```
 
-`withSigilGoogleAdkPlugins(...)` appends Sigil instrumentation to ADK plugin config while preserving existing plugins.
+`withAgento11yGoogleAdkPlugins(...)` appends Sigil instrumentation to ADK plugin config while preserving existing plugins.
 The appended plugin implements the ADK callback surface (`beforeRunCallback`, `onEventCallback`, `afterRunCallback`, model/tool lifecycle callbacks).
 
 ## Streaming snippet
 
 ```ts
-import { SigilClient } from '@grafana/agento11y';
-import { SigilGoogleAdkHandler } from '@grafana/agento11y/google-adk';
+import { Agento11yClient } from '@grafana/agento11y';
+import { Agento11yGoogleAdkHandler } from '@grafana/agento11y/google-adk';
 
-const client = new SigilClient();
-const handler = new SigilGoogleAdkHandler(client, { providerResolver: 'auto' });
+const client = new Agento11yClient();
+const handler = new Agento11yGoogleAdkHandler(client, { providerResolver: 'auto' });
 
 await handler.handleLLMStart(
   { kwargs: { model: 'gemini-2.5-pro' } },
@@ -60,7 +60,7 @@ Primary mapping is ADK conversation/session identity:
 
 1. `conversation_id` / `session_id` / `group_id`
 2. `thread_id`
-3. fallback: `sigil:framework:google-adk:<run_id>`
+3. fallback: `agento11y:framework:google-adk:<run_id>`
 
 ## Metadata and lineage
 

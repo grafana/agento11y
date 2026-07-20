@@ -10,7 +10,7 @@ package config
 import (
 	"log"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -21,7 +21,7 @@ import (
 // directly. OTel transport (OTEL_EXPORTER_OTLP_*) is read by the
 // OpenTelemetry SDK exporters natively, so this struct doesn't carry it.
 type Config struct {
-	ContentCapture sigil.ContentCaptureMode
+	ContentCapture agento11y.ContentCaptureMode
 	UserIDOverride string
 	Debug          bool
 }

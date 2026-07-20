@@ -47,8 +47,8 @@ class _TagsHarness:
         self.generation_exporter = CapturingGenerationExporter()
         self.client = Client(
             ClientConfig(
-                tracer=self.tracer_provider.get_tracer("sigil-test"),
-                meter=self.meter_provider.get_meter("sigil-test"),
+                tracer=self.tracer_provider.get_tracer("agento11y-test"),
+                meter=self.meter_provider.get_meter("agento11y-test"),
                 generation_export=GenerationExportConfig(
                     batch_size=10,
                     flush_interval=timedelta(seconds=60),

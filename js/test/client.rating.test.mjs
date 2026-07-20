@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
 import { trace } from '@opentelemetry/api';
-import { defaultConfig, SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
 test('submitConversationRating sends HTTP request and maps response', async () => {
   let receivedPath = '';
@@ -241,7 +241,7 @@ test('submitConversationRating applies bearer auth header from config', async ()
 
 function newClient(options) {
   const defaults = defaultConfig();
-  return new SigilClient({
+  return new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-rating-test'),
     generationExport: {
       ...defaults.generationExport,

@@ -31,10 +31,10 @@ Set client tags with the `AGENTO11Y_TAGS` env var (CSV: `key=value,key=value`) a
 **Go**
 
 ```go
-cfg := sigil.DefaultConfig()
+cfg := agento11y.DefaultConfig()
 cfg.Tags = map[string]string{"team": "checkout", "env": "prod"}
 cfg.UserID = "u-1234" // default; per-call UserID and context still win
-client := sigil.NewClient(cfg)
+client := agento11y.NewClient(cfg)
 ```
 
 **Python**
@@ -50,7 +50,7 @@ client = Client(ClientConfig(
 **TypeScript / JavaScript**
 
 ```ts
-const sigil = createSigilClient({
+const agento11y = createAgento11yClient({
   tags: { team: "checkout", env: "prod" },
   userId: "u-1234",
   generationExport: { /* ... */ },
@@ -64,8 +64,8 @@ Per-call values win over client-level values on key conflict. Per-call `tags` an
 **Go**
 
 ```go
-ctx, rec := client.StartGeneration(ctx, sigil.GenerationStart{
-    Model:    sigil.ModelRef{Provider: "openai", Name: "gpt-4.1-mini"},
+ctx, rec := client.StartGeneration(ctx, agento11y.GenerationStart{
+    Model:    agento11y.ModelRef{Provider: "openai", Name: "gpt-4.1-mini"},
     UserID:   "u-1234",                                  // -> user.id span attribute + export
     Tags:     map[string]string{"feature": "summarize"}, // export only
     Metadata: map[string]any{"prompt_version": "v2"},   // export only
@@ -88,7 +88,7 @@ with client.start_generation(GenerationStart(
 **TypeScript / JavaScript**
 
 ```ts
-await sigil.startGeneration(
+await agento11y.startGeneration(
   {
     model: { provider: "openai", name: "gpt-4.1-mini" },
     userId: "u-1234",                  // -> user.id span attribute + export

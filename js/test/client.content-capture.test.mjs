@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { defaultConfig, SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 import {
   assertSpanErrorRedacted,
   createContentCaptureEnv,
@@ -1023,7 +1023,7 @@ function newHarness(overrides = {}) {
 
   const { contentCapture, contentCaptureResolver, embeddingCapture, ...exportOverrides } = overrides;
 
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     tracer,
     generationExport: {
       ...defaults.generationExport,

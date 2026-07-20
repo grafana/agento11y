@@ -44,7 +44,7 @@ export interface HookResponse {
   delayMs?: number;
 }
 
-export interface SigilTestServer {
+export interface Agento11yTestServer {
   server: Server;
   baseUrl: string;
   hookCalls: HookCall[];
@@ -60,10 +60,10 @@ export interface SigilTestServer {
  * response, so a test can vary behavior across the preflight and postflight
  * calls of a single turn by returning different values on successive calls.
  */
-export function startSigilTestServer(opts: {
+export function startAgento11yTestServer(opts: {
   hook: (call: HookCall) => HookResponse;
-}): Promise<SigilTestServer> {
-  const state: SigilTestServer = {
+}): Promise<Agento11yTestServer> {
+  const state: Agento11yTestServer = {
     server: undefined as unknown as Server,
     baseUrl: "",
     hookCalls: [],
@@ -110,7 +110,7 @@ export function startSigilTestServer(opts: {
 function handleExport(
   raw: string,
   res: import("node:http").ServerResponse,
-  state: SigilTestServer,
+  state: Agento11yTestServer,
 ): void {
   let parsed: { generations?: Array<{ id?: string }> };
   try {
@@ -133,7 +133,7 @@ function handleExport(
 function handleHook(
   raw: string,
   res: import("node:http").ServerResponse,
-  state: SigilTestServer,
+  state: Agento11yTestServer,
   hook: (call: HookCall) => HookResponse,
 ): void {
   let body: HookRequestBody;

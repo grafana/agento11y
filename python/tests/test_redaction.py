@@ -288,7 +288,7 @@ def test_generation_sanitizer_failure_falls_back_to_metadata_only(caplog) -> Non
         assert generation.system_prompt == ""
         assert generation.input[0].parts[0].text == ""
         assert generation.output[0].parts[0].text == ""
-        assert "sigil: generation sanitization failed, falling back to metadata_only" in caplog.text
+        assert "agento11y: generation sanitization failed, falling back to metadata_only" in caplog.text
     finally:
         client.shutdown()
 

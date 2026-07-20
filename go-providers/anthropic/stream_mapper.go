@@ -7,7 +7,7 @@ import (
 	"time"
 
 	asdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 // StreamSummary captures Anthropic stream events and an optional final message.
@@ -17,24 +17,24 @@ type StreamSummary struct {
 	FirstChunkAt time.Time
 }
 
-// FromStream maps Anthropic streaming output to sigil.Generation.
-func FromStream(req asdk.BetaMessageNewParams, summary StreamSummary, opts ...Option) (sigil.Generation, error) {
+// FromStream maps Anthropic streaming output to agento11y.Generation.
+func FromStream(req asdk.BetaMessageNewParams, summary StreamSummary, opts ...Option) (agento11y.Generation, error) {
 	if summary.FinalMessage != nil {
 		generation, err := FromRequestResponse(req, summary.FinalMessage, opts...)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		return appendStreamEventsArtifact(generation, summary.Events, opts)
 	}
 
 	if len(summary.Events) == 0 {
-		return sigil.Generation{}, errors.New("stream summary has no events and no final message")
+		return agento11y.Generation{}, errors.New("stream summary has no events and no final message")
 	}
 
 	options := applyOptions(opts)
 	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapRequestControls(req)
 
-	usage := sigil.TokenUsage{}
+	usage := agento11y.TokenUsage{}
 	stopReason := ""
 	modelName := req.Model
 	responseID := ""
@@ -69,49 +69,49 @@ func FromStream(req asdk.BetaMessageNewParams, summary StreamSummary, opts ...Op
 	metadata = mergeServerToolUsageMetadata(metadata, serverToolUsage)
 
 	input := mapRequestMessages(req.Messages)
-	output := make([]sigil.Message, 0, 2)
+	output := make([]agento11y.Message, 0, 2)
 	if len(assistantParts) > 0 {
-		output = append(output, sigil.Message{
-			Role:  sigil.RoleAssistant,
+		output = append(output, agento11y.Message{
+			Role:  agento11y.RoleAssistant,
 			Parts: assistantParts,
 		})
 	}
 	if len(toolParts) > 0 {
-		output = append(output, sigil.Message{
-			Role:  sigil.RoleTool,
+		output = append(output, agento11y.Message{
+			Role:  agento11y.RoleTool,
 			Parts: toolParts,
 		})
 	}
 
-	artifacts := make([]sigil.Artifact, 0, 4)
+	artifacts := make([]agento11y.Artifact, 0, 4)
 	if options.includeRequestArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindRequest, "anthropic.request", req)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindRequest, "anthropic.request", req)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeToolsArtifact && len(req.Tools) > 0 {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindTools, "anthropic.tools", req.Tools)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindTools, "anthropic.tools", req.Tools)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeEventsArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindProviderEvent, "anthropic.stream_events", summary.Events)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindProviderEvent, "anthropic.stream_events", summary.Events)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 
-	generation := sigil.Generation{
+	generation := agento11y.Generation{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: req.Model},
 		ResponseID:        responseID,
 		ResponseModel:     modelName,
 		SystemPrompt:      mapSystemPrompt(req.System),
@@ -131,13 +131,13 @@ func FromStream(req asdk.BetaMessageNewParams, summary StreamSummary, opts ...Op
 	}
 
 	if err := generation.Validate(); err != nil {
-		return sigil.Generation{}, err
+		return agento11y.Generation{}, err
 	}
 
 	return generation, nil
 }
 
-func appendStreamEventsArtifact(generation sigil.Generation, events []asdk.BetaRawMessageStreamEventUnion, opts []Option) (sigil.Generation, error) {
+func appendStreamEventsArtifact(generation agento11y.Generation, events []asdk.BetaRawMessageStreamEventUnion, opts []Option) (agento11y.Generation, error) {
 	if len(events) == 0 {
 		return generation, nil
 	}
@@ -147,9 +147,9 @@ func appendStreamEventsArtifact(generation sigil.Generation, events []asdk.BetaR
 		return generation, nil
 	}
 
-	artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindProviderEvent, "anthropic.stream_events", events)
+	artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindProviderEvent, "anthropic.stream_events", events)
 	if err != nil {
-		return sigil.Generation{}, err
+		return agento11y.Generation{}, err
 	}
 
 	generation.Artifacts = append(generation.Artifacts, artifact)
@@ -263,7 +263,7 @@ func (a *streamBlockAccumulator) applyDelta(index int, delta asdk.BetaRawMessage
 }
 
 // build produces the final assistant and tool parts in block-index order.
-func (a *streamBlockAccumulator) build() (assistantParts, toolParts []sigil.Part) {
+func (a *streamBlockAccumulator) build() (assistantParts, toolParts []agento11y.Part) {
 	for i := 0; i <= a.maxIndex; i++ {
 		b, ok := a.blocks[i]
 		if !ok {
@@ -282,20 +282,20 @@ func (a *streamBlockAccumulator) build() (assistantParts, toolParts []sigil.Part
 	return
 }
 
-func (b *streamBlock) toPart() (sigil.Part, bool, bool) {
+func (b *streamBlock) toPart() (agento11y.Part, bool, bool) {
 	switch b.blockType {
 	case "text":
 		text := b.text.String()
 		if text == "" {
-			return sigil.Part{}, false, false
+			return agento11y.Part{}, false, false
 		}
-		return sigil.TextPart(text), false, true
+		return agento11y.TextPart(text), false, true
 	case "thinking", "redacted_thinking":
 		content := b.thinking.String()
 		if content == "" {
-			return sigil.Part{}, false, false
+			return agento11y.Part{}, false, false
 		}
-		part := sigil.ThinkingPart(content)
+		part := agento11y.ThinkingPart(content)
 		part.Metadata.ProviderType = b.providerType
 		return part, false, true
 	case "tool_use", "server_tool_use", "mcp_tool_use":
@@ -303,7 +303,7 @@ func (b *streamBlock) toPart() (sigil.Part, bool, bool) {
 		if accumulated := b.toolJSON.String(); accumulated != "" {
 			inputJSON = []byte(accumulated)
 		}
-		part := sigil.ToolCallPart(sigil.ToolCall{
+		part := agento11y.ToolCallPart(agento11y.ToolCall{
 			ID:        b.toolID,
 			Name:      b.toolName,
 			InputJSON: inputJSON,
@@ -313,7 +313,7 @@ func (b *streamBlock) toPart() (sigil.Part, bool, bool) {
 	default:
 		if isToolResultType(b.blockType) {
 			contentJSON, _ := marshalAny(b.resultContent)
-			part := sigil.ToolResultPart(sigil.ToolResult{
+			part := agento11y.ToolResultPart(agento11y.ToolResult{
 				ToolCallID:  b.toolResultID,
 				IsError:     b.isError,
 				ContentJSON: contentJSON,
@@ -321,7 +321,7 @@ func (b *streamBlock) toPart() (sigil.Part, bool, bool) {
 			part.Metadata.ProviderType = b.providerType
 			return part, true, true
 		}
-		return sigil.Part{}, false, false
+		return agento11y.Part{}, false, false
 	}
 }
 

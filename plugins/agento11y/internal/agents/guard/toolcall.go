@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
@@ -70,7 +70,7 @@ type ToolCallInput struct {
 // Result is the host-neutral outcome of a guard evaluation.
 type Result struct {
 	// Action is allow or deny.
-	Action sigil.HookAction
+	Action agento11y.HookAction
 	// Reason is the deny reason from Sigil or the host-friendly description
 	// of a fail-closed transport/config error.
 	Reason string
@@ -84,7 +84,7 @@ type Result struct {
 
 // Blocked reports whether the host should refuse to execute the tool call.
 func (r Result) Blocked() bool {
-	return r.Action == sigil.HookActionDeny
+	return r.Action == agento11y.HookActionDeny
 }
 
 // EvaluateToolCall asks Sigil whether the tool call should proceed. It
@@ -109,10 +109,10 @@ func (r Result) Blocked() bool {
 // running against a local Sigil instance does not require real cloud creds.
 func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCallInput, logger *log.Logger) Result {
 	if !cfg.Enabled {
-		return Result{Action: sigil.HookActionAllow}
+		return Result{Action: agento11y.HookActionAllow}
 	}
 	if strings.TrimSpace(in.ToolName) == "" {
-		return Result{Action: sigil.HookActionAllow}
+		return Result{Action: agento11y.HookActionAllow}
 	}
 
 	endpoint := envconfig.Getenv("ENDPOINT")
@@ -124,31 +124,31 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 			if logger != nil {
 				logger.Printf("guard: missing AGENTO11Y_*/SIGIL_* credentials; failing open")
 			}
-			return Result{Action: sigil.HookActionAllow}
+			return Result{Action: agento11y.HookActionAllow}
 		}
 		if logger != nil {
 			logger.Printf("guard: missing AGENTO11Y_*/SIGIL_* credentials; failing closed")
 		}
 		return Result{
-			Action: sigil.HookActionDeny,
+			Action: agento11y.HookActionDeny,
 			Reason: formatEvalFailure(in.ToolName, "missing AGENTO11Y_ENDPOINT/AGENTO11Y_AUTH_TENANT_ID/AGENTO11Y_AUTH_TOKEN"),
 		}
 	}
 
 	failOpen := cfg.FailOpen
-	clientCfg := sigil.Config{
-		API: sigil.APIConfig{
+	clientCfg := agento11y.Config{
+		API: agento11y.APIConfig{
 			Endpoint: endpoint,
 		},
-		Hooks: sigil.HooksConfig{
+		Hooks: agento11y.HooksConfig{
 			Enabled:  true,
-			Phases:   []sigil.HookPhase{sigil.HookPhasePostflight},
+			Phases:   []agento11y.HookPhase{agento11y.HookPhasePostflight},
 			Timeout:  time.Duration(cfg.TimeoutMs) * time.Millisecond,
 			FailOpen: &failOpen,
 		},
-		GenerationExport: sigil.GenerationExportConfig{
-			Auth: sigil.AuthConfig{
-				Mode:          sigil.ExportAuthModeBasic,
+		GenerationExport: agento11y.GenerationExportConfig{
+			Auth: agento11y.AuthConfig{
+				Mode:          agento11y.ExportAuthModeBasic,
 				BasicUser:     tenantID,
 				BasicPassword: authToken,
 				TenantID:      tenantID,
@@ -156,7 +156,7 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 		},
 	}
 
-	client := sigil.NewClient(clientCfg)
+	client := agento11y.NewClient(clientCfg)
 	defer func() { _ = client.Shutdown(ctx) }()
 
 	provider := strings.TrimSpace(in.ModelProvider)
@@ -167,24 +167,24 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 	if modelName == "" {
 		modelName = "unknown"
 	}
-	hookCtx := sigil.HookContext{
+	hookCtx := agento11y.HookContext{
 		AgentName:    in.AgentName,
 		AgentVersion: in.AgentVersion,
-		Model: &sigil.HookModel{
+		Model: &agento11y.HookModel{
 			Provider: provider,
 			Name:     modelName,
 		},
 	}
 
-	req := sigil.HookEvaluateRequest{
-		Phase:   sigil.HookPhasePostflight,
+	req := agento11y.HookEvaluateRequest{
+		Phase:   agento11y.HookPhasePostflight,
 		Context: hookCtx,
-		Input: sigil.HookInput{
-			Output: []sigil.Message{{
-				Role: sigil.RoleAssistant,
-				Parts: []sigil.Part{{
-					Kind: sigil.PartKindToolCall,
-					ToolCall: &sigil.ToolCall{
+		Input: agento11y.HookInput{
+			Output: []agento11y.Message{{
+				Role: agento11y.RoleAssistant,
+				Parts: []agento11y.Part{{
+					Kind: agento11y.PartKindToolCall,
+					ToolCall: &agento11y.ToolCall{
 						ID:        strings.TrimSpace(in.ToolCallID),
 						Name:      in.ToolName,
 						InputJSON: in.ToolInputJSON,
@@ -203,12 +203,12 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 			logger.Printf("guard: tool=%q endpoint=%q evaluate err=%v", in.ToolName, endpoint, err)
 		}
 		return Result{
-			Action: sigil.HookActionDeny,
+			Action: agento11y.HookActionDeny,
 			Reason: formatEvalFailure(in.ToolName, err.Error()),
 		}
 	}
 
-	deniedErr := sigil.HookDeniedFromResponse(resp)
+	deniedErr := agento11y.HookDeniedFromResponse(resp)
 
 	// Resolve any redaction transform before logging so the decision line can
 	// report whether the tool input was rewritten. A deny never carries a
@@ -232,7 +232,7 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 
 	if deniedErr != nil {
 		var ruleReason string
-		var denied *sigil.HookDeniedError
+		var denied *agento11y.HookDeniedError
 		if errors.As(deniedErr, &denied) {
 			ruleReason = denied.Reason
 		}
@@ -241,14 +241,14 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 			ruleID = resp.RuleID
 		}
 		return Result{
-			Action: sigil.HookActionDeny,
+			Action: agento11y.HookActionDeny,
 			Reason: formatPolicyDeny(in.ToolName, ruleReason),
 			RuleID: ruleID,
 		}
 	}
 
 	return Result{
-		Action:           sigil.HookActionAllow,
+		Action:           agento11y.HookActionAllow,
 		UpdatedInputJSON: updatedInput,
 	}
 }
@@ -258,7 +258,7 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 // JSON. Returns nil on any mismatch or parse failure so the caller falls
 // through to the original tool input unchanged. Mirrors pi guard.ts
 // extractToolCallTransform; keep the two in sync.
-func extractToolCallTransform(resp *sigil.HookEvaluateResponse, toolCallID string, logger *log.Logger) json.RawMessage {
+func extractToolCallTransform(resp *agento11y.HookEvaluateResponse, toolCallID string, logger *log.Logger) json.RawMessage {
 	// Treat an absent or empty output the same way: there is no transform to
 	// apply, so stay silent. This mirrors pi guard.ts, whose early return also
 	// covers the empty-output case; the no-match line below is reserved for a
@@ -268,7 +268,7 @@ func extractToolCallTransform(resp *sigil.HookEvaluateResponse, toolCallID strin
 	}
 	for _, msg := range resp.TransformedInput.Output {
 		for _, part := range msg.Parts {
-			if part.Kind != sigil.PartKindToolCall || part.ToolCall == nil || part.ToolCall.ID != toolCallID {
+			if part.Kind != agento11y.PartKindToolCall || part.ToolCall == nil || part.ToolCall.ID != toolCallID {
 				continue
 			}
 			// A matching tool_call whose args we cannot parse means the

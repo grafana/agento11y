@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from agento11y import Client
-from agento11y.framework_handler import ProviderResolver, SigilFrameworkHandlerBase, merge_framework_callback_kwargs
+from agento11y.framework_handler import Agento11yFrameworkHandlerBase, ProviderResolver, merge_framework_callback_kwargs
 from opentelemetry.trace import Status, StatusCode
 
 try:
@@ -45,7 +45,7 @@ def _discard_recorder(recorder: Any, *, pop_capture_mode: bool = False) -> None:
             _pop_capture_mode(id(recorder))
 
 
-class SigilPydanticAIHandler(SigilFrameworkHandlerBase):
+class Agento11yPydanticAIHandler(Agento11yFrameworkHandlerBase):
     """Sigil framework handler for the Pydantic AI integration."""
 
     def __init__(

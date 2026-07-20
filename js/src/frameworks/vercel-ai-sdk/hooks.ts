@@ -1,4 +1,4 @@
-import type { SigilClient } from '../../client.js';
+import type { Agento11yClient } from '../../client.js';
 import { HookDeniedError } from '../../hooks.js';
 import type {
   GenerationMode,
@@ -25,12 +25,12 @@ import {
   shouldTreatStepAsError,
 } from './mapping.js';
 import type {
+  Agento11yVercelAiSdkOptions,
   CallOptions,
   ConversationResolution,
   GenerateTextHooks,
   PrepareStepEvent,
   PrepareStepResult,
-  SigilVercelAiSdkOptions,
   StepStartEvent,
   StreamTextHooks,
   ToolCallFinishEvent,
@@ -68,20 +68,20 @@ interface CallState {
   nextSyntheticStepNumber: number;
 }
 
-export class SigilVercelAiSdkInstrumentation {
+export class Agento11yVercelAiSdkInstrumentation {
   private readonly agentName?: string;
   private readonly agentVersion?: string;
   private readonly captureInputs: boolean;
   private readonly captureOutputs: boolean;
   private readonly extraTags: Record<string, string>;
   private readonly extraMetadata: Record<string, unknown>;
-  private readonly resolveConversationIdFn: SigilVercelAiSdkOptions['resolveConversationId'];
+  private readonly resolveConversationIdFn: Agento11yVercelAiSdkOptions['resolveConversationId'];
   private readonly hooksOverride: boolean | undefined;
   private callSequence = 0;
 
   constructor(
-    private readonly client: SigilClient,
-    options: SigilVercelAiSdkOptions = {},
+    private readonly client: Agento11yClient,
+    options: Agento11yVercelAiSdkOptions = {},
   ) {
     this.agentName = normalizeOptionalString(options.agentName);
     this.agentVersion = normalizeOptionalString(options.agentVersion);
@@ -557,12 +557,12 @@ export class SigilVercelAiSdkInstrumentation {
         if (transformed) {
           if (!returnPreparedMessages) {
             throw new Error(
-              'sigil preflight transformed_input.messages cannot be applied by experimental_onStepStart; use prepareStep-capable AI SDK instrumentation',
+              'agento11y preflight transformed_input.messages cannot be applied by experimental_onStepStart; use prepareStep-capable AI SDK instrumentation',
             );
           }
           if (providerMessages === undefined) {
             throw new Error(
-              'sigil preflight transformed_input.messages could not be converted to Vercel AI SDK model messages',
+              'agento11y preflight transformed_input.messages could not be converted to Vercel AI SDK model messages',
             );
           }
         }

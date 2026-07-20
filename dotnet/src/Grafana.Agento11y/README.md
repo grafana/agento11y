@@ -8,12 +8,12 @@ Core runtime for normalized generation export and OpenTelemetry-aligned instrume
 dotnet add package Grafana.Agento11y
 ```
 
-## Configure `SigilClient`
+## Configure `Agento11yClient`
 
 ```csharp
-using Grafana.Sigil;
+using Grafana.Agento11y;
 
-var client = new SigilClient(new SigilClientConfig
+var client = new Agento11yClient(new Agento11yClientConfig
 {
     GenerationExport = new GenerationExportConfig
     {
@@ -70,7 +70,7 @@ Generation export transport protocols:
 ## Instrumentation-only mode (no generation send)
 
 ```csharp
-var client = new SigilClient(new SigilClientConfig
+var client = new Agento11yClient(new Agento11yClientConfig
 {
     GenerationExport = new GenerationExportConfig
     {
@@ -85,7 +85,7 @@ Use the built-in sanitizer to redact high-confidence secret formats before
 generation data is exported:
 
 ```csharp
-var client = new SigilClient(new SigilClientConfig
+var client = new Agento11yClient(new Agento11yClientConfig
 {
     GenerationSanitizer = SecretRedactionSanitizer.Create(),
 });
@@ -94,7 +94,7 @@ var client = new SigilClient(new SigilClientConfig
 User input messages are not redacted by default. To opt in:
 
 ```csharp
-var client = new SigilClient(new SigilClientConfig
+var client = new Agento11yClient(new Agento11yClientConfig
 {
     GenerationSanitizer = SecretRedactionSanitizer.Create(new SecretRedactionOptions
     {
@@ -255,9 +255,9 @@ finally
 ## Context defaults with async-local scopes
 
 ```csharp
-using var _conversation = SigilContext.WithConversationId("conv-default");
-using var _agentName = SigilContext.WithAgentName("assistant-core");
-using var _agentVersion = SigilContext.WithAgentVersion("1.0.0");
+using var _conversation = Agento11yContext.WithConversationId("conv-default");
+using var _agentName = Agento11yContext.WithAgentName("assistant-core");
+using var _agentVersion = Agento11yContext.WithAgentVersion("1.0.0");
 
 var recorder = client.StartGeneration(new GenerationStart
 {
@@ -269,7 +269,7 @@ var recorder = client.StartGeneration(new GenerationStart
 });
 ```
 
-If `ConversationId`, `AgentName`, or `AgentVersion` are omitted in `GenerationStart` or `ToolExecutionStart`, the current `SigilContext` values are applied.
+If `ConversationId`, `AgentName`, or `AgentVersion` are omitted in `GenerationStart` or `ToolExecutionStart`, the current `Agento11yContext` values are applied.
 
 ## Error semantics
 
@@ -319,7 +319,7 @@ Auth = new AuthConfig
 
 ## Lifecycle and performance guidance
 
-- Reuse one `SigilClient` for the process lifetime.
+- Reuse one `Agento11yClient` for the process lifetime.
 - Call `ShutdownAsync(...)` on graceful shutdown to flush pending generation batches.
 - Use `FlushAsync(...)` before short-lived jobs exit if needed.
 - Keep raw artifacts disabled by default in production.

@@ -1,8 +1,8 @@
-import type { SigilClient } from '../../client.js';
-import { SigilVercelAiSdkInstrumentation } from './hooks.js';
-import type { SigilVercelAiSdkOptions } from './types.js';
+import type { Agento11yClient } from '../../client.js';
+import { Agento11yVercelAiSdkInstrumentation } from './hooks.js';
+import type { Agento11yVercelAiSdkOptions } from './types.js';
 
-export { SigilVercelAiSdkInstrumentation } from './hooks.js';
+export { Agento11yVercelAiSdkInstrumentation } from './hooks.js';
 export {
   buildFrameworkMetadata,
   buildFrameworkTags,
@@ -21,12 +21,12 @@ export {
   resolveConversationId,
 } from './mapping.js';
 export type {
+  Agento11yVercelAiSdkOptions,
   CallOptions,
   ConversationResolution,
   GenerateTextHooks,
   PrepareStepEvent,
   PrepareStepResult,
-  SigilVercelAiSdkOptions,
   StepFinishEvent,
   StepOutputMapping,
   StepStartEvent,
@@ -38,9 +38,9 @@ export type {
   VercelAiSdkModelMessage,
 } from './types.js';
 
-export function createSigilVercelAiSdk(
-  client: SigilClient,
-  options: SigilVercelAiSdkOptions = {},
-): SigilVercelAiSdkInstrumentation {
-  return new SigilVercelAiSdkInstrumentation(client, options);
+export function createAgento11yVercelAiSdk(
+  client: Agento11yClient,
+  options: Agento11yVercelAiSdkOptions = {},
+): Agento11yVercelAiSdkInstrumentation {
+  return new Agento11yVercelAiSdkInstrumentation(client, options);
 }

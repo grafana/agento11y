@@ -1,4 +1,4 @@
-namespace Grafana.Sigil;
+namespace Grafana.Agento11y;
 
 public enum GenerationExportProtocol
 {
@@ -75,7 +75,7 @@ public sealed class ApiConfig
     public string Endpoint { get; set; } = "http://localhost:8080";
 }
 
-public sealed class SigilClientConfig
+public sealed class Agento11yClientConfig
 {
     public GenerationExportConfig GenerationExport { get; set; } = new();
     public ApiConfig Api { get; set; } = new();
@@ -151,14 +151,14 @@ internal static class ConfigResolver
     internal const string TenantHeaderName = "X-Scope-OrgID";
     internal const string AuthorizationHeaderName = "Authorization";
 
-    public static SigilClientConfig Resolve(SigilClientConfig? config)
+    public static Agento11yClientConfig Resolve(Agento11yClientConfig? config)
     {
         return Resolve(config, Environment.GetEnvironmentVariable);
     }
 
-    internal static SigilClientConfig Resolve(SigilClientConfig? config, Func<string, string?> envLookup)
+    internal static Agento11yClientConfig Resolve(Agento11yClientConfig? config, Func<string, string?> envLookup)
     {
-        var (resolved, warnings) = EnvConfig.ResolveFromEnv(envLookup, config ?? new SigilClientConfig());
+        var (resolved, warnings) = EnvConfig.ResolveFromEnv(envLookup, config ?? new Agento11yClientConfig());
 
         var callerLogger = resolved.Logger;
         resolved.Logger ??= _ => { };

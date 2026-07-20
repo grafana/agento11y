@@ -3,7 +3,7 @@ package config
 import (
 	"log"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -12,7 +12,7 @@ import (
 // Config holds codex-side knobs the agent adapter needs after dotenv has
 // been applied. Endpoint, auth, and SIGIL_TAGS are read by the SDK directly.
 type Config struct {
-	ContentCapture sigil.ContentCaptureMode
+	ContentCapture agento11y.ContentCaptureMode
 	Debug          bool
 	Guards         envconfig.GuardsConfig
 }

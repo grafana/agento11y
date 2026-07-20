@@ -22,7 +22,7 @@ from agento11y import (
     GenerationExportConfig,
     with_conversation_title,
 )
-from agento11y_pydantic_ai import with_sigil_pydantic_ai_capability
+from agento11y_pydantic_ai import with_agento11y_pydantic_ai_capability
 
 load_dotenv()
 
@@ -47,7 +47,7 @@ mp = MeterProvider(
 )
 metrics.set_meter_provider(mp)
 
-sigil = Client(
+agento11y = Client(
     ClientConfig(
         generation_export=GenerationExportConfig(
             protocol="http",
@@ -64,7 +64,7 @@ sigil = Client(
 agent = Agent(
     "anthropic:claude-haiku-4-5",
     deps_type=Deps,
-    capabilities=with_sigil_pydantic_ai_capability(None, client=sigil),
+    capabilities=with_agento11y_pydantic_ai_capability(None, client=agento11y),
 )
 
 
@@ -90,7 +90,7 @@ with with_conversation_title("getting-started-python-pydantic-ai"):
     print(f"Reply 2: {second.output}\n")
 
 # Shut down Sigil first so in-flight generations finish exporting before OTel stops.
-sigil.shutdown()
+agento11y.shutdown()
 tp.shutdown()
 mp.shutdown()
 print("Done — check the AI Observability plugin in your Grafana Cloud stack.")

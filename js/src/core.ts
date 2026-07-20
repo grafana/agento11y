@@ -4,7 +4,7 @@ export {
   CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY,
   setCacheDiagnostics,
 } from './cache-diagnostics.js';
-export { SigilClient } from './client.js';
+export { Agento11yClient } from './client.js';
 export { configFromEnv, defaultConfig, mergeConfig } from './config.js';
 export {
   agentNameFromContext,
@@ -22,6 +22,10 @@ export { HookDeniedError } from './hooks.js';
 export type { SecretRedactionOptions } from './redaction.js';
 export { createSecretRedactionSanitizer } from './redaction.js';
 export type {
+  Agento11yDebugSnapshot,
+  Agento11yLogger,
+  Agento11ySdkConfig,
+  Agento11ySdkConfigInput,
   ApiConfig,
   Artifact,
   ContentCaptureMode,
@@ -64,10 +68,6 @@ export type {
   ModelRef,
   PartMetadata,
   RecorderCallback,
-  SigilDebugSnapshot,
-  SigilLogger,
-  SigilSdkConfig,
-  SigilSdkConfigInput,
   SubmitConversationRatingResponse,
   TokenUsage,
   ToolCallPart,
@@ -81,10 +81,10 @@ export type {
 } from './types.js';
 export { SDK_VERSION, userAgent } from './version.js';
 
-import { SigilClient } from './client.js';
-import type { SigilSdkConfigInput } from './types.js';
+import { Agento11yClient } from './client.js';
+import type { Agento11ySdkConfigInput } from './types.js';
 
-/** Convenience factory equivalent to `new SigilClient(config)`. */
-export function createSigilClient(config: SigilSdkConfigInput = {}): SigilClient {
-  return new SigilClient(config);
+/** Convenience factory equivalent to `new Agento11yClient(config)`. */
+export function createAgento11yClient(config: Agento11ySdkConfigInput = {}): Agento11yClient {
+  return new Agento11yClient(config);
 }

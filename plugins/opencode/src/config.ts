@@ -1,7 +1,7 @@
 import type { ContentCaptureMode } from "@grafana/agento11y";
-import { applySigilDotenv } from "./sigilDotenv.js";
+import { applyAgento11yDotenv } from "./agento11yDotenv.js";
 
-export type SigilAuthConfig =
+export type Agento11yAuthConfig =
   | {
       mode: "basic";
       basicUser: string;
@@ -22,9 +22,9 @@ export interface GuardsFeatureConfig {
   failOpen: boolean;
 }
 
-export interface SigilOpencodeConfig {
+export interface Agento11yOpencodeConfig {
   endpoint: string;
-  auth: SigilAuthConfig;
+  auth: Agento11yAuthConfig;
   agentName: string;
   agentVersion?: string;
   contentCapture: ContentCaptureMode;
@@ -33,16 +33,16 @@ export interface SigilOpencodeConfig {
   otlp?: OtlpConfig;
 }
 
-export async function loadConfig(): Promise<SigilOpencodeConfig | null> {
+export async function loadConfig(): Promise<Agento11yOpencodeConfig | null> {
   // Read the shared sigil dotenv file so the OpenCode plugin and every other
   // Sigil agent resolve credentials from the same place. Shell env values win
   // over file values for each alias family, and the winner is materialized
-  // under both spellings; see applySigilDotenv.
-  applySigilDotenv();
+  // under both spellings; see applyAgento11yDotenv.
+  applyAgento11yDotenv();
   return resolveConfig();
 }
 
-export function resolveConfig(): SigilOpencodeConfig | null {
+export function resolveConfig(): Agento11yOpencodeConfig | null {
   const endpoint = normalizeBaseEndpoint(brandedEnv("ENDPOINT") ?? "");
   if (!endpoint) return null;
 
@@ -64,7 +64,7 @@ export function resolveConfig(): SigilOpencodeConfig | null {
   };
 }
 
-function resolveAuth(): SigilAuthConfig {
+function resolveAuth(): Agento11yAuthConfig {
   const tenant = brandedEnv("AUTH_TENANT_ID") ?? "";
   const token = lookupBrandedEnv("AUTH_TOKEN");
   if (tenant && token) {

@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from agento11y import Client
-from agento11y.framework_handler import ProviderResolver, SigilFrameworkHandlerBase, merge_framework_callback_kwargs
+from agento11y.framework_handler import Agento11yFrameworkHandlerBase, ProviderResolver, merge_framework_callback_kwargs
 
 _framework_name = "openai-agents"
 _framework_source = "handler"
@@ -14,7 +14,7 @@ _framework_language = "python"
 _framework_instrumentation_name = "github.com/grafana/sigil/sdks/python-frameworks/openai-agents"
 
 
-class _SigilOpenAIAgentsBase(SigilFrameworkHandlerBase):
+class _Agento11yOpenAIAgentsBase(Agento11yFrameworkHandlerBase):
     def __init__(
         self,
         *,
@@ -45,7 +45,7 @@ class _SigilOpenAIAgentsBase(SigilFrameworkHandlerBase):
         )
 
 
-class SigilOpenAIAgentsHandler(_SigilOpenAIAgentsBase):
+class Agento11yOpenAIAgentsHandler(_Agento11yOpenAIAgentsBase):
     """Sync OpenAI Agents callback handler that records Sigil generations."""
 
     def on_llm_start(
@@ -180,7 +180,7 @@ class SigilOpenAIAgentsHandler(_SigilOpenAIAgentsBase):
         self._on_retriever_error(error=error, run_id=run_id)
 
 
-class SigilAsyncOpenAIAgentsHandler(_SigilOpenAIAgentsBase):
+class Agento11yAsyncOpenAIAgentsHandler(_Agento11yOpenAIAgentsBase):
     """Async OpenAI Agents callback handler that records Sigil generations."""
 
     async def on_llm_start(

@@ -39,7 +39,7 @@ class OpenTelemetry:
 
 
 def setup_opentelemetry() -> OpenTelemetry:
-    service_name = os.getenv("OTEL_SERVICE_NAME", "sigil-langchain-weather-example")
+    service_name = os.getenv("OTEL_SERVICE_NAME", "agento11y-langchain-weather-example")
 
     resource = Resource.create({"service.name": service_name})
 

@@ -50,8 +50,8 @@ class _ExemplarHarness:
         exporter = CapturingGenerationExporter()
         self.client = Client(
             ClientConfig(
-                tracer=self.tracer_provider.get_tracer("sigil-test"),
-                meter=self.meter_provider.get_meter("sigil-test"),
+                tracer=self.tracer_provider.get_tracer("agento11y-test"),
+                meter=self.meter_provider.get_meter("agento11y-test"),
                 generation_export=gen_export,
                 generation_exporter=exporter,
             )

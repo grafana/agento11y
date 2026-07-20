@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
 
-namespace Grafana.Sigil.OpenAI;
+namespace Grafana.Agento11y.OpenAI;
 
 internal static class OpenAIJsonHelpers
 {

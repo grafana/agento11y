@@ -3,7 +3,7 @@ using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class HistogramBucketAdviceTests
 {
@@ -26,14 +26,14 @@ public sealed class HistogramBucketAdviceTests
 
         var exporter = new CapturingMetricExporter(captured);
         using var meterProvider = Sdk.CreateMeterProviderBuilder()
-            .AddMeter(SigilClient.InstrumentationName)
+            .AddMeter(Agento11yClient.InstrumentationName)
             .AddReader(new BaseExportingMetricReader(exporter))
             .Build()!;
 
         var generationExporter = new CapturingGenerationExporter();
         var config = TestHelpers.TestConfig(generationExporter);
 
-        await using (var client = new SigilClient(config))
+        await using (var client = new Agento11yClient(config))
         {
             var start = TestHelpers.CreateSeedStart("gen-buckets");
             start.Mode = null;

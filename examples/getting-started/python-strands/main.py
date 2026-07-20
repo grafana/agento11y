@@ -11,7 +11,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from agento11y import AuthConfig, Client, ClientConfig, GenerationExportConfig
-from agento11y_strands import with_sigil_strands_hooks
+from agento11y_strands import with_agento11y_strands_hooks
 from strands import Agent, tool
 from strands.models.openai import OpenAIModel
 
@@ -52,7 +52,7 @@ def otlp_metrics_endpoint() -> str:
 
 
 def setup_metrics() -> MeterProvider:
-    resource = Resource.create({"service.name": env("OTEL_SERVICE_NAME", "sigil-strands-example")})
+    resource = Resource.create({"service.name": env("OTEL_SERVICE_NAME", "agento11y-strands-example")})
     exporter = OTLPMetricExporter(
         endpoint=otlp_metrics_endpoint(),
     )
@@ -82,7 +82,7 @@ def create_model():
 
 meter_provider = setup_metrics()
 tenant_id = required_env("AGENTO11Y_AUTH_TENANT_ID")
-sigil = Client(
+agento11y = Client(
     ClientConfig(
         generation_export=GenerationExportConfig(
             protocol=os.getenv("AGENTO11Y_PROTOCOL", "http"),
@@ -94,31 +94,31 @@ sigil = Client(
                 basic_password=required_env("AGENTO11Y_AUTH_TOKEN"),
             ),
         ),
-        meter=meter_provider.get_meter("sigil-strands-example"),
+        meter=meter_provider.get_meter("agento11y-strands-example"),
     )
 )
 
 try:
-    agent_config = with_sigil_strands_hooks(
+    agent_config = with_agento11y_strands_hooks(
         {
             "name": "strands-demo",
             "model": create_model(),
             "tools": [add_numbers],
             "system_prompt": "You are concise and show the final answer.",
         },
-        client=sigil,
+        client=agento11y,
         provider_resolver="auto",
     )
     agent = Agent(**agent_config)
 
     result = agent(
         "Use the add_numbers tool to add 19 and 23, then answer in one sentence.",
-        invocation_state={"conversation_id": env("AGENTO11Y_CONVERSATION_ID", "sigil-strands-demo")},
+        invocation_state={"conversation_id": env("AGENTO11Y_CONVERSATION_ID", "agento11y-strands-demo")},
     )
 
     print(result.message)
 finally:
-    sigil.shutdown()
+    agento11y.shutdown()
     meter_provider.shutdown()
 
 print("Done")

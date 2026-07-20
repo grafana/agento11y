@@ -1,16 +1,16 @@
-import { resetSigilDotenvStateForTests } from "./sigilDotenv.js";
+import { resetAgento11yDotenvStateForTests } from "./agento11yDotenv.js";
 
 /**
  * Reset every AGENTO11Y_*, SIGIL_*, and OTEL_* env var and XDG_CONFIG_HOME
  * between test cases so on-disk fixtures (config.env) and shell exports
  * cannot leak across cases. Used by both config.test.ts and
- * sigilDotenv.test.ts.
+ * agento11yDotenv.test.ts.
  *
  * Also clears the dotenv loader's per-process "owned keys" tracking so a
- * test that calls applySigilDotenv doesn't poison the next case's view of
+ * test that calls applyAgento11yDotenv doesn't poison the next case's view of
  * which env values came from the shell vs. config.env.
  */
-export function clearSigilEnv(): void {
+export function clearAgento11yEnv(): void {
   for (const key of Object.keys(process.env)) {
     if (
       key.startsWith("AGENTO11Y_") ||
@@ -21,7 +21,7 @@ export function clearSigilEnv(): void {
     }
   }
   delete process.env.XDG_CONFIG_HOME;
-  resetSigilDotenvStateForTests();
+  resetAgento11yDotenvStateForTests();
 }
 
 // Keys that the real-SDK suites (golden, guards e2e) snapshot and clear so
@@ -63,7 +63,7 @@ export function snapshotAndClearTestEnv(): Record<string, string | undefined> {
     saved[key] = process.env[key];
     delete process.env[key];
   }
-  resetSigilDotenvStateForTests();
+  resetAgento11yDotenvStateForTests();
   return saved;
 }
 
@@ -84,5 +84,5 @@ export function restoreEnv(saved: Record<string, string | undefined>): void {
       process.env[key] = value;
     }
   }
-  resetSigilDotenvStateForTests();
+  resetAgento11yDotenvStateForTests();
 }

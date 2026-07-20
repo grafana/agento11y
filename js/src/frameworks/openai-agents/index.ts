@@ -1,5 +1,5 @@
-import type { SigilClient } from '../../client.js';
-import { type FrameworkHandlerOptions, SigilFrameworkHandler } from '../shared.js';
+import type { Agento11yClient } from '../../client.js';
+import { Agento11yFrameworkHandler, type FrameworkHandlerOptions } from '../shared.js';
 
 export type { FrameworkHandlerOptions };
 
@@ -11,14 +11,14 @@ type OpenAIAgentsHookTarget = {
 };
 
 export interface OpenAIAgentsHookRegistration {
-  handler: SigilOpenAIAgentsHandler;
+  handler: Agento11yOpenAIAgentsHandler;
   detach: () => void;
 }
 
-export class SigilOpenAIAgentsHandler extends SigilFrameworkHandler {
-  name = 'sigil_openai_agents_handler';
+export class Agento11yOpenAIAgentsHandler extends Agento11yFrameworkHandler {
+  name = 'agento11y_openai_agents_handler';
 
-  constructor(client: SigilClient, options: FrameworkHandlerOptions = {}) {
+  constructor(client: Agento11yClient, options: FrameworkHandlerOptions = {}) {
     super(client, 'openai-agents', 'javascript', options);
   }
 
@@ -122,25 +122,25 @@ export class SigilOpenAIAgentsHandler extends SigilFrameworkHandler {
   }
 }
 
-export function createSigilOpenAIAgentsHandler(
-  client: SigilClient,
+export function createAgento11yOpenAIAgentsHandler(
+  client: Agento11yClient,
   options: FrameworkHandlerOptions = {},
-): SigilOpenAIAgentsHandler {
-  return new SigilOpenAIAgentsHandler(client, options);
+): Agento11yOpenAIAgentsHandler {
+  return new Agento11yOpenAIAgentsHandler(client, options);
 }
 
-export function withSigilOpenAIAgentsHooks(
+export function withAgento11yOpenAIAgentsHooks(
   target: OpenAIAgentsHookTarget,
-  client: SigilClient,
+  client: Agento11yClient,
   options: FrameworkHandlerOptions = {},
 ): OpenAIAgentsHookRegistration {
   if (!isHookTarget(target)) {
     throw new Error(
-      'withSigilOpenAIAgentsHooks expects an OpenAI Agents Runner or Agent (RunHooks/AgentHooks emitter).',
+      'withAgento11yOpenAIAgentsHooks expects an OpenAI Agents Runner or Agent (RunHooks/AgentHooks emitter).',
     );
   }
 
-  const handler = createSigilOpenAIAgentsHandler(client, options);
+  const handler = createAgento11yOpenAIAgentsHandler(client, options);
   const contextStacks = new WeakMap<object, string[]>();
   const contextIds = new WeakMap<object, number>();
   const toolRunIds = new Map<string, string>();
@@ -488,7 +488,7 @@ export function withSigilOpenAIAgentsHooks(
   };
 }
 
-export const attachSigilOpenAIAgentsHooks = withSigilOpenAIAgentsHooks;
+export const attachAgento11yOpenAIAgentsHooks = withAgento11yOpenAIAgentsHooks;
 
 function isHookTarget(value: unknown): value is OpenAIAgentsHookTarget {
   if (!isRecord(value)) {

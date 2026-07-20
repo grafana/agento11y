@@ -1,11 +1,11 @@
 import type {
+  Agento11yClient,
   HookEvaluateRequest,
   Message,
-  SigilClient,
 } from "@grafana/agento11y";
 
 export interface GuardArgs {
-  client: SigilClient;
+  client: Agento11yClient;
   agentName: string;
   agentVersion?: string;
   model: { provider: string; name: string };
@@ -72,7 +72,7 @@ function formatEvalFailure(
 }
 
 export interface PreflightTransformArgs {
-  client: SigilClient;
+  client: Agento11yClient;
   agentName: string;
   agentVersion?: string;
   model: { provider: string; name: string };

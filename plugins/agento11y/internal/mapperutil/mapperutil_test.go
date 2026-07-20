@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 func TestDeterministicID(t *testing.T) {
@@ -52,14 +52,14 @@ func TestDeterministicID(t *testing.T) {
 func TestNormalizeStartContentMode(t *testing.T) {
 	cases := []struct {
 		name string
-		in   sigil.ContentCaptureMode
-		want sigil.ContentCaptureMode
+		in   agento11y.ContentCaptureMode
+		want agento11y.ContentCaptureMode
 	}{
-		{"default becomes metadata-only", sigil.ContentCaptureModeDefault, sigil.ContentCaptureModeMetadataOnly},
-		{"metadata-only unchanged", sigil.ContentCaptureModeMetadataOnly, sigil.ContentCaptureModeMetadataOnly},
-		{"no-tool-content unchanged", sigil.ContentCaptureModeNoToolContent, sigil.ContentCaptureModeNoToolContent},
-		{"full unchanged", sigil.ContentCaptureModeFull, sigil.ContentCaptureModeFull},
-		{"full-with-metadata-spans unchanged", sigil.ContentCaptureModeFullWithMetadataSpans, sigil.ContentCaptureModeFullWithMetadataSpans},
+		{"default becomes metadata-only", agento11y.ContentCaptureModeDefault, agento11y.ContentCaptureModeMetadataOnly},
+		{"metadata-only unchanged", agento11y.ContentCaptureModeMetadataOnly, agento11y.ContentCaptureModeMetadataOnly},
+		{"no-tool-content unchanged", agento11y.ContentCaptureModeNoToolContent, agento11y.ContentCaptureModeNoToolContent},
+		{"full unchanged", agento11y.ContentCaptureModeFull, agento11y.ContentCaptureModeFull},
+		{"full-with-metadata-spans unchanged", agento11y.ContentCaptureModeFullWithMetadataSpans, agento11y.ContentCaptureModeFullWithMetadataSpans},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -73,14 +73,14 @@ func TestNormalizeStartContentMode(t *testing.T) {
 func TestNormalizePayloadContentMode(t *testing.T) {
 	cases := []struct {
 		name string
-		in   sigil.ContentCaptureMode
-		want sigil.ContentCaptureMode
+		in   agento11y.ContentCaptureMode
+		want agento11y.ContentCaptureMode
 	}{
-		{"default becomes metadata-only", sigil.ContentCaptureModeDefault, sigil.ContentCaptureModeMetadataOnly},
-		{"metadata-only unchanged", sigil.ContentCaptureModeMetadataOnly, sigil.ContentCaptureModeMetadataOnly},
-		{"no-tool-content unchanged", sigil.ContentCaptureModeNoToolContent, sigil.ContentCaptureModeNoToolContent},
-		{"full unchanged", sigil.ContentCaptureModeFull, sigil.ContentCaptureModeFull},
-		{"full-with-metadata-spans becomes full", sigil.ContentCaptureModeFullWithMetadataSpans, sigil.ContentCaptureModeFull},
+		{"default becomes metadata-only", agento11y.ContentCaptureModeDefault, agento11y.ContentCaptureModeMetadataOnly},
+		{"metadata-only unchanged", agento11y.ContentCaptureModeMetadataOnly, agento11y.ContentCaptureModeMetadataOnly},
+		{"no-tool-content unchanged", agento11y.ContentCaptureModeNoToolContent, agento11y.ContentCaptureModeNoToolContent},
+		{"full unchanged", agento11y.ContentCaptureModeFull, agento11y.ContentCaptureModeFull},
+		{"full-with-metadata-spans becomes full", agento11y.ContentCaptureModeFullWithMetadataSpans, agento11y.ContentCaptureModeFull},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

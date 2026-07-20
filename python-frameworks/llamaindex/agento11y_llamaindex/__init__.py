@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 from agento11y import Client
 
-from .handler import SigilAsyncLlamaIndexHandler, SigilLlamaIndexHandler
+from .handler import Agento11yAsyncLlamaIndexHandler, Agento11yLlamaIndexHandler
 
 try:  # pragma: no cover - imported from llama-index at runtime
     from llama_index.core.callbacks import CallbackManager
@@ -62,24 +62,24 @@ except Exception:  # pragma: no cover - lightweight fallback for local unit test
 _chain_event_types = {"query", "retrieve", "synthesize", "tree", "sub_question", "agent_step"}
 
 
-def create_sigil_llamaindex_handler(
+def create_agento11y_llamaindex_handler(
     *,
     client: Client,
     async_handler: bool = False,
     **handler_kwargs: Any,
-) -> SigilLlamaIndexHandler | SigilAsyncLlamaIndexHandler:
+) -> Agento11yLlamaIndexHandler | Agento11yAsyncLlamaIndexHandler:
     """Create a LlamaIndex Sigil callback handler for sync or async flows."""
     if async_handler:
-        return SigilAsyncLlamaIndexHandler(client=client, **handler_kwargs)
-    return SigilLlamaIndexHandler(client=client, **handler_kwargs)
+        return Agento11yAsyncLlamaIndexHandler(client=client, **handler_kwargs)
+    return Agento11yLlamaIndexHandler(client=client, **handler_kwargs)
 
 
-class SigilLlamaIndexCallbackHandler(BaseCallbackHandler):
+class Agento11yLlamaIndexCallbackHandler(BaseCallbackHandler):
     """LlamaIndex BaseCallbackHandler bridge that forwards lifecycle events to Sigil."""
 
-    def __init__(self, sigil_handler: SigilLlamaIndexHandler | SigilAsyncLlamaIndexHandler) -> None:
+    def __init__(self, agento11y_handler: Agento11yLlamaIndexHandler | Agento11yAsyncLlamaIndexHandler) -> None:
         super().__init__(event_starts_to_ignore=[], event_ends_to_ignore=[])
-        self._sigil_handler = sigil_handler
+        self._agento11y_handler = agento11y_handler
         self._run_ids: dict[str, UUID] = {}
         self._run_kinds: dict[str, str] = {}
 
@@ -111,7 +111,7 @@ class SigilLlamaIndexCallbackHandler(BaseCallbackHandler):
             messages = _llm_messages(event_payload)
             if messages:
                 _invoke_handler(
-                    self._sigil_handler,
+                    self._agento11y_handler,
                     "on_chat_model_start",
                     serialized,
                     [messages],
@@ -123,7 +123,7 @@ class SigilLlamaIndexCallbackHandler(BaseCallbackHandler):
                 )
             else:
                 _invoke_handler(
-                    self._sigil_handler,
+                    self._agento11y_handler,
                     "on_llm_start",
                     serialized,
                     _llm_prompts(event_payload),
@@ -141,7 +141,7 @@ class SigilLlamaIndexCallbackHandler(BaseCallbackHandler):
             self._run_kinds[current_event_id] = "tool"
             tool_name = _tool_name(event_payload)
             _invoke_handler(
-                self._sigil_handler,
+                self._agento11y_handler,
                 "on_tool_start",
                 {"name": tool_name},
                 _tool_input_string(_read(event_payload, "function_call")),
@@ -159,7 +159,7 @@ class SigilLlamaIndexCallbackHandler(BaseCallbackHandler):
             self._run_kinds[current_event_id] = "chain"
             chain_name = f"llamaindex.{event_name}"
             _invoke_handler(
-                self._sigil_handler,
+                self._agento11y_handler,
                 "on_chain_start",
                 {"name": chain_name},
                 event_payload,
@@ -191,7 +191,7 @@ class SigilLlamaIndexCallbackHandler(BaseCallbackHandler):
 
         if run_kind == "llm" or event_name == "llm":
             _invoke_handler(
-                self._sigil_handler,
+                self._agento11y_handler,
                 "on_llm_end",
                 _llm_end_payload(event_payload),
                 run_id=run_id,
@@ -200,7 +200,7 @@ class SigilLlamaIndexCallbackHandler(BaseCallbackHandler):
 
         if run_kind == "tool" or event_name == "function_call":
             _invoke_handler(
-                self._sigil_handler,
+                self._agento11y_handler,
                 "on_tool_end",
                 _read(event_payload, "function_call_response"),
                 run_id=run_id,
@@ -208,18 +208,18 @@ class SigilLlamaIndexCallbackHandler(BaseCallbackHandler):
             return
 
         if run_kind == "chain" or event_name in _chain_event_types:
-            _invoke_handler(self._sigil_handler, "on_chain_end", event_payload, run_id=run_id)
+            _invoke_handler(self._agento11y_handler, "on_chain_end", event_payload, run_id=run_id)
 
 
-def create_sigil_llamaindex_callback_handler(
+def create_agento11y_llamaindex_callback_handler(
     *,
     client: Client,
     async_handler: bool = False,
     **handler_kwargs: Any,
-) -> SigilLlamaIndexCallbackHandler:
+) -> Agento11yLlamaIndexCallbackHandler:
     """Create a callback-manager compatible LlamaIndex handler."""
-    return SigilLlamaIndexCallbackHandler(
-        create_sigil_llamaindex_handler(
+    return Agento11yLlamaIndexCallbackHandler(
+        create_agento11y_llamaindex_handler(
             client=client,
             async_handler=async_handler,
             **handler_kwargs,
@@ -227,7 +227,7 @@ def create_sigil_llamaindex_callback_handler(
     )
 
 
-def with_sigil_llamaindex_callbacks(
+def with_agento11y_llamaindex_callbacks(
     config: dict[str, Any] | None,
     *,
     client: Client,
@@ -251,10 +251,10 @@ def with_sigil_llamaindex_callbacks(
             _add_handler(callback_manager, existing_handler)
     merged.pop("callbacks", None)
 
-    if not _has_sigil_handler(callback_manager):
+    if not _has_agento11y_handler(callback_manager):
         _add_handler(
             callback_manager,
-            create_sigil_llamaindex_callback_handler(
+            create_agento11y_llamaindex_callback_handler(
                 client=client,
                 async_handler=async_handler,
                 **handler_kwargs,
@@ -453,9 +453,9 @@ def _is_callback_handler(value: Any) -> bool:
     return all(callable(getattr(value, method_name, None)) for method_name in required_methods)
 
 
-def _has_sigil_handler(callback_manager: Any) -> bool:
+def _has_agento11y_handler(callback_manager: Any) -> bool:
     handlers = _as_list(_read(callback_manager, "handlers"))
-    return any(isinstance(handler, SigilLlamaIndexCallbackHandler) for handler in handlers)
+    return any(isinstance(handler, Agento11yLlamaIndexCallbackHandler) for handler in handlers)
 
 
 def _message_text(value: Any) -> str:
@@ -531,10 +531,10 @@ def _camel_case(snake_case: str) -> str:
 
 
 __all__ = [
-    "SigilLlamaIndexHandler",
-    "SigilAsyncLlamaIndexHandler",
-    "SigilLlamaIndexCallbackHandler",
-    "create_sigil_llamaindex_handler",
-    "create_sigil_llamaindex_callback_handler",
-    "with_sigil_llamaindex_callbacks",
+    "Agento11yLlamaIndexHandler",
+    "Agento11yAsyncLlamaIndexHandler",
+    "Agento11yLlamaIndexCallbackHandler",
+    "create_agento11y_llamaindex_handler",
+    "create_agento11y_llamaindex_callback_handler",
+    "with_agento11y_llamaindex_callbacks",
 ]

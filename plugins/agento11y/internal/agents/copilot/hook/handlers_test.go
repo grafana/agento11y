@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/fragment"
@@ -51,7 +51,7 @@ func TestHookSequenceExportsOnStop(t *testing.T) {
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 
 	SessionStart(Payload{HookEventNameJSON: "SessionStart", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:00Z"`), SourceValue: "new"}, cfg, logger)
 	UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "hello glc_abcdefghijklmnopqrstuvwxyz"}, cfg, logger)
@@ -123,7 +123,7 @@ func TestStopLocalEndpointAllowsMissingCredentials(t *testing.T) {
 			t.Setenv("SIGIL_ENDPOINT", server.URL)
 			t.Setenv("SIGIL_AUTH_TENANT_ID", tc.tenantID)
 			t.Setenv("SIGIL_AUTH_TOKEN", tc.token)
-			cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+			cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 
 			UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "hello"}, cfg, logger)
 			Stop(Payload{HookEventNameJSON: "Stop", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:04Z"`), StopReasonJSON: "end_turn"}, cfg, logger)
@@ -184,7 +184,7 @@ func TestSessionEndKeepsActiveTurnUntilStop(t *testing.T) {
 func TestErrorOccurredStoresMetadataOnlyOutsideFullMode(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(io.Discard, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 	UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "hello"}, cfg, logger)
 	ErrorOccurred(Payload{
 		HookEventNameJSON: "ErrorOccurred",
@@ -227,7 +227,7 @@ func TestStopEnrichesExportFromTranscript(t *testing.T) {
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 
 	UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "hello"}, cfg, logger)
 	Stop(Payload{HookEventNameJSON: "Stop", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:04Z"`), StopReasonJSON: "end_turn", TranscriptPathJSON: transcriptPath}, cfg, logger)
@@ -255,7 +255,7 @@ func TestStopRetainsActiveTurnWhenExportFlushFails(t *testing.T) {
 	t.Setenv("SIGIL_ENDPOINT", "://bad-endpoint")
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 
 	UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "hello"}, cfg, logger)
 	Stop(Payload{HookEventNameJSON: "Stop", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:04Z"`), StopReasonJSON: "end_turn"}, cfg, logger)
@@ -279,7 +279,7 @@ func TestStopClearsActiveTurnWhenFragmentLoadFails(t *testing.T) {
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
 	t.Setenv("SIGIL_AUTH_TOKEN", "")
 	logger := log.New(io.Discard, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 
 	UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "hello"}, cfg, logger)
 	path := fragment.FragmentFilePath("sess", "turn-000001")
@@ -309,7 +309,7 @@ func TestStopClearsActiveTurnWhenDeleteFailsAfterSuccessfulExport(t *testing.T) 
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 
 	origDelete := deleteFragment
 	deleteFragment = func(sessionID, turnID string) error {
@@ -358,7 +358,7 @@ func TestStopUsesPromptHashForMetadataOnlyTranscriptEnrichment(t *testing.T) {
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeMetadataOnly}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 
 	UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "second prompt"}, cfg, logger)
 	frag := fragment.LoadTolerant("sess", "turn-000001", logger)
@@ -467,7 +467,7 @@ func TestStopWaitsForCurrentCLITranscriptTurnInsteadOfReusingPreviousTurn(t *tes
 	t.Setenv("SIGIL_ENDPOINT", server.URL)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 
 	UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "second prompt"}, cfg, logger)
 	Stop(Payload{HookEventNameJSON: "Stop", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:04Z"`), StopReasonJSON: "end_turn", TranscriptPathJSON: transcriptPath}, cfg, logger)
@@ -662,7 +662,7 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			}
 
 			cfg := config.Config{
-				ContentCapture: sigil.ContentCaptureModeFull,
+				ContentCapture: agento11y.ContentCaptureModeFull,
 				Guards:         tt.guards,
 			}
 			UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "hello"}, cfg, logger)

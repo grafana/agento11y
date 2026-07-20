@@ -1,7 +1,7 @@
 import { CallbackManager } from 'llamaindex';
 
-import type { SigilClient } from '../../client.js';
-import { type FrameworkHandlerOptions, SigilFrameworkHandler } from '../shared.js';
+import type { Agento11yClient } from '../../client.js';
+import { Agento11yFrameworkHandler, type FrameworkHandlerOptions } from '../shared.js';
 
 export type { FrameworkHandlerOptions };
 
@@ -22,16 +22,16 @@ type LlamaIndexCallbackManager = {
 };
 
 export interface LlamaIndexCallbackRegistration {
-  handler: SigilLlamaIndexHandler;
+  handler: Agento11yLlamaIndexHandler;
   detach: () => void;
 }
 
 const registrations = new WeakMap<LlamaIndexCallbackManager, LlamaIndexCallbackRegistration>();
 
-export class SigilLlamaIndexHandler extends SigilFrameworkHandler {
-  name = 'sigil_llamaindex_handler';
+export class Agento11yLlamaIndexHandler extends Agento11yFrameworkHandler {
+  name = 'agento11y_llamaindex_handler';
 
-  constructor(client: SigilClient, options: FrameworkHandlerOptions = {}) {
+  constructor(client: Agento11yClient, options: FrameworkHandlerOptions = {}) {
     super(client, 'llamaindex', 'javascript', options);
   }
 
@@ -135,16 +135,16 @@ export class SigilLlamaIndexHandler extends SigilFrameworkHandler {
   }
 }
 
-export function createSigilLlamaIndexHandler(
-  client: SigilClient,
+export function createAgento11yLlamaIndexHandler(
+  client: Agento11yClient,
   options: FrameworkHandlerOptions = {},
-): SigilLlamaIndexHandler {
-  return new SigilLlamaIndexHandler(client, options);
+): Agento11yLlamaIndexHandler {
+  return new Agento11yLlamaIndexHandler(client, options);
 }
 
-export function attachSigilLlamaIndexCallbacks(
+export function attachAgento11yLlamaIndexCallbacks(
   callbackManager: LlamaIndexCallbackManager,
-  client: SigilClient,
+  client: Agento11yClient,
   options: FrameworkHandlerOptions = {},
 ): LlamaIndexCallbackRegistration {
   const existing = registrations.get(callbackManager);
@@ -152,7 +152,7 @@ export function attachSigilLlamaIndexCallbacks(
     return existing;
   }
 
-  const handler = createSigilLlamaIndexHandler(client, options);
+  const handler = createAgento11yLlamaIndexHandler(client, options);
   const llmRunIds = new Map<string, string>();
   const llmFallbackRunIds: string[] = [];
   const toolRunIds = new Map<string, string>();
@@ -420,9 +420,9 @@ export function attachSigilLlamaIndexCallbacks(
   return registration;
 }
 
-export function withSigilLlamaIndexCallbacks<T extends CallbackConfig>(
+export function withAgento11yLlamaIndexCallbacks<T extends CallbackConfig>(
   config: T | undefined,
-  client: SigilClient,
+  client: Agento11yClient,
   options: FrameworkHandlerOptions = {},
 ): T & { callbackManager: LlamaIndexCallbackManager } {
   const base = { ...(config ?? {}) } as CallbackConfig;
@@ -434,10 +434,10 @@ export function withSigilLlamaIndexCallbacks<T extends CallbackConfig>(
   } else if (isCallbackManager(existingManager)) {
     callbackManager = existingManager;
   } else {
-    throw new Error('withSigilLlamaIndexCallbacks expects config.callbackManager to implement on/off methods.');
+    throw new Error('withAgento11yLlamaIndexCallbacks expects config.callbackManager to implement on/off methods.');
   }
 
-  attachSigilLlamaIndexCallbacks(callbackManager, client, options);
+  attachAgento11yLlamaIndexCallbacks(callbackManager, client, options);
 
   return {
     ...base,
@@ -454,7 +454,7 @@ type ChainStartConfig = {
 };
 
 async function runChainStart(
-  handler: SigilLlamaIndexHandler,
+  handler: Agento11yLlamaIndexHandler,
   event: LlamaIndexEvent,
   config: ChainStartConfig,
 ): Promise<void> {
@@ -477,7 +477,7 @@ async function runChainStart(
 }
 
 async function runChainEnd(
-  handler: SigilLlamaIndexHandler,
+  handler: Agento11yLlamaIndexHandler,
   event: LlamaIndexEvent,
   runPrefix: string,
   idPath?: string[],

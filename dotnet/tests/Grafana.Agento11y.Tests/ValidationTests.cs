@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class ValidationTests
 {

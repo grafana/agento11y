@@ -111,7 +111,7 @@ Evaluator ids are yours to choose — pick clear, stable ids. Be concrete about 
 each one means, because it is not a Sigil control-plane action here: in the offline SDK flow
 an evaluator is **code the developer writes in the runner** (Step 4). An `llm_judge` is a
 function that calls a model and returns a score; a `deterministic` one is a plain code check.
-`sigil.Evaluator(evaluator_id=..., kind=...)` is only the label attached to the score, not the
+`experiments.Evaluator(evaluator_id=..., kind=...)` is only the label attached to the score, not the
 logic. (Forking a predefined template is a separate online-eval path, not needed here.)
 
 This skill targets the **offline** phase: run these evaluators as offline experiments against
@@ -147,7 +147,7 @@ as a harness case in its notes, or leave it out.
 ```yaml
 # STARTER DRAFT — review before use. Generated from your agent code (<file:line refs>).
 # NOT validated. Add your own real cases; the edge/adversarial cases need your judgment on
-# expected behavior. Loads with sigil TestSuite.from_yaml(...).
+# expected behavior. Loads with agento11y TestSuite.from_yaml(...).
 suite_id: <agent>-starter
 name: <Agent> starter suite
 version: 1.0.0
@@ -200,7 +200,7 @@ What you generate depends on the runnability you assessed in Step 1:
 
 Also branch on **language** (the experiments SDK is Python/Go only):
 
-- **Python or Go agent** → native runner (`run_experiment.py`, or the Go `sigil` package).
+- **Python or Go agent** → native runner (`run_experiment.py`, or the Go `agento11y` package).
 - **TS / Java / .NET agent** → there is no experiments SDK in that language. Deliver
   recommendations + YAML (they are language-neutral), and be honest about the run path: the
   runner must be Python or Go calling the agent across a process boundary (e.g. a Python
@@ -211,7 +211,7 @@ Also branch on **language** (the experiments SDK is Python/Go only):
 For an **easy Python/Go** agent, write `evals/run_experiment.py`. It must:
 
 - Load the suite with `TestSuite.from_yaml(...)`.
-- Open an experiment (`sigil.experiment(...)`) and one `trial` per case.
+- Open an experiment (`experiments.experiment(...)`) and one `trial` per case.
 - Call the agent through a single clearly-marked function `run_agent(case)` — **this is the
   one hole the developer fills**; wire it to the real entrypoint you found in Step 1.
 - Include ONE recommended evaluator sketched end-to-end (prefer an `llm_judge` — a real model
@@ -240,13 +240,13 @@ trial creation fails with "401: experiment is owned by another actor".
 import json, os, time
 from pathlib import Path
 from dotenv import load_dotenv
-from agento11y import experiments as sigil
+from agento11y import experiments
 
 load_dotenv()
 SUITE = Path(__file__).parent / "<agent>-starter.yaml"
 
 
-def run_agent(case: sigil.TestCase) -> str:
+def run_agent(case: experiments.TestCase) -> str:
     """THE ONE HOLE YOU FILL — call your agent for this case, return its output text."""
     raise NotImplementedError("wire this to your agent entrypoint (see Step 1 refs)")
 
@@ -265,8 +265,8 @@ def judge_<evaluator>(case_input, output) -> tuple[float, bool, str]:
 
 
 def main() -> None:
-    suite = sigil.TestSuite.from_yaml(str(SUITE))
-    verifier = sigil.Evaluator(evaluator_id="<evaluator>", version="draft-0", kind="llm_judge")
+    suite = experiments.TestSuite.from_yaml(str(SUITE))
+    verifier = experiments.Evaluator(evaluator_id="<evaluator>", version="draft-0", kind="llm_judge")
     candidate = {
         "agent_name": "<agent>",
         # Always send a declared agent_version. Without it Sigil auto-derives a version from
@@ -277,7 +277,7 @@ def main() -> None:
         "git_sha": os.getenv("GIT_SHA", ""),
         "model_name": os.getenv("MODEL_NAME", ""),
     }
-    with sigil.experiment(name="<agent> starter", experiment_id=f"<agent>-starter-{int(time.time())}",
+    with experiments.experiment(name="<agent> starter", experiment_id=f"<agent>-starter-{int(time.time())}",
                           suite=suite, candidate=candidate, tags=["starter"],
                           actor=os.getenv("AGENTO11Y_INGEST_ACTOR", "ingest:sdk/python")) as exp:
         for case in suite.test_cases:

@@ -1,19 +1,19 @@
-namespace Grafana.Sigil;
+namespace Grafana.Agento11y;
 
-public class SigilException : Exception
+public class Agento11yException : Exception
 {
-    public SigilException(string? message)
+    public Agento11yException(string? message)
         : base(message)
     {
     }
 
-    public SigilException(string? message, Exception? inner)
+    public Agento11yException(string? message, Exception? inner)
         : base(message, inner)
     {
     }
 }
 
-public sealed class ValidationException : SigilException
+public sealed class ValidationException : Agento11yException
 {
     public ValidationException(string? message)
         : base(message)
@@ -26,7 +26,7 @@ public sealed class ValidationException : SigilException
     }
 }
 
-public class EnqueueException : SigilException
+public class EnqueueException : Agento11yException
 {
     public EnqueueException(string? message)
         : base(message)
@@ -65,7 +65,7 @@ public sealed class ClientShutdownException : EnqueueException
     }
 }
 
-public sealed class MappingException : SigilException
+public sealed class MappingException : Agento11yException
 {
     public MappingException(string? message)
         : base(message)
@@ -78,7 +78,7 @@ public sealed class MappingException : SigilException
     }
 }
 
-public sealed class RatingConflictException : SigilException
+public sealed class RatingConflictException : Agento11yException
 {
     public RatingConflictException(string? message)
         : base(message)
@@ -91,7 +91,7 @@ public sealed class RatingConflictException : SigilException
     }
 }
 
-public sealed class RatingTransportException : SigilException
+public sealed class RatingTransportException : Agento11yException
 {
     public RatingTransportException(string? message)
         : base(message)

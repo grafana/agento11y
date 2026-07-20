@@ -8,7 +8,7 @@ import {
   PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { defaultConfig, SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
 const clientTagProjectKey = 'agento11y.tag.project';
 
@@ -128,7 +128,7 @@ function newHarness(overrides = {}) {
   });
   const meterProvider = new MeterProvider({ readers: [metricReader] });
 
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     tracer,
     meter: meterProvider.getMeter('sigil-test'),
     generationExport: {

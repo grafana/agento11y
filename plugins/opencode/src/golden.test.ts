@@ -1,14 +1,14 @@
 // OpenCode high-level real-SDK golden test.
 //
-// Drives the OpenCode plugin through `createSigilHooks(config, client)`
+// Drives the OpenCode plugin through `createAgento11yHooks(config, client)`
 // with a fake OpencodeClient. The Sigil JS SDK exporter is pointed at a
 // local HTTP capture server, and the normalized export body is compared
 // against src/testdata/golden/opencode-full-message.golden.json.
 //
-// We bypass `SigilPlugin`/`config.ts` because the config loader resolves a
-// path at import time from `homedir()`. `createSigilHooks` is the cleaner
+// We bypass `Agento11yPlugin`/`config.ts` because the config loader resolves a
+// path at import time from `homedir()`. `createAgento11yHooks` is the cleaner
 // seam — it accepts a config object directly and is the function
-// `SigilPlugin` ultimately delegates to.
+// `Agento11yPlugin` ultimately delegates to.
 //
 // Set UPDATE_GOLDENS=1 to regenerate the golden after a deliberate change.
 
@@ -17,8 +17,8 @@ import { createServer, type Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { SigilOpencodeConfig } from "./config.js";
-import { createSigilHooks } from "./hooks.js";
+import type { Agento11yOpencodeConfig } from "./config.js";
+import { createAgento11yHooks } from "./hooks.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GOLDEN_PATH = join(
@@ -224,7 +224,7 @@ describe("opencode plugin: real-SDK golden export", () => {
   });
 
   async function runCompleteAssistantTurn(
-    configOverrides: Partial<SigilOpencodeConfig> = {},
+    configOverrides: Partial<Agento11yOpencodeConfig> = {},
   ) {
     const {
       sessionID,
@@ -235,7 +235,7 @@ describe("opencode plugin: real-SDK golden export", () => {
       effectiveSystem,
     } = opencodeMessageFixture();
 
-    const config: SigilOpencodeConfig = {
+    const config: Agento11yOpencodeConfig = {
       endpoint: serverEnv.baseUrl,
       auth: { mode: "none" },
       agentName: "opencode",
@@ -259,8 +259,9 @@ describe("opencode plugin: real-SDK golden export", () => {
       },
     } as any;
 
-    const hooks = await createSigilHooks(config, fakeClient);
-    if (!hooks) throw new Error("expected createSigilHooks to return hooks");
+    const hooks = await createAgento11yHooks(config, fakeClient);
+    if (!hooks)
+      throw new Error("expected createAgento11yHooks to return hooks");
 
     // Store the user message, capture the composed system prompt, then
     // export when the assistant message completes.
@@ -381,7 +382,7 @@ describe("opencode plugin: real-SDK golden export", () => {
     }
     // full_with_metadata_spans must keep tool bodies in the proto export
     // (the SDK splits content only on the OTel span side); see
-    // go/sigil/content_capture.go on ContentCaptureModeFullWithMetadataSpans.
+    // go/agento11y/content_capture.go on ContentCaptureModeFullWithMetadataSpans.
     if (contentCapture === "full_with_metadata_spans") {
       expect(findOutputPart(turn, "tool_call").tool_call.input_json).not.toBe(
         "",

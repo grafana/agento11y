@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createSigilVercelAiSdk } from '../.test-dist/frameworks/vercel-ai-sdk/index.js';
-import { defaultConfig, SigilClient } from '../.test-dist/index.js';
+import { createAgento11yVercelAiSdk } from '../.test-dist/frameworks/vercel-ai-sdk/index.js';
+import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
 class CapturingExporter {
   requests = [];
@@ -19,12 +19,12 @@ class CapturingExporter {
 
 test('vercel ai sdk generateText hooks record single-step success', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client, {
+    const agento11y = createAgento11yVercelAiSdk(client, {
       agentName: 'vercel-agent',
       agentVersion: '1.0.0',
     });
 
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-1' });
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-1' });
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
       model: { provider: 'openai', modelId: 'gpt-5' },
@@ -77,8 +77,8 @@ test('vercel ai sdk generateText hooks record single-step success', async () => 
 
 test('vercel ai sdk prepareStep records input messages for ai sdk v6', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-v6-prepare-step' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-v6-prepare-step' });
 
     const prepareResult = hooks.prepareStep?.({
       stepNumber: 0,
@@ -106,8 +106,8 @@ test('vercel ai sdk prepareStep records input messages for ai sdk v6', async () 
 
 test('vercel ai sdk streamText prepareStep records input messages for ai sdk v6', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.streamTextHooks({ conversationId: 'conv-v6-stream-prepare-step' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.streamTextHooks({ conversationId: 'conv-v6-stream-prepare-step' });
 
     const prepareResult = hooks.prepareStep?.({
       stepNumber: 0,
@@ -142,8 +142,8 @@ test('vercel ai sdk streamText prepareStep records input messages for ai sdk v6'
 
 test('vercel ai sdk generateText hooks record single-step error', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-error' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-error' });
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
       model: { modelId: 'gpt-5' },
@@ -165,8 +165,8 @@ test('vercel ai sdk generateText hooks record single-step error', async () => {
 
 test('vercel ai sdk generateText hooks record step when step start callback is absent', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks();
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks();
     hooks.onStepFinish?.({
       stepNumber: 0,
       text: 'fallback path',
@@ -177,7 +177,7 @@ test('vercel ai sdk generateText hooks record step when step start callback is a
 
   assert.equal(generations.length, 1);
   const generation = generations[0];
-  assert.equal(generation.conversationId, 'sigil:framework:vercel-ai-sdk:call-1:step-0');
+  assert.equal(generation.conversationId, 'agento11y:framework:vercel-ai-sdk:call-1:step-0');
   assert.equal(generation.model.provider, 'openai');
   assert.equal(generation.model.name, 'gpt-5');
   assert.equal(generation.output[0].content, 'fallback path');
@@ -192,8 +192,8 @@ test('vercel ai sdk generateText defers recorder creation until step finish', as
       return originalStartGeneration(...args);
     };
 
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-no-step-finish' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-no-step-finish' });
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
       model: { modelId: 'gpt-5' },
@@ -208,8 +208,8 @@ test('vercel ai sdk generateText defers recorder creation until step finish', as
 
 test('vercel ai sdk generateText records tool execution from onStepFinish without experimental tool callbacks', async () => {
   const { generations, snapshot } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-v5-step-finish-tools' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-v5-step-finish-tools' });
 
     hooks.onStepFinish?.({
       stepNumber: 0,
@@ -243,8 +243,8 @@ test('vercel ai sdk generateText records tool execution from onStepFinish withou
 
 test('vercel ai sdk fallback tool spans use deterministic seed-based conversation id', async () => {
   const { generations, snapshot } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks();
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks();
 
     hooks.onStepFinish?.({
       stepNumber: 0,
@@ -271,14 +271,14 @@ test('vercel ai sdk fallback tool spans use deterministic seed-based conversatio
 
   assert.equal(generations.length, 1);
   assert.equal(snapshot.toolExecutions.length, 1);
-  assert.equal(generations[0].conversationId, 'sigil:framework:vercel-ai-sdk:call-1:step-0');
+  assert.equal(generations[0].conversationId, 'agento11y:framework:vercel-ai-sdk:call-1:step-0');
   assert.equal(snapshot.toolExecutions[0].conversationId, generations[0].conversationId);
 });
 
 test('vercel ai sdk fallback conversation id is consistent across tool callback availability', async () => {
   const stepFinishOnly = await captureSingleGeneration(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks();
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks();
 
     hooks.onStepFinish?.({
       stepNumber: 0,
@@ -304,8 +304,8 @@ test('vercel ai sdk fallback conversation id is consistent across tool callback 
   });
 
   const withToolCallbacks = await captureSingleGeneration(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks();
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks();
 
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
@@ -335,15 +335,15 @@ test('vercel ai sdk fallback conversation id is consistent across tool callback 
     });
   });
 
-  assert.equal(stepFinishOnly.conversationId, 'sigil:framework:vercel-ai-sdk:call-1:step-0');
-  assert.equal(withToolCallbacks.conversationId, 'sigil:framework:vercel-ai-sdk:call-1:step-0');
+  assert.equal(stepFinishOnly.conversationId, 'agento11y:framework:vercel-ai-sdk:call-1:step-0');
+  assert.equal(withToolCallbacks.conversationId, 'agento11y:framework:vercel-ai-sdk:call-1:step-0');
   assert.equal(stepFinishOnly.conversationId, withToolCallbacks.conversationId);
 });
 
 test('vercel ai sdk onStepFinish fallback tool failures do not throw', async () => {
   const { generations, snapshot } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-v5-tool-failure' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-v5-tool-failure' });
 
     assert.doesNotThrow(() => {
       hooks.onStepFinish?.({
@@ -378,8 +378,8 @@ test('vercel ai sdk onStepFinish fallback tool failures do not throw', async () 
 
 test('vercel ai sdk generateText hooks support multi-step loop and tool lifecycle', async () => {
   const { generations, snapshot } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client, { captureInputs: true, captureOutputs: true });
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-loop' });
+    const agento11y = createAgento11yVercelAiSdk(client, { captureInputs: true, captureOutputs: true });
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-loop' });
 
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
@@ -456,8 +456,8 @@ test('vercel ai sdk generateText hooks support multi-step loop and tool lifecycl
 test('vercel ai sdk streamText hooks capture TTFT once and record streaming result', async () => {
   const { generations, firstTokenCalls } = await captureSession(
     async (client) => {
-      const sigil = createSigilVercelAiSdk(client);
-      const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream' });
+      const agento11y = createAgento11yVercelAiSdk(client);
+      const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream' });
 
       hooks.experimental_onStepStart?.({
         stepNumber: 0,
@@ -508,8 +508,8 @@ test('vercel ai sdk streamText hooks capture TTFT once and record streaming resu
 
 test('vercel ai sdk streamText hooks close step and open tools on error', async () => {
   const { generations, snapshot } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream-error' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream-error' });
 
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
@@ -535,8 +535,8 @@ test('vercel ai sdk streamText hooks close step and open tools on error', async 
 
 test('vercel ai sdk streamText hooks export error when step start callback is unavailable', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream-no-step-start-error' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream-no-step-start-error' });
     hooks.onError?.({ error: new Error('stream aborted without step start') });
   });
 
@@ -548,8 +548,8 @@ test('vercel ai sdk streamText hooks export error when step start callback is un
 
 test('vercel ai sdk streamText hooks close step and open tools on abort', async () => {
   const { generations, snapshot } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream-abort' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream-abort' });
 
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
@@ -575,8 +575,8 @@ test('vercel ai sdk streamText hooks close step and open tools on abort', async 
 
 test('vercel ai sdk streamText hooks export abort when step start callback is unavailable', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream-no-step-start-abort' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream-no-step-start-abort' });
     hooks.onAbort?.();
   });
 
@@ -588,8 +588,8 @@ test('vercel ai sdk streamText hooks export abort when step start callback is un
 
 test('vercel ai sdk streamText hooks normalize structured abort payloads to abort error', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream-structured-abort' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream-structured-abort' });
     hooks.onAbort?.({ steps: [{ stepNumber: 0 }] });
   });
 
@@ -600,8 +600,8 @@ test('vercel ai sdk streamText hooks normalize structured abort payloads to abor
 
 test('vercel ai sdk streamText synthetic step uses call start when no step start callback or chunk is observed', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream-finish-only-start' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream-finish-only-start' });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -621,8 +621,8 @@ test('vercel ai sdk streamText synthetic step uses call start when no step start
 
 test('vercel ai sdk streamText synthetic step fallback does not reuse first-step start across later steps', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream-finish-only-multi-step' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream-finish-only-multi-step' });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     hooks.onStepFinish?.({
@@ -658,8 +658,8 @@ test('vercel ai sdk streamText synthetic step fallback does not reuse first-step
 test('vercel ai sdk streamText synthetic step preserves pre-finish start timestamp', async () => {
   const { generations, firstTokenCalls } = await captureSession(
     async (client) => {
-      const sigil = createSigilVercelAiSdk(client);
-      const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream-synthetic-start' });
+      const agento11y = createAgento11yVercelAiSdk(client);
+      const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream-synthetic-start' });
 
       hooks.onChunk?.({
         stepNumber: 0,
@@ -690,8 +690,8 @@ test('vercel ai sdk streamText synthetic step preserves pre-finish start timesta
 
 test('vercel ai sdk streamText synthetic step uses response model when step start callback is unavailable', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream-model-fallback' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream-model-fallback' });
 
     hooks.onChunk?.({
       stepNumber: 0,
@@ -716,8 +716,8 @@ test('vercel ai sdk streamText synthetic step uses response model when step star
 
 test('vercel ai sdk streamText records observed start from non-text chunks', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream-reasoning-start' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream-reasoning-start' });
 
     hooks.onChunk?.({
       stepNumber: 0,
@@ -757,8 +757,8 @@ test('vercel ai sdk streamText fallback preserves TTFT when non-text chunks arri
       return recorder;
     };
 
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream-reasoning-ttft' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream-reasoning-ttft' });
 
     hooks.onChunk?.({
       stepNumber: 0,
@@ -797,8 +797,8 @@ test('vercel ai sdk streamText fallback preserves TTFT when non-text chunks arri
 
 test('vercel ai sdk streamText hooks preserve tool spans when step start callback is unavailable', async () => {
   const { generations, snapshot } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.streamTextHooks({ conversationId: 'conv-stream-tool-no-step-start' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.streamTextHooks({ conversationId: 'conv-stream-tool-no-step-start' });
 
     hooks.experimental_onToolCallStart?.({
       stepNumber: 0,
@@ -819,8 +819,8 @@ test('vercel ai sdk streamText hooks preserve tool spans when step start callbac
 
 test('vercel ai sdk tool finish error path records call error and duration', async () => {
   const { snapshot } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-tool-error' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-tool-error' });
 
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
@@ -860,11 +860,11 @@ test('vercel ai sdk tool finish error path records call error and duration', asy
 
 test('vercel ai sdk capture toggles omit model and tool payload content', async () => {
   const { generations, snapshot } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client, {
+    const agento11y = createAgento11yVercelAiSdk(client, {
       captureInputs: false,
       captureOutputs: false,
     });
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-private' });
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-private' });
 
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
@@ -905,10 +905,10 @@ test('vercel ai sdk capture toggles omit model and tool payload content', async 
 
 test('vercel ai sdk conversation id precedence explicit then resolver then fallback', async () => {
   const explicit = await captureSingleGeneration(async (client) => {
-    const sigil = createSigilVercelAiSdk(client, {
+    const agento11y = createAgento11yVercelAiSdk(client, {
       resolveConversationId: () => 'resolver-conv',
     });
-    const hooks = sigil.generateTextHooks({ conversationId: 'explicit-conv' });
+    const hooks = agento11y.generateTextHooks({ conversationId: 'explicit-conv' });
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
       model: { modelId: 'gpt-5' },
@@ -924,10 +924,10 @@ test('vercel ai sdk conversation id precedence explicit then resolver then fallb
   assert.equal(explicit.conversationId, 'explicit-conv');
 
   const resolver = await captureSingleGeneration(async (client) => {
-    const sigil = createSigilVercelAiSdk(client, {
+    const agento11y = createAgento11yVercelAiSdk(client, {
       resolveConversationId: () => 'resolver-conv',
     });
-    const hooks = sigil.generateTextHooks();
+    const hooks = agento11y.generateTextHooks();
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
       model: { modelId: 'gpt-5' },
@@ -943,8 +943,8 @@ test('vercel ai sdk conversation id precedence explicit then resolver then fallb
   assert.equal(resolver.conversationId, 'resolver-conv');
 
   const fallback = await captureSingleGeneration(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks();
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks();
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
       model: { modelId: 'gpt-5' },
@@ -957,13 +957,13 @@ test('vercel ai sdk conversation id precedence explicit then resolver then fallb
       response: { id: 'resp-fallback-42', modelId: 'gpt-5' },
     });
   });
-  assert.equal(fallback.conversationId, 'sigil:framework:vercel-ai-sdk:call-1:step-0');
+  assert.equal(fallback.conversationId, 'agento11y:framework:vercel-ai-sdk:call-1:step-0');
 });
 
 test('vercel ai sdk keeps fallback conversation id aligned between generation and tools', async () => {
   const { generations, snapshot } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks();
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks();
 
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
@@ -995,13 +995,13 @@ test('vercel ai sdk keeps fallback conversation id aligned between generation an
   assert.equal(generations.length, 1);
   assert.equal(snapshot.toolExecutions.length, 1);
   assert.equal(generations[0].conversationId, snapshot.toolExecutions[0].conversationId);
-  assert.equal(generations[0].conversationId, 'sigil:framework:vercel-ai-sdk:call-1:step-0');
+  assert.equal(generations[0].conversationId, 'agento11y:framework:vercel-ai-sdk:call-1:step-0');
 });
 
 test('vercel ai sdk closes open tool recorders when parent step errors', async () => {
   const { generations, snapshot } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-parent-error' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-parent-error' });
 
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
@@ -1045,8 +1045,8 @@ test('vercel ai sdk cleans step and tool state before rethrowing generation reco
       return recorder;
     };
 
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-recorder-error-step-cleanup' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-recorder-error-step-cleanup' });
 
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
@@ -1104,8 +1104,8 @@ test('vercel ai sdk removes tool state before rethrowing tool recorder errors', 
       return recorder;
     };
 
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-recorder-error-tool-cleanup' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-recorder-error-tool-cleanup' });
 
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
@@ -1160,9 +1160,9 @@ test('vercel ai sdk removes tool state before rethrowing tool recorder errors', 
 
 test('vercel ai sdk isolates step state across concurrent calls', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooksA = sigil.generateTextHooks({ conversationId: 'conv-a' });
-    const hooksB = sigil.generateTextHooks({ conversationId: 'conv-b' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooksA = agento11y.generateTextHooks({ conversationId: 'conv-a' });
+    const hooksB = agento11y.generateTextHooks({ conversationId: 'conv-b' });
 
     hooksA.experimental_onStepStart?.({
       stepNumber: 0,
@@ -1209,8 +1209,8 @@ test('vercel ai sdk captures Output.object schema into Generation.tools', async 
     required: ['question', 'skills'],
   };
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client, { agentName: 'structured-agent' });
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-output-schema' });
+    const agento11y = createAgento11yVercelAiSdk(client, { agentName: 'structured-agent' });
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-output-schema' });
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
       model: { provider: 'openai', modelId: 'gpt-5' },
@@ -1246,8 +1246,8 @@ test('vercel ai sdk captures Output.object schema into Generation.tools', async 
 
 test('vercel ai sdk omits tools entry when no output schema is configured', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-no-schema' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-no-schema' });
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
       model: { provider: 'openai', modelId: 'gpt-5' },
@@ -1267,8 +1267,8 @@ test('vercel ai sdk omits tools entry when no output schema is configured', asyn
 
 test('vercel ai sdk recovers without tools when output schema extraction fails', async () => {
   const { generations } = await captureSession(async (client) => {
-    const sigil = createSigilVercelAiSdk(client);
-    const hooks = sigil.generateTextHooks({ conversationId: 'conv-schema-fail' });
+    const agento11y = createAgento11yVercelAiSdk(client);
+    const hooks = agento11y.generateTextHooks({ conversationId: 'conv-schema-fail' });
     hooks.experimental_onStepStart?.({
       stepNumber: 0,
       model: { provider: 'openai', modelId: 'gpt-5' },
@@ -1300,7 +1300,7 @@ async function captureSingleGeneration(run) {
 async function captureSession(run, options = {}) {
   const exporter = new CapturingExporter();
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     generationExport: {
       ...defaults.generationExport,
       batchSize: 10,

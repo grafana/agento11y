@@ -213,7 +213,7 @@ run = "pnpm --filter @grafana/agento11y-opencode run test"
 [tasks."test:go:sdk-conformance"]
 description = "Run the Go SDK core conformance harness"
 dir = "go"
-run = "GOWORK=off go test ./sigil -run '^TestConformance' -count=1"
+run = "GOWORK=off go test ./agento11y -run '^TestConformance' -count=1"
 
 # --- TypeScript/JavaScript SDK tests ---
 
@@ -371,7 +371,7 @@ run = "./gradlew --no-daemon :core:test"
 [tasks."test:java:sdk-conformance"]
 description = "Run Java SDK core conformance tests"
 dir = "java"
-run = "./gradlew --no-daemon :core:test --tests 'com.grafana.sigil.sdk.ConformanceTest'"
+run = "./gradlew --no-daemon :core:test --tests 'com.grafana.agento11y.sdk.ConformanceTest'"
 
 [tasks."test:java:sdk-openai"]
 description = "Run Java OpenAI provider adapter tests"

@@ -9,11 +9,11 @@ from uuid import uuid4
 from agento11y import Client, ClientConfig, GenerationExportConfig
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
 from agento11y_llamaindex import (
-    SigilAsyncLlamaIndexHandler,
-    SigilLlamaIndexCallbackHandler,
-    SigilLlamaIndexHandler,
-    create_sigil_llamaindex_handler,
-    with_sigil_llamaindex_callbacks,
+    Agento11yAsyncLlamaIndexHandler,
+    Agento11yLlamaIndexCallbackHandler,
+    Agento11yLlamaIndexHandler,
+    create_agento11y_llamaindex_handler,
+    with_agento11y_llamaindex_callbacks,
 )
 from llama_index.core.callbacks.base_handler import BaseCallbackHandler
 from opentelemetry.sdk.trace import TracerProvider
@@ -54,7 +54,7 @@ def test_agento11y_llamaindex_sync_lifecycle_sets_framework_metadata() -> None:
     try:
         run_id = uuid4()
         parent_run_id = uuid4()
-        handler = SigilLlamaIndexHandler(client=client, provider_resolver="auto")
+        handler = Agento11yLlamaIndexHandler(client=client, provider_resolver="auto")
 
         handler.on_chat_model_start(
             {"name": "ChatModel"},
@@ -103,7 +103,7 @@ def test_agento11y_llamaindex_keeps_thread_metadata_when_ids_are_split_across_pa
 
     try:
         run_id = uuid4()
-        handler = SigilLlamaIndexHandler(client=client, provider_resolver="auto")
+        handler = Agento11yLlamaIndexHandler(client=client, provider_resolver="auto")
 
         handler.on_chat_model_start(
             {"name": "ChatModel"},
@@ -139,7 +139,7 @@ def test_agento11y_llamaindex_fallback_conversation_is_deterministic() -> None:
 
     try:
         run_id = uuid4()
-        handler = SigilLlamaIndexHandler(client=client)
+        handler = Agento11yLlamaIndexHandler(client=client)
 
         handler.on_llm_start(
             {"kwargs": {"model": "gpt-5"}},
@@ -151,7 +151,7 @@ def test_agento11y_llamaindex_fallback_conversation_is_deterministic() -> None:
 
         client.flush()
         generation = exporter.requests[0].generations[0]
-        assert generation.conversation_id == f"sigil:framework:llamaindex:{run_id}"
+        assert generation.conversation_id == f"agento11y:framework:llamaindex:{run_id}"
     finally:
         client.shutdown()
 
@@ -162,7 +162,7 @@ def test_agento11y_llamaindex_stream_mode_uses_chunks_when_output_missing() -> N
 
     try:
         run_id = uuid4()
-        handler = SigilLlamaIndexHandler(client=client)
+        handler = Agento11yLlamaIndexHandler(client=client)
 
         handler.on_llm_start(
             {"kwargs": {"model": "claude-sonnet-4-5"}},
@@ -188,13 +188,13 @@ def test_agento11y_llamaindex_generation_span_tracks_active_parent_span_and_expo
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-framework-test")
+    tracer = provider.get_tracer("agento11y-framework-test")
     client = _new_client(exporter, tracer=tracer)
 
     try:
         run_id = uuid4()
         with tracer.start_as_current_span("framework.request"):
-            handler = SigilLlamaIndexHandler(client=client, provider_resolver="auto")
+            handler = Agento11yLlamaIndexHandler(client=client, provider_resolver="auto")
             handler.on_chat_model_start(
                 {"name": "ChatModel"},
                 [[{"type": "human", "content": "hello"}]],
@@ -233,7 +233,7 @@ def test_agento11y_llamaindex_normalizes_extra_metadata() -> None:
 
     try:
         run_id = uuid4()
-        handler = SigilLlamaIndexHandler(
+        handler = Agento11yLlamaIndexHandler(
             client=client,
             extra_metadata={
                 "timestamp": "2026-02-20T00:00:00Z",
@@ -265,7 +265,7 @@ def test_agento11y_llamaindex_async_handler_records_generation() -> None:
 
     async def _run() -> None:
         run_id = uuid4()
-        handler = SigilAsyncLlamaIndexHandler(client=client)
+        handler = Agento11yAsyncLlamaIndexHandler(client=client)
         await handler.on_llm_start({}, ["hello"], run_id=run_id, invocation_params={"model": "gpt-5"})
         await handler.on_llm_end({"generations": [[{"text": "world"}]]}, run_id=run_id)
 
@@ -297,11 +297,11 @@ def test_agento11y_llamaindex_callback_helpers_append_handler() -> None:
             return
 
     try:
-        created = create_sigil_llamaindex_handler(client=client)
-        assert isinstance(created, SigilLlamaIndexHandler)
+        created = create_agento11y_llamaindex_handler(client=client)
+        assert isinstance(created, Agento11yLlamaIndexHandler)
 
         existing = _ExistingCallback()
-        config = with_sigil_llamaindex_callbacks(
+        config = with_agento11y_llamaindex_callbacks(
             {"callbacks": existing, "batch_size": 16},
             client=client,
             agent_name="llamaindex-helper",
@@ -312,11 +312,11 @@ def test_agento11y_llamaindex_callback_helpers_append_handler() -> None:
         callback_manager = config["callback_manager"]
         handlers = callback_manager.handlers
         assert handlers[0] is existing
-        sigil_callback = handlers[1]
-        assert isinstance(sigil_callback, SigilLlamaIndexCallbackHandler)
-        assert isinstance(sigil_callback, BaseCallbackHandler)
+        agento11y_callback = handlers[1]
+        assert isinstance(agento11y_callback, Agento11yLlamaIndexCallbackHandler)
+        assert isinstance(agento11y_callback, BaseCallbackHandler)
 
-        event_id = sigil_callback.on_event_start(
+        event_id = agento11y_callback.on_event_start(
             "llm",
             payload={
                 "messages": [{"role": "user", "content": "hello"}],
@@ -326,7 +326,7 @@ def test_agento11y_llamaindex_callback_helpers_append_handler() -> None:
             event_id="llm-42",
             parent_id="root",
         )
-        sigil_callback.on_event_end(
+        agento11y_callback.on_event_end(
             "llm",
             payload={
                 "response": {
@@ -359,7 +359,7 @@ def test_agento11y_llamaindex_handler_explicitly_has_no_embedding_lifecycle() ->
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLlamaIndexHandler(client=client)
+        handler = Agento11yLlamaIndexHandler(client=client)
         assert not hasattr(handler, "on_embedding_start")
         assert not hasattr(handler, "on_embedding_end")
         assert not hasattr(handler, "on_embedding_error")

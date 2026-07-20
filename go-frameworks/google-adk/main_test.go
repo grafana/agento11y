@@ -4,10 +4,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/grafana/agento11y/go/sigil/sigiltest"
+	"github.com/grafana/agento11y/go/agento11y/testkit"
 )
 
 func TestMain(m *testing.M) {
-	sigiltest.ClearAmbientEnv()
+	testkit.ClearAmbientEnv()
 	os.Exit(m.Run())
 }

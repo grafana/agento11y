@@ -1,24 +1,24 @@
-import { SigilClient } from "@grafana/agento11y";
+import { Agento11yClient } from "@grafana/agento11y";
 import type { Meter, Tracer } from "@opentelemetry/api";
-import { EXPORT_PATH, type SigilOpencodeConfig } from "./config.js";
+import { type Agento11yOpencodeConfig, EXPORT_PATH } from "./config.js";
 import { pluginUserAgent } from "./version.js";
 
-export interface SigilClientOptions {
+export interface Agento11yClientOptions {
   tracer?: Tracer;
   meter?: Meter;
 }
 
-export function createSigilClient(
-  config: SigilOpencodeConfig,
-  options?: SigilClientOptions,
-): SigilClient | null {
+export function createAgento11yClient(
+  config: Agento11yOpencodeConfig,
+  options?: Agento11yClientOptions,
+): Agento11yClient | null {
   try {
     const guards = config.guards ?? {
       enabled: false,
       timeoutMs: 1500,
       failOpen: true,
     };
-    return new SigilClient({
+    return new Agento11yClient({
       generationExport: {
         protocol: "http",
         endpoint: appendExportPath(config.endpoint),
@@ -37,7 +37,7 @@ export function createSigilClient(
       ...(options?.meter ? { meter: options.meter } : {}),
     });
   } catch (err) {
-    console.warn("[sigil-opencode] failed to create SigilClient:", err);
+    console.warn("[sigil-opencode] failed to create Agento11yClient:", err);
     return null;
   }
 }

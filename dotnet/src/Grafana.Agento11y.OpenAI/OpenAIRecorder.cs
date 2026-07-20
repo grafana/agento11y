@@ -2,22 +2,22 @@ using global::OpenAI.Chat;
 using global::OpenAI.Embeddings;
 using global::OpenAI.Responses;
 
-namespace Grafana.Sigil.OpenAI;
+namespace Grafana.Agento11y.OpenAI;
 
 public static class OpenAIRecorder
 {
     public static async Task<ChatCompletion> CompleteChatAsync(
-        SigilClient client,
+        Agento11yClient client,
         ChatClient provider,
         IEnumerable<ChatMessage> messages,
         ChatCompletionOptions? requestOptions = null,
-        OpenAISigilOptions? options = null,
+        OpenAIAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(provider);
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var modelName = ResolveInitialModelName(effective, provider.Model);
 
         return await CompleteChatAsync(
@@ -35,18 +35,18 @@ public static class OpenAIRecorder
     }
 
     public static async Task<ChatCompletion> CompleteChatAsync(
-        SigilClient client,
+        Agento11yClient client,
         IEnumerable<ChatMessage> messages,
         Func<IEnumerable<ChatMessage>, ChatCompletionOptions?, CancellationToken, Task<ChatCompletion>> invoke,
         ChatCompletionOptions? requestOptions = null,
-        OpenAISigilOptions? options = null,
+        OpenAIAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(invoke);
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var messageList = messages?.ToList() ?? throw new ArgumentNullException(nameof(messages));
         var modelName = ResolveInitialModelName(effective, fallback: null);
 
@@ -101,17 +101,17 @@ public static class OpenAIRecorder
     }
 
     public static async Task<OpenAIChatCompletionsStreamSummary> CompleteChatStreamingAsync(
-        SigilClient client,
+        Agento11yClient client,
         ChatClient provider,
         IEnumerable<ChatMessage> messages,
         ChatCompletionOptions? requestOptions = null,
-        OpenAISigilOptions? options = null,
+        OpenAIAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(provider);
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var modelName = ResolveInitialModelName(effective, provider.Model);
 
         return await CompleteChatStreamingAsync(
@@ -125,18 +125,18 @@ public static class OpenAIRecorder
     }
 
     public static async Task<OpenAIChatCompletionsStreamSummary> CompleteChatStreamingAsync(
-        SigilClient client,
+        Agento11yClient client,
         IEnumerable<ChatMessage> messages,
         Func<IEnumerable<ChatMessage>, ChatCompletionOptions?, CancellationToken, IAsyncEnumerable<StreamingChatCompletionUpdate>> invoke,
         ChatCompletionOptions? requestOptions = null,
-        OpenAISigilOptions? options = null,
+        OpenAIAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(invoke);
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var messageList = messages?.ToList() ?? throw new ArgumentNullException(nameof(messages));
         var modelName = ResolveInitialModelName(effective, fallback: null);
 
@@ -194,17 +194,17 @@ public static class OpenAIRecorder
     }
 
     public static async Task<ResponseResult> CreateResponseAsync(
-        SigilClient client,
+        Agento11yClient client,
         ResponsesClient provider,
         IEnumerable<ResponseItem> inputItems,
         CreateResponseOptions? requestOptions = null,
-        OpenAISigilOptions? options = null,
+        OpenAIAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(provider);
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var modelName = ResolveInitialModelName(effective, provider.GetType().GetProperty("Model")?.GetValue(provider) as string);
 
         return await CreateResponseAsync(
@@ -223,18 +223,18 @@ public static class OpenAIRecorder
     }
 
     public static async Task<ResponseResult> CreateResponseAsync(
-        SigilClient client,
+        Agento11yClient client,
         IEnumerable<ResponseItem> inputItems,
         Func<IEnumerable<ResponseItem>, CreateResponseOptions?, CancellationToken, Task<ResponseResult>> invoke,
         CreateResponseOptions? requestOptions = null,
-        OpenAISigilOptions? options = null,
+        OpenAIAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(invoke);
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var itemList = inputItems?.ToList() ?? throw new ArgumentNullException(nameof(inputItems));
         var modelName = ResolveInitialModelName(effective, fallback: null);
 
@@ -289,17 +289,17 @@ public static class OpenAIRecorder
     }
 
     public static async Task<OpenAIResponsesStreamSummary> CreateResponseStreamingAsync(
-        SigilClient client,
+        Agento11yClient client,
         ResponsesClient provider,
         IEnumerable<ResponseItem> inputItems,
         CreateResponseOptions? requestOptions = null,
-        OpenAISigilOptions? options = null,
+        OpenAIAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(provider);
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var modelName = ResolveInitialModelName(effective, provider.GetType().GetProperty("Model")?.GetValue(provider) as string);
 
         return await CreateResponseStreamingAsync(
@@ -317,18 +317,18 @@ public static class OpenAIRecorder
     }
 
     public static async Task<OpenAIResponsesStreamSummary> CreateResponseStreamingAsync(
-        SigilClient client,
+        Agento11yClient client,
         IEnumerable<ResponseItem> inputItems,
         Func<IEnumerable<ResponseItem>, CreateResponseOptions?, CancellationToken, IAsyncEnumerable<StreamingResponseUpdate>> invoke,
         CreateResponseOptions? requestOptions = null,
-        OpenAISigilOptions? options = null,
+        OpenAIAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(invoke);
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var itemList = inputItems?.ToList() ?? throw new ArgumentNullException(nameof(inputItems));
         var modelName = ResolveInitialModelName(effective, fallback: null);
 
@@ -390,17 +390,17 @@ public static class OpenAIRecorder
     }
 
     public static async Task<OpenAIEmbeddingCollection> GenerateEmbeddingsAsync(
-        SigilClient client,
+        Agento11yClient client,
         EmbeddingClient provider,
         IEnumerable<string> inputs,
         EmbeddingGenerationOptions? requestOptions = null,
-        OpenAISigilOptions? options = null,
+        OpenAIAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(provider);
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var modelName = ResolveInitialModelName(effective, provider.Model);
 
         return await GenerateEmbeddingsAsync(
@@ -418,18 +418,18 @@ public static class OpenAIRecorder
     }
 
     public static async Task<OpenAIEmbeddingCollection> GenerateEmbeddingsAsync(
-        SigilClient client,
+        Agento11yClient client,
         IEnumerable<string> inputs,
         Func<IEnumerable<string>, EmbeddingGenerationOptions?, CancellationToken, Task<OpenAIEmbeddingCollection>> invoke,
         EmbeddingGenerationOptions? requestOptions = null,
-        OpenAISigilOptions? options = null,
+        OpenAIAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(invoke);
 
-        var effective = options ?? new OpenAISigilOptions();
+        var effective = options ?? new OpenAIAgento11yOptions();
         var inputList = inputs?.ToList() ?? throw new ArgumentNullException(nameof(inputs));
         var modelName = ResolveInitialModelName(effective, fallback: null);
         var recorder = client.StartEmbedding(OpenAIGenerationMapper.EmbeddingsStart(modelName, requestOptions, effective));
@@ -451,7 +451,7 @@ public static class OpenAIRecorder
         }
     }
 
-    private static string ResolveInitialModelName(OpenAISigilOptions options, string? fallback)
+    private static string ResolveInitialModelName(OpenAIAgento11yOptions options, string? fallback)
     {
         if (!string.IsNullOrWhiteSpace(options.ModelName))
         {

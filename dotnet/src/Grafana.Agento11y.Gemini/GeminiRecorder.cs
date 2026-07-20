@@ -1,17 +1,17 @@
 using Google.GenAI;
 using Google.GenAI.Types;
 
-namespace Grafana.Sigil.Gemini;
+namespace Grafana.Agento11y.Gemini;
 
 public static class GeminiRecorder
 {
     public static async Task<GenerateContentResponse> GenerateContentAsync(
-        SigilClient client,
+        Agento11yClient client,
         Client provider,
         string model,
         IReadOnlyList<Content>? contents,
         GenerateContentConfig? config = null,
-        GeminiSigilOptions? options = null,
+        GeminiAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -29,12 +29,12 @@ public static class GeminiRecorder
     }
 
     public static async Task<GenerateContentResponse> GenerateContentAsync(
-        SigilClient client,
+        Agento11yClient client,
         string model,
         IReadOnlyList<Content>? contents,
         Func<string, List<Content>, GenerateContentConfig?, CancellationToken, Task<GenerateContentResponse>> invoke,
         GenerateContentConfig? config = null,
-        GeminiSigilOptions? options = null,
+        GeminiAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -47,7 +47,7 @@ public static class GeminiRecorder
 
         ArgumentNullException.ThrowIfNull(invoke);
 
-        var effective = options ?? new GeminiSigilOptions();
+        var effective = options ?? new GeminiAgento11yOptions();
         var mappedContents = MapContents(contents);
         var modelName = ResolveModelName(model, effective);
 
@@ -95,12 +95,12 @@ public static class GeminiRecorder
     }
 
     public static async Task<GeminiStreamSummary> GenerateContentStreamAsync(
-        SigilClient client,
+        Agento11yClient client,
         Client provider,
         string model,
         IReadOnlyList<Content>? contents,
         GenerateContentConfig? config = null,
-        GeminiSigilOptions? options = null,
+        GeminiAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -118,12 +118,12 @@ public static class GeminiRecorder
     }
 
     public static async Task<GeminiStreamSummary> GenerateContentStreamAsync(
-        SigilClient client,
+        Agento11yClient client,
         string model,
         IReadOnlyList<Content>? contents,
         Func<string, List<Content>, GenerateContentConfig?, CancellationToken, IAsyncEnumerable<GenerateContentResponse>> invoke,
         GenerateContentConfig? config = null,
-        GeminiSigilOptions? options = null,
+        GeminiAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -136,7 +136,7 @@ public static class GeminiRecorder
 
         ArgumentNullException.ThrowIfNull(invoke);
 
-        var effective = options ?? new GeminiSigilOptions();
+        var effective = options ?? new GeminiAgento11yOptions();
         var mappedContents = MapContents(contents);
         var modelName = ResolveModelName(model, effective);
 
@@ -197,12 +197,12 @@ public static class GeminiRecorder
     }
 
     public static async Task<EmbedContentResponse> EmbedContentAsync(
-        SigilClient client,
+        Agento11yClient client,
         Client provider,
         string model,
         IReadOnlyList<Content>? contents,
         EmbedContentConfig? config = null,
-        GeminiSigilOptions? options = null,
+        GeminiAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -220,12 +220,12 @@ public static class GeminiRecorder
     }
 
     public static async Task<EmbedContentResponse> EmbedContentAsync(
-        SigilClient client,
+        Agento11yClient client,
         string model,
         IReadOnlyList<Content>? contents,
         Func<string, List<Content>, EmbedContentConfig?, CancellationToken, Task<EmbedContentResponse>> invoke,
         EmbedContentConfig? config = null,
-        GeminiSigilOptions? options = null,
+        GeminiAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -238,7 +238,7 @@ public static class GeminiRecorder
 
         ArgumentNullException.ThrowIfNull(invoke);
 
-        var effective = options ?? new GeminiSigilOptions();
+        var effective = options ?? new GeminiAgento11yOptions();
         var mappedContents = MapContents(contents);
         var modelName = ResolveModelName(model, effective);
         var recorder = client.StartEmbedding(new EmbeddingStart
@@ -289,7 +289,7 @@ public static class GeminiRecorder
         return mapped;
     }
 
-    private static string ResolveModelName(string model, GeminiSigilOptions options)
+    private static string ResolveModelName(string model, GeminiAgento11yOptions options)
     {
         if (!string.IsNullOrWhiteSpace(options.ModelName))
         {

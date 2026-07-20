@@ -1,6 +1,6 @@
 # LangChain Handler (`@grafana/agento11y/langchain`)
 
-Use `SigilLangChainHandler` to map LangChain callback lifecycle events to Sigil generation records.
+Use `Agento11yLangChainHandler` to map LangChain callback lifecycle events to Sigil generation records.
 
 ## Install
 
@@ -11,11 +11,11 @@ pnpm add @grafana/agento11y @langchain/core @langchain/openai
 ## Usage
 
 ```ts
-import { SigilClient } from '@grafana/agento11y';
-import { withSigilLangChainCallbacks } from '@grafana/agento11y/langchain';
+import { Agento11yClient } from '@grafana/agento11y';
+import { withAgento11yLangChainCallbacks } from '@grafana/agento11y/langchain';
 
-const client = new SigilClient();
-const config = withSigilLangChainCallbacks(undefined, client, {
+const client = new Agento11yClient();
+const config = withAgento11yLangChainCallbacks(undefined, client, {
   providerResolver: 'auto',
   agentName: 'langchain-app',
 });
@@ -25,14 +25,14 @@ const config = withSigilLangChainCallbacks(undefined, client, {
 
 ```ts
 import { ChatOpenAI } from '@langchain/openai';
-import { SigilClient } from '@grafana/agento11y';
+import { Agento11yClient } from '@grafana/agento11y';
 import {
-  SigilLangChainHandler,
-  withSigilLangChainCallbacks,
+  Agento11yLangChainHandler,
+  withAgento11yLangChainCallbacks,
 } from '@grafana/agento11y/langchain';
 
-const client = new SigilClient();
-const handler = new SigilLangChainHandler(client, {
+const client = new Agento11yClient();
+const handler = new Agento11yLangChainHandler(client, {
   providerResolver: 'auto',
   agentName: 'langchain-example',
   agentVersion: '1.0.0',
@@ -43,14 +43,14 @@ const llm = new ChatOpenAI({ model: 'gpt-4o-mini', temperature: 0 });
 // Non-stream call -> SYNC generation mode.
 const result = await llm.invoke(
   'Summarize why retry budgets matter.',
-  withSigilLangChainCallbacks(undefined, client, { providerResolver: 'auto' })
+  withAgento11yLangChainCallbacks(undefined, client, { providerResolver: 'auto' })
 );
 console.log(result.content);
 
 // Stream call -> STREAM generation mode + TTFT tracking.
 const stream = await llm.stream(
   'Give me three short reliability tips.',
-  withSigilLangChainCallbacks(undefined, client, { providerResolver: 'auto' })
+  withAgento11yLangChainCallbacks(undefined, client, { providerResolver: 'auto' })
 );
 for await (const chunk of stream) {
   if (chunk.content) process.stdout.write(String(chunk.content));
@@ -58,7 +58,7 @@ for await (const chunk of stream) {
 process.stdout.write('\n');
 
 // Advanced usage: instantiate and pass a handler manually.
-const handler = new SigilLangChainHandler(client, { providerResolver: 'auto' });
+const handler = new Agento11yLangChainHandler(client, { providerResolver: 'auto' });
 await llm.invoke('manual handler wiring', { callbacks: [handler] });
 
 await client.shutdown();
@@ -93,7 +93,7 @@ Conversation mapping is conversation-first:
 
 - `conversation_id` / `session_id` / `group_id` first
 - then `thread_id`
-- deterministic fallback `sigil:framework:langchain:<run_id>`
+- deterministic fallback `agento11y:framework:langchain:<run_id>`
 
 Provider resolver behavior:
 

@@ -737,17 +737,17 @@ export async function emitFrameworks(frameworks, client, source, mode, context) 
     return;
   }
 
-  await emitFrameworkHandler(frameworks.langchain.SigilLangChainHandler, client, source, mode, context);
-  await emitFrameworkHandler(frameworks.langgraph.SigilLangGraphHandler, client, source, mode, context);
-  await emitFrameworkHandler(frameworks.openaiAgents.SigilOpenAIAgentsHandler, client, source, mode, context);
-  await emitFrameworkHandler(frameworks.llamaindex.SigilLlamaIndexHandler, client, source, mode, context);
-  await emitFrameworkHandler(frameworks.googleAdk.SigilGoogleAdkHandler, client, source, mode, context);
+  await emitFrameworkHandler(frameworks.langchain.Agento11yLangChainHandler, client, source, mode, context);
+  await emitFrameworkHandler(frameworks.langgraph.Agento11yLangGraphHandler, client, source, mode, context);
+  await emitFrameworkHandler(frameworks.openaiAgents.Agento11yOpenAIAgentsHandler, client, source, mode, context);
+  await emitFrameworkHandler(frameworks.llamaindex.Agento11yLlamaIndexHandler, client, source, mode, context);
+  await emitFrameworkHandler(frameworks.googleAdk.Agento11yGoogleAdkHandler, client, source, mode, context);
 }
 
 export async function runEmitter(config = loadConfig()) {
   const sdk = await loadSdkModule();
   const frameworks = await loadFrameworkModules();
-  const client = new sdk.SigilClient({
+  const client = new sdk.Agento11yClient({
     generationExport: {
       protocol: 'grpc',
       endpoint: config.genGrpcEndpoint,

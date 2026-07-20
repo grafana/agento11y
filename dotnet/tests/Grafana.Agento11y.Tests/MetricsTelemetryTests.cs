@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class MetricsTelemetryTests
 {
@@ -33,7 +33,7 @@ public sealed class MetricsTelemetryTests
         var exporter = new CapturingGenerationExporter();
         var config = TestHelpers.TestConfig(exporter);
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         var start = TestHelpers.CreateSeedStart("gen-metrics");
         start.Mode = null;
         start.OperationName = string.Empty;

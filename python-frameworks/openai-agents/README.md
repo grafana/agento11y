@@ -13,10 +13,10 @@ pip install openai-agents
 
 ```python
 from agento11y import Client
-from agento11y_openai_agents import with_sigil_openai_agents_hooks
+from agento11y_openai_agents import with_agento11y_openai_agents_hooks
 
 client = Client()
-run_options = with_sigil_openai_agents_hooks(None, client=client, provider_resolver="auto")
+run_options = with_agento11y_openai_agents_hooks(None, client=client, provider_resolver="auto")
 # Runner.run(agent, input="...", hooks=run_options["hooks"])
 ```
 
@@ -24,10 +24,10 @@ run_options = with_sigil_openai_agents_hooks(None, client=client, provider_resol
 
 ```python
 from agento11y import Client
-from agento11y_openai_agents import with_sigil_openai_agents_hooks
+from agento11y_openai_agents import with_agento11y_openai_agents_hooks
 
 client = Client()
-run_options = with_sigil_openai_agents_hooks(None, client=client, provider_resolver="auto")
+run_options = with_agento11y_openai_agents_hooks(None, client=client, provider_resolver="auto")
 # Runner.run(agent, input="...", hooks=run_options["hooks"])
 ```
 
@@ -37,7 +37,7 @@ Conversation ID precedence:
 
 1. `conversation_id` / `session_id` / `group_id`
 2. `thread_id`
-3. deterministic fallback `sigil:framework:openai-agents:<run_id>`
+3. deterministic fallback `agento11y:framework:openai-agents:<run_id>`
 
 ## Metadata and lineage
 

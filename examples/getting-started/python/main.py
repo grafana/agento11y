@@ -41,7 +41,7 @@ metrics.set_meter_provider(mp)
 openai_client = OpenAI()
 model = "gpt-4.1-mini"
 
-sigil = Client(
+agento11y = Client(
     ClientConfig(
         generation_export=GenerationExportConfig(
             protocol="http",
@@ -73,7 +73,7 @@ response_text = completion.choices[0].message.content
 usage = completion.usage
 print(f"Response: {response_text}\n")
 
-with sigil.start_generation(
+with agento11y.start_generation(
     GenerationStart(
         conversation_id="getting-started-python",
         agent_name="getting-started",
@@ -102,7 +102,7 @@ with sigil.start_generation(
     if rec.err() is not None:
         print("SDK error:", rec.err())
 
-sigil.shutdown()
+agento11y.shutdown()
 tp.shutdown()
 mp.shutdown()
 print("Done — check the AI Observability plugin in your Grafana Cloud stack.")

@@ -2,13 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   loadConfigMock,
-  createSigilClientMock,
+  createAgento11yClientMock,
   createTelemetryProvidersMock,
   resolveGitBranchMock,
   loggerMock,
 } = vi.hoisted(() => ({
   loadConfigMock: vi.fn(),
-  createSigilClientMock: vi.fn(),
+  createAgento11yClientMock: vi.fn(),
   createTelemetryProvidersMock: vi.fn(),
   resolveGitBranchMock: vi.fn(),
   loggerMock: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -25,7 +25,7 @@ vi.mock("./config.js", async (importOriginal) => {
 });
 
 vi.mock("./client.js", () => ({
-  createSigilClient: createSigilClientMock,
+  createAgento11yClient: createAgento11yClientMock,
 }));
 
 vi.mock("./telemetry.js", () => ({
@@ -36,7 +36,7 @@ vi.mock("./git.js", () => ({
   resolveGitBranch: resolveGitBranchMock,
 }));
 
-import type { SigilClient } from "@grafana/agento11y";
+import type { Agento11yClient } from "@grafana/agento11y";
 import registerExtension, { emitToolSpans } from "./index.js";
 import type {
   PiAssistantMessage,
@@ -57,7 +57,7 @@ interface ToolRecorderLike {
   getError: ReturnType<typeof vi.fn>;
 }
 
-interface SigilLike {
+interface Agento11yLike {
   startStreamingGeneration: (
     seed: unknown,
     run: (recorder: RecorderLike) => Promise<void>,
@@ -159,7 +159,7 @@ function assistantMessage() {
 describe("extension lifecycle", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
-    createSigilClientMock.mockReset();
+    createAgento11yClientMock.mockReset();
     createTelemetryProvidersMock.mockReset();
     // Default: no git repo. Individual tests opt into a branch by overriding.
     resolveGitBranchMock.mockReset();
@@ -182,7 +182,7 @@ describe("extension lifecycle", () => {
       setFirstTokenAt: vi.fn(),
     };
 
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         capturedSeed = seed as { startedAt: Date };
         await run(recorder);
@@ -202,7 +202,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -242,7 +242,7 @@ describe("extension lifecycle", () => {
       setFirstTokenAt: vi.fn(),
     };
 
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
         await run(recorder);
       }),
@@ -261,7 +261,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -292,7 +292,7 @@ describe("extension lifecycle", () => {
       setFirstTokenAt: vi.fn(),
     };
 
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         capturedSeed = seed as { startedAt: Date };
         await run(recorder);
@@ -312,7 +312,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -363,7 +363,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -391,7 +391,7 @@ describe("extension lifecycle", () => {
       setFirstTokenAt: vi.fn(),
     };
 
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
         await run(recorder);
       }),
@@ -410,7 +410,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -430,7 +430,7 @@ describe("extension lifecycle", () => {
       setFirstTokenAt: vi.fn(),
     };
 
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
         await run(recorder);
       }),
@@ -449,7 +449,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -473,7 +473,7 @@ describe("extension lifecycle", () => {
       setCallError: vi.fn(),
     };
 
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
         await run(recorder);
       }),
@@ -492,7 +492,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "full",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -534,7 +534,7 @@ describe("extension lifecycle", () => {
       setCallError: vi.fn(),
     };
 
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
         await run(recorder);
       }),
@@ -561,7 +561,7 @@ describe("extension lifecycle", () => {
       otlp: { endpoint: "http://localhost:4318", headers: {} },
     });
     createTelemetryProvidersMock.mockReturnValue(telemetry);
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -577,7 +577,7 @@ describe("extension lifecycle", () => {
       },
       "sess-default-id",
     );
-    expect(createSigilClientMock).toHaveBeenCalledWith(
+    expect(createAgento11yClientMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         tracer: telemetry.tracer,
@@ -593,7 +593,7 @@ describe("extension lifecycle", () => {
       setCallError: vi.fn(),
     };
 
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
         await run(recorder);
       }),
@@ -622,7 +622,7 @@ describe("extension lifecycle", () => {
       otlp: { endpoint: "http://localhost:4318", headers: {} },
     });
     createTelemetryProvidersMock.mockReturnValue(telemetry);
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -653,7 +653,7 @@ describe("extension lifecycle", () => {
       setCallError: vi.fn(),
     };
 
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
         await run(recorder);
       }),
@@ -672,7 +672,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "full",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -707,7 +707,7 @@ describe("extension lifecycle", () => {
       setCallError: vi.fn(),
     };
 
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         capturedSeed = seed;
         await run(recorder);
@@ -727,7 +727,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -756,7 +756,7 @@ describe("extension lifecycle", () => {
       setCallError: vi.fn(),
     };
 
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
         await run(recorder);
       }),
@@ -779,7 +779,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -831,7 +831,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -869,7 +869,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -904,7 +904,7 @@ describe("extension lifecycle", () => {
       setResult: vi.fn(),
       setCallError: vi.fn(),
     };
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (_seed, run) => {
         await run(recorder);
       }),
@@ -918,7 +918,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -943,7 +943,7 @@ describe("extension lifecycle", () => {
     // must emit distinct conversationIds.
     const seeds: Array<{ conversationId?: string }> = [];
     const recorder = { setResult: vi.fn(), setCallError: vi.fn() };
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         seeds.push(seed as { conversationId?: string });
         await run(recorder);
@@ -963,7 +963,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -1017,7 +1017,7 @@ describe("extension lifecycle", () => {
     // sessionId at every turn_end, not just at session_start.
     const seeds: Array<{ conversationId?: string }> = [];
     const recorder = { setResult: vi.fn(), setCallError: vi.fn() };
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         seeds.push(seed as { conversationId?: string });
         await run(recorder);
@@ -1037,7 +1037,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -1083,7 +1083,7 @@ describe("extension lifecycle", () => {
     // empty string as the conversationId.
     let capturedSeed: { conversationId?: string } | undefined;
     const recorder = { setResult: vi.fn(), setCallError: vi.fn() };
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         capturedSeed = seed as { conversationId?: string };
         await run(recorder);
@@ -1103,7 +1103,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "metadata_only",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -1134,9 +1134,9 @@ describe("extension lifecycle", () => {
       };
     }
 
-    function makeSigilLike(
+    function makeAgento11yLike(
       evaluateHook?: ReturnType<typeof vi.fn>,
-    ): SigilLike & { evaluateHook?: ReturnType<typeof vi.fn> } {
+    ): Agento11yLike & { evaluateHook?: ReturnType<typeof vi.fn> } {
       const recorder = makeRecorder();
       return {
         startStreamingGeneration: vi.fn(async (_seed, run) => {
@@ -1150,12 +1150,12 @@ describe("extension lifecycle", () => {
         })),
         shutdown: vi.fn(async () => {}),
         ...(evaluateHook ? { evaluateHook } : {}),
-      } as SigilLike & { evaluateHook?: ReturnType<typeof vi.fn> };
+      } as Agento11yLike & { evaluateHook?: ReturnType<typeof vi.fn> };
     }
 
     it("does not call evaluateHook when guards are disabled", async () => {
       const evaluateHook = vi.fn();
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
 
       loadConfigMock.mockResolvedValue({
         endpoint: "http://localhost:8080/api/v1/generations:export",
@@ -1164,7 +1164,7 @@ describe("extension lifecycle", () => {
         contentCapture: "metadata_only",
         guards: { enabled: false, timeoutMs: 1500, failOpen: true },
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1185,7 +1185,7 @@ describe("extension lifecycle", () => {
       const evaluateHook = vi
         .fn()
         .mockResolvedValue({ action: "allow", evaluations: [] });
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
 
       loadConfigMock.mockResolvedValue({
         endpoint: "http://localhost:8080/api/v1/generations:export",
@@ -1194,7 +1194,7 @@ describe("extension lifecycle", () => {
         contentCapture: "metadata_only",
         guards: { enabled: true, timeoutMs: 1500, failOpen: true },
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1217,7 +1217,7 @@ describe("extension lifecycle", () => {
         reason: "blocked rm -rf",
         evaluations: [],
       });
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
 
       loadConfigMock.mockResolvedValue({
         endpoint: "http://localhost:8080/api/v1/generations:export",
@@ -1226,7 +1226,7 @@ describe("extension lifecycle", () => {
         contentCapture: "metadata_only",
         guards: { enabled: true, timeoutMs: 1500, failOpen: true },
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1251,7 +1251,7 @@ describe("extension lifecycle", () => {
       const evaluateHook = vi
         .fn()
         .mockResolvedValue({ action: "allow", evaluations: [] });
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
 
       loadConfigMock.mockResolvedValue({
         endpoint: "http://localhost:8080/api/v1/generations:export",
@@ -1260,7 +1260,7 @@ describe("extension lifecycle", () => {
         contentCapture: "metadata_only",
         guards: { enabled: true, timeoutMs: 1500, failOpen: true },
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1287,7 +1287,7 @@ describe("extension lifecycle", () => {
       const evaluateHook = vi
         .fn()
         .mockResolvedValue({ action: "allow", evaluations: [] });
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
 
       loadConfigMock.mockResolvedValue({
         endpoint: "http://localhost:8080/api/v1/generations:export",
@@ -1296,7 +1296,7 @@ describe("extension lifecycle", () => {
         contentCapture: "metadata_only",
         guards: { enabled: true, timeoutMs: 1500, failOpen: true },
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1322,7 +1322,7 @@ describe("extension lifecycle", () => {
       const evaluateHook = vi
         .fn()
         .mockResolvedValue({ action: "allow", evaluations: [] });
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
 
       loadConfigMock.mockResolvedValue({
         endpoint: "http://localhost:8080/api/v1/generations:export",
@@ -1331,7 +1331,7 @@ describe("extension lifecycle", () => {
         contentCapture: "metadata_only",
         guards: { enabled: true, timeoutMs: 1500, failOpen: true },
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1381,7 +1381,7 @@ describe("extension lifecycle", () => {
           ],
         },
       });
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
 
       loadConfigMock.mockResolvedValue({
         endpoint: "http://localhost:8080/api/v1/generations:export",
@@ -1390,7 +1390,7 @@ describe("extension lifecycle", () => {
         contentCapture: "metadata_only",
         guards: { enabled: true, timeoutMs: 1500, failOpen: true },
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1420,9 +1420,9 @@ describe("extension lifecycle", () => {
       };
     }
 
-    function makeSigilLike(
+    function makeAgento11yLike(
       evaluateHook?: ReturnType<typeof vi.fn>,
-    ): SigilLike & { evaluateHook?: ReturnType<typeof vi.fn> } {
+    ): Agento11yLike & { evaluateHook?: ReturnType<typeof vi.fn> } {
       const recorder = makeRecorder();
       return {
         startStreamingGeneration: vi.fn(async (_seed, run) => {
@@ -1436,7 +1436,7 @@ describe("extension lifecycle", () => {
         })),
         shutdown: vi.fn(async () => {}),
         ...(evaluateHook ? { evaluateHook } : {}),
-      } as SigilLike & { evaluateHook?: ReturnType<typeof vi.fn> };
+      } as Agento11yLike & { evaluateHook?: ReturnType<typeof vi.fn> };
     }
 
     function preflightConfig() {
@@ -1451,12 +1451,12 @@ describe("extension lifecycle", () => {
 
     it("does not call evaluateHook when guards are disabled", async () => {
       const evaluateHook = vi.fn();
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
       loadConfigMock.mockResolvedValue({
         ...preflightConfig(),
         guards: { enabled: false, timeoutMs: 1500, failOpen: true },
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1492,9 +1492,9 @@ describe("extension lifecycle", () => {
           ],
         },
       });
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
       loadConfigMock.mockResolvedValue(preflightConfig());
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1524,9 +1524,9 @@ describe("extension lifecycle", () => {
       const evaluateHook = vi
         .fn()
         .mockResolvedValue({ action: "allow", evaluations: [] });
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
       loadConfigMock.mockResolvedValue(preflightConfig());
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1541,9 +1541,9 @@ describe("extension lifecycle", () => {
 
     it("fails open (no transform) when evaluateHook throws", async () => {
       const evaluateHook = vi.fn().mockRejectedValue(new Error("timeout"));
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
       loadConfigMock.mockResolvedValue(preflightConfig());
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1572,9 +1572,9 @@ describe("extension lifecycle", () => {
           ],
         },
       });
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
       loadConfigMock.mockResolvedValue(preflightConfig());
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1604,9 +1604,9 @@ describe("extension lifecycle", () => {
           ],
         },
       });
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
       loadConfigMock.mockResolvedValue(preflightConfig());
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1656,9 +1656,9 @@ describe("extension lifecycle", () => {
       const evaluateHook = vi
         .fn()
         .mockResolvedValue({ action: "allow", evaluations: [] });
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
       loadConfigMock.mockResolvedValue(preflightConfig());
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1708,9 +1708,9 @@ describe("extension lifecycle", () => {
           ],
         },
       });
-      const sigil = makeSigilLike(evaluateHook);
+      const sigil = makeAgento11yLike(evaluateHook);
       loadConfigMock.mockResolvedValue(preflightConfig());
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const fakePi = new FakePi();
       registerExtension(fakePi as any);
@@ -1760,7 +1760,7 @@ describe("extension lifecycle", () => {
         setCallError: vi.fn(),
         setFirstTokenAt: vi.fn(),
       };
-      const sigil: SigilLike = {
+      const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           capturedSeed = seed as { tags?: Record<string, string> };
           await run(recorder);
@@ -1780,7 +1780,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: mode,
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -1809,7 +1809,7 @@ describe("extension lifecycle", () => {
       setCallError: vi.fn(),
       setFirstTokenAt: vi.fn(),
     };
-    const sigil: SigilLike = {
+    const sigil: Agento11yLike = {
       startStreamingGeneration: vi.fn(async (seed, run) => {
         capturedSeed = seed as { tags?: Record<string, string> };
         await run(recorder);
@@ -1829,7 +1829,7 @@ describe("extension lifecycle", () => {
       agentName: "pi",
       contentCapture: "full",
     });
-    createSigilClientMock.mockReturnValue(sigil);
+    createAgento11yClientMock.mockReturnValue(sigil);
 
     const pi = new FakePi();
     registerExtension(pi as any);
@@ -1853,7 +1853,7 @@ describe("extension lifecycle", () => {
         setCallError: vi.fn(),
         setFirstTokenAt: vi.fn(),
       };
-      const sigil: SigilLike = {
+      const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           seeds.push(seed as { systemPrompt?: string });
           await run(recorder);
@@ -1877,7 +1877,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "full",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -1913,7 +1913,7 @@ describe("extension lifecycle", () => {
           agentName: "pi",
           contentCapture: mode,
         });
-        createSigilClientMock.mockReturnValue(sigil);
+        createAgento11yClientMock.mockReturnValue(sigil);
 
         const pi = new FakePi();
         registerExtension(pi as any);
@@ -1946,7 +1946,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "full",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -1980,7 +1980,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "full",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -2009,7 +2009,7 @@ describe("extension lifecycle", () => {
         setCallError: vi.fn(),
         setFirstTokenAt: vi.fn(),
       };
-      const sigil: SigilLike = {
+      const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           seeds.push(seed as { tools?: unknown[] });
           await run(recorder);
@@ -2050,7 +2050,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "full",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       pi.getAllTools = () => [bashTool, readTool];
@@ -2089,7 +2089,7 @@ describe("extension lifecycle", () => {
           agentName: "pi",
           contentCapture: mode,
         });
-        createSigilClientMock.mockReturnValue(sigil);
+        createAgento11yClientMock.mockReturnValue(sigil);
 
         const pi = new FakePi();
         pi.getAllTools = () => [bashTool, readTool];
@@ -2123,7 +2123,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       pi.getAllTools = () => [bashTool, readTool];
@@ -2150,7 +2150,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "full",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       pi.getAllTools = () => {
@@ -2182,7 +2182,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "full",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       pi.getAllTools = () => {
@@ -2220,7 +2220,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       // Neither hook present — emulates older pi versions.
@@ -2252,7 +2252,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       pi.getAllTools = () => [bashTool, readTool];
@@ -2278,7 +2278,7 @@ describe("extension lifecycle", () => {
         setCallError: vi.fn(),
         setFirstTokenAt: vi.fn(),
       };
-      const sigil: SigilLike = {
+      const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           seeds.push(seed as Record<string, unknown>);
           await run(recorder);
@@ -2302,7 +2302,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -2341,7 +2341,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -2377,7 +2377,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -2413,7 +2413,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -2453,7 +2453,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -2480,7 +2480,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -2522,7 +2522,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -2552,7 +2552,7 @@ describe("extension lifecycle", () => {
         setCallError: vi.fn(),
         setFirstTokenAt: vi.fn(),
       };
-      const sigil: SigilLike = {
+      const sigil: Agento11yLike = {
         startStreamingGeneration: vi.fn(async (seed, run) => {
           seeds.push(seed as { id?: string; parentGenerationIds?: string[] });
           await run(recorder);
@@ -2598,7 +2598,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const msg = assistantMessage();
       const ctx = ctxWithBranch("pi-conv-1", [
@@ -2641,7 +2641,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const msg = assistantMessage();
       const branch = [
@@ -2685,7 +2685,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const msg1 = assistantMessage();
       const msg2 = assistantMessage();
@@ -2757,7 +2757,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const pi = new FakePi();
       registerExtension(pi as any);
@@ -2783,7 +2783,7 @@ describe("extension lifecycle", () => {
         agentName: "pi",
         contentCapture: "metadata_only",
       });
-      createSigilClientMock.mockReturnValue(sigil);
+      createAgento11yClientMock.mockReturnValue(sigil);
 
       const msg = assistantMessage();
       const ctx = ctxWithBranch("", [
@@ -2849,7 +2849,7 @@ function makePiToolResult(overrides?: Partial<PiToolResult>): PiToolResult {
   };
 }
 
-function mockSigilClient() {
+function mockAgento11yClient() {
   const recorders: Array<{
     start: Record<string, unknown>;
     result: Record<string, unknown> | undefined;
@@ -2879,14 +2879,14 @@ function mockSigilClient() {
         getError: vi.fn(() => undefined),
       };
     }),
-  } as unknown as SigilClient;
+  } as unknown as Agento11yClient;
 
   return { client, recorders };
 }
 
 describe("emitToolSpans", () => {
   it("does nothing when no timings", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     emitToolSpans(client, makePiMsg(), [], [], {
       agentName: "pi",
       contentCapture: "metadata_only",
@@ -2895,7 +2895,7 @@ describe("emitToolSpans", () => {
   });
 
   it("creates a span per tool timing", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     const msg = makePiMsg({
       content: [
         { type: "toolCall", id: "c1", name: "bash", arguments: { cmd: "ls" } },
@@ -2934,7 +2934,7 @@ describe("emitToolSpans", () => {
   });
 
   it("passes model and agent context", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     emitToolSpans(
       client,
       makePiMsg(),
@@ -2958,7 +2958,7 @@ describe("emitToolSpans", () => {
   });
 
   it("includes arguments and results with content capture", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     const msg = makePiMsg({
       content: [
         { type: "toolCall", id: "c1", name: "bash", arguments: { cmd: "ls" } },
@@ -2987,7 +2987,7 @@ describe("emitToolSpans", () => {
   });
 
   it("omits content when contentCapture is off", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     const msg = makePiMsg({
       content: [
         { type: "toolCall", id: "c1", name: "bash", arguments: { cmd: "ls" } },
@@ -3010,7 +3010,7 @@ describe("emitToolSpans", () => {
   });
 
   it("marks error tool executions", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     emitToolSpans(
       client,
       makePiMsg(),
@@ -3023,7 +3023,7 @@ describe("emitToolSpans", () => {
   });
 
   it("uses real start/end times", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     emitToolSpans(
       client,
       makePiMsg(),

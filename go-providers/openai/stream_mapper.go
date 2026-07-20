@@ -7,7 +7,7 @@ import (
 
 	osdk "github.com/openai/openai-go/v3"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 // ChatCompletionsStreamSummary captures chat-completions stream chunks and an optional final response.
@@ -23,28 +23,28 @@ type streamToolCall struct {
 	arguments strings.Builder
 }
 
-// ChatCompletionsFromStream maps OpenAI chat-completions streaming output to sigil.Generation.
-func ChatCompletionsFromStream(req osdk.ChatCompletionNewParams, summary ChatCompletionsStreamSummary, opts ...Option) (sigil.Generation, error) {
+// ChatCompletionsFromStream maps OpenAI chat-completions streaming output to agento11y.Generation.
+func ChatCompletionsFromStream(req osdk.ChatCompletionNewParams, summary ChatCompletionsStreamSummary, opts ...Option) (agento11y.Generation, error) {
 	if summary.FinalResponse != nil {
 		generation, err := ChatCompletionsFromRequestResponse(req, summary.FinalResponse, opts...)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		return appendChatCompletionsStreamEventsArtifact(generation, summary.Chunks, opts)
 	}
 
 	if len(summary.Chunks) == 0 {
-		return sigil.Generation{}, errors.New("stream summary has no chunks and no final response")
+		return agento11y.Generation{}, errors.New("stream summary has no chunks and no final response")
 	}
 
 	options := applyOptions(opts)
 	input, systemPrompt := mapRequestMessages(req.Messages)
-	output := make([]sigil.Message, 0, 1)
+	output := make([]agento11y.Message, 0, 1)
 	maxTokens, temperature, topP, toolChoice, thinkingEnabled, thinkingBudget := mapRequestControls(req)
 
 	modelName := req.Model
 	responseID := ""
-	usage := sigil.TokenUsage{}
+	usage := agento11y.TokenUsage{}
 	stopReason := ""
 	var text strings.Builder
 
@@ -93,16 +93,16 @@ func ChatCompletionsFromStream(req osdk.ChatCompletionNewParams, summary ChatCom
 		}
 	}
 
-	assistantParts := make([]sigil.Part, 0, 1+len(order))
+	assistantParts := make([]agento11y.Part, 0, 1+len(order))
 	if generated := text.String(); generated != "" {
-		assistantParts = append(assistantParts, sigil.TextPart(generated))
+		assistantParts = append(assistantParts, agento11y.TextPart(generated))
 	}
 	for _, index := range order {
 		call := toolCalls[index]
 		if call == nil || strings.TrimSpace(call.name) == "" {
 			continue
 		}
-		part := sigil.ToolCallPart(sigil.ToolCall{
+		part := agento11y.ToolCallPart(agento11y.ToolCall{
 			ID:        call.id,
 			Name:      call.name,
 			InputJSON: parseJSONOrString(call.arguments.String()),
@@ -111,41 +111,41 @@ func ChatCompletionsFromStream(req osdk.ChatCompletionNewParams, summary ChatCom
 		assistantParts = append(assistantParts, part)
 	}
 	if len(assistantParts) > 0 {
-		output = append(output, sigil.Message{
-			Role:  sigil.RoleAssistant,
+		output = append(output, agento11y.Message{
+			Role:  agento11y.RoleAssistant,
 			Parts: assistantParts,
 		})
 	}
 
-	artifacts := make([]sigil.Artifact, 0, 3)
+	artifacts := make([]agento11y.Artifact, 0, 3)
 	if options.includeRequestArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindRequest, "openai.chat.request", req)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindRequest, "openai.chat.request", req)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeToolsArtifact && len(req.Tools) > 0 {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindTools, "openai.chat.tools", req.Tools)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindTools, "openai.chat.tools", req.Tools)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	if options.includeEventsArtifact {
-		artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindProviderEvent, "openai.chat.stream_events", summary.Chunks)
+		artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindProviderEvent, "openai.chat.stream_events", summary.Chunks)
 		if err != nil {
-			return sigil.Generation{}, err
+			return agento11y.Generation{}, err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 
-	generation := sigil.Generation{
+	generation := agento11y.Generation{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: req.Model},
 		ResponseID:        responseID,
 		ResponseModel:     modelName,
 		SystemPrompt:      systemPrompt,
@@ -165,13 +165,13 @@ func ChatCompletionsFromStream(req osdk.ChatCompletionNewParams, summary ChatCom
 	}
 
 	if err := generation.Validate(); err != nil {
-		return sigil.Generation{}, err
+		return agento11y.Generation{}, err
 	}
 
 	return generation, nil
 }
 
-func appendChatCompletionsStreamEventsArtifact(generation sigil.Generation, chunks []osdk.ChatCompletionChunk, opts []Option) (sigil.Generation, error) {
+func appendChatCompletionsStreamEventsArtifact(generation agento11y.Generation, chunks []osdk.ChatCompletionChunk, opts []Option) (agento11y.Generation, error) {
 	if len(chunks) == 0 {
 		return generation, nil
 	}
@@ -181,9 +181,9 @@ func appendChatCompletionsStreamEventsArtifact(generation sigil.Generation, chun
 		return generation, nil
 	}
 
-	artifact, err := sigil.NewJSONArtifact(sigil.ArtifactKindProviderEvent, "openai.chat.stream_events", chunks)
+	artifact, err := agento11y.NewJSONArtifact(agento11y.ArtifactKindProviderEvent, "openai.chat.stream_events", chunks)
 	if err != nil {
-		return sigil.Generation{}, err
+		return agento11y.Generation{}, err
 	}
 	generation.Artifacts = append(generation.Artifacts, artifact)
 	return generation, nil

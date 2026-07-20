@@ -5,7 +5,7 @@ import (
 	"log"
 	"testing"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
@@ -19,13 +19,13 @@ func ptrInt64(v int64) *int64 { return &v }
 func TestAfterAgentResponse_GatesAssistantTextByMode(t *testing.T) {
 	cases := []struct {
 		name        string
-		mode        sigil.ContentCaptureMode
+		mode        agento11y.ContentCaptureMode
 		wantSegment bool
 	}{
-		{"metadata_only drops text", sigil.ContentCaptureModeMetadataOnly, false},
-		{"default drops text", sigil.ContentCaptureModeDefault, false},
-		{"full keeps text", sigil.ContentCaptureModeFull, true},
-		{"no_tool_content keeps text", sigil.ContentCaptureModeNoToolContent, true},
+		{"metadata_only drops text", agento11y.ContentCaptureModeMetadataOnly, false},
+		{"default drops text", agento11y.ContentCaptureModeDefault, false},
+		{"full keeps text", agento11y.ContentCaptureModeFull, true},
+		{"no_tool_content keeps text", agento11y.ContentCaptureModeNoToolContent, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,7 +80,7 @@ func TestAfterAgentResponse_MissingIDsSilent(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	var buf bytes.Buffer
 	logger := log.New(&buf, "", 0)
-	cfg := config.Config{ContentCapture: sigil.ContentCaptureModeFull}
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 	AfterAgentResponse(Payload{HookEventName: "afterAgentResponse"}, cfg, logger)
 	if !bytes.Contains(buf.Bytes(), []byte("missing")) {
 		t.Errorf("expected 'missing' log; got %q", buf.String())

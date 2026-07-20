@@ -43,11 +43,11 @@ from openai import OpenAI
 from agento11y import Client, ClientConfig
 from agento11y_openai import OpenAIOptions, responses
 
-sigil = Client(ClientConfig())
+agento11y = Client(ClientConfig())
 provider = OpenAI()
 
 response = responses.create(
-    sigil,
+    agento11y,
     {
         "model": "gpt-5",
         "instructions": "Be concise",
@@ -65,7 +65,7 @@ response = responses.create(
 from agento11y_openai import ChatCompletionsStreamSummary, chat
 
 summary = chat.completions.stream(
-    sigil,
+    agento11y,
     {
         "model": "gpt-5",
         "stream": True,
@@ -81,7 +81,7 @@ summary = chat.completions.stream(
 from agento11y_openai import embeddings
 
 embedding_response = embeddings.create(
-    sigil,
+    agento11y,
     {
         "model": "text-embedding-3-small",
         "input": ["hello", "world"],
@@ -107,7 +107,7 @@ opts = OpenAIOptions(
     agent_version="1.0.0",
 )
 
-with sigil.start_generation(
+with agento11y.start_generation(
     GenerationStart(
         conversation_id=opts.conversation_id,
         agent_name=opts.agent_name,

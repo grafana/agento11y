@@ -1,5 +1,5 @@
 import type OpenAI from 'openai';
-import type { SigilClient } from '../client.js';
+import type { Agento11yClient } from '../client.js';
 import type { EmbeddingResult, GenerationResult, Message, TokenUsage, ToolDefinition } from '../types.js';
 
 const thinkingBudgetMetadataKey = 'agento11y.gen_ai.request.thinking.budget_tokens';
@@ -44,7 +44,7 @@ export interface ResponsesStreamSummary {
 }
 
 async function chatCompletionsCreate(
-  client: SigilClient,
+  client: Agento11yClient,
   request: ChatCreateRequest,
   providerCall: (request: ChatCreateRequest) => Promise<ChatResponse>,
   options: OpenAIOptions = {},
@@ -86,7 +86,7 @@ async function chatCompletionsCreate(
 }
 
 async function chatCompletionsStream(
-  client: SigilClient,
+  client: Agento11yClient,
   request: ChatStreamRequest,
   providerCall: (request: ChatStreamRequest) => Promise<ChatCompletionsStreamSummary>,
   options: OpenAIOptions = {},
@@ -230,7 +230,7 @@ function chatCompletionsFromStream(
 }
 
 async function responsesCreate(
-  client: SigilClient,
+  client: Agento11yClient,
   request: ResponsesCreateRequest,
   providerCall: (request: ResponsesCreateRequest) => Promise<ResponsesResponse>,
   options: OpenAIOptions = {},
@@ -266,7 +266,7 @@ async function responsesCreate(
 }
 
 async function responsesStream(
-  client: SigilClient,
+  client: Agento11yClient,
   request: ResponsesStreamRequest,
   providerCall: (request: ResponsesStreamRequest) => Promise<ResponsesStreamSummary>,
   options: OpenAIOptions = {},
@@ -397,7 +397,7 @@ function responsesFromStream(
 }
 
 async function embeddingsCreate(
-  client: SigilClient,
+  client: Agento11yClient,
   request: EmbeddingsCreateRequest,
   providerCall: (request: EmbeddingsCreateRequest) => Promise<EmbeddingsCreateResponse>,
   options: OpenAIOptions = {},

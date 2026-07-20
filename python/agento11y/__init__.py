@@ -32,6 +32,7 @@ from .context import (
     with_user_id,
 )
 from .errors import (
+    Agento11yError,
     ClientShutdownError,
     ConflictError,
     EnqueueError,
@@ -44,7 +45,6 @@ from .errors import (
     RatingConflictError,
     RatingTransportError,
     ScoreExportError,
-    SigilError,
     ValidationError,
 )
 from .hooks import (
@@ -174,7 +174,7 @@ __all__ = [
     "ScoreItem",
     "ScoreSource",
     "ScoreValue",
-    "SigilError",
+    "Agento11yError",
     "SecretRedactionOptions",
     "SubmitConversationRatingResponse",
     "TokenUsage",

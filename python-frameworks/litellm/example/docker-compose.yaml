@@ -8,10 +8,10 @@ services:
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      SIGIL_ENDPOINT: ${SIGIL_ENDPOINT}
-      SIGIL_AUTH_TENANT_ID: ${SIGIL_AUTH_TENANT_ID}
-      SIGIL_AUTH_TOKEN: ${SIGIL_AUTH_TOKEN}
+      AGENTO11Y_ENDPOINT: ${AGENTO11Y_ENDPOINT}
+      AGENTO11Y_AUTH_TENANT_ID: ${AGENTO11Y_AUTH_TENANT_ID}
+      AGENTO11Y_AUTH_TOKEN: ${AGENTO11Y_AUTH_TOKEN}
     volumes:
       - ./config.yaml:/app/config.yaml
-      - ./sigil_callback.py:/app/sigil_callback.py
+      - ./agento11y_callback.py:/app/agento11y_callback.py
     command: ["--config", "/app/config.yaml", "--port", "4000"]

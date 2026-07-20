@@ -1,14 +1,14 @@
-import type { SigilClient } from '../../client.js';
-import { type FrameworkHandlerOptions, SigilFrameworkHandler } from '../shared.js';
+import type { Agento11yClient } from '../../client.js';
+import { Agento11yFrameworkHandler, type FrameworkHandlerOptions } from '../shared.js';
 
 export type { FrameworkHandlerOptions };
 
 type CallbackConfig = Record<string, unknown> & { callbacks?: unknown };
 
-export class SigilLangChainHandler extends SigilFrameworkHandler {
-  name = 'sigil_langchain_handler';
+export class Agento11yLangChainHandler extends Agento11yFrameworkHandler {
+  name = 'agento11y_langchain_handler';
 
-  constructor(client: SigilClient, options: FrameworkHandlerOptions = {}) {
+  constructor(client: Agento11yClient, options: FrameworkHandlerOptions = {}) {
     super(client, 'langchain', 'javascript', options);
   }
 
@@ -112,19 +112,19 @@ export class SigilLangChainHandler extends SigilFrameworkHandler {
   }
 }
 
-export function createSigilLangChainHandler(
-  client: SigilClient,
+export function createAgento11yLangChainHandler(
+  client: Agento11yClient,
   options: FrameworkHandlerOptions = {},
-): SigilLangChainHandler {
-  return new SigilLangChainHandler(client, options);
+): Agento11yLangChainHandler {
+  return new Agento11yLangChainHandler(client, options);
 }
 
-export function withSigilLangChainCallbacks<T extends CallbackConfig>(
+export function withAgento11yLangChainCallbacks<T extends CallbackConfig>(
   config: T | undefined,
-  client: SigilClient,
+  client: Agento11yClient,
   options: FrameworkHandlerOptions = {},
 ): T & { callbacks: unknown[] } {
-  const handler = createSigilLangChainHandler(client, options);
+  const handler = createAgento11yLangChainHandler(client, options);
   const base = { ...(config ?? {}) } as CallbackConfig;
   const existingValue = base.callbacks;
   const callbacks = Array.isArray(existingValue)
@@ -132,7 +132,7 @@ export function withSigilLangChainCallbacks<T extends CallbackConfig>(
     : existingValue === undefined
       ? []
       : [existingValue];
-  if (!callbacks.some((callback) => callback instanceof SigilLangChainHandler)) {
+  if (!callbacks.some((callback) => callback instanceof Agento11yLangChainHandler)) {
     callbacks.push(handler);
   }
   return {

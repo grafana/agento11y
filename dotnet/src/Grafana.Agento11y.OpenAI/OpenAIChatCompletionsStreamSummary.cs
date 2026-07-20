@@ -1,6 +1,6 @@
 using OpenAI.Chat;
 
-namespace Grafana.Sigil.OpenAI;
+namespace Grafana.Agento11y.OpenAI;
 
 public sealed class OpenAIChatCompletionsStreamSummary
 {

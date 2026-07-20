@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"go.opentelemetry.io/otel/codes"
@@ -573,29 +573,29 @@ func TestReadTranscriptSettled_LonePromptWaitsForReply(t *testing.T) {
 func TestBuildToolResultMap(t *testing.T) {
 	tests := []struct {
 		name     string
-		gens     []sigil.Generation
+		gens     []agento11y.Generation
 		wantIDs  []string
 		wantErrs map[string]bool
 	}{
 		{name: "empty generations", gens: nil, wantIDs: nil},
 		{
 			name: "no tool results in input",
-			gens: []sigil.Generation{{
-				Input: []sigil.Message{{
-					Role:  sigil.RoleUser,
-					Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: "hello"}},
+			gens: []agento11y.Generation{{
+				Input: []agento11y.Message{{
+					Role:  agento11y.RoleUser,
+					Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "hello"}},
 				}},
 			}},
 			wantIDs: nil,
 		},
 		{
 			name: "single tool result",
-			gens: []sigil.Generation{{
-				Input: []sigil.Message{{
-					Role: sigil.RoleTool,
-					Parts: []sigil.Part{{
-						Kind: sigil.PartKindToolResult,
-						ToolResult: &sigil.ToolResult{
+			gens: []agento11y.Generation{{
+				Input: []agento11y.Message{{
+					Role: agento11y.RoleTool,
+					Parts: []agento11y.Part{{
+						Kind: agento11y.PartKindToolResult,
+						ToolResult: &agento11y.ToolResult{
 							ToolCallID: "tc_1",
 							Content:    "file contents",
 						},
@@ -606,18 +606,18 @@ func TestBuildToolResultMap(t *testing.T) {
 		},
 		{
 			name: "multiple tool results across generations",
-			gens: []sigil.Generation{
-				{Input: []sigil.Message{{
-					Role: sigil.RoleTool,
-					Parts: []sigil.Part{
-						{Kind: sigil.PartKindToolResult, ToolResult: &sigil.ToolResult{ToolCallID: "tc_1", Content: "result1"}},
-						{Kind: sigil.PartKindToolResult, ToolResult: &sigil.ToolResult{ToolCallID: "tc_2", Content: "result2"}},
+			gens: []agento11y.Generation{
+				{Input: []agento11y.Message{{
+					Role: agento11y.RoleTool,
+					Parts: []agento11y.Part{
+						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "tc_1", Content: "result1"}},
+						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "tc_2", Content: "result2"}},
 					},
 				}}},
-				{Input: []sigil.Message{{
-					Role: sigil.RoleTool,
-					Parts: []sigil.Part{
-						{Kind: sigil.PartKindToolResult, ToolResult: &sigil.ToolResult{ToolCallID: "tc_3", Content: "result3", IsError: true}},
+				{Input: []agento11y.Message{{
+					Role: agento11y.RoleTool,
+					Parts: []agento11y.Part{
+						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "tc_3", Content: "result3", IsError: true}},
 					},
 				}}},
 			},
@@ -626,12 +626,12 @@ func TestBuildToolResultMap(t *testing.T) {
 		},
 		{
 			name: "skips parts without tool call ID",
-			gens: []sigil.Generation{{
-				Input: []sigil.Message{{
-					Role: sigil.RoleTool,
-					Parts: []sigil.Part{
-						{Kind: sigil.PartKindToolResult, ToolResult: &sigil.ToolResult{ToolCallID: "", Content: "orphan"}},
-						{Kind: sigil.PartKindToolResult, ToolResult: &sigil.ToolResult{ToolCallID: "tc_1", Content: "ok"}},
+			gens: []agento11y.Generation{{
+				Input: []agento11y.Message{{
+					Role: agento11y.RoleTool,
+					Parts: []agento11y.Part{
+						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "", Content: "orphan"}},
+						{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "tc_1", Content: "ok"}},
 					},
 				}},
 			}},
@@ -660,13 +660,13 @@ func TestBuildToolResultMap(t *testing.T) {
 	}
 }
 
-func newSpanRecordingClient(t *testing.T, mode sigil.ContentCaptureMode) (*sigil.Client, *tracetest.SpanRecorder) {
+func newSpanRecordingClient(t *testing.T, mode agento11y.ContentCaptureMode) (*agento11y.Client, *tracetest.SpanRecorder) {
 	t.Helper()
 	recorder := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
-	client := sigil.NewClient(sigil.Config{
+	client := agento11y.NewClient(agento11y.Config{
 		Tracer:         tp.Tracer("test"),
 		ContentCapture: mode,
 	})
@@ -698,9 +698,9 @@ func TestEmitToolSpans(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		gen         sigil.Generation
-		results     map[string]*sigil.ToolResult
-		contentMode sigil.ContentCaptureMode
+		gen         agento11y.Generation
+		results     map[string]*agento11y.ToolResult
+		contentMode agento11y.ContentCaptureMode
 		wantSpans   int
 		wantNames   []string
 		wantArgs    map[string]string
@@ -708,10 +708,10 @@ func TestEmitToolSpans(t *testing.T) {
 	}{
 		{
 			name: "no tool calls",
-			gen: sigil.Generation{
-				Output: []sigil.Message{{
-					Role:  sigil.RoleAssistant,
-					Parts: []sigil.Part{{Kind: sigil.PartKindText, Text: "hello"}},
+			gen: agento11y.Generation{
+				Output: []agento11y.Message{{
+					Role:  agento11y.RoleAssistant,
+					Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "hello"}},
 				}},
 				CompletedAt: ts,
 			},
@@ -719,17 +719,17 @@ func TestEmitToolSpans(t *testing.T) {
 		},
 		{
 			name: "single tool call metadata only",
-			gen: sigil.Generation{
+			gen: agento11y.Generation{
 				ConversationID: "conv-1",
 				AgentName:      "claude-code",
 				AgentVersion:   "1.0.0",
-				Model:          sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-20250514"},
+				Model:          agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-20250514"},
 				CompletedAt:    ts,
-				Output: []sigil.Message{{
-					Role: sigil.RoleAssistant,
-					Parts: []sigil.Part{{
-						Kind: sigil.PartKindToolCall,
-						ToolCall: &sigil.ToolCall{
+				Output: []agento11y.Message{{
+					Role: agento11y.RoleAssistant,
+					Parts: []agento11y.Part{{
+						Kind: agento11y.PartKindToolCall,
+						ToolCall: &agento11y.ToolCall{
 							ID:        "tc_1",
 							Name:      "Read",
 							InputJSON: json.RawMessage(`{"path":"main.go"}`),
@@ -737,35 +737,35 @@ func TestEmitToolSpans(t *testing.T) {
 					}},
 				}},
 			},
-			contentMode: sigil.ContentCaptureModeMetadataOnly,
+			contentMode: agento11y.ContentCaptureModeMetadataOnly,
 			wantSpans:   1,
 			wantNames:   []string{"Read"},
 		},
 		{
 			name: "multiple tool calls with full content and results",
-			gen: sigil.Generation{
+			gen: agento11y.Generation{
 				ConversationID: "conv-1",
 				AgentName:      "claude-code",
-				Model:          sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-20250514"},
+				Model:          agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-20250514"},
 				CompletedAt:    ts,
-				Output: []sigil.Message{{
-					Role: sigil.RoleAssistant,
-					Parts: []sigil.Part{
-						{Kind: sigil.PartKindText, Text: "Let me check."},
-						{Kind: sigil.PartKindToolCall, ToolCall: &sigil.ToolCall{
+				Output: []agento11y.Message{{
+					Role: agento11y.RoleAssistant,
+					Parts: []agento11y.Part{
+						{Kind: agento11y.PartKindText, Text: "Let me check."},
+						{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{
 							ID: "tc_1", Name: "Read", InputJSON: json.RawMessage(`{"path":"a.go"}`),
 						}},
-						{Kind: sigil.PartKindToolCall, ToolCall: &sigil.ToolCall{
+						{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{
 							ID: "tc_2", Name: "Grep", InputJSON: json.RawMessage(`{"pattern":"TODO"}`),
 						}},
 					},
 				}},
 			},
-			results: map[string]*sigil.ToolResult{
+			results: map[string]*agento11y.ToolResult{
 				"tc_1": {ToolCallID: "tc_1", Content: "package main"},
 				"tc_2": {ToolCallID: "tc_2", Content: "found 3 matches"},
 			},
-			contentMode: sigil.ContentCaptureModeFull,
+			contentMode: agento11y.ContentCaptureModeFull,
 			wantSpans:   2,
 			wantNames:   []string{"Read", "Grep"},
 			wantArgs: map[string]string{
@@ -779,22 +779,22 @@ func TestEmitToolSpans(t *testing.T) {
 		},
 		{
 			name: "tool result with ContentJSON",
-			gen: sigil.Generation{
+			gen: agento11y.Generation{
 				CompletedAt: ts,
-				Output: []sigil.Message{{
-					Role: sigil.RoleAssistant,
-					Parts: []sigil.Part{{
-						Kind: sigil.PartKindToolCall,
-						ToolCall: &sigil.ToolCall{
+				Output: []agento11y.Message{{
+					Role: agento11y.RoleAssistant,
+					Parts: []agento11y.Part{{
+						Kind: agento11y.PartKindToolCall,
+						ToolCall: &agento11y.ToolCall{
 							ID: "tc_1", Name: "Bash", InputJSON: json.RawMessage(`{"cmd":"ls"}`),
 						},
 					}},
 				}},
 			},
-			results: map[string]*sigil.ToolResult{
+			results: map[string]*agento11y.ToolResult{
 				"tc_1": {ToolCallID: "tc_1", ContentJSON: json.RawMessage(`{"files":["a","b"]}`)},
 			},
-			contentMode: sigil.ContentCaptureModeFull,
+			contentMode: agento11y.ContentCaptureModeFull,
 			wantSpans:   1,
 			wantNames:   []string{"Bash"},
 			wantResults: map[string]string{
@@ -803,22 +803,22 @@ func TestEmitToolSpans(t *testing.T) {
 		},
 		{
 			name: "error tool result sets error status",
-			gen: sigil.Generation{
+			gen: agento11y.Generation{
 				CompletedAt: ts,
-				Output: []sigil.Message{{
-					Role: sigil.RoleAssistant,
-					Parts: []sigil.Part{{
-						Kind: sigil.PartKindToolCall,
-						ToolCall: &sigil.ToolCall{
+				Output: []agento11y.Message{{
+					Role: agento11y.RoleAssistant,
+					Parts: []agento11y.Part{{
+						Kind: agento11y.PartKindToolCall,
+						ToolCall: &agento11y.ToolCall{
 							ID: "tc_1", Name: "Write", InputJSON: json.RawMessage(`{}`),
 						},
 					}},
 				}},
 			},
-			results: map[string]*sigil.ToolResult{
+			results: map[string]*agento11y.ToolResult{
 				"tc_1": {ToolCallID: "tc_1", Content: "permission denied", IsError: true},
 			},
-			contentMode: sigil.ContentCaptureModeMetadataOnly,
+			contentMode: agento11y.ContentCaptureModeMetadataOnly,
 			wantSpans:   1,
 			wantNames:   []string{"Write"},
 		},
@@ -829,7 +829,7 @@ func TestEmitToolSpans(t *testing.T) {
 			client, recorder := newSpanRecordingClient(t, tt.contentMode)
 			results := tt.results
 			if results == nil {
-				results = map[string]*sigil.ToolResult{}
+				results = map[string]*agento11y.ToolResult{}
 			}
 
 			emitToolSpans(context.Background(), client, tt.gen, results)
@@ -871,20 +871,20 @@ func TestEmitToolSpans(t *testing.T) {
 }
 
 func TestEmitToolSpans_ErrorStatus(t *testing.T) {
-	client, recorder := newSpanRecordingClient(t, sigil.ContentCaptureModeMetadataOnly)
+	client, recorder := newSpanRecordingClient(t, agento11y.ContentCaptureModeMetadataOnly)
 	ts := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 
-	gen := sigil.Generation{
+	gen := agento11y.Generation{
 		CompletedAt: ts,
-		Output: []sigil.Message{{
-			Role: sigil.RoleAssistant,
-			Parts: []sigil.Part{{
-				Kind:     sigil.PartKindToolCall,
-				ToolCall: &sigil.ToolCall{ID: "tc_err", Name: "Write"},
+		Output: []agento11y.Message{{
+			Role: agento11y.RoleAssistant,
+			Parts: []agento11y.Part{{
+				Kind:     agento11y.PartKindToolCall,
+				ToolCall: &agento11y.ToolCall{ID: "tc_err", Name: "Write"},
 			}},
 		}},
 	}
-	results := map[string]*sigil.ToolResult{
+	results := map[string]*agento11y.ToolResult{
 		"tc_err": {ToolCallID: "tc_err", Content: "denied", IsError: true},
 	}
 

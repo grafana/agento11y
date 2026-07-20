@@ -11,7 +11,7 @@ import (
 	"time"
 
 	googleadk "github.com/grafana/agento11y/go-frameworks/google-adk"
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -38,7 +38,7 @@ const (
 )
 
 type conformanceEnv struct {
-	client         *sigil.Client
+	client         *agento11y.Client
 	capture        *generationCaptureServer
 	spans          *tracetest.SpanRecorder
 	tracerProvider *sdktrace.TracerProvider
@@ -47,7 +47,7 @@ type conformanceEnv struct {
 func TestConformance_RunLifecycleExportsFrameworkTelemetry(t *testing.T) {
 	env := newConformanceEnv(t)
 
-	adapter := googleadk.NewSigilAdapter(env.client, googleadk.Options{
+	adapter := googleadk.NewAgento11yAdapter(env.client, googleadk.Options{
 		AgentName:    "triage-agent",
 		AgentVersion: "1.2.3",
 		ExtraTags: map[string]string{
@@ -87,10 +87,10 @@ func TestConformance_RunLifecycleExportsFrameworkTelemetry(t *testing.T) {
 
 	if err := adapter.OnRunEnd("run-sync", googleadk.RunEndEvent{
 		RunID:          "run-sync",
-		OutputMessages: []sigil.Message{sigil.AssistantTextMessage("System health is green")},
+		OutputMessages: []agento11y.Message{agento11y.AssistantTextMessage("System health is green")},
 		ResponseModel:  "gemini-2.5-pro",
 		StopReason:     "stop",
-		Usage: sigil.TokenUsage{
+		Usage: agento11y.TokenUsage{
 			InputTokens:  12,
 			OutputTokens: 4,
 			TotalTokens:  16,
@@ -154,7 +154,7 @@ func TestConformance_RunLifecycleExportsFrameworkTelemetry(t *testing.T) {
 func TestConformance_StreamingRunExportsTokenDrivenGeneration(t *testing.T) {
 	env := newConformanceEnv(t)
 
-	adapter := googleadk.NewSigilAdapter(env.client, googleadk.Options{
+	adapter := googleadk.NewAgento11yAdapter(env.client, googleadk.Options{
 		AgentName:    "stream-agent",
 		AgentVersion: "9.9.9",
 	})
@@ -248,9 +248,9 @@ func newConformanceEnv(t *testing.T) *conformanceEnv {
 	spanRecorder := tracetest.NewSpanRecorder()
 	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spanRecorder))
 
-	cfg := sigil.DefaultConfig()
+	cfg := agento11y.DefaultConfig()
 	cfg.Tracer = tracerProvider.Tracer("google-adk-conformance")
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolHTTP
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolHTTP
 	cfg.GenerationExport.Endpoint = capture.server.URL + "/api/v1/generations:export"
 	cfg.GenerationExport.BatchSize = 1
 	cfg.GenerationExport.QueueSize = 8
@@ -260,7 +260,7 @@ func newConformanceEnv(t *testing.T) *conformanceEnv {
 	cfg.GenerationExport.MaxBackoff = 10 * time.Millisecond
 
 	env := &conformanceEnv{
-		client:         sigil.NewClient(cfg),
+		client:         agento11y.NewClient(cfg),
 		capture:        capture,
 		spans:          spanRecorder,
 		tracerProvider: tracerProvider,

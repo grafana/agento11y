@@ -1,13 +1,13 @@
 import { createServer, type Server } from "node:http";
-import type { SigilClient } from "@grafana/agento11y";
+import type { Agento11yClient } from "@grafana/agento11y";
 import type { Part } from "@opencode-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SigilOpencodeConfig } from "./config.js";
+import type { Agento11yOpencodeConfig } from "./config.js";
 import {
   _peekToolExecutionState,
   _resetHookState,
   _resetToolExecutionState,
-  createSigilHooks,
+  createAgento11yHooks,
   drainActiveToolExecutions,
   emitToolSpans,
   mergeToolSpanRecords,
@@ -16,7 +16,7 @@ import {
 } from "./hooks.js";
 import { Redactor } from "./redact.js";
 
-function mockSigilClient() {
+function mockAgento11yClient() {
   const recorders: Array<{
     start: Record<string, unknown>;
     result: Record<string, unknown> | undefined;
@@ -46,7 +46,7 @@ function mockSigilClient() {
         getError: vi.fn(() => undefined),
       };
     }),
-  } as unknown as SigilClient;
+  } as unknown as Agento11yClient;
 
   return { client, recorders };
 }
@@ -78,7 +78,7 @@ const defaultOpts = () => ({
 
 describe("emitToolSpans", () => {
   it("does nothing when no records", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     emitToolSpans(client, [], {
       ...defaultOpts(),
       contentCapture: "metadata_only",
@@ -87,7 +87,7 @@ describe("emitToolSpans", () => {
   });
 
   it("creates a span per completed record with full context", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     emitToolSpans(
       client,
       [
@@ -116,7 +116,7 @@ describe("emitToolSpans", () => {
   });
 
   it("uses real start/end times", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     emitToolSpans(
       client,
       [makeRecord({ startedAt: 1000, completedAt: 5000 })],
@@ -128,7 +128,7 @@ describe("emitToolSpans", () => {
   });
 
   it("omits arguments and result in metadata_only", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     emitToolSpans(client, [makeRecord()], {
       ...defaultOpts(),
       contentCapture: "metadata_only",
@@ -139,7 +139,7 @@ describe("emitToolSpans", () => {
   });
 
   it("omits arguments and result in no_tool_content", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     emitToolSpans(client, [makeRecord()], {
       ...defaultOpts(),
       contentCapture: "no_tool_content",
@@ -150,7 +150,7 @@ describe("emitToolSpans", () => {
   });
 
   it("includes redacted arguments and result in full", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     emitToolSpans(
       client,
       [
@@ -171,7 +171,7 @@ describe("emitToolSpans", () => {
   });
 
   it("marks error records with setCallError", () => {
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     emitToolSpans(client, [makeRecord({ isError: true, error: "boom" })], {
       ...defaultOpts(),
       contentCapture: "metadata_only",
@@ -186,7 +186,7 @@ describe("emitToolSpans", () => {
       startToolExecution: () => {
         throw new Error("nope");
       },
-    } as unknown as SigilClient;
+    } as unknown as Agento11yClient;
     expect(() =>
       emitToolSpans(failing, [makeRecord()], {
         ...defaultOpts(),
@@ -354,7 +354,7 @@ describe("mergeToolSpanRecords", () => {
   });
 });
 
-function metadataOnlyConfig(): SigilOpencodeConfig {
+function metadataOnlyConfig(): Agento11yOpencodeConfig {
   return {
     endpoint: "http://127.0.0.1:1",
     auth: { mode: "none" },
@@ -365,8 +365,8 @@ function metadataOnlyConfig(): SigilOpencodeConfig {
   };
 }
 
-async function makeHooks(config: SigilOpencodeConfig) {
-  const hooks = await createSigilHooks(config, {
+async function makeHooks(config: Agento11yOpencodeConfig) {
+  const hooks = await createAgento11yHooks(config, {
     session: { message: async () => ({ data: { parts: [] } }) },
   } as never);
   if (!hooks) throw new Error("expected hooks");
@@ -447,7 +447,7 @@ describe("synthesized error spans for never-completed tools", () => {
     const drained = drainActiveToolExecutions("s1");
     const merged = mergeToolSpanRecords(termRecords, drained);
 
-    const { client, recorders } = mockSigilClient();
+    const { client, recorders } = mockAgento11yClient();
     emitToolSpans(client, merged, {
       ...defaultOpts(),
       conversationId: "s1",
@@ -502,7 +502,7 @@ describe("hook lifecycle records and guard denial", () => {
   });
 
   it("toolExecuteBefore/After move an active record into completed", async () => {
-    const config: SigilOpencodeConfig = {
+    const config: Agento11yOpencodeConfig = {
       endpoint: "http://127.0.0.1:1",
       auth: { mode: "none" },
       agentName: "opencode",
@@ -512,7 +512,7 @@ describe("hook lifecycle records and guard denial", () => {
       // guards disabled, so the before hook just records timing.
     };
 
-    const hooks = await createSigilHooks(config, {
+    const hooks = await createAgento11yHooks(config, {
       session: { message: async () => ({ data: { parts: [] } }) },
     } as never);
     if (!hooks) throw new Error("expected hooks");
@@ -555,7 +555,7 @@ describe("hook lifecycle records and guard denial", () => {
     });
     servers.push(guardSrv.server);
 
-    const config: SigilOpencodeConfig = {
+    const config: Agento11yOpencodeConfig = {
       endpoint: guardSrv.baseUrl,
       auth: { mode: "none" },
       agentName: "opencode",
@@ -565,7 +565,7 @@ describe("hook lifecycle records and guard denial", () => {
       guards: { enabled: true, timeoutMs: 1500, failOpen: false },
     };
 
-    const hooks = await createSigilHooks(config, {
+    const hooks = await createAgento11yHooks(config, {
       session: { message: async () => ({ data: { parts: [] } }) },
     } as never);
     if (!hooks) throw new Error("expected hooks");
@@ -596,11 +596,11 @@ describe("hook lifecycle records and guard denial", () => {
   });
 
   it("drains an incomplete tool execution when the assistant message records (metadata_only)", async () => {
-    const sigilSrv = await startResponseServer({ results: [] });
-    servers.push(sigilSrv.server);
+    const agento11ySrv = await startResponseServer({ results: [] });
+    servers.push(agento11ySrv.server);
 
-    const config: SigilOpencodeConfig = {
-      endpoint: sigilSrv.baseUrl,
+    const config: Agento11yOpencodeConfig = {
+      endpoint: agento11ySrv.baseUrl,
       auth: { mode: "none" },
       agentName: "opencode",
       agentVersion: "test-version",
@@ -608,7 +608,7 @@ describe("hook lifecycle records and guard denial", () => {
       debug: false,
     };
 
-    const hooks = await createSigilHooks(config, {
+    const hooks = await createAgento11yHooks(config, {
       session: { message: async () => ({ data: { parts: [] } }) },
     } as never);
     if (!hooks) throw new Error("expected hooks");
@@ -670,8 +670,8 @@ describe("hook lifecycle records and guard denial", () => {
   });
 
   it("removes the stranded active entry in full mode when the error part is present", async () => {
-    const sigilSrv = await startResponseServer({ results: [] });
-    servers.push(sigilSrv.server);
+    const agento11ySrv = await startResponseServer({ results: [] });
+    servers.push(agento11ySrv.server);
 
     const sessionID = "sess-full";
     const messageID = "msg-full";
@@ -690,8 +690,8 @@ describe("hook lifecycle records and guard denial", () => {
       },
     };
 
-    const config: SigilOpencodeConfig = {
-      endpoint: sigilSrv.baseUrl,
+    const config: Agento11yOpencodeConfig = {
+      endpoint: agento11ySrv.baseUrl,
       auth: { mode: "none" },
       agentName: "opencode",
       agentVersion: "test-version",
@@ -699,7 +699,7 @@ describe("hook lifecycle records and guard denial", () => {
       debug: false,
     };
 
-    const hooks = await createSigilHooks(config, {
+    const hooks = await createAgento11yHooks(config, {
       session: { message: async () => ({ data: { parts: [errorPart] } }) },
     } as never);
     if (!hooks) throw new Error("expected hooks");
@@ -763,7 +763,7 @@ describe("hook lifecycle records and guard denial", () => {
   });
 
   it("clears active and completed records on session.deleted", async () => {
-    const config: SigilOpencodeConfig = {
+    const config: Agento11yOpencodeConfig = {
       endpoint: "http://127.0.0.1:1",
       auth: { mode: "none" },
       agentName: "opencode",
@@ -772,7 +772,7 @@ describe("hook lifecycle records and guard denial", () => {
       debug: false,
     };
 
-    const hooks = await createSigilHooks(config, {
+    const hooks = await createAgento11yHooks(config, {
       session: { message: async () => ({ data: { parts: [] } }) },
     } as never);
     if (!hooks) throw new Error("expected hooks");

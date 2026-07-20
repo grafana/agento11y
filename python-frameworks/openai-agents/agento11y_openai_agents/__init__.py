@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 from agento11y import Client
 
-from .handler import SigilAsyncOpenAIAgentsHandler, SigilOpenAIAgentsHandler
+from .handler import Agento11yAsyncOpenAIAgentsHandler, Agento11yOpenAIAgentsHandler
 
 try:  # pragma: no cover - imported from openai-agents at runtime
     from agents import RunHooks
@@ -46,28 +46,28 @@ except Exception:  # pragma: no cover - lightweight fallback for local unit test
             return
 
 
-def create_sigil_openai_agents_handler(
+def create_agento11y_openai_agents_handler(
     *,
     client: Client,
     async_handler: bool = False,
     **handler_kwargs: Any,
-) -> SigilOpenAIAgentsHandler | SigilAsyncOpenAIAgentsHandler:
+) -> Agento11yOpenAIAgentsHandler | Agento11yAsyncOpenAIAgentsHandler:
     """Create an OpenAI Agents Sigil handler for sync or async flows."""
     if async_handler:
-        return SigilAsyncOpenAIAgentsHandler(client=client, **handler_kwargs)
-    return SigilOpenAIAgentsHandler(client=client, **handler_kwargs)
+        return Agento11yAsyncOpenAIAgentsHandler(client=client, **handler_kwargs)
+    return Agento11yOpenAIAgentsHandler(client=client, **handler_kwargs)
 
 
-class SigilOpenAIAgentsRunHooks(RunHooks):
+class Agento11yOpenAIAgentsRunHooks(RunHooks):
     """RunHooks bridge that maps OpenAI Agents lifecycle callbacks into Sigil handlers."""
 
     def __init__(
         self,
         *,
-        sigil_handler: SigilOpenAIAgentsHandler | SigilAsyncOpenAIAgentsHandler,
+        agento11y_handler: Agento11yOpenAIAgentsHandler | Agento11yAsyncOpenAIAgentsHandler,
         delegate: Any | None = None,
     ) -> None:
-        self._sigil_handler = sigil_handler
+        self._agento11y_handler = agento11y_handler
         self._delegate = delegate
         self._agent_run_stacks: dict[int, list[UUID]] = {}
         self._llm_run_stacks: dict[tuple[int, int], list[UUID]] = {}
@@ -84,7 +84,7 @@ class SigilOpenAIAgentsRunHooks(RunHooks):
 
         agent_name = _agent_name(agent)
         await _invoke_handler(
-            self._sigil_handler,
+            self._agento11y_handler,
             "on_chain_start",
             {"name": agent_name},
             {},
@@ -100,7 +100,7 @@ class SigilOpenAIAgentsRunHooks(RunHooks):
         stack = self._agent_run_stacks.get(context_key, [])
         run_id = stack.pop() if stack else None
         if run_id is not None:
-            await _invoke_handler(self._sigil_handler, "on_chain_end", {"output": output}, run_id=run_id)
+            await _invoke_handler(self._agento11y_handler, "on_chain_end", {"output": output}, run_id=run_id)
         if not stack:
             self._agent_run_stacks.pop(context_key, None)
 
@@ -116,7 +116,7 @@ class SigilOpenAIAgentsRunHooks(RunHooks):
             "destination": _agent_name(to_agent),
         }
         await _invoke_handler(
-            self._sigil_handler,
+            self._agento11y_handler,
             "on_chain_start",
             serialized,
             {},
@@ -126,7 +126,7 @@ class SigilOpenAIAgentsRunHooks(RunHooks):
             run_type="handoff",
             run_name="agent_handoff",
         )
-        await _invoke_handler(self._sigil_handler, "on_chain_end", {"handoff": True}, run_id=run_id)
+        await _invoke_handler(self._agento11y_handler, "on_chain_end", {"handoff": True}, run_id=run_id)
 
         await _invoke_delegate(self._delegate, "on_handoff", context, from_agent, to_agent)
 
@@ -157,7 +157,7 @@ class SigilOpenAIAgentsRunHooks(RunHooks):
             serialized["kwargs"] = {"model": model_name}
 
         await _invoke_handler(
-            self._sigil_handler,
+            self._agento11y_handler,
             "on_llm_start",
             serialized,
             _input_prompts(system_prompt, input_items),
@@ -174,7 +174,7 @@ class SigilOpenAIAgentsRunHooks(RunHooks):
         run_id = llm_stack.pop() if llm_stack else None
         if run_id is not None:
             await _invoke_handler(
-                self._sigil_handler,
+                self._agento11y_handler,
                 "on_llm_end",
                 _build_llm_end_response(response, model_name=_model_name(agent)),
                 run_id=run_id,
@@ -203,7 +203,7 @@ class SigilOpenAIAgentsRunHooks(RunHooks):
         tool_name = _tool_name(tool)
         tool_input = _read(context, "tool_input")
         await _invoke_handler(
-            self._sigil_handler,
+            self._agento11y_handler,
             "on_tool_start",
             {"name": tool_name},
             _tool_input_string(tool_input),
@@ -219,30 +219,30 @@ class SigilOpenAIAgentsRunHooks(RunHooks):
         tool_stack = self._tool_run_stacks.get(tool_key, [])
         run_id = tool_stack.pop() if tool_stack else None
         if run_id is not None:
-            await _invoke_handler(self._sigil_handler, "on_tool_end", result, run_id=run_id)
+            await _invoke_handler(self._agento11y_handler, "on_tool_end", result, run_id=run_id)
         if not tool_stack:
             self._tool_run_stacks.pop(tool_key, None)
 
         await _invoke_delegate(self._delegate, "on_tool_end", context, agent, tool, result)
 
 
-def create_sigil_openai_agents_hooks(
+def create_agento11y_openai_agents_hooks(
     *,
     client: Client,
     existing_hooks: Any | None = None,
     async_handler: bool = False,
     **handler_kwargs: Any,
-) -> SigilOpenAIAgentsRunHooks:
+) -> Agento11yOpenAIAgentsRunHooks:
     """Create a RunHooks instance wired to Sigil instrumentation."""
-    sigil_handler = create_sigil_openai_agents_handler(
+    agento11y_handler = create_agento11y_openai_agents_handler(
         client=client,
         async_handler=async_handler,
         **handler_kwargs,
     )
-    return SigilOpenAIAgentsRunHooks(sigil_handler=sigil_handler, delegate=existing_hooks)
+    return Agento11yOpenAIAgentsRunHooks(agento11y_handler=agento11y_handler, delegate=existing_hooks)
 
 
-def with_sigil_openai_agents_hooks(
+def with_agento11y_openai_agents_hooks(
     run_options: dict[str, Any] | None,
     *,
     client: Client,
@@ -255,12 +255,12 @@ def with_sigil_openai_agents_hooks(
     if isinstance(existing, list):
         raise TypeError("openai-agents expects `hooks` to be a RunHooks instance, not a list.")
 
-    if isinstance(existing, SigilOpenAIAgentsRunHooks):
+    if isinstance(existing, Agento11yOpenAIAgentsRunHooks):
         return merged
-    if isinstance(existing, (SigilOpenAIAgentsHandler, SigilAsyncOpenAIAgentsHandler)):
+    if isinstance(existing, (Agento11yOpenAIAgentsHandler, Agento11yAsyncOpenAIAgentsHandler)):
         existing = None
 
-    merged["hooks"] = create_sigil_openai_agents_hooks(
+    merged["hooks"] = create_agento11y_openai_agents_hooks(
         client=client,
         existing_hooks=existing,
         async_handler=async_handler,
@@ -471,10 +471,10 @@ def _camel_case(snake_case: str) -> str:
 
 
 __all__ = [
-    "SigilOpenAIAgentsHandler",
-    "SigilAsyncOpenAIAgentsHandler",
-    "SigilOpenAIAgentsRunHooks",
-    "create_sigil_openai_agents_handler",
-    "create_sigil_openai_agents_hooks",
-    "with_sigil_openai_agents_hooks",
+    "Agento11yOpenAIAgentsHandler",
+    "Agento11yAsyncOpenAIAgentsHandler",
+    "Agento11yOpenAIAgentsRunHooks",
+    "create_agento11y_openai_agents_handler",
+    "create_agento11y_openai_agents_hooks",
+    "with_agento11y_openai_agents_hooks",
 ]

@@ -1,8 +1,8 @@
 using Google.GenAI.Types;
 using System.Text.Json;
-using SigilPart = Grafana.Sigil.Part;
+using Agento11yPart = Grafana.Agento11y.Part;
 
-namespace Grafana.Sigil.Gemini;
+namespace Grafana.Agento11y.Gemini;
 
 public static class GeminiGenerationMapper
 {
@@ -15,7 +15,7 @@ public static class GeminiGenerationMapper
         IReadOnlyList<Content>? contents,
         GenerateContentConfig? config,
         GenerateContentResponse response,
-        GeminiSigilOptions? options = null
+        GeminiAgento11yOptions? options = null
     )
     {
         if (string.IsNullOrWhiteSpace(model))
@@ -34,7 +34,7 @@ public static class GeminiGenerationMapper
         IReadOnlyList<Content>? contents,
         GenerateContentConfig? config,
         GeminiStreamSummary summary,
-        GeminiSigilOptions? options = null
+        GeminiAgento11yOptions? options = null
     )
     {
         if (string.IsNullOrWhiteSpace(model))
@@ -111,10 +111,10 @@ public static class GeminiGenerationMapper
     private static Generation FromRequestResponseInternal(
         GenerateContentRequest request,
         GenerateContentResponse response,
-        GeminiSigilOptions? options = null
+        GeminiAgento11yOptions? options = null
     )
     {
-        var effective = options ?? new GeminiSigilOptions();
+        var effective = options ?? new GeminiAgento11yOptions();
         var modelName = ResolveModelName(request, effective);
 
         var output = MapCandidates(response.Candidates);
@@ -172,10 +172,10 @@ public static class GeminiGenerationMapper
     private static Generation FromStreamInternal(
         GenerateContentRequest request,
         GeminiStreamSummary summary,
-        GeminiSigilOptions? options = null
+        GeminiAgento11yOptions? options = null
     )
     {
-        var effective = options ?? new GeminiSigilOptions();
+        var effective = options ?? new GeminiAgento11yOptions();
         var modelName = ResolveModelName(request, effective);
         var tools = MapTools(request.Config);
         var maxTokens = ReadNullableLongProperty(request.Config, "MaxOutputTokens");
@@ -365,9 +365,9 @@ public static class GeminiGenerationMapper
             }
 
             var role = ParseRole(content.Role);
-            var roleParts = new List<SigilPart>();
-            var assistantParts = new List<SigilPart>();
-            var toolParts = new List<SigilPart>();
+            var roleParts = new List<Agento11yPart>();
+            var assistantParts = new List<Agento11yPart>();
+            var toolParts = new List<Agento11yPart>();
 
             foreach (var part in content.Parts ?? [])
             {
@@ -380,17 +380,17 @@ public static class GeminiGenerationMapper
                 {
                     if (part.Thought == true && role == MessageRole.Assistant)
                     {
-                        roleParts.Add(SigilPart.ThinkingPart(part.Text));
+                        roleParts.Add(Agento11yPart.ThinkingPart(part.Text));
                     }
                     else
                     {
-                        roleParts.Add(SigilPart.TextPart(part.Text));
+                        roleParts.Add(Agento11yPart.TextPart(part.Text));
                     }
                 }
 
                 if (part.FunctionCall != null)
                 {
-                    var mappedCall = SigilPart.ToolCallPart(new ToolCall
+                    var mappedCall = Agento11yPart.ToolCallPart(new ToolCall
                     {
                         Id = part.FunctionCall.Id ?? string.Empty,
                         Name = part.FunctionCall.Name ?? string.Empty,
@@ -413,7 +413,7 @@ public static class GeminiGenerationMapper
                     var responsePayload = part.FunctionResponse.Response;
                     var contentText = ResolveFunctionResponseText(responsePayload);
 
-                    var mappedResult = SigilPart.ToolResultPart(new ToolResult
+                    var mappedResult = Agento11yPart.ToolResultPart(new ToolResult
                     {
                         ToolCallId = part.FunctionResponse.Id ?? string.Empty,
                         Name = part.FunctionResponse.Name ?? string.Empty,
@@ -642,7 +642,7 @@ public static class GeminiGenerationMapper
         };
     }
 
-    private static string ResolveModelName(GenerateContentRequest request, GeminiSigilOptions options)
+    private static string ResolveModelName(GenerateContentRequest request, GeminiAgento11yOptions options)
     {
         if (!string.IsNullOrWhiteSpace(options.ModelName))
         {
@@ -684,7 +684,7 @@ public static class GeminiGenerationMapper
     }
 
     private static List<Artifact> BuildRequestResponseArtifacts(
-        GeminiSigilOptions options,
+        GeminiAgento11yOptions options,
         GenerateContentRequest request,
         GenerateContentResponse response,
         List<ToolDefinition> tools
@@ -711,7 +711,7 @@ public static class GeminiGenerationMapper
     }
 
     private static List<Artifact> BuildStreamArtifacts(
-        GeminiSigilOptions options,
+        GeminiAgento11yOptions options,
         GenerateContentRequest request,
         GeminiStreamSummary summary,
         List<ToolDefinition> tools

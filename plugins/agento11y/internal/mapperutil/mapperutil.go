@@ -15,7 +15,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 // Clone returns a shallow copy of in, or nil when in is empty. The mappers
@@ -46,9 +46,9 @@ func DeterministicID(prefix string, parts ...string) string {
 // that bypass the config layer. FullWithMetadataSpans is preserved because the
 // SDK uses it to keep content out of OTLP span attributes while exporting full
 // content over gRPC.
-func NormalizeStartContentMode(mode sigil.ContentCaptureMode) sigil.ContentCaptureMode {
-	if mode == sigil.ContentCaptureModeDefault {
-		return sigil.ContentCaptureModeMetadataOnly
+func NormalizeStartContentMode(mode agento11y.ContentCaptureMode) agento11y.ContentCaptureMode {
+	if mode == agento11y.ContentCaptureModeDefault {
+		return agento11y.ContentCaptureModeMetadataOnly
 	}
 	return mode
 }
@@ -57,12 +57,12 @@ func NormalizeStartContentMode(mode sigil.ContentCaptureMode) sigil.ContentCaptu
 // mappers actually branch on when building Generation input/output payloads.
 // FullWithMetadataSpans becomes Full because the gRPC payload is identical; the
 // difference only matters for GenerationStart and span attributes.
-func NormalizePayloadContentMode(mode sigil.ContentCaptureMode) sigil.ContentCaptureMode {
+func NormalizePayloadContentMode(mode agento11y.ContentCaptureMode) agento11y.ContentCaptureMode {
 	switch mode {
-	case sigil.ContentCaptureModeDefault:
-		return sigil.ContentCaptureModeMetadataOnly
-	case sigil.ContentCaptureModeFullWithMetadataSpans:
-		return sigil.ContentCaptureModeFull
+	case agento11y.ContentCaptureModeDefault:
+		return agento11y.ContentCaptureModeMetadataOnly
+	case agento11y.ContentCaptureModeFullWithMetadataSpans:
+		return agento11y.ContentCaptureModeFull
 	default:
 		return mode
 	}
@@ -73,7 +73,7 @@ func NormalizePayloadContentMode(mode sigil.ContentCaptureMode) sigil.ContentCap
 // when no non-empty names remain. Sorting keeps the emitted Tools slice stable
 // across turns and across tool subsets, which downstream consumers (tests, log
 // diffing, dashboards) rely on.
-func SortedToolDefinitions(names []string) []sigil.ToolDefinition {
+func SortedToolDefinitions(names []string) []agento11y.ToolDefinition {
 	seen := make(map[string]struct{}, len(names))
 	uniq := make([]string, 0, len(names))
 	for _, name := range names {
@@ -90,9 +90,9 @@ func SortedToolDefinitions(names []string) []sigil.ToolDefinition {
 		return nil
 	}
 	sort.Strings(uniq)
-	out := make([]sigil.ToolDefinition, len(uniq))
+	out := make([]agento11y.ToolDefinition, len(uniq))
 	for i, name := range uniq {
-		out[i] = sigil.ToolDefinition{Name: name, Type: "function"}
+		out[i] = agento11y.ToolDefinition{Name: name, Type: "function"}
 	}
 	return out
 }

@@ -4,14 +4,14 @@ import (
 	"context"
 	"os"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 	osdk "github.com/openai/openai-go/v3"
 	osdkoption "github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
 )
 
-// Example_withSigilWrapper shows the one-liner wrapper approach.
-func Example_withSigilWrapper() {
+// Example_withAgento11yWrapper shows the one-liner wrapper approach.
+func Example_withAgento11yWrapper() {
 	if os.Getenv("SIGIL_RUN_LIVE_EXAMPLES") != "1" {
 		return
 	}
@@ -21,7 +21,7 @@ func Example_withSigilWrapper() {
 		return
 	}
 
-	client := sigil.NewClient(sigil.DefaultConfig())
+	client := agento11y.NewClient(agento11y.DefaultConfig())
 	providerClient := osdk.NewClient(osdkoption.WithAPIKey(apiKey))
 	req := exampleOpenAIRequest()
 
@@ -37,8 +37,8 @@ func Example_withSigilWrapper() {
 	_ = resp.Choices[0].Message.Content
 }
 
-// Example_withSigilDefer shows the defer pattern for full control.
-func Example_withSigilDefer() {
+// Example_withAgento11yDefer shows the defer pattern for full control.
+func Example_withAgento11yDefer() {
 	if os.Getenv("SIGIL_RUN_LIVE_EXAMPLES") != "1" {
 		return
 	}
@@ -48,15 +48,15 @@ func Example_withSigilDefer() {
 		return
 	}
 
-	client := sigil.NewClient(sigil.DefaultConfig())
+	client := agento11y.NewClient(agento11y.DefaultConfig())
 	providerClient := osdk.NewClient(osdkoption.WithAPIKey(apiKey))
 	req := exampleOpenAIRequest()
 
-	ctx, rec := client.StartGeneration(context.Background(), sigil.GenerationStart{
+	ctx, rec := client.StartGeneration(context.Background(), agento11y.GenerationStart{
 		ConversationID: "conv-openai-2",
 		AgentName:      "assistant-openai",
 		AgentVersion:   "1.0.0",
-		Model:          sigil.ModelRef{Provider: "openai", Name: req.Model},
+		Model:          agento11y.ModelRef{Provider: "openai", Name: req.Model},
 	})
 	defer rec.End()
 
@@ -74,8 +74,8 @@ func Example_withSigilDefer() {
 	_ = resp.Choices[0].Message.Content
 }
 
-// Example_withSigilStreamingWrapper shows the streaming wrapper approach.
-func Example_withSigilStreamingWrapper() {
+// Example_withAgento11yStreamingWrapper shows the streaming wrapper approach.
+func Example_withAgento11yStreamingWrapper() {
 	if os.Getenv("SIGIL_RUN_LIVE_EXAMPLES") != "1" {
 		return
 	}
@@ -85,7 +85,7 @@ func Example_withSigilStreamingWrapper() {
 		return
 	}
 
-	client := sigil.NewClient(sigil.DefaultConfig())
+	client := agento11y.NewClient(agento11y.DefaultConfig())
 	providerClient := osdk.NewClient(osdkoption.WithAPIKey(apiKey))
 	req := exampleOpenAIRequest()
 
@@ -99,8 +99,8 @@ func Example_withSigilStreamingWrapper() {
 	}
 }
 
-// Example_withSigilStreamingDefer shows the defer pattern for streaming with per-chunk processing.
-func Example_withSigilStreamingDefer() {
+// Example_withAgento11yStreamingDefer shows the defer pattern for streaming with per-chunk processing.
+func Example_withAgento11yStreamingDefer() {
 	if os.Getenv("SIGIL_RUN_LIVE_EXAMPLES") != "1" {
 		return
 	}
@@ -110,15 +110,15 @@ func Example_withSigilStreamingDefer() {
 		return
 	}
 
-	client := sigil.NewClient(sigil.DefaultConfig())
+	client := agento11y.NewClient(agento11y.DefaultConfig())
 	providerClient := osdk.NewClient(osdkoption.WithAPIKey(apiKey))
 	req := exampleOpenAIRequest()
 
-	ctx, rec := client.StartStreamingGeneration(context.Background(), sigil.GenerationStart{
+	ctx, rec := client.StartStreamingGeneration(context.Background(), agento11y.GenerationStart{
 		ConversationID: "conv-openai-4",
 		AgentName:      "assistant-openai",
 		AgentVersion:   "1.0.0",
-		Model:          sigil.ModelRef{Provider: "openai", Name: req.Model},
+		Model:          agento11y.ModelRef{Provider: "openai", Name: req.Model},
 	})
 	defer rec.End()
 

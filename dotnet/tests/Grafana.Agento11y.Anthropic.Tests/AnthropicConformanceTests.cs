@@ -5,7 +5,7 @@ using System.Text.Json;
 using Xunit;
 using AnthropicMessage = Anthropic.Models.Messages.Message;
 
-namespace Grafana.Sigil.Anthropic.Tests;
+namespace Grafana.Agento11y.Anthropic.Tests;
 
 public sealed class AnthropicConformanceTests
 {
@@ -18,7 +18,7 @@ public sealed class AnthropicConformanceTests
         var generation = AnthropicGenerationMapper.FromRequestResponse(
             request,
             response,
-            new AnthropicSigilOptions
+            new AnthropicAgento11yOptions
             {
                 ConversationId = "conv-1",
                 AgentName = "agent-anthropic",
@@ -54,7 +54,7 @@ public sealed class AnthropicConformanceTests
         summary.Events.Add(CreateMessageStartEvent("msg_stream_1", "stream output"));
         summary.Events.Add(CreateMessageDeltaEvent(80, 25, 8, 4, 3, 2));
 
-        var generation = AnthropicGenerationMapper.FromStream(request, summary, new AnthropicSigilOptions().WithRawArtifacts());
+        var generation = AnthropicGenerationMapper.FromStream(request, summary, new AnthropicAgento11yOptions().WithRawArtifacts());
 
         Assert.Equal(GenerationMode.Stream, generation.Mode);
         Assert.Equal("msg_stream_1", generation.ResponseId);
@@ -76,7 +76,7 @@ public sealed class AnthropicConformanceTests
     public async Task Recorder_SyncAndStreamModes_AreRecordedWithProviderErrorPropagation()
     {
         var exporter = new CapturingExporter();
-        var client = new SigilClient(new SigilClientConfig
+        var client = new Agento11yClient(new Agento11yClientConfig
         {
             GenerationExporter = exporter,
             GenerationExport = new GenerationExportConfig
@@ -93,7 +93,7 @@ public sealed class AnthropicConformanceTests
             client,
             request,
             (_, _) => throw new InvalidOperationException("provider failed"),
-            new AnthropicSigilOptions
+            new AnthropicAgento11yOptions
             {
                 ModelName = "claude-sonnet-4-5",
             },
@@ -104,7 +104,7 @@ public sealed class AnthropicConformanceTests
             client,
             request,
             (_, _) => StreamEvents(),
-            new AnthropicSigilOptions
+            new AnthropicAgento11yOptions
             {
                 ModelName = "claude-sonnet-4-5",
             },
@@ -130,7 +130,7 @@ public sealed class AnthropicConformanceTests
         using var listener = NewGenerationListener(spans);
         ActivitySource.AddActivityListener(listener);
 
-        await using var client = new SigilClient(new SigilClientConfig
+        await using var client = new Agento11yClient(new Agento11yClientConfig
         {
             GenerationExporter = exporter,
             GenerationExport = new GenerationExportConfig
@@ -145,7 +145,7 @@ public sealed class AnthropicConformanceTests
             client,
             CreateRequest(),
             (_, _) => EmptyStreamEvents(),
-            new AnthropicSigilOptions
+            new AnthropicAgento11yOptions
             {
                 ModelName = "claude-sonnet-4-5",
             },
@@ -170,12 +170,12 @@ public sealed class AnthropicConformanceTests
         Assert.Throws<ArgumentNullException>(() => AnthropicGenerationMapper.FromRequestResponse(
             CreateRequest(),
             response: null!,
-            new AnthropicSigilOptions()
+            new AnthropicAgento11yOptions()
         ));
         Assert.Throws<ArgumentException>(() => AnthropicGenerationMapper.FromStream(
             CreateRequest(),
             new AnthropicStreamSummary(),
-            new AnthropicSigilOptions()
+            new AnthropicAgento11yOptions()
         ));
     }
 
@@ -183,7 +183,7 @@ public sealed class AnthropicConformanceTests
     public void EmbeddingConformance_IsExplicitlyUnsupportedWithoutPublicSurface()
     {
         Assert.NotNull(typeof(AnthropicRecorder));
-        Assert.Null(typeof(AnthropicRecorder).Assembly.GetType("Grafana.Sigil.Anthropic.AnthropicEmbeddings"));
+        Assert.Null(typeof(AnthropicRecorder).Assembly.GetType("Grafana.Agento11y.Anthropic.AnthropicEmbeddings"));
     }
 
     private static MessageCreateParams CreateRequest()

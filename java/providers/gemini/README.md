@@ -31,7 +31,7 @@ List<Content> contents = List.of(
 );
 
 GenerateContentResponse response = GeminiAdapter.completion(
-    sigilClient,
+    agento11yClient,
     "gemini-2.5-pro",
     contents,
     GenerateContentConfig.builder().maxOutputTokens(512).build(),
@@ -47,7 +47,7 @@ GenerateContentResponse response = GeminiAdapter.completion(
 
 ```java
 GeminiStreamSummary summary = GeminiAdapter.completionStream(
-    sigilClient,
+    agento11yClient,
     "gemini-2.5-pro",
     contents,
     GenerateContentConfig.builder().maxOutputTokens(512).build(),
@@ -60,7 +60,7 @@ GeminiStreamSummary summary = GeminiAdapter.completionStream(
 
 ```java
 EmbedContentResponse embeddingResponse = GeminiAdapter.embedContent(
-    sigilClient,
+    agento11yClient,
     "gemini-embedding-001",
     java.util.List.of("hello", "world"),
     null,

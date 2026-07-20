@@ -14,7 +14,7 @@ from agento11y.models import (
     MessageRole,
     PartKind,
 )
-from agento11y_litellm import SigilLiteLLMLogger, create_sigil_litellm_logger
+from agento11y_litellm import Agento11yLiteLLMLogger, create_agento11y_litellm_logger
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -57,7 +57,7 @@ def _new_span_client(
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
     return Client(
         ClientConfig(
-            tracer=provider.get_tracer("sigil-litellm-test"),
+            tracer=provider.get_tracer("agento11y-litellm-test"),
             generation_export=GenerationExportConfig(
                 batch_size=10,
                 flush_interval=timedelta(seconds=60),
@@ -162,7 +162,7 @@ def test_missing_slo() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         handler.log_success_event(
             kwargs={},
             response_obj=None,
@@ -180,7 +180,7 @@ def test_success_event_basic() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(response=_make_slo_response(content="Hi there!"))
         handler.log_success_event(
             kwargs=_make_kwargs(slo),
@@ -221,7 +221,7 @@ def test_failure_event() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(error_str="Rate limit exceeded")
         handler.log_failure_event(
             kwargs=_make_kwargs(slo),
@@ -244,7 +244,7 @@ def test_system_prompt_extraction() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(
             messages=[
                 {"role": "system", "content": "You are helpful."},
@@ -273,7 +273,7 @@ def test_tool_calls() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(
             messages=[
                 {"role": "user", "content": "What's the weather?"},
@@ -334,7 +334,7 @@ def test_streaming_mode() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(
             stream=True,
             completionStartTime=1700000000.5,
@@ -358,7 +358,7 @@ def test_tags_and_metadata() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(
+        handler = Agento11yLiteLLMLogger(
             client=client,
             extra_tags={"env": "test"},
             extra_metadata={"session": "s1"},
@@ -394,7 +394,7 @@ def test_model_parameters() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(
             model_parameters={
                 "temperature": "0.7",
@@ -423,7 +423,7 @@ def test_capture_inputs_disabled() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client, capture_inputs=False)
+        handler = Agento11yLiteLLMLogger(client=client, capture_inputs=False)
         slo = _base_slo(
             messages=[
                 {"role": "system", "content": "Secret system prompt"},
@@ -450,7 +450,7 @@ def test_capture_outputs_disabled() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client, capture_outputs=False)
+        handler = Agento11yLiteLLMLogger(client=client, capture_outputs=False)
         handler.log_success_event(
             kwargs=_make_kwargs(_base_slo()),
             response_obj=None,
@@ -470,7 +470,7 @@ def test_response_tool_calls_in_output() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(
             response=_make_slo_response(
                 content="Let me check.",
@@ -517,7 +517,7 @@ def test_async_log_success_event() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
 
         asyncio.run(
             handler.async_log_success_event(
@@ -541,7 +541,7 @@ def test_agent_name_and_conversation_id() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(
+        handler = Agento11yLiteLLMLogger(
             client=client,
             agent_name="my-agent",
             agent_version="v2",
@@ -568,7 +568,7 @@ def test_per_request_agent_name_from_metadata() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(
+        handler = Agento11yLiteLLMLogger(
             client=client,
             agent_name="default-agent",
             agent_version="v1",
@@ -593,7 +593,7 @@ def test_per_request_agent_name_falls_back_to_static() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(
+        handler = Agento11yLiteLLMLogger(
             client=client,
             agent_name="default-agent",
             agent_version="v1",
@@ -613,18 +613,18 @@ def test_per_request_agent_name_falls_back_to_static() -> None:
         client.shutdown()
 
 
-def test_create_sigil_litellm_logger_factory() -> None:
+def test_create_agento11y_litellm_logger_factory() -> None:
     """Factory function creates a properly configured logger."""
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = create_sigil_litellm_logger(
+        handler = create_agento11y_litellm_logger(
             client=client,
             capture_inputs=True,
             capture_outputs=True,
             extra_tags={"k": "v"},
         )
-        assert isinstance(handler, SigilLiteLLMLogger)
+        assert isinstance(handler, Agento11yLiteLLMLogger)
     finally:
         client.shutdown()
 
@@ -634,7 +634,7 @@ def test_non_chat_call_type_skipped() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         for call_type in ("image_generation", "transcription"):
             slo = _base_slo(call_type=call_type)
             handler.log_success_event(
@@ -654,7 +654,7 @@ def test_acompletion_call_type_recorded() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(call_type="acompletion")
         handler.log_success_event(
             kwargs=_make_kwargs(slo),
@@ -673,7 +673,7 @@ def test_text_completion_call_type_recorded() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         for call_type in ("text_completion", "atext_completion"):
             slo = _base_slo(call_type=call_type)
             handler.log_success_event(
@@ -694,7 +694,7 @@ def test_dynamic_conversation_id_from_metadata() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client, conversation_id="static-fallback")
+        handler = Agento11yLiteLLMLogger(client=client, conversation_id="static-fallback")
         slo = _base_slo()
         kwargs = _make_kwargs(slo, conversation_id="dynamic-conv-456")
         handler.log_success_event(
@@ -716,7 +716,7 @@ def test_conversation_id_session_id_fallback() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo()
         kwargs = _make_kwargs(slo, session_id="sess-789")
         handler.log_success_event(
@@ -738,7 +738,7 @@ def test_litellm_session_id_used_as_conversation_id() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client, conversation_id="static-fallback")
+        handler = Agento11yLiteLLMLogger(client=client, conversation_id="static-fallback")
         slo = _base_slo()
         kwargs: dict[str, Any] = {
             "standard_logging_object": slo,
@@ -766,7 +766,7 @@ def test_litellm_trace_id_used_as_conversation_id() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo()
         kwargs: dict[str, Any] = {
             "standard_logging_object": slo,
@@ -794,7 +794,7 @@ def test_metadata_conversation_id_takes_precedence_over_litellm_session() -> Non
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo()
         kwargs: dict[str, Any] = {
             "standard_logging_object": slo,
@@ -822,7 +822,7 @@ def test_empty_tool_result_preserved() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(
             messages=[
                 {"role": "user", "content": "Send email"},
@@ -867,7 +867,7 @@ def test_string_response_in_slo() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(response="Plain text response")
         handler.log_success_event(
             kwargs=_make_kwargs(slo),
@@ -889,7 +889,7 @@ def test_missing_call_type_still_recorded() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo()
         del slo["call_type"]
         handler.log_success_event(
@@ -909,7 +909,7 @@ def test_tool_definitions_captured() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo()
         kwargs = _make_kwargs(slo)
         kwargs["optional_params"] = {
@@ -967,7 +967,7 @@ def test_detailed_token_usage() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
         response_obj = SimpleNamespace(
@@ -1007,7 +1007,7 @@ def test_zero_token_counts_preserved() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
         response_obj = SimpleNamespace(
@@ -1044,7 +1044,7 @@ def test_non_utc_timezone_converted_to_utc() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo()
 
         tz_plus5 = timezone(timedelta(hours=5))
@@ -1071,7 +1071,7 @@ def test_naive_datetime_produces_utc_aware_output() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo()
 
         naive_start = datetime(2024, 6, 15, 14, 30, 0)
@@ -1099,7 +1099,7 @@ def test_multi_choice_response_all_mapped() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(
             response={
                 "choices": [
@@ -1134,7 +1134,7 @@ def test_embedding_produces_span() -> None:
     span_exporter = InMemorySpanExporter()
     client = _new_span_client(exporter, span_exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_embedding_slo()
         kwargs = _make_kwargs(slo)
         kwargs["input"] = "hello world"
@@ -1166,7 +1166,7 @@ def test_embedding_input_texts_suppressed_by_default() -> None:
     span_exporter = InMemorySpanExporter()
     client = _new_span_client(exporter, span_exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client, capture_inputs=True)
+        handler = Agento11yLiteLLMLogger(client=client, capture_inputs=True)
         slo = _base_embedding_slo()
         kwargs = _make_kwargs(slo)
         kwargs["input"] = "secret text"
@@ -1196,7 +1196,7 @@ def test_embedding_input_texts_captured_when_both_flags_enabled() -> None:
         embedding_capture=EmbeddingCaptureConfig(capture_input=True),
     )
     try:
-        handler = SigilLiteLLMLogger(client=client, capture_inputs=True)
+        handler = Agento11yLiteLLMLogger(client=client, capture_inputs=True)
         slo = _base_embedding_slo()
         kwargs = _make_kwargs(slo)
         kwargs["input"] = ["first", "second"]
@@ -1225,7 +1225,7 @@ def test_embedding_empty_input_sets_no_input_texts() -> None:
         embedding_capture=EmbeddingCaptureConfig(capture_input=True),
     )
     try:
-        handler = SigilLiteLLMLogger(client=client, capture_inputs=True)
+        handler = Agento11yLiteLLMLogger(client=client, capture_inputs=True)
         slo = _base_embedding_slo()
         kwargs = _make_kwargs(slo)
         kwargs["input"] = ""
@@ -1254,7 +1254,7 @@ def test_embedding_input_text_gated_by_handler_capture_inputs() -> None:
         embedding_capture=EmbeddingCaptureConfig(capture_input=True),
     )
     try:
-        handler = SigilLiteLLMLogger(client=client, capture_inputs=False)
+        handler = Agento11yLiteLLMLogger(client=client, capture_inputs=False)
         slo = _base_embedding_slo()
         kwargs = _make_kwargs(slo)
         kwargs["input"] = "secret text"
@@ -1278,7 +1278,7 @@ def test_aembedding_recorded() -> None:
     span_exporter = InMemorySpanExporter()
     client = _new_span_client(exporter, span_exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_embedding_slo(call_type="aembedding")
         kwargs = _make_kwargs(slo)
         kwargs["input"] = "hello"
@@ -1305,7 +1305,7 @@ def test_embedding_failure_sets_error_status() -> None:
     span_exporter = InMemorySpanExporter()
     client = _new_span_client(exporter, span_exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_embedding_slo(error_str="rate limit exceeded")
         kwargs = _make_kwargs(slo)
         kwargs["input"] = "hello"
@@ -1335,7 +1335,7 @@ def test_embedding_input_count_string_vs_list() -> None:
         ("", 0),
     ]
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         for inputs, _ in cases:
             slo = _base_embedding_slo()
             kwargs = _make_kwargs(slo)
@@ -1361,7 +1361,7 @@ def test_embedding_dimensions_fall_back_to_response() -> None:
     span_exporter = InMemorySpanExporter()
     client = _new_span_client(exporter, span_exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_embedding_slo()
         kwargs = _make_kwargs(slo)
         kwargs["input"] = "hello"
@@ -1394,7 +1394,7 @@ def test_embedding_input_text_honours_litellm_redaction() -> None:
     prev_redaction = litellm.turn_off_message_logging
     prev_callbacks = litellm.callbacks
     try:
-        handler = SigilLiteLLMLogger(client=client, capture_inputs=True)
+        handler = Agento11yLiteLLMLogger(client=client, capture_inputs=True)
         litellm.turn_off_message_logging = True
         litellm.callbacks = [handler]
         litellm.embedding(
@@ -1418,7 +1418,7 @@ def test_reasoning_content_mapped_to_thinking_output() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(
             response=_make_slo_response(
                 content="The answer is 42.",
@@ -1447,7 +1447,7 @@ def test_thinking_blocks_including_redacted() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(
             response=_make_slo_response(
                 content="Done.",
@@ -1480,7 +1480,7 @@ def test_thinking_blocks_preferred_over_reasoning_content() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(
             response=_make_slo_response(
                 content="Result.",
@@ -1511,7 +1511,7 @@ def test_thinking_dropped_when_outputs_disabled() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client, capture_outputs=False)
+        handler = Agento11yLiteLLMLogger(client=client, capture_outputs=False)
         slo = _base_slo(
             response=_make_slo_response(
                 content="Hi",
@@ -1537,7 +1537,7 @@ def test_input_assistant_reasoning_mapped_to_thinking() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client)
+        handler = Agento11yLiteLLMLogger(client=client)
         slo = _base_slo(
             messages=[
                 {"role": "user", "content": "Hello"},
@@ -1571,7 +1571,7 @@ def test_input_assistant_thinking_dropped_when_inputs_disabled() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLiteLLMLogger(client=client, capture_inputs=False)
+        handler = Agento11yLiteLLMLogger(client=client, capture_inputs=False)
         slo = _base_slo(
             messages=[
                 {"role": "user", "content": "Hello"},

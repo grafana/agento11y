@@ -8,7 +8,7 @@ import (
 	oresponses "github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 func TestFromRequestResponse(t *testing.T) {
@@ -150,7 +150,7 @@ func TestFromRequestResponse(t *testing.T) {
 
 	hasToolRole := false
 	for _, message := range generation.Input {
-		if message.Role == sigil.RoleTool {
+		if message.Role == agento11y.RoleTool {
 			hasToolRole = true
 			if len(message.Parts) != 1 || message.Parts[0].ToolResult == nil {
 				t.Fatalf("expected single tool_result part, got %#v", message.Parts)
@@ -203,7 +203,7 @@ func TestMapResponsesRequestInputUsesNameFallbackWhenCallIDMissing(t *testing.T)
 	if len(input) != 1 {
 		t.Fatalf("expected one input message, got %#v", input)
 	}
-	if input[0].Role != sigil.RoleTool {
+	if input[0].Role != agento11y.RoleTool {
 		t.Fatalf("expected tool role, got %q", input[0].Role)
 	}
 	if len(input[0].Parts) != 1 || input[0].Parts[0].ToolResult == nil {
@@ -567,7 +567,7 @@ func TestResponsesFromStream(t *testing.T) {
 	if generation.Output[0].Parts[0].Text != "hello world" {
 		t.Fatalf("expected merged stream output, got %q", generation.Output[0].Parts[0].Text)
 	}
-	if generation.Output[1].Parts[0].Kind != sigil.PartKindToolCall {
+	if generation.Output[1].Parts[0].Kind != agento11y.PartKindToolCall {
 		t.Fatalf("expected tool call output, got %#v", generation.Output[1].Parts[0])
 	}
 	if generation.Output[1].Parts[0].ToolCall.ID != "call_weather" {
@@ -582,7 +582,7 @@ func TestResponsesFromStream(t *testing.T) {
 	if len(generation.Artifacts) != 2 {
 		t.Fatalf("expected request and provider_event artifacts, got %d", len(generation.Artifacts))
 	}
-	if generation.Artifacts[0].Kind != sigil.ArtifactKindRequest || generation.Artifacts[1].Kind != sigil.ArtifactKindProviderEvent {
+	if generation.Artifacts[0].Kind != agento11y.ArtifactKindRequest || generation.Artifacts[1].Kind != agento11y.ArtifactKindProviderEvent {
 		t.Fatalf("unexpected artifact kinds: %#v", generation.Artifacts)
 	}
 }

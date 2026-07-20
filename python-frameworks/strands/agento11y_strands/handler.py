@@ -22,7 +22,7 @@ from agento11y import (
     ToolCall,
     ToolResult,
 )
-from agento11y.framework_handler import ProviderResolver, SigilFrameworkHandlerBase, merge_framework_callback_kwargs
+from agento11y.framework_handler import Agento11yFrameworkHandlerBase, ProviderResolver, merge_framework_callback_kwargs
 from agento11y.usage import map_usage
 
 _framework_name = "strands"
@@ -46,7 +46,7 @@ class _StrandsRunState:
     first_token_recorded: bool = False
 
 
-class SigilStrandsHandler(SigilFrameworkHandlerBase):
+class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
     """Sigil framework handler for Strands Agents lifecycle hooks."""
 
     def __init__(
@@ -460,7 +460,7 @@ def _resolve_conversation_id(*, framework_name: str, run_key: str, callback_kwar
         return conversation_id, thread_id
     if thread_id != "":
         return thread_id, thread_id
-    return f"sigil:framework:{framework_name}:{run_key}", ""
+    return f"agento11y:framework:{framework_name}:{run_key}", ""
 
 
 def _event_id_from_payload(payload: Any) -> str:

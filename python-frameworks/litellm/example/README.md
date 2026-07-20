@@ -12,9 +12,9 @@ Runs a LiteLLM proxy with the Sigil callback handler, exporting generations to G
 
 ```bash
 cd sdks/python-frameworks/litellm/example
-SIGIL_ENDPOINT=https://your-sigil.grafana.net \
-  SIGIL_AUTH_TENANT_ID=your-tenant \
-  SIGIL_AUTH_TOKEN=glc_... \
+AGENTO11Y_ENDPOINT=https://your-agento11y.grafana.net \
+  AGENTO11Y_AUTH_TENANT_ID=your-tenant \
+  AGENTO11Y_AUTH_TOKEN=glc_... \
   OPENAI_API_KEY=sk-... \
   docker compose up --build
 ```

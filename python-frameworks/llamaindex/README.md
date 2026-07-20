@@ -13,10 +13,10 @@ pip install llama-index
 
 ```python
 from agento11y import Client
-from agento11y_llamaindex import with_sigil_llamaindex_callbacks
+from agento11y_llamaindex import with_agento11y_llamaindex_callbacks
 
 client = Client()
-config = with_sigil_llamaindex_callbacks(None, client=client, provider_resolver="auto")
+config = with_agento11y_llamaindex_callbacks(None, client=client, provider_resolver="auto")
 # query_engine = index.as_query_engine(callback_manager=config["callback_manager"])
 ```
 
@@ -24,10 +24,10 @@ config = with_sigil_llamaindex_callbacks(None, client=client, provider_resolver=
 
 ```python
 from agento11y import Client
-from agento11y_llamaindex import with_sigil_llamaindex_callbacks
+from agento11y_llamaindex import with_agento11y_llamaindex_callbacks
 
 client = Client()
-config = with_sigil_llamaindex_callbacks(None, client=client, provider_resolver="auto")
+config = with_agento11y_llamaindex_callbacks(None, client=client, provider_resolver="auto")
 # query_engine = index.as_query_engine(callback_manager=config["callback_manager"])
 ```
 
@@ -37,7 +37,7 @@ Conversation ID precedence:
 
 1. `conversation_id` / `session_id` / `group_id`
 2. `thread_id`
-3. fallback `sigil:framework:llamaindex:<run_id>`
+3. fallback `agento11y:framework:llamaindex:<run_id>`
 
 ## Metadata and lineage
 

@@ -1,13 +1,13 @@
 import type {
+  Agento11yLogger,
+  Agento11ySdkConfig,
+  Agento11ySdkConfigInput,
   ApiConfig,
   ContentCaptureMode,
   EmbeddingCaptureConfig,
   ExportAuthConfig,
   GenerationExportConfig,
   HooksConfig,
-  SigilLogger,
-  SigilSdkConfig,
-  SigilSdkConfigInput,
 } from './types.js';
 
 const tenantHeaderName = 'X-Scope-OrgID';
@@ -80,7 +80,7 @@ export const defaultHooksConfig: HooksConfig = {
   failOpen: true,
 };
 
-export const defaultLogger: SigilLogger = {
+export const defaultLogger: Agento11yLogger = {
   debug(message: string, ...args: unknown[]) {
     console.debug(message, ...args);
   },
@@ -94,7 +94,7 @@ export const defaultLogger: SigilLogger = {
 
 export const defaultContentCaptureMode: ContentCaptureMode = 'default';
 
-export function defaultConfig(): SigilSdkConfig {
+export function defaultConfig(): Agento11ySdkConfig {
   return {
     generationExport: cloneGenerationExportConfig(defaultGenerationExportConfig),
     api: cloneAPIConfig(defaultAPIConfig),
@@ -105,20 +105,20 @@ export function defaultConfig(): SigilSdkConfig {
 }
 
 /**
- * Build a SigilSdkConfig from canonical AGENTO11Y_* environment variables
+ * Build a Agento11ySdkConfig from canonical AGENTO11Y_* environment variables
  * (with SIGIL_* fallbacks).
  *
- * Most callers should use `new SigilClient()` (env reading is automatic).
+ * Most callers should use `new Agento11yClient()` (env reading is automatic).
  * Use `configFromEnv()` for tests, debugging, or advanced layering.
  */
-export function configFromEnv(env: Record<string, string | undefined> = defaultEnv()): SigilSdkConfig {
+export function configFromEnv(env: Record<string, string | undefined> = defaultEnv()): Agento11ySdkConfig {
   return mergeConfig({}, env);
 }
 
 export function mergeConfig(
-  config: SigilSdkConfigInput,
+  config: Agento11ySdkConfigInput,
   env: Record<string, string | undefined> = defaultEnv(),
-): SigilSdkConfig {
+): Agento11ySdkConfig {
   // Layer env values under user-provided fields. The user-provided field wins
   // when defined; env fills in undefined fields; defaults fill the rest.
   // Malformed env values are logged and skipped — one typo cannot discard the
@@ -157,8 +157,8 @@ function defaultEnv(): Record<string, string | undefined> {
   return {};
 }
 
-function envOverrides(env: Record<string, string | undefined>, logger: SigilLogger): SigilSdkConfigInput {
-  const out: SigilSdkConfigInput = {};
+function envOverrides(env: Record<string, string | undefined>, logger: Agento11yLogger): Agento11ySdkConfigInput {
+  const out: Agento11ySdkConfigInput = {};
 
   const generationExport: Partial<GenerationExportConfig> = {};
   const auth: Partial<ExportAuthConfig> = {};
@@ -179,7 +179,7 @@ function envOverrides(env: Record<string, string | undefined>, logger: SigilLogg
     if (validAuthModes.includes(normalized as ExportAuthConfig['mode'])) {
       auth.mode = normalized as ExportAuthConfig['mode'];
     } else {
-      logger.warn?.(`sigil: ignoring invalid ${authMode.key}: ${authMode.value}`);
+      logger.warn?.(`agento11y: ignoring invalid ${authMode.key}: ${authMode.value}`);
     }
   }
   const tenantId = envTrimmed(env, envAuthTenantId);
@@ -215,7 +215,7 @@ function envOverrides(env: Record<string, string | undefined>, logger: SigilLogg
     if (['full', 'no_tool_content', 'metadata_only', 'full_with_metadata_spans'].includes(normalized)) {
       out.contentCapture = normalized as ContentCaptureMode;
     } else {
-      logger.warn?.(`sigil: ignoring invalid ${ccm.key}: ${ccm.value}`);
+      logger.warn?.(`agento11y: ignoring invalid ${ccm.key}: ${ccm.value}`);
     }
   }
   const debug = envTrimmed(env, envDebug);
@@ -224,8 +224,8 @@ function envOverrides(env: Record<string, string | undefined>, logger: SigilLogg
   return out;
 }
 
-function layerInputs(base: SigilSdkConfigInput, override: SigilSdkConfigInput): SigilSdkConfigInput {
-  const out: SigilSdkConfigInput = { ...base, ...override };
+function layerInputs(base: Agento11ySdkConfigInput, override: Agento11ySdkConfigInput): Agento11ySdkConfigInput {
+  const out: Agento11ySdkConfigInput = { ...base, ...override };
   if (base.generationExport || override.generationExport) {
     const baseGE = base.generationExport ?? {};
     const overGE = override.generationExport ?? {};

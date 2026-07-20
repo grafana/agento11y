@@ -1,4 +1,4 @@
-namespace Grafana.Sigil;
+namespace Grafana.Agento11y;
 
 /// <summary>
 /// One logical config field readable under the preferred <c>AGENTO11Y_*</c>
@@ -11,19 +11,19 @@ internal readonly record struct EnvPair(string Preferred, string Legacy);
 /// <summary>
 /// Reads canonical <c>AGENTO11Y_*</c> environment variables (with
 /// <c>SIGIL_*</c> legacy fallbacks) and layers them under caller-supplied
-/// <see cref="SigilClientConfig"/> values.
+/// <see cref="Agento11yClientConfig"/> values.
 /// </summary>
 /// <remarks>
 /// <para>Resolution order (highest precedence first):</para>
 /// <list type="number">
-///   <item><description>Caller-supplied <see cref="SigilClientConfig"/> field
+///   <item><description>Caller-supplied <see cref="Agento11yClientConfig"/> field
 ///       (when not at its default/unset state).</description></item>
 ///   <item><description>Preferred <c>AGENTO11Y_*</c> env var, then the
 ///       <c>SIGIL_*</c> legacy spelling.</description></item>
 ///   <item><description>SDK schema default.</description></item>
 /// </list>
 /// <para>Mirrors the Go reference implementation in
-/// <c>go/sigil/env.go</c>. Invalid env values are skipped with a warning so
+/// <c>go/agento11y/env.go</c>. Invalid env values are skipped with a warning so
 /// a single typo does not discard the rest of the env layer.</para>
 /// </remarks>
 public static class EnvConfig
@@ -77,13 +77,13 @@ public static class EnvConfig
 
     /// <summary>
     /// Returns a config built from process env vars layered onto a fresh
-    /// <see cref="SigilClientConfig"/>. Convenience helper; most callers should
-    /// let <see cref="SigilClient"/> construction perform the same resolution
+    /// <see cref="Agento11yClientConfig"/>. Convenience helper; most callers should
+    /// let <see cref="Agento11yClient"/> construction perform the same resolution
     /// internally. Warnings for invalid env values are written to stderr.
     /// </summary>
-    public static SigilClientConfig FromEnv()
+    public static Agento11yClientConfig FromEnv()
     {
-        var (cfg, warnings) = ResolveFromEnv(Environment.GetEnvironmentVariable, new SigilClientConfig());
+        var (cfg, warnings) = ResolveFromEnv(Environment.GetEnvironmentVariable, new Agento11yClientConfig());
         LogWarnings(Console.Error.WriteLine, warnings);
         return cfg;
     }
@@ -101,13 +101,13 @@ public static class EnvConfig
     /// and a list of warnings emitted for invalid env values (e.g. unknown
     /// <c>AGENTO11Y_AUTH_MODE</c>), naming the env var the value came from.
     /// </returns>
-    internal static (SigilClientConfig config, IReadOnlyList<string> warnings) ResolveFromEnv(
+    internal static (Agento11yClientConfig config, IReadOnlyList<string> warnings) ResolveFromEnv(
         Func<string, string?> lookup,
-        SigilClientConfig @base
+        Agento11yClientConfig @base
     )
     {
         var src = lookup ?? Environment.GetEnvironmentVariable;
-        var cfg = @base ?? new SigilClientConfig();
+        var cfg = @base ?? new Agento11yClientConfig();
         EnsureNonNullNested(cfg);
         var warnings = new List<string>();
 
@@ -129,7 +129,7 @@ public static class EnvConfig
             }
             else
             {
-                warnings.Add($"sigil: ignoring invalid {protocolKey} {protocol}");
+                warnings.Add($"agento11y: ignoring invalid {protocolKey} {protocol}");
             }
         }
 
@@ -164,7 +164,7 @@ public static class EnvConfig
             }
             else
             {
-                warnings.Add($"sigil: ignoring invalid {authModeKey} {authModeRaw}");
+                warnings.Add($"agento11y: ignoring invalid {authModeKey} {authModeRaw}");
             }
         }
 
@@ -247,7 +247,7 @@ public static class EnvConfig
             }
             else
             {
-                warnings.Add($"sigil: ignoring invalid {ccmKey} {ccmRaw}");
+                warnings.Add($"agento11y: ignoring invalid {ccmKey} {ccmRaw}");
             }
         }
 
@@ -260,7 +260,7 @@ public static class EnvConfig
         return (cfg, warnings);
     }
 
-    private static void EnsureNonNullNested(SigilClientConfig cfg)
+    private static void EnsureNonNullNested(Agento11yClientConfig cfg)
     {
         cfg.Api ??= new ApiConfig();
         cfg.GenerationExport ??= new GenerationExportConfig();

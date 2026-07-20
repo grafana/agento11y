@@ -201,7 +201,7 @@ func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 }
 
 // hookResponse is the allow-only payload returned to the SDK. It matches
-// the sigil.HookEvaluateResponse JSON shape so the SDK decodes it
+// the agento11y.HookEvaluateResponse JSON shape so the SDK decodes it
 // without complaint.
 type hookResponse struct {
 	Action      string `json:"action"`

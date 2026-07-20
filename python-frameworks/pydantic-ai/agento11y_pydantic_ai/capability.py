@@ -17,7 +17,7 @@ from pydantic_ai.exceptions import (
     ToolRetryError,
 )
 
-from .handler import SigilPydanticAIHandler
+from .handler import Agento11yPydanticAIHandler
 
 logger = logging.getLogger(__name__)
 
@@ -33,22 +33,22 @@ _PYDANTIC_CONTROL_FLOW: tuple[type[BaseException], ...] = (
 )
 
 
-def create_sigil_pydantic_ai_handler(*, client: Client, **handler_kwargs: Any) -> SigilPydanticAIHandler:
+def create_agento11y_pydantic_ai_handler(*, client: Client, **handler_kwargs: Any) -> Agento11yPydanticAIHandler:
     """Create a Pydantic AI Sigil handler."""
-    return SigilPydanticAIHandler(client=client, **handler_kwargs)
+    return Agento11yPydanticAIHandler(client=client, **handler_kwargs)
 
 
-class SigilPydanticAICapability(AbstractCapability):
+class Agento11yPydanticAICapability(AbstractCapability):
     """Pydantic AI capability bridge that maps lifecycle hooks to Sigil handlers."""
 
-    def __init__(self, sigil_handler: SigilPydanticAIHandler) -> None:
-        self._sigil_handler = sigil_handler
+    def __init__(self, agento11y_handler: Agento11yPydanticAIHandler) -> None:
+        self._agento11y_handler = agento11y_handler
         self._run_stack: list[UUID] = []
         self._llm_run_ids: list[UUID] = []
 
-    async def for_run(self, ctx: Any) -> SigilPydanticAICapability:
+    async def for_run(self, ctx: Any) -> Agento11yPydanticAICapability:
         """Per-run isolated state — each agent run gets its own stacks."""
-        return SigilPydanticAICapability(self._sigil_handler)
+        return Agento11yPydanticAICapability(self._agento11y_handler)
 
     async def wrap_run(self, ctx: Any, *, handler: Any) -> Any:
         run_id = uuid4()
@@ -57,7 +57,7 @@ class SigilPydanticAICapability(AbstractCapability):
         run_name = _agent_name(ctx)
         metadata = _run_context_metadata(ctx)
         try:
-            self._sigil_handler.on_chain_start(
+            self._agento11y_handler.on_chain_start(
                 {"name": run_name},
                 {},
                 run_id=run_id,
@@ -75,19 +75,19 @@ class SigilPydanticAICapability(AbstractCapability):
         except BaseException as exc:
             _remove(self._run_stack, run_id)
             if isinstance(exc, _PYDANTIC_CONTROL_FLOW):
-                self._sigil_handler._discard_chain_run(run_id=run_id)
+                self._agento11y_handler._discard_chain_run(run_id=run_id)
             else:
                 try:
-                    self._sigil_handler.on_chain_error(exc, run_id=run_id)
+                    self._agento11y_handler.on_chain_error(exc, run_id=run_id)
                 except Exception:
-                    logger.debug("sigil: failed to record chain error", exc_info=True)
+                    logger.debug("agento11y: failed to record chain error", exc_info=True)
             raise
 
         _remove(self._run_stack, run_id)
         try:
-            self._sigil_handler.on_chain_end({"status": "completed"}, run_id=run_id)
+            self._agento11y_handler.on_chain_end({"status": "completed"}, run_id=run_id)
         except Exception:
-            logger.debug("sigil: failed to record chain end", exc_info=True)
+            logger.debug("agento11y: failed to record chain end", exc_info=True)
         return result
 
     async def wrap_model_request(self, ctx: Any, *, request_context: Any, handler: Any) -> Any:
@@ -106,7 +106,7 @@ class SigilPydanticAICapability(AbstractCapability):
 
         metadata = _run_context_metadata(ctx)
         try:
-            self._sigil_handler.on_chat_model_start(
+            self._agento11y_handler.on_chat_model_start(
                 serialized,
                 [messages],
                 run_id=run_id,
@@ -124,19 +124,19 @@ class SigilPydanticAICapability(AbstractCapability):
         except BaseException as exc:
             _remove(self._llm_run_ids, run_id)
             if isinstance(exc, _PYDANTIC_CONTROL_FLOW):
-                self._sigil_handler._discard_llm_run(run_id=run_id)
+                self._agento11y_handler._discard_llm_run(run_id=run_id)
             else:
                 try:
-                    self._sigil_handler.on_llm_error(exc, run_id=run_id)
+                    self._agento11y_handler.on_llm_error(exc, run_id=run_id)
                 except Exception:
-                    logger.debug("sigil: failed to record LLM error", exc_info=True)
+                    logger.debug("agento11y: failed to record LLM error", exc_info=True)
             raise
 
         _remove(self._llm_run_ids, run_id)
         try:
-            self._sigil_handler.on_llm_end(_map_pydantic_response(response, model_name), run_id=run_id)
+            self._agento11y_handler.on_llm_end(_map_pydantic_response(response, model_name), run_id=run_id)
         except Exception:
-            logger.debug("sigil: failed to record LLM end", exc_info=True)
+            logger.debug("agento11y: failed to record LLM end", exc_info=True)
         return response
 
     async def on_model_request_error(self, ctx: Any, *, request_context: Any, error: Any) -> Any:
@@ -153,7 +153,7 @@ class SigilPydanticAICapability(AbstractCapability):
 
         tool_name = _tool_name(call, tool_def)
         metadata = _run_context_metadata(ctx)
-        self._sigil_handler.on_tool_start(
+        self._agento11y_handler.on_tool_start(
             {"name": tool_name, "description": _as_string(_read(tool_def, "description"))},
             "",
             run_id=run_id,
@@ -167,18 +167,18 @@ class SigilPydanticAICapability(AbstractCapability):
             result = await handler(args)
         except BaseException as exc:
             if isinstance(exc, _PYDANTIC_CONTROL_FLOW):
-                self._sigil_handler._discard_tool_run(run_id=run_id)
+                self._agento11y_handler._discard_tool_run(run_id=run_id)
             else:
                 try:
-                    self._sigil_handler.on_tool_error(exc, run_id=run_id)
+                    self._agento11y_handler.on_tool_error(exc, run_id=run_id)
                 except Exception:
-                    logger.debug("sigil: failed to record tool error", exc_info=True)
+                    logger.debug("agento11y: failed to record tool error", exc_info=True)
             raise
 
         try:
-            self._sigil_handler.on_tool_end(result, run_id=run_id)
+            self._agento11y_handler.on_tool_end(result, run_id=run_id)
         except Exception:
-            logger.debug("sigil: failed to record tool end", exc_info=True)
+            logger.debug("agento11y: failed to record tool end", exc_info=True)
         return result
 
     async def on_tool_execute_error(self, ctx: Any, *, call: Any, tool_def: Any, args: Any, error: Any) -> Any:
@@ -191,18 +191,18 @@ class SigilPydanticAICapability(AbstractCapability):
             token = _extract_stream_token(event)
             if token != "" and self._llm_run_ids:
                 try:
-                    self._sigil_handler.on_llm_new_token(token, run_id=self._llm_run_ids[-1])
+                    self._agento11y_handler.on_llm_new_token(token, run_id=self._llm_run_ids[-1])
                 except Exception:
-                    logger.debug("sigil: failed to record stream token", exc_info=True)
+                    logger.debug("agento11y: failed to record stream token", exc_info=True)
             yield event
 
 
-def create_sigil_pydantic_ai_capability(*, client: Client, **handler_kwargs: Any) -> SigilPydanticAICapability:
+def create_agento11y_pydantic_ai_capability(*, client: Client, **handler_kwargs: Any) -> Agento11yPydanticAICapability:
     """Create a Pydantic AI capability wired to Sigil instrumentation."""
-    return SigilPydanticAICapability(create_sigil_pydantic_ai_handler(client=client, **handler_kwargs))
+    return Agento11yPydanticAICapability(create_agento11y_pydantic_ai_handler(client=client, **handler_kwargs))
 
 
-def with_sigil_pydantic_ai_capability(
+def with_agento11y_pydantic_ai_capability(
     capabilities: list[Any] | None,
     *,
     client: Client,
@@ -210,9 +210,9 @@ def with_sigil_pydantic_ai_capability(
 ) -> list[Any]:
     """Add a Sigil capability to a list, with double-injection guard."""
     result = list(capabilities or [])
-    if any(isinstance(cap, SigilPydanticAICapability) for cap in result):
+    if any(isinstance(cap, Agento11yPydanticAICapability) for cap in result):
         return result
-    result.append(create_sigil_pydantic_ai_capability(client=client, **handler_kwargs))
+    result.append(create_agento11y_pydantic_ai_capability(client=client, **handler_kwargs))
     return result
 
 
@@ -339,7 +339,7 @@ def _run_context_metadata(ctx: Any) -> dict[str, Any]:
     if not any(k in metadata for k in ("conversation_id", "session_id", "thread_id")):
         run_id = _as_string(_read(ctx, "run_id"))
         if run_id != "":
-            metadata["conversation_id"] = f"sigil:framework:pydantic-ai:{run_id}"
+            metadata["conversation_id"] = f"agento11y:framework:pydantic-ai:{run_id}"
 
     return metadata
 

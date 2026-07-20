@@ -1,7 +1,7 @@
 using System.Text;
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class RedactionTests
 {
@@ -250,7 +250,7 @@ public sealed class RedactionTests
         var config = TestHelpers.TestConfig(exporter);
         config.GenerationSanitizer = SecretRedactionSanitizer.Create();
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         var recorder = client.StartGeneration(new GenerationStart
         {
             Id = "gen-redact",
@@ -271,7 +271,7 @@ public sealed class RedactionTests
         Assert.DoesNotContain(secret, generation.SystemPrompt);
         Assert.DoesNotContain(secret, generation.CallError);
         Assert.DoesNotContain(secret, generation.Output[0].Parts[0].Text);
-        Assert.Equal(generation.ConversationTitle, generation.Metadata[SigilClient.SpanAttrConversationTitle]?.ToString());
+        Assert.Equal(generation.ConversationTitle, generation.Metadata[Agento11yClient.SpanAttrConversationTitle]?.ToString());
         Assert.Equal(generation.CallError, generation.Metadata["call_error"]?.ToString());
     }
 
@@ -285,7 +285,7 @@ public sealed class RedactionTests
         config.Logger = logs.Add;
         config.GenerationSanitizer = _ => throw new InvalidOperationException("boom");
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         var recorder = client.StartGeneration(new GenerationStart
         {
             Id = "gen-sanitizer-fail",
@@ -303,12 +303,12 @@ public sealed class RedactionTests
 
         var generation = recorder.LastGeneration!;
         Assert.Null(recorder.Error);
-        Assert.Equal("metadata_only", generation.Metadata[SigilClient.MetadataKeyContentCaptureMode]?.ToString());
+        Assert.Equal("metadata_only", generation.Metadata[Agento11yClient.MetadataKeyContentCaptureMode]?.ToString());
         Assert.Equal(string.Empty, generation.ConversationTitle);
         Assert.Equal(string.Empty, generation.SystemPrompt);
         Assert.Equal(string.Empty, generation.Input[0].Parts[0].Text);
         Assert.Equal(string.Empty, generation.Output[0].Parts[0].Text);
-        Assert.Contains(logs, entry => entry.Contains("sigil: generation sanitization failed, falling back to metadata_only"));
+        Assert.Contains(logs, entry => entry.Contains("agento11y: generation sanitization failed, falling back to metadata_only"));
     }
 
     [Fact]
@@ -324,7 +324,7 @@ public sealed class RedactionTests
             return generation;
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         var recorder = client.StartGeneration(new GenerationStart
         {
             Id = "gen-metadata-only",

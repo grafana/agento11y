@@ -45,7 +45,7 @@ from agento11y import (
 load_dotenv()
 
 
-def sigil_api_endpoint() -> str:
+def agento11y_api_endpoint() -> str:
     parsed = urlparse(os.environ["AGENTO11Y_ENDPOINT"])
     return f"{parsed.scheme}://{parsed.netloc}"
 
@@ -78,7 +78,7 @@ metrics.set_meter_provider(mp)
 openai_client = OpenAI()
 model = "gpt-4.1-mini"
 
-sigil = Client(
+agento11y = Client(
     ClientConfig(
         generation_export=GenerationExportConfig(
             protocol="http",
@@ -89,7 +89,7 @@ sigil = Client(
                 basic_password=os.environ["AGENTO11Y_AUTH_TOKEN"],
             ),
         ),
-        api=ApiConfig(endpoint=sigil_api_endpoint()),
+        api=ApiConfig(endpoint=agento11y_api_endpoint()),
         hooks=HooksConfig(enabled=True, phases=[HookPhase.PREFLIGHT.value]),
     )
 )
@@ -99,7 +99,7 @@ prompt = "My name is Jane Doe and my email is jane@example.com. Explain LLM guar
 input_messages = [Message(role=MessageRole.USER, parts=[text_part(prompt)])]
 
 try:
-    hook_response = sigil.evaluate_hook(
+    hook_response = agento11y.evaluate_hook(
         HookEvaluateRequest(
             phase=HookPhase.PREFLIGHT.value,
             context=HookContext(
@@ -138,7 +138,7 @@ try:
     usage = completion.usage
     print(f"Response: {response_text}\n")
 
-    with sigil.start_generation(
+    with agento11y.start_generation(
         GenerationStart(
             conversation_id="getting-started-python-hooks",
             agent_name="getting-started-hooks",
@@ -168,6 +168,6 @@ else:
     print("Done - check the AI Observability plugin in your Grafana Cloud stack.")
 
 finally:
-    sigil.shutdown()
+    agento11y.shutdown()
     tp.shutdown()
     mp.shutdown()

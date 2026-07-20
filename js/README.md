@@ -8,7 +8,7 @@ Sigil records normalized LLM generation and tool-execution telemetry using your 
 pnpm add @grafana/agento11y
 ```
 
-For low-dependency runtimes that only need the core `SigilClient` and generation export APIs, use the slim core package:
+For low-dependency runtimes that only need the core `Agento11yClient` and generation export APIs, use the slim core package:
 
 ```bash
 pnpm add @grafana/agento11y-core
@@ -32,12 +32,12 @@ mise run sdk:conformance
 
 ## Quick Start
 
-The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and call `new SigilClient()` with no arguments — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names.
+The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and call `new Agento11yClient()` with no arguments — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names.
 
 ```ts
-import { SigilClient } from "@grafana/agento11y";
+import { Agento11yClient } from "@grafana/agento11y";
 
-const client = new SigilClient({
+const client = new Agento11yClient({
   generationExport: {
     protocol: "http",
     endpoint: "https://sigil-prod-<region>.grafana.net",
@@ -75,9 +75,9 @@ await client.shutdown();
 Client-level default:
 
 ```ts
-import { SigilClient } from "@grafana/agento11y";
+import { Agento11yClient } from "@grafana/agento11y";
 
-const client = new SigilClient({
+const client = new Agento11yClient({
   contentCapture: "metadata_only",
 });
 ```
@@ -112,7 +112,7 @@ await client.startToolExecution(
 Dynamic resolution via `contentCaptureResolver`:
 
 ```ts
-const client = new SigilClient({
+const client = new Agento11yClient({
   contentCaptureResolver: (metadata) => {
     if (metadata?.["tenant"] === "healthcare") {
       return "metadata_only";
@@ -141,11 +141,11 @@ validation, span sync, debug snapshots, and export.
 
 ```ts
 import {
-  SigilClient,
+  Agento11yClient,
   createSecretRedactionSanitizer,
 } from "@grafana/agento11y";
 
-const client = new SigilClient({
+const client = new Agento11yClient({
   generationSanitizer: createSecretRedactionSanitizer({
     redactInputMessages: false, // omit to fall back to AGENTO11Y_REDACT_INPUT_MESSAGES, then false
     redactEmailAddresses: true,
@@ -163,7 +163,7 @@ The built-in sanitizer:
 To preserve email addresses, opt out explicitly:
 
 ```ts
-const client = new SigilClient({
+const client = new Agento11yClient({
   generationSanitizer: createSecretRedactionSanitizer({
     redactEmailAddresses: false,
   }),
@@ -181,11 +181,11 @@ redaction.
 ```ts
 import {
   createSecretRedactionSanitizer,
-  SigilClient,
+  Agento11yClient,
 } from "@grafana/agento11y";
 
 // Omit redactInputMessages so AGENTO11Y_REDACT_INPUT_MESSAGES decides.
-const client = new SigilClient({
+const client = new Agento11yClient({
   generationSanitizer: createSecretRedactionSanitizer(),
 });
 ```
@@ -197,9 +197,9 @@ Use hooks when you want Sigil guard rules to run before an LLM call. The SDK eva
 Hooks are disabled by default. Enable them on the client and call `evaluateHook(...)` before the provider request:
 
 ```ts
-import { HookDeniedError, SigilClient } from "@grafana/agento11y";
+import { HookDeniedError, Agento11yClient } from "@grafana/agento11y";
 
-const client = new SigilClient({
+const client = new Agento11yClient({
   hooks: { enabled: true, phases: ["preflight"], timeoutMs: 15_000, failOpen: true },
 });
 
@@ -229,7 +229,7 @@ With `failOpen: true`, hook transport errors resolve to allow so an unavailable 
 
 If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `startGeneration(...)`. If you use the Vercel AI SDK adapter, see `docs/frameworks/vercel-ai-sdk.md` for automatic preflight hook wiring.
 
-Configure OTEL exporters (traces/metrics) in your application OTEL SDK setup. You can optionally pass `tracer` and `meter` directly to `SigilClient`.
+Configure OTEL exporters (traces/metrics) in your application OTEL SDK setup. You can optionally pass `tracer` and `meter` directly to `Agento11yClient`.
 
 Quick OTEL setup pattern before creating the Sigil client:
 
@@ -292,7 +292,7 @@ await client.startEmbedding(
 Input text capture is opt-in:
 
 ```ts
-const client = new SigilClient({
+const client = new Agento11yClient({
   embeddingCapture: {
     captureInput: true,
     maxInputItems: 20,
@@ -352,30 +352,30 @@ Use module subpath exports for framework callback integrations:
 - Strands Agents guide: `docs/frameworks/strands.md`
 
 ```ts
-import { SigilClient } from "@grafana/agento11y";
-import { withSigilLangChainCallbacks } from "@grafana/agento11y/langchain";
-import { withSigilLangGraphCallbacks } from "@grafana/agento11y/langgraph";
-import { withSigilOpenAIAgentsHooks } from "@grafana/agento11y/openai-agents";
-import { withSigilLlamaIndexCallbacks } from "@grafana/agento11y/llamaindex";
-import { withSigilGoogleAdkPlugins } from "@grafana/agento11y/google-adk";
-import { createSigilVercelAiSdk } from "@grafana/agento11y/vercel-ai-sdk";
-import { withSigilStrandsHooks } from "@grafana/agento11y/strands";
+import { Agento11yClient } from "@grafana/agento11y";
+import { withAgento11yLangChainCallbacks } from "@grafana/agento11y/langchain";
+import { withAgento11yLangGraphCallbacks } from "@grafana/agento11y/langgraph";
+import { withAgento11yOpenAIAgentsHooks } from "@grafana/agento11y/openai-agents";
+import { withAgento11yLlamaIndexCallbacks } from "@grafana/agento11y/llamaindex";
+import { withAgento11yGoogleAdkPlugins } from "@grafana/agento11y/google-adk";
+import { createAgento11yVercelAiSdk } from "@grafana/agento11y/vercel-ai-sdk";
+import { withAgento11yStrandsHooks } from "@grafana/agento11y/strands";
 import { Runner } from "@openai/agents";
 import { CallbackManager } from "llamaindex";
 
-const client = new SigilClient();
-const langChainConfig = withSigilLangChainCallbacks(undefined, client, { providerResolver: "auto" });
-const langGraphConfig = withSigilLangGraphCallbacks(undefined, client, { providerResolver: "auto" });
+const client = new Agento11yClient();
+const langChainConfig = withAgento11yLangChainCallbacks(undefined, client, { providerResolver: "auto" });
+const langGraphConfig = withAgento11yLangGraphCallbacks(undefined, client, { providerResolver: "auto" });
 const runner = new Runner();
-const openAIAgentsHooks = withSigilOpenAIAgentsHooks(runner, client, { providerResolver: "auto" });
+const openAIAgentsHooks = withAgento11yOpenAIAgentsHooks(runner, client, { providerResolver: "auto" });
 const callbackManager = new CallbackManager();
-const llamaIndexConfig = withSigilLlamaIndexCallbacks({ callbackManager }, client, { providerResolver: "auto" });
-const googleAdkRunnerConfig = withSigilGoogleAdkPlugins(undefined, client, { providerResolver: "auto" });
-const vercelAiSdk = createSigilVercelAiSdk(client, { agentName: "vercel-agent" });
-const strandsConfig = withSigilStrandsHooks(undefined, client, { conversationId: "chat-123" });
+const llamaIndexConfig = withAgento11yLlamaIndexCallbacks({ callbackManager }, client, { providerResolver: "auto" });
+const googleAdkRunnerConfig = withAgento11yGoogleAdkPlugins(undefined, client, { providerResolver: "auto" });
+const vercelAiSdk = createAgento11yVercelAiSdk(client, { agentName: "vercel-agent" });
+const strandsConfig = withAgento11yStrandsHooks(undefined, client, { conversationId: "chat-123" });
 ```
 
-Framework handlers use the `SigilClient` instance you pass in. If that client is configured with
+Framework handlers use the `Agento11yClient` instance you pass in. If that client is configured with
 `generationSanitizer`, the same redaction policy applies automatically to generations recorded
 through LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, and Vercel AI SDK integrations.
 The same redaction policy also applies to Strands Agents generations.
@@ -399,7 +399,7 @@ Conversation mapping is conversation-first:
 
 - `conversation_id` / `session_id` / `group_id` from framework context first
 - then `thread_id`
-- deterministic fallback `sigil:framework:<framework_name>:<run_id>`
+- deterministic fallback `agento11y:framework:<framework_name>:<run_id>`
 
 When present in generation metadata, low-cardinality framework keys are copied onto generation span attributes.
 
@@ -407,7 +407,7 @@ For LangGraph persistence, pass `configurable.thread_id` and reuse it across inv
 
 ```ts
 const threadConfig = {
-  ...withSigilLangGraphCallbacks(undefined, client, { providerResolver: "auto" }),
+  ...withAgento11yLangGraphCallbacks(undefined, client, { providerResolver: "auto" }),
   configurable: { thread_id: 'customer-42' },
 };
 await graph.invoke({ prompt: 'Remember my timezone is UTC+1.', answer: '' }, threadConfig);
@@ -432,7 +432,7 @@ await graph.invoke({ prompt: 'What timezone did I give you?', answer: '' }, thre
 Set `generationExport.protocol` to `"none"` to keep generation/tool instrumentation and spans while disabling generation transport.
 
 ```ts
-const client = new SigilClient({
+const client = new Agento11yClient({
   generationExport: {
     protocol: "none",
   },
@@ -462,7 +462,7 @@ Invalid mode/field combinations throw during client config resolution.
 If explicit headers already contain `Authorization` or `X-Scope-OrgID`, explicit headers take precedence.
 
 ```ts
-const client = new SigilClient({
+const client = new Agento11yClient({
   generationExport: {
     protocol: "http",
     endpoint: "https://sigil-prod-<region>.grafana.net",
@@ -483,7 +483,7 @@ const client = new SigilClient({
 For Grafana Cloud, use `basic` auth mode. The username is your Grafana Cloud instance/tenant ID and the password is your Grafana Cloud API key. See the [Grafana Cloud AI Observability getting started docs](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for full setup steps; for this SDK endpoint, copy the **API URL** from **Observability → AI Observability → Configuration**. It looks like `https://sigil-prod-<region>.grafana.net`.
 
 ```ts
-const client = new SigilClient({
+const client = new Agento11yClient({
   generationExport: {
     protocol: "http",
     endpoint: "https://sigil-prod-<region>.grafana.net",
@@ -509,12 +509,12 @@ auth: {
 
 ## Wiring custom env vars
 
-The SDK only auto-loads `AGENTO11Y_*` env vars (`AGENTO11Y_ENDPOINT`, `AGENTO11Y_PROTOCOL`, `AGENTO11Y_AUTH_MODE`, `AGENTO11Y_AUTH_TOKEN`, etc.) when you call `new SigilClient()`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:
+The SDK only auto-loads `AGENTO11Y_*` env vars (`AGENTO11Y_ENDPOINT`, `AGENTO11Y_PROTOCOL`, `AGENTO11Y_AUTH_MODE`, `AGENTO11Y_AUTH_TOKEN`, etc.) when you call `new Agento11yClient()`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:
 
 ```ts
 const generationBearerToken = (process.env.MY_APP_SIGIL_TOKEN ?? "").trim();
 
-const client = new SigilClient({
+const client = new Agento11yClient({
   generationExport: {
     protocol: "http",
     endpoint: "https://sigil-prod-<region>.grafana.net",

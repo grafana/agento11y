@@ -6,7 +6,7 @@ import (
 
 	"google.golang.org/genai"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 // GenerateContent calls the Gemini generate-content API and records the generation.
@@ -14,7 +14,7 @@ import (
 // The native *genai.GenerateContentResponse is returned unchanged.
 func GenerateContent(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	provider *genai.Client,
 	model string,
 	contents []*genai.Content,
@@ -33,7 +33,7 @@ func GenerateContent(
 
 func generateContent(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	model string,
 	contents []*genai.Content,
 	config *genai.GenerateContentConfig,
@@ -42,12 +42,12 @@ func generateContent(
 ) (*genai.GenerateContentResponse, error) {
 	options := applyOptions(opts)
 
-	ctx, rec := client.StartGeneration(ctx, sigil.GenerationStart{
+	ctx, rec := client.StartGeneration(ctx, agento11y.GenerationStart{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: model},
 	})
 	defer rec.End()
 
@@ -65,7 +65,7 @@ func generateContent(
 // It mirrors providerClient.Models.EmbedContent but adds Sigil recording.
 func EmbedContent(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	provider *genai.Client,
 	model string,
 	contents []*genai.Content,
@@ -84,7 +84,7 @@ func EmbedContent(
 
 func embedContent(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	model string,
 	contents []*genai.Content,
 	config *genai.EmbedContentConfig,
@@ -93,10 +93,10 @@ func embedContent(
 ) (*genai.EmbedContentResponse, error) {
 	options := applyOptions(opts)
 
-	start := sigil.EmbeddingStart{
+	start := agento11y.EmbeddingStart{
 		AgentName:    options.agentName,
 		AgentVersion: options.agentVersion,
-		Model:        sigil.ModelRef{Provider: options.providerName, Name: model},
+		Model:        agento11y.ModelRef{Provider: options.providerName, Name: model},
 	}
 	if config != nil && config.OutputDimensionality != nil {
 		dimensions := int64(*config.OutputDimensionality)
@@ -125,7 +125,7 @@ func embedContent(
 // defer pattern directly with StartStreamingGeneration.
 func GenerateContentStream(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	provider *genai.Client,
 	model string,
 	contents []*genai.Content,
@@ -134,12 +134,12 @@ func GenerateContentStream(
 ) (StreamSummary, error) {
 	options := applyOptions(opts)
 
-	ctx, rec := client.StartStreamingGeneration(ctx, sigil.GenerationStart{
+	ctx, rec := client.StartStreamingGeneration(ctx, agento11y.GenerationStart{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: model},
 	})
 	defer rec.End()
 

@@ -11,11 +11,11 @@ import pytest
 from agento11y import Client, ClientConfig, GenerationExportConfig
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
 from agento11y_pydantic_ai import (
-    SigilPydanticAICapability,
-    SigilPydanticAIHandler,
-    create_sigil_pydantic_ai_capability,
-    create_sigil_pydantic_ai_handler,
-    with_sigil_pydantic_ai_capability,
+    Agento11yPydanticAICapability,
+    Agento11yPydanticAIHandler,
+    create_agento11y_pydantic_ai_capability,
+    create_agento11y_pydantic_ai_handler,
+    with_agento11y_pydantic_ai_capability,
 )
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -55,7 +55,7 @@ def test_agento11y_pydantic_ai_sync_lifecycle_sets_framework_metadata() -> None:
     try:
         run_id = uuid4()
         parent_run_id = uuid4()
-        handler = SigilPydanticAIHandler(client=client, provider_resolver="auto")
+        handler = Agento11yPydanticAIHandler(client=client, provider_resolver="auto")
 
         handler.on_chat_model_start(
             {"name": "ChatModel"},
@@ -104,7 +104,7 @@ def test_agento11y_pydantic_ai_keeps_thread_metadata_when_ids_are_split_across_p
 
     try:
         run_id = uuid4()
-        handler = SigilPydanticAIHandler(client=client, provider_resolver="auto")
+        handler = Agento11yPydanticAIHandler(client=client, provider_resolver="auto")
 
         handler.on_chat_model_start(
             {"name": "ChatModel"},
@@ -140,7 +140,7 @@ def test_agento11y_pydantic_ai_fallback_conversation_is_deterministic() -> None:
 
     try:
         run_id = uuid4()
-        handler = SigilPydanticAIHandler(client=client)
+        handler = Agento11yPydanticAIHandler(client=client)
 
         handler.on_llm_start(
             {"kwargs": {"model": "gpt-5"}},
@@ -152,7 +152,7 @@ def test_agento11y_pydantic_ai_fallback_conversation_is_deterministic() -> None:
 
         client.flush()
         generation = exporter.requests[0].generations[0]
-        assert generation.conversation_id == f"sigil:framework:pydantic-ai:{run_id}"
+        assert generation.conversation_id == f"agento11y:framework:pydantic-ai:{run_id}"
     finally:
         client.shutdown()
 
@@ -163,7 +163,7 @@ def test_agento11y_pydantic_ai_stream_mode_uses_chunks_when_output_missing() -> 
 
     try:
         run_id = uuid4()
-        handler = SigilPydanticAIHandler(client=client)
+        handler = Agento11yPydanticAIHandler(client=client)
 
         handler.on_llm_start(
             {"kwargs": {"model": "claude-sonnet-4-5"}},
@@ -189,13 +189,13 @@ def test_agento11y_pydantic_ai_generation_span_tracks_active_parent_span_and_exp
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-framework-test")
+    tracer = provider.get_tracer("agento11y-framework-test")
     client = _new_client(exporter, tracer=tracer)
 
     try:
         run_id = uuid4()
         with tracer.start_as_current_span("framework.request"):
-            handler = SigilPydanticAIHandler(client=client, provider_resolver="auto")
+            handler = Agento11yPydanticAIHandler(client=client, provider_resolver="auto")
             handler.on_chat_model_start(
                 {"name": "ChatModel"},
                 [[{"type": "human", "content": "hello"}]],
@@ -234,7 +234,7 @@ def test_agento11y_pydantic_ai_handler_records_generation_from_async_context() -
 
     async def _run() -> None:
         run_id = uuid4()
-        handler = SigilPydanticAIHandler(client=client)
+        handler = Agento11yPydanticAIHandler(client=client)
         handler.on_llm_start({}, ["hello"], run_id=run_id, invocation_params={"model": "gpt-5"})
         handler.on_llm_end({"generations": [[{"text": "world"}]]}, run_id=run_id)
 
@@ -287,7 +287,7 @@ def test_agento11y_pydantic_ai_capability_wrap_model_request() -> None:
         messages = [_ModelRequest()]
 
     try:
-        capability = create_sigil_pydantic_ai_capability(client=client, provider_resolver="auto")
+        capability = create_agento11y_pydantic_ai_capability(client=client, provider_resolver="auto")
 
         async def _run() -> None:
             ctx = _RunContext()
@@ -304,7 +304,7 @@ def test_agento11y_pydantic_ai_capability_wrap_model_request() -> None:
         assert generation.tags["agento11y.framework.name"] == "pydantic-ai"
         assert generation.model.name == "gpt-5"
         assert generation.model.provider == "openai"
-        assert generation.conversation_id == "sigil:framework:pydantic-ai:pydantic-run-42"
+        assert generation.conversation_id == "agento11y:framework:pydantic-ai:pydantic-run-42"
         assert generation.output[0].parts[0].text == "world"
         assert generation.usage.input_tokens == 10
         assert generation.usage.output_tokens == 5
@@ -355,7 +355,7 @@ def test_agento11y_pydantic_ai_capability_wrap_model_request_propagates_settings
         model_request_parameters = _RequestParams()
 
     try:
-        capability = create_sigil_pydantic_ai_capability(client=client, provider_resolver="auto")
+        capability = create_agento11y_pydantic_ai_capability(client=client, provider_resolver="auto")
 
         async def _run() -> None:
             async def handler(rc: Any) -> Any:
@@ -406,7 +406,7 @@ def test_agento11y_pydantic_ai_capability_wrap_model_request_marks_streaming_han
         return _ModelResponse()
 
     try:
-        capability = create_sigil_pydantic_ai_capability(client=client, provider_resolver="auto")
+        capability = create_agento11y_pydantic_ai_capability(client=client, provider_resolver="auto")
 
         async def _run() -> None:
             await capability.wrap_model_request(
@@ -453,7 +453,7 @@ def test_agento11y_pydantic_ai_capability_wrap_tool_execute() -> None:
         description = "Get weather info"
 
     capture = _CapturingHandler()
-    capability = SigilPydanticAICapability(capture)  # type: ignore[arg-type]
+    capability = Agento11yPydanticAICapability(capture)  # type: ignore[arg-type]
 
     async def _run() -> None:
         ctx = _RunContext()
@@ -481,7 +481,7 @@ def test_agento11y_pydantic_ai_capability_wrap_tool_execute_records_arguments() 
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-pydantic-ai-tool-args")
+    tracer = provider.get_tracer("agento11y-pydantic-ai-tool-args")
     client = _new_client(exporter, tracer=tracer)
 
     class _RunContext:
@@ -499,7 +499,7 @@ def test_agento11y_pydantic_ai_capability_wrap_tool_execute_records_arguments() 
         description = "Get weather info"
 
     try:
-        capability = create_sigil_pydantic_ai_capability(client=client)
+        capability = create_agento11y_pydantic_ai_capability(client=client)
 
         async def _run() -> None:
             async def handler(args: Any) -> Any:
@@ -550,7 +550,7 @@ def test_agento11y_pydantic_ai_capability_wrap_run_chain_spans() -> None:
         data = "ok"
 
     capture = _CapturingHandler()
-    capability = SigilPydanticAICapability(capture)  # type: ignore[arg-type]
+    capability = Agento11yPydanticAICapability(capture)  # type: ignore[arg-type]
 
     async def _run() -> None:
         ctx = _RunContext()
@@ -574,11 +574,11 @@ def test_agento11y_pydantic_ai_factory_function_return_types() -> None:
     client = _new_client(exporter)
 
     try:
-        handler = create_sigil_pydantic_ai_handler(client=client)
-        assert isinstance(handler, SigilPydanticAIHandler)
+        handler = create_agento11y_pydantic_ai_handler(client=client)
+        assert isinstance(handler, Agento11yPydanticAIHandler)
 
-        capability = create_sigil_pydantic_ai_capability(client=client)
-        assert isinstance(capability, SigilPydanticAICapability)
+        capability = create_agento11y_pydantic_ai_capability(client=client)
+        assert isinstance(capability, Agento11yPydanticAICapability)
     finally:
         client.shutdown()
 
@@ -588,11 +588,11 @@ def test_agento11y_pydantic_ai_double_injection_guard() -> None:
     client = _new_client(exporter)
 
     try:
-        caps = with_sigil_pydantic_ai_capability(None, client=client)
+        caps = with_agento11y_pydantic_ai_capability(None, client=client)
         assert len(caps) == 1
-        assert isinstance(caps[0], SigilPydanticAICapability)
+        assert isinstance(caps[0], Agento11yPydanticAICapability)
 
-        caps2 = with_sigil_pydantic_ai_capability(caps, client=client)
+        caps2 = with_agento11y_pydantic_ai_capability(caps, client=client)
         assert len(caps2) == 1
         assert caps2[0] is caps[0]
     finally:
@@ -603,16 +603,16 @@ def test_agento11y_pydantic_ai_capability_for_run_returns_isolated_capability() 
     class _CapturingHandler:
         pass
 
-    capability = SigilPydanticAICapability(_CapturingHandler())  # type: ignore[arg-type]
+    capability = Agento11yPydanticAICapability(_CapturingHandler())  # type: ignore[arg-type]
 
-    async def _run() -> SigilPydanticAICapability:
+    async def _run() -> Agento11yPydanticAICapability:
         return await capability.for_run(object())
 
     run_capability = asyncio.run(_run())
 
-    assert isinstance(run_capability, SigilPydanticAICapability)
+    assert isinstance(run_capability, Agento11yPydanticAICapability)
     assert run_capability is not capability
-    assert run_capability._sigil_handler is capability._sigil_handler
+    assert run_capability._agento11y_handler is capability._agento11y_handler
 
 
 def test_agento11y_pydantic_ai_capability_control_flow_exceptions_do_not_record_errors() -> None:
@@ -640,8 +640,8 @@ def test_agento11y_pydantic_ai_capability_control_flow_exceptions_do_not_record_
         description = "Can be skipped"
 
     try:
-        handler = SigilPydanticAIHandler(client=client)
-        capability = SigilPydanticAICapability(handler)
+        handler = Agento11yPydanticAIHandler(client=client)
+        capability = Agento11yPydanticAICapability(handler)
 
         async def _run() -> None:
             ctx = _RunContext()
@@ -715,7 +715,7 @@ def test_agento11y_pydantic_ai_capability_wrap_model_request_error_records_llm_e
         messages = []
 
     capture = _CapturingHandler()
-    capability = SigilPydanticAICapability(capture)  # type: ignore[arg-type]
+    capability = Agento11yPydanticAICapability(capture)  # type: ignore[arg-type]
 
     async def _run() -> None:
         ctx = _RunContext()
@@ -773,7 +773,7 @@ def test_agento11y_pydantic_ai_capability_wrap_tool_execute_error_records_tool_e
         description = "A tool that fails"
 
     capture = _CapturingHandler()
-    capability = SigilPydanticAICapability(capture)  # type: ignore[arg-type]
+    capability = Agento11yPydanticAICapability(capture)  # type: ignore[arg-type]
 
     async def _run() -> None:
         ctx = _RunContext()
@@ -829,7 +829,7 @@ def test_agento11y_pydantic_ai_capability_wrap_run_error_records_chain_error() -
         agent = None
 
     capture = _CapturingHandler()
-    capability = SigilPydanticAICapability(capture)  # type: ignore[arg-type]
+    capability = Agento11yPydanticAICapability(capture)  # type: ignore[arg-type]
 
     async def _run() -> None:
         ctx = _RunContext()
@@ -873,7 +873,7 @@ def test_agento11y_pydantic_ai_capability_agent_name_from_agent_attribute() -> N
             pass
 
     capture = _CapturingHandler()
-    capability = SigilPydanticAICapability(capture)  # type: ignore[arg-type]
+    capability = Agento11yPydanticAICapability(capture)  # type: ignore[arg-type]
 
     async def _run() -> None:
         ctx = _RunContext()
@@ -893,7 +893,7 @@ def test_agento11y_pydantic_ai_handler_explicitly_has_no_embedding_lifecycle() -
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilPydanticAIHandler(client=client)
+        handler = Agento11yPydanticAIHandler(client=client)
         assert not hasattr(handler, "on_embedding_start")
         assert not hasattr(handler, "on_embedding_end")
         assert not hasattr(handler, "on_embedding_error")

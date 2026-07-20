@@ -1,15 +1,15 @@
 """Error hierarchy used by Sigil Python SDK."""
 
 
-class SigilError(Exception):
+class Agento11yError(Exception):
     """Base class for SDK-specific errors."""
 
 
-class ValidationError(SigilError):
+class ValidationError(Agento11yError):
     """Raised when generation validation fails before enqueue."""
 
 
-class EnqueueError(SigilError):
+class EnqueueError(Agento11yError):
     """Raised when generation enqueue fails."""
 
 
@@ -21,35 +21,35 @@ class ClientShutdownError(EnqueueError):
     """Raised when enqueue happens while shutdown is in progress."""
 
 
-class MappingError(SigilError):
+class MappingError(Agento11yError):
     """Raised when provider mapper logic fails."""
 
 
-class RatingConflictError(SigilError):
+class RatingConflictError(Agento11yError):
     """Raised when rating idempotency key conflicts with a different payload."""
 
 
-class RatingTransportError(SigilError):
+class RatingTransportError(Agento11yError):
     """Raised when rating submission transport fails."""
 
 
-class NotFoundError(SigilError):
+class NotFoundError(Agento11yError):
     """Raised when a requested resource does not exist (HTTP 404)."""
 
 
-class ConflictError(SigilError):
+class ConflictError(Agento11yError):
     """Raised when a request conflicts with current resource state (HTTP 409)."""
 
 
-class ExperimentTransportError(SigilError):
+class ExperimentTransportError(Agento11yError):
     """Raised when an experiment request fails."""
 
 
-class ScoreExportError(SigilError):
+class ScoreExportError(Agento11yError):
     """Raised when a score export request fails at the transport level."""
 
 
-class HookDeniedError(SigilError):
+class HookDeniedError(Agento11yError):
     """Raised when a synchronous hook evaluation responds with action=deny."""
 
     def __init__(
@@ -63,14 +63,14 @@ class HookDeniedError(SigilError):
             normalized_reason = "request blocked by Sigil hook rule"
         clean_rule = (rule_id or "").strip()
         if clean_rule != "":
-            message = f"sigil hook denied by rule {clean_rule}: {normalized_reason}"
+            message = f"agento11y hook denied by rule {clean_rule}: {normalized_reason}"
         else:
-            message = f"sigil hook denied: {normalized_reason}"
+            message = f"agento11y hook denied: {normalized_reason}"
         super().__init__(message)
         self.reason = normalized_reason
         self.rule_id = clean_rule
         self.evaluations = list(evaluations) if evaluations else []
 
 
-class HookTransportError(SigilError):
+class HookTransportError(Agento11yError):
     """Raised when hook evaluation transport fails and fail_open is disabled."""

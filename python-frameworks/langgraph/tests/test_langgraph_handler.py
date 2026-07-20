@@ -9,10 +9,10 @@ from uuid import uuid4
 from agento11y import Client, ClientConfig, GenerationExportConfig
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
 from agento11y_langgraph import (
-    SigilAsyncLangGraphHandler,
-    SigilLangGraphHandler,
-    create_sigil_langgraph_handler,
-    with_sigil_langgraph_callbacks,
+    Agento11yAsyncLangGraphHandler,
+    Agento11yLangGraphHandler,
+    create_agento11y_langgraph_handler,
+    with_agento11y_langgraph_callbacks,
 )
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -52,7 +52,7 @@ def test_langgraph_sync_lifecycle_sets_framework_tags_and_metadata() -> None:
     try:
         run_id = uuid4()
         parent_run_id = uuid4()
-        handler = SigilLangGraphHandler(
+        handler = Agento11yLangGraphHandler(
             client=client,
             agent_name="agent-langgraph",
             agent_version="v1",
@@ -124,7 +124,7 @@ def test_langgraph_stream_lifecycle_uses_stream_mode_and_chunk_fallback() -> Non
 
     try:
         run_id = uuid4()
-        handler = SigilLangGraphHandler(client=client)
+        handler = Agento11yLangGraphHandler(client=client)
 
         handler.on_llm_start(
             {"kwargs": {"model": "claude-sonnet-4-5"}},
@@ -150,13 +150,13 @@ def test_langgraph_generation_span_tracks_active_parent_span_and_export_lineage(
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-framework-test")
+    tracer = provider.get_tracer("agento11y-framework-test")
     client = _new_client(exporter, tracer=tracer)
 
     try:
         run_id = uuid4()
         with tracer.start_as_current_span("framework.request"):
-            handler = SigilLangGraphHandler(client=client)
+            handler = Agento11yLangGraphHandler(client=client)
             handler.on_chat_model_start(
                 {"name": "ChatOpenAI"},
                 [[{"type": "human", "content": "hello"}]],
@@ -191,7 +191,7 @@ def test_langgraph_provider_resolution_supports_known_models_and_fallback() -> N
     client = _new_client(exporter)
 
     try:
-        handler = SigilLangGraphHandler(client=client)
+        handler = Agento11yLangGraphHandler(client=client)
 
         run_openai = uuid4()
         handler.on_llm_start({}, ["x"], run_id=run_openai, invocation_params={"model": "gpt-5"})
@@ -222,7 +222,7 @@ def test_langgraph_error_sets_call_error_and_preserves_framework_tags() -> None:
 
     try:
         run_id = uuid4()
-        handler = SigilLangGraphHandler(client=client)
+        handler = Agento11yLangGraphHandler(client=client)
 
         handler.on_llm_start({}, ["x"], run_id=run_id, invocation_params={"model": "gpt-5"})
         handler.on_llm_error(RuntimeError("provider unavailable"), run_id=run_id)
@@ -241,7 +241,7 @@ def test_langgraph_async_handler_records_generation() -> None:
 
     async def _run() -> None:
         run_id = uuid4()
-        handler = SigilAsyncLangGraphHandler(client=client)
+        handler = Agento11yAsyncLangGraphHandler(client=client)
         await handler.on_llm_start({}, ["hello"], run_id=run_id, invocation_params={"model": "gpt-5"})
         await handler.on_llm_end({"generations": [[{"text": "world"}]]}, run_id=run_id)
 
@@ -260,11 +260,11 @@ def test_langgraph_tool_chain_and_retriever_callbacks_emit_spans() -> None:
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
     client = _new_client(exporter, tracer=tracer)
 
     try:
-        handler = SigilLangGraphHandler(client=client)
+        handler = Agento11yLangGraphHandler(client=client)
         parent_run_id = uuid4()
 
         tool_run_id = uuid4()
@@ -328,11 +328,11 @@ def test_langgraph_attach_helpers_preserve_existing_callbacks() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        created = create_sigil_langgraph_handler(client=client)
-        assert isinstance(created, SigilLangGraphHandler)
+        created = create_agento11y_langgraph_handler(client=client)
+        assert isinstance(created, Agento11yLangGraphHandler)
 
         existing = object()
-        config = with_sigil_langgraph_callbacks(
+        config = with_agento11y_langgraph_callbacks(
             {"callbacks": [existing], "durable": True},
             client=client,
             agent_name="langgraph-helper",
@@ -342,7 +342,7 @@ def test_langgraph_attach_helpers_preserve_existing_callbacks() -> None:
         callbacks = config["callbacks"]
         assert isinstance(callbacks, list)
         assert callbacks[0] is existing
-        assert isinstance(callbacks[1], SigilLangGraphHandler)
+        assert isinstance(callbacks[1], Agento11yLangGraphHandler)
     finally:
         client.shutdown()
 
@@ -351,7 +351,7 @@ def test_langgraph_handler_explicitly_has_no_embedding_lifecycle() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     try:
-        handler = SigilLangGraphHandler(client=client)
+        handler = Agento11yLangGraphHandler(client=client)
         assert not hasattr(handler, "on_embedding_start")
         assert not hasattr(handler, "on_embedding_end")
         assert not hasattr(handler, "on_embedding_error")

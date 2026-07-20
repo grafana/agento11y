@@ -3,26 +3,28 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createSigilClientMock, createTelemetryProvidersMock } = vi.hoisted(
+const { createAgento11yClientMock, createTelemetryProvidersMock } = vi.hoisted(
   () => ({
-    createSigilClientMock: vi.fn(),
+    createAgento11yClientMock: vi.fn(),
     createTelemetryProvidersMock: vi.fn(),
   }),
 );
 
-vi.mock("./client.js", () => ({ createSigilClient: createSigilClientMock }));
+vi.mock("./client.js", () => ({
+  createAgento11yClient: createAgento11yClientMock,
+}));
 vi.mock("./telemetry.js", () => ({
   createTelemetryProviders: createTelemetryProvidersMock,
 }));
 
-import { _resetHookState, createSigilHooks } from "./hooks.js";
+import { _resetHookState, createAgento11yHooks } from "./hooks.js";
 import {
   assistantMessage,
   baseConfig,
   emitMessageUpdated,
   emitSessionDeleted,
+  makeAgento11yMock,
   makeOpencodeClient,
-  makeSigilMock,
   type TestHooks,
 } from "./hooks.testutil.js";
 
@@ -43,7 +45,7 @@ async function makeHooks(
   config = baseConfig(),
   client = makeOpencodeClient(),
 ): Promise<TestHooks> {
-  const hooks = await createSigilHooks(config, client);
+  const hooks = await createAgento11yHooks(config, client);
   if (!hooks) throw new Error("expected hooks");
   return hooks;
 }
@@ -64,8 +66,8 @@ describe("opencode system prompt capture", () => {
   });
 
   it("prefers the transform prompt over the legacy chat.message override", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     hooks.chatMessage(
@@ -85,8 +87,8 @@ describe("opencode system prompt capture", () => {
   });
 
   it("uses the legacy chat.message override when no transform fired", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     hooks.chatMessage(
@@ -100,8 +102,8 @@ describe("opencode system prompt capture", () => {
   });
 
   it("ignores a transform without a session ID", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     hooks.systemTransform(
@@ -115,8 +117,8 @@ describe("opencode system prompt capture", () => {
   });
 
   it("ignores a transform whose model differs from the chat model", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     hooks.chatMessage(
@@ -133,8 +135,8 @@ describe("opencode system prompt capture", () => {
   });
 
   it("accepts a transform when the session model is unknown", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     emitTransform(hooks, "sess-1", ["prompt without chat.message"]);
@@ -147,8 +149,8 @@ describe("opencode system prompt capture", () => {
   });
 
   it("keeps the latest transform when several fire in one turn", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     emitTransform(hooks, "sess-1", ["first step"]);
@@ -160,8 +162,8 @@ describe("opencode system prompt capture", () => {
   });
 
   it("keeps the prompt for later turns in the same session", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     emitTransform(hooks, "sess-1", ["session prompt"]);
@@ -173,8 +175,8 @@ describe("opencode system prompt capture", () => {
   });
 
   it("drops malformed system entries instead of throwing", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     expect(() =>
@@ -193,8 +195,8 @@ describe("opencode system prompt capture", () => {
   });
 
   it("omits the prompt in metadata_only", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks(
       baseConfig({ contentCapture: "metadata_only" }),
     );
@@ -207,8 +209,8 @@ describe("opencode system prompt capture", () => {
   });
 
   it("keeps prompts of concurrent sessions separate", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     emitTransform(hooks, "sess-1", ["prompt one"]);
@@ -222,8 +224,8 @@ describe("opencode system prompt capture", () => {
   });
 
   it("clears the prompt when the session is deleted", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     emitTransform(hooks, "sess-1", ["session prompt"]);
@@ -242,8 +244,8 @@ describe("opencode tool definitions", () => {
   });
 
   it("builds name-only definitions from used tools and legacy overrides", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     hooks.chatMessage(
@@ -269,8 +271,8 @@ describe("opencode tool definitions", () => {
   });
 
   it("keeps tool names in metadata_only from execution records", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks(
       baseConfig({ contentCapture: "metadata_only" }),
     );
@@ -292,8 +294,8 @@ describe("opencode tool definitions", () => {
   });
 
   it("includes a started tool that never completed", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     // tool.execute.after never fires for denied or interrupted tools.
@@ -310,8 +312,8 @@ describe("opencode tool definitions", () => {
   });
 
   it("omits tools when nothing was used or declared", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks();
 
     await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
@@ -338,8 +340,8 @@ describe("opencode host version", () => {
   }
 
   it("uses the OpenCode version as agent and effective version", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks(baseConfig({ agentVersion: undefined }));
 
     await emitSessionCreatedWithVersion(hooks, "sess-1", "1.17.20");
@@ -351,8 +353,8 @@ describe("opencode host version", () => {
   });
 
   it("updates the version from session.updated", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks(baseConfig({ agentVersion: undefined }));
 
     await hooks.event({
@@ -368,8 +370,8 @@ describe("opencode host version", () => {
   });
 
   it("prefers a configured SIGIL_AGENT_VERSION over the host version", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks(baseConfig({ agentVersion: "my-agent-2" }));
 
     await emitSessionCreatedWithVersion(hooks, "sess-1", "1.17.20");
@@ -381,8 +383,8 @@ describe("opencode host version", () => {
   });
 
   it("leaves the version unset without config or session events", async () => {
-    const { sigil, generations } = makeSigilMock();
-    createSigilClientMock.mockReturnValue(sigil);
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks(baseConfig({ agentVersion: undefined }));
 
     await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));

@@ -1,5 +1,5 @@
 import { type Span, SpanKind, SpanStatusCode, type Tracer, trace } from '@opentelemetry/api';
-import type { SigilClient } from '../client.js';
+import type { Agento11yClient } from '../client.js';
 import type {
   GenerationRecorder,
   GenerationResult,
@@ -75,7 +75,7 @@ interface FrameworkContext {
   eventId: string;
 }
 
-export class SigilFrameworkHandler {
+export class Agento11yFrameworkHandler {
   private readonly runs = new Map<string, RunState>();
   private readonly toolRuns = new Map<string, ToolRunState>();
   private readonly chainSpans = new Map<string, Span>();
@@ -90,7 +90,7 @@ export class SigilFrameworkHandler {
   private readonly extraMetadata: Record<string, unknown>;
 
   constructor(
-    private readonly client: SigilClient,
+    private readonly client: Agento11yClient,
     private readonly frameworkName: FrameworkName,
     private readonly frameworkLanguage: 'javascript',
     options: FrameworkHandlerOptions = {},
@@ -779,7 +779,7 @@ function resolveFrameworkConversationContext(
   }
 
   // Deterministic fallback when frameworks do not expose session/conversation identity.
-  return { conversationId: `sigil:framework:${frameworkName}:${runId}`, threadId: '' };
+  return { conversationId: `agento11y:framework:${frameworkName}:${runId}`, threadId: '' };
 }
 
 function threadIdFromPayload(payload: unknown): string {

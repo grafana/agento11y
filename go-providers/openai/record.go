@@ -7,7 +7,7 @@ import (
 	osdk "github.com/openai/openai-go/v3"
 	oresponses "github.com/openai/openai-go/v3/responses"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 // ChatCompletionsNew calls the OpenAI chat-completions API and records the generation.
@@ -15,7 +15,7 @@ import (
 // The native *osdk.ChatCompletion response is returned unchanged.
 func ChatCompletionsNew(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	provider osdk.Client,
 	req osdk.ChatCompletionNewParams,
 	opts ...Option,
@@ -27,19 +27,19 @@ func ChatCompletionsNew(
 
 func chatCompletionsNew(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	req osdk.ChatCompletionNewParams,
 	invoke func(context.Context, osdk.ChatCompletionNewParams) (*osdk.ChatCompletion, error),
 	opts ...Option,
 ) (*osdk.ChatCompletion, error) {
 	options := applyOptions(opts)
 
-	ctx, rec := client.StartGeneration(ctx, sigil.GenerationStart{
+	ctx, rec := client.StartGeneration(ctx, agento11y.GenerationStart{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: req.Model},
 	})
 	defer rec.End()
 
@@ -59,19 +59,19 @@ func chatCompletionsNew(
 // defer pattern directly with StartStreamingGeneration.
 func ChatCompletionsNewStreaming(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	provider osdk.Client,
 	req osdk.ChatCompletionNewParams,
 	opts ...Option,
 ) (*osdk.ChatCompletion, ChatCompletionsStreamSummary, error) {
 	options := applyOptions(opts)
 
-	ctx, rec := client.StartStreamingGeneration(ctx, sigil.GenerationStart{
+	ctx, rec := client.StartStreamingGeneration(ctx, agento11y.GenerationStart{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: req.Model},
 	})
 	defer rec.End()
 
@@ -109,7 +109,7 @@ func ChatCompletionsNewStreaming(
 // It mirrors providerClient.Responses.New but adds Sigil recording.
 func ResponsesNew(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	provider osdk.Client,
 	req oresponses.ResponseNewParams,
 	opts ...Option,
@@ -121,19 +121,19 @@ func ResponsesNew(
 
 func responsesNew(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	req oresponses.ResponseNewParams,
 	invoke func(context.Context, oresponses.ResponseNewParams) (*oresponses.Response, error),
 	opts ...Option,
 ) (*oresponses.Response, error) {
 	options := applyOptions(opts)
 
-	ctx, rec := client.StartGeneration(ctx, sigil.GenerationStart{
+	ctx, rec := client.StartGeneration(ctx, agento11y.GenerationStart{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: req.Model},
 	})
 	defer rec.End()
 
@@ -151,7 +151,7 @@ func responsesNew(
 // It mirrors providerClient.Embeddings.New but adds Sigil recording.
 func EmbeddingsNew(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	provider osdk.Client,
 	req osdk.EmbeddingNewParams,
 	opts ...Option,
@@ -163,17 +163,17 @@ func EmbeddingsNew(
 
 func embeddingsNew(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	req osdk.EmbeddingNewParams,
 	invoke func(context.Context, osdk.EmbeddingNewParams) (*osdk.CreateEmbeddingResponse, error),
 	opts ...Option,
 ) (*osdk.CreateEmbeddingResponse, error) {
 	options := applyOptions(opts)
 
-	start := sigil.EmbeddingStart{
+	start := agento11y.EmbeddingStart{
 		AgentName:    options.agentName,
 		AgentVersion: options.agentVersion,
-		Model:        sigil.ModelRef{Provider: options.providerName, Name: req.Model},
+		Model:        agento11y.ModelRef{Provider: options.providerName, Name: req.Model},
 	}
 	if req.Dimensions.Valid() {
 		start.Dimensions = &req.Dimensions.Value
@@ -200,19 +200,19 @@ func embeddingsNew(
 // It mirrors providerClient.Responses.NewStreaming but adds Sigil recording.
 func ResponsesNewStreaming(
 	ctx context.Context,
-	client *sigil.Client,
+	client *agento11y.Client,
 	provider osdk.Client,
 	req oresponses.ResponseNewParams,
 	opts ...Option,
 ) (*oresponses.Response, ResponsesStreamSummary, error) {
 	options := applyOptions(opts)
 
-	ctx, rec := client.StartStreamingGeneration(ctx, sigil.GenerationStart{
+	ctx, rec := client.StartStreamingGeneration(ctx, agento11y.GenerationStart{
 		ConversationID:    options.conversationID,
 		ConversationTitle: options.conversationTitle,
 		AgentName:         options.agentName,
 		AgentVersion:      options.agentVersion,
-		Model:             sigil.ModelRef{Provider: options.providerName, Name: req.Model},
+		Model:             agento11y.ModelRef{Provider: options.providerName, Name: req.Model},
 	})
 	defer rec.End()
 

@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig, normalizeBaseEndpoint, resolveConfig } from "./config.js";
-import { clearSigilEnv } from "./testEnv.js";
+import { clearAgento11yEnv } from "./testEnv.js";
 
 describe("resolveConfig", () => {
-  beforeEach(clearSigilEnv);
-  afterEach(clearSigilEnv);
+  beforeEach(clearAgento11yEnv);
+  afterEach(clearAgento11yEnv);
 
   it("returns null when endpoint is missing", () => {
     expect(resolveConfig()).toBeNull();
@@ -203,7 +203,7 @@ describe("resolveConfig", () => {
     process.env.SIGIL_GUARDS_TIMEOUT_MS = "2400";
     const legacy = resolveConfig();
 
-    clearSigilEnv();
+    clearAgento11yEnv();
     process.env.AGENTO11Y_ENDPOINT = "http://localhost:8080";
     process.env.AGENTO11Y_AGENT_NAME = "opencode-custom";
     process.env.AGENTO11Y_AGENT_VERSION = "9.9.9";
@@ -275,8 +275,8 @@ describe("resolveConfig", () => {
 });
 
 describe("resolveConfig OTLP env vars", () => {
-  beforeEach(clearSigilEnv);
-  afterEach(clearSigilEnv);
+  beforeEach(clearAgento11yEnv);
+  afterEach(clearAgento11yEnv);
 
   it("returns no otlp when not configured", () => {
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
@@ -456,7 +456,7 @@ describe("loadConfig reads ~/.config/agento11y/config.env", () => {
   let homeBackup: string | undefined;
 
   beforeEach(() => {
-    clearSigilEnv();
+    clearAgento11yEnv();
     dir = mkdtempSync(join(tmpdir(), "sigil-opencode-loadconfig-"));
     process.env.XDG_CONFIG_HOME = dir;
     homeBackup = process.env.HOME;
@@ -467,7 +467,7 @@ describe("loadConfig reads ~/.config/agento11y/config.env", () => {
     rmSync(dir, { recursive: true, force: true });
     if (homeBackup === undefined) delete process.env.HOME;
     else process.env.HOME = homeBackup;
-    clearSigilEnv();
+    clearAgento11yEnv();
   });
 
   it("returns null when config.env is missing and no shell env is set", async () => {

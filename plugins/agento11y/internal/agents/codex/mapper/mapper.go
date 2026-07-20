@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/codexlog"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/fragment"
@@ -24,13 +24,13 @@ type Inputs struct {
 	Fragment       *fragment.Fragment
 	SubagentLink   *fragment.SubagentLink
 	TokenSnapshot  *codexlog.TokenSnapshot
-	ContentCapture sigil.ContentCaptureMode
+	ContentCapture agento11y.ContentCaptureMode
 	Now            time.Time
 }
 
 type Mapped struct {
-	Start      sigil.GenerationStart
-	Generation sigil.Generation
+	Start      agento11y.GenerationStart
+	Generation agento11y.Generation
 }
 
 func Map(in Inputs) Mapped {
@@ -48,7 +48,7 @@ func Map(in Inputs) Mapped {
 	if modelName == "" {
 		modelName = "unknown"
 	}
-	model := sigil.ModelRef{Provider: mapperutil.InferProvider(modelName), Name: modelName}
+	model := agento11y.ModelRef{Provider: mapperutil.InferProvider(modelName), Name: modelName}
 	if model.Provider == "" {
 		model.Provider = "codex"
 	}
@@ -71,11 +71,11 @@ func Map(in Inputs) Mapped {
 	conversationID, agentName, parentIDs, metadata := linkFields(frag, in.SubagentLink, tags)
 	usage, metadata := usageFields(in.TokenSnapshot, metadata)
 
-	start := sigil.GenerationStart{
+	start := agento11y.GenerationStart{
 		ID:                  id,
 		ConversationID:      conversationID,
 		AgentName:           agentName,
-		Mode:                sigil.GenerationModeSync,
+		Mode:                agento11y.GenerationModeSync,
 		OperationName:       "generateText",
 		Model:               model,
 		Tools:               tools,
@@ -85,11 +85,11 @@ func Map(in Inputs) Mapped {
 		StartedAt:           startedAt,
 		ContentCapture:      startMode,
 	}
-	gen := sigil.Generation{
+	gen := agento11y.Generation{
 		ID:                  id,
 		ConversationID:      conversationID,
 		AgentName:           agentName,
-		Mode:                sigil.GenerationModeSync,
+		Mode:                agento11y.GenerationModeSync,
 		OperationName:       "generateText",
 		Model:               model,
 		ResponseModel:       modelName,
@@ -155,11 +155,11 @@ func linkFields(frag *fragment.Fragment, link *fragment.SubagentLink, tags map[s
 	return conversationID, agentName, parentIDs, metadata
 }
 
-func usageFields(snapshot *codexlog.TokenSnapshot, metadata map[string]any) (sigil.TokenUsage, map[string]any) {
+func usageFields(snapshot *codexlog.TokenSnapshot, metadata map[string]any) (agento11y.TokenUsage, map[string]any) {
 	if snapshot == nil || !hasPositiveCodexUsage(snapshot.TurnUsage) {
-		return sigil.TokenUsage{}, metadata
+		return agento11y.TokenUsage{}, metadata
 	}
-	usage := sigil.TokenUsage{
+	usage := agento11y.TokenUsage{
 		InputTokens:          snapshot.TurnUsage.InputTokens,
 		OutputTokens:         snapshot.TurnUsage.OutputTokens,
 		TotalTokens:          snapshot.TurnUsage.TotalTokens,
@@ -191,45 +191,45 @@ func hasPositiveCodexUsage(u codexlog.TokenUsage) bool {
 		u.TotalTokens > 0
 }
 
-func buildMessages(frag *fragment.Fragment, mode sigil.ContentCaptureMode) (input, output []sigil.Message) {
+func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (input, output []agento11y.Message) {
 	mode = mapperutil.NormalizePayloadContentMode(mode)
 	red := redact.New()
 	cleanText := func(s string) string {
-		if mode == sigil.ContentCaptureModeFull || mode == sigil.ContentCaptureModeNoToolContent {
+		if mode == agento11y.ContentCaptureModeFull || mode == agento11y.ContentCaptureModeNoToolContent {
 			return red.Redact(s)
 		}
 		return ""
 	}
 
-	if mode != sigil.ContentCaptureModeMetadataOnly && strings.TrimSpace(frag.Prompt) != "" {
-		input = append(input, sigil.UserTextMessage(cleanText(frag.Prompt)))
+	if mode != agento11y.ContentCaptureModeMetadataOnly && strings.TrimSpace(frag.Prompt) != "" {
+		input = append(input, agento11y.UserTextMessage(cleanText(frag.Prompt)))
 	}
 	for i := range frag.Tools {
 		t := &frag.Tools[i]
 		if t.ToolName == "" {
 			continue
 		}
-		call := sigil.ToolCall{ID: t.ToolUseID, Name: t.ToolName}
-		if mode == sigil.ContentCaptureModeFull && len(t.ToolInput) > 0 {
+		call := agento11y.ToolCall{ID: t.ToolUseID, Name: t.ToolName}
+		if mode == agento11y.ContentCaptureModeFull && len(t.ToolInput) > 0 {
 			call.InputJSON = red.RedactJSON(t.ToolInput)
 		}
-		output = append(output, sigil.Message{Role: sigil.RoleAssistant, Parts: []sigil.Part{sigil.ToolCallPart(call)}})
-		if mode == sigil.ContentCaptureModeMetadataOnly {
+		output = append(output, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{agento11y.ToolCallPart(call)}})
+		if mode == agento11y.ContentCaptureModeMetadataOnly {
 			continue
 		}
-		result := sigil.ToolResult{ToolCallID: t.ToolUseID, Name: t.ToolName, IsError: t.Status == "error"}
-		if mode == sigil.ContentCaptureModeFull && len(t.ToolResponse) > 0 {
+		result := agento11y.ToolResult{ToolCallID: t.ToolUseID, Name: t.ToolName, IsError: t.Status == "error"}
+		if mode == agento11y.ContentCaptureModeFull && len(t.ToolResponse) > 0 {
 			result.ContentJSON = red.RedactJSON(t.ToolResponse)
 		}
-		input = append(input, sigil.Message{Role: sigil.RoleTool, Parts: []sigil.Part{sigil.ToolResultPart(result)}})
+		input = append(input, agento11y.Message{Role: agento11y.RoleTool, Parts: []agento11y.Part{agento11y.ToolResultPart(result)}})
 	}
-	if mode != sigil.ContentCaptureModeMetadataOnly && strings.TrimSpace(frag.LastAssistantMessage) != "" {
-		output = append(output, sigil.AssistantTextMessage(cleanText(frag.LastAssistantMessage)))
+	if mode != agento11y.ContentCaptureModeMetadataOnly && strings.TrimSpace(frag.LastAssistantMessage) != "" {
+		output = append(output, agento11y.AssistantTextMessage(cleanText(frag.LastAssistantMessage)))
 	}
 	return input, output
 }
 
-func buildToolDefinitions(tools []fragment.ToolRecord) []sigil.ToolDefinition {
+func buildToolDefinitions(tools []fragment.ToolRecord) []agento11y.ToolDefinition {
 	names := make([]string, len(tools))
 	for i := range tools {
 		names[i] = tools[i].ToolName

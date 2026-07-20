@@ -134,7 +134,7 @@ def _resolve_redact_input_messages(
         return False
     parsed = _parse_strict_bool(raw)
     if parsed is None:
-        _logger.warning("sigil: ignoring invalid %s: %s", key, raw)
+        _logger.warning("agento11y: ignoring invalid %s: %s", key, raw)
         return False
     return parsed
 

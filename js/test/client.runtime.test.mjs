@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
 import { trace } from '@opentelemetry/api';
-import { defaultConfig, SigilClient } from '../.test-dist/index.js';
+import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
 class MockGenerationExporter {
   requests = [];
@@ -431,7 +431,7 @@ test('built-in HTTP exporter posts generation batches to configured endpoint', a
   }
 
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-test'),
     generationExport: {
       ...defaults.generationExport,
@@ -459,7 +459,7 @@ test('built-in HTTP exporter posts generation batches to configured endpoint', a
 
 test('built-in none exporter records generations without sending', async () => {
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-test'),
     generationExport: {
       ...defaults.generationExport,
@@ -520,7 +520,7 @@ test('embedding recorder does not enqueue generation exports', async () => {
 
 function newClient(generationExporter, overrides, clientOverrides = {}) {
   const defaults = defaultConfig();
-  return new SigilClient({
+  return new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-test'),
     ...clientOverrides,
     generationExport: {

@@ -9,7 +9,7 @@ using System.Net;
 using System.Text;
 using IngestProto = global::Agento11y.V1;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 internal static class TestHelpers
 {
@@ -176,9 +176,9 @@ internal static class TestHelpers
         };
     }
 
-    public static SigilClientConfig TestConfig(IGenerationExporter exporter)
+    public static Agento11yClientConfig TestConfig(IGenerationExporter exporter)
     {
-        return new SigilClientConfig
+        return new Agento11yClientConfig
         {
             GenerationExporter = exporter,
             GenerationExport = new GenerationExportConfig

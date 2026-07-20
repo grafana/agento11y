@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearSigilEnv as clearEnv } from "./testEnv.js";
+import { clearAgento11yEnv as clearEnv } from "./testEnv.js";
 
 const { loggerMock } = vi.hoisted(() => ({
   loggerMock: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -245,7 +245,7 @@ describe("resolveConfig AGENTO11Y_* aliases", () => {
     warn.mockRestore();
   });
 
-  it("clearSigilEnv strips ambient AGENTO11Y_* vars", () => {
+  it("clearAgento11yEnv strips ambient AGENTO11Y_* vars", () => {
     process.env.AGENTO11Y_ENDPOINT = "http://ambient:8080";
     clearEnv();
     expect(process.env.AGENTO11Y_ENDPOINT).toBeUndefined();

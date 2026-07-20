@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using AnthropicMessage = Anthropic.Models.Messages.Message;
 
-namespace Grafana.Sigil.Anthropic;
+namespace Grafana.Agento11y.Anthropic;
 
 public static class AnthropicGenerationMapper
 {
@@ -15,13 +15,13 @@ public static class AnthropicGenerationMapper
     public static Generation FromRequestResponse(
         MessageCreateParams request,
         AnthropicMessage response,
-        AnthropicSigilOptions? options = null
+        AnthropicAgento11yOptions? options = null
     )
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(response);
 
-        var effective = options ?? new AnthropicSigilOptions();
+        var effective = options ?? new AnthropicAgento11yOptions();
         var requestJson = NormalizeRequestJson(SerializeJson(request));
         var responseJson = SerializeJson(response);
 
@@ -79,7 +79,7 @@ public static class AnthropicGenerationMapper
     public static Generation FromStream(
         MessageCreateParams request,
         AnthropicStreamSummary summary,
-        AnthropicSigilOptions? options = null
+        AnthropicAgento11yOptions? options = null
     )
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -97,7 +97,7 @@ public static class AnthropicGenerationMapper
             throw new ArgumentException("stream summary must contain events or a final message", nameof(summary));
         }
 
-        var effective = options ?? new AnthropicSigilOptions();
+        var effective = options ?? new AnthropicAgento11yOptions();
         var requestJson = NormalizeRequestJson(SerializeJson(request));
         var requestModel = ResolveModelName(requestJson, effective);
         var requestMaxTokens = ReadNullableLong(requestJson, "max_tokens");
@@ -610,7 +610,7 @@ public static class AnthropicGenerationMapper
         };
     }
 
-    private static string ResolveModelName(JsonElement requestJson, AnthropicSigilOptions options)
+    private static string ResolveModelName(JsonElement requestJson, AnthropicAgento11yOptions options)
     {
         if (!string.IsNullOrWhiteSpace(options.ModelName))
         {
@@ -627,7 +627,7 @@ public static class AnthropicGenerationMapper
     }
 
     private static List<Artifact> BuildRequestResponseArtifacts(
-        AnthropicSigilOptions options,
+        AnthropicAgento11yOptions options,
         JsonElement requestJson,
         JsonElement responseJson,
         List<ToolDefinition> tools
@@ -654,7 +654,7 @@ public static class AnthropicGenerationMapper
     }
 
     private static List<Artifact> BuildStreamArtifacts(
-        AnthropicSigilOptions options,
+        AnthropicAgento11yOptions options,
         JsonElement requestJson,
         List<ToolDefinition> tools,
         AnthropicStreamSummary summary
@@ -689,9 +689,9 @@ public static class AnthropicGenerationMapper
         return artifacts;
     }
 
-    private static Generation AppendEventsArtifact(Generation generation, AnthropicStreamSummary summary, AnthropicSigilOptions? options)
+    private static Generation AppendEventsArtifact(Generation generation, AnthropicStreamSummary summary, AnthropicAgento11yOptions? options)
     {
-        var effective = options ?? new AnthropicSigilOptions();
+        var effective = options ?? new AnthropicAgento11yOptions();
         if (!effective.IncludeEventsArtifact || summary.Events.Count == 0)
         {
             return generation;

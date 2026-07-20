@@ -33,7 +33,7 @@ go get github.com/grafana/agento11y/go-frameworks/google-adk
 ## Quickstart
 
 ```go
-client := sigil.NewClient(cfg)
+client := agento11y.NewClient(cfg)
 captureInputs := true
 captureOutputs := true
 callbacks := googleadk.NewCallbacks(client, googleadk.Options{
@@ -45,7 +45,7 @@ callbacks := googleadk.NewCallbacks(client, googleadk.Options{
 ```
 
 `NewCallbacks(...)` is the one-liner path for wiring ADK lifecycle hooks once in runner setup.
-`NewSigilAdapter(...)` remains available for advanced/manual integration.
+`NewAgento11yAdapter(...)` remains available for advanced/manual integration.
 
 Capture defaults:
 
@@ -67,7 +67,7 @@ _ = callbacks.OnRunStart(ctx, googleadk.RunStartEvent{
 
 _ = callbacks.OnRunEnd("run-1", googleadk.RunEndEvent{
 	RunID:          "run-1",
-	OutputMessages: []sigil.Message{sigil.AssistantTextMessage("Release is healthy")},
+	OutputMessages: []agento11y.Message{agento11y.AssistantTextMessage("Release is healthy")},
 	ResponseModel:  "gpt-5",
 	StopReason:     "stop",
 })
@@ -96,7 +96,7 @@ Precedence:
 2. `SessionID`
 3. `GroupID`
 4. `ThreadID`
-5. fallback `sigil:framework:google-adk:<run_id>`
+5. fallback `agento11y:framework:google-adk:<run_id>`
 
 ## Tool lifecycle snippet
 

@@ -12,7 +12,7 @@
 //   - assistant text: {role, content (str), reasoning_content?, message_id}
 //
 // tool_calls[].function.arguments is a JSON-encoded string, not an object.
-// Its raw bytes go straight into sigil.ToolCall.InputJSON without
+// Its raw bytes go straight into agento11y.ToolCall.InputJSON without
 // re-encoding.
 package transcript
 

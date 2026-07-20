@@ -11,14 +11,14 @@ go get github.com/grafana/agento11y/go
 ## Quick start
 
 ```go
-client := sigil.NewClient(sigil.Config{}) // reads AGENTO11Y_* env vars
+client := agento11y.NewClient(agento11y.Config{}) // reads AGENTO11Y_* env vars
 defer func() { _ = client.Shutdown(context.Background()) }()
 
-ctx, rec := client.StartGeneration(ctx, sigil.GenerationStart{
+ctx, rec := client.StartGeneration(ctx, agento11y.GenerationStart{
 	ConversationID: "conv-9b2f",
 	AgentName:      "assistant-core",
 	AgentVersion:   "1.0.0",
-	Model:          sigil.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-5"},
+	Model:          agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-5"},
 })
 defer rec.End()
 
@@ -28,10 +28,10 @@ if err != nil {
 	return err
 }
 
-rec.SetResult(sigil.Generation{
-	Input:  []sigil.Message{sigil.UserTextMessage("Hello")},
-	Output: []sigil.Message{sigil.AssistantTextMessage(resp.Text)},
-	Usage:  sigil.TokenUsage{InputTokens: 120, OutputTokens: 42},
+rec.SetResult(agento11y.Generation{
+	Input:  []agento11y.Message{agento11y.UserTextMessage("Hello")},
+	Output: []agento11y.Message{agento11y.AssistantTextMessage(resp.Text)},
+	Usage:  agento11y.TokenUsage{InputTokens: 120, OutputTokens: 42},
 }, nil)
 ```
 
@@ -95,17 +95,17 @@ Framework helpers:
 
 ## Configuration
 
-The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and pass an empty `sigil.Config{}` — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names.
+The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and pass an empty `agento11y.Config{}` — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names.
 
 ```go
-client := sigil.NewClient(sigil.Config{})
+client := agento11y.NewClient(agento11y.Config{})
 defer func() { _ = client.Shutdown(context.Background()) }()
 ```
 
 For explicit configuration with custom auth or batch tuning:
 
 ```go
-cfg := sigil.DefaultConfig()
+cfg := agento11y.DefaultConfig()
 
 // Optional: inject tracer/meter explicitly.
 // If unset, the SDK uses otel.Tracer(...) and otel.Meter(...).
@@ -113,10 +113,10 @@ cfg := sigil.DefaultConfig()
 // cfg.Meter = myMeter
 
 // Generation export to Grafana Cloud.
-cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolHTTP
+cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolHTTP
 cfg.GenerationExport.Endpoint = "https://sigil-prod-<region>.grafana.net"
-cfg.GenerationExport.Auth = sigil.AuthConfig{
-	Mode:          sigil.ExportAuthModeBasic,
+cfg.GenerationExport.Auth = agento11y.AuthConfig{
+	Mode:          agento11y.ExportAuthModeBasic,
 	TenantID:      os.Getenv("AGENTO11Y_AUTH_TENANT_ID"),
 	BasicPassword: os.Getenv("AGENTO11Y_AUTH_TOKEN"),
 }
@@ -133,7 +133,7 @@ cfg.GenerationExport.PayloadMaxBytes = 16 << 20
 // Sigil API base used by helpers like SubmitConversationRating.
 cfg.API.Endpoint = "https://sigil-prod-<region>.grafana.net"
 
-client := sigil.NewClient(cfg)
+client := agento11y.NewClient(cfg)
 defer func() {
 	_ = client.Shutdown(context.Background())
 }()
@@ -156,10 +156,10 @@ otel.SetMeterProvider(mp)
 Use `GenerationExportProtocolNone` to keep generation and tool instrumentation active while disabling generation transport:
 
 ```go
-cfg := sigil.DefaultConfig()
-cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolNone
+cfg := agento11y.DefaultConfig()
+cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolNone
 
-client := sigil.NewClient(cfg)
+client := agento11y.NewClient(cfg)
 defer func() { _ = client.Shutdown(context.Background()) }()
 ```
 
@@ -175,8 +175,8 @@ Auth is configured for generation export.
 Invalid combinations fail fast during `NewClient(...)`.
 
 ```go
-cfg.GenerationExport.Auth = sigil.AuthConfig{
-	Mode:        sigil.ExportAuthModeBearer,
+cfg.GenerationExport.Auth = agento11y.AuthConfig{
+	Mode:        agento11y.ExportAuthModeBearer,
 	BearerToken: "token-from-secret-manager",
 }
 ```
@@ -188,8 +188,8 @@ Explicit transport headers remain the highest-precedence escape hatch. If `Heade
 For Grafana Cloud, use `basic` auth mode. The username is your Grafana Cloud instance/tenant ID and the password is your Grafana Cloud API key:
 
 ```go
-cfg.GenerationExport.Auth = sigil.AuthConfig{
-	Mode:          sigil.ExportAuthModeBasic,
+cfg.GenerationExport.Auth = agento11y.AuthConfig{
+	Mode:          agento11y.ExportAuthModeBasic,
 	TenantID:      os.Getenv("AGENTO11Y_AUTH_TENANT_ID"),
 	BasicPassword: os.Getenv("AGENTO11Y_AUTH_TOKEN"),
 }
@@ -198,8 +198,8 @@ cfg.GenerationExport.Auth = sigil.AuthConfig{
 If your deployment requires a distinct username (different from the tenant ID), set `BasicUser` explicitly:
 
 ```go
-cfg.GenerationExport.Auth = sigil.AuthConfig{
-	Mode:          sigil.ExportAuthModeBasic,
+cfg.GenerationExport.Auth = agento11y.AuthConfig{
+	Mode:          agento11y.ExportAuthModeBasic,
 	TenantID:      os.Getenv("AGENTO11Y_AUTH_TENANT_ID"),
 	BasicUser:     os.Getenv("AGENTO11Y_AUTH_TENANT_ID"),
 	BasicPassword: os.Getenv("AGENTO11Y_AUTH_TOKEN"),
@@ -213,23 +213,23 @@ Use hooks when you want Sigil guard rules to run before an LLM call. The SDK eva
 Hooks are disabled by default. Enable them on the client and call `EvaluateHook(...)` before the provider request:
 
 ```go
-cfg := sigil.DefaultConfig()
+cfg := agento11y.DefaultConfig()
 cfg.Hooks.Enabled = true
-cfg.Hooks.Phases = []sigil.HookPhase{sigil.HookPhasePreflight}
+cfg.Hooks.Phases = []agento11y.HookPhase{agento11y.HookPhasePreflight}
 
-client := sigil.NewClient(cfg)
+client := agento11y.NewClient(cfg)
 
-messages := []sigil.Message{
-	sigil.UserTextMessage("Summarize this customer note..."),
+messages := []agento11y.Message{
+	agento11y.UserTextMessage("Summarize this customer note..."),
 }
-response, err := client.EvaluateHook(ctx, sigil.HookEvaluateRequest{
-	Phase: sigil.HookPhasePreflight,
-	Context: sigil.HookContext{
+response, err := client.EvaluateHook(ctx, agento11y.HookEvaluateRequest{
+	Phase: agento11y.HookPhasePreflight,
+	Context: agento11y.HookContext{
 		AgentName:    "support-agent",
 		AgentVersion: "1.0.0",
-		Model:        &sigil.HookModel{Provider: "openai", Name: "gpt-5"},
+		Model:        &agento11y.HookModel{Provider: "openai", Name: "gpt-5"},
 	},
-	Input: sigil.HookInput{
+	Input: agento11y.HookInput{
 		Messages:            messages,
 		SystemPrompt:        "You are a helpful support agent.",
 		ConversationPreview: "Summarize this customer note...",
@@ -238,7 +238,7 @@ response, err := client.EvaluateHook(ctx, sigil.HookEvaluateRequest{
 if err != nil {
 	return err
 }
-if err := sigil.HookDeniedFromResponse(response); err != nil {
+if err := agento11y.HookDeniedFromResponse(response); err != nil {
 	return err
 }
 if response.TransformedInput != nil && len(response.TransformedInput.Messages) > 0 {
@@ -246,19 +246,19 @@ if response.TransformedInput != nil && len(response.TransformedInput.Messages) >
 }
 ```
 
-`HooksConfig` defaults to `Phases: []HookPhase{HookPhasePreflight}`, `Timeout: 15s`, and fail-open behavior. With fail-open enabled, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `FailOpen` to `sigil.BoolPtr(false)` for strict paths that should fail closed.
+`HooksConfig` defaults to `Phases: []HookPhase{HookPhasePreflight}`, `Timeout: 15s`, and fail-open behavior. With fail-open enabled, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `FailOpen` to `agento11y.BoolPtr(false)` for strict paths that should fail closed.
 
 If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `StartGeneration(...)`. For a runnable example, see [`../examples/getting-started/go-hooks/`](../examples/getting-started/go-hooks/).
 
 ## Wiring custom env vars
 
-The SDK only auto-loads `AGENTO11Y_*` env vars (`AGENTO11Y_ENDPOINT`, `AGENTO11Y_PROTOCOL`, `AGENTO11Y_AUTH_MODE`, `AGENTO11Y_AUTH_TOKEN`, etc.) when you call `sigil.NewClient(sigil.Config{})`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:
+The SDK only auto-loads `AGENTO11Y_*` env vars (`AGENTO11Y_ENDPOINT`, `AGENTO11Y_PROTOCOL`, `AGENTO11Y_AUTH_MODE`, `AGENTO11Y_AUTH_TOKEN`, etc.) when you call `agento11y.NewClient(agento11y.Config{})`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:
 
 ```go
 genToken := strings.TrimSpace(os.Getenv("MY_APP_SIGIL_TOKEN"))
 if genToken != "" {
-	cfg.GenerationExport.Auth = sigil.AuthConfig{
-		Mode:        sigil.ExportAuthModeBearer,
+	cfg.GenerationExport.Auth = agento11y.AuthConfig{
+		Mode:        agento11y.ExportAuthModeBearer,
 		BearerToken: genToken,
 	}
 }
@@ -278,10 +278,10 @@ Common topology:
 Client-level default:
 
 ```go
-cfg := sigil.DefaultConfig()
-cfg.ContentCapture = sigil.ContentCaptureModeMetadataOnly
+cfg := agento11y.DefaultConfig()
+cfg.ContentCapture = agento11y.ContentCaptureModeMetadataOnly
 
-client := sigil.NewClient(cfg)
+client := agento11y.NewClient(cfg)
 defer func() { _ = client.Shutdown(context.Background()) }()
 ```
 
@@ -290,9 +290,9 @@ The core SDK client treats `ContentCaptureModeDefault` as `ContentCaptureModeNoT
 Per-generation override:
 
 ```go
-ctx, rec := client.StartGeneration(ctx, sigil.GenerationStart{
-    Model:          sigil.ModelRef{Provider: "openai", Name: "gpt-5"},
-    ContentCapture: sigil.ContentCaptureModeFull,
+ctx, rec := client.StartGeneration(ctx, agento11y.GenerationStart{
+    Model:          agento11y.ModelRef{Provider: "openai", Name: "gpt-5"},
+    ContentCapture: agento11y.ContentCaptureModeFull,
 })
 defer rec.End()
 ```
@@ -300,9 +300,9 @@ defer rec.End()
 Per-tool-execution override (here `Full` opts into capturing tool arguments and results in the span):
 
 ```go
-ctx, tool := client.StartToolExecution(ctx, sigil.ToolExecutionStart{
+ctx, tool := client.StartToolExecution(ctx, agento11y.ToolExecutionStart{
     ToolName:       "search",
-    ContentCapture: sigil.ContentCaptureModeFull,
+    ContentCapture: agento11y.ContentCaptureModeFull,
 })
 defer tool.End()
 ```
@@ -312,11 +312,11 @@ Tool executions also inherit the parent generation's resolved mode via context, 
 Dynamic resolution via `ContentCaptureResolver`:
 
 ```go
-cfg.ContentCaptureResolver = func(ctx context.Context, metadata map[string]any) sigil.ContentCaptureMode {
+cfg.ContentCaptureResolver = func(ctx context.Context, metadata map[string]any) agento11y.ContentCaptureMode {
     if metadata["tenant"] == "healthcare" {
-        return sigil.ContentCaptureModeMetadataOnly
+        return agento11y.ContentCaptureModeMetadataOnly
     }
-    return sigil.ContentCaptureModeDefault // defer to Config.ContentCapture
+    return agento11y.ContentCaptureModeDefault // defer to Config.ContentCapture
 }
 ```
 
@@ -344,13 +344,13 @@ Use `GenerationSanitizer` when you want to redact substrings from normalized gen
 ```go
 redactEmails := true
 redactInputs := false
-cfg := sigil.DefaultConfig()
-cfg.GenerationSanitizer = sigil.NewSecretRedactionSanitizer(sigil.SecretRedactionOptions{
+cfg := agento11y.DefaultConfig()
+cfg.GenerationSanitizer = agento11y.NewSecretRedactionSanitizer(agento11y.SecretRedactionOptions{
     RedactInputMessages:  &redactInputs, // nil falls back to AGENTO11Y_REDACT_INPUT_MESSAGES, then false
     RedactEmailAddresses: &redactEmails, // nil defaults to true; point to false to preserve
 })
 
-client := sigil.NewClient(cfg)
+client := agento11y.NewClient(cfg)
 ```
 
 The built-in sanitizer:
@@ -365,7 +365,7 @@ To preserve email addresses, opt out explicitly:
 
 ```go
 preserveEmails := false
-cfg.GenerationSanitizer = sigil.NewSecretRedactionSanitizer(sigil.SecretRedactionOptions{
+cfg.GenerationSanitizer = agento11y.NewSecretRedactionSanitizer(agento11y.SecretRedactionOptions{
     RedactEmailAddresses: &preserveEmails,
 })
 ```
@@ -378,7 +378,7 @@ If a sanitizer panics during `Recorder.End`, the SDK falls back to `ContentCaptu
 
 ```go
 // Leave RedactInputMessages nil so AGENTO11Y_REDACT_INPUT_MESSAGES decides.
-cfg.GenerationSanitizer = sigil.NewSecretRedactionSanitizer(sigil.SecretRedactionOptions{})
+cfg.GenerationSanitizer = agento11y.NewSecretRedactionSanitizer(agento11y.SecretRedactionOptions{})
 ```
 
 ## Conversation Ratings
@@ -386,9 +386,9 @@ cfg.GenerationSanitizer = sigil.NewSecretRedactionSanitizer(sigil.SecretRedactio
 Use the SDK helper to submit user-facing ratings:
 
 ```go
-rating, err := client.SubmitConversationRating(ctx, "conv-123", sigil.ConversationRatingInput{
+rating, err := client.SubmitConversationRating(ctx, "conv-123", agento11y.ConversationRatingInput{
 	RatingID: "rat-123",
-	Rating:   sigil.ConversationRatingValueBad,
+	Rating:   agento11y.ConversationRatingValueBad,
 	Comment:  "Answer ignored user context",
 	Metadata: map[string]any{
 		"channel": "assistant-ui",
@@ -422,18 +422,18 @@ The SDK emits four OTel histograms automatically through your configured OTel me
 ## Streaming example
 
 ```go
-ctx, rec := client.StartStreamingGeneration(ctx, sigil.GenerationStart{
+ctx, rec := client.StartStreamingGeneration(ctx, agento11y.GenerationStart{
 	ConversationID: "conv-stream",
 	AgentName:      "assistant-core",
 	AgentVersion:   "1.0.0",
-	Model:          sigil.ModelRef{Provider: "openai", Name: "gpt-5"},
+	Model:          agento11y.ModelRef{Provider: "openai", Name: "gpt-5"},
 })
 defer rec.End()
 
 // accumulate stream output...
-rec.SetResult(sigil.Generation{
-	Input:  []sigil.Message{sigil.UserTextMessage("Say hello")},
-	Output: []sigil.Message{sigil.AssistantTextMessage(stitchedOutput)},
+rec.SetResult(agento11y.Generation{
+	Input:  []agento11y.Message{agento11y.UserTextMessage("Say hello")},
+	Output: []agento11y.Message{agento11y.AssistantTextMessage(stitchedOutput)},
 }, nil)
 ```
 
@@ -442,10 +442,10 @@ rec.SetResult(sigil.Generation{
 Use `StartEmbedding` for embedding API calls. Embedding recording emits OTel spans and SDK metrics only, and does not enqueue generation export payloads.
 
 ```go
-ctx, rec := client.StartEmbedding(ctx, sigil.EmbeddingStart{
+ctx, rec := client.StartEmbedding(ctx, agento11y.EmbeddingStart{
 	AgentName:    "retrieval-worker",
 	AgentVersion: "1.0.0",
-	Model:        sigil.ModelRef{Provider: "openai", Name: "text-embedding-3-small"},
+	Model:        agento11y.ModelRef{Provider: "openai", Name: "text-embedding-3-small"},
 })
 defer rec.End()
 
@@ -455,7 +455,7 @@ if err != nil {
 	return err
 }
 
-rec.SetResult(sigil.EmbeddingResult{
+rec.SetResult(agento11y.EmbeddingResult{
 	InputCount:    len(req.Input),
 	InputTokens:   resp.Usage.PromptTokens,
 	InputTexts:    req.Input, // captured only when EmbeddingCapture.CaptureInput=true
@@ -469,7 +469,7 @@ if err := rec.Err(); err != nil {
 Input text capture is opt-in and should stay off in production unless you need short-term debugging:
 
 ```go
-cfg.EmbeddingCapture = sigil.EmbeddingCaptureConfig{
+cfg.EmbeddingCapture = agento11y.EmbeddingCaptureConfig{
 	CaptureInput:  true,
 	MaxInputItems: 20,
 	MaxTextLength: 1024,
@@ -506,5 +506,5 @@ The Go SDK ships a local no-Docker conformance harness for the current cross-SDK
 
 - Shared spec: `docs/references/sdk-conformance-spec.md` (in the sigil repo)
 - Default local command: `mise run sdk:conformance`
-- Direct Go command: `cd go && GOWORK=off go test ./sigil -run '^TestConformance' -count=1`
+- Direct Go command: `cd go && GOWORK=off go test ./agento11y -run '^TestConformance' -count=1`
 - Current baseline coverage: sync roundtrip, conversation title resolution, user ID resolution, agent name/version resolution, streaming mode + TTFT, tool execution, embeddings, validation/error handling, rating submission, and shutdown flush semantics across exported generation payloads, OTLP spans, OTLP metrics, and local rating HTTP capture

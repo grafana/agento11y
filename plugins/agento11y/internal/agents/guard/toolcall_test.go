@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
@@ -31,7 +31,7 @@ func TestEvaluateToolCall(t *testing.T) {
 		// endpoint set, to exercise the LocalAuthPlaceholders path.
 		clearCredsKeepEndpoint bool
 		toolName               string
-		wantAction             sigil.HookAction
+		wantAction             agento11y.HookAction
 		wantReasonSub          string
 		wantUpdatedInput       string
 		wantLogSub             string
@@ -42,20 +42,20 @@ func TestEvaluateToolCall(t *testing.T) {
 			name:       "disabled returns allow without contacting sigil",
 			cfg:        envconfig.GuardsConfig{Enabled: false, TimeoutMs: 1500, FailOpen: true},
 			toolName:   "bash",
-			wantAction: sigil.HookActionAllow,
+			wantAction: agento11y.HookActionAllow,
 		},
 		{
 			name:       "empty tool name returns allow",
 			cfg:        envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			toolName:   "",
-			wantAction: sigil.HookActionAllow,
+			wantAction: agento11y.HookActionAllow,
 		},
 		{
 			name:             "allow response from sigil",
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			serverResponds:   `{"action":"allow"}`,
 			toolName:         "bash",
-			wantAction:       sigil.HookActionAllow,
+			wantAction:       agento11y.HookActionAllow,
 			wantLogSub:       "transform_applied=false",
 			wantServerCalled: true,
 		},
@@ -66,7 +66,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			serverResponds:   `{"action":"allow","transformed_input":{"output":[]}}`,
 			toolName:         "bash",
-			wantAction:       sigil.HookActionAllow,
+			wantAction:       agento11y.HookActionAllow,
 			wantNoLogSub:     "tool-call transform present but no part matched",
 			wantServerCalled: true,
 		},
@@ -75,7 +75,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			serverResponds:   `{"action":"deny","reason":"blocked tool","rule_id":"r-1"}`,
 			toolName:         "bash",
-			wantAction:       sigil.HookActionDeny,
+			wantAction:       agento11y.HookActionDeny,
 			wantReasonSub:    "blocked tool",
 			wantServerCalled: true,
 		},
@@ -84,14 +84,14 @@ func TestEvaluateToolCall(t *testing.T) {
 			cfg:             envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			useClosedServer: true,
 			toolName:        "bash",
-			wantAction:      sigil.HookActionAllow,
+			wantAction:      agento11y.HookActionAllow,
 		},
 		{
 			name:            "transport error fails closed",
 			cfg:             envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: false},
 			useClosedServer: true,
 			toolName:        "bash",
-			wantAction:      sigil.HookActionDeny,
+			wantAction:      agento11y.HookActionDeny,
 			wantReasonSub:   "could not evaluate",
 		},
 		{
@@ -99,7 +99,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			cfg:           envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			clearCreds:    true,
 			toolName:      "bash",
-			wantAction:    sigil.HookActionAllow,
+			wantAction:    agento11y.HookActionAllow,
 			wantReasonSub: "",
 		},
 		{
@@ -107,7 +107,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			cfg:           envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: false},
 			clearCreds:    true,
 			toolName:      "bash",
-			wantAction:    sigil.HookActionDeny,
+			wantAction:    agento11y.HookActionDeny,
 			wantReasonSub: "missing AGENTO11Y_ENDPOINT",
 		},
 		{
@@ -115,7 +115,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_1","name":"bash","input_json":{"cmd":"echo [REDACTED]"}}}]}]}}`,
 			toolName:         "bash",
-			wantAction:       sigil.HookActionAllow,
+			wantAction:       agento11y.HookActionAllow,
 			wantUpdatedInput: `{"cmd":"echo [REDACTED]"}`,
 			wantLogSub:       "transform_applied=true",
 			wantServerCalled: true,
@@ -127,7 +127,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_1","name":"bash","input_json":"eyJjb21tYW5kIjoiZWNobyBbUkVEQUNURURdIn0="}}]}]}}`,
 			toolName:         "bash",
-			wantAction:       sigil.HookActionAllow,
+			wantAction:       agento11y.HookActionAllow,
 			wantUpdatedInput: `{"command":"echo [REDACTED]"}`,
 			wantServerCalled: true,
 		},
@@ -136,7 +136,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_other","name":"bash","input_json":{"cmd":"echo X"}}}]}]}}`,
 			toolName:         "bash",
-			wantAction:       sigil.HookActionAllow,
+			wantAction:       agento11y.HookActionAllow,
 			wantLogSub:       "tool-call transform present but no part matched tu_1",
 			wantServerCalled: true,
 		},
@@ -145,7 +145,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_1","name":"bash","input_json":"not json"}}]}]}}`,
 			toolName:         "bash",
-			wantAction:       sigil.HookActionAllow,
+			wantAction:       agento11y.HookActionAllow,
 			wantLogSub:       "tool-call transform for tu_1 dropped: invalid JSON arguments",
 			wantServerCalled: true,
 		},
@@ -154,7 +154,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_1","name":"bash","input_json":[1,2]}}]}]}}`,
 			toolName:         "bash",
-			wantAction:       sigil.HookActionAllow,
+			wantAction:       agento11y.HookActionAllow,
 			wantLogSub:       "tool-call transform for tu_1 dropped: arguments were not a JSON object",
 			wantServerCalled: true,
 		},
@@ -163,7 +163,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			serverResponds:   `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_1","name":"bash","input_json":""}}]}]}}`,
 			toolName:         "bash",
-			wantAction:       sigil.HookActionAllow,
+			wantAction:       agento11y.HookActionAllow,
 			wantLogSub:       "tool-call transform for tu_1 dropped: empty arguments",
 			wantServerCalled: true,
 		},
@@ -172,7 +172,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
 			serverResponds:   `{"action":"deny","reason":"blocked tool","rule_id":"r-1","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"tu_1","name":"bash","input_json":{"cmd":"echo [REDACTED]"}}}]}]}}`,
 			toolName:         "bash",
-			wantAction:       sigil.HookActionDeny,
+			wantAction:       agento11y.HookActionDeny,
 			wantReasonSub:    "blocked tool",
 			wantServerCalled: true,
 		},
@@ -185,7 +185,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			clearCredsKeepEndpoint: true,
 			serverResponds:         `{"action":"allow"}`,
 			toolName:               "bash",
-			wantAction:             sigil.HookActionAllow,
+			wantAction:             agento11y.HookActionAllow,
 			wantServerCalled:       true,
 		},
 	}

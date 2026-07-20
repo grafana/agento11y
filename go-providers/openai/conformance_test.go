@@ -12,8 +12,8 @@ import (
 	oresponses "github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
-	sigil "github.com/grafana/agento11y/go/sigil"
-	"github.com/grafana/agento11y/go/sigil/sigiltest"
+	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/go/agento11y/testkit"
 )
 
 const (
@@ -23,16 +23,16 @@ const (
 )
 
 func TestConformance_OpenAIResponsesSyncMapping(t *testing.T) {
-	env := sigiltest.NewEnv(t)
+	env := testkit.NewEnv(t)
 
 	req := openAIResponsesRequest()
 	resp := openAIResponsesResponse()
-	start := sigil.GenerationStart{
+	start := agento11y.GenerationStart{
 		ConversationID:    "conv-openai-sync",
 		ConversationTitle: "OpenAI responses sync",
 		AgentName:         "agent-openai",
 		AgentVersion:      "v-openai",
-		Model:             sigil.ModelRef{Provider: "openai", Name: req.Model},
+		Model:             agento11y.ModelRef{Provider: "openai", Name: req.Model},
 	}
 
 	generation, err := ResponsesFromRequestResponse(
@@ -44,68 +44,68 @@ func TestConformance_OpenAIResponsesSyncMapping(t *testing.T) {
 		WithAgentVersion(start.AgentVersion),
 		WithTag("tenant", "t-openai"),
 	)
-	sigiltest.RecordGeneration(t, env, start, generation, err)
+	testkit.RecordGeneration(t, env, start, generation, err)
 	env.Shutdown(t)
 
 	exported := env.SingleGenerationJSON(t)
 
-	if got := sigiltest.StringValue(t, exported, "mode"); got != "GENERATION_MODE_SYNC" {
-		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_SYNC", sigiltest.DebugJSON(exported))
+	if got := testkit.StringValue(t, exported, "mode"); got != "GENERATION_MODE_SYNC" {
+		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_SYNC", testkit.DebugJSON(exported))
 	}
-	if got := sigiltest.StringValue(t, exported, "response_id"); got != "resp_openai_sync" {
+	if got := testkit.StringValue(t, exported, "response_id"); got != "resp_openai_sync" {
 		t.Fatalf("unexpected response_id: got %q want %q", got, "resp_openai_sync")
 	}
-	if got := sigiltest.StringValue(t, exported, "stop_reason"); got != "stop" {
+	if got := testkit.StringValue(t, exported, "stop_reason"); got != "stop" {
 		t.Fatalf("unexpected stop_reason: got %q want %q", got, "stop")
 	}
-	if got := sigiltest.StringValue(t, exported, "system_prompt"); got != "Be concise." {
+	if got := testkit.StringValue(t, exported, "system_prompt"); got != "Be concise." {
 		t.Fatalf("unexpected system_prompt: got %q want %q", got, "Be concise.")
 	}
-	if got := sigiltest.StringValue(t, exported, "conversation_id"); got != start.ConversationID {
+	if got := testkit.StringValue(t, exported, "conversation_id"); got != start.ConversationID {
 		t.Fatalf("unexpected conversation_id: got %q want %q", got, start.ConversationID)
 	}
-	if got := sigiltest.StringValue(t, exported, "agent_name"); got != start.AgentName {
+	if got := testkit.StringValue(t, exported, "agent_name"); got != start.AgentName {
 		t.Fatalf("unexpected agent_name: got %q want %q", got, start.AgentName)
 	}
-	if got := sigiltest.StringValue(t, exported, "model", "provider"); got != "openai" {
+	if got := testkit.StringValue(t, exported, "model", "provider"); got != "openai" {
 		t.Fatalf("unexpected model.provider: got %q want %q", got, "openai")
 	}
-	if got := sigiltest.StringValue(t, exported, "model", "name"); got != "gpt-5" {
+	if got := testkit.StringValue(t, exported, "model", "name"); got != "gpt-5" {
 		t.Fatalf("unexpected model.name: got %q want %q", got, "gpt-5")
 	}
-	if got := sigiltest.StringValue(t, exported, "usage", "reasoning_tokens"); got != "3" {
+	if got := testkit.StringValue(t, exported, "usage", "reasoning_tokens"); got != "3" {
 		t.Fatalf("unexpected usage.reasoning_tokens: got %q want %q", got, "3")
 	}
-	if got := sigiltest.StringValue(t, exported, "usage", "cache_read_input_tokens"); got != "2" {
+	if got := testkit.StringValue(t, exported, "usage", "cache_read_input_tokens"); got != "2" {
 		t.Fatalf("unexpected usage.cache_read_input_tokens: got %q want %q", got, "2")
 	}
-	if got := sigiltest.StringValue(t, exported, "input", 1, "role"); got != "MESSAGE_ROLE_TOOL" {
+	if got := testkit.StringValue(t, exported, "input", 1, "role"); got != "MESSAGE_ROLE_TOOL" {
 		t.Fatalf("unexpected tool input role: got %q want %q", got, "MESSAGE_ROLE_TOOL")
 	}
-	if got := sigiltest.StringValue(t, exported, "input", 1, "parts", 0, "metadata", "provider_type"); got != "tool_result" {
+	if got := testkit.StringValue(t, exported, "input", 1, "parts", 0, "metadata", "provider_type"); got != "tool_result" {
 		t.Fatalf("unexpected tool result provider_type: got %q want %q", got, "tool_result")
 	}
-	if got := sigiltest.StringValue(t, exported, "input", 1, "parts", 0, "tool_result", "tool_call_id"); got != "call_weather" {
+	if got := testkit.StringValue(t, exported, "input", 1, "parts", 0, "tool_result", "tool_call_id"); got != "call_weather" {
 		t.Fatalf("unexpected tool_result.tool_call_id: got %q want %q", got, "call_weather")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 1, "parts", 0, "metadata", "provider_type"); got != "tool_call" {
+	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "metadata", "provider_type"); got != "tool_call" {
 		t.Fatalf("unexpected tool call provider_type: got %q want %q", got, "tool_call")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 1, "parts", 0, "tool_call", "name"); got != "weather" {
+	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "tool_call", "name"); got != "weather" {
 		t.Fatalf("unexpected tool_call.name: got %q want %q", got, "weather")
 	}
 }
 
 func TestConformance_OpenAIResponsesStreamMapping(t *testing.T) {
-	env := sigiltest.NewEnv(t)
+	env := testkit.NewEnv(t)
 
 	req := openAIResponsesRequest()
 	summary := openAIResponsesStreamSummary()
-	start := sigil.GenerationStart{
+	start := agento11y.GenerationStart{
 		ConversationID: "conv-openai-stream",
 		AgentName:      "agent-openai-stream",
 		AgentVersion:   "v-openai-stream",
-		Model:          sigil.ModelRef{Provider: "openai", Name: req.Model},
+		Model:          agento11y.ModelRef{Provider: "openai", Name: req.Model},
 	}
 
 	generation, err := ResponsesFromStream(
@@ -115,71 +115,71 @@ func TestConformance_OpenAIResponsesStreamMapping(t *testing.T) {
 		WithAgentName(start.AgentName),
 		WithAgentVersion(start.AgentVersion),
 	)
-	sigiltest.RecordStreamingGeneration(t, env, start, summary.FirstChunkAt, generation, err)
+	testkit.RecordStreamingGeneration(t, env, start, summary.FirstChunkAt, generation, err)
 	env.Shutdown(t)
 
 	exported := env.SingleGenerationJSON(t)
 
-	if got := sigiltest.StringValue(t, exported, "mode"); got != "GENERATION_MODE_STREAM" {
-		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_STREAM", sigiltest.DebugJSON(exported))
+	if got := testkit.StringValue(t, exported, "mode"); got != "GENERATION_MODE_STREAM" {
+		t.Fatalf("unexpected mode: got %q want %q\n%s", got, "GENERATION_MODE_STREAM", testkit.DebugJSON(exported))
 	}
-	if got := sigiltest.StringValue(t, exported, "response_id"); got != "resp_openai_stream" {
+	if got := testkit.StringValue(t, exported, "response_id"); got != "resp_openai_stream" {
 		t.Fatalf("unexpected response_id: got %q want %q", got, "resp_openai_stream")
 	}
-	if got := sigiltest.StringValue(t, exported, "stop_reason"); got != "stop" {
+	if got := testkit.StringValue(t, exported, "stop_reason"); got != "stop" {
 		t.Fatalf("unexpected stop_reason: got %q want %q", got, "stop")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 0, "parts", 0, "text"); got != "checking weather" {
+	if got := testkit.StringValue(t, exported, "output", 0, "parts", 0, "text"); got != "checking weather" {
 		t.Fatalf("unexpected streamed output text: got %q want %q", got, "checking weather")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 1, "parts", 0, "metadata", "provider_type"); got != "tool_call" {
+	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "metadata", "provider_type"); got != "tool_call" {
 		t.Fatalf("unexpected streamed tool call provider_type: got %q want %q", got, "tool_call")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 1, "parts", 0, "tool_call", "id"); got != "call_weather" {
+	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "tool_call", "id"); got != "call_weather" {
 		t.Fatalf("unexpected streamed tool_call.id: got %q want %q", got, "call_weather")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 1, "parts", 0, "tool_call", "name"); got != "weather" {
+	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "tool_call", "name"); got != "weather" {
 		t.Fatalf("unexpected streamed tool_call.name: got %q want %q", got, "weather")
 	}
-	if got := sigiltest.StringValue(t, exported, "output", 1, "parts", 0, "tool_call", "input_json"); got != "eyJjaXR5IjoiUGFyaXMifQ==" {
+	if got := testkit.StringValue(t, exported, "output", 1, "parts", 0, "tool_call", "input_json"); got != "eyJjaXR5IjoiUGFyaXMifQ==" {
 		t.Fatalf("unexpected streamed tool_call.input_json: got %q want %q", got, "eyJjaXR5IjoiUGFyaXMifQ==")
 	}
-	if got := sigiltest.StringValue(t, exported, "usage", "total_tokens"); got != "26" {
+	if got := testkit.StringValue(t, exported, "usage", "total_tokens"); got != "26" {
 		t.Fatalf("unexpected usage.total_tokens: got %q want %q", got, "26")
 	}
-	if got := sigiltest.StringValue(t, exported, "input", 1, "parts", 0, "tool_result", "tool_call_id"); got != "call_weather" {
+	if got := testkit.StringValue(t, exported, "input", 1, "parts", 0, "tool_result", "tool_call_id"); got != "call_weather" {
 		t.Fatalf("unexpected streamed tool_result.tool_call_id: got %q want %q", got, "call_weather")
 	}
 }
 
 func TestConformance_OpenAIErrorMapping(t *testing.T) {
-	env := sigiltest.NewEnv(t)
+	env := testkit.NewEnv(t)
 
 	callErr := &osdk.Error{
 		StatusCode: http.StatusTooManyRequests,
 		Request:    &http.Request{Method: http.MethodPost, URL: mustURL(t, "https://api.openai.com/v1/responses")},
 		Response:   &http.Response{StatusCode: http.StatusTooManyRequests, Status: "429 Too Many Requests"},
 	}
-	sigiltest.RecordCallError(t, env, sigil.GenerationStart{
-		Model: sigil.ModelRef{Provider: "openai", Name: "gpt-5"},
+	testkit.RecordCallError(t, env, agento11y.GenerationStart{
+		Model: agento11y.ModelRef{Provider: "openai", Name: "gpt-5"},
 	}, callErr)
 
-	span := sigiltest.FindSpan(t, env.Spans.Ended(), "generateText gpt-5")
-	attrs := sigiltest.SpanAttributes(span)
+	span := testkit.FindSpan(t, env.Spans.Ended(), "generateText gpt-5")
+	attrs := testkit.SpanAttributes(span)
 	if got := attrs[openAISpanErrorCategory].AsString(); got != "rate_limit" {
 		t.Fatalf("unexpected error.category: got %q want %q", got, "rate_limit")
 	}
 
 	env.Shutdown(t)
 	exported := env.SingleGenerationJSON(t)
-	callError := sigiltest.StringValue(t, exported, "call_error")
+	callError := testkit.StringValue(t, exported, "call_error")
 	if !strings.Contains(callError, "429") {
 		t.Fatalf("expected call_error to include status code, got %q", callError)
 	}
 }
 
 func TestConformance_OpenAIEmbeddingMapping(t *testing.T) {
-	env := sigiltest.NewEnv(t)
+	env := testkit.NewEnv(t)
 
 	req := osdk.EmbeddingNewParams{
 		Model: osdk.EmbeddingModel("text-embedding-3-small"),
@@ -199,15 +199,15 @@ func TestConformance_OpenAIEmbeddingMapping(t *testing.T) {
 		},
 	}
 	dimensions := int64(3)
-	sigiltest.RecordEmbedding(t, env, sigil.EmbeddingStart{
-		Model:        sigil.ModelRef{Provider: "openai", Name: req.Model},
+	testkit.RecordEmbedding(t, env, agento11y.EmbeddingStart{
+		Model:        agento11y.ModelRef{Provider: "openai", Name: req.Model},
 		AgentName:    "agent-openai-embed",
 		AgentVersion: "v-openai-embed",
 		Dimensions:   &dimensions,
 	}, EmbeddingsFromResponse(req, resp))
 
-	span := sigiltest.FindSpan(t, env.Spans.Ended(), "embeddings text-embedding-3-small")
-	attrs := sigiltest.SpanAttributes(span)
+	span := testkit.FindSpan(t, env.Spans.Ended(), "embeddings text-embedding-3-small")
+	attrs := testkit.SpanAttributes(span)
 	if got := attrs[openAISpanInputCount].AsInt64(); got != 2 {
 		t.Fatalf("unexpected gen_ai.embeddings.input_count: got %d want %d", got, 2)
 	}
@@ -216,7 +216,7 @@ func TestConformance_OpenAIEmbeddingMapping(t *testing.T) {
 	}
 
 	env.Shutdown(t)
-	sigiltest.RequireRequestCount(t, env, 0)
+	testkit.RequireRequestCount(t, env, 0)
 }
 
 func openAIResponsesRequest() oresponses.ResponseNewParams {
@@ -447,10 +447,10 @@ func TestConformance_ChatCompletionsSyncNormalization(t *testing.T) {
 	if len(generation.Output) != 1 || len(generation.Output[0].Parts) != 2 {
 		t.Fatalf("expected one assistant message with text + tool call, got %#v", generation.Output)
 	}
-	if generation.Output[0].Parts[0].Kind != sigil.PartKindText || generation.Output[0].Parts[0].Text != "Calling tool" {
+	if generation.Output[0].Parts[0].Kind != agento11y.PartKindText || generation.Output[0].Parts[0].Text != "Calling tool" {
 		t.Fatalf("unexpected assistant text part: %#v", generation.Output[0].Parts[0])
 	}
-	if generation.Output[0].Parts[1].Kind != sigil.PartKindToolCall {
+	if generation.Output[0].Parts[1].Kind != agento11y.PartKindToolCall {
 		t.Fatalf("expected tool_call part, got %#v", generation.Output[0].Parts[1])
 	}
 	if generation.Output[0].Parts[1].ToolCall.ID != "call_weather" || generation.Output[0].Parts[1].ToolCall.Name != "weather" {
@@ -463,9 +463,9 @@ func TestConformance_ChatCompletionsSyncNormalization(t *testing.T) {
 		t.Fatalf("expected tenant tag")
 	}
 	requireOpenAIArtifactKinds(t, generation.Artifacts,
-		sigil.ArtifactKindRequest,
-		sigil.ArtifactKindResponse,
-		sigil.ArtifactKindTools,
+		agento11y.ArtifactKindRequest,
+		agento11y.ArtifactKindResponse,
+		agento11y.ArtifactKindTools,
 	)
 }
 
@@ -568,16 +568,16 @@ func TestConformance_ChatCompletionsStreamNormalization(t *testing.T) {
 	if generation.Output[0].Parts[0].Text != "Calling tool now." {
 		t.Fatalf("unexpected streamed text: %q", generation.Output[0].Parts[0].Text)
 	}
-	if generation.Output[0].Parts[1].Kind != sigil.PartKindToolCall {
+	if generation.Output[0].Parts[1].Kind != agento11y.PartKindToolCall {
 		t.Fatalf("expected tool call output, got %#v", generation.Output[0].Parts[1])
 	}
 	if string(generation.Output[0].Parts[1].ToolCall.InputJSON) != `{"city":"Paris"}` {
 		t.Fatalf("unexpected streamed tool input: %q", string(generation.Output[0].Parts[1].ToolCall.InputJSON))
 	}
 	requireOpenAIArtifactKinds(t, generation.Artifacts,
-		sigil.ArtifactKindRequest,
-		sigil.ArtifactKindTools,
-		sigil.ArtifactKindProviderEvent,
+		agento11y.ArtifactKindRequest,
+		agento11y.ArtifactKindTools,
+		agento11y.ArtifactKindProviderEvent,
 	)
 }
 
@@ -654,12 +654,12 @@ func TestConformance_ResponsesSyncNormalization(t *testing.T) {
 	if generation.Output[0].Parts[0].Text != "world" {
 		t.Fatalf("unexpected response text: %q", generation.Output[0].Parts[0].Text)
 	}
-	if generation.Output[1].Parts[0].Kind != sigil.PartKindToolCall {
+	if generation.Output[1].Parts[0].Kind != agento11y.PartKindToolCall {
 		t.Fatalf("expected response tool call, got %#v", generation.Output[1].Parts[0])
 	}
 	requireOpenAIArtifactKinds(t, generation.Artifacts,
-		sigil.ArtifactKindRequest,
-		sigil.ArtifactKindResponse,
+		agento11y.ArtifactKindRequest,
+		agento11y.ArtifactKindResponse,
 	)
 }
 
@@ -708,8 +708,8 @@ func TestConformance_ResponsesStreamNormalization(t *testing.T) {
 		t.Fatalf("unexpected streamed output: %#v", generation.Output)
 	}
 	requireOpenAIArtifactKinds(t, generation.Artifacts,
-		sigil.ArtifactKindRequest,
-		sigil.ArtifactKindProviderEvent,
+		agento11y.ArtifactKindRequest,
+		agento11y.ArtifactKindProviderEvent,
 	)
 }
 
@@ -737,7 +737,7 @@ func TestConformance_OpenAIMapperValidationErrors(t *testing.T) {
 	}
 }
 
-func requireOpenAIArtifactKinds(t *testing.T, artifacts []sigil.Artifact, want ...sigil.ArtifactKind) {
+func requireOpenAIArtifactKinds(t *testing.T, artifacts []agento11y.Artifact, want ...agento11y.ArtifactKind) {
 	t.Helper()
 
 	if len(artifacts) != len(want) {

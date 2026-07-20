@@ -63,7 +63,7 @@ _metadata_cwd = "agento11y.claude_agent.cwd"
 _metadata_total_cost_usd = "agento11y.claude_agent.total_cost_usd"
 
 
-class SigilClaudeAgentHandler:
+class Agento11yClaudeAgentHandler:
     """Records Claude Agent SDK streams and tool hooks into Sigil."""
 
     def __init__(
@@ -360,10 +360,10 @@ class SigilClaudeAgentHandler:
 
     def _append_hook(self, hooks: dict[str, list[HookMatcher]], event: str, callback: Any) -> None:
         matchers = hooks.setdefault(event, [])
-        if any(getattr(matcher, "_sigil_claude_agent", False) for matcher in matchers):
+        if any(getattr(matcher, "_agento11y_claude_agent", False) for matcher in matchers):
             return
         matcher = HookMatcher(hooks=[callback])
-        matcher._sigil_claude_agent = True
+        matcher._agento11y_claude_agent = True
         matchers.append(matcher)
 
     def _resolve_conversation_id(self, options: ClaudeAgentOptions) -> str:
@@ -376,7 +376,7 @@ class SigilClaudeAgentHandler:
         if options.resume:
             self._conversation_id = options.resume
             return self._conversation_id
-        self._conversation_id = f"sigil:framework:{_framework_name}:{self._run_id}"
+        self._conversation_id = f"agento11y:framework:{_framework_name}:{self._run_id}"
         return self._conversation_id
 
     def _finish_tool(self, run_key: str, *, result: Any = None, error: BaseException | None = None) -> None:
@@ -405,7 +405,7 @@ class SigilClaudeAgentHandler:
             self._finish_tool(run_key, error=RuntimeError("tool did not complete before Claude Agent SDK stopped"))
 
 
-class SigilClaudeSDKClient:
+class Agento11yClaudeSDKClient:
     """Wrap ``ClaudeSDKClient`` and record each response stream to Sigil."""
 
     def __init__(
@@ -417,15 +417,15 @@ class SigilClaudeSDKClient:
         _client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient,
         **handler_kwargs: Any,
     ) -> None:
-        self._sigil_client = client
+        self._agento11y_client = client
         self._handler_kwargs = dict(handler_kwargs)
-        self._active_handler: SigilClaudeAgentHandler | None = None
+        self._active_handler: Agento11yClaudeAgentHandler | None = None
         self._options = self._instrument_options(options)
         if not _as_string(self._handler_kwargs.get("conversation_id")):
             self._handler_kwargs["conversation_id"] = self._client_conversation_id(self._options)
         self._claude = _claude_client or _client_factory(options=self._options)
 
-    async def __aenter__(self) -> SigilClaudeSDKClient:
+    async def __aenter__(self) -> Agento11yClaudeSDKClient:
         await self._claude.__aenter__()
         return self
 
@@ -438,7 +438,7 @@ class SigilClaudeSDKClient:
 
         if self._active_handler is not None:
             raise RuntimeError("cannot start a new Claude query before the previous response stream finishes")
-        handler = create_sigil_claude_agent_handler(client=self._sigil_client, **self._handler_kwargs)
+        handler = create_agento11y_claude_agent_handler(client=self._agento11y_client, **self._handler_kwargs)
         self._active_handler = handler
         try:
             await handler.start(prompt=prompt, options=self._options)
@@ -497,13 +497,13 @@ class SigilClaudeSDKClient:
         return (
             _as_string(options.session_id)
             or _as_string(options.resume)
-            or f"sigil:framework:{_framework_name}:client:{uuid4()}"
+            or f"agento11y:framework:{_framework_name}:client:{uuid4()}"
         )
 
     def _append_hook(self, hooks: dict[str, list[HookMatcher]], event: str, callback: Any) -> None:
         matchers = hooks.setdefault(event, [])
         matcher = HookMatcher(hooks=[callback])
-        matcher._sigil_claude_client = True
+        matcher._agento11y_claude_client = True
         matchers.append(matcher)
 
     async def _on_user_prompt_submit(
@@ -557,37 +557,37 @@ class SigilClaudeSDKClient:
             handler.finish(error=error)
 
 
-def create_sigil_claude_agent_handler(*, client: Client, **handler_kwargs: Any) -> SigilClaudeAgentHandler:
+def create_agento11y_claude_agent_handler(*, client: Client, **handler_kwargs: Any) -> Agento11yClaudeAgentHandler:
     """Create a Claude Agent SDK Sigil handler."""
 
-    return SigilClaudeAgentHandler(client=client, **handler_kwargs)
+    return Agento11yClaudeAgentHandler(client=client, **handler_kwargs)
 
 
-def with_sigil_claude_agent_options(
+def with_agento11y_claude_agent_options(
     options: ClaudeAgentOptions | None,
     *,
     client: Client,
-    handler: SigilClaudeAgentHandler | None = None,
+    handler: Agento11yClaudeAgentHandler | None = None,
     **handler_kwargs: Any,
 ) -> ClaudeAgentOptions:
     """Return Claude Agent SDK options with Sigil hooks attached."""
 
-    handler = handler or create_sigil_claude_agent_handler(client=client, **handler_kwargs)
+    handler = handler or create_agento11y_claude_agent_handler(client=client, **handler_kwargs)
     return handler.instrument_options(options)
 
 
-async def sigil_query(
+async def agento11y_query(
     *,
     prompt: str | AsyncIterable[dict[str, Any]],
     client: Client,
     options: ClaudeAgentOptions | None = None,
-    handler: SigilClaudeAgentHandler | None = None,
+    handler: Agento11yClaudeAgentHandler | None = None,
     _query_fn: Callable[..., AsyncIterator[Any]] | None = None,
     **handler_kwargs: Any,
 ) -> AsyncIterator[Any]:
     """Run ``claude_agent_sdk.query`` while recording the stream to Sigil."""
 
-    handler = handler or create_sigil_claude_agent_handler(client=client, **handler_kwargs)
+    handler = handler or create_agento11y_claude_agent_handler(client=client, **handler_kwargs)
     instrumented_options = handler.instrument_options(options)
     await handler.start(prompt=prompt, options=instrumented_options)
     query_fn = _query_fn or claude_query

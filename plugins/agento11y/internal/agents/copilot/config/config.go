@@ -3,7 +3,7 @@ package config
 import (
 	"log"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -14,7 +14,7 @@ import (
 // SIGIL_DEBUG is consumed by cli.InitLogger in the single-binary entrypoint
 // before this struct is built, so it does not appear here.
 type Config struct {
-	ContentCapture sigil.ContentCaptureMode
+	ContentCapture agento11y.ContentCaptureMode
 	Guards         envconfig.GuardsConfig
 }
 

@@ -245,7 +245,7 @@ def test_gemini_embeddings_wrapper_records_span_and_skips_generation_export() ->
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
     client = _new_client(exporter, tracer=tracer)
 
     try:
@@ -281,7 +281,7 @@ def test_gemini_embeddings_wrapper_propagates_provider_error_and_sets_span_error
     span_exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    tracer = provider.get_tracer("sigil-test")
+    tracer = provider.get_tracer("agento11y-test")
     client = _new_client(exporter, tracer=tracer)
 
     try:

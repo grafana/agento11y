@@ -1,6 +1,6 @@
 # Vercel AI SDK Hooks (`@grafana/agento11y/vercel-ai-sdk`)
 
-Use `createSigilVercelAiSdk(...)` to instrument Vercel AI SDK calls with Sigil generation export, spans, metrics, tool execution spans, and streaming TTFT.
+Use `createAgento11yVercelAiSdk(...)` to instrument Vercel AI SDK calls with Sigil generation export, spans, metrics, tool execution spans, and streaming TTFT.
 
 Supported AI SDK line:
 
@@ -19,13 +19,13 @@ pnpm add @grafana/agento11y ai
 ## Quickstart
 
 ```ts
-import { SigilClient } from '@grafana/agento11y';
-import { createSigilVercelAiSdk } from '@grafana/agento11y/vercel-ai-sdk';
+import { Agento11yClient } from '@grafana/agento11y';
+import { createAgento11yVercelAiSdk } from '@grafana/agento11y/vercel-ai-sdk';
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
 
-const client = new SigilClient();
-const sigil = createSigilVercelAiSdk(client, {
+const client = new Agento11yClient();
+const agento11y = createAgento11yVercelAiSdk(client, {
   agentName: 'research-agent',
   agentVersion: '1.0.0',
 });
@@ -33,7 +33,7 @@ const sigil = createSigilVercelAiSdk(client, {
 const result = await generateText({
   model: openai('gpt-5'),
   prompt: 'Summarize this ticket in one paragraph.',
-  ...sigil.generateTextHooks({ conversationId: 'chat-123' }),
+  ...agento11y.generateTextHooks({ conversationId: 'chat-123' }),
 });
 ```
 
@@ -44,12 +44,12 @@ The model object stays untouched. Sigil only consumes hook callbacks.
 Set `enableHooks: true` when you want Sigil guard rules to evaluate each Vercel AI SDK model step before it reaches the provider:
 
 ```ts
-import { HookDeniedError, SigilClient } from '@grafana/agento11y';
-import { createSigilVercelAiSdk } from '@grafana/agento11y/vercel-ai-sdk';
+import { HookDeniedError, Agento11yClient } from '@grafana/agento11y';
+import { createAgento11yVercelAiSdk } from '@grafana/agento11y/vercel-ai-sdk';
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
 
-const client = new SigilClient({
+const client = new Agento11yClient({
   hooks: {
     enabled: true,
     phases: ['preflight'],
@@ -58,7 +58,7 @@ const client = new SigilClient({
   },
 });
 
-const sigil = createSigilVercelAiSdk(client, {
+const agento11y = createAgento11yVercelAiSdk(client, {
   agentName: 'research-agent',
   agentVersion: '1.0.0',
   enableHooks: true,
@@ -68,7 +68,7 @@ try {
   await generateText({
     model: openai('gpt-5'),
     prompt: 'Summarize this ticket in one paragraph.',
-    ...sigil.generateTextHooks({ conversationId: 'chat-123' }),
+    ...agento11y.generateTextHooks({ conversationId: 'chat-123' }),
   });
 } catch (error) {
   if (error instanceof HookDeniedError) {
@@ -87,14 +87,14 @@ The adapter sends the step messages, model, agent name/version, and conversation
 Vercel AI SDK is stateless on the server side. For multi-turn grouping, pass a stable `conversationId` per call:
 
 ```ts
-const hooks = sigil.generateTextHooks({ conversationId: 'customer-42' });
+const hooks = agento11y.generateTextHooks({ conversationId: 'customer-42' });
 ```
 
 Precedence:
 
 1. `generateTextHooks({ conversationId })` / `streamTextHooks({ conversationId })`
 2. `resolveConversationId(stepStartEvent)` from global integration options
-3. fallback `sigil:framework:vercel-ai-sdk:<response.id>` (single-response scope)
+3. fallback `agento11y:framework:vercel-ai-sdk:<response.id>` (single-response scope)
 
 ## Multi-step agentic loop (`generateText`)
 
@@ -112,7 +112,7 @@ const result = await generateText({
     },
   },
   stopWhen: stopWhen.stepCountIs(2),
-  ...sigil.generateTextHooks({ conversationId: 'weather-chat-1' }),
+  ...agento11y.generateTextHooks({ conversationId: 'weather-chat-1' }),
 });
 ```
 
@@ -130,7 +130,7 @@ import { anthropic } from '@ai-sdk/anthropic';
 const stream = streamText({
   model: anthropic('claude-sonnet-4-5'),
   prompt: 'Stream a concise status update.',
-  ...sigil.streamTextHooks({ conversationId: 'stream-chat-1' }),
+  ...agento11y.streamTextHooks({ conversationId: 'stream-chat-1' }),
 });
 
 for await (const _chunk of stream.textStream) {
@@ -145,7 +145,7 @@ for await (const _chunk of stream.textStream) {
 Disable model/tool payload capture:
 
 ```ts
-const sigil = createSigilVercelAiSdk(client, {
+const agento11y = createAgento11yVercelAiSdk(client, {
   captureInputs: false,
   captureOutputs: false,
 });

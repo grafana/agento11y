@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import type { LocalAgent, Plugin } from '@strands-agents/sdk';
-import type { SigilClient } from '../../client.js';
+import type { Agento11yClient } from '../../client.js';
 import type {
   GenerationRecorder,
   GenerationStart,
@@ -19,7 +19,7 @@ export type StrandsProviderResolver =
   | 'none'
   | ((params: { modelName: string; model: unknown; agent: unknown; modelConfig: unknown }) => string | undefined);
 
-export interface SigilStrandsOptions {
+export interface Agento11yStrandsOptions {
   agentName?: string;
   agentVersion?: string;
   conversationId?: string;
@@ -65,10 +65,10 @@ interface ToolRunState {
 const frameworkName = 'strands';
 const frameworkSource = 'hooks';
 const frameworkLanguage = 'typescript';
-const sigilPluginMarker = '__sigilStrandsPlugin';
+const agento11yPluginMarker = '__agento11yStrandsPlugin';
 const instrumentedAgents = new WeakSet<object>();
 
-export class SigilStrandsHookProvider {
+export class Agento11yStrandsHookProvider {
   private readonly agentName?: string;
   private readonly agentVersion?: string;
   private readonly conversationId?: string;
@@ -80,7 +80,7 @@ export class SigilStrandsHookProvider {
   private readonly captureOutputs: boolean;
   private readonly extraTags: Record<string, string>;
   private readonly extraMetadata: Record<string, unknown>;
-  private readonly resolveConversationIdFn?: SigilStrandsOptions['resolveConversationId'];
+  private readonly resolveConversationIdFn?: Agento11yStrandsOptions['resolveConversationId'];
   private readonly invocationRunIds = new WeakMap<object, string[]>();
   private readonly modelRunIds = new WeakMap<object, string[]>();
   private readonly modelRuns = new Map<string, ModelRunState>();
@@ -90,8 +90,8 @@ export class SigilStrandsHookProvider {
   private sequence = 0;
 
   constructor(
-    private readonly client: SigilClient,
-    options: SigilStrandsOptions = {},
+    private readonly client: Agento11yClient,
+    options: Agento11yStrandsOptions = {},
   ) {
     this.agentName = normalizeOptionalString(options.agentName);
     this.agentVersion = normalizeOptionalString(options.agentVersion);
@@ -352,7 +352,7 @@ export class SigilStrandsHookProvider {
       resolved ?? '',
       conversationIdFromPayload(metadataFromAgentState(agent)),
       conversationIdFromPayload(this.extraMetadata),
-      `sigil:framework:${frameworkName}:${runId}`,
+      `agento11y:framework:${frameworkName}:${runId}`,
     );
   }
 
@@ -413,13 +413,13 @@ export class SigilStrandsHookProvider {
   }
 }
 
-export class SigilStrandsPlugin implements Plugin {
-  readonly name = 'sigil-strands-plugin';
-  readonly [sigilPluginMarker] = true;
+export class Agento11yStrandsPlugin implements Plugin {
+  readonly name = 'agento11y-strands-plugin';
+  readonly [agento11yPluginMarker] = true;
 
   constructor(
-    private readonly client: SigilClient,
-    private readonly options: SigilStrandsOptions = {},
+    private readonly client: Agento11yClient,
+    private readonly options: Agento11yStrandsOptions = {},
   ) {}
 
   initAgent(agent: LocalAgent): void {
@@ -427,33 +427,36 @@ export class SigilStrandsPlugin implements Plugin {
     if (instrumentedAgents.has(target)) {
       return;
     }
-    const provider = createSigilStrandsHookProvider(this.client, this.options);
+    const provider = createAgento11yStrandsHookProvider(this.client, this.options);
     provider.registerHooks(target);
     instrumentedAgents.add(target);
   }
 }
 
-export function createSigilStrandsHookProvider(
-  client: SigilClient,
-  options: SigilStrandsOptions = {},
-): SigilStrandsHookProvider {
-  return new SigilStrandsHookProvider(client, options);
+export function createAgento11yStrandsHookProvider(
+  client: Agento11yClient,
+  options: Agento11yStrandsOptions = {},
+): Agento11yStrandsHookProvider {
+  return new Agento11yStrandsHookProvider(client, options);
 }
 
-export function createSigilStrandsPlugin(client: SigilClient, options: SigilStrandsOptions = {}): SigilStrandsPlugin {
-  return new SigilStrandsPlugin(client, options);
+export function createAgento11yStrandsPlugin(
+  client: Agento11yClient,
+  options: Agento11yStrandsOptions = {},
+): Agento11yStrandsPlugin {
+  return new Agento11yStrandsPlugin(client, options);
 }
 
-export function withSigilStrandsHooks<T extends StrandsAgentConfig | HookableAgent | undefined>(
+export function withAgento11yStrandsHooks<T extends StrandsAgentConfig | HookableAgent | undefined>(
   configOrAgent: T,
-  client: SigilClient,
-  options: SigilStrandsOptions = {},
+  client: Agento11yClient,
+  options: Agento11yStrandsOptions = {},
 ): T extends undefined ? StrandsAgentConfig : T {
-  const plugin = createSigilStrandsPlugin(client, options);
+  const plugin = createAgento11yStrandsPlugin(client, options);
   if (configOrAgent === undefined || !isHookableAgent(configOrAgent)) {
     const config = { ...(configOrAgent ?? {}) } as StrandsAgentConfig;
     const plugins = asArray(config.plugins);
-    if (!plugins.some(isSigilPlugin)) {
+    if (!plugins.some(isAgento11yPlugin)) {
       plugins.push(plugin);
     }
     config.plugins = plugins;
@@ -461,7 +464,7 @@ export function withSigilStrandsHooks<T extends StrandsAgentConfig | HookableAge
   }
 
   if (!instrumentedAgents.has(configOrAgent)) {
-    createSigilStrandsHookProvider(client, options).registerHooks(configOrAgent);
+    createAgento11yStrandsHookProvider(client, options).registerHooks(configOrAgent);
     instrumentedAgents.add(configOrAgent);
   }
   return configOrAgent as T extends undefined ? StrandsAgentConfig : T;
@@ -839,8 +842,8 @@ function asArray(value: unknown): unknown[] {
   return value === undefined || value === null ? [] : [value];
 }
 
-function isSigilPlugin(value: unknown): boolean {
-  return isRecord(value) && value[sigilPluginMarker] === true;
+function isAgento11yPlugin(value: unknown): boolean {
+  return isRecord(value) && value[agento11yPluginMarker] === true;
 }
 
 function isHookableAgent(value: unknown): value is HookableAgent {

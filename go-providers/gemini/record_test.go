@@ -8,7 +8,7 @@ import (
 
 	"google.golang.org/genai"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 func TestEmbedContentReturnsRecorderValidationErrorAfterEnd(t *testing.T) {
@@ -132,13 +132,13 @@ func TestConformance_GenerateContentErrorMapping(t *testing.T) {
 	})
 }
 
-func newProviderTestClient(t *testing.T) *sigil.Client {
+func newProviderTestClient(t *testing.T) *agento11y.Client {
 	t.Helper()
 
-	cfg := sigil.DefaultConfig()
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolNone
+	cfg := agento11y.DefaultConfig()
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolNone
 
-	client := sigil.NewClient(cfg)
+	client := agento11y.NewClient(cfg)
 	t.Cleanup(func() {
 		if err := client.Shutdown(context.Background()); err != nil {
 			t.Errorf("shutdown sigil client: %v", err)

@@ -63,11 +63,11 @@ test('framework emit path invokes all framework handlers for provider sources', 
 
   await emitFrameworks(
     {
-      langchain: { SigilLangChainHandler: FakeHandler },
-      langgraph: { SigilLangGraphHandler: FakeHandler },
-      openaiAgents: { SigilOpenAIAgentsHandler: FakeHandler },
-      llamaindex: { SigilLlamaIndexHandler: FakeHandler },
-      googleAdk: { SigilGoogleAdkHandler: FakeHandler },
+      langchain: { Agento11yLangChainHandler: FakeHandler },
+      langgraph: { Agento11yLangGraphHandler: FakeHandler },
+      openaiAgents: { Agento11yOpenAIAgentsHandler: FakeHandler },
+      llamaindex: { Agento11yLlamaIndexHandler: FakeHandler },
+      googleAdk: { Agento11yGoogleAdkHandler: FakeHandler },
     },
     {},
     'openai',
@@ -95,11 +95,11 @@ test('framework emit path skips non-provider custom source', async () => {
 
   await emitFrameworks(
     {
-      langchain: { SigilLangChainHandler: FakeHandler },
-      langgraph: { SigilLangGraphHandler: FakeHandler },
-      openaiAgents: { SigilOpenAIAgentsHandler: FakeHandler },
-      llamaindex: { SigilLlamaIndexHandler: FakeHandler },
-      googleAdk: { SigilGoogleAdkHandler: FakeHandler },
+      langchain: { Agento11yLangChainHandler: FakeHandler },
+      langgraph: { Agento11yLangGraphHandler: FakeHandler },
+      openaiAgents: { Agento11yOpenAIAgentsHandler: FakeHandler },
+      llamaindex: { Agento11yLlamaIndexHandler: FakeHandler },
+      googleAdk: { Agento11yGoogleAdkHandler: FakeHandler },
     },
     {},
     'mistral',

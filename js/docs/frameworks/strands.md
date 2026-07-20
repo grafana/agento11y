@@ -1,6 +1,6 @@
 # Strands Agents Hooks (`@grafana/agento11y/strands`)
 
-Use `withSigilStrandsHooks(...)` to instrument Strands Agents TypeScript agents with Sigil generation export, spans, metrics, tool execution spans, and streaming TTFT.
+Use `withAgento11yStrandsHooks(...)` to instrument Strands Agents TypeScript agents with Sigil generation export, spans, metrics, tool execution spans, and streaming TTFT.
 
 ## Install
 
@@ -13,44 +13,44 @@ pnpm add @grafana/agento11y @strands-agents/sdk
 ```ts
 import { Agent } from '@strands-agents/sdk';
 import { OpenAIModel } from '@strands-agents/sdk/models/openai';
-import { SigilClient } from '@grafana/agento11y';
-import { withSigilStrandsHooks } from '@grafana/agento11y/strands';
+import { Agento11yClient } from '@grafana/agento11y';
+import { withAgento11yStrandsHooks } from '@grafana/agento11y/strands';
 
-const sigil = new SigilClient();
+const agento11y = new Agento11yClient();
 const model = new OpenAIModel({ api: 'chat', modelId: 'gpt-4o-mini' });
 
 const agent = new Agent(
-  withSigilStrandsHooks(
+  withAgento11yStrandsHooks(
     {
       name: 'support-agent',
       model,
       systemPrompt: 'You are concise.',
       appState: { conversation_id: 'chat-123' },
     },
-    sigil,
+    agento11y,
     { providerResolver: 'auto' },
   ),
 );
 
 const result = await agent.invoke('Answer in one sentence.');
 console.log(result.toString());
-await sigil.shutdown();
+await agento11y.shutdown();
 ```
 
-`withSigilStrandsHooks(...)` can also register hooks on an already-created agent:
+`withAgento11yStrandsHooks(...)` can also register hooks on an already-created agent:
 
 ```ts
-withSigilStrandsHooks(agent, sigil, { conversationId: 'chat-123' });
+withAgento11yStrandsHooks(agent, agento11y, { conversationId: 'chat-123' });
 ```
 
 ## Conversation ID
 
 Use a stable conversation ID for multi-turn continuity. Precedence:
 
-1. `withSigilStrandsHooks(..., { conversationId })`
+1. `withAgento11yStrandsHooks(..., { conversationId })`
 2. `resolveConversationId(event, agent)` option
 3. `agent.appState` keys: `conversation_id`, `conversationId`, `session_id`, `sessionId`, `group_id`, `groupId`
-4. fallback `sigil:framework:strands:<run_id>`
+4. fallback `agento11y:framework:strands:<run_id>`
 
 For per-request routing, set `agent.appState.set('conversation_id', id)` before `agent.invoke(...)` and omit the fixed `conversationId` option.
 
@@ -75,7 +75,7 @@ Metadata includes:
 Disable model/tool payload capture:
 
 ```ts
-withSigilStrandsHooks(agent, sigil, {
+withAgento11yStrandsHooks(agent, agento11y, {
   captureInputs: false,
   captureOutputs: false,
 });
@@ -85,4 +85,4 @@ withSigilStrandsHooks(agent, sigil, {
 
 - The adapter uses Strands lifecycle hooks and plugins. It does not replace the model or tool implementations.
 - OpenAI usage requires installing Strands' OpenAI peer dependency (`openai`) and setting `OPENAI_API_KEY`.
-- Call `await sigil.shutdown()` to flush queued generation export before process exit.
+- Call `await agento11y.shutdown()` to flush queued generation export before process exit.

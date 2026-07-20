@@ -1,10 +1,10 @@
-namespace Grafana.Sigil;
+namespace Grafana.Agento11y;
 
 public static class GenerationValidator
 {
     public static void Validate(Generation generation)
     {
-        var contentStripped = SigilClient.IsContentStripped(generation);
+        var contentStripped = Agento11yClient.IsContentStripped(generation);
 
         if (generation.Mode is not null && generation.Mode is not (GenerationMode.Sync or GenerationMode.Stream))
         {

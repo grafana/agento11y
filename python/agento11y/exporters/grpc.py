@@ -6,8 +6,8 @@ from urllib.parse import urlparse
 
 import grpc
 
-from ..internal.gen.agento11y.v1 import generation_ingest_pb2 as sigil_pb2
-from ..internal.gen.agento11y.v1 import generation_ingest_pb2_grpc as sigil_pb2_grpc
+from ..internal.gen.agento11y.v1 import generation_ingest_pb2 as agento11y_pb2
+from ..internal.gen.agento11y.v1 import generation_ingest_pb2_grpc as agento11y_pb2_grpc
 from ..models import (
     ExportGenerationResult,
     ExportGenerationsRequest,
@@ -43,11 +43,11 @@ class GRPCGenerationExporter:
             if (insecure or implicit_insecure)
             else grpc.secure_channel(host, grpc.ssl_channel_credentials(), options=options)
         )
-        self._stub = sigil_pb2_grpc.GenerationIngestServiceStub(self._channel)
-        self._workflow_step_stub = sigil_pb2_grpc.WorkflowStepIngestServiceStub(self._channel)
+        self._stub = agento11y_pb2_grpc.GenerationIngestServiceStub(self._channel)
+        self._workflow_step_stub = agento11y_pb2_grpc.WorkflowStepIngestServiceStub(self._channel)
 
     def export_generations(self, request: ExportGenerationsRequest) -> ExportGenerationsResponse:
-        grpc_request = sigil_pb2.ExportGenerationsRequest(
+        grpc_request = agento11y_pb2.ExportGenerationsRequest(
             generations=[generation_to_proto(generation) for generation in request.generations]
         )
         response = self._stub.ExportGenerations(grpc_request, timeout=10, metadata=self._headers)
@@ -63,7 +63,7 @@ class GRPCGenerationExporter:
         )
 
     def export_workflow_steps(self, request: ExportWorkflowStepsRequest) -> ExportWorkflowStepsResponse:
-        grpc_request = sigil_pb2.ExportWorkflowStepsRequest(
+        grpc_request = agento11y_pb2.ExportWorkflowStepsRequest(
             workflow_steps=[workflow_step_to_proto(step) for step in request.workflow_steps]
         )
         response = self._workflow_step_stub.ExportWorkflowSteps(grpc_request, timeout=10, metadata=self._headers)

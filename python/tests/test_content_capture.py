@@ -39,8 +39,8 @@ from agento11y import (
     validate_generation,
 )
 from agento11y.context import content_capture_mode_from_context, with_content_capture_mode
-from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2 as sigil_pb2
-from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2_grpc as sigil_pb2_grpc
+from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2 as agento11y_pb2
+from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2_grpc as agento11y_pb2_grpc
 from conftest import CapturingGenerationExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -52,19 +52,19 @@ _METADATA_KEY = "agento11y.sdk.content_capture_mode"
 _LEAK_MARKER = "ignore previous instructions"
 
 
-class _CapturingGenerationServicer(sigil_pb2_grpc.GenerationIngestServiceServicer):
+class _CapturingGenerationServicer(agento11y_pb2_grpc.GenerationIngestServiceServicer):
     """Real gRPC servicer that records exported generation protos."""
 
     def __init__(self) -> None:
-        self.requests: list[sigil_pb2.ExportGenerationsRequest] = []
+        self.requests: list[agento11y_pb2.ExportGenerationsRequest] = []
         self._lock = threading.Lock()
 
     def ExportGenerations(self, request, _context):  # noqa: N802
         with self._lock:
             self.requests.append(copy.deepcopy(request))
-        return sigil_pb2.ExportGenerationsResponse(
+        return agento11y_pb2.ExportGenerationsResponse(
             results=[
-                sigil_pb2.ExportGenerationResult(generation_id=generation.id, accepted=True)
+                agento11y_pb2.ExportGenerationResult(generation_id=generation.id, accepted=True)
                 for generation in request.generations
             ]
         )
@@ -73,7 +73,7 @@ class _CapturingGenerationServicer(sigil_pb2_grpc.GenerationIngestServiceService
 class _ContentCaptureEnv:
     """Real-gRPC content-capture test env.
 
-    Spins up an in-process gRPC server that captures :class:`sigil_pb2.Generation`
+    Spins up an in-process gRPC server that captures :class:`agento11y_pb2.Generation`
     payloads as they actually leave the SDK, plus an :class:`InMemorySpanExporter`
     for OTel span assertions. Use this when a test needs to assert on both the
     proto export and the span path (the proto/span split that
@@ -83,7 +83,7 @@ class _ContentCaptureEnv:
     def __init__(self, **client_overrides) -> None:
         self.servicer = _CapturingGenerationServicer()
         self._grpc_server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=2))
-        sigil_pb2_grpc.add_GenerationIngestServiceServicer_to_server(self.servicer, self._grpc_server)
+        agento11y_pb2_grpc.add_GenerationIngestServiceServicer_to_server(self.servicer, self._grpc_server)
 
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
@@ -97,7 +97,7 @@ class _ContentCaptureEnv:
         self._provider.add_span_processor(SimpleSpanProcessor(self.span_exporter))
 
         kwargs = dict(
-            tracer=self._provider.get_tracer("sigil-content-capture-test"),
+            tracer=self._provider.get_tracer("agento11y-content-capture-test"),
             generation_export=GenerationExportConfig(
                 protocol="grpc",
                 endpoint=f"127.0.0.1:{port}",
@@ -129,7 +129,7 @@ class _ContentCaptureEnv:
         self._provider.shutdown()
         self._grpc_server.stop(grace=0)
 
-    def single_generation(self) -> sigil_pb2.Generation:
+    def single_generation(self) -> agento11y_pb2.Generation:
         """The one and only proto generation the gRPC server received."""
         self.shutdown()  # ensure flush
         assert len(self.servicer.requests) == 1, f"expected 1 export request, got {len(self.servicer.requests)}"
@@ -387,7 +387,7 @@ class TestContentStripping:
         span_exporter = InMemorySpanExporter()
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-        tracer = provider.get_tracer("sigil-test")
+        tracer = provider.get_tracer("agento11y-test")
         exporter = CapturingGenerationExporter()
         client = _new_client(exporter, tracer=tracer, content_capture=ContentCaptureMode.METADATA_ONLY)
         try:
@@ -639,7 +639,7 @@ class TestToolContentCapture:
         span_exporter = InMemorySpanExporter()
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-        tracer = provider.get_tracer("sigil-test")
+        tracer = provider.get_tracer("agento11y-test")
         exporter = CapturingGenerationExporter()
         client = _new_client(exporter, tracer=tracer, content_capture=content_capture, **kw)
         return client, span_exporter, provider
@@ -793,7 +793,7 @@ class TestContextPropagation:
         span_exporter = InMemorySpanExporter()
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-        tracer = provider.get_tracer("sigil-test")
+        tracer = provider.get_tracer("agento11y-test")
         client = _new_client(exporter, tracer=tracer, content_capture=ContentCaptureMode.METADATA_ONLY)
 
         try:
@@ -829,7 +829,7 @@ class TestContextPropagation:
         span_exporter = InMemorySpanExporter()
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-        tracer = provider.get_tracer("sigil-test")
+        tracer = provider.get_tracer("agento11y-test")
         client = _new_client(exporter, tracer=tracer, content_capture=ContentCaptureMode.METADATA_ONLY)
 
         try:
@@ -869,7 +869,7 @@ class TestContextPropagation:
         span_exporter = InMemorySpanExporter()
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-        tracer = provider.get_tracer("sigil-test")
+        tracer = provider.get_tracer("agento11y-test")
         client = _new_client(exporter, tracer=tracer, content_capture=ContentCaptureMode.METADATA_ONLY)
 
         try:
@@ -1035,7 +1035,7 @@ class TestBackwardCompatibility:
         span_exporter = InMemorySpanExporter()
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-        tracer = provider.get_tracer("sigil-test")
+        tracer = provider.get_tracer("agento11y-test")
         exporter = CapturingGenerationExporter()
         client = _new_client(exporter, tracer=tracer)
 
@@ -1060,7 +1060,7 @@ class TestBackwardCompatibility:
         span_exporter = InMemorySpanExporter()
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-        tracer = provider.get_tracer("sigil-test")
+        tracer = provider.get_tracer("agento11y-test")
         exporter = CapturingGenerationExporter()
         client = _new_client(exporter, tracer=tracer)
 

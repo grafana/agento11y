@@ -3,15 +3,15 @@ using Anthropic.Models.Messages;
 using System.Text.Json;
 using AnthropicMessage = Anthropic.Models.Messages.Message;
 
-namespace Grafana.Sigil.Anthropic;
+namespace Grafana.Agento11y.Anthropic;
 
 public static class AnthropicRecorder
 {
     public static async Task<AnthropicMessage> MessageAsync(
-        SigilClient client,
+        Agento11yClient client,
         IAnthropicClient provider,
         MessageCreateParams request,
-        AnthropicSigilOptions? options = null,
+        AnthropicAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -27,10 +27,10 @@ public static class AnthropicRecorder
     }
 
     public static async Task<AnthropicMessage> MessageAsync(
-        SigilClient client,
+        Agento11yClient client,
         MessageCreateParams request,
         Func<MessageCreateParams, CancellationToken, Task<AnthropicMessage>> invoke,
-        AnthropicSigilOptions? options = null,
+        AnthropicAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -38,7 +38,7 @@ public static class AnthropicRecorder
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(invoke);
 
-        var effective = options ?? new AnthropicSigilOptions();
+        var effective = options ?? new AnthropicAgento11yOptions();
         var modelName = ResolveModelName(request, effective);
 
         var recorder = client.StartGeneration(new GenerationStart
@@ -85,10 +85,10 @@ public static class AnthropicRecorder
     }
 
     public static async Task<AnthropicStreamSummary> MessageStreamAsync(
-        SigilClient client,
+        Agento11yClient client,
         IAnthropicClient provider,
         MessageCreateParams request,
-        AnthropicSigilOptions? options = null,
+        AnthropicAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -104,10 +104,10 @@ public static class AnthropicRecorder
     }
 
     public static async Task<AnthropicStreamSummary> MessageStreamAsync(
-        SigilClient client,
+        Agento11yClient client,
         MessageCreateParams request,
         Func<MessageCreateParams, CancellationToken, IAsyncEnumerable<RawMessageStreamEvent>> invoke,
-        AnthropicSigilOptions? options = null,
+        AnthropicAgento11yOptions? options = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -115,7 +115,7 @@ public static class AnthropicRecorder
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(invoke);
 
-        var effective = options ?? new AnthropicSigilOptions();
+        var effective = options ?? new AnthropicAgento11yOptions();
         var modelName = ResolveModelName(request, effective);
 
         var recorder = client.StartStreamingGeneration(new GenerationStart
@@ -171,7 +171,7 @@ public static class AnthropicRecorder
         }
     }
 
-    private static string ResolveModelName(MessageCreateParams request, AnthropicSigilOptions options)
+    private static string ResolveModelName(MessageCreateParams request, AnthropicAgento11yOptions options)
     {
         if (!string.IsNullOrWhiteSpace(options.ModelName))
         {

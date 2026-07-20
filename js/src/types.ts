@@ -100,7 +100,7 @@ export interface EmbeddingCaptureConfig {
 }
 
 /** Optional logger hooks used by the SDK runtime. */
-export interface SigilLogger {
+export interface Agento11yLogger {
   debug?: (message: string, ...args: unknown[]) => void;
   warn?: (message: string, ...args: unknown[]) => void;
   error?: (message: string, ...args: unknown[]) => void;
@@ -201,7 +201,7 @@ export interface GenerationExporter {
 export type GenerationSanitizer = (generation: Generation) => Generation;
 
 /** Fully resolved SDK configuration. */
-export interface SigilSdkConfig {
+export interface Agento11ySdkConfig {
   generationExport: GenerationExportConfig;
   api: ApiConfig;
   embeddingCapture: EmbeddingCaptureConfig;
@@ -227,14 +227,14 @@ export interface SigilSdkConfig {
   generationExporter?: GenerationExporter;
   tracer?: Tracer;
   meter?: Meter;
-  logger?: SigilLogger;
+  logger?: Agento11yLogger;
   now?: () => Date;
   sleep?: (durationMs: number) => Promise<void>;
   /**
    * Default agent name applied to GenerationStart / EmbeddingStart /
    * ToolExecutionStart when the per-call value is empty. Read from
    * `AGENTO11Y_AGENT_NAME` (`SIGIL_AGENT_NAME` fallback) automatically by
-   * `new SigilClient()`.
+   * `new Agento11yClient()`.
    */
   agentName?: string;
   /** Default agent version. Read from `AGENTO11Y_AGENT_VERSION` (`SIGIL_AGENT_VERSION` fallback). */
@@ -258,7 +258,7 @@ export interface SigilSdkConfig {
 }
 
 /** Partial SDK configuration passed by callers. */
-export interface SigilSdkConfigInput {
+export interface Agento11ySdkConfigInput {
   generationExport?: Partial<GenerationExportConfig>;
   api?: Partial<ApiConfig>;
   embeddingCapture?: Partial<EmbeddingCaptureConfig>;
@@ -269,7 +269,7 @@ export interface SigilSdkConfigInput {
   generationExporter?: GenerationExporter;
   tracer?: Tracer;
   meter?: Meter;
-  logger?: SigilLogger;
+  logger?: Agento11yLogger;
   now?: () => Date;
   sleep?: (durationMs: number) => Promise<void>;
   agentName?: string;
@@ -520,7 +520,7 @@ export interface ToolExecutionStart {
   startedAt?: Date;
 }
 
-/** Options for {@link SigilClient.executeToolCalls}. */
+/** Options for {@link Agento11yClient.executeToolCalls}. */
 export interface ExecuteToolCallsOptions {
   conversationId?: string;
   conversationTitle?: string;
@@ -588,7 +588,7 @@ export interface ToolExecutionRecorder {
 }
 
 /** In-memory snapshot for tests/debugging. */
-export interface SigilDebugSnapshot {
+export interface Agento11yDebugSnapshot {
   generations: Generation[];
   workflowSteps: WorkflowStep[];
   toolExecutions: ToolExecution[];

@@ -373,7 +373,7 @@ describe("pi plugin: real-SDK golden export", () => {
 
     // full and full_with_metadata_spans must keep tool bodies in the proto
     // export (the SDK splits content only on the OTel span side); see
-    // go/sigil/content_capture.go on ContentCaptureModeFullWithMetadataSpans.
+    // go/agento11y/content_capture.go on ContentCaptureModeFullWithMetadataSpans.
     const expectsToolBodies =
       contentCapture === "full" ||
       contentCapture === "full_with_metadata_spans";

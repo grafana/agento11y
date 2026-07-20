@@ -9,11 +9,11 @@ import pytest
 from agento11y import Client, ClientConfig, GenerationExportConfig, HookEvaluateResponse
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse, PartKind
 from agento11y_claude_agent import (
-    SigilClaudeAgentHandler,
-    SigilClaudeSDKClient,
-    create_sigil_claude_agent_handler,
-    sigil_query,
-    with_sigil_claude_agent_options,
+    Agento11yClaudeAgentHandler,
+    Agento11yClaudeSDKClient,
+    agento11y_query,
+    create_agento11y_claude_agent_handler,
+    with_agento11y_claude_agent_options,
 )
 from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, ToolUseBlock, UserMessage
 
@@ -102,7 +102,7 @@ def _success_result(session_id: str = "session-42") -> ResultMessage:
 
 
 @pytest.mark.asyncio
-async def test_sigil_query_records_claude_agent_stream() -> None:
+async def test_agento11y_query_records_claude_agent_stream() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
 
@@ -138,7 +138,7 @@ async def test_sigil_query_records_claude_agent_stream() -> None:
     try:
         seen = [
             message
-            async for message in sigil_query(
+            async for message in agento11y_query(
                 prompt="Inspect the README.",
                 client=client,
                 options=ClaudeAgentOptions(model="claude-sonnet-4-5", permission_mode="acceptEdits"),
@@ -174,7 +174,7 @@ async def test_sigil_query_records_claude_agent_stream() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sigil_query_early_stream_exit_finishes_without_error() -> None:
+async def test_agento11y_query_early_stream_exit_finishes_without_error() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
 
@@ -183,7 +183,7 @@ async def test_sigil_query_early_stream_exit_finishes_without_error() -> None:
         yield AssistantMessage(content=[TextBlock("Unread.")], model="claude-sonnet-4-5", session_id="session-42")
 
     try:
-        stream = sigil_query(
+        stream = agento11y_query(
             prompt="Inspect the README.",
             client=client,
             options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
@@ -216,15 +216,15 @@ async def test_claude_sdk_client_early_stream_exit_finishes_without_error() -> N
     )
 
     try:
-        async with SigilClaudeSDKClient(
+        async with Agento11yClaudeSDKClient(
             client=client,
             _claude_client=claude,  # type: ignore[arg-type]
             options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
             conversation_id="conv-client",
             agent_name="claude-agent",
-        ) as sigil_claude:
-            await sigil_claude.query("Inspect the README.")
-            stream = sigil_claude.receive_response()
+        ) as agento11y_claude:
+            await agento11y_claude.query("Inspect the README.")
+            stream = agento11y_claude.receive_response()
             async for _message in stream:
                 await stream.aclose()
                 break
@@ -268,7 +268,7 @@ async def test_handler_start_failure_can_be_retried() -> None:
             return self.recorder
 
     flaky_client = _FlakyClient()
-    handler = SigilClaudeAgentHandler(client=flaky_client, conversation_id="conv-42")  # type: ignore[arg-type]
+    handler = Agento11yClaudeAgentHandler(client=flaky_client, conversation_id="conv-42")  # type: ignore[arg-type]
     options = ClaudeAgentOptions(model="claude-sonnet-4-5")
 
     with pytest.raises(RuntimeError, match="start failed"):
@@ -302,7 +302,7 @@ async def test_claude_sdk_client_start_failure_can_be_retried() -> None:
         def err(self):
             return None
 
-    class _FlakySigilClient:
+    class _FlakyAgento11yClient:
         def __init__(self) -> None:
             self.calls = 0
             self.recorder = _Recorder()
@@ -313,14 +313,14 @@ async def test_claude_sdk_client_start_failure_can_be_retried() -> None:
                 raise RuntimeError("start failed")
             return self.recorder
 
-    sigil_client = _FlakySigilClient()
+    agento11y_client = _FlakyAgento11yClient()
     claude = _FakeClaudeSDKClient()
     claude.responses.append(
         [AssistantMessage(content=[TextBlock("Recovered.")], model="claude-sonnet-4-5"), _success_result()]
     )
 
-    sigil_claude = SigilClaudeSDKClient(
-        client=sigil_client,  # type: ignore[arg-type]
+    agento11y_claude = Agento11yClaudeSDKClient(
+        client=agento11y_client,  # type: ignore[arg-type]
         _claude_client=claude,  # type: ignore[arg-type]
         options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
         conversation_id="conv-client",
@@ -328,22 +328,22 @@ async def test_claude_sdk_client_start_failure_can_be_retried() -> None:
     )
 
     with pytest.raises(RuntimeError, match="start failed"):
-        await sigil_claude.query("First prompt.")
+        await agento11y_claude.query("First prompt.")
 
-    await sigil_claude.query("Retry prompt.")
-    _ = [message async for message in sigil_claude.receive_response()]
+    await agento11y_claude.query("Retry prompt.")
+    _ = [message async for message in agento11y_claude.receive_response()]
 
-    assert sigil_client.calls == 2
+    assert agento11y_client.calls == 2
     assert claude.queries == [("Retry prompt.", "default")]
-    assert sigil_client.recorder.generation.input[0].parts[0].text == "Retry prompt."
-    assert sigil_client.recorder.generation.output[0].parts[0].text == "Recovered."
+    assert agento11y_client.recorder.generation.input[0].parts[0].text == "Retry prompt."
+    assert agento11y_client.recorder.generation.output[0].parts[0].text == "Recovered."
 
 
 @pytest.mark.asyncio
-async def test_sigil_query_reuses_finished_handler_for_new_generation() -> None:
+async def test_agento11y_query_reuses_finished_handler_for_new_generation() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
-    handler = create_sigil_claude_agent_handler(client=client, conversation_id="conv-42", agent_name="claude-agent")
+    handler = create_agento11y_claude_agent_handler(client=client, conversation_id="conv-42", agent_name="claude-agent")
 
     async def first_query(**_kwargs) -> AsyncIterator[object]:
         yield AssistantMessage(content=[TextBlock("First.")], model="claude-sonnet-4-5", session_id="session-1")
@@ -356,7 +356,7 @@ async def test_sigil_query_reuses_finished_handler_for_new_generation() -> None:
     try:
         _ = [
             message
-            async for message in sigil_query(
+            async for message in agento11y_query(
                 prompt="First prompt.",
                 client=client,
                 handler=handler,
@@ -366,7 +366,7 @@ async def test_sigil_query_reuses_finished_handler_for_new_generation() -> None:
         ]
         _ = [
             message
-            async for message in sigil_query(
+            async for message in agento11y_query(
                 prompt="Second prompt.",
                 client=client,
                 handler=handler,
@@ -391,7 +391,7 @@ async def test_sigil_query_reuses_finished_handler_for_new_generation() -> None:
 async def test_reused_handler_resolves_conversation_id_per_run() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
-    handler = create_sigil_claude_agent_handler(client=client, agent_name="claude-agent")
+    handler = create_agento11y_claude_agent_handler(client=client, agent_name="claude-agent")
 
     async def first_query(**_kwargs) -> AsyncIterator[object]:
         yield AssistantMessage(content=[TextBlock("First.")], model="claude-sonnet-4-5", session_id="session-1")
@@ -404,7 +404,7 @@ async def test_reused_handler_resolves_conversation_id_per_run() -> None:
     try:
         _ = [
             message
-            async for message in sigil_query(
+            async for message in agento11y_query(
                 prompt="First prompt.",
                 client=client,
                 handler=handler,
@@ -414,7 +414,7 @@ async def test_reused_handler_resolves_conversation_id_per_run() -> None:
         ]
         _ = [
             message
-            async for message in sigil_query(
+            async for message in agento11y_query(
                 prompt="Second prompt.",
                 client=client,
                 handler=handler,
@@ -434,7 +434,7 @@ async def test_reused_handler_resolves_conversation_id_per_run() -> None:
 async def test_reused_handler_resolves_model_per_run() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
-    handler = create_sigil_claude_agent_handler(client=client, conversation_id="conv-42", agent_name="claude-agent")
+    handler = create_agento11y_claude_agent_handler(client=client, conversation_id="conv-42", agent_name="claude-agent")
 
     async def first_query(**_kwargs) -> AsyncIterator[object]:
         yield AssistantMessage(content=[TextBlock("First.")], model="claude-model-a", session_id="session-1")
@@ -447,7 +447,7 @@ async def test_reused_handler_resolves_model_per_run() -> None:
     try:
         _ = [
             message
-            async for message in sigil_query(
+            async for message in agento11y_query(
                 prompt="First prompt.",
                 client=client,
                 handler=handler,
@@ -457,7 +457,7 @@ async def test_reused_handler_resolves_model_per_run() -> None:
         ]
         _ = [
             message
-            async for message in sigil_query(
+            async for message in agento11y_query(
                 prompt="Second prompt.",
                 client=client,
                 handler=handler,
@@ -474,7 +474,7 @@ async def test_reused_handler_resolves_model_per_run() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sigil_query_skips_replayed_initial_user_message() -> None:
+async def test_agento11y_query_skips_replayed_initial_user_message() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
 
@@ -486,7 +486,7 @@ async def test_sigil_query_skips_replayed_initial_user_message() -> None:
     try:
         seen = [
             message
-            async for message in sigil_query(
+            async for message in agento11y_query(
                 prompt="Inspect the README.",
                 client=client,
                 options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
@@ -505,7 +505,7 @@ async def test_sigil_query_skips_replayed_initial_user_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sigil_claude_sdk_client_records_receive_response_stream() -> None:
+async def test_agento11y_claude_sdk_client_records_receive_response_stream() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     claude = _FakeClaudeSDKClient()
@@ -518,15 +518,15 @@ async def test_sigil_claude_sdk_client_records_receive_response_stream() -> None
     )
 
     try:
-        async with SigilClaudeSDKClient(
+        async with Agento11yClaudeSDKClient(
             client=client,
             _claude_client=claude,  # type: ignore[arg-type]
             options=ClaudeAgentOptions(model="claude-sonnet-4-5", permission_mode="default"),
             conversation_id="conv-client",
             agent_name="claude-agent",
-        ) as sigil_claude:
-            await sigil_claude.query("Inspect the README.", session_id="work")
-            seen = [message async for message in sigil_claude.receive_response()]
+        ) as agento11y_claude:
+            await agento11y_claude.query("Inspect the README.", session_id="work")
+            seen = [message async for message in agento11y_claude.receive_response()]
 
         assert claude.entered is True
         assert claude.exited is True
@@ -546,7 +546,7 @@ async def test_sigil_claude_sdk_client_records_receive_response_stream() -> None
 
 
 @pytest.mark.asyncio
-async def test_sigil_claude_sdk_client_records_multiple_queries() -> None:
+async def test_agento11y_claude_sdk_client_records_multiple_queries() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     claude = _FakeClaudeSDKClient()
@@ -558,17 +558,17 @@ async def test_sigil_claude_sdk_client_records_multiple_queries() -> None:
     )
 
     try:
-        async with SigilClaudeSDKClient(
+        async with Agento11yClaudeSDKClient(
             client=client,
             _claude_client=claude,  # type: ignore[arg-type]
             options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
             conversation_id="conv-client",
             agent_name="claude-agent",
-        ) as sigil_claude:
-            await sigil_claude.query("First prompt.")
-            _ = [message async for message in sigil_claude.receive_response()]
-            await sigil_claude.query("Second prompt.")
-            _ = [message async for message in sigil_claude.receive_messages()]
+        ) as agento11y_claude:
+            await agento11y_claude.query("First prompt.")
+            _ = [message async for message in agento11y_claude.receive_response()]
+            await agento11y_claude.query("Second prompt.")
+            _ = [message async for message in agento11y_claude.receive_messages()]
 
         client.flush()
         generations = exporter.requests[0].generations
@@ -579,28 +579,28 @@ async def test_sigil_claude_sdk_client_records_multiple_queries() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sigil_claude_sdk_client_rejects_overlapping_queries() -> None:
+async def test_agento11y_claude_sdk_client_rejects_overlapping_queries() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     claude = _FakeClaudeSDKClient()
 
     try:
-        async with SigilClaudeSDKClient(
+        async with Agento11yClaudeSDKClient(
             client=client,
             _claude_client=claude,  # type: ignore[arg-type]
             options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
             conversation_id="conv-client",
             agent_name="claude-agent",
-        ) as sigil_claude:
-            await sigil_claude.query("First prompt.")
+        ) as agento11y_claude:
+            await agento11y_claude.query("First prompt.")
             with pytest.raises(RuntimeError, match="previous response stream finishes"):
-                await sigil_claude.query("Second prompt.")
+                await agento11y_claude.query("Second prompt.")
     finally:
         client.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_sigil_claude_sdk_client_uses_stable_fallback_conversation() -> None:
+async def test_agento11y_claude_sdk_client_uses_stable_fallback_conversation() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
     claude = _FakeClaudeSDKClient()
@@ -612,37 +612,37 @@ async def test_sigil_claude_sdk_client_uses_stable_fallback_conversation() -> No
     )
 
     try:
-        async with SigilClaudeSDKClient(
+        async with Agento11yClaudeSDKClient(
             client=client,
             _claude_client=claude,  # type: ignore[arg-type]
             options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
             agent_name="claude-agent",
-        ) as sigil_claude:
-            await sigil_claude.query("First prompt.")
-            _ = [message async for message in sigil_claude.receive_response()]
-            await sigil_claude.query("Second prompt.")
-            _ = [message async for message in sigil_claude.receive_response()]
+        ) as agento11y_claude:
+            await agento11y_claude.query("First prompt.")
+            _ = [message async for message in agento11y_claude.receive_response()]
+            await agento11y_claude.query("Second prompt.")
+            _ = [message async for message in agento11y_claude.receive_response()]
 
         client.flush()
         generations = exporter.requests[0].generations
         assert len({generation.conversation_id for generation in generations}) == 1
-        assert generations[0].conversation_id.startswith("sigil:framework:claude-agent-sdk:client:")
+        assert generations[0].conversation_id.startswith("agento11y:framework:claude-agent-sdk:client:")
     finally:
         client.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_sigil_claude_sdk_client_passthrough_methods() -> None:
+async def test_agento11y_claude_sdk_client_passthrough_methods() -> None:
     claude = _FakeClaudeSDKClient()
     exporter = _CapturingExporter()
     client = _new_client(exporter)
 
     try:
-        sigil_claude = SigilClaudeSDKClient(client=client, _claude_client=claude)  # type: ignore[arg-type]
-        await sigil_claude.set_permission_mode("acceptEdits")
-        await sigil_claude.rewind_files("checkpoint-1")
-        await sigil_claude.interrupt()
-        await sigil_claude.disconnect()
+        agento11y_claude = Agento11yClaudeSDKClient(client=client, _claude_client=claude)  # type: ignore[arg-type]
+        await agento11y_claude.set_permission_mode("acceptEdits")
+        await agento11y_claude.rewind_files("checkpoint-1")
+        await agento11y_claude.interrupt()
+        await agento11y_claude.disconnect()
 
         assert claude.permission_modes == ["acceptEdits"]
         assert claude.rewind_ids == ["checkpoint-1"]
@@ -652,14 +652,14 @@ async def test_sigil_claude_sdk_client_passthrough_methods() -> None:
         client.shutdown()
 
 
-def test_with_sigil_claude_agent_options_appends_hooks_once() -> None:
+def test_with_agento11y_claude_agent_options_appends_hooks_once() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
 
     try:
-        handler = create_sigil_claude_agent_handler(client=client)
-        options = with_sigil_claude_agent_options(ClaudeAgentOptions(), client=client, handler=handler)
-        options = with_sigil_claude_agent_options(options, client=client, handler=handler)
+        handler = create_agento11y_claude_agent_handler(client=client)
+        options = with_agento11y_claude_agent_options(ClaudeAgentOptions(), client=client, handler=handler)
+        options = with_agento11y_claude_agent_options(options, client=client, handler=handler)
 
         assert options.hooks is not None
         assert len(options.hooks["PreToolUse"]) == 1
@@ -675,7 +675,7 @@ async def test_claude_agent_guard_denial_blocks_user_prompt() -> None:
         def evaluate_hook(self, _request):
             return HookEvaluateResponse(action="deny", rule_id="rule-1", reason="blocked")
 
-    handler = SigilClaudeAgentHandler(client=_GuardClient())  # type: ignore[arg-type]
+    handler = Agento11yClaudeAgentHandler(client=_GuardClient())  # type: ignore[arg-type]
     options = handler.instrument_options(ClaudeAgentOptions())
     hook = options.hooks["UserPromptSubmit"][0].hooks[0]
 
@@ -726,7 +726,7 @@ async def test_claude_agent_tool_hooks_record_tool_result() -> None:
             return HookEvaluateResponse(action="allow")
 
     tool_client = _ToolClient()
-    handler = SigilClaudeAgentHandler(client=tool_client)  # type: ignore[arg-type]
+    handler = Agento11yClaudeAgentHandler(client=tool_client)  # type: ignore[arg-type]
     options = handler.instrument_options(ClaudeAgentOptions())
 
     pre_hook = options.hooks["PreToolUse"][0].hooks[0]

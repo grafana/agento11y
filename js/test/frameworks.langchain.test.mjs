@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { context, SpanStatusCode, trace } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { SigilLangChainHandler } from '../.test-dist/frameworks/langchain/index.js';
-import { defaultConfig, SigilClient } from '../.test-dist/index.js';
+import { Agento11yLangChainHandler } from '../.test-dist/frameworks/langchain/index.js';
+import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
 class CapturingExporter {
   requests = [];
@@ -21,7 +21,7 @@ class CapturingExporter {
 
 test('langchain handler records sync lifecycle with framework tags', async () => {
   const generation = await captureSingleGeneration(async (client) => {
-    const handler = new SigilLangChainHandler(client, {
+    const handler = new Agento11yLangChainHandler(client, {
       agentName: 'agent-langchain',
       agentVersion: 'v1',
       extraTags: { env: 'test', 'agento11y.framework.name': 'override' },
@@ -83,7 +83,7 @@ test('langchain handler records sync lifecycle with framework tags', async () =>
 
 test('langchain handler records stream mode and token fallback output', async () => {
   const generation = await captureSingleGeneration(async (client) => {
-    const handler = new SigilLangChainHandler(client);
+    const handler = new Agento11yLangChainHandler(client);
 
     await handler.handleLLMStart({ kwargs: { model: 'claude-sonnet-4-5' } }, ['stream this'], 'run-stream', undefined, {
       invocation_params: { model: 'claude-sonnet-4-5', stream: true },
@@ -100,7 +100,7 @@ test('langchain handler records stream mode and token fallback output', async ()
 
 test('langchain handler records first token timestamp once per run', async () => {
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     generationExport: {
       ...defaults.generationExport,
       batchSize: 10,
@@ -110,7 +110,7 @@ test('langchain handler records first token timestamp once per run', async () =>
   });
 
   try {
-    const handler = new SigilLangChainHandler(client);
+    const handler = new Agento11yLangChainHandler(client);
     await handler.handleLLMStart({ kwargs: { model: 'gpt-5' } }, ['stream this'], 'run-ttft', undefined, {
       invocation_params: { model: 'gpt-5', stream: true },
     });
@@ -140,7 +140,7 @@ test('langchain generation span tracks active parent span and preserves export l
   const tracerProvider = new BasicTracerProvider({
     spanProcessors: [new SimpleSpanProcessor(spanExporter)],
   });
-  const baseTracer = tracerProvider.getTracer('sigil-framework-test');
+  const baseTracer = tracerProvider.getTracer('agento11y-framework-test');
   let parentContext;
   const tracer = {
     startSpan(name, options, contextArg) {
@@ -152,7 +152,7 @@ test('langchain generation span tracks active parent span and preserves export l
   };
   const defaults = defaultConfig();
   const exporter = new CapturingExporter();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     generationExport: {
       ...defaults.generationExport,
       batchSize: 10,
@@ -163,7 +163,7 @@ test('langchain generation span tracks active parent span and preserves export l
   });
 
   try {
-    const handler = new SigilLangChainHandler(client);
+    const handler = new Agento11yLangChainHandler(client);
     const parentSpan = baseTracer.startSpan('framework.request');
     parentContext = trace.setSpan(context.active(), parentSpan);
     await handler.handleChatModelStart(
@@ -206,7 +206,7 @@ test('langchain provider mapping covers openai anthopic gemini and fallback', as
 
   await captureGenerations(
     async (client) => {
-      const handler = new SigilLangChainHandler(client);
+      const handler = new Agento11yLangChainHandler(client);
 
       await handler.handleLLMStart({}, ['x'], 'run-openai', undefined, { invocation_params: { model: 'gpt-5' } });
       await handler.handleLLMEnd({ generations: [[{ text: 'ok' }]] }, 'run-openai');
@@ -238,7 +238,7 @@ test('langchain backfills Bedrock inference-profile model from the response', as
   // Backfill must land on generation.model so the token-usage metric is priceable.
   const arnModel = 'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6-v1:0';
   const generation = await captureSingleGeneration(async (client) => {
-    const handler = new SigilLangChainHandler(client);
+    const handler = new Agento11yLangChainHandler(client);
 
     await handler.handleChatModelStart({ name: 'ChatBedrock' }, [[{ type: 'human', content: 'hello' }]], 'run-bedrock');
     await handler.handleLLMEnd(
@@ -261,7 +261,7 @@ test('langchain backfills Bedrock inference-profile model from the response', as
 test('langchain backfills Bedrock plain inference-profile id from the response', async () => {
   const idModel = 'global.anthropic.claude-sonnet-4-6';
   const generation = await captureSingleGeneration(async (client) => {
-    const handler = new SigilLangChainHandler(client);
+    const handler = new Agento11yLangChainHandler(client);
 
     await handler.handleChatModelStart({ name: 'ChatBedrock' }, [[{ type: 'human', content: 'hi' }]], 'run-bedrock-id');
     await handler.handleLLMEnd(
@@ -280,7 +280,7 @@ test('langchain backfills streaming Bedrock model+usage from generation response
   // llm_output. This is the actual customer scenario (streaming ChatBedrock).
   const arnModel = 'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6-v1:0';
   const generation = await captureSingleGeneration(async (client) => {
-    const handler = new SigilLangChainHandler(client);
+    const handler = new Agento11yLangChainHandler(client);
 
     await handler.handleChatModelStart(
       { name: 'ChatBedrock' },
@@ -324,7 +324,7 @@ test('langchain falls through an empty llm_output.token_usage to usage_metadata'
   // A present-but-empty token_usage must not short-circuit the usage fallback, or a
   // streaming response that also carries usage_metadata would report zero tokens ($0).
   const generation = await captureSingleGeneration(async (client) => {
-    const handler = new SigilLangChainHandler(client);
+    const handler = new Agento11yLangChainHandler(client);
 
     await handler.handleChatModelStart(
       { name: 'ChatBedrock' },
@@ -349,7 +349,7 @@ test('langchain falls through an empty llm_output.token_usage to usage_metadata'
 
 test('langchain does not clobber an explicit request model with the response model', async () => {
   const generation = await captureSingleGeneration(async (client) => {
-    const handler = new SigilLangChainHandler(client);
+    const handler = new Agento11yLangChainHandler(client);
 
     await handler.handleLLMStart({}, ['x'], 'run-known', undefined, { invocation_params: { model: 'gpt-5' } });
     // Response reports a different model — the known request model must win.
@@ -368,7 +368,7 @@ test('langchain infers Bedrock provider at request start and keeps custom for lo
 
   await captureGenerations(
     async (client) => {
-      const handler = new SigilLangChainHandler(client);
+      const handler = new Agento11yLangChainHandler(client);
 
       // Bedrock-style id surfaced at start resolves to its vendor, not "custom".
       await handler.handleLLMStart({}, ['x'], 'run-bedrock-start', undefined, {
@@ -396,7 +396,7 @@ test('langchain non-canonical provider hint does not block Bedrock model inferen
 
   await captureGenerations(
     async (client) => {
-      const handler = new SigilLangChainHandler(client);
+      const handler = new Agento11yLangChainHandler(client);
 
       // ls_provider hint -> still resolves anthropic from the model id.
       await handler.handleLLMStart({}, ['x'], 'run-ls', undefined, {
@@ -430,7 +430,7 @@ test('langchain non-canonical provider hint does not block Bedrock model inferen
 
 test('langchain handler sets call_error on llm error', async () => {
   const generation = await captureSingleGeneration(async (client) => {
-    const handler = new SigilLangChainHandler(client);
+    const handler = new Agento11yLangChainHandler(client);
 
     await handler.handleLLMStart({}, ['x'], 'run-error', undefined, { invocation_params: { model: 'gpt-5' } });
     await handler.handleLLMError(new Error('provider unavailable'), 'run-error');
@@ -441,9 +441,9 @@ test('langchain handler sets call_error on llm error', async () => {
 });
 
 test('langchain handler explicitly has no embedding lifecycle', async () => {
-  const client = new SigilClient(defaultConfig());
+  const client = new Agento11yClient(defaultConfig());
   try {
-    const handler = new SigilLangChainHandler(client);
+    const handler = new Agento11yLangChainHandler(client);
     assert.equal(typeof handler.handleEmbeddingStart, 'undefined');
     assert.equal(typeof handler.handleEmbeddingEnd, 'undefined');
     assert.equal(typeof handler.handleEmbeddingError, 'undefined');
@@ -457,10 +457,10 @@ test('langchain handler maps tool callbacks and emits chain/retriever spans', as
   const tracerProvider = new BasicTracerProvider({
     spanProcessors: [new SimpleSpanProcessor(spanExporter)],
   });
-  const tracer = tracerProvider.getTracer('sigil-framework-test');
+  const tracer = tracerProvider.getTracer('agento11y-framework-test');
 
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     generationExport: {
       ...defaults.generationExport,
       batchSize: 10,
@@ -471,7 +471,7 @@ test('langchain handler maps tool callbacks and emits chain/retriever spans', as
   });
 
   try {
-    const handler = new SigilLangChainHandler(client);
+    const handler = new Agento11yLangChainHandler(client);
     await handler.handleToolStart(
       { name: 'weather', description: 'Get weather' },
       '{"city":"Paris"}',
@@ -539,7 +539,7 @@ async function captureSingleGeneration(run) {
 async function captureGenerations(run, onGeneration) {
   const exporter = new CapturingExporter();
   const defaults = defaultConfig();
-  const client = new SigilClient({
+  const client = new Agento11yClient({
     generationExport: {
       ...defaults.generationExport,
       batchSize: 10,

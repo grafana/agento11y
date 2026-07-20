@@ -56,35 +56,35 @@ Framework handler usage:
 
 ```python
 from agento11y import Client
-from agento11y_langchain import with_sigil_langchain_callbacks
-from agento11y_langgraph import with_sigil_langgraph_callbacks
-from agento11y_openai_agents import with_sigil_openai_agents_hooks
-from agento11y_llamaindex import with_sigil_llamaindex_callbacks
-from agento11y_google_adk import with_sigil_google_adk_callbacks
-from agento11y_strands import with_sigil_strands_hooks
-from agento11y_claude_agent import with_sigil_claude_agent_options
-from agento11y_pydantic_ai import with_sigil_pydantic_ai_capability
+from agento11y_langchain import with_agento11y_langchain_callbacks
+from agento11y_langgraph import with_agento11y_langgraph_callbacks
+from agento11y_openai_agents import with_agento11y_openai_agents_hooks
+from agento11y_llamaindex import with_agento11y_llamaindex_callbacks
+from agento11y_google_adk import with_agento11y_google_adk_callbacks
+from agento11y_strands import with_agento11y_strands_hooks
+from agento11y_claude_agent import with_agento11y_claude_agent_options
+from agento11y_pydantic_ai import with_agento11y_pydantic_ai_capability
 
 client = Client()
-chain_config = with_sigil_langchain_callbacks(None, client=client, provider_resolver="auto")
-graph_config = with_sigil_langgraph_callbacks(None, client=client, provider_resolver="auto")
-openai_agents_run_options = with_sigil_openai_agents_hooks(None, client=client, provider_resolver="auto")
-llamaindex_config = with_sigil_llamaindex_callbacks(None, client=client, provider_resolver="auto")
-google_adk_agent_config = with_sigil_google_adk_callbacks(None, client=client, provider_resolver="auto")
-strands_agent_config = with_sigil_strands_hooks(None, client=client, provider_resolver="auto")
-claude_agent_options = with_sigil_claude_agent_options(None, client=client)
-pydantic_ai_capabilities = with_sigil_pydantic_ai_capability(None, client=client, provider_resolver="auto")
+chain_config = with_agento11y_langchain_callbacks(None, client=client, provider_resolver="auto")
+graph_config = with_agento11y_langgraph_callbacks(None, client=client, provider_resolver="auto")
+openai_agents_run_options = with_agento11y_openai_agents_hooks(None, client=client, provider_resolver="auto")
+llamaindex_config = with_agento11y_llamaindex_callbacks(None, client=client, provider_resolver="auto")
+google_adk_agent_config = with_agento11y_google_adk_callbacks(None, client=client, provider_resolver="auto")
+strands_agent_config = with_agento11y_strands_hooks(None, client=client, provider_resolver="auto")
+claude_agent_options = with_agento11y_claude_agent_options(None, client=client)
+pydantic_ai_capabilities = with_agento11y_pydantic_ai_capability(None, client=client, provider_resolver="auto")
 ```
 
-LiteLLM uses a callback class instead of a `with_sigil_*` helper:
+LiteLLM uses a callback class instead of a `with_agento11y_*` helper:
 
 ```python
 import litellm
 from agento11y import Client
-from agento11y_litellm import SigilLiteLLMLogger
+from agento11y_litellm import Agento11yLiteLLMLogger
 
 client = Client()
-litellm.callbacks = [SigilLiteLLMLogger(client=client)]
+litellm.callbacks = [Agento11yLiteLLMLogger(client=client)]
 ```
 
 Framework handlers use the `Client` instance you pass in. If that client is configured with
@@ -110,7 +110,7 @@ Conversation mapping is conversation-first:
 
 - `conversation_id` / `session_id` / `group_id` from framework context first
 - then `thread_id`
-- deterministic fallback `sigil:framework:<framework_name>:<run_id>`
+- deterministic fallback `agento11y:framework:<framework_name>:<run_id>`
 
 When present in generation metadata, low-cardinality framework keys are copied onto generation span attributes.
 
@@ -118,7 +118,7 @@ For LangGraph persistence, pass `configurable.thread_id` and reuse it across inv
 
 ```python
 thread_config = {
-    **with_sigil_langgraph_callbacks(None, client=client, provider_resolver="auto"),
+    **with_agento11y_langgraph_callbacks(None, client=client, provider_resolver="auto"),
     "configurable": {"thread_id": "customer-42"},
 }
 graph.invoke({"prompt": "Remember my timezone is UTC+1.", "answer": ""}, config=thread_config)
@@ -691,18 +691,18 @@ the framework-free path for Cloud users: one ingestion API key writes the run,
 trials, generations, scores, and final status.
 
 ```python
-from agento11y import experiments as sigil
+from agento11y import experiments
 
-suite = sigil.TestSuite(
+suite = experiments.TestSuite(
     suite_id="smoke",
     name="Smoke",
     test_cases=[
-        sigil.TestCase(test_case_id="capital-fr", input="Capital of France?", expected="Paris"),
+        experiments.TestCase(test_case_id="capital-fr", input="Capital of France?", expected="Paris"),
     ],
 )
-verifier = sigil.Evaluator(evaluator_id="exact_match", version="2026-06-29")
+verifier = experiments.Evaluator(evaluator_id="exact_match", version="2026-06-29")
 
-with sigil.experiment("PR 123", experiment_id="pr-123", suite=suite, tags=["ci"]) as exp:
+with agento11y.experiment("PR 123", experiment_id="pr-123", suite=suite, tags=["ci"]) as exp:
     for case in suite.test_cases:
         with exp.trial(case) as trial:
             answer = my_agent(case.input)
@@ -727,7 +727,7 @@ suite and evaluators.
 Experiment writes use the same Grafana Cloud ingestion API key as generation
 ingest. They do not require a control-plane URL or a separate eval API key.
 Experimental OTel eval spans/events are disabled by default; opt in with
-`use_experimental_otel=True` on `sigil.experiment(...)` or
+`use_experimental_otel=True` on `agento11y.experiment(...)` or
 `AGENTO11Y_USE_EXPERIMENTAL_OTEL=true`.
 
 If you use a supported framework, prefer its adapter (e.g. `agento11y-langgraph`)

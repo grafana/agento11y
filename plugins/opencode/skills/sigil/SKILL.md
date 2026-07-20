@@ -216,7 +216,7 @@ Provider wrappers and framework adapters already exist; reuse them where possibl
 ## Useful repo examples to copy patterns from
 
 - Go explicit generation flow:
-  - `sdks/go/sigil/example_test.go`
+  - `sdks/go/agento11y/example_test.go`
   - `sdks/go/cmd/devex-emitter/main.go`
 - Go provider wrapper examples:
   - `sdks/go-providers/openai/sdk_example_test.go`

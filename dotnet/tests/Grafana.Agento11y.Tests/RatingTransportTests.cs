@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Xunit;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class RatingTransportTests
 {
@@ -39,7 +39,7 @@ public sealed class RatingTransportTests
             )
         );
 
-        var config = new SigilClientConfig
+        var config = new Agento11yClientConfig
         {
             Api = new ApiConfig
             {
@@ -60,7 +60,7 @@ public sealed class RatingTransportTests
             },
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         var response = await client.SubmitConversationRatingAsync(
             "conv-1",
             new SubmitConversationRatingRequest
@@ -96,7 +96,7 @@ public sealed class RatingTransportTests
             (409, "text/plain", Encoding.UTF8.GetBytes("idempotency conflict"))
         );
 
-        var config = new SigilClientConfig
+        var config = new Agento11yClientConfig
         {
             Api = new ApiConfig
             {
@@ -112,7 +112,7 @@ public sealed class RatingTransportTests
             },
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         var error = await Assert.ThrowsAsync<RatingConflictException>(() =>
             client.SubmitConversationRatingAsync(
                 "conv-1",
@@ -131,7 +131,7 @@ public sealed class RatingTransportTests
     [Fact]
     public async Task SubmitConversationRatingAsync_ValidatesInputBeforeTransport()
     {
-        var config = new SigilClientConfig
+        var config = new Agento11yClientConfig
         {
             Api = new ApiConfig
             {
@@ -147,7 +147,7 @@ public sealed class RatingTransportTests
             },
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
 
         await Assert.ThrowsAsync<ValidationException>(() =>
             client.SubmitConversationRatingAsync(
@@ -204,7 +204,7 @@ public sealed class RatingTransportTests
             )
         );
 
-        var config = new SigilClientConfig
+        var config = new Agento11yClientConfig
         {
             Api = new ApiConfig
             {
@@ -226,7 +226,7 @@ public sealed class RatingTransportTests
             },
         };
 
-        await using var client = new SigilClient(config);
+        await using var client = new Agento11yClient(config);
         await client.SubmitConversationRatingAsync(
             "conv-1",
             new SubmitConversationRatingRequest

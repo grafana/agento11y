@@ -7,7 +7,11 @@ from types import SimpleNamespace
 
 from agento11y import Client, ClientConfig, GenerationExportConfig
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse, MessageRole, PartKind
-from agento11y_strands import SigilStrandsHookProvider, create_sigil_strands_hook_provider, with_sigil_strands_hooks
+from agento11y_strands import (
+    Agento11yStrandsHookProvider,
+    create_agento11y_strands_hook_provider,
+    with_agento11y_strands_hooks,
+)
 
 
 class _CapturingExporter:
@@ -74,7 +78,7 @@ def test_strands_model_lifecycle_exports_generation_with_framework_metadata() ->
     client = _new_client(exporter)
 
     try:
-        hooks = create_sigil_strands_hook_provider(client=client, provider_resolver="auto")
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
         invocation_state = {"conversation_id": "conv-42", "thread_id": "thread-42"}
         agent = _agent()
 
@@ -134,7 +138,7 @@ def test_strands_tool_use_turn_exports_tool_call_output_and_agent_name() -> None
     client = _new_client(exporter)
 
     try:
-        hooks = create_sigil_strands_hook_provider(client=client, provider_resolver="auto")
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
         invocation_state = {"conversation_id": "conv-tool-use"}
         agent = _agent()
 
@@ -189,7 +193,7 @@ def test_strands_followup_generation_input_includes_tool_history() -> None:
     client = _new_client(exporter)
 
     try:
-        hooks = create_sigil_strands_hook_provider(client=client, provider_resolver="auto")
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
         invocation_state = {"conversation_id": "conv-tool-result"}
         agent = _agent()
         agent.messages = [
@@ -254,7 +258,7 @@ def test_strands_model_error_ends_generation_without_exporting_result() -> None:
     client = _new_client(exporter)
 
     try:
-        hooks = create_sigil_strands_hook_provider(client=client)
+        hooks = create_agento11y_strands_hook_provider(client=client)
         invocation_state = {"conversation_id": "conv-error"}
         agent = _agent()
 
@@ -274,17 +278,17 @@ def test_strands_model_error_ends_generation_without_exporting_result() -> None:
         client.shutdown()
 
 
-def test_with_sigil_strands_hooks_adds_provider_to_config_once() -> None:
+def test_with_agento11y_strands_hooks_adds_provider_to_config_once() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
 
     try:
-        config = with_sigil_strands_hooks({"hooks": []}, client=client)
-        config = with_sigil_strands_hooks(config, client=client)
+        config = with_agento11y_strands_hooks({"hooks": []}, client=client)
+        config = with_agento11y_strands_hooks(config, client=client)
 
         hooks = config["hooks"]
         assert len(hooks) == 1
-        assert isinstance(hooks[0], SigilStrandsHookProvider)
+        assert isinstance(hooks[0], Agento11yStrandsHookProvider)
     finally:
         client.shutdown()
 
@@ -294,7 +298,7 @@ def test_strands_cache_token_usage_preserved() -> None:
     client = _new_client(exporter)
 
     try:
-        hooks = create_sigil_strands_hook_provider(client=client, provider_resolver="auto")
+        hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
         invocation_state = {"conversation_id": "conv-cache"}
         agent = _agent()
 

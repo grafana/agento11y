@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 from agento11y import Client, ToolDefinition
 
-from .handler import SigilAsyncGoogleAdkHandler, SigilGoogleAdkHandler
+from .handler import Agento11yAsyncGoogleAdkHandler, Agento11yGoogleAdkHandler
 
 try:  # pragma: no cover - imported from google-adk at runtime
     from google.adk.plugins import BasePlugin
@@ -72,23 +72,23 @@ _adk_callback_fields = (
 )
 
 
-def create_sigil_google_adk_handler(
+def create_agento11y_google_adk_handler(
     *,
     client: Client,
     async_handler: bool = False,
     **handler_kwargs: Any,
-) -> SigilGoogleAdkHandler | SigilAsyncGoogleAdkHandler:
+) -> Agento11yGoogleAdkHandler | Agento11yAsyncGoogleAdkHandler:
     """Create a Google ADK Sigil callback handler for sync or async flows."""
     if async_handler:
-        return SigilAsyncGoogleAdkHandler(client=client, **handler_kwargs)
-    return SigilGoogleAdkHandler(client=client, **handler_kwargs)
+        return Agento11yAsyncGoogleAdkHandler(client=client, **handler_kwargs)
+    return Agento11yGoogleAdkHandler(client=client, **handler_kwargs)
 
 
-class SigilGoogleAdkCallbacks:
+class Agento11yGoogleAdkCallbacks:
     """Google ADK callback bridge that forwards agent callback fields to Sigil."""
 
-    def __init__(self, sigil_handler: SigilGoogleAdkHandler | SigilAsyncGoogleAdkHandler) -> None:
-        self._sigil_handler = sigil_handler
+    def __init__(self, agento11y_handler: Agento11yGoogleAdkHandler | Agento11yAsyncGoogleAdkHandler) -> None:
+        self._agento11y_handler = agento11y_handler
         self._llm_run_stacks: dict[str, list[UUID]] = {}
         self._tool_run_ids: dict[str, UUID] = {}
         self._tool_fallback_run_stacks: dict[str, list[UUID]] = {}
@@ -109,7 +109,7 @@ class SigilGoogleAdkCallbacks:
 
         messages = _adk_messages(_read(llm_request, "contents"))
         await _invoke_handler(
-            self._sigil_handler,
+            self._agento11y_handler,
             "on_chat_model_start",
             _serialized_llm_payload(callback_context, model_name),
             [messages],
@@ -128,7 +128,7 @@ class SigilGoogleAdkCallbacks:
             return None
 
         await _invoke_handler(
-            self._sigil_handler,
+            self._agento11y_handler,
             "on_llm_end",
             _adk_llm_end_payload(llm_response),
             run_id=run_id,
@@ -142,7 +142,7 @@ class SigilGoogleAdkCallbacks:
         if run_id is None:
             return None
 
-        await _invoke_handler(self._sigil_handler, "on_llm_error", error, run_id=run_id)
+        await _invoke_handler(self._agento11y_handler, "on_llm_error", error, run_id=run_id)
         return None
 
     async def before_tool_callback(self, tool: Any, args: dict[str, Any], tool_context: Any) -> None:
@@ -163,7 +163,7 @@ class SigilGoogleAdkCallbacks:
             metadata["event_id"] = function_call_id
 
         await _invoke_handler(
-            self._sigil_handler,
+            self._agento11y_handler,
             "on_tool_start",
             {"name": tool_name, "description": _as_string(_read(tool, "description"))},
             _json_string(args),
@@ -188,7 +188,7 @@ class SigilGoogleAdkCallbacks:
         if run_id is None:
             return None
 
-        await _invoke_handler(self._sigil_handler, "on_tool_end", result, run_id=run_id)
+        await _invoke_handler(self._agento11y_handler, "on_tool_end", result, run_id=run_id)
         return None
 
     async def on_tool_error_callback(
@@ -204,7 +204,7 @@ class SigilGoogleAdkCallbacks:
         if run_id is None:
             return None
 
-        await _invoke_handler(self._sigil_handler, "on_tool_error", error, run_id=run_id)
+        await _invoke_handler(self._agento11y_handler, "on_tool_error", error, run_id=run_id)
         return None
 
     def _invocation_key(self, callback_context: Any) -> str:
@@ -231,14 +231,14 @@ class SigilGoogleAdkCallbacks:
         return stack[-1]
 
 
-class SigilGoogleAdkPlugin(BasePlugin):
+class Agento11yGoogleAdkPlugin(BasePlugin):
     """Google ADK BasePlugin-compatible bridge that forwards plugin callbacks to Sigil."""
 
-    name = "sigil_google_adk_plugin"
+    name = "agento11y_google_adk_plugin"
 
-    def __init__(self, sigil_handler: SigilGoogleAdkHandler | SigilAsyncGoogleAdkHandler) -> None:
-        self._sigil_handler = sigil_handler
-        self._callbacks = SigilGoogleAdkCallbacks(sigil_handler)
+    def __init__(self, agento11y_handler: Agento11yGoogleAdkHandler | Agento11yAsyncGoogleAdkHandler) -> None:
+        self._agento11y_handler = agento11y_handler
+        self._callbacks = Agento11yGoogleAdkCallbacks(agento11y_handler)
         self._run_ids: dict[str, UUID] = {}
         self._agent_run_stacks: dict[str, list[UUID]] = {}
 
@@ -248,7 +248,7 @@ class SigilGoogleAdkPlugin(BasePlugin):
         self._run_ids[invocation_key] = run_id
         run_name = _agent_name(invocation_context)
         await _invoke_handler(
-            self._sigil_handler,
+            self._agento11y_handler,
             "on_chain_start",
             {"name": run_name},
             {},
@@ -279,7 +279,7 @@ class SigilGoogleAdkPlugin(BasePlugin):
         if token == "":
             return None
 
-        await _invoke_handler(self._sigil_handler, "on_llm_new_token", token, run_id=llm_run_id)
+        await _invoke_handler(self._agento11y_handler, "on_llm_new_token", token, run_id=llm_run_id)
         return None
 
     async def after_run_callback(self, *, invocation_context: Any) -> None:
@@ -289,7 +289,7 @@ class SigilGoogleAdkPlugin(BasePlugin):
             return None
         self._callbacks._llm_run_stacks.pop(invocation_key, None)
         self._agent_run_stacks.pop(invocation_key, None)
-        await _invoke_handler(self._sigil_handler, "on_chain_end", {"status": "completed"}, run_id=run_id)
+        await _invoke_handler(self._agento11y_handler, "on_chain_end", {"status": "completed"}, run_id=run_id)
         return None
 
     async def before_agent_callback(self, *, callback_context: Any, agent: Any | None = None) -> None:
@@ -302,7 +302,7 @@ class SigilGoogleAdkPlugin(BasePlugin):
 
         run_name = _agent_name(callback_context, agent)
         await _invoke_handler(
-            self._sigil_handler,
+            self._agento11y_handler,
             "on_chain_start",
             {"name": run_name},
             {},
@@ -324,7 +324,7 @@ class SigilGoogleAdkPlugin(BasePlugin):
         if not stack:
             self._agent_run_stacks.pop(invocation_key, None)
 
-        await _invoke_handler(self._sigil_handler, "on_chain_end", {"status": "completed"}, run_id=run_id)
+        await _invoke_handler(self._agento11y_handler, "on_chain_end", {"status": "completed"}, run_id=run_id)
         return None
 
     async def before_model_callback(self, *, callback_context: Any, llm_request: Any) -> None:
@@ -369,37 +369,37 @@ class SigilGoogleAdkPlugin(BasePlugin):
         return None
 
 
-def create_sigil_google_adk_callbacks(
+def create_agento11y_google_adk_callbacks(
     *,
     client: Client,
     async_handler: bool = False,
     **handler_kwargs: Any,
-) -> SigilGoogleAdkCallbacks:
+) -> Agento11yGoogleAdkCallbacks:
     """Create callback functions compatible with Google ADK agent callback fields."""
-    sigil_handler = create_sigil_google_adk_handler(
+    agento11y_handler = create_agento11y_google_adk_handler(
         client=client,
         async_handler=async_handler,
         **handler_kwargs,
     )
-    return SigilGoogleAdkCallbacks(sigil_handler)
+    return Agento11yGoogleAdkCallbacks(agento11y_handler)
 
 
-def create_sigil_google_adk_plugin(
+def create_agento11y_google_adk_plugin(
     *,
     client: Client,
     async_handler: bool = False,
     **handler_kwargs: Any,
-) -> SigilGoogleAdkPlugin:
+) -> Agento11yGoogleAdkPlugin:
     """Create a Google ADK plugin instance wired to Sigil instrumentation."""
-    sigil_handler = create_sigil_google_adk_handler(
+    agento11y_handler = create_agento11y_google_adk_handler(
         client=client,
         async_handler=async_handler,
         **handler_kwargs,
     )
-    return SigilGoogleAdkPlugin(sigil_handler)
+    return Agento11yGoogleAdkPlugin(agento11y_handler)
 
 
-def with_sigil_google_adk_callbacks(
+def with_agento11y_google_adk_callbacks(
     config_or_agent: dict[str, Any] | Any | None,
     *,
     client: Client,
@@ -407,7 +407,7 @@ def with_sigil_google_adk_callbacks(
     **handler_kwargs: Any,
 ) -> dict[str, Any] | Any:
     """Attach Sigil to Google ADK callback fields on either config dicts or agent objects."""
-    callbacks = create_sigil_google_adk_callbacks(
+    callbacks = create_agento11y_google_adk_callbacks(
         client=client,
         async_handler=async_handler,
         **handler_kwargs,
@@ -438,7 +438,7 @@ def with_sigil_google_adk_callbacks(
     return target
 
 
-def with_sigil_google_adk_plugins(
+def with_agento11y_google_adk_plugins(
     config_or_agent: dict[str, Any] | Any | None,
     *,
     client: Client,
@@ -446,7 +446,7 @@ def with_sigil_google_adk_plugins(
     **handler_kwargs: Any,
 ) -> dict[str, Any] | Any:
     """Attach Sigil as a Google ADK plugin on either config dicts or agent-like objects."""
-    plugin = create_sigil_google_adk_plugin(
+    plugin = create_agento11y_google_adk_plugin(
         client=client,
         async_handler=async_handler,
         **handler_kwargs,
@@ -455,14 +455,14 @@ def with_sigil_google_adk_plugins(
     if config_or_agent is None or isinstance(config_or_agent, dict):
         merged = dict(config_or_agent or {})
         plugins = _as_list(merged.get("plugins"))
-        if not _contains_sigil_plugin(plugins):
+        if not _contains_agento11y_plugin(plugins):
             plugins.append(plugin)
         merged["plugins"] = plugins
         return merged
 
     target = config_or_agent
     plugins = _as_list(getattr(target, "plugins", None))
-    if not _contains_sigil_plugin(plugins):
+    if not _contains_agento11y_plugin(plugins):
         plugins.append(plugin)
     target.plugins = plugins
     return target
@@ -476,7 +476,7 @@ async def _invoke_handler(handler: Any, method_name: str, *args: Any, **kwargs: 
 
 
 def _merge_callback_value(existing: Any, callback: Any, *, field_name: str) -> Any:
-    if _contains_sigil_callback(existing, field_name):
+    if _contains_agento11y_callback(existing, field_name):
         return existing
     if existing is None:
         return callback
@@ -487,20 +487,20 @@ def _merge_callback_value(existing: Any, callback: Any, *, field_name: str) -> A
     raise TypeError(f"google-adk `{field_name}` must be a callback or list of callbacks.")
 
 
-def _contains_sigil_callback(existing: Any, field_name: str) -> bool:
+def _contains_agento11y_callback(existing: Any, field_name: str) -> bool:
     callbacks = existing if isinstance(existing, list) else [existing]
     for callback in callbacks:
         if callback is None:
             continue
         instance = getattr(callback, "__self__", None)
         name = getattr(callback, "__name__", "")
-        if isinstance(instance, SigilGoogleAdkCallbacks) and name == field_name:
+        if isinstance(instance, Agento11yGoogleAdkCallbacks) and name == field_name:
             return True
     return False
 
 
-def _contains_sigil_plugin(plugins: list[Any]) -> bool:
-    return any(isinstance(plugin, SigilGoogleAdkPlugin) for plugin in plugins)
+def _contains_agento11y_plugin(plugins: list[Any]) -> bool:
+    return any(isinstance(plugin, Agento11yGoogleAdkPlugin) for plugin in plugins)
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -520,7 +520,7 @@ def _invocation_key(callback_context: Any) -> str:
         _as_string(_read(invocation_context, "invocation_id")),
         _as_string(_read(invocation_context, "invocationId")),
         _as_string(_read(_read(invocation_context, "session"), "id")),
-        f"sigil-google-adk-invocation:{id(callback_context)}",
+        f"agento11y-google-adk-invocation:{id(callback_context)}",
     )
 
 
@@ -1004,13 +1004,13 @@ def _first_non_empty(*values: str) -> str:
 
 
 __all__ = [
-    "SigilGoogleAdkHandler",
-    "SigilAsyncGoogleAdkHandler",
-    "SigilGoogleAdkCallbacks",
-    "SigilGoogleAdkPlugin",
-    "create_sigil_google_adk_handler",
-    "create_sigil_google_adk_callbacks",
-    "create_sigil_google_adk_plugin",
-    "with_sigil_google_adk_callbacks",
-    "with_sigil_google_adk_plugins",
+    "Agento11yGoogleAdkHandler",
+    "Agento11yAsyncGoogleAdkHandler",
+    "Agento11yGoogleAdkCallbacks",
+    "Agento11yGoogleAdkPlugin",
+    "create_agento11y_google_adk_handler",
+    "create_agento11y_google_adk_callbacks",
+    "create_agento11y_google_adk_plugin",
+    "with_agento11y_google_adk_callbacks",
+    "with_agento11y_google_adk_plugins",
 ]

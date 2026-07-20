@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/joho/godotenv"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -54,35 +54,35 @@ func main() {
 	otel.SetMeterProvider(mp)
 	defer func() { _ = mp.Shutdown(ctx) }()
 
-	cfg := sigil.DefaultConfig()
-	cfg.GenerationExport.Protocol = sigil.GenerationExportProtocolHTTP
+	cfg := agento11y.DefaultConfig()
+	cfg.GenerationExport.Protocol = agento11y.GenerationExportProtocolHTTP
 	cfg.GenerationExport.Endpoint = os.Getenv("AGENTO11Y_ENDPOINT")
-	cfg.GenerationExport.Auth = sigil.AuthConfig{
-		Mode:          sigil.ExportAuthModeBasic,
+	cfg.GenerationExport.Auth = agento11y.AuthConfig{
+		Mode:          agento11y.ExportAuthModeBasic,
 		TenantID:      os.Getenv("AGENTO11Y_AUTH_TENANT_ID"),
 		BasicPassword: os.Getenv("AGENTO11Y_AUTH_TOKEN"),
 	}
-	cfg.API.Endpoint = sigilAPIEndpoint()
+	cfg.API.Endpoint = agento11yAPIEndpoint()
 	cfg.Hooks.Enabled = true
-	cfg.Hooks.Phases = []sigil.HookPhase{sigil.HookPhasePreflight}
+	cfg.Hooks.Phases = []agento11y.HookPhase{agento11y.HookPhasePreflight}
 
-	sigilClient := sigil.NewClient(cfg)
-	defer func() { _ = sigilClient.Shutdown(ctx) }()
+	agento11yClient := agento11y.NewClient(cfg)
+	defer func() { _ = agento11yClient.Shutdown(ctx) }()
 
 	openaiClient := openai.NewClient(option.WithAPIKey(os.Getenv("OPENAI_API_KEY")))
 
 	systemPrompt := "You are a helpful assistant. Keep answers concise."
 	prompt := "My name is Jane Doe and my email is jane@example.com. Explain LLM guardrails in one sentence."
-	inputMessages := []sigil.Message{sigil.UserTextMessage(prompt)}
+	inputMessages := []agento11y.Message{agento11y.UserTextMessage(prompt)}
 
-	hookResponse, err := sigilClient.EvaluateHook(ctx, sigil.HookEvaluateRequest{
-		Phase: sigil.HookPhasePreflight,
-		Context: sigil.HookContext{
+	hookResponse, err := agento11yClient.EvaluateHook(ctx, agento11y.HookEvaluateRequest{
+		Phase: agento11y.HookPhasePreflight,
+		Context: agento11y.HookContext{
 			AgentName:    "getting-started-hooks",
 			AgentVersion: "1.0.0",
-			Model:        &sigil.HookModel{Provider: "openai", Name: model},
+			Model:        &agento11y.HookModel{Provider: "openai", Name: model},
 		},
-		Input: sigil.HookInput{
+		Input: agento11y.HookInput{
 			Messages:            inputMessages,
 			SystemPrompt:        systemPrompt,
 			ConversationPreview: prompt,
@@ -91,8 +91,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Sigil hook error: %v", err)
 	}
-	if err := sigil.HookDeniedFromResponse(hookResponse); err != nil {
-		var denied *sigil.HookDeniedError
+	if err := agento11y.HookDeniedFromResponse(hookResponse); err != nil {
+		var denied *agento11y.HookDeniedError
 		if errors.As(err, &denied) {
 			log.Printf("Blocked by Sigil guard rule %s: %s", valueOrUnknown(denied.RuleID), denied.Reason)
 			return
@@ -123,23 +123,23 @@ func main() {
 	responseText := completion.Choices[0].Message.Content
 	log.Printf("Response: %s", responseText)
 
-	ctx, rec := sigilClient.StartGeneration(ctx, sigil.GenerationStart{
+	ctx, rec := agento11yClient.StartGeneration(ctx, agento11y.GenerationStart{
 		ConversationID: "getting-started-go-hooks",
 		AgentName:      "getting-started-hooks",
 		AgentVersion:   "1.0.0",
-		Model:          sigil.ModelRef{Provider: "openai", Name: model},
+		Model:          agento11y.ModelRef{Provider: "openai", Name: model},
 		SystemPrompt:   systemPrompt,
 	})
 	defer rec.End()
 	_ = ctx
 
-	rec.SetResult(sigil.Generation{
+	rec.SetResult(agento11y.Generation{
 		Input:         inputMessages,
-		Output:        []sigil.Message{sigil.AssistantTextMessage(responseText)},
+		Output:        []agento11y.Message{agento11y.AssistantTextMessage(responseText)},
 		ResponseID:    completion.ID,
 		ResponseModel: completion.Model,
 		StopReason:    completion.Choices[0].FinishReason,
-		Usage: sigil.TokenUsage{
+		Usage: agento11y.TokenUsage{
 			InputTokens:  completion.Usage.PromptTokens,
 			OutputTokens: completion.Usage.CompletionTokens,
 		},
@@ -148,7 +148,7 @@ func main() {
 	log.Println("Done - check the AI Observability plugin in your Grafana Cloud stack.")
 }
 
-func sigilAPIEndpoint() string {
+func agento11yAPIEndpoint() string {
 	parsed, err := url.Parse(os.Getenv("AGENTO11Y_ENDPOINT"))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return os.Getenv("AGENTO11Y_ENDPOINT")
@@ -156,12 +156,12 @@ func sigilAPIEndpoint() string {
 	return parsed.Scheme + "://" + parsed.Host
 }
 
-func openAIMessages(systemPrompt string, messages []sigil.Message) []openai.ChatCompletionMessageParamUnion {
+func openAIMessages(systemPrompt string, messages []agento11y.Message) []openai.ChatCompletionMessageParamUnion {
 	out := []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(systemPrompt)}
 	for _, msg := range messages {
 		text := messageText(msg)
 		switch msg.Role {
-		case sigil.RoleAssistant:
+		case agento11y.RoleAssistant:
 			out = append(out, openai.AssistantMessage(text))
 		default:
 			out = append(out, openai.UserMessage(text))
@@ -170,10 +170,10 @@ func openAIMessages(systemPrompt string, messages []sigil.Message) []openai.Chat
 	return out
 }
 
-func messageText(msg sigil.Message) string {
+func messageText(msg agento11y.Message) string {
 	parts := make([]string, 0, len(msg.Parts))
 	for _, part := range msg.Parts {
-		if part.Kind == sigil.PartKindText {
+		if part.Kind == agento11y.PartKindText {
 			parts = append(parts, part.Text)
 		}
 	}

@@ -3,9 +3,9 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Text;
 using Xunit;
-using SigilProto = Agento11y.V1;
+using Agento11yProto = Agento11y.V1;
 
-namespace Grafana.Sigil.Tests;
+namespace Grafana.Agento11y.Tests;
 
 public sealed class ConformanceTests
 {
@@ -112,7 +112,7 @@ public sealed class ConformanceTests
         var generation = env.SingleGeneration();
         var span = env.GenerationSpan();
 
-        Assert.Equal(SigilProto.GenerationMode.Sync, generation.Mode);
+        Assert.Equal(Agento11yProto.GenerationMode.Sync, generation.Mode);
         Assert.Equal("generateText", generation.OperationName);
         Assert.Equal("conv-roundtrip", generation.ConversationId);
         Assert.Equal("agent-roundtrip", generation.AgentName);
@@ -165,7 +165,7 @@ public sealed class ConformanceTests
     public async Task ConversationTitleSemantics(string startTitle, string contextTitle, string metadataTitle, string expected)
     {
         await using var env = new ConformanceEnv();
-        using var titleScope = contextTitle.Length > 0 ? SigilContext.WithConversationTitle(contextTitle) : NullScope.Instance;
+        using var titleScope = contextTitle.Length > 0 ? Agento11yContext.WithConversationTitle(contextTitle) : NullScope.Instance;
 
         var start = new GenerationStart
         {
@@ -206,7 +206,7 @@ public sealed class ConformanceTests
     public async Task UserIdSemantics(string startUserId, string contextUserId, string canonicalUserId, string legacyUserId, string expected)
     {
         await using var env = new ConformanceEnv();
-        using var userScope = contextUserId.Length > 0 ? SigilContext.WithUserId(contextUserId) : NullScope.Instance;
+        using var userScope = contextUserId.Length > 0 ? Agento11yContext.WithUserId(contextUserId) : NullScope.Instance;
 
         var start = new GenerationStart
         {
@@ -251,8 +251,8 @@ public sealed class ConformanceTests
     )
     {
         await using var env = new ConformanceEnv();
-        using var agentNameScope = contextName.Length > 0 ? SigilContext.WithAgentName(contextName) : NullScope.Instance;
-        using var agentVersionScope = contextVersion.Length > 0 ? SigilContext.WithAgentVersion(contextVersion) : NullScope.Instance;
+        using var agentNameScope = contextName.Length > 0 ? Agento11yContext.WithAgentName(contextName) : NullScope.Instance;
+        using var agentVersionScope = contextVersion.Length > 0 ? Agento11yContext.WithAgentVersion(contextVersion) : NullScope.Instance;
 
         var recorder = env.Client.StartGeneration(new GenerationStart
         {
@@ -433,7 +433,7 @@ public sealed class ConformanceTests
 
         var generation = env.SingleGeneration();
         var span = env.GenerationSpan();
-        Assert.Equal(SigilProto.GenerationMode.Stream, generation.Mode);
+        Assert.Equal(Agento11yProto.GenerationMode.Stream, generation.Mode);
         Assert.Equal("streamText", generation.OperationName);
         Assert.Equal("streamText gpt-5", span.DisplayName);
         Assert.Contains("gen_ai.client.operation.duration", env.MetricNames);
@@ -444,9 +444,9 @@ public sealed class ConformanceTests
     public async Task ToolExecutionSemantics()
     {
         await using var env = new ConformanceEnv();
-        using var titleScope = SigilContext.WithConversationTitle("Context title");
-        using var agentNameScope = SigilContext.WithAgentName("agent-context");
-        using var agentVersionScope = SigilContext.WithAgentVersion("v-context");
+        using var titleScope = Agento11yContext.WithConversationTitle("Context title");
+        using var agentNameScope = Agento11yContext.WithAgentName("agent-context");
+        using var agentVersionScope = Agento11yContext.WithAgentVersion("v-context");
 
         var recorder = env.Client.StartToolExecution(new ToolExecutionStart
         {
@@ -494,8 +494,8 @@ public sealed class ConformanceTests
     public async Task EmbeddingSemantics()
     {
         await using var env = new ConformanceEnv();
-        using var agentNameScope = SigilContext.WithAgentName("agent-context");
-        using var agentVersionScope = SigilContext.WithAgentVersion("v-context");
+        using var agentNameScope = Agento11yContext.WithAgentName("agent-context");
+        using var agentVersionScope = Agento11yContext.WithAgentVersion("v-context");
 
         var recorder = env.Client.StartEmbedding(new EmbeddingStart
         {
@@ -664,7 +664,7 @@ public sealed class ConformanceTests
     // caller-supplied metadata and tags pass through untouched even when they
     // use the legacy sigil.* namespace.
     [Fact]
-    public async Task NoSdkOwnedLegacySigilNamespace()
+    public async Task NoSdkOwnedLegacyAgento11yNamespace()
     {
         await using var env = new ConformanceEnv();
         var recorder = env.Client.StartGeneration(new GenerationStart
@@ -718,7 +718,7 @@ public sealed class ConformanceTests
 
         public GrpcIngestServer Ingest { get; }
         public RatingCaptureServer Rating { get; }
-        public SigilClient Client { get; }
+        public Agento11yClient Client { get; }
         public ConcurrentQueue<Activity> Spans { get; } = new();
         public ConcurrentDictionary<string, byte> MetricNames { get; } = new(StringComparer.Ordinal);
         public ConcurrentQueue<MetricMeasurement> MetricMeasurements { get; } = new();
@@ -783,7 +783,7 @@ public sealed class ConformanceTests
                     )
                 )
             );
-            var config = new SigilClientConfig
+            var config = new Agento11yClientConfig
             {
                 Api = new ApiConfig
                 {
@@ -806,7 +806,7 @@ public sealed class ConformanceTests
             {
                 config.Tags = tags;
             }
-            Client = new SigilClient(config);
+            Client = new Agento11yClient(config);
         }
 
         public async Task ShutdownAsync()
@@ -824,7 +824,7 @@ public sealed class ConformanceTests
             Rating.Dispose();
         }
 
-        public SigilProto.Generation SingleGeneration()
+        public Agento11yProto.Generation SingleGeneration()
         {
             Assert.Single(Ingest.Requests);
             Assert.Single(Ingest.Requests[0].Request.Generations);
