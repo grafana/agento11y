@@ -2,10 +2,11 @@
 
 You are a coding agent. The user wants help with [Grafana AI observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/), powered by the open-source Sigil SDKs and plugins in [grafana/sigil-sdk](https://github.com/grafana/sigil-sdk).
 
-There are two distinct things this file covers. Pick the path that matches the request before doing anything else.
+There are three distinct things this file covers. Pick the path that matches the request before doing anything else.
 
 - Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, or Pi sent to Grafana AI observability. They are not changing application code.
 - Path B, [Instrument an LLM app or agent](#path-b-instrument-an-llm-app-or-agent): the user wants their own code (an app, agent, framework pipeline) to send generations to Grafana AI observability.
+- Path C, [Evaluate an agent](#path-c-evaluate-an-agent): the user's agent is already instrumented and they want to evaluate it — decide what to evaluate, run offline experiments, or add online evaluation and guardrails once real traffic exists.
 
 If you cannot tell, ask one clarifying question and stop.
 
@@ -96,6 +97,12 @@ Unknown values fall back to `metadata_only` with a warning. Secret redaction is 
 ---
 
 # Path B: Instrument an LLM app or agent
+
+> If you are running in Claude Code (or another `.agents` harness) with the gcx skill bundle
+> installed, prefer the **`agento11y-instrument`** skill (`gcx agent skills install
+> agento11y-instrument`) — it does this as a guided loop: detect the app, run a gap checklist,
+> apply changes with confirmation, and verify data lands via `gcx`. The rest of this section is the
+> underlying reference the skill draws on; follow it directly when you don't have that setup.
 
 You are acting as a coding agent inside the user's repository. Your goal is to add or improve Grafana AI observability instrumentation with minimal, safe changes.
 
@@ -468,3 +475,37 @@ Provide:
 4. Rollout/risk notes
 
 If no safe opportunities are found, explain exactly why and list what evidence you checked.
+
+---
+
+# Path C: Evaluate an agent
+
+The user has an instrumented agent and wants to evaluate it. What to reach for depends on the agent's lifecycle phase and what the user is trying to do. Pick by phase first, then by intent. Do not recommend online evaluation to someone with no traffic, and do not stall an early-stage user on production tooling they can't use yet.
+
+Each skill below is self-contained: it carries its own step-by-step instructions. This file only routes to the right one and states its prerequisite. `agento11y-eval-starter` ships in the gcx skill bundle — install it with the Claude Code plugin (`/plugin install gcx@gcx-marketplace`) or, for any `.agents`-compatible harness, `gcx agent skills install agento11y-eval-starter`. Installing needs `gcx`; *running* the skill afterward does not — it publishes with the ingestion key (below). `agento11y-experiments` still lives in this repo (`python/skills/agento11y-experiments/`) for now; a coding agent with the repo checked out can load it directly.
+
+## Early stage: no real traffic yet
+
+The agent is being built. There is no production traffic to score, so the work is offline: decide what to evaluate and build a test suite you run yourself. These skills publish scores with the **Cloud ingestion API key** (`AGENTO11Y_ENDPOINT` + `AGENTO11Y_AUTH_TOKEN`, same credentials as Path B). Running them does **not** need `gcx` (installing `agento11y-eval-starter` from the bundle does — see above).
+
+| Intent | Skill | Path |
+|--------|-------|------|
+| Decide *which* evaluators this agent needs and scaffold a starter test suite from its code | `agento11y-eval-starter` | `gcx agent skills install agento11y-eval-starter` |
+| Run a Python agent as an offline experiment — typed trials, bind/record generation I/O, grade outputs, publish scores | `agento11y-experiments` | [`python/skills/agento11y-experiments/`](https://github.com/grafana/sigil-sdk/tree/main/python/skills/agento11y-experiments) |
+
+Start with `agento11y-eval-starter` when the user doesn't yet know what to evaluate or has no test cases — it reads the agent, recommends evaluators, and writes a starter suite. Move to `agento11y-experiments` for the run-side details (binding existing generations, auditable LLM judges, cross-process verifiers, pass@k/pass^k). The experiments SDK exists in **Python and Go only**; for a TypeScript/Java/.NET agent, `agento11y-eval-starter` still produces recommendations and a suite YAML, but the runner must be Python or Go.
+
+## Production: real traffic exists
+
+The agent is deployed and ingesting real conversations. Now you can evaluate live traffic and enforce policy on the request path:
+
+- **Online evaluation rules** score live conversations continuously, so you catch quality regressions on real traffic instead of a fixed test set.
+- **Guards** are request-path policies (content allow/deny/redact, tool filtering). Introduce them **warn-first** (observe-only), then promote to deny once you trust them.
+
+This phase reads and writes **tenant-level** objects (evaluators, rules, guards), so it needs the `gcx` CLI (`gcx agento11y ...`) authenticated against the user's stack — not just the ingestion key. Sample the agent's real traffic first, check which evaluators/rules/guards already exist, and recommend only what's missing. Every tenant write must be confirmed explicitly; new guards start disabled and in warn mode. This is a judgment step on top of a deployed agent — it never rewrites or redeploys the agent itself.
+
+## Routing summary
+
+- "I don't know what to evaluate" / "help me get started" / no traffic yet → `agento11y-eval-starter`.
+- "run offline experiments" / "test my agent before shipping" → `agento11y-eval-starter` then `agento11y-experiments`.
+- "my agent is in prod, what should I evaluate" / "catch regressions on live traffic" / "add guardrails" / "redact PII" → production phase (online eval rules + guards via `gcx agento11y`).
