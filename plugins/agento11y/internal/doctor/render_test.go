@@ -11,7 +11,7 @@ func sampleReport() *Report {
 	return &Report{
 		Sigil: SigilSection{Version: "1.2.3"},
 		Config: ConfigSection{
-			Path: "/tmp/sigil/config.env", Exists: true,
+			Path: "/tmp/agento11y/config.env", Exists: true,
 			ContentCaptureMode: "metadata_only", Health: HealthOK,
 		},
 		Conversations: ConversationsSection{

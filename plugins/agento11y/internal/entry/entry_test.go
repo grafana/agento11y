@@ -31,7 +31,7 @@ import (
 // It also points HOME/XDG_* at a throwaway dir for the whole package: run()
 // applies the dotenv config via os.Setenv, which t.Setenv cannot undo, so a
 // single hook or launcher dispatch test reading the developer's real
-// ~/.config/sigil/config.env would leak SIGIL_* values (e.g. guard flags)
+// ~/.config/agento11y/config.env would leak SIGIL_* values (e.g. guard flags)
 // into every later test in the package.
 func TestMain(m *testing.M) {
 	loginRun = func(context.Context, login.RunOpts) error { return login.ErrNotInteractive }
@@ -139,45 +139,53 @@ func TestRun_DispatchesToMatchingAgentHook(t *testing.T) {
 
 // TestRun_DotenvSIGILDebugEnablesLogging guards the ordering invariant in
 // run(): dotenv.ApplyEnv must run before cli.InitLogger so SIGIL_DEBUG=true
-// set only in $XDG_CONFIG_HOME/sigil/config.env still routes the logger to
-// the per-app log file. Cursor and Codex headless launch hooks under a
-// stripped environment where the dotenv is the only source of SIGIL_DEBUG.
+// set only in the dotenv config still routes the logger to the per-app log
+// file. Cursor and Codex headless launch hooks under a stripped environment
+// where the dotenv is the only source of SIGIL_DEBUG. Runs against both the
+// preferred agento11y config dir and the legacy sigil fallback.
 func TestRun_DotenvSIGILDebugEnablesLogging(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	t.Setenv("SIGIL_DEBUG", "")
+	for _, app := range []string{"agento11y", "sigil"} {
+		t.Run(app, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("HOME", dir)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+			t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+			// ApplyEnv materializes the winner under both spellings via
+			// os.Setenv, so pin both blank to keep the subtests hermetic.
+			t.Setenv("SIGIL_DEBUG", "")
+			t.Setenv("AGENTO11Y_DEBUG", "")
 
-	cfgDir := filepath.Join(dir, "config", "sigil")
-	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(cfgDir, "config.env"), []byte("SIGIL_DEBUG=true\n"), 0o600); err != nil {
-		t.Fatalf("write dotenv: %v", err)
-	}
+			cfgDir := filepath.Join(dir, "config", app)
+			if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(cfgDir, "config.env"), []byte("SIGIL_DEBUG=true\n"), 0o600); err != nil {
+				t.Fatalf("write dotenv: %v", err)
+			}
 
-	prev := agents
-	t.Cleanup(func() { agents = prev })
-	agents = map[string]agentHook{
-		"claude-code": func(_ context.Context, _ io.Reader, _ io.Writer, logger *log.Logger) error {
-			logger.Print("hook ran")
-			return nil
-		},
-	}
+			prev := agents
+			t.Cleanup(func() { agents = prev })
+			agents = map[string]agentHook{
+				"claude-code": func(_ context.Context, _ io.Reader, _ io.Writer, logger *log.Logger) error {
+					logger.Print("hook ran")
+					return nil
+				},
+			}
 
-	var stdout, stderr bytes.Buffer
-	withExit(t, func() {
-		run([]string{"claude-code", "hook"}, strings.NewReader(`{}`), &stdout, &stderr)
-	})
+			var stdout, stderr bytes.Buffer
+			withExit(t, func() {
+				run([]string{"claude-code", "hook"}, strings.NewReader(`{}`), &stdout, &stderr)
+			})
 
-	logPath := filepath.Join(dir, "state", "sigil", "logs", "sigil.log")
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatalf("debug log not created at %s: %v", logPath, err)
-	}
-	if !strings.Contains(string(data), "hook ran") {
-		t.Fatalf("debug log missing expected line; got %q", data)
+			logPath := filepath.Join(dir, "state", "sigil", "logs", "sigil.log")
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatalf("debug log not created at %s: %v", logPath, err)
+			}
+			if !strings.Contains(string(data), "hook ran") {
+				t.Fatalf("debug log missing expected line; got %q", data)
+			}
+		})
 	}
 }
 

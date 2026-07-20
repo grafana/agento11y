@@ -193,10 +193,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	isHookCall := len(args) >= 2 && args[1] == "hook" && isHookAgent
 	if launcher, ok := launchers[args[0]]; ok && !isHookCall {
 		// dotenv must run before parseLauncherArgs so XDG_STATE_HOME set
-		// only in $XDG_CONFIG_HOME/sigil/config.env reaches local.StateDir()
+		// only in $XDG_CONFIG_HOME/agento11y/config.env reaches local.StateDir()
 		// when --local is used. Otherwise the daemon dir is resolved against
 		// the wrong root.
-		dotenv.ApplyEnv("sigil", nil)
+		dotenv.ApplyEnv(nil)
 		launcherArgs, localEnv, ok := parseLauncherArgs(args[0], args[1:], stderr)
 		if !ok {
 			return
@@ -289,10 +289,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	useragent.SigilVersion = version
 
 	// Apply the dotenv file before initialising the logger so SIGIL_DEBUG=true
-	// set only in $XDG_CONFIG_HOME/sigil/config.env still enables file logging.
+	// set only in $XDG_CONFIG_HOME/agento11y/config.env still enables file logging.
 	// Cursor (and Codex headless) launch hooks under a stripped environment
 	// where the dotenv is the only place SIGIL_DEBUG could come from.
-	dotenv.ApplyEnv("sigil", nil)
+	dotenv.ApplyEnv(nil)
 	logger := cli.InitLogger("sigil", agent)
 	defer cli.RecoverAndLog(logger)
 
@@ -303,7 +303,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 
 // runLoginCommand handles `sigil login`. The flow is interactive-only: any
 // args (including unknown flags) are rejected with exit 2. Non-interactive
-// callers should set SIGIL_* env vars or edit $XDG_CONFIG_HOME/sigil/config.env
+// callers should set SIGIL_* env vars or edit $XDG_CONFIG_HOME/agento11y/config.env
 // directly.
 func runLoginCommand(args []string, stderr io.Writer) {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
@@ -311,7 +311,8 @@ func runLoginCommand(args []string, stderr io.Writer) {
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: agento11y login")
 		_, _ = fmt.Fprintln(stderr)
-		_, _ = fmt.Fprintln(stderr, "Interactively save Sigil credentials to $XDG_CONFIG_HOME/sigil/config.env.")
+		_, _ = fmt.Fprintln(stderr, "Interactively save Sigil credentials to $XDG_CONFIG_HOME/agento11y/config.env")
+		_, _ = fmt.Fprintln(stderr, "(or the old $XDG_CONFIG_HOME/sigil/config.env if only that file exists).")
 	}
 	if err := fs.Parse(args); err != nil {
 		exit(2)
@@ -323,7 +324,7 @@ func runLoginCommand(args []string, stderr io.Writer) {
 		return
 	}
 
-	dotenv.ApplyEnv("sigil", nil)
+	dotenv.ApplyEnv(nil)
 	logger := cli.InitLogger("sigil", "login")
 
 	err := loginRun(context.Background(), login.RunOpts{
@@ -357,9 +358,9 @@ func runLoginCommand(args []string, stderr io.Writer) {
 // same way the launchers do; uninstall removes the hook entries.
 func runCursorInstall(verb string, stdout, stderr io.Writer) {
 	// dotenv must run before InitLogger so SIGIL_DEBUG=true set only in
-	// $XDG_CONFIG_HOME/sigil/config.env still enables file logging, and
+	// $XDG_CONFIG_HOME/agento11y/config.env still enables file logging, and
 	// before HasCredentials so dotenv-supplied credentials are visible.
-	dotenv.ApplyEnv("sigil", nil)
+	dotenv.ApplyEnv(nil)
 	logger := cli.InitLogger("sigil", "cursor")
 
 	if verb == "uninstall" {
@@ -405,7 +406,7 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 // is applied so doctor can attribute each value to the OS env vs config.env.
 func runDoctorCommand(args []string, stdout, stderr io.Writer) {
 	osEnv := doctor.SnapshotEnv()
-	dotenv.ApplyEnv("sigil", nil)
+	dotenv.ApplyEnv(nil)
 	code := doctor.Run(context.Background(), args, doctor.Params{
 		Version: version,
 		OSEnv:   osEnv,
@@ -604,9 +605,9 @@ func runLocalCommand(args []string, stdout, stderr io.Writer) {
 		return
 	}
 	// Apply dotenv before resolving the state dir so XDG_STATE_HOME set
-	// only in $XDG_CONFIG_HOME/sigil/config.env reaches local.StateDir().
+	// only in $XDG_CONFIG_HOME/agento11y/config.env reaches local.StateDir().
 	// Each verb relies on that resolution.
-	dotenv.ApplyEnv("sigil", nil)
+	dotenv.ApplyEnv(nil)
 	dir := local.StateDir()
 	switch args[0] {
 	case "start":

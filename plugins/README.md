@@ -30,7 +30,7 @@ The command was renamed from `sigil`; the old name still works but will be remov
 
 ## Launch your agent
 
-Launch with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, or `vibe`. On first run it installs the agent plugin or extension, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches the agent.
+Launch with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, or `vibe`. On first run it installs the agent plugin or extension, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches the agent.
 
 Cursor has no launcher; see [`cursor/README.md`](cursor/README.md) for setup.
 
@@ -46,4 +46,4 @@ Cursor has no launcher; see [`cursor/README.md`](cursor/README.md) for setup.
 | [Pi](https://github.com/earendil-works/pi) | [`pi/`](pi/) | Available |
 | [Vibe](https://github.com/mistralai/vibe) | [`vibe/`](vibe/) | Experimental |
 
-Plugins backed by the `agento11y` launcher share one config file at `~/.config/sigil/config.env`. The launcher creates or updates it on first run; `agento11y login` re-runs the same prompt later. Cursor has no launcher, so register its plugin in-app and run `agento11y login` once for the shared config.
+Plugins backed by the `agento11y` launcher share one config file at `~/.config/agento11y/config.env`. If you only have the old `~/.config/sigil/config.env`, that file is read and updated instead. The launcher creates or updates it on first run; `agento11y login` re-runs the same prompt later. Cursor has no launcher, so register its plugin in-app and run `agento11y login` once for the shared config.

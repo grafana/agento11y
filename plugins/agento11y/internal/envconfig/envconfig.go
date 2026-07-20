@@ -270,7 +270,7 @@ func ResolveContentMode(logger *log.Logger) sigil.ContentCaptureMode {
 
 // GuardsConfig is the resolved guard feature flags for a hook handler.
 // Mirrors plugins/pi/src/config.ts::GuardsFeatureConfig so a single
-// ~/.config/sigil/config.env drives both plugins.
+// ~/.config/agento11y/config.env drives both plugins.
 type GuardsConfig struct {
 	Enabled   bool
 	TimeoutMs int

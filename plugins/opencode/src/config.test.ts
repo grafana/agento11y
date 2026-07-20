@@ -451,7 +451,7 @@ describe("normalizeBaseEndpoint", () => {
   });
 });
 
-describe("loadConfig reads ~/.config/sigil/config.env", () => {
+describe("loadConfig reads ~/.config/agento11y/config.env", () => {
   let dir: string;
   let homeBackup: string | undefined;
 
@@ -476,7 +476,7 @@ describe("loadConfig reads ~/.config/sigil/config.env", () => {
   });
 
   it("picks up SIGIL_* credentials from config.env when no shell env is set", async () => {
-    const cfgDir = join(dir, "sigil");
+    const cfgDir = join(dir, "agento11y");
     mkdirSync(cfgDir, { recursive: true });
     writeFileSync(
       join(cfgDir, "config.env"),

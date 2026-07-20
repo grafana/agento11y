@@ -62,7 +62,7 @@ Install the `agento11y` binary (renamed from `sigil`; the old name still works b
 
 The script installs to `~/.local/bin`; `go install` puts the binary in `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`.
 
-Then launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, or `pi`. On first run it installs the plugin, prompts for credentials, writes `~/.config/sigil/config.env`, and launches the agent.
+Then launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, or `pi`. On first run it installs the plugin, prompts for credentials, writes `~/.config/agento11y/config.env`, and launches the agent.
 
 Cursor has no launcher (it is a GUI app). After installing the binary, wire its hooks once with `agento11y cursor install` (it merges into `~/.cursor/hooks.json` and prompts for credentials on first run); `agento11y cursor uninstall` removes them. See [`plugins/cursor/`](https://github.com/grafana/sigil-sdk/tree/main/plugins/cursor) for details.
 
@@ -79,7 +79,7 @@ To re-enter credentials later, run `agento11y login`.
 
 ## Content capture
 
-Coding-agent plugins default to `metadata_only`: only model, tokens, tool names, timing, and cost are sent. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/sigil/config.env`.
+Coding-agent plugins default to `metadata_only`: only model, tokens, tool names, timing, and cost are sent. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`.
 
 Accepted values depend on the plugin surface:
 
@@ -91,7 +91,7 @@ Unknown values fall back to `metadata_only` with a warning. Secret redaction is 
 
 1. Run the agent normally for one turn (any prompt).
 2. Open Grafana Cloud → AI Observability → Conversations. A new conversation should appear within a few seconds.
-3. If it doesn't, check the launcher's stderr for `agento11y:` warnings and confirm `~/.config/sigil/config.env` is readable.
+3. If it doesn't, check the launcher's stderr for `agento11y:` warnings and confirm `~/.config/agento11y/config.env` is readable. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
 
 ---
 

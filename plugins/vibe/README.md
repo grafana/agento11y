@@ -31,7 +31,7 @@ agento11y vibe
 
 The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y vibe` resolves the `vibe` binary on `PATH`, upserts the three sigil-owned `[[hooks]]` entries into `~/.vibe/hooks.toml` (or `$VIBE_HOME/hooks.toml`) on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then execs it. Repeated runs are no-ops: each entry is matched by name (`sigil`, `sigil-before-tool`, `sigil-after-tool`) and any hand-authored hooks in the same file are preserved.
+`agento11y vibe` resolves the `vibe` binary on `PATH`, upserts the three sigil-owned `[[hooks]]` entries into `~/.vibe/hooks.toml` (or `$VIBE_HOME/hooks.toml`) on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then execs it. Repeated runs are no-ops: each entry is matched by name (`sigil`, `sigil-before-tool`, `sigil-after-tool`) and any hand-authored hooks in the same file are preserved.
 
 The launcher always sets `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` in Mistral Vibe's environment because these events are gated behind that flag.
 
@@ -68,7 +68,7 @@ Then export `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` in the shell where you run `vi
 
 ## 2. Credentials
 
-Credentials are shared with every other `agento11y` launcher; see [`pi/README.md`](../pi/README.md#2-credentials) for the field-by-field walkthrough. Once `~/.config/sigil/config.env` exists, every launcher (and the Mistral Vibe hook) picks it up.
+Credentials are shared with every other `agento11y` launcher; see [`pi/README.md`](../pi/README.md#2-credentials) for the field-by-field walkthrough. Once `~/.config/agento11y/config.env` exists, every launcher (and the Mistral Vibe hook) picks it up. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
 
 ## 3. Verify
 

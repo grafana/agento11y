@@ -144,7 +144,7 @@ func TestApplyEnv(t *testing.T) {
 					t.Fatalf("write: %v", err)
 				}
 			}
-			ApplyEnv("sigil", log.New(&bytes.Buffer{}, "", 0))
+			ApplyEnv(log.New(&bytes.Buffer{}, "", 0))
 			if got := os.Getenv(key); got != tc.want {
 				t.Fatalf("%s = %q, want %q", key, got, tc.want)
 			}
@@ -209,7 +209,7 @@ func TestApplyEnvAliasFamilies(t *testing.T) {
 					t.Fatalf("write: %v", err)
 				}
 			}
-			ApplyEnv("sigil", log.New(&bytes.Buffer{}, "", 0))
+			ApplyEnv(log.New(&bytes.Buffer{}, "", 0))
 			if got := os.Getenv("AGENTO11Y_ENDPOINT"); got != tc.want {
 				t.Fatalf("AGENTO11Y_ENDPOINT = %q, want %q", got, tc.want)
 			}
@@ -224,8 +224,8 @@ func TestFilePath(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	got := FilePath("sigil")
-	wantSuffix := filepath.Join("sigil", "config.env")
+	got := FilePath()
+	wantSuffix := filepath.Join("agento11y", "config.env")
 	if !strings.HasPrefix(got, dir) || !strings.HasSuffix(got, wantSuffix) {
 		t.Fatalf("FilePath() = %q, want inside %q ending %q", got, dir, wantSuffix)
 	}
@@ -236,9 +236,44 @@ func TestFilePathDefaultsToHomeDotConfigWhenXDGUnset(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", home)
 
-	got := FilePath("sigil")
-	want := filepath.Join(home, ".config", "sigil", "config.env")
+	got := FilePath()
+	want := filepath.Join(home, ".config", "agento11y", "config.env")
 	if got != want {
 		t.Fatalf("FilePath() = %q, want %q", got, want)
+	}
+}
+
+func TestFilePathResolution(t *testing.T) {
+	cases := []struct {
+		name       string
+		makeNew    bool
+		makeLegacy bool
+		wantApp    string
+	}{
+		{name: "neither exists defaults to new", wantApp: "agento11y"},
+		{name: "only new exists", makeNew: true, wantApp: "agento11y"},
+		{name: "only legacy exists", makeLegacy: true, wantApp: "sigil"},
+		{name: "both exist prefers new", makeNew: true, makeLegacy: true, wantApp: "agento11y"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			for app, make := range map[string]bool{"agento11y": tc.makeNew, "sigil": tc.makeLegacy} {
+				if !make {
+					continue
+				}
+				if err := os.MkdirAll(filepath.Join(dir, app), 0o755); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, app, "config.env"), []byte("SIGIL_ENDPOINT=x\n"), 0o600); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+			}
+			want := filepath.Join(dir, tc.wantApp, "config.env")
+			if got := FilePath(); got != want {
+				t.Fatalf("FilePath() = %q, want %q", got, want)
+			}
+		})
 	}
 }

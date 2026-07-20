@@ -239,7 +239,7 @@ func Serve(ctx context.Context, dir string, port int, logger *log.Logger) error 
 		return fmt.Errorf("listen: %w", err)
 	}
 	actualPort := listener.Addr().(*net.TCPAddr).Port
-	srv := NewServer(storage, logger, dotenv.FilePath("sigil"))
+	srv := NewServer(storage, logger, dotenv.FilePath())
 	httpSrv := &http.Server{
 		Handler:           srv,
 		ReadHeaderTimeout: 5 * time.Second,

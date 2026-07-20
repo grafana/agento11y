@@ -288,7 +288,7 @@ func parseFlags(args []string, stderr io.Writer) (Options, error) {
 // Collect builds the report. It reads config.env and the env snapshot but
 // performs no mutations. Network probes run only when opts.Probe is set.
 func Collect(ctx context.Context, opts Options, p Params) *Report {
-	fileEnv := dotenv.LoadDotenv(dotenv.FilePath("sigil"), nil)
+	fileEnv := dotenv.LoadDotenv(dotenv.FilePath(), nil)
 	osEnv := p.OSEnv
 	if osEnv == nil {
 		osEnv = map[string]string{}
@@ -452,7 +452,7 @@ func headersHaveAuthorization(raw string) bool {
 }
 
 func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
-	path := dotenv.FilePath("sigil")
+	path := dotenv.FilePath()
 	sec := ConfigSection{Path: path, Health: HealthOK}
 	if _, err := os.Stat(path); err == nil {
 		sec.Exists = true

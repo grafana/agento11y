@@ -71,7 +71,7 @@ You need values from three Grafana Cloud pages:
 <details>
 <summary>Non-interactive config.env</summary>
 
-Create or update `~/.config/sigil/config.env`:
+Create or update `~/.config/agento11y/config.env` (if you already have the old `~/.config/sigil/config.env`, edit that one instead):
 
 ```dotenv
 AGENTO11Y_ENDPOINT=https://sigil-prod-<region>.grafana.net
@@ -82,7 +82,7 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana
 
 </details>
 
-To also send the conversation text, add this to `~/.config/sigil/config.env`:
+To also send the conversation text, add this to your `config.env`:
 
 ```dotenv
 AGENTO11Y_CONTENT_CAPTURE_MODE=full
@@ -94,7 +94,7 @@ Cursor content is not passed through the shared redactor before export. Avoid `f
 
 Use Cursor's agent for one turn, then open **AI Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
 
-If nothing shows up, add `AGENTO11Y_DEBUG=true` to `~/.config/sigil/config.env` (Cursor launches from the GUI, so a shell env var won't reach the hooks) and tail the log:
+If nothing shows up, add `AGENTO11Y_DEBUG=true` to `~/.config/agento11y/config.env` (Cursor launches from the GUI, so a shell env var won't reach the hooks) and tail the log:
 
 ```sh
 tail -f ~/.local/state/sigil/logs/sigil.log

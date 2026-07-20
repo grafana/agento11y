@@ -9,7 +9,7 @@ import (
 // TestLoad_Guards pins the env-var contract and defaults for codex against
 // the shared envconfig resolver, mirroring the copilot config test so the
 // two agents stay byte-identical on the guard knobs that ship in
-// ~/.config/sigil/config.env.
+// ~/.config/agento11y/config.env.
 func TestLoad_Guards(t *testing.T) {
 	tests := []struct {
 		name          string

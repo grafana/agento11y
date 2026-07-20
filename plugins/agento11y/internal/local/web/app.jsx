@@ -1807,7 +1807,7 @@
       const [form, setForm] = useState(null);
       const [saved, setSaved] = useState(null);
       const [preview, setPreview] = useState("");
-      const [path, setPath] = useState("~/.config/sigil/config.env");
+      const [path, setPath] = useState("~/.config/agento11y/config.env");
       const [loading, setLoading] = useState(true);
       const [error, setError] = useState(null);
       const [toast, setToast] = useState(null);

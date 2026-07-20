@@ -25,7 +25,7 @@ func HasCredentials() bool {
 }
 
 // Load returns the copilot-local subset of config from OS env. Call
-// dotenv.ApplyEnv("sigil", logger) first so dotenv-only values are
+// dotenv.ApplyEnv(logger) first so dotenv-only values are
 // reflected in the OS env.
 func Load(logger *log.Logger) Config {
 	return Config{
