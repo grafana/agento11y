@@ -7,7 +7,7 @@ import (
 
 	osdk "github.com/openai/openai-go/v3"
 
-	"github.com/grafana/sigil-sdk/go/sigil"
+	"github.com/grafana/agento11y/go/sigil"
 )
 
 // ChatCompletionsStreamSummary captures chat-completions stream chunks and an optional final response.

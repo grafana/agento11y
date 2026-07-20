@@ -1,18 +1,18 @@
-# OpenAI Agents Handler (`@grafana/sigil-sdk-js/openai-agents`)
+# OpenAI Agents Handler (`@grafana/agento11y/openai-agents`)
 
 Use `SigilOpenAIAgentsHandler` to map OpenAI Agents lifecycle callbacks to Sigil generations.
 
 ## Install
 
 ```bash
-pnpm add @grafana/sigil-sdk-js @openai/agents
+pnpm add @grafana/agento11y @openai/agents
 ```
 
 ## Quickstart
 
 ```ts
-import { SigilClient } from '@grafana/sigil-sdk-js';
-import { withSigilOpenAIAgentsHooks } from '@grafana/sigil-sdk-js/openai-agents';
+import { SigilClient } from '@grafana/agento11y';
+import { withSigilOpenAIAgentsHooks } from '@grafana/agento11y/openai-agents';
 import { Runner } from '@openai/agents';
 
 const client = new SigilClient();
@@ -32,8 +32,8 @@ sigilHooks.detach();
 ## Streaming snippet
 
 ```ts
-import { SigilClient } from '@grafana/sigil-sdk-js';
-import { SigilOpenAIAgentsHandler } from '@grafana/sigil-sdk-js/openai-agents';
+import { SigilClient } from '@grafana/agento11y';
+import { SigilOpenAIAgentsHandler } from '@grafana/agento11y/openai-agents';
 
 const client = new SigilClient();
 const handler = new SigilOpenAIAgentsHandler(client, { providerResolver: 'auto' });

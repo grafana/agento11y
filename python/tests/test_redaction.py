@@ -5,8 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from conftest import CapturingGenerationExporter
-from sigil_sdk import (
+from agento11y import (
     Client,
     ClientConfig,
     ContentCaptureMode,
@@ -25,7 +24,8 @@ from sigil_sdk import (
     ToolResult,
     create_secret_redaction_sanitizer,
 )
-from sigil_sdk.redaction import _resolve_redact_input_messages
+from agento11y.redaction import _resolve_redact_input_messages
+from conftest import CapturingGenerationExporter
 
 
 def _new_client(
@@ -255,7 +255,7 @@ def test_secret_redaction_sanitizer_redacts_tool_and_assistant_input_when_opted_
 
 def test_generation_sanitizer_failure_falls_back_to_metadata_only(caplog) -> None:
     exporter = CapturingGenerationExporter()
-    logger = logging.getLogger("sigil_sdk.test_redaction")
+    logger = logging.getLogger("agento11y.test_redaction")
     client = _new_client(
         exporter,
         generation_sanitizer=lambda _generation: (_ for _ in ()).throw(RuntimeError("boom")),
@@ -319,7 +319,7 @@ def test_resolve_redact_input_messages_blank_falls_back_to_false() -> None:
 
 
 def test_resolve_redact_input_messages_invalid_warns_and_falls_back(caplog) -> None:
-    with caplog.at_level(logging.WARNING, logger="sigil_sdk"):
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
         got = _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": "maybe"})
     assert got is False
     assert any(
@@ -349,7 +349,7 @@ def test_resolve_redact_input_messages_explicit_beats_both_prefixes() -> None:
 
 def test_resolve_redact_input_messages_invalid_preferred_blocks_valid_legacy(caplog) -> None:
     env = {"AGENTO11Y_REDACT_INPUT_MESSAGES": "maybe", "SIGIL_REDACT_INPUT_MESSAGES": "true"}
-    with caplog.at_level(logging.WARNING, logger="sigil_sdk"):
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
         assert _resolve_redact_input_messages(None, env=env) is False
     assert any("AGENTO11Y_REDACT_INPUT_MESSAGES" in record.getMessage() for record in caplog.records)
 

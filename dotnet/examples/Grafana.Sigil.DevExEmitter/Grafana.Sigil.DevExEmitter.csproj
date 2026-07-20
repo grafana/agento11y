@@ -8,9 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../src/Grafana.Sigil/Grafana.Sigil.csproj" />
-    <ProjectReference Include="../../src/Grafana.Sigil.OpenAI/Grafana.Sigil.OpenAI.csproj" />
-    <ProjectReference Include="../../src/Grafana.Sigil.Anthropic/Grafana.Sigil.Anthropic.csproj" />
-    <ProjectReference Include="../../src/Grafana.Sigil.Gemini/Grafana.Sigil.Gemini.csproj" />
+    <ProjectReference Include="../../src/Grafana.Agento11y/Grafana.Agento11y.csproj" />
+    <ProjectReference Include="../../src/Grafana.Agento11y.OpenAI/Grafana.Agento11y.OpenAI.csproj" />
+    <ProjectReference Include="../../src/Grafana.Agento11y.Anthropic/Grafana.Agento11y.Anthropic.csproj" />
+    <ProjectReference Include="../../src/Grafana.Agento11y.Gemini/Grafana.Agento11y.Gemini.csproj" />
   </ItemGroup>
 </Project>

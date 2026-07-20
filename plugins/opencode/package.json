@@ -1,7 +1,7 @@
 {
-  "name": "@grafana/sigil-opencode",
+  "name": "@grafana/agento11y-opencode",
   "version": "0.13.0",
-  "description": "OpenCode plugin for Grafana Sigil AI telemetry",
+  "description": "OpenCode plugin for Grafana Agent Observability",
   "repository": {
     "type": "git",
     "url": "https://github.com/grafana/sigil-sdk.git",
@@ -38,7 +38,7 @@
     "@opencode-ai/plugin": "^1.2.16"
   },
   "devDependencies": {
-    "@grafana/sigil-sdk-js": "workspace:*",
+    "@grafana/agento11y": "workspace:*",
     "@opencode-ai/plugin": "1.3.13",
     "@opencode-ai/sdk": "1.3.13",
     "@opentelemetry/api": "1.9.1",

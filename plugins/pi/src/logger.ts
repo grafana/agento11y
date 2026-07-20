@@ -8,11 +8,11 @@ import { format } from "node:util";
 // stdout in interactive mode — see core/output-guard.ts). So all diagnostics
 // go to a file instead, matching the shared sigil binary, which writes its
 // debug log to $XDG_STATE_HOME/sigil/logs/sigil.log (see
-// plugins/sigil/internal/xdg and internal/cli InitLogger). Logging is silent
+// plugins/agento11y/internal/xdg and internal/cli InitLogger). Logging is silent
 // unless AGENTO11Y_DEBUG (SIGIL_DEBUG fallback) is truthy.
 const APP_NAME = "sigil";
 
-/** Mirrors plugins/sigil/internal/xdg.StateRoot for app "sigil". */
+/** Mirrors plugins/agento11y/internal/xdg.StateRoot for app "sigil". */
 export function stateRoot(appName = APP_NAME): string {
   const xdg = (process.env.XDG_STATE_HOME ?? "").trim();
   if (xdg && isAbsolute(xdg)) return join(xdg, appName);
@@ -21,7 +21,7 @@ export function stateRoot(appName = APP_NAME): string {
   return join(tmpdir(), appName);
 }
 
-/** Mirrors plugins/sigil/internal/xdg.LogFilePath for app "sigil". */
+/** Mirrors plugins/agento11y/internal/xdg.LogFilePath for app "sigil". */
 export function logFilePath(appName = APP_NAME): string {
   return join(stateRoot(appName), "logs", `${appName}.log`);
 }

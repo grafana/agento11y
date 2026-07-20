@@ -22,7 +22,7 @@ Set the [`AGENTO11Y_*` env vars](#grafana-cloud-credentials) and construct the c
 ### TypeScript
 
 ```ts
-import { SigilClient } from "@grafana/sigil-sdk-js";
+import { SigilClient } from "@grafana/agento11y";
 
 const client = new SigilClient(); // reads AGENTO11Y_* env vars
 
@@ -39,7 +39,7 @@ await client.shutdown();
 ### Python
 
 ```python
-from sigil_sdk import Client, GenerationStart, ModelRef, assistant_text_message
+from agento11y import Client, GenerationStart, ModelRef, assistant_text_message
 
 client = Client()  # reads AGENTO11Y_* env vars
 
@@ -75,11 +75,11 @@ rec.SetResult(sigil.Generation{
 
 | Language | Package | Path |
 |----------|---------|------|
-| Go | `github.com/grafana/sigil-sdk/go` | [`go/`](go/) |
-| Python | `sigil-sdk` | [`python/`](python/) |
-| TypeScript/JavaScript | `@grafana/sigil-sdk-js` | [`js/`](js/) |
-| .NET/C# | `Grafana.Sigil` | [`dotnet/`](dotnet/) |
-| Java | `com.grafana.sigil` | [`java/`](java/) |
+| Go | `github.com/grafana/agento11y/go` | [`go/`](go/) |
+| Python | `agento11y` | [`python/`](python/) |
+| TypeScript/JavaScript | `@grafana/agento11y` | [`js/`](js/) |
+| .NET/C# | `Grafana.Agento11y` | [`dotnet/`](dotnet/) |
+| Java | `com.grafana.agento11y` | [`java/`](java/) |
 
 ## Provider adapters
 
@@ -89,14 +89,14 @@ rec.SetResult(sigil.Generation{
 | Python | Anthropic, OpenAI, Gemini | [`python-providers/`](python-providers/) |
 | Java | Anthropic, OpenAI, Gemini | [`java/providers/`](java/providers/) |
 | .NET | Anthropic, OpenAI, Gemini | [`dotnet/src/`](dotnet/src/) |
-| TypeScript/JavaScript | Anthropic, OpenAI, Gemini | Subpath exports of `@grafana/sigil-sdk-js`. See [`js/README.md`](js/README.md). |
+| TypeScript/JavaScript | Anthropic, OpenAI, Gemini | Subpath exports of `@grafana/agento11y`. See [`js/README.md`](js/README.md). |
 
 ## Framework integrations
 
 | Language | Frameworks | Where |
 |----------|------------|-------|
 | Python | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands Agents, Claude Agent SDK, LiteLLM, Pydantic AI | [`python-frameworks/`](python-frameworks/) |
-| TypeScript/JavaScript | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands, Vercel AI SDK | Subpath exports of `@grafana/sigil-sdk-js`. See [`js/README.md`](js/README.md). |
+| TypeScript/JavaScript | LangChain, LangGraph, OpenAI Agents, LlamaIndex, Google ADK, Strands, Vercel AI SDK | Subpath exports of `@grafana/agento11y`. See [`js/README.md`](js/README.md). |
 | Go | Google ADK | [`go-frameworks/`](go-frameworks/) |
 | Java | Google ADK | [`java/frameworks/`](java/frameworks/) |
 

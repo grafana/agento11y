@@ -1,6 +1,6 @@
 # Getting Started — Python + Pydantic AI
 
-Runs a Pydantic AI agent and records the generation to Grafana Cloud AI Observability via the `sigil-sdk-pydantic-ai` capability.
+Runs a Pydantic AI agent and records the generation to Grafana Cloud AI Observability via the `agento11y-pydantic-ai` capability.
 
 ## Setup
 

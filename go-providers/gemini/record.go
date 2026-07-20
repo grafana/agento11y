@@ -6,7 +6,7 @@ import (
 
 	"google.golang.org/genai"
 
-	"github.com/grafana/sigil-sdk/go/sigil"
+	"github.com/grafana/agento11y/go/sigil"
 )
 
 // GenerateContent calls the Gemini generate-content API and records the generation.

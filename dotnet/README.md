@@ -4,17 +4,17 @@ Sigil extends OpenTelemetry-style instrumentation with normalized AI generation 
 
 ## Packages
 
-- `Grafana.Sigil`: core runtime (`SigilClient`, generation/tool recorders, generation export)
-- `Grafana.Sigil.OpenAI`: OpenAI Responses + Chat Completions + Embeddings wrappers and mappers
-- `Grafana.Sigil.Anthropic`: Anthropic Messages wrappers and mappers
-- `Grafana.Sigil.Gemini`: Gemini GenerateContent + EmbedContent wrappers and mappers
+- `Grafana.Agento11y`: core runtime (`SigilClient`, generation/tool recorders, generation export)
+- `Grafana.Agento11y.OpenAI`: OpenAI Responses + Chat Completions + Embeddings wrappers and mappers
+- `Grafana.Agento11y.Anthropic`: Anthropic Messages wrappers and mappers
+- `Grafana.Agento11y.Gemini`: Gemini GenerateContent + EmbedContent wrappers and mappers
 
 Package docs:
 
-- Core: [`src/Grafana.Sigil/README.md`](src/Grafana.Sigil/README.md)
-- OpenAI: [`src/Grafana.Sigil.OpenAI/README.md`](src/Grafana.Sigil.OpenAI/README.md)
-- Anthropic: [`src/Grafana.Sigil.Anthropic/README.md`](src/Grafana.Sigil.Anthropic/README.md)
-- Gemini: [`src/Grafana.Sigil.Gemini/README.md`](src/Grafana.Sigil.Gemini/README.md)
+- Core: [`src/Grafana.Agento11y/README.md`](src/Grafana.Agento11y/README.md)
+- OpenAI: [`src/Grafana.Agento11y.OpenAI/README.md`](src/Grafana.Agento11y.OpenAI/README.md)
+- Anthropic: [`src/Grafana.Agento11y.Anthropic/README.md`](src/Grafana.Agento11y.Anthropic/README.md)
+- Gemini: [`src/Grafana.Agento11y.Gemini/README.md`](src/Grafana.Agento11y.Gemini/README.md)
 
 ## Target frameworks
 
@@ -24,9 +24,9 @@ Package docs:
 ## Install
 
 ```bash
-dotnet add package Grafana.Sigil
-dotnet add package Grafana.Sigil.OpenAI
-# or: Grafana.Sigil.Anthropic / Grafana.Sigil.Gemini
+dotnet add package Grafana.Agento11y
+dotnet add package Grafana.Agento11y.OpenAI
+# or: Grafana.Agento11y.Anthropic / Grafana.Agento11y.Gemini
 ```
 
 For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance ID, and API token), refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/).

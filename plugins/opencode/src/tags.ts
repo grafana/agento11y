@@ -1,6 +1,6 @@
 // Build per-generation built-in tags for the opencode plugin.
 //
-// Mirrors the Go side in plugins/sigil/internal/agents/cursor/tags/tags.go
+// Mirrors the Go side in plugins/agento11y/internal/agents/cursor/tags/tags.go
 // `Build`: only emits keys whose values are non-empty, returns `undefined`
 // when no inputs are populated. User-supplied `SIGIL_TAGS` is layered in by
 // the SDK at the client level; the seed/built-in tags merged here take

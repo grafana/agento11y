@@ -1,7 +1,7 @@
 # Sigil framework-free experiment example
 
 A minimal, runnable set of Sigil **experiment** examples using the core
-`sigil-sdk` only — **no framework adapter**.
+`agento11y` only — **no framework adapter**.
 
 There are two entry points:
 

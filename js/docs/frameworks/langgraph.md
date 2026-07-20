@@ -1,18 +1,18 @@
-# LangGraph Handler (`@grafana/sigil-sdk-js/langgraph`)
+# LangGraph Handler (`@grafana/agento11y/langgraph`)
 
 Use `SigilLangGraphHandler` to map LangGraph callback lifecycle events to Sigil generation records.
 
 ## Install
 
 ```bash
-pnpm add @grafana/sigil-sdk-js @langchain/core @langchain/langgraph @langchain/openai
+pnpm add @grafana/agento11y @langchain/core @langchain/langgraph @langchain/openai
 ```
 
 ## Usage
 
 ```ts
-import { SigilClient } from '@grafana/sigil-sdk-js';
-import { withSigilLangGraphCallbacks } from '@grafana/sigil-sdk-js/langgraph';
+import { SigilClient } from '@grafana/agento11y';
+import { withSigilLangGraphCallbacks } from '@grafana/agento11y/langgraph';
 
 const client = new SigilClient();
 const config = withSigilLangGraphCallbacks(undefined, client, { providerResolver: 'auto' });
@@ -23,11 +23,11 @@ const config = withSigilLangGraphCallbacks(undefined, client, { providerResolver
 ```ts
 import { ChatOpenAI } from '@langchain/openai';
 import { END, START, StateGraph, Annotation } from '@langchain/langgraph';
-import { SigilClient } from '@grafana/sigil-sdk-js';
+import { SigilClient } from '@grafana/agento11y';
 import {
   SigilLangGraphHandler,
   withSigilLangGraphCallbacks,
-} from '@grafana/sigil-sdk-js/langgraph';
+} from '@grafana/agento11y/langgraph';
 
 const GraphState = Annotation.Root({
   prompt: Annotation<string>(),

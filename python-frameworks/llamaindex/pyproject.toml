@@ -1,12 +1,12 @@
 [project]
-name = "sigil-sdk-llamaindex"
+name = "agento11y-llamaindex"
 version = "0.9.3"
-description = "LlamaIndex callback handlers for Sigil Python SDK"
+description = "LlamaIndex callback handlers for the Grafana Agent Observability Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "sigil-sdk>=0.9.3",
+  "agento11y>=0.9.3",
   "llama-index>=0.14.0",
 ]
 
@@ -24,7 +24,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sigil_sdk_llamaindex*"]
+include = ["agento11y_llamaindex*"]
 
 [tool.setuptools.package-data]
-sigil_sdk_llamaindex = ["py.typed"]
+agento11y_llamaindex = ["py.typed"]

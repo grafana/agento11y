@@ -1,0 +1,46 @@
+version: 2
+
+project_name: agento11y
+
+builds:
+  - id: agento11y
+    binary: agento11y
+    main: ./cmd/agento11y
+    dir: plugins/agento11y
+    env:
+      - CGO_ENABLED=0
+      - GOWORK=off
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version=v{{ .Version }}
+
+archives:
+  - id: agento11y
+    ids: [agento11y]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+# Release creation is handled by the workflow via `gh release create`,
+# so the published artifacts attach to the real `plugins/agento11y/v<ver>` tag
+# rather than GORELEASER_CURRENT_TAG.
+release:
+  disable: true
+
+changelog:
+  disable: true

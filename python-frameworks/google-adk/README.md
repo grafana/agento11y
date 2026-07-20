@@ -1,19 +1,19 @@
 # Sigil Python Framework Module: Google ADK
 
-`sigil-sdk-google-adk` provides callback handlers that map Google ADK invocation/session events into Sigil generation recorder lifecycles.
+`agento11y-google-adk` provides callback handlers that map Google ADK invocation/session events into Sigil generation recorder lifecycles.
 
 ## Installation
 
 ```bash
-pip install sigil-sdk sigil-sdk-google-adk
+pip install agento11y agento11y-google-adk
 pip install google-adk
 ```
 
 ## Quickstart
 
 ```python
-from sigil_sdk import Client
-from sigil_sdk_google_adk import with_sigil_google_adk_plugins
+from agento11y import Client
+from agento11y_google_adk import with_sigil_google_adk_plugins
 
 client = Client()
 runner_config = with_sigil_google_adk_plugins(None, client=client, provider_resolver="auto")
@@ -23,8 +23,8 @@ runner_config = with_sigil_google_adk_plugins(None, client=client, provider_reso
 ## Callback-field wiring
 
 ```python
-from sigil_sdk import Client
-from sigil_sdk_google_adk import with_sigil_google_adk_callbacks
+from agento11y import Client
+from agento11y_google_adk import with_sigil_google_adk_callbacks
 
 client = Client()
 agent_config = with_sigil_google_adk_callbacks(None, client=client, provider_resolver="auto")

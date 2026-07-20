@@ -4,7 +4,7 @@ plugins {
 }
 
 mavenPublishing {
-    coordinates(artifactId = "sigil-sdk-google-adk")
+    coordinates(artifactId = "agento11y-google-adk")
 }
 
 dependencies {

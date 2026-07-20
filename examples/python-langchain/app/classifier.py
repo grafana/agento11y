@@ -21,7 +21,7 @@ from typing import Literal
 from anthropic import Anthropic
 from anthropic.types import TextBlock
 
-from sigil_sdk import (
+from agento11y import (
     Client,
     GenerationStart,
     ModelRef,

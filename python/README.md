@@ -1,6 +1,6 @@
 # Grafana Sigil Python SDK
 
-`sigil-sdk` records normalized LLM generation and tool-execution telemetry. It exports normalized generations to Sigil ingest and uses your OpenTelemetry tracer/meter setup for traces and metrics.
+`agento11y` records normalized LLM generation and tool-execution telemetry. It exports normalized generations to Sigil ingest and uses your OpenTelemetry tracer/meter setup for traces and metrics.
 
 Use this package when you want:
 
@@ -11,7 +11,7 @@ Use this package when you want:
 ## Installation
 
 ```bash
-pip install sigil-sdk
+pip install agento11y
 ```
 
 For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance ID, and API token), refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/).
@@ -33,37 +33,37 @@ mise run sdk:conformance
 Optional provider helper packages:
 
 ```bash
-pip install sigil-sdk-openai
-pip install sigil-sdk-anthropic
-pip install sigil-sdk-gemini
+pip install agento11y-openai
+pip install agento11y-anthropic
+pip install agento11y-gemini
 ```
 
 Optional framework modules:
 
 ```bash
-pip install sigil-sdk-langchain
-pip install sigil-sdk-langgraph
-pip install sigil-sdk-openai-agents
-pip install sigil-sdk-llamaindex
-pip install sigil-sdk-google-adk
-pip install sigil-sdk-strands
-pip install sigil-sdk-claude-agent-sdk
-pip install sigil-sdk-litellm
-pip install sigil-sdk-pydantic-ai
+pip install agento11y-langchain
+pip install agento11y-langgraph
+pip install agento11y-openai-agents
+pip install agento11y-llamaindex
+pip install agento11y-google-adk
+pip install agento11y-strands
+pip install agento11y-claude-agent-sdk
+pip install agento11y-litellm
+pip install agento11y-pydantic-ai
 ```
 
 Framework handler usage:
 
 ```python
-from sigil_sdk import Client
-from sigil_sdk_langchain import with_sigil_langchain_callbacks
-from sigil_sdk_langgraph import with_sigil_langgraph_callbacks
-from sigil_sdk_openai_agents import with_sigil_openai_agents_hooks
-from sigil_sdk_llamaindex import with_sigil_llamaindex_callbacks
-from sigil_sdk_google_adk import with_sigil_google_adk_callbacks
-from sigil_sdk_strands import with_sigil_strands_hooks
-from sigil_sdk_claude_agent import with_sigil_claude_agent_options
-from sigil_sdk_pydantic_ai import with_sigil_pydantic_ai_capability
+from agento11y import Client
+from agento11y_langchain import with_sigil_langchain_callbacks
+from agento11y_langgraph import with_sigil_langgraph_callbacks
+from agento11y_openai_agents import with_sigil_openai_agents_hooks
+from agento11y_llamaindex import with_sigil_llamaindex_callbacks
+from agento11y_google_adk import with_sigil_google_adk_callbacks
+from agento11y_strands import with_sigil_strands_hooks
+from agento11y_claude_agent import with_sigil_claude_agent_options
+from agento11y_pydantic_ai import with_sigil_pydantic_ai_capability
 
 client = Client()
 chain_config = with_sigil_langchain_callbacks(None, client=client, provider_resolver="auto")
@@ -80,8 +80,8 @@ LiteLLM uses a callback class instead of a `with_sigil_*` helper:
 
 ```python
 import litellm
-from sigil_sdk import Client
-from sigil_sdk_litellm import SigilLiteLLMLogger
+from agento11y import Client
+from agento11y_litellm import SigilLiteLLMLogger
 
 client = Client()
 litellm.callbacks = [SigilLiteLLMLogger(client=client)]
@@ -142,7 +142,7 @@ Full framework examples:
 `Client()` reads `AGENTO11Y_*` env vars by default. See the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names. Pass an explicit `ClientConfig` only when you need to override.
 
 ```python
-from sigil_sdk import (
+from agento11y import (
     Client,
     GenerationStart,
     ModelRef,
@@ -177,7 +177,7 @@ Explicit configuration form:
 
 ```python
 import os
-from sigil_sdk import AuthConfig, Client, ClientConfig, GenerationExportConfig
+from agento11y import AuthConfig, Client, ClientConfig, GenerationExportConfig
 
 client = Client(
     ClientConfig(
@@ -200,7 +200,7 @@ Use `generation_sanitizer` when you want to redact substrings from normalized ge
 validation, span sync, and export.
 
 ```python
-from sigil_sdk import (
+from agento11y import (
     Client,
     ClientConfig,
     SecretRedactionOptions,
@@ -240,10 +240,10 @@ client = Client(
 
 ### Configuring redaction via environment variables
 
-`create_secret_redaction_sanitizer()` reads `AGENTO11Y_REDACT_INPUT_MESSAGES` (accepts `1/0`, `true/false`, `yes/no`, `on/off`) when `redact_input_messages` is left `None`. Precedence is explicit option > env var > `False`. An unrecognised env value logs a warning through the `sigil_sdk` logger and falls back to the next layer, so a typo cannot silently flip redaction.
+`create_secret_redaction_sanitizer()` reads `AGENTO11Y_REDACT_INPUT_MESSAGES` (accepts `1/0`, `true/false`, `yes/no`, `on/off`) when `redact_input_messages` is left `None`. Precedence is explicit option > env var > `False`. An unrecognised env value logs a warning through the `agento11y` logger and falls back to the next layer, so a typo cannot silently flip redaction.
 
 ```python
-from sigil_sdk import (
+from agento11y import (
     Client,
     ClientConfig,
     create_secret_redaction_sanitizer,
@@ -264,7 +264,7 @@ Use hooks when you want Sigil guard rules to run before an LLM call. The SDK eva
 Hooks are disabled by default. Enable them on the client and call `evaluate_hook(...)` before the provider request:
 
 ```python
-from sigil_sdk import (
+from agento11y import (
     Client,
     ClientConfig,
     HookContext,
@@ -330,7 +330,7 @@ metrics.set_meter_provider(MeterProvider())
 Use `start_streaming_generation(...)` when the upstream provider call is streaming.
 
 ```python
-from sigil_sdk import GenerationStart, ModelRef
+from agento11y import GenerationStart, ModelRef
 
 with client.start_streaming_generation(
     GenerationStart(
@@ -346,7 +346,7 @@ with client.start_streaming_generation(
 Use `start_embedding(...)` for embedding API calls. Embedding recording emits OTel spans and SDK metrics only, and does not enqueue generation exports.
 
 ```python
-from sigil_sdk import EmbeddingResult, EmbeddingStart, ModelRef
+from agento11y import EmbeddingResult, EmbeddingStart, ModelRef
 
 with client.start_embedding(
     EmbeddingStart(
@@ -369,7 +369,7 @@ with client.start_embedding(
 Input text capture is opt-in:
 
 ```python
-from sigil_sdk import ClientConfig, EmbeddingCaptureConfig
+from agento11y import ClientConfig, EmbeddingCaptureConfig
 
 cfg = ClientConfig(
     embedding_capture=EmbeddingCaptureConfig(
@@ -393,7 +393,7 @@ TraceQL examples:
 Tool spans are recorded independently of generation export.
 
 ```python
-from sigil_sdk import ToolExecutionStart
+from agento11y import ToolExecutionStart
 
 with client.start_tool_execution(
     ToolExecutionStart(
@@ -418,7 +418,7 @@ with client.start_tool_execution(
 Use context helpers to set defaults once per request/task boundary.
 
 ```python
-from sigil_sdk import with_agent_name, with_agent_version, with_conversation_id
+from agento11y import with_agent_name, with_agent_version, with_conversation_id
 
 with with_conversation_id("conv-ctx"), with_agent_name("planner"), with_agent_version("2026.02"):
     with client.start_generation(
@@ -447,7 +447,7 @@ User-provided `metadata` and `tags` are **not** stripped by any capture mode; ca
 ### Client-level default
 
 ```python
-from sigil_sdk import Client, ClientConfig, ContentCaptureMode
+from agento11y import Client, ClientConfig, ContentCaptureMode
 
 client = Client(ClientConfig(
     content_capture=ContentCaptureMode.METADATA_ONLY,
@@ -457,7 +457,7 @@ client = Client(ClientConfig(
 ### Per-generation override
 
 ```python
-from sigil_sdk import ContentCaptureMode, GenerationStart, ModelRef
+from agento11y import ContentCaptureMode, GenerationStart, ModelRef
 
 with client.start_generation(
     GenerationStart(
@@ -476,7 +476,7 @@ with client.start_generation(
 Child tool executions inherit the active capture mode from the parent generation via `ContextVar`. You can also set it explicitly for a block:
 
 ```python
-from sigil_sdk import ContentCaptureMode, with_content_capture_mode
+from agento11y import ContentCaptureMode, with_content_capture_mode
 
 with with_content_capture_mode(ContentCaptureMode.METADATA_ONLY):
     with client.start_tool_execution(
@@ -490,7 +490,7 @@ with with_content_capture_mode(ContentCaptureMode.METADATA_ONLY):
 A callback on `ClientConfig` that resolves the capture mode per-recording at runtime. Useful for feature flags, per-tenant policies, or context-dependent decisions:
 
 ```python
-from sigil_sdk import Client, ClientConfig, ContentCaptureMode
+from agento11y import Client, ClientConfig, ContentCaptureMode
 
 def resolve_capture(metadata: dict) -> ContentCaptureMode:
     if metadata.get("sigil.tenant") == "healthcare":
@@ -526,7 +526,7 @@ Exceptions in the resolver are caught and treated as `METADATA_ONLY` (fail-close
 
 ```python
 import os
-from sigil_sdk import ApiConfig, AuthConfig, ClientConfig, GenerationExportConfig
+from agento11y import ApiConfig, AuthConfig, ClientConfig, GenerationExportConfig
 
 cfg = ClientConfig(
     generation_export=GenerationExportConfig(
@@ -557,7 +557,7 @@ If explicit `headers` already include `Authorization` or `X-Scope-OrgID`, explic
 
 ```python
 import os
-from sigil_sdk import ApiConfig, AuthConfig, ClientConfig, GenerationExportConfig
+from agento11y import ApiConfig, AuthConfig, ClientConfig, GenerationExportConfig
 
 cfg = ClientConfig(
     generation_export=GenerationExportConfig(
@@ -579,7 +579,7 @@ For Grafana Cloud, use `basic` auth mode. The username is your Grafana Cloud ins
 
 ```python
 import os
-from sigil_sdk import AuthConfig, ClientConfig, GenerationExportConfig
+from agento11y import AuthConfig, ClientConfig, GenerationExportConfig
 
 cfg = ClientConfig(
     generation_export=GenerationExportConfig(
@@ -611,7 +611,7 @@ The SDK only auto-loads `AGENTO11Y_*` env vars (`AGENTO11Y_ENDPOINT`, `AGENTO11Y
 
 ```python
 import os
-from sigil_sdk import AuthConfig, ClientConfig
+from agento11y import AuthConfig, ClientConfig
 
 cfg = ClientConfig()
 
@@ -632,7 +632,7 @@ Common topology:
 Use the SDK helper to submit user-facing ratings:
 
 ```python
-from sigil_sdk import ConversationRatingInput, ConversationRatingValue
+from agento11y import ConversationRatingInput, ConversationRatingValue
 
 result = client.submit_conversation_rating(
     "conv-123",
@@ -655,7 +655,7 @@ print(result.rating.rating, result.summary.has_bad_rating)
 Set `generation_export.protocol="none"` to keep generation/tool instrumentation and spans while disabling generation transport.
 
 ```python
-from sigil_sdk import Client, ClientConfig, GenerationExportConfig
+from agento11y import Client, ClientConfig, GenerationExportConfig
 
 cfg = ClientConfig(
     generation_export=GenerationExportConfig(
@@ -691,7 +691,7 @@ the framework-free path for Cloud users: one ingestion API key writes the run,
 trials, generations, scores, and final status.
 
 ```python
-from sigil_sdk import experiments as sigil
+from agento11y import experiments as sigil
 
 suite = sigil.TestSuite(
     suite_id="smoke",
@@ -730,7 +730,7 @@ Experimental OTel eval spans/events are disabled by default; opt in with
 `use_experimental_otel=True` on `sigil.experiment(...)` or
 `AGENTO11Y_USE_EXPERIMENTAL_OTEL=true`.
 
-If you use a supported framework, prefer its adapter (e.g. `sigil-sdk-langgraph`)
+If you use a supported framework, prefer its adapter (e.g. `agento11y-langgraph`)
 — it can expose conversation or generation ids that you bind to the trial, so
 the experiment points at the same trace your agent already emits. See the
 `agento11y-experiments` skill
@@ -767,18 +767,18 @@ Validation:
 
 Experiments:
 
-- `sigil_sdk.experiments.experiment(...)`
-- `sigil_sdk.experiments.Client`
-- `sigil_sdk.experiments.Experiment`, `Trial`, `TrialRef`
-- `sigil_sdk.experiments.TestSuite`, `TestCase`, `Evaluator`
-- `sigil_sdk.experiments.stable_id(...)`
+- `agento11y.experiments.experiment(...)`
+- `agento11y.experiments.Client`
+- `agento11y.experiments.Experiment`, `Trial`, `TrialRef`
+- `agento11y.experiments.TestSuite`, `TestCase`, `Evaluator`
+- `agento11y.experiments.stable_id(...)`
 
 ## Provider Helper Packages
 
 Provider wrappers are wrapper-first and mapper-explicit:
 
-- `sigil-sdk-openai`
-- `sigil-sdk-anthropic`
-- `sigil-sdk-gemini`
+- `agento11y-openai`
+- `agento11y-anthropic`
+- `agento11y-gemini`
 
 Each package exposes sync + async wrappers and explicit mapper functions for custom integration points.

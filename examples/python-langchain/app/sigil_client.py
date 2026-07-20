@@ -1,6 +1,6 @@
 """Sigil client bootstrap.
 
-Builds a `sigil_sdk.Client` that reuses the app's OTel providers, so the
+Builds an `agento11y.Client` that reuses the app's OTel providers, so the
 `gen_ai.*` spans and metrics it emits flow through the same pipeline as
 everything else. Config comes from environment variables (see `.env.example`).
 """
@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from opentelemetry.metrics import MeterProvider
 from opentelemetry.trace import TracerProvider
 
-from sigil_sdk import ApiConfig, AuthConfig, Client, ClientConfig, GenerationExportConfig
+from agento11y import ApiConfig, AuthConfig, Client, ClientConfig, GenerationExportConfig
 
 
 def _required_env(name: str) -> str:
@@ -54,7 +54,7 @@ def setup_sigil(
                 auth=auth,
             ),
             api=ApiConfig(endpoint=api_endpoint),
-            tracer=tracer_provider.get_tracer("sigil-sdk"),
-            meter=meter_provider.get_meter("sigil-sdk"),
+            tracer=tracer_provider.get_tracer("agento11y"),
+            meter=meter_provider.get_meter("agento11y"),
         )
     )

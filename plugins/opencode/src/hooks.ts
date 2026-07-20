@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ContentCaptureMode, SigilClient } from "@grafana/sigil-sdk-js";
+import type { ContentCaptureMode, SigilClient } from "@grafana/agento11y";
 import type { PluginInput } from "@opencode-ai/plugin";
 import type {
   AssistantMessage,

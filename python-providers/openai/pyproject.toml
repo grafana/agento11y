@@ -1,12 +1,12 @@
 [project]
-name = "sigil-sdk-openai"
+name = "agento11y-openai"
 version = "0.9.3"
-description = "OpenAI helper wrappers for Sigil Python SDK"
+description = "OpenAI helper wrappers for the Grafana Agent Observability Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "sigil-sdk>=0.9.3",
+  "agento11y>=0.9.3",
   "openai>=1.66.0,<3",
 ]
 
@@ -24,7 +24,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sigil_sdk_openai*"]
+include = ["agento11y_openai*"]
 
 [tool.setuptools.package-data]
-sigil_sdk_openai = ["py.typed"]
+agento11y_openai = ["py.typed"]

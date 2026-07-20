@@ -6,7 +6,7 @@ import (
 
 	asdk "github.com/anthropics/anthropic-sdk-go"
 	asdkoption "github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/grafana/sigil-sdk/go/sigil"
+	"github.com/grafana/agento11y/go/sigil"
 )
 
 // Example_withSigilWrapper shows the one-liner wrapper approach.

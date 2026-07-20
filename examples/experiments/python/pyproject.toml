@@ -1,5 +1,5 @@
 [project]
-name = "sigil-experiment-example"
+name = "agento11y-experiment-example"
 version = "0.1.0"
 description = "Run a framework-free agent over a dataset as a Sigil experiment, grade outputs, and publish scores."
 readme = "README.md"
@@ -8,13 +8,13 @@ dependencies = [
     "anthropic>=0.40",
     "matplotlib>=3.8",
     "python-dotenv>=1.0",
-    "sigil-sdk>=0.9.0",
+    "agento11y>=0.9.0",
 ]
 
 [tool.uv.sources]
 # Point at the workspace package in this monorepo so the example runs against the
 # code in this checkout. Remove this entry to consume the published PyPI release.
-sigil-sdk = { path = "../../../python", editable = true }
+agento11y = { path = "../../../python", editable = true }
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -2,14 +2,14 @@
 
 Slim JavaScript package for Sigil generation export and core recording APIs.
 
-Use `@grafana/sigil-sdk-js-core` when you want the core `SigilClient` without the provider and framework integration dependencies included by `@grafana/sigil-sdk-js`.
+Use `@grafana/agento11y-core` when you want the core `SigilClient` without the provider and framework integration dependencies included by `@grafana/agento11y`.
 
 ```bash
-pnpm add @grafana/sigil-sdk-js-core
+pnpm add @grafana/agento11y-core
 ```
 
 ```ts
-import { SigilClient } from "@grafana/sigil-sdk-js-core";
+import { SigilClient } from "@grafana/agento11y-core";
 
 const client = new SigilClient({
   generationExport: {

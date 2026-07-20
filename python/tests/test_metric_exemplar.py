@@ -5,14 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 from unittest.mock import patch
 
-from conftest import CapturingGenerationExporter
-from opentelemetry import trace
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from sigil_sdk import (
+from agento11y import (
     Client,
     ClientConfig,
     EmbeddingResult,
@@ -23,6 +16,13 @@ from sigil_sdk import (
     TokenUsage,
     ToolExecutionStart,
 )
+from conftest import CapturingGenerationExporter
+from opentelemetry import trace
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 _OPENAI = ModelRef(provider="openai", name="gpt-5")
 _EMBEDDING_MODEL = ModelRef(provider="openai", name="text-embedding-3-small")

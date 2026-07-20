@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/grafana/sigil-sdk/go/sigil"
+	"github.com/grafana/agento11y/go/sigil"
 )
 
 var suite = sigil.TestSuite{

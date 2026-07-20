@@ -71,7 +71,7 @@ jobs:
           - go-providers/openai
           - go-providers/gemini
           - go-frameworks/google-adk
-          - plugins/sigil
+          - plugins/agento11y
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -94,8 +94,8 @@ jobs:
       - name: Test
         run: cd ${{ matrix.module }} && GOWORK=off go test ./...
 
-      - name: Build Sigil CLI
-        if: matrix.module == 'plugins/sigil'
+      - name: Build agento11y CLI
+        if: matrix.module == 'plugins/agento11y'
         env:
           GOWORK: "off"
         run: |
@@ -146,31 +146,31 @@ jobs:
         run: mise run lint:ts:sdk-js
 
       - name: Typecheck
-        run: pnpm --filter @grafana/sigil-sdk-js run typecheck
+        run: pnpm --filter @grafana/agento11y run typecheck
 
       - name: Test
-        run: pnpm --filter @grafana/sigil-sdk-js run test:ci
+        run: pnpm --filter @grafana/agento11y run test:ci
 
       - name: Lint pi plugin
         run: mise run lint:ts:plugin-pi
 
       - name: Typecheck pi plugin
-        run: pnpm --filter @grafana/sigil-pi run typecheck
+        run: pnpm --filter @grafana/agento11y-pi run typecheck
 
       - name: Test pi plugin
-        run: pnpm --filter @grafana/sigil-pi run test
+        run: pnpm --filter @grafana/agento11y-pi run test
 
       - name: Lint opencode plugin
         run: mise run lint:ts:plugin-opencode
 
       - name: Typecheck opencode plugin
-        run: pnpm --filter @grafana/sigil-opencode run typecheck
+        run: pnpm --filter @grafana/agento11y-opencode run typecheck
 
       - name: Test opencode plugin
-        run: pnpm --filter @grafana/sigil-opencode run test
+        run: pnpm --filter @grafana/agento11y-opencode run test
 
       - name: Build opencode plugin
-        run: pnpm --filter @grafana/sigil-opencode run build
+        run: pnpm --filter @grafana/agento11y-opencode run build
 
   python-lint:
     name: Python Lint
@@ -244,16 +244,16 @@ jobs:
           global-json-file: dotnet/global.json
 
       - name: Restore
-        run: dotnet restore dotnet/Sigil.DotNet.slnx
+        run: dotnet restore dotnet/Agento11y.DotNet.slnx
 
       - name: Format check
-        run: dotnet format dotnet/Sigil.DotNet.slnx --verify-no-changes --no-restore
+        run: dotnet format dotnet/Agento11y.DotNet.slnx --verify-no-changes --no-restore
 
       - name: Test
-        run: dotnet test dotnet/Sigil.DotNet.slnx -c Release
+        run: dotnet test dotnet/Agento11y.DotNet.slnx -c Release
 
       - name: Pack
-        run: dotnet pack dotnet/Sigil.DotNet.slnx -c Release
+        run: dotnet pack dotnet/Agento11y.DotNet.slnx -c Release
 
       - name: Publish packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

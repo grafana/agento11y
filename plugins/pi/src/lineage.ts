@@ -47,7 +47,7 @@ export interface PiGenerationLineage {
 /**
  * Deterministic Pi generation ID: SHA-256 of `${conversationId}\0${entryId}`
  * truncated to 24 hex chars and prefixed with `pi-`. Matches the convention
- * in `plugins/sigil/internal/agents/{codex,copilot}/mapper/mapper.go`, but
+ * in `plugins/agento11y/internal/agents/{codex,copilot}/mapper/mapper.go`, but
  * uses a Pi-specific prefix so generation IDs identify the producer plugin.
  */
 export function stablePiGenerationId(

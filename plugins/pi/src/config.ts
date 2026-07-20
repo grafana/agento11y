@@ -1,4 +1,4 @@
-import type { ContentCaptureMode } from "@grafana/sigil-sdk-js";
+import type { ContentCaptureMode } from "@grafana/agento11y";
 import { logger } from "./logger.js";
 import { applySigilDotenv } from "./sigilDotenv.js";
 

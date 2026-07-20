@@ -4,7 +4,7 @@ plugins {
 }
 
 mavenPublishing {
-    coordinates(artifactId = "sigil-sdk-gemini")
+    coordinates(artifactId = "agento11y-gemini")
 }
 
 dependencies {

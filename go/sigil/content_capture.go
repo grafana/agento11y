@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/grafana/sigil-sdk/go/sigil/sigilmodel"
+	"github.com/grafana/agento11y/go/sigil/sigilmodel"
 )
 
 // ContentCaptureMode controls what content is included in exported generation

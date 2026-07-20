@@ -20,7 +20,7 @@ This helper maps strict Gemini `model/contents/config` payloads into Sigil `Gene
 ## Wrapper-first example
 
 ```ts
-import { SigilClient, gemini } from "@grafana/sigil-sdk-js";
+import { SigilClient, gemini } from "@grafana/agento11y";
 
 const client = new SigilClient();
 

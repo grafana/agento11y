@@ -14,12 +14,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import grpc
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from sigil_sdk import (
+from agento11y import (
     ApiConfig,
     Client,
     ClientConfig,
@@ -47,8 +42,13 @@ from sigil_sdk import (
     with_conversation_title,
     with_user_id,
 )
-from sigil_sdk.internal.gen.sigil.v1 import generation_ingest_pb2 as sigil_pb2
-from sigil_sdk.internal.gen.sigil.v1 import generation_ingest_pb2_grpc as sigil_pb2_grpc
+from agento11y.internal.gen.sigil.v1 import generation_ingest_pb2 as sigil_pb2
+from agento11y.internal.gen.sigil.v1 import generation_ingest_pb2_grpc as sigil_pb2_grpc
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 _metadata_conversation_title = "sigil.conversation.title"
 _metadata_user_id = "sigil.user.id"

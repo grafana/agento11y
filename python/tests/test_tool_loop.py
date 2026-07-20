@@ -5,11 +5,7 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
-from conftest import CapturingGenerationExporter
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from sigil_sdk import (
+from agento11y import (
     Client,
     ClientConfig,
     EmbeddingCaptureConfig,
@@ -22,6 +18,10 @@ from sigil_sdk import (
     ToolCall,
     tool_call_part,
 )
+from conftest import CapturingGenerationExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 
 def _new_client(exporter: CapturingGenerationExporter, span_exporter: InMemorySpanExporter) -> Client:

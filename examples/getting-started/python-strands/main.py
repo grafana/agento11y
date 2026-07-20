@@ -10,8 +10,8 @@ from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExp
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
-from sigil_sdk import AuthConfig, Client, ClientConfig, GenerationExportConfig
-from sigil_sdk_strands import with_sigil_strands_hooks
+from agento11y import AuthConfig, Client, ClientConfig, GenerationExportConfig
+from agento11y_strands import with_sigil_strands_hooks
 from strands import Agent, tool
 from strands.models.openai import OpenAIModel
 

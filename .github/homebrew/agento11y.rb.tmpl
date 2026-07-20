@@ -1,7 +1,7 @@
 class Agento11y < Formula
   desc "CLI for the Grafana AI Observability (Sigil) agent plugins"
-  homepage "https://github.com/grafana/sigil-sdk/tree/main/plugins/sigil"
-  url "https://github.com/grafana/sigil-sdk/archive/refs/tags/plugins/sigil/v${VERSION}.tar.gz"
+  homepage "https://github.com/grafana/sigil-sdk/tree/main/plugins/agento11y"
+  url "https://github.com/grafana/sigil-sdk/archive/refs/tags/plugins/agento11y/v${VERSION}.tar.gz"
   version "${VERSION}"
   sha256 "${SHA256}"
   license "Apache-2.0"
@@ -16,7 +16,7 @@ class Agento11y < Formula
       "v#{version}"
     end
 
-    cd "plugins/sigil" do
+    cd "plugins/agento11y" do
       ldflags = %W[
         -s -w
         -X main.version=#{version_string}

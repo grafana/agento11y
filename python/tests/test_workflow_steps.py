@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 from uuid import uuid4
 
-from sigil_sdk import (
+from agento11y import (
     Client,
     ClientConfig,
     EnqueueError,
@@ -17,18 +17,18 @@ from sigil_sdk import (
     ValidationError,
     WorkflowStep,
 )
-from sigil_sdk.exporters.http import HTTPGenerationExporter, _normalize_endpoint
-from sigil_sdk.exporters.noop import NoopGenerationExporter
-from sigil_sdk.framework_handler import (
+from agento11y.exporters.http import HTTPGenerationExporter, _normalize_endpoint
+from agento11y.exporters.noop import NoopGenerationExporter
+from agento11y.framework_handler import (
     SigilFrameworkHandlerBase,
     _safe_serializable_dict,
 )
-from sigil_sdk.models import (
+from agento11y.models import (
     ExportWorkflowStepResult,
     ExportWorkflowStepsRequest,
     ExportWorkflowStepsResponse,
 )
-from sigil_sdk.proto_mapping import workflow_step_to_proto, workflow_step_to_proto_json
+from agento11y.proto_mapping import workflow_step_to_proto, workflow_step_to_proto_json
 
 # ---------------------------------------------------------------------------
 # proto mapping
@@ -194,7 +194,7 @@ class _RecordingExporter:
 
     def export_generations(self, request):
         self.gen_batches.append(list(request.generations))
-        from sigil_sdk.models import ExportGenerationResult, ExportGenerationsResponse
+        from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
 
         return ExportGenerationsResponse(
             results=[

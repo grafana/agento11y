@@ -5,7 +5,7 @@
 #   changelog-for-release.sh <new-version> <tag-prefix> <path>...
 #
 # Examples:
-#   .github/scripts/changelog-for-release.sh 0.8.0 plugins/sigil plugins/sigil
+#   .github/scripts/changelog-for-release.sh 0.8.0 plugins/agento11y plugins/agento11y
 #   .github/scripts/changelog-for-release.sh 0.7.0 sdk-python python python-providers python-frameworks
 #
 # Finds the previous tag matching `<tag-prefix>/v*`, then walks

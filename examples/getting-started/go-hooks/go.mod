@@ -1,9 +1,9 @@
-module github.com/grafana/sigil-sdk/examples/getting-started/go-hooks
+module github.com/grafana/agento11y/examples/getting-started/go-hooks
 
 go 1.25.6
 
 require (
-	github.com/grafana/sigil-sdk/go v0.2.0
+	github.com/grafana/agento11y/go v0.2.0
 	github.com/joho/godotenv v1.5.1
 	github.com/openai/openai-go/v3 v3.29.0
 	go.opentelemetry.io/otel v1.43.0
@@ -38,4 +38,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/grafana/sigil-sdk/go => ../../../go
+replace github.com/grafana/agento11y/go => ../../../go

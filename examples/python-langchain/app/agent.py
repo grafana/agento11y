@@ -16,8 +16,8 @@ from langchain.agents import create_agent
 from langchain_anthropic import ChatAnthropic
 from langchain_core.tools import tool
 
-from sigil_sdk import Client
-from sigil_sdk_langchain import with_sigil_langchain_callbacks
+from agento11y import Client
+from agento11y_langchain import with_sigil_langchain_callbacks
 
 from .weather import known_cities, lookup_forecast
 

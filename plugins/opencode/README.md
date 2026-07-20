@@ -1,4 +1,4 @@
-# @grafana/sigil-opencode
+# @grafana/agento11y-opencode
 
 [OpenCode](https://opencode.ai) plugin that sends LLM generations to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
 
@@ -9,7 +9,7 @@ By default only metadata is sent (token counts, cost, model, tool names, duratio
 **Quick install (Linux/macOS):**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/grafana/sigil-sdk/main/plugins/sigil/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/grafana/sigil-sdk/main/plugins/agento11y/scripts/install.sh | sh
 agento11y opencode
 ```
 
@@ -23,19 +23,19 @@ agento11y opencode
 **Go install (Windows, or any platform with Go 1.25+):**
 
 ```sh
-go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/agento11y@latest
+go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
 agento11y opencode
 ```
 
-The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../sigil/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
+The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y opencode` installs `@grafana/sigil-opencode` into OpenCode on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches OpenCode. Pass arguments to OpenCode after `--`, e.g. `agento11y opencode -- run "say hi"`.
+`agento11y opencode` installs `@grafana/agento11y-opencode` into OpenCode on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/sigil/config.env`, and then launches OpenCode. Pass arguments to OpenCode after `--`, e.g. `agento11y opencode -- run "say hi"`.
 
 <details>
 <summary>Manual plugin registration</summary>
 
 ```sh
-opencode plugin @grafana/sigil-opencode --global
+opencode plugin @grafana/agento11y-opencode --global
 agento11y login
 ```
 
@@ -138,8 +138,8 @@ A non-empty OS env value always wins over the file; an empty or whitespace-only 
 
 ```bash
 pnpm install
-pnpm --filter @grafana/sigil-opencode build
-pnpm --filter @grafana/sigil-opencode test
+pnpm --filter @grafana/agento11y-opencode build
+pnpm --filter @grafana/agento11y-opencode test
 ```
 
-The `@grafana/sigil-sdk-js` dependency resolves via pnpm workspace linking to `js/`.
+The `@grafana/agento11y` dependency resolves via pnpm workspace linking to `js/`.

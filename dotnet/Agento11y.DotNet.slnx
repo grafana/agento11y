@@ -1,0 +1,10 @@
+<Solution>
+  <Project Path="src//Grafana.Agento11y.Anthropic//Grafana.Agento11y.Anthropic.csproj" />
+  <Project Path="src//Grafana.Agento11y.Gemini//Grafana.Agento11y.Gemini.csproj" />
+  <Project Path="src//Grafana.Agento11y.OpenAI//Grafana.Agento11y.OpenAI.csproj" />
+  <Project Path="src//Grafana.Agento11y//Grafana.Agento11y.csproj" />
+  <Project Path="tests//Grafana.Agento11y.Anthropic.Tests//Grafana.Agento11y.Anthropic.Tests.csproj" />
+  <Project Path="tests//Grafana.Agento11y.Gemini.Tests//Grafana.Agento11y.Gemini.Tests.csproj" />
+  <Project Path="tests//Grafana.Agento11y.OpenAI.Tests//Grafana.Agento11y.OpenAI.Tests.csproj" />
+  <Project Path="tests//Grafana.Agento11y.Tests//Grafana.Agento11y.Tests.csproj" />
+</Solution>

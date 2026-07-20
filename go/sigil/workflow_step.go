@@ -1,6 +1,6 @@
 package sigil
 
-import "github.com/grafana/sigil-sdk/go/sigil/sigilmodel"
+import "github.com/grafana/agento11y/go/sigil/sigilmodel"
 
 // WorkflowStep describes one execution node in an agentic workflow.
 type WorkflowStep = sigilmodel.WorkflowStep

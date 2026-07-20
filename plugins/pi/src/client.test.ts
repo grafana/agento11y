@@ -19,7 +19,7 @@ const { SigilClientMock, createSecretRedactionSanitizerMock, SANITIZER } =
     };
   });
 
-vi.mock("@grafana/sigil-sdk-js", () => ({
+vi.mock("@grafana/agento11y", () => ({
   SigilClient: SigilClientMock,
   createSecretRedactionSanitizer: createSecretRedactionSanitizerMock,
   userAgent: () => "sigil-sdk-js/0.0.0-test",

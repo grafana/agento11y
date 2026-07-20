@@ -1,5 +1,5 @@
 {
-  "name": "sigil-getting-started-typescript",
+  "name": "agento11y-getting-started-typescript",
   "version": "1.0.0",
   "type": "module",
   "private": true,
@@ -7,7 +7,7 @@
     "start": "npx tsx main.ts"
   },
   "dependencies": {
-    "@grafana/sigil-sdk-js": "file:../../../js",
+    "@grafana/agento11y": "file:../../../js",
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/exporter-metrics-otlp-http": "0.57.2",
     "@opentelemetry/exporter-trace-otlp-http": "0.57.2",

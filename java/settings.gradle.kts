@@ -1,4 +1,4 @@
-rootProject.name = "sigil-sdk-java"
+rootProject.name = "agento11y-java"
 
 include(":core")
 include(":providers:openai")

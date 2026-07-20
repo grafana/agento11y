@@ -12,7 +12,7 @@ if str(_PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(_PYTHON_ROOT))
 
 import pytest
-from sigil_sdk.models import ExportGenerationResult, ExportGenerationsResponse
+from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
 
 
 @pytest.fixture(autouse=True)

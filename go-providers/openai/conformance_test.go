@@ -12,8 +12,8 @@ import (
 	oresponses "github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
-	sigil "github.com/grafana/sigil-sdk/go/sigil"
-	"github.com/grafana/sigil-sdk/go/sigil/sigiltest"
+	sigil "github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/sigil/sigiltest"
 )
 
 const (

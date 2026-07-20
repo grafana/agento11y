@@ -1,4 +1,4 @@
-# @grafana/sigil-vibe
+# Sigil for Mistral Vibe
 
 [Mistral Vibe](https://github.com/mistralai/vibe) is sent to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/) by registering hooks in Mistral Vibe's `hooks.toml` that forward each turn to the `agento11y` binary. `post_agent_turn` exports one generation per turn; `before_tool` enforces Sigil guard policy (when enabled); `after_tool` records per-tool timing for tool spans.
 
@@ -11,7 +11,7 @@ By default only metadata is sent (token counts, model, tool names). Set `AGENTO1
 **Quick install (Linux/macOS):**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/grafana/sigil-sdk/main/plugins/sigil/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/grafana/sigil-sdk/main/plugins/agento11y/scripts/install.sh | sh
 agento11y vibe
 ```
 
@@ -25,7 +25,7 @@ agento11y vibe
 **Go install (Windows, or any platform with Go 1.25+):**
 
 ```sh
-go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/agento11y@latest
+go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
 agento11y vibe
 ```
 

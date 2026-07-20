@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/grafana/sigil-sdk/go/sigil/sigilmodel"
+	"github.com/grafana/agento11y/go/sigil/sigilmodel"
 )
 
 // ValidateGeneration enforces the Sigil generation invariants required by the

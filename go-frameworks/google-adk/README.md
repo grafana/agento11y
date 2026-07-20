@@ -27,7 +27,7 @@ if err := googleadk.CheckEmbeddingsSupport(); err != nil {
 ## Install
 
 ```bash
-go get github.com/grafana/sigil-sdk/go-frameworks/google-adk
+go get github.com/grafana/agento11y/go-frameworks/google-adk
 ```
 
 ## Quickstart

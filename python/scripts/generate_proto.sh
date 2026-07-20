@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT_DIR="${1:-${ROOT_DIR}/python/sigil_sdk/internal/gen}"
+OUT_DIR="${1:-${ROOT_DIR}/python/agento11y/internal/gen}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 # Pinned via mise.toml; bump both versions together and regenerate stubs.

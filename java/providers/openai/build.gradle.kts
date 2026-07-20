@@ -4,7 +4,7 @@ plugins {
 }
 
 mavenPublishing {
-    coordinates(artifactId = "sigil-sdk-openai")
+    coordinates(artifactId = "agento11y-openai")
 }
 
 dependencies {

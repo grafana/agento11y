@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from anthropic import Anthropic
-from sigil_sdk.models import TokenUsage
-from sigil_sdk.usage import from_anthropic
+from agento11y.models import TokenUsage
+from agento11y.usage import from_anthropic
 
 
 @dataclass(frozen=True)

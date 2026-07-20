@@ -2,9 +2,9 @@
 
 import os
 
-from sigil_sdk import Client
-from sigil_sdk.config import AuthConfig, ClientConfig, GenerationExportConfig
-from sigil_sdk_litellm import SigilLiteLLMLogger
+from agento11y import Client
+from agento11y.config import AuthConfig, ClientConfig, GenerationExportConfig
+from agento11y_litellm import SigilLiteLLMLogger
 
 _endpoint = os.environ["SIGIL_ENDPOINT"]
 

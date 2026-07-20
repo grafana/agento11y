@@ -43,22 +43,22 @@ run = "ruff format python/ python-providers/ python-frameworks/"
 
 [tasks."format:cs"]
 description = "Format .NET SDK code"
-run = "dotnet format dotnet/Sigil.DotNet.slnx"
+run = "dotnet format dotnet/Agento11y.DotNet.slnx"
 
 [tasks."format:ts:sdk-js"]
 description = "Format TypeScript/JavaScript SDK code"
 depends = ["deps"]
-run = "pnpm --filter @grafana/sigil-sdk-js run lint:fix"
+run = "pnpm --filter @grafana/agento11y run lint:fix"
 
 [tasks."format:ts:plugin-pi"]
 description = "Format Pi plugin code"
 depends = ["deps"]
-run = "pnpm --filter @grafana/sigil-pi run lint:fix"
+run = "pnpm --filter @grafana/agento11y-pi run lint:fix"
 
 [tasks."format:ts:plugin-opencode"]
 description = "Format OpenCode plugin code"
 depends = ["deps"]
-run = "pnpm --filter @grafana/sigil-opencode run lint:fix"
+run = "pnpm --filter @grafana/agento11y-opencode run lint:fix"
 
 [tasks.format]
 description = "Format all code"
@@ -92,22 +92,22 @@ ruff format --check python/ python-providers/ python-frameworks/
 
 [tasks."lint:cs"]
 description = "Verify .NET SDK formatting and analyzer checks"
-run = "dotnet format dotnet/Sigil.DotNet.slnx --verify-no-changes"
+run = "dotnet format dotnet/Agento11y.DotNet.slnx --verify-no-changes"
 
 [tasks."lint:ts:sdk-js"]
 description = "Lint TypeScript/JavaScript SDK code"
 depends = ["deps"]
-run = "pnpm --filter @grafana/sigil-sdk-js run lint"
+run = "pnpm --filter @grafana/agento11y run lint"
 
 [tasks."lint:ts:plugin-pi"]
 description = "Lint Pi plugin code"
 depends = ["deps"]
-run = "pnpm --filter @grafana/sigil-pi run lint"
+run = "pnpm --filter @grafana/agento11y-pi run lint"
 
 [tasks."lint:ts:plugin-opencode"]
 description = "Lint OpenCode plugin code"
 depends = ["deps"]
-run = "pnpm --filter @grafana/sigil-opencode run lint"
+run = "pnpm --filter @grafana/agento11y-opencode run lint"
 
 [tasks."lint:js-dependency-pinning"]
 description = "Verify JavaScript dependencies are pinned where required"
@@ -122,17 +122,17 @@ depends = ["lint:go", "lint:py", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi
 [tasks."typecheck:ts:sdk-js"]
 description = "Type-check TypeScript/JavaScript SDK code"
 depends = ["deps"]
-run = "pnpm --filter @grafana/sigil-sdk-js run typecheck"
+run = "pnpm --filter @grafana/agento11y run typecheck"
 
 [tasks."typecheck:ts:plugin-pi"]
 description = "Type-check Pi plugin code"
 depends = ["deps", "build:ts:sdk-js"]
-run = "pnpm --filter @grafana/sigil-pi run typecheck"
+run = "pnpm --filter @grafana/agento11y-pi run typecheck"
 
 [tasks."typecheck:ts:plugin-opencode"]
 description = "Type-check OpenCode plugin code"
 depends = ["deps", "build:ts:sdk-js"]
-run = "pnpm --filter @grafana/sigil-opencode run typecheck"
+run = "pnpm --filter @grafana/agento11y-opencode run typecheck"
 
 [tasks.typecheck]
 description = "Run all type checks"
@@ -156,17 +156,17 @@ sources = [
   "js/tsconfig.build.json",
 ]
 outputs = ["js/dist/index.js", "js/dist/index.d.ts"]
-run = "pnpm --filter @grafana/sigil-sdk-js run build"
+run = "pnpm --filter @grafana/agento11y run build"
 
 [tasks."build:ts:plugin-pi"]
 description = "Build Pi plugin bundle"
 depends = ["deps", "build:ts:sdk-js"]
-run = "pnpm --filter @grafana/sigil-pi run build"
+run = "pnpm --filter @grafana/agento11y-pi run build"
 
 [tasks."build:ts:plugin-opencode"]
 description = "Build OpenCode plugin bundle"
 depends = ["deps", "build:ts:sdk-js"]
-run = "pnpm --filter @grafana/sigil-opencode run build"
+run = "pnpm --filter @grafana/agento11y-opencode run build"
 
 # --- Go SDK tests ---
 
@@ -195,25 +195,20 @@ description = "Run Google ADK framework helper tests as standalone module"
 dir = "go-frameworks/google-adk"
 run = "GOWORK=off go test ./..."
 
-[tasks."test:go:plugin-claude-code"]
-description = "Run Claude Code plugin tests as standalone module"
-dir = "plugins/claude-code"
+[tasks."test:go:plugin"]
+description = "Run agento11y plugin tests as standalone module"
+dir = "plugins/agento11y"
 run = "GOWORK=off go test ./..."
 
 [tasks."test:ts:plugin-pi"]
 description = "Run Pi plugin tests"
 depends = ["deps", "build:ts:sdk-js"]
-run = "pnpm --filter @grafana/sigil-pi run test"
+run = "pnpm --filter @grafana/agento11y-pi run test"
 
 [tasks."test:ts:plugin-opencode"]
 description = "Run OpenCode plugin tests"
 depends = ["deps", "build:ts:sdk-js"]
-run = "pnpm --filter @grafana/sigil-opencode run test"
-
-[tasks."test:go:plugin-cursor"]
-description = "Run Cursor plugin tests as standalone module"
-dir = "plugins/cursor"
-run = "GOWORK=off go test ./..."
+run = "pnpm --filter @grafana/agento11y-opencode run test"
 
 [tasks."test:go:sdk-conformance"]
 description = "Run the Go SDK core conformance harness"
@@ -225,7 +220,7 @@ run = "GOWORK=off go test ./sigil -run '^TestConformance' -count=1"
 [tasks."test:ts:sdk-js"]
 description = "Run TypeScript/JavaScript SDK runtime tests"
 depends = ["deps"]
-run = "pnpm --filter @grafana/sigil-sdk-js run test:ci"
+run = "pnpm --filter @grafana/agento11y run test:ci"
 
 [tasks."test:ts:sdk-conformance"]
 description = "Run TypeScript/JavaScript SDK core conformance tests"
@@ -334,27 +329,27 @@ mise run test:py:sdk-litellm
 [tasks."test:cs:sdk-core"]
 description = "Run .NET SDK core runtime tests"
 dir = "dotnet"
-run = "dotnet test tests/Grafana.Sigil.Tests/Grafana.Sigil.Tests.csproj -c Release"
+run = "dotnet test tests/Grafana.Agento11y.Tests/Grafana.Agento11y.Tests.csproj -c Release"
 
 [tasks."test:cs:sdk-conformance"]
 description = "Run .NET SDK core conformance tests"
 dir = "dotnet"
-run = "dotnet test tests/Grafana.Sigil.Tests/Grafana.Sigil.Tests.csproj -c Release --filter FullyQualifiedName~ConformanceTests"
+run = "dotnet test tests/Grafana.Agento11y.Tests/Grafana.Agento11y.Tests.csproj -c Release --filter FullyQualifiedName~ConformanceTests"
 
 [tasks."test:cs:sdk-openai"]
 description = "Run .NET OpenAI provider helper tests"
 dir = "dotnet"
-run = "dotnet test tests/Grafana.Sigil.OpenAI.Tests/Grafana.Sigil.OpenAI.Tests.csproj -c Release"
+run = "dotnet test tests/Grafana.Agento11y.OpenAI.Tests/Grafana.Agento11y.OpenAI.Tests.csproj -c Release"
 
 [tasks."test:cs:sdk-anthropic"]
 description = "Run .NET Anthropic provider helper tests"
 dir = "dotnet"
-run = "dotnet test tests/Grafana.Sigil.Anthropic.Tests/Grafana.Sigil.Anthropic.Tests.csproj -c Release"
+run = "dotnet test tests/Grafana.Agento11y.Anthropic.Tests/Grafana.Agento11y.Anthropic.Tests.csproj -c Release"
 
 [tasks."test:cs:sdk-gemini"]
 description = "Run .NET Gemini provider helper tests"
 dir = "dotnet"
-run = "dotnet test tests/Grafana.Sigil.Gemini.Tests/Grafana.Sigil.Gemini.Tests.csproj -c Release"
+run = "dotnet test tests/Grafana.Agento11y.Gemini.Tests/Grafana.Agento11y.Gemini.Tests.csproj -c Release"
 
 [tasks."test:cs:sdk-provider-conformance"]
 description = "Run .NET provider-wrapper conformance tests"
@@ -477,8 +472,7 @@ mise run test:go:sdk-anthropic
 mise run test:go:sdk-openai
 mise run test:go:sdk-gemini
 mise run test:go:sdk-google-adk
-mise run test:go:plugin-claude-code
-mise run test:go:plugin-cursor
+mise run test:go:plugin
 mise run test:ts:sdk-js
 mise run test:ts:plugin-pi
 mise run test:ts:plugin-opencode
@@ -528,7 +522,7 @@ for dir in "${PACKAGE_DIRS[@]}"; do
   file="${dir}/pyproject.toml"
   perl -i -pe "s/^version = \".*\"/version = \"${VERSION}\"/" "$file"
   if [[ "$dir" != "python" ]]; then
-    perl -i -pe "s/\"sigil-sdk>=.*\"/\"sigil-sdk>=${VERSION}\"/" "$file"
+    perl -i -pe "s/\"agento11y>=.*\"/\"agento11y>=${VERSION}\"/" "$file"
   fi
   echo "  updated ${file}"
 done
@@ -549,7 +543,7 @@ run = "bash python/scripts/generate_proto.sh"
 [tasks."generate:proto:js"]
 description = "Sync proto/sigil/v1/*.proto into js/proto for the JS SDK"
 depends = ["deps"]
-run = "pnpm --filter @grafana/sigil-sdk-js run sync-proto"
+run = "pnpm --filter @grafana/agento11y run sync-proto"
 
 [tasks."generate:proto"]
 description = "Regenerate protobuf stubs for all SDKs"
@@ -575,7 +569,7 @@ fi
 
 echo "==> check:proto python"
 bash python/scripts/generate_proto.sh "$tmp/python"
-if ! diff -ruN python/sigil_sdk/internal/gen "$tmp/python"; then
+if ! diff -ruN python/agento11y/internal/gen "$tmp/python"; then
   echo >&2 "::error::Python protobuf stubs are out of sync with proto/sigil/v1/*.proto"
   fail=1
 fi

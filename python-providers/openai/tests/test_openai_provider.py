@@ -6,12 +6,9 @@ import asyncio
 from datetime import timedelta
 
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from sigil_sdk import Client, ClientConfig, GenerationExportConfig
-from sigil_sdk.models import ExportGenerationResult, ExportGenerationsResponse
-from sigil_sdk_openai import (
+from agento11y import Client, ClientConfig, GenerationExportConfig
+from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
+from agento11y_openai import (
     ChatCompletionsStreamSummary,
     OpenAIOptions,
     ResponsesStreamSummary,
@@ -19,6 +16,9 @@ from sigil_sdk_openai import (
     embeddings,
     responses,
 )
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 
 class _CapturingExporter:

@@ -1,8 +1,8 @@
 {
   "name": "grafana-ai-observability",
-  "displayName": "Grafana AI Observability",
+  "displayName": "Grafana Agent Observability",
   "version": "0.3.0",
-  "description": "Send Cursor agent prompts, replies, tool calls, and token usage to Grafana AI Observability.",
+  "description": "Send Cursor agent prompts, replies, tool calls, and token usage to Grafana Agent Observability.",
   "author": {
     "name": "Grafana Labs",
     "email": "machine-learning@grafana.com"

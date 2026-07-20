@@ -1,11 +1,11 @@
 # Sigil Python Provider Helper: Gemini
 
-`sigil-sdk-gemini` provides strict Gemini Models wrappers and mappers for Sigil.
+`agento11y-gemini` provides strict Gemini Models wrappers and mappers for Sigil.
 
 ## Installation
 
 ```bash
-pip install sigil-sdk sigil-sdk-gemini google-genai
+pip install agento11y agento11y-gemini google-genai
 ```
 
 ## Public API
@@ -26,8 +26,8 @@ pip install sigil-sdk sigil-sdk-gemini google-genai
 
 ```python
 from google.genai import types as genai_types
-from sigil_sdk import Client, ClientConfig
-from sigil_sdk_gemini import GeminiOptions, models
+from agento11y import Client, ClientConfig
+from agento11y_gemini import GeminiOptions, models
 
 client = Client(ClientConfig())
 
@@ -52,7 +52,7 @@ response = models.generate_content(
 ## Wrapper Mode (Stream)
 
 ```python
-from sigil_sdk_gemini import GeminiStreamSummary, models
+from agento11y_gemini import GeminiStreamSummary, models
 
 summary = models.generate_content_stream(
     client,

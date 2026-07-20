@@ -1,8 +1,8 @@
 package sigil
 
 import (
-	sigilv1 "github.com/grafana/sigil-sdk/go/proto/sigil/v1"
-	"github.com/grafana/sigil-sdk/go/sigil/sigilcodec"
+	sigilv1 "github.com/grafana/agento11y/go/proto/sigil/v1"
+	"github.com/grafana/agento11y/go/sigil/sigilcodec"
 )
 
 // generationToProto translates the SDK's Generation value into the wire-level

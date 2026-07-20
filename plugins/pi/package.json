@@ -1,7 +1,7 @@
 {
-  "name": "@grafana/sigil-pi",
+  "name": "@grafana/agento11y-pi",
   "version": "0.17.0",
-  "description": "Pi agent extension for Grafana Sigil AI telemetry",
+  "description": "Pi agent extension for Grafana Agent Observability",
   "repository": {
     "type": "git",
     "url": "https://github.com/grafana/sigil-sdk.git",
@@ -44,7 +44,7 @@
     "@sinclair/typebox": "*"
   },
   "devDependencies": {
-    "@grafana/sigil-sdk-js": "workspace:*",
+    "@grafana/agento11y": "workspace:*",
     "@mariozechner/pi-ai": "0.73.1",
     "@mariozechner/pi-coding-agent": "0.73.1",
     "@opentelemetry/api": "1.9.1",

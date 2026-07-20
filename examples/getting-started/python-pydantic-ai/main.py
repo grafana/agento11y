@@ -15,14 +15,14 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic_ai import Agent, RunContext
-from sigil_sdk import (
+from agento11y import (
     AuthConfig,
     Client,
     ClientConfig,
     GenerationExportConfig,
     with_conversation_title,
 )
-from sigil_sdk_pydantic_ai import with_sigil_pydantic_ai_capability
+from agento11y_pydantic_ai import with_sigil_pydantic_ai_capability
 
 load_dotenv()
 

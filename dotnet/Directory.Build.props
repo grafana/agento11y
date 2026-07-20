@@ -20,7 +20,7 @@
     <PackageProjectUrl>https://grafana.ai/</PackageProjectUrl>
     <PackageReleaseNotes>https://github.com/grafana/sigil-sdk/releases</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
-    <PackageTags>Grafana;AI;Sigil</PackageTags>
+    <PackageTags>Grafana;AI;Agento11y;AgentObservability</PackageTags>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/grafana/sigil-sdk</RepositoryUrl>

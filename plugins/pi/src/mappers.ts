@@ -4,7 +4,7 @@ import type {
   GenerationStart,
   Message,
   ToolDefinition,
-} from "@grafana/sigil-sdk-js";
+} from "@grafana/agento11y";
 
 // includesToolBodies decides whether tool argument JSON, tool result content,
 // and tool description/schema are included in the proto export.

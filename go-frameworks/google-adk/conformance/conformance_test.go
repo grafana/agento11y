@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	googleadk "github.com/grafana/sigil-sdk/go-frameworks/google-adk"
-	"github.com/grafana/sigil-sdk/go/sigil"
+	googleadk "github.com/grafana/agento11y/go-frameworks/google-adk"
+	"github.com/grafana/agento11y/go/sigil"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"

@@ -15,8 +15,8 @@ import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { Agent, tool } from '@strands-agents/sdk';
 import { OpenAIModel } from '@strands-agents/sdk/models/openai';
-import { createSigilClient } from '@grafana/sigil-sdk-js';
-import { withSigilStrandsHooks } from '@grafana/sigil-sdk-js/strands';
+import { createSigilClient } from '@grafana/agento11y';
+import { withSigilStrandsHooks } from '@grafana/agento11y/strands';
 import { z } from 'zod';
 
 function env(name: string, fallback: string): string {

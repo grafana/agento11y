@@ -36,7 +36,7 @@ vi.mock("./git.js", () => ({
   resolveGitBranch: resolveGitBranchMock,
 }));
 
-import type { SigilClient } from "@grafana/sigil-sdk-js";
+import type { SigilClient } from "@grafana/agento11y";
 import registerExtension, { emitToolSpans } from "./index.js";
 import type {
   PiAssistantMessage,

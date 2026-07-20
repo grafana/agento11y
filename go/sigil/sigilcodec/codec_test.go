@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	sigilv1 "github.com/grafana/sigil-sdk/go/proto/sigil/v1"
-	"github.com/grafana/sigil-sdk/go/sigil/sigilcodec"
-	"github.com/grafana/sigil-sdk/go/sigil/sigilmodel"
+	sigilv1 "github.com/grafana/agento11y/go/proto/sigil/v1"
+	"github.com/grafana/agento11y/go/sigil/sigilcodec"
+	"github.com/grafana/agento11y/go/sigil/sigilmodel"
 )
 
 func TestToProtoMode(t *testing.T) {

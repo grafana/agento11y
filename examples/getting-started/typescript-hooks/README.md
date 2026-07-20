@@ -16,7 +16,7 @@ cp .env.example .env
 npm install
 ```
 
-> The `@grafana/sigil-sdk-js` package is installed from the local monorepo via a `file:` reference. If you're working outside the monorepo, replace it with the published package once available.
+> The `@grafana/agento11y` package is installed from the local monorepo via a `file:` reference. If you're working outside the monorepo, replace it with the published package once available.
 
 Create or enable at least one preflight guard rule in AI Observability. Good first rules are:
 

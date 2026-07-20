@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/grafana/sigil-sdk/go/sigil/sigiltest"
+	"github.com/grafana/agento11y/go/sigil/sigiltest"
 )
 
 func TestMain(m *testing.M) {

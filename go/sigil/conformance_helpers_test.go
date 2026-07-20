@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	sigilv1 "github.com/grafana/sigil-sdk/go/proto/sigil/v1"
-	sigil "github.com/grafana/sigil-sdk/go/sigil"
+	sigilv1 "github.com/grafana/agento11y/go/proto/sigil/v1"
+	sigil "github.com/grafana/agento11y/go/sigil"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"

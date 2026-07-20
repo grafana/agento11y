@@ -7,7 +7,7 @@ import os
 from tempfile import TemporaryDirectory
 
 from dotenv import load_dotenv
-from sigil_sdk import experiments as sigil
+from agento11y import experiments as sigil
 
 from app.dashboard_agent import (
     DashboardCase,

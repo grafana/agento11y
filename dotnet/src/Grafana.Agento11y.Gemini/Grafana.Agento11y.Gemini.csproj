@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0;net8.0</TargetFrameworks>
+    <AssemblyName>Grafana.Sigil.Gemini</AssemblyName>
+    <RootNamespace>Grafana.Sigil.Gemini</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>Grafana.Agento11y.Gemini</PackageId>
+    <Description>Grafana Agent Observability Google Gemini provider helpers for .NET.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Grafana.Agento11y/Grafana.Agento11y.csproj" />
+    <PackageReference Include="Google.GenAI" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

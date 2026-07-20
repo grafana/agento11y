@@ -18,12 +18,12 @@ import {
 } from "@opentelemetry/sdk-metrics";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { Resource } from "@opentelemetry/resources";
-import { createSigilClient } from "@grafana/sigil-sdk-js";
+import { createSigilClient } from "@grafana/agento11y";
 import type {
   GenerationRecorder,
   HookEvaluateRequest,
   Message,
-} from "@grafana/sigil-sdk-js";
+} from "@grafana/agento11y";
 
 function sigilApiEndpoint(): string {
   const url = new URL(process.env.AGENTO11Y_ENDPOINT!);

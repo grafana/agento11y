@@ -2,7 +2,7 @@ import type {
   HookEvaluateRequest,
   Message,
   SigilClient,
-} from "@grafana/sigil-sdk-js";
+} from "@grafana/agento11y";
 
 export interface GuardArgs {
   client: SigilClient;
@@ -32,7 +32,7 @@ export type GuardResult = GuardBlockResult | GuardTransformResult | undefined;
  * not mistaken for a generic tool failure to retry or work around. Appended
  * by both the policy-deny and fail-closed formatters.
  *
- * Mirrors `guardBehaviorHint` in `plugins/sigil/internal/agents/guard/toolcall.go`.
+ * Mirrors `guardBehaviorHint` in `plugins/agento11y/internal/agents/guard/toolcall.go`.
  * Keep the two in sync.
  */
 const GUARD_BEHAVIOR_HINT =

@@ -1,9 +1,9 @@
-module github.com/grafana/sigil-sdk/examples/getting-started/go
+module github.com/grafana/agento11y/examples/getting-started/go
 
 go 1.23
 
 require (
-	github.com/grafana/sigil-sdk/go v0.2.0
+	github.com/grafana/agento11y/go v0.2.0
 	github.com/joho/godotenv v1.5.1
 	github.com/openai/openai-go/v3 v3.29.0
 	go.opentelemetry.io/contrib/exporters/autoexport v0.60.0
@@ -13,4 +13,4 @@ require (
 	go.opentelemetry.io/otel/semconv v1.26.0
 )
 
-replace github.com/grafana/sigil-sdk/go => ../../../go
+replace github.com/grafana/agento11y/go => ../../../go

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-from sigil_sdk import (
+from agento11y import (
     AuthConfig,
     Client,
     ClientConfig,
@@ -33,34 +33,34 @@ class _MissingProviderNamespace:
         self._import_error = import_error
 
     def __getattr__(self, _name: str):
-        emitter = self._package_name.removeprefix("sigil_sdk_")
+        emitter = self._package_name.removeprefix("agento11y_")
         raise ModuleNotFoundError(
             f"{self._package_name} is required to run {emitter} devex emitter paths"
         ) from self._import_error
 
 
 try:
-    from sigil_sdk_anthropic import (
+    from agento11y_anthropic import (
         AnthropicOptions,
         AnthropicStreamSummary,
         messages,
     )
 except ModuleNotFoundError as anthropic_import_error:  # pragma: no cover - exercised by sdk-core tests
     AnthropicOptions = AnthropicStreamSummary = object  # type: ignore[assignment]
-    messages = _MissingProviderNamespace("sigil_sdk_anthropic", anthropic_import_error)
+    messages = _MissingProviderNamespace("agento11y_anthropic", anthropic_import_error)
 
 try:
-    from sigil_sdk_gemini import (
+    from agento11y_gemini import (
         GeminiOptions,
         GeminiStreamSummary,
         models,
     )
 except ModuleNotFoundError as gemini_import_error:  # pragma: no cover - exercised by sdk-core tests
     GeminiOptions = GeminiStreamSummary = object  # type: ignore[assignment]
-    models = _MissingProviderNamespace("sigil_sdk_gemini", gemini_import_error)
+    models = _MissingProviderNamespace("agento11y_gemini", gemini_import_error)
 
 try:
-    from sigil_sdk_openai import (
+    from agento11y_openai import (
         ChatCompletionsStreamSummary,
         OpenAIOptions,
         ResponsesStreamSummary,
@@ -69,33 +69,33 @@ try:
     )
 except ModuleNotFoundError as openai_import_error:  # pragma: no cover - exercised by sdk-core tests
     ChatCompletionsStreamSummary = OpenAIOptions = ResponsesStreamSummary = object  # type: ignore[assignment]
-    chat = _MissingProviderNamespace("sigil_sdk_openai", openai_import_error)
-    responses = _MissingProviderNamespace("sigil_sdk_openai", openai_import_error)
+    chat = _MissingProviderNamespace("agento11y_openai", openai_import_error)
+    responses = _MissingProviderNamespace("agento11y_openai", openai_import_error)
 
 try:
-    from sigil_sdk_langchain import SigilLangChainHandler
+    from agento11y_langchain import SigilLangChainHandler
 except ModuleNotFoundError as langchain_import_error:  # pragma: no cover - exercised by sdk-core tests
-    SigilLangChainHandler = _MissingProviderNamespace("sigil_sdk_langchain", langchain_import_error)  # type: ignore[assignment]
+    SigilLangChainHandler = _MissingProviderNamespace("agento11y_langchain", langchain_import_error)  # type: ignore[assignment]
 
 try:
-    from sigil_sdk_langgraph import SigilLangGraphHandler
+    from agento11y_langgraph import SigilLangGraphHandler
 except ModuleNotFoundError as langgraph_import_error:  # pragma: no cover - exercised by sdk-core tests
-    SigilLangGraphHandler = _MissingProviderNamespace("sigil_sdk_langgraph", langgraph_import_error)  # type: ignore[assignment]
+    SigilLangGraphHandler = _MissingProviderNamespace("agento11y_langgraph", langgraph_import_error)  # type: ignore[assignment]
 
 try:
-    from sigil_sdk_openai_agents import SigilOpenAIAgentsHandler
+    from agento11y_openai_agents import SigilOpenAIAgentsHandler
 except ModuleNotFoundError as openai_agents_import_error:  # pragma: no cover - exercised by sdk-core tests
-    SigilOpenAIAgentsHandler = _MissingProviderNamespace("sigil_sdk_openai_agents", openai_agents_import_error)  # type: ignore[assignment]
+    SigilOpenAIAgentsHandler = _MissingProviderNamespace("agento11y_openai_agents", openai_agents_import_error)  # type: ignore[assignment]
 
 try:
-    from sigil_sdk_llamaindex import SigilLlamaIndexHandler
+    from agento11y_llamaindex import SigilLlamaIndexHandler
 except ModuleNotFoundError as llamaindex_import_error:  # pragma: no cover - exercised by sdk-core tests
-    SigilLlamaIndexHandler = _MissingProviderNamespace("sigil_sdk_llamaindex", llamaindex_import_error)  # type: ignore[assignment]
+    SigilLlamaIndexHandler = _MissingProviderNamespace("agento11y_llamaindex", llamaindex_import_error)  # type: ignore[assignment]
 
 try:
-    from sigil_sdk_google_adk import SigilGoogleAdkHandler
+    from agento11y_google_adk import SigilGoogleAdkHandler
 except ModuleNotFoundError as google_adk_import_error:  # pragma: no cover - exercised by sdk-core tests
-    SigilGoogleAdkHandler = _MissingProviderNamespace("sigil_sdk_google_adk", google_adk_import_error)  # type: ignore[assignment]
+    SigilGoogleAdkHandler = _MissingProviderNamespace("agento11y_google_adk", google_adk_import_error)  # type: ignore[assignment]
 
 LANGUAGE = "python"
 SOURCES = ("openai", "anthropic", "gemini", "mistral")

@@ -3,7 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { isMissingFileError } from "./fsErrors.js";
 
-// Mirror plugins/sigil/internal/dotenv/dotenv.go::AllowedDotenvKey so the
+// Mirror plugins/agento11y/internal/dotenv/dotenv.go::AllowedDotenvKey so the
 // allow-list stays in sync with the Go launcher. Anything outside the
 // AGENTO11Y_* / SIGIL_* prefixes and this small OTEL_* set is ignored,
 // including innocent-looking vars like PATH that happen to appear in a
@@ -52,7 +52,7 @@ const ALIAS_SUFFIXES = [
 
 /**
  * Resolve the path the sigil dotenv loader reads. Mirrors
- * `plugins/sigil/internal/xdg/xdg.go::ConfigRoot` so every Sigil agent reads
+ * `plugins/agento11y/internal/xdg/xdg.go::ConfigRoot` so every Sigil agent reads
  * the same file:
  *
  * 1. `$XDG_CONFIG_HOME/sigil/config.env` when XDG_CONFIG_HOME is an absolute path.
@@ -73,7 +73,7 @@ export function sigilConfigEnvPath(): string {
 
 /**
  * Parse a config.env body using the same rules as the Go reference loader
- * (`plugins/sigil/internal/dotenv/dotenv.go::LoadDotenv` +
+ * (`plugins/agento11y/internal/dotenv/dotenv.go::LoadDotenv` +
  * `parseDotenvValue`):
  *
  * - `KEY=value` one pair per line.

@@ -5,8 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from sigil_sdk.models import TokenUsage
-from sigil_sdk.usage import (
+from agento11y.models import TokenUsage
+from agento11y.usage import (
     from_anthropic,
     from_gemini,
     from_generic,

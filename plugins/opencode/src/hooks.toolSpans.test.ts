@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import type { SigilClient } from "@grafana/sigil-sdk-js";
+import type { SigilClient } from "@grafana/agento11y";
 import type { Part } from "@opencode-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SigilOpencodeConfig } from "./config.js";

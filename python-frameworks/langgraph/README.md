@@ -1,19 +1,19 @@
 # Sigil Python Framework Module: LangGraph
 
-`sigil-sdk-langgraph` provides callback handlers that map LangGraph lifecycle events into Sigil generation recorder lifecycles.
+`agento11y-langgraph` provides callback handlers that map LangGraph lifecycle events into Sigil generation recorder lifecycles.
 
 ## Installation
 
 ```bash
-pip install sigil-sdk sigil-sdk-langgraph
+pip install agento11y agento11y-langgraph
 pip install langgraph langchain-openai
 ```
 
 ## Usage
 
 ```python
-from sigil_sdk import Client
-from sigil_sdk_langgraph import with_sigil_langgraph_callbacks
+from agento11y import Client
+from agento11y_langgraph import with_sigil_langgraph_callbacks
 
 client = Client()
 config = with_sigil_langgraph_callbacks(None, client=client, provider_resolver="auto")
@@ -27,8 +27,8 @@ from typing import TypedDict
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
-from sigil_sdk import Client
-from sigil_sdk_langgraph import with_sigil_langgraph_callbacks
+from agento11y import Client
+from agento11y_langgraph import with_sigil_langgraph_callbacks
 
 
 class GraphState(TypedDict):
@@ -90,8 +90,8 @@ Always set `conversation_title` to a short human-readable label — it appears a
 name in the Sigil UI. Without it, the title falls back to an opaque auto-generated ID.
 
 ```python
-from sigil_sdk import Client
-from sigil_sdk_langgraph import SigilLangGraphHandler
+from agento11y import Client
+from agento11y_langgraph import SigilLangGraphHandler
 
 client = Client()
 handler = SigilLangGraphHandler(

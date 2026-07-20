@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	sigilv1 "github.com/grafana/sigil-sdk/go/proto/sigil/v1"
-	"github.com/grafana/sigil-sdk/go/proto/sigil/wire"
+	sigilv1 "github.com/grafana/agento11y/go/proto/sigil/v1"
+	"github.com/grafana/agento11y/go/proto/sigil/wire"
 	"google.golang.org/protobuf/proto"
 )
 

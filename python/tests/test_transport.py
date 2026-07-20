@@ -11,8 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import grpc
-from opentelemetry.sdk.trace import TracerProvider
-from sigil_sdk import (
+from agento11y import (
     Artifact,
     ArtifactKind,
     AuthConfig,
@@ -32,8 +31,9 @@ from sigil_sdk import (
     ToolDefinition,
     ToolResult,
 )
-from sigil_sdk.internal.gen.sigil.v1 import generation_ingest_pb2 as sigil_pb2
-from sigil_sdk.internal.gen.sigil.v1 import generation_ingest_pb2_grpc as sigil_pb2_grpc
+from agento11y.internal.gen.sigil.v1 import generation_ingest_pb2 as sigil_pb2
+from agento11y.internal.gen.sigil.v1 import generation_ingest_pb2_grpc as sigil_pb2_grpc
+from opentelemetry.sdk.trace import TracerProvider
 
 
 class _CapturingGenerationServicer(sigil_pb2_grpc.GenerationIngestServiceServicer):
@@ -55,8 +55,8 @@ class _CapturingGenerationServicer(sigil_pb2_grpc.GenerationIngestServiceService
 
 
 import pytest
-from sigil_sdk.exporters.http import _normalize_endpoint
-from sigil_sdk.version import SDK_VERSION
+from agento11y.exporters.http import _normalize_endpoint
+from agento11y.version import SDK_VERSION
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-import { SigilClient } from "@grafana/sigil-sdk-js";
+import { SigilClient } from "@grafana/agento11y";
 import type { Meter, Tracer } from "@opentelemetry/api";
 import { EXPORT_PATH, type SigilOpencodeConfig } from "./config.js";
 import { pluginUserAgent } from "./version.js";

@@ -1,11 +1,11 @@
 # Grafana AI Observability Python Framework Module: Pydantic AI
 
-`sigil-sdk-pydantic-ai` provides an `AbstractCapability` implementation that maps Pydantic AI lifecycle hooks into Sigil generation recorder lifecycles.
+`agento11y-pydantic-ai` provides an `AbstractCapability` implementation that maps Pydantic AI lifecycle hooks into Sigil generation recorder lifecycles.
 
 ## Installation
 
 ```bash
-pip install sigil-sdk sigil-sdk-pydantic-ai
+pip install agento11y agento11y-pydantic-ai
 pip install pydantic-ai
 ```
 
@@ -13,8 +13,8 @@ pip install pydantic-ai
 
 ```python
 from pydantic_ai import Agent
-from sigil_sdk import Client
-from sigil_sdk_pydantic_ai import create_sigil_pydantic_ai_capability
+from agento11y import Client
+from agento11y_pydantic_ai import create_sigil_pydantic_ai_capability
 
 client = Client()
 capability = create_sigil_pydantic_ai_capability(client=client, provider_resolver="auto")
@@ -30,8 +30,8 @@ client.shutdown()
 
 ```python
 from pydantic_ai import Agent
-from sigil_sdk import Client
-from sigil_sdk_pydantic_ai import with_sigil_pydantic_ai_capability
+from agento11y import Client
+from agento11y_pydantic_ai import with_sigil_pydantic_ai_capability
 
 client = Client()
 capabilities = with_sigil_pydantic_ai_capability(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sigil_sdk.framework_handler import _extract_tool_output
+from agento11y.framework_handler import _extract_tool_output
 
 
 class _FakeToolMessage:

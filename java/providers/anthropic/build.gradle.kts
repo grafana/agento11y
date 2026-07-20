@@ -4,7 +4,7 @@ plugins {
 }
 
 mavenPublishing {
-    coordinates(artifactId = "sigil-sdk-anthropic")
+    coordinates(artifactId = "agento11y-anthropic")
 }
 
 dependencies {

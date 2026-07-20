@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import agento11y_anthropic
 import pytest
-import sigil_sdk_anthropic
-from sigil_sdk import Client, ClientConfig, GenerationExportConfig
-from sigil_sdk.models import ExportGenerationResult, ExportGenerationsResponse
-from sigil_sdk_anthropic import AnthropicOptions, AnthropicStreamSummary, messages
+from agento11y import Client, ClientConfig, GenerationExportConfig
+from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
+from agento11y_anthropic import AnthropicOptions, AnthropicStreamSummary, messages
 
 
 class _CapturingExporter:
@@ -243,6 +243,6 @@ def test_anthropic_mapper_maps_thinking_disabled() -> None:
 
 
 def test_anthropic_provider_explicitly_has_no_embeddings_surface() -> None:
-    assert "messages" in sigil_sdk_anthropic.__all__
-    assert "embeddings" not in sigil_sdk_anthropic.__all__
-    assert not hasattr(sigil_sdk_anthropic, "embeddings")
+    assert "messages" in agento11y_anthropic.__all__
+    assert "embeddings" not in agento11y_anthropic.__all__
+    assert not hasattr(agento11y_anthropic, "embeddings")

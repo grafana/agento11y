@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/grafana/sigil-sdk/go/sigil"
+	"github.com/grafana/agento11y/go/sigil"
 	osdk "github.com/openai/openai-go/v3"
 	osdkoption "github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"

@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from sigil_sdk import experiments as sigil
+from agento11y import experiments as sigil
 
 from app.agent import answer_question, grade_answer
 

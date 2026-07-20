@@ -1,7 +1,7 @@
 [project]
-name = "sigil-sdk"
+name = "agento11y"
 version = "0.9.3"
-description = "Grafana Sigil Python SDK"
+description = "Grafana Agent Observability Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -31,10 +31,10 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sigil_sdk*"]
+include = ["agento11y*"]
 
 [tool.setuptools.package-data]
-sigil_sdk = ["py.typed"]
+agento11y = ["py.typed"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"

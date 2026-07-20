@@ -1839,7 +1839,7 @@ const file_sigil_v1_generation_ingest_proto_rawDesc = "" +
 	"\x17GenerationIngestService\x12\\\n" +
 	"\x11ExportGenerations\x12\".sigil.v1.ExportGenerationsRequest\x1a#.sigil.v1.ExportGenerationsResponse2\x7f\n" +
 	"\x19WorkflowStepIngestService\x12b\n" +
-	"\x13ExportWorkflowSteps\x12$.sigil.v1.ExportWorkflowStepsRequest\x1a%.sigil.v1.ExportWorkflowStepsResponseB8Z6github.com/grafana/sigil-sdk/go/proto/sigil/v1;sigilv1b\x06proto3"
+	"\x13ExportWorkflowSteps\x12$.sigil.v1.ExportWorkflowStepsRequest\x1a%.sigil.v1.ExportWorkflowStepsResponseB8Z6github.com/grafana/agento11y/go/proto/sigil/v1;sigilv1b\x06proto3"
 
 var (
 	file_sigil_v1_generation_ingest_proto_rawDescOnce sync.Once

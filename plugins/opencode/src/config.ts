@@ -1,4 +1,4 @@
-import type { ContentCaptureMode } from "@grafana/sigil-sdk-js";
+import type { ContentCaptureMode } from "@grafana/agento11y";
 import { applySigilDotenv } from "./sigilDotenv.js";
 
 export type SigilAuthConfig =

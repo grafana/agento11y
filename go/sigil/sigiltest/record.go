@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	sigil "github.com/grafana/sigil-sdk/go/sigil"
+	sigil "github.com/grafana/agento11y/go/sigil"
 )
 
 func RecordGeneration(t testing.TB, env *Env, start sigil.GenerationStart, generation sigil.Generation, mapErr error) {

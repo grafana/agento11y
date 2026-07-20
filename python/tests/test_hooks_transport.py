@@ -11,8 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import pytest
-from opentelemetry import trace
-from sigil_sdk import (
+from agento11y import (
     ApiConfig,
     AuthConfig,
     Client,
@@ -31,10 +30,11 @@ from sigil_sdk import (
     hook_denied_from_response,
     user_text_message,
 )
+from opentelemetry import trace
 
 
 def test_parse_hook_response_includes_transformed_input() -> None:
-    from sigil_sdk.hooks import _parse_response
+    from agento11y.hooks import _parse_response
 
     parsed = _parse_response(
         {
@@ -49,7 +49,7 @@ def test_parse_hook_response_includes_transformed_input() -> None:
 
 
 def test_parse_hook_response_transformed_messages_numeric_proto_role() -> None:
-    from sigil_sdk.hooks import _parse_response
+    from agento11y.hooks import _parse_response
 
     parsed = _parse_response(
         {

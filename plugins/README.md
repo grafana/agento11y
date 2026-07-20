@@ -19,7 +19,7 @@ Upgrade later with `brew upgrade grafana/grafana/agento11y`.
 **Linux and Windows** — `go install` (also works on macOS):
 
 ```sh
-go install github.com/grafana/sigil-sdk/plugins/sigil/cmd/agento11y@latest
+go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
 ```
 
 This installs `agento11y` to `go env GOPATH`/bin (or `GOBIN`); make sure that directory is on your `PATH`. Re-run the same command to upgrade.

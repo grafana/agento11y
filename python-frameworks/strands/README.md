@@ -1,19 +1,19 @@
 # Sigil Python Framework Module: Strands Agents
 
-`sigil-sdk-strands` provides a Strands `HookProvider` bridge that maps agent, model, and tool lifecycle events into Sigil generation and tool recording.
+`agento11y-strands` provides a Strands `HookProvider` bridge that maps agent, model, and tool lifecycle events into Sigil generation and tool recording.
 
 ## Installation
 
 ```bash
-pip install sigil-sdk sigil-sdk-strands
+pip install agento11y agento11y-strands
 pip install strands-agents
 ```
 
 ## Quickstart
 
 ```python
-from sigil_sdk import Client
-from sigil_sdk_strands import with_sigil_strands_hooks
+from agento11y import Client
+from agento11y_strands import with_sigil_strands_hooks
 from strands import Agent
 
 client = Client()
@@ -35,8 +35,8 @@ client.shutdown()
 ## Existing Agents
 
 ```python
-from sigil_sdk import Client
-from sigil_sdk_strands import with_sigil_strands_hooks
+from agento11y import Client
+from agento11y_strands import with_sigil_strands_hooks
 
 client = Client()
 with_sigil_strands_hooks(agent, client=client, provider_resolver="auto")

@@ -2,7 +2,7 @@
 name: agento11y-experiments
 description: >-
   Run any Python LLM agent as a Sigil experiment using the public
-  sigil_sdk.experiments package: define a test suite, run an existing agent
+  agento11y.experiments package: define a test suite, run an existing agent
   through typed trials, bind or record generation I/O, grade outputs, and
   publish scores to Grafana Cloud Sigil with one ingestion API key.
 ---
@@ -10,7 +10,7 @@ description: >-
 # Sigil experiments
 
 Use this skill when adding framework-free offline evaluation to a Python project.
-The public SDK surface is `sigil_sdk.experiments`; do not use removed v0 runner
+The public SDK surface is `agento11y.experiments`; do not use removed v0 runner
 APIs.
 
 This is the reference for the run-side API. If you don't yet know which evaluators
@@ -21,7 +21,7 @@ LLM judges, cross-process verifiers, pass@k/pass^k).
 
 The normal setup cost for an already instrumented agent should be small:
 
-1. Import `sigil_sdk.experiments` as `sigil`.
+1. Import `agento11y.experiments` as `sigil`.
 2. Define a `TestSuite` with `TestCase`s.
 3. Wrap the existing agent call in `with exp.trial(case) as trial:`.
 4. Bind the generation/conversation ids your normal instrumentation already
@@ -31,7 +31,7 @@ The normal setup cost for an already instrumented agent should be small:
 ## Setup
 
 ```bash
-pip install "sigil-sdk>=0.9.0"
+pip install "agento11y>=0.9.0"
 ```
 
 Required environment:
@@ -61,7 +61,7 @@ with sigil.experiment("nightly", use_experimental_otel=True) as exp:
 ## Recommended Pattern
 
 ```python
-from sigil_sdk import experiments as sigil
+from agento11y import experiments as sigil
 
 suite = sigil.TestSuite(
     suite_id="smoke",
@@ -147,7 +147,7 @@ env = ref.to_env()
 In the verifier:
 
 ```python
-from sigil_sdk import experiments as sigil
+from agento11y import experiments as sigil
 
 client = sigil.Client(
     endpoint=os.environ["AGENTO11Y_ENDPOINT"],

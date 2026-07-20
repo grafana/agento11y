@@ -6,18 +6,18 @@ import asyncio
 from datetime import timedelta
 from uuid import uuid4
 
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from sigil_sdk import Client, ClientConfig, GenerationExportConfig
-from sigil_sdk.client import GenerationRecorder
-from sigil_sdk.models import ExportGenerationResult, ExportGenerationsResponse
-from sigil_sdk_langchain import (
+from agento11y import Client, ClientConfig, GenerationExportConfig
+from agento11y.client import GenerationRecorder
+from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
+from agento11y_langchain import (
     SigilAsyncLangChainHandler,
     SigilLangChainHandler,
     create_sigil_langchain_handler,
     with_sigil_langchain_callbacks,
 )
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 
 class _CapturingExporter:

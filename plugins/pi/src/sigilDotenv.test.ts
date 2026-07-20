@@ -19,7 +19,7 @@ import { clearSigilEnv } from "./testEnv.js";
 
 describe("parseSigilDotenv", () => {
   it("parses the full sample from the Go reference test", () => {
-    // Mirrors plugins/sigil/internal/dotenv/dotenv_test.go::TestLoadDotenv
+    // Mirrors plugins/agento11y/internal/dotenv/dotenv_test.go::TestLoadDotenv
     const body = `# leading comment
 SIGIL_ENDPOINT=https://sigil.example.com
 export SIGIL_AUTH_TENANT_ID=alice

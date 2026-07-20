@@ -1,0 +1,160 @@
+name: Release plugins/agento11y
+
+# Opens a release PR that bumps the changelog. The tag is created by
+# tag-agento11y-on-merge.yml when this PR merges into main, so the tag always
+# points at a real commit on main (which Homebrew, `go install`, and humans
+# pulling main all expect).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Semver bump (applied to the latest plugins/agento11y/v* tag)'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      dry-run:
+        description: 'Preview only, do not open the release PR'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.repository == 'grafana/sigil-sdk' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - name: Generate GitHub token
+        id: generate-github-token
+        uses: grafana/shared-workflows/actions/create-github-app-token@259ba21cb3ff07724f331e26d926d655d24b317b # create-github-app-token/v0.2.3
+        with:
+          github_app: grafana-plugins-platform-bot
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ steps.generate-github-token.outputs.token }}
+          persist-credentials: true
+          fetch-depth: 0  # changelog script needs full git history
+
+      - name: Setup Git
+        run: |
+          git config user.name 'grafana-plugins-platform-bot[bot]'
+          git config user.email '144369747+grafana-plugins-platform-bot[bot]@users.noreply.github.com'
+
+      - name: Compute next version
+        id: ver
+        env:
+          BUMP: ${{ inputs.version }}
+        run: |
+          CURRENT=$(git tag -l 'plugins/agento11y/v*' | sed 's|plugins/agento11y/v||' | sort -V | tail -1)
+          CHANGELOG_FROM=""
+          if [[ -z "$CURRENT" ]]; then
+            # First release after the plugins/sigil -> plugins/agento11y
+            # rename: continue the version lineage from the old tag prefix.
+            CURRENT=$(git tag -l 'plugins/sigil/v*' | sed 's|plugins/sigil/v||' | sort -V | tail -1)
+            if [[ -n "$CURRENT" ]]; then
+              # The changelog script also derives its previous tag from the
+              # new prefix; point it at the old tag so the generated section
+              # starts at the last pre-rename release instead of walking the
+              # whole history.
+              CHANGELOG_FROM="plugins/sigil/v${CURRENT}"
+            fi
+          fi
+          CURRENT=${CURRENT:-0.0.0}
+
+          # Fail if the changelog is already ahead of the latest tag, so we
+          # don't re-emit a duplicate section after a previous tag step failed.
+          TOP=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' plugins/agento11y/CHANGELOG.md 2>/dev/null | tr -d '#[] ' || true)
+          if [[ -n "$TOP" && "$(printf '%s\n%s\n' "$TOP" "$CURRENT" | sort -V | tail -1)" == "$TOP" && "$TOP" != "$CURRENT" ]]; then
+            echo "::error::CHANGELOG top v${TOP} is ahead of the latest plugin tag v${CURRENT}; create the missing tag and retry."
+            exit 1
+          fi
+
+          NEW=$(./.github/scripts/bump-version.sh "$BUMP" "$CURRENT")
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "new=${NEW}" >> "$GITHUB_OUTPUT"
+          echo "changelog_from=${CHANGELOG_FROM}" >> "$GITHUB_OUTPUT"
+
+      - name: Update CHANGELOG.md
+        id: cl
+        env:
+          BUMP: ${{ inputs.version }}
+          CURRENT: ${{ steps.ver.outputs.current }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          LEGACY_FROM: ${{ steps.ver.outputs.changelog_from }}
+          NEW: ${{ steps.ver.outputs.new }}
+        run: |
+          # Set (non-empty) only for the first post-rename release, where the
+          # previous tag lives under the old plugins/sigil/v* prefix. Guarded
+          # because an empty-but-set CHANGELOG_FROM means "walk from root".
+          PATHS=(plugins/agento11y)
+          if [[ -n "$LEGACY_FROM" ]]; then
+            export CHANGELOG_FROM="$LEGACY_FROM"
+            # Commits between the old tag and the rename touched
+            # plugins/sigil, so walk the old path too or they'd be missing
+            # from the section.
+            PATHS+=(plugins/sigil)
+          fi
+          NEW_SECTION=$(./.github/scripts/changelog-for-release.sh "$NEW" plugins/agento11y "${PATHS[@]}")
+
+          # Prepend the new section to the existing changelog.
+          printf '%s\n' "$NEW_SECTION" | ./.github/scripts/prepend-changelog.sh plugins/agento11y/CHANGELOG.md
+
+          # Stash the section for the PR body and the run summary.
+          {
+            echo 'section<<EOF'
+            printf '%s\n' "$NEW_SECTION"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo '## Release plan'
+            echo ''
+            echo "- bump: \`${BUMP}\`"
+            echo "- current: \`v${CURRENT}\`"
+            echo "- new: \`v${NEW}\`"
+            echo "- dry-run: \`${DRY_RUN}\`"
+            echo ''
+            echo '### Changelog section'
+            echo ''
+            printf '%s\n' "$NEW_SECTION"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build release PR body
+        if: ${{ !inputs.dry-run }}
+        env:
+          NEW: ${{ steps.ver.outputs.new }}
+          SECTION: ${{ steps.cl.outputs.section }}
+        run: |
+          {
+            printf "Releases \`plugins/agento11y/v%s\`.\n\n" "$NEW"
+            printf '%s\n\n' "$SECTION"
+            printf '%s\n\n' '---'
+            printf "The tag \`plugins/agento11y/v%s\` will be created automatically by \`tag-agento11y-on-merge.yml\` when this PR merges into main.\n\n" "$NEW"
+            printf "Generated by \`.github/workflows/release-agento11y.yml\`.\n"
+          } > /tmp/pr-body.md
+
+      - name: Open release PR
+        if: ${{ !inputs.dry-run }}
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.generate-github-token.outputs.token }}
+          branch: release/plugins-agento11y-v${{ steps.ver.outputs.new }}
+          base: main
+          sign-commits: true
+          add-paths: plugins/agento11y/CHANGELOG.md
+          commit-message: "chore(plugins/agento11y): release v${{ steps.ver.outputs.new }}"
+          title: "chore(plugins/agento11y): release v${{ steps.ver.outputs.new }}"
+          body-path: /tmp/pr-body.md

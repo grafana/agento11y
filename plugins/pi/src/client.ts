@@ -1,8 +1,8 @@
-import type { SigilLogger } from "@grafana/sigil-sdk-js";
+import type { SigilLogger } from "@grafana/agento11y";
 import {
   createSecretRedactionSanitizer,
   SigilClient,
-} from "@grafana/sigil-sdk-js";
+} from "@grafana/agento11y";
 import type { Meter, Tracer } from "@opentelemetry/api";
 import type { SigilPiConfig } from "./config.js";
 import { EXPORT_PATH } from "./config.js";

@@ -22,7 +22,7 @@ This helper currently supports Anthropic Messages APIs only. Native Anthropic em
 ## Wrapper-first example
 
 ```ts
-import { SigilClient, anthropic } from "@grafana/sigil-sdk-js";
+import { SigilClient, anthropic } from "@grafana/agento11y";
 
 const client = new SigilClient();
 

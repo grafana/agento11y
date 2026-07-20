@@ -10,8 +10,8 @@ import (
 
 	asdk "github.com/anthropics/anthropic-sdk-go"
 
-	sigil "github.com/grafana/sigil-sdk/go/sigil"
-	"github.com/grafana/sigil-sdk/go/sigil/sigiltest"
+	sigil "github.com/grafana/agento11y/go/sigil"
+	"github.com/grafana/agento11y/go/sigil/sigiltest"
 )
 
 const anthropicSpanErrorCategory = "error.category"

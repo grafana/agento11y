@@ -5,7 +5,7 @@ const { SigilClientMock } = vi.hoisted(() => ({
   SigilClientMock: vi.fn(),
 }));
 
-vi.mock("@grafana/sigil-sdk-js", () => ({
+vi.mock("@grafana/agento11y", () => ({
   SigilClient: SigilClientMock,
   userAgent: () => "sigil-sdk-js/0.0.0-test",
 }));

@@ -3,7 +3,7 @@ import type {
   GenerationResult,
   Message,
   ToolDefinition,
-} from "@grafana/sigil-sdk-js";
+} from "@grafana/agento11y";
 import type { AssistantMessage, Part } from "@opencode-ai/sdk";
 import type { Redactor } from "./redact.js";
 

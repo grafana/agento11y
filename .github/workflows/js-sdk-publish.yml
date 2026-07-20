@@ -73,15 +73,17 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build
-        run: pnpm --filter @grafana/sigil-sdk-js run build
+        run: pnpm --filter @grafana/agento11y run build
 
       - name: Pack tarball
         run: |
           mkdir -p tarballs
+          # The [0-9] glob keeps the main-package pattern from also matching
+          # the core tarball (grafana-agento11y-core-*.tgz).
           (cd js && pnpm --config.ignore-scripts=true pack --pack-destination ../tarballs)
-          mv tarballs/grafana-sigil-sdk-js-*.tgz tarballs/sdk-js.tgz
+          mv tarballs/grafana-agento11y-[0-9]*.tgz tarballs/sdk-js.tgz
           (cd js-core && pnpm --config.ignore-scripts=true pack --pack-destination ../tarballs)
-          mv tarballs/grafana-sigil-sdk-js-core-*.tgz tarballs/sdk-js-core.tgz
+          mv tarballs/grafana-agento11y-core-*.tgz tarballs/sdk-js-core.tgz
 
       - name: Upload tarball
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -123,7 +125,7 @@ jobs:
           npm publish ./tarballs/sdk-js.tgz --access public --ignore-scripts --provenance --dry-run
 
           # Publish the new (less-proven) package first. If it fails the run
-          # can be retried without leaving an orphan @grafana/sigil-sdk-js
+          # can be retried without leaving an orphan @grafana/agento11y
           # release on npm.
           npm publish ./tarballs/sdk-js-core.tgz --access public --ignore-scripts --provenance
           npm publish ./tarballs/sdk-js.tgz --access public --ignore-scripts --provenance

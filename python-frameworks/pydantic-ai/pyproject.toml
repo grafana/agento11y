@@ -1,12 +1,12 @@
 [project]
-name = "sigil-sdk-pydantic-ai"
+name = "agento11y-pydantic-ai"
 version = "0.9.3"
-description = "Pydantic AI capability for Sigil Python SDK"
+description = "Pydantic AI capability for the Grafana Agent Observability Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "sigil-sdk>=0.9.3",
+  "agento11y>=0.9.3",
   "pydantic-ai>=1.86.0,<2.0.0",
 ]
 
@@ -24,7 +24,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sigil_sdk_pydantic_ai*"]
+include = ["agento11y_pydantic_ai*"]
 
 [tool.setuptools.package-data]
-sigil_sdk_pydantic_ai = ["py.typed"]
+agento11y_pydantic_ai = ["py.typed"]

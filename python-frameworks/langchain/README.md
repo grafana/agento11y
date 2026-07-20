@@ -1,19 +1,19 @@
 # Sigil Python Framework Module: LangChain
 
-`sigil-sdk-langchain` provides callback handlers that map LangChain lifecycle events into Sigil generation recorder lifecycles.
+`agento11y-langchain` provides callback handlers that map LangChain lifecycle events into Sigil generation recorder lifecycles.
 
 ## Installation
 
 ```bash
-pip install sigil-sdk sigil-sdk-langchain
+pip install agento11y agento11y-langchain
 pip install langchain-openai
 ```
 
 ## Usage
 
 ```python
-from sigil_sdk import Client
-from sigil_sdk_langchain import with_sigil_langchain_callbacks
+from agento11y import Client
+from agento11y_langchain import with_sigil_langchain_callbacks
 
 client = Client()
 config = with_sigil_langchain_callbacks(None, client=client, provider_resolver="auto")
@@ -23,8 +23,8 @@ config = with_sigil_langchain_callbacks(None, client=client, provider_resolver="
 
 ```python
 from langchain_openai import ChatOpenAI
-from sigil_sdk import Client
-from sigil_sdk_langchain import SigilLangChainHandler, with_sigil_langchain_callbacks
+from agento11y import Client
+from agento11y_langchain import SigilLangChainHandler, with_sigil_langchain_callbacks
 
 client = Client()
 handler = SigilLangChainHandler(

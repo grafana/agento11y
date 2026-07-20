@@ -5,12 +5,12 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
+from agento11y import Client, ClientConfig, GenerationExportConfig
+from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
+from agento11y_gemini import GeminiOptions, GeminiStreamSummary, models
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from sigil_sdk import Client, ClientConfig, GenerationExportConfig
-from sigil_sdk.models import ExportGenerationResult, ExportGenerationsResponse
-from sigil_sdk_gemini import GeminiOptions, GeminiStreamSummary, models
 
 
 class _CapturingExporter:

@@ -5,7 +5,7 @@ plugins {
 }
 
 mavenPublishing {
-    coordinates(artifactId = "sigil-sdk-core")
+    coordinates(artifactId = "agento11y-core")
 }
 
 val protoRoot = rootProject.projectDir.resolve("../proto")

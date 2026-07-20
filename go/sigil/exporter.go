@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	sigilv1 "github.com/grafana/sigil-sdk/go/proto/sigil/v1"
-	"github.com/grafana/sigil-sdk/go/proto/sigil/wire"
+	sigilv1 "github.com/grafana/agento11y/go/proto/sigil/v1"
+	"github.com/grafana/agento11y/go/proto/sigil/wire"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"

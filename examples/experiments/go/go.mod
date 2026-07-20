@@ -1,8 +1,8 @@
-module github.com/grafana/sigil-sdk/examples/experiments/go
+module github.com/grafana/agento11y/examples/experiments/go
 
 go 1.25.6
 
-require github.com/grafana/sigil-sdk/go v0.8.0
+require github.com/grafana/agento11y/go v0.8.0
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -20,4 +20,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/grafana/sigil-sdk/go => ../../../go
+replace github.com/grafana/agento11y/go => ../../../go

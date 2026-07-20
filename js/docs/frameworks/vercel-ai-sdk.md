@@ -1,4 +1,4 @@
-# Vercel AI SDK Hooks (`@grafana/sigil-sdk-js/vercel-ai-sdk`)
+# Vercel AI SDK Hooks (`@grafana/agento11y/vercel-ai-sdk`)
 
 Use `createSigilVercelAiSdk(...)` to instrument Vercel AI SDK calls with Sigil generation export, spans, metrics, tool execution spans, and streaming TTFT.
 
@@ -13,14 +13,14 @@ Supported AI SDK line:
 ## Install
 
 ```bash
-pnpm add @grafana/sigil-sdk-js ai
+pnpm add @grafana/agento11y ai
 ```
 
 ## Quickstart
 
 ```ts
-import { SigilClient } from '@grafana/sigil-sdk-js';
-import { createSigilVercelAiSdk } from '@grafana/sigil-sdk-js/vercel-ai-sdk';
+import { SigilClient } from '@grafana/agento11y';
+import { createSigilVercelAiSdk } from '@grafana/agento11y/vercel-ai-sdk';
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
 
@@ -44,8 +44,8 @@ The model object stays untouched. Sigil only consumes hook callbacks.
 Set `enableHooks: true` when you want Sigil guard rules to evaluate each Vercel AI SDK model step before it reaches the provider:
 
 ```ts
-import { HookDeniedError, SigilClient } from '@grafana/sigil-sdk-js';
-import { createSigilVercelAiSdk } from '@grafana/sigil-sdk-js/vercel-ai-sdk';
+import { HookDeniedError, SigilClient } from '@grafana/agento11y';
+import { createSigilVercelAiSdk } from '@grafana/agento11y/vercel-ai-sdk';
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
 

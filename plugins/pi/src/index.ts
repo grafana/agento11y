@@ -3,7 +3,7 @@ import type {
   ContentCaptureMode,
   Message,
   SigilClient,
-} from "@grafana/sigil-sdk-js";
+} from "@grafana/agento11y";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { createSigilClient } from "./client.js";
 import type { SigilPiConfig } from "./config.js";

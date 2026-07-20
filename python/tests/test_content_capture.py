@@ -13,11 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import grpc
 import pytest
-from conftest import CapturingGenerationExporter
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from sigil_sdk import (
+from agento11y import (
     ApiConfig,
     Client,
     ClientConfig,
@@ -42,9 +38,13 @@ from sigil_sdk import (
     ToolResult,
     validate_generation,
 )
-from sigil_sdk.context import content_capture_mode_from_context, with_content_capture_mode
-from sigil_sdk.internal.gen.sigil.v1 import generation_ingest_pb2 as sigil_pb2
-from sigil_sdk.internal.gen.sigil.v1 import generation_ingest_pb2_grpc as sigil_pb2_grpc
+from agento11y.context import content_capture_mode_from_context, with_content_capture_mode
+from agento11y.internal.gen.sigil.v1 import generation_ingest_pb2 as sigil_pb2
+from agento11y.internal.gen.sigil.v1 import generation_ingest_pb2_grpc as sigil_pb2_grpc
+from conftest import CapturingGenerationExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 _METADATA_KEY = "sigil.sdk.content_capture_mode"
 # Sentinel substring guaranteed not to appear in any error category classifier

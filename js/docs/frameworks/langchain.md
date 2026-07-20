@@ -1,18 +1,18 @@
-# LangChain Handler (`@grafana/sigil-sdk-js/langchain`)
+# LangChain Handler (`@grafana/agento11y/langchain`)
 
 Use `SigilLangChainHandler` to map LangChain callback lifecycle events to Sigil generation records.
 
 ## Install
 
 ```bash
-pnpm add @grafana/sigil-sdk-js @langchain/core @langchain/openai
+pnpm add @grafana/agento11y @langchain/core @langchain/openai
 ```
 
 ## Usage
 
 ```ts
-import { SigilClient } from '@grafana/sigil-sdk-js';
-import { withSigilLangChainCallbacks } from '@grafana/sigil-sdk-js/langchain';
+import { SigilClient } from '@grafana/agento11y';
+import { withSigilLangChainCallbacks } from '@grafana/agento11y/langchain';
 
 const client = new SigilClient();
 const config = withSigilLangChainCallbacks(undefined, client, {
@@ -25,11 +25,11 @@ const config = withSigilLangChainCallbacks(undefined, client, {
 
 ```ts
 import { ChatOpenAI } from '@langchain/openai';
-import { SigilClient } from '@grafana/sigil-sdk-js';
+import { SigilClient } from '@grafana/agento11y';
 import {
   SigilLangChainHandler,
   withSigilLangChainCallbacks,
-} from '@grafana/sigil-sdk-js/langchain';
+} from '@grafana/agento11y/langchain';
 
 const client = new SigilClient();
 const handler = new SigilLangChainHandler(client, {

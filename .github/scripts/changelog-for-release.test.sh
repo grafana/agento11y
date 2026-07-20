@@ -53,8 +53,8 @@ assert_count() {
 
 commit_plugin() {
   local msg="$1"
-  printf '%s\n' "$msg" >> plugins/sigil/file.txt
-  git add plugins/sigil/file.txt
+  printf '%s\n' "$msg" >> plugins/agento11y/file.txt
+  git add plugins/agento11y/file.txt
   git commit -q -m "$msg"
 }
 
@@ -63,21 +63,21 @@ git init -q
 git config user.name 'Test User'
 git config user.email 'test@example.com'
 
-mkdir -p plugins/sigil plugins/pi
-printf 'seed\n' > plugins/sigil/file.txt
-git add plugins/sigil/file.txt
-git commit -q -m 'feat(plugins/sigil): initial release'
-git tag plugins/sigil/v0.1.0
+mkdir -p plugins/agento11y plugins/pi
+printf 'seed\n' > plugins/agento11y/file.txt
+git add plugins/agento11y/file.txt
+git commit -q -m 'feat(plugins/agento11y): initial release'
+git tag plugins/agento11y/v0.1.0
 
 commit_plugin 'feat!: rename config key'
 commit_plugin 'chore!: drop old flag'
-commit_plugin 'fix(plugins/sigil): repair login'
+commit_plugin 'fix(plugins/agento11y): repair login'
 commit_plugin 'docs: update sigil docs'
 printf 'pi\n' > plugins/pi/file.txt
 git add plugins/pi/file.txt
 git commit -q -m 'feat(plugins/pi): unrelated plugin change'
 
-out=$("$CHANGELOG" 0.2.0 plugins/sigil plugins/sigil)
+out=$("$CHANGELOG" 0.2.0 plugins/agento11y plugins/agento11y)
 assert_contains 'breaking section exists' '### Breaking Changes' "$out"
 assert_contains 'breaking feat listed' '- rename config key' "$out"
 assert_contains 'breaking chore listed' '- drop old flag' "$out"
@@ -85,15 +85,15 @@ assert_count 'breaking feat is not duplicated' '- rename config key' 1 "$out"
 assert_count 'breaking chore is not contradicted by fallback' '- drop old flag' 1 "$out"
 assert_not_contains 'breaking feat excluded from feature section' '### Features' "$out"
 assert_not_contains 'breaking changes count as user-facing' '_No user-facing changes._' "$out"
-assert_contains 'scoped fix keeps scope' '- **plugins/sigil**: repair login' "$out"
+assert_contains 'scoped fix keeps scope' '- **plugins/agento11y**: repair login' "$out"
 assert_contains 'docs section exists' '### Documentation' "$out"
 assert_contains 'docs entry listed' '- update sigil docs' "$out"
 assert_not_contains 'other plugin path excluded' 'unrelated plugin change' "$out"
 
-git tag plugins/sigil/v0.2.0
+git tag plugins/agento11y/v0.2.0
 commit_plugin 'chore: internal cleanup'
 
-out=$("$CHANGELOG" 0.3.0 plugins/sigil plugins/sigil)
+out=$("$CHANGELOG" 0.3.0 plugins/agento11y plugins/agento11y)
 assert_contains 'non-user-facing fallback' '_No user-facing changes._' "$out"
 assert_not_contains 'non-breaking chore omitted' 'internal cleanup' "$out"
 

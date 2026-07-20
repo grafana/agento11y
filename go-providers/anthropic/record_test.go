@@ -7,7 +7,7 @@ import (
 
 	asdk "github.com/anthropics/anthropic-sdk-go"
 
-	"github.com/grafana/sigil-sdk/go/sigil"
+	"github.com/grafana/agento11y/go/sigil"
 )
 
 func TestConformance_MessageErrorMapping(t *testing.T) {

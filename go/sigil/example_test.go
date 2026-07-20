@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/grafana/sigil-sdk/go/sigil"
+	"github.com/grafana/agento11y/go/sigil"
 )
 
 func ExampleClient_StartGeneration() {

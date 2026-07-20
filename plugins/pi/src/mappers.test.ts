@@ -1,4 +1,4 @@
-import type { Message } from "@grafana/sigil-sdk-js";
+import type { Message } from "@grafana/agento11y";
 import { describe, expect, it } from "vitest";
 import {
   applyRedactedText,

@@ -1,12 +1,12 @@
 [project]
-name = "sigil-sdk-gemini"
+name = "agento11y-gemini"
 version = "0.9.3"
-description = "Gemini helper wrappers for Sigil Python SDK"
+description = "Gemini helper wrappers for the Grafana Agent Observability Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "sigil-sdk>=0.9.3",
+  "agento11y>=0.9.3",
   "google-genai>=1.63.0,<2",
 ]
 
@@ -24,7 +24,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sigil_sdk_gemini*"]
+include = ["agento11y_gemini*"]
 
 [tool.setuptools.package-data]
-sigil_sdk_gemini = ["py.typed"]
+agento11y_gemini = ["py.typed"]

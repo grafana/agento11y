@@ -112,7 +112,7 @@ jobs:
             pnpm --filter "${NAME}" run build
             (cd "plugins/${p}" && pnpm --config.ignore-scripts=true pack --pack-destination "../../tarballs")
 
-            # pnpm pack output is e.g. grafana-sigil-pi-0.1.1.tgz; rename to <plugin>.tgz
+            # pnpm pack output is e.g. grafana-agento11y-pi-0.18.0.tgz; rename to <plugin>.tgz
             # so the matrix step doesn't need to know the version.
             for f in "tarballs/"*"${p}-"[0-9]*.tgz; do
               mv "$f" "tarballs/${p}.tgz"

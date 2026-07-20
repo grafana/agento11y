@@ -5,7 +5,7 @@ The Sigil Go SDK records LLM generations and tool calls for [Grafana AI observab
 ## Install
 
 ```sh
-go get github.com/grafana/sigil-sdk/go
+go get github.com/grafana/agento11y/go
 ```
 
 ## Quick start

@@ -15,8 +15,8 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from sigil_sdk import AuthConfig, Client, ClientConfig, GenerationExportConfig
-from sigil_sdk_claude_agent import SigilClaudeSDKClient
+from agento11y import AuthConfig, Client, ClientConfig, GenerationExportConfig
+from agento11y_claude_agent import SigilClaudeSDKClient
 
 load_dotenv()
 

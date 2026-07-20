@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
  * Deterministic OpenCode generation ID: SHA-256 of
  * `${sessionID}\0${messageID}` truncated to 24 hex chars and prefixed with
  * `opencode-`. Matches the convention in
- * `plugins/sigil/internal/agents/{codex,copilot}/mapper/mapper.go` and
+ * `plugins/agento11y/internal/agents/{codex,copilot}/mapper/mapper.go` and
  * `plugins/pi/src/lineage.ts` (`stablePiGenerationId`), but uses an
  * opencode-specific prefix so generation IDs identify the producer plugin.
  *

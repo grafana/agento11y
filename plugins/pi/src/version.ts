@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { userAgent } from "@grafana/sigil-sdk-js";
+import { userAgent } from "@grafana/agento11y";
 
 function readPluginVersion(): string {
   try {

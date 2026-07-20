@@ -1,7 +1,7 @@
 {
   "name": "sigil-cc",
   "version": "0.4.0",
-  "description": "Send Claude Code session telemetry to Grafana Sigil",
+  "description": "Send Claude Code session telemetry to Grafana Agent Observability",
   "author": {
     "name": "Grafana Labs"
   },

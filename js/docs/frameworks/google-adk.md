@@ -1,18 +1,18 @@
-# Google ADK Handler (`@grafana/sigil-sdk-js/google-adk`)
+# Google ADK Handler (`@grafana/agento11y/google-adk`)
 
 Use `SigilGoogleAdkHandler` to map Google ADK session/invocation callbacks to Sigil generations.
 
 ## Install
 
 ```bash
-pnpm add @grafana/sigil-sdk-js @google/adk
+pnpm add @grafana/agento11y @google/adk
 ```
 
 ## Quickstart
 
 ```ts
-import { SigilClient } from '@grafana/sigil-sdk-js';
-import { withSigilGoogleAdkPlugins } from '@grafana/sigil-sdk-js/google-adk';
+import { SigilClient } from '@grafana/agento11y';
+import { withSigilGoogleAdkPlugins } from '@grafana/agento11y/google-adk';
 
 const client = new SigilClient();
 const runnerConfig = withSigilGoogleAdkPlugins(undefined, client, {
@@ -24,7 +24,7 @@ const runnerConfig = withSigilGoogleAdkPlugins(undefined, client, {
 Or create the plugin explicitly:
 
 ```ts
-import { createSigilGoogleAdkPlugin } from '@grafana/sigil-sdk-js/google-adk';
+import { createSigilGoogleAdkPlugin } from '@grafana/agento11y/google-adk';
 
 const sigilPlugin = createSigilGoogleAdkPlugin(client, { providerResolver: 'auto' });
 const runnerConfig = { plugins: [sigilPlugin] };
@@ -36,8 +36,8 @@ The appended plugin implements the ADK callback surface (`beforeRunCallback`, `o
 ## Streaming snippet
 
 ```ts
-import { SigilClient } from '@grafana/sigil-sdk-js';
-import { SigilGoogleAdkHandler } from '@grafana/sigil-sdk-js/google-adk';
+import { SigilClient } from '@grafana/agento11y';
+import { SigilGoogleAdkHandler } from '@grafana/agento11y/google-adk';
 
 const client = new SigilClient();
 const handler = new SigilGoogleAdkHandler(client, { providerResolver: 'auto' });

@@ -2,4 +2,4 @@ openai
 opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 python-dotenv
-sigil-sdk
+agento11y

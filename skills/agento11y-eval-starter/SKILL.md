@@ -240,7 +240,7 @@ trial creation fails with "401: experiment is owned by another actor".
 import json, os, time
 from pathlib import Path
 from dotenv import load_dotenv
-from sigil_sdk import experiments as sigil
+from agento11y import experiments as sigil
 
 load_dotenv()
 SUITE = Path(__file__).parent / "<agent>-starter.yaml"

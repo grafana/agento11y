@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0;net8.0</TargetFrameworks>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+	
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+	<PackageReference Include="Grpc.AspNetCore" />
+	<PackageReference Include="Grpc.Tools" PrivateAssets="All" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Grafana.Agento11y/Grafana.Agento11y.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+	<AssemblyMetadata Include="SolutionRoot" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)\..\..'))" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="../../../js/proto/opentelemetry/proto/collector/trace/v1/trace_service.proto" ProtoRoot="../../../js/proto" GrpcServices="Server" Link="Proto/opentelemetry/proto/collector/trace/v1/trace_service.proto" />
+    <Protobuf Include="../../../js/proto/opentelemetry/proto/trace/v1/trace.proto" ProtoRoot="../../../js/proto" GrpcServices="None" Link="Proto/opentelemetry/proto/trace/v1/trace.proto" />
+    <Protobuf Include="../../../js/proto/opentelemetry/proto/resource/v1/resource.proto" ProtoRoot="../../../js/proto" GrpcServices="None" Link="Proto/opentelemetry/proto/resource/v1/resource.proto" />
+    <Protobuf Include="../../../js/proto/opentelemetry/proto/common/v1/common.proto" ProtoRoot="../../../js/proto" GrpcServices="None" Link="Proto/opentelemetry/proto/common/v1/common.proto" />
+  </ItemGroup>
+</Project>

@@ -6,9 +6,9 @@ import logging
 from collections.abc import Callable
 
 import pytest
-from sigil_sdk import ApiConfig, Client, ClientConfig
-from sigil_sdk.config import default_config, resolve_config
-from sigil_sdk.models import ContentCaptureMode, GenerationStart, ModelRef
+from agento11y import ApiConfig, Client, ClientConfig
+from agento11y.config import default_config, resolve_config
+from agento11y.models import ContentCaptureMode, GenerationStart, ModelRef
 
 
 def _check_no_env(cfg: ClientConfig) -> None:
@@ -231,7 +231,7 @@ def test_explicit_overrides_both_env_prefixes() -> None:
 
 
 def test_invalid_preferred_capture_mode_warning_names_selected_key(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING, logger="sigil_sdk"):
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
         cfg = resolve_config(
             None,
             env={"AGENTO11Y_CONTENT_CAPTURE_MODE": "bogus", "SIGIL_CONTENT_CAPTURE_MODE": "metadata_only"},

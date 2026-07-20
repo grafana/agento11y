@@ -1,5 +1,5 @@
 [project]
-name = "sigil-langchain-weather-example"
+name = "agento11y-langchain-weather-example"
 version = "0.1.0"
 description = "Minimal FastAPI + LangChain weather agent instrumented with Sigil and OpenTelemetry."
 readme = "README.md"
@@ -21,16 +21,16 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.27",
     "opentelemetry-instrumentation-fastapi>=0.48b0",
 
-    "sigil-sdk>=0.1.2",
-    "sigil-sdk-langchain>=0.1.2",
+    "agento11y>=0.1.2",
+    "agento11y-langchain>=0.1.2",
 ]
 
 [tool.uv.sources]
 # Point at the local packages in this monorepo so the example runs against
 # the code in this checkout. Remove these two entries to consume the
 # published PyPI releases instead.
-sigil-sdk = { path = "../../python", editable = true }
-sigil-sdk-langchain = { path = "../../python-frameworks/langchain", editable = true }
+agento11y = { path = "../../python", editable = true }
+agento11y-langchain = { path = "../../python-frameworks/langchain", editable = true }
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -7,7 +7,7 @@ import (
 	osdk "github.com/openai/openai-go/v3"
 	oresponses "github.com/openai/openai-go/v3/responses"
 
-	"github.com/grafana/sigil-sdk/go/sigil"
+	"github.com/grafana/agento11y/go/sigil"
 )
 
 // ChatCompletionsNew calls the OpenAI chat-completions API and records the generation.

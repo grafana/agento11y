@@ -1,7 +1,7 @@
 {
   "name": "sigil-copilot",
   "version": "0.3.0",
-  "description": "Send GitHub Copilot CLI session telemetry to Grafana Sigil",
+  "description": "Send GitHub Copilot CLI session telemetry to Grafana Agent Observability",
   "author": {
     "name": "Grafana Labs"
   },
@@ -11,7 +11,7 @@
   "keywords": ["telemetry", "observability", "sigil", "grafana", "copilot"],
   "hooks": "./hooks.json",
   "interface": {
-    "displayName": "Grafana AI Observability for GitHub Copilot",
+    "displayName": "Grafana Agent Observability for GitHub Copilot",
     "category": "Coding",
     "capabilities": ["Read", "Write"]
   }

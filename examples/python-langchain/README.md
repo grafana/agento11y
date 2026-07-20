@@ -14,7 +14,7 @@ Both LLM calls run under the same `conversation_id`, so they land grouped togeth
 ## What the demo teaches
 
 1. **Setting up OpenTelemetry for a FastAPI app.** `[app/telemetry.py](./app/telemetry.py)` wires a `TracerProvider` and `MeterProvider` with OTLP gRPC exporters.
-2. **Creating a Sigil client.** `[app/sigil_client.py](./app/sigil_client.py)` builds a `sigil_sdk.Client` that reuses those OTel providers, so `gen_ai.`* spans and metrics flow through the same pipeline as the rest of the app.
+2. **Creating a Sigil client.** `[app/sigil_client.py](./app/sigil_client.py)` builds an `agento11y.Client` that reuses those OTel providers, so `gen_ai.`* spans and metrics flow through the same pipeline as the rest of the app.
 3. **Instrumenting a LangChain agent.** One line in `[app/agent.py](./app/agent.py)` — `with_sigil_langchain_callbacks(config, client=sigil, ...)` — attaches the Sigil callback handler to the agent's config.
 4. **Instrumenting arbitrary LLM code.** `[app/classifier.py](./app/classifier.py)` shows the raw SDK pattern for any provider call, regardless of framework.
 5. **Grouping related generations.** Passing a common `conversation_id` ties both calls together in the Sigil UI.
@@ -33,7 +33,7 @@ cp .env.example .env
 uv sync
 ```
 
-By default `pyproject.toml` pins `sigil-sdk` and `sigil-sdk-langchain` to the local packages in this monorepo via `[tool.uv.sources]`. Remove that block to consume the published PyPI releases instead.
+By default `pyproject.toml` pins `agento11y` and `agento11y-langchain` to the local packages in this monorepo via `[tool.uv.sources]`. Remove that block to consume the published PyPI releases instead.
 
 ## Run
 

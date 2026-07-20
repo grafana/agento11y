@@ -43,7 +43,7 @@ test('sdk js core package keeps provider and framework dependencies out of defau
     assert.equal(
       packageJson.dependencies?.[dependencyName],
       undefined,
-      `${dependencyName} should not be a default dependency of @grafana/sigil-sdk-js-core`,
+      `${dependencyName} should not be a default dependency of @grafana/agento11y-core`,
     );
   }
 });

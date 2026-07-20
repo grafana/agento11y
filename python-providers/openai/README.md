@@ -1,11 +1,11 @@
 # Sigil Python Provider Helper: OpenAI
 
-`sigil-sdk-openai` exposes strict OpenAI-shaped wrappers and mappers for both Chat Completions and Responses.
+`agento11y-openai` exposes strict OpenAI-shaped wrappers and mappers for both Chat Completions and Responses.
 
 ## Installation
 
 ```bash
-pip install sigil-sdk sigil-sdk-openai
+pip install agento11y agento11y-openai
 ```
 
 ## Public API
@@ -40,8 +40,8 @@ pip install sigil-sdk sigil-sdk-openai
 
 ```python
 from openai import OpenAI
-from sigil_sdk import Client, ClientConfig
-from sigil_sdk_openai import OpenAIOptions, responses
+from agento11y import Client, ClientConfig
+from agento11y_openai import OpenAIOptions, responses
 
 sigil = Client(ClientConfig())
 provider = OpenAI()
@@ -62,7 +62,7 @@ response = responses.create(
 ## Chat Completions stream example
 
 ```python
-from sigil_sdk_openai import ChatCompletionsStreamSummary, chat
+from agento11y_openai import ChatCompletionsStreamSummary, chat
 
 summary = chat.completions.stream(
     sigil,
@@ -78,7 +78,7 @@ summary = chat.completions.stream(
 ## Embeddings example
 
 ```python
-from sigil_sdk_openai import embeddings
+from agento11y_openai import embeddings
 
 embedding_response = embeddings.create(
     sigil,
@@ -93,8 +93,8 @@ embedding_response = embeddings.create(
 ## Manual instrumentation example (strict mapper)
 
 ```python
-from sigil_sdk import GenerationStart, ModelRef
-from sigil_sdk_openai import OpenAIOptions, responses
+from agento11y import GenerationStart, ModelRef
+from agento11y_openai import OpenAIOptions, responses
 
 request = {
     "model": "gpt-5",

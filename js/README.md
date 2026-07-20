@@ -5,13 +5,13 @@ Sigil records normalized LLM generation and tool-execution telemetry using your 
 ## Installation
 
 ```bash
-pnpm add @grafana/sigil-sdk-js
+pnpm add @grafana/agento11y
 ```
 
 For low-dependency runtimes that only need the core `SigilClient` and generation export APIs, use the slim core package:
 
 ```bash
-pnpm add @grafana/sigil-sdk-js-core
+pnpm add @grafana/agento11y-core
 ```
 
 For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance ID, and API token), refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/).
@@ -35,7 +35,7 @@ mise run sdk:conformance
 The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and call `new SigilClient()` with no arguments — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names.
 
 ```ts
-import { SigilClient } from "@grafana/sigil-sdk-js";
+import { SigilClient } from "@grafana/agento11y";
 
 const client = new SigilClient({
   generationExport: {
@@ -75,7 +75,7 @@ await client.shutdown();
 Client-level default:
 
 ```ts
-import { SigilClient } from "@grafana/sigil-sdk-js";
+import { SigilClient } from "@grafana/agento11y";
 
 const client = new SigilClient({
   contentCapture: "metadata_only",
@@ -143,7 +143,7 @@ validation, span sync, debug snapshots, and export.
 import {
   SigilClient,
   createSecretRedactionSanitizer,
-} from "@grafana/sigil-sdk-js";
+} from "@grafana/agento11y";
 
 const client = new SigilClient({
   generationSanitizer: createSecretRedactionSanitizer({
@@ -182,7 +182,7 @@ redaction.
 import {
   createSecretRedactionSanitizer,
   SigilClient,
-} from "@grafana/sigil-sdk-js";
+} from "@grafana/agento11y";
 
 // Omit redactInputMessages so AGENTO11Y_REDACT_INPUT_MESSAGES decides.
 const client = new SigilClient({
@@ -197,7 +197,7 @@ Use hooks when you want Sigil guard rules to run before an LLM call. The SDK eva
 Hooks are disabled by default. Enable them on the client and call `evaluateHook(...)` before the provider request:
 
 ```ts
-import { HookDeniedError, SigilClient } from "@grafana/sigil-sdk-js";
+import { HookDeniedError, SigilClient } from "@grafana/agento11y";
 
 const client = new SigilClient({
   hooks: { enabled: true, phases: ["preflight"], timeoutMs: 15_000, failOpen: true },
@@ -336,13 +336,13 @@ await client.startToolExecution(
 
 Use module subpath exports for framework callback integrations:
 
-- LangChain: `@grafana/sigil-sdk-js/langchain`
-- LangGraph: `@grafana/sigil-sdk-js/langgraph`
-- OpenAI Agents: `@grafana/sigil-sdk-js/openai-agents`
-- LlamaIndex: `@grafana/sigil-sdk-js/llamaindex`
-- Google ADK: `@grafana/sigil-sdk-js/google-adk`
-- Vercel AI SDK: `@grafana/sigil-sdk-js/vercel-ai-sdk`
-- Strands Agents: `@grafana/sigil-sdk-js/strands`
+- LangChain: `@grafana/agento11y/langchain`
+- LangGraph: `@grafana/agento11y/langgraph`
+- OpenAI Agents: `@grafana/agento11y/openai-agents`
+- LlamaIndex: `@grafana/agento11y/llamaindex`
+- Google ADK: `@grafana/agento11y/google-adk`
+- Vercel AI SDK: `@grafana/agento11y/vercel-ai-sdk`
+- Strands Agents: `@grafana/agento11y/strands`
 - LangChain guide: `docs/frameworks/langchain.md`
 - LangGraph guide: `docs/frameworks/langgraph.md`
 - OpenAI Agents guide: `docs/frameworks/openai-agents.md`
@@ -352,14 +352,14 @@ Use module subpath exports for framework callback integrations:
 - Strands Agents guide: `docs/frameworks/strands.md`
 
 ```ts
-import { SigilClient } from "@grafana/sigil-sdk-js";
-import { withSigilLangChainCallbacks } from "@grafana/sigil-sdk-js/langchain";
-import { withSigilLangGraphCallbacks } from "@grafana/sigil-sdk-js/langgraph";
-import { withSigilOpenAIAgentsHooks } from "@grafana/sigil-sdk-js/openai-agents";
-import { withSigilLlamaIndexCallbacks } from "@grafana/sigil-sdk-js/llamaindex";
-import { withSigilGoogleAdkPlugins } from "@grafana/sigil-sdk-js/google-adk";
-import { createSigilVercelAiSdk } from "@grafana/sigil-sdk-js/vercel-ai-sdk";
-import { withSigilStrandsHooks } from "@grafana/sigil-sdk-js/strands";
+import { SigilClient } from "@grafana/agento11y";
+import { withSigilLangChainCallbacks } from "@grafana/agento11y/langchain";
+import { withSigilLangGraphCallbacks } from "@grafana/agento11y/langgraph";
+import { withSigilOpenAIAgentsHooks } from "@grafana/agento11y/openai-agents";
+import { withSigilLlamaIndexCallbacks } from "@grafana/agento11y/llamaindex";
+import { withSigilGoogleAdkPlugins } from "@grafana/agento11y/google-adk";
+import { createSigilVercelAiSdk } from "@grafana/agento11y/vercel-ai-sdk";
+import { withSigilStrandsHooks } from "@grafana/agento11y/strands";
 import { Runner } from "@openai/agents";
 import { CallbackManager } from "llamaindex";
 

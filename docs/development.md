@@ -15,10 +15,10 @@ This runs three subtasks:
 | Task | Outputs | Tooling |
 | --- | --- | --- |
 | `generate:proto:go` | `go/proto/sigil/v1/*.pb.go` | `protoc`, `protoc-gen-go`, `protoc-gen-go-grpc` |
-| `generate:proto:python` | `python/sigil_sdk/internal/gen/sigil/v1/*_pb2*.py` | `grpcio-tools` (auto-fetched via `uv` if needed) |
+| `generate:proto:python` | `python/agento11y/internal/gen/sigil/v1/*_pb2*.py` | `grpcio-tools` (auto-fetched via `uv` if needed) |
 | `generate:proto:js` | `js/proto/sigil/v1/*.proto` | none — copies the proto for the runtime loader |
 
-The Go stubs live under the Go SDK module at `github.com/grafana/sigil-sdk/go/proto/sigil/v1` so external producers can import the wire schema without importing the SDK client package. They share the Go SDK module version.
+The Go stubs live under the Go SDK module at `github.com/grafana/agento11y/go/proto/sigil/v1` so external producers can import the wire schema without importing the SDK client package. They share the Go SDK module version.
 
 Java and .NET compile the proto on build (gradle protobuf plugin and `Grpc.Tools` respectively), so they pick up changes automatically once the canonical `.proto` is updated.
 

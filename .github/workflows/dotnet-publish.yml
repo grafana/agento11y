@@ -76,7 +76,7 @@ jobs:
         env:
           PKG_VERSION: ${{ steps.bump.outputs.new-version }}
         run: |
-          dotnet pack dotnet/Sigil.DotNet.slnx -c Release \
+          dotnet pack dotnet/Agento11y.DotNet.slnx -c Release \
             -p:PackageVersion="${PKG_VERSION}"
 
       - name: Upload packages

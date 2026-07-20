@@ -171,6 +171,10 @@ type APIConfig struct {
 	Endpoint string
 }
 
+// instrumentationName is the OTel instrumentation scope name. It is a
+// telemetry-visible data contract consumed outside this repository, so it
+// intentionally keeps the pre-rename module path. Do not update it for the
+// sigil-sdk -> agento11y rename without server-side dual-read support.
 const instrumentationName = "github.com/grafana/sigil-sdk/go/sigil"
 const (
 	defaultGRPCMaxSendMessageBytes    = 16 << 20

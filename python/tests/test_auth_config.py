@@ -5,8 +5,8 @@ from __future__ import annotations
 import base64
 
 import pytest
-from sigil_sdk import AuthConfig, ClientConfig, GenerationExportConfig
-from sigil_sdk.config import resolve_config
+from agento11y import AuthConfig, ClientConfig, GenerationExportConfig
+from agento11y.config import resolve_config
 
 
 def test_resolve_config_injects_tenant_header_for_generation_export() -> None:

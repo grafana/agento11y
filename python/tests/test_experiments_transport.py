@@ -9,10 +9,10 @@ from datetime import timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
-from sigil_sdk import _experiments_transport as transport
-from sigil_sdk.errors import NotFoundError, ScoreExportError, ValidationError
-from sigil_sdk.experiments import Client as ExperimentClient
-from sigil_sdk.models import (
+from agento11y import _experiments_transport as transport
+from agento11y.errors import NotFoundError, ScoreExportError, ValidationError
+from agento11y.experiments import Client as ExperimentClient
+from agento11y.models import (
     CreateExperimentRequest,
     ExperimentStatus,
     ScoreItem,

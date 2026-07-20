@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from sigil_sdk import (
+from agento11y import (
     EmbeddingResult,
     EmbeddingStart,
     Generation,

@@ -1,12 +1,12 @@
 [project]
-name = "sigil-sdk-litellm"
+name = "agento11y-litellm"
 version = "0.9.3"
-description = "LiteLLM callback handler for Sigil Python SDK"
+description = "LiteLLM callback handler for the Grafana Agent Observability Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "sigil-sdk>=0.9.3",
+  "agento11y>=0.9.3",
   "litellm>=1.82.3,!=1.82.7,!=1.82.8",
 ]
 
@@ -20,12 +20,18 @@ dev = [
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+# Temporary path source until the renamed agento11y distribution is published
+# to PyPI; drop this table and re-run `uv lock` after the first post-rename
+# release.
+[tool.uv.sources]
+agento11y = { path = "../../python", editable = true }
+
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sigil_sdk_litellm*"]
+include = ["agento11y_litellm*"]
 
 [tool.setuptools.package-data]
-sigil_sdk_litellm = ["py.typed"]
+agento11y_litellm = ["py.typed"]

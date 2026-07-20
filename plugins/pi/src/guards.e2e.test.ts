@@ -1,6 +1,6 @@
 // Pi guards: real-SDK-over-HTTP integration tests.
 //
-// Drives the @grafana/sigil-pi extension through a faked pi host, but unlike
+// Drives the @grafana/agento11y-pi extension through a faked pi host, but unlike
 // the handler-wiring unit tests (index.test.ts) the Sigil client here is the
 // real JS SDK pointed at a local HTTP server. Each test exercises the full
 // preflight (`context`) or postflight (`tool_call`) path end to end: real

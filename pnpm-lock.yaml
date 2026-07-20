@@ -116,7 +116,7 @@ importers:
 
   plugins/opencode:
     devDependencies:
-      '@grafana/sigil-sdk-js':
+      '@grafana/agento11y':
         specifier: workspace:*
         version: link:../../js
       '@opencode-ai/plugin':
@@ -168,7 +168,7 @@ importers:
         specifier: '*'
         version: 0.34.49
     devDependencies:
-      '@grafana/sigil-sdk-js':
+      '@grafana/agento11y':
         specifier: workspace:*
         version: link:../../js
       '@mariozechner/pi-ai':

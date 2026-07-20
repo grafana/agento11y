@@ -94,13 +94,14 @@ jobs:
             python-frameworks/litellm
             python-frameworks/pydantic-ai
             python-frameworks/strands
+            python-frameworks/claude-agent-sdk
           )
 
           for dir in "${PACKAGE_DIRS[@]}"; do
             file="${dir}/pyproject.toml"
             sed -i "s/^version = \".*\"/version = \"${NEW}\"/" "$file"
             if [[ "$dir" != "python" ]]; then
-              sed -i "s/\"sigil-sdk>=.*\"/\"sigil-sdk>=${NEW}\"/" "$file"
+              sed -i "s/\"agento11y>=.*\"/\"agento11y>=${NEW}\"/" "$file"
             fi
             echo "  updated ${file}"
           done
@@ -121,6 +122,7 @@ jobs:
             python-frameworks/litellm
             python-frameworks/pydantic-ai
             python-frameworks/strands
+            python-frameworks/claude-agent-sdk
           )
 
           for dir in "${PACKAGE_DIRS[@]}"; do
@@ -189,10 +191,10 @@ jobs:
           name: python-sdk-dists
           path: dist/
 
-      - name: Publish sigil-sdk to PyPI
+      - name: Publish agento11y to PyPI
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
-          packages-dir: dist/sigil-sdk/
+          packages-dir: dist/agento11y/
           # PEP 740 attestations via OIDC (id-token: write). Default since
           # v1.11.0; pin it explicitly so future action upgrades that flip the
           # default would surface as a workflow change instead of a silent
@@ -210,17 +212,18 @@ jobs:
       fail-fast: false
       matrix:
         package:
-          - sigil-sdk-openai
-          - sigil-sdk-anthropic
-          - sigil-sdk-gemini
-          - sigil-sdk-langchain
-          - sigil-sdk-langgraph
-          - sigil-sdk-openai-agents
-          - sigil-sdk-llamaindex
-          - sigil-sdk-google-adk
-          - sigil-sdk-litellm
-          - sigil-sdk-pydantic-ai
-          - sigil-sdk-strands
+          - agento11y-openai
+          - agento11y-anthropic
+          - agento11y-gemini
+          - agento11y-langchain
+          - agento11y-langgraph
+          - agento11y-openai-agents
+          - agento11y-llamaindex
+          - agento11y-google-adk
+          - agento11y-litellm
+          - agento11y-pydantic-ai
+          - agento11y-strands
+          - agento11y-claude-agent-sdk
 
     steps:
       - name: Download distributions

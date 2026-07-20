@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0;net8.0;netstandard2.0</TargetFrameworks>
+    <!-- The assembly and namespace keep the pre-rename Grafana.Sigil identity
+         so existing consumers' `using Grafana.Sigil` code compiles unchanged;
+         only the NuGet PackageId moved to Grafana.Agento11y. -->
+    <AssemblyName>Grafana.Sigil</AssemblyName>
+    <RootNamespace>Grafana.Sigil</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>Grafana.Agento11y</PackageId>
+    <Description>Grafana Agent Observability .NET SDK core runtime for normalized generation export and OTel-aligned instrumentation.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+	<!-- TODO Fix trim warnings -->
+	<IsAotCompatible>false</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Grafana.Agento11y.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Net.Client" />
+    <PackageReference Include="Grpc.Tools" PrivateAssets="All" />
+    <PackageReference Include="OpenTelemetry" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+	<PackageReference Include="System.Text.Json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="../../../proto/sigil/v1/generation_ingest.proto" ProtoRoot="../../../proto" GrpcServices="Both" Link="Proto/sigil/v1/generation_ingest.proto" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

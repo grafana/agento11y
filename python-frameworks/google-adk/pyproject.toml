@@ -1,12 +1,12 @@
 [project]
-name = "sigil-sdk-google-adk"
+name = "agento11y-google-adk"
 version = "0.9.3"
-description = "Google ADK callback handlers for Sigil Python SDK"
+description = "Google ADK callback handlers for the Grafana Agent Observability Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "sigil-sdk>=0.9.3",
+  "agento11y>=0.9.3",
   "google-adk>=1.31.0",
 ]
 
@@ -24,7 +24,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sigil_sdk_google_adk*"]
+include = ["agento11y_google_adk*"]
 
 [tool.setuptools.package-data]
-sigil_sdk_google_adk = ["py.typed"]
+agento11y_google_adk = ["py.typed"]

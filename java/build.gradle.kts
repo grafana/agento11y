@@ -5,7 +5,7 @@ plugins {
 }
 
 allprojects {
-    group = "com.grafana.sigil"
+    group = "com.grafana.agento11y"
     version = findProperty("version")?.toString() ?: "0.1.0-SNAPSHOT"
 }
 
@@ -42,7 +42,7 @@ subprojects {
 
             pom {
                 name.set(project.name)
-                description.set("Sigil SDK for Java - ${project.name}")
+                description.set("Grafana Agent Observability SDK for Java - ${project.name}")
                 url.set("https://github.com/grafana/sigil-sdk")
                 inceptionYear.set("2025")
 

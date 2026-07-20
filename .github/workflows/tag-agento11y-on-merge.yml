@@ -1,0 +1,84 @@
+name: Tag plugins/agento11y on merge
+
+# Pairs with release-agento11y.yml. When that workflow's release PR merges,
+# plugins/agento11y/CHANGELOG.md changes on main; this workflow reads the
+# top version heading and creates `plugins/agento11y/v<version>` at the
+# merge commit.
+#
+# Idempotent: if the tag already exists it does nothing, so manual
+# edits to the changelog won't re-tag.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/agento11y/CHANGELOG.md'
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    if: github.repository == 'grafana/sigil-sdk'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Generate GitHub token
+        id: generate-github-token
+        uses: grafana/shared-workflows/actions/create-github-app-token@259ba21cb3ff07724f331e26d926d655d24b317b # create-github-app-token/v0.2.3
+        with:
+          github_app: grafana-plugins-platform-bot
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ steps.generate-github-token.outputs.token }}
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Setup Git
+        run: |
+          git config user.name 'grafana-plugins-platform-bot[bot]'
+          git config user.email '144369747+grafana-plugins-platform-bot[bot]@users.noreply.github.com'
+
+      - name: Read top version from CHANGELOG.md
+        id: ver
+        run: |
+          # First `## [X.Y.Z]` heading in the file is the just-released version.
+          VERSION=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' plugins/agento11y/CHANGELOG.md || true)
+          VERSION=${VERSION#'## ['}
+          VERSION=${VERSION%']'}
+          if [[ -z "$VERSION" ]]; then
+            echo "No \`## [X.Y.Z]\` heading found; nothing to tag."
+            exit 0
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag if missing
+        if: steps.ver.outputs.version != ''
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          GITHUB_TOKEN: ${{ steps.generate-github-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="plugins/agento11y/v${VERSION}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists; nothing to do."
+            exit 0
+          fi
+          # The plugin was tagged under plugins/sigil/v* before the rename.
+          # A version already released under the old prefix must not be
+          # re-tagged (and re-released) under the new one — in particular
+          # the rename merge itself, which moves CHANGELOG.md with the
+          # already-released top version.
+          if git rev-parse "plugins/sigil/v${VERSION}" >/dev/null 2>&1; then
+            echo "Version ${VERSION} already released as plugins/sigil/v${VERSION}; nothing to do."
+            exit 0
+          fi
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git"
+          git tag -a "$TAG" -m "plugins/agento11y ${VERSION}"
+          git push origin "$TAG"
+          echo "Created and pushed ${TAG}" >> "$GITHUB_STEP_SUMMARY"

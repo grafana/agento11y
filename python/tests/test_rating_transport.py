@@ -8,8 +8,7 @@ from datetime import timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
-from opentelemetry import trace
-from sigil_sdk import (
+from agento11y import (
     ApiConfig,
     AuthConfig,
     Client,
@@ -20,6 +19,7 @@ from sigil_sdk import (
     RatingConflictError,
     ValidationError,
 )
+from opentelemetry import trace
 
 
 def test_submit_conversation_rating_over_http_round_trip() -> None:

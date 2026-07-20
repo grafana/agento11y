@@ -4,7 +4,7 @@ import type {
   HookInput,
   Message,
   SigilClient,
-} from "@grafana/sigil-sdk-js";
+} from "@grafana/agento11y";
 import { describe, expect, it, vi } from "vitest";
 import {
   type GuardArgs,

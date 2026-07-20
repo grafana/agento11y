@@ -863,7 +863,7 @@ function loadStrandsRuntime(): StrandsRuntime {
     errors.push(error instanceof Error ? error.message : String(error));
   }
 
-  throw new Error(`@grafana/sigil-sdk-js/strands requires @strands-agents/sdk to be installed: ${errors.join('; ')}`);
+  throw new Error(`@grafana/agento11y/strands requires @strands-agents/sdk to be installed: ${errors.join('; ')}`);
 }
 
 function validateStrandsRuntime(value: unknown): StrandsRuntime {

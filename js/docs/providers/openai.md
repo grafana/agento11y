@@ -32,7 +32,7 @@ This helper now mirrors official OpenAI SDK shapes for both Chat Completions and
 
 ```ts
 import OpenAI from 'openai';
-import { SigilClient, openai } from '@grafana/sigil-sdk-js';
+import { SigilClient, openai } from '@grafana/agento11y';
 
 const sigil = new SigilClient();
 const provider = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from conftest import CapturingGenerationExporter
-from sigil_sdk import (
+from agento11y import (
     CACHE_DIAGNOSTICS_MISS_REASON_KEY,
     CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY,
     CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY,
@@ -21,6 +20,7 @@ from sigil_sdk import (
     PartKind,
     set_cache_diagnostics,
 )
+from conftest import CapturingGenerationExporter
 
 
 def _client(exporter: CapturingGenerationExporter) -> Client:

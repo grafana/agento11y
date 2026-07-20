@@ -1,11 +1,11 @@
-# Strands Agents Hooks (`@grafana/sigil-sdk-js/strands`)
+# Strands Agents Hooks (`@grafana/agento11y/strands`)
 
 Use `withSigilStrandsHooks(...)` to instrument Strands Agents TypeScript agents with Sigil generation export, spans, metrics, tool execution spans, and streaming TTFT.
 
 ## Install
 
 ```bash
-pnpm add @grafana/sigil-sdk-js @strands-agents/sdk
+pnpm add @grafana/agento11y @strands-agents/sdk
 ```
 
 ## Quickstart
@@ -13,8 +13,8 @@ pnpm add @grafana/sigil-sdk-js @strands-agents/sdk
 ```ts
 import { Agent } from '@strands-agents/sdk';
 import { OpenAIModel } from '@strands-agents/sdk/models/openai';
-import { SigilClient } from '@grafana/sigil-sdk-js';
-import { withSigilStrandsHooks } from '@grafana/sigil-sdk-js/strands';
+import { SigilClient } from '@grafana/agento11y';
+import { withSigilStrandsHooks } from '@grafana/agento11y/strands';
 
 const sigil = new SigilClient();
 const model = new OpenAIModel({ api: 'chat', modelId: 'gpt-4o-mini' });
