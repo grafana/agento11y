@@ -34,3 +34,6 @@ allowBuilds:
   protobufjs: true
   sqlite3: true
   tree-sitter: true
+minimumReleaseAgeExclude:
+  # Renovate security update: pnpm@11.8.0
+  - pnpm@11.8.0
