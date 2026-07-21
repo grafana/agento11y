@@ -1,12 +1,12 @@
 [project]
 name = "agento11y-gemini"
-version = "0.9.3"
+version = "0.10.0"
 description = "Gemini helper wrappers for the Grafana Agent Observability Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "agento11y>=0.9.3",
+  "agento11y>=0.10.0",
   "google-genai>=1.63.0,<2",
 ]
 

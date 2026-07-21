@@ -1,13 +1,13 @@
 [project]
 name = "agento11y-litellm"
-version = "0.9.3"
+version = "0.10.0"
 description = "LiteLLM callback handler for the Grafana Agent Observability Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
   "aiohttp>=3.14.1",
-  "agento11y>=0.9.3",
+  "agento11y>=0.10.0",
   "litellm>=1.82.3,!=1.82.7,!=1.82.8",
 ]
 
