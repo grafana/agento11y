@@ -6,7 +6,7 @@ require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/google/uuid v1.6.0
-	github.com/grafana/agento11y/go v0.0.0-00010101000000-000000000000
+	github.com/grafana/agento11y/go v0.15.0
 	github.com/pelletier/go-toml/v2 v2.4.0
 	github.com/stretchr/testify v1.11.1
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
@@ -63,10 +63,3 @@ require (
 	google.golang.org/grpc v1.80.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-// The renamed module path is not fetchable until the GitHub repo is renamed
-// to grafana/agento11y, so the SDK is pinned to a zero placeholder and
-// resolved from the local tree. After the repo rename, drop this replace and
-// run `go get github.com/grafana/agento11y/go@main && go mod tidy` (or pin
-// the first post-rename go/v* tag).
-replace github.com/grafana/agento11y/go => ../../go
