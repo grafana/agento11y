@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.20.0] - 2026-07-21
+
+### Breaking Changes
+
+- rename public SDK APIs from sigil to agento11y (#403)
+
+### Features
+
+- **plugins**: rename launcher state folder to agento11y (#404)
+- **plugins**: move CLI config to ~/.config/agento11y/config.env (#401)
+- **sdk**: rename attributes from sigil.* to agento11y.* (#392)
+- rename package identities from sigil-sdk to agento11y (#397)
+
 ## [0.19.0] - 2026-07-17
 
 ### Features
