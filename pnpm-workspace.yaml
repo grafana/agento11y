@@ -4,7 +4,7 @@ packages:
   - 'plugins/*'
 
 overrides:
-  protobufjs: 7.6.3
+  protobufjs: 7.6.5
   lodash: 4.18.1
   lodash-es: 4.18.1
   '@mikro-orm/knex': 6.6.14
@@ -37,3 +37,5 @@ allowBuilds:
 minimumReleaseAgeExclude:
   # Renovate security update: pnpm@11.8.0
   - pnpm@11.8.0
+  # Renovate security update: protobufjs@7.6.5
+  - protobufjs@7.6.5
