@@ -26,7 +26,7 @@
   "scripts": {
     "clean": "find dist -type f -delete 2>/dev/null || true && find dist -type d -empty -delete 2>/dev/null || true",
     "sync-proto": "node ../js/scripts/sync-proto.mjs proto",
-    "build": "pnpm run sync-proto && pnpm run clean && tsc --project tsconfig.build.json",
+    "build": "pnpm run sync-proto && pnpm run clean && tsc --project tsconfig.build.json && node ../js/scripts/stamp-version.mjs dist",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "lint": "cd ../js && biome check src/core.ts src/cache-diagnostics.ts src/client.ts src/config.ts src/content_capture.ts src/context.ts src/exporters/default.ts src/exporters/grpc.ts src/exporters/http.ts src/hooks.ts src/redaction.ts src/types.ts src/utils.ts"
   },

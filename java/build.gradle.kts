@@ -17,6 +17,13 @@ subprojects {
             }
         }
 
+        tasks.withType<Jar>().configureEach {
+            manifest {
+                attributes["Implementation-Title"] = project.name
+                attributes["Implementation-Version"] = project.version
+            }
+        }
+
         tasks.withType<Test>().configureEach {
             useJUnitPlatform()
             // Clear canonical AGENTO11Y_* and legacy SIGIL_* env vars so

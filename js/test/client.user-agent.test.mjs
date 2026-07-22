@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -21,6 +22,11 @@ const protoLoadOptions = {
 
 test('userAgent() returns the SDK product token', () => {
   assert.equal(userAgent(), `agento11y-sdk-js/${SDK_VERSION}`);
+});
+
+test('SDK_VERSION matches package.json', () => {
+  const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf-8'));
+  assert.equal(SDK_VERSION, pkg.version);
 });
 
 const defaultUserAgent = `agento11y-sdk-js/${SDK_VERSION}`;

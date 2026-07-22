@@ -27,6 +27,10 @@
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <UseArtifactsOutput>true</UseArtifactsOutput>
+    <!-- Unstamped builds would otherwise get MSBuild's default 1.0.0 and
+         misreport it as a release in SdkVersion. Release builds override this
+         with -p:Version. MSBuild rejects '+' here, so use a prerelease tag. -->
+    <Version Condition=" '$(Version)' == '' ">0.0.0-unknown</Version>
   </PropertyGroup>
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)/$(PackageIcon)" Pack="true" PackagePath="" />

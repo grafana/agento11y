@@ -23,11 +23,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Version is the released version of the Sigil Go SDK. It is stamped into the
-// default generation-export User-Agent (see UserAgent). Released via the
-// go/vX.Y.Z git tag; bump this on release.
-const Version = "0.8.0"
-
 // UserAgent returns the SDK's default generation-export User-Agent product
 // token, "agento11y-sdk-go/<Version>". Coding-agent plugins prepend their own token
 // (most-specific first), e.g.
