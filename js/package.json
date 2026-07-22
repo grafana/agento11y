@@ -55,9 +55,9 @@
   "scripts": {
     "clean": "find dist -type f -delete 2>/dev/null || true && find dist -type d -empty -delete 2>/dev/null || true",
     "sync-proto": "node scripts/sync-proto.mjs",
-    "build": "pnpm --filter @grafana/agento11y-core run build && pnpm run sync-proto && pnpm run clean && tsc --project tsconfig.build.json",
+    "build": "pnpm --filter @grafana/agento11y-core run build && pnpm run sync-proto && pnpm run clean && tsc --project tsconfig.build.json && node scripts/stamp-version.mjs dist",
     "typecheck": "pnpm --filter @grafana/agento11y-core run typecheck && tsc --project tsconfig.json --noEmit",
-    "test:build": "pnpm --filter @grafana/agento11y-core run build && pnpm run sync-proto && rm -rf .test-dist && tsc --project tsconfig.test.json",
+    "test:build": "pnpm --filter @grafana/agento11y-core run build && pnpm run sync-proto && rm -rf .test-dist && tsc --project tsconfig.test.json && node scripts/stamp-version.mjs .test-dist",
     "test": "pnpm run test:build && node --import ./test/_setup.mjs --test test/**/*.test.mjs",
     "test:ci": "pnpm run test",
     "lint": "pnpm --filter @grafana/agento11y-core run lint && biome check .",
