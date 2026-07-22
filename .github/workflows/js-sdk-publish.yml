@@ -11,6 +11,7 @@ on:
           - patch
           - minor
           - major
+        default: minor
       dry-run:
         description: 'Preview only, do not publish, open a PR, or push tags'
         required: false
