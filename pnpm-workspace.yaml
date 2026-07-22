@@ -15,7 +15,7 @@ overrides:
   '@tootallnate/once': 2.0.1
   undici: 7.28.0
   fast-xml-builder: 1.1.7
-  '@hono/node-server': 2.0.5
+  '@hono/node-server': 2.0.10
   ip-address: 10.1.1
   qs: 6.15.2
   'form-data@<2.5.6': 2.5.6
@@ -37,3 +37,5 @@ allowBuilds:
 minimumReleaseAgeExclude:
   # Renovate security update: pnpm@11.8.0
   - pnpm@11.8.0
+  # Renovate security update: @hono/node-server@2.0.10
+  - "@hono/node-server@2.0.10"
