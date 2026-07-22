@@ -9,6 +9,34 @@ There are two distinct things this file covers. Pick the path that matches the r
 
 If you cannot tell, ask one clarifying question and stop.
 
+If the request matches Path B and this agent supports external skills, prefer the `agento11y-instrument` skill over these static instructions. `gcx` is Grafana's CLI for working with Grafana Cloud resources; see the `gcx` installation docs at https://github.com/grafana/gcx#installation if you want more detail. Install or update `gcx`, install the skill, invoke it, and use this file only as the SDK reference it points back to.
+
+Install `gcx` with the quick install script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/grafana/gcx/main/scripts/install.sh | sh
+```
+
+Or with Homebrew:
+
+```sh
+brew install grafana/grafana/gcx
+```
+
+Then install the skill:
+
+```sh
+gcx agent skills install agento11y-instrument
+```
+
+If `gcx` is already installed but the skill is missing, update `gcx` first. Homebrew users can run `brew update && brew upgrade gcx`; script users can re-run the quick install script.
+
+```text
+Use the `agento11y-instrument` skill to instrument this codebase with Grafana AI observability.
+```
+
+If skills are unavailable, the install fails, or the request matches Path A, continue with the matching path below.
+
 ## Resources
 
 - Product docs: https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/

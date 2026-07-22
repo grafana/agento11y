@@ -8,7 +8,35 @@
 
 ## Quick start (with an AI coding agent)
 
-Drop [`llms.txt`](llms.txt) into your repo and ask your agent what you want. It handles either case, depending on what your repo is:
+If you want your own app or agent code instrumented, the recommended path is the `agento11y-instrument` agent skill. [`gcx`](https://github.com/grafana/gcx) is Grafana's CLI for working with Grafana Cloud resources; see the [`gcx` installation docs](https://github.com/grafana/gcx#installation) if you want more detail.
+
+Install `gcx` with the quick install script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/grafana/gcx/main/scripts/install.sh | sh
+```
+
+Or with Homebrew:
+
+```sh
+brew install grafana/grafana/gcx
+```
+
+Then install the skill:
+
+```sh
+gcx agent skills install agento11y-instrument
+```
+
+If `gcx` is already installed but the skill is missing, update `gcx` first. Homebrew users can run `brew update && brew upgrade gcx`; script users can re-run the quick install script.
+
+```text
+Use the `agento11y-instrument` skill to instrument this codebase with Grafana AI observability.
+```
+
+The skill inspects your code, applies the SDK with small diffs after confirmation, and verifies that data lands in Grafana Cloud with `gcx agento11y`.
+
+If you want to capture sessions from your coding agent instead, or if your agent does not support skills, drop [`llms.txt`](llms.txt) into your repo and ask your agent what you want. It handles either case, depending on what your repo is:
 
 - `Instrument this codebase with Grafana AI observability`: the agent wires the [SDK](#sdks) into your app or agent code.
 - `Set up Grafana AI observability for my coding agent`: the agent installs one of the [`plugins/`](plugins/) launchers to capture sessions from popular coding agents.
