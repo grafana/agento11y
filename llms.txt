@@ -145,6 +145,8 @@ OTEL_EXPORTER_OTLP_ENDPOINT=<from stack OpenTelemetry card>
 OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64 of "<otlp-instance-id>:<glc_... token>">
 ```
 
+`AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic` are **required** for Grafana Cloud. The SDK defaults to `protocol=grpc` and `auth_mode=none`; against a Cloud HTTP ingest endpoint those defaults fail with a `401 UNAUTHENTICATED` (grpc is the wrong transport, none sends no auth header) — silently, with no other signal. Always set both explicitly.
+
 Construct the client with no config when the env vars are present; the SDK reads them. Only use explicit `ClientConfig(...)` when the app needs values that aren't in env (e.g. test endpoints).
 
 ### Content capture
@@ -276,9 +278,9 @@ metrics.setGlobalMeterProvider(mp);
 
 | Language | Package | Core methods |
 |----------|---------|--------------|
-| Go | `github.com/grafana/agento11y/go` | `StartGeneration`, `StartStreamingGeneration`, `StartToolExecution`, `StartEmbedding` |
-| Python | `agento11y` | `start_generation`, `start_streaming_generation`, `start_tool_execution`, `start_embedding` |
-| JS/TS | `@grafana/agento11y` | `startGeneration`, `startStreamingGeneration`, `startToolExecution`, `startEmbedding` |
+| Go | `github.com/grafana/agento11y/go` | `StartGeneration`, `StartStreamingGeneration`, `StartToolExecution`, `StartEmbedding`, `EnqueueWorkflowStep` |
+| Python | `agento11y` | `start_generation`, `start_streaming_generation`, `start_tool_execution`, `start_embedding`, `enqueue_workflow_step` |
+| JS/TS | `@grafana/agento11y` | `startGeneration`, `startStreamingGeneration`, `startToolExecution`, `startEmbedding`, `enqueueWorkflowStep` |
 | Java | `com.grafana.agento11y` | `startGeneration`, `startStreamingGeneration`, `withGeneration`, `withToolExecution` |
 | .NET | `Grafana.Agento11y` | `StartGeneration`, `StartStreamingGeneration`, `StartToolExecution`, `StartEmbedding` |
 
@@ -302,7 +304,7 @@ Framework adapters:
 On generation and tool spans, capture or preserve these when available:
 
 - identity and routing:
-  - `gen_ai.operation.name`
+  - `gen_ai.operation.name` — must be a value the Sigil UI recognizes: `generateText` (SYNC default), `streamText` (STREAM default), `embeddings`, `execute_tool`, `framework_chain`, `framework_retriever`. Omit `operation_name` to take the SDK default; never invent one. An unrecognized value (e.g. `"chat"`) still reaches Tempo, but the UI classifies it as `unknown` and renders a synthetic generation node with no attached span — the trace does not appear inside the conversation and the "T" icon is absent even though `trace_id`/`span_id` are set.
   - `agento11y.generation.id`
   - `gen_ai.conversation.id`
   - `gen_ai.agent.name`
@@ -376,14 +378,14 @@ trace_id / span_id     — OTel correlation
 
 There are two layers:
 
-- **Manual SDK API** — use `enqueue_workflow_step(step)` when forwarding pre-built workflow steps or instrumenting custom execution graphs directly. You create step IDs, parent edges, timestamps, input/output state, and linked generation IDs yourself.
-- **Framework adapter** — use the adapter when one exists, such as `Agento11yLangGraphHandler` for LangGraph. The adapter creates workflow steps automatically from framework callbacks.
+- **Manual SDK API** — available in Go (`EnqueueWorkflowStep`), JS/TS (`enqueueWorkflowStep`), and Python (`enqueue_workflow_step`). Use it when forwarding pre-built workflow steps or instrumenting custom execution graphs directly. You create step IDs, parent edges, timestamps, input/output state, and linked generation IDs yourself. (Java and .NET do not expose a workflow-step API.)
+- **Framework adapter (auto-capture)** — **Python only.** Use the adapter when one exists, such as `Agento11yLangGraphHandler` for LangGraph. The adapter creates workflow steps automatically from framework callbacks. Go and JS have no framework-level auto-capture for workflow steps; use the manual API above.
 
 Do not use both paths for the same LangGraph node, or you will record duplicate workflow steps.
 
 ### Manual SDK workflow step API
 
-The SDK client exposes `enqueue_workflow_step(step)` which queues the step for batch export alongside generations. The flush pipeline handles both.
+The SDK client exposes an enqueue method (`EnqueueWorkflowStep` in Go, `enqueueWorkflowStep` in JS/TS, `enqueue_workflow_step` in Python) which queues the step for batch export alongside generations. The flush pipeline handles both. The Python example below shows the shape; the Go and JS APIs take the same fields.
 
 ```python
 from agento11y import Client, WorkflowStep
@@ -470,10 +472,12 @@ In the grafana/agento11y repo:
 - Ensure non-stream wrappers set `SYNC`, stream wrappers set `STREAM`.
 - Ensure lifecycle flush/shutdown semantics are preserved.
 - When calling `set_result` / `SetResult`, always include all available fields:
+  - `input` and `output` populated with `Message` objects (input = system+user prompt, output = the model reply). If both are empty the tokens/usage still land, but the Agent Observability conversation view shows "No messages in this turn" — silently, with no error. Build messages with the helpers `user_text_message()` / `assistant_text_message()` / `tool_result_message()` (Python) rather than by hand.
   - `response_id` (provider correlation, maps to `gen_ai.response.id`)
   - `response_model` (actual model used)
   - `stop_reason` / `finish_reason`
   - Full token usage including `cache_read_input_tokens`, `cache_write_input_tokens`, and `reasoning_tokens` when the provider returns them
+- `MessageRole` has only `USER`, `ASSISTANT`, and `TOOL` — there is no `SYSTEM` (or `DEVELOPER`) member, and `MessageRole.SYSTEM` raises `AttributeError` (Python). Fold the system prompt into the `USER` message (or a text part), or pass it via the generation's `system_prompt` field; prefer the `user_text_message()` / `assistant_text_message()` / `tool_result_message()` helpers.
 - Always check `rec.err()` / `Err()` after the generation recorder closes; SDK validation or enqueue errors are otherwise silent.
 - Use `AGENTO11Y_TAGS` (client-level) or `tags` on `GenerationStart` for filtering: both export tags on generations. Client-level tags also appear as `agento11y.tag.<key>` on OTel spans and metrics in all SDKs; per-generation tags and `metadata` are export-only everywhere. For end-user identity use `user_id` (sets `user.id` span attribute), not a tag. See [`docs/concepts/tags-and-metadata.md`](https://github.com/grafana/agento11y/blob/main/docs/concepts/tags-and-metadata.md).
 
