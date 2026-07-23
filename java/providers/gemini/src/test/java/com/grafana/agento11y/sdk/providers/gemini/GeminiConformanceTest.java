@@ -53,6 +53,8 @@ class GeminiConformanceTest {
             assertThat(thinkingLevel).isEqualTo("high");
         }
         assertThat(exporter.generations.get(0).getMetadata().get("agento11y.gen_ai.usage.tool_use_prompt_tokens")).isEqualTo(5L);
+        assertThat(exporter.generations.get(0).getUsage().getInputTokens()).isEqualTo(8L);
+        assertThat(exporter.generations.get(0).getUsage().getCacheReadInputTokens()).isEqualTo(2L);
         assertThat(exporter.generations.get(1).getMode()).isEqualTo(GenerationMode.STREAM);
     }
 

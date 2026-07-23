@@ -423,7 +423,8 @@ describe("mapGeneration", () => {
     const result = mapGeneration(msg, userParts, assistantParts, redactor);
     expect(result.input).toHaveLength(1);
     expect(result.output).toHaveLength(1);
-    expect(result.usage?.inputTokens).toBe(100);
+    // Fresh input excludes cache reads/writes: input(100) - read(5) - write(3) = 92.
+    expect(result.usage?.inputTokens).toBe(92);
     expect(result.metadata?.cost).toBe(0.01);
   });
 

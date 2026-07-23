@@ -67,12 +67,23 @@ test('vercel ai sdk mapping extracts usage with cache and reasoning token detail
     },
   });
 
-  assert.equal(usage.inputTokens, 12);
+  // Vercel reports a cache-inclusive input: the provider's own total (18) equals
+  // raw inputTokens (12) + outputTokens (6), which proves the 3 cacheRead and 2
+  // cacheWrite tokens are already counted inside inputTokens. That is why the
+  // mapper subtracts BOTH cache buckets to recover fresh input (12 - 3 - 2 = 7).
+  assert.equal(18, 12 + 6, 'provider total == raw input + output (cache is inside input)');
+  assert.equal(usage.inputTokens, 7);
   assert.equal(usage.outputTokens, 6);
   assert.equal(usage.totalTokens, 18);
   assert.equal(usage.cacheReadInputTokens, 3);
   assert.equal(usage.cacheWriteInputTokens, 2);
   assert.equal(usage.reasoningTokens, 4);
+  // Disjoint contract: fresh input + all disjoint buckets reconstructs the total.
+  assert.equal(
+    usage.inputTokens + usage.outputTokens + usage.cacheReadInputTokens + usage.cacheWriteInputTokens,
+    usage.totalTokens,
+  );
+  assert.equal(usage.inputIsDisjoint, true);
 });
 
 test('vercel ai sdk mapping remains zero-safe when usage detail fields are absent', () => {

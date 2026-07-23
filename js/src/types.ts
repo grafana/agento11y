@@ -294,7 +294,14 @@ export interface ToolDefinition {
   inputSchemaJSON?: string;
 }
 
-/** Token usage counters. */
+/**
+ * Token usage counters.
+ *
+ * `inputTokens` is fresh, non-cached input. Cache-inclusive provider adapters
+ * subtract `cacheReadInputTokens` before setting it. `reasoningTokens` is an
+ * explanatory sub-bucket and may overlap with `outputTokens` depending on
+ * provider semantics.
+ */
 export interface TokenUsage {
   inputTokens?: number;
   outputTokens?: number;
@@ -302,6 +309,12 @@ export interface TokenUsage {
   cacheReadInputTokens?: number;
   cacheWriteInputTokens?: number;
   reasoningTokens?: number;
+  /**
+   * Set by SDK-owned adapters that already normalized this usage to the disjoint
+   * contract (fresh input, additive cache buckets). Consumers must not re-derive
+   * fresh input when true. Manual user-supplied usage leaves it undefined.
+   */
+  inputIsDisjoint?: boolean;
 }
 
 /** Provider-specific metadata attached to message parts. */

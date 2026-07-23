@@ -319,6 +319,7 @@ def test_gemini_mappers_use_strict_payloads_and_support_raw_artifacts() -> None:
     assert mapped_default.tool_choice == "any"
     assert mapped_default.thinking_enabled is True
     assert mapped_default.metadata["agento11y.gen_ai.request.thinking.budget_tokens"] == 1536
+    assert mapped_default.usage.input_tokens == 108
     assert mapped_default.usage.total_tokens == 170
     assert mapped_default.usage.cache_read_input_tokens == 12
     assert mapped_default.usage.reasoning_tokens == 10

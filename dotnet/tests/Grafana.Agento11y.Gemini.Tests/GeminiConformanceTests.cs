@@ -43,6 +43,7 @@ public sealed class GeminiConformanceTests
         Assert.Equal(1536L, ReadThinkingBudget(generation));
         Assert.Equal("medium", ReadThinkingLevel(generation));
         Assert.Equal(7L, ReadMetadataLong(generation, "agento11y.gen_ai.usage.tool_use_prompt_tokens"));
+        Assert.Equal(108, generation.Usage.InputTokens);
         Assert.Equal(170, generation.Usage.TotalTokens);
         Assert.Equal(12, generation.Usage.CacheReadInputTokens);
         Assert.Equal(10, generation.Usage.ReasoningTokens);

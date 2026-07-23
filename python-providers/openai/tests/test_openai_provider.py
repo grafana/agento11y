@@ -92,6 +92,8 @@ def test_chat_sync_wrapper_sets_sync_mode_and_raw_artifacts_default_off() -> Non
         assert generation.model.provider == "openai"
         assert generation.max_tokens == 320
         assert generation.metadata["agento11y.gen_ai.request.thinking.budget_tokens"] == 1024
+        assert generation.usage.input_tokens == 9
+        assert generation.usage.cache_read_input_tokens == 1
         assert generation.artifacts == []
     finally:
         client.shutdown()
@@ -567,6 +569,7 @@ def test_responses_mapper_maps_output_and_stream_fallback() -> None:
     assert mapped.stop_reason == "stop"
     assert mapped.thinking_enabled is True
     assert mapped.metadata["agento11y.gen_ai.request.thinking.budget_tokens"] == 640
+    assert mapped.usage.input_tokens == 78
     assert mapped.usage.total_tokens == 100
     assert len(mapped.output) == 3
     assert mapped.output[2].role.value == "tool"

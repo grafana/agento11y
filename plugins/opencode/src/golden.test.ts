@@ -330,7 +330,8 @@ describe("opencode plugin: real-SDK golden export", () => {
     expect(turn.agent_name).toBe("opencode:build");
     expect(turn.model.name).toBe("claude-sonnet-4-opencode");
     expect(turn.model.provider).toBe("anthropic");
-    expect(String(turn.usage.input_tokens)).toBe("200");
+    // Fresh input excludes cache reads: input(200) - cache_read(30) = 170.
+    expect(String(turn.usage.input_tokens)).toBe("170");
     expect(String(turn.usage.output_tokens)).toBe("50");
   }
 

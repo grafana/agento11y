@@ -337,15 +337,18 @@ function mapUsageToProtoJSON(usage: TokenUsage | undefined): Record<string, unkn
 
   const inputTokens = usage.inputTokens ?? 0;
   const outputTokens = usage.outputTokens ?? 0;
-  const totalTokens = usage.totalTokens ?? inputTokens + outputTokens;
+  const cacheReadInputTokens = usage.cacheReadInputTokens ?? 0;
+  const cacheWriteInputTokens = usage.cacheWriteInputTokens ?? 0;
+  const totalTokens = usage.totalTokens ?? inputTokens + outputTokens + cacheReadInputTokens + cacheWriteInputTokens;
 
   return {
     input_tokens: toInt64String(inputTokens),
     output_tokens: toInt64String(outputTokens),
     total_tokens: toInt64String(totalTokens),
-    cache_read_input_tokens: toInt64String(usage.cacheReadInputTokens),
-    cache_write_input_tokens: toInt64String(usage.cacheWriteInputTokens),
+    cache_read_input_tokens: toInt64String(cacheReadInputTokens),
+    cache_write_input_tokens: toInt64String(cacheWriteInputTokens),
     reasoning_tokens: toInt64String(usage.reasoningTokens),
+    input_is_disjoint: usage.inputIsDisjoint ?? false,
   };
 }
 

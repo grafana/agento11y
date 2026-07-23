@@ -263,6 +263,7 @@ func usageToProto(usage model.TokenUsage) *agento11yv1.TokenUsage {
 		CacheReadInputTokens:  usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheWriteInputTokens,
 		ReasoningTokens:       usage.ReasoningTokens,
+		InputIsDisjoint:       usage.InputIsDisjoint,
 	}
 }
 

@@ -468,7 +468,8 @@ def test_langchain_gemini_tool_calls_map_from_message_fields() -> None:
         assert output_tool_call.name == "get_weather"
         assert b'"Paris"' in output_tool_call.input_json
 
-        assert generation.usage.input_tokens == 49
+        # usage_metadata.input_tokens (49) is cache-inclusive: fresh = 49 - 7 cache_read = 42.
+        assert generation.usage.input_tokens == 42
         assert generation.usage.output_tokens == 51
         assert generation.usage.total_tokens == 100
         assert generation.usage.cache_read_input_tokens == 7

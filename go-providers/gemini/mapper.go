@@ -323,17 +323,28 @@ func mapUsage(usage *genai.GenerateContentResponseUsageMetadata) agento11y.Token
 	totalTokens := int64(usage.TotalTokenCount)
 	toolUsePromptTokens := int64(usage.ToolUsePromptTokenCount)
 	reasoningTokens := int64(usage.ThoughtsTokenCount)
+	cacheReadInputTokens := int64(usage.CachedContentTokenCount)
+	inputTokens := freshInputTokens(int64(usage.PromptTokenCount), cacheReadInputTokens)
 	if totalTokens == 0 {
-		totalTokens = int64(usage.PromptTokenCount) + int64(usage.CandidatesTokenCount) + toolUsePromptTokens + reasoningTokens
+		totalTokens = inputTokens + int64(usage.CandidatesTokenCount) + cacheReadInputTokens + toolUsePromptTokens + reasoningTokens
 	}
 
 	return agento11y.TokenUsage{
-		InputTokens:          int64(usage.PromptTokenCount),
+		InputTokens:          inputTokens,
 		OutputTokens:         int64(usage.CandidatesTokenCount),
 		TotalTokens:          totalTokens,
-		CacheReadInputTokens: int64(usage.CachedContentTokenCount),
+		CacheReadInputTokens: cacheReadInputTokens,
 		ReasoningTokens:      reasoningTokens,
+		InputIsDisjoint:      true,
 	}
+}
+
+func freshInputTokens(rawInputTokens, cacheReadInputTokens int64) int64 {
+	fresh := rawInputTokens - cacheReadInputTokens
+	if fresh < 0 {
+		return 0
+	}
+	return fresh
 }
 
 func mapRole(role string) agento11y.Role {

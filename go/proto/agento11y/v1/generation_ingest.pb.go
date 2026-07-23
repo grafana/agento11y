@@ -905,15 +905,38 @@ func (x *ToolDefinition) GetDeferred() bool {
 }
 
 type TokenUsage struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	InputTokens           int64                  `protobuf:"varint,1,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"`
-	OutputTokens          int64                  `protobuf:"varint,2,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
-	TotalTokens           int64                  `protobuf:"varint,3,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
-	CacheReadInputTokens  int64                  `protobuf:"varint,4,opt,name=cache_read_input_tokens,json=cacheReadInputTokens,proto3" json:"cache_read_input_tokens,omitempty"`
-	CacheWriteInputTokens int64                  `protobuf:"varint,5,opt,name=cache_write_input_tokens,json=cacheWriteInputTokens,proto3" json:"cache_write_input_tokens,omitempty"`
-	ReasoningTokens       int64                  `protobuf:"varint,6,opt,name=reasoning_tokens,json=reasoningTokens,proto3" json:"reasoning_tokens,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Fresh, non-cached input tokens. Provider adapters whose raw prompt/input
+	// total includes cached tokens must subtract cache_read_input_tokens before
+	// setting this field.
+	InputTokens int64 `protobuf:"varint,1,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"`
+	// Output tokens as reported by the provider. For providers that include
+	// reasoning/thinking tokens in output totals, keep that provider semantics
+	// here and also populate reasoning_tokens when available.
+	OutputTokens int64 `protobuf:"varint,2,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
+	// Provider-reported total when available. If derived by an SDK, use the
+	// disjoint bucket sum: input + output + cache_read + cache_write.
+	TotalTokens int64 `protobuf:"varint,3,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
+	// Cached input tokens read from the provider cache.
+	CacheReadInputTokens int64 `protobuf:"varint,4,opt,name=cache_read_input_tokens,json=cacheReadInputTokens,proto3" json:"cache_read_input_tokens,omitempty"`
+	// Input tokens written to the provider cache.
+	CacheWriteInputTokens int64 `protobuf:"varint,5,opt,name=cache_write_input_tokens,json=cacheWriteInputTokens,proto3" json:"cache_write_input_tokens,omitempty"`
+	// Provider-reported reasoning/thinking tokens when available.
+	// This may overlap with output_tokens depending on provider semantics.
+	// Treat it as an explanatory sub-bucket, not an additive total bucket.
+	ReasoningTokens int64 `protobuf:"varint,6,opt,name=reasoning_tokens,json=reasoningTokens,proto3" json:"reasoning_tokens,omitempty"`
+	// Self-describing marker set by SDK-owned adapters that have already
+	// normalized this usage to the disjoint contract (input_tokens is fresh and
+	// cache buckets are additive). Consumers must NOT re-derive fresh input
+	// (e.g. subtract cache_read from input) when this is true.
+	//
+	// When false/absent the usage may be legacy cache-inclusive telemetry from an
+	// older SDK, or a caller's manual usage the SDK did not reinterpret; consumers
+	// may fall back to provider-name heuristics for those. SDK provider/framework
+	// wrappers set this true; manual user-supplied usage leaves it false.
+	InputIsDisjoint bool `protobuf:"varint,8,opt,name=input_is_disjoint,json=inputIsDisjoint,proto3" json:"input_is_disjoint,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *TokenUsage) Reset() {
@@ -986,6 +1009,13 @@ func (x *TokenUsage) GetReasoningTokens() int64 {
 		return x.ReasoningTokens
 	}
 	return 0
+}
+
+func (x *TokenUsage) GetInputIsDisjoint() bool {
+	if x != nil {
+		return x.InputIsDisjoint
+	}
+	return false
 }
 
 type Artifact struct {
@@ -1725,7 +1755,7 @@ const file_agento11y_v1_generation_ingest_proto_rawDesc = "" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x12\n" +
 	"\x04type\x18\x03 \x01(\tR\x04type\x12*\n" +
 	"\x11input_schema_json\x18\x04 \x01(\fR\x0finputSchemaJson\x12\x1a\n" +
-	"\bdeferred\x18\x05 \x01(\bR\bdeferred\"\xb5\x02\n" +
+	"\bdeferred\x18\x05 \x01(\bR\bdeferred\"\xe1\x02\n" +
 	"\n" +
 	"TokenUsage\x12!\n" +
 	"\finput_tokens\x18\x01 \x01(\x03R\vinputTokens\x12#\n" +
@@ -1733,7 +1763,8 @@ const file_agento11y_v1_generation_ingest_proto_rawDesc = "" +
 	"\ftotal_tokens\x18\x03 \x01(\x03R\vtotalTokens\x125\n" +
 	"\x17cache_read_input_tokens\x18\x04 \x01(\x03R\x14cacheReadInputTokens\x127\n" +
 	"\x18cache_write_input_tokens\x18\x05 \x01(\x03R\x15cacheWriteInputTokens\x12)\n" +
-	"\x10reasoning_tokens\x18\x06 \x01(\x03R\x0freasoningTokensJ\x04\b\a\x10\bR\x1bcache_creation_input_tokens\"\xba\x01\n" +
+	"\x10reasoning_tokens\x18\x06 \x01(\x03R\x0freasoningTokens\x12*\n" +
+	"\x11input_is_disjoint\x18\b \x01(\bR\x0finputIsDisjointJ\x04\b\a\x10\bR\x1bcache_creation_input_tokens\"\xba\x01\n" +
 	"\bArtifact\x12.\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1a.agento11y.v1.ArtifactKindR\x04kind\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12!\n" +

@@ -60,6 +60,7 @@
           }
         ],
         "usage": {
+          "input_is_disjoint": true,
           "input_tokens": "40",
           "output_tokens": "15",
           "total_tokens": "55"
@@ -116,6 +117,7 @@
           "git.branch": "main"
         },
         "usage": {
+          "input_is_disjoint": true,
           "input_tokens": "60",
           "output_tokens": "20",
           "total_tokens": "80"

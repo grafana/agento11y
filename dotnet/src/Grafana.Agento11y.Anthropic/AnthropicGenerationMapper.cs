@@ -594,10 +594,12 @@ public static class AnthropicGenerationMapper
         var input = ReadLong(usage, "input_tokens");
         var output = ReadLong(usage, "output_tokens");
         var total = ReadLong(usage, "total_tokens");
+        var cacheRead = ReadLong(usage, "cache_read_input_tokens");
+        var cacheWrite = ReadLong(usage, "cache_creation_input_tokens");
 
         if (total == 0)
         {
-            total = input + output;
+            total = input + output + cacheRead + cacheWrite;
         }
 
         return new TokenUsage
@@ -605,8 +607,9 @@ public static class AnthropicGenerationMapper
             InputTokens = input,
             OutputTokens = output,
             TotalTokens = total,
-            CacheReadInputTokens = ReadLong(usage, "cache_read_input_tokens"),
-            CacheWriteInputTokens = ReadLong(usage, "cache_creation_input_tokens"),
+            CacheReadInputTokens = cacheRead,
+            CacheWriteInputTokens = cacheWrite,
+            InputIsDisjoint = true,
         };
     }
 

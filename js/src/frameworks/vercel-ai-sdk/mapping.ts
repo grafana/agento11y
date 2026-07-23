@@ -211,17 +211,23 @@ export function mapUsageFromStepFinish(event: StepFinishEvent): TokenUsage | und
     return undefined;
   }
 
-  const resolvedInput = inputTokens ?? 0;
+  // Vercel AI SDK reports cache-inclusive inputTokens: the total input includes both
+  // cacheReadTokens and cacheWriteTokens (totalTokens === inputTokens + outputTokens).
+  // Subtract both to recover fresh, non-cached input for the disjoint TokenUsage contract.
+  const resolvedCacheRead = cacheReadTokens ?? 0;
+  const resolvedCacheWrite = cacheWriteTokens ?? 0;
+  const resolvedInput = Math.max((inputTokens ?? 0) - resolvedCacheRead - resolvedCacheWrite, 0);
   const resolvedOutput = outputTokens ?? 0;
-  const resolvedTotal = totalTokens ?? resolvedInput + resolvedOutput;
+  const resolvedTotal = totalTokens ?? resolvedInput + resolvedOutput + resolvedCacheRead + resolvedCacheWrite;
 
   return {
     inputTokens: resolvedInput,
     outputTokens: resolvedOutput,
     totalTokens: resolvedTotal,
-    cacheReadInputTokens: cacheReadTokens ?? 0,
-    cacheWriteInputTokens: cacheWriteTokens ?? 0,
+    cacheReadInputTokens: resolvedCacheRead,
+    cacheWriteInputTokens: resolvedCacheWrite,
     reasoningTokens: reasoningTokens ?? 0,
+    inputIsDisjoint: true,
   };
 }
 

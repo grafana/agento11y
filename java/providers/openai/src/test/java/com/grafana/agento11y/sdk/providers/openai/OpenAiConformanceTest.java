@@ -48,6 +48,8 @@ class OpenAiConformanceTest {
             Generation generation = singleDebugGeneration(client);
             assertThat(generation.getMode()).isEqualTo(GenerationMode.SYNC);
             assertThat(generation.getModel().getProvider()).isEqualTo("openai");
+            assertThat(generation.getUsage().getInputTokens()).isEqualTo(112L);
+            assertThat(generation.getUsage().getCacheReadInputTokens()).isEqualTo(8L);
             assertThat(generation.getArtifacts()).isEmpty();
         }
     }
@@ -85,6 +87,7 @@ class OpenAiConformanceTest {
             assertThat(generation.getMode()).isEqualTo(GenerationMode.SYNC);
             assertThat(generation.getModel().getProvider()).isEqualTo("openai");
             assertThat(generation.getStopReason()).isEqualTo("stop");
+            assertThat(generation.getUsage().getInputTokens()).isEqualTo(78L);
             assertThat(generation.getUsage().getTotalTokens()).isEqualTo(100L);
             assertThat(generation.getUsage().getCacheReadInputTokens()).isEqualTo(2L);
             assertThat(generation.getUsage().getReasoningTokens()).isEqualTo(3L);

@@ -53,7 +53,7 @@
     "any_generation": [
       "\"agent_name\":\"codex\"",
       "\"conversation_id\":\"codex-sess-1\"",
-      "\"input_tokens\":\"120\"",
+      "\"input_tokens\":\"90\"",
       "\"output_tokens\":\"40\""
     ]
   }

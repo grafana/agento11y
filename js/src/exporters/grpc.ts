@@ -418,15 +418,18 @@ function mapUsageToProto(usage: TokenUsage | undefined): Record<string, unknown>
 
   const inputTokens = usage.inputTokens ?? 0;
   const outputTokens = usage.outputTokens ?? 0;
-  const totalTokens = usage.totalTokens ?? inputTokens + outputTokens;
+  const cacheReadInputTokens = usage.cacheReadInputTokens ?? 0;
+  const cacheWriteInputTokens = usage.cacheWriteInputTokens ?? 0;
+  const totalTokens = usage.totalTokens ?? inputTokens + outputTokens + cacheReadInputTokens + cacheWriteInputTokens;
 
   return {
     inputTokens: toInt64String(inputTokens),
     outputTokens: toInt64String(outputTokens),
     totalTokens: toInt64String(totalTokens),
-    cacheReadInputTokens: toInt64String(usage.cacheReadInputTokens),
-    cacheWriteInputTokens: toInt64String(usage.cacheWriteInputTokens),
+    cacheReadInputTokens: toInt64String(cacheReadInputTokens),
+    cacheWriteInputTokens: toInt64String(cacheWriteInputTokens),
     reasoningTokens: toInt64String(usage.reasoningTokens),
+    inputIsDisjoint: usage.inputIsDisjoint ?? false,
   };
 }
 

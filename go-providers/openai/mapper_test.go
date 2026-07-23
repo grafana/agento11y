@@ -120,6 +120,9 @@ func TestFromRequestResponse(t *testing.T) {
 	if generation.Usage.TotalTokens != 162 {
 		t.Fatalf("expected total tokens 162, got %d", generation.Usage.TotalTokens)
 	}
+	if generation.Usage.InputTokens != 112 {
+		t.Fatalf("expected fresh input tokens 112, got %d", generation.Usage.InputTokens)
+	}
 	if generation.Usage.CacheReadInputTokens != 8 {
 		t.Fatalf("expected cached tokens 8, got %d", generation.Usage.CacheReadInputTokens)
 	}
@@ -487,6 +490,9 @@ func TestResponsesFromRequestResponse(t *testing.T) {
 	if generation.Usage.TotalTokens != 100 {
 		t.Fatalf("expected total tokens 100, got %d", generation.Usage.TotalTokens)
 	}
+	if generation.Usage.InputTokens != 78 {
+		t.Fatalf("expected fresh input tokens 78, got %d", generation.Usage.InputTokens)
+	}
 	if generation.Usage.CacheReadInputTokens != 2 {
 		t.Fatalf("expected cached tokens 2, got %d", generation.Usage.CacheReadInputTokens)
 	}
@@ -626,6 +632,23 @@ func TestEmbeddingsFromResponse(t *testing.T) {
 	}
 	if len(result.InputTexts) != 2 || result.InputTexts[0] != "hello" || result.InputTexts[1] != "world" {
 		t.Fatalf("expected input texts [hello world], got %v", result.InputTexts)
+	}
+}
+
+func TestMapUsageClampsFreshInputTokens(t *testing.T) {
+	usage := mapUsage(osdk.CompletionUsage{
+		PromptTokens:     10,
+		CompletionTokens: 5,
+		TotalTokens:      15,
+		PromptTokensDetails: osdk.CompletionUsagePromptTokensDetails{
+			CachedTokens: 30,
+		},
+	})
+	if usage.InputTokens != 0 {
+		t.Fatalf("expected fresh input tokens to clamp to 0, got %d", usage.InputTokens)
+	}
+	if usage.CacheReadInputTokens != 30 {
+		t.Fatalf("expected cached tokens 30, got %d", usage.CacheReadInputTokens)
 	}
 }
 

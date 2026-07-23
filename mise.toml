@@ -299,6 +299,10 @@ run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with-editable '.
 description = "Run Python LiteLLM framework handler tests"
 run = "uv run --python \"$PYTHON_BIN\" --with './python[dev]' --with './python-frameworks/litellm[dev]' pytest python-frameworks/litellm/tests"
 
+[tasks."test:py:sdk-pydantic-ai"]
+description = "Run Python Pydantic-AI framework handler tests"
+run = "uv run --python \"$PYTHON_BIN\" --with-editable './python[dev]' --with-editable './python-frameworks/pydantic-ai[dev]' pytest python-frameworks/pydantic-ai/tests"
+
 [tasks."test:py:sdk-provider-conformance"]
 description = "Run Python provider-wrapper conformance tests"
 run = """
@@ -322,6 +326,7 @@ mise run test:py:sdk-google-adk
 mise run test:py:sdk-strands
 mise run test:py:sdk-claude-agent-sdk
 mise run test:py:sdk-litellm
+mise run test:py:sdk-pydantic-ai
 """
 
 # --- .NET SDK tests ---

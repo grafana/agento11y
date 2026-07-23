@@ -75,6 +75,7 @@ public sealed class OpenAIConformanceTests
         Assert.Equal(512, generation.MaxTokens);
         Assert.Contains("weather", generation.ToolChoice ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.True(generation.ThinkingEnabled);
+        Assert.Equal(112, generation.Usage.InputTokens);
         Assert.Equal(162, generation.Usage.TotalTokens);
         Assert.Equal(8, generation.Usage.CacheReadInputTokens);
         Assert.Equal(5, generation.Usage.ReasoningTokens);
@@ -204,6 +205,7 @@ public sealed class OpenAIConformanceTests
         Assert.Equal(320, generation.MaxTokens);
         Assert.Contains("weather", generation.ToolChoice ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.True(generation.ThinkingEnabled);
+        Assert.Equal(78, generation.Usage.InputTokens);
         Assert.Equal(100, generation.Usage.TotalTokens);
         Assert.Equal(2, generation.Usage.CacheReadInputTokens);
         Assert.Equal(3, generation.Usage.ReasoningTokens);

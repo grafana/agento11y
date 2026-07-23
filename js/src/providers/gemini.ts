@@ -511,9 +511,15 @@ function mapGeminiUsage(rawUsage: unknown): TokenUsage | undefined {
   const toolUsePromptTokens = readIntFromAny(rawUsage.toolUsePromptTokenCount);
   const reasoningTokens = readIntFromAny(rawUsage.thoughtsTokenCount);
 
+  // Compute fresh input once so the derived total below stays consistent with
+  // out.inputTokens and matches the Go/Java/.NET/Python mappers: tool-use prompt
+  // tokens are a separate additive term in the total, never mixed into the
+  // input-vs-cache_read clamp.
+  const freshInput = inputTokens !== undefined ? freshInputTokens(inputTokens, cacheReadInputTokens) : 0;
+
   const out: TokenUsage = {};
   if (inputTokens !== undefined) {
-    out.inputTokens = inputTokens;
+    out.inputTokens = freshInput;
   }
   if (outputTokens !== undefined) {
     out.outputTokens = outputTokens;
@@ -521,7 +527,13 @@ function mapGeminiUsage(rawUsage: unknown): TokenUsage | undefined {
   if (totalTokens !== undefined) {
     out.totalTokens = totalTokens;
   } else if (inputTokens !== undefined || outputTokens !== undefined) {
-    out.totalTokens = (inputTokens ?? 0) + (outputTokens ?? 0) + (toolUsePromptTokens ?? 0) + (reasoningTokens ?? 0);
+    out.totalTokens =
+      freshInput +
+      (toolUsePromptTokens ?? 0) +
+      (outputTokens ?? 0) +
+      (cacheReadInputTokens ?? 0) +
+      (cacheWriteInputTokens ?? 0) +
+      (reasoningTokens ?? 0);
   }
   if (cacheReadInputTokens !== undefined) {
     out.cacheReadInputTokens = cacheReadInputTokens;
@@ -533,7 +545,15 @@ function mapGeminiUsage(rawUsage: unknown): TokenUsage | undefined {
     out.reasoningTokens = reasoningTokens;
   }
 
-  return Object.keys(out).length > 0 ? out : undefined;
+  if (Object.keys(out).length === 0) {
+    return undefined;
+  }
+  out.inputIsDisjoint = true;
+  return out;
+}
+
+function freshInputTokens(rawInputTokens: number, cacheReadInputTokens?: number): number {
+  return Math.max(rawInputTokens - (cacheReadInputTokens ?? 0), 0);
 }
 
 function geminiUsageMetadata(rawUsage: unknown): Record<string, unknown> | undefined {

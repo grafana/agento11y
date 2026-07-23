@@ -1649,11 +1649,20 @@ def _map_framework_usage(raw_usage: Any):
     cache_read = _as_int(_read(input_token_details, "cache_read"))
     if cache_read > 0 and usage.cache_read_input_tokens == 0:
         usage.cache_read_input_tokens = cache_read
+        # LangChain-style usage_metadata reports cache-inclusive input_tokens with
+        # cache_read nested in input_token_details. Move it into the disjoint
+        # cache_read bucket so fresh input is not double-counted. total_tokens is
+        # invariant under this rebucketing (input drops by cache_read, cache_read
+        # rises by the same amount), so it needs no adjustment.
+        usage.input_tokens = max(usage.input_tokens - cache_read, 0)
 
     reasoning = _as_int(_read(output_token_details, "reasoning"))
     if reasoning > 0 and usage.reasoning_tokens == 0:
         usage.reasoning_tokens = reasoning
 
+    # This handler owns the disjoint normalization above, so mark the usage
+    # regardless of which extractor map_usage dispatched to.
+    usage.input_is_disjoint = True
     return usage
 
 

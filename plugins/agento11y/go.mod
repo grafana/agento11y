@@ -63,3 +63,10 @@ require (
 	google.golang.org/grpc v1.82.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// Temporary: the plugin sets TokenUsage.InputIsDisjoint, added to core in this
+// same coordinated change and not yet in a published go/v* tag. Resolve core
+// from the local tree so the module builds standalone (GOWORK=off). After the
+// next core release, drop this replace and run
+// `go get github.com/grafana/agento11y/go@<tag> && go mod tidy`.
+replace github.com/grafana/agento11y/go => ../../go

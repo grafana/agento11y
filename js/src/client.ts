@@ -155,6 +155,10 @@ const metricTokenTypeOutput = 'output';
 const metricTokenTypeCacheRead = 'cache_read';
 const metricTokenTypeCacheWrite = 'cache_write';
 const metricTokenTypeReasoning = 'reasoning';
+// Marks token-usage series already normalized to the disjoint contract so
+// consumers skip cache-inclusive normalization; absence means legacy telemetry.
+const metricAttrTokenSemantics = 'gen_ai.token.semantics';
+const metricTokenSemanticsDisjoint = 'disjoint';
 
 const durationBucketsSeconds: number[] = [
   0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
@@ -1106,7 +1110,7 @@ export class Agento11yClient {
     if (value === undefined || value === 0) {
       return;
     }
-    this.tokenUsageHistogram.record(value, {
+    const attributes: Record<string, string | number | boolean> = {
       [spanAttrOperationName]: generation.operationName,
       ...metricIdentityAttributes(
         generation.model.provider,
@@ -1116,7 +1120,11 @@ export class Agento11yClient {
       ),
       ...tagMetricAttributes(this.config.tags),
       [metricAttrTokenType]: tokenType,
-    });
+    };
+    if (generation.usage?.inputIsDisjoint) {
+      attributes[metricAttrTokenSemantics] = metricTokenSemanticsDisjoint;
+    }
+    this.tokenUsageHistogram.record(value, attributes);
   }
 
   private recordToolExecutionMetrics(toolExecution: ToolExecution, finalError: Error | undefined): void {

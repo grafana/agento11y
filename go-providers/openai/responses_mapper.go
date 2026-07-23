@@ -499,12 +499,14 @@ func mapResponsesTools(value any) []agento11y.ToolDefinition {
 }
 
 func mapResponsesUsage(usage responses.ResponseUsage) agento11y.TokenUsage {
+	cacheReadInputTokens := usage.InputTokensDetails.CachedTokens
 	return agento11y.TokenUsage{
-		InputTokens:          usage.InputTokens,
+		InputTokens:          freshInputTokens(usage.InputTokens, cacheReadInputTokens),
 		OutputTokens:         usage.OutputTokens,
 		TotalTokens:          usage.TotalTokens,
-		CacheReadInputTokens: usage.InputTokensDetails.CachedTokens,
+		CacheReadInputTokens: cacheReadInputTokens,
 		ReasoningTokens:      usage.OutputTokensDetails.ReasoningTokens,
+		InputIsDisjoint:      true,
 	}
 }
 

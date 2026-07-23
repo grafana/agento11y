@@ -409,7 +409,7 @@ func TestConformance_GenerateContentSyncNormalization(t *testing.T) {
 	if generation.StopReason != "STOP" {
 		t.Fatalf("unexpected stop reason: %q", generation.StopReason)
 	}
-	if generation.Usage.TotalTokens != 160 || generation.Usage.CacheReadInputTokens != 12 || generation.Usage.ReasoningTokens != 10 {
+	if generation.Usage.InputTokens != 108 || generation.Usage.TotalTokens != 160 || generation.Usage.CacheReadInputTokens != 12 || generation.Usage.ReasoningTokens != 10 {
 		t.Fatalf("unexpected usage mapping: %#v", generation.Usage)
 	}
 	if generation.ThinkingEnabled == nil || !*generation.ThinkingEnabled {

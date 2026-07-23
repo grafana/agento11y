@@ -645,10 +645,12 @@ def test_agento11y_google_adk_plugin_maps_current_request_config_tools_and_usage
         assert tool_call.name == "get_weather"
         assert b'"Paris"' in tool_call.input_json
 
-        assert generation.usage.input_tokens == 14
+        # Fresh input excludes cached reads and tool-use prompt tokens: prompt(10) - cache_read(3) = 7.
+        assert generation.usage.input_tokens == 7
         assert generation.usage.output_tokens == 7
         assert generation.usage.cache_read_input_tokens == 3
         assert generation.usage.reasoning_tokens == 2
+        # total derived from disjoint buckets: input(7)+output(7)+cache_read(3)+tool_use(4) = 21.
         assert generation.usage.total_tokens == 21
     finally:
         client.shutdown()

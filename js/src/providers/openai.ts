@@ -684,7 +684,7 @@ function mapChatUsage(usage: unknown): TokenUsage | undefined {
 
   const out: TokenUsage = {};
   if (inputTokens !== undefined) {
-    out.inputTokens = inputTokens;
+    out.inputTokens = freshInputTokens(inputTokens, cacheReadInputTokens);
   }
   if (outputTokens !== undefined) {
     out.outputTokens = outputTokens;
@@ -699,7 +699,11 @@ function mapChatUsage(usage: unknown): TokenUsage | undefined {
     out.reasoningTokens = reasoningTokens;
   }
 
-  return Object.keys(out).length > 0 ? out : undefined;
+  if (Object.keys(out).length === 0) {
+    return undefined;
+  }
+  out.inputIsDisjoint = true;
+  return out;
 }
 
 function firstFinishReason(response: ChatResponse): string | undefined {
@@ -952,7 +956,7 @@ function mapResponsesUsage(value: unknown): TokenUsage | undefined {
 
   const out: TokenUsage = {};
   if (inputTokens !== undefined) {
-    out.inputTokens = inputTokens;
+    out.inputTokens = freshInputTokens(inputTokens, cacheReadInputTokens);
   }
   if (outputTokens !== undefined) {
     out.outputTokens = outputTokens;
@@ -967,7 +971,15 @@ function mapResponsesUsage(value: unknown): TokenUsage | undefined {
     out.reasoningTokens = reasoningTokens;
   }
 
-  return Object.keys(out).length > 0 ? out : undefined;
+  if (Object.keys(out).length === 0) {
+    return undefined;
+  }
+  out.inputIsDisjoint = true;
+  return out;
+}
+
+function freshInputTokens(rawInputTokens: number, cacheReadInputTokens?: number): number {
+  return Math.max(rawInputTokens - (cacheReadInputTokens ?? 0), 0);
 }
 
 function normalizeResponsesStopReason(response: ResponsesResponse): string | undefined {

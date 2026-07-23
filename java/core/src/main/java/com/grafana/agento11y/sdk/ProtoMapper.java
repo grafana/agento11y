@@ -91,6 +91,7 @@ final class ProtoMapper {
                     .setCacheReadInputTokens(usage.getCacheReadInputTokens())
                     .setCacheWriteInputTokens(usage.getCacheWriteInputTokens())
                     .setReasoningTokens(usage.getReasoningTokens())
+                    .setInputIsDisjoint(usage.getInputIsDisjoint())
                     .build());
         }
 

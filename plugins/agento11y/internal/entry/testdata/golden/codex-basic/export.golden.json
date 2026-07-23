@@ -78,7 +78,8 @@
         ],
         "usage": {
           "cache_read_input_tokens": "30",
-          "input_tokens": "120",
+          "input_is_disjoint": true,
+          "input_tokens": "90",
           "output_tokens": "40",
           "reasoning_tokens": "5",
           "total_tokens": "160"

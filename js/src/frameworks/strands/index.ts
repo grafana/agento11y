@@ -641,6 +641,8 @@ function mapUsage(rawUsage: unknown): TokenUsage | undefined {
       optionalNumber(read(usage, 'cacheReadInputTokens')) ?? optionalNumber(read(usage, 'cache_read_input_tokens')),
     cacheWriteInputTokens:
       optionalNumber(read(usage, 'cacheWriteInputTokens')) ?? optionalNumber(read(usage, 'cache_write_input_tokens')),
+    // Bedrock reports additive (non-cached) input, already disjoint-compliant.
+    inputIsDisjoint: true,
   };
 }
 

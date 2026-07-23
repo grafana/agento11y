@@ -427,16 +427,17 @@ public final class AnthropicAdapter {
         var usage = response.usage();
         long input = usage.inputTokens();
         long output = usage.outputTokens();
-        long total = input + output;
         long cacheRead = usage.cacheReadInputTokens().orElse(0L);
         long cacheWrite = usage.cacheCreationInputTokens().orElse(0L);
+        long total = input + output + cacheRead + cacheWrite;
 
         return new TokenUsage()
                 .setInputTokens(input)
                 .setOutputTokens(output)
-                .setTotalTokens(total == 0 ? input + output : total)
+                .setTotalTokens(total)
                 .setCacheReadInputTokens(cacheRead)
-                .setCacheWriteInputTokens(cacheWrite);
+                .setCacheWriteInputTokens(cacheWrite)
+                .setInputIsDisjoint(true);
     }
 
     private static String extractDeltaText(RawMessageStreamEvent event) {
@@ -605,23 +606,6 @@ public final class AnthropicAdapter {
             }
         }
         return 0L;
-    }
-
-    private static Double asDouble(Object value) {
-        if (value == null) {
-            return null;
-        }
-        if (value instanceof Number number) {
-            return number.doubleValue();
-        }
-        if (value instanceof String text) {
-            try {
-                return Double.parseDouble(text.trim());
-            } catch (NumberFormatException ignored) {
-                return null;
-            }
-        }
-        return null;
     }
 
     private static boolean asBoolean(Object value) {

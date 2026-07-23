@@ -425,11 +425,16 @@ def _map_pydantic_usage(usage: Any) -> TokenUsage | None:
     cache_write = _int_or_none(_read(usage, "cache_write_tokens"))
     if input_tokens is None and output_tokens is None and cache_read is None and cache_write is None:
         return None
+    # pydantic-ai reports cache-inclusive input_tokens: the total includes both
+    # cache_read_tokens and cache_write_tokens. Subtract both to recover fresh,
+    # non-cached input for the disjoint TokenUsage contract.
+    fresh_input = max((input_tokens or 0) - (cache_read or 0) - (cache_write or 0), 0)
     return TokenUsage(
-        input_tokens=input_tokens or 0,
+        input_tokens=fresh_input,
         output_tokens=output_tokens or 0,
         cache_read_input_tokens=cache_read or 0,
         cache_write_input_tokens=cache_write or 0,
+        input_is_disjoint=True,
     ).normalize()
 
 

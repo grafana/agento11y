@@ -1001,17 +1001,19 @@ public static class OpenAIGenerationMapper
             return new TokenUsage();
         }
 
+        var cacheReadInputTokens = usage.InputTokenDetails?.CachedTokenCount ?? 0;
         var mapped = new TokenUsage
         {
-            InputTokens = usage.InputTokenCount,
+            InputTokens = FreshInputTokens(usage.InputTokenCount, cacheReadInputTokens),
             OutputTokens = usage.OutputTokenCount,
             TotalTokens = usage.TotalTokenCount,
-            CacheReadInputTokens = usage.InputTokenDetails?.CachedTokenCount ?? 0,
+            CacheReadInputTokens = cacheReadInputTokens,
             ReasoningTokens = usage.OutputTokenDetails?.ReasoningTokenCount ?? 0,
+            InputIsDisjoint = true,
         };
         if (mapped.TotalTokens == 0)
         {
-            mapped.TotalTokens = mapped.InputTokens + mapped.OutputTokens;
+            mapped.TotalTokens = mapped.InputTokens + mapped.OutputTokens + mapped.CacheReadInputTokens + mapped.CacheWriteInputTokens;
         }
         return mapped;
     }
@@ -1406,21 +1408,28 @@ public static class OpenAIGenerationMapper
             return new TokenUsage();
         }
 
+        var cacheReadInputTokens = usage.InputTokenDetails?.CachedTokenCount ?? 0;
         var mapped = new TokenUsage
         {
-            InputTokens = usage.InputTokenCount,
+            InputTokens = FreshInputTokens(usage.InputTokenCount, cacheReadInputTokens),
             OutputTokens = usage.OutputTokenCount,
             TotalTokens = usage.TotalTokenCount,
-            CacheReadInputTokens = usage.InputTokenDetails?.CachedTokenCount ?? 0,
+            CacheReadInputTokens = cacheReadInputTokens,
             ReasoningTokens = usage.OutputTokenDetails?.ReasoningTokenCount ?? 0,
+            InputIsDisjoint = true,
         };
 
         if (mapped.TotalTokens == 0)
         {
-            mapped.TotalTokens = mapped.InputTokens + mapped.OutputTokens;
+            mapped.TotalTokens = mapped.InputTokens + mapped.OutputTokens + mapped.CacheReadInputTokens + mapped.CacheWriteInputTokens;
         }
 
         return mapped;
+    }
+
+    private static long FreshInputTokens(long rawInputTokens, long cacheReadInputTokens)
+    {
+        return Math.Max(rawInputTokens - cacheReadInputTokens, 0);
     }
 
     private static List<Artifact> BuildChatCompletionsArtifactsForRequestResponse(

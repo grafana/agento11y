@@ -747,12 +747,16 @@ final class OpenAiGenerationMapper {
         }
         Map<String, Object> promptDetails = asMap(getFirst(usage, "prompt_tokens_details", "promptTokensDetails"));
         Map<String, Object> completionDetails = asMap(getFirst(usage, "completion_tokens_details", "completionTokensDetails"));
+        long cacheReadInputTokens = defaultLong(asLong(getFirst(promptDetails, "cached_tokens", "cachedTokens")));
         return new TokenUsage()
-                .setInputTokens(defaultLong(asLong(getFirst(usage, "prompt_tokens", "promptTokens"))))
+                .setInputTokens(freshInputTokens(
+                        defaultLong(asLong(getFirst(usage, "prompt_tokens", "promptTokens"))),
+                        cacheReadInputTokens))
                 .setOutputTokens(defaultLong(asLong(getFirst(usage, "completion_tokens", "completionTokens"))))
                 .setTotalTokens(defaultLong(asLong(getFirst(usage, "total_tokens", "totalTokens"))))
-                .setCacheReadInputTokens(defaultLong(asLong(getFirst(promptDetails, "cached_tokens", "cachedTokens"))))
-                .setReasoningTokens(defaultLong(asLong(getFirst(completionDetails, "reasoning_tokens", "reasoningTokens"))));
+                .setCacheReadInputTokens(cacheReadInputTokens)
+                .setReasoningTokens(defaultLong(asLong(getFirst(completionDetails, "reasoning_tokens", "reasoningTokens"))))
+                .setInputIsDisjoint(true);
     }
 
     private static TokenUsage mapResponsesUsage(Map<String, Object> usage) {
@@ -761,12 +765,20 @@ final class OpenAiGenerationMapper {
         }
         Map<String, Object> inputDetails = asMap(getFirst(usage, "input_tokens_details", "inputTokensDetails"));
         Map<String, Object> outputDetails = asMap(getFirst(usage, "output_tokens_details", "outputTokensDetails"));
+        long cacheReadInputTokens = defaultLong(asLong(getFirst(inputDetails, "cached_tokens", "cachedTokens")));
         return new TokenUsage()
-                .setInputTokens(defaultLong(asLong(getFirst(usage, "input_tokens", "inputTokens"))))
+                .setInputTokens(freshInputTokens(
+                        defaultLong(asLong(getFirst(usage, "input_tokens", "inputTokens"))),
+                        cacheReadInputTokens))
                 .setOutputTokens(defaultLong(asLong(getFirst(usage, "output_tokens", "outputTokens"))))
                 .setTotalTokens(defaultLong(asLong(getFirst(usage, "total_tokens", "totalTokens"))))
-                .setCacheReadInputTokens(defaultLong(asLong(getFirst(inputDetails, "cached_tokens", "cachedTokens"))))
-                .setReasoningTokens(defaultLong(asLong(getFirst(outputDetails, "reasoning_tokens", "reasoningTokens"))));
+                .setCacheReadInputTokens(cacheReadInputTokens)
+                .setReasoningTokens(defaultLong(asLong(getFirst(outputDetails, "reasoning_tokens", "reasoningTokens"))))
+                .setInputIsDisjoint(true);
+    }
+
+    private static long freshInputTokens(long rawInputTokens, long cacheReadInputTokens) {
+        return Math.max(rawInputTokens - cacheReadInputTokens, 0L);
     }
 
     private static String firstChoiceFinishReason(Map<String, Object> responsePayload) {

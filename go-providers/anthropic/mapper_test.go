@@ -69,8 +69,11 @@ func TestFromRequestResponse(t *testing.T) {
 	if generation.SystemPrompt != "Be precise." {
 		t.Fatalf("unexpected system prompt: %q", generation.SystemPrompt)
 	}
-	if generation.Usage.TotalTokens != 162 {
-		t.Fatalf("expected total tokens 162, got %d", generation.Usage.TotalTokens)
+	if generation.Usage.InputTokens != 120 {
+		t.Fatalf("expected input tokens 120, got %d", generation.Usage.InputTokens)
+	}
+	if generation.Usage.TotalTokens != 202 {
+		t.Fatalf("expected total tokens 202, got %d", generation.Usage.TotalTokens)
 	}
 	if generation.Usage.CacheReadInputTokens != 30 {
 		t.Fatalf("expected cache read input tokens 30, got %d", generation.Usage.CacheReadInputTokens)
@@ -304,8 +307,8 @@ func TestFromStream(t *testing.T) {
 	if generation.ResponseModel != "claude-sonnet-4-5" {
 		t.Fatalf("expected response model claude-sonnet-4-5, got %q", generation.ResponseModel)
 	}
-	if generation.Usage.TotalTokens != 105 {
-		t.Fatalf("expected total tokens 105, got %d", generation.Usage.TotalTokens)
+	if generation.Usage.TotalTokens != 117 {
+		t.Fatalf("expected total tokens 117, got %d", generation.Usage.TotalTokens)
 	}
 	if generation.MaxTokens == nil || *generation.MaxTokens != 512 {
 		t.Fatalf("expected max tokens 512, got %v", generation.MaxTokens)

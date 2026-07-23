@@ -80,6 +80,12 @@ func TestConformance_AnthropicSyncMapping(t *testing.T) {
 	if got := testkit.StringValue(t, exported, "input", 2, "role"); got != "MESSAGE_ROLE_TOOL" {
 		t.Fatalf("unexpected tool input role: got %q want %q", got, "MESSAGE_ROLE_TOOL")
 	}
+	if got := testkit.StringValue(t, exported, "usage", "input_tokens"); got != "120" {
+		t.Fatalf("unexpected usage.input_tokens: got %q want %q", got, "120")
+	}
+	if got := testkit.StringValue(t, exported, "usage", "total_tokens"); got != "202" {
+		t.Fatalf("unexpected usage.total_tokens: got %q want %q", got, "202")
+	}
 	if got := testkit.StringValue(t, exported, "usage", "cache_read_input_tokens"); got != "30" {
 		t.Fatalf("unexpected usage.cache_read_input_tokens: got %q want %q", got, "30")
 	}
@@ -276,7 +282,7 @@ func TestConformance_MessageSyncNormalization(t *testing.T) {
 	if generation.StopReason != "end_turn" {
 		t.Fatalf("unexpected stop reason: %q", generation.StopReason)
 	}
-	if generation.Usage.TotalTokens != 162 || generation.Usage.CacheReadInputTokens != 30 || generation.Usage.CacheWriteInputTokens != 10 {
+	if generation.Usage.InputTokens != 120 || generation.Usage.TotalTokens != 202 || generation.Usage.CacheReadInputTokens != 30 || generation.Usage.CacheWriteInputTokens != 10 {
 		t.Fatalf("unexpected usage mapping: %#v", generation.Usage)
 	}
 	if generation.ThinkingEnabled == nil || !*generation.ThinkingEnabled {

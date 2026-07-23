@@ -97,6 +97,10 @@ public final class Agento11yClient implements AutoCloseable {
     static final String METRIC_TOKEN_TYPE_CACHE_READ = "cache_read";
     static final String METRIC_TOKEN_TYPE_CACHE_WRITE = "cache_write";
     static final String METRIC_TOKEN_TYPE_REASONING = "reasoning";
+    // Marks token-usage series already normalized to the disjoint contract so
+    // consumers skip cache-inclusive normalization; absence means legacy telemetry.
+    static final String METRIC_ATTR_TOKEN_SEMANTICS = "gen_ai.token.semantics";
+    static final String METRIC_TOKEN_SEMANTICS_DISJOINT = "disjoint";
 
     static final List<Double> DURATION_BUCKETS_SECONDS = List.of(
             0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28,
@@ -1372,9 +1376,7 @@ public final class Agento11yClient implements AutoCloseable {
         if (value == 0L) {
             return;
         }
-        tokenUsageHistogram.record(
-                (double) value,
-                metricIdentityAttributes(
+        AttributesBuilder attrs = metricIdentityAttributes(
                         generation.getModel() == null ? "" : generation.getModel().getProvider(),
                         generation.getModel() == null ? "" : generation.getModel().getName(),
                         generation.getAgentName(),
@@ -1382,9 +1384,12 @@ public final class Agento11yClient implements AutoCloseable {
                 )
                         .put(SPAN_ATTR_OPERATION_NAME, operationName(generation))
                         .putAll(clientTagAttributes())
-                        .put(METRIC_ATTR_TOKEN_TYPE, tokenType)
-                        .build()
-        );
+                        .put(METRIC_ATTR_TOKEN_TYPE, tokenType);
+        TokenUsage usage = generation.getUsage();
+        if (usage != null && usage.getInputIsDisjoint()) {
+            attrs.put(METRIC_ATTR_TOKEN_SEMANTICS, METRIC_TOKEN_SEMANTICS_DISJOINT);
+        }
+        tokenUsageHistogram.record((double) value, attrs.build());
     }
 
     void recordToolExecutionMetrics(ToolExecutionStart seed, Instant startedAt, Instant completedAt, Throwable finalError) {

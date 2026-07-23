@@ -88,12 +88,27 @@ public sealed class ToolDefinition
 
 public sealed class TokenUsage
 {
+    /// <summary>
+    /// Fresh, non-cached input tokens. Cache-inclusive provider adapters subtract
+    /// <see cref="CacheReadInputTokens" /> before setting this field.
+    /// </summary>
     public long InputTokens { get; set; }
     public long OutputTokens { get; set; }
     public long TotalTokens { get; set; }
     public long CacheReadInputTokens { get; set; }
     public long CacheWriteInputTokens { get; set; }
+    /// <summary>
+    /// Provider-reported reasoning/thinking tokens. This may overlap with
+    /// <see cref="OutputTokens" /> depending on provider semantics.
+    /// </summary>
     public long ReasoningTokens { get; set; }
+
+    /// <summary>
+    /// Marks that this usage already follows the disjoint contract (fresh input,
+    /// additive cache buckets) because an SDK-owned adapter produced it. Consumers
+    /// must not re-derive fresh input when true. Manual usage leaves it false.
+    /// </summary>
+    public bool InputIsDisjoint { get; set; }
 
     public TokenUsage Normalize()
     {
@@ -103,7 +118,7 @@ public sealed class TokenUsage
         }
 
         var clone = Clone();
-        clone.TotalTokens = clone.InputTokens + clone.OutputTokens;
+        clone.TotalTokens = clone.InputTokens + clone.OutputTokens + clone.CacheReadInputTokens + clone.CacheWriteInputTokens;
         return clone;
     }
 
@@ -117,6 +132,7 @@ public sealed class TokenUsage
             CacheReadInputTokens = CacheReadInputTokens,
             CacheWriteInputTokens = CacheWriteInputTokens,
             ReasoningTokens = ReasoningTokens,
+            InputIsDisjoint = InputIsDisjoint,
         };
     }
 }

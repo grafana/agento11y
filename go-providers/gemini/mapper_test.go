@@ -128,6 +128,9 @@ func TestFromRequestResponse(t *testing.T) {
 	if generation.Usage.TotalTokens != 160 {
 		t.Fatalf("expected total tokens 160, got %d", generation.Usage.TotalTokens)
 	}
+	if generation.Usage.InputTokens != 108 {
+		t.Fatalf("expected fresh input tokens 108, got %d", generation.Usage.InputTokens)
+	}
 	if generation.Usage.CacheReadInputTokens != 12 {
 		t.Fatalf("expected cache read tokens 12, got %d", generation.Usage.CacheReadInputTokens)
 	}
@@ -502,5 +505,20 @@ func TestExtractSystemPromptPreservesEmptySegments(t *testing.T) {
 	}
 	if got := extractSystemPrompt(config); got != "\n\nsecond" {
 		t.Fatalf("expected preserved empty segment separator, got %q", got)
+	}
+}
+
+func TestMapUsageClampsFreshInputTokens(t *testing.T) {
+	usage := mapUsage(&genai.GenerateContentResponseUsageMetadata{
+		PromptTokenCount:        10,
+		CandidatesTokenCount:    5,
+		TotalTokenCount:         15,
+		CachedContentTokenCount: 30,
+	})
+	if usage.InputTokens != 0 {
+		t.Fatalf("expected fresh input tokens to clamp to 0, got %d", usage.InputTokens)
+	}
+	if usage.CacheReadInputTokens != 30 {
+		t.Fatalf("expected cache read tokens 30, got %d", usage.CacheReadInputTokens)
 	}
 }

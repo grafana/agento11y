@@ -114,8 +114,12 @@ func TestProcess_SinglePromptResponse(t *testing.T) {
 	if gen.Usage.OutputTokens != 50 {
 		t.Errorf("OutputTokens = %d", gen.Usage.OutputTokens)
 	}
-	if gen.Usage.TotalTokens != gen.Usage.InputTokens+gen.Usage.OutputTokens {
-		t.Errorf("TotalTokens = %d, want %d", gen.Usage.TotalTokens, gen.Usage.InputTokens+gen.Usage.OutputTokens)
+	wantTotal := gen.Usage.InputTokens + gen.Usage.OutputTokens + gen.Usage.CacheReadInputTokens + gen.Usage.CacheWriteInputTokens
+	if gen.Usage.TotalTokens != wantTotal {
+		t.Errorf("TotalTokens = %d, want %d", gen.Usage.TotalTokens, wantTotal)
+	}
+	if !gen.Usage.InputIsDisjoint {
+		t.Errorf("InputIsDisjoint = false, want true")
 	}
 	if gen.StopReason != "end_turn" {
 		t.Errorf("StopReason = %q", gen.StopReason)

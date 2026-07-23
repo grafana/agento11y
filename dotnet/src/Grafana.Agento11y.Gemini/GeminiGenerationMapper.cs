@@ -488,16 +488,24 @@ public static class GeminiGenerationMapper
         var outputTokens = usage.CandidatesTokenCount ?? 0;
         var toolUsePromptTokens = usage.ToolUsePromptTokenCount ?? 0;
         var reasoningTokens = usage.ThoughtsTokenCount ?? 0;
-        var totalTokens = usage.TotalTokenCount ?? (inputTokens + outputTokens + toolUsePromptTokens + reasoningTokens);
+        var cacheReadInputTokens = usage.CachedContentTokenCount ?? 0;
+        var freshInputTokens = FreshInputTokens(inputTokens, cacheReadInputTokens);
+        var totalTokens = usage.TotalTokenCount ?? (freshInputTokens + outputTokens + cacheReadInputTokens + toolUsePromptTokens + reasoningTokens);
 
         return new TokenUsage
         {
-            InputTokens = inputTokens,
+            InputTokens = freshInputTokens,
             OutputTokens = outputTokens,
             TotalTokens = totalTokens,
-            CacheReadInputTokens = usage.CachedContentTokenCount ?? 0,
+            CacheReadInputTokens = cacheReadInputTokens,
             ReasoningTokens = reasoningTokens,
+            InputIsDisjoint = true,
         };
+    }
+
+    private static long FreshInputTokens(long rawInputTokens, long cacheReadInputTokens)
+    {
+        return Math.Max(rawInputTokens - cacheReadInputTokens, 0);
     }
 
     private static Dictionary<string, object?> ThinkingMetadata(

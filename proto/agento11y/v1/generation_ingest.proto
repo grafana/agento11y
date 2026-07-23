@@ -96,14 +96,37 @@ message ToolDefinition {
 }
 
 message TokenUsage {
+  // Fresh, non-cached input tokens. Provider adapters whose raw prompt/input
+  // total includes cached tokens must subtract cache_read_input_tokens before
+  // setting this field.
   int64 input_tokens = 1;
+  // Output tokens as reported by the provider. For providers that include
+  // reasoning/thinking tokens in output totals, keep that provider semantics
+  // here and also populate reasoning_tokens when available.
   int64 output_tokens = 2;
+  // Provider-reported total when available. If derived by an SDK, use the
+  // disjoint bucket sum: input + output + cache_read + cache_write.
   int64 total_tokens = 3;
+  // Cached input tokens read from the provider cache.
   int64 cache_read_input_tokens = 4;
+  // Input tokens written to the provider cache.
   int64 cache_write_input_tokens = 5;
+  // Provider-reported reasoning/thinking tokens when available.
+  // This may overlap with output_tokens depending on provider semantics.
+  // Treat it as an explanatory sub-bucket, not an additive total bucket.
   int64 reasoning_tokens = 6;
   reserved 7;
   reserved "cache_creation_input_tokens";
+  // Self-describing marker set by SDK-owned adapters that have already
+  // normalized this usage to the disjoint contract (input_tokens is fresh and
+  // cache buckets are additive). Consumers must NOT re-derive fresh input
+  // (e.g. subtract cache_read from input) when this is true.
+  //
+  // When false/absent the usage may be legacy cache-inclusive telemetry from an
+  // older SDK, or a caller's manual usage the SDK did not reinterpret; consumers
+  // may fall back to provider-name heuristics for those. SDK provider/framework
+  // wrappers set this true; manual user-supplied usage leaves it false.
+  bool input_is_disjoint = 8;
 }
 
 enum ArtifactKind {

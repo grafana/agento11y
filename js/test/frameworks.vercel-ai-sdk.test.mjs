@@ -64,7 +64,8 @@ test('vercel ai sdk generateText hooks record single-step success', async () => 
   assert.equal(generation.model.name, 'gpt-5');
   assert.equal(generation.input[0].content, 'hello');
   assert.equal(generation.output[0].content, 'world');
-  assert.equal(generation.usage.inputTokens, 10);
+  // Fresh input excludes cache reads/writes: inputTokens(10) - cacheRead(2) - cacheWrite(1) = 7.
+  assert.equal(generation.usage.inputTokens, 7);
   assert.equal(generation.usage.outputTokens, 5);
   assert.equal(generation.usage.totalTokens, 15);
   assert.equal(generation.usage.cacheReadInputTokens, 2);

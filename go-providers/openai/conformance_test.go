@@ -438,7 +438,7 @@ func TestConformance_ChatCompletionsSyncNormalization(t *testing.T) {
 	if generation.StopReason != "tool_calls" {
 		t.Fatalf("unexpected stop reason: %q", generation.StopReason)
 	}
-	if generation.Usage.TotalTokens != 162 || generation.Usage.CacheReadInputTokens != 8 || generation.Usage.ReasoningTokens != 5 {
+	if generation.Usage.InputTokens != 112 || generation.Usage.TotalTokens != 162 || generation.Usage.CacheReadInputTokens != 8 || generation.Usage.ReasoningTokens != 5 {
 		t.Fatalf("unexpected usage mapping: %#v", generation.Usage)
 	}
 	if generation.ThinkingEnabled == nil || !*generation.ThinkingEnabled {
@@ -645,7 +645,7 @@ func TestConformance_ResponsesSyncNormalization(t *testing.T) {
 	if generation.ThinkingEnabled == nil || !*generation.ThinkingEnabled {
 		t.Fatalf("expected thinking enabled true, got %v", generation.ThinkingEnabled)
 	}
-	if generation.Usage.TotalTokens != 100 || generation.Usage.CacheReadInputTokens != 2 || generation.Usage.ReasoningTokens != 3 {
+	if generation.Usage.InputTokens != 78 || generation.Usage.TotalTokens != 100 || generation.Usage.CacheReadInputTokens != 2 || generation.Usage.ReasoningTokens != 3 {
 		t.Fatalf("unexpected usage mapping: %#v", generation.Usage)
 	}
 	if len(generation.Output) != 2 {

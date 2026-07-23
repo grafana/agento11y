@@ -509,22 +509,26 @@ func mapSystemPrompt(system []asdk.BetaTextBlockParam) string {
 }
 
 func mapUsage(usage asdk.BetaUsage) agento11y.TokenUsage {
+	totalTokens := usage.InputTokens + usage.OutputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 	return agento11y.TokenUsage{
 		InputTokens:           usage.InputTokens,
 		OutputTokens:          usage.OutputTokens,
-		TotalTokens:           usage.InputTokens + usage.OutputTokens,
+		TotalTokens:           totalTokens,
 		CacheReadInputTokens:  usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheCreationInputTokens,
+		InputIsDisjoint:       true,
 	}
 }
 
 func mapDeltaUsage(usage asdk.BetaMessageDeltaUsage) agento11y.TokenUsage {
+	totalTokens := usage.InputTokens + usage.OutputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 	return agento11y.TokenUsage{
 		InputTokens:           usage.InputTokens,
 		OutputTokens:          usage.OutputTokens,
-		TotalTokens:           usage.InputTokens + usage.OutputTokens,
+		TotalTokens:           totalTokens,
 		CacheReadInputTokens:  usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheCreationInputTokens,
+		InputIsDisjoint:       true,
 	}
 }
 

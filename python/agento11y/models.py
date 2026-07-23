@@ -95,7 +95,13 @@ class ToolDefinition:
 
 @dataclass(slots=True)
 class TokenUsage:
-    """Token usage counters for request/response."""
+    """Token usage counters for request/response.
+
+    ``input_tokens`` is fresh, non-cached input. Cache-inclusive provider
+    adapters subtract ``cache_read_input_tokens`` before setting it.
+    ``reasoning_tokens`` is an explanatory sub-bucket and may overlap with
+    ``output_tokens`` depending on provider semantics.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
@@ -103,6 +109,10 @@ class TokenUsage:
     cache_read_input_tokens: int = 0
     cache_write_input_tokens: int = 0
     reasoning_tokens: int = 0
+    #: Set by SDK-owned adapters that already normalized this usage to the
+    #: disjoint contract (fresh input, additive cache buckets). Consumers must
+    #: not re-derive fresh input when true. Manual usage leaves it False.
+    input_is_disjoint: bool = False
 
     def normalize(self) -> TokenUsage:
         """Returns a copy with `total_tokens` auto-filled when missing."""
@@ -114,9 +124,15 @@ class TokenUsage:
             cache_read_input_tokens=self.cache_read_input_tokens,
             cache_write_input_tokens=self.cache_write_input_tokens,
             reasoning_tokens=self.reasoning_tokens,
+            input_is_disjoint=self.input_is_disjoint,
         )
         if normalized.total_tokens == 0:
-            normalized.total_tokens = normalized.input_tokens + normalized.output_tokens
+            normalized.total_tokens = (
+                normalized.input_tokens
+                + normalized.output_tokens
+                + normalized.cache_read_input_tokens
+                + normalized.cache_write_input_tokens
+            )
         return normalized
 
 

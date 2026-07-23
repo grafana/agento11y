@@ -39,7 +39,7 @@ test('anthropic messages wrapper maps strict request/response and records SYNC m
         usage: {
           input_tokens: 100,
           output_tokens: 20,
-          total_tokens: 120,
+          cache_read_input_tokens: 30,
           server_tool_use: {
             web_search_requests: 2,
           },
@@ -54,6 +54,9 @@ test('anthropic messages wrapper maps strict request/response and records SYNC m
   assert.equal(generation.temperature, 0.2);
   assert.equal(generation.topP, 0.85);
   assert.equal(generation.maxTokens, 320);
+  assert.equal(generation.usage.inputTokens, 100);
+  assert.equal(generation.usage.totalTokens, 150);
+  assert.equal(generation.usage.cacheReadInputTokens, 30);
   assert.equal(generation.metadata['agento11y.gen_ai.request.thinking.budget_tokens'], 2048);
   assert.equal(generation.metadata['agento11y.gen_ai.usage.server_tool_use.web_search_requests'], 2);
   assert.equal(generation.metadata['agento11y.gen_ai.usage.server_tool_use.total_requests'], 2);
@@ -101,6 +104,7 @@ test('gemini models wrapper maps strict request/response and records SYNC mode',
           promptTokenCount: 100,
           candidatesTokenCount: 20,
           totalTokenCount: 120,
+          cachedContentTokenCount: 12,
           thoughtsTokenCount: 6,
           toolUsePromptTokenCount: 5,
         },
@@ -117,6 +121,8 @@ test('gemini models wrapper maps strict request/response and records SYNC mode',
   assert.equal(generation.metadata['agento11y.gen_ai.request.thinking.budget_tokens'], 1536);
   assert.equal(generation.metadata['agento11y.gen_ai.request.thinking.level'], 'high');
   assert.equal(generation.metadata['agento11y.gen_ai.usage.tool_use_prompt_tokens'], 5);
+  assert.equal(generation.usage.inputTokens, 88);
+  assert.equal(generation.usage.cacheReadInputTokens, 12);
   assert.equal(generation.artifacts, undefined);
 });
 
@@ -262,6 +268,8 @@ test('openai chat completions wrapper maps strict request/response and records S
   assert.equal(generation.topP, 0.85);
   assert.equal(generation.stopReason, 'stop');
   assert.equal(generation.metadata['agento11y.gen_ai.request.thinking.budget_tokens'], 1024);
+  assert.equal(generation.usage.inputTokens, 97);
+  assert.equal(generation.usage.cacheReadInputTokens, 3);
   assert.equal(generation.artifacts, undefined);
 });
 
@@ -358,6 +366,8 @@ test('openai responses wrapper maps strict request/response and records SYNC mod
   assert.equal(generation.topP, 0.9);
   assert.equal(generation.stopReason, 'stop');
   assert.equal(generation.metadata['agento11y.gen_ai.request.thinking.budget_tokens'], 512);
+  assert.equal(generation.usage.inputTokens, 78);
+  assert.equal(generation.usage.cacheReadInputTokens, 2);
 });
 
 test('openai responses stream wrapper records STREAM mode with stream event artifacts', async () => {
@@ -881,6 +891,7 @@ test('openai chat mapper aggregates system/developer, preserves tool role, and a
   assert.equal(mappedDefault.topP, 0.8);
   assert.equal(mappedDefault.thinkingEnabled, true);
   assert.equal(mappedDefault.metadata['agento11y.gen_ai.request.thinking.budget_tokens'], 1024);
+  assert.equal(mappedDefault.usage.inputTokens, 10);
   assert.equal(mappedDefault.artifacts, undefined);
   assert.equal(mappedDefault.output[0].role, 'assistant');
 
@@ -973,6 +984,8 @@ test('openai responses mapper maps input/output/usage and stream fallback from e
   assert.equal(mapped.stopReason, 'stop');
   assert.equal(mapped.thinkingEnabled, true);
   assert.equal(mapped.metadata['agento11y.gen_ai.request.thinking.budget_tokens'], 640);
+  assert.equal(mapped.usage.inputTokens, 78);
+  assert.equal(mapped.usage.cacheReadInputTokens, 2);
   assert.equal(mapped.usage.totalTokens, 100);
   assert.equal(mapped.output.length, 3);
   assert.equal(mapped.output[2].role, 'tool');
@@ -1044,6 +1057,58 @@ test('provider mappers expose thinking disabled when explicitly configured', () 
     },
   );
   assert.equal(geminiMapped.thinkingEnabled, false);
+});
+
+test('cache-inclusive provider mappers clamp fresh input tokens', () => {
+  const openAIChat = openai.chat.completions.fromRequestResponse(
+    { model: 'gpt-5', messages: [{ role: 'user', content: 'hi' }] },
+    {
+      id: 'resp-chat-clamp',
+      model: 'gpt-5',
+      choices: [],
+      usage: {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        prompt_tokens_details: { cached_tokens: 30 },
+      },
+    },
+  );
+  assert.equal(openAIChat.usage.inputTokens, 0);
+  assert.equal(openAIChat.usage.cacheReadInputTokens, 30);
+
+  const openAIResponses = openai.responses.fromRequestResponse(
+    { model: 'gpt-5', input: 'hi' },
+    {
+      id: 'resp-responses-clamp',
+      model: 'gpt-5',
+      output: [],
+      usage: {
+        input_tokens: 10,
+        output_tokens: 5,
+        input_tokens_details: { cached_tokens: 30 },
+      },
+    },
+  );
+  assert.equal(openAIResponses.usage.inputTokens, 0);
+  assert.equal(openAIResponses.usage.cacheReadInputTokens, 30);
+
+  const geminiMapped = gemini.models.fromRequestResponse(
+    'gemini-pro',
+    [{ role: 'user', parts: [{ text: 'hi' }] }],
+    undefined,
+    {
+      responseId: 'resp-gemini-clamp',
+      modelVersion: 'gemini-pro',
+      candidates: [],
+      usageMetadata: {
+        promptTokenCount: 10,
+        candidatesTokenCount: 5,
+        cachedContentTokenCount: 30,
+      },
+    },
+  );
+  assert.equal(geminiMapped.usage.inputTokens, 0);
+  assert.equal(geminiMapped.usage.cacheReadInputTokens, 30);
 });
 
 test('embedding mappers extract input counts, texts, usage, and dimensions', () => {

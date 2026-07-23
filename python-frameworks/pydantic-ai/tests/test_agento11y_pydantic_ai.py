@@ -306,11 +306,25 @@ def test_agento11y_pydantic_ai_capability_wrap_model_request() -> None:
         assert generation.model.provider == "openai"
         assert generation.conversation_id == "agento11y:framework:pydantic-ai:pydantic-run-42"
         assert generation.output[0].parts[0].text == "world"
-        assert generation.usage.input_tokens == 10
+        # pydantic-ai reports a cache-inclusive input: the raw input (10) already
+        # contains the 3 cache_read and 2 cache_write tokens, so raw_input + output
+        # (10 + 5) equals the disjoint total (15). That justifies subtracting BOTH
+        # cache buckets to recover fresh input (10 - 3 - 2 = 5).
+        assert 10 + 5 == 15  # raw input + output == total (cache is inside input)
+        assert generation.usage.input_tokens == 5
         assert generation.usage.output_tokens == 5
         assert generation.usage.cache_read_input_tokens == 3
         assert generation.usage.cache_write_input_tokens == 2
         assert generation.usage.total_tokens == 15
+        # Disjoint contract: fresh input + all disjoint buckets reconstructs total.
+        assert (
+            generation.usage.input_tokens
+            + generation.usage.output_tokens
+            + generation.usage.cache_read_input_tokens
+            + generation.usage.cache_write_input_tokens
+            == generation.usage.total_tokens
+        )
+        assert generation.usage.input_is_disjoint is True
     finally:
         client.shutdown()
 

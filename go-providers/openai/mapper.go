@@ -326,13 +326,23 @@ func marshalFunctionSchema(function shared.FunctionDefinitionParam) []byte {
 }
 
 func mapUsage(usage osdk.CompletionUsage) agento11y.TokenUsage {
+	cacheReadInputTokens := usage.PromptTokensDetails.CachedTokens
 	return agento11y.TokenUsage{
-		InputTokens:          usage.PromptTokens,
+		InputTokens:          freshInputTokens(usage.PromptTokens, cacheReadInputTokens),
 		OutputTokens:         usage.CompletionTokens,
 		TotalTokens:          usage.TotalTokens,
-		CacheReadInputTokens: usage.PromptTokensDetails.CachedTokens,
+		CacheReadInputTokens: cacheReadInputTokens,
 		ReasoningTokens:      usage.CompletionTokensDetails.ReasoningTokens,
+		InputIsDisjoint:      true,
 	}
+}
+
+func freshInputTokens(rawInputTokens, cacheReadInputTokens int64) int64 {
+	fresh := rawInputTokens - cacheReadInputTokens
+	if fresh < 0 {
+		return 0
+	}
+	return fresh
 }
 
 func firstFinishReason(choices []osdk.ChatCompletionChoice) string {

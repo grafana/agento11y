@@ -356,7 +356,8 @@ func TestMapSetsUsageFromTokenSnapshot(t *testing.T) {
 
 	got := Map(Inputs{Fragment: f, TokenSnapshot: snapshot, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: time.Unix(1, 0)})
 
-	if got.Generation.Usage.InputTokens != 160 ||
+	// Fresh input excludes cached reads: input_tokens(160) - cached_input_tokens(120) = 40.
+	if got.Generation.Usage.InputTokens != 40 ||
 		got.Generation.Usage.CacheReadInputTokens != 120 ||
 		got.Generation.Usage.OutputTokens != 30 ||
 		got.Generation.Usage.ReasoningTokens != 9 ||

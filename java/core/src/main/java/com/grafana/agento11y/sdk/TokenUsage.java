@@ -1,6 +1,13 @@
 package com.grafana.agento11y.sdk;
 
-/** Token usage counters. */
+/**
+ * Token usage counters.
+ *
+ * <p>{@code inputTokens} is fresh, non-cached input. Cache-inclusive provider
+ * adapters subtract {@code cacheReadInputTokens} before setting it.
+ * {@code reasoningTokens} is an explanatory sub-bucket and may overlap with
+ * {@code outputTokens} depending on provider semantics.
+ */
 public final class TokenUsage {
     private long inputTokens;
     private long outputTokens;
@@ -8,6 +15,7 @@ public final class TokenUsage {
     private long cacheReadInputTokens;
     private long cacheWriteInputTokens;
     private long reasoningTokens;
+    private boolean inputIsDisjoint;
 
     public long getInputTokens() {
         return inputTokens;
@@ -63,10 +71,24 @@ public final class TokenUsage {
         return this;
     }
 
+    /**
+     * Marks that this usage already follows the disjoint contract (fresh input,
+     * additive cache buckets) because an SDK-owned adapter produced it. Consumers
+     * must not re-derive fresh input when true. Manual usage leaves it false.
+     */
+    public boolean getInputIsDisjoint() {
+        return inputIsDisjoint;
+    }
+
+    public TokenUsage setInputIsDisjoint(boolean inputIsDisjoint) {
+        this.inputIsDisjoint = inputIsDisjoint;
+        return this;
+    }
+
     public TokenUsage normalized() {
         TokenUsage out = copy();
         if (out.totalTokens == 0) {
-            out.totalTokens = out.inputTokens + out.outputTokens;
+            out.totalTokens = out.inputTokens + out.outputTokens + out.cacheReadInputTokens + out.cacheWriteInputTokens;
         }
         return out;
     }
@@ -78,6 +100,7 @@ public final class TokenUsage {
                 .setTotalTokens(totalTokens)
                 .setCacheReadInputTokens(cacheReadInputTokens)
                 .setCacheWriteInputTokens(cacheWriteInputTokens)
-                .setReasoningTokens(reasoningTokens);
+                .setReasoningTokens(reasoningTokens)
+                .setInputIsDisjoint(inputIsDisjoint);
     }
 }

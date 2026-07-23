@@ -71,6 +71,10 @@ public sealed partial class Agento11yClient : IAsyncDisposable
     internal const string MetricTokenTypeCacheRead = "cache_read";
     internal const string MetricTokenTypeCacheWrite = "cache_write";
     internal const string MetricTokenTypeReasoning = "reasoning";
+    // Marks token-usage series already normalized to the disjoint contract so
+    // consumers skip cache-inclusive normalization; absence means legacy telemetry.
+    internal const string MetricAttrTokenSemantics = "gen_ai.token.semantics";
+    internal const string MetricTokenSemanticsDisjoint = "disjoint";
 
     internal static readonly double[] DurationBucketsSeconds =
     {
@@ -1638,15 +1642,26 @@ public sealed partial class Agento11yClient : IAsyncDisposable
             return;
         }
 
-        _tokenUsageHistogram.Record(
-            value,
-            WithMetricTags(generation.AgentVersion, [
+        KeyValuePair<string, object?>[] tags = generation.Usage.InputIsDisjoint
+            ?
+            [
                 new(SpanAttrOperationName, OperationName(generation)),
                 new(SpanAttrProviderName, generation.Model.Provider ?? string.Empty),
                 new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
                 new(SpanAttrAgentName, generation.AgentName ?? string.Empty),
                 new(MetricAttrTokenType, tokenType),
-            ]));
+                new(MetricAttrTokenSemantics, MetricTokenSemanticsDisjoint),
+            ]
+            :
+            [
+                new(SpanAttrOperationName, OperationName(generation)),
+                new(SpanAttrProviderName, generation.Model.Provider ?? string.Empty),
+                new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
+                new(SpanAttrAgentName, generation.AgentName ?? string.Empty),
+                new(MetricAttrTokenType, tokenType),
+            ];
+
+        _tokenUsageHistogram.Record(value, WithMetricTags(generation.AgentVersion, tags));
     }
 
     internal static KeyValuePair<string, object?>[] TagAttributes(IReadOnlyDictionary<string, string>? tags)

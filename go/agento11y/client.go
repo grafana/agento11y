@@ -229,6 +229,12 @@ const (
 	metricTokenTypeCacheRead    = "cache_read"
 	metricTokenTypeCacheWrite   = "cache_write"
 	metricTokenTypeReasoning    = "reasoning"
+	// metricAttrTokenSemantics marks token-usage series that already follow the
+	// disjoint contract (input is fresh, cache buckets additive). Consumers that
+	// normalize cache-inclusive providers must skip that normalization when this
+	// label is "disjoint"; absence means legacy cache-inclusive telemetry.
+	metricAttrTokenSemantics     = "gen_ai.token.semantics"
+	metricTokenSemanticsDisjoint = "disjoint"
 )
 
 // durationBucketsSeconds is the OTel GenAI semantic-convention bucket advice
@@ -2026,6 +2032,9 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 		)
 		tokenAttrs = append(tokenAttrs, tagAttrs...)
 		tokenAttrs = append(tokenAttrs, attribute.String(metricAttrTokenType, tokenType))
+		if generation.Usage.InputIsDisjoint {
+			tokenAttrs = append(tokenAttrs, attribute.String(metricAttrTokenSemantics, metricTokenSemanticsDisjoint))
+		}
 		c.instruments.tokenUsage.Record(ctx, value, metric.WithAttributes(tokenAttrs...))
 	}
 

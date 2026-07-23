@@ -136,6 +136,10 @@ _metric_token_type_output = "output"
 _metric_token_type_cache_read = "cache_read"
 _metric_token_type_cache_write = "cache_write"
 _metric_token_type_reasoning = "reasoning"
+# Marks token-usage series already normalized to the disjoint contract so
+# consumers skip cache-inclusive normalization; absence means legacy telemetry.
+_metric_attr_token_semantics = "gen_ai.token.semantics"
+_metric_token_semantics_disjoint = "disjoint"
 
 _DURATION_BUCKETS_SECONDS: tuple[float, ...] = (
     0.01,
@@ -1211,20 +1215,20 @@ class Client:
     def _record_token_usage(self, generation: Generation, token_type: str, value: int) -> None:
         if value == 0:
             return
-        self._token_usage_histogram.record(
-            value,
-            attributes={
-                _span_attr_operation_name: generation.operation_name,
-                **_metric_identity_attributes(
-                    generation.model.provider,
-                    generation.model.name,
-                    generation.agent_name,
-                    generation.agent_version,
-                ),
-                **self._client_tag_attributes(),
-                _metric_attr_token_type: token_type,
-            },
-        )
+        attributes = {
+            _span_attr_operation_name: generation.operation_name,
+            **_metric_identity_attributes(
+                generation.model.provider,
+                generation.model.name,
+                generation.agent_name,
+                generation.agent_version,
+            ),
+            **self._client_tag_attributes(),
+            _metric_attr_token_type: token_type,
+        }
+        if generation.usage.input_is_disjoint:
+            attributes[_metric_attr_token_semantics] = _metric_token_semantics_disjoint
+        self._token_usage_histogram.record(value, attributes=attributes)
 
     def _record_tool_execution_metrics(
         self,

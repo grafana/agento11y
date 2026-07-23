@@ -50,6 +50,10 @@ class AnthropicConformanceTest {
         assertThat(exporter.generations.get(0).getTopP()).isEqualTo(0.9);
         assertThat(exporter.generations.get(0).getToolChoice()).contains("weather");
         assertThat(exporter.generations.get(0).getThinkingEnabled()).isTrue();
+        assertThat(exporter.generations.get(0).getUsage().getInputTokens()).isEqualTo(11L);
+        assertThat(exporter.generations.get(0).getUsage().getCacheReadInputTokens()).isEqualTo(2L);
+        assertThat(exporter.generations.get(0).getUsage().getCacheWriteInputTokens()).isEqualTo(3L);
+        assertThat(exporter.generations.get(0).getUsage().getTotalTokens()).isEqualTo(23L);
         assertThat(exporter.generations.get(0).getMetadata().get("agento11y.gen_ai.request.thinking.budget_tokens")).isEqualTo(2048L);
         assertThat(exporter.generations.get(0).getMetadata().get("agento11y.gen_ai.usage.server_tool_use.web_search_requests")).isEqualTo(2L);
         assertThat(exporter.generations.get(0).getMetadata().get("agento11y.gen_ai.usage.server_tool_use.total_requests")).isEqualTo(2L);

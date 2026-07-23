@@ -992,7 +992,8 @@ def test_detailed_token_usage() -> None:
         client.flush()
 
         gen = exporter.requests[0].generations[0]
-        assert gen.usage.input_tokens == 100
+        # prompt_tokens (100) is cache-inclusive: fresh input = 100 - 30 cached = 70.
+        assert gen.usage.input_tokens == 70
         assert gen.usage.output_tokens == 50
         assert gen.usage.total_tokens == 150
         assert gen.usage.cache_read_input_tokens == 30

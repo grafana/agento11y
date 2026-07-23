@@ -75,12 +75,13 @@
           }
         ],
         "usage": {
-          "input_tokens": "200",
+          "input_tokens": "170",
           "output_tokens": "50",
           "total_tokens": "250",
           "cache_read_input_tokens": "30",
           "cache_write_input_tokens": "0",
-          "reasoning_tokens": "0"
+          "reasoning_tokens": "0",
+          "input_is_disjoint": true
         },
         "stop_reason": "end_turn",
         "started_at": "<NORMALIZED>",

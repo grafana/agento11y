@@ -351,13 +351,17 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 
 	completedAt, _ := time.Parse(time.RFC3339Nano, line.Timestamp)
 
+	// Claude Code reports Anthropic-style additive usage: InputTokens is already
+	// fresh (exclusive of cache), so it is disjoint-compliant as-is. Total is the
+	// disjoint bucket sum including cache reads/writes.
 	usage := agento11y.TokenUsage{
 		InputTokens:           msg.Usage.InputTokens,
 		OutputTokens:          msg.Usage.OutputTokens,
 		CacheReadInputTokens:  msg.Usage.CacheReadInputTokens,
 		CacheWriteInputTokens: msg.Usage.CacheCreationInputTokens,
+		InputIsDisjoint:       true,
 	}
-	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.CacheReadInputTokens + usage.CacheWriteInputTokens
 
 	gen := agento11y.Generation{
 		ID:                generationID(line),

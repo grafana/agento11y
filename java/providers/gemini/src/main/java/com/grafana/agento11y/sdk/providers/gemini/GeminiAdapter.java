@@ -533,16 +533,22 @@ public final class GeminiAdapter {
         long cacheRead = asLong(first(usagePayload, "cachedContentTokenCount", "cached_content_token_count"));
         long toolUsePrompt = asLong(first(usagePayload, "toolUsePromptTokenCount", "tool_use_prompt_token_count"));
         long reasoning = asLong(first(usagePayload, "thoughtsTokenCount", "thoughts_token_count"));
+        long freshInput = freshInputTokens(input, cacheRead);
         if (total == 0) {
-            total = input + output + toolUsePrompt + reasoning;
+            total = freshInput + output + cacheRead + toolUsePrompt + reasoning;
         }
 
         return new TokenUsage()
-                .setInputTokens(input)
+                .setInputTokens(freshInput)
                 .setOutputTokens(output)
                 .setTotalTokens(total)
                 .setCacheReadInputTokens(cacheRead)
-                .setReasoningTokens(reasoning);
+                .setReasoningTokens(reasoning)
+                .setInputIsDisjoint(true);
+    }
+
+    private static long freshInputTokens(long rawInputTokens, long cacheReadInputTokens) {
+        return Math.max(rawInputTokens - cacheReadInputTokens, 0L);
     }
 
     private static String normalizeStopReason(Map<String, Object> responsePayload) {

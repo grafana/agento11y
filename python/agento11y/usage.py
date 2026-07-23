@@ -26,6 +26,7 @@ def from_anthropic(raw: Any) -> TokenUsage:
         total_tokens=_as_int(_read(raw, "total_tokens")),
         cache_read_input_tokens=_as_int(_read(raw, "cache_read_input_tokens")),
         cache_write_input_tokens=cache_write,
+        input_is_disjoint=True,
     ).normalize()
 
 
@@ -33,19 +34,22 @@ def from_openai_chat(raw: Any) -> TokenUsage:
     """Extract usage from OpenAI Chat Completions (prompt_tokens / completion_tokens + nested details)."""
     if raw is None:
         return TokenUsage()
+    prompt_tokens = _as_int(_read(raw, "prompt_tokens"))
+    cache_read = _as_int(
+        _read(_read(raw, "prompt_tokens_details"), "cached_tokens"),
+    )
     return TokenUsage(
-        input_tokens=_as_int(_read(raw, "prompt_tokens")),
+        input_tokens=_fresh_input_tokens(prompt_tokens, cache_read),
         output_tokens=_as_int(_read(raw, "completion_tokens")),
         total_tokens=_as_int(_read(raw, "total_tokens")),
-        cache_read_input_tokens=_as_int(
-            _read(_read(raw, "prompt_tokens_details"), "cached_tokens"),
-        ),
+        cache_read_input_tokens=cache_read,
         cache_write_input_tokens=_as_int(
             _read(_read(raw, "prompt_tokens_details"), "cache_creation_tokens"),
         ),
         reasoning_tokens=_as_int(
             _read(_read(raw, "completion_tokens_details"), "reasoning_tokens"),
         ),
+        input_is_disjoint=True,
     ).normalize()
 
 
@@ -53,16 +57,19 @@ def from_openai_responses(raw: Any) -> TokenUsage:
     """Extract usage from OpenAI Responses API (input_tokens / output_tokens + nested details)."""
     if raw is None:
         return TokenUsage()
+    input_tokens = _as_int(_read(raw, "input_tokens"))
+    cache_read = _as_int(
+        _read(_read(raw, "input_tokens_details"), "cached_tokens"),
+    )
     return TokenUsage(
-        input_tokens=_as_int(_read(raw, "input_tokens")),
+        input_tokens=_fresh_input_tokens(input_tokens, cache_read),
         output_tokens=_as_int(_read(raw, "output_tokens")),
         total_tokens=_as_int(_read(raw, "total_tokens")),
-        cache_read_input_tokens=_as_int(
-            _read(_read(raw, "input_tokens_details"), "cached_tokens"),
-        ),
+        cache_read_input_tokens=cache_read,
         reasoning_tokens=_as_int(
             _read(_read(raw, "output_tokens_details"), "reasoning_tokens"),
         ),
+        input_is_disjoint=True,
     ).normalize()
 
 
@@ -76,11 +83,10 @@ def from_gemini(raw: Any) -> TokenUsage:
     total_tokens = _as_int(_read(raw, "total_token_count"))
     tool_use_prompt_tokens = _as_int(_read(raw, "tool_use_prompt_token_count"))
     reasoning_tokens = _as_int(_read(raw, "thoughts_token_count"))
-    input_tokens = prompt_tokens + tool_use_prompt_tokens
+    cache_read = _as_int(_read(raw, "cached_content_token_count"))
+    # Match Go/JS/.NET: fresh input excludes tool-use prompt tokens (metadata + total only).
+    input_tokens = _fresh_input_tokens(prompt_tokens, cache_read)
     output_tokens = candidate_tokens + reasoning_tokens
-
-    if total_tokens == 0:
-        total_tokens = input_tokens + output_tokens
 
     cache_write_raw = _read(raw, "cache_write_input_token_count")
     cache_write = (
@@ -90,13 +96,17 @@ def from_gemini(raw: Any) -> TokenUsage:
             _read(raw, "cache_creation_input_token_count"),
         )
     )
+    if total_tokens == 0:
+        total_tokens = input_tokens + output_tokens + cache_read + cache_write + tool_use_prompt_tokens
+
     return TokenUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
-        cache_read_input_tokens=_as_int(_read(raw, "cached_content_token_count")),
+        cache_read_input_tokens=cache_read,
         cache_write_input_tokens=cache_write,
         reasoning_tokens=reasoning_tokens,
+        input_is_disjoint=True,
     )
 
 
@@ -167,6 +177,12 @@ def _read(value: Any, key: str, default: Any = None) -> Any:
         return getattr(value, key)
 
     return default
+
+
+def _fresh_input_tokens(raw_input_tokens: int, cache_read_input_tokens: int) -> int:
+    """Convert cache-inclusive input totals into fresh-input tokens."""
+
+    return max(raw_input_tokens - cache_read_input_tokens, 0)
 
 
 def _as_int(value: Any) -> int:

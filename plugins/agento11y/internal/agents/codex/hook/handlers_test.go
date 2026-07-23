@@ -390,7 +390,8 @@ func TestStopExportsRolloutTokenUsage(t *testing.T) {
 		t.Fatalf("generations len = %d, want 1; body=%s", len(req.Generations), string(body))
 	}
 	usage := req.Generations[0].Usage
-	if jsonInt64(t, usage["input_tokens"]) != 160 ||
+	// Fresh input excludes cached reads: input_tokens(160) - cached_input_tokens(120) = 40.
+	if jsonInt64(t, usage["input_tokens"]) != 40 ||
 		jsonInt64(t, usage["cache_read_input_tokens"]) != 120 ||
 		jsonInt64(t, usage["output_tokens"]) != 30 ||
 		jsonInt64(t, usage["reasoning_tokens"]) != 9 ||
@@ -718,7 +719,8 @@ func TestStopRetrySweepPreservesSubagentLinkAndTokenUsage(t *testing.T) {
 	if len(retried.ParentGenerationIDs) != 1 || retried.ParentGenerationIDs[0] != parentGenerationID {
 		t.Errorf("retry ParentGenerationIDs = %v, want [%s]", retried.ParentGenerationIDs, parentGenerationID)
 	}
-	if jsonInt64(t, retried.Usage["input_tokens"]) != 17 ||
+	// Fresh input excludes cached reads: input_tokens(17) - cached_input_tokens(6) = 11.
+	if jsonInt64(t, retried.Usage["input_tokens"]) != 11 ||
 		jsonInt64(t, retried.Usage["cache_read_input_tokens"]) != 6 ||
 		jsonInt64(t, retried.Usage["output_tokens"]) != 5 ||
 		jsonInt64(t, retried.Usage["reasoning_tokens"]) != 2 ||

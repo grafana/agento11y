@@ -418,7 +418,8 @@ function mapAnthropicUsage(rawUsage: unknown): TokenUsage | undefined {
   if (totalTokens !== undefined) {
     out.totalTokens = totalTokens;
   } else if (inputTokens !== undefined || outputTokens !== undefined) {
-    out.totalTokens = (inputTokens ?? 0) + (outputTokens ?? 0);
+    out.totalTokens =
+      (inputTokens ?? 0) + (outputTokens ?? 0) + (cacheReadInputTokens ?? 0) + (cacheWriteInputTokens ?? 0);
   }
   if (cacheReadInputTokens !== undefined) {
     out.cacheReadInputTokens = cacheReadInputTokens;
@@ -427,7 +428,11 @@ function mapAnthropicUsage(rawUsage: unknown): TokenUsage | undefined {
     out.cacheWriteInputTokens = cacheWriteInputTokens;
   }
 
-  return Object.keys(out).length > 0 ? out : undefined;
+  if (Object.keys(out).length === 0) {
+    return undefined;
+  }
+  out.inputIsDisjoint = true;
+  return out;
 }
 
 function anthropicUsageMetadata(rawUsage: unknown): Record<string, unknown> | undefined {

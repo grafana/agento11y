@@ -29,7 +29,7 @@ class TestFromAnthropic:
         usage = from_anthropic(raw)
         assert usage.input_tokens == 100
         assert usage.output_tokens == 50
-        assert usage.total_tokens == 150  # normalized
+        assert usage.total_tokens == 165  # normalized from disjoint buckets
         assert usage.cache_read_input_tokens == 10
         # When both upstream fields are present, prefer cache_write_input_tokens.
         assert usage.cache_write_input_tokens == 5
@@ -86,9 +86,20 @@ class TestFromAnthropic:
         usage = from_anthropic(raw)
         assert usage.input_tokens == 80
         assert usage.output_tokens == 40
-        assert usage.total_tokens == 120
+        assert usage.total_tokens == 142
         assert usage.cache_read_input_tokens == 15
         assert usage.cache_write_input_tokens == 7
+
+    def test_additive_cache_read_does_not_reduce_input(self):
+        usage = from_anthropic(
+            {
+                "input_tokens": 100,
+                "output_tokens": 10,
+                "cache_read_input_tokens": 30,
+            }
+        )
+        assert usage.input_tokens == 100
+        assert usage.cache_read_input_tokens == 30
 
 
 class TestFromOpenAIChat:
@@ -106,7 +117,7 @@ class TestFromOpenAIChat:
             },
         }
         usage = from_openai_chat(raw)
-        assert usage.input_tokens == 200
+        assert usage.input_tokens == 150
         assert usage.output_tokens == 100
         assert usage.total_tokens == 300
         assert usage.cache_read_input_tokens == 50
@@ -135,6 +146,17 @@ class TestFromOpenAIChat:
         usage = from_openai_chat(raw)
         assert usage.total_tokens == 225
 
+    def test_cache_inclusive_input_is_clamped(self):
+        usage = from_openai_chat(
+            {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "prompt_tokens_details": {"cached_tokens": 30},
+            }
+        )
+        assert usage.input_tokens == 0
+        assert usage.cache_read_input_tokens == 30
+
     def test_none(self):
         assert from_openai_chat(None) == TokenUsage()
 
@@ -152,6 +174,7 @@ class TestFromOpenAIChat:
             ),
         )
         usage = from_openai_chat(raw)
+        assert usage.input_tokens == 150
         assert usage.cache_read_input_tokens == 50
         assert usage.cache_write_input_tokens == 10
         assert usage.reasoning_tokens == 25
@@ -167,7 +190,7 @@ class TestFromOpenAIResponses:
             "output_tokens_details": {"reasoning_tokens": 40},
         }
         usage = from_openai_responses(raw)
-        assert usage.input_tokens == 300
+        assert usage.input_tokens == 220
         assert usage.output_tokens == 150
         assert usage.total_tokens == 450
         assert usage.cache_read_input_tokens == 80
@@ -188,6 +211,17 @@ class TestFromOpenAIResponses:
         usage = from_openai_responses(raw)
         assert usage.total_tokens == 280
 
+    def test_cache_inclusive_input_is_clamped(self):
+        usage = from_openai_responses(
+            {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "input_tokens_details": {"cached_tokens": 30},
+            }
+        )
+        assert usage.input_tokens == 0
+        assert usage.cache_read_input_tokens == 30
+
     def test_none(self):
         assert from_openai_responses(None) == TokenUsage()
 
@@ -205,7 +239,7 @@ class TestFromGemini:
             "tool_use_prompt_token_count": 15,
         }
         usage = from_gemini(raw)
-        assert usage.input_tokens == 515
+        assert usage.input_tokens == 440
         assert usage.output_tokens == 285
         assert usage.total_tokens == 800
         assert usage.cache_read_input_tokens == 60
@@ -222,9 +256,20 @@ class TestFromGemini:
             "tool_use_prompt_token_count": 10,
         }
         usage = from_gemini(raw)
-        assert usage.input_tokens == 110
+        assert usage.input_tokens == 100
         assert usage.output_tokens == 70
-        assert usage.total_tokens == 180  # 100 + 50 + 10 + 20
+        assert usage.total_tokens == 180  # fresh 100 + output 70 + tool_use 10
+
+    def test_cache_inclusive_input_is_clamped(self):
+        usage = from_gemini(
+            {
+                "prompt_token_count": 10,
+                "candidates_token_count": 5,
+                "cached_content_token_count": 30,
+            }
+        )
+        assert usage.input_tokens == 0
+        assert usage.cache_read_input_tokens == 30
 
     def test_partial(self):
         raw = {
@@ -276,7 +321,7 @@ class TestMapUsage:
             "completion_tokens_details": {"reasoning_tokens": 30},
         }
         usage = map_usage(raw)
-        assert usage.input_tokens == 200
+        assert usage.input_tokens == 150
         assert usage.cache_read_input_tokens == 50
         assert usage.reasoning_tokens == 30
 

@@ -368,6 +368,7 @@ def _extract_detailed_usage(response_obj: Any, slo: dict[str, Any]) -> TokenUsag
         input_tokens=slo.get("prompt_tokens") or 0,
         output_tokens=slo.get("completion_tokens") or 0,
         total_tokens=slo.get("total_tokens") or 0,
+        input_is_disjoint=True,
     )
 
     if response_obj is None:
@@ -381,6 +382,10 @@ def _extract_detailed_usage(response_obj: Any, slo: dict[str, Any]) -> TokenUsag
     usage.cache_read_input_tokens = detail.cache_read_input_tokens
     usage.cache_write_input_tokens = detail.cache_write_input_tokens
     usage.reasoning_tokens = detail.reasoning_tokens
+    # SLO prompt_tokens are OpenAI-style cache-inclusive counts (cached reads are part
+    # of prompt_tokens). Subtract cache reads to recover fresh, non-cached input so the
+    # disjoint cache_read bucket does not double-count. total_tokens is invariant.
+    usage.input_tokens = max(usage.input_tokens - detail.cache_read_input_tokens, 0)
     return usage
 
 

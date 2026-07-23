@@ -45,6 +45,7 @@ def generation_to_proto(generation: Generation) -> agento11y_pb2.Generation:
             cache_read_input_tokens=generation.usage.cache_read_input_tokens,
             cache_write_input_tokens=generation.usage.cache_write_input_tokens,
             reasoning_tokens=generation.usage.reasoning_tokens,
+            input_is_disjoint=generation.usage.input_is_disjoint,
         ),
         stop_reason=generation.stop_reason,
         tags=dict(generation.tags),

@@ -159,12 +159,17 @@ func usageFields(snapshot *codexlog.TokenSnapshot, metadata map[string]any) (age
 	if snapshot == nil || !hasPositiveCodexUsage(snapshot.TurnUsage) {
 		return agento11y.TokenUsage{}, metadata
 	}
+	// Codex reports OpenAI-style cache-inclusive input_tokens: cached_input_tokens
+	// is a subset of input_tokens (total_tokens == input_tokens + output_tokens).
+	// Subtract cached reads to recover fresh, non-cached input for the disjoint
+	// TokenUsage contract; total_tokens is invariant under this rebucketing.
 	usage := agento11y.TokenUsage{
-		InputTokens:          snapshot.TurnUsage.InputTokens,
+		InputTokens:          max(snapshot.TurnUsage.InputTokens-snapshot.TurnUsage.CachedInputTokens, 0),
 		OutputTokens:         snapshot.TurnUsage.OutputTokens,
 		TotalTokens:          snapshot.TurnUsage.TotalTokens,
 		CacheReadInputTokens: snapshot.TurnUsage.CachedInputTokens,
 		ReasoningTokens:      snapshot.TurnUsage.ReasoningOutputTokens,
+		InputIsDisjoint:      true,
 	}
 	if metadata == nil {
 		metadata = map[string]any{}
