@@ -1,4 +1,4 @@
-"""Core typed models for the Sigil Python SDK."""
+"""Core typed models for the agento11y Python SDK."""
 
 from __future__ import annotations
 
@@ -398,7 +398,7 @@ class ConversationRatingInput:
 
 @dataclass(slots=True)
 class ConversationRating:
-    """Conversation rating event returned by Sigil."""
+    """Conversation rating event returned by Agent Observability."""
 
     rating_id: str
     conversation_id: str
@@ -493,7 +493,7 @@ def tool_result_message(tool_call_id: str, content: str) -> Message:
 # ---------------------------------------------------------------------------
 # Offline evaluation: experiments and scores
 #
-# These models map to the Sigil experiment and score APIs (HTTP):
+# These models map to the Agent Observability experiment and score APIs (HTTP):
 #   POST   /api/v1/experiment-runs:upsert
 #   POST   /api/v1/experiment-runs/{run_id}:finalize
 #   GET    /api/v1/eval/experiments/{run_id}
@@ -527,8 +527,8 @@ class ExperimentSource(str, Enum):
 class ScoreValue:
     """A single typed score value. Exactly one field must be set.
 
-    The boolean field serializes to the JSON key ``bool`` to match the Sigil
-    score schema, while staying a valid Python attribute name (``boolean``).
+    The boolean field serializes to the JSON key ``bool`` to match the
+    Agent Observability score schema, while staying a valid Python attribute name (``boolean``).
     """
 
     number: float | None = None
@@ -661,7 +661,7 @@ class CreateExperimentRequest:
 
 @dataclass(slots=True)
 class Experiment:
-    """An experiment run as returned by Sigil."""
+    """An experiment run as returned by Agent Observability."""
 
     run_id: str
     name: str

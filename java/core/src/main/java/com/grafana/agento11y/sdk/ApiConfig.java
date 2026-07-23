@@ -1,6 +1,6 @@
 package com.grafana.agento11y.sdk;
 
-/** Sigil HTTP API settings used by non-ingest helper endpoints. */
+/** Agent Observability HTTP API settings used by non-ingest helper endpoints. */
 public final class ApiConfig {
     private String endpoint = "http://localhost:8080";
 

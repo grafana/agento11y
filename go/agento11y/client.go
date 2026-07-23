@@ -32,12 +32,12 @@ func UserAgent() string {
 	return sdkUserAgentProduct + "/" + Version
 }
 
-// Config controls Sigil client behavior.
+// Config controls agento11y client behavior.
 type Config struct {
 	GenerationExport GenerationExportConfig
 	API              APIConfig
 	EmbeddingCapture EmbeddingCaptureConfig
-	// Hooks controls synchronous hook evaluation against the Sigil API
+	// Hooks controls synchronous hook evaluation against the Agent Observability API
 	// (preflight/postflight guardrails). Disabled by default; callers must
 	// explicitly opt in by setting Hooks.Enabled = true.
 	Hooks HooksConfig

@@ -153,7 +153,7 @@ func experimentRunFromContext(ctx context.Context) (*ExperimentRun, bool) {
 	return run, ok && run != nil
 }
 
-// WithExperimentRunID stores a Sigil experiment run ID in the context.
+// WithExperimentRunID stores an Agent Observability experiment run ID in the context.
 // StartGeneration and StartStreamingGeneration read it and tag normal
 // instrumentation with experiment.run_id / experiment_run_id.
 //

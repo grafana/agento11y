@@ -512,7 +512,7 @@ auth: {
 The SDK only auto-loads `AGENTO11Y_*` env vars (`AGENTO11Y_ENDPOINT`, `AGENTO11Y_PROTOCOL`, `AGENTO11Y_AUTH_MODE`, `AGENTO11Y_AUTH_TOKEN`, etc.) when you call `new Agento11yClient()`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:
 
 ```ts
-const generationBearerToken = (process.env.MY_APP_SIGIL_TOKEN ?? "").trim();
+const generationBearerToken = (process.env.MY_APP_AGENTO11Y_TOKEN ?? "").trim();
 
 const client = new Agento11yClient({
   generationExport: {

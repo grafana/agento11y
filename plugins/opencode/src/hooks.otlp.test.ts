@@ -78,7 +78,9 @@ async function startAgento11yServer(): Promise<{
     server.listen(0, "127.0.0.1", () => {
       const addr = server.address();
       if (!addr || typeof addr === "string") {
-        throw new Error("Sigil server did not bind to a TCP port");
+        throw new Error(
+          "Agent Observability server did not bind to a TCP port",
+        );
       }
       resolve({ server, baseUrl: `http://127.0.0.1:${addr.port}` });
     });
@@ -276,7 +278,7 @@ describe("createAgento11yHooks OTLP wiring", () => {
     });
   }
 
-  it("forwards Sigil SDK spans and metrics through the configured OTLP endpoint", async () => {
+  it("forwards agento11y SDK spans and metrics through the configured OTLP endpoint", async () => {
     await runOneTurn(true);
 
     const traceReqs = otlp.requests.filter((r) => r.url === "/otlp/v1/traces");

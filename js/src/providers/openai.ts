@@ -17,7 +17,7 @@ type ResponsesStreamEvent = OpenAI.Responses.ResponseStreamEvent;
 type EmbeddingsCreateRequest = AnyRecord;
 type EmbeddingsCreateResponse = AnyRecord;
 
-/** Optional Sigil fields applied during OpenAI helper mapping. */
+/** Optional agento11y fields applied during OpenAI helper mapping. */
 export interface OpenAIOptions {
   conversationId?: string;
   agentName?: string;

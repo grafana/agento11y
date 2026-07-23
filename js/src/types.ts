@@ -83,9 +83,9 @@ export interface GenerationExportConfig {
   payloadMaxBytes: number;
 }
 
-/** Sigil HTTP API settings used by non-ingest helper endpoints. */
+/** Agent Observability HTTP API settings used by non-ingest helper endpoints. */
 export interface ApiConfig {
-  /** Sigil API base endpoint, for example the Grafana Cloud Agent Observability API URL. */
+  /** Agent Observability API base endpoint, for example the Grafana Cloud Agent Observability API URL. */
   endpoint: string;
 }
 
@@ -154,7 +154,7 @@ export interface ConversationRatingInput {
   source?: string;
 }
 
-/** Conversation rating event returned by Sigil. */
+/** Conversation rating event returned by Agent Observability. */
 export interface ConversationRating {
   ratingId: string;
   conversationId: string;
@@ -167,7 +167,7 @@ export interface ConversationRating {
   createdAt: string;
 }
 
-/** Aggregated rating summary returned by Sigil. */
+/** Aggregated rating summary returned by Agent Observability. */
 export interface ConversationRatingSummary {
   totalCount: number;
   goodCount: number;
@@ -178,7 +178,7 @@ export interface ConversationRatingSummary {
   hasBadRating: boolean;
 }
 
-/** Rating create response envelope returned by Sigil. */
+/** Rating create response envelope returned by Agent Observability. */
 export interface SubmitConversationRatingResponse {
   rating: ConversationRating;
   summary: ConversationRatingSummary;

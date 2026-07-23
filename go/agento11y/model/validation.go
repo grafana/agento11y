@@ -15,7 +15,7 @@ const MetadataKeyContentCaptureMode = "agento11y.sdk.content_capture_mode"
 // the generation has been stripped down to metadata.
 const ContentCaptureModeMetadataOnly = "metadata_only"
 
-// Validate enforces the Sigil generation invariants required by the ingest
+// Validate enforces the generation invariants required by the ingest
 // pipeline.
 func (g Generation) Validate() error {
 	return ValidateGeneration(g)

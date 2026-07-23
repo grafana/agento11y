@@ -29,7 +29,7 @@ _EMBEDDING_MODEL = ModelRef(provider="openai", name="text-embedding-3-small")
 
 
 class _ExemplarHarness:
-    """Shared OTel + Sigil plumbing for exemplar tests."""
+    """Shared OTel + agento11y plumbing for exemplar tests."""
 
     def __init__(self) -> None:
         self.span_exporter = InMemorySpanExporter()

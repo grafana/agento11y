@@ -1,6 +1,6 @@
 import type { GenerationRecorder } from './types.js';
 
-/** Reserved generation metadata keys (Sigil docs/guides/cache-diagnostics.md). */
+/** Reserved generation metadata keys (Anthropic-style cache diagnostics). */
 export const CACHE_DIAGNOSTICS_MISS_REASON_KEY = 'agento11y.cache_diagnostics.miss_reason';
 export const CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY = 'agento11y.cache_diagnostics.missed_input_tokens';
 export const CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY = 'agento11y.cache_diagnostics.previous_message_id';

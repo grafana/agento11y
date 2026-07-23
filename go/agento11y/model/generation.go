@@ -1,5 +1,5 @@
 // Package model defines the provider-agnostic generation data model used
-// by the Sigil SDK exporter and other producers that need to construct
+// by the agento11y SDK exporter and other producers that need to construct
 // generation payloads without depending on the full SDK client.
 //
 // The types here mirror what the SDK accepts and what the codec package
@@ -39,7 +39,7 @@ type ToolDefinition struct {
 // Generation is the normalized, provider-agnostic generation payload. It
 // can represent both request/response and streaming outcomes.
 type Generation struct {
-	// ID is the Sigil generation identifier. If empty, End assigns one.
+	// ID is the generation identifier. If empty, End assigns one.
 	ID                string         `json:"id,omitempty"`
 	ConversationID    string         `json:"conversation_id,omitempty"`
 	ConversationTitle string         `json:"conversation_title,omitempty"`

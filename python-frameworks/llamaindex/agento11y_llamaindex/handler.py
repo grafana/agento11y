@@ -1,4 +1,4 @@
-"""LlamaIndex callback handlers for Sigil generation recording."""
+"""LlamaIndex callback handlers for agento11y generation recording."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ class _Agento11yLlamaIndexBase(Agento11yFrameworkHandlerBase):
 
 
 class Agento11yLlamaIndexHandler(_Agento11yLlamaIndexBase):
-    """Sync LlamaIndex callback handler that records Sigil generations."""
+    """Sync LlamaIndex callback handler that records agento11y generations."""
 
     def on_llm_start(
         self,
@@ -181,7 +181,7 @@ class Agento11yLlamaIndexHandler(_Agento11yLlamaIndexBase):
 
 
 class Agento11yAsyncLlamaIndexHandler(_Agento11yLlamaIndexBase):
-    """Async LlamaIndex callback handler that records Sigil generations."""
+    """Async LlamaIndex callback handler that records agento11y generations."""
 
     async def on_llm_start(
         self,

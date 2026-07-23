@@ -1,4 +1,4 @@
-"""Error hierarchy used by Sigil Python SDK."""
+"""Error hierarchy used by agento11y Python SDK."""
 
 
 class Agento11yError(Exception):
@@ -60,7 +60,7 @@ class HookDeniedError(Agento11yError):
     ) -> None:
         normalized_reason = (reason or "").strip()
         if normalized_reason == "":
-            normalized_reason = "request blocked by Sigil hook rule"
+            normalized_reason = "request blocked by Agent Observability hook rule"
         clean_rule = (rule_id or "").strip()
         if clean_rule != "":
             message = f"agento11y hook denied by rule {clean_rule}: {normalized_reason}"

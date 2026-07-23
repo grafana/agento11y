@@ -1,4 +1,4 @@
-"""Public exports for Sigil Google ADK callback handlers."""
+"""Public exports for agento11y Google ADK callback handlers."""
 
 from __future__ import annotations
 
@@ -78,14 +78,14 @@ def create_agento11y_google_adk_handler(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> Agento11yGoogleAdkHandler | Agento11yAsyncGoogleAdkHandler:
-    """Create a Google ADK Sigil callback handler for sync or async flows."""
+    """Create a Google ADK agento11y callback handler for sync or async flows."""
     if async_handler:
         return Agento11yAsyncGoogleAdkHandler(client=client, **handler_kwargs)
     return Agento11yGoogleAdkHandler(client=client, **handler_kwargs)
 
 
 class Agento11yGoogleAdkCallbacks:
-    """Google ADK callback bridge that forwards agent callback fields to Sigil."""
+    """Google ADK callback bridge that forwards agent callback fields to Agent Observability."""
 
     def __init__(self, agento11y_handler: Agento11yGoogleAdkHandler | Agento11yAsyncGoogleAdkHandler) -> None:
         self._agento11y_handler = agento11y_handler
@@ -232,7 +232,7 @@ class Agento11yGoogleAdkCallbacks:
 
 
 class Agento11yGoogleAdkPlugin(BasePlugin):
-    """Google ADK BasePlugin-compatible bridge that forwards plugin callbacks to Sigil."""
+    """Google ADK BasePlugin-compatible bridge that forwards plugin callbacks to Agent Observability."""
 
     name = "agento11y_google_adk_plugin"
 
@@ -390,7 +390,7 @@ def create_agento11y_google_adk_plugin(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> Agento11yGoogleAdkPlugin:
-    """Create a Google ADK plugin instance wired to Sigil instrumentation."""
+    """Create a Google ADK plugin instance wired to agento11y instrumentation."""
     agento11y_handler = create_agento11y_google_adk_handler(
         client=client,
         async_handler=async_handler,
@@ -406,7 +406,7 @@ def with_agento11y_google_adk_callbacks(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> dict[str, Any] | Any:
-    """Attach Sigil to Google ADK callback fields on either config dicts or agent objects."""
+    """Attach agento11y to Google ADK callback fields on either config dicts or agent objects."""
     callbacks = create_agento11y_google_adk_callbacks(
         client=client,
         async_handler=async_handler,
@@ -445,7 +445,7 @@ def with_agento11y_google_adk_plugins(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> dict[str, Any] | Any:
-    """Attach Sigil as a Google ADK plugin on either config dicts or agent-like objects."""
+    """Attach agento11y as a Google ADK plugin on either config dicts or agent-like objects."""
     plugin = create_agento11y_google_adk_plugin(
         client=client,
         async_handler=async_handler,

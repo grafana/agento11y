@@ -1,8 +1,8 @@
-"""OpenTelemetry GenAI evaluation telemetry for Sigil experiments.
+"""OpenTelemetry GenAI evaluation telemetry for Agent Observability experiments.
 
 The experiments surface writes scores over the v1 ingest path. When explicitly
 enabled, it also emits OpenTelemetry so already-instrumented agents line up with
-Sigil's eval model and a future OTLP eval materializer can read the same data.
+Agent Observability's eval model and a future OTLP eval materializer can read the same data.
 
 We emit OpenTelemetry names directly — there is **no parallel ``agento11y.*`` mirror**:
 
@@ -11,7 +11,7 @@ We emit OpenTelemetry names directly — there is **no parallel ``agento11y.*`` 
   and the ``test.*`` suite/case identity that already exists in general OTel
   (``test.suite.name``, ``test.suite.run.status``, ``test.case.name``,
   ``test.case.result.status``).
-- **Proposed names** Sigil is pushing through the OTel GenAI SIG are emitted as a
+- **Proposed names** Grafana is pushing through the OTel GenAI SIG are emitted as a
   best-effort prediction and **may change until they land upstream**: evaluator
   and reference-set provenance under ``gen_ai.evaluation.*``, suite id/version,
   the run/case ids (#79), and the per-attempt trial identity ``test.case.run.*``.
@@ -24,7 +24,7 @@ We emit OpenTelemetry names directly — there is **no parallel ``agento11y.*`` 
   standard ``gen_ai.usage.*`` tokens and cost is rolled up server-side from REST.
 
 The score verdict is the OTel ``gen_ai.evaluation.score.label`` (``pass``/``fail``)
-and, at the case level, ``test.case.result.status`` — there is no separate Sigil
+and, at the case level, ``test.case.result.status`` — there is no separate Agent Observability
 verdict attribute.
 """
 
@@ -75,13 +75,13 @@ EVAL_REFERENCE_SET_VERSION = "gen_ai.evaluation.reference_set.version"
 TEST_SUITE_RUN_ID = "test.suite.run.id"  # proposed for genai (#79) = experiment/run id
 TEST_SUITE_NAME = "test.suite.name"  # merged (general OTel)
 TEST_SUITE_RUN_STATUS = "test.suite.run.status"  # merged (general OTel)
-TEST_SUITE_ID = "test.suite.id"  # proposed (Sigil) — suite identity distinct from name
-TEST_SUITE_VERSION = "test.suite.version"  # proposed (Sigil)
+TEST_SUITE_ID = "test.suite.id"  # proposed (Grafana) — suite identity distinct from name
+TEST_SUITE_VERSION = "test.suite.version"  # proposed (Grafana)
 TEST_CASE_ID = "test.case.id"  # proposed for genai (#79)
 TEST_CASE_NAME = "test.case.name"  # merged (general OTel)
 TEST_CASE_RESULT_STATUS = "test.case.result.status"  # merged; we also emit proposed error/skipped
-TEST_CASE_RUN_ID = "test.case.run.id"  # proposed (Sigil) = per-attempt trial id
-TEST_CASE_RUN_ATTEMPT = "test.case.run.attempt"  # proposed (Sigil) = 1-based attempt
+TEST_CASE_RUN_ID = "test.case.run.id"  # proposed (Grafana) = per-attempt trial id
+TEST_CASE_RUN_ATTEMPT = "test.case.run.attempt"  # proposed (Grafana) = 1-based attempt
 
 OPERATION_NAME = "gen_ai.operation.name"
 CONVERSATION_ID = "gen_ai.conversation.id"

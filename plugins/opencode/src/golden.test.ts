@@ -1,7 +1,7 @@
 // OpenCode high-level real-SDK golden test.
 //
 // Drives the OpenCode plugin through `createAgento11yHooks(config, client)`
-// with a fake OpencodeClient. The Sigil JS SDK exporter is pointed at a
+// with a fake OpencodeClient. The agento11y JS SDK exporter is pointed at a
 // local HTTP capture server, and the normalized export body is compared
 // against src/testdata/golden/opencode-full-message.golden.json.
 //

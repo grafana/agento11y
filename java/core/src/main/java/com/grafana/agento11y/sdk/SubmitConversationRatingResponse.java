@@ -1,6 +1,6 @@
 package com.grafana.agento11y.sdk;
 
-/** Conversation rating create response envelope returned by Sigil. */
+/** Conversation rating create response envelope returned by Agent Observability. */
 public final class SubmitConversationRatingResponse {
     private ConversationRating rating = new ConversationRating();
     private ConversationRatingSummary summary = new ConversationRatingSummary();

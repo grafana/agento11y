@@ -34,7 +34,7 @@ export interface Agento11yPiConfig {
 }
 
 export async function loadConfig(): Promise<Agento11yPiConfig | null> {
-  // Read the shared sigil dotenv file so plain `pi` and `agento11y pi --` resolve
+  // Read the shared agento11y dotenv file so plain `pi` and `agento11y pi --` resolve
   // credentials from the same place. Shell values in process.env always beat
   // config.env values, across both env-var spellings.
   applyAgento11yDotenv();
@@ -230,7 +230,7 @@ function toBool(v: unknown): boolean | undefined {
 export const EXPORT_PATH = "/api/v1/generations:export";
 
 /**
- * Normalize a Sigil endpoint to the bare API base URL. Accepts either the
+ * Normalize an Agent Observability endpoint to the bare API base URL. Accepts either the
  * base URL (`https://host` or `https://host/prefix`) or a full generations
  * export URL (`https://host/api/v1/generations:export`) — the latter is a
  * common copy-paste mistake. Trailing slashes are stripped. The export path

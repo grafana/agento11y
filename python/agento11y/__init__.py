@@ -1,4 +1,4 @@
-"""Public exports for the Sigil Python SDK."""
+"""Public exports for the agento11y Python SDK."""
 
 from .cache_diagnostics import (
     CACHE_DIAGNOSTICS_MISS_REASON_KEY,

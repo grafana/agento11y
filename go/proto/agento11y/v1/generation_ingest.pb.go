@@ -1104,7 +1104,7 @@ type Generation struct {
 	ThinkingEnabled     *bool                  `protobuf:"varint,28,opt,name=thinking_enabled,json=thinkingEnabled,proto3,oneof" json:"thinking_enabled,omitempty"`
 	ParentGenerationIds []string               `protobuf:"bytes,29,rep,name=parent_generation_ids,json=parentGenerationIds,proto3" json:"parent_generation_ids,omitempty"`
 	// Optional SDK-supplied catalog key. Must match `^sha256:[0-9a-f]{64}$`
-	// when set; ingest rejects any other shape. Sigil falls back to a
+	// when set; ingest rejects any other shape. The backend falls back to a
 	// server-computed sha256 of (system_prompt + sorted tools) when omitted.
 	EffectiveVersion *string `protobuf:"bytes,30,opt,name=effective_version,json=effectiveVersion,proto3,oneof" json:"effective_version,omitempty"`
 	unknownFields    protoimpl.UnknownFields

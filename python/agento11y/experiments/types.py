@@ -40,7 +40,7 @@ class TrialStatus(str, Enum):
 class EvaluatorKind(str, Enum):
     """The OTel-aligned evaluator type vocabulary.
 
-    Sigil-specific kinds map deterministically onto this set for telemetry.
+    Agent Observability-specific kinds map deterministically onto this set for telemetry.
     """
 
     LLM_JUDGE = "llm_judge"

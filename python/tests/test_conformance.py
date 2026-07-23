@@ -1,4 +1,4 @@
-"""Core conformance suite for the Sigil Python SDK."""
+"""Core conformance suite for the agento11y Python SDK."""
 
 from __future__ import annotations
 

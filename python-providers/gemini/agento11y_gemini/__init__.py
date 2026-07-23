@@ -1,4 +1,4 @@
-"""Gemini strict wrapper namespace for Sigil Python SDK."""
+"""Gemini strict wrapper namespace for agento11y Python SDK."""
 
 from .provider import (
     GeminiOptions,

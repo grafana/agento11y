@@ -1,4 +1,4 @@
-"""Public exports for Sigil LiteLLM callback handler."""
+"""Public exports for agento11y LiteLLM callback handler."""
 
 from typing import Any
 
@@ -18,7 +18,7 @@ def create_agento11y_litellm_logger(
     extra_tags: dict[str, str] | None = None,
     extra_metadata: dict[str, Any] | None = None,
 ) -> Agento11yLiteLLMLogger:
-    """Create a LiteLLM Sigil callback logger."""
+    """Create a LiteLLM agento11y callback logger."""
     return Agento11yLiteLLMLogger(
         client=client,
         capture_inputs=capture_inputs,

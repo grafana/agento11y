@@ -537,7 +537,7 @@ async function recordAssistantMessage(
     }
   } catch (err) {
     debugLog("agento11y generation export failed", err);
-    // Sigil recording failure should never break the plugin
+    // agento11y recording failure should never break the plugin
   }
 
   // Clean up pending generation and per-turn tool records. The completed
@@ -959,7 +959,7 @@ export function mergeToolSpanRecords(
 }
 
 /**
- * Emit Sigil tool execution spans for a set of completed tool records.
+ * Emit agento11y tool execution spans for a set of completed tool records.
  * Errors thrown by the SDK are swallowed so a span failure cannot break
  * the plugin.
  *

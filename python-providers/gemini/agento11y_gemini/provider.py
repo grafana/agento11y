@@ -44,7 +44,7 @@ _usage_tool_use_prompt_tokens_metadata_key = "agento11y.gen_ai.usage.tool_use_pr
 
 @dataclass(slots=True)
 class GeminiOptions:
-    """Optional Sigil enrichments for Gemini wrappers."""
+    """Optional agento11y enrichments for Gemini wrappers."""
 
     provider_name: str = "gemini"
     conversation_id: str = ""

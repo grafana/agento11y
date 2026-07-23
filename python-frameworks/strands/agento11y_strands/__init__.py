@@ -1,4 +1,4 @@
-"""Public exports for Sigil Strands Agents hooks."""
+"""Public exports for agento11y Strands Agents hooks."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ class Agento11yStrandsHookProvider:
         self._node_run_ids: dict[tuple[int, str], list[UUID]] = {}
 
     def register_hooks(self, registry: HookRegistry, **_kwargs: Any) -> None:
-        """Register Sigil callbacks with a Strands HookRegistry."""
+        """Register agento11y callbacks with a Strands HookRegistry."""
         registry.add_callback(BeforeInvocationEvent, self.before_invocation)
         registry.add_callback(AfterInvocationEvent, self.after_invocation)
         registry.add_callback(BeforeModelCallEvent, self.before_model_call)
@@ -231,7 +231,7 @@ class Agento11yStrandsHookProvider:
 
 
 def create_agento11y_strands_handler(*, client: Client, **handler_kwargs: Any) -> Agento11yStrandsHandler:
-    """Create a Strands Sigil lifecycle handler."""
+    """Create a Strands agento11y lifecycle handler."""
     return Agento11yStrandsHandler(client=client, **handler_kwargs)
 
 
@@ -248,7 +248,7 @@ def with_agento11y_strands_hooks(
     client: Client,
     **handler_kwargs: Any,
 ) -> dict[str, Any] | Any:
-    """Attach Sigil as a Strands hook provider on config dicts or agent instances."""
+    """Attach agento11y as a Strands hook provider on config dicts or agent instances."""
     provider = create_agento11y_strands_hook_provider(client=client, **handler_kwargs)
 
     if config_or_agent is None or isinstance(config_or_agent, dict):

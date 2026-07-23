@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Conversation rating event returned by Sigil. */
+/** Conversation rating event returned by Agent Observability. */
 public final class ConversationRating {
     private String ratingId = "";
     private String conversationId = "";

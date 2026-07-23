@@ -1,4 +1,4 @@
-"""Sigil callback for LiteLLM proxy."""
+"""agento11y callback for LiteLLM proxy."""
 
 import os
 

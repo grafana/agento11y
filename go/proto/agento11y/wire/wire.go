@@ -1,6 +1,6 @@
 // Package wire exposes the shared HTTP transport constants and encoding
-// helpers that the Sigil SDK exporter and other generation producers use to
-// talk to a Sigil generation ingest endpoint.
+// helpers that the agento11y SDK exporter and other generation producers use
+// to talk to an Agent Observability generation ingest endpoint.
 //
 // The helpers here intentionally have no dependency on the SDK client. They
 // only operate on the generated protobuf types from
@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	// TenantHeaderName carries the Sigil tenant ID on HTTP and gRPC requests.
+	// TenantHeaderName carries the Agent Observability tenant ID on HTTP and gRPC requests.
 	TenantHeaderName = "X-Scope-OrgID"
 	// AuthorizationHeaderName carries the bearer or basic auth credential.
 	AuthorizationHeaderName = "Authorization"
@@ -33,7 +33,7 @@ const (
 	ContentTypeProto = "application/x-protobuf"
 )
 
-// NormalizeGenerationExportURL returns endpoint with the Sigil generation
+// NormalizeGenerationExportURL returns endpoint with the generation
 // export HTTP path applied when no path is present, mirroring the SDK
 // exporter behavior. If endpoint has no scheme, https is assumed unless
 // insecure is true (in which case http is used).
@@ -41,7 +41,7 @@ func NormalizeGenerationExportURL(endpoint string, insecure bool) (string, error
 	return normalizeExportURL(endpoint, insecure, GenerationExportHTTPPath, "")
 }
 
-// NormalizeWorkflowStepExportURL returns endpoint with the Sigil workflow-step
+// NormalizeWorkflowStepExportURL returns endpoint with the workflow-step
 // export HTTP path applied when no path is present. If the generation export
 // path is supplied, it is rewritten to the workflow-step sibling path.
 func NormalizeWorkflowStepExportURL(endpoint string, insecure bool) (string, error) {

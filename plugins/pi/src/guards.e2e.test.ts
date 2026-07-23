@@ -1,7 +1,7 @@
 // Pi guards: real-SDK-over-HTTP integration tests.
 //
 // Drives the @grafana/agento11y-pi extension through a faked pi host, but unlike
-// the handler-wiring unit tests (index.test.ts) the Sigil client here is the
+// the handler-wiring unit tests (index.test.ts) the agento11y client here is the
 // real JS SDK pointed at a local HTTP server. Each test exercises the full
 // preflight (`context`) or postflight (`tool_call`) path end to end: real
 // Agento11yClient.evaluateHook -> HTTP hooks:evaluate round-trip -> wire parse ->
@@ -85,7 +85,7 @@ function toolResultMsg(text: string): PiToolResult {
   };
 }
 
-// Wire-shaped (snake_case) hook response bodies, matching what the Sigil API
+// Wire-shaped (snake_case) hook response bodies, matching what the Agent Observability API
 // emits and what js/src/hooks.ts parses.
 function preflightTransform(messages: unknown[]): HookResponse {
   return {

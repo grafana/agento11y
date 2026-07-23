@@ -19,7 +19,7 @@ Out-of-process use (e.g. a verifier container) opens a trial from a
 
     ref = TrialRef.from_env()
     if ref is None:
-        raise RuntimeError("missing Sigil trial environment")
+        raise RuntimeError("missing Agent Observability trial environment")
     trial = Trial.from_ref(client, ref)
     trial.final_score(0.82, passed=True)
     trial.flush()
@@ -107,7 +107,7 @@ def _infer_final_passed(value: ScoreValue) -> bool | None:
 
 
 def _kind_from_mime(mime: str) -> str:
-    """Maps a MIME type to a Sigil artifact kind."""
+    """Maps a MIME type to an Agent Observability artifact kind."""
 
     m = (mime or "").lower()
     if m.startswith("image/"):
@@ -143,7 +143,7 @@ def _artifact_content(path: str, data: Any, text: str, kind: str, mime: str) -> 
 class Trial:
     """One attempt at one test case: records scores and emits eval telemetry.
 
-    Use as a context manager. Scores are buffered and exported to Sigil on exit
+    Use as a context manager. Scores are buffered and exported to Agent Observability on exit
     (or on an explicit :meth:`flush`). Each score also emits a
     ``gen_ai.evaluation.result`` OTel event on the trial span.
     """
@@ -405,7 +405,7 @@ class Trial:
         """Records the attempt's input/output for the anchor generation.
 
         Stored now and exported as one generation when scores flush, so the
-        attempt's conversation is visible in Sigil and the scores attach to it.
+        attempt's conversation is visible in Agent Observability and the scores attach to it.
         """
 
         self._has_generation = True
@@ -441,7 +441,7 @@ class Trial:
 
         Tokens are emitted on the span as the standard ``gen_ai.usage.*`` signal.
         ``cost`` is an optional override (USD): when provided it is sent as the
-        trial's reported cost; when omitted, Sigil derives the trial's cost at
+        trial's reported cost; when omitted, Agent Observability derives the trial's cost at
         ingestion from token usage and model-card pricing. Cost has no OTel
         attribute, so it is never put on the span. Pass ``cost`` only when a
         framework computes it itself (e.g. provider-billed cost) — leave it unset
@@ -555,7 +555,7 @@ class Trial:
     ) -> ScoreItem:
         """The headline score + trial verdict (``score_key="final"``).
 
-        ``passed`` is the trial's pass/fail verdict used by the Sigil report
+        ``passed`` is the trial's pass/fail verdict used by the Agent Observability report
         rollup. When omitted and ``value`` is boolean, the boolean is the verdict.
         """
 
@@ -711,7 +711,7 @@ class Trial:
 
         Generations are optional: the typed trial already attributes scores. We
         only export one when the harness gave us input/output to make the
-        attempt's conversation visible in Sigil.
+        attempt's conversation visible in Agent Observability.
         """
 
         if self._generation_exported or self._generation_bound or not self._io:
@@ -744,7 +744,7 @@ class Trial:
         self._generation_exported = True
 
     def flush(self) -> int:
-        """Exports buffered scores to Sigil. Returns the number freshly accepted.
+        """Exports buffered scores to Agent Observability. Returns the number freshly accepted.
 
         Anchors the trial's generation first (when not externally bound) so the
         scores' ``generation_id`` resolves under strict score ingest.
@@ -921,7 +921,7 @@ class Experiment:
 
     @property
     def url(self) -> str:
-        """Best-effort deep link to the run in the Sigil UI."""
+        """Best-effort deep link to the run in the Agent Observability UI."""
 
         return self._client.experiment_url(self.experiment_id)
 
@@ -947,7 +947,7 @@ def experiment(
     """Opens a cloud experiment, building a client from the environment.
 
     The headline entry point: wrap an already-instrumented run and publish to your
-    Grafana Cloud Sigil instance. When ``client`` is omitted one is built from
+    Grafana Cloud Agent Observability instance. When ``client`` is omitted one is built from
     ``endpoint``/``ingest_token``/``tenant_id``/``actor``, falling back to the
     ``AGENTO11Y_ENDPOINT``, ``AGENTO11Y_AUTH_TOKEN``, ``AGENTO11Y_AUTH_TENANT_ID``,
     and ``AGENTO11Y_INGEST_ACTOR`` environment variables (with their ``SIGIL_*``
@@ -970,7 +970,8 @@ def experiment(
         ).strip()
         if not resolved_endpoint:
             raise ValueError(
-                "Sigil endpoint is required: pass endpoint= or set AGENTO11Y_ENDPOINT to your Grafana Cloud Sigil URL"
+                "Agent Observability endpoint is required: "
+                "pass endpoint= or set AGENTO11Y_ENDPOINT to your Grafana Cloud Agent Observability URL"
             )
         resolved_tenant = (
             tenant_id

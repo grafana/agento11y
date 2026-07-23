@@ -76,7 +76,7 @@ function formatEvalFailure(
 }
 
 /**
- * Evaluates the Sigil postflight hook for a tool call. Returns a block result
+ * Evaluates the Agent Observability postflight hook for a tool call. Returns a block result
  * when the server denies the call, or a transform result when the server
  * redacted/sanitized the call's arguments. On transport/timeout/serialization
  * errors, returns `undefined` (allow) when `failOpen` is true and a block

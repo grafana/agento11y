@@ -144,7 +144,7 @@ export interface ResolveConversationTitleOptions {
 }
 
 /**
- * Resolve the conversation title shown in Sigil.
+ * Resolve the conversation title shown in Agent Observability.
  *
  * Pi exposes a real, user-defined session name via `getSessionName()`; prefer
  * it whenever set. Otherwise derive a title from the first user prompt, the
@@ -184,7 +184,7 @@ export interface MapGenerationStartOptions {
   requestControls?: CachedRequestControls;
   /**
    * Deterministic generation ID. When set, overrides the SDK's random
-   * `gen-*` ID so Sigil can link this generation in the dependency graph.
+   * `gen-*` ID so Agent Observability can link this generation in the dependency graph.
    * Resolved from the active Pi session branch in `index.ts`.
    */
   generationId?: string;
@@ -330,7 +330,7 @@ export type PiAgentMessage =
 
 /**
  * Map pi's `ContextEvent.messages` (the full conversation pi is about to
- * send to the model) to Sigil `Message[]` for a preflight hook evaluation.
+ * send to the model) to agento11y `Message[]` for a preflight hook evaluation.
  *
  * Differences from `mapUserMessage`/`mapAssistantOutput`:
  * - All roles (user, assistant, tool) are mapped 1:1 so the redacted
@@ -345,7 +345,7 @@ export type PiAgentMessage =
  *   would needlessly inflate the hook request. The original pi message is
  *   kept by the caller, so the `thinking` block survives untouched on the
  *   write-back side.
- * - Image content is skipped (Sigil's `MessagePart` union has no image
+ * - Image content is skipped (agento11y's `MessagePart` union has no image
  *   type), mirroring `mapUserMessage`.
  */
 export function mapAgentMessagesForHook(messages: PiAgentMessage[]): Message[] {
@@ -439,7 +439,7 @@ function mapToolResultForHook(tr: PiToolResult): Message {
 }
 
 /**
- * Write redacted text from a Sigil-side preflight transform back into the
+ * Write redacted text from a server-side preflight transform back into the
  * original pi messages, in place. Returns true on a clean apply, false when
  * any safety check fails (counts diverge, role mismatch, no text part where
  * one is expected). On a false return, callers must NOT replace pi's
@@ -489,7 +489,7 @@ function applyRedactedToMessage(pi: PiAgentMessage, sig: Message): boolean {
 
 function extractTextFromAgento11yMessage(sig: Message): string | null {
   // Accept both shapes: legacy `content` shorthand and the typed `parts`
-  // array. The Sigil server emits typed parts on the transformed payload,
+  // array. The Agent Observability server emits typed parts on the transformed payload,
   // but tolerate either to keep round-tripping robust to wire changes.
   if (typeof sig.content === "string") return sig.content;
   if (!sig.parts) return null;
@@ -601,9 +601,9 @@ function collapseTextParts(
 }
 
 /**
- * Map a pi user message to a Sigil input Message. Returns null in
+ * Map a pi user message to an agento11y input Message. Returns null in
  * `metadata_only` (mirrors how assistant text/thinking is dropped) and for
- * empty/whitespace-only content. Image parts are skipped because Sigil's
+ * empty/whitespace-only content. Image parts are skipped because agento11y's
  * `MessagePart` union has no image type; multiple text parts are joined with
  * a newline.
  */
@@ -625,7 +625,7 @@ export function mapUserMessage(
 /**
  * Flatten a pi user message to plain text. String content passes through;
  * a content array keeps text parts (joined with a newline) and drops images,
- * which Sigil's `MessagePart` union cannot represent.
+ * which agento11y's `MessagePart` union cannot represent.
  */
 export function userMessageText(msg: PiUserMessage): string {
   if (typeof msg.content === "string") return msg.content;
@@ -769,7 +769,7 @@ export function extractRequestControls(
 }
 
 /**
- * Map assistant message content blocks to Sigil output messages.
+ * Map assistant message content blocks to agento11y output messages.
  * - text/thinking parts: only when contentCapture allows body content.
  * - tool_call parts: always emitted (structure needed for the SDK's
  *   tool_calls_per_operation metric); inputJSON is only filled when the mode
@@ -828,7 +828,7 @@ function mapAssistantOutput(
 }
 
 /**
- * Map pi tool results to Sigil tool result messages. Always emits the
+ * Map pi tool results to agento11y tool result messages. Always emits the
  * structural part; body content is included only when the mode includes tool
  * bodies (`full` or `full_with_metadata_spans`).
  */

@@ -53,7 +53,7 @@ class Client:
         use_experimental_otel: bool | None = None,
     ) -> None:
         if not (endpoint or "").strip():
-            raise ValueError("Sigil endpoint is required (your Grafana Cloud Sigil URL)")
+            raise ValueError("Agent Observability endpoint is required (your Grafana Cloud Agent Observability URL)")
         token = (ingest_token or _first_nonblank(os.environ, "AGENTO11Y_AUTH_TOKEN", "SIGIL_AUTH_TOKEN")).strip()
         if not token:
             raise ValueError("ingest_token is required (your Grafana Cloud ingestion API key)")
@@ -426,7 +426,7 @@ class Client:
     # --- links ------------------------------------------------------------ #
 
     def experiment_url(self, experiment_id: str) -> str:
-        """Best-effort deep link to the run in the Sigil UI."""
+        """Best-effort deep link to the run in the Agent Observability UI."""
 
         quoted = urllib.parse.quote(experiment_id, safe="")
         base = self.grafana_url

@@ -1,4 +1,4 @@
-"""Claude Agent SDK Sigil integration tests."""
+"""Claude Agent SDK agento11y integration tests."""
 
 from __future__ import annotations
 

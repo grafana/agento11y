@@ -154,7 +154,7 @@ message Generation {
   optional bool thinking_enabled = 28;
   repeated string parent_generation_ids = 29;
   // Optional SDK-supplied catalog key. Must match `^sha256:[0-9a-f]{64}$`
-  // when set; ingest rejects any other shape. Sigil falls back to a
+  // when set; ingest rejects any other shape. The backend falls back to a
   // server-computed sha256 of (system_prompt + sorted tools) when omitted.
   optional string effective_version = 30;
 }

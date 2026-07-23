@@ -1,4 +1,4 @@
-"""Shared test fixtures/helpers for Sigil Python SDK tests."""
+"""Shared test fixtures/helpers for agento11y Python SDK tests."""
 
 from __future__ import annotations
 

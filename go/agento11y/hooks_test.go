@@ -286,7 +286,7 @@ func TestHookDeniedErrorMessageFormat(t *testing.T) {
 		{
 			name: "without reason",
 			err:  &HookDeniedError{RuleID: "rule-1"},
-			want: "agento11y hook denied by rule rule-1: request blocked by Sigil hook rule",
+			want: "agento11y hook denied by rule rule-1: request blocked by Agent Observability hook rule",
 		},
 	}
 	for _, tc := range cases {

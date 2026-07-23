@@ -244,7 +244,7 @@ export class Agento11yClient {
   private closed = false;
 
   /**
-   * Creates a Sigil SDK client.
+   * Creates an agento11y SDK client.
    *
    * `inputConfig` is merged with defaults.
    */
@@ -469,7 +469,7 @@ export class Agento11yClient {
     return out;
   }
 
-  /** Submits a user-facing conversation rating through Sigil HTTP API. */
+  /** Submits a user-facing conversation rating through Agent Observability HTTP API. */
   async submitConversationRating(
     conversationId: string,
     input: ConversationRatingInput,
@@ -2200,7 +2200,7 @@ function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean): string {
 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     const parsed = new URL(trimmed);
-    // Preserve a path prefix so prefix-mounted Sigil deployments
+    // Preserve a path prefix so prefix-mounted Agent Observability deployments
     // (https://host/sigil) route /api/v1/conversations/... under the prefix.
     const path = parsed.pathname.replace(/\/+$/, '');
     return `${parsed.protocol}//${parsed.host}${path}`;

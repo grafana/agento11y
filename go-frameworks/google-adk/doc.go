@@ -1,4 +1,4 @@
-// Package googleadk maps Google ADK lifecycle events to Sigil generation/tool recorders.
+// Package googleadk maps Google ADK lifecycle events to agento11y generation/tool recorders.
 //
 // The adapter is conversation-first and keeps run/thread/event IDs as optional
 // metadata for tracing and generation analysis.

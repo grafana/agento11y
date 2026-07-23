@@ -1,4 +1,4 @@
-"""Sigil framework handler for the Pydantic AI integration."""
+"""agento11y framework handler for the Pydantic AI integration."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def _discard_recorder(recorder: Any, *, pop_capture_mode: bool = False) -> None:
 
 
 class Agento11yPydanticAIHandler(Agento11yFrameworkHandlerBase):
-    """Sigil framework handler for the Pydantic AI integration."""
+    """agento11y framework handler for the Pydantic AI integration."""
 
     def __init__(
         self,

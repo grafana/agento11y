@@ -1,4 +1,4 @@
-"""Sigil client runtime and recorder lifecycle implementation."""
+"""agento11y client runtime and recorder lifecycle implementation."""
 
 from __future__ import annotations
 
@@ -175,7 +175,7 @@ _status_code_pattern = re.compile(r"\b([1-5][0-9][0-9])\b")
 _instrumentation_name = "github.com/grafana/sigil/sdks/python"
 _sdk_name = "sdk-python"
 
-# Generation metadata keys for cache diagnostics (Sigil docs/guides/cache-diagnostics.md).
+# Generation metadata keys for cache diagnostics.
 CACHE_DIAGNOSTICS_MISS_REASON_KEY = "agento11y.cache_diagnostics.miss_reason"
 CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY = "agento11y.cache_diagnostics.missed_input_tokens"
 CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY = "agento11y.cache_diagnostics.previous_message_id"
@@ -320,7 +320,7 @@ def _build_tool_result_message(
 
 
 class Client:
-    """Sigil client that records generations, tool spans, and exports in background."""
+    """agento11y client that records generations, tool spans, and exports in background."""
 
     def __init__(self, config: ClientConfig | None = None) -> None:
         self._config = resolve_config(config)
@@ -632,7 +632,7 @@ class Client:
         conversation_id: str,
         rating: ConversationRatingInput,
     ) -> SubmitConversationRatingResponse:
-        """Submits a user-facing conversation rating through Sigil HTTP API."""
+        """Submits a user-facing conversation rating through Agent Observability HTTP API."""
 
         self._assert_open()
 
@@ -726,7 +726,7 @@ class Client:
     def list_collection_members(self, collection_id: str) -> list[dict[str, Any]]:
         """Lists the saved conversations belonging to an eval collection.
 
-        Uses the configured Sigil API endpoint and auth headers. Returns
+        Uses the configured Agent Observability API endpoint and auth headers. Returns
         raw member dicts (``saved_id``, ``conversation_id``, ``name``, ...).
         """
 
@@ -740,7 +740,7 @@ class Client:
     def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         """Fetches a single conversation (with its generations) by id.
 
-        Uses the configured Sigil API endpoint and auth headers. Returns
+        Uses the configured Agent Observability API endpoint and auth headers. Returns
         the raw conversation dict.
         """
 
@@ -752,7 +752,7 @@ class Client:
         )
 
     def _api_args(self, *, include_path_prefix: bool = True) -> dict[str, Any]:
-        """Connection args for Sigil HTTP helper APIs."""
+        """Connection args for Agent Observability HTTP helper APIs."""
 
         headers = dict(self._config.generation_export.headers)
         actor = (self._config.ingest_actor or "").strip()

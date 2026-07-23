@@ -41,7 +41,7 @@ _usage_server_tool_use_total_metadata_key = "agento11y.gen_ai.usage.server_tool_
 
 @dataclass(slots=True)
 class AnthropicOptions:
-    """Optional Sigil enrichments for Anthropic wrappers."""
+    """Optional agento11y enrichments for Anthropic wrappers."""
 
     provider_name: str = "anthropic"
     conversation_id: str = ""

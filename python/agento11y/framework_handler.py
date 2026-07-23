@@ -713,7 +713,7 @@ class Agento11yFrameworkHandlerBase:
             if parent_run_id is None:
                 # Nested graph invocation (e.g. sub-agent invoked inside a tool):
                 # inherit the conversation_id from the already-active graph root
-                # so all sub-graphs appear in the same Sigil conversation.
+                # so all sub-graphs appear in the same Agent Observability conversation.
                 if self._graph_root_run_keys and self._graph_run_conversation_id:
                     existing_root = next(
                         (r for r in self._graph_root_run_keys if r in self._graph_run_conversation_id),

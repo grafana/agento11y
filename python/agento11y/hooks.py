@@ -1,4 +1,4 @@
-"""Synchronous hook evaluation for Sigil preflight/postflight rules."""
+"""Synchronous hook evaluation for Agent Observability preflight/postflight rules."""
 
 from __future__ import annotations
 
@@ -123,7 +123,7 @@ def evaluate_hook(
     hooks: HooksConfig,
     request: HookEvaluateRequest,
 ) -> HookEvaluateResponse:
-    """Sends a hook evaluation request to the Sigil API.
+    """Sends a hook evaluation request to the Agent Observability API.
 
     Returns ``HookAction.ALLOW`` without contacting the server when hooks are
     disabled or the request phase is not configured. Honours

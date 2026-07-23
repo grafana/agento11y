@@ -1,6 +1,6 @@
 // Local HTTP harness for the pi real-SDK guard tests.
 //
-// Stands up one server that routes the two endpoints the real Sigil JS SDK
+// Stands up one server that routes the two endpoints the real agento11y JS SDK
 // talks to when guards are enabled: `/api/v1/hooks:evaluate` (preflight /
 // postflight evaluation) and `/api/v1/generations:export` (turn export). Hook
 // responses are supplied per request via a caller-provided responder so a

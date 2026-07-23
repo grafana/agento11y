@@ -189,7 +189,7 @@ describe("opencode guards", () => {
     await hooks.event({ event: { type: "global.disposed", properties: {} } });
   });
 
-  it("leaves tool.execute.before args unchanged when Sigil allows without a transform", async () => {
+  it("leaves tool.execute.before args unchanged when Agent Observability allows without a transform", async () => {
     const hookServer = await startHookServer({
       action: "allow",
       evaluations: [],
@@ -212,7 +212,7 @@ describe("opencode guards", () => {
     await hooks.event({ event: { type: "global.disposed", properties: {} } });
   });
 
-  it("strips all args when Sigil returns an empty-object transform", async () => {
+  it("strips all args when Agent Observability returns an empty-object transform", async () => {
     const hookServer = await startHookServer({
       action: "allow",
       evaluations: [],
@@ -294,7 +294,7 @@ describe("opencode guards", () => {
     await hooks.event({ event: { type: "global.disposed", properties: {} } });
   });
 
-  it("sets permission.ask output to deny when Sigil denies", async () => {
+  it("sets permission.ask output to deny when Agent Observability denies", async () => {
     const hookServer = await startHookServer({
       action: "deny",
       reason: "blocked permission",

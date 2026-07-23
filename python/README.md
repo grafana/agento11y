@@ -615,7 +615,7 @@ from agento11y import AuthConfig, ClientConfig
 
 cfg = ClientConfig()
 
-gen_token = (os.getenv("MY_APP_SIGIL_TOKEN") or "").strip()
+gen_token = (os.getenv("MY_APP_AGENTO11Y_TOKEN") or "").strip()
 if gen_token:
     cfg.generation_export.auth = AuthConfig(mode="bearer", bearer_token=gen_token)
 ```

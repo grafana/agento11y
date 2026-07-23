@@ -75,8 +75,8 @@ function configRoot(): string {
 }
 
 /**
- * Resolve the path the sigil dotenv loader reads. Mirrors
- * `plugins/agento11y/internal/dotenv/dotenv.go::FilePath` so every Sigil
+ * Resolve the path the agento11y dotenv loader reads. Mirrors
+ * `plugins/agento11y/internal/dotenv/dotenv.go::FilePath` so every agento11y
  * agent reads the same file: `<config root>/agento11y/config.env` if that
  * file exists, otherwise the legacy `<config root>/sigil/config.env` if that
  * exists, otherwise the new path. Preferring the new path when both exist

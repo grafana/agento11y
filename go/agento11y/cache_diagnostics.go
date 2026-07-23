@@ -6,7 +6,6 @@ import (
 )
 
 // Reserved generation metadata keys for Anthropic-style cache diagnostics.
-// See docs/guides/cache-diagnostics.md in the Sigil repo.
 const (
 	CacheDiagnosticsMissReasonKey        = "agento11y.cache_diagnostics.miss_reason"
 	CacheDiagnosticsMissedInputTokensKey = "agento11y.cache_diagnostics.missed_input_tokens"

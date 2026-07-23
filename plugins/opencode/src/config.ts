@@ -34,8 +34,8 @@ export interface Agento11yOpencodeConfig {
 }
 
 export async function loadConfig(): Promise<Agento11yOpencodeConfig | null> {
-  // Read the shared sigil dotenv file so the OpenCode plugin and every other
-  // Sigil agent resolve credentials from the same place. Shell env values win
+  // Read the shared agento11y dotenv file so the OpenCode plugin and every other
+  // agento11y agent resolve credentials from the same place. Shell env values win
   // over file values for each alias family, and the winner is materialized
   // under both spellings; see applyAgento11yDotenv.
   applyAgento11yDotenv();
@@ -228,7 +228,7 @@ function toBool(v: unknown): boolean | undefined {
 export const EXPORT_PATH = "/api/v1/generations:export";
 
 /**
- * Normalize a Sigil endpoint to the bare API base URL. Accepts either the
+ * Normalize an Agent Observability endpoint to the bare API base URL. Accepts either the
  * base URL (`https://host` or `https://host/prefix`) or a full generations
  * export URL (`https://host/api/v1/generations:export`) — the latter is a
  * common copy-paste mistake. Trailing slashes are stripped. The export path

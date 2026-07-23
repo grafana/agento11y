@@ -1,4 +1,4 @@
-"""Public exports for Sigil LlamaIndex callback handlers."""
+"""Public exports for agento11y LlamaIndex callback handlers."""
 
 from __future__ import annotations
 
@@ -68,14 +68,14 @@ def create_agento11y_llamaindex_handler(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> Agento11yLlamaIndexHandler | Agento11yAsyncLlamaIndexHandler:
-    """Create a LlamaIndex Sigil callback handler for sync or async flows."""
+    """Create a LlamaIndex agento11y callback handler for sync or async flows."""
     if async_handler:
         return Agento11yAsyncLlamaIndexHandler(client=client, **handler_kwargs)
     return Agento11yLlamaIndexHandler(client=client, **handler_kwargs)
 
 
 class Agento11yLlamaIndexCallbackHandler(BaseCallbackHandler):
-    """LlamaIndex BaseCallbackHandler bridge that forwards lifecycle events to Sigil."""
+    """LlamaIndex BaseCallbackHandler bridge that forwards lifecycle events to Agent Observability."""
 
     def __init__(self, agento11y_handler: Agento11yLlamaIndexHandler | Agento11yAsyncLlamaIndexHandler) -> None:
         super().__init__(event_starts_to_ignore=[], event_ends_to_ignore=[])
@@ -234,7 +234,7 @@ def with_agento11y_llamaindex_callbacks(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> dict[str, Any]:
-    """Register Sigil through LlamaIndex `callback_manager` wiring."""
+    """Register agento11y through LlamaIndex `callback_manager` wiring."""
     merged = dict(config or {})
 
     callback_manager = merged.get("callback_manager")

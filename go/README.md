@@ -255,7 +255,7 @@ If you use transformed input, pass the transformed messages/system prompt to the
 The SDK only auto-loads `AGENTO11Y_*` env vars (`AGENTO11Y_ENDPOINT`, `AGENTO11Y_PROTOCOL`, `AGENTO11Y_AUTH_MODE`, `AGENTO11Y_AUTH_TOKEN`, etc.) when you call `agento11y.NewClient(agento11y.Config{})`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:
 
 ```go
-genToken := strings.TrimSpace(os.Getenv("MY_APP_SIGIL_TOKEN"))
+genToken := strings.TrimSpace(os.Getenv("MY_APP_AGENTO11Y_TOKEN"))
 if genToken != "" {
 	cfg.GenerationExport.Auth = agento11y.AuthConfig{
 		Mode:        agento11y.ExportAuthModeBearer,
@@ -504,7 +504,6 @@ Current Go provider helpers:
 
 The Go SDK ships a local no-Docker conformance harness for the current cross-SDK baseline.
 
-- Shared spec: `docs/references/sdk-conformance-spec.md` (in the sigil repo)
 - Default local command: `mise run sdk:conformance`
 - Direct Go command: `cd go && GOWORK=off go test ./agento11y -run '^TestConformance' -count=1`
 - Current baseline coverage: sync roundtrip, conversation title resolution, user ID resolution, agent name/version resolution, streaming mode + TTFT, tool execution, embeddings, validation/error handling, rating submission, and shutdown flush semantics across exported generation payloads, OTLP spans, OTLP metrics, and local rating HTTP capture

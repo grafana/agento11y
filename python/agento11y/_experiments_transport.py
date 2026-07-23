@@ -1,4 +1,4 @@
-"""Experiment lifecycle and score export transport for the Sigil SDK.
+"""Experiment lifecycle and score export transport for the agento11y SDK.
 
 External writes go through the ingest lifecycle on the same tenant token used
 for generation export:
@@ -12,7 +12,7 @@ for generation export:
   POST   /api/v1/experiment-runs/{run_id}/trials/{trial_id}/artifacts:upload
                                                         attach a trial artifact
 
-Reads use the Sigil query routes with the same configured endpoint and auth:
+Reads use the Agent Observability query routes with the same configured endpoint and auth:
 
   GET    /api/v1/eval/experiments/{run_id}           fetch a run
   GET    /api/v1/eval/experiments/{run_id}/scores    list run scores (paginated)

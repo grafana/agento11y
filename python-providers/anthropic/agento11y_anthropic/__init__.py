@@ -1,4 +1,4 @@
-"""Anthropic strict wrapper namespace for Sigil Python SDK."""
+"""Anthropic strict wrapper namespace for agento11y Python SDK."""
 
 from .provider import (
     AnthropicOptions,

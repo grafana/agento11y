@@ -131,7 +131,7 @@ type Callbacks struct {
 	OnToolError func(string, error) error
 }
 
-// Adapter bridges Google ADK lifecycle events into Sigil recorder lifecycles.
+// Adapter bridges Google ADK lifecycle events into agento11y recorder lifecycles.
 type Adapter struct {
 	client         *agento11y.Client
 	opts           Options
@@ -145,7 +145,7 @@ type Adapter struct {
 	toolRunsMu     sync.Mutex
 }
 
-// NewAgento11yAdapter creates a Google ADK adapter for a Sigil client.
+// NewAgento11yAdapter creates a Google ADK adapter for an agento11y client.
 func NewAgento11yAdapter(client *agento11y.Client, opts Options) *Adapter {
 	captureInputs := true
 	if opts.CaptureInputs != nil {
@@ -199,12 +199,12 @@ func (a *Adapter) Callbacks() Callbacks {
 	}
 }
 
-// NewCallbacks creates a Sigil adapter and returns function-based lifecycle hooks.
+// NewCallbacks creates an agento11y adapter and returns function-based lifecycle hooks.
 func NewCallbacks(client *agento11y.Client, opts Options) Callbacks {
 	return NewAgento11yAdapter(client, opts).Callbacks()
 }
 
-// OnRunStart starts a Sigil generation lifecycle for an ADK run.
+// OnRunStart starts an agento11y generation lifecycle for an ADK run.
 func (a *Adapter) OnRunStart(ctx context.Context, event RunStartEvent) error {
 	runID := strings.TrimSpace(event.RunID)
 	if runID == "" {

@@ -85,7 +85,7 @@ def test_workflow_step_to_proto_json_uses_snake_case_keys() -> None:
 
     payload = workflow_step_to_proto_json(step)
 
-    # Sigil HTTP parity uses snake_case proto field names.
+    # Agent Observability HTTP parity uses snake_case proto field names.
     assert "stepName" not in payload
     assert payload.get("step_name") == "route"
     assert payload.get("conversation_id") == "c"

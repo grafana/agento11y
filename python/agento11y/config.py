@@ -1,4 +1,4 @@
-"""Runtime configuration for the Sigil Python SDK."""
+"""Runtime configuration for the agento11y Python SDK."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ class GenerationExportConfig:
 
 @dataclass(slots=True)
 class ApiConfig:
-    """Sigil HTTP API settings used by non-ingest helper endpoints."""
+    """Agent Observability HTTP API settings used by non-ingest helper endpoints."""
 
     endpoint: str = "http://localhost:8080"
 

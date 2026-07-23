@@ -304,7 +304,7 @@ Framework adapters:
 On generation and tool spans, capture or preserve these when available:
 
 - identity and routing:
-  - `gen_ai.operation.name` — must be a value the Sigil UI recognizes: `generateText` (SYNC default), `streamText` (STREAM default), `embeddings`, `execute_tool`, `framework_chain`, `framework_retriever`. Omit `operation_name` to take the SDK default; never invent one. An unrecognized value (e.g. `"chat"`) still reaches Tempo, but the UI classifies it as `unknown` and renders a synthetic generation node with no attached span — the trace does not appear inside the conversation and the "T" icon is absent even though `trace_id`/`span_id` are set.
+  - `gen_ai.operation.name` — must be a value the Agent Observability UI recognizes: `generateText` (SYNC default), `streamText` (STREAM default), `embeddings`, `execute_tool`, `framework_chain`, `framework_retriever`. Omit `operation_name` to take the SDK default; never invent one. An unrecognized value (e.g. `"chat"`) still reaches Tempo, but the UI classifies it as `unknown` and renders a synthetic generation node with no attached span — the trace does not appear inside the conversation and the "T" icon is absent even though `trace_id`/`span_id` are set.
   - `agento11y.generation.id`
   - `gen_ai.conversation.id`
   - `gen_ai.agent.name`

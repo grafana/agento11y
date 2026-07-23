@@ -14,7 +14,7 @@ type GeminiResponse = GenerateContentResponse & AnyRecord;
 type GeminiEmbedConfig = AnyRecord;
 type GeminiEmbedResponse = AnyRecord;
 
-/** Optional Sigil fields applied during Gemini helper mapping. */
+/** Optional agento11y fields applied during Gemini helper mapping. */
 export interface GeminiOptions {
   conversationId?: string;
   agentName?: string;

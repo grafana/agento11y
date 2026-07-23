@@ -7,14 +7,14 @@ import (
 	"github.com/grafana/agento11y/go/agento11y/model"
 )
 
-// ValidateGeneration enforces the Sigil generation invariants required by the
+// ValidateGeneration enforces the generation invariants required by the
 // ingest pipeline. It delegates to the model package so external callers that work
 // with model.Generation directly see the same checks.
 func ValidateGeneration(g Generation) error {
 	return model.ValidateGeneration(g)
 }
 
-// ValidateWorkflowStep enforces the Sigil workflow-step invariants required by
+// ValidateWorkflowStep enforces the workflow-step invariants required by
 // the ingest pipeline.
 func ValidateWorkflowStep(step WorkflowStep) error {
 	return model.ValidateWorkflowStep(step)

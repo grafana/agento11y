@@ -91,7 +91,7 @@ Real end-to-end examples using the actual Gemini SDK (no fake provider calls) ar
 
 Run them with:
 ```bash
-SIGIL_RUN_LIVE_EXAMPLES=1 GOOGLE_API_KEY=... go test -run Example_withAgento11y -v
+AGENTO11Y_RUN_LIVE_EXAMPLES=1 GOOGLE_API_KEY=... go test -run Example_withAgento11y -v
 ```
 
 ## Provider metadata mapping

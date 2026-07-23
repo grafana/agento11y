@@ -97,7 +97,7 @@ Real end-to-end examples using the actual Anthropic SDK (no fake provider calls)
 
 Run them with:
 ```bash
-SIGIL_RUN_LIVE_EXAMPLES=1 ANTHROPIC_API_KEY=... go test -run Example_withAgento11y -v
+AGENTO11Y_RUN_LIVE_EXAMPLES=1 ANTHROPIC_API_KEY=... go test -run Example_withAgento11y -v
 ```
 
 ## Provider metadata mapping

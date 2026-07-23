@@ -1,4 +1,4 @@
-"""Strands Agents hook handlers for Sigil generation recording."""
+"""Strands Agents hook handlers for agento11y generation recording."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ class _StrandsRunState:
 
 
 class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
-    """Sigil framework handler for Strands Agents lifecycle hooks."""
+    """agento11y framework handler for Strands Agents lifecycle hooks."""
 
     def __init__(
         self,

@@ -3,7 +3,7 @@ import type { Agento11yLogger, GenerationSanitizer, Message, MessagePart } from 
 import { cloneGeneration } from './utils.js';
 
 /**
- * Secret redaction engine for Sigil content capture.
+ * Secret redaction engine for agento11y content capture.
  *
  * ~20 high-confidence patterns hand-curated from Gitleaks
  * (https://github.com/gitleaks/gitleaks). Two tiers:

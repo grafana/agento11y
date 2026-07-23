@@ -40,7 +40,7 @@ import java.util.function.BiFunction;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Sigil Java SDK runtime client. */
+/** agento11y Java SDK runtime client. */
 public final class Agento11yClient implements AutoCloseable {
     static final String SPAN_ATTR_GENERATION_ID = "agento11y.generation.id";
     static final String SPAN_ATTR_SDK_NAME = "agento11y.sdk.name";
@@ -468,7 +468,7 @@ public final class Agento11yClient implements AutoCloseable {
         return out;
     }
 
-    /** Submits a user-facing conversation rating through Sigil HTTP API. */
+    /** Submits a user-facing conversation rating through Agent Observability HTTP API. */
     public SubmitConversationRatingResponse submitConversationRating(
             String conversationId,
             SubmitConversationRatingRequest request) {

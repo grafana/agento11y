@@ -1,4 +1,4 @@
-"""OpenAI strict wrapper namespaces for Sigil Python SDK."""
+"""OpenAI strict wrapper namespaces for agento11y Python SDK."""
 
 from .provider import (
     ChatCompletionsStreamSummary,

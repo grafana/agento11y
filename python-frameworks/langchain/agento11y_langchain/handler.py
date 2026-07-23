@@ -1,4 +1,4 @@
-"""LangChain callback handlers for Sigil generation recording."""
+"""LangChain callback handlers for agento11y generation recording."""
 
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ class _Agento11yLangChainBase(Agento11yFrameworkHandlerBase):
 
 
 class Agento11yLangChainHandler(_Agento11yLangChainBase, BaseCallbackHandler):
-    """Sync LangChain callback handler that records Sigil generations."""
+    """Sync LangChain callback handler that records agento11y generations."""
 
     def on_llm_start(
         self,
@@ -214,7 +214,7 @@ class Agento11yLangChainHandler(_Agento11yLangChainBase, BaseCallbackHandler):
 
 
 class Agento11yAsyncLangChainHandler(_Agento11yLangChainBase, AsyncCallbackHandler):
-    """Async LangChain callback handler that records Sigil generations."""
+    """Async LangChain callback handler that records agento11y generations."""
 
     async def on_llm_start(
         self,

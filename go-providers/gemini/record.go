@@ -10,7 +10,7 @@ import (
 )
 
 // GenerateContent calls the Gemini generate-content API and records the generation.
-// It mirrors providerClient.Models.GenerateContent but adds Sigil recording.
+// It mirrors providerClient.Models.GenerateContent but adds agento11y recording.
 // The native *genai.GenerateContentResponse is returned unchanged.
 func GenerateContent(
 	ctx context.Context,
@@ -62,7 +62,7 @@ func generateContent(
 }
 
 // EmbedContent calls the Gemini embed-content API and records an embeddings span.
-// It mirrors providerClient.Models.EmbedContent but adds Sigil recording.
+// It mirrors providerClient.Models.EmbedContent but adds agento11y recording.
 func EmbedContent(
 	ctx context.Context,
 	client *agento11y.Client,
@@ -120,7 +120,7 @@ func embedContent(
 }
 
 // GenerateContentStream calls the Gemini streaming generate-content API and records the generation.
-// It mirrors providerClient.Models.GenerateContentStream but adds Sigil recording.
+// It mirrors providerClient.Models.GenerateContentStream but adds agento11y recording.
 // All responses are collected into StreamSummary; for per-response processing use the
 // defer pattern directly with StartStreamingGeneration.
 func GenerateContentStream(

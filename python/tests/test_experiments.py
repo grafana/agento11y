@@ -338,7 +338,7 @@ def test_record_io_mints_real_conversation() -> None:
 
 def test_recorded_generation_carries_candidate_agent_version() -> None:
     # Regression: the candidate's declared agent_version must reach the ingested
-    # generation, or Sigil auto-derives a version from the prompt hash and version
+    # generation, or Agent Observability auto-derives a version from the prompt hash and version
     # comparison on the agent's Quality view is impossible.
     client = FakeClient()
     suite = _suite()

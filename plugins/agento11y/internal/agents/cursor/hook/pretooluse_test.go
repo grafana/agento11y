@@ -24,7 +24,7 @@ func TestPreToolUse(t *testing.T) {
 	tests := []struct {
 		name string
 		env  map[string]string
-		// serverResponds is the JSON the fake Sigil hook server returns;
+		// serverResponds is the JSON the fake Agent Observability hook server returns;
 		// empty means allow.
 		serverResponds string
 		// useClosedServer points SIGIL_ENDPOINT at a closed listener so the

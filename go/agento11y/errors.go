@@ -77,7 +77,7 @@ type HookDeniedError struct {
 func (e *HookDeniedError) Error() string {
 	reason := strings.TrimSpace(e.Reason)
 	if reason == "" {
-		reason = "request blocked by Sigil hook rule"
+		reason = "request blocked by Agent Observability hook rule"
 	}
 	if id := strings.TrimSpace(e.RuleID); id != "" {
 		return fmt.Sprintf("agento11y hook denied by rule %s: %s", id, reason)

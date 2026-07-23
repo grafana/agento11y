@@ -1,4 +1,4 @@
-"""LiteLLM callback handler that exports generations to Sigil."""
+"""LiteLLM callback handler that exports generations to Agent Observability."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ _EMBEDDING_CALL_TYPES = frozenset({"embedding", "aembedding"})
 
 
 def _make_tool_call_part(*, call_id: str, name: str, arguments: str) -> Part:
-    """Build a Sigil TOOL_CALL Part from normalized arguments."""
+    """Build an agento11y TOOL_CALL Part from normalized arguments."""
     return Part(
         kind=PartKind.TOOL_CALL,
         tool_call=ToolCall(
@@ -54,7 +54,7 @@ def _make_tool_call_part(*, call_id: str, name: str, arguments: str) -> Part:
 
 
 def _map_messages(messages: list[dict[str, Any]] | None) -> tuple[list[Message], str]:
-    """Map OpenAI-format messages to Sigil Messages, extracting system prompt."""
+    """Map OpenAI-format messages to agento11y Messages, extracting system prompt."""
     if not messages:
         return [], ""
 
@@ -139,7 +139,7 @@ def _map_thinking_parts(message: dict[str, Any]) -> list[Part]:
 
 
 def _map_tool_call_parts(tool_calls: list[dict[str, Any]] | None) -> list[Part]:
-    """Map OpenAI-format tool_calls to Sigil ToolCall parts."""
+    """Map OpenAI-format tool_calls to agento11y ToolCall parts."""
     if not tool_calls:
         return []
 
@@ -161,7 +161,7 @@ def _map_tool_call_parts(tool_calls: list[dict[str, Any]] | None) -> list[Part]:
 
 
 def _tool_result_message(*, content: str, tool_call_id: str, name: str) -> Message:
-    """Create a Sigil tool result Message."""
+    """Create an agento11y tool result Message."""
     return Message(
         role=MessageRole.TOOL,
         parts=[
@@ -178,7 +178,7 @@ def _tool_result_message(*, content: str, tool_call_id: str, name: str) -> Messa
 
 
 def _map_response_output(response: Any) -> list[Message]:
-    """Map SLO response to Sigil output Messages.
+    """Map SLO response to agento11y output Messages.
 
     Reads from the StandardLoggingPayload ``response`` field (dict or str)
     so that LiteLLM redaction settings are honoured.
@@ -385,9 +385,9 @@ def _extract_detailed_usage(response_obj: Any, slo: dict[str, Any]) -> TokenUsag
 
 
 class Agento11yLiteLLMLogger(CustomLogger):
-    """LiteLLM callback logger that exports generations to Sigil.
+    """LiteLLM callback logger that exports generations to Agent Observability.
 
-    Uses the Sigil SDK recorder pattern directly. The SDK handles
+    Uses the agento11y SDK recorder pattern directly. The SDK handles
     batching and export internally, so this extends CustomLogger
     (not CustomBatchLogger) to avoid double-batching.
     """

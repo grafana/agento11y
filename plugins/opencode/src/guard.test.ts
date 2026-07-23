@@ -19,7 +19,7 @@ function asTransform(res: GuardResult): { transform: Record<string, unknown> } {
 }
 
 describe("runToolCallGuard", () => {
-  it("returns undefined when Sigil allows the tool call", async () => {
+  it("returns undefined when Agent Observability allows the tool call", async () => {
     const calls: unknown[] = [];
     const client = {
       evaluateHook: async (req: unknown) => {
@@ -46,7 +46,7 @@ describe("runToolCallGuard", () => {
     );
   });
 
-  it("returns a wrapped policy-deny result when Sigil denies the tool call", async () => {
+  it("returns a wrapped policy-deny result when Agent Observability denies the tool call", async () => {
     const client = {
       evaluateHook: async () => ({
         action: "deny",
@@ -73,7 +73,7 @@ describe("runToolCallGuard", () => {
     expect(block.reason).toContain("Stop and tell the user");
   });
 
-  it("omits the Reason clause when Sigil denies without a reason", async () => {
+  it("omits the Reason clause when Agent Observability denies without a reason", async () => {
     const client = {
       evaluateHook: async () => ({
         action: "deny",

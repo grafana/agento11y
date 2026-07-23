@@ -495,7 +495,7 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 		name string
 		// guards is the GuardsConfig the test passes through cfg.Guards.
 		guards envconfig.GuardsConfig
-		// hookResponse is the JSON the fake Sigil hook server returns.
+		// hookResponse is the JSON the fake Agent Observability hook server returns.
 		// If empty, an allow is returned.
 		hookResponse string
 		// useClosedServer points cfg.Endpoint at a closed listener so

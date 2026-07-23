@@ -519,7 +519,7 @@ export class Agento11yVercelAiSdkInstrumentation {
       );
       if (response.action === 'deny') {
         throw new HookDeniedError(
-          response.reason ?? 'request blocked by Sigil hook rule',
+          response.reason ?? 'request blocked by Agent Observability hook rule',
           response.ruleId,
           response.evaluations,
         );

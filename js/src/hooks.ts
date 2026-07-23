@@ -31,16 +31,16 @@ export class HookDeniedError extends Error {
     super(formatDenyMessage(reason, ruleId));
     this.name = 'HookDeniedError';
     const normalized = reason?.trim() ?? '';
-    this.reason = normalized.length > 0 ? normalized : 'request blocked by Sigil hook rule';
+    this.reason = normalized.length > 0 ? normalized : 'request blocked by Agent Observability hook rule';
     this.ruleId = ruleId;
     this.evaluations = evaluations;
   }
 }
 
 /**
- * Sends a hook evaluation request to the Sigil API.
+ * Sends a hook evaluation request to the Agent Observability API.
  *
- * `apiEndpoint` is the Sigil API base URL (without the `/api/v1/...` suffix).
+ * `apiEndpoint` is the Agent Observability API base URL (without the `/api/v1/...` suffix).
  * `extraHeaders` is merged into the request — typically the same auth headers
  * the SDK uses for generation export.
  *
@@ -131,7 +131,7 @@ function allowResponse(): HookEvaluateResponse {
 
 function formatDenyMessage(reason: string, ruleId: string | undefined): string {
   const trimmedReason = reason?.trim() ?? '';
-  const baseReason = trimmedReason.length > 0 ? trimmedReason : 'request blocked by Sigil hook rule';
+  const baseReason = trimmedReason.length > 0 ? trimmedReason : 'request blocked by Agent Observability hook rule';
   if (ruleId !== undefined && ruleId.length > 0) {
     return `agento11y hook denied by rule ${ruleId}: ${baseReason}`;
   }
@@ -151,7 +151,7 @@ function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean): string {
 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     const parsed = new URL(trimmed);
-    // Preserve a path prefix so prefix-mounted Sigil deployments
+    // Preserve a path prefix so prefix-mounted Agent Observability deployments
     // (https://host/sigil) route /api/v1/hooks:evaluate under the prefix.
     const path = parsed.pathname.replace(/\/+$/, '');
     return `${parsed.protocol}//${parsed.host}${path}`;
@@ -251,7 +251,7 @@ function parseTransformedInputPayload(payload: Record<string, unknown>): HookInp
   return parseHookInputWire(raw);
 }
 
-/** Parses `transformed_input` from the Sigil API (SDK-shaped JSON and Go/proto JSON encodings). */
+/** Parses `transformed_input` from the Agent Observability API (SDK-shaped JSON and Go/proto JSON encodings). */
 function parseHookInputWire(raw: Record<string, unknown>): HookInput | undefined {
   const out: HookInput = {};
   const msgs = parseWireMessages(raw.messages);
