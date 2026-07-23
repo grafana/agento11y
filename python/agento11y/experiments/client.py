@@ -1,29 +1,29 @@
 """``Client`` — a thin, ergonomic client for cloud experiment writes.
 
-It speaks the v1 one-token ingest contract over the stdlib ``experiments``
-transport (urllib) directly, so it has no OpenTelemetry / heavy ``Client``
-dependency and can be vendored into a benchmark verifier container. Generation
-recording (``record_generation``) lazily uses the full ``Client`` when
-available, since that path needs the generation exporter.
+It speaks the v1 one-token ingest contract over the retrying stdlib
+``experiments`` transport, including generation publishing, so benchmark
+verifier containers do not need the OpenTelemetry-backed core client.
 """
 
 from __future__ import annotations
 
 import base64
-import json
+import copy
 import os
 import urllib.parse
-import urllib.request
 from typing import Any
 
 from .. import _experiments_transport as _transport
+from ..config import _warn_legacy_env
 from ..errors import ScoreExportError
 from ..models import (
     CreateExperimentRequest,
     Experiment,
     ExperimentReport,
     ScoreItem,
+    TokenUsage,
 )
+from ..redaction import redact_secret_text, redact_secret_value
 from .types import _first_nonblank
 
 TENANT_HEADER = "X-Scope-OrgID"
@@ -51,28 +51,32 @@ class Client:
         generation_protocol: str = "http",
         insecure: bool | None = None,
         use_experimental_otel: bool | None = None,
+        redact_secrets: bool = True,
     ) -> None:
+        _warn_legacy_env()
         if not (endpoint or "").strip():
             raise ValueError("Agent Observability endpoint is required (your Grafana Cloud Agent Observability URL)")
-        token = (ingest_token or _first_nonblank(os.environ, "AGENTO11Y_AUTH_TOKEN", "SIGIL_AUTH_TOKEN")).strip()
+        token = (ingest_token or _first_nonblank(os.environ, "AGENTO11Y_AUTH_TOKEN")).strip()
         if not token:
             raise ValueError("ingest_token is required (your Grafana Cloud ingestion API key)")
         self.endpoint = endpoint.rstrip("/")
         self.tenant_id = tenant_id.strip()
         self.ingest_token = token
-        self.actor = actor
+        # The backend derives this same identity from the run's sdk/python
+        # source. Sending it on every lifecycle request also covers routes such
+        # as artifact upload that cannot carry a JSON source object.
+        self.actor = actor.strip() or _transport.DEFAULT_INGEST_ACTOR
         self.trusted = trusted
-        self.grafana_url = (
-            grafana_url or _first_nonblank(os.environ, "AGENTO11Y_GRAFANA_URL", "SIGIL_GRAFANA_URL")
-        ).rstrip("/")
+        self.grafana_url = (grafana_url or _first_nonblank(os.environ, "AGENTO11Y_GRAFANA_URL")).rstrip("/")
         self.timeout = timeout
         self.generation_endpoint = generation_endpoint or self.endpoint
         self.generation_protocol = generation_protocol
         self._insecure = insecure if insecure is not None else self.endpoint.startswith("http://")
         self._retry = _transport.RetryPolicy(timeout=timeout)
         self._core: Any | None = None
+        self.redact_secrets = bool(redact_secrets)
         self.use_experimental_otel = (
-            _env_bool("AGENTO11Y_USE_EXPERIMENTAL_OTEL", "SIGIL_USE_EXPERIMENTAL_OTEL")
+            _env_bool("AGENTO11Y_USE_EXPERIMENTAL_OTEL")
             if use_experimental_otel is None
             else bool(use_experimental_otel)
         )
@@ -133,6 +137,7 @@ class Client:
         conversation_id: str = "",
         trace_id: str = "",
         span_id: str = "",
+        test_case: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Creates or idempotently upserts a typed trial under a run."""
@@ -149,6 +154,8 @@ class Client:
             request["trace_id"] = trace_id
         if span_id:
             request["span_id"] = span_id
+        if test_case:
+            request["test_case"] = dict(test_case)
         if metadata:
             request["metadata"] = dict(metadata)
         return _transport.create_test_case_trial(
@@ -168,6 +175,7 @@ class Client:
         duration_ms: int | None = None,
         conversation_id: str = "",
         trace_id: str = "",
+        span_id: str = "",
     ) -> dict[str, Any]:
         """Patches a typed trial's status / usage rollups."""
 
@@ -188,6 +196,8 @@ class Client:
             request["conversation_id"] = conversation_id
         if trace_id:
             request["trace_id"] = trace_id
+        if span_id:
+            request["span_id"] = span_id
         return _transport.update_test_case_trial(
             **self._args(),
             experiment_id=experiment_id,
@@ -203,7 +213,14 @@ class Client:
 
         if not scores:
             return 0
-        response = _transport.export_scores(**self._args(), scores=scores, retry=self._retry)
+        exported = copy.deepcopy(scores)
+        if self.redact_secrets:
+            for score in exported:
+                if score.value.string is not None:
+                    score.value.string = redact_secret_text(score.value.string)
+                score.explanation = redact_secret_text(score.explanation)
+                score.metadata = redact_secret_value(score.metadata)
+        response = _transport.export_scores(**self._args(), scores=exported, retry=self._retry)
         if raise_on_reject and response.rejected:
             details = "; ".join(f"{r.score_id}: {r.error or 'rejected'}" for r in response.rejected)
             raise ScoreExportError(f"agento11y score export rejected {len(response.rejected)} score(s): {details}")
@@ -223,22 +240,23 @@ class Client:
         agent_name: str = "",
         agent_version: str = "",
         operation_name: str = "invoke_agent",
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        usage: TokenUsage | None = None,
         tags: dict[str, str] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> str:
         """Ingests a single generation over HTTP using only the stdlib.
 
-        Unlike :meth:`record_generation` (which uses the full ``Client`` and its
-        OpenTelemetry-backed exporter), this posts a minimal generation JSON
-        directly, so a minimal vendored environment (e.g. a verifier container)
-        can ingest the attempt's transcript and give the trial a real, openable
-        conversation.
+        This posts generation JSON directly so a minimal vendored environment
+        can ingest the attempt's transcript and create an openable conversation.
         """
 
         generation: dict[str, Any] = {
             "id": generation_id,
             "conversation_id": conversation_id,
             "operation_name": operation_name,
+            "mode": "GENERATION_MODE_SYNC",
             "model": {"provider": model_provider or "eval", "name": model_name or "experiment"},
         }
         if agent_name:
@@ -253,18 +271,21 @@ class Client:
             generation["tags"] = dict(tags)
         if metadata:
             generation["metadata"] = dict(metadata)
-        self._post("/api/v1/generations:export", {"generations": [generation]})
+        resolved_usage = usage or TokenUsage(input_tokens=int(input_tokens or 0), output_tokens=int(output_tokens or 0))
+        normalized_usage = resolved_usage.normalize()
+        if normalized_usage.total_tokens:
+            generation["usage"] = {
+                "input_tokens": normalized_usage.input_tokens,
+                "output_tokens": normalized_usage.output_tokens,
+                "total_tokens": normalized_usage.total_tokens,
+                "cache_read_input_tokens": normalized_usage.cache_read_input_tokens,
+                "cache_write_input_tokens": normalized_usage.cache_write_input_tokens,
+                "reasoning_tokens": normalized_usage.reasoning_tokens,
+            }
+        if self.redact_secrets:
+            generation = redact_secret_value(generation)
+        _transport.export_generation_json(**self._args(), generation=generation, retry=self._retry)
         return generation_id
-
-    def _post(self, path: str, body: dict[str, Any]) -> None:
-        request = urllib.request.Request(
-            f"{self.endpoint}{path}",
-            data=json.dumps(body).encode("utf-8"),
-            headers={**self._headers(), "Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=self.timeout):
-            pass
 
     # --- artifacts -------------------------------------------------------- #
 
@@ -292,6 +313,8 @@ class Client:
 
         if parent_kind != "test_case_trial":
             raise ValueError("only test_case_trial artifacts are supported by the experiments ingest client")
+        if self.redact_secrets and (kind in {"json", "markdown", "text", "csv"} or mime.startswith("text/")):
+            content = redact_secret_text(content.decode("utf-8")).encode("utf-8")
         return _transport.upload_trial_artifact(
             **self._args(),
             experiment_id=experiment_id,
@@ -319,55 +342,28 @@ class Client:
         operation_name: str = "invoke_agent",
         input_tokens: int | None = None,
         output_tokens: int | None = None,
+        usage: TokenUsage | None = None,
         tags: dict[str, str] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> str:
-        """Exports a generation to anchor a trial's scores (needs the full SDK).
+        """Exports a generation through the lightweight experiment transport."""
 
-        Lazily builds the core ``Client`` (which owns the generation exporter and
-        pulls in OpenTelemetry). In a minimal vendored environment without those
-        deps this raises; the live path ingests generations through the agent's
-        own instrumentation instead.
-        """
-
-        from ..models import (
-            Generation,
-            GenerationStart,
-            ModelRef,
-            TokenUsage,
-            assistant_text_message,
-            user_text_message,
+        return self.export_generation(
+            generation_id=generation_id,
+            conversation_id=conversation_id,
+            input_text=input_text,
+            output_text=output_text,
+            model_provider=model_provider,
+            model_name=model_name,
+            agent_name=agent_name,
+            agent_version=agent_version,
+            operation_name=operation_name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            usage=usage,
+            tags=tags,
+            metadata=metadata,
         )
-
-        client = self._ensure_core()
-        model = ModelRef(provider=model_provider or "eval", name=model_name or "experiment")
-        usage = TokenUsage(input_tokens=int(input_tokens or 0), output_tokens=int(output_tokens or 0))
-        with client.start_generation(
-            GenerationStart(
-                id=generation_id,
-                conversation_id=conversation_id,
-                model=model,
-                agent_name=agent_name,
-                agent_version=agent_version,
-                operation_name=operation_name,
-                tags=dict(tags or {}),
-                metadata=dict(metadata or {}),
-            )
-        ) as recorder:
-            recorder.set_result(
-                Generation(
-                    id=generation_id,
-                    conversation_id=conversation_id,
-                    model=model,
-                    agent_name=agent_name,
-                    agent_version=agent_version,
-                    input=[user_text_message(input_text)] if input_text else [],
-                    output=[assistant_text_message(output_text)] if output_text else [],
-                    usage=usage,
-                )
-            )
-        client.flush()
-        return generation_id
 
     def _ensure_core(self) -> Any:
         if self._core is None:
@@ -431,8 +427,8 @@ class Client:
         quoted = urllib.parse.quote(experiment_id, safe="")
         base = self.grafana_url
         if base:
-            return f"{base}/a/grafana-sigil-app/offline-experiments/experiments/{quoted}"
-        return f"{self.endpoint}/a/grafana-sigil-app/offline-experiments/experiments/{quoted}"
+            return f"{base}/a/grafana-sigil-app/experiments/runs/{quoted}"
+        return f"{self.endpoint}/a/grafana-sigil-app/experiments/runs/{quoted}"
 
     def shutdown(self) -> None:
         """Flushes and closes the underlying client if one was built."""

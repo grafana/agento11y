@@ -16,8 +16,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from typing import Any
 
-from .config import GenerationSanitizer, _env
+from .config import GenerationSanitizer, _env, _warn_legacy_env
 from .models import Generation, Message, MessageRole, Part, PartKind
 
 _logger = logging.getLogger("agento11y")
@@ -38,8 +39,8 @@ class SecretRedactionOptions:
     Options for the built-in secret redaction sanitizer.
 
     `redact_input_messages` is None by default, which falls back to
-    AGENTO11Y_REDACT_INPUT_MESSAGES (legacy SIGIL_REDACT_INPUT_MESSAGES) and
-    then to False (the current opencode plugin behavior). Set it explicitly to
+    AGENTO11Y_REDACT_INPUT_MESSAGES and then to False (the current opencode
+    plugin behavior). Set it explicitly to
     override the env var.
 
     `redact_email_addresses` defaults to True. Callers can opt out when email
@@ -114,19 +115,45 @@ class _SecretRedactor:
         return result
 
 
+def redact_secret_text(text: str, *, redact_email_addresses: bool = True) -> str:
+    """Redacts known secret formats from arbitrary experiment text."""
+
+    return _SecretRedactor(include_email_addresses=redact_email_addresses).redact(text)
+
+
+def redact_secret_value(value: Any, *, redact_email_addresses: bool = True) -> Any:
+    """Recursively redacts strings while preserving a JSON-like value's shape."""
+
+    redactor = _SecretRedactor(include_email_addresses=redact_email_addresses)
+
+    def visit(item: Any) -> Any:
+        if isinstance(item, str):
+            return redactor.redact(item)
+        if isinstance(item, dict):
+            return {key: visit(child) for key, child in item.items()}
+        if isinstance(item, list):
+            return [visit(child) for child in item]
+        if isinstance(item, tuple):
+            return tuple(visit(child) for child in item)
+        return item
+
+    return visit(value)
+
+
 def _resolve_redact_input_messages(
     explicit: bool | None,
     env: dict[str, str] | None = None,
 ) -> bool:
     """Resolve input-message redaction: explicit > env > ``False``.
 
-    ``AGENTO11Y_REDACT_INPUT_MESSAGES`` (legacy ``SIGIL_REDACT_INPUT_MESSAGES``)
-    accepts ``1/0``, ``true/false``, ``yes/no``, ``on/off`` (case-insensitive)
+    ``AGENTO11Y_REDACT_INPUT_MESSAGES`` accepts ``1/0``, ``true/false``,
+    ``yes/no``, ``on/off`` (case-insensitive)
     and is consulted only when ``explicit`` is ``None``. An unrecognised env
     value logs a warning naming the selected key and falls back to ``False``,
-    never to the other spelling, so a typo cannot silently flip redaction.
+    so a typo cannot silently flip redaction.
     """
 
+    _warn_legacy_env(env)
     if explicit is not None:
         return explicit
     raw, key = _env(env, "REDACT_INPUT_MESSAGES")

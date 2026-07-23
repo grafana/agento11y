@@ -22,7 +22,7 @@ Out-of-process use (e.g. a verifier container) opens a trial from a
         raise RuntimeError("missing Agent Observability trial environment")
     trial = Trial.from_ref(client, ref)
     trial.final_score(0.82, passed=True)
-    trial.flush()
+    trial.close()
 """
 
 from __future__ import annotations
@@ -55,7 +55,9 @@ from ..models import (
     ScoreSource,
     ScoreValue,
 )
+from ..redaction import redact_secret_text
 from . import otel
+from .evaluators import EvaluationResult, OutputEvaluator
 from .types import (
     Candidate,
     Evaluator,
@@ -70,6 +72,7 @@ from .types import (
 
 if TYPE_CHECKING:  # avoid an import cycle at runtime
     from .client import Client
+    from .suites import TestSuitesClient
 
 
 def stable_id(prefix: str, *parts: Any) -> str:
@@ -154,6 +157,7 @@ class Trial:
         ref: TrialRef,
         *,
         experiment: Experiment | None = None,
+        test_case: TestCase | None = None,
         candidate: Candidate | None = None,
         default_evaluator: Evaluator | None = None,
         metadata: dict[str, Any] | None = None,
@@ -162,6 +166,7 @@ class Trial:
         self._client = client
         self.ref = ref
         self._experiment = experiment
+        self._test_case = test_case
         self._candidate = candidate
         self._default_evaluator = default_evaluator or Evaluator(evaluator_id="sdk", version="0")
         self._metadata = dict(metadata or {})
@@ -195,6 +200,8 @@ class Trial:
         self._accepted = 0
         self._has_final = False
         self._final_passed: bool | None = None
+        self._closed = False
+        self._score_occurrences: dict[tuple[str, str], int] = {}
         self.artifacts: list[dict[str, Any]] = []
 
     # --- lifecycle -------------------------------------------------------- #
@@ -222,6 +229,8 @@ class Trial:
         )
 
     def __enter__(self) -> Trial:
+        if self._closed:
+            raise RuntimeError("cannot enter a closed trial")
         self._started_monotonic = time.perf_counter()
         self._start_span()
         return self
@@ -232,22 +241,40 @@ class Trial:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> bool:
+        self.close(exc=exc, exc_type=exc_type)
+        return False  # never suppress
+
+    def close(
+        self,
+        *,
+        exc: BaseException | None = None,
+        exc_type: type[BaseException] | None = None,
+    ) -> None:
+        """Flushes and terminalizes this trial exactly once."""
+
+        if self._closed:
+            return
         if exc is not None and self.status == TrialStatus.RUNNING.value:
             self.status = TrialStatus.ERRORED.value
-            self.error = str(exc) or exc_type.__name__ if exc_type else str(exc)
+            self.error = str(exc) or (exc_type.__name__ if exc_type else type(exc).__name__)
         elif self.status == TrialStatus.RUNNING.value:
-            # No explicit verdict: derive from the final score if present.
-            if self._has_final:
-                self.status = TrialStatus.PASSED.value if self._final_passed else TrialStatus.FAILED.value
-            else:
+            if not self._has_final:
                 self.status = TrialStatus.FAILED.value
-                self.error = "trial exited without a final score"
+                self.error = "trial closed without a final score"
+            elif self._final_passed is None:
+                self.status = TrialStatus.COMPLETED.value
+            else:
+                self.status = TrialStatus.PASSED.value if self._final_passed else TrialStatus.FAILED.value
         try:
             self.flush()
         finally:
-            self._finalize_trial()
-            self._end_span()
-        return False  # never suppress
+            try:
+                self._finalize_trial()
+            finally:
+                self._end_span()
+                self._closed = True
+                if self._experiment is not None:
+                    self._experiment._trial_closed(self)
 
     def _finalize_trial(self) -> None:
         """Patches the typed trial with its terminal status and usage rollups."""
@@ -268,6 +295,7 @@ class Trial:
             duration_ms=self._duration_ms(),
             conversation_id=self.conversation_id,
             trace_id=self.trace_id,
+            span_id=self.span_id,
         )
 
     def _duration_ms(self) -> int | None:
@@ -310,9 +338,41 @@ class Trial:
             conversation_id=self.conversation_id,
             trace_id=self.trace_id,
             span_id=self.span_id,
+            test_case=self._test_case_snapshot(),
             metadata={"test_case_name": self.ref.test_case_name} if self.ref.test_case_name else None,
         )
         self._trial_created = True
+
+    def _test_case_snapshot(self) -> dict[str, Any] | None:
+        """Returns the immutable case data stored with this trial."""
+
+        case = self._test_case
+        if case is None:
+            return None
+
+        def object_value(value: Any) -> dict[str, Any]:
+            if value is None:
+                return {}
+            if isinstance(value, dict):
+                return dict(value)
+            return {"value": value}
+
+        artifact_refs = [
+            dict(ref) for ref in case.artifact_refs if ref.get("artifact_id") and ref.get("name") and ref.get("kind")
+        ]
+        return {
+            "test_case_id": case.test_case_id,
+            "suite_id": self.ref.suite_id,
+            "suite_version": self.ref.suite_version,
+            "name": case.name,
+            "description": case.description,
+            "tags": list(case.tags),
+            "category": case.category,
+            "input": object_value(case.input),
+            "expected": object_value(case.expected),
+            "metadata": dict(case.metadata),
+            "artifact_refs": artifact_refs,
+        }
 
     def _end_span(self) -> None:
         if self._span is None:
@@ -322,8 +382,9 @@ class Trial:
             self._otel_token = None
         self._span.set_attributes(self._identity_attrs())
         if self.error:
-            self._span.set_attribute(otel.EVAL_EXPLANATION, self.error)
-            self._span.set_status(Status(StatusCode.ERROR, self.error))
+            safe_error = self._telemetry_text(self.error)
+            self._span.set_attribute(otel.EVAL_EXPLANATION, safe_error)
+            self._span.set_status(Status(StatusCode.ERROR, safe_error))
         else:
             self._span.set_status(Status(StatusCode.OK))
         self._span.end()
@@ -364,6 +425,13 @@ class Trial:
 
         self.trace_id = (trace_id or "").strip()
         self.span_id = (span_id or "").strip()
+        if self._trial_created:
+            self._client.update_trial(
+                self.ref.experiment_id,
+                self.trial_id,
+                trace_id=self.trace_id,
+                span_id=self.span_id,
+            )
         return self
 
     def bind_conversation(self, conversation_id: str) -> Trial:
@@ -472,6 +540,99 @@ class Trial:
 
     # --- scoring ---------------------------------------------------------- #
 
+    def record_evaluation(
+        self,
+        result: EvaluationResult,
+        *,
+        score_key: str = "",
+        publish_grader: bool = True,
+        metadata: dict[str, Any] | None = None,
+    ) -> ScoreItem:
+        """Records an evaluation produced by any runner, framework, or helper.
+
+        When the result includes a grader generation, it is published and linked
+        to the score. Agent Observability does not fetch or normalize the evaluated
+        conversation; callers bind its existing trace/conversation identifiers.
+        """
+
+        resolved_score_key = score_key or result.score_key
+        score_id = self._next_score_id(resolved_score_key, result.evaluator.evaluator_id)
+        grader_conversation_id = ""
+        grader_generation_id = ""
+        if result.grader is not None and publish_grader:
+            grader_generation_id = stable_id(
+                "gen",
+                score_id,
+                "grader",
+            )
+            grader_conversation_id = stable_id(
+                "conv",
+                score_id,
+                "grader",
+            )
+            grader = result.grader
+            self._client.record_generation(
+                grader_generation_id,
+                conversation_id=grader_conversation_id,
+                input_text=grader.input,
+                output_text=grader.output,
+                model_provider=grader.model_provider,
+                model_name=grader.model_name,
+                agent_name=grader.agent_name,
+                agent_version=grader.agent_version,
+                operation_name=grader.operation_name,
+                usage=grader.usage,
+                tags={
+                    "experiment.run_id": self.ref.experiment_id,
+                    "test.case.id": self.ref.test_case_id,
+                    "test.case.attempt": str(self.ref.attempt),
+                    "evaluator.id": result.evaluator.evaluator_id,
+                },
+                metadata={
+                    "experiment_run_id": self.ref.experiment_id,
+                    "test_case_id": self.ref.test_case_id,
+                    "attempt": self.ref.attempt,
+                    **result.metadata,
+                },
+            )
+        return self.score(
+            resolved_score_key,
+            result.value,
+            evaluator=result.evaluator,
+            passed=result.passed,
+            explanation=result.explanation,
+            grader_conversation_id=grader_conversation_id,
+            grader_generation_id=grader_generation_id,
+            metadata={**result.metadata, **(metadata or {})},
+            _score_id=score_id,
+        )
+
+    def evaluate_output(
+        self,
+        judge: OutputEvaluator,
+        *,
+        input: Any,
+        output: Any,
+        expected: Any = None,
+        score_key: str = "",
+        publish_grader: bool = True,
+        metadata: dict[str, Any] | None = None,
+    ) -> ScoreItem:
+        """Grades explicit caller-supplied output and records the result.
+
+        This convenience does not retrieve the trial's bound conversation. Use a
+        framework-native evaluator and :meth:`record_evaluation` for trajectory
+        or transcript evaluation.
+        """
+
+        result = judge.evaluate_output(input=input, output=output, expected=expected)
+        return self.record_evaluation(
+            result,
+            score_key=score_key,
+            publish_grader=publish_grader,
+            metadata=metadata,
+        )
+
     def score(
         self,
         score_key: str,
@@ -485,6 +646,7 @@ class Trial:
         grader_generation_id: str = "",
         grader_trace_id: str = "",
         metadata: dict[str, Any] | None = None,
+        _score_id: str = "",
     ) -> ScoreItem:
         """Records a score for this trial. The general primitive.
 
@@ -496,7 +658,7 @@ class Trial:
         sv = _coerce_value(value)
         if score_key == "final" and passed is None:
             passed = _infer_final_passed(sv)
-        score_id = stable_id("score", self.ref.experiment_id, self.trial_id, score_key, ev.evaluator_id)
+        score_id = _score_id or self._next_score_id(score_key, ev.evaluator_id)
         # The score carries the typed trial_id so the backend attributes it and the
         # report rolls up per case; metadata mirrors the ids for grouping.
         score_metadata = {
@@ -542,6 +704,15 @@ class Trial:
             self._has_final = True
             self._final_passed = passed
         return item
+
+    def _next_score_id(self, score_key: str, evaluator_id: str) -> str:
+        identity = (score_key, evaluator_id)
+        occurrence = self._score_occurrences.get(identity, 0)
+        self._score_occurrences[identity] = occurrence + 1
+        parts: tuple[Any, ...] = (self.ref.experiment_id, self.trial_id, score_key, evaluator_id)
+        if occurrence:
+            parts += (occurrence + 1,)
+        return stable_id("score", *parts)
 
     def final_score(
         self,
@@ -690,6 +861,7 @@ class Trial:
     ) -> None:
         if self._span is None:
             return
+        explanation = self._telemetry_text(explanation)
         attrs = otel.score_event_attributes(
             name=score_key,
             value=_event_value(value),
@@ -703,6 +875,11 @@ class Trial:
             response_id=response_id,
         )
         self._span.add_event(otel.EVENT_EVAL_RESULT, attributes=attrs)
+
+    def _telemetry_text(self, value: str) -> str:
+        if getattr(self._client, "redact_secrets", True):
+            return redact_secret_text(value)
+        return value
 
     # --- export ----------------------------------------------------------- #
 
@@ -750,12 +927,13 @@ class Trial:
         scores' ``generation_id`` resolves under strict score ingest.
         """
 
-        if not self._buffer:
-            return 0
         self._ensure_generation()
         flush_generations = getattr(self._client, "flush_generations", None)
         if callable(flush_generations):
             flush_generations()
+        self._create_trial()
+        if not self._buffer:
+            return 0
         pending = list(self._buffer)
         accepted = self._client.export_scores(pending)
         del self._buffer[: len(pending)]
@@ -789,9 +967,12 @@ class Experiment:
         description: str = "",
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        planned_trial_count: int | None = None,
         auto_finalize: bool = True,
         use_experimental_otel: bool | None = None,
     ) -> None:
+        if planned_trial_count is not None and planned_trial_count < 0:
+            raise ValueError("planned_trial_count must be non-negative")
         self._client = client
         self.experiment_id = experiment_id or stable_id("exp", name, secrets.token_hex(8))
         self.name = name or self.experiment_id
@@ -801,6 +982,7 @@ class Experiment:
         self.description = description
         self._tags = list(tags or [])
         self._metadata = dict(metadata or {})
+        self.planned_trial_count = planned_trial_count
         self._auto_finalize = auto_finalize
         self._use_experimental_otel = (
             bool(use_experimental_otel)
@@ -810,6 +992,8 @@ class Experiment:
         self.status = "running"
         self._accepted = 0
         self._finalized = False
+        self._open_trials: dict[str, Trial] = {}
+        self._claimed_trial_ids: set[str] = set()
         self._owns_client = False  # set by the experiment() factory when it built the client
 
     # alias: many callers spell the identifier ``run_id``
@@ -825,11 +1009,17 @@ class Experiment:
 
     def __enter__(self) -> Experiment:
         metadata = dict(self._metadata)
+        suite_id = ""
+        suite_version = ""
         if self.suite is not None:
-            metadata.setdefault("suite_id", self.suite.suite_id)
-            metadata.setdefault("suite_version", self.suite.version)
+            suite_id = self.suite.suite_id
+            suite_version = self.suite.version
+            metadata.setdefault("suite_id", suite_id)
+            metadata.setdefault("suite_version", suite_version)
+        candidate_metadata: dict[str, Any] = {}
         if self._candidate is not None:
-            metadata.update(self._candidate.as_metadata())
+            candidate_metadata = self._candidate.as_metadata()
+            metadata.update(candidate_metadata)
         self._client.upsert_experiment(
             CreateExperimentRequest(
                 run_id=self.experiment_id,
@@ -837,6 +1027,10 @@ class Experiment:
                 source="external",
                 description=self.description,
                 tags=self._tags,
+                suite_id=suite_id,
+                suite_version=suite_version,
+                candidate=candidate_metadata,
+                planned_trial_count=self.planned_trial_count,
                 metadata=metadata,
             )
         )
@@ -868,15 +1062,21 @@ class Experiment:
         trajectory_id: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> Trial:
-        """Opens a trial for ``case`` (a :class:`TestCase` or a test-case id)."""
+        """Opens one unique case attempt.
+
+        Reusing the same case and attempt in one experiment is rejected because
+        both map to the same durable trial and score identities. Increment
+        ``attempt`` when retrying a case.
+        """
 
         if isinstance(case, TestCase):
+            test_case = case
             test_case_id = case.test_case_id
             test_case_name = case.name or case.test_case_id
         else:
             test_case_id = str(case)
-            tc = self.suite.case(test_case_id) if self.suite is not None else None
-            test_case_name = tc.name if tc is not None else test_case_id
+            test_case = self.suite.case(test_case_id) if self.suite is not None else None
+            test_case_name = test_case.name if test_case is not None else test_case_id
         ref = TrialRef(
             experiment_id=self.experiment_id,
             test_case_id=test_case_id,
@@ -887,15 +1087,27 @@ class Experiment:
             test_case_name=test_case_name,
             trajectory_id=trajectory_id,
         )
-        return Trial(
+        trial_id = stable_id("trial", ref.experiment_id, ref.test_case_id, ref.attempt)
+        if trial_id in self._claimed_trial_ids:
+            raise ValueError(
+                f"trial for test case {test_case_id!r} attempt {attempt} already exists; increment attempt for a retry"
+            )
+        trial = Trial(
             self._client,
             ref,
             experiment=self,
+            test_case=test_case,
             candidate=self._candidate,
             default_evaluator=self._default_evaluator,
             metadata=metadata,
             use_experimental_otel=self._use_experimental_otel,
         )
+        self._claimed_trial_ids.add(trial.trial_id)
+        self._open_trials[trial.trial_id] = trial
+        return trial
+
+    def _trial_closed(self, trial: Trial) -> None:
+        self._open_trials.pop(trial.trial_id, None)
 
     def _record_accepted(self, n: int) -> None:
         self._accepted += n
@@ -904,14 +1116,26 @@ class Experiment:
     def accepted_scores(self) -> int:
         return self._accepted
 
-    def finalize(self, status: ExperimentStatus | str = ExperimentStatus.COMPLETED, *, error: str = "") -> None:
-        """Finalizes the run. Safe to call once; later calls are no-ops."""
+    def finalize(
+        self,
+        status: ExperimentStatus | str = ExperimentStatus.COMPLETED,
+        *,
+        error: str = "",
+        score_count: int | None = None,
+    ) -> None:
+        """Finalizes the run. Safe to call once; later calls are no-ops.
+
+        ``score_count`` is an optional assertion against the server's stored
+        scores. Leave it unset for normal and distributed runners.
+        """
 
         if self._finalized:
             return
+        for trial in list(self._open_trials.values()):
+            trial.close()
         status_value = status.value if isinstance(status, ExperimentStatus) else str(status)
         self.status = status_value
-        self._client.finalize(self.experiment_id, status_value, score_count=self._accepted, error=error)
+        self._client.finalize(self.experiment_id, status_value, score_count=score_count, error=error)
         self._finalized = True
 
     def report(self) -> ExperimentReport:
@@ -943,6 +1167,7 @@ def experiment(
     description: str = "",
     tags: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
+    planned_trial_count: int | None = None,
 ) -> Experiment:
     """Opens a cloud experiment, building a client from the environment.
 
@@ -950,9 +1175,8 @@ def experiment(
     Grafana Cloud Agent Observability instance. When ``client`` is omitted one is built from
     ``endpoint``/``ingest_token``/``tenant_id``/``actor``, falling back to the
     ``AGENTO11Y_ENDPOINT``, ``AGENTO11Y_AUTH_TOKEN``, ``AGENTO11Y_AUTH_TENANT_ID``,
-    and ``AGENTO11Y_INGEST_ACTOR`` environment variables (with their ``SIGIL_*``
-    legacy fallbacks, plus ``SIGIL_API_ENDPOINT`` and ``SIGIL_TENANT_ID``), and
-    closed on exit. ``endpoint`` and the ingestion token are required::
+    and ``AGENTO11Y_INGEST_ACTOR`` environment variables, and closed on exit.
+    ``endpoint`` and the ingestion token are required::
 
         with experiment("nightly", suite=suite, candidate={"model_name": "gpt-5"}) as exp:
             for case in suite.cases:
@@ -965,28 +1189,21 @@ def experiment(
     if client is None:
         from .client import Client
 
-        resolved_endpoint = (
-            endpoint or _first_nonblank(os.environ, "AGENTO11Y_ENDPOINT", "SIGIL_ENDPOINT", "SIGIL_API_ENDPOINT")
-        ).strip()
+        resolved_endpoint = (endpoint or _first_nonblank(os.environ, "AGENTO11Y_ENDPOINT")).strip()
         if not resolved_endpoint:
             raise ValueError(
                 "Agent Observability endpoint is required: "
                 "pass endpoint= or set AGENTO11Y_ENDPOINT to your Grafana Cloud Agent Observability URL"
             )
-        resolved_tenant = (
-            tenant_id
-            or _first_nonblank(os.environ, "AGENTO11Y_AUTH_TENANT_ID", "SIGIL_AUTH_TENANT_ID", "SIGIL_TENANT_ID")
-        ).strip()
-        resolved_token = (
-            ingest_token or _first_nonblank(os.environ, "AGENTO11Y_AUTH_TOKEN", "SIGIL_AUTH_TOKEN")
-        ).strip()
+        resolved_tenant = (tenant_id or _first_nonblank(os.environ, "AGENTO11Y_AUTH_TENANT_ID")).strip()
+        resolved_token = (ingest_token or _first_nonblank(os.environ, "AGENTO11Y_AUTH_TOKEN")).strip()
         if not resolved_token:
             raise ValueError("ingest_token is required: pass ingest_token= or set AGENTO11Y_AUTH_TOKEN")
         client = Client(
             resolved_endpoint,
             tenant_id=resolved_tenant,
             ingest_token=resolved_token,
-            actor=actor or _first_nonblank(os.environ, "AGENTO11Y_INGEST_ACTOR", "SIGIL_INGEST_ACTOR"),
+            actor=actor or _first_nonblank(os.environ, "AGENTO11Y_INGEST_ACTOR"),
             grafana_url=grafana_url,
             use_experimental_otel=use_experimental_otel,
         )
@@ -1000,7 +1217,68 @@ def experiment(
         description=description,
         tags=tags,
         metadata=metadata,
+        planned_trial_count=planned_trial_count,
         use_experimental_otel=use_experimental_otel,
     )
     exp._owns_client = owns_client
     return exp
+
+
+def experiment_from_suite(
+    suite_id: str,
+    *,
+    version: str = "latest_published",
+    name: str = "",
+    test_suites_client: TestSuitesClient | None = None,
+    service_account_token: str = "",
+    control_endpoint: str = "",
+    candidate: Candidate | dict[str, Any] | None = None,
+    experiment_id: str = "",
+    client: Client | None = None,
+    endpoint: str = "",
+    tenant_id: str = "",
+    ingest_token: str = "",
+    actor: str = "",
+    grafana_url: str = "",
+    use_experimental_otel: bool | None = None,
+    default_evaluator: Evaluator | None = None,
+    description: str = "",
+    tags: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+    planned_trial_count: int | None = None,
+) -> Experiment:
+    """Pulls a stored suite and opens an experiment linked to that exact version.
+
+    Stored-suite reads use the Grafana service-account credential while the
+    returned experiment uses the normal ingestion credential. Both credential
+    sets can be passed explicitly or loaded from their ``AGENTO11Y_*`` env vars.
+    """
+
+    if test_suites_client is None:
+        from .suites import TestSuitesClient
+
+        test_suites_client = TestSuitesClient(
+            grafana_url=grafana_url,
+            service_account_token=service_account_token,
+            control_endpoint=control_endpoint,
+        )
+    suite = test_suites_client.pull_suite(suite_id, version=version)
+    resolved_grafana_url = grafana_url or getattr(test_suites_client, "grafana_url", "")
+    return experiment(
+        name=name or f"{suite.name or suite.suite_id} experiment",
+        suite=suite,
+        candidate=candidate,
+        experiment_id=experiment_id,
+        client=client,
+        endpoint=endpoint,
+        tenant_id=tenant_id,
+        ingest_token=ingest_token,
+        actor=actor,
+        grafana_url=resolved_grafana_url,
+        use_experimental_otel=use_experimental_otel,
+        default_evaluator=default_evaluator,
+        description=description,
+        tags=tags,
+        metadata=metadata,
+        planned_trial_count=planned_trial_count,
+    )

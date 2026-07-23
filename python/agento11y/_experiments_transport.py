@@ -40,11 +40,11 @@ from .errors import (
     NotFoundError,
     ScoreExportError,
     ValidationError,
+    classify_conflict,
 )
 from .models import (
     CreateExperimentRequest,
     Experiment,
-    ExperimentEvaluator,
     ExperimentReport,
     ExperimentReportSummary,
     ExperimentStatus,
@@ -58,10 +58,12 @@ _EVAL_EXPERIMENTS_SUFFIX = "/eval/experiments"
 _EXPERIMENT_RUNS_UPSERT_PATH = "/api/v1/experiment-runs:upsert"
 _EXPERIMENT_RUNS_PREFIX = "/api/v1/experiment-runs"
 _SCORES_EXPORT_PATH = "/api/v1/scores:export"
+_GENERATIONS_EXPORT_PATH = "/api/v1/generations:export"
 _DEFAULT_PATH_PREFIX = "/api/v1"
 _DEFAULT_TIMEOUT = 30.0
 _MAX_RESPONSE_BYTES = 8 << 20
 _EXPERIMENT_RUN_SOURCE = {"kind": "sdk", "id": "python"}
+DEFAULT_INGEST_ACTOR = "ingest:sdk/python"
 
 
 @dataclass(slots=True)
@@ -183,6 +185,35 @@ def export_scores(
     payload = {"scores": [_serialize_score(score) for score in scores]}
     body = _request_json("POST", url, headers, payload, retry, ScoreExportError, "score export")
     return _parse_export_scores_response(body)
+
+
+def export_generation_json(
+    *,
+    api_endpoint: str,
+    insecure: bool,
+    headers: dict[str, str],
+    generation: dict[str, Any],
+    retry: RetryPolicy | None = None,
+) -> None:
+    """Exports one generation through the retrying stdlib transport."""
+
+    url = _base_url(api_endpoint, insecure) + _GENERATIONS_EXPORT_PATH
+    body = _request_json(
+        "POST",
+        url,
+        headers,
+        {"generations": [generation]},
+        retry,
+        ExperimentTransportError,
+        "generation export",
+    )
+    results = body.get("results") if isinstance(body, dict) else None
+    if not isinstance(results, list) or not results:
+        raise ExperimentTransportError("agento11y generation export failed: response did not include a result")
+    result = results[0] if isinstance(results[0], dict) else {}
+    if not bool(result.get("accepted")):
+        detail = _str(result.get("error")) or "rejected"
+        raise ExperimentTransportError(f"agento11y generation export rejected: {detail}")
 
 
 def create_test_case_trial(
@@ -335,6 +366,11 @@ def get_experiment_report(
 
 
 def _serialize_upsert_request(request: CreateExperimentRequest) -> dict[str, Any]:
+    if request.collection_id or request.evaluators:
+        raise ValidationError(
+            "agento11y experiment validation failed: collection_id and evaluators "
+            "are not supported by external experiment-run ingest"
+        )
     out: dict[str, Any] = {
         "name": request.name.strip(),
         "source": dict(_EXPERIMENT_RUN_SOURCE),
@@ -347,6 +383,16 @@ def _serialize_upsert_request(request: CreateExperimentRequest) -> dict[str, Any
         out["description"] = request.description
     if request.tags:
         out["tags"] = list(request.tags)
+    if request.suite_id:
+        out["suite_id"] = request.suite_id
+    if request.suite_version:
+        out["suite_version"] = request.suite_version
+    if request.candidate:
+        out["candidate"] = dict(request.candidate)
+    if request.planned_trial_count is not None:
+        if request.planned_trial_count < 0:
+            raise ValidationError("agento11y experiment validation failed: planned_trial_count must be non-negative")
+        out["planned_trial_count"] = request.planned_trial_count
     if request.metadata:
         out["metadata"] = dict(request.metadata)
     return out
@@ -433,27 +479,54 @@ def _validate_score(score: ScoreItem) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _parse_report_summary(payload: Any) -> ExperimentReportSummary:
+    summary = payload if isinstance(payload, dict) else {}
+
+    def _kmap(raw: Any) -> dict[str, float]:
+        return {str(k): _float(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+    return ExperimentReportSummary(
+        test_case_count=_int(summary.get("test_case_count")),
+        trial_count=_int(summary.get("trial_count")),
+        completed_count=_int(summary.get("completed_count")),
+        failed_count=_int(summary.get("failed_count")),
+        canceled_count=_int(summary.get("canceled_count")),
+        pass_rate=_float(summary.get("pass_rate")) if summary.get("pass_rate") is not None else None,
+        pass_at_k=_kmap(summary.get("pass_at_k")),
+        pass_power_k=_kmap(summary.get("pass_power_k")),
+        final_score_avg=_float(summary.get("final_score_avg")) if summary.get("final_score_avg") is not None else None,
+        total_cost=_float(summary.get("total_cost")) if summary.get("total_cost") is not None else None,
+        total_tokens=_int(summary.get("total_tokens")) if summary.get("total_tokens") is not None else None,
+        pass_count=_int(summary.get("pass_count")),
+        pass_denominator=_int(summary.get("pass_denominator")),
+        final_score_sum=_float(summary.get("final_score_sum")),
+        final_score_count=_int(summary.get("final_score_count")),
+        token_coverage=_str(summary.get("token_coverage")),
+        cost_coverage=_str(summary.get("cost_coverage")),
+    )
+
+
 def _parse_experiment(payload: Any) -> Experiment:
     if not isinstance(payload, dict):
         raise ExperimentTransportError("agento11y experiment transport failed: invalid response payload")
-    evaluators = [
-        ExperimentEvaluator(id=_str(ev.get("id")), selector=_str(ev.get("selector")))
-        for ev in payload.get("evaluators", []) or []
-        if isinstance(ev, dict)
-    ]
     return Experiment(
         run_id=_str(payload.get("experiment_id")) or _str(payload.get("run_id")),
         name=_str(payload.get("name")),
-        source=_str(payload.get("source")),
         status=_str(payload.get("status")),
         tenant_id=_str(payload.get("tenant_id")),
         description=_str(payload.get("description")),
         tags=[_str(t) for t in payload.get("tags", []) or []],
-        collection_id=_str(payload.get("collection_id")),
-        evaluators=evaluators,
+        suite_id=_str(payload.get("suite_id")),
+        suite_version=_str(payload.get("suite_version")),
+        candidate=_dict(payload.get("candidate")),
         metadata=_dict(payload.get("metadata")),
-        score_count=_int(payload.get("score_count")),
         error=_str(payload.get("error")),
+        planned_trial_count=(
+            _int(payload.get("planned_trial_count")) if payload.get("planned_trial_count") is not None else None
+        ),
+        result_status=_str(payload.get("result_status")),
+        result_error=_str(payload.get("result_error")),
+        result=_parse_report_summary(payload.get("result")) if isinstance(payload.get("result"), dict) else None,
         created_by=_str(payload.get("created_by")),
         created_at=_parse_ts(payload.get("created_at")),
         updated_at=_parse_ts(payload.get("updated_at")),
@@ -497,23 +570,7 @@ def _parse_report(payload: Any) -> ExperimentReport:
     # The backend keys the run under `experiment` (older drafts used `run`).
     run = _parse_experiment(payload.get("experiment") or payload.get("run") or {})
     summary_raw = payload.get("summary") or {}
-
-    def _kmap(raw: Any) -> dict[str, float]:
-        return {str(k): _float(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
-
-    summary = ExperimentReportSummary(
-        test_case_count=_int(summary_raw.get("test_case_count")),
-        trial_count=_int(summary_raw.get("trial_count")),
-        completed_count=_int(summary_raw.get("completed_count")),
-        failed_count=_int(summary_raw.get("failed_count")),
-        canceled_count=_int(summary_raw.get("canceled_count")),
-        pass_rate=_float(summary_raw.get("pass_rate")),
-        pass_at_k=_kmap(summary_raw.get("pass_at_k")),
-        pass_power_k=_kmap(summary_raw.get("pass_power_k")),
-        final_score_avg=_float(summary_raw.get("final_score_avg")),
-        total_cost=_float(summary_raw.get("total_cost")),
-        total_tokens=_int(summary_raw.get("total_tokens")),
-    )
+    summary = _parse_report_summary(summary_raw)
     rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
     return ExperimentReport(run=run, summary=summary, rows=list(rows))
 
@@ -555,7 +612,8 @@ def _request_json(
             if exc.code == 404:
                 raise NotFoundError(f"agento11y {label} not found: {body or exc.code}") from exc
             if exc.code == 409:
-                raise ConflictError(f"agento11y {label} conflict: {body or exc.code}") from exc
+                detail = body or str(exc.code)
+                raise ConflictError(f"agento11y {label} conflict: {detail}", kind=classify_conflict(detail)) from exc
             last_detail = f"status {exc.code}: {body or 'unexpected status'}"
             if exc.code == 429 or 500 <= exc.code < 600:
                 if attempt < policy.max_retries:
@@ -599,7 +657,8 @@ def _request_bytes_json(
             if exc.code == 404:
                 raise NotFoundError(f"agento11y {label} not found: {body or exc.code}") from exc
             if exc.code == 409:
-                raise ConflictError(f"agento11y {label} conflict: {body or exc.code}") from exc
+                detail = body or str(exc.code)
+                raise ConflictError(f"agento11y {label} conflict: {detail}", kind=classify_conflict(detail)) from exc
             last_detail = f"status {exc.code}: {body or 'unexpected status'}"
             if exc.code == 429 or 500 <= exc.code < 600:
                 if attempt < policy.max_retries:

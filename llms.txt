@@ -452,6 +452,32 @@ Example: an orchestrator spawns agents A, B, C where C depends on A and B:
 - B: `parent_generation_ids = []` (no parents)
 - C: `parent_generation_ids = [A.generation_id, B.generation_id]`
 
+## Python offline experiments
+
+Use `agento11y.experiments` to track work run by an existing benchmark, CI job,
+notebook, or agent harness. The SDK records runs, trials, scores, usage,
+artifacts, and telemetry links; it does not schedule the experiment or require
+a stored test suite.
+
+- Run-side publishing uses `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TOKEN`, and
+  optional `AGENTO11Y_AUTH_TENANT_ID`.
+- Stored suite push/pull is optional and additionally uses
+  `AGENTO11Y_CONTROL_ENDPOINT` and `AGENTO11Y_SERVICE_ACCOUNT_TOKEN`.
+- Only canonical `AGENTO11Y_*` names are supported. Known removed `SIGIL_*`
+  connection and trial-handoff names are ignored and produce a migration
+  warning.
+- Use `trial.record_io(...)` when the harness owns candidate I/O, or
+  `bind_generation`/`bind_conversation`/`bind_trace` when normal instrumentation
+  already emitted it.
+- Local `LLMJudge` and `RegexJudge` helpers do not require an evaluator created
+  in Grafana. Frameworks can submit their native grader result and transcript
+  through `trial.record_evaluation(...)`.
+- Catch evaluator exceptions around each trial when one failed judge should not
+  abort the whole run.
+
+See the [Python experiments guide](https://github.com/grafana/agento11y/blob/main/python/README.md#experiments)
+and [v2 migration guide](https://github.com/grafana/agento11y/blob/main/docs/experiments-python-v2-migration.md).
+
 ## Useful examples to copy patterns from
 
 In the grafana/agento11y repo:

@@ -1,5 +1,7 @@
 """Error hierarchy used by agento11y Python SDK."""
 
+from enum import Enum
+
 
 class Agento11yError(Exception):
     """Base class for SDK-specific errors."""
@@ -37,8 +39,48 @@ class NotFoundError(Agento11yError):
     """Raised when a requested resource does not exist (HTTP 404)."""
 
 
+class ConflictKind(str, Enum):
+    """Stable categories for experiment and suite HTTP 409 responses."""
+
+    SCORE_COUNT_MISMATCH = "score_count_mismatch"
+    RUNNING_TRIALS = "running_trials"
+    TERMINAL = "terminal"
+    IMMUTABLE_FIELD = "immutable_field"
+    OPEN_DRAFT = "open_draft"
+    UNKNOWN = "unknown"
+
+
 class ConflictError(Agento11yError):
     """Raised when a request conflicts with current resource state (HTTP 409)."""
+
+    def __init__(self, message: str, *, kind: ConflictKind = ConflictKind.UNKNOWN) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+    @property
+    def recoverable(self) -> bool:
+        return self.kind in {
+            ConflictKind.SCORE_COUNT_MISMATCH,
+            ConflictKind.RUNNING_TRIALS,
+            ConflictKind.OPEN_DRAFT,
+        }
+
+
+def classify_conflict(message: str) -> ConflictKind:
+    """Classifies backend conflict text without making callers parse strings."""
+
+    value = (message or "").lower()
+    if "score_count" in value or "score count" in value or ("expected " in value and " scores, found " in value):
+        return ConflictKind.SCORE_COUNT_MISMATCH
+    if "running trial" in value or ("cannot complete experiment with " in value and " trial" in value):
+        return ConflictKind.RUNNING_TRIALS
+    if "draft" in value:
+        return ConflictKind.OPEN_DRAFT
+    if "immutable" in value or "cannot change" in value or "conflicts with the existing experiment" in value:
+        return ConflictKind.IMMUTABLE_FIELD
+    if "terminal" in value or "already completed" in value or "already finalized" in value:
+        return ConflictKind.TERMINAL
+    return ConflictKind.UNKNOWN
 
 
 class ExperimentTransportError(Agento11yError):

@@ -645,7 +645,7 @@ class ExperimentEvaluator:
     selector: str
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class CreateExperimentRequest:
     """Request body for ``POST /api/v1/experiment-runs:upsert``."""
 
@@ -654,27 +654,34 @@ class CreateExperimentRequest:
     run_id: str = ""
     description: str = ""
     tags: list[str] = field(default_factory=list)
+    suite_id: str = ""
+    suite_version: str = ""
+    candidate: dict[str, Any] = field(default_factory=dict)
+    planned_trial_count: int | None = None
     collection_id: str = ""
     evaluators: list[ExperimentEvaluator] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class Experiment:
     """An experiment run as returned by Agent Observability."""
 
     run_id: str
     name: str
-    source: str
     status: str
     tenant_id: str = ""
     description: str = ""
     tags: list[str] = field(default_factory=list)
-    collection_id: str = ""
-    evaluators: list[ExperimentEvaluator] = field(default_factory=list)
+    suite_id: str = ""
+    suite_version: str = ""
+    candidate: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
-    score_count: int = 0
     error: str = ""
+    planned_trial_count: int | None = None
+    result_status: str = ""
+    result_error: str = ""
+    result: ExperimentReportSummary | None = None
     created_by: str = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -687,8 +694,8 @@ class ExperimentReportSummary:
     """Aggregate summary block of an experiment report.
 
     Mirrors the backend's typed trial rollup (``sigil/internal/eval/types.go``):
-    trial counts, pass-rate, pass@k / pass^k, and average final score, plus the
-    derived ``total_cost`` and ``total_tokens``.
+    trial counts, pass-rate, pass@k / pass^k, score totals, and token/cost
+    coverage. The additive totals support durable finalized result projections.
     """
 
     test_case_count: int = 0
@@ -696,12 +703,18 @@ class ExperimentReportSummary:
     completed_count: int = 0
     failed_count: int = 0
     canceled_count: int = 0
-    pass_rate: float = 0.0
+    pass_rate: float | None = None
     pass_at_k: dict[str, float] = field(default_factory=dict)
     pass_power_k: dict[str, float] = field(default_factory=dict)
-    final_score_avg: float = 0.0
-    total_cost: float = 0.0
-    total_tokens: int = 0
+    final_score_avg: float | None = None
+    total_cost: float | None = None
+    total_tokens: int | None = None
+    pass_count: int = 0
+    pass_denominator: int = 0
+    final_score_sum: float = 0.0
+    final_score_count: int = 0
+    token_coverage: str = ""
+    cost_coverage: str = ""
 
 
 @dataclass(slots=True)

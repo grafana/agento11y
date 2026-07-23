@@ -4,7 +4,7 @@ description: >-
   Run any Python LLM agent as an Agent Observability experiment using the public
   agento11y.experiments package: define a test suite, run an existing agent
   through typed trials, bind or record generation I/O, grade outputs, and
-  publish scores to Grafana Cloud Agent Observability with one ingestion API key.
+  publish scores, including from stored Grafana test suites.
 ---
 
 # Agent Observability experiments
@@ -31,7 +31,7 @@ The normal setup cost for an already instrumented agent should be small:
 ## Setup
 
 ```bash
-pip install "agento11y>=0.9.0"
+pip install "agento11y>=0.11.0"
 ```
 
 Required environment:
@@ -47,8 +47,9 @@ export AGENTO11Y_AUTH_TENANT_ID=<stack-id>
 export AGENTO11Y_GRAFANA_URL=https://<your-stack>.grafana.net
 ```
 
-Experiment ingest uses the Cloud ingestion API key. Do not add a separate
-control-plane URL or eval API key.
+Local-suite experiment ingest uses only the Cloud ingestion API key. Stored
+suite push/pull additionally uses `AGENTO11Y_CONTROL_ENDPOINT` and a Grafana
+service-account token in `AGENTO11Y_SERVICE_ACCOUNT_TOKEN`.
 
 Experimental OTel eval spans/events are disabled by default. Opt in only when
 asked:
@@ -77,6 +78,7 @@ with experiments.experiment(
     "PR experiment",
     experiment_id=f"pr-{git_sha}",
     suite=suite,
+    planned_trial_count=len(suite.test_cases),
     candidate={"git_sha": git_sha, "model_name": "gpt-4o-mini"},
     tags=["ci"],
 ) as exp:
@@ -110,6 +112,45 @@ The context manager upserts the run on enter, creates a typed trial per case,
 exports buffered scores when each trial exits, and finalizes the run as
 `completed` or `failed`.
 
+Set `planned_trial_count` to the runner's exact post-filter, post-attempt trial
+count. Do not derive it from the stored suite when the runner filters cases or
+runs multiple attempts. Normal context-manager finalization omits
+`score_count`, allowing Agent Observability to use its authoritative stored score count.
+Each `(test_case_id, attempt)` pair must be unique within a run; increment
+`attempt` for retries.
+
+## Stored Suites
+
+Stored suites use a Grafana service-account token in addition to the ingestion
+credential:
+
+```bash
+export AGENTO11Y_CONTROL_ENDPOINT=https://<stack>.grafana.net/a/grafana-sigil-app
+export AGENTO11Y_SERVICE_ACCOUNT_TOKEN=<grafana-service-account-token>
+```
+
+Pull and run the latest published version while preserving exact suite
+provenance:
+
+```python
+from agento11y import experiments
+
+with experiments.experiment_from_suite(
+    "dashboard-regression",
+    version="latest_published",
+    experiment_id=f"pr-{git_sha}",
+) as exp:
+    for case in exp.suite.cases:
+        with exp.trial(case) as trial:
+            answer = call_your_agent(case.input)
+            trial.final_score(answer == case.expected)
+```
+
+Use `TestSuite.from_yaml(...)` and `TestSuitesClient.push_suite(...)` to manage
+portable source-controlled suites. Pushes are additive by default; pass
+`prune=True` to delete remote-only draft cases and `publish=True` to publish the
+resulting version.
+
 ## Scoring
 
 Use `trial.final_score(...)` for the headline result. Add supporting scores with
@@ -120,19 +161,22 @@ trial.check_score("json_valid", passed=is_valid_json(answer))
 trial.rubric_score("helpfulness", 0.82, explanation="Useful but missed one constraint")
 ```
 
-An LLM judge is just another model call plus a score. If the judge call should be
-auditable, instrument it normally or record it as generation I/O before emitting
-the score.
+Locally configured judges do not require a platform evaluator. ``LLMJudge``
+executes an injected model callable, and ``trial.evaluate_output`` publishes the grader
+transcript and links it to the score automatically.
 
 ```python
-verdict = call_judge(case.input, answer)
-trial.rubric_score(
-    "correctness",
-    verdict["score"],
-    passed=verdict["score"] >= 0.7,
-    explanation=verdict["reason"],
-    evaluator=experiments.Evaluator(evaluator_id="judge.correctness", version="2026-06-29", kind="llm_judge"),
+judge = experiments.LLMJudge(
+    evaluator_id="judge.correctness",
+    invoke=judge_model.invoke,
+    model_provider="anthropic",
+    model_name="claude-sonnet-4-5",
+    prompt_template="Input: {input}\nExpected: {expected}\nOutput: {output}\nReturn a JSON score.",
 )
+trial.evaluate_output(judge, input=case.input, expected=case.expected, output=answer)
+
+regex = experiments.RegexJudge(evaluator_id="regex.answer", pattern=r"Paris", score_key="contains_answer")
+trial.evaluate_output(regex, input=case.input, output=answer)
 ```
 
 ## Cross-Process Evaluation
@@ -159,8 +203,11 @@ if ref is None:
     raise RuntimeError("missing experiment trial environment")
 trial = experiments.Trial.from_ref(client, ref)
 trial.final_score(0.9, passed=True)
-trial.flush()
+trial.close()
 ```
+
+For all v1 environment and worker-lifecycle changes, see the
+[Experiments v2 migration guide](https://github.com/grafana/agento11y/blob/main/docs/experiments-python-v2-migration.md).
 
 ## Gotchas
 
@@ -168,6 +215,7 @@ trial.flush()
 - Prefer binding existing conversation/generation ids when the agent is already
   instrumented; use `record_io(...)` when the experiment harness is the only
   instrumentation around the agent call.
-- Keep “offline evaluation” wording for batch eval workflows and UI routes.
 - The Grafana UI route is
-  `/a/grafana-sigil-app/offline-experiments/experiments/{experiment_id}`.
+  `/a/grafana-sigil-app/experiments/runs/{experiment_id}`.
+- Catch evaluator failures outside each `with exp.trial(...)` block when one
+  malformed judge response should fail only that trial and the run should continue.

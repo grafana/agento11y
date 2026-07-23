@@ -200,7 +200,9 @@ def main() -> None:
 
         report = exp.report()
     print(f"\nDashboard experiment '{experiment_id}' finished: {exp.accepted_scores} score(s) accepted.")
-    print(f"pass_rate={report.summary.pass_rate:.2f} mean_score={report.summary.final_score_avg:.2f}")
+    pass_rate = "n/a" if report.summary.pass_rate is None else f"{report.summary.pass_rate:.2f}"
+    mean_score = "n/a" if report.summary.final_score_avg is None else f"{report.summary.final_score_avg:.2f}"
+    print(f"pass_rate={pass_rate} mean_score={mean_score}")
     print(f"View in Agent Observability: {exp.url}")
 
 
