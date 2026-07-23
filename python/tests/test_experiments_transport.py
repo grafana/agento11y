@@ -246,6 +246,9 @@ def test_complete_experiment_finalizes_run() -> None:
             False,
         ),
         ('experiment "run_1" is already finalized as completed', ConflictKind.TERMINAL, False),
+        ("suite version is not a draft", ConflictKind.IMMUTABLE_FIELD, False),
+        ("suite draft is already published", ConflictKind.TERMINAL, False),
+        ("suite has an open draft", ConflictKind.OPEN_DRAFT, True),
     ],
 )
 def test_conflict_has_stable_kind_for_real_server_messages(
@@ -406,6 +409,33 @@ def test_experiment_client_redacts_scores_and_text_artifacts_without_mutating_in
         assert secret not in recorder.requests[1]["raw_payload"].decode()
         assert score.value.string == secret
         assert score.explanation == f"found {secret}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_experiment_client_redacts_non_utf8_text_artifact_without_changing_encoding() -> None:
+    recorder = _Recorder()
+    recorder.push(200, {"artifact_id": "artifact-1", "name": "log", "kind": "text"})
+    server = _serve(recorder)
+    secret = b"glc_abcdefghijklmnopqrstuvwxyz"
+    try:
+        client = ExperimentClient(
+            f"http://127.0.0.1:{server.server_address[1]}",
+            ingest_token="token",
+        )
+        client.upload_artifact(
+            experiment_id="run-1",
+            parent_id="trial-1",
+            name="log",
+            kind="text",
+            mime="text/plain; charset=iso-8859-1",
+            content=b"artifact " + secret + b" caf\xe9",
+        )
+
+        uploaded = recorder.requests[0]["raw_payload"]
+        assert secret not in uploaded
+        assert uploaded.endswith(b" caf\xe9")
     finally:
         server.shutdown()
         server.server_close()

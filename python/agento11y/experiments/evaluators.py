@@ -141,17 +141,18 @@ class LLMJudge:
         )
 
     def _parse_default(self, raw: str) -> tuple[float, bool, str]:
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if match is None:
+        objects = _json_objects(raw)
+        if not objects:
             raise ValueError("LLM judge response did not contain a JSON object")
-        try:
-            payload = json.loads(match.group(0))
-            score = max(0.0, min(1.0, float(payload["score"])))
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise ValueError("LLM judge response requires a numeric 'score'") from exc
-        passed = _parse_passed(payload.get("passed", payload.get("pass")), score, self.pass_threshold)
-        explanation = str(payload.get("explanation", payload.get("reason", ""))).strip()
-        return score, passed, explanation
+        for payload in reversed(objects):
+            try:
+                score = max(0.0, min(1.0, float(payload["score"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+            passed = _parse_passed(payload.get("passed", payload.get("pass")), score, self.pass_threshold)
+            explanation = str(payload.get("explanation", payload.get("reason", ""))).strip()
+            return score, passed, explanation
+        raise ValueError("LLM judge response requires a numeric 'score'")
 
 
 @dataclass(slots=True)
@@ -255,6 +256,21 @@ def _response_usage(response: Any) -> TokenUsage | None:
         if any(value is not None for value in values.values()):
             return TokenUsage(**{key: value or 0 for key, value in values.items()}).normalize()
     return None
+
+
+def _json_objects(raw: str) -> list[dict[str, Any]]:
+    """Extracts complete JSON objects without merging unrelated brace ranges."""
+
+    decoder = json.JSONDecoder()
+    objects: list[dict[str, Any]] = []
+    for match in re.finditer(r"\{", raw):
+        try:
+            value, _ = decoder.raw_decode(raw, match.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            objects.append(value)
+    return objects
 
 
 def _field(value: Any, name: str) -> Any:

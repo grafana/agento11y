@@ -314,7 +314,8 @@ class Client:
         if parent_kind != "test_case_trial":
             raise ValueError("only test_case_trial artifacts are supported by the experiments ingest client")
         if self.redact_secrets and (kind in {"json", "markdown", "text", "csv"} or mime.startswith("text/")):
-            content = redact_secret_text(content.decode("utf-8")).encode("utf-8")
+            text = content.decode("utf-8", errors="surrogateescape")
+            content = redact_secret_text(text).encode("utf-8", errors="surrogateescape")
         return _transport.upload_trial_artifact(
             **self._args(),
             experiment_id=experiment_id,

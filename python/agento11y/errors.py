@@ -74,12 +74,22 @@ def classify_conflict(message: str) -> ConflictKind:
         return ConflictKind.SCORE_COUNT_MISMATCH
     if "running trial" in value or ("cannot complete experiment with " in value and " trial" in value):
         return ConflictKind.RUNNING_TRIALS
-    if "draft" in value:
-        return ConflictKind.OPEN_DRAFT
-    if "immutable" in value or "cannot change" in value or "conflicts with the existing experiment" in value:
-        return ConflictKind.IMMUTABLE_FIELD
-    if "terminal" in value or "already completed" in value or "already finalized" in value:
+    if (
+        "terminal" in value
+        or "already completed" in value
+        or "already finalized" in value
+        or "already published" in value
+    ):
         return ConflictKind.TERMINAL
+    if (
+        "immutable" in value
+        or "cannot change" in value
+        or "conflicts with the existing experiment" in value
+        or "not a draft" in value
+    ):
+        return ConflictKind.IMMUTABLE_FIELD
+    if "open draft" in value or "draft already exists" in value:
+        return ConflictKind.OPEN_DRAFT
     return ConflictKind.UNKNOWN
 
 

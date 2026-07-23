@@ -83,6 +83,14 @@ def stable_id(prefix: str, *parts: Any) -> str:
     return f"{prefix}-{digest}"
 
 
+def _add_exception_note(exc: BaseException, note: str) -> None:
+    """Adds diagnostic context when supported while retaining Python 3.10."""
+
+    add_note = getattr(exc, "add_note", None)
+    if callable(add_note):
+        add_note(note)
+
+
 def _coerce_value(value: ScoreValue | float | bool | str) -> ScoreValue:
     if isinstance(value, ScoreValue):
         return value
@@ -1046,7 +1054,13 @@ class Experiment:
             if not self._auto_finalize:
                 return False
             if exc is not None:
-                self.finalize(ExperimentStatus.FAILED, error=str(exc) or (exc_type.__name__ if exc_type else "error"))
+                try:
+                    self.finalize(
+                        ExperimentStatus.FAILED,
+                        error=str(exc) or (exc_type.__name__ if exc_type else "error"),
+                    )
+                except Exception as finalize_error:
+                    _add_exception_note(exc, f"experiment finalization also failed: {finalize_error!r}")
             else:
                 self.finalize(ExperimentStatus.COMPLETED)
         finally:
@@ -1131,12 +1145,37 @@ class Experiment:
 
         if self._finalized:
             return
+        close_errors: list[Exception] = []
         for trial in list(self._open_trials.values()):
-            trial.close()
+            try:
+                trial.close()
+            except Exception as exc:
+                close_errors.append(exc)
         status_value = status.value if isinstance(status, ExperimentStatus) else str(status)
+        if close_errors:
+            status_value = ExperimentStatus.FAILED.value
+            close_summary = "; ".join(str(exc) or type(exc).__name__ for exc in close_errors)
+            error = "; ".join(part for part in (error, f"trial close failed: {close_summary}") if part)
+            score_count = None
         self.status = status_value
-        self._client.finalize(self.experiment_id, status_value, score_count=score_count, error=error)
-        self._finalized = True
+        try:
+            self._client.finalize(self.experiment_id, status_value, score_count=score_count, error=error)
+            self._finalized = True
+        except Exception as finalize_error:
+            if close_errors:
+                primary = close_errors[0]
+                for secondary in [*close_errors[1:], finalize_error]:
+                    _add_exception_note(
+                        primary,
+                        f"additional experiment finalization failure: {secondary!r}",
+                    )
+                raise primary from finalize_error
+            raise
+        if close_errors:
+            primary = close_errors[0]
+            for secondary in close_errors[1:]:
+                _add_exception_note(primary, f"additional trial close failure: {secondary!r}")
+            raise primary
 
     def report(self) -> ExperimentReport:
         """Fetches the aggregated report for this run."""

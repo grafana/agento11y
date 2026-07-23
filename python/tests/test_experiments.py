@@ -293,6 +293,22 @@ def test_llm_judge_invalid_response_is_explicit() -> None:
         judge.evaluate_output(input="", output="answer")
 
 
+def test_llm_judge_uses_valid_score_object_after_unrelated_json() -> None:
+    judge = LLMJudge(
+        evaluator_id="judge.preamble",
+        invoke=lambda prompt: (
+            'I first considered {"candidate": "incomplete"}.\n{"score": 0.8, "passed": true, "explanation": "grounded"}'
+        ),
+        model_name="test-model",
+    )
+
+    result = judge.evaluate_output(input="question", output="answer")
+
+    assert result.value == 0.8
+    assert result.passed is True
+    assert result.explanation == "grounded"
+
+
 def test_llm_judge_renders_placeholders_in_one_pass() -> None:
     prompts: list[str] = []
     judge = LLMJudge(
@@ -410,6 +426,50 @@ def test_experiment_finalize_closes_open_trial() -> None:
     assert trial.accepted_scores == 1
     assert client.trial_updates[0][2] == "completed"
     assert client.finalized == [("run-open", "completed", None)]
+
+
+def test_experiment_finalize_closes_all_trials_and_marks_run_failed_on_close_error(
+    monkeypatch,
+) -> None:
+    client = FakeClient()
+    exp = Experiment(client, experiment_id="run-close-error", auto_finalize=False)
+    first = exp.trial("case-a")
+    second = exp.trial("case-b")
+    close_calls: list[str] = []
+
+    def fail_first() -> None:
+        close_calls.append("first")
+        raise RuntimeError("score export failed")
+
+    def close_second() -> None:
+        close_calls.append("second")
+
+    monkeypatch.setattr(first, "close", fail_first)
+    monkeypatch.setattr(second, "close", close_second)
+
+    with pytest.raises(RuntimeError, match="score export failed"):
+        exp.finalize()
+
+    assert close_calls == ["first", "second"]
+    assert client.finalized == [("run-close-error", "failed", None)]
+    assert exp.status == "failed"
+
+
+def test_experiment_exit_preserves_body_error_when_trial_close_also_fails(monkeypatch) -> None:
+    client = FakeClient()
+
+    def fail_close() -> None:
+        raise RuntimeError("score export failed")
+
+    with pytest.raises(ValueError, match="agent failed") as caught:
+        with Experiment(client, experiment_id="run-body-error") as exp:
+            trial = exp.trial("case-a")
+            monkeypatch.setattr(trial, "close", fail_close)
+            raise ValueError("agent failed")
+
+    assert client.finalized == [("run-body-error", "failed", None)]
+    if sys.version_info >= (3, 11):
+        assert any("score export failed" in note for note in (caught.value.__notes__ or []))
 
 
 def test_experiment_rejects_duplicate_case_attempt() -> None:
