@@ -110,11 +110,11 @@ def test_endpoint_derivation_and_bearer_auth(monkeypatch: pytest.MonkeyPatch) ->
         suite = client.get_suite("dashboard")
         request = recorder.requests[0]
         assert request["method"] == "GET"
-        assert request["path"] == "/api/plugins/grafana-sigil-app/resources/eval/test-suites/dashboard"
+        assert request["path"] == "/api/plugins/grafana-agento11y-app/resources/eval/test-suites/dashboard"
         assert request["headers"]["authorization"] == "Bearer env-token"
         assert suite["suite_id"] == "dashboard"
         assert client.grafana_url == f"http://127.0.0.1:{server.server_address[1]}"
-        assert client.control_endpoint.endswith("/api/plugins/grafana-sigil-app/resources/eval")
+        assert client.control_endpoint.endswith("/api/plugins/grafana-agento11y-app/resources/eval")
         assert client.service_account_token == "env-token"
     finally:
         server.shutdown()
@@ -146,14 +146,14 @@ def test_control_endpoint_normalizes_grafana_app_url(monkeypatch: pytest.MonkeyP
     server = _serve(recorder)
     monkeypatch.setenv(
         "AGENTO11Y_CONTROL_ENDPOINT",
-        f"http://127.0.0.1:{server.server_address[1]}/a/grafana-sigil-app",
+        f"http://127.0.0.1:{server.server_address[1]}/a/grafana-agento11y-app",
     )
     monkeypatch.setenv("AGENTO11Y_SERVICE_ACCOUNT_TOKEN", "env-token")
     try:
         client = TestSuitesClient(timeout=2)
         client.get_suite("dashboard")
         request = recorder.requests[0]
-        assert request["path"] == "/api/plugins/grafana-sigil-app/resources/eval/test-suites/dashboard"
+        assert request["path"] == "/api/plugins/grafana-agento11y-app/resources/eval/test-suites/dashboard"
         assert request["headers"]["authorization"] == "Bearer env-token"
     finally:
         server.shutdown()
@@ -162,11 +162,11 @@ def test_control_endpoint_normalizes_grafana_app_url(monkeypatch: pytest.MonkeyP
 
 def test_control_endpoint_preserves_grafana_subpath() -> None:
     client = TestSuitesClient(
-        control_endpoint="https://example.test/grafana/a/grafana-sigil-app/experiments/test-suites",
+        control_endpoint="https://example.test/grafana/a/grafana-agento11y-app/experiments/test-suites",
         service_account_token="token",
     )
 
-    assert client.control_endpoint == ("https://example.test/grafana/api/plugins/grafana-sigil-app/resources/eval")
+    assert client.control_endpoint == ("https://example.test/grafana/api/plugins/grafana-agento11y-app/resources/eval")
 
 
 def test_direct_control_endpoint_keeps_separate_grafana_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -193,7 +193,7 @@ def test_legacy_control_environment_is_ignored(monkeypatch: pytest.MonkeyPatch) 
 
 def test_version_resolution_aliases() -> None:
     client = TestSuitesClient(
-        control_endpoint="http://example.test/api/plugins/grafana-sigil-app/resources/eval",
+        control_endpoint="http://example.test/api/plugins/grafana-agento11y-app/resources/eval",
         service_account_token="token",
     )
     suite = _suite_body()
@@ -224,7 +224,7 @@ def test_experiment_from_suite_requires_control_token() -> None:
     with pytest.raises(ValueError, match="service_account_token is required"):
         experiment_from_suite(
             "suite",
-            control_endpoint="https://example.test/a/grafana-sigil-app",
+            control_endpoint="https://example.test/a/grafana-agento11y-app",
             endpoint="https://ingest.example",
             ingest_token="token",
         )
@@ -392,11 +392,11 @@ def test_push_suite_creates_missing_suite_reuses_open_draft_upserts_and_publishe
         assert pushed.published is True
         assert pushed.pruned_case_ids == []
         assert [r["path"] for r in recorder.requests] == [
-            "/api/plugins/grafana-sigil-app/resources/eval/test-suites/local",
-            "/api/plugins/grafana-sigil-app/resources/eval/test-suites",
-            "/api/plugins/grafana-sigil-app/resources/eval/test-suites/local",
-            "/api/plugins/grafana-sigil-app/resources/eval/test-suites/local/versions/v2/test-cases",
-            "/api/plugins/grafana-sigil-app/resources/eval/test-suites/local/versions/v2:publish",
+            "/api/plugins/grafana-agento11y-app/resources/eval/test-suites/local",
+            "/api/plugins/grafana-agento11y-app/resources/eval/test-suites",
+            "/api/plugins/grafana-agento11y-app/resources/eval/test-suites/local",
+            "/api/plugins/grafana-agento11y-app/resources/eval/test-suites/local/versions/v2/test-cases",
+            "/api/plugins/grafana-agento11y-app/resources/eval/test-suites/local/versions/v2:publish",
         ]
         upsert = recorder.requests[3]["payload"]
         assert upsert["input"] == {"value": "question"}
