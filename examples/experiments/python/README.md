@@ -84,7 +84,7 @@ You should see output like:
 ```
 Experiment 'experiment-example-manual' finished: 3 score(s) accepted.
 pass_rate=1.00 mean_score=1.00
-View in Agent Observability: https://<your-stack>.grafana.net/a/grafana-sigil-app/offline-experiments/experiments/experiment-example-manual
+View in Agent Observability: https://<your-stack>.grafana.net/a/grafana-agento11y-app/offline-experiments/experiments/experiment-example-manual
 ```
 
 > The deep link uses `AGENTO11Y_GRAFANA_URL`; keep it pointed at your Grafana stack

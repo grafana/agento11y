@@ -176,7 +176,7 @@ To attach custom key/values (team, project, env, request id, end-user id), see [
 All four connection values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the Agent Observability plugin in your stack:
 
 ```
-https://<your-stack>.grafana.net/plugins/grafana-sigil-app
+https://<your-stack>.grafana.net/plugins/grafana-agento11y-app
 ```
 
 Follow *Create a token in Cloud Access Policies* on the Connection page and create one token scoped with `sigil:write`, `metrics:write`, `traces:write`, and `logs:write`. The same token then covers both `AGENTO11Y_AUTH_TOKEN` (Agent Observability ingest) and `OTEL_EXPORTER_OTLP_HEADERS` (OTel traces and metrics).

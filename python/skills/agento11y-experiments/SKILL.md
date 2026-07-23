@@ -170,4 +170,4 @@ trial.flush()
   instrumentation around the agent call.
 - Keep “offline evaluation” wording for batch eval workflows and UI routes.
 - The Grafana UI route is
-  `/a/grafana-sigil-app/offline-experiments/experiments/{experiment_id}`.
+  `/a/grafana-agento11y-app/offline-experiments/experiments/{experiment_id}`.

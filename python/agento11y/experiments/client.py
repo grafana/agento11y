@@ -431,8 +431,8 @@ class Client:
         quoted = urllib.parse.quote(experiment_id, safe="")
         base = self.grafana_url
         if base:
-            return f"{base}/a/grafana-sigil-app/offline-experiments/experiments/{quoted}"
-        return f"{self.endpoint}/a/grafana-sigil-app/offline-experiments/experiments/{quoted}"
+            return f"{base}/a/grafana-agento11y-app/offline-experiments/experiments/{quoted}"
+        return f"{self.endpoint}/a/grafana-agento11y-app/offline-experiments/experiments/{quoted}"
 
     def shutdown(self) -> None:
         """Flushes and closes the underlying client if one was built."""
