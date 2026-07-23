@@ -1,11 +1,11 @@
-# Grafana AI observability: LLM agent instructions
+# Grafana Agent observability: LLM agent instructions
 
-You are a coding agent. The user wants help with [Grafana AI observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/), powered by the open-source agento11y SDKs and plugins in [grafana/agento11y](https://github.com/grafana/agento11y).
+You are a coding agent. The user wants help with [Grafana Agent observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/), powered by the open-source agento11y SDKs and plugins in [grafana/agento11y](https://github.com/grafana/agento11y).
 
 There are two distinct things this file covers. Pick the path that matches the request before doing anything else.
 
-- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, or Pi sent to Grafana AI observability. They are not changing application code.
-- Path B, [Instrument an LLM app or agent](#path-b-instrument-an-llm-app-or-agent): the user wants their own code (an app, agent, framework pipeline) to send generations to Grafana AI observability.
+- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, or Pi sent to Grafana Agent observability. They are not changing application code.
+- Path B, [Instrument an LLM app or agent](#path-b-instrument-an-llm-app-or-agent): the user wants their own code (an app, agent, framework pipeline) to send generations to Grafana Agent observability.
 
 If you cannot tell, ask one clarifying question and stop.
 
@@ -32,20 +32,20 @@ gcx agent skills install agento11y-instrument
 If `gcx` is already installed but the skill is missing, update `gcx` first. Homebrew users can run `brew update && brew upgrade gcx`; script users can re-run the quick install script.
 
 ```text
-Use the `agento11y-instrument` skill to instrument this codebase with Grafana AI observability.
+Use the `agento11y-instrument` skill to instrument this codebase with Grafana Agent observability.
 ```
 
 If skills are unavailable, the install fails, or the request matches Path A, continue with the matching path below.
 
 ## Resources
 
-- Product docs: https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/
+- Product docs: https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/
 - SDK + plugin source: https://github.com/grafana/agento11y
 - Grafana Cloud OTLP setup: https://grafana.com/docs/grafana-cloud/send-data/otlp/send-data-otlp
 
 ## Credentials (both paths)
 
-All four values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the AI Observability plugin in the user's stack:
+All four values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the Agent Observability plugin in the user's stack:
 
 ```
 https://<your-stack>.grafana.net/plugins/grafana-sigil-app
@@ -67,7 +67,7 @@ printf '%s' '<otlp-instance-id>:<glc_token>' | base64 | tr -d '\n'
 
 # Path A: Monitor a coding agent
 
-The user wants Grafana AI observability to capture sessions from their coding agent. They do not write app code for this; they install a plugin and configure credentials.
+The user wants Grafana Agent observability to capture sessions from their coding agent. They do not write app code for this; they install a plugin and configure credentials.
 
 ## Supported agents
 
@@ -118,14 +118,14 @@ Unknown values fall back to `metadata_only` with a warning. Secret redaction is 
 ## Verifying the install
 
 1. Run the agent normally for one turn (any prompt).
-2. Open Grafana Cloud → AI Observability → Conversations. A new conversation should appear within a few seconds.
+2. Open Grafana Cloud → Agent Observability → Conversations. A new conversation should appear within a few seconds.
 3. If it doesn't, check the launcher's stderr for `agento11y:` warnings and confirm `~/.config/agento11y/config.env` is readable. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
 
 ---
 
 # Path B: Instrument an LLM app or agent
 
-You are acting as a coding agent inside the user's repository. Your goal is to add or improve Grafana AI observability instrumentation with minimal, safe changes.
+You are acting as a coding agent inside the user's repository. Your goal is to add or improve Grafana Agent observability instrumentation with minimal, safe changes.
 
 ## Environment
 

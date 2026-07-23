@@ -67,7 +67,7 @@ describe("runToolCallGuard", () => {
 
     const block = asBlock(res);
     expect(block.block).toBe(true);
-    expect(block.reason).toContain("A Grafana AI Observability policy");
+    expect(block.reason).toContain("A Grafana Agent Observability policy");
     expect(block.reason).toContain('"bash"');
     expect(block.reason).toContain("Reason: blocked by rule");
     expect(block.reason).toContain("Stop and tell the user");
@@ -94,7 +94,7 @@ describe("runToolCallGuard", () => {
 
     const block = asBlock(res);
     expect(block.block).toBe(true);
-    expect(block.reason).toContain("A Grafana AI Observability policy");
+    expect(block.reason).toContain("A Grafana Agent Observability policy");
     expect(block.reason).toContain('"bash"');
     expect(block.reason).not.toContain("Reason:");
     expect(block.reason).toContain("Stop and tell the user");
@@ -124,7 +124,7 @@ describe("runToolCallGuard", () => {
     expect(block.reason).toContain('"bash"');
     expect(block.reason).toContain("network down");
     expect(block.reason).not.toContain(
-      "A Grafana AI Observability policy blocked",
+      "A Grafana Agent Observability policy blocked",
     );
   });
 

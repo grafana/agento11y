@@ -782,14 +782,14 @@ func TestPreToolUseGuard(t *testing.T) {
 			env:                map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
 			serverResponds:     `{"action":"deny","reason":"blocked tool"}`,
 			expectServerCall:   true,
-			wantStdoutContains: []string{`"permissionDecision":"deny"`, "blocked tool", "A Grafana AI Observability policy"},
+			wantStdoutContains: []string{`"permissionDecision":"deny"`, "blocked tool", "A Grafana Agent Observability policy"},
 		},
 		{
 			name:               "enabled_deny_empty_reason_fallback",
 			env:                map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
 			serverResponds:     `{"action":"deny"}`,
 			expectServerCall:   true,
-			wantStdoutContains: []string{`"permissionDecision":"deny"`, "A Grafana AI Observability policy blocked"},
+			wantStdoutContains: []string{`"permissionDecision":"deny"`, "A Grafana Agent Observability policy blocked"},
 		},
 		{
 			name:              "enabled_fail_open_on_transport_error",

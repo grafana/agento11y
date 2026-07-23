@@ -1,6 +1,6 @@
 # Getting Started — TypeScript
 
-Makes an OpenAI chat completion and records the generation to Grafana Cloud AI Observability.
+Makes an OpenAI chat completion and records the generation to Grafana Cloud Agent Observability.
 
 ## Setup
 
@@ -22,4 +22,4 @@ npm install
 npx tsx main.ts
 ```
 
-You should see the LLM response printed, followed by `Done`. Open the AI Observability plugin in your Grafana Cloud stack to see the recorded generation, and check your Grafana Cloud Traces and Metrics datasources for SDK-emitted spans and metrics.
+You should see the LLM response printed, followed by `Done`. Open the Agent Observability plugin in your Grafana Cloud stack to see the recorded generation, and check your Grafana Cloud Traces and Metrics datasources for SDK-emitted spans and metrics.

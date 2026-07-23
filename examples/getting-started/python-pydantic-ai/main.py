@@ -1,4 +1,4 @@
-"""Minimal AI Observability getting-started example — Python + Pydantic AI."""
+"""Minimal Agent Observability getting-started example — Python + Pydantic AI."""
 
 import os
 import uuid
@@ -93,4 +93,4 @@ with with_conversation_title("getting-started-python-pydantic-ai"):
 agento11y.shutdown()
 tp.shutdown()
 mp.shutdown()
-print("Done — check the AI Observability plugin in your Grafana Cloud stack.")
+print("Done — check the Agent Observability plugin in your Grafana Cloud stack.")

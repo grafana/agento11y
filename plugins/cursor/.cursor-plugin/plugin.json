@@ -7,11 +7,11 @@
     "name": "Grafana Labs",
     "email": "machine-learning@grafana.com"
   },
-  "homepage": "https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/",
+  "homepage": "https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/",
   "repository": "https://github.com/grafana/agento11y",
   "license": "Apache-2.0",
   "keywords": ["telemetry", "observability", "sigil", "grafana", "cursor", "ai", "llm"],
   "category": "developer-tools",
-  "tags": ["ai-observability", "telemetry", "monitoring", "llm"],
+  "tags": ["agent-observability", "telemetry", "monitoring", "llm"],
   "hooks": "./hooks/hooks.json"
 }

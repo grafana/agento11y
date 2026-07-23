@@ -14,7 +14,7 @@ For low-dependency runtimes that only need the core `Agento11yClient` and genera
 pnpm add @grafana/agento11y-core
 ```
 
-For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance ID, and API token), refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/).
+For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance ID, and API token), refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/).
 
 ## Validation
 
@@ -32,7 +32,7 @@ mise run sdk:conformance
 
 ## Quick Start
 
-The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and call `new Agento11yClient()` with no arguments — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names.
+The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and call `new Agento11yClient()` with no arguments — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/) for the variable names.
 
 ```ts
 import { Agento11yClient } from "@grafana/agento11y";
@@ -480,7 +480,7 @@ const client = new Agento11yClient({
 
 ### Grafana Cloud auth (basic)
 
-For Grafana Cloud, use `basic` auth mode. The username is your Grafana Cloud instance/tenant ID and the password is your Grafana Cloud API key. See the [Grafana Cloud AI Observability getting started docs](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for full setup steps; for this SDK endpoint, copy the **API URL** from **Observability → AI Observability → Configuration**. It looks like `https://agento11y-prod-<region>.grafana.net`.
+For Grafana Cloud, use `basic` auth mode. The username is your Grafana Cloud instance/tenant ID and the password is your Grafana Cloud API key. See the [Grafana Cloud Agent Observability getting started docs](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/) for full setup steps; for this SDK endpoint, copy the **API URL** from **Observability → Agent Observability → Configuration**. It looks like `https://agento11y-prod-<region>.grafana.net`.
 
 ```ts
 const client = new Agento11yClient({
@@ -556,4 +556,4 @@ const result = await client.submitConversationRating("conv-123", {
 console.log(result.rating.rating, result.summary.hasBadRating);
 ```
 
-`submitConversationRating` sends requests to `api.endpoint`, which should be the Grafana Cloud Agent Observability API URL from AI Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
+`submitConversationRating` sends requests to `api.endpoint`, which should be the Grafana Cloud Agent Observability API URL from Agent Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.

@@ -1,5 +1,5 @@
 /**
- * Guarded AI Observability getting-started example — TypeScript + OpenAI.
+ * Guarded Agent Observability getting-started example — TypeScript + OpenAI.
  *
  * The SDK evaluates an agento11y preflight hook before the provider call. Guard rules
  * configured in Grafana Cloud can allow the call, deny it, or return transformed
@@ -162,7 +162,7 @@ if (hookResponse.action === "deny") {
   );
 
   console.log(
-    "Done — check the AI Observability plugin in your Grafana Cloud stack.",
+    "Done — check the Agent Observability plugin in your Grafana Cloud stack.",
   );
 }
 

@@ -1,6 +1,6 @@
 # @grafana/agento11y-pi
 
-[Pi](https://github.com/earendil-works/pi) agent extension that sends LLM generations to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
+[Pi](https://github.com/earendil-works/pi) agent extension that sends LLM generations to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
 By default only metadata is sent (token counts, cost, model, tool names, durations). Set `AGENTO11Y_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
 
@@ -45,11 +45,11 @@ The extension reads the same `~/.config/agento11y/config.env` file whether you s
 
 ## 2. Credentials
 
-When `agento11y pi` or `agento11y login` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+When `agento11y pi` or `agento11y login` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
-1. **AI Observability → Configuration**
+1. **Agent Observability → Configuration**
    - **API URL** → `AGENTO11Y_ENDPOINT`
    - **Instance ID** → `AGENTO11Y_AUTH_TENANT_ID`
 
@@ -86,7 +86,7 @@ AGENTO11Y_CONTENT_CAPTURE_MODE=full
 
 ## 3. Verify
 
-Run one pi turn, then open **AI Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
+Run one pi turn, then open **Agent Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
 
 If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/agento11y/config.env`, run another turn, and check the debug log at `~/.local/state/agento11y/logs/agento11y.log` (honors `XDG_STATE_HOME`).
 
@@ -127,7 +127,7 @@ The same three variables are honored by the [Claude Code plugin](../claude-code/
 
 ### Transform guards (redaction)
 
-When guards are enabled, pi also applies [Transform guards](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/guides/guards/) — regex redaction rules you configure in Grafana — in two places:
+When guards are enabled, pi also applies [Transform guards](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/guards/) — regex redaction rules you configure in Grafana — in two places:
 
 - **Preflight (message redaction).** Before each model call, the outgoing conversation is sent to Agent Observability; redacted text replaces the original, so the placeholder (e.g. `[REDACTED]`) reaches the model instead of the secret.
 - **Postflight (tool-argument redaction).** Before a tool runs, its arguments are sent to Agent Observability; if a Transform rule matches, the redacted arguments replace what the tool receives.

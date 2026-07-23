@@ -87,7 +87,7 @@ See `[.env.example](./.env.example)`.
 | Variable                           | Purpose                                                                                                                               |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `ANTHROPIC_API_KEY`                | Required. Used by both the agent and the classifier.                                                                                  |
-| `AGENTO11Y_ENDPOINT`                   | API URL from AI Observability → Configuration. Required for Grafana Cloud.                                                            |
+| `AGENTO11Y_ENDPOINT`                   | API URL from Agent Observability → Configuration. Required for Grafana Cloud.                                                            |
 | `AGENTO11Y_AUTH_TENANT_ID`             | Numeric instance ID. Sent as `X-Scope-OrgID` and used as basic-auth user.                                                             |
 | `AGENTO11Y_AUTH_TOKEN`                 | Cloud Access Policy Token (`glc_…`) with `sigil:write` scope. Required for Cloud.                                                     |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`      | OTLP target for traces + metrics. Use the Grafana Cloud OTLP gateway URL or your collector endpoint.                                  |

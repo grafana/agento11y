@@ -1,6 +1,6 @@
 # Grafana Agent Observability Java SDK (Core)
 
-If you already use OpenTelemetry, agento11y is a thin extension for AI observability.
+If you already use OpenTelemetry, agento11y is a thin extension for Agent observability.
 
 The Java SDK records normalized generation payloads, correlates them with traces, and exports generations through transport-aware clients.
 
@@ -9,7 +9,7 @@ The Java SDK records normalized generation payloads, correlates them with traces
 - Java 17+
 - OpenTelemetry SDK already in your app (optional but recommended)
 
-For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance ID, and API token), refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/).
+For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance ID, and API token), refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/).
 
 ## Modules
 
@@ -50,7 +50,7 @@ For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance 
 
 ## Quick Start (sync)
 
-The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and call `new Agento11yClient()` with no arguments — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names.
+The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and call `new Agento11yClient()` with no arguments — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/) for the variable names.
 
 ```java
 Agento11yClient client = new Agento11yClient(new Agento11yClientConfig()
@@ -315,7 +315,7 @@ SubmitConversationRatingResponse result = client.submitConversationRating(
 System.out.println(result.getRating().getRating() + " hasBad=" + result.getSummary().isHasBadRating());
 ```
 
-`submitConversationRating(...)` sends requests to `ApiConfig.endpoint`, which should be the Grafana Cloud Agent Observability API URL from AI Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
+`submitConversationRating(...)` sends requests to `ApiConfig.endpoint`, which should be the Grafana Cloud Agent Observability API URL from Agent Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
 
 ## Lifecycle
 

@@ -430,7 +430,7 @@ describe("pi guards: real-SDK over HTTP", () => {
           expect(result).toMatchObject({ block: true });
           const reason = (result as { reason: string }).reason;
           expect(reason).toContain("blocked rm -rf");
-          expect(reason).toContain("A Grafana AI Observability policy");
+          expect(reason).toContain("A Grafana Agent Observability policy");
           expect(reason).toContain("Stop and tell the user");
         },
       },

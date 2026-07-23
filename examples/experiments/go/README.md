@@ -20,7 +20,7 @@ This example uses the production-style shape you would use for LLMSpec or A2A:
 
 When the runner and agent are in the same process, use the context passed to `WithTrial` or `run.Context(ctx)`; both tag existing generation instrumentation automatically. When the agent is behind HTTP, A2A, or a task queue, propagate the run ID explicitly and restore it with `WithExperimentRunID`.
 
-This example is designed for Grafana Cloud AI Observability.
+This example is designed for Grafana Cloud Agent Observability.
 
 ## Run
 

@@ -1,4 +1,4 @@
-"""Minimal AI Observability getting-started example — Python + OpenAI."""
+"""Minimal Agent Observability getting-started example — Python + OpenAI."""
 
 import os
 
@@ -105,4 +105,4 @@ with agento11y.start_generation(
 agento11y.shutdown()
 tp.shutdown()
 mp.shutdown()
-print("Done — check the AI Observability plugin in your Grafana Cloud stack.")
+print("Done — check the Agent Observability plugin in your Grafana Cloud stack.")

@@ -1,10 +1,10 @@
 # Grafana Agent Observability SDK
 
 <p align="center">
-  <img src="./assets/readme/agento11y-tri-shot.svg" alt="Grafana AI observability landing, analytics, and conversation explore views" width="100%" />
+  <img src="./assets/readme/agento11y-tri-shot.svg" alt="Grafana Agent observability landing, analytics, and conversation explore views" width="100%" />
 </p>
 
-[Grafana AI observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/) is a product from Grafana for teams running agents in production. This repo holds the open-source SDKs and the coding-agent plugins that send telemetry to it.
+[Grafana Agent observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) is a product from Grafana for teams running agents in production. This repo holds the open-source SDKs and the coding-agent plugins that send telemetry to it.
 
 ## Quick start (with an AI coding agent)
 
@@ -31,17 +31,17 @@ gcx agent skills install agento11y-instrument
 If `gcx` is already installed but the skill is missing, update `gcx` first. Homebrew users can run `brew update && brew upgrade gcx`; script users can re-run the quick install script.
 
 ```text
-Use the `agento11y-instrument` skill to instrument this codebase with Grafana AI observability.
+Use the `agento11y-instrument` skill to instrument this codebase with Grafana Agent observability.
 ```
 
 The skill inspects your code, applies the SDK with small diffs after confirmation, and verifies that data lands in Grafana Cloud with `gcx agento11y`.
 
 If you want to capture sessions from your coding agent instead, or if your agent does not support skills, drop [`llms.txt`](llms.txt) into your repo and ask your agent what you want. It handles either case, depending on what your repo is:
 
-- `Instrument this codebase with Grafana AI observability`: the agent wires the [SDK](#sdks) into your app or agent code.
-- `Set up Grafana AI observability for my coding agent`: the agent installs one of the [`plugins/`](plugins/) launchers to capture sessions from popular coding agents.
+- `Instrument this codebase with Grafana Agent observability`: the agent wires the [SDK](#sdks) into your app or agent code.
+- `Set up Grafana Agent observability for my coding agent`: the agent installs one of the [`plugins/`](plugins/) launchers to capture sessions from popular coding agents.
 
-Or open the AI Observability plugin in your Grafana Cloud stack and use the onboarding wizard.
+Or open the Agent Observability plugin in your Grafana Cloud stack and use the onboarding wizard.
 
 ## Quick start (manual)
 
@@ -95,7 +95,7 @@ ctx, rec := client.StartGeneration(context.Background(), agento11y.GenerationSta
 defer rec.End()
 
 rec.SetResult(agento11y.Generation{
-    Output: []agento11y.Message{agento11y.AssistantTextMessage("Hello from Grafana AI observability")},
+    Output: []agento11y.Message{agento11y.AssistantTextMessage("Hello from Grafana Agent observability")},
 }, nil)
 ```
 
@@ -132,7 +132,7 @@ rec.SetResult(agento11y.Generation{
 
 Self-contained examples grouped into three tiers. See [`examples/README.md`](examples/README.md) for the full map.
 
-The getting-started quickstarts each make a real LLM call and record the generation to Grafana AI observability.
+The getting-started quickstarts each make a real LLM call and record the generation to Grafana Agent observability.
 
 | Stack | Example |
 |-------|---------|
@@ -173,7 +173,7 @@ To attach custom key/values (team, project, env, request id, end-user id), see [
 
 ## Grafana Cloud credentials
 
-All four connection values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the AI Observability plugin in your stack:
+All four connection values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the Agent Observability plugin in your stack:
 
 ```
 https://<your-stack>.grafana.net/plugins/grafana-sigil-app
@@ -181,13 +181,13 @@ https://<your-stack>.grafana.net/plugins/grafana-sigil-app
 
 Follow *Create a token in Cloud Access Policies* on the Connection page and create one token scoped with `sigil:write`, `metrics:write`, `traces:write`, and `logs:write`. The same token then covers both `AGENTO11Y_AUTH_TOKEN` (Agent Observability ingest) and `OTEL_EXPORTER_OTLP_HEADERS` (OTel traces and metrics).
 
-See the [Grafana Cloud AI observability getting started docs](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the full setup flow.
+See the [Grafana Cloud Agent observability getting started docs](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/) for the full setup flow.
 
 ## Plugins for coding agents
 
 Plugins can record sessions from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, and Pi without changing application code. See [`plugins/README.md`](plugins/README.md) for install and config per agent.
 
-## Why Grafana AI observability
+## Why Grafana Agent observability
 
 - The SDK emits traces and metrics as standard OTLP, so they can use existing OTel pipelines. Conversations and generations go through Agent Observability ingest so Grafana can join them with traces, costs, and scores.
 - It uses OTel GenAI semantic conventions where they exist. agento11y-specific fields cover agent versions, generation IDs, and tool executions.

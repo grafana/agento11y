@@ -284,7 +284,7 @@
       return (
         <div style={{ display: "flex", alignItems: "center", gap: 9, userSelect: "none" }}>
           <GrafanaMark size={22}/>
-          <span style={{ fontFamily: "var(--fontFamily)", fontSize: 15, fontWeight: 600, letterSpacing: "-0.01em", color: "var(--fg-max)", whiteSpace: "nowrap" }}>Grafana AI Observability</span>
+          <span style={{ fontFamily: "var(--fontFamily)", fontSize: 15, fontWeight: 600, letterSpacing: "-0.01em", color: "var(--fg-max)", whiteSpace: "nowrap" }}>Grafana Agent Observability</span>
           <span style={{
             fontFamily: "var(--fontFamily)", fontSize: 10, fontWeight: 600,
             letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--fg2)",
@@ -1905,7 +1905,7 @@
                 <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg3)", padding: "0 0 10px" }}>
                   These values apply to your Grafana Cloud sessions.
                 </div>
-                <SettingRow label="Endpoint" help={<>Grafana AI Observability ingest URL.</>}>
+                <SettingRow label="Endpoint" help={<>Grafana Agent Observability ingest URL.</>}>
                   <MonoInput value={form.endpoint} onChange={v => set({ endpoint: v })} placeholder="https://agento11y-prod-….grafana.net" width={320}/>
                 </SettingRow>
                 <SettingRow label="Tenant ID" help={<>Your stack instance ID.</>}>

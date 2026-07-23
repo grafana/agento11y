@@ -53,7 +53,7 @@ If you change shared-binary behavior, the four glue plugins all see it. The Open
 
 ## Consumer prompt lives in two places
 
-[`llms.txt`](llms.txt) is what this repo ships. There is a second copy of the same prompt rendered by the AI Observability onboarding wizard (a separate Grafana product). When you change user-facing semantics here (new SDK field, renamed env var, new framework adapter), the wizard copy needs the same change. If you're only fixing this repo's internals, the wizard copy doesn't move.
+[`llms.txt`](llms.txt) is what this repo ships. There is a second copy of the same prompt rendered by the Agent Observability onboarding wizard (a separate Grafana product). When you change user-facing semantics here (new SDK field, renamed env var, new framework adapter), the wizard copy needs the same change. If you're only fixing this repo's internals, the wizard copy doesn't move.
 
 ## Running checks
 

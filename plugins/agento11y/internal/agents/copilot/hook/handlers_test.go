@@ -542,7 +542,7 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			// envelope is what Copilot Chat in VS Code reads. The leading
 			// `{"permissionDecision"` matches only the flat copy.
 			wantServerCalled:    true,
-			wantStdoutContains:  []string{`{"permissionDecision":"deny"`, `"hookSpecificOutput"`, `"hookEventName":"PreToolUse"`, `A Grafana AI Observability policy`, `blocked tool`},
+			wantStdoutContains:  []string{`{"permissionDecision":"deny"`, `"hookSpecificOutput"`, `"hookEventName":"PreToolUse"`, `A Grafana Agent Observability policy`, `blocked tool`},
 			wantToolRecordCount: 0,
 		},
 		{

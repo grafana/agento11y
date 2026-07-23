@@ -53,7 +53,7 @@ func TestPreToolUse(t *testing.T) {
 			wantStdoutContains: []string{
 				`"permission":"deny"`,
 				`"agent_message"`,
-				`A Grafana AI Observability policy`,
+				`A Grafana Agent Observability policy`,
 				`blocked tool`,
 			},
 		},

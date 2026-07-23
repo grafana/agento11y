@@ -1,6 +1,6 @@
 # Agent Observability for Codex
 
-Sends Codex turns to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/): model, tokens, tools, timing, and optionally the conversation content.
+Sends Codex turns to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/): model, tokens, tools, timing, and optionally the conversation content.
 
 > Experimental. Codex hooks and plugin lifecycle config are still feature-flagged.
 
@@ -59,11 +59,11 @@ Restart Codex, open `/hooks`, and trust the five `sigil-codex@grafana-sigil` hoo
 
 ## 2. Credentials
 
-When `agento11y codex` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+When `agento11y codex` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
-1. **AI Observability → Configuration**
+1. **Agent Observability → Configuration**
    - **API URL** → `AGENTO11Y_ENDPOINT`
    - **Instance ID** → `AGENTO11Y_AUTH_TENANT_ID`
 
@@ -98,7 +98,7 @@ AGENTO11Y_CONTENT_CAPTURE_MODE=full
 
 ## 3. Verify
 
-Run one turn in Codex and let it finish — the plugin only exports completed turns, so `/exit` mid-turn means nothing is sent. Then open **AI Observability → Conversations** in Grafana Cloud.
+Run one turn in Codex and let it finish — the plugin only exports completed turns, so `/exit` mid-turn means nothing is sent. Then open **Agent Observability → Conversations** in Grafana Cloud.
 
 If nothing shows up:
 
@@ -114,7 +114,7 @@ tail -f ~/.local/state/agento11y/logs/agento11y.log
 | `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL. Find it at `/plugins/grafana-sigil-app`. |
 | `AGENTO11Y_AUTH_TENANT_ID` | — | Grafana Cloud instance ID. |
 | `AGENTO11Y_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
-| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the AI Observability latency and tool-call panels stay empty. |
+| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the Agent Observability latency and tool-call panels stay empty. |
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTel password. |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
@@ -127,7 +127,7 @@ tail -f ~/.local/state/agento11y/logs/agento11y.log
 
 Guard rules can block a tool call or rewrite its arguments (Transform rules, e.g. redacting a secret before the tool runs). Guards only intercept tool calls that Codex routes through `PreToolUse` — Bash, the `apply_patch` variants, and MCP tools. See the [Codex hooks docs](https://developers.openai.com/codex/hooks) for the supported set.
 
-If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
+If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your Agent Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 
 ## Troubleshooting
 

@@ -47,7 +47,7 @@ A/B testing is just two runs with different `AGENTO11Y_EXPERIMENT_ID`/`tags` ove
 ## Prerequisites
 
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/)
-- Grafana Cloud AI Observability endpoint, stack ID, and access policy token
+- Grafana Cloud Agent Observability endpoint, stack ID, and access policy token
 - `ANTHROPIC_API_KEY`
 
 ## Run it
@@ -55,7 +55,7 @@ A/B testing is just two runs with different `AGENTO11Y_EXPERIMENT_ID`/`tags` ove
 ```bash
 uv sync
 
-# Grafana Cloud AI Observability ingest API URL.
+# Grafana Cloud Agent Observability ingest API URL.
 export AGENTO11Y_ENDPOINT=https://agento11y-prod-<region>.grafana.net
 export AGENTO11Y_PROTOCOL=http
 export AGENTO11Y_AUTH_TENANT_ID=<your-stack-id>

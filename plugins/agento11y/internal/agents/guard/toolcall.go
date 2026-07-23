@@ -28,10 +28,10 @@ import (
 const guardBehaviorHint = "Stop and tell the user this tool call was blocked, then wait for their direction before taking any other action."
 
 // formatPolicyDeny wraps a rule-authored reason (which may be empty) into a
-// self-explanatory message naming the Grafana AI Observability source, the
+// self-explanatory message naming the Grafana Agent Observability source, the
 // blocked tool, and the expected agent behavior.
 func formatPolicyDeny(toolName, reason string) string {
-	msg := fmt.Sprintf("A Grafana AI Observability policy blocked the %q tool call, so it was not run.", toolName)
+	msg := fmt.Sprintf("A Grafana Agent Observability policy blocked the %q tool call, so it was not run.", toolName)
 	if r := strings.TrimSpace(reason); r != "" {
 		msg += " Reason: " + r
 	}
@@ -42,7 +42,7 @@ func formatPolicyDeny(toolName, reason string) string {
 // be evaluated (missing credentials or transport failure). It explicitly
 // distinguishes the infrastructure failure from a policy decision.
 func formatEvalFailure(toolName, detail string) string {
-	msg := fmt.Sprintf("agento11y could not evaluate the Grafana AI Observability guard for the %q tool call, so it was blocked as a safety measure.", toolName)
+	msg := fmt.Sprintf("agento11y could not evaluate the Grafana Agent Observability guard for the %q tool call, so it was blocked as a safety measure.", toolName)
 	if d := strings.TrimSpace(detail); d != "" {
 		msg += " Details: " + d
 	}

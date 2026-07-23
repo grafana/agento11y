@@ -1,4 +1,4 @@
-// Guarded AI Observability getting-started example - Go + OpenAI.
+// Guarded Agent Observability getting-started example - Go + OpenAI.
 package main
 
 import (
@@ -145,7 +145,7 @@ func main() {
 		},
 	}, nil)
 
-	log.Println("Done - check the AI Observability plugin in your Grafana Cloud stack.")
+	log.Println("Done - check the Agent Observability plugin in your Grafana Cloud stack.")
 }
 
 func agento11yAPIEndpoint() string {

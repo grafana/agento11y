@@ -2,7 +2,7 @@
 
 Forwards completed GitHub Copilot turns, hook-visible tool calls, error
 metadata, subagent lifecycle metadata, and optional prompt/tool content to
-[Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/).
+[Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 Powered by the shared `agento11y` binary and driven by a single hooks file at
 `~/.copilot/hooks/agento11y.json`, which is read by **both** the GitHub Copilot CLI
 and Copilot Chat in **VS Code**. Each exported turn is tagged with the host it
@@ -52,11 +52,11 @@ For VS Code, no launch wrapper is needed — once `~/.copilot/hooks/agento11y.js
 
 ## 2. Credentials
 
-When `agento11y copilot` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure AI Observability is enabled on your stack — an administrator opens **Observability → AI Observability** once and accepts the terms.
+When `agento11y copilot` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
-1. **AI Observability → Configuration**
+1. **Agent Observability → Configuration**
    - **API URL** → `AGENTO11Y_ENDPOINT`
    - **Instance ID** → `AGENTO11Y_AUTH_TENANT_ID`
 
@@ -93,7 +93,7 @@ AGENTO11Y_CONTENT_CAPTURE_MODE=full
 
 Start a Copilot CLI session in a repository and give it a prompt that triggers
 at least one tool call. The plugin only exports completed turns at `agentStop`.
-Then open **AI Observability → Conversations** in Grafana Cloud and look for
+Then open **Agent Observability → Conversations** in Grafana Cloud and look for
 generations with `agent_name=copilot`.
 
 If nothing shows up:
@@ -145,7 +145,7 @@ By default, transport errors and timeouts let the tool call through. Set `AGENTO
 
 ### Transform guards (redaction)
 
-When guards are enabled and a [Transform rule](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/guides/guards/) matches a tool call, the redacted arguments replace what the tool receives.
+When guards are enabled and a [Transform rule](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/guards/) matches a tool call, the redacted arguments replace what the tool receives.
 
 Limits:
 
@@ -160,7 +160,7 @@ Limits:
 | `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL. Find it at `/plugins/grafana-sigil-app`. |
 | `AGENTO11Y_AUTH_TENANT_ID` | — | Grafana Cloud instance ID. |
 | `AGENTO11Y_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
-| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the AI Observability latency and tool-call panels stay empty. |
+| `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the Agent Observability latency and tool-call panels stay empty. |
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTel password. |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. |
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
@@ -171,7 +171,7 @@ Limits:
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout. Lower = less added latency on every tool call, higher = better tolerance for slow `llm_judge` evaluators. |
 | `AGENTO11Y_COPILOT_HOOK_SURFACE` | _(auto)_ | Override the detected host surface (`copilot-cli` or `vscode`). Normally inferred at runtime; set explicitly only when driving capture through a custom hooks config. |
 
-If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your AI Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
+If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your Agent Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 
 ## What Gets Exported
 
@@ -231,7 +231,7 @@ field and the `AGENTO11Y_DEBUG` log line (`dispatch: event=… surface=…`).
 | Turns appear twice in Agent Observability | A leftover `sigil-copilot` plugin is firing alongside the shared file. Remove it: `copilot plugin uninstall sigil-copilot` (newer `agento11y copilot` runs do this automatically). |
 | Command not found | Reinstall `agento11y` (see step 1). Check `agento11y --version` and that its install dir is on `PATH`. |
 | Hooks run but nothing appears in Agent Observability | Check `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TENANT_ID`, and `AGENTO11Y_AUTH_TOKEN`. Without all three, the plugin discards the completed fragment. |
-| No latency/tool charts in AI Observability | Set `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` so the plugin can emit traces and metrics. |
+| No latency/tool charts in Agent Observability | Set `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` so the plugin can emit traces and metrics. |
 | Prompt or tool content is missing | Check `AGENTO11Y_CONTENT_CAPTURE_MODE`. The default is `metadata_only`. |
 | Assistant response text is missing | Check that `agentStop` included a readable `transcriptPath` and that the local `events.jsonl` transcript still exists under `~/.copilot/session-state/<session-id>/`. |
 | Model or output tokens are still missing | The local Copilot transcript for that turn did not include those fields. This plugin can only export the fields Copilot recorded locally. |

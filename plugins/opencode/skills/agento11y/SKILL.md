@@ -19,7 +19,7 @@ You are acting as a coding agent inside this repository. Your goal is to add or 
 
 Agent Observability is a Grafana Cloud-only product for user-facing setup. Do not suggest
 non-Cloud or development-only endpoints in docs, examples, or generated
-instructions. Use the Grafana Cloud API URL from AI Observability configuration
+instructions. Use the Grafana Cloud API URL from Agent Observability configuration
 and Cloud `basic` auth.
 
 ## Output contract (required)

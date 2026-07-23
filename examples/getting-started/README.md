@@ -1,6 +1,6 @@
-# Getting Started with AI Observability
+# Getting Started with Agent Observability
 
-Minimal, self-contained examples that make a real LLM call and record the generation to Grafana Cloud AI Observability. Pick your language and you should be up and running in under five minutes.
+Minimal, self-contained examples that make a real LLM call and record the generation to Grafana Cloud Agent Observability. Pick your language and you should be up and running in under five minutes.
 
 ### Single generation
 
@@ -52,7 +52,7 @@ Set all values as environment variables before running an example.
 
 ## What to look for
 
-After running an example, open the AI Observability plugin in your Grafana Cloud stack. You should see:
+After running an example, open the Agent Observability plugin in your Grafana Cloud stack. You should see:
 
 - A new generation under the conversation ID used in the example.
 - Model name, provider, token usage, and latency filled in.

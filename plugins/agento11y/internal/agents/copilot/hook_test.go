@@ -58,7 +58,7 @@ func TestHookPreToolUseDeniedPropagatesStdout(t *testing.T) {
 	if !strings.Contains(stdout.String(), `"permissionDecision":"deny"`) {
 		t.Fatalf("stdout = %q, want deny decision", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `A Grafana AI Observability policy`) ||
+	if !strings.Contains(stdout.String(), `A Grafana Agent Observability policy`) ||
 		!strings.Contains(stdout.String(), `Reason: blocked`) {
 		t.Fatalf("stdout = %q, want wrapped deny reason", stdout.String())
 	}
