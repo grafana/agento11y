@@ -659,3 +659,124 @@ func TestServer_Config_RejectsBadBody(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	resp.Body.Close()
 }
+
+// TestServer_APISearch covers the /api/v1/search endpoint: empty query,
+// ranked hits with the design shape, unknown query, and the default
+// limit. Semantic search is not wired up, so the mode is always "fts".
+func TestServer_APISearch(t *testing.T) {
+	srv, dir := newTestServer(t)
+	storage, err := NewStorage(dir)
+	require.NoError(t, err)
+
+	writeGenWithMessages(t, storage, "conv-A", "g1",
+		[]agento11y.Message{textMsg(agento11y.RoleUser, "hit the rate limit")},
+		[]agento11y.Message{textMsg(agento11y.RoleAssistant, "backoff once the rate limit clears")},
+		"2026-05-21T10:00:00Z")
+	writeGenWithMessages(t, storage, "conv-B", "g2",
+		nil,
+		[]agento11y.Message{textMsg(agento11y.RoleAssistant, "nothing useful here")},
+		"2026-05-21T11:00:00Z")
+
+	t.Run("empty query returns empty hits with fts mode", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var body struct {
+			Hits []SearchHit `json:"hits"`
+			Mode string      `json:"mode"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+		assert.Empty(t, body.Hits)
+		assert.Equal(t, "fts", body.Mode)
+	})
+
+	t.Run("populated store returns ranked hits with the design shape", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=rate+limit", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var body struct {
+			Hits []SearchHit `json:"hits"`
+			Mode string      `json:"mode"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+		assert.Equal(t, "fts", body.Mode)
+		require.Len(t, body.Hits, 1, "only conv-A contains both terms")
+		hit := body.Hits[0]
+		assert.Equal(t, "conv-A", hit.ID)
+		assert.Greater(t, hit.MatchCount, 0)
+		assert.NotEmpty(t, hit.Snippet)
+		assert.Contains(t, strings.ToLower(hit.Snippet), "limit")
+		assert.Equal(t, "g1", hit.GenerationID)
+		assert.NotEmpty(t, hit.LastActivity)
+	})
+
+	t.Run("unknown query returns empty hits, not error", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=zzz-impossible", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		assert.Contains(t, rr.Body.String(), `"hits":[]`)
+	})
+
+	t.Run("limit=0 falls back to the default cap", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=rate&limit=0", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var body struct {
+			Hits []SearchHit `json:"hits"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+		assert.NotEmpty(t, body.Hits)
+	})
+}
+
+// TestServer_APISearchCapabilities checks that the capabilities endpoint
+// reports full-text search available and semantic search unavailable in
+// this build.
+func TestServer_APISearchCapabilities(t *testing.T) {
+	srv, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search/capabilities", nil)
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var caps SearchCapabilities
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &caps))
+	assert.True(t, caps.FullText, "full-text search is available")
+	assert.False(t, caps.Semantic, "semantic search is not wired up in this build")
+}
+
+// TestServer_DevAsset_EnvPrecedence checks that the preferred
+// AGENTO11Y_LOCAL_WEB_DIR wins over the legacy SIGIL_LOCAL_WEB_DIR, and
+// that the legacy spelling still works on its own.
+func TestServer_DevAsset_EnvPrecedence(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	preferred := t.TempDir()
+	legacy := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(preferred, "app.jsx"), []byte("// preferred"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(legacy, "app.jsx"), []byte("// legacy"), 0o600))
+
+	fetchJSX := func() string {
+		req := httptest.NewRequest(http.MethodGet, "/assets/app.jsx", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		return rr.Body.String()
+	}
+
+	t.Run("preferred wins over legacy", func(t *testing.T) {
+		t.Setenv("AGENTO11Y_LOCAL_WEB_DIR", preferred)
+		t.Setenv("SIGIL_LOCAL_WEB_DIR", legacy)
+		assert.Equal(t, "// preferred", fetchJSX())
+	})
+
+	t.Run("legacy is used as a fallback", func(t *testing.T) {
+		t.Setenv("AGENTO11Y_LOCAL_WEB_DIR", "")
+		t.Setenv("SIGIL_LOCAL_WEB_DIR", legacy)
+		assert.Equal(t, "// legacy", fetchJSX())
+	})
+}

@@ -5,10 +5,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 // Maximum body sizes accepted by the receiver. These guard against
@@ -28,6 +31,10 @@ type Server struct {
 	now        func() time.Time
 	configPath string
 	mux        *http.ServeMux
+	hub        *eventHub
+	// eventPingInterval overrides defaultEventPingInterval for tests; zero
+	// uses the default.
+	eventPingInterval time.Duration
 }
 
 // NewServer builds a Server backed by the given storage. logger may be
@@ -44,9 +51,17 @@ func NewServer(storage *Storage, logger *log.Logger, configPath string) *Server 
 		logger:     logger,
 		configPath: configPath,
 		now:        func() time.Time { return time.Now().UTC() },
+		hub:        newEventHub(),
 	}
 	s.mux = s.routes()
 	return s
+}
+
+// Close releases server resources. It closes the event hub so open SSE
+// connections return promptly instead of holding the HTTP shutdown
+// deadline. Safe to call more than once.
+func (s *Server) Close() {
+	s.hub.closeAll()
 }
 
 func (s *Server) routes() *http.ServeMux {
@@ -60,6 +75,9 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /assets/app.jsx", s.handleAppJSX)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/v1/conversations", s.handleListConversations)
+	mux.HandleFunc("GET /api/v1/search", s.handleSearch)
+	mux.HandleFunc("GET /api/v1/search/capabilities", s.handleSearchCapabilities)
+	mux.HandleFunc("GET /api/v1/events", s.handleEvents)
 	mux.HandleFunc("GET /api/v1/metrics/tokens", s.handleTokenMetrics)
 	mux.HandleFunc("GET /api/v1/config", s.handleGetConfig)
 	mux.HandleFunc("POST /api/v1/config:preview", s.handlePreviewConfig)
@@ -83,22 +101,38 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
+// devAsset returns the on-disk copy of a web asset when the
+// AGENTO11Y_LOCAL_WEB_DIR (or legacy SIGIL_LOCAL_WEB_DIR) variable points
+// at the web/ source dir, so the frontend can be iterated on with a
+// browser reload instead of a Go rebuild. Unset returns the embedded copy.
+// Dev-only convenience — no caching, no file watching.
+func devAsset(name string, embedded []byte) []byte {
+	dir, _, ok := envconfig.LookupEnv("LOCAL_WEB_DIR")
+	if !ok {
+		return embedded
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+		return b
+	}
+	return embedded
+}
+
 func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(indexHTML)
+	_, _ = w.Write(devAsset("index.html", indexHTML))
 }
 
 func (s *Server) handleAppCSS(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(appCSS)
+	_, _ = w.Write(devAsset("app.css", appCSS))
 }
 
 func (s *Server) handleAppJSX(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/babel; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(appJSX)
+	_, _ = w.Write(devAsset("app.jsx", appJSX))
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -175,6 +209,14 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 		resp.Results = append(resp.Results, generationResult{
 			GenerationID: gen.ID,
 			Accepted:     true,
+		})
+		// Notify connected viewers so the list (and any open matching
+		// conversation) refreshes without waiting for the backstop poll.
+		// Broadcast is non-blocking; a stalled subscriber cannot stall
+		// ingest.
+		s.hub.broadcast(changeEvent{
+			ConversationID: gen.ConversationID,
+			GenerationID:   gen.ID,
 		})
 	}
 	s.writeJSON(w, http.StatusOK, resp)
@@ -342,6 +384,63 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 		convs = []ConversationSummary{}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"conversations": convs})
+}
+
+// searchResultLimit caps the number of hits the search endpoint returns
+// when the client does not pass a limit. The cap exists to bound the
+// response body on stores with thousands of conversations; the viewer
+// renders the full list it receives.
+const searchResultLimit = 100
+
+// handleSearch runs a full-text search across every recorded conversation
+// and returns the hits as JSON. Empty/whitespace queries are not an
+// error; they yield {"hits":[],"mode":"fts"} so the client can treat "no
+// query" the same as "no results" without a special case.
+//
+// The response carries mode ("fts") so the viewer can show a faint
+// backend hint. Semantic search is not wired up in this build, so the
+// mode is always "fts".
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	limit := searchResultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	hits, err := s.storage.SearchConversations(q, limit)
+	if err != nil {
+		s.logger.Printf("local: search: %v", err)
+		http.Error(w, "search: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if hits == nil {
+		hits = []SearchHit{}
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"hits": hits, "mode": "fts"})
+}
+
+// SearchCapabilities is the JSON shape /api/v1/search/capabilities
+// returns: whether full-text search is available (always true here),
+// whether semantic search is available (not in this build), and a short
+// status string the UI can show. The search endpoint always uses FTS.
+type SearchCapabilities struct {
+	FullText   bool   `json:"fts"`
+	Semantic   bool   `json:"semantic"`
+	IndexState string `json:"indexState"`
+	Status     string `json:"status"`
+}
+
+// handleSearchCapabilities reports the search backends available to the
+// viewer. Full-text search is always available; semantic search is not
+// wired up in this build, so it is reported unavailable.
+func (s *Server) handleSearchCapabilities(w http.ResponseWriter, _ *http.Request) {
+	s.writeJSON(w, http.StatusOK, SearchCapabilities{
+		FullText:   true,
+		Semantic:   false,
+		IndexState: "unavailable",
+		Status:     "Full-text search only",
+	})
 }
 
 // handleTokenMetrics returns one token-usage point per recorded
