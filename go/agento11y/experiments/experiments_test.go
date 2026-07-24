@@ -12,6 +12,7 @@ import (
 
 	agento11y "github.com/grafana/agento11y/go/agento11y"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -31,11 +32,18 @@ test_cases:
     weight: 2.5
     metadata:
       owner: eval
+  - test_case_id: disabled
+    input: skip
+    weight: 0
+  - test_case_id: default
+    input: run
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if suite.SuiteID != "smoke" || len(suite.TestCases) != 1 || suite.TestCases[0].Weight != 2.5 {
+	if suite.SuiteID != "smoke" || len(suite.TestCases) != 3 ||
+		suite.TestCases[0].Weight != 2.5 || suite.TestCases[1].Weight != 0 ||
+		suite.TestCases[2].Weight != 1 {
 		t.Fatalf("unexpected suite: %#v", suite)
 	}
 	data, err := MarshalSuite(*suite)
@@ -43,15 +51,16 @@ test_cases:
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(data), "suite_id: smoke") || !strings.Contains(string(data), "cases:") ||
-		!strings.Contains(string(data), "id: scalar") {
+		!strings.Contains(string(data), "id: scalar") || !strings.Contains(string(data), "weight: 0") {
 		t.Fatalf("unexpected YAML:\n%s", data)
 	}
 	roundTrip, err := ParseSuite(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if roundTrip.TestCases[0].Input != "hello" || roundTrip.TestCases[0].Expected != "world" {
-		t.Fatalf("scalar values were not preserved: %#v", roundTrip.TestCases[0])
+	if roundTrip.TestCases[0].Input != "hello" || roundTrip.TestCases[0].Expected != "world" ||
+		roundTrip.TestCases[1].Weight != 0 || roundTrip.TestCases[2].Weight != 1 {
+		t.Fatalf("portable values were not preserved: %#v", roundTrip.TestCases)
 	}
 }
 
@@ -338,6 +347,14 @@ func TestTrialTerminalUpdateFailureIsRetryable(t *testing.T) {
 }
 
 func TestTrialCloseRetriesBufferedScoresBeforeFinalizing(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	otel.SetTracerProvider(provider)
+	defer func() {
+		_ = provider.Shutdown(context.Background())
+		otel.SetTracerProvider(trace.NewNoopTracerProvider())
+	}()
+
 	scoreExports, patches := 0, 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -359,7 +376,10 @@ func TestTrialCloseRetriesBufferedScoresBeforeFinalizing(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(ClientOptions{Endpoint: server.URL, IngestToken: "token"})
+	enabled := true
+	client, err := NewClient(ClientOptions{
+		Endpoint: server.URL, IngestToken: "token", UseExperimentalOTel: &enabled,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,6 +410,9 @@ func TestTrialCloseRetriesBufferedScoresBeforeFinalizing(t *testing.T) {
 	if patches != 0 {
 		t.Fatalf("terminal update ran before scores were exported: patches=%d", patches)
 	}
+	if len(recorder.Ended()) != 0 {
+		t.Fatal("retryable close failure must keep the trial span open")
+	}
 
 	if err := trial.Close(context.Background(), nil); err != nil {
 		t.Fatalf("second close should retry buffered scores: %v", err)
@@ -402,6 +425,10 @@ func TestTrialCloseRetriesBufferedScoresBeforeFinalizing(t *testing.T) {
 			"unexpected retry result: closed=%t buffered=%d exports=%d patches=%d",
 			closed, buffered, scoreExports, patches,
 		)
+	}
+	spans := recorder.Ended()
+	if len(spans) != 1 || spans[0].Status().Code != codes.Ok {
+		t.Fatalf("successful retry must end one successful trial span: %#v", spans)
 	}
 }
 

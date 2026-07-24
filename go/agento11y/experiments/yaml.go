@@ -142,7 +142,7 @@ func MarshalSuite(suite TestSuite) ([]byte, error) {
 			Metadata:     cloneMap(testCase.Metadata),
 			ArtifactRefs: toPortableArtifactRefs(testCase.ArtifactRefs),
 		}
-		if testCase.Weight != 0 && testCase.Weight != 1 {
+		if testCase.Weight != 1 {
 			weight := testCase.Weight
 			item.Weight = &weight
 		}

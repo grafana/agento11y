@@ -557,15 +557,12 @@ func (t *Trial) Close(ctx context.Context, callbackErr error) error {
 	}
 	t.mu.Unlock()
 	if err := t.create(ctx); err != nil {
-		t.endSpan(err)
 		return err
 	}
 	if _, err := t.Flush(ctx); err != nil {
-		t.endSpan(err)
 		return err
 	}
 	if err := t.finalize(ctx); err != nil {
-		t.endSpan(err)
 		return err
 	}
 	t.mu.Lock()

@@ -538,12 +538,8 @@ func localCaseToRemote(testCase TestCase) (map[string]any, error) {
 			wrapped = append(wrapped, "expected")
 		}
 	}
-	weight := testCase.Weight
-	if weight == 0 {
-		weight = 1
-	}
-	if weight != 1 {
-		portability["weight"] = weight
+	if testCase.Weight != 1 {
+		portability["weight"] = testCase.Weight
 	}
 	if len(wrapped) > 0 {
 		portability["wrapped_fields"] = wrapped

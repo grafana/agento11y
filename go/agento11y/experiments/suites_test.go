@@ -67,6 +67,25 @@ func TestTestSuitesPullPortabilityAndBearerNormalization(t *testing.T) {
 	}
 }
 
+func TestZeroWeightIsPreservedInPortableSuiteMetadata(t *testing.T) {
+	remote, err := localCaseToRemote(TestCase{
+		TestCaseID: "disabled", Input: "skip", Weight: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := objectMap(remote["metadata"])
+	portability := objectMap(metadata[portabilityMetadataKey])
+	weight, ok := numberValue(portability["weight"])
+	if !ok || weight != 0 {
+		t.Fatalf("explicit zero weight was not preserved: %#v", remote)
+	}
+	roundTrip := remoteCaseToLocal(remote)
+	if roundTrip.Weight != 0 {
+		t.Fatalf("zero weight changed during remote round trip: %#v", roundTrip)
+	}
+}
+
 func TestPushSuiteCreatesDraftPrunesAndPublishes(t *testing.T) {
 	var mu sync.Mutex
 	var methods []string
