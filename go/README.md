@@ -271,6 +271,90 @@ Common topology:
 - Traces/metrics via OTEL Collector/Alloy: configure exporters in your app OTEL SDK setup.
 - Enterprise proxy: generation `bearer` mode to proxy; proxy authenticates and forwards tenant header upstream.
 
+## Offline experiments
+
+Use `github.com/grafana/agento11y/go/agento11y/experiments` when an existing
+benchmark, CI job, notebook, or agent harness owns execution and Agent
+Observability should track the run. The package publishes typed trials,
+generations, scores, evaluations, usage/cost, and artifacts; it does not
+schedule work.
+
+Suite-free publishing needs `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TOKEN`, and
+optional `AGENTO11Y_AUTH_TENANT_ID`:
+
+```go
+client, err := experiments.NewClientFromEnv()
+if err != nil {
+	return err
+}
+defer client.Shutdown(context.Background())
+
+planned := len(cases) * attempts // optional; never inferred from suite size
+run, err := experiments.WithExperiment(ctx, client, experiments.ExperimentOptions{
+	ExperimentID:      stableResumeID,
+	Name:              "nightly",
+	PlannedTrialCount: &planned,
+	Candidate: &experiments.Candidate{
+		AgentName: "support-agent", ModelName: "gpt-5", GitSHA: gitSHA,
+	},
+}, func(ctx context.Context, run *experiments.Experiment) error {
+	for _, testCase := range cases {
+		for attempt := 1; attempt <= attempts; attempt++ {
+			err := run.WithTrial(ctx, testCase, func(ctx context.Context, trial *experiments.Trial) error {
+				output := runAgent(testCase.Input)
+				trial.RecordIO(experiments.RecordIOOptions{Input: testCase.Input, Output: output})
+				if _, err := trial.CheckScore("json_valid", validJSON(output), experiments.ScoreOptions{}); err != nil {
+					return err
+				}
+				didPass := passed(output)
+				if _, err := trial.FinalScore(score(output), experiments.ScoreOptions{Passed: &didPass}); err != nil {
+					return err
+				}
+				_, err := trial.Flush(ctx) // publish this scored attempt immediately
+				return err
+			}, experiments.TrialOptions{Attempt: attempt})
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+})
+```
+
+Keep `ExperimentID`, case ID, and attempt stable when resuming. The SDK derives
+stable trial/generation/conversation IDs and occurrence-aware score IDs from
+them. Reusing the same case/attempt twice in one run is rejected; increment the
+attempt for genuinely new work. Normal finalization omits `score_count`, which
+is appropriate for distributed runners. Supply `FinalizeOptions.ScoreCount`
+only when the count is an intentional server-side assertion.
+
+Portable suites accept `id`/`test_case_id` and `cases`/`test_cases` YAML aliases:
+
+```go
+suite, err := experiments.LoadSuite("evals/smoke.yaml")
+suites, err := experiments.NewTestSuitesClient(experiments.TestSuitesClientOptions{})
+pushed, err := suites.PushSuite(ctx, *suite, experiments.PushSuiteOptions{
+	Prune: true, Publish: true, Changelog: "nightly sync",
+})
+```
+
+Stored-suite operations additionally use `AGENTO11Y_CONTROL_ENDPOINT` (or
+`AGENTO11Y_GRAFANA_URL`) and `AGENTO11Y_SERVICE_ACCOUNT_TOKEN`. Run ingest
+continues to use the ingest credential. `NewExperimentFromSuite` and
+`WithExperimentFromSuite` resolve exact, `latest`, `latest_published`, or
+`draft` versions before starting, so the selected version is durable.
+
+Local `LLMJudge` and `RegexJudge` helpers require no platform evaluator.
+`Trial.RecordEvaluation` also accepts framework-owned evaluations without
+reinterpreting their transcript. If an evaluation includes a grader generation,
+the SDK publishes and links it before its score. Secret redaction is enabled by
+default for generations, scores, explanations, metadata, and text-like
+artifacts. Experimental trial spans and `gen_ai.evaluation.result` events are
+opt-in with `AGENTO11Y_USE_EXPERIMENTAL_OTEL=true`.
+
+See the runnable [Go streaming example](../examples/experiments/go/).
+
 ## Content Capture Mode
 
 `ContentCaptureMode` controls what content the SDK includes in exported generation payloads and OTel span attributes. See [Content Capture Modes](../docs/concepts/content-capture-modes.md) for the canonical mode matrix and defaults; the snippets below show how to wire it up in Go.

@@ -71,6 +71,14 @@ type Config struct {
 	//
 	// Use NewSecretRedactionSanitizer for the built-in regex-based redactor.
 	GenerationSanitizer GenerationSanitizer
+	// RedactExperimentSecrets redacts known secrets from experiment scores,
+	// explanations, metadata, and text-like artifacts before export. The core
+	// client leaves this disabled for backward compatibility; the experiments
+	// package enables it by default.
+	RedactExperimentSecrets bool
+	// ExperimentRetryTimeout bounds each experiment/control HTTP attempt.
+	// Zero uses the SDK default.
+	ExperimentRetryTimeout time.Duration
 	// Tracer is optional and mainly used for tests. If nil, the client uses the global OpenTelemetry tracer.
 	Tracer trace.Tracer
 	// Meter is optional and mainly used for tests. If nil, the client uses the global OpenTelemetry meter.
@@ -160,6 +168,9 @@ type GenerationExportConfig struct {
 	InitialBackoff             time.Duration
 	MaxBackoff                 time.Duration
 	PayloadMaxBytes            int
+	// HTTPTimeout bounds each HTTP generation export request. Zero uses ten
+	// seconds. It has no effect on gRPC export.
+	HTTPTimeout time.Duration
 }
 
 type APIConfig struct {
@@ -347,6 +358,9 @@ type GenerationRecorder struct {
 	firstTokenAt   time.Time
 	// extraMetadata is merged last in normalizeGeneration (e.g. cache diagnostics).
 	extraMetadata map[string]any
+	// persist overrides the default asynchronous queue for callers that require
+	// a synchronous durability boundary before publishing dependent records.
+	persist func(Generation) error
 }
 
 // EmbeddingRecorder records and closes one in-flight embeddings span.
@@ -511,6 +525,26 @@ func NewClient(config Config) *Client {
 //   - The span includes agento11y.generation.id as an attribute.
 func (c *Client) StartGeneration(ctx context.Context, start GenerationStart) (context.Context, *GenerationRecorder) {
 	return c.startGeneration(ctx, start, GenerationModeSync)
+}
+
+// ExportGeneration records and synchronously exports one generation.
+//
+// This is intended for workflows that must durably publish a generation before
+// publishing a dependent record, such as an experiment score linked to a grader
+// generation. Normal instrumentation should use StartGeneration instead.
+func (c *Client) ExportGeneration(ctx context.Context, start GenerationStart, generation Generation) error {
+	if c == nil {
+		return ErrNilClient
+	}
+	_, recorder := c.startGeneration(ctx, start, GenerationModeSync)
+	recorder.mu.Lock()
+	recorder.persist = func(normalized Generation) error {
+		return c.exportGeneration(ctx, normalized)
+	}
+	recorder.mu.Unlock()
+	recorder.SetResult(generation, nil)
+	recorder.End()
+	return recorder.Err()
 }
 
 // StartStreamingGeneration starts a streaming GenAI span and returns a context for the provider call.
@@ -898,6 +932,7 @@ func (r *GenerationRecorder) End() {
 	generation := r.generation
 	firstTokenAt := r.firstTokenAt
 	extraMeta := cloneMetadata(r.extraMetadata)
+	persist := r.persist
 	r.mu.Unlock()
 
 	// No-op recorder: no client/span means nothing to finalize.
@@ -982,7 +1017,12 @@ func (r *GenerationRecorder) End() {
 	r.lastGeneration = cloneGeneration(normalized)
 	r.mu.Unlock()
 
-	enqueueErr := r.client.persistGeneration(normalized)
+	var enqueueErr error
+	if persist != nil {
+		enqueueErr = persist(normalized)
+	} else {
+		enqueueErr = r.client.persistGeneration(normalized)
+	}
 
 	// Record errors on span. spanCallError is the post-sanitization,
 	// post-redaction text: under MetadataOnly and FullWithMetadataSpans the

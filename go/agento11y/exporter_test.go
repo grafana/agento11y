@@ -12,6 +12,47 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
+func TestExportGenerationBypassesAsyncQueue(t *testing.T) {
+	exporter := &capturingGenerationExporter{}
+	client := NewClient(Config{
+		GenerationExport: GenerationExportConfig{
+			QueueSize:      1,
+			MaxRetries:     0,
+			InitialBackoff: time.Millisecond,
+			MaxBackoff:     time.Millisecond,
+		},
+		Tracer:                 noop.NewTracerProvider().Tracer("test"),
+		Now:                    time.Now,
+		testDisableWorker:      true,
+		testGenerationExporter: exporter,
+	})
+	t.Cleanup(func() {
+		_ = client.Shutdown(context.Background())
+	})
+
+	err := client.ExportGeneration(context.Background(), GenerationStart{
+		ID: "generation-1", Model: ModelRef{Provider: "openai", Name: "gpt-5"},
+	}, Generation{
+		ID:     "generation-1",
+		Input:  []Message{UserTextMessage("hello")},
+		Output: []Message{AssistantTextMessage("hi")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued := len(client.queue); queued != 0 {
+		t.Fatalf("synchronous export enqueued %d generations", queued)
+	}
+	exporter.mu.Lock()
+	defer exporter.mu.Unlock()
+	if len(exporter.requests) != 1 || len(exporter.requests[0].Generations) != 1 {
+		t.Fatalf("unexpected synchronous exports: %#v", exporter.requests)
+	}
+	if got := exporter.requests[0].Generations[0].Id; got != "generation-1" {
+		t.Fatalf("generation ID = %q, want generation-1", got)
+	}
+}
+
 func TestGenerationRecorderQueueFullReturnsEnqueueError(t *testing.T) {
 	exporter := &capturingGenerationExporter{}
 	client := NewClient(Config{

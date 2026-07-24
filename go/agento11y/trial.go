@@ -209,6 +209,7 @@ func (t *Trial) finalizeTrial(ctx context.Context) error {
 		Error:          t.errorText,
 		ConversationID: t.conversationID,
 		TraceID:        t.traceID,
+		SpanID:         t.spanID,
 	}
 	if v, ok := t.usage["cost"].(float64); ok {
 		req.Cost = &v

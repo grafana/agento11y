@@ -54,6 +54,18 @@ func serializeUpsertRequest(req CreateExperimentRequest) map[string]any {
 	if len(req.Tags) > 0 {
 		out["tags"] = append([]string(nil), req.Tags...)
 	}
+	if strings.TrimSpace(req.SuiteID) != "" {
+		out["suite_id"] = strings.TrimSpace(req.SuiteID)
+	}
+	if strings.TrimSpace(req.SuiteVersion) != "" {
+		out["suite_version"] = strings.TrimSpace(req.SuiteVersion)
+	}
+	if len(req.Candidate) > 0 {
+		out["candidate"] = cloneMetadata(req.Candidate)
+	}
+	if req.PlannedTrialCount != nil {
+		out["planned_trial_count"] = *req.PlannedTrialCount
+	}
 	if len(req.Metadata) > 0 {
 		out["metadata"] = cloneMetadata(req.Metadata)
 	}

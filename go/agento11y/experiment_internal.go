@@ -71,6 +71,7 @@ func cloneTestCases(in []TestCase) []TestCase {
 func cloneTestCase(in TestCase) TestCase {
 	in.Tags = append([]string(nil), in.Tags...)
 	in.Metadata = cloneMetadata(in.Metadata)
+	in.ArtifactRefs = append([]ExperimentArtifactRef(nil), in.ArtifactRefs...)
 	return in
 }
 

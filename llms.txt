@@ -452,7 +452,7 @@ Example: an orchestrator spawns agents A, B, C where C depends on A and B:
 - B: `parent_generation_ids = []` (no parents)
 - C: `parent_generation_ids = [A.generation_id, B.generation_id]`
 
-## Python offline experiments
+## Python and Go offline experiments
 
 Use `agento11y.experiments` to track work run by an existing benchmark, CI job,
 notebook, or agent harness. The SDK records runs, trials, scores, usage,
@@ -477,6 +477,23 @@ a stored test suite.
 
 See the [Python experiments guide](https://github.com/grafana/agento11y/blob/main/python/README.md#experiments)
 and [v2 migration guide](https://github.com/grafana/agento11y/blob/main/docs/experiments-python-v2-migration.md).
+
+Go has the tracking-first parity surface at
+`github.com/grafana/agento11y/go/agento11y/experiments`. Construct
+`experiments.Client` from canonical `AGENTO11Y_*` ingest settings, then use
+`WithExperiment` and `Experiment.WithTrial`. Trials can record candidate I/O,
+multiple verifier scores, framework-owned evaluations, usage/cost, and file or
+structured artifacts, and can `Flush` immediately after scoring for streaming
+runners. Stable experiment ID + case ID + explicit attempt gives resumable,
+idempotent identities.
+
+Portable Go suites use `LoadSuite`/`MarshalSuite`/`WriteSuite` and accept both
+`id`/`test_case_id` and `cases`/`test_cases`. Stored suite synchronization uses
+`TestSuitesClient` with `AGENTO11Y_CONTROL_ENDPOINT` and
+`AGENTO11Y_SERVICE_ACCOUNT_TOKEN`; `NewExperimentFromSuite` resolves the exact
+stored version before running. Run/trial/generation/score/artifact writes always
+use the ingest credential. Secret redaction is on by default, and experiment
+OTel spans/events are opt-in via `AGENTO11Y_USE_EXPERIMENTAL_OTEL=true`.
 
 ## Useful examples to copy patterns from
 
