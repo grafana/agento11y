@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -275,8 +276,8 @@ func renderJudgePrompt(template string, input EvaluationInput) string {
 
 func parseJudgeResponse(raw string, threshold float64) (float64, bool, string, error) {
 	objects := topLevelJSONObjects(raw)
-	for i := len(objects) - 1; i >= 0; i-- {
-		rawScore, ok := objects[i]["score"]
+	for _, object := range slices.Backward(objects) {
+		rawScore, ok := object["score"]
 		if !ok {
 			continue
 		}
@@ -286,14 +287,14 @@ func parseJudgeResponse(raw string, threshold float64) (float64, bool, string, e
 		}
 		score = min(1, max(0, score))
 		passed := score >= threshold
-		if rawPassed, ok := objects[i]["passed"]; ok {
+		if rawPassed, ok := object["passed"]; ok {
 			passed = passedValue(rawPassed, passed)
-		} else if rawPassed, ok := objects[i]["pass"]; ok {
+		} else if rawPassed, ok := object["pass"]; ok {
 			passed = passedValue(rawPassed, passed)
 		}
-		explanation := stringValue(objects[i]["explanation"])
+		explanation := stringValue(object["explanation"])
 		if explanation == "" {
-			explanation = stringValue(objects[i]["reason"])
+			explanation = stringValue(object["reason"])
 		}
 		return score, passed, strings.TrimSpace(explanation), nil
 	}
