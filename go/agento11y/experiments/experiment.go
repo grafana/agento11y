@@ -284,6 +284,7 @@ func withTrial(ctx context.Context, trial *Trial, fn func(context.Context, *Tria
 		return errors.New("trial callback is required")
 	}
 	if err := trial.Enter(ctx); err != nil {
+		trial.abandon(err)
 		return err
 	}
 	ctx = trial.Context(ctx)
@@ -384,6 +385,13 @@ func (e *Experiment) Status() ExperimentStatus {
 func (e *Experiment) trialClosed(t *Trial) {
 	e.mu.Lock()
 	delete(e.open, t.TrialID)
+	e.mu.Unlock()
+}
+
+func (e *Experiment) trialAbandoned(t *Trial) {
+	e.mu.Lock()
+	delete(e.open, t.TrialID)
+	delete(e.claimed, t.TrialID)
 	e.mu.Unlock()
 }
 
@@ -566,6 +574,20 @@ func (t *Trial) Close(ctx context.Context, callbackErr error) error {
 		t.experiment.trialClosed(t)
 	}
 	return flushErr
+}
+
+func (t *Trial) abandon(err error) {
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return
+	}
+	t.closed = true
+	t.mu.Unlock()
+	t.endSpan(err)
+	if t.experiment != nil {
+		t.experiment.trialAbandoned(t)
+	}
 }
 
 func (t *Trial) finalize(ctx context.Context) error {

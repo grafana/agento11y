@@ -90,6 +90,93 @@ func TestRegexJudgeOptions(t *testing.T) {
 	}
 }
 
+func TestWithTrialEnterFailureReleasesClaimForRetry(t *testing.T) {
+	var mu sync.Mutex
+	trialUpserts := 0
+	var trialIDs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/trials"):
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			trialUpserts++
+			trialIDs = append(trialIDs, body["trial_id"].(string))
+			attempt := trialUpserts
+			mu.Unlock()
+			if attempt == 1 {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"trial upsert rejected"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"trial_id":"trial","experiment_id":"run","test_case_id":"case","attempt":1,"status":"running"}`))
+		case r.URL.Path == "/api/v1/scores:export":
+			_, _ = w.Write([]byte(`{"accepted":1,"results":[{"score_id":"score","accepted":true}]}`))
+		case r.Method == http.MethodPatch:
+			_, _ = w.Write([]byte(`{"trial_id":"trial","experiment_id":"run","test_case_id":"case","attempt":1,"status":"completed"}`))
+		case strings.HasSuffix(r.URL.Path, ":finalize"):
+			_, _ = w.Write([]byte(`{"experiment_id":"run","name":"run","status":"completed"}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		Endpoint: server.URL, IngestToken: "token",
+		UseExperimentalOTel: boolPointer(false),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Shutdown(context.Background()) }()
+	experiment, err := NewExperiment(client, ExperimentOptions{ExperimentID: "run", Name: "run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	callbackCalls := 0
+	err = experiment.WithTrialByCaseID(context.Background(), "case", func(context.Context, *Trial) error {
+		callbackCalls++
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected the first trial upsert to fail")
+	}
+	if callbackCalls != 0 {
+		t.Fatal("callback must not run when trial entry fails")
+	}
+	experiment.mu.Lock()
+	open, claimed := len(experiment.open), len(experiment.claimed)
+	experiment.mu.Unlock()
+	if open != 0 || claimed != 0 {
+		t.Fatalf("failed entry left trial registered: open=%d claimed=%d", open, claimed)
+	}
+
+	err = experiment.WithTrialByCaseID(context.Background(), "case", func(_ context.Context, trial *Trial) error {
+		callbackCalls++
+		_, scoreErr := trial.FinalScore(true, ScoreOptions{})
+		return scoreErr
+	})
+	if err != nil {
+		t.Fatalf("retrying the same case and attempt failed: %v", err)
+	}
+	if err := experiment.Finalize(context.Background(), ExperimentStatusCompleted); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if trialUpserts != 2 {
+		t.Fatalf("expected only the failed entry and its retry, got %d trial upserts", trialUpserts)
+	}
+	if len(trialIDs) != 2 || trialIDs[0] != trialIDs[1] {
+		t.Fatalf("retry must preserve the stable trial ID: %#v", trialIDs)
+	}
+}
+
 type capturedRequest struct {
 	Method string
 	Path   string
