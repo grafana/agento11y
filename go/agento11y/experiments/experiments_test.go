@@ -3,6 +3,7 @@ package experiments
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -42,8 +43,9 @@ test_cases:
 		t.Fatal(err)
 	}
 	if suite.SuiteID != "smoke" || len(suite.TestCases) != 3 ||
-		suite.TestCases[0].Weight != 2.5 || suite.TestCases[1].Weight != 0 ||
-		suite.TestCases[2].Weight != 1 {
+		suite.TestCases[0].EffectiveWeight() != 2.5 ||
+		suite.TestCases[1].EffectiveWeight() != 0 ||
+		suite.TestCases[2].EffectiveWeight() != 1 {
 		t.Fatalf("unexpected suite: %#v", suite)
 	}
 	data, err := MarshalSuite(*suite)
@@ -59,7 +61,8 @@ test_cases:
 		t.Fatal(err)
 	}
 	if roundTrip.TestCases[0].Input != "hello" || roundTrip.TestCases[0].Expected != "world" ||
-		roundTrip.TestCases[1].Weight != 0 || roundTrip.TestCases[2].Weight != 1 {
+		roundTrip.TestCases[1].EffectiveWeight() != 0 ||
+		roundTrip.TestCases[2].EffectiveWeight() != 1 {
 		t.Fatalf("portable values were not preserved: %#v", roundTrip.TestCases)
 	}
 }
@@ -581,5 +584,20 @@ func TestExperimentOTelIsOptInAndRedactsEventExplanation(t *testing.T) {
 		if strings.Contains(attr.Value.AsString(), secret) {
 			t.Fatalf("secret leaked in OTel event: %#v", attr)
 		}
+	}
+
+	errored, err := NewTrial(client, TrialRef{ExperimentID: "run", TestCaseID: "errored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := errored.Enter(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := errored.Close(context.Background(), errors.New("callback failed")); err != nil {
+		t.Fatal(err)
+	}
+	spans = recorder.Ended()
+	if len(spans) != 2 || spans[1].Status().Code != codes.Error {
+		t.Fatalf("errored trial must end its span with error status: %#v", spans)
 	}
 }

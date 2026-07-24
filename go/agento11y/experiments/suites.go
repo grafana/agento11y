@@ -538,8 +538,8 @@ func localCaseToRemote(testCase TestCase) (map[string]any, error) {
 			wrapped = append(wrapped, "expected")
 		}
 	}
-	if testCase.Weight != 1 {
-		portability["weight"] = testCase.Weight
+	if testCase.Weight != nil && *testCase.Weight != 1 {
+		portability["weight"] = *testCase.Weight
 	}
 	if len(wrapped) > 0 {
 		portability["wrapped_fields"] = wrapped
@@ -580,9 +580,9 @@ func remoteCaseToLocal(data map[string]any) TestCase {
 	} else {
 		portability = nil
 	}
-	weight := 1.0
+	var weight *float64
 	if value, ok := numberValue(portability["weight"]); ok {
-		weight = value
+		weight = Weight(value)
 	}
 	wrapped := map[string]bool{}
 	for _, field := range stringSlice(portability["wrapped_fields"]) {

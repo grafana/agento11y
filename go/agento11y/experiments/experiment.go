@@ -567,8 +567,13 @@ func (t *Trial) Close(ctx context.Context, callbackErr error) error {
 	}
 	t.mu.Lock()
 	t.closed = true
+	terminalError := t.Error
 	t.mu.Unlock()
-	t.endSpan(nil)
+	var spanErr error
+	if terminalError != "" {
+		spanErr = errors.New(terminalError)
+	}
+	t.endSpan(spanErr)
 	if t.experiment != nil {
 		t.experiment.trialClosed(t)
 	}

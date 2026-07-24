@@ -98,9 +98,9 @@ func ParseSuite(data []byte) (*TestSuite, error) {
 		if id == "" {
 			id = rawCase.ID
 		}
-		weight := 1.0
+		var weight *float64
 		if rawCase.Weight != nil {
-			weight = *rawCase.Weight
+			weight = Weight(*rawCase.Weight)
 		}
 		suite.TestCases = append(suite.TestCases, TestCase{
 			TestCaseID: id, Name: rawCase.Name, Description: rawCase.Description,
@@ -142,9 +142,8 @@ func MarshalSuite(suite TestSuite) ([]byte, error) {
 			Metadata:     cloneMap(testCase.Metadata),
 			ArtifactRefs: toPortableArtifactRefs(testCase.ArtifactRefs),
 		}
-		if testCase.Weight != 1 {
-			weight := testCase.Weight
-			item.Weight = &weight
+		if testCase.Weight != nil && *testCase.Weight != 1 {
+			item.Weight = Weight(*testCase.Weight)
 		}
 		raw.Cases = append(raw.Cases, item)
 	}

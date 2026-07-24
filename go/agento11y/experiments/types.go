@@ -93,13 +93,24 @@ type TestCase struct {
 	Category     string
 	Input        any
 	Expected     any
-	Weight       float64
+	Weight       *float64
 	Metadata     map[string]any
 	ArtifactRefs []ExperimentArtifactRef
 }
 
 // ID returns the portable id alias used by YAML.
 func (c TestCase) ID() string { return c.TestCaseID }
+
+// EffectiveWeight returns the configured weight or the portable default of 1.
+func (c TestCase) EffectiveWeight() float64 {
+	if c.Weight == nil {
+		return 1
+	}
+	return *c.Weight
+}
+
+// Weight returns a pointer suitable for TestCase.Weight, including explicit zero.
+func Weight(value float64) *float64 { return &value }
 
 // TestSuite is a local or stored portable test suite.
 type TestSuite struct {
@@ -311,6 +322,9 @@ func firstEnv(keys ...string) string {
 
 func cloneTestCase(in TestCase) TestCase {
 	in.Tags = append([]string(nil), in.Tags...)
+	if in.Weight != nil {
+		in.Weight = Weight(*in.Weight)
+	}
 	in.Metadata = cloneMap(in.Metadata)
 	in.ArtifactRefs = append([]ExperimentArtifactRef(nil), in.ArtifactRefs...)
 	return in

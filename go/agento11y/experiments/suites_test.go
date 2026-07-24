@@ -55,7 +55,7 @@ func TestTestSuitesPullPortabilityAndBearerNormalization(t *testing.T) {
 	}
 	if suite.Version != "v10" || len(suite.TestCases) != 1 ||
 		suite.TestCases[0].Input != "hello" || suite.TestCases[0].Expected != float64(4) ||
-		suite.TestCases[0].Weight != 2.5 {
+		suite.TestCases[0].EffectiveWeight() != 2.5 {
 		t.Fatalf("unexpected pulled suite: %#v", suite)
 	}
 	mu.Lock()
@@ -69,7 +69,7 @@ func TestTestSuitesPullPortabilityAndBearerNormalization(t *testing.T) {
 
 func TestZeroWeightIsPreservedInPortableSuiteMetadata(t *testing.T) {
 	remote, err := localCaseToRemote(TestCase{
-		TestCaseID: "disabled", Input: "skip", Weight: 0,
+		TestCaseID: "disabled", Input: "skip", Weight: Weight(0),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,8 +81,34 @@ func TestZeroWeightIsPreservedInPortableSuiteMetadata(t *testing.T) {
 		t.Fatalf("explicit zero weight was not preserved: %#v", remote)
 	}
 	roundTrip := remoteCaseToLocal(remote)
-	if roundTrip.Weight != 0 {
+	if roundTrip.EffectiveWeight() != 0 {
 		t.Fatalf("zero weight changed during remote round trip: %#v", roundTrip)
+	}
+}
+
+func TestUnsetWeightUsesPortableDefault(t *testing.T) {
+	testCase := TestCase{TestCaseID: "default", Input: "run"}
+	if testCase.EffectiveWeight() != 1 {
+		t.Fatalf("unset weight must default to 1: %#v", testCase)
+	}
+	remote, err := localCaseToRemote(testCase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := objectMap(remote["metadata"])
+	portability := objectMap(metadata[portabilityMetadataKey])
+	if _, ok := portability["weight"]; ok {
+		t.Fatalf("default weight must not emit a portability weight: %#v", remote)
+	}
+	suite := TestSuite{
+		SuiteID: "suite", TestCases: []TestCase{testCase},
+	}
+	data, err := MarshalSuite(suite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "weight:") {
+		t.Fatalf("default weight must be omitted from portable YAML:\n%s", data)
 	}
 }
 
@@ -125,7 +151,7 @@ func TestPushSuiteCreatesDraftPrunesAndPublishes(t *testing.T) {
 	}
 	result, err := client.PushSuite(context.Background(), TestSuite{
 		SuiteID: "suite", Name: "Suite",
-		TestCases: []TestCase{{TestCaseID: "keep", Input: "a", Expected: "b", Weight: 2}},
+		TestCases: []TestCase{{TestCaseID: "keep", Input: "a", Expected: "b", Weight: Weight(2)}},
 	}, PushSuiteOptions{Publish: true, Prune: true, Changelog: "new"})
 	if err != nil {
 		t.Fatal(err)
