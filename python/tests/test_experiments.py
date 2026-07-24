@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from agento11y.experiments import (
+    EvaluationResult,
     Evaluator,
     Experiment,
+    GraderGeneration,
+    LLMJudge,
+    RegexJudge,
     TestCase,
     TestSuite,
     Trial,
@@ -22,7 +26,7 @@ from agento11y.experiments import (
     otel,
     score,
 )
-from agento11y.models import CreateExperimentRequest, ScoreItem
+from agento11y.models import CreateExperimentRequest, ScoreItem, TokenUsage
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -36,7 +40,7 @@ class FakeClient:
         self.use_experimental_otel = use_experimental_otel
         self.upserts: list[CreateExperimentRequest] = []
         self.scores: list[ScoreItem] = []
-        self.finalized: list[tuple[str, str, int]] = []
+        self.finalized: list[tuple[str, str, int | None]] = []
         self.generations: list[str] = []
         self.generation_calls: list[tuple] = []
         self.trials: list[tuple] = []
@@ -62,11 +66,11 @@ class FakeClient:
         self.calls.append("flush_generations")
 
     def upsert_trial(self, experiment_id, *, trial_id, **kwargs) -> dict:
-        self.trials.append((experiment_id, trial_id, kwargs.get("status")))
+        self.trials.append((experiment_id, trial_id, kwargs.get("status"), kwargs.get("test_case")))
         return {"trial_id": trial_id}
 
     def update_trial(self, experiment_id, trial_id, **kwargs) -> dict:
-        self.trial_updates.append((experiment_id, trial_id, kwargs.get("status")))
+        self.trial_updates.append((experiment_id, trial_id, kwargs.get("status"), kwargs))
         return {"trial_id": trial_id}
 
     def upload_artifact(
@@ -84,7 +88,7 @@ class FakeClient:
         return {"artifact_id": f"art_{name}", "name": name, "kind": kind}
 
     def finalize(self, experiment_id, status="succeeded", *, score_count=None, error=""):
-        self.finalized.append((experiment_id, status, score_count or 0))
+        self.finalized.append((experiment_id, status, score_count))
         return None
 
     def experiment_url(self, experiment_id: str) -> str:
@@ -119,7 +123,13 @@ def test_experiment_lifecycle_and_score_wire_fields() -> None:
     suite = _suite()
     verifier = Evaluator(evaluator_id="exact", version="1", kind="deterministic")
 
-    with Experiment(client, experiment_id="run-1", name="smoke run", suite=suite) as exp:
+    with Experiment(
+        client,
+        experiment_id="run-1",
+        name="smoke run",
+        suite=suite,
+        planned_trial_count=3,
+    ) as exp:
         with exp.trial(suite.test_cases[0]) as trial:
             trial.final_score(1.0, passed=True, explanation="matched", evaluator=verifier)
             trial.check_score("json_valid", passed=True)
@@ -128,6 +138,9 @@ def test_experiment_lifecycle_and_score_wire_fields() -> None:
     # Upsert sent experiment_id (not run_id) and source=external.
     assert len(client.upserts) == 1
     assert client.upserts[0].run_id == "run-1"
+    assert client.upserts[0].suite_id == "smoke"
+    assert client.upserts[0].suite_version == "1.2.0"
+    assert client.upserts[0].planned_trial_count == 3
 
     # Three scores, all attributed to the run + trial + test case.
     assert len(client.scores) == 3
@@ -136,6 +149,19 @@ def test_experiment_lifecycle_and_score_wire_fields() -> None:
     # One typed trial was created (so the report rolls up) and finalized.
     assert len(client.trials) == 1
     assert client.trials[0][0] == "run-1"
+    assert client.trials[0][3] == {
+        "test_case_id": "add",
+        "suite_id": "smoke",
+        "suite_version": "1.2.0",
+        "name": "Addition",
+        "description": "",
+        "tags": [],
+        "category": "",
+        "input": {"value": "2+2"},
+        "expected": {"value": "4"},
+        "metadata": {},
+        "artifact_refs": [],
+    }
     assert client.trial_updates and client.trial_updates[0][2] == "completed"
 
     for s in client.scores:
@@ -157,8 +183,161 @@ def test_experiment_lifecycle_and_score_wire_fields() -> None:
     rubric = next(s for s in client.scores if s.score_key == "helpfulness")
     assert rubric.evaluator_kind == "llm_judge"
 
-    # Finalized completed (the backend's terminal-success status) with the count.
-    assert client.finalized == [("run-1", "completed", 3)]
+    # Normal finalization lets the backend count stored scores authoritatively.
+    assert client.finalized == [("run-1", "completed", None)]
+
+
+def test_experiment_finalize_can_assert_score_count_explicitly() -> None:
+    client = FakeClient()
+    exp = Experiment(client, experiment_id="run-assert", auto_finalize=False)
+
+    with exp:
+        pass
+    exp.finalize(score_count=4)
+
+    assert client.finalized == [("run-assert", "completed", 4)]
+
+
+def test_experiment_rejects_negative_planned_trial_count() -> None:
+    with pytest.raises(ValueError, match="planned_trial_count must be non-negative"):
+        Experiment(FakeClient(), planned_trial_count=-1)
+
+
+def test_llm_judge_evaluates_publishes_transcript_and_links_score() -> None:
+    client = FakeClient()
+    suite = _suite()
+    judge = LLMJudge(
+        evaluator_id="judge.correctness",
+        version="2026-07-21",
+        invoke=lambda prompt: SimpleNamespace(
+            content='{"score": 0.9, "passed": true, "explanation": "correct"}',
+            usage_metadata={"input_tokens": 120, "output_tokens": 18, "total_tokens": 138},
+        ),
+        model_provider="anthropic",
+        model_name="claude-test",
+        prompt_template='Input: {input}\nExpected: {expected}\nOutput: {output}\nReturn {"score": 1}',
+    )
+
+    with Experiment(client, experiment_id="run-judge", suite=suite) as exp:
+        with exp.trial(suite.test_cases[0], attempt=2) as trial:
+            item = trial.evaluate_output(judge, input="2+2", expected="4", output="4")
+
+    assert item.value.number == 0.9
+    assert item.passed is True
+    assert item.grader_conversation_id
+    assert item.grader_generation_id
+    assert item.metadata["judge_provider"] == "anthropic"
+    assert item.metadata["judge_model"] == "claude-test"
+    generation_id, generation = client.generation_calls[0]
+    assert generation_id == item.grader_generation_id
+    assert generation["conversation_id"] == item.grader_conversation_id
+    assert generation["model_name"] == "claude-test"
+    assert generation["usage"].input_tokens == 120
+    assert generation["usage"].output_tokens == 18
+    assert generation["input_text"].startswith("Input: 2+2")
+    assert generation["input_text"].endswith('Return {"score": 1}')
+    assert generation["output_text"].startswith('{"score"')
+
+
+def test_regex_judge_scores_without_publishing_transcript() -> None:
+    client = FakeClient()
+    suite = _suite()
+    judge = RegexJudge(evaluator_id="regex.answer", pattern=r"^4$", full_match=True)
+
+    with Experiment(client, experiment_id="run-regex", suite=suite) as exp:
+        with exp.trial(suite.test_cases[0]) as trial:
+            item = trial.evaluate_output(judge, input="2+2", expected="4", output="4", score_key="final")
+
+    assert item.passed is True
+    assert item.value.boolean is True
+    assert item.evaluator_kind == "deterministic"
+    assert item.grader_conversation_id == ""
+    assert client.generations == []
+
+
+def test_record_evaluation_accepts_framework_produced_result() -> None:
+    client = FakeClient()
+    evaluator = Evaluator(evaluator_id="harbor.rubric", version="1", kind="llm_judge")
+    result = EvaluationResult(
+        evaluator=evaluator,
+        value=0.8,
+        passed=True,
+        explanation="framework-owned trajectory passed",
+        grader=GraderGeneration(
+            input="harbor-rendered trajectory",
+            output='{"score": 0.8}',
+            model_provider="anthropic",
+            model_name="claude-test",
+            usage=TokenUsage(input_tokens=30, output_tokens=6, total_tokens=36),
+        ),
+    )
+
+    with Experiment(client, experiment_id="run-framework", suite=_suite()) as exp:
+        with exp.trial(exp.suite.test_cases[0]) as trial:
+            item = trial.record_evaluation(result)
+
+    assert item.evaluator_id == "harbor.rubric"
+    assert item.grader_generation_id
+    assert client.generation_calls[0][1]["input_text"] == "harbor-rendered trajectory"
+    assert client.generation_calls[0][1]["usage"].total_tokens == 36
+
+
+def test_llm_judge_invalid_response_is_explicit() -> None:
+    judge = LLMJudge(
+        evaluator_id="judge.invalid",
+        invoke=lambda prompt: "not structured",
+        model_name="test-model",
+    )
+
+    with pytest.raises(ValueError, match="did not contain a JSON object"):
+        judge.evaluate_output(input="", output="answer")
+
+
+def test_llm_judge_uses_valid_score_object_after_unrelated_json() -> None:
+    judge = LLMJudge(
+        evaluator_id="judge.preamble",
+        invoke=lambda prompt: (
+            'I first considered {"candidate": "incomplete"}.\n{"score": 0.8, "passed": true, "explanation": "grounded"}'
+        ),
+        model_name="test-model",
+    )
+
+    result = judge.evaluate_output(input="question", output="answer")
+
+    assert result.value == 0.8
+    assert result.passed is True
+    assert result.explanation == "grounded"
+
+
+def test_llm_judge_uses_top_level_score_instead_of_nested_rubric_score() -> None:
+    judge = LLMJudge(
+        evaluator_id="judge.nested-rubric",
+        invoke=lambda prompt: (
+            '{"score": 0.9, "passed": true, "explanation": "overall", '
+            '"rubric": {"score": 0.2, "passed": false, "explanation": "nested"}}'
+        ),
+        model_name="test-model",
+    )
+
+    result = judge.evaluate_output(input="question", output="answer")
+
+    assert result.value == 0.9
+    assert result.passed is True
+    assert result.explanation == "overall"
+
+
+def test_llm_judge_renders_placeholders_in_one_pass() -> None:
+    prompts: list[str] = []
+    judge = LLMJudge(
+        evaluator_id="judge.safe-template",
+        invoke=lambda prompt: prompts.append(prompt) or '{"score": 1, "passed": true, "explanation": "ok"}',
+        model_name="test-model",
+        prompt_template="Input={input}; Output={output}; Expected={expected}",
+    )
+
+    judge.evaluate_output(input="{output}", output="{expected}", expected="secret-answer")
+
+    assert prompts == ["Input={output}; Output={expected}; Expected=secret-answer"]
 
 
 def test_trial_span_emits_otel_eval_telemetry() -> None:
@@ -166,10 +345,16 @@ def test_trial_span_emits_otel_eval_telemetry() -> None:
     client = FakeClient(use_experimental_otel=True)
     suite = _suite()
     verifier = Evaluator(evaluator_id="exact", version="2", kind="deterministic")
+    secret = "glc_abcdefghijklmnopqrstuvwxyz"
 
     with Experiment(client, experiment_id="run-2", name="telemetry run", suite=suite) as exp:
         with exp.trial(suite.test_cases[0]) as trial:
-            trial.final_score(0.5, passed=False, explanation="off by one", evaluator=verifier)
+            trial.final_score(
+                0.5,
+                passed=False,
+                explanation=f"off by one; credential {secret}",
+                evaluator=verifier,
+            )
 
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
@@ -203,7 +388,8 @@ def test_trial_span_emits_otel_eval_telemetry() -> None:
     assert eattrs[otel.EVAL_EVALUATOR_ID] == "exact"
     assert eattrs[otel.EVAL_EVALUATOR_TYPE] == "deterministic"
     assert "agento11y.eval.score.passed" not in eattrs  # verdict is the label, no mirror
-    assert eattrs[otel.EVAL_EXPLANATION] == "off by one"
+    assert secret not in eattrs[otel.EVAL_EXPLANATION]
+    assert eattrs[otel.EVAL_EXPLANATION] == "off by one; credential [REDACTED:grafana-cloud-token]"
 
 
 def test_trial_span_is_disabled_by_default() -> None:
@@ -234,11 +420,167 @@ def test_trial_from_ref_cross_process() -> None:
     assert s.passed is True  # boolean final score derives the verdict
 
 
+def test_trial_from_ref_documented_close_creates_and_terminalizes_trial() -> None:
+    client = FakeClient()
+    trial = Trial.from_ref(client, TrialRef(experiment_id="run-worker", test_case_id="case-x"))
+
+    trial.final_score(0.82, passed=True)
+    trial.close()
+
+    assert len(client.trials) == 1
+    assert client.trials[0][1] == trial.trial_id
+    assert client.scores[0].trial_id == trial.trial_id
+    assert trial.accepted_scores == 1
+    assert client.trial_updates[0][2] == "completed"
+
+
+def test_experiment_finalize_closes_open_trial() -> None:
+    client = FakeClient()
+    with Experiment(client, experiment_id="run-open", name="open") as exp:
+        trial = exp.trial("case-x")
+        trial.final_score(1.0, passed=True)
+
+    assert trial.accepted_scores == 1
+    assert client.trial_updates[0][2] == "completed"
+    assert client.finalized == [("run-open", "completed", None)]
+
+
+def test_experiment_finalize_retries_trial_when_terminal_update_fails(monkeypatch) -> None:
+    client = FakeClient()
+    exp = Experiment(client, experiment_id="run-update-retry", auto_finalize=False)
+    trial = exp.trial("case-x")
+    trial.final_score(1.0, passed=True)
+    update_calls = 0
+    finalize_calls = 0
+    original_update_trial = client.update_trial
+    original_finalize = client.finalize
+
+    def fail_first_update(*args, **kwargs):
+        nonlocal update_calls
+        update_calls += 1
+        if update_calls == 1:
+            raise RuntimeError("trial update failed")
+        return original_update_trial(*args, **kwargs)
+
+    def fail_first_finalize(*args, **kwargs):
+        nonlocal finalize_calls
+        finalize_calls += 1
+        if finalize_calls == 1:
+            raise RuntimeError("cannot finalize with running trials")
+        return original_finalize(*args, **kwargs)
+
+    monkeypatch.setattr(client, "update_trial", fail_first_update)
+    monkeypatch.setattr(client, "finalize", fail_first_finalize)
+
+    with pytest.raises(RuntimeError, match="trial update failed"):
+        exp.finalize()
+
+    assert not trial._closed
+    assert trial.trial_id in exp._open_trials
+    assert not exp._finalized
+
+    exp.finalize()
+
+    assert trial._closed
+    assert trial.trial_id not in exp._open_trials
+    assert exp._finalized
+    assert update_calls == 2
+    assert finalize_calls == 2
+    assert len(client.scores) == 1
+    assert client.finalized == [("run-update-retry", "completed", None)]
+
+
+def test_experiment_finalize_closes_all_trials_and_marks_run_failed_on_close_error(
+    monkeypatch,
+) -> None:
+    client = FakeClient()
+    exp = Experiment(client, experiment_id="run-close-error", auto_finalize=False)
+    first = exp.trial("case-a")
+    second = exp.trial("case-b")
+    close_calls: list[str] = []
+
+    def fail_first() -> None:
+        close_calls.append("first")
+        raise RuntimeError("score export failed")
+
+    def close_second() -> None:
+        close_calls.append("second")
+
+    monkeypatch.setattr(first, "close", fail_first)
+    monkeypatch.setattr(second, "close", close_second)
+
+    with pytest.raises(RuntimeError, match="score export failed"):
+        exp.finalize()
+
+    assert close_calls == ["first", "second"]
+    assert client.finalized == [("run-close-error", "failed", None)]
+    assert exp.status == "failed"
+
+
+def test_experiment_exit_preserves_body_error_when_trial_close_also_fails(monkeypatch) -> None:
+    client = FakeClient()
+
+    def fail_close() -> None:
+        raise RuntimeError("score export failed")
+
+    with pytest.raises(ValueError, match="agent failed") as caught:
+        with Experiment(client, experiment_id="run-body-error") as exp:
+            trial = exp.trial("case-a")
+            monkeypatch.setattr(trial, "close", fail_close)
+            raise ValueError("agent failed")
+
+    assert client.finalized == [("run-body-error", "failed", None)]
+    if sys.version_info >= (3, 11):
+        assert any("score export failed" in note for note in (caught.value.__notes__ or []))
+
+
+def test_experiment_rejects_duplicate_case_attempt() -> None:
+    client = FakeClient()
+    with Experiment(client, experiment_id="run-duplicate", name="duplicate", auto_finalize=False) as exp:
+        exp.trial("case-x", attempt=1)
+        with pytest.raises(ValueError, match="increment attempt for a retry"):
+            exp.trial("case-x", attempt=1)
+
+        retry = exp.trial("case-x", attempt=2)
+
+    assert retry.ref.attempt == 2
+
+
+def test_record_io_without_scores_still_exports_generation() -> None:
+    client = FakeClient()
+    with Experiment(client, experiment_id="run-io", name="io") as exp:
+        with exp.trial("case-x") as trial:
+            trial.record_io(input="prompt", output="answer")
+
+    assert client.generations == [trial.generation_id]
+    assert client.trial_updates[0][3]["conversation_id"] == trial.conversation_id
+
+
+def test_repeated_scores_and_grader_transcripts_have_distinct_ids() -> None:
+    client = FakeClient()
+    evaluator = Evaluator(evaluator_id="judge", version="1", kind="llm_judge")
+    result = EvaluationResult(
+        evaluator=evaluator,
+        value=0.8,
+        passed=True,
+        grader=GraderGeneration(input="prompt", output="result", model_provider="test", model_name="judge"),
+    )
+    with Experiment(client, experiment_id="run-repeat", name="repeat") as exp:
+        with exp.trial("case-x") as trial:
+            first = trial.record_evaluation(result, score_key="quality")
+            second = trial.record_evaluation(result, score_key="quality")
+            trial.final_score(1.0, passed=True)
+
+    assert first.score_id != second.score_id
+    assert first.grader_generation_id != second.grader_generation_id
+    assert first.grader_conversation_id != second.grader_conversation_id
+
+
 def test_trial_ref_env_round_trip() -> None:
     ref = TrialRef(experiment_id="run-4", test_case_id="c1", attempt=3, suite_id="s", suite_version="2.0.0")
     env = ref.to_env()
-    assert env["SIGIL_EXPERIMENT_ID"] == "run-4"
-    assert env["SIGIL_ATTEMPT"] == "3"
+    assert env["AGENTO11Y_EXPERIMENT_ID"] == "run-4"
+    assert env["AGENTO11Y_ATTEMPT"] == "3"
     restored = TrialRef.from_env(env)
     assert restored is not None
     assert restored.experiment_id == "run-4"
@@ -246,7 +588,7 @@ def test_trial_ref_env_round_trip() -> None:
     assert restored.attempt == 3
 
 
-def test_trial_ref_to_env_dual_writes_both_prefixes() -> None:
+def test_trial_ref_to_env_writes_only_agento11y_names() -> None:
     ref = TrialRef(
         experiment_id="run-5",
         test_case_id="c1",
@@ -256,46 +598,23 @@ def test_trial_ref_to_env_dual_writes_both_prefixes() -> None:
         trajectory_id="traj-1",
     )
     env = ref.to_env()
-    for suffix in ("EXPERIMENT_ID", "TEST_CASE_ID", "ATTEMPT", "SUITE_ID", "SUITE_VERSION", "TRAJECTORY_ID"):
-        assert env[f"AGENTO11Y_{suffix}"] == env[f"SIGIL_{suffix}"]
-    assert env["AGENTO11Y_EXPERIMENT_ID"] == "run-5"
-    assert env["SIGIL_EXPERIMENT_ID"] == "run-5"
-    assert env["SIGIL_ATTEMPT"] == "2"
+    assert env == {
+        "AGENTO11Y_EXPERIMENT_ID": "run-5",
+        "AGENTO11Y_TEST_CASE_ID": "c1",
+        "AGENTO11Y_ATTEMPT": "2",
+        "AGENTO11Y_SUITE_ID": "s",
+        "AGENTO11Y_SUITE_VERSION": "2.0.0",
+        "AGENTO11Y_TRAJECTORY_ID": "traj-1",
+    }
 
 
-def test_trial_ref_from_env_reads_legacy_only_writer() -> None:
+def test_trial_ref_from_env_rejects_sigil_names_with_warning(caplog: pytest.LogCaptureFixture) -> None:
     env = {"SIGIL_EXPERIMENT_ID": "run-old", "SIGIL_TEST_CASE_ID": "c1", "SIGIL_ATTEMPT": "4"}
-    ref = TrialRef.from_env(env)
-    assert ref is not None
-    assert ref.experiment_id == "run-old"
-    assert ref.test_case_id == "c1"
-    assert ref.attempt == 4
-
-
-@pytest.mark.parametrize(
-    "env,expected_experiment_id",
-    [
-        pytest.param(
-            {"AGENTO11Y_EXPERIMENT_ID": "run-new", "SIGIL_EXPERIMENT_ID": "run-old", "AGENTO11Y_TEST_CASE_ID": "c1"},
-            "run-new",
-            id="preferred wins over legacy",
-        ),
-        pytest.param(
-            {"AGENTO11Y_EXPERIMENT_ID": "   ", "SIGIL_EXPERIMENT_ID": "run-old", "SIGIL_TEST_CASE_ID": "c1"},
-            "run-old",
-            id="blank preferred falls through",
-        ),
-        pytest.param(
-            {"SIGIL_RUN_ID": "run-tertiary", "SIGIL_TEST_CASE_ID": "c1"},
-            "run-tertiary",
-            id="SIGIL_RUN_ID tertiary fallback",
-        ),
-    ],
-)
-def test_trial_ref_from_env_precedence(env: dict[str, str], expected_experiment_id: str) -> None:
-    ref = TrialRef.from_env(env)
-    assert ref is not None
-    assert ref.experiment_id == expected_experiment_id
+    with caplog.at_level("WARNING", logger="agento11y"):
+        assert TrialRef.from_env(env) is None
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("SIGIL_EXPERIMENT_ID is ignored; rename it to AGENTO11Y_EXPERIMENT_ID" in item for item in messages)
+    assert any("SIGIL_TEST_CASE_ID is ignored; rename it to AGENTO11Y_TEST_CASE_ID" in item for item in messages)
 
 
 def test_trial_ref_from_env_ignores_agento11y_run_id() -> None:
@@ -319,6 +638,19 @@ def test_no_synthetic_conversation_id_when_unbound() -> None:
         assert trial.conversation_id == ""
     assert all(s.conversation_id == "" for s in client.scores)
     assert client.generations == []  # nothing ingested, so nothing to link
+
+
+def test_bind_trace_after_trial_creation_patches_span_id() -> None:
+    client = FakeClient()
+    with Experiment(client, experiment_id="run-trace", name="trace") as exp:
+        with exp.trial("case-x") as trial:
+            trial.bind_trace("a" * 32, "b" * 16)
+            trial.final_score(True)
+
+    assert any(
+        update[3].get("trace_id") == "a" * 32 and update[3].get("span_id") == "b" * 16
+        for update in client.trial_updates
+    )
 
 
 def test_record_io_mints_real_conversation() -> None:
@@ -373,7 +705,7 @@ def test_trial_without_final_score_fails() -> None:
         with exp.trial(suite.test_cases[0]) as trial:
             trial.check_score("json_valid", passed=True)
     assert trial.status == "failed"
-    assert trial.error == "trial exited without a final score"
+    assert trial.error == "trial closed without a final score"
     assert client.trial_updates and client.trial_updates[0][2] == "completed"
 
 
@@ -435,6 +767,31 @@ def test_suite_from_yaml(tmp_path) -> None:
     assert [c.test_case_id for c in suite.cases] == ["a", "b"]
 
 
+def test_suite_yaml_round_trip(tmp_path) -> None:
+    suite = TestSuite(
+        suite_id="round-trip",
+        name="Round Trip",
+        version="v2",
+        description="portable dataset",
+        tags=["smoke"],
+        changelog="publish v2",
+        test_cases=[
+            TestCase(
+                test_case_id="case-1",
+                name="Case 1",
+                input={"prompt": "hello"},
+                expected={"answer": "hi"},
+                metadata={"source": "unit"},
+            )
+        ],
+    )
+    path = tmp_path / "round-trip.yaml"
+    text = suite.to_yaml(str(path))
+    restored = TestSuite.from_yaml(str(path))
+    assert "suite_id: round-trip" in text
+    assert restored.to_dict() == suite.to_dict()
+
+
 def test_candidate_dict_coercion_into_experiment() -> None:
     client = FakeClient()
     suite = _suite()
@@ -443,11 +800,24 @@ def test_candidate_dict_coercion_into_experiment() -> None:
         experiment_id="run-cand",
         name="cand",
         suite=suite,
-        candidate={"git_sha": "abc123", "model_name": "gpt-5", "unknown": "ignored"},
+        candidate={
+            "agent_name": "agent-a",
+            "agent_version": "1.2.3",
+            "git_sha": "abc123",
+            "model_name": "gpt-5",
+            "unknown": "ignored",
+        },
     ) as exp:
         with exp.trial(suite.test_cases[0]) as trial:
             trial.score("final", value=0.8, passed=True, explanation="good")
     md = client.upserts[0].metadata
+    assert client.upserts[0].candidate == {
+        "agent_name": "agent-a",
+        "agent_version": "1.2.3",
+        "model_name": "gpt-5",
+        "git_sha": "abc123",
+    }
+    assert "unknown" not in client.upserts[0].candidate
     assert md["git_sha"] == "abc123"
     assert md["model_name"] == "gpt-5"
     final = next(s for s in client.scores if s.score_key == "final")
@@ -477,73 +847,48 @@ def test_experiment_factory_uses_supplied_client() -> None:
     suite = _suite()
     from agento11y.experiments import experiment as experiment_factory
 
-    with experiment_factory("factory run", suite=suite, client=client, experiment_id="run-f") as exp:
+    with experiment_factory(
+        "factory run",
+        suite=suite,
+        client=client,
+        experiment_id="run-f",
+        planned_trial_count=1,
+    ) as exp:
         assert exp._owns_client is False
         with exp.trial(suite.test_cases[0]) as trial:
             trial.score("final", value=True)
+    assert client.upserts[0].planned_trial_count == 1
     assert client.finalized and client.finalized[0][0] == "run-f"
 
 
-@pytest.mark.parametrize(
-    "env,expected",
-    [
-        pytest.param(
-            {
-                "AGENTO11Y_ENDPOINT": "https://preferred",
-                "SIGIL_ENDPOINT": "https://legacy",
-                "SIGIL_API_ENDPOINT": "https://api-legacy",
-                "AGENTO11Y_AUTH_TENANT_ID": "1",
-                "SIGIL_AUTH_TENANT_ID": "2",
-                "SIGIL_TENANT_ID": "3",
-                "AGENTO11Y_AUTH_TOKEN": "tok-preferred",
-                "SIGIL_AUTH_TOKEN": "tok-legacy",
-            },
-            ("https://preferred", "1", "tok-preferred"),
-            id="preferred wins per field",
-        ),
-        pytest.param(
-            {"SIGIL_API_ENDPOINT": "https://api-legacy", "SIGIL_TENANT_ID": "3", "SIGIL_AUTH_TOKEN": "tok"},
-            ("https://api-legacy", "3", "tok"),
-            id="oldest legacy spellings still resolve",
-        ),
-        pytest.param(
-            {"AGENTO11Y_ENDPOINT": "   ", "SIGIL_ENDPOINT": "https://legacy", "SIGIL_AUTH_TOKEN": "tok"},
-            ("https://legacy", "", "tok"),
-            id="blank preferred endpoint falls through",
-        ),
-    ],
-)
-def test_experiment_factory_connection_env_precedence(
-    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], expected: tuple[str, str, str]
-) -> None:
+def test_experiment_factory_uses_agento11y_connection_env(monkeypatch: pytest.MonkeyPatch) -> None:
     from agento11y.experiments import experiment as experiment_factory
 
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("AGENTO11Y_ENDPOINT", "https://agento11y")
+    monkeypatch.setenv("AGENTO11Y_AUTH_TENANT_ID", "1")
+    monkeypatch.setenv("AGENTO11Y_AUTH_TOKEN", "token")
     exp = experiment_factory("conn")
     client = exp.client
-    assert (client.endpoint, client.tenant_id, client.ingest_token) == expected
+    assert (client.endpoint, client.tenant_id, client.ingest_token) == ("https://agento11y", "1", "token")
 
 
 def test_experiment_factory_ignores_agento11y_api_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     from agento11y.experiments import experiment as experiment_factory
 
     monkeypatch.setenv("AGENTO11Y_API_ENDPOINT", "https://nope")
-    monkeypatch.setenv("SIGIL_AUTH_TOKEN", "tok")
+    monkeypatch.setenv("AGENTO11Y_AUTH_TOKEN", "tok")
     with pytest.raises(ValueError, match="endpoint is required"):
         experiment_factory("conn")
 
 
-def test_experiments_client_env_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_experiments_client_uses_agento11y_env(monkeypatch: pytest.MonkeyPatch) -> None:
     from agento11y.experiments.client import Client as IngestClient
 
-    monkeypatch.setenv("AGENTO11Y_AUTH_TOKEN", "tok-preferred")
-    monkeypatch.setenv("SIGIL_AUTH_TOKEN", "tok-legacy")
+    monkeypatch.setenv("AGENTO11Y_AUTH_TOKEN", "token")
     monkeypatch.setenv("AGENTO11Y_GRAFANA_URL", "https://g.example/")
     monkeypatch.setenv("AGENTO11Y_USE_EXPERIMENTAL_OTEL", "false")
-    monkeypatch.setenv("SIGIL_USE_EXPERIMENTAL_OTEL", "true")
     client = IngestClient("https://sigil.example")
-    assert client.ingest_token == "tok-preferred"
+    assert client.ingest_token == "token"
     assert client.grafana_url == "https://g.example"
     assert client.use_experimental_otel is False
 
@@ -575,10 +920,20 @@ def test_artifact_content_kind_inference() -> None:
 def test_trial_result_status_only_pass_fail() -> None:
     # test.case.result.status is the merged pass|fail enum; non-verdict states omit it.
     assert otel.trial_status_telemetry("passed") == "pass"
-    assert otel.trial_status_telemetry("completed") == "pass"
     assert otel.trial_status_telemetry("failed") == "fail"
-    for state in ("running", "errored", "skipped", ""):
+    for state in ("running", "completed", "errored", "skipped", ""):
         assert otel.trial_status_telemetry(state) == ""
+
+
+def test_numeric_final_without_verdict_is_neutral() -> None:
+    client = FakeClient()
+    with Experiment(client, experiment_id="run-neutral", name="neutral") as exp:
+        with exp.trial("case-x") as trial:
+            item = trial.final_score(0.7)
+
+    assert item.passed is None
+    assert trial.status == "completed"
+    assert otel.trial_status_telemetry(trial.status) == ""
 
 
 def test_non_verdict_states_omit_result_status() -> None:
@@ -599,7 +954,25 @@ def test_parse_report_matches_backend_shape() -> None:
     from agento11y._experiments_transport import _parse_report
 
     payload = {
-        "experiment": {"experiment_id": "run-9", "name": "nightly", "status": "completed"},
+        "experiment": {
+            "experiment_id": "run-9",
+            "name": "nightly",
+            "status": "completed",
+            "suite_id": "suite-9",
+            "suite_version": "v4",
+            "candidate": {"agent_name": "agent-a"},
+            "planned_trial_count": 6,
+            "result_status": "ready",
+            "result": {
+                "trial_count": 6,
+                "pass_count": 3,
+                "pass_denominator": 6,
+                "final_score_sum": 4.26,
+                "final_score_count": 6,
+                "token_coverage": "complete",
+                "cost_coverage": "partial",
+            },
+        },
         "summary": {
             "test_case_count": 2,
             "trial_count": 6,
@@ -610,18 +983,54 @@ def test_parse_report_matches_backend_shape() -> None:
             "final_score_avg": 0.71,
             "total_cost": 0.0123,
             "total_tokens": 4096,
+            "pass_count": 3,
+            "pass_denominator": 6,
+            "final_score_sum": 4.26,
+            "final_score_count": 6,
+            "token_coverage": "complete",
+            "cost_coverage": "partial",
         },
         "rows": [{"test_case_id": "add", "trials": []}],
     }
     report = _parse_report(payload)
     assert report.run.run_id == "run-9"  # not blank (parsed from the `experiment` key)
     assert report.run.name == "nightly"
+    assert report.run.suite_id == "suite-9"
+    assert report.run.suite_version == "v4"
+    assert report.run.candidate == {"agent_name": "agent-a"}
+    assert report.run.planned_trial_count == 6
+    assert report.run.result_status == "ready"
+    assert report.run.result is not None
+    assert report.run.result.pass_denominator == 6
+    assert report.run.result.final_score_count == 6
     assert report.summary.total_cost == 0.0123  # not dropped
     assert report.summary.total_tokens == 4096
+    assert report.summary.pass_count == 3
+    assert report.summary.pass_denominator == 6
+    assert report.summary.final_score_sum == 4.26
+    assert report.summary.final_score_count == 6
+    assert report.summary.token_coverage == "complete"
+    assert report.summary.cost_coverage == "partial"
     assert report.summary.pass_at_k == {"1": 0.5, "3": 0.83}
     assert report.summary.pass_power_k == {"1": 0.5}
     assert report.summary.final_score_avg == 0.71
     assert report.rows and report.rows[0]["test_case_id"] == "add"
+
+
+def test_report_preserves_missing_nullable_aggregates() -> None:
+    from agento11y._experiments_transport import _parse_report
+
+    report = _parse_report(
+        {
+            "experiment": {"experiment_id": "run-empty", "name": "empty", "status": "running"},
+            "summary": {"trial_count": 0},
+        }
+    )
+
+    assert report.summary.pass_rate is None
+    assert report.summary.final_score_avg is None
+    assert report.summary.total_cost is None
+    assert report.summary.total_tokens is None
 
 
 def test_example_json_fallbacks_handle_malformed_slices(monkeypatch: pytest.MonkeyPatch) -> None:

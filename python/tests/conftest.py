@@ -12,6 +12,7 @@ if str(_PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(_PYTHON_ROOT))
 
 import pytest
+from agento11y.config import _WARNED_LEGACY_ENV
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
 
 
@@ -21,7 +22,9 @@ def _clear_agento11y_env(monkeypatch):
     for key in list(os.environ):
         if key.startswith(("AGENTO11Y_", "SIGIL_", "OTEL_")):
             monkeypatch.delenv(key, raising=False)
+    _WARNED_LEGACY_ENV.clear()
     yield
+    _WARNED_LEGACY_ENV.clear()
 
 
 class CapturingGenerationExporter:

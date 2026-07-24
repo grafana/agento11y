@@ -105,7 +105,6 @@ RUN_STATUS_MAP = {
 # (running / errored / skipped) — the trial's terminal state lives on the REST
 # trial and the span status. (`error`/`skipped` are a proposed enum extension, P4.)
 TRIAL_STATUS_MAP = {
-    "completed": "pass",
     "passed": "pass",
     "failed": "fail",
 }

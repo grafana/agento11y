@@ -11,7 +11,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any
+
+from ..config import _warn_legacy_env
 
 
 class ExperimentStatus(str, Enum):
@@ -31,6 +34,7 @@ class TrialStatus(str, Enum):
     """Lifecycle of a single trial (a test case attempt)."""
 
     RUNNING = "running"
+    COMPLETED = "completed"
     PASSED = "passed"
     FAILED = "failed"
     ERRORED = "errored"
@@ -77,34 +81,77 @@ class TestCase:
     expected: Any = None
     weight: float = 1.0
     metadata: dict[str, Any] = field(default_factory=dict)
+    artifact_refs: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def id(self) -> str:
+        """Portable test-case id alias used in suite YAML and examples."""
+
+        return self.test_case_id
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TestCase:
         """Builds a test case from a mapping, accepting ``id`` or ``test_case_id``."""
 
+        if not isinstance(data, dict):
+            raise ValueError(f"test case must be a mapping, got {type(data).__name__}")
         test_case_id = str(data.get("test_case_id") or data.get("id") or "").strip()
         if not test_case_id:
             raise ValueError("test case requires an 'id' (or 'test_case_id')")
+        tags = data.get("tags") or []
+        if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+            raise ValueError(f"test case {test_case_id!r} tags must be a list of strings")
+        metadata = data.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            raise ValueError(f"test case {test_case_id!r} metadata must be a mapping")
+        try:
+            weight = float(data.get("weight", 1.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"test case {test_case_id!r} weight must be numeric") from exc
         return cls(
             test_case_id=test_case_id,
             name=str(data.get("name") or ""),
             description=str(data.get("description") or ""),
-            tags=list(data.get("tags") or []),
+            tags=list(tags),
             category=str(data.get("category") or ""),
             input=data.get("input"),
             expected=data.get("expected"),
-            weight=float(data.get("weight", 1.0)),
-            metadata=dict(data.get("metadata") or {}),
+            weight=weight,
+            metadata=dict(metadata),
+            artifact_refs=[dict(ref) for ref in data.get("artifact_refs", []) or [] if isinstance(ref, dict)],
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Returns the portable YAML/JSON representation for this test case."""
+
+        out: dict[str, Any] = {"id": self.test_case_id}
+        if self.name:
+            out["name"] = self.name
+        if self.description:
+            out["description"] = self.description
+        if self.tags:
+            out["tags"] = list(self.tags)
+        if self.category:
+            out["category"] = self.category
+        if self.input is not None:
+            out["input"] = self.input
+        if self.expected is not None:
+            out["expected"] = self.expected
+        if self.weight != 1.0:
+            out["weight"] = self.weight
+        if self.metadata:
+            out["metadata"] = dict(self.metadata)
+        if self.artifact_refs:
+            out["artifact_refs"] = [dict(ref) for ref in self.artifact_refs]
+        return out
 
 
 @dataclass(slots=True)
 class TestSuite:
     """A named, versioned collection of test cases.
 
-    In the v1 one-token model the suite is carried as telemetry and run metadata
-    (it does not require a separate server-side CRUD surface): its id/version are
-    stamped onto the run and onto each trial span.
+    A suite can be local-only or pulled from the stored-suite control plane. Its
+    id and version are stamped onto the experiment and each trial.
     """
 
     __test__ = False  # not a pytest test class
@@ -141,12 +188,17 @@ class TestSuite:
         raw_cases = data.get("cases")
         if raw_cases is None:
             raw_cases = data.get("test_cases") or []
+        if not isinstance(raw_cases, list):
+            raise ValueError("suite cases must be a list of mappings")
+        tags = data.get("tags") or []
+        if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+            raise ValueError("suite tags must be a list of strings")
         return cls(
             suite_id=suite_id,
             name=str(data.get("name") or ""),
             version=str(data.get("version") or "1.0.0"),
             description=str(data.get("description") or ""),
-            tags=list(data.get("tags") or []),
+            tags=list(tags),
             changelog=str(data.get("changelog") or ""),
             test_cases=[TestCase.from_dict(c) for c in raw_cases],
         )
@@ -162,6 +214,33 @@ class TestSuite:
         if not isinstance(data, dict):
             raise ValueError(f"suite YAML must be a mapping, got {type(data).__name__}")
         return cls.from_dict(data)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Returns the portable YAML/JSON representation for this suite."""
+
+        out: dict[str, Any] = {"suite_id": self.suite_id}
+        if self.name:
+            out["name"] = self.name
+        if self.version:
+            out["version"] = self.version
+        if self.description:
+            out["description"] = self.description
+        if self.tags:
+            out["tags"] = list(self.tags)
+        if self.changelog:
+            out["changelog"] = self.changelog
+        out["cases"] = [case.to_dict() for case in self.test_cases]
+        return out
+
+    def to_yaml(self, path: str | os.PathLike[str] | None = None) -> str:
+        """Serializes the suite to YAML and optionally writes it to ``path``."""
+
+        import yaml  # lazy: keeps the package importable in minimal vendored envs
+
+        text = yaml.safe_dump(self.to_dict(), sort_keys=False)
+        if path is not None:
+            Path(path).write_text(text, encoding="utf-8")
+        return text
 
 
 @dataclass(slots=True)
@@ -215,24 +294,14 @@ class Evaluator:
         return normalize_evaluator_kind(self.kind)
 
 
-# Environment variables used to hand a trial reference across a process / container
-# boundary (e.g. from the host that creates the run to a verifier container).
-# Readers accept the preferred AGENTO11Y_* names first, then the legacy SIGIL_*
-# names; writers emit both prefixes so old verifier containers keep working.
-ENV_EXPERIMENT_ID = "SIGIL_EXPERIMENT_ID"
-ENV_RUN_ID = "SIGIL_RUN_ID"  # legacy alias accepted on read
-ENV_TEST_CASE_ID = "SIGIL_TEST_CASE_ID"
-ENV_ATTEMPT = "SIGIL_ATTEMPT"
-ENV_SUITE_ID = "SIGIL_SUITE_ID"
-ENV_SUITE_VERSION = "SIGIL_SUITE_VERSION"
-ENV_TRAJECTORY_ID = "SIGIL_TRAJECTORY_ID"
-
-ENV_EXPERIMENT_ID_PREFERRED = "AGENTO11Y_EXPERIMENT_ID"
-ENV_TEST_CASE_ID_PREFERRED = "AGENTO11Y_TEST_CASE_ID"
-ENV_ATTEMPT_PREFERRED = "AGENTO11Y_ATTEMPT"
-ENV_SUITE_ID_PREFERRED = "AGENTO11Y_SUITE_ID"
-ENV_SUITE_VERSION_PREFERRED = "AGENTO11Y_SUITE_VERSION"
-ENV_TRAJECTORY_ID_PREFERRED = "AGENTO11Y_TRAJECTORY_ID"
+# Environment variables used to hand a trial reference across a process or
+# container boundary.
+ENV_EXPERIMENT_ID = "AGENTO11Y_EXPERIMENT_ID"
+ENV_TEST_CASE_ID = "AGENTO11Y_TEST_CASE_ID"
+ENV_ATTEMPT = "AGENTO11Y_ATTEMPT"
+ENV_SUITE_ID = "AGENTO11Y_SUITE_ID"
+ENV_SUITE_VERSION = "AGENTO11Y_SUITE_VERSION"
+ENV_TRAJECTORY_ID = "AGENTO11Y_TRAJECTORY_ID"
 
 
 def _first_nonblank(env: dict[str, str], *keys: str) -> str:
@@ -296,40 +365,35 @@ class TrialRef:
 
     def to_env(self) -> dict[str, str]:
         env = {
-            ENV_EXPERIMENT_ID_PREFERRED: self.experiment_id,
             ENV_EXPERIMENT_ID: self.experiment_id,
-            ENV_TEST_CASE_ID_PREFERRED: self.test_case_id,
             ENV_TEST_CASE_ID: self.test_case_id,
-            ENV_ATTEMPT_PREFERRED: str(self.attempt),
             ENV_ATTEMPT: str(self.attempt),
         }
         if self.suite_id:
-            env[ENV_SUITE_ID_PREFERRED] = self.suite_id
             env[ENV_SUITE_ID] = self.suite_id
         if self.suite_version:
-            env[ENV_SUITE_VERSION_PREFERRED] = self.suite_version
             env[ENV_SUITE_VERSION] = self.suite_version
         if self.trajectory_id:
-            env[ENV_TRAJECTORY_ID_PREFERRED] = self.trajectory_id
             env[ENV_TRAJECTORY_ID] = self.trajectory_id
         return env
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> TrialRef | None:
         env = environ if environ is not None else dict(os.environ)
-        experiment_id = _first_nonblank(env, ENV_EXPERIMENT_ID_PREFERRED, ENV_EXPERIMENT_ID, ENV_RUN_ID)
-        test_case_id = _first_nonblank(env, ENV_TEST_CASE_ID_PREFERRED, ENV_TEST_CASE_ID)
+        _warn_legacy_env(env)
+        experiment_id = _first_nonblank(env, ENV_EXPERIMENT_ID)
+        test_case_id = _first_nonblank(env, ENV_TEST_CASE_ID)
         if not experiment_id or not test_case_id:
             return None
         try:
-            attempt = int(_first_nonblank(env, ENV_ATTEMPT_PREFERRED, ENV_ATTEMPT) or "1")
+            attempt = int(_first_nonblank(env, ENV_ATTEMPT) or "1")
         except ValueError:
             attempt = 1
         return cls(
             experiment_id=experiment_id,
             test_case_id=test_case_id,
             attempt=attempt,
-            suite_id=_first_nonblank(env, ENV_SUITE_ID_PREFERRED, ENV_SUITE_ID),
-            suite_version=_first_nonblank(env, ENV_SUITE_VERSION_PREFERRED, ENV_SUITE_VERSION),
-            trajectory_id=_first_nonblank(env, ENV_TRAJECTORY_ID_PREFERRED, ENV_TRAJECTORY_ID),
+            suite_id=_first_nonblank(env, ENV_SUITE_ID),
+            suite_version=_first_nonblank(env, ENV_SUITE_VERSION),
+            trajectory_id=_first_nonblank(env, ENV_TRAJECTORY_ID),
         )

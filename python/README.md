@@ -702,7 +702,13 @@ suite = experiments.TestSuite(
 )
 verifier = experiments.Evaluator(evaluator_id="exact_match", version="2026-06-29")
 
-with experiments.experiment("PR 123", experiment_id="pr-123", suite=suite, tags=["ci"]) as exp:
+with experiments.experiment(
+    "PR 123",
+    experiment_id="pr-123",
+    suite=suite,
+    planned_trial_count=len(suite.test_cases),
+    tags=["ci"],
+) as exp:
     for case in suite.test_cases:
         with exp.trial(case) as trial:
             answer = my_agent(case.input)
@@ -721,14 +727,106 @@ with experiments.experiment("PR 123", experiment_id="pr-123", suite=suite, tags=
 `experiment(...)` creates the run (`source="external"`), each `exp.trial(...)`
 creates a typed trial, and the trial exports scores on exit. On normal exit the
 run finalizes as `completed`; on exception or Ctrl-C it finalizes as `failed`.
+Set `planned_trial_count` to the number of trials the runner intends to execute
+after filtering and attempt expansion. The SDK does not infer it from suite
+size because a runner may select cases or execute multiple attempts. Normal
+finalization lets Agent Observability count stored scores; pass `score_count=` directly
+to `exp.finalize(...)` only when you want the server to assert an exact count.
 A/B testing is two runs with different `experiment_id`/`tags` over the same
 suite and evaluators.
 
 Experiment writes use the same Grafana Cloud ingestion API key as generation
 ingest. They do not require a control-plane URL or a separate eval API key.
+Experiment transcripts, string scores, explanations, metadata, and text
+artifacts redact recognized secrets by default. Pass `redact_secrets=False` to
+`experiments.Client(...)` only for an explicitly trusted destination.
 Experimental OTel eval spans/events are disabled by default; opt in with
 `use_experimental_otel=True` on `experiments.experiment(...)` or
 `AGENTO11Y_USE_EXPERIMENTAL_OTEL=true`.
+
+### Local evaluator helpers
+
+The tracking-first MVP boundary and deferred framework/OTel work are summarized
+in the [Experiments Python SDK MVP design](https://github.com/grafana/agento11y/blob/main/docs/experiments-python-mvp.md).
+
+Final-output evaluators can be configured entirely in application code. They do
+not require a stored test suite or an evaluator created in Grafana. ``LLMJudge``
+accepts any callable that invokes a model; ``trial.evaluate_output`` publishes
+the grader request and response as a linked generation automatically:
+
+```python
+judge = experiments.LLMJudge(
+    evaluator_id="judge.correctness",
+    version="2026-07-21",
+    invoke=lambda prompt: anthropic_model.invoke(prompt),
+    model_provider="anthropic",
+    model_name="claude-sonnet-4-5",
+    prompt_template=(
+        "Input: {input}\nExpected: {expected}\nOutput: {output}\n"
+        'Return JSON: {"score": 0.0, "passed": false, "explanation": "reason"}'
+    ),
+)
+
+with experiments.experiment("local eval", experiment_id="run-1") as exp:
+    with exp.trial("case-1") as trial:
+        answer = my_agent("Capital of France?")
+        trial.evaluate_output(
+            judge,
+            input="Capital of France?",
+            expected="Paris",
+            output=answer,
+        )
+```
+
+The score contains ``judge_provider`` and ``judge_model`` metadata plus the
+grader conversation and generation IDs. For deterministic checks, use the same
+path without a model call:
+
+```python
+format_check = experiments.RegexJudge(
+    evaluator_id="regex.currency",
+    pattern=r"^\\$\\d+(?:\\.\\d{2})?$",
+)
+trial.evaluate_output(format_check, input=prompt, output=answer, score_key="format_valid")
+```
+
+``evaluate_output`` grades only the values supplied by the caller; it does not
+fetch or normalize the trial's bound conversation. Frameworks and benchmark
+runners that already own a transcript should produce an ``EvaluationResult``
+and pass it to ``trial.record_evaluation(...)``. The framework remains the
+authority for transcript rendering while Agent Observability records the result and its
+trace, conversation, generation, and artifact references.
+
+Evaluator exceptions intentionally propagate after marking the current trial
+errored. To continue a batch after one judge failure, catch the exception around
+each `with exp.trial(...)` block.
+
+See the [Experiments v2 migration guide](https://github.com/grafana/agento11y/blob/main/docs/experiments-python-v2-migration.md)
+before upgrading a v1 runner.
+
+Stored test suites use the Grafana control plane and therefore require a second,
+Grafana service-account credential. Set `AGENTO11Y_CONTROL_ENDPOINT` to either
+the Grafana stack URL, the Agent Observability app URL, or a full eval API prefix,
+and set `AGENTO11Y_SERVICE_ACCOUNT_TOKEN` to the service-account token. Then pull
+and run an exact published suite version in one call:
+
+```python
+with experiments.experiment_from_suite(
+    "dashboard-regression",
+    version="latest_published",
+    experiment_id="pr-123",
+    candidate={"git_sha": "abc123", "model_name": "gpt-5"},
+) as exp:
+    for case in exp.suite.cases:
+        with exp.trial(case) as trial:
+            answer = my_agent(case.input)
+            trial.final_score(answer == case.expected)
+```
+
+Use `TestSuitesClient.pull_suite(...)` for local editing and
+`push_suite(..., publish=True)` to create or update a draft and publish it.
+`push_suite(..., prune=True)` also removes remote-only cases from the draft;
+without `prune`, pushes are additive.
 
 If you use a supported framework, prefer its adapter (e.g. `agento11y-langgraph`)
 — it can expose conversation or generation ids that you bind to the trial, so
@@ -768,7 +866,9 @@ Validation:
 Experiments:
 
 - `agento11y.experiments.experiment(...)`
+- `agento11y.experiments.experiment_from_suite(...)`
 - `agento11y.experiments.Client`
+- `agento11y.experiments.TestSuitesClient`, `PushedSuite`
 - `agento11y.experiments.Experiment`, `Trial`, `TrialRef`
 - `agento11y.experiments.TestSuite`, `TestCase`, `Evaluator`
 - `agento11y.experiments.stable_id(...)`

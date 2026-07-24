@@ -10,10 +10,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 from agento11y import _experiments_transport as transport
-from agento11y.errors import NotFoundError, ScoreExportError, ValidationError
+from agento11y.errors import ConflictError, ConflictKind, NotFoundError, ScoreExportError, ValidationError
 from agento11y.experiments import Client as ExperimentClient
 from agento11y.models import (
     CreateExperimentRequest,
+    ExperimentEvaluator,
     ExperimentStatus,
     ScoreItem,
     ScoreSource,
@@ -119,6 +120,10 @@ def test_create_experiment_upserts_external_run() -> None:
                 name="PR 123",
                 source="external",
                 tags=["smoke"],
+                suite_id="suite-1",
+                suite_version="v2",
+                candidate={"agent_name": "agent-a", "model_name": "model-a"},
+                planned_trial_count=30,
                 metadata={"git_sha": "abc"},
             ),
         )
@@ -132,11 +137,72 @@ def test_create_experiment_upserts_external_run() -> None:
             "source": {"kind": "sdk", "id": "python"},
             "experiment_id": "run_1",
             "tags": ["smoke"],
+            "suite_id": "suite-1",
+            "suite_version": "v2",
+            "candidate": {"agent_name": "agent-a", "model_name": "model-a"},
+            "planned_trial_count": 30,
             "metadata": {"git_sha": "abc"},
         }
         assert run.run_id == "run_1"
         assert run.status == "running"
         assert run.created_at is not None and run.created_at.tzinfo == timezone.utc
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_create_experiment_sends_known_empty_plan() -> None:
+    recorder = _Recorder()
+    recorder.push(200, {"run": _experiment_body(planned_trial_count=0), "created": True})
+    server = _serve(recorder)
+    try:
+        run = transport.create_experiment(
+            **_args(server),
+            request=CreateExperimentRequest(name="empty", planned_trial_count=0),
+        )
+
+        assert recorder.requests[0]["payload"]["planned_trial_count"] == 0
+        assert run.planned_trial_count == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_create_experiment_rejects_negative_planned_trial_count_before_request() -> None:
+    recorder = _Recorder()
+    server = _serve(recorder)
+    try:
+        with pytest.raises(ValidationError, match="planned_trial_count must be non-negative"):
+            transport.create_experiment(
+                **_args(server),
+                request=CreateExperimentRequest(name="invalid", planned_trial_count=-1),
+            )
+
+        assert recorder.requests == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    "create_request",
+    [
+        CreateExperimentRequest(name="invalid", collection_id="collection-1"),
+        CreateExperimentRequest(
+            name="invalid",
+            evaluators=[ExperimentEvaluator(id="judge", selector="all")],
+        ),
+    ],
+)
+def test_create_experiment_rejects_unsupported_collection_fields(
+    create_request: CreateExperimentRequest,
+) -> None:
+    recorder = _Recorder()
+    server = _serve(recorder)
+    try:
+        with pytest.raises(ValidationError, match="not supported"):
+            transport.create_experiment(**_args(server), request=create_request)
+        assert recorder.requests == []
     finally:
         server.shutdown()
         server.server_close()
@@ -163,7 +229,45 @@ def test_complete_experiment_finalizes_run() -> None:
             "source": {"kind": "sdk", "id": "python"},
         }
         assert run.status == "completed"
-        assert run.score_count == 3
+        assert not hasattr(run, "score_count")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    ("message", "kind", "recoverable"),
+    [
+        ("cannot complete experiment with 2 running trial(s)", ConflictKind.RUNNING_TRIALS, True),
+        ("expected 12 scores, found 11", ConflictKind.SCORE_COUNT_MISMATCH, True),
+        (
+            "planned_trial_count conflicts with the existing experiment",
+            ConflictKind.IMMUTABLE_FIELD,
+            False,
+        ),
+        ('experiment "run_1" is already finalized as completed', ConflictKind.TERMINAL, False),
+        ("suite version is not a draft", ConflictKind.IMMUTABLE_FIELD, False),
+        ("suite draft is already published", ConflictKind.TERMINAL, False),
+        ("suite has an open draft", ConflictKind.OPEN_DRAFT, True),
+    ],
+)
+def test_conflict_has_stable_kind_for_real_server_messages(
+    message: str,
+    kind: ConflictKind,
+    recoverable: bool,
+) -> None:
+    recorder = _Recorder()
+    recorder.push(409, {"error": message})
+    server = _serve(recorder)
+    try:
+        with pytest.raises(ConflictError) as caught:
+            transport.finalize_experiment(
+                **_args(server),
+                run_id="run_1",
+                status="completed",
+            )
+        assert caught.value.kind is kind
+        assert caught.value.recoverable is recoverable
     finally:
         server.shutdown()
         server.server_close()
@@ -219,6 +323,154 @@ def test_export_scores_round_trip_and_accepted_count() -> None:
         server.server_close()
 
 
+def test_experiment_client_generation_uses_lightweight_transport_and_redacts() -> None:
+    recorder = _Recorder()
+    recorder.push(200, {"results": [{"generation_id": "gen-1", "accepted": True}]})
+    server = _serve(recorder)
+    try:
+        client = ExperimentClient(
+            f"http://127.0.0.1:{server.server_address[1]}",
+            ingest_token="token",
+        )
+        client._ensure_core = lambda: pytest.fail("record_generation must not build the core client")
+        client.record_generation(
+            "gen-1",
+            conversation_id="conv-1",
+            input_text="token glc_abcdefghijklmnopqrstuvwxyz",
+            output_text="done",
+            input_tokens=4,
+            output_tokens=2,
+        )
+
+        generation = recorder.requests[0]["payload"]["generations"][0]
+        assert generation["mode"] == "GENERATION_MODE_SYNC"
+        assert generation["input"][0]["parts"][0]["text"] == "token [REDACTED:grafana-cloud-token]"
+        assert generation["usage"]["total_tokens"] == 6
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_experiment_client_treats_duplicate_generation_as_success() -> None:
+    recorder = _Recorder()
+    recorder.push(
+        200,
+        {
+            "results": [
+                {
+                    "generation_id": "gen-1",
+                    "accepted": False,
+                    "error": "generation already exists",
+                }
+            ]
+        },
+    )
+    server = _serve(recorder)
+    try:
+        client = ExperimentClient(
+            f"http://127.0.0.1:{server.server_address[1]}",
+            ingest_token="token",
+        )
+
+        generation_id = client.record_generation("gen-1", output_text="done")
+
+        assert generation_id == "gen-1"
+        assert len(recorder.requests) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_experiment_client_can_explicitly_disable_redaction() -> None:
+    recorder = _Recorder()
+    recorder.push(200, {"results": [{"generation_id": "gen-1", "accepted": True}]})
+    server = _serve(recorder)
+    try:
+        client = ExperimentClient(
+            f"http://127.0.0.1:{server.server_address[1]}",
+            ingest_token="token",
+            redact_secrets=False,
+        )
+        client.record_generation(
+            "gen-1",
+            conversation_id="conv-1",
+            input_text="glc_abcdefghijklmnopqrstuvwxyz",
+        )
+        generation = recorder.requests[0]["payload"]["generations"][0]
+        assert generation["input"][0]["parts"][0]["text"] == "glc_abcdefghijklmnopqrstuvwxyz"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_experiment_client_redacts_scores_and_text_artifacts_without_mutating_input() -> None:
+    recorder = _Recorder()
+    recorder.push(200, {"results": [{"score_id": "score-1", "accepted": True}]})
+    recorder.push(200, {"artifact_id": "artifact-1", "name": "log", "kind": "text"})
+    server = _serve(recorder)
+    secret = "glc_abcdefghijklmnopqrstuvwxyz"
+    try:
+        client = ExperimentClient(
+            f"http://127.0.0.1:{server.server_address[1]}",
+            ingest_token="token",
+        )
+        score = ScoreItem(
+            score_id="score-1",
+            trial_id="trial-1",
+            evaluator_id="judge",
+            evaluator_version="1",
+            score_key="final",
+            value=ScoreValue(string=secret),
+            explanation=f"found {secret}",
+            metadata={"raw": secret},
+        )
+        client.export_scores([score])
+        client.upload_artifact(
+            experiment_id="run-1",
+            parent_id="trial-1",
+            name="log",
+            kind="text",
+            mime="text/plain",
+            content=f"artifact {secret}".encode(),
+        )
+
+        exported_score = recorder.requests[0]["payload"]["scores"][0]
+        assert secret not in json.dumps(exported_score)
+        assert secret not in recorder.requests[1]["raw_payload"].decode()
+        assert score.value.string == secret
+        assert score.explanation == f"found {secret}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_experiment_client_redacts_non_utf8_text_artifact_without_changing_encoding() -> None:
+    recorder = _Recorder()
+    recorder.push(200, {"artifact_id": "artifact-1", "name": "log", "kind": "text"})
+    server = _serve(recorder)
+    secret = b"glc_abcdefghijklmnopqrstuvwxyz"
+    try:
+        client = ExperimentClient(
+            f"http://127.0.0.1:{server.server_address[1]}",
+            ingest_token="token",
+        )
+        client.upload_artifact(
+            experiment_id="run-1",
+            parent_id="trial-1",
+            name="log",
+            kind="text",
+            mime="text/plain; charset=iso-8859-1",
+            content=b"artifact " + secret + b" caf\xe9",
+        )
+
+        uploaded = recorder.requests[0]["raw_payload"]
+        assert secret not in uploaded
+        assert uploaded.endswith(b" caf\xe9")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_experiment_client_uploads_trial_artifact_to_ingest_route() -> None:
     recorder = _Recorder()
     recorder.push(200, {"artifact_id": "art-1", "name": "details", "kind": "json"})
@@ -242,11 +494,25 @@ def test_experiment_client_uploads_trial_artifact_to_ingest_route() -> None:
         )
         assert request["path"] == expected_path
         assert request["headers"]["authorization"] == _basic("tenant-a", "ingest-token-a")
+        assert request["headers"]["x-sigil-ingest-actor"] == "ingest:sdk/python"
         assert request["raw_payload"] == b'{"ok":true}'
         assert record["artifact_id"] == "art-1"
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_experiment_client_uses_one_default_actor_for_all_lifecycle_requests() -> None:
+    client = ExperimentClient("http://example.test", ingest_token="token")
+
+    assert client.actor == "ingest:sdk/python"
+    assert client._headers()["X-Sigil-Ingest-Actor"] == "ingest:sdk/python"  # noqa: SLF001
+
+
+def test_experiment_client_preserves_explicit_actor() -> None:
+    client = ExperimentClient("http://example.test", ingest_token="token", actor=" runner/harbor ")
+
+    assert client.actor == "runner/harbor"
 
 
 def test_export_scores_validates_missing_value() -> None:

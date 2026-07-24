@@ -29,6 +29,34 @@ _DEFAULT_INSECURE = False
 _DEFAULT_AUTH_MODE = "none"
 _VALID_AUTH_MODES = ("none", "tenant", "bearer", "basic")
 _VALID_CONTENT_CAPTURE = ("full", "no_tool_content", "metadata_only", "full_with_metadata_spans")
+_LEGACY_ENV_RENAMES = {
+    "SIGIL_AGENT_NAME": "AGENTO11Y_AGENT_NAME",
+    "SIGIL_AGENT_VERSION": "AGENTO11Y_AGENT_VERSION",
+    "SIGIL_API_ENDPOINT": "AGENTO11Y_ENDPOINT",
+    "SIGIL_ATTEMPT": "AGENTO11Y_ATTEMPT",
+    "SIGIL_AUTH_MODE": "AGENTO11Y_AUTH_MODE",
+    "SIGIL_AUTH_TENANT_ID": "AGENTO11Y_AUTH_TENANT_ID",
+    "SIGIL_AUTH_TOKEN": "AGENTO11Y_AUTH_TOKEN",
+    "SIGIL_CONTENT_CAPTURE_MODE": "AGENTO11Y_CONTENT_CAPTURE_MODE",
+    "SIGIL_CONTROL_ENDPOINT": "AGENTO11Y_CONTROL_ENDPOINT",
+    "SIGIL_CONTROL_PLANE_ENDPOINT": "AGENTO11Y_CONTROL_ENDPOINT",
+    "SIGIL_CONTROL_PLANE_TOKEN": "AGENTO11Y_SERVICE_ACCOUNT_TOKEN",
+    "SIGIL_ENDPOINT": "AGENTO11Y_ENDPOINT",
+    "SIGIL_EXPERIMENT_ID": "AGENTO11Y_EXPERIMENT_ID",
+    "SIGIL_GRAFANA_URL": "AGENTO11Y_GRAFANA_URL",
+    "SIGIL_INGEST_ACTOR": "AGENTO11Y_INGEST_ACTOR",
+    "SIGIL_PROTOCOL": "AGENTO11Y_PROTOCOL",
+    "SIGIL_REDACT_INPUT_MESSAGES": "AGENTO11Y_REDACT_INPUT_MESSAGES",
+    "SIGIL_RUN_ID": "AGENTO11Y_EXPERIMENT_ID",
+    "SIGIL_SERVICE_ACCOUNT_TOKEN": "AGENTO11Y_SERVICE_ACCOUNT_TOKEN",
+    "SIGIL_SUITE_ID": "AGENTO11Y_SUITE_ID",
+    "SIGIL_SUITE_VERSION": "AGENTO11Y_SUITE_VERSION",
+    "SIGIL_TENANT_ID": "AGENTO11Y_AUTH_TENANT_ID",
+    "SIGIL_TEST_CASE_ID": "AGENTO11Y_TEST_CASE_ID",
+    "SIGIL_TRAJECTORY_ID": "AGENTO11Y_TRAJECTORY_ID",
+    "SIGIL_USE_EXPERIMENTAL_OTEL": "AGENTO11Y_USE_EXPERIMENTAL_OTEL",
+}
+_WARNED_LEGACY_ENV: set[str] = set()
 
 
 @dataclass(slots=True)
@@ -52,8 +80,7 @@ class GenerationExportConfig:
 
     Transport fields default to ``None`` so the resolver can layer in env vars
     (``AGENTO11Y_ENDPOINT`` / ``AGENTO11Y_PROTOCOL`` / ``AGENTO11Y_INSECURE`` /
-    ``AGENTO11Y_HEADERS``, each with a ``SIGIL_*`` legacy fallback) before
-    falling back to schema defaults.
+    ``AGENTO11Y_HEADERS``) before falling back to schema defaults.
     """
 
     protocol: str | None = None
@@ -106,7 +133,7 @@ class ClientConfig:
     """Top-level SDK runtime configuration.
 
     Fields default to ``None`` where the resolver can layer in canonical
-    ``AGENTO11Y_*`` environment variables (``SIGIL_*`` legacy fallback). After
+    ``AGENTO11Y_*`` environment variables. After
     ``resolve_config`` runs, all fields are populated with concrete values.
     """
 
@@ -127,7 +154,7 @@ class ClientConfig:
 
     # Default identity / tags merged into each GenerationStart when the per-call
     # field is unset. Read from AGENTO11Y_AGENT_NAME / AGENTO11Y_AGENT_VERSION /
-    # AGENTO11Y_USER_ID / AGENTO11Y_TAGS (SIGIL_* fallback) by ``resolve_config``.
+    # AGENTO11Y_USER_ID / AGENTO11Y_TAGS by ``resolve_config``.
     agent_name: str | None = None
     agent_version: str | None = None
     user_id: str | None = None
@@ -136,8 +163,7 @@ class ClientConfig:
     ingest_actor: str | None = None
 
     # When True (and ``logger`` is not provided) the SDK constructs a default
-    # logger at debug level. Read from ``AGENTO11Y_DEBUG`` (``SIGIL_DEBUG``
-    # fallback) by ``resolve_config``.
+    # logger at debug level. Read from ``AGENTO11Y_DEBUG`` by ``resolve_config``.
     debug: bool | None = None
 
     # Convenience aliases for simpler caller config wiring.
@@ -146,7 +172,7 @@ class ClientConfig:
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> ClientConfig:
         """Returns a fully-resolved config built from canonical AGENTO11Y_* env
-        vars (with SIGIL_* fallbacks).
+        vars.
 
         This is a debugging / advanced helper. The recommended path is to call
         ``Client()`` directly which performs the same resolution internally.
@@ -167,24 +193,35 @@ def default_config() -> ClientConfig:
 
 
 def _env(env: dict[str, str] | None, suffix: str) -> tuple[str | None, str]:
-    """Selects the first nonblank value of ``AGENTO11Y_<suffix>`` / ``SIGIL_<suffix>``.
+    """Selects a nonblank ``AGENTO11Y_<suffix>`` value.
 
     Returns ``(value, selected_key)`` so validation messages can name the key
-    the user actually set, or ``(None, "")`` when neither spelling is set.
-    Selection happens before parsing: a nonblank preferred value always wins,
-    even when it later fails validation, so stale legacy config cannot silently
-    resurface.
+    the user actually set, or ``(None, "")`` when it is unset.
     """
 
     src = env if env is not None else os.environ
-    for key in ("AGENTO11Y_" + suffix, "SIGIL_" + suffix):
-        raw = src.get(key)
-        if raw is None:
-            continue
+    key = "AGENTO11Y_" + suffix
+    raw = src.get(key)
+    if raw is not None:
         val = raw.strip()
         if val:
             return val, key
     return None, ""
+
+
+def _warn_legacy_env(env: dict[str, str] | None = None) -> None:
+    """Warns once for removed SIGIL_* configuration without reading its value."""
+
+    src = env if env is not None else os.environ
+    logger = logging.getLogger("agento11y")
+    for legacy, replacement in _LEGACY_ENV_RENAMES.items():
+        if legacy in src and legacy not in _WARNED_LEGACY_ENV:
+            _WARNED_LEGACY_ENV.add(legacy)
+            logger.warning(
+                "agento11y: %s is ignored; rename it to %s",
+                legacy,
+                replacement,
+            )
 
 
 def _parse_bool(raw: str) -> bool:
@@ -215,9 +252,10 @@ def resolve_config(
     """Resolves caller config against canonical env vars and defaults.
 
     Resolution order: explicit user-provided fields > ``AGENTO11Y_*`` env vars
-    (``SIGIL_*`` legacy fallback) > SDK config struct defaults.
+    > SDK config struct defaults.
     """
 
+    _warn_legacy_env(env)
     # Clone so resolve_config never mutates the caller's config. Some fields
     # (logger, tracer, exporter) hold non-picklable resources, so we shallow-
     # clone the dataclass tree rather than deepcopying.

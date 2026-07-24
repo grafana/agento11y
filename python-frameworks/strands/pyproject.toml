@@ -1,12 +1,12 @@
 [project]
 name = "agento11y-strands"
-version = "0.10.0"
+version = "0.11.0"
 description = "Strands Agents hooks for the Grafana Agent Observability Python SDK"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
-  "agento11y>=0.10.0",
+  "agento11y>=0.11.0",
   "strands-agents>=1.0.0",
 ]
 
