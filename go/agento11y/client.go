@@ -71,6 +71,14 @@ type Config struct {
 	//
 	// Use NewSecretRedactionSanitizer for the built-in regex-based redactor.
 	GenerationSanitizer GenerationSanitizer
+	// RedactExperimentSecrets redacts known secrets from experiment scores,
+	// explanations, metadata, and text-like artifacts before export. The core
+	// client leaves this disabled for backward compatibility; the experiments
+	// package enables it by default.
+	RedactExperimentSecrets bool
+	// ExperimentRetryTimeout bounds each experiment/control HTTP attempt.
+	// Zero uses the SDK default.
+	ExperimentRetryTimeout time.Duration
 	// Tracer is optional and mainly used for tests. If nil, the client uses the global OpenTelemetry tracer.
 	Tracer trace.Tracer
 	// Meter is optional and mainly used for tests. If nil, the client uses the global OpenTelemetry meter.
@@ -160,6 +168,9 @@ type GenerationExportConfig struct {
 	InitialBackoff             time.Duration
 	MaxBackoff                 time.Duration
 	PayloadMaxBytes            int
+	// HTTPTimeout bounds each HTTP generation export request. Zero uses ten
+	// seconds. It has no effect on gRPC export.
+	HTTPTimeout time.Duration
 }
 
 type APIConfig struct {

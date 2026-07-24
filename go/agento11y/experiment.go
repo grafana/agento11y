@@ -50,15 +50,16 @@ const (
 )
 
 type TestCase struct {
-	TestCaseID  string
-	Name        string
-	Description string
-	Tags        []string
-	Category    string
-	Input       any
-	Expected    any
-	Weight      float64
-	Metadata    map[string]any
+	TestCaseID   string
+	Name         string
+	Description  string
+	Tags         []string
+	Category     string
+	Input        any
+	Expected     any
+	Weight       float64
+	Metadata     map[string]any
+	ArtifactRefs []ExperimentArtifactRef
 }
 
 type TestSuite struct {

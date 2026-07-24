@@ -205,13 +205,17 @@ func newHTTPGenerationExporter(cfg GenerationExportConfig) (generationExporter, 
 	// caller override wins, otherwise the SDK default. headers has any
 	// User-Agent entry removed so it can't blank out the resolved value below.
 	userAgent, headers := splitUserAgent(cfg.Headers)
+	timeout := cfg.HTTPTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
 	return &httpGenerationExporter{
 		endpoint:             urlString,
 		workflowStepEndpoint: workflowStepURLString,
 		userAgent:            userAgent,
 		headers:              headers,
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: timeout,
 		},
 	}, nil
 }
@@ -363,6 +367,9 @@ func mergeGenerationExportConfig(base, override GenerationExportConfig) Generati
 	}
 	if override.PayloadMaxBytes > 0 {
 		out.PayloadMaxBytes = override.PayloadMaxBytes
+	}
+	if override.HTTPTimeout > 0 {
+		out.HTTPTimeout = override.HTTPTimeout
 	}
 	return out
 }
