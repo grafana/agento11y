@@ -10,7 +10,7 @@ overrides:
   '@mikro-orm/knex': 6.6.14
   fast-uri: 3.1.4
   hono: 4.12.27
-  tar: 7.5.19
+  tar: 7.5.21
   ws: 8.21.0
   '@tootallnate/once': 2.0.1
   undici: 7.28.0
@@ -37,3 +37,5 @@ allowBuilds:
 minimumReleaseAgeExclude:
   # Renovate security update: pnpm@11.8.0
   - pnpm@11.8.0
+  # Renovate security update: tar@7.5.21
+  - tar@7.5.21
