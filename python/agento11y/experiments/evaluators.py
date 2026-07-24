@@ -263,13 +263,19 @@ def _json_objects(raw: str) -> list[dict[str, Any]]:
 
     decoder = json.JSONDecoder()
     objects: list[dict[str, Any]] = []
-    for match in re.finditer(r"\{", raw):
+    cursor = 0
+    while True:
+        start = raw.find("{", cursor)
+        if start < 0:
+            break
         try:
-            value, _ = decoder.raw_decode(raw, match.start())
+            value, end = decoder.raw_decode(raw, start)
         except json.JSONDecodeError:
+            cursor = start + 1
             continue
         if isinstance(value, dict):
             objects.append(value)
+        cursor = max(end, start + 1)
     return objects
 
 

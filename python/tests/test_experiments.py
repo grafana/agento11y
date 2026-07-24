@@ -309,6 +309,23 @@ def test_llm_judge_uses_valid_score_object_after_unrelated_json() -> None:
     assert result.explanation == "grounded"
 
 
+def test_llm_judge_uses_top_level_score_instead_of_nested_rubric_score() -> None:
+    judge = LLMJudge(
+        evaluator_id="judge.nested-rubric",
+        invoke=lambda prompt: (
+            '{"score": 0.9, "passed": true, "explanation": "overall", '
+            '"rubric": {"score": 0.2, "passed": false, "explanation": "nested"}}'
+        ),
+        model_name="test-model",
+    )
+
+    result = judge.evaluate_output(input="question", output="answer")
+
+    assert result.value == 0.9
+    assert result.passed is True
+    assert result.explanation == "overall"
+
+
 def test_llm_judge_renders_placeholders_in_one_pass() -> None:
     prompts: list[str] = []
     judge = LLMJudge(

@@ -121,6 +121,25 @@ def test_endpoint_derivation_and_bearer_auth(monkeypatch: pytest.MonkeyPatch) ->
         server.server_close()
 
 
+def test_bearer_auth_normalizes_scheme_casing() -> None:
+    recorder = _Recorder()
+    recorder.push(200, _suite_body())
+    server = _serve(recorder)
+    try:
+        client = TestSuitesClient(
+            grafana_url=f"http://127.0.0.1:{server.server_address[1]}",
+            service_account_token="bearer control-token",
+            timeout=2,
+        )
+
+        client.get_suite("dashboard")
+
+        assert recorder.requests[0]["headers"]["authorization"] == "Bearer control-token"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_control_endpoint_normalizes_grafana_app_url(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = _Recorder()
     recorder.push(200, _suite_body())

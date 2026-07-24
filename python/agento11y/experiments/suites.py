@@ -328,7 +328,9 @@ class TestSuitesClient:
 
 def _format_bearer(token: str) -> str:
     raw = (token or "").strip()
-    return raw if raw.lower().startswith("bearer ") else f"Bearer {raw}"
+    if raw.lower().startswith("bearer "):
+        raw = raw[7:].strip()
+    return f"Bearer {raw}"
 
 
 def _normalize_control_endpoint(value: str) -> str:
