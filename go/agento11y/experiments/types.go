@@ -27,11 +27,12 @@ const (
 type TrialStatus = agento11y.TrialStatus
 
 const (
-	TrialStatusRunning = agento11y.TrialStatusRunning
-	TrialStatusPassed  = agento11y.TrialStatusPassed
-	TrialStatusFailed  = agento11y.TrialStatusFailed
-	TrialStatusErrored = agento11y.TrialStatusErrored
-	TrialStatusSkipped = agento11y.TrialStatusSkipped
+	TrialStatusRunning   = agento11y.TrialStatusRunning
+	TrialStatusCompleted = agento11y.TrialStatusCompleted
+	TrialStatusPassed    = agento11y.TrialStatusPassed
+	TrialStatusFailed    = agento11y.TrialStatusFailed
+	TrialStatusErrored   = agento11y.TrialStatusErrored
+	TrialStatusSkipped   = agento11y.TrialStatusSkipped
 )
 
 type EvaluatorKind = agento11y.EvaluatorKind

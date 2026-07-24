@@ -548,7 +548,7 @@ func (t *Trial) Close(ctx context.Context, callbackErr error) error {
 		case !t.hasFinal:
 			t.Status, t.Error = TrialStatusFailed, "trial closed without a final score"
 		case t.finalPassed == nil:
-			t.Status = TrialStatus("completed")
+			t.Status = TrialStatusCompleted
 		case *t.finalPassed:
 			t.Status = TrialStatusPassed
 		default:
@@ -560,20 +560,22 @@ func (t *Trial) Close(ctx context.Context, callbackErr error) error {
 		t.endSpan(err)
 		return err
 	}
-	_, flushErr := t.Flush(ctx)
-	updateErr := t.finalize(ctx)
-	if updateErr != nil {
-		t.endSpan(errors.Join(flushErr, updateErr))
-		return errors.Join(flushErr, updateErr)
+	if _, err := t.Flush(ctx); err != nil {
+		t.endSpan(err)
+		return err
+	}
+	if err := t.finalize(ctx); err != nil {
+		t.endSpan(err)
+		return err
 	}
 	t.mu.Lock()
 	t.closed = true
 	t.mu.Unlock()
-	t.endSpan(flushErr)
+	t.endSpan(nil)
 	if t.experiment != nil {
 		t.experiment.trialClosed(t)
 	}
-	return flushErr
+	return nil
 }
 
 func (t *Trial) abandon(err error) {
@@ -880,6 +882,9 @@ func (t *Trial) Artifact(ctx context.Context, opts ArtifactOptions) (*TrialArtif
 }
 
 func (t *Trial) Flush(ctx context.Context) (int, error) {
+	if err := t.create(ctx); err != nil {
+		return 0, err
+	}
 	if err := t.ensureGeneration(ctx); err != nil {
 		return 0, err
 	}

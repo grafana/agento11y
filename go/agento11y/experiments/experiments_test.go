@@ -337,6 +337,112 @@ func TestTrialTerminalUpdateFailureIsRetryable(t *testing.T) {
 	}
 }
 
+func TestTrialCloseRetriesBufferedScoresBeforeFinalizing(t *testing.T) {
+	scoreExports, patches := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/scores:export":
+			scoreExports++
+			if scoreExports == 1 {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"temporary score export failure"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"accepted":1,"results":[{"score_id":"score","accepted":true}]}`))
+		case r.Method == http.MethodPatch:
+			patches++
+			_, _ = w.Write([]byte(`{"trial_id":"trial","experiment_id":"run","test_case_id":"case","attempt":1,"status":"completed"}`))
+		default:
+			_, _ = w.Write([]byte(`{"trial_id":"trial","experiment_id":"run","test_case_id":"case","attempt":1,"status":"running"}`))
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{Endpoint: server.URL, IngestToken: "token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Shutdown(context.Background()) }()
+	trial, err := NewTrial(client, TrialRef{ExperimentID: "run", TestCaseID: "case"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := trial.Enter(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := trial.FinalScore(0.75, ScoreOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := trial.Close(context.Background(), nil); err == nil {
+		t.Fatal("expected the first close to fail while exporting scores")
+	}
+	trial.mu.Lock()
+	closed, buffered := trial.closed, len(trial.buffer)
+	trial.mu.Unlock()
+	if closed || buffered != 1 {
+		t.Fatalf("failed score export must keep trial retryable: closed=%t buffered=%d", closed, buffered)
+	}
+	if trial.Status != TrialStatusCompleted {
+		t.Fatalf("expected exported completed status, got %q", trial.Status)
+	}
+	if patches != 0 {
+		t.Fatalf("terminal update ran before scores were exported: patches=%d", patches)
+	}
+
+	if err := trial.Close(context.Background(), nil); err != nil {
+		t.Fatalf("second close should retry buffered scores: %v", err)
+	}
+	trial.mu.Lock()
+	closed, buffered = trial.closed, len(trial.buffer)
+	trial.mu.Unlock()
+	if !closed || buffered != 0 || scoreExports != 2 || patches != 1 {
+		t.Fatalf(
+			"unexpected retry result: closed=%t buffered=%d exports=%d patches=%d",
+			closed, buffered, scoreExports, patches,
+		)
+	}
+}
+
+func TestTrialFlushCreatesTrialBeforePublishingScores(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/trials"):
+			requests = append(requests, "trial")
+			_, _ = w.Write([]byte(`{"trial_id":"trial","experiment_id":"run","test_case_id":"case","attempt":1,"status":"running"}`))
+		case r.URL.Path == "/api/v1/scores:export":
+			requests = append(requests, "scores")
+			_, _ = w.Write([]byte(`{"accepted":1,"results":[{"score_id":"score","accepted":true}]}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{Endpoint: server.URL, IngestToken: "token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Shutdown(context.Background()) }()
+	trial, err := NewTrial(client, TrialRef{ExperimentID: "run", TestCaseID: "case"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := trial.FinalScore(true, ScoreOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := trial.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[0] != "trial" || requests[1] != "scores" {
+		t.Fatalf("strict ingest requires trial upsert before score export: %#v", requests)
+	}
+}
+
 func TestClientRedactsScoresAndTextArtifactsByDefault(t *testing.T) {
 	const secret = "glc_abcdefghijklmnopqrstuvwxyz123456"
 	var bodies []string
