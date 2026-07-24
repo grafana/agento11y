@@ -167,7 +167,6 @@ func (c *Client) RecordGeneration(ctx context.Context, generationID string, opts
 		OperationName: firstNonBlank(opts.OperationName, "invoke_agent"),
 		Tags:          cloneStrings(opts.Tags), Metadata: cloneMap(opts.Metadata),
 	}
-	_, recorder := c.core.StartGeneration(ctx, start)
 	generation := agento11y.Generation{
 		ID: generationID, ConversationID: opts.ConversationID, Model: start.Model,
 		AgentName: opts.AgentName, AgentVersion: opts.AgentVersion,
@@ -175,12 +174,7 @@ func (c *Client) RecordGeneration(ctx context.Context, generationID string, opts
 		Output: textMessages(agento11y.RoleAssistant, opts.OutputText),
 		Usage:  opts.Usage.Normalize(),
 	}
-	recorder.SetResult(generation, nil)
-	recorder.End()
-	if err := recorder.Err(); err != nil {
-		return err
-	}
-	return c.core.Flush(ctx)
+	return c.core.ExportGeneration(ctx, start, generation)
 }
 
 type GenerationOptions struct {
