@@ -58,6 +58,7 @@ test('vercel ai sdk preflight allows step when hook returns allow', async () => 
     assert.equal(receivedBody.context.agent_version, '2.0.0');
     assert.equal(receivedBody.context.model.provider, 'openai');
     assert.equal(receivedBody.context.model.name, 'gpt-4o');
+    assert.equal(receivedBody.context.conversation_id, 'conv-allow');
     assert.equal(receivedBody.input.messages[0].role, 'user');
   } finally {
     await client.shutdown();

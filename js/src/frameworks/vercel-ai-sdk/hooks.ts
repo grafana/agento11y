@@ -201,26 +201,20 @@ export class Agento11yVercelAiSdkInstrumentation {
       stepStartEvent: StepStartEvent;
       startedAt: Date;
       inputMessages: Message[];
+      conversation: ConversationResolution;
     }): StepState => {
-      const conversation = resolveConversationId({
-        explicitConversationId,
-        resolver: this.resolveConversationIdFn,
-        stepStartEvent: params.stepStartEvent,
-        fallbackSeed: `${callID}:step-${params.stepNumber}`,
-      });
-
       const stepState: StepState = {
         recorder:
           mode === 'STREAM' && hasStepStartModelRef(params.stepStartEvent)
             ? createGenerationRecorder({
                 stepStartEvent: params.stepStartEvent,
-                conversationId: conversation.conversationId,
+                conversationId: params.conversation.conversationId,
                 startedAt: params.startedAt,
               })
             : undefined,
         startedAt: params.startedAt,
         inputMessages: params.inputMessages,
-        conversation,
+        conversation: params.conversation,
         fallbackSeed: `${callID}:step-${params.stepNumber}`,
         firstTokenRecorded: false,
         firstTokenAt: undefined,
@@ -236,6 +230,13 @@ export class Agento11yVercelAiSdkInstrumentation {
       kickOffOutputSchemaExtraction(stepState);
       return stepState;
     };
+    const resolveStepConversation = (stepNumber: number, stepStartEvent: StepStartEvent): ConversationResolution =>
+      resolveConversationId({
+        explicitConversationId,
+        resolver: this.resolveConversationIdFn,
+        stepStartEvent,
+        fallbackSeed: `${callID}:step-${stepNumber}`,
+      });
     const kickOffOutputSchemaExtraction = (stepState: StepState): void => {
       const outputRef = stepState.stepStartEvent.output;
       if (outputRef === undefined || outputRef === null) {
@@ -285,6 +286,7 @@ export class Agento11yVercelAiSdkInstrumentation {
         stepStartEvent: syntheticStepStartEvent,
         startedAt: syntheticStartedAt,
         inputMessages: [],
+        conversation: resolveStepConversation(syntheticStepNumber, syntheticStepStartEvent),
       });
       return { stepNumber: syntheticStepNumber, stepState: syntheticStepState };
     };
@@ -314,6 +316,7 @@ export class Agento11yVercelAiSdkInstrumentation {
         stepStartEvent: syntheticStepStartEvent,
         startedAt: params.observedAt,
         inputMessages: [],
+        conversation: resolveStepConversation(syntheticStepNumber, syntheticStepStartEvent),
       });
       return { stepNumber: syntheticStepNumber, stepState: syntheticStepState };
     };
@@ -496,6 +499,7 @@ export class Agento11yVercelAiSdkInstrumentation {
     const runPreflight = async (
       event: StepStartEvent,
       inputMessages: Message[],
+      conversationId: string,
     ): Promise<{ messages: Message[]; providerMessages?: VercelAiSdkModelMessage[]; transformed: boolean }> => {
       const model = mapModelFromStepStart(event);
       // evaluateHook honors fail-open internally; an exception here means
@@ -510,6 +514,7 @@ export class Agento11yVercelAiSdkInstrumentation {
             agentVersion: this.agentVersion,
             model: { provider: model.provider, name: model.modelName },
             tags,
+            conversationId,
           },
           input: {
             messages: inputMessages.length > 0 ? inputMessages : undefined,
@@ -549,6 +554,7 @@ export class Agento11yVercelAiSdkInstrumentation {
       state.nextSyntheticStepNumber = Math.max(state.nextSyntheticStepNumber + 1, stepNumber + 1);
 
       const inputMessages = mapInputMessages(event.messages);
+      const conversation = resolveStepConversation(stepNumber, event);
       const finalize = (
         resolvedMessages: Message[],
         providerMessages: VercelAiSdkModelMessage[] | undefined,
@@ -572,6 +578,7 @@ export class Agento11yVercelAiSdkInstrumentation {
           stepStartEvent: event,
           startedAt: new Date(),
           inputMessages: this.captureInputs ? resolvedMessages : [],
+          conversation,
         });
         if (returnPreparedMessages && providerMessages !== undefined) {
           return { messages: providerMessages };
@@ -586,8 +593,8 @@ export class Agento11yVercelAiSdkInstrumentation {
       // Preflight evaluates against the actual prompt/messages even when
       // captureInputs is disabled — the hook server only sees them in
       // memory and never persists them.
-      return runPreflight(event, inputMessages).then(({ messages, providerMessages, transformed }) =>
-        finalize(messages, providerMessages, transformed),
+      return runPreflight(event, inputMessages, conversation.conversationId).then(
+        ({ messages, providerMessages, transformed }) => finalize(messages, providerMessages, transformed),
       );
     };
 

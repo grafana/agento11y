@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
-import { trace } from '@opentelemetry/api';
-import { Agento11yClient, defaultConfig, HookDeniedError } from '../.test-dist/index.js';
+import { context, trace } from '@opentelemetry/api';
+import { Agento11yClient, defaultConfig, HookDeniedError, withConversationId } from '../.test-dist/index.js';
 
 test('evaluateHook returns allow without contacting server when disabled', async () => {
   const client = newClient({
@@ -110,6 +110,84 @@ test('evaluateHook posts JSON to /api/v1/hooks:evaluate and parses allow respons
     assert.equal(response.evaluations[0].passed, true);
     assert.equal(response.evaluations[0].latencyMs, 12);
     assert.equal(response.evaluations[0].explanation, 'no PII matches');
+  } finally {
+    await client.shutdown();
+    await close(server);
+  }
+});
+
+test('evaluateHook adds conversation correlation and explicit trace identifiers', async () => {
+  let receivedBody = {};
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) {
+      chunks.push(chunk);
+    }
+    receivedBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ action: 'allow', evaluations: [] }));
+  });
+  await listen(server);
+  const address = server.address();
+  const client = newClient({
+    apiEndpoint: `http://127.0.0.1:${address.port}`,
+    hooksEnabled: true,
+  });
+
+  try {
+    await withConversationId('conv-guarded', () =>
+      client.evaluateHook({
+        phase: 'preflight',
+        context: {
+          model: { provider: 'openai', name: 'gpt-4o' },
+          traceId: '0123456789abcdef0123456789abcdef',
+          spanId: '0123456789abcdef',
+        },
+        input: {},
+      }),
+    );
+    assert.equal(receivedBody.context.conversation_id, 'conv-guarded');
+    assert.equal(receivedBody.context.trace_id, '0123456789abcdef0123456789abcdef');
+    assert.equal(receivedBody.context.span_id, '0123456789abcdef');
+  } finally {
+    await client.shutdown();
+    await close(server);
+  }
+});
+
+test('evaluateHook omits invalid active trace identifiers', async () => {
+  let receivedBody = {};
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) {
+      chunks.push(chunk);
+    }
+    receivedBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ action: 'allow', evaluations: [] }));
+  });
+  await listen(server);
+  const address = server.address();
+  const client = newClient({
+    apiEndpoint: `http://127.0.0.1:${address.port}`,
+    hooksEnabled: true,
+  });
+  const invalidSpan = trace.wrapSpanContext({
+    traceId: '00000000000000000000000000000000',
+    spanId: '0000000000000000',
+    traceFlags: 0,
+  });
+
+  try {
+    await context.with(trace.setSpan(context.active(), invalidSpan), () =>
+      client.evaluateHook({
+        phase: 'preflight',
+        context: { model: { provider: 'openai', name: 'gpt-4o' } },
+        input: {},
+      }),
+    );
+    assert.equal(receivedBody.context.trace_id, undefined);
+    assert.equal(receivedBody.context.span_id, undefined);
   } finally {
     await client.shutdown();
     await close(server);

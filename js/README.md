@@ -210,6 +210,7 @@ const response = await client.evaluateHook({
     agentName: "support-agent",
     agentVersion: "1.0.0",
     model: { provider: "openai", name: "gpt-5" },
+    conversationId: "support-case-42",
   },
   input: {
     messages,
@@ -226,6 +227,8 @@ messages = response.transformedInput?.messages ?? messages;
 ```
 
 With `failOpen: true`, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `failOpen: false` for strict paths that should fail closed.
+
+Set `context.conversationId` to the same ID used by `startGeneration(...)`. The SDK also reads `withConversationId(...)` and the active OpenTelemetry span when explicit correlation fields are omitted. This lets Agent Observability retain denied preflight attempts even though no LLM generation is created.
 
 If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `startGeneration(...)`. If you use the Vercel AI SDK adapter, see `docs/frameworks/vercel-ai-sdk.md` for automatic preflight hook wiring.
 

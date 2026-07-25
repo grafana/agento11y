@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -108,6 +109,42 @@ func TestEvaluateHookSendsRequestAndParsesAllow(t *testing.T) {
 	}
 	if len(resp.Evaluations) != 1 || resp.Evaluations[0].RuleID != "pii" {
 		t.Fatalf("unexpected evaluations: %#v", resp.Evaluations)
+	}
+}
+
+func TestEvaluateHookAddsCorrelationFromContext(t *testing.T) {
+	var captured HookEvaluateRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if err := json.NewDecoder(req.Body).Decode(&captured); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"action":"allow","evaluations":[]}`))
+	}))
+	defer server.Close()
+
+	client := newHookTestClient(t, hookTestClientOptions{apiEndpoint: server.URL, hooksEnabled: true})
+	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+	traceID, _ := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
+	spanID, _ := trace.SpanIDFromHex("0123456789abcdef")
+	ctx := WithConversationID(context.Background(), "conv-guarded")
+	ctx = trace.ContextWithSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: traceID,
+		SpanID:  spanID,
+	}))
+
+	_, err := client.EvaluateHook(ctx, HookEvaluateRequest{
+		Phase:   HookPhasePreflight,
+		Context: HookContext{Model: &HookModel{Provider: "openai", Name: "gpt-4o"}},
+	})
+	if err != nil {
+		t.Fatalf("evaluate hook: %v", err)
+	}
+	if captured.Context.ConversationID != "conv-guarded" {
+		t.Fatalf("expected conversation correlation, got %#v", captured.Context)
+	}
+	if captured.Context.TraceID != traceID.String() || captured.Context.SpanID != spanID.String() {
+		t.Fatalf("expected trace correlation, got %#v", captured.Context)
 	}
 }
 

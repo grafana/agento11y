@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // HookPhase enumerates evaluation phases.
@@ -111,10 +113,13 @@ type HookModel struct {
 
 // HookContext is metadata used to match hook rules against this evaluation.
 type HookContext struct {
-	AgentName    string            `json:"agent_name,omitempty"`
-	AgentVersion string            `json:"agent_version,omitempty"`
-	Model        *HookModel        `json:"model,omitempty"`
-	Tags         map[string]string `json:"tags,omitempty"`
+	AgentName      string            `json:"agent_name,omitempty"`
+	AgentVersion   string            `json:"agent_version,omitempty"`
+	Model          *HookModel        `json:"model,omitempty"`
+	Tags           map[string]string `json:"tags,omitempty"`
+	ConversationID string            `json:"conversation_id,omitempty"`
+	TraceID        string            `json:"trace_id,omitempty"`
+	SpanID         string            `json:"span_id,omitempty"`
 }
 
 // HookInput carries the evaluable payload (request for preflight,
@@ -185,6 +190,7 @@ func (c *Client) EvaluateHook(ctx context.Context, req HookEvaluateRequest) (*Ho
 	if !phaseEnabled(hooksCfg.Phases, req.Phase) {
 		return allowResponse(), nil
 	}
+	enrichHookCorrelation(ctx, &req.Context)
 
 	timeout := hooksCfg.Timeout
 	if timeout <= 0 {
@@ -252,6 +258,27 @@ func (c *Client) EvaluateHook(ctx context.Context, req HookEvaluateRequest) (*Ho
 		out.Action = HookActionAllow
 	}
 	return &out, nil
+}
+
+func enrichHookCorrelation(ctx context.Context, hookCtx *HookContext) {
+	if hookCtx == nil {
+		return
+	}
+	if hookCtx.ConversationID == "" {
+		if conversationID, ok := ConversationIDFromContext(ctx); ok {
+			hookCtx.ConversationID = conversationID
+		}
+	}
+	spanCtx := trace.SpanContextFromContext(ctx)
+	if !spanCtx.IsValid() {
+		return
+	}
+	if hookCtx.TraceID == "" {
+		hookCtx.TraceID = spanCtx.TraceID().String()
+	}
+	if hookCtx.SpanID == "" {
+		hookCtx.SpanID = spanCtx.SpanID().String()
+	}
 }
 
 // HookDeniedFromResponse converts a denied HookEvaluateResponse into a typed
