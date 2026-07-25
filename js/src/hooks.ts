@@ -1,4 +1,4 @@
-import { context as otelContext, trace } from '@opentelemetry/api';
+import { isSpanContextValid, context as otelContext, trace } from '@opentelemetry/api';
 import { conversationIdFromContext } from './context.js';
 import type {
   HookEvaluateRequest,
@@ -193,7 +193,9 @@ function serializeContext(hookContext: HookEvaluateRequest['context']): Record<s
   if (conversationId !== undefined && conversationId.length > 0) {
     out.conversation_id = conversationId;
   }
-  const spanContext = trace.getSpan(otelContext.active())?.spanContext();
+  const activeSpanContext = trace.getSpan(otelContext.active())?.spanContext();
+  const spanContext =
+    activeSpanContext !== undefined && isSpanContextValid(activeSpanContext) ? activeSpanContext : undefined;
   const traceId = hookContext.traceId ?? spanContext?.traceId;
   const spanId = hookContext.spanId ?? spanContext?.spanId;
   if (traceId !== undefined && traceId.length > 0) {
