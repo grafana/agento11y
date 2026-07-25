@@ -106,6 +106,7 @@ try:
                 agent_name="getting-started-hooks",
                 agent_version="1.0.0",
                 model=HookModel(provider="openai", name=model),
+                conversation_id="getting-started-python-hooks",
             ),
             input=HookInput(
                 messages=input_messages,

@@ -11,7 +11,10 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
+from opentelemetry import trace
+
 from .config import HooksConfig
+from .context import conversation_id_from_context
 from .errors import HookDeniedError, HookTransportError
 from .models import Message, MessageRole, Part, PartKind, ToolDefinition
 
@@ -51,6 +54,9 @@ class HookContext:
     agent_name: str = ""
     agent_version: str = ""
     tags: dict[str, str] = field(default_factory=dict)
+    conversation_id: str = ""
+    trace_id: str = ""
+    span_id: str = ""
 
 
 @dataclass(slots=True)
@@ -222,6 +228,19 @@ def _serialize_context(context: HookContext) -> dict[str, Any]:
         out["agent_version"] = context.agent_version
     if context.tags:
         out["tags"] = dict(context.tags)
+    conversation_id = context.conversation_id or conversation_id_from_context() or ""
+    if conversation_id:
+        out["conversation_id"] = conversation_id
+    span_context = trace.get_current_span().get_span_context()
+    trace_id = context.trace_id
+    span_id = context.span_id
+    if span_context.is_valid:
+        trace_id = trace_id or format(span_context.trace_id, "032x")
+        span_id = span_id or format(span_context.span_id, "016x")
+    if trace_id:
+        out["trace_id"] = trace_id
+    if span_id:
+        out["span_id"] = span_id
     return out
 
 

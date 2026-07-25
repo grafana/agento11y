@@ -29,7 +29,9 @@ from agento11y import (
     ToolDefinition,
     hook_denied_from_response,
     user_text_message,
+    with_conversation_id,
 )
+from opentelemetry import context as otel_context
 from opentelemetry import trace
 
 
@@ -180,6 +182,38 @@ def test_evaluate_hook_posts_to_hooks_evaluate() -> None:
         client.shutdown()
         server.shutdown()
         server.server_close()
+
+
+def test_evaluate_hook_adds_correlation_from_context() -> None:
+    with _capturing_hook_server({"action": "allow", "evaluations": []}) as (captured, endpoint):
+        client = _new_client(endpoint, hooks=HooksConfig(enabled=True))
+        span_context = trace.SpanContext(
+            trace_id=int("0123456789abcdef0123456789abcdef", 16),
+            span_id=int("0123456789abcdef", 16),
+            is_remote=False,
+            trace_flags=trace.TraceFlags(1),
+        )
+        token = otel_context.attach(trace.set_span_in_context(trace.NonRecordingSpan(span_context)))
+        try:
+            with with_conversation_id("conv-guarded"):
+                client.evaluate_hook(
+                    HookEvaluateRequest(
+                        phase=HookPhase.PREFLIGHT.value,
+                        context=HookContext(model=HookModel(provider="openai", name="gpt-4o")),
+                        input=HookInput(),
+                    )
+                )
+        finally:
+            otel_context.detach(token)
+            client.shutdown()
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    context_payload = payload["context"]
+    assert isinstance(context_payload, dict)
+    assert context_payload["conversation_id"] == "conv-guarded"
+    assert context_payload["trace_id"] == "0123456789abcdef0123456789abcdef"
+    assert context_payload["span_id"] == "0123456789abcdef"
 
 
 def test_evaluate_hook_deny() -> None:
