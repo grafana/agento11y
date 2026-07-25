@@ -19,7 +19,7 @@ overrides:
   ip-address: 10.1.1
   qs: 6.15.2
   'form-data@<2.5.6': 2.5.6
-  'brace-expansion@5': 5.0.7
+  'brace-expansion@5': 5.0.8
   'uuid@<11.1.1': 11.1.1
   'uuid@13.0.0': 13.0.2
 
@@ -37,3 +37,5 @@ allowBuilds:
 minimumReleaseAgeExclude:
   # Renovate security update: pnpm@11.8.0
   - pnpm@11.8.0
+  # Renovate security update: brace-expansion@5.0.8
+  - brace-expansion@5.0.8
