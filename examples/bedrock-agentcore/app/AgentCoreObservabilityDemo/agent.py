@@ -12,6 +12,7 @@ from demo_data import get_order, get_support_cases, make_return, search_products
 from langchain.agents import create_agent
 from langchain_core.tools import tool
 from opentelemetry import metrics
+from opentelemetry.trace import Status, StatusCode
 from telemetry import Telemetry
 
 SYSTEM_PROMPT = """You are a demo service-operations assistant.
@@ -204,6 +205,7 @@ def run_agent(
             }
         except Exception as error:
             span.record_exception(error)
+            span.set_status(Status(StatusCode.ERROR, str(error)))
             telemetry.requests.add(
                 1,
                 {**metric_attributes, "status": "error"},
