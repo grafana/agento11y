@@ -1,0 +1,8 @@
+[
+  {
+    "name": "default",
+    "description": "Default target. Replace account and region before deployment.",
+    "account": "000000000000",
+    "region": "us-west-2"
+  }
+]

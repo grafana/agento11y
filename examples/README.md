@@ -24,6 +24,13 @@ A fuller FastAPI service showing a LangChain agent with framework callbacks and
 manual SDK instrumentation side by side. Use this when you want to see the SDK
 wired into a real service rather than a single script.
 
+## Amazon Bedrock AgentCore — [`bedrock-agentcore/`](bedrock-agentcore/)
+
+A deployable LangChain agent for Amazon Bedrock AgentCore Runtime. It includes
+synthetic operations tools, Agent Observability framework callbacks, custom
+OpenTelemetry spans and metrics, local AgentCore dev instructions, and an
+optional AWS deployment flow.
+
 ## Credentials
 
 Every example needs your Grafana Cloud credentials (instance ID, API token,
