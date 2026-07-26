@@ -23,6 +23,12 @@ func TestExtractCandidates(t *testing.T) {
 			wantLabel:  "candidate 1",
 		},
 		{
+			name:       "skips unrelated JSON object",
+			response:   "For example, {\"temperature\":0.2}. Use this proposal: {\"prompts\":[{\"prompt\":[{\"role\":\"system\",\"content\":\"usable prompt\"}]}]}",
+			wantPrompt: "usable prompt",
+			wantLabel:  "candidate 1",
+		},
+		{
 			name:     "malformed response",
 			response: `not JSON {"prompts":[`,
 			wantErr:  true,

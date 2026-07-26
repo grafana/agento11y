@@ -62,9 +62,32 @@ func proposeCandidates(ctx context.Context, llm *llmClient, current string, curr
 }
 
 func extractCandidates(text string) ([]promptCandidate, error) {
+	trimmed := strings.TrimSpace(text)
+	if json.Valid([]byte(trimmed)) {
+		if candidates := candidatesFromJSON([]byte(trimmed)); len(candidates) > 0 {
+			return candidates, nil
+		}
+	}
+	for index, character := range text {
+		if character != '{' {
+			continue
+		}
+		decoder := json.NewDecoder(strings.NewReader(text[index:]))
+		var object json.RawMessage
+		if err := decoder.Decode(&object); err != nil {
+			continue
+		}
+		if candidates := candidatesFromJSON(object); len(candidates) > 0 {
+			return candidates, nil
+		}
+	}
+	return nil, errors.New("reasoning model did not return a usable JSON object")
+}
+
+func candidatesFromJSON(data []byte) []promptCandidate {
 	var parsed proposalResponse
-	if err := decodeJSONObject(text, &parsed); err != nil {
-		return nil, err
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil
 	}
 	candidates := make([]promptCandidate, 0, len(parsed.Prompts))
 	for i, item := range parsed.Prompts {
@@ -87,26 +110,7 @@ func extractCandidates(text string) ([]promptCandidate, error) {
 		}
 		candidates = append(candidates, promptCandidate{Label: label, SystemPrompt: systemPrompt})
 	}
-	return candidates, nil
-}
-
-func decodeJSONObject(text string, destination any) error {
-	trimmed := strings.TrimSpace(text)
-	if json.Valid([]byte(trimmed)) {
-		if err := json.Unmarshal([]byte(trimmed), destination); err == nil {
-			return nil
-		}
-	}
-	for index, character := range text {
-		if character != '{' {
-			continue
-		}
-		decoder := json.NewDecoder(strings.NewReader(text[index:]))
-		if err := decoder.Decode(destination); err == nil {
-			return nil
-		}
-	}
-	return errors.New("reasoning model did not return a usable JSON object")
+	return candidates
 }
 
 type evaluationConfig struct {
