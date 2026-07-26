@@ -113,9 +113,6 @@ func serializeScore(score ScoreItem) map[string]any {
 	if score.RuleID != "" {
 		out["rule_id"] = score.RuleID
 	}
-	if score.EvaluatorKind != "" {
-		out["evaluator_kind"] = score.EvaluatorKind
-	}
 	if score.Passed != nil {
 		out["passed"] = *score.Passed
 	}
