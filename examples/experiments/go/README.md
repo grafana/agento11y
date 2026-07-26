@@ -1,6 +1,6 @@
 # Go experiments example
 
-This is an o11y-bench-shaped streaming runner built on
+The root example is an o11y-bench-shaped streaming runner built on
 `github.com/grafana/agento11y/go/agento11y/experiments`. It publishes each
 scored attempt immediately, including candidate I/O, multiple verifier scores,
 token usage, cost, and a file artifact.
@@ -19,6 +19,21 @@ GOWORK=off go run .
 
 The canned agent makes no provider call. It needs only `AGENTO11Y_ENDPOINT`,
 `AGENTO11Y_AUTH_TOKEN`, and optional `AGENTO11Y_AUTH_TENANT_ID`.
+
+## Prompt optimization
+
+[`prompt-optimization/`](prompt-optimization/) is a real-model example that
+ports the Sigil prompt optimizer to Go. It asks a reasoning model for candidate
+prompts, evaluates each candidate over 27 embedded unit-inference fixtures, and
+uses the finalized Agent Observability report score as its hill-climbing
+objective:
+
+```bash
+GOWORK=off go run ./prompt-optimization
+```
+
+See its README for model configuration, suite versioning, and the explicit
+content-recording opt-in.
 
 To synchronize the local suite before a run:
 
