@@ -206,7 +206,9 @@ func normalizePrometheusRateUnit(query, unit string) string {
 	if !strings.Contains(lowered, "rate(") && !strings.Contains(lowered, "irate(") {
 		return unit
 	}
-	if strings.Contains(lowered, "_bytes") || strings.Contains(lowered, "_cpu_") {
+	if strings.Contains(lowered, "_bytes") ||
+		strings.Contains(lowered, "_cpu_") ||
+		strings.Contains(lowered, "_seconds_total") {
 		return unit
 	}
 	for _, token := range rateCounterTokens {

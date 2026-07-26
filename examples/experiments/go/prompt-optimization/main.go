@@ -218,7 +218,7 @@ func experimentComparisonURL(baseURL string) (string, error) {
 		return "", fmt.Errorf("Grafana URL must use http or https")
 	}
 	return base.ResolveReference(&url.URL{
-		Path: "/a/grafana-agento11y-app/evaluation/experiments",
+		Path: "/a/grafana-agento11y-app/offline-experiments/experiments/",
 	}).String(), nil
 }
 

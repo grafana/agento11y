@@ -61,6 +61,14 @@ func TestResolveUnit(t *testing.T) {
 			want: "short",
 		},
 		{
+			name: "does not normalize seconds rate", output: "UNIT: short",
+			item: fixture{
+				DatasourceKind: "Prometheus",
+				QueryString:    "rate(job_runtime_seconds_total[5m])",
+			},
+			want: "short",
+		},
+		{
 			name: "does not normalize non-prometheus query", output: "UNIT: ops",
 			item: fixture{
 				DatasourceKind: "CloudWatch",
