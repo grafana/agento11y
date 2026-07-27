@@ -33,11 +33,12 @@ const (
 type TrialStatus string
 
 const (
-	TrialStatusRunning TrialStatus = "running"
-	TrialStatusPassed  TrialStatus = "passed"
-	TrialStatusFailed  TrialStatus = "failed"
-	TrialStatusErrored TrialStatus = "errored"
-	TrialStatusSkipped TrialStatus = "skipped"
+	TrialStatusRunning   TrialStatus = "running"
+	TrialStatusCompleted TrialStatus = "completed"
+	TrialStatusPassed    TrialStatus = "passed"
+	TrialStatusFailed    TrialStatus = "failed"
+	TrialStatusErrored   TrialStatus = "errored"
+	TrialStatusSkipped   TrialStatus = "skipped"
 )
 
 type EvaluatorKind string
@@ -50,15 +51,16 @@ const (
 )
 
 type TestCase struct {
-	TestCaseID  string
-	Name        string
-	Description string
-	Tags        []string
-	Category    string
-	Input       any
-	Expected    any
-	Weight      float64
-	Metadata    map[string]any
+	TestCaseID   string
+	Name         string
+	Description  string
+	Tags         []string
+	Category     string
+	Input        any
+	Expected     any
+	Weight       float64
+	Metadata     map[string]any
+	ArtifactRefs []ExperimentArtifactRef
 }
 
 type TestSuite struct {

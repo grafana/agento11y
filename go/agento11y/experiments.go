@@ -331,7 +331,10 @@ func (c *Client) experimentRetryPolicy() experimentRetryPolicy {
 		maxRetries:     cfg.MaxRetries,
 		initialBackoff: cfg.InitialBackoff,
 		maxBackoff:     cfg.MaxBackoff,
-		timeout:        defaultExperimentRetryTimeout,
+		timeout:        c.config.ExperimentRetryTimeout,
+	}
+	if policy.timeout <= 0 {
+		policy.timeout = defaultExperimentRetryTimeout
 	}
 	if policy.maxRetries < 0 {
 		policy.maxRetries = 0

@@ -6,6 +6,43 @@ import (
 	"strings"
 )
 
+// RedactSecretText replaces recognized secrets in arbitrary text. It is used
+// by the experiments package for scores, explanations, metadata, and textual
+// artifacts. Email addresses are redacted to match the built-in generation
+// sanitizer's default.
+func RedactSecretText(value string) string {
+	return redactFull(value, true)
+}
+
+// RedactSecretValue recursively returns a redacted copy of JSON-like values.
+// Unknown scalar types are returned unchanged.
+func RedactSecretValue(value any) any {
+	switch typed := value.(type) {
+	case string:
+		return RedactSecretText(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i := range typed {
+			out[i] = RedactSecretValue(typed[i])
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = RedactSecretValue(item)
+		}
+		return out
+	case []string:
+		out := make([]string, len(typed))
+		for i := range typed {
+			out[i] = RedactSecretText(typed[i])
+		}
+		return out
+	default:
+		return value
+	}
+}
+
 // GenerationSanitizer mutates a generation before export. Sanitizers receive
 // the fully normalized Generation and return the version to ship. Implementations
 // may mutate strings/payloads (e.g. redact secrets) but must preserve message

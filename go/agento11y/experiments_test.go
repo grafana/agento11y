@@ -396,9 +396,9 @@ func TestExportScoresRetriesThenSucceedsOn5xx(t *testing.T) {
 	}
 }
 
-func TestExportScoresDoesNotRetryWithoutEvaluatorKind(t *testing.T) {
+func TestExportScoresOmitsEvaluatorKindFromWire(t *testing.T) {
 	recorder := &experimentRecorder{}
-	recorder.push(http.StatusBadRequest, map[string]any{"error": `json: unknown field "evaluator_kind"`})
+	recorder.push(http.StatusAccepted, map[string]any{"results": []map[string]any{{"score_id": "sc1", "accepted": true}}})
 	server := httptest.NewServer(recorder.handler(t))
 	defer server.Close()
 
@@ -412,15 +412,15 @@ func TestExportScoresDoesNotRetryWithoutEvaluatorKind(t *testing.T) {
 		ScoreKey:         "reward",
 		Value:            NumberScoreValue(1),
 	}})
-	if !errors.Is(err, ErrScoreValidationFailed) {
-		t.Fatalf("expected validation error, got %v", err)
+	if err != nil {
+		t.Fatalf("export scores: %v", err)
 	}
 	if recorder.requestCount() != 1 {
-		t.Fatalf("expected no evaluator_kind fallback retry, got %d request(s)", recorder.requestCount())
+		t.Fatalf("expected one request, got %d", recorder.requestCount())
 	}
 	first := recorder.request(0).Payload["scores"].([]any)[0].(map[string]any)
-	if first["evaluator_kind"] != "deterministic" {
-		t.Fatalf("expected first request to include evaluator_kind, got %#v", first)
+	if _, exists := first["evaluator_kind"]; exists {
+		t.Fatalf("evaluator_kind is not part of the score ingest contract, got %#v", first)
 	}
 }
 

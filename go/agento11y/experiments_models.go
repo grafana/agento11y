@@ -139,12 +139,16 @@ type ExperimentEvaluator struct {
 }
 
 type CreateExperimentRequest struct {
-	RunID       string           `json:"run_id,omitempty"`
-	Name        string           `json:"name"`
-	Source      ExperimentSource `json:"source"`
-	Description string           `json:"description,omitempty"`
-	Tags        []string         `json:"tags,omitempty"`
-	Metadata    map[string]any   `json:"metadata,omitempty"`
+	RunID             string           `json:"run_id,omitempty"`
+	Name              string           `json:"name"`
+	Source            ExperimentSource `json:"source"`
+	Description       string           `json:"description,omitempty"`
+	Tags              []string         `json:"tags,omitempty"`
+	SuiteID           string           `json:"suite_id,omitempty"`
+	SuiteVersion      string           `json:"suite_version,omitempty"`
+	Candidate         map[string]any   `json:"candidate,omitempty"`
+	PlannedTrialCount *int             `json:"planned_trial_count,omitempty"`
+	Metadata          map[string]any   `json:"metadata,omitempty"`
 }
 
 type CompleteExperimentOptions struct {
@@ -153,14 +157,15 @@ type CompleteExperimentOptions struct {
 }
 
 type UpsertTrialRequest struct {
-	TrialID        string         `json:"trial_id"`
-	TestCaseID     string         `json:"test_case_id"`
-	Attempt        int            `json:"attempt"`
-	Status         string         `json:"status"`
-	ConversationID string         `json:"conversation_id,omitempty"`
-	TraceID        string         `json:"trace_id,omitempty"`
-	SpanID         string         `json:"span_id,omitempty"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
+	TrialID        string            `json:"trial_id"`
+	TestCaseID     string            `json:"test_case_id"`
+	Attempt        int               `json:"attempt"`
+	Status         string            `json:"status"`
+	ConversationID string            `json:"conversation_id,omitempty"`
+	TraceID        string            `json:"trace_id,omitempty"`
+	SpanID         string            `json:"span_id,omitempty"`
+	TestCase       *TestCaseSnapshot `json:"test_case,omitempty"`
+	Metadata       map[string]any    `json:"metadata,omitempty"`
 }
 
 type UpdateTrialRequest struct {
@@ -172,6 +177,7 @@ type UpdateTrialRequest struct {
 	DurationMillis *int     `json:"duration_ms,omitempty"`
 	ConversationID string   `json:"conversation_id,omitempty"`
 	TraceID        string   `json:"trace_id,omitempty"`
+	SpanID         string   `json:"span_id,omitempty"`
 }
 
 type TestCaseSnapshot struct {
@@ -245,23 +251,30 @@ type TrialArtifact struct {
 }
 
 type Experiment struct {
-	RunID        string                `json:"run_id"`
-	Name         string                `json:"name"`
-	Source       string                `json:"source"`
-	Status       string                `json:"status"`
-	TenantID     string                `json:"tenant_id,omitempty"`
-	Description  string                `json:"description,omitempty"`
-	Tags         []string              `json:"tags,omitempty"`
-	CollectionID string                `json:"collection_id,omitempty"`
-	Evaluators   []ExperimentEvaluator `json:"evaluators,omitempty"`
-	Metadata     map[string]any        `json:"metadata,omitempty"`
-	ScoreCount   int                   `json:"score_count,omitempty"`
-	Error        string                `json:"error,omitempty"`
-	CreatedBy    string                `json:"created_by,omitempty"`
-	CreatedAt    *time.Time            `json:"created_at,omitempty"`
-	UpdatedAt    *time.Time            `json:"updated_at,omitempty"`
-	StartedAt    *time.Time            `json:"started_at,omitempty"`
-	CompletedAt  *time.Time            `json:"completed_at,omitempty"`
+	RunID             string                   `json:"run_id"`
+	Name              string                   `json:"name"`
+	Source            string                   `json:"source"`
+	Status            string                   `json:"status"`
+	TenantID          string                   `json:"tenant_id,omitempty"`
+	Description       string                   `json:"description,omitempty"`
+	Tags              []string                 `json:"tags,omitempty"`
+	SuiteID           string                   `json:"suite_id,omitempty"`
+	SuiteVersion      string                   `json:"suite_version,omitempty"`
+	Candidate         map[string]any           `json:"candidate,omitempty"`
+	PlannedTrialCount *int                     `json:"planned_trial_count,omitempty"`
+	CollectionID      string                   `json:"collection_id,omitempty"`
+	Evaluators        []ExperimentEvaluator    `json:"evaluators,omitempty"`
+	Metadata          map[string]any           `json:"metadata,omitempty"`
+	ScoreCount        int                      `json:"score_count,omitempty"`
+	Error             string                   `json:"error,omitempty"`
+	ResultStatus      string                   `json:"result_status,omitempty"`
+	ResultError       string                   `json:"result_error,omitempty"`
+	Result            *ExperimentReportSummary `json:"result,omitempty"`
+	CreatedBy         string                   `json:"created_by,omitempty"`
+	CreatedAt         *time.Time               `json:"created_at,omitempty"`
+	UpdatedAt         *time.Time               `json:"updated_at,omitempty"`
+	StartedAt         *time.Time               `json:"started_at,omitempty"`
+	CompletedAt       *time.Time               `json:"completed_at,omitempty"`
 }
 
 type experimentRunResponse struct {
@@ -324,17 +337,61 @@ func (e *Experiment) UnmarshalJSON(data []byte) error {
 }
 
 type ExperimentReportSummary struct {
-	TestCaseCount  int                `json:"test_case_count"`
-	TrialCount     int                `json:"trial_count"`
-	CompletedCount int                `json:"completed_count"`
-	FailedCount    int                `json:"failed_count"`
-	CanceledCount  int                `json:"canceled_count"`
-	PassRate       float64            `json:"pass_rate"`
-	PassAtK        map[string]float64 `json:"pass_at_k,omitempty"`
-	PassPowerK     map[string]float64 `json:"pass_power_k,omitempty"`
-	FinalScoreAvg  float64            `json:"final_score_avg"`
-	TotalCost      float64            `json:"total_cost"`
-	TotalTokens    int                `json:"total_tokens"`
+	TestCaseCount   int                `json:"test_case_count"`
+	TrialCount      int                `json:"trial_count"`
+	CompletedCount  int                `json:"completed_count"`
+	FailedCount     int                `json:"failed_count"`
+	CanceledCount   int                `json:"canceled_count"`
+	PassRate        float64            `json:"pass_rate"`
+	PassAtK         map[string]float64 `json:"pass_at_k,omitempty"`
+	PassPowerK      map[string]float64 `json:"pass_power_k,omitempty"`
+	FinalScoreAvg   float64            `json:"final_score_avg"`
+	TotalCost       float64            `json:"total_cost"`
+	TotalTokens     int                `json:"total_tokens"`
+	PassCount       int                `json:"pass_count"`
+	PassDenominator int                `json:"pass_denominator"`
+	FinalScoreSum   float64            `json:"final_score_sum"`
+	FinalScoreCount int                `json:"final_score_count"`
+	TokenCoverage   string             `json:"token_coverage,omitempty"`
+	CostCoverage    string             `json:"cost_coverage,omitempty"`
+	// Nullable projections preserve whether the backend omitted an aggregate
+	// without changing the legacy numeric fields above.
+	PassRateValue      *float64 `json:"-"`
+	FinalScoreAvgValue *float64 `json:"-"`
+	TotalCostValue     *float64 `json:"-"`
+	TotalTokensValue   *int     `json:"-"`
+}
+
+func (s *ExperimentReportSummary) UnmarshalJSON(data []byte) error {
+	type alias ExperimentReportSummary
+	var raw struct {
+		*alias
+		PassRate      *float64 `json:"pass_rate"`
+		FinalScoreAvg *float64 `json:"final_score_avg"`
+		TotalCost     *float64 `json:"total_cost"`
+		TotalTokens   *int     `json:"total_tokens"`
+	}
+	raw.alias = (*alias)(s)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	s.PassRateValue = raw.PassRate
+	s.FinalScoreAvgValue = raw.FinalScoreAvg
+	s.TotalCostValue = raw.TotalCost
+	s.TotalTokensValue = raw.TotalTokens
+	if raw.PassRate != nil {
+		s.PassRate = *raw.PassRate
+	}
+	if raw.FinalScoreAvg != nil {
+		s.FinalScoreAvg = *raw.FinalScoreAvg
+	}
+	if raw.TotalCost != nil {
+		s.TotalCost = *raw.TotalCost
+	}
+	if raw.TotalTokens != nil {
+		s.TotalTokens = *raw.TotalTokens
+	}
+	return nil
 }
 
 type TestCaseResultRowSummary struct {

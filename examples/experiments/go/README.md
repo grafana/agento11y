@@ -1,35 +1,37 @@
-# Go Experiment Example
+# Go experiments example
 
-Runs a tiny framework-free Go agent over a test suite as an Agent Observability experiment.
+This is an o11y-bench-shaped streaming runner built on
+`github.com/grafana/agento11y/go/agento11y/experiments`. It publishes each
+scored attempt immediately, including candidate I/O, multiple verifier scores,
+token usage, cost, and a file artifact.
 
-The shape mirrors the Python v1 experiment examples:
-
-1. Build an agento11y client.
-2. Define a `TestSuite` with `TestCase` entries.
-3. Open an `ExperimentRun`, run one `WithTrial` callback per test case, record scores, finalize the run, and print a link.
-
-Go does not have a LangGraph adapter in this repo. Existing Go agents should keep their normal `client.StartGeneration(ctx, ...)` instrumentation.
-
-This example uses the production-style shape you would use for LLMSpec or A2A:
-
-1. The experiment harness owns the run, typed trials, and scores.
-2. The target sends only the `runID` across a simulated service boundary.
-3. The receiving service restores it with `agento11y.WithExperimentRunID(ctx, runID)`.
-4. Existing `client.StartGeneration(ctx, ...)` instrumentation automatically tags generations with `experiment.run_id` and `experiment_run_id`.
-5. The service returns the generated `generationID` so scores can attach to the right generation.
-
-When the runner and agent are in the same process, use the context passed to `WithTrial` or `run.Context(ctx)`; both tag existing generation instrumentation automatically. When the agent is behind HTTP, A2A, or a task queue, propagate the run ID explicitly and restore it with `WithExperimentRunID`.
-
-This example is designed for Grafana Cloud Agent Observability.
-
-## Run
+`RUN_ID`, test-case ID, and the explicit attempt number produce stable run,
+trial, generation, conversation, and occurrence-aware score identities.
+Re-running a resumed job with the same identities is idempotent; increment the
+attempt only for a genuinely new attempt.
 
 ```bash
 cd examples/experiments/go
 cp .env.example .env
-# Fill in the Grafana Cloud Agent Observability values in .env.
 set -a && source .env && set +a
 GOWORK=off go run .
 ```
 
-The canned sample does not call an LLM. Provider keys in `.env.example` are included because real experiment jobs often use them for the agent or grader. The required values for this sample are the Grafana Cloud ingest settings (`AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_MODE`, `AGENTO11Y_AUTH_TENANT_ID`, `AGENTO11Y_AUTH_TOKEN`).
+The canned agent makes no provider call. It needs only `AGENTO11Y_ENDPOINT`,
+`AGENTO11Y_AUTH_TOKEN`, and optional `AGENTO11Y_AUTH_TENANT_ID`.
+
+To synchronize the local suite before a run:
+
+```go
+suites, _ := experiments.NewTestSuitesClient(experiments.TestSuitesClientOptions{})
+pushed, err := suites.PushSuite(ctx, suite, experiments.PushSuiteOptions{
+	Prune: true, Publish: true, Changelog: "nightly dataset sync",
+})
+```
+
+Stored suite access additionally needs `AGENTO11Y_CONTROL_ENDPOINT` (or
+`AGENTO11Y_GRAFANA_URL`) and `AGENTO11Y_SERVICE_ACCOUNT_TOKEN`. Use
+`NewExperimentFromSuite`/`WithExperimentFromSuite` to resolve
+`latest_published`, `latest`, `draft`, or an exact version and stamp that exact
+suite identity onto the run and trials. A stored suite is optional: the example
+publishes the in-memory suite directly.
