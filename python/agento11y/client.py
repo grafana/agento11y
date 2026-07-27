@@ -757,7 +757,7 @@ class Client:
         headers = dict(self._config.generation_export.headers)
         actor = (self._config.ingest_actor or "").strip()
         if actor:
-            headers["X-Sigil-Ingest-Actor"] = actor
+            headers[_experiments_transport.INGEST_ACTOR_HEADER] = actor
         args: dict[str, Any] = {
             "api_endpoint": self._config.api.endpoint,
             "insecure": bool(self._config.generation_export.insecure),

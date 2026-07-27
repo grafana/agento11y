@@ -91,8 +91,11 @@ func TestEvaluateHookSendsRequestAndParsesAllow(t *testing.T) {
 	if capturedHeaders.Get("Content-Type") != "application/json" {
 		t.Fatalf("missing content-type header")
 	}
-	if capturedHeaders.Get("X-Sigil-Hook-Timeout-Ms") == "" {
-		t.Fatalf("missing timeout header")
+	if got := capturedHeaders.Get("X-Agento11y-Hook-Timeout-Ms"); got != "15000" {
+		t.Fatalf("unexpected timeout header: %q", got)
+	}
+	if got := capturedHeaders.Get("X-Sigil-Hook-Timeout-Ms"); got != "" {
+		t.Fatalf("legacy timeout header should not be sent, got %q", got)
 	}
 	if capturedBody.Phase != HookPhasePreflight {
 		t.Fatalf("unexpected phase: %q", capturedBody.Phase)
@@ -109,6 +112,30 @@ func TestEvaluateHookSendsRequestAndParsesAllow(t *testing.T) {
 	}
 	if len(resp.Evaluations) != 1 || resp.Evaluations[0].RuleID != "pii" {
 		t.Fatalf("unexpected evaluations: %#v", resp.Evaluations)
+	}
+}
+
+func TestEvaluateHookCallerHeaderOverridesTimeoutHeader(t *testing.T) {
+	var capturedHeaders http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		capturedHeaders = req.Header.Clone()
+		_, _ = w.Write([]byte(`{"action":"allow","evaluations":[]}`))
+	}))
+	defer server.Close()
+
+	client := newHookTestClient(t, hookTestClientOptions{
+		apiEndpoint:  server.URL,
+		hooksEnabled: true,
+		headers:      map[string]string{hookTimeoutHeader: "500"},
+	})
+	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+	if _, err := client.EvaluateHook(context.Background(), HookEvaluateRequest{Phase: HookPhasePreflight}); err != nil {
+		t.Fatalf("evaluate hook: %v", err)
+	}
+
+	if got := capturedHeaders.Get("X-Agento11y-Hook-Timeout-Ms"); got != "500" {
+		t.Fatalf("caller header should win, got %q", got)
 	}
 }
 
@@ -382,6 +409,7 @@ type hookTestClientOptions struct {
 	hooksEnabled bool
 	phases       []HookPhase
 	failOpen     *bool
+	headers      map[string]string
 }
 
 func newHookTestClient(t *testing.T, options hookTestClientOptions) *Client {
@@ -399,6 +427,7 @@ func newHookTestClient(t *testing.T, options hookTestClientOptions) *Client {
 			InitialBackoff:  time.Millisecond,
 			MaxBackoff:      time.Millisecond,
 			PayloadMaxBytes: 1 << 20,
+			Headers:         options.headers,
 		},
 		API: APIConfig{Endpoint: options.apiEndpoint},
 		Hooks: HooksConfig{

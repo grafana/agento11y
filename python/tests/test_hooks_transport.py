@@ -164,7 +164,8 @@ def test_evaluate_hook_posts_to_hooks_evaluate() -> None:
         assert captured["path"] == "/api/v1/hooks:evaluate"
         headers = captured["headers"]
         assert isinstance(headers, dict)
-        assert headers.get("x-sigil-hook-timeout-ms") == "15000"
+        assert headers.get("x-agento11y-hook-timeout-ms") == "15000"
+        assert "x-sigil-hook-timeout-ms" not in headers
         assert headers.get("x-scope-orgid") == "tenant-a"
         assert headers.get("content-type") == "application/json"
         payload = captured["payload"]

@@ -82,7 +82,8 @@ test('evaluateHook posts JSON to /api/v1/hooks:evaluate and parses allow respons
 
     assert.equal(receivedPath, '/api/v1/hooks:evaluate');
     assert.equal(receivedHeaders['content-type'], 'application/json');
-    assert.equal(receivedHeaders['x-sigil-hook-timeout-ms'], '15000');
+    assert.equal(receivedHeaders['x-agento11y-hook-timeout-ms'], '15000');
+    assert.equal(receivedHeaders['x-sigil-hook-timeout-ms'], undefined);
     assert.deepEqual(receivedBody, {
       phase: 'preflight',
       context: {

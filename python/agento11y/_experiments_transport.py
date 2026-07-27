@@ -64,6 +64,7 @@ _DEFAULT_TIMEOUT = 30.0
 _MAX_RESPONSE_BYTES = 8 << 20
 _EXPERIMENT_RUN_SOURCE = {"kind": "sdk", "id": "python"}
 DEFAULT_INGEST_ACTOR = "ingest:sdk/python"
+INGEST_ACTOR_HEADER = "X-Agento11y-Ingest-Actor"
 
 
 @dataclass(slots=True)

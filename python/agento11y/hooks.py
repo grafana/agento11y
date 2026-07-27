@@ -19,7 +19,7 @@ from .errors import HookDeniedError, HookTransportError
 from .models import Message, MessageRole, Part, PartKind, ToolDefinition
 
 HOOKS_EVALUATE_PATH = "/api/v1/hooks:evaluate"
-HOOK_TIMEOUT_HEADER = "X-Sigil-Hook-Timeout-Ms"
+HOOK_TIMEOUT_HEADER = "X-Agento11y-Hook-Timeout-Ms"
 DEFAULT_HOOK_TIMEOUT = 15.0
 _MAX_HOOK_RESPONSE_BYTES = 4 << 20
 

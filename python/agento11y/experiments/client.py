@@ -27,7 +27,7 @@ from ..redaction import redact_secret_text, redact_secret_value
 from .types import _first_nonblank
 
 TENANT_HEADER = "X-Scope-OrgID"
-INGEST_ACTOR_HEADER = "X-Sigil-Ingest-Actor"
+INGEST_ACTOR_HEADER = _transport.INGEST_ACTOR_HEADER
 
 
 class Client:
