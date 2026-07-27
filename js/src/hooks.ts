@@ -15,7 +15,7 @@ import type {
 import { asError } from './utils.js';
 
 const hooksEvaluatePath = '/api/v1/hooks:evaluate';
-const hookTimeoutHeader = 'X-Sigil-Hook-Timeout-Ms';
+const hookTimeoutHeader = 'X-Agento11y-Hook-Timeout-Ms';
 
 /**
  * Thrown by framework adapters when hook evaluation returns `action: 'deny'`.

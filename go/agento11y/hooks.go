@@ -35,7 +35,7 @@ const (
 
 const (
 	hooksEvaluatePath      = "/api/v1/hooks:evaluate"
-	hookTimeoutHeader      = "X-Sigil-Hook-Timeout-Ms"
+	hookTimeoutHeader      = "X-Agento11y-Hook-Timeout-Ms"
 	defaultHookTimeout     = 15 * time.Second
 	maxHookEvaluateRespLen = 4 << 20
 )
@@ -48,10 +48,10 @@ type HooksConfig struct {
 	// Phases the SDK is allowed to evaluate. Defaults to {HookPhasePreflight}.
 	// Requests whose phase isn't listed short-circuit to allow.
 	Phases []HookPhase
-	// Timeout is the per-request HTTP timeout. Defaults to 15s, capped by the
-	// server at 120s. The value is also propagated via the
-	// X-Sigil-Hook-Timeout-Ms header so the server can scope its evaluator
-	// budget accordingly.
+	// Timeout is the per-request HTTP timeout, also sent as
+	// X-Agento11y-Hook-Timeout-Ms so the server can scope its evaluator budget.
+	// Defaults to 15s. The server honours 1..119999 ms and falls back to its own
+	// budget for anything else.
 	Timeout time.Duration
 	// FailOpen returns HookActionAllow on transport / decode failures when
 	// non-nil and *FailOpen == true. Set to a pointer to false to surface
