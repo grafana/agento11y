@@ -45,7 +45,7 @@ The extension reads the same `~/.config/agento11y/config.env` file whether you s
 
 ## 2. Credentials
 
-When `agento11y pi` or `agento11y login` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
+When `agento11y pi` or `agento11y login` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-agento11y-app`. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -144,7 +144,7 @@ Limits:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL (find it at `/plugins/grafana-sigil-app`) |
+| `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL (find it at `/plugins/grafana-agento11y-app`) |
 | `AGENTO11Y_AUTH_TENANT_ID` | — | Grafana Cloud instance ID. Combined with `AGENTO11Y_AUTH_TOKEN` becomes Basic auth for Agent Observability and OTLP. |
 | `AGENTO11Y_AUTH_TOKEN` | — | Cloud access policy token (`glc_…`). |
 | `AGENTO11Y_AGENT_NAME` | `pi` | Agent name reported to Agent Observability. |

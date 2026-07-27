@@ -125,7 +125,7 @@ Stored suites use a Grafana service-account token in addition to the ingestion
 credential:
 
 ```bash
-export AGENTO11Y_CONTROL_ENDPOINT=https://<stack>.grafana.net/a/grafana-sigil-app
+export AGENTO11Y_CONTROL_ENDPOINT=https://<stack>.grafana.net/a/grafana-agento11y-app
 export AGENTO11Y_SERVICE_ACCOUNT_TOKEN=<grafana-service-account-token>
 ```
 
@@ -216,6 +216,6 @@ For all v1 environment and worker-lifecycle changes, see the
   instrumented; use `record_io(...)` when the experiment harness is the only
   instrumentation around the agent call.
 - The Grafana UI route is
-  `/a/grafana-sigil-app/experiments/runs/{experiment_id}`.
+  `/a/grafana-agento11y-app/experiments/runs/{experiment_id}`.
 - Catch evaluator failures outside each `with exp.trial(...)` block when one
   malformed judge response should fail only that trial and the run should continue.

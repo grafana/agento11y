@@ -40,7 +40,7 @@ curlie POST http://<proxy-host>:4000/chat/completions \
 
 ## Verify in Agent Observability
 
-Open `https://<your-stack>.grafana.net/a/grafana-sigil-app/conversations`. Generations appear with:
+Open `https://<your-stack>.grafana.net/a/grafana-agento11y-app/conversations`. Generations appear with:
 
 - `agent_name`: `litellm-proxy-integration-test`
 - `agento11y.framework.name`: `litellm`
