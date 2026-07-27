@@ -9,3 +9,6 @@ model_list:
 
 litellm_settings:
   callbacks: agento11y_callback.agento11y_handler
+  # Swap in this callback instead to name callers that send no agent identity
+  # after their virtual key rather than after the proxy:
+  # callbacks: agento11y_callback_agent_from_key_alias.agento11y_handler

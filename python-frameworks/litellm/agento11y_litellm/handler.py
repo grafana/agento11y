@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -39,6 +40,14 @@ _CHAT_CALL_TYPES = frozenset(
 )
 
 _EMBEDDING_CALL_TYPES = frozenset({"embedding", "aembedding"})
+
+# Metadata keys consulted, in order, to name the agent behind a request.
+# ``agent_id`` is LiteLLM's own identity field, filled in by the proxy from the
+# ``x-litellm-agent-id`` header or from an ``agent_id`` on the calling virtual
+# key, so callers that know nothing about agento11y are still attributed to
+# themselves rather than to the proxy. Override via ``agent_name_metadata_keys``
+# to consult different keys, or pass ``("agent_name",)`` to opt out.
+DEFAULT_AGENT_NAME_METADATA_KEYS = ("agent_name", "agent_id")
 
 
 def _make_tool_call_part(*, call_id: str, name: str, arguments: str) -> Part:
@@ -362,6 +371,40 @@ def _response_model(response_obj: Any) -> str:
     return getattr(response_obj, "model", "") or ""
 
 
+def _metadata_sources(kwargs: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect the metadata dicts LiteLLM may attach to a request.
+
+    Chat completions carry client metadata in ``metadata``; assistant and thread
+    routes use ``litellm_metadata``; metadata passed through the Router lands one
+    level deeper, under ``metadata.metadata``.
+    """
+    litellm_params = kwargs.get("litellm_params") or {}
+    sources: list[dict[str, Any]] = []
+    for key in ("metadata", "litellm_metadata"):
+        candidate = litellm_params.get(key)
+        if not isinstance(candidate, dict):
+            continue
+        sources.append(candidate)
+        nested = candidate.get("metadata")
+        if isinstance(nested, dict):
+            sources.append(nested)
+    return sources
+
+
+def _first_metadata_value(sources: list[dict[str, Any]], keys: tuple[str, ...]) -> str:
+    """Return the first non-empty value for ``keys``, in key priority order.
+
+    Keys are the outer loop so that a lower-priority key in the first source
+    never beats a higher-priority key in a later one.
+    """
+    for key in keys:
+        for source in sources:
+            value = source.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
 def _extract_detailed_usage(response_obj: Any, slo: dict[str, Any]) -> TokenUsage:
     """Build TokenUsage with detailed breakdowns from response_obj, basic counts from SLO."""
     usage = TokenUsage(
@@ -399,6 +442,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
         capture_inputs: bool = True,
         capture_outputs: bool = True,
         agent_name: str = "",
+        agent_name_metadata_keys: Sequence[str] = DEFAULT_AGENT_NAME_METADATA_KEYS,
         agent_version: str = "",
         conversation_id: str = "",
         extra_tags: dict[str, str] | None = None,
@@ -410,6 +454,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
         self._capture_inputs = capture_inputs
         self._capture_outputs = capture_outputs
         self._agent_name = agent_name
+        self._agent_name_metadata_keys = tuple(agent_name_metadata_keys)
         self._agent_version = agent_version
         self._conversation_id = conversation_id
         self._extra_tags = dict(extra_tags) if extra_tags else {}
@@ -455,21 +500,12 @@ class Agento11yLiteLLMLogger(CustomLogger):
 
     def _resolve_agent_name(self, kwargs: dict[str, Any]) -> str:
         """Resolve agent_name from per-request metadata, falling back to static."""
-        litellm_params = kwargs.get("litellm_params") or {}
-        metadata = litellm_params.get("metadata") or {}
-        value = metadata.get("agent_name")
-        if value:
-            return str(value)
-        return self._agent_name
+        keys = self._agent_name_metadata_keys
+        return _first_metadata_value(_metadata_sources(kwargs), keys) or self._agent_name
 
     def _resolve_agent_version(self, kwargs: dict[str, Any]) -> str:
         """Resolve agent_version from per-request metadata, falling back to static."""
-        litellm_params = kwargs.get("litellm_params") or {}
-        metadata = litellm_params.get("metadata") or {}
-        value = metadata.get("agent_version")
-        if value:
-            return str(value)
-        return self._agent_version
+        return _first_metadata_value(_metadata_sources(kwargs), ("agent_version",)) or self._agent_version
 
     def _resolve_conversation_id(self, kwargs: dict[str, Any]) -> str:
         """Resolve conversation_id from per-request metadata, falling back to static.
@@ -478,14 +514,14 @@ class Agento11yLiteLLMLogger(CustomLogger):
         then LiteLLM's built-in session tracking fields (litellm_session_id,
         litellm_trace_id) in both metadata and litellm_params.
         """
+        sources = _metadata_sources(kwargs)
+        value = _first_metadata_value(sources, ("conversation_id", "session_id", "thread_id"))
+        if value:
+            return value
+
         litellm_params = kwargs.get("litellm_params") or {}
-        metadata = litellm_params.get("metadata") or {}
-        for key in ("conversation_id", "session_id", "thread_id"):
-            value = metadata.get(key)
-            if value:
-                return str(value)
         for key in ("litellm_session_id", "litellm_trace_id"):
-            value = metadata.get(key) or litellm_params.get(key)
+            value = _first_metadata_value(sources, (key,)) or litellm_params.get(key)
             if value:
                 return str(value)
         return self._conversation_id
