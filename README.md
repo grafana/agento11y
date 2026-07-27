@@ -160,6 +160,7 @@ The reference app is a fuller FastAPI service with framework callbacks and manua
 | Stack | Example |
 |-------|---------|
 | Python + LangChain (FastAPI) | [`examples/python-langchain/`](examples/python-langchain/) |
+| Python + LangChain (Amazon Bedrock AgentCore) | [`examples/bedrock-agentcore/`](examples/bedrock-agentcore/) |
 
 ## Hooks and guards
 
