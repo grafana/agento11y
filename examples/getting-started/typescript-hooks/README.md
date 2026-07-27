@@ -31,4 +31,4 @@ npx tsx main.ts
 
 If the guard allows the request, the example applies any `transformedInput` returned by Agent Observability, calls OpenAI, records the generation, and prints `Done`.
 
-If the guard denies the request, the example reads `action: "deny"` from the hook response, prints the rule and reason, and does not call OpenAI.
+If the guard denies the request, the example reads `action: "deny"` from the hook response, prints the rule and reason, and does not call OpenAI. It uses the same conversation ID for the hook and generation, so Agent Observability can retain the denied attempt as a conversation event even when OpenAI is never called.

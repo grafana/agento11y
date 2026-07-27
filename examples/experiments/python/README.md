@@ -69,7 +69,7 @@ export AGENTO11Y_GRAFANA_URL=https://<your-stack>.grafana.net
 
 # Required only for stored-suite push/pull through the Grafana plugin proxy.
 # AGENTO11Y_CONTROL_ENDPOINT accepts the stack URL or app URL.
-export AGENTO11Y_CONTROL_ENDPOINT=https://<your-stack>.grafana.net/a/grafana-sigil-app
+export AGENTO11Y_CONTROL_ENDPOINT=https://<your-stack>.grafana.net/a/grafana-agento11y-app
 export AGENTO11Y_SERVICE_ACCOUNT_TOKEN=<your-grafana-service-account-token>
 
 # Optional: stable experiment id for CI retries / a real model.
@@ -126,7 +126,7 @@ You should see output like:
 ```
 Experiment 'experiment-example-manual' finished: 3 score(s) accepted.
 pass_rate=1.00 mean_score=1.00
-View in Agent Observability: https://<your-stack>.grafana.net/a/grafana-sigil-app/experiments/runs/experiment-example-manual
+View in Agent Observability: https://<your-stack>.grafana.net/a/grafana-agento11y-app/experiments/runs/experiment-example-manual
 ```
 
 > The deep link uses `AGENTO11Y_GRAFANA_URL`; keep it pointed at your Grafana stack

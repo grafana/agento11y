@@ -45,7 +45,7 @@ The plugin reads `~/.config/agento11y/config.env` on every session start, whethe
 
 ## 2. Credentials
 
-When `agento11y opencode` or `agento11y login` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
+When `agento11y opencode` or `agento11y login` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-agento11y-app`. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -117,7 +117,7 @@ Built-in tags win collisions with user tags, matching the claude-code and cursor
 
 | Variable | Default | Description |
 |---|---|---|
-| `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL. Find it at `/plugins/grafana-sigil-app`. Empty value disables the plugin. |
+| `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL. Find it at `/plugins/grafana-agento11y-app`. Empty value disables the plugin. |
 | `AGENTO11Y_AUTH_TENANT_ID` | — | Grafana Cloud instance ID. |
 | `AGENTO11Y_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
 | `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the Agent Observability latency and tool-call panels stay empty. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. |

@@ -53,7 +53,7 @@ Do not use both. `/add-plugin` and `agento11y cursor install` write to the same 
 
 ## 3. Add your credentials
 
-`agento11y cursor install` already prompts for these on first run; run `agento11y login` from a terminal to enter or change them later. The prompt asks for values from `https://<your-grafana>.grafana.net/plugins/grafana-sigil-app`. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
+`agento11y cursor install` already prompts for these on first run; run `agento11y login` from a terminal to enter or change them later. The prompt asks for values from `https://<your-grafana>.grafana.net/plugins/grafana-agento11y-app`. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 You need values from three Grafana Cloud pages:
 
@@ -104,7 +104,7 @@ tail -f ~/.local/state/agento11y/logs/agento11y.log
 
 | Variable | Default | Description |
 |---|---|---|
-| `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL. Find it at `/plugins/grafana-sigil-app`. |
+| `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL. Find it at `/plugins/grafana-agento11y-app`. |
 | `AGENTO11Y_AUTH_TENANT_ID` | — | Grafana Cloud instance ID. |
 | `AGENTO11Y_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
 | `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the Agent Observability latency and tool-call panels stay empty. |

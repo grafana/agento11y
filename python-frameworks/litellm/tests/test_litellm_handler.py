@@ -613,6 +613,181 @@ def test_per_request_agent_name_falls_back_to_static() -> None:
         client.shutdown()
 
 
+def test_agent_name_from_litellm_agent_id() -> None:
+    """LiteLLM's own agent_id names the agent when agent_name is absent."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client, agent_name="litellm-proxy")
+        handler.log_success_event(
+            kwargs=_make_kwargs(_base_slo(), agent_id="billing-agent"),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.agent_name == "billing-agent"
+    finally:
+        client.shutdown()
+
+
+def test_agent_name_takes_precedence_over_agent_id() -> None:
+    """Explicit agent_name wins over LiteLLM's agent_id."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        handler.log_success_event(
+            kwargs=_make_kwargs(_base_slo(), agent_name="search-agent", agent_id="key-agent-id"),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.agent_name == "search-agent"
+    finally:
+        client.shutdown()
+
+
+def test_identity_resolved_from_litellm_metadata() -> None:
+    """Assistant/thread routes carry metadata under litellm_metadata."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client, agent_name="litellm-proxy")
+        kwargs: dict[str, Any] = {
+            "standard_logging_object": _base_slo(),
+            "litellm_params": {
+                "litellm_metadata": {
+                    "agent_name": "assistant-agent",
+                    "agent_version": "v7",
+                    "conversation_id": "conv-thread-1",
+                },
+            },
+        }
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.agent_name == "assistant-agent"
+        assert gen.agent_version == "v7"
+        assert gen.conversation_id == "conv-thread-1"
+    finally:
+        client.shutdown()
+
+
+def test_identity_resolved_from_nested_router_metadata() -> None:
+    """Router-supplied metadata nested under metadata.metadata is read too."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client, agent_name="litellm-proxy")
+        kwargs: dict[str, Any] = {
+            "standard_logging_object": _base_slo(),
+            "litellm_params": {
+                "metadata": {
+                    "agent_id": "key-agent-id",
+                    "metadata": {"agent_name": "search-agent"},
+                },
+            },
+        }
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.agent_name == "search-agent"
+    finally:
+        client.shutdown()
+
+
+def test_key_alias_is_not_used_as_agent_name_by_default() -> None:
+    """A virtual key alias names a credential, not an agent, so it is ignored."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client, agent_name="litellm-proxy")
+        handler.log_success_event(
+            kwargs=_make_kwargs(_base_slo(), user_api_key_alias="team-key"),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.agent_name == "litellm-proxy"
+    finally:
+        client.shutdown()
+
+
+def test_custom_agent_name_metadata_keys() -> None:
+    """agent_name_metadata_keys opts extra keys in, keeping the configured order."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(
+            client=client,
+            agent_name="litellm-proxy",
+            agent_name_metadata_keys=("agent_name", "agent_id", "user_api_key_alias"),
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(_base_slo(), user_api_key_alias="team-key"),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(_base_slo(), agent_id="billing-agent", user_api_key_alias="team-key"),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        generations = [gen for request in exporter.requests for gen in request.generations]
+        assert [gen.agent_name for gen in generations] == ["team-key", "billing-agent"]
+    finally:
+        client.shutdown()
+
+
+def test_agent_name_metadata_keys_can_opt_out_of_agent_id() -> None:
+    """Passing only agent_name pins generations to the static proxy-wide name."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(
+            client=client,
+            agent_name="litellm-proxy",
+            agent_name_metadata_keys=("agent_name",),
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(_base_slo(), agent_id="key-agent-id"),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.agent_name == "litellm-proxy"
+    finally:
+        client.shutdown()
+
+
 def test_create_agento11y_litellm_logger_factory() -> None:
     """Factory function creates a properly configured logger."""
     exporter = _CapturingExporter()

@@ -291,6 +291,7 @@ response = client.evaluate_hook(
             agent_name="support-agent",
             agent_version="1.0.0",
             model=HookModel(provider="openai", name="gpt-5"),
+            conversation_id="support-case-42",
         ),
         input=HookInput(
             messages=messages,
@@ -309,6 +310,8 @@ if response.transformed_input is not None:
 ```
 
 `HooksConfig` defaults to `phases=["preflight"]`, `timeout_seconds=15.0`, and `fail_open=True`. With fail-open enabled, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `fail_open=False` for strict paths that should fail closed.
+
+Set `HookContext.conversation_id` to the same ID used by `start_generation(...)`. The SDK also reads `with_conversation_id(...)` and the active OpenTelemetry span when explicit correlation fields are omitted. This lets Agent Observability retain denied preflight attempts even though no LLM generation is created.
 
 If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `start_generation(...)`. For a runnable example, see `../examples/getting-started/python-hooks/`.
 

@@ -639,6 +639,9 @@ export interface HookContext {
   agentVersion?: string;
   model: HookModel;
   tags?: Record<string, string>;
+  conversationId?: string;
+  traceId?: string;
+  spanId?: string;
 }
 
 /**

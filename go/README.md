@@ -228,6 +228,7 @@ response, err := client.EvaluateHook(ctx, agento11y.HookEvaluateRequest{
 		AgentName:    "support-agent",
 		AgentVersion: "1.0.0",
 		Model:        &agento11y.HookModel{Provider: "openai", Name: "gpt-5"},
+		ConversationID: "support-case-42",
 	},
 	Input: agento11y.HookInput{
 		Messages:            messages,
@@ -247,6 +248,8 @@ if response.TransformedInput != nil && len(response.TransformedInput.Messages) >
 ```
 
 `HooksConfig` defaults to `Phases: []HookPhase{HookPhasePreflight}`, `Timeout: 15s`, and fail-open behavior. With fail-open enabled, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `FailOpen` to `agento11y.BoolPtr(false)` for strict paths that should fail closed.
+
+Set `HookContext.ConversationID` to the same ID used by `StartGeneration(...)`. The SDK also reads `WithConversationID(...)` and the active OpenTelemetry span when explicit correlation fields are omitted. This lets Agent Observability retain denied preflight attempts even though no LLM generation is created.
 
 If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `StartGeneration(...)`. For a runnable example, see [`../examples/getting-started/go-hooks/`](../examples/getting-started/go-hooks/).
 

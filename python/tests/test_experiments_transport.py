@@ -494,7 +494,8 @@ def test_experiment_client_uploads_trial_artifact_to_ingest_route() -> None:
         )
         assert request["path"] == expected_path
         assert request["headers"]["authorization"] == _basic("tenant-a", "ingest-token-a")
-        assert request["headers"]["x-sigil-ingest-actor"] == "ingest:sdk/python"
+        assert request["headers"]["x-agento11y-ingest-actor"] == "ingest:sdk/python"
+        assert "x-sigil-ingest-actor" not in request["headers"]
         assert request["raw_payload"] == b'{"ok":true}'
         assert record["artifact_id"] == "art-1"
     finally:
@@ -506,7 +507,8 @@ def test_experiment_client_uses_one_default_actor_for_all_lifecycle_requests() -
     client = ExperimentClient("http://example.test", ingest_token="token")
 
     assert client.actor == "ingest:sdk/python"
-    assert client._headers()["X-Sigil-Ingest-Actor"] == "ingest:sdk/python"  # noqa: SLF001
+    assert client._headers()["X-Agento11y-Ingest-Actor"] == "ingest:sdk/python"  # noqa: SLF001
+    assert "X-Sigil-Ingest-Actor" not in client._headers()  # noqa: SLF001
 
 
 def test_experiment_client_preserves_explicit_actor() -> None:

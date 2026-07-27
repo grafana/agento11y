@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // HookPhase enumerates evaluation phases.
@@ -33,7 +35,7 @@ const (
 
 const (
 	hooksEvaluatePath      = "/api/v1/hooks:evaluate"
-	hookTimeoutHeader      = "X-Sigil-Hook-Timeout-Ms"
+	hookTimeoutHeader      = "X-Agento11y-Hook-Timeout-Ms"
 	defaultHookTimeout     = 15 * time.Second
 	maxHookEvaluateRespLen = 4 << 20
 )
@@ -46,10 +48,10 @@ type HooksConfig struct {
 	// Phases the SDK is allowed to evaluate. Defaults to {HookPhasePreflight}.
 	// Requests whose phase isn't listed short-circuit to allow.
 	Phases []HookPhase
-	// Timeout is the per-request HTTP timeout. Defaults to 15s, capped by the
-	// server at 120s. The value is also propagated via the
-	// X-Sigil-Hook-Timeout-Ms header so the server can scope its evaluator
-	// budget accordingly.
+	// Timeout is the per-request HTTP timeout, also sent as
+	// X-Agento11y-Hook-Timeout-Ms so the server can scope its evaluator budget.
+	// Defaults to 15s. The server honours 1..119999 ms and falls back to its own
+	// budget for anything else.
 	Timeout time.Duration
 	// FailOpen returns HookActionAllow on transport / decode failures when
 	// non-nil and *FailOpen == true. Set to a pointer to false to surface
@@ -111,10 +113,13 @@ type HookModel struct {
 
 // HookContext is metadata used to match hook rules against this evaluation.
 type HookContext struct {
-	AgentName    string            `json:"agent_name,omitempty"`
-	AgentVersion string            `json:"agent_version,omitempty"`
-	Model        *HookModel        `json:"model,omitempty"`
-	Tags         map[string]string `json:"tags,omitempty"`
+	AgentName      string            `json:"agent_name,omitempty"`
+	AgentVersion   string            `json:"agent_version,omitempty"`
+	Model          *HookModel        `json:"model,omitempty"`
+	Tags           map[string]string `json:"tags,omitempty"`
+	ConversationID string            `json:"conversation_id,omitempty"`
+	TraceID        string            `json:"trace_id,omitempty"`
+	SpanID         string            `json:"span_id,omitempty"`
 }
 
 // HookInput carries the evaluable payload (request for preflight,
@@ -185,6 +190,7 @@ func (c *Client) EvaluateHook(ctx context.Context, req HookEvaluateRequest) (*Ho
 	if !phaseEnabled(hooksCfg.Phases, req.Phase) {
 		return allowResponse(), nil
 	}
+	enrichHookCorrelation(ctx, &req.Context)
 
 	timeout := hooksCfg.Timeout
 	if timeout <= 0 {
@@ -252,6 +258,27 @@ func (c *Client) EvaluateHook(ctx context.Context, req HookEvaluateRequest) (*Ho
 		out.Action = HookActionAllow
 	}
 	return &out, nil
+}
+
+func enrichHookCorrelation(ctx context.Context, hookCtx *HookContext) {
+	if hookCtx == nil {
+		return
+	}
+	if hookCtx.ConversationID == "" {
+		if conversationID, ok := ConversationIDFromContext(ctx); ok {
+			hookCtx.ConversationID = conversationID
+		}
+	}
+	spanCtx := trace.SpanContextFromContext(ctx)
+	if !spanCtx.IsValid() {
+		return
+	}
+	if hookCtx.TraceID == "" {
+		hookCtx.TraceID = spanCtx.TraceID().String()
+	}
+	if hookCtx.SpanID == "" {
+		hookCtx.SpanID = spanCtx.SpanID().String()
+	}
 }
 
 // HookDeniedFromResponse converts a denied HookEvaluateResponse into a typed

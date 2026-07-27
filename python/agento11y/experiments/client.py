@@ -27,7 +27,7 @@ from ..redaction import redact_secret_text, redact_secret_value
 from .types import _first_nonblank
 
 TENANT_HEADER = "X-Scope-OrgID"
-INGEST_ACTOR_HEADER = "X-Sigil-Ingest-Actor"
+INGEST_ACTOR_HEADER = _transport.INGEST_ACTOR_HEADER
 
 
 class Client:
@@ -428,8 +428,8 @@ class Client:
         quoted = urllib.parse.quote(experiment_id, safe="")
         base = self.grafana_url
         if base:
-            return f"{base}/a/grafana-sigil-app/experiments/runs/{quoted}"
-        return f"{self.endpoint}/a/grafana-sigil-app/experiments/runs/{quoted}"
+            return f"{base}/a/grafana-agento11y-app/experiments/runs/{quoted}"
+        return f"{self.endpoint}/a/grafana-agento11y-app/experiments/runs/{quoted}"
 
     def shutdown(self) -> None:
         """Flushes and closes the underlying client if one was built."""

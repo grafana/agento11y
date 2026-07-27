@@ -101,6 +101,7 @@ const hookRequest: HookEvaluateRequest = {
     agentName: "getting-started-hooks",
     agentVersion: "1.0.0",
     model: { provider: "openai", name: model },
+    conversationId: "getting-started-typescript-hooks",
   },
   input: {
     messages: inputMessages,

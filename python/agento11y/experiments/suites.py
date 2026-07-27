@@ -17,8 +17,8 @@ from ..config import _warn_legacy_env
 from ..errors import ConflictError, ExperimentTransportError, NotFoundError, ValidationError
 from .types import TestCase, TestSuite, _first_nonblank
 
-_DEFAULT_CONTROL_PATH = "/api/plugins/grafana-sigil-app/resources/eval"
-_GRAFANA_APP_PATH = "/a/grafana-sigil-app"
+_DEFAULT_CONTROL_PATH = "/api/plugins/grafana-agento11y-app/resources/eval"
+_GRAFANA_APP_PATH = "/a/grafana-agento11y-app"
 _PORTABILITY_METADATA_KEY = "agento11y.sdk.portability"
 _PORTABILITY_VERSION = 1
 

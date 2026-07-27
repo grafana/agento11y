@@ -160,10 +160,11 @@ The reference app is a fuller FastAPI service with framework callbacks and manua
 | Stack | Example |
 |-------|---------|
 | Python + LangChain (FastAPI) | [`examples/python-langchain/`](examples/python-langchain/) |
+| Python + LangChain (Amazon Bedrock AgentCore) | [`examples/bedrock-agentcore/`](examples/bedrock-agentcore/) |
 
 ## Hooks and guards
 
-Application SDK hooks evaluate Agent Observability guard rules on your request path before a provider call. A guard can allow the request, deny it, or return transformed input such as redacted messages. See the Go, Python, and TypeScript SDK READMEs for manual hook evaluation, and the runnable [`examples/getting-started/go-hooks/`](examples/getting-started/go-hooks/), [`examples/getting-started/python-hooks/`](examples/getting-started/python-hooks/), and [`examples/getting-started/typescript-hooks/`](examples/getting-started/typescript-hooks/) examples for preflight guard setups.
+Application SDK hooks evaluate Agent Observability guard rules on your request path before a provider call. A guard can allow the request, deny it, or return transformed input such as redacted messages. Go, Python, and TypeScript hook requests propagate the active conversation and OpenTelemetry trace correlation so Agent Observability can show a denied preflight attempt in conversation detail even when no generation was created. See the SDK READMEs for manual hook evaluation, and the runnable [`examples/getting-started/go-hooks/`](examples/getting-started/go-hooks/), [`examples/getting-started/python-hooks/`](examples/getting-started/python-hooks/), and [`examples/getting-started/typescript-hooks/`](examples/getting-started/typescript-hooks/) examples for preflight guard setups.
 
 ## Content capture and privacy
 
@@ -176,7 +177,7 @@ To attach custom key/values (team, project, env, request id, end-user id), see [
 All four connection values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the Agent Observability plugin in your stack:
 
 ```
-https://<your-stack>.grafana.net/plugins/grafana-sigil-app
+https://<your-stack>.grafana.net/plugins/grafana-agento11y-app
 ```
 
 Follow *Create a token in Cloud Access Policies* on the Connection page and create one token scoped with `sigil:write`, `metrics:write`, `traces:write`, and `logs:write`. The same token then covers both `AGENTO11Y_AUTH_TOKEN` (Agent Observability ingest) and `OTEL_EXPORTER_OTLP_HEADERS` (OTel traces and metrics).

@@ -1,3 +1,5 @@
+import { isSpanContextValid, context as otelContext, trace } from '@opentelemetry/api';
+import { conversationIdFromContext } from './context.js';
 import type {
   HookEvaluateRequest,
   HookEvaluateResponse,
@@ -13,7 +15,7 @@ import type {
 import { asError } from './utils.js';
 
 const hooksEvaluatePath = '/api/v1/hooks:evaluate';
-const hookTimeoutHeader = 'X-Sigil-Hook-Timeout-Ms';
+const hookTimeoutHeader = 'X-Agento11y-Hook-Timeout-Ms';
 
 /**
  * Thrown by framework adapters when hook evaluation returns `action: 'deny'`.
@@ -174,18 +176,33 @@ function serializeRequest(request: HookEvaluateRequest): Record<string, unknown>
   return body;
 }
 
-function serializeContext(context: HookEvaluateRequest['context']): Record<string, unknown> {
+function serializeContext(hookContext: HookEvaluateRequest['context']): Record<string, unknown> {
   const out: Record<string, unknown> = {
-    model: { provider: context.model.provider, name: context.model.name },
+    model: { provider: hookContext.model.provider, name: hookContext.model.name },
   };
-  if (context.agentName !== undefined && context.agentName.length > 0) {
-    out.agent_name = context.agentName;
+  if (hookContext.agentName !== undefined && hookContext.agentName.length > 0) {
+    out.agent_name = hookContext.agentName;
   }
-  if (context.agentVersion !== undefined && context.agentVersion.length > 0) {
-    out.agent_version = context.agentVersion;
+  if (hookContext.agentVersion !== undefined && hookContext.agentVersion.length > 0) {
+    out.agent_version = hookContext.agentVersion;
   }
-  if (context.tags !== undefined && Object.keys(context.tags).length > 0) {
-    out.tags = { ...context.tags };
+  if (hookContext.tags !== undefined && Object.keys(hookContext.tags).length > 0) {
+    out.tags = { ...hookContext.tags };
+  }
+  const conversationId = hookContext.conversationId ?? conversationIdFromContext();
+  if (conversationId !== undefined && conversationId.length > 0) {
+    out.conversation_id = conversationId;
+  }
+  const activeSpanContext = trace.getSpan(otelContext.active())?.spanContext();
+  const spanContext =
+    activeSpanContext !== undefined && isSpanContextValid(activeSpanContext) ? activeSpanContext : undefined;
+  const traceId = hookContext.traceId ?? spanContext?.traceId;
+  const spanId = hookContext.spanId ?? spanContext?.spanId;
+  if (traceId !== undefined && traceId.length > 0) {
+    out.trace_id = traceId;
+  }
+  if (spanId !== undefined && spanId.length > 0) {
+    out.span_id = spanId;
   }
   return out;
 }

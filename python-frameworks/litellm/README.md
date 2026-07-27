@@ -63,7 +63,8 @@ All options are keyword-only on `Agento11yLiteLLMLogger`:
 | `client` | `agento11y.Client` | required | agento11y SDK client instance |
 | `capture_inputs` | `bool` | `True` | Record input messages |
 | `capture_outputs` | `bool` | `True` | Record output messages |
-| `agent_name` | `str` | `""` | Default agent name (see below for per-request) |
+| `agent_name` | `str` | `""` | Fallback agent name, used when the request carries no agent identity (see below for per-request) |
+| `agent_name_metadata_keys` | `Sequence[str]` | `("agent_name", "agent_id")` | Metadata keys consulted, in order, to name the agent |
 | `agent_version` | `str` | `""` | Default agent version (see below for per-request) |
 | `conversation_id` | `str` | `""` | Default conversation ID (see below for per-request) |
 | `extra_tags` | `dict[str, str]` | `None` | Additional tags merged into every generation |
@@ -88,6 +89,31 @@ response = litellm.completion(
 ```
 
 For `conversation_id`, the handler also checks `session_id` and `thread_id` metadata keys as fallbacks.
+
+When no `agent_name` is set, the handler falls back to LiteLLM's own `agent_id`, which the proxy fills in from the `x-litellm-agent-id` header or from an `agent_id` on the calling virtual key. Callers behind a proxy are then attributed to themselves without having to know about agento11y:
+
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H 'x-litellm-agent-id: search-agent' \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+Metadata is read from `litellm_params["metadata"]`, from `litellm_metadata` (used by assistant and thread routes), and from metadata nested one level deeper under `metadata.metadata` (where the Router puts SDK-supplied metadata). Keys are matched in priority order across all of those, so an `agent_name` in any of them beats an `agent_id` in another.
+
+`agent_name_metadata_keys` controls which keys are consulted. Add your own, or LiteLLM's key alias for deployments where one virtual key means one agent:
+
+```python
+from agento11y_litellm import DEFAULT_AGENT_NAME_METADATA_KEYS, Agento11yLiteLLMLogger
+
+handler = Agento11yLiteLLMLogger(
+    client=client,
+    agent_name_metadata_keys=(*DEFAULT_AGENT_NAME_METADATA_KEYS, "user_api_key_alias"),
+    agent_name="litellm-proxy",
+)
+```
+
+A key alias names a credential rather than an agent, so it is not consulted by default: rotating a key would rename the agent, and a shared key would merge unrelated callers. Conversely, pass `("agent_name",)` to ignore LiteLLM's `agent_id` and keep every generation under the static name.
 
 ## LiteLLM Proxy (Docker)
 
