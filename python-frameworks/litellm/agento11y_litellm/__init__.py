@@ -1,10 +1,11 @@
 """Public exports for agento11y LiteLLM callback handler."""
 
+from collections.abc import Sequence
 from typing import Any
 
 from agento11y import Client
 
-from .handler import Agento11yLiteLLMLogger
+from .handler import DEFAULT_AGENT_NAME_METADATA_KEYS, Agento11yLiteLLMLogger
 
 
 def create_agento11y_litellm_logger(
@@ -13,6 +14,7 @@ def create_agento11y_litellm_logger(
     capture_inputs: bool = True,
     capture_outputs: bool = True,
     agent_name: str = "",
+    agent_name_metadata_keys: Sequence[str] = DEFAULT_AGENT_NAME_METADATA_KEYS,
     agent_version: str = "",
     conversation_id: str = "",
     extra_tags: dict[str, str] | None = None,
@@ -24,6 +26,7 @@ def create_agento11y_litellm_logger(
         capture_inputs=capture_inputs,
         capture_outputs=capture_outputs,
         agent_name=agent_name,
+        agent_name_metadata_keys=agent_name_metadata_keys,
         agent_version=agent_version,
         conversation_id=conversation_id,
         extra_tags=extra_tags,
@@ -32,6 +35,7 @@ def create_agento11y_litellm_logger(
 
 
 __all__ = [
+    "DEFAULT_AGENT_NAME_METADATA_KEYS",
     "Agento11yLiteLLMLogger",
     "create_agento11y_litellm_logger",
 ]
