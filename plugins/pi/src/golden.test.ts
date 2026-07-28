@@ -31,6 +31,15 @@ const GOLDEN_PATH = join(
   "golden",
   "pi-full-turn.golden.json",
 );
+// Host summarization (compaction) exports through a separate, synchronous
+// path, so it gets its own driver and fixture rather than extending the
+// full-turn one.
+const COMPACTION_GOLDEN_PATH = join(
+  __dirname,
+  "testdata",
+  "golden",
+  "pi-compaction.golden.json",
+);
 
 interface CapturedExport {
   path: string;
@@ -293,6 +302,114 @@ describe("pi plugin: real-SDK golden export", () => {
 
     return { exports, turn };
   }
+
+  // piCompactionFixture returns the persisted compaction entry pi writes after
+  // a threshold auto-compaction, including the usage of the summarization call.
+  function piCompactionFixture() {
+    return {
+      type: "compaction" as const,
+      id: "c1",
+      parentId: "a1",
+      timestamp: "2025-01-01T00:00:05.000Z",
+      summary: "The user asked about go files; main.go and util.go were found.",
+      firstKeptEntryId: "u1",
+      tokensBefore: 152_000,
+      usage: {
+        input: 120_000,
+        output: 8_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 128_000,
+        cost: {
+          input: 0.36,
+          output: 0.12,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0.48,
+        },
+      },
+    };
+  }
+
+  // runCompaction drives a threshold auto-compaction end to end. It is a
+  // separate driver on purpose: runFullTurn is shared by several assertions
+  // and its fixture would have to be regenerated if compaction were folded
+  // into it.
+  async function runCompaction(): Promise<{
+    exports: { path: string; generations: unknown[] }[];
+    compaction: any;
+  }> {
+    const pi = new FakePi();
+    registerExtension(pi as any);
+
+    const { userMsg, assistantMsg } = piTurnFixture();
+    const compactionEntry = piCompactionFixture();
+
+    // Branch: user u1 -> assistant a1 -> compaction c1. The compaction is the
+    // leaf, which is where pi appends it, and a1 becomes its lineage parent.
+    const ctx = {
+      sessionManager: {
+        getSessionFile: () => "pi-session.jsonl",
+        getSessionId: () => "pi-conv-1",
+        getBranch: () => [
+          { type: "message", id: "u1", parentId: null, message: userMsg },
+          { type: "message", id: "a1", parentId: "u1", message: assistantMsg },
+          compactionEntry,
+        ],
+      },
+      model: { provider: "anthropic", id: "claude-sonnet-4-pi" },
+    };
+
+    await pi.emit("session_start", {}, ctx);
+    await pi.emit(
+      "session_before_compact",
+      { reason: "threshold", willRetry: false },
+      ctx,
+    );
+    await pi.emit(
+      "session_compact",
+      {
+        compactionEntry,
+        fromExtension: false,
+        reason: "threshold",
+        willRetry: false,
+      },
+      ctx,
+    );
+    await pi.emit("session_shutdown", {}, ctx);
+
+    expect(serverEnv.errors).toEqual([]);
+
+    const exports = serverEnv.captures.map((c) => ({
+      path: c.path,
+      generations: c.generations.map(normalizeAny),
+    }));
+    for (const exp of exports) {
+      expect(exp.path).toBe("/api/v1/generations:export");
+    }
+    const allGen = exports.flatMap((e) => e.generations) as any[];
+    expect(allGen).toHaveLength(1);
+
+    return { exports, compaction: allGen[0] };
+  }
+
+  it("matches the recorded golden export for a host compaction", async () => {
+    const { exports, compaction } = await runCompaction();
+
+    // generateText (not streamText) is what discriminates a host
+    // summarization call from a turn.
+    expect(compaction.operation_name).toBe("generateText");
+    expect(compaction.mode).toBe("GENERATION_MODE_SYNC");
+    expect(compaction.conversation_id).toBe("pi-conv-1");
+    expect(compaction.id).toMatch(/^pi-[a-f0-9]{24}$/);
+    expect(compaction.parent_generation_ids).toHaveLength(1);
+    expect(compaction.tags["pi.call_kind"]).toBe("compaction");
+    expect(String(compaction.usage.input_tokens)).toBe("120000");
+    expect(String(compaction.usage.output_tokens)).toBe("8000");
+    expect(compaction.output[0].parts[0].text).toContain("main.go");
+
+    assertGoldenJSON(COMPACTION_GOLDEN_PATH, exports);
+  });
 
   // The proto export uses a oneof for `parts`, so a part is identified by
   // which field is populated (`tool_call`, `tool_result`, `text`, ...), not

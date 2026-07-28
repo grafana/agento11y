@@ -1,0 +1,68 @@
+[
+  {
+    "path": "/api/v1/generations:export",
+    "generations": [
+      {
+        "id": "pi-0768336eaf3ef1a25ccb1d82",
+        "conversation_id": "pi-conv-1",
+        "operation_name": "generateText",
+        "mode": "GENERATION_MODE_SYNC",
+        "trace_id": "<NORMALIZED>",
+        "span_id": "<NORMALIZED>",
+        "model": {
+          "provider": "anthropic",
+          "name": "claude-sonnet-4-pi"
+        },
+        "response_id": "",
+        "response_model": "claude-sonnet-4-pi",
+        "system_prompt": "",
+        "input": [],
+        "output": [
+          {
+            "role": "MESSAGE_ROLE_ASSISTANT",
+            "name": "",
+            "parts": [
+              {
+                "text": "The user asked about go files; main.go and util.go were found."
+              }
+            ]
+          }
+        ],
+        "tools": [],
+        "usage": {
+          "input_tokens": "120000",
+          "output_tokens": "8000",
+          "total_tokens": "128000",
+          "cache_read_input_tokens": "0",
+          "cache_write_input_tokens": "0",
+          "reasoning_tokens": "0"
+        },
+        "stop_reason": "end_turn",
+        "started_at": "<NORMALIZED>",
+        "completed_at": "<NORMALIZED>",
+        "tags": {
+          "git.branch": "<NORMALIZED>",
+          "cwd": "<NORMALIZED>",
+          "pi.call_kind": "compaction"
+        },
+        "metadata": {
+          "cost_usd": 0.48,
+          "pi.tokens_before": 152000,
+          "pi.compaction.reason": "threshold",
+          "pi.compaction.will_retry": false,
+          "agento11y.conversation.title": "pi-conv-1",
+          "agento11y.sdk.name": "sdk-js",
+          "agento11y.sdk.content_capture_mode": "full"
+        },
+        "raw_artifacts": [],
+        "call_error": "",
+        "agent_name": "pi",
+        "agent_version": "test-version",
+        "parent_generation_ids": [
+          "pi-7d0cc91aec6a3962f720b126"
+        ],
+        "effective_version": "<NORMALIZED>"
+      }
+    ]
+  }
+]

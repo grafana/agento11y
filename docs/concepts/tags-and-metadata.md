@@ -108,8 +108,24 @@ The coding-agent plugins (claude-code, codex, copilot, cursor, opencode, pi, vib
 | `cwd` | Working directory of the session. For pi, the directory pi was launched from, which can be a subdirectory of the repo. | all launchers |
 | `git.branch` | Branch checked out in that directory, or a short commit SHA when HEAD is detached. Omitted outside a git checkout. | all launchers |
 | `subagent` | `"true"` on generations from a subagent run. Absent otherwise, never `"false"`. | claude-code, codex, cursor, opencode |
+| `pi.call_kind` | The host made this model call outside a user turn: `compaction` for context compaction, `branch_summary` for a tree-navigation summary. Absent on ordinary turns. | pi |
 
 Launchers also set a few keys specific to one host, so this table is not the full list of what arrives on a generation.
+
+## Built-in metadata from the agent launchers
+
+Metadata is exported but never turned into a metric label, so launchers use it for numbers and for keys with too many distinct values to be a tag.
+
+Codex and copilot also add their own `codex.*` and `copilot.*` keys, so this table is not the full list. A launcher's own docs are the place to look for them.
+
+| Key | Value | Emitted by |
+| --- | --- | --- |
+| `cost_usd` | Cost the host itself reported for the call, in US dollars. Present whenever pi priced the call, including a cost of `0`. | pi |
+| `vibe.cost_usd` | Cost vibe reported for the turn, in US dollars. Omitted when the cost is `0`. | vibe |
+| `cost` | Cost opencode reported for the turn, in US dollars. | opencode |
+| `pi.tokens_before` | Pi's estimate of the context size before a compaction, in tokens. Compaction generations only. The estimate covers the whole conversation, not this call's input tokens. | pi |
+| `pi.compaction.reason` | What triggered the compaction: `manual` (`/compact` or `ctx.compact()`), `threshold` (context limit), or `overflow` (context-overflow recovery). | pi |
+| `pi.compaction.will_retry` | `true` when pi retries the turn it aborted to run this compaction. Only overflow recovery retries. | pi |
 
 ## See also
 

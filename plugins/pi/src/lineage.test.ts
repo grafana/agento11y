@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   resolvePiGenerationLineage,
+  resolvePiSummaryLineage,
   type SessionEntryLike,
   stablePiGenerationId,
 } from "./lineage.js";
@@ -27,13 +28,35 @@ function userEntry(id: string, parentId: string | null): SessionEntryLike {
   };
 }
 
+function toolResultEntry(
+  id: string,
+  parentId: string | null,
+): SessionEntryLike {
+  return {
+    type: "message",
+    id,
+    parentId,
+    message: { role: "toolResult" },
+  };
+}
+
 function nonMessageEntry(
   id: string,
   parentId: string | null,
 ): SessionEntryLike {
-  // e.g. thinking_level_change, model_change, compaction. Lineage must
-  // ignore these and follow the parent chain through them.
+  // e.g. thinking_level_change, model_change. Lineage must ignore these as
+  // parent candidates and follow the parent chain through them.
   return { type: "model_change", id, parentId };
+}
+
+// Compaction and branch_summary entries are never lineage parents, but they
+// are lineage subjects: resolvePiSummaryLineage hashes them into their own
+// generation id.
+function compactionEntry(
+  id: string,
+  parentId: string | null,
+): SessionEntryLike {
+  return { type: "compaction", id, parentId };
 }
 
 describe("stablePiGenerationId", () => {
@@ -246,6 +269,153 @@ describe("resolvePiGenerationLineage", () => {
     // Should not link to the abandoned sibling assistant entry.
     expect(lineage.parentGenerationIds).not.toContain(
       stablePiGenerationId("conv", "a2"),
+    );
+  });
+});
+
+describe("resolvePiSummaryLineage", () => {
+  it("returns empty when conversationId is missing", () => {
+    const sm = { getBranch: () => [compactionEntry("c1", "a1")] };
+    expect(resolvePiSummaryLineage(sm, "c1", undefined)).toEqual({});
+  });
+
+  it("returns empty when the entry id is empty", () => {
+    const sm = { getBranch: () => [compactionEntry("c1", "a1")] };
+    expect(resolvePiSummaryLineage(sm, "", "conv")).toEqual({});
+  });
+
+  it("keeps the deterministic id when getBranch is unavailable", () => {
+    // The id only needs conversationId + entryId, both of which pi hands us
+    // directly, so an older runtime without getBranch still gets a stable id.
+    const sm = { getSessionId: () => "x" } as Record<string, unknown>;
+    expect(
+      resolvePiSummaryLineage(
+        sm as unknown as Parameters<typeof resolvePiSummaryLineage>[0],
+        "c1",
+        "conv",
+      ),
+    ).toEqual({ generationId: stablePiGenerationId("conv", "c1") });
+    expect(resolvePiSummaryLineage(undefined, "c1", "conv")).toEqual({
+      generationId: stablePiGenerationId("conv", "c1"),
+    });
+    expect(resolvePiSummaryLineage(null, "c1", "conv")).toEqual({
+      generationId: stablePiGenerationId("conv", "c1"),
+    });
+  });
+
+  it("keeps the deterministic id when getBranch throws or is empty", () => {
+    const throwing = {
+      getBranch: () => {
+        throw new Error("not a real session");
+      },
+    };
+    expect(resolvePiSummaryLineage(throwing, "c1", "conv")).toEqual({
+      generationId: stablePiGenerationId("conv", "c1"),
+    });
+    expect(
+      resolvePiSummaryLineage({ getBranch: () => [] }, "c1", "conv"),
+    ).toEqual({ generationId: stablePiGenerationId("conv", "c1") });
+  });
+
+  it("keeps the deterministic id when the entry is not on the branch", () => {
+    const sm = { getBranch: () => [assistantEntry("a1", null)] };
+    expect(resolvePiSummaryLineage(sm, "c1", "conv")).toEqual({
+      generationId: stablePiGenerationId("conv", "c1"),
+    });
+  });
+
+  it("parents a compaction entry on the previous assistant entry", () => {
+    const branch: SessionEntryLike[] = [
+      userEntry("u1", null),
+      assistantEntry("a1", "u1"),
+      compactionEntry("c1", "a1"),
+    ];
+    const sm = { getBranch: () => branch };
+    const lineage = resolvePiSummaryLineage(sm, "c1", "conv");
+    expect(lineage.generationId).toBe(stablePiGenerationId("conv", "c1"));
+    expect(lineage.parentGenerationIds).toEqual([
+      stablePiGenerationId("conv", "a1"),
+    ]);
+  });
+
+  it("walks through an intervening toolResult message entry", () => {
+    // Compaction is appended as a child of the current leaf, which after a
+    // tool-using turn is the toolResult message, not the assistant message.
+    const branch: SessionEntryLike[] = [
+      userEntry("u1", null),
+      assistantEntry("a1", "u1"),
+      toolResultEntry("t1", "a1"),
+      compactionEntry("c1", "t1"),
+    ];
+    const sm = { getBranch: () => branch };
+    expect(
+      resolvePiSummaryLineage(sm, "c1", "conv").parentGenerationIds,
+    ).toEqual([stablePiGenerationId("conv", "a1")]);
+  });
+
+  it("walks through an intervening model_change entry", () => {
+    const branch: SessionEntryLike[] = [
+      userEntry("u1", null),
+      assistantEntry("a1", "u1"),
+      nonMessageEntry("mc1", "a1"),
+      compactionEntry("c1", "mc1"),
+    ];
+    const sm = { getBranch: () => branch };
+    expect(
+      resolvePiSummaryLineage(sm, "c1", "conv").parentGenerationIds,
+    ).toEqual([stablePiGenerationId("conv", "a1")]);
+  });
+
+  it("walks through both a toolResult and a model_change entry", () => {
+    const branch: SessionEntryLike[] = [
+      userEntry("u1", null),
+      assistantEntry("a1", "u1"),
+      toolResultEntry("t1", "a1"),
+      nonMessageEntry("m1", "t1"),
+      compactionEntry("c1", "m1"),
+    ];
+    const sm = { getBranch: () => branch };
+    const lineage = resolvePiSummaryLineage(sm, "c1", "conv");
+    expect(lineage.generationId).toBe(stablePiGenerationId("conv", "c1"));
+    expect(lineage.parentGenerationIds).toEqual([
+      stablePiGenerationId("conv", "a1"),
+    ]);
+  });
+
+  it("omits parentGenerationIds when no assistant entry precedes the summary", () => {
+    const branch: SessionEntryLike[] = [
+      userEntry("u1", null),
+      compactionEntry("c1", "u1"),
+    ];
+    const sm = { getBranch: () => branch };
+    const lineage = resolvePiSummaryLineage(sm, "c1", "conv");
+    expect(lineage.generationId).toBe(stablePiGenerationId("conv", "c1"));
+    expect(lineage.parentGenerationIds).toBeUndefined();
+  });
+
+  it("resolves a branch_summary entry the same way", () => {
+    const branch: SessionEntryLike[] = [
+      userEntry("u1", null),
+      assistantEntry("a1", "u1"),
+      { type: "branch_summary", id: "b1", parentId: "a1" },
+    ];
+    const sm = { getBranch: () => branch };
+    const lineage = resolvePiSummaryLineage(sm, "b1", "conv");
+    expect(lineage.generationId).toBe(stablePiGenerationId("conv", "b1"));
+    expect(lineage.parentGenerationIds).toEqual([
+      stablePiGenerationId("conv", "a1"),
+    ]);
+  });
+
+  it("differs from the turn generation id for the same conversation", () => {
+    const branch: SessionEntryLike[] = [
+      userEntry("u1", null),
+      assistantEntry("a1", "u1"),
+      compactionEntry("c1", "a1"),
+    ];
+    const sm = { getBranch: () => branch };
+    expect(resolvePiSummaryLineage(sm, "c1", "conv").generationId).not.toBe(
+      stablePiGenerationId("conv", "a1"),
     );
   });
 });

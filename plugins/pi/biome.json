@@ -7,7 +7,7 @@
     "root": "../.."
   },
   "files": {
-    "includes": ["**", "!!**/dist", "!!vendor"]
+    "includes": ["**", "!!**/dist", "!!vendor", "!**/testdata/golden"]
   },
   "formatter": {
     "enabled": true,

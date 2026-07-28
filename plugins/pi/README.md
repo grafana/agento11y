@@ -107,7 +107,25 @@ The plugin always attaches two built-in tags to every generation:
 - `git.branch` — current branch from the working directory, or a 12-char short SHA on detached HEAD. Omitted when not inside a git checkout.
 - `cwd` — the process working directory.
 
-Built-in tags win collisions with user tags, matching the claude-code and cursor launchers.
+One more tag appears on generations pi produces outside a user turn:
+
+- `pi.call_kind` — `compaction` or `branch_summary`. Absent on ordinary turns. See [Compaction and summarization](#compaction-and-summarization).
+
+Built-in tags win collisions with user tags, matching the claude-code and cursor launchers. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#built-in-tags-from-the-agent-launchers) for the tags the launchers share and the metadata keys pi adds.
+
+## Compaction and summarization
+
+Pi makes model calls of its own outside the agent loop. It compacts the context when the conversation approaches the model's window, when you run `/compact`, and while recovering from a context overflow. It summarizes the abandoned branch when you navigate the session tree with summarization on. A compaction on a large-window model can be a six-figure-token request at full price, because pi sends it with cache retention off.
+
+The plugin exports each of those calls as its own generation so they show up in the session's token and cost totals:
+
+- The tag `pi.call_kind` is `compaction` or `branch_summary`. That is the marker to filter on.
+- `operation_name` is `generateText` rather than the `streamText` a turn gets, because there is no token stream to time.
+- The parent generation is the nearest assistant turn above the entry in pi's session tree. For a compaction that is the turn it followed. For a branch summary it is the turn above the navigation target, which can sit earlier in the session than the branch that was summarized.
+- Metadata carries `cost_usd` whenever pi priced the call, on the same rule as a turn. Compactions add `pi.tokens_before`, `pi.compaction.reason`, and `pi.compaction.will_retry`. Branch summaries carry none of those three, because pi records no pre-summary context estimate and no trigger reason for them.
+- The summary text is exported as assistant output, so `AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only` drops it while keeping tokens, cost, and timing. The request side is not exported: these generations carry no input messages and no system prompt, so input tokens are reported without the text they came from.
+
+Two cases export nothing, because no model call happened: an extension supplied the compaction, or you navigated the tree without asking for a summary. Older pi versions record no usage on the entry; those still export a generation, with timing and metadata but no token counts.
 
 ## Redaction
 

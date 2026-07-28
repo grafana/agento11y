@@ -38,6 +38,7 @@ vi.mock("./git.js", () => ({
 
 import type { Agento11yClient } from "@grafana/agento11y";
 import registerExtension, { emitToolSpans } from "./index.js";
+import { stablePiGenerationId } from "./lineage.js";
 import type {
   PiAssistantMessage,
   PiToolResult,
@@ -59,6 +60,16 @@ interface ToolRecorderLike {
 
 interface Agento11yLike {
   startStreamingGeneration: (
+    seed: unknown,
+    run: (recorder: RecorderLike) => Promise<void>,
+  ) => Promise<void>;
+  // Host summarization calls (compaction, branch summary) go through the
+  // synchronous path. Optional, because the fakes in turn-path tests leave it
+  // off. Any test that expects a summary export needs it: FakePi.emit
+  // swallows a missing handler and the plugin's handlers swallow throws into
+  // logger.error, so a fake without startGeneration makes a broken export
+  // look like a passing test.
+  startGeneration?: (
     seed: unknown,
     run: (recorder: RecorderLike) => Promise<void>,
   ) => Promise<void>;
@@ -110,19 +121,27 @@ class FakePi {
   }
 }
 
+// Pi's live model, as exposed on ctx.model. `id` (not `name`) is what
+// assistant messages carry as their model, so the summary export path reads
+// `id`.
+const defaultModel = { provider: "anthropic", id: "claude-sonnet-4" };
+
 const defaultCtx = {
   sessionManager: {
     getSessionFile: () => "session-1",
     getSessionId: () => "sess-default-id",
   },
+  model: defaultModel,
 };
 
 function makeCtx({
   sessionFile,
   sessionId,
+  model = defaultModel,
 }: {
   sessionFile?: string | (() => string | undefined);
   sessionId: string | (() => string);
+  model?: { provider: string; id: string };
 }) {
   const fileFn =
     typeof sessionFile === "function"
@@ -134,6 +153,44 @@ function makeCtx({
       getSessionFile: fileFn,
       getSessionId: idFn,
     },
+    model,
+  };
+}
+
+// A fake session entry as returned by ReadonlySessionManager.getBranch().
+// Loose on purpose: message entries carry `message`, compaction and
+// branch_summary entries carry summary/usage/timestamp instead.
+interface FakeBranchEntry {
+  type: string;
+  id: string;
+  parentId: string | null;
+  message?: unknown;
+  timestamp?: string;
+  summary?: string;
+  tokensBefore?: number;
+  usage?: unknown;
+  fromHook?: boolean;
+}
+
+// ctxWithBranch is a fake ReadonlySessionManager that returns a static
+// session branch. Turn tests track which assistant entry each turn_end
+// should hit by swapping a shared `currentMessage` reference between turns,
+// mirroring how the real pi runtime appends entries to the tree. Pass
+// `{ model: null }` to simulate a session with no resolvable model.
+function ctxWithBranch(
+  sessionId: string,
+  branch: FakeBranchEntry[] | (() => FakeBranchEntry[]),
+  opts?: { model?: { provider: string; id: string } | null },
+) {
+  const model = opts ? (opts.model ?? undefined) : defaultModel;
+  const branchFn = typeof branch === "function" ? branch : () => branch;
+  return {
+    sessionManager: {
+      getSessionFile: () => "pi-session.jsonl",
+      getSessionId: () => sessionId,
+      getBranch: branchFn,
+    },
+    model,
   };
 }
 
@@ -2568,28 +2625,6 @@ describe("extension lifecycle", () => {
       return { sigil, seeds };
     }
 
-    // ctxWithBranch is a fake ReadonlySessionManager that returns a static
-    // session branch. We track which assistant entry each turn_end should
-    // hit by swapping a shared `currentMessage` reference between turns,
-    // mirroring how the real pi runtime appends entries to the tree.
-    function ctxWithBranch(
-      sessionId: string,
-      branch: Array<{
-        type: string;
-        id: string;
-        parentId: string | null;
-        message?: { role: string } | null;
-      }>,
-    ) {
-      return {
-        sessionManager: {
-          getSessionFile: () => "pi-session.jsonl",
-          getSessionId: () => sessionId,
-          getBranch: () => branch,
-        },
-      };
-    }
-
     it("emits deterministic pi-* generation id when branch data is available", async () => {
       const { sigil, seeds } = setupClient();
       loadConfigMock.mockResolvedValue({
@@ -2798,6 +2833,1049 @@ describe("extension lifecycle", () => {
 
       expect(seeds[0]!.id).toBeUndefined();
       expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+    });
+  });
+
+  // --- Host summarization calls (compaction, branch summary) ---
+  //
+  // These run outside pi's agent loop: no turn_*, message_*, or provider
+  // events fire, so the only signals are session_before_compact /
+  // session_compact and session_before_tree / session_tree.
+  describe("host summarization export", () => {
+    interface CapturedSeed {
+      id?: string;
+      conversationId?: string;
+      conversationTitle?: string;
+      agentName?: string;
+      agentVersion?: string;
+      operationName?: string;
+      model?: { provider: string; name: string };
+      startedAt?: Date;
+      tags?: Record<string, string>;
+      parentGenerationIds?: string[];
+    }
+    interface CapturedResult {
+      usage?: Record<string, number>;
+      metadata?: Record<string, unknown>;
+      output?: Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+      completedAt?: Date;
+      stopReason?: string;
+      responseModel?: string;
+    }
+
+    function setupClient(opts?: { startGenerationError?: Error }) {
+      const seeds: CapturedSeed[] = [];
+      const results: CapturedResult[] = [];
+      const turnSeeds: Array<Record<string, unknown>> = [];
+      const turnResults: Array<Record<string, unknown>> = [];
+      const sigil: Agento11yLike = {
+        startStreamingGeneration: vi.fn(async (seed, run) => {
+          turnSeeds.push(seed as Record<string, unknown>);
+          await run({
+            setResult: (value: unknown) => {
+              turnResults.push(value as Record<string, unknown>);
+            },
+            setCallError: vi.fn(),
+            setFirstTokenAt: vi.fn(),
+          });
+        }),
+        startGeneration: vi.fn(async (seed, run) => {
+          if (opts?.startGenerationError) throw opts.startGenerationError;
+          seeds.push(seed as CapturedSeed);
+          await run({
+            setResult: (value: unknown) => {
+              results.push(value as CapturedResult);
+            },
+            setCallError: vi.fn(),
+          });
+        }),
+        startToolExecution: vi.fn(() => ({
+          setResult: vi.fn(),
+          setCallError: vi.fn(),
+          end: vi.fn(),
+          getError: vi.fn(),
+        })),
+        shutdown: vi.fn(async () => {}),
+      };
+      return { sigil, seeds, results, turnSeeds, turnResults };
+    }
+
+    function useConfig(
+      sigil: Agento11yLike,
+      contentCapture:
+        | "metadata_only"
+        | "full"
+        | "no_tool_content"
+        | "full_with_metadata_spans" = "full",
+    ) {
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        agentVersion: "0.82.1",
+        contentCapture,
+      });
+      createAgento11yClientMock.mockReturnValue(sigil);
+    }
+
+    const COMPACTION_TS = "2025-01-01T00:00:05.000Z";
+    const COMPACTION_AT = Date.parse(COMPACTION_TS);
+
+    function compactionEntry(
+      overrides?: Partial<FakeBranchEntry>,
+    ): FakeBranchEntry {
+      return {
+        type: "compaction",
+        id: "c1",
+        parentId: "a1",
+        timestamp: COMPACTION_TS,
+        summary: "Earlier: we split the exporter and fixed two tests.",
+        tokensBefore: 152000,
+        usage: {
+          input: 120000,
+          output: 8000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 128000,
+          cost: { total: 2.5 },
+        },
+        ...overrides,
+      };
+    }
+
+    // u1 -> a1 -> <summary entry>: the shape pi produces when compaction runs
+    // right after an assistant turn.
+    function branchWith(...tail: FakeBranchEntry[]): FakeBranchEntry[] {
+      return [
+        {
+          type: "message",
+          id: "u1",
+          parentId: null,
+          message: { role: "user" },
+        },
+        {
+          type: "message",
+          id: "a1",
+          parentId: "u1",
+          message: { role: "assistant" },
+        },
+        ...tail,
+      ];
+    }
+
+    it("exports one generation for a threshold auto-compaction", async () => {
+      const { sigil, seeds, results } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("session_before_compact", { reason: "threshold" }, ctx);
+      await pi.emit(
+        "session_compact",
+        {
+          compactionEntry: entry,
+          fromExtension: false,
+          reason: "threshold",
+          willRetry: false,
+        },
+        ctx,
+      );
+
+      expect(sigil.startGeneration).toHaveBeenCalledTimes(1);
+      // Not the streaming path: there is no token stream to time.
+      expect(sigil.startStreamingGeneration).not.toHaveBeenCalled();
+      expect(seeds).toHaveLength(1);
+      expect(seeds[0]!.id).toMatch(/^pi-[a-f0-9]{24}$/);
+      expect(seeds[0]!.id).toBe(stablePiGenerationId("pi-conv-1", "c1"));
+      expect(seeds[0]!.tags?.["pi.call_kind"]).toBe("compaction");
+      expect(seeds[0]!.conversationId).toBe("pi-conv-1");
+      expect(seeds[0]!.agentName).toBe("pi");
+      expect(seeds[0]!.model).toEqual({
+        provider: "anthropic",
+        name: "claude-sonnet-4",
+      });
+      // No explicit operationName: the SYNC path defaults it to generateText.
+      expect(seeds[0]!.operationName).toBeUndefined();
+      // Parent is the assistant turn that preceded the compaction.
+      expect(seeds[0]!.parentGenerationIds).toEqual([
+        stablePiGenerationId("pi-conv-1", "a1"),
+      ]);
+      expect(results[0]!.usage).toEqual({
+        inputTokens: 120000,
+        outputTokens: 8000,
+        totalTokens: 128000,
+        cacheReadInputTokens: 0,
+        cacheWriteInputTokens: 0,
+      });
+      expect(results[0]!.stopReason).toBe("end_turn");
+      expect(results[0]!.completedAt).toEqual(new Date(COMPACTION_AT));
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    // willRetry is only true on overflow recovery, so the reason and the retry
+    // flag travel together.
+    it.each([
+      { reason: "manual", willRetry: false },
+      { reason: "threshold", willRetry: false },
+      { reason: "overflow", willRetry: true },
+    ])("exports metadata for a $reason compaction", async (event) => {
+      const { sigil, seeds, results } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("session_before_compact", { reason: event.reason }, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false, ...event },
+        ctx,
+      );
+
+      expect(sigil.startGeneration).toHaveBeenCalledTimes(1);
+      expect(seeds[0]!.tags?.["pi.call_kind"]).toBe("compaction");
+      expect(seeds[0]!.operationName).toBeUndefined();
+      expect(results[0]!.metadata).toEqual({
+        cost_usd: 2.5,
+        "pi.tokens_before": 152000,
+        "pi.compaction.reason": event.reason,
+        "pi.compaction.will_retry": event.willRetry,
+      });
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("records a zero cost, matching the turn path", async () => {
+      const { sigil, results } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry({
+        usage: {
+          input: 10,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 12,
+          cost: { total: 0 },
+        },
+      });
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      expect(results[0]!.metadata?.cost_usd).toBe(0);
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("skips extension-supplied compaction (fromExtension)", async () => {
+      const { sigil } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry({ fromHook: true });
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("session_before_compact", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: true },
+        ctx,
+      );
+
+      expect(sigil.startGeneration).not.toHaveBeenCalled();
+      expect(
+        loggerMock.debug.mock.calls.map(([m]) => String(m)),
+      ).toContainEqual(expect.stringContaining("supplied by an extension"));
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("skips a compaction entry marked fromHook even when fromExtension is false", async () => {
+      const { sigil } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry({ fromHook: true });
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      expect(sigil.startGeneration).not.toHaveBeenCalled();
+      expect(
+        loggerMock.debug.mock.calls.map(([m]) => String(m)),
+      ).toContainEqual(expect.stringContaining("came from an extension"));
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("exports nothing for plain tree navigation without a summary", async () => {
+      const { sigil } = setupClient();
+      useConfig(sigil);
+      const ctx = ctxWithBranch("pi-conv-1", branchWith());
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("session_before_tree", {}, ctx);
+      await pi.emit(
+        "session_tree",
+        { newLeafId: "a1", oldLeafId: "a1", summaryEntry: undefined },
+        ctx,
+      );
+
+      expect(sigil.startGeneration).not.toHaveBeenCalled();
+      expect(loggerMock.error).not.toHaveBeenCalled();
+      // Plain navigation is the common case and stays out of the log.
+      expect(
+        loggerMock.debug.mock.calls.map(([m]) => String(m)),
+      ).not.toContainEqual(expect.stringContaining("branch_summary"));
+    });
+
+    it("exports a branch_summary generation for a summarizing tree navigation", async () => {
+      const { sigil, seeds, results } = setupClient();
+      useConfig(sigil);
+      const entry: FakeBranchEntry = {
+        type: "branch_summary",
+        id: "b1",
+        parentId: "a1",
+        timestamp: COMPACTION_TS,
+        summary: "The abandoned branch explored a caching layer.",
+        usage: {
+          input: 40000,
+          output: 900,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 40900,
+          cost: { total: 0.4 },
+        },
+      };
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("session_before_tree", {}, ctx);
+      await pi.emit(
+        "session_tree",
+        { newLeafId: "b1", oldLeafId: "a1", summaryEntry: entry },
+        ctx,
+      );
+
+      expect(seeds).toHaveLength(1);
+      expect(seeds[0]!.operationName).toBeUndefined();
+      expect(seeds[0]!.tags?.["pi.call_kind"]).toBe("branch_summary");
+      expect(seeds[0]!.id).toBe(stablePiGenerationId("pi-conv-1", "b1"));
+      expect(seeds[0]!.parentGenerationIds).toEqual([
+        stablePiGenerationId("pi-conv-1", "a1"),
+      ]);
+      // tokensBefore only exists on compaction entries.
+      expect(results[0]!.metadata).toEqual({ cost_usd: 0.4 });
+      expect(results[0]!.output?.[0]?.parts[0]).toEqual({
+        type: "text",
+        text: "The abandoned branch explored a caching layer.",
+      });
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("exports the entry session_tree carried, not the newest one on the branch", async () => {
+      // session_tree resolves its entry with getEntry(summaryId), an exact id
+      // lookup, so the event's entry is authoritative. The positional branch
+      // scan exists only to correct session_compact's find-by-summary-text.
+      const { sigil, seeds } = setupClient();
+      useConfig(sigil);
+      const eventEntry: FakeBranchEntry = {
+        type: "branch_summary",
+        id: "b1",
+        parentId: "a1",
+        timestamp: COMPACTION_TS,
+        summary: "Explored a caching layer.",
+      };
+      const laterEntry: FakeBranchEntry = {
+        ...eventEntry,
+        id: "b9",
+        parentId: "b1",
+      };
+      const ctx = ctxWithBranch(
+        "pi-conv-1",
+        branchWith(eventEntry, laterEntry),
+      );
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_tree",
+        { newLeafId: "b9", oldLeafId: "a1", summaryEntry: eventEntry },
+        ctx,
+      );
+
+      expect(seeds).toHaveLength(1);
+      expect(seeds[0]!.id).toBe(stablePiGenerationId("pi-conv-1", "b1"));
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("does not re-export the same summary entry twice", async () => {
+      const { sigil } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      const event = { compactionEntry: entry, fromExtension: false };
+      await pi.emit("session_compact", event, ctx);
+      await pi.emit("session_compact", event, ctx);
+
+      expect(sigil.startGeneration).toHaveBeenCalledTimes(1);
+      expect(
+        loggerMock.debug.mock.calls.map(([m]) => String(m)),
+      ).toContainEqual(expect.stringContaining("already exported"));
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("resolves the newest branch entry when the event hands back an older duplicate", async () => {
+      // session_compact finds its entry by summary text, first match in the
+      // whole session file, so two byte-identical summaries make it carry the
+      // older entry. Resolving positionally from the branch avoids re-sending
+      // an already-exported generation id.
+      const { sigil, seeds } = setupClient();
+      useConfig(sigil);
+      const first = compactionEntry({ id: "c1", parentId: "a1" });
+      const second = compactionEntry({ id: "c2", parentId: "a2" });
+      let branch = branchWith(first);
+      const ctx = ctxWithBranch("pi-conv-1", () => branch);
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: first, fromExtension: false },
+        ctx,
+      );
+
+      branch = [
+        ...branch,
+        {
+          type: "message",
+          id: "u2",
+          parentId: "c1",
+          message: { role: "user" },
+        },
+        {
+          type: "message",
+          id: "a2",
+          parentId: "u2",
+          message: { role: "assistant" },
+        },
+        second,
+      ];
+      // Pi hands us `first` again because the summaries are identical.
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: first, fromExtension: false },
+        ctx,
+      );
+
+      expect(seeds.map((s) => s.id)).toEqual([
+        stablePiGenerationId("pi-conv-1", "c1"),
+        stablePiGenerationId("pi-conv-1", "c2"),
+      ]);
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("is a silent no-op before session_start and after session_shutdown", async () => {
+      const { sigil } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+      const event = { compactionEntry: entry, fromExtension: false };
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+
+      await pi.emit("session_compact", event, ctx);
+      expect(sigil.startGeneration).not.toHaveBeenCalled();
+
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("session_shutdown", {}, ctx);
+      await pi.emit("session_compact", event, ctx);
+
+      expect(sigil.startGeneration).not.toHaveBeenCalled();
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("prefers ctx.model over the model cached from the last assistant message", async () => {
+      const { sigil, seeds } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "message_end",
+        {
+          message: {
+            ...assistantMessage(),
+            provider: "openai",
+            model: "gpt-5",
+          },
+        },
+        ctx,
+      );
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      expect(seeds[0]!.model).toEqual({
+        provider: "anthropic",
+        name: "claude-sonnet-4",
+      });
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the last seen model when ctx.model is unavailable", async () => {
+      const { sigil, seeds, results } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry), {
+        model: null,
+      });
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "message_end",
+        {
+          message: {
+            ...assistantMessage(),
+            provider: "openai",
+            model: "gpt-5",
+          },
+        },
+        ctx,
+      );
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      expect(seeds[0]!.model).toEqual({ provider: "openai", name: "gpt-5" });
+      expect(results[0]!.responseModel).toBe("gpt-5");
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("skips the export when no model can be resolved", async () => {
+      const { sigil } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry), {
+        model: null,
+      });
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      expect(sigil.startGeneration).not.toHaveBeenCalled();
+      expect(
+        loggerMock.debug.mock.calls.map(([m]) => String(m)),
+      ).toContainEqual(expect.stringContaining("no model could be resolved"));
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("drops the summary text in metadata_only but keeps usage, tags and metadata", async () => {
+      const { sigil, seeds, results } = setupClient();
+      useConfig(sigil, "metadata_only");
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      expect(results[0]!.output).toBeUndefined();
+      expect(results[0]!.usage?.inputTokens).toBe(120000);
+      expect(seeds[0]!.tags?.["pi.call_kind"]).toBe("compaction");
+      expect(results[0]!.metadata?.["pi.tokens_before"]).toBe(152000);
+      // The summary must not leak through metadata or tags, which content
+      // capture never strips.
+      expect(JSON.stringify([seeds[0], results[0]])).not.toContain(
+        "split the exporter",
+      );
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    // The summary is assistant text, not a tool body, so the no_tool_content
+    // split does not apply to it: every mode except metadata_only keeps it.
+    it.each([
+      "full",
+      "no_tool_content",
+      "full_with_metadata_spans",
+    ] as const)("keeps the summary text in %s", async (contentCapture) => {
+      const { sigil, results } = setupClient();
+      useConfig(sigil, contentCapture);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      expect(results[0]!.output).toEqual([
+        {
+          role: "assistant",
+          parts: [
+            {
+              type: "text",
+              text: "Earlier: we split the exporter and fixed two tests.",
+            },
+          ],
+        },
+      ]);
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("exports without a usage block when the host reports no usage", async () => {
+      const { sigil, results } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry({ usage: undefined });
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.usage).toBeUndefined();
+      // The pre-compaction context estimate is still reported; it is not a
+      // substitute for the missing input token count.
+      expect(results[0]!.metadata?.["pi.tokens_before"]).toBe(152000);
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {
+        name: "a usage object with a cost but no token counts",
+        usage: { cost: { total: 1.75 } },
+        cost: 1.75,
+      },
+      {
+        name: "a usage object with nothing mappable",
+        usage: { input: "lots", cost: { total: "free" } },
+        cost: undefined,
+      },
+    ])("omits the usage block for $name", async ({ usage, cost }) => {
+      // Zeros would read as "this call used no tokens"; the truth is that
+      // the host did not report any. A cost still survives on its own.
+      const { sigil, results } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry({ usage });
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.usage).toBeUndefined();
+      expect(results[0]!.metadata?.cost_usd).toBe(cost);
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: "missing", timestamp: undefined },
+      { name: "not a parseable date", timestamp: "whenever" },
+    ])("falls back to the current time when the entry timestamp is $name", async ({
+      timestamp,
+    }) => {
+      const { sigil, seeds, results } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry({ timestamp });
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+      const now = Date.parse("2025-02-02T03:04:05.000Z");
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+
+      try {
+        const pi = new FakePi();
+        registerExtension(pi as any);
+        await pi.emit("session_start", {}, ctx);
+        await pi.emit(
+          "session_compact",
+          { compactionEntry: entry, fromExtension: false },
+          ctx,
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.completedAt).toEqual(new Date(now));
+      // No start signal was seen, so startedAt collapses onto completedAt
+      // rather than inverting the window.
+      expect(seeds[0]!.startedAt).toEqual(new Date(now));
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("takes startedAt from session_before_compact", async () => {
+      const { sigil, seeds, results } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+      const startedAt = COMPACTION_AT - 5_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+
+      try {
+        const pi = new FakePi();
+        registerExtension(pi as any);
+        await pi.emit("session_start", {}, ctx);
+        await pi.emit("session_before_compact", {}, ctx);
+        await pi.emit(
+          "session_compact",
+          { compactionEntry: entry, fromExtension: false },
+          ctx,
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      expect(seeds[0]!.startedAt).toEqual(new Date(startedAt));
+      expect(results[0]!.completedAt).toEqual(new Date(COMPACTION_AT));
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the entry timestamp when no start signal was seen", async () => {
+      const { sigil, seeds, results } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      expect(seeds[0]!.startedAt).toEqual(new Date(COMPACTION_AT));
+      expect(results[0]!.completedAt).toEqual(new Date(COMPACTION_AT));
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("overwrites an orphaned start from an aborted compaction", async () => {
+      // An aborted or failed compaction emits no session_compact at all, so
+      // its start timestamp must not be reused by the next attempt.
+      const { sigil, seeds } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+      const orphaned = COMPACTION_AT - 60_000;
+      const real = COMPACTION_AT - 3_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(orphaned);
+
+      try {
+        const pi = new FakePi();
+        registerExtension(pi as any);
+        await pi.emit("session_start", {}, ctx);
+        await pi.emit("session_before_compact", {}, ctx);
+        // ... aborted, no session_compact ...
+        nowSpy.mockReturnValue(real);
+        await pi.emit("session_before_compact", {}, ctx);
+        await pi.emit(
+          "session_compact",
+          { compactionEntry: entry, fromExtension: false },
+          ctx,
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      expect(seeds[0]!.startedAt).toEqual(new Date(real));
+      expect(seeds[0]!.startedAt).not.toEqual(new Date(orphaned));
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("does not reuse a consumed start for a later compaction", async () => {
+      const { sigil, seeds } = setupClient();
+      useConfig(sigil);
+      const first = compactionEntry({ id: "c1" });
+      const second = compactionEntry({
+        id: "c2",
+        parentId: "c1",
+        timestamp: "2025-01-01T00:10:05.000Z",
+      });
+      let branch = branchWith(first);
+      const ctx = ctxWithBranch("pi-conv-1", () => branch);
+      const firstStart = COMPACTION_AT - 5_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(firstStart);
+
+      try {
+        const pi = new FakePi();
+        registerExtension(pi as any);
+        await pi.emit("session_start", {}, ctx);
+        await pi.emit("session_before_compact", {}, ctx);
+        await pi.emit(
+          "session_compact",
+          { compactionEntry: first, fromExtension: false },
+          ctx,
+        );
+        branch = branchWith(first, second);
+        await pi.emit(
+          "session_compact",
+          { compactionEntry: second, fromExtension: false },
+          ctx,
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      expect(seeds[0]!.startedAt).toEqual(new Date(firstStart));
+      // Second export has no start of its own, so it falls back to its own
+      // entry timestamp instead of inheriting the first one's start.
+      expect(seeds[1]!.startedAt).toEqual(
+        new Date(Date.parse("2025-01-01T00:10:05.000Z")),
+      );
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("clamps startedAt so it never exceeds completedAt", async () => {
+      const { sigil, seeds, results } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+      // Clock jumped forward after the entry was written (or the entry came
+      // from a machine with a different clock).
+      const nowSpy = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(COMPACTION_AT + 60_000);
+
+      try {
+        const pi = new FakePi();
+        registerExtension(pi as any);
+        await pi.emit("session_start", {}, ctx);
+        await pi.emit("session_before_compact", {}, ctx);
+        await pi.emit(
+          "session_compact",
+          { compactionEntry: entry, fromExtension: false },
+          ctx,
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      expect(seeds[0]!.startedAt).toEqual(new Date(COMPACTION_AT));
+      expect(results[0]!.completedAt).toEqual(new Date(COMPACTION_AT));
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("discards the turn state that a manual mid-stream /compact abandons", async () => {
+      // Manual /compact disconnects from the agent before aborting, so the
+      // in-flight turn's turn_end never arrives. Its buffered prompt must not
+      // be attributed to the next turn.
+      const { sigil, turnResults } = setupClient();
+      useConfig(sigil, "full");
+      const msg = assistantMessage();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith());
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit(
+        "message_end",
+        {
+          message: {
+            role: "user",
+            content: "abandoned prompt",
+            timestamp: Date.now(),
+          },
+        },
+        ctx,
+      );
+      await pi.emit("session_before_compact", { reason: "manual" }, ctx);
+
+      // Next turn, with a fresh prompt.
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit(
+        "message_end",
+        {
+          message: {
+            role: "user",
+            content: "fresh prompt",
+            timestamp: Date.now(),
+          },
+        },
+        ctx,
+      );
+      await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+
+      const input = turnResults[0]?.input as
+        | Array<{ parts: Array<{ text?: string }> }>
+        | undefined;
+      expect(input).toHaveLength(1);
+      expect(input?.[0]?.parts[0]?.text).toBe("fresh prompt");
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("swallows an export failure into logger.error", async () => {
+      const { sigil } = setupClient({
+        startGenerationError: new Error("queue closed"),
+      });
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      // The log names the entry: this catch is the only place an export
+      // failure surfaces, and the two summary kinds interleave in the log.
+      expect(loggerMock.error).toHaveBeenCalledWith(
+        "session_compact failed, entry=c1",
+        expect.any(Error),
+      );
+    });
+
+    it("retries a previously failed entry on the next event", async () => {
+      // The entry id is only recorded once the recorder accepted it, so a
+      // transient export failure does not permanently drop the generation.
+      let fail = true;
+      const seeds: CapturedSeed[] = [];
+      const sigil: Agento11yLike = {
+        startStreamingGeneration: vi.fn(async () => {}),
+        startGeneration: vi.fn(async (seed, run) => {
+          if (fail) {
+            fail = false;
+            throw new Error("transient");
+          }
+          seeds.push(seed as CapturedSeed);
+          await run({ setResult: vi.fn(), setCallError: vi.fn() });
+        }),
+        startToolExecution: vi.fn(),
+        shutdown: vi.fn(async () => {}),
+      };
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      const event = { compactionEntry: entry, fromExtension: false };
+      await pi.emit("session_compact", event, ctx);
+      await pi.emit("session_compact", event, ctx);
+
+      expect(seeds).toHaveLength(1);
+      expect(seeds[0]!.id).toBe(stablePiGenerationId("pi-conv-1", "c1"));
+    });
+
+    it("clears summary state across sessions", async () => {
+      // A new session_start must not inherit the previous session's exported
+      // entry ids or pending starts.
+      const { sigil, seeds } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = ctxWithBranch("pi-conv-1", branchWith(entry));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      expect(seeds).toHaveLength(2);
+      expect(seeds[0]!.id).toBe(seeds[1]!.id);
+      expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the event entry when getBranch is unavailable", async () => {
+      const { sigil, seeds } = setupClient();
+      useConfig(sigil);
+      const entry = compactionEntry();
+      const ctx = {
+        sessionManager: {
+          getSessionFile: () => "pi-session.jsonl",
+          getSessionId: () => "pi-conv-1",
+        },
+        model: defaultModel,
+      };
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: entry, fromExtension: false },
+        ctx,
+      );
+
+      expect(seeds).toHaveLength(1);
+      expect(seeds[0]!.id).toBe(stablePiGenerationId("pi-conv-1", "c1"));
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+      expect(loggerMock.error).not.toHaveBeenCalled();
     });
   });
 });
