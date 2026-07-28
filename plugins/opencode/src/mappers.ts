@@ -174,23 +174,38 @@ export function mapToolDefinitions(names: Iterable<string>): ToolDefinition[] {
   return [...uniq].sort().map((name) => ({ name, type: "function" }));
 }
 
-/** Map an AssistantMessage + parts to an agento11y GenerationResult with content. */
+/**
+ * Token counts in opencode's shape, shared by `AssistantMessage.tokens` and
+ * `StepFinishPart.tokens`. `input` excludes cached tokens and `output` excludes
+ * reasoning tokens; `Session.getUsage` subtracts both upstream.
+ */
+export type OpencodeTokens = AssistantMessage["tokens"];
+
+/**
+ * Map an AssistantMessage + parts to an agento11y GenerationResult with content.
+ *
+ * `tokens` are the per-step counts summed over the whole message, which the
+ * caller accumulates from `step-finish` parts. Omit them to use `msg.tokens`,
+ * which on a multi-step message covers only the last step.
+ */
 export function mapGeneration(
   msg: AssistantMessage,
   userParts: Part[],
   assistantParts: Part[],
   redactor: Redactor,
   contentCapture: ContentCaptureMode = "full",
+  tokens?: OpencodeTokens,
 ): GenerationResult {
+  const usage = tokens ?? msg.tokens;
   return {
     input: mapInputMessages(userParts, contentCapture),
     output: mapOutputMessages(assistantParts, redactor, contentCapture),
     usage: {
-      inputTokens: msg.tokens.input,
-      outputTokens: msg.tokens.output,
-      reasoningTokens: msg.tokens.reasoning,
-      cacheReadInputTokens: msg.tokens.cache.read,
-      cacheWriteInputTokens: msg.tokens.cache.write,
+      inputTokens: usage.input,
+      outputTokens: usage.output,
+      reasoningTokens: usage.reasoning,
+      cacheReadInputTokens: usage.cache.read,
+      cacheWriteInputTokens: usage.cache.write,
     },
     responseModel: msg.modelID,
     stopReason: msg.finish,

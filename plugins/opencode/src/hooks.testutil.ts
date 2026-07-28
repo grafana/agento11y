@@ -1,6 +1,7 @@
 // Shared factories and event helpers for hook tests. Each test file keeps its
 // own vi.mock calls because Vitest hoists them.
 
+import type { AssistantMessage, StepFinishPart } from "@opencode-ai/sdk";
 import { vi } from "vitest";
 import type { Agento11yOpencodeConfig } from "./config.js";
 import type { createAgento11yHooks, OpencodeEventType } from "./hooks.js";
@@ -96,7 +97,11 @@ export function baseConfig(
   };
 }
 
-export function assistantMessage(sessionID: string, messageID: string) {
+export function assistantMessage(
+  sessionID: string,
+  messageID: string,
+  overrides: Partial<AssistantMessage> = {},
+): AssistantMessage {
   return {
     id: messageID,
     sessionID,
@@ -115,7 +120,59 @@ export function assistantMessage(sessionID: string, messageID: string) {
       cache: { read: 0, write: 0 },
     },
     finish: "end_turn",
-  } as const;
+    ...overrides,
+  };
+}
+
+/**
+ * An assistant message mid-turn: opencode sets `finish` at every `step-finish`
+ * and only sets `time.completed` when the turn actually ends, so this shape is
+ * what the plugin sees between steps.
+ */
+export function inFlightAssistantMessage(
+  sessionID: string,
+  messageID: string,
+  overrides: Omit<Partial<AssistantMessage>, "time"> = {},
+): AssistantMessage {
+  return assistantMessage(sessionID, messageID, {
+    ...overrides,
+    time: { created: 1_700_000_001_000 },
+  });
+}
+
+/**
+ * A `step-finish` part carrying one provider step's usage. Token fields
+ * default to 0 so a case only states the numbers it cares about.
+ */
+export function stepFinishPart(
+  sessionID: string,
+  messageID: string,
+  tokens: {
+    input?: number;
+    output?: number;
+    reasoning?: number;
+    cache?: { read?: number; write?: number };
+  } = {},
+  overrides: Omit<Partial<StepFinishPart>, "tokens"> = {},
+): StepFinishPart {
+  return {
+    id: `prt-step-${messageID}`,
+    sessionID,
+    messageID,
+    type: "step-finish",
+    reason: "tool-calls",
+    cost: 0.002,
+    tokens: {
+      input: tokens.input ?? 0,
+      output: tokens.output ?? 0,
+      reasoning: tokens.reasoning ?? 0,
+      cache: {
+        read: tokens.cache?.read ?? 0,
+        write: tokens.cache?.write ?? 0,
+      },
+    },
+    ...overrides,
+  };
 }
 
 export async function emitMessageUpdated(
