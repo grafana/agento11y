@@ -104,12 +104,13 @@ agento11y opencode --tag team=ai -- run "say hi"
 
 `--tag` is shorthand for `AGENTO11Y_TAGS`; flag tags merge onto (and override) any `AGENTO11Y_TAGS` already in the environment or `~/.config/agento11y/config.env`. The merge happens in the SDK, so user tags reach every generation without the plugin reparsing them.
 
-The plugin always attaches two built-in tags to every generation:
+The plugin attaches built-in tags of its own:
 
 - `git.branch` — current branch from the opencode project directory, or a 12-char short SHA on detached HEAD. Omitted when not inside a git checkout.
-- `cwd` — the opencode project directory (from `PluginInput.directory`).
+- `cwd` — the opencode project directory.
+- `subagent` — `"true"` on generations from a subagent session. Omitted for ordinary sessions, and for a subagent that opencode started before the plugin loaded.
 
-Built-in tags win collisions with user tags, matching the claude-code and cursor launchers.
+Built-in tags win collisions with user tags, matching the claude-code and cursor launchers. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#built-in-tags-from-the-agent-launchers) for the tags the launchers share.
 
 ## All options
 

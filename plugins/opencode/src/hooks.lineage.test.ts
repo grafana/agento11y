@@ -14,7 +14,7 @@ vi.mock("./telemetry.js", () => ({
   createTelemetryProviders: createTelemetryProvidersMock,
 }));
 
-import { createAgento11yHooks } from "./hooks.js";
+import { _resetHookState, createAgento11yHooks } from "./hooks.js";
 import {
   assistantMessage,
   baseConfig,
@@ -45,6 +45,7 @@ function textPart(
 describe("opencode generation lineage and streaming", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetHookState();
   });
 
   it("assigns a deterministic opencode- generation id from session and message id", async () => {
@@ -197,7 +198,7 @@ describe("opencode generation lineage and streaming", () => {
     expect(child?.seed.parentGenerationIds).not.toEqual([parentTurn2]);
   });
 
-  it("does not link a subagent when the parent has no recorded generation yet", async () => {
+  it("tags a subagent but does not link it when the parent has no recorded generation yet", async () => {
     const { sigil, generations } = makeAgento11yMock();
     createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await createAgento11yHooks(
@@ -208,15 +209,17 @@ describe("opencode generation lineage and streaming", () => {
 
     // session.created arrives before the parent has recorded any generation.
     // No parent generation exists to freeze, so the child records unlinked
-    // (fails safe) rather than guessing.
+    // (fails safe) rather than guessing. The tag comes from `Session.parentID`
+    // alone, so it survives the dropped lineage edge.
     await emitSessionCreated(hooks, "sess-child-4", "sess-parent-4");
     await emitMessageUpdated(hooks, assistantMessage("sess-child-4", "msg-c1"));
 
     expect(generations).toHaveLength(1);
     expect(generations[0]!.seed.parentGenerationIds).toBeUndefined();
+    expect(generations[0]!.seed.tags?.subagent).toBe("true");
   });
 
-  it("does not link a root session with no parentID", async () => {
+  it("does not link or tag a root session with no parentID", async () => {
     const { sigil, generations } = makeAgento11yMock();
     createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await createAgento11yHooks(
@@ -230,6 +233,81 @@ describe("opencode generation lineage and streaming", () => {
 
     expect(generations).toHaveLength(1);
     expect(generations[0]!.seed.parentGenerationIds).toBeUndefined();
+    expect(generations[0]!.seed.tags?.subagent).toBeUndefined();
+  });
+
+  it("tags a child session's generations with subagent=true", async () => {
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
+    if (!hooks) throw new Error("expected hooks");
+
+    await emitMessageUpdated(hooks, assistantMessage("sess-parent-tag", "m-1"));
+    await emitSessionCreated(hooks, "sess-child-tag", "sess-parent-tag");
+    await emitMessageUpdated(hooks, assistantMessage("sess-child-tag", "m-c1"));
+
+    expect(generations).toHaveLength(2);
+    // The spawning session is not a subagent itself.
+    expect(generations[0]!.seed.tags?.subagent).toBeUndefined();
+    expect(generations[1]!.seed.tags?.subagent).toBe("true");
+    // Agent naming stays mode-based; subagent status lives in the tag only.
+    expect(generations[1]!.seed.agentName).toBe("opencode:build");
+  });
+
+  it("does not tag a self-parenting session", async () => {
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
+    if (!hooks) throw new Error("expected hooks");
+
+    await emitSessionCreated(hooks, "sess-self-tag", "sess-self-tag");
+    await emitMessageUpdated(hooks, assistantMessage("sess-self-tag", "m-1"));
+
+    expect(generations).toHaveLength(1);
+    expect(generations[0]!.seed.tags?.subagent).toBeUndefined();
+  });
+
+  it("drops subagent classification on session.deleted", async () => {
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
+    if (!hooks) throw new Error("expected hooks");
+
+    await emitSessionCreated(hooks, "sess-del-tag", "sess-parent-del");
+    await emitSessionDeleted(hooks, "sess-del-tag");
+    // The id is reused as a root session; the stale classification must be gone.
+    await emitSessionCreated(hooks, "sess-del-tag");
+    await emitMessageUpdated(hooks, assistantMessage("sess-del-tag", "m-1"));
+
+    expect(generations).toHaveLength(1);
+    expect(generations[0]!.seed.tags?.subagent).toBeUndefined();
+  });
+
+  it("drops subagent classification on _resetHookState", async () => {
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await createAgento11yHooks(
+      baseConfig(),
+      makeOpencodeClient(),
+    );
+    if (!hooks) throw new Error("expected hooks");
+
+    await emitSessionCreated(hooks, "sess-reset-tag", "sess-parent-reset");
+    _resetHookState();
+    await emitSessionCreated(hooks, "sess-reset-tag");
+    await emitMessageUpdated(hooks, assistantMessage("sess-reset-tag", "m-1"));
+
+    expect(generations).toHaveLength(1);
+    expect(generations[0]!.seed.tags?.subagent).toBeUndefined();
   });
 
   it("records first-token time from the first streamed part", async () => {

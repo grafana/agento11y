@@ -99,6 +99,18 @@ await agento11y.startGeneration(
 );
 ```
 
+## Built-in tags from the agent launchers
+
+The coding-agent plugins (claude-code, codex, copilot, cursor, opencode, pi, vibe) add tags of their own to every generation, on top of whatever you set in `AGENTO11Y_TAGS`. A built-in key wins if you set the same key yourself. A tag is left off when the launcher has no value for it, so a missing key means "unknown" rather than "false".
+
+| Tag | Value | Emitted by |
+| --- | --- | --- |
+| `cwd` | Working directory of the session. For pi, the directory pi was launched from, which can be a subdirectory of the repo. | all launchers |
+| `git.branch` | Branch checked out in that directory, or a short commit SHA when HEAD is detached. Omitted outside a git checkout. | all launchers |
+| `subagent` | `"true"` on generations from a subagent run. Absent otherwise, never `"false"`. | claude-code, codex, cursor, opencode |
+
+Launchers also set a few keys specific to one host, so this table is not the full list of what arrives on a generation.
+
 ## See also
 
 - [Content Capture Modes](content-capture-modes.md) — which content fields ship. Content capture does not strip `tags` or `metadata`; both are always exported.
