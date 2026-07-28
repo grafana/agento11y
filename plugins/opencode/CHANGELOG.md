@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.16.0] - 2026-07-28
+
+### Features
+
+- **plugins/opencode**: send the session title as conversationTitle (#481)
+- **plugins/opencode**: emit the subagent built-in tag (#476)
+
+### Bug Fixes
+
+- **plugins/opencode**: shut down the SDK and OTel providers on teardown (#478)
+
 ## [0.15.0] - 2026-07-28
 
 ### Documentation
