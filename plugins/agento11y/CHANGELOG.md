@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.22.0] - 2026-07-28
+
+### Features
+
+- **plugins**: local viewer UI improvements (#475)
+
 ## [0.21.0] - 2026-07-28
 
 ### Features
