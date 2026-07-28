@@ -271,11 +271,10 @@ describe("createAgento11yHooks OTLP wiring", () => {
         properties: { info: { id: sessionID } },
       },
     });
-    // session.idle's forceFlush is fire-and-forget; only global.disposed
-    // awaits shutdown, which drains the OTLP exporters.
-    await hooks.event({
-      event: { type: "global.disposed", properties: {} },
-    });
+    // session.idle's forceFlush is fire-and-forget, so it cannot be awaited
+    // here. Disposal is the awaited path: it shuts the providers down, which
+    // drains the OTLP exporters.
+    await hooks.dispose();
   }
 
   it("forwards agento11y SDK spans and metrics through the configured OTLP endpoint", async () => {
@@ -452,9 +451,7 @@ describe("createAgento11yHooks OTLP wiring", () => {
         properties: { info: { id: sessionID } },
       },
     });
-    await hooks.event({
-      event: { type: "global.disposed", properties: {} },
-    });
+    await hooks.dispose();
   }
 
   it("exports an error execute_tool span for a tool that never completes in metadata_only", async () => {

@@ -14,6 +14,7 @@ import {
   type ToolExecutionRecord,
   toolSpansFromParts,
 } from "./hooks.js";
+import { emitServerInstanceDisposed } from "./hooks.testutil.js";
 import { Redactor } from "./redact.js";
 
 function mockAgento11yClient() {
@@ -592,7 +593,7 @@ describe("hook lifecycle records and guard denial", () => {
     );
     expect(_peekToolExecutionState().completed).toHaveLength(0);
 
-    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+    await emitServerInstanceDisposed(hooks);
   });
 
   it("drains an incomplete tool execution when the assistant message records (metadata_only)", async () => {
@@ -666,7 +667,7 @@ describe("hook lifecycle records and guard denial", () => {
 
     expect(_peekToolExecutionState().active).toHaveLength(0);
 
-    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+    await emitServerInstanceDisposed(hooks);
   });
 
   it("removes the stranded active entry in full mode when the error part is present", async () => {
@@ -759,7 +760,7 @@ describe("hook lifecycle records and guard denial", () => {
     // precedence is pinned by the mergeToolSpanRecords cases above.
     expect(_peekToolExecutionState().active).toHaveLength(0);
 
-    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+    await emitServerInstanceDisposed(hooks);
   });
 
   it("clears active and completed records on session.deleted", async () => {

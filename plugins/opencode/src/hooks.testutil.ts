@@ -3,11 +3,24 @@
 
 import { vi } from "vitest";
 import type { Agento11yOpencodeConfig } from "./config.js";
-import type { createAgento11yHooks } from "./hooks.js";
+import type { createAgento11yHooks, OpencodeEventType } from "./hooks.js";
 
 export type TestHooks = NonNullable<
   Awaited<ReturnType<typeof createAgento11yHooks>>
 >;
+
+/**
+ * Dispatches an event through the plugin's `event` hook. `type` is constrained
+ * to the `@opencode-ai/sdk` `Event` union, so a name outside opencode's
+ * declared event surface fails to compile.
+ */
+export async function emitEvent(
+  hooks: TestHooks,
+  type: OpencodeEventType,
+  properties: unknown = {},
+): Promise<void> {
+  await hooks.event({ event: { type, properties } });
+}
 
 export type CapturedGeneration = {
   seed: any;
@@ -109,27 +122,21 @@ export async function emitMessageUpdated(
   hooks: TestHooks,
   msg: unknown,
 ): Promise<void> {
-  await hooks.event({
-    event: { type: "message.updated", properties: { info: msg } },
-  });
+  await emitEvent(hooks, "message.updated", { info: msg });
 }
 
 export async function emitPartUpdated(
   hooks: TestHooks,
   part: unknown,
 ): Promise<void> {
-  await hooks.event({
-    event: { type: "message.part.updated", properties: { part } },
-  });
+  await emitEvent(hooks, "message.part.updated", { part });
 }
 
 export async function emitSessionDeleted(
   hooks: TestHooks,
   sessionID: string,
 ): Promise<void> {
-  await hooks.event({
-    event: { type: "session.deleted", properties: { info: { id: sessionID } } },
-  });
+  await emitEvent(hooks, "session.deleted", { info: { id: sessionID } });
 }
 
 export async function emitSessionCreated(
@@ -137,7 +144,12 @@ export async function emitSessionCreated(
   id: string,
   parentID?: string,
 ): Promise<void> {
-  await hooks.event({
-    event: { type: "session.created", properties: { info: { id, parentID } } },
-  });
+  await emitEvent(hooks, "session.created", { info: { id, parentID } });
+}
+
+/** Dispatches opencode's instance-teardown event. */
+export async function emitServerInstanceDisposed(
+  hooks: TestHooks,
+): Promise<void> {
+  await emitEvent(hooks, "server.instance.disposed", { directory: "/repo" });
 }
