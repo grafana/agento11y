@@ -230,7 +230,7 @@ func (c *Client) ExperimentURL(experimentID string) string {
 		return ""
 	}
 	if c.grafanaURL != "" {
-		return c.grafanaURL + "/a/grafana-sigil-app/offline-experiments/experiments/" + url.PathEscape(experimentID)
+		return c.grafanaURL + grafanaAppPath + "/offline-experiments/experiments/" + url.PathEscape(experimentID)
 	}
 	return c.core.ExperimentURL(experimentID)
 }
