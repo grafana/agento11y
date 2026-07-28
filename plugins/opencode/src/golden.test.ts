@@ -97,6 +97,7 @@ function closeServer(server: Server): Promise<void> {
 function opencodeMessageFixture() {
   const sessionID = "opencode-sess-1";
   const messageID = "msg-1";
+  const sessionTitle = "List the Go files in the repo";
   // Leave `system` and `tools` unset. Real OpenCode sessions rarely set these
   // per-request overrides.
   const userMessage = {
@@ -166,6 +167,7 @@ function opencodeMessageFixture() {
   ];
   return {
     sessionID,
+    sessionTitle,
     userMessage,
     userParts,
     assistantMessage,
@@ -228,6 +230,7 @@ describe("opencode plugin: real-SDK golden export", () => {
   ) {
     const {
       sessionID,
+      sessionTitle,
       userMessage,
       userParts,
       assistantMessage,
@@ -262,6 +265,13 @@ describe("opencode plugin: real-SDK golden export", () => {
     const hooks = await createAgento11yHooks(config, fakeClient);
     if (!hooks)
       throw new Error("expected createAgento11yHooks to return hooks");
+
+    await hooks.event({
+      event: {
+        type: "session.created",
+        properties: { info: { id: sessionID, title: sessionTitle } },
+      },
+    });
 
     // Store the user message, capture the composed system prompt, then
     // export when the assistant message completes.
@@ -319,7 +329,7 @@ describe("opencode plugin: real-SDK golden export", () => {
     const turn = allGen.find((g) => g.conversation_id === sessionID);
     expect(turn, "expected a generation for the session").toBeDefined();
 
-    return { exports, sessionID, turn, messageFetches };
+    return { exports, sessionID, sessionTitle, turn, messageFetches };
   }
 
   function expectCommonTurnFields(turn: any): void {
@@ -331,10 +341,14 @@ describe("opencode plugin: real-SDK golden export", () => {
   }
 
   it("matches the recorded golden for a complete assistant turn", async () => {
-    const { exports, turn, messageFetches } = await runCompleteAssistantTurn();
+    const { exports, sessionTitle, turn, messageFetches } =
+      await runCompleteAssistantTurn();
 
     // Invariant assertions on top of the golden diff.
     expectCommonTurnFields(turn);
+    // The proto Generation has no conversation_title field; the SDK carries
+    // the title in metadata (spanAttrConversationTitle in js/src/client.ts).
+    expect(turn.metadata["agento11y.conversation.title"]).toBe(sessionTitle);
     expect(messageFetches).toBe(1);
 
     assertGoldenJSON(GOLDEN_PATH, exports);
@@ -346,11 +360,17 @@ describe("opencode plugin: real-SDK golden export", () => {
     "metadata_only",
     "full_with_metadata_spans",
   ] as const)("propagates content capture mode %s to the SDK export", async (contentCapture) => {
-    const { turn, messageFetches } = await runCompleteAssistantTurn({
-      contentCapture,
-    });
+    const { sessionTitle, turn, messageFetches } =
+      await runCompleteAssistantTurn({
+        contentCapture,
+      });
 
     expectCommonTurnFields(turn);
+    if (contentCapture === "metadata_only") {
+      expect(turn.metadata["agento11y.conversation.title"]).toBeUndefined();
+    } else {
+      expect(turn.metadata["agento11y.conversation.title"]).toBe(sessionTitle);
+    }
     expect(turn.metadata["agento11y.sdk.content_capture_mode"]).toBe(
       contentCapture,
     );

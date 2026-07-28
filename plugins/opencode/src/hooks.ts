@@ -111,6 +111,22 @@ const latestSystemPromptBySession = new Map<string, string>();
 // Used as the default agent and effective version, matching claude-code.
 let hostVersion: string | undefined;
 
+// Latest real `Session.title` per session, from the same
+// `session.created`/`session.updated` events that carry the host version.
+// Latest wins: opencode generates the title asynchronously with its small
+// model (so it usually arrives after the first turn has been exported) and a
+// user can rename a session at any time. Blank and placeholder titles are
+// never stored, so they cannot clear a real one.
+const latestSessionTitleBySession = new Map<string, string>();
+
+// At session creation opencode seeds a placeholder rather than an empty title:
+// `New session - <ISO>`, or `Child session - <ISO>` for subagents. The ISO
+// string is the session's creation time, so sending a placeholder is worse than
+// sending nothing: unique per session, and no use as a conversation name. Same
+// regex opencode uses on its own placeholders.
+const placeholderSessionTitle =
+  /^(New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
 type SessionContext = {
   agent: string | undefined;
   model: { provider: string; name: string } | undefined;
@@ -172,6 +188,7 @@ export function _resetHookState(): void {
   firstPartAtByMessage.clear();
   pendingGenerations.clear();
   latestSystemPromptBySession.clear();
+  latestSessionTitleBySession.clear();
   hostVersion = undefined;
   sessionContexts.clear();
   _resetToolExecutionState();
@@ -275,6 +292,7 @@ async function handleEvent(
 ): Promise<void> {
   if (event.type === "session.created" || event.type === "session.updated") {
     recordHostVersion(event.properties);
+    recordSessionTitle(event.properties, redactor);
     if (event.type === "session.created") {
       recordSessionParent(event.properties);
     }
@@ -512,6 +530,13 @@ async function recordAssistantMessage(
     gitBranch: resolveGitBranch(projectDir),
     isSubagent: subagentSessions.has(assistantMsg.sessionID),
   });
+  // Sent regardless of content capture mode: the title is host-provided
+  // session metadata that opencode shows in its own UI, and the SDK drops it
+  // from a `metadata_only` export itself. Already redacted by
+  // `recordSessionTitle`.
+  const conversationTitle = latestSessionTitleBySession.get(
+    assistantMsg.sessionID,
+  );
   const seed = {
     id: genId,
     conversationId: assistantMsg.sessionID,
@@ -521,6 +546,7 @@ async function recordAssistantMessage(
     model: { provider: assistantMsg.providerID, name: assistantMsg.modelID },
     startedAt: new Date(assistantMsg.time.created),
     contentCapture: config.contentCapture,
+    ...(conversationTitle && { conversationTitle }),
     ...(parent && { parentGenerationIds: [parent] }),
     ...(tools.length > 0 && { tools }),
     ...(includeMessageBodies && { systemPrompt }),
@@ -537,6 +563,7 @@ async function recordAssistantMessage(
 
   const spanOpts = {
     conversationId: assistantMsg.sessionID,
+    conversationTitle,
     agentName: buildAgentName(config.agentName, assistantMsg.mode),
     agentVersion,
     requestProvider: assistantMsg.providerID,
@@ -599,6 +626,21 @@ function recordHostVersion(properties: unknown): void {
   const info = recordField(properties, "info");
   const version = stringField(info, "version");
   if (version) hostVersion = version;
+}
+
+/**
+ * Remember the latest real `Session.title` from a session event, redacted here so
+ * the map only holds exportable text. `plugins/opencode/src/client.ts` installs no
+ * SDK `generationSanitizer` the way pi does, so this is the title's only
+ * redaction, and opencode's small model writes it from the user's prompt, which
+ * may contain a pasted token.
+ */
+function recordSessionTitle(properties: unknown, redactor: Redactor): void {
+  const info = recordField(properties, "info");
+  const id = stringField(info, "id");
+  const title = stringField(info, "title")?.trim();
+  if (!id || !title || placeholderSessionTitle.test(title)) return;
+  latestSessionTitleBySession.set(id, redactor.redactLightweight(title));
 }
 
 /**
@@ -681,6 +723,7 @@ async function handleLifecycle(
       subagentSessions.delete(sessionId);
       pendingGenerations.delete(sessionId);
       latestSystemPromptBySession.delete(sessionId);
+      latestSessionTitleBySession.delete(sessionId);
       sessionContexts.delete(sessionId);
       completedToolExecutions.delete(sessionId);
       for (const key of activeToolExecutions.keys()) {
@@ -1001,6 +1044,7 @@ export function emitToolSpans(
   records: ToolExecutionRecord[],
   opts: {
     conversationId: string;
+    conversationTitle?: string;
     agentName: string;
     agentVersion?: string;
     requestProvider: string;
@@ -1020,6 +1064,7 @@ export function emitToolSpans(
         toolCallId: record.toolCallId,
         toolType: "function",
         conversationId: opts.conversationId,
+        conversationTitle: opts.conversationTitle,
         agentName: opts.agentName,
         agentVersion: opts.agentVersion,
         requestProvider: opts.requestProvider,

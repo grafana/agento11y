@@ -139,12 +139,21 @@ export async function emitSessionDeleted(
   await emitEvent(hooks, "session.deleted", { info: { id: sessionID } });
 }
 
+/** Emit a session lifecycle event carrying an arbitrary `Session` subset. */
+export async function emitSessionEvent(
+  hooks: TestHooks,
+  type: "session.created" | "session.updated",
+  info: Record<string, unknown>,
+): Promise<void> {
+  await emitEvent(hooks, type, { info });
+}
+
 export async function emitSessionCreated(
   hooks: TestHooks,
   id: string,
   parentID?: string,
 ): Promise<void> {
-  await emitEvent(hooks, "session.created", { info: { id, parentID } });
+  await emitSessionEvent(hooks, "session.created", { id, parentID });
 }
 
 /** Dispatches opencode's instance-teardown event. */
