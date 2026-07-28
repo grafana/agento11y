@@ -275,6 +275,9 @@ func Serve(ctx context.Context, dir string, port int, logger *log.Logger) error 
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
+		// Close the event hub first so open SSE streams return immediately
+		// instead of holding the shutdown deadline open.
+		srv.Close()
 		_ = httpSrv.Shutdown(shutdownCtx)
 		return nil
 	case err := <-serveErr:

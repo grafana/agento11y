@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -34,6 +35,14 @@ type ConversationSummary struct {
 	// Status is "ok" or "err". "err" means at least one generation in
 	// the conversation recorded a call_error.
 	Status string `json:"status"`
+	// Workspace is the session's working directory (the cwd tag); Branch
+	// is the git.branch tag. The viewer groups and filters the list by
+	// these. Subagents is the number of subagent steps (generations whose
+	// agent_name carries a "parent/child" suffix) — a cheap signal for
+	// flagging orchestration-heavy conversations in the list.
+	Workspace string `json:"workspace,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	Subagents int    `json:"subagents,omitempty"`
 }
 
 // GenerationView is one step in the conversation thread.
@@ -62,8 +71,32 @@ type GenerationView struct {
 	Output       []agento11y.Message `json:"output,omitempty"`
 	Tools        []string            `json:"tools,omitempty"`
 	ToolPreview  string              `json:"tool_preview,omitempty"`
-	StopReason   string              `json:"stop_reason,omitempty"`
-	CallError    string              `json:"call_error,omitempty"`
+	// Skills is the on-demand skill set this generation loaded. Unlike
+	// Tools (derived from message content) it is read from the
+	// generation's `skills` field. Empty for the common no-skill turn.
+	Skills     []SkillView `json:"skills,omitempty"`
+	StopReason string      `json:"stop_reason,omitempty"`
+	CallError  string      `json:"call_error,omitempty"`
+	// ParentGenerationIDs links this step to the generation(s) that
+	// caused it. A cross-agent edge (parent has a different agent_name)
+	// marks a subagent launch; same-agent edges chain a single agent's
+	// steps. The viewer uses these to build the subagent tree/timeline.
+	ParentGenerationIDs []string `json:"parent_generation_ids,omitempty"`
+	// ThinkingEnabled reports that the model reasoned on this step. Claude
+	// Code transcripts record the flag but not the reasoning text, so the
+	// viewer can note "reasoning used" even when no thinking part exists.
+	ThinkingEnabled bool `json:"thinking_enabled,omitempty"`
+}
+
+// SkillView is one skill a generation loaded, as shown in the viewer.
+// Name is the full invoked string, plugin-qualified for plugin skills
+// (e.g. "workflow-toolkit:code-review"); the client splits the plugin
+// prefix for display.
+type SkillView struct {
+	Name        string `json:"name"`
+	ID          string `json:"id,omitempty"`
+	Description string `json:"description,omitempty"`
+	Version     string `json:"version,omitempty"`
 }
 
 // ConversationDetail is the payload for the detail screen — the
@@ -119,7 +152,7 @@ func summariseConversationFile(path string) (ConversationSummary, bool, error) {
 	var sum ConversationSummary
 	var hasError, seen bool
 
-	err := scanGenerationRecords(path, func(r generationRecord, gen storedGeneration) {
+	err := scanLatestGenerationRecords(path, func(r generationRecord, gen storedGeneration) {
 		seen = true
 		if sum.ID == "" {
 			sum.ID = r.ConversationID
@@ -128,7 +161,7 @@ func summariseConversationFile(path string) (ConversationSummary, bool, error) {
 		usage := gen.Usage.toSDK()
 		sum.InputTokens += usage.InputTokens
 		sum.OutputTokens += usage.OutputTokens
-		sum.TotalTokens += usage.Normalize().TotalTokens
+		sum.TotalTokens += totalTokensForView(usage, gen.Model.Provider)
 		sum.TokenBuckets = sum.TokenBuckets.plus(disjointTokenUsage(usage, gen.Model.Provider))
 
 		if !gen.StartedAt.IsZero() && (sum.StartedAt.IsZero() || gen.StartedAt.Before(sum.StartedAt)) {
@@ -160,6 +193,19 @@ func summariseConversationFile(path string) (ConversationSummary, bool, error) {
 		if gen.CallError != "" {
 			hasError = true
 		}
+		// cwd/branch are per-session and identical across a conversation's
+		// generations; take the first non-empty. A generation whose
+		// agent_name carries a subagent suffix ("claude-code/general-purpose")
+		// is one step of a spawned subagent.
+		if sum.Workspace == "" {
+			sum.Workspace = gen.Tags["cwd"]
+		}
+		if sum.Branch == "" {
+			sum.Branch = gen.Tags["git.branch"]
+		}
+		if strings.Contains(gen.AgentName, "/") {
+			sum.Subagents++
+		}
 	})
 	if err != nil {
 		return ConversationSummary{}, false, err
@@ -185,7 +231,7 @@ func (s *Storage) ConversationDetail(id string) (*ConversationDetail, error) {
 	}
 	path := filepath.Join(s.dir, ConversationsDir, id+".jsonl")
 	out := &ConversationDetail{ID: id}
-	err := scanGenerationRecords(path, func(_ generationRecord, gen storedGeneration) {
+	err := scanLatestGenerationRecords(path, func(_ generationRecord, gen storedGeneration) {
 		if out.Title == "" && gen.title() != "" {
 			out.Title = gen.title()
 		}
@@ -193,26 +239,28 @@ func (s *Storage) ConversationDetail(id string) (*ConversationDetail, error) {
 		input := gen.inputMessages()
 		output := gen.outputMessages()
 		view := GenerationView{
-			GenerationID: gen.ID,
-			AgentName:    gen.AgentName,
-			Model:        gen.modelName(),
-			Provider:     gen.Model.Provider,
-			StartedAt:    gen.StartedAt,
-			CompletedAt:  gen.CompletedAt,
-			InputTokens:  usage.InputTokens,
-			OutputTokens: usage.OutputTokens,
-			TotalTokens:  usage.Normalize().TotalTokens,
-			TokenBuckets: disjointTokenUsage(usage, gen.Model.Provider),
-			Messages:     threadMessages(input, output),
-			Input:        input,
-			Output:       output,
-			StopReason:   gen.StopReason,
-			CallError:    gen.CallError,
+			GenerationID:        gen.ID,
+			AgentName:           gen.AgentName,
+			Model:               gen.modelName(),
+			Provider:            gen.Model.Provider,
+			StartedAt:           gen.StartedAt,
+			CompletedAt:         gen.CompletedAt,
+			InputTokens:         usage.InputTokens,
+			OutputTokens:        usage.OutputTokens,
+			TotalTokens:         totalTokensForView(usage, gen.Model.Provider),
+			TokenBuckets:        disjointTokenUsage(usage, gen.Model.Provider),
+			Input:               input,
+			Output:              output,
+			StopReason:          gen.StopReason,
+			CallError:           gen.CallError,
+			ParentGenerationIDs: gen.ParentGenerationIDs,
+			ThinkingEnabled:     gen.ThinkingEnabled,
 		}
 		if !gen.StartedAt.IsZero() && !gen.CompletedAt.IsZero() {
 			view.DurationSeconds = gen.CompletedAt.Sub(gen.StartedAt).Seconds()
 		}
 		view.Tools, view.ToolPreview = extractTools(output)
+		view.Skills = gen.skillViews()
 		out.Generations = append(out.Generations, view)
 	})
 	if err != nil {
@@ -224,6 +272,16 @@ func (s *Storage) ConversationDetail(id string) (*ConversationDetail, error) {
 	sort.SliceStable(out.Generations, func(i, j int) bool {
 		return out.Generations[i].StartedAt.Before(out.Generations[j].StartedAt)
 	})
+
+	// Each step shows the data of exactly one model call: its own input (the
+	// user prompt, or the tool results the harness fed into THIS request)
+	// followed by its own output. A tool call's result lands in the NEXT
+	// request's input, so it renders on the step that received it — not folded
+	// back into the step that issued the call. That keeps every step's content
+	// and tokens aligned with the single generation it represents.
+	for i := range out.Generations {
+		out.Generations[i].Messages = threadMessages(out.Generations[i].Input, out.Generations[i].Output)
+	}
 	return out, nil
 }
 
@@ -277,7 +335,7 @@ func (s *Storage) TokenUsagePoints() ([]TokenUsagePoint, error) {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
 			continue
 		}
-		err := scanGenerationRecords(filepath.Join(dir, e.Name()), func(r generationRecord, gen storedGeneration) {
+		err := scanLatestGenerationRecords(filepath.Join(dir, e.Name()), func(r generationRecord, gen storedGeneration) {
 			if p, ok := tokenUsagePoint(r, gen); ok {
 				out = append(out, p)
 			}
@@ -408,88 +466,36 @@ func nonNeg(n int64) int64 {
 	return n
 }
 
-// scanGenerationRecords walks one per-conversation JSONL file calling visit
-// for every decodable record. A missing file is not an error; lines that
-// fail to decode (truncated mid-append, future-schema, …) are skipped.
+// totalTokensForView returns an explicit provider total when present; when
+// older records omit it, it falls back to the provider-aware disjoint buckets
+// so additive cache fields (notably Anthropic) are not silently dropped.
+func totalTokensForView(u agento11y.TokenUsage, provider string) int64 {
+	if u.TotalTokens != 0 {
+		return u.TotalTokens
+	}
+	b := disjointTokenUsage(u, provider)
+	return b.FreshInput + b.CacheRead + b.CacheWrite + b.Output + b.Reasoning
+}
+
+// threadMessages renders one generation's messages in display order: its own
+// input — the user prompt, or the tool results the harness fed into THIS
+// request — followed by its own output (the assistant's text and tool calls).
+// Results are shown on the step that received them (the request after the call
+// that produced them), never folded back into the issuing step, so each step
+// reflects only the data sent to and produced by that single model call.
 func threadMessages(input, output []agento11y.Message) []agento11y.Message {
 	if len(input) == 0 && len(output) == 0 {
 		return nil
 	}
-
-	inputWithoutResults := make([]agento11y.Message, 0, len(input))
-	toolResults := make([]agento11y.Message, 0, len(input))
-	for _, msg := range input {
-		if messageHasToolResult(msg) {
-			toolResults = append(toolResults, msg)
-			continue
-		}
-		inputWithoutResults = append(inputWithoutResults, msg)
-	}
-
-	if len(toolResults) == 0 {
-		messages := make([]agento11y.Message, 0, len(input)+len(output))
-		messages = append(messages, input...)
-		messages = append(messages, output...)
-		return messages
-	}
-
 	messages := make([]agento11y.Message, 0, len(input)+len(output))
-	messages = append(messages, inputWithoutResults...)
-	usedResults := make([]bool, len(toolResults))
-	for _, outputMsg := range output {
-		messages = append(messages, outputMsg)
-		callIDs := toolCallIDs(outputMsg)
-		if len(callIDs) == 0 {
-			continue
-		}
-		for i, resultMsg := range toolResults {
-			if usedResults[i] || !toolResultMatchesAny(resultMsg, callIDs) {
-				continue
-			}
-			messages = append(messages, resultMsg)
-			usedResults[i] = true
-		}
-	}
-	for i, resultMsg := range toolResults {
-		if !usedResults[i] {
-			messages = append(messages, resultMsg)
-		}
-	}
+	messages = append(messages, input...)
+	messages = append(messages, output...)
 	return messages
 }
 
-func messageHasToolResult(msg agento11y.Message) bool {
-	for _, part := range msg.Parts {
-		if part.Kind == agento11y.PartKindToolResult && part.ToolResult != nil {
-			return true
-		}
-	}
-	return false
-}
-
-func toolCallIDs(msg agento11y.Message) map[string]struct{} {
-	ids := map[string]struct{}{}
-	for _, part := range msg.Parts {
-		if part.Kind != agento11y.PartKindToolCall || part.ToolCall == nil || part.ToolCall.ID == "" {
-			continue
-		}
-		ids[part.ToolCall.ID] = struct{}{}
-	}
-	return ids
-}
-
-func toolResultMatchesAny(msg agento11y.Message, ids map[string]struct{}) bool {
-	for _, part := range msg.Parts {
-		if part.Kind != agento11y.PartKindToolResult || part.ToolResult == nil || part.ToolResult.ToolCallID == "" {
-			continue
-		}
-		if _, ok := ids[part.ToolResult.ToolCallID]; ok {
-			return true
-		}
-	}
-	return false
-}
-
+// scanGenerationRecords walks one per-conversation JSONL file calling visit
+// for every decodable record. A missing file is not an error; lines that
+// fail to decode (truncated mid-append, future-schema, …) are skipped.
 func scanGenerationRecords(path string, visit func(generationRecord, storedGeneration)) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -519,6 +525,41 @@ func scanGenerationRecords(path string, visit func(generationRecord, storedGener
 		visit(rec, gen)
 	}
 	return sc.Err()
+}
+
+type scannedGenerationRecord struct {
+	record generationRecord
+	gen    storedGeneration
+}
+
+func scanLatestGenerationRecords(path string, visit func(generationRecord, storedGeneration)) error {
+	indexByID := map[string]int{}
+	var records []scannedGenerationRecord
+	lineNo := 0
+	err := scanGenerationRecords(path, func(r generationRecord, gen storedGeneration) {
+		lineNo++
+		id := strings.TrimSpace(r.GenerationID)
+		if id == "" {
+			id = strings.TrimSpace(gen.ID)
+		}
+		if id == "" {
+			id = "\x00line:" + strconv.Itoa(lineNo)
+		}
+		scanned := scannedGenerationRecord{record: r, gen: gen}
+		if idx, ok := indexByID[id]; ok {
+			records[idx] = scanned
+			return
+		}
+		indexByID[id] = len(records)
+		records = append(records, scanned)
+	})
+	if err != nil {
+		return err
+	}
+	for _, r := range records {
+		visit(r.record, r.gen)
+	}
+	return nil
 }
 
 // extractTools walks the assistant's output messages and collects the
