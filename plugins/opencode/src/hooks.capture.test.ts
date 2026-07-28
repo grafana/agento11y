@@ -1,5 +1,5 @@
 // Tests system prompt capture via `experimental.chat.system.transform`,
-// name-only tool definitions, and host version capture.
+// name-only tool definitions, host version capture, and session title capture.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,12 +17,14 @@ vi.mock("./telemetry.js", () => ({
   createTelemetryProviders: createTelemetryProvidersMock,
 }));
 
+import type { Agento11yOpencodeConfig } from "./config.js";
 import { _resetHookState, createAgento11yHooks } from "./hooks.js";
 import {
   assistantMessage,
   baseConfig,
   emitMessageUpdated,
   emitSessionDeleted,
+  emitSessionEvent,
   makeAgento11yMock,
   makeOpencodeClient,
   type TestHooks,
@@ -329,22 +331,15 @@ describe("opencode host version", () => {
     _resetHookState();
   });
 
-  async function emitSessionCreatedWithVersion(
-    hooks: TestHooks,
-    id: string,
-    version: string,
-  ) {
-    await hooks.event({
-      event: { type: "session.created", properties: { info: { id, version } } },
-    });
-  }
-
   it("uses the OpenCode version as agent and effective version", async () => {
     const { sigil, generations } = makeAgento11yMock();
     createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks(baseConfig({ agentVersion: undefined }));
 
-    await emitSessionCreatedWithVersion(hooks, "sess-1", "1.17.20");
+    await emitSessionEvent(hooks, "session.created", {
+      id: "sess-1",
+      version: "1.17.20",
+    });
     await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
 
     expect(generations).toHaveLength(1);
@@ -357,11 +352,9 @@ describe("opencode host version", () => {
     createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks(baseConfig({ agentVersion: undefined }));
 
-    await hooks.event({
-      event: {
-        type: "session.updated",
-        properties: { info: { id: "sess-1", version: "1.18.0" } },
-      },
+    await emitSessionEvent(hooks, "session.updated", {
+      id: "sess-1",
+      version: "1.18.0",
     });
     await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
 
@@ -374,7 +367,10 @@ describe("opencode host version", () => {
     createAgento11yClientMock.mockReturnValue(sigil);
     const hooks = await makeHooks(baseConfig({ agentVersion: "my-agent-2" }));
 
-    await emitSessionCreatedWithVersion(hooks, "sess-1", "1.17.20");
+    await emitSessionEvent(hooks, "session.created", {
+      id: "sess-1",
+      version: "1.17.20",
+    });
     await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
 
     expect(generations).toHaveLength(1);
@@ -391,5 +387,221 @@ describe("opencode host version", () => {
 
     expect(generations).toHaveLength(1);
     expect(generations[0]!.seed.agentVersion).toBeUndefined();
+  });
+});
+
+describe("opencode conversation title", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetHookState();
+  });
+
+  const title = "Fix flaky auth test";
+  // opencode's own creation defaults, replaced only once its small model
+  // produces a real title.
+  const newPlaceholder = "New session - 2026-01-12T13:07:53.510Z";
+  const childPlaceholder = "Child session - 2026-01-12T13:07:53.510Z";
+
+  function emitTitle(
+    hooks: TestHooks,
+    type: "session.created" | "session.updated",
+    sessionTitle: string | undefined,
+    id = "sess-1",
+  ): Promise<void> {
+    return emitSessionEvent(hooks, type, { id, title: sessionTitle });
+  }
+
+  const cases: {
+    name: string;
+    config?: Agento11yOpencodeConfig;
+    run: (hooks: TestHooks) => Promise<void>;
+    // Expected seed.conversationTitle per exported generation, in order.
+    want: (string | undefined)[];
+  }[] = [
+    {
+      name: "uses the title from session.created",
+      run: async (hooks) => {
+        await emitTitle(hooks, "session.created", title);
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+      },
+      want: [title],
+    },
+    {
+      name: "keeps the title for later turns in the same session",
+      run: async (hooks) => {
+        await emitTitle(hooks, "session.created", title);
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-2"));
+      },
+      want: [title, title],
+    },
+    {
+      name: "replaces the stored title on a later session.updated",
+      run: async (hooks) => {
+        await emitTitle(hooks, "session.created", "Investigate auth failure");
+        await emitTitle(hooks, "session.updated", title);
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+      },
+      want: [title],
+    },
+    {
+      name: "keeps the previous title when an update is blank",
+      run: async (hooks) => {
+        await emitTitle(hooks, "session.created", title);
+        await emitTitle(hooks, "session.updated", "");
+        await emitTitle(hooks, "session.updated", "   ");
+        await emitTitle(hooks, "session.updated", undefined);
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+      },
+      want: [title],
+    },
+    {
+      name: "ignores an empty title",
+      run: async (hooks) => {
+        await emitTitle(hooks, "session.created", "");
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+      },
+      want: [undefined],
+    },
+    {
+      name: "ignores the placeholder opencode sets at session creation",
+      run: async (hooks) => {
+        await emitTitle(hooks, "session.created", newPlaceholder);
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+        await emitTitle(hooks, "session.updated", title);
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-2"));
+      },
+      want: [undefined, title],
+    },
+    {
+      name: "ignores the placeholder opencode sets on a subagent session",
+      run: async (hooks) => {
+        await emitTitle(hooks, "session.created", childPlaceholder);
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+      },
+      want: [undefined],
+    },
+    {
+      name: "keeps a real title when a placeholder update arrives",
+      run: async (hooks) => {
+        await emitTitle(hooks, "session.created", title);
+        await emitTitle(hooks, "session.updated", newPlaceholder);
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+      },
+      want: [title],
+    },
+    {
+      name: "keeps a title that only looks like a placeholder",
+      run: async (hooks) => {
+        await emitTitle(
+          hooks,
+          "session.created",
+          "New session - what changed?",
+        );
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+      },
+      want: ["New session - what changed?"],
+    },
+    {
+      name: "applies a late title prospectively, leaving the first turn untitled",
+      run: async (hooks) => {
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+        await emitTitle(hooks, "session.updated", title);
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-2"));
+      },
+      want: [undefined, title],
+    },
+    {
+      name: "keeps titles of concurrent sessions separate",
+      run: async (hooks) => {
+        await emitTitle(hooks, "session.created", "title one", "sess-1");
+        await emitTitle(hooks, "session.created", "title two", "sess-2");
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+        await emitMessageUpdated(hooks, assistantMessage("sess-2", "msg-1"));
+      },
+      want: ["title one", "title two"],
+    },
+    {
+      name: "clears the title when the session is deleted",
+      run: async (hooks) => {
+        await emitTitle(hooks, "session.created", title);
+        await emitSessionDeleted(hooks, "sess-1");
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+      },
+      want: [undefined],
+    },
+    {
+      name: "clears the title on hook state reset",
+      run: async (hooks) => {
+        await emitTitle(hooks, "session.created", title);
+        _resetHookState();
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+      },
+      want: [undefined],
+    },
+    {
+      name: "still sets the title in metadata_only",
+      config: baseConfig({ contentCapture: "metadata_only" }),
+      run: async (hooks) => {
+        await emitTitle(hooks, "session.created", title);
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+      },
+      want: [title],
+    },
+    {
+      name: "redacts a secret the titling model copied from the prompt",
+      run: async (hooks) => {
+        await emitTitle(
+          hooks,
+          "session.created",
+          "Rotate glc_abcdefghijklmnopqrstuvwxyz1234",
+        );
+        await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+      },
+      want: ["Rotate [REDACTED:grafana-cloud-token]"],
+    },
+  ];
+
+  it.each(cases)("$name", async ({ config, run, want }) => {
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await makeHooks(config);
+
+    await run(hooks);
+
+    expect(generations.map((g) => g.seed.conversationTitle)).toEqual(want);
+  });
+
+  it("omits the field instead of sending an empty title", async () => {
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await makeHooks();
+
+    await emitTitle(hooks, "session.created", newPlaceholder);
+    await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+
+    expect(generations).toHaveLength(1);
+    expect("conversationTitle" in generations[0]!.seed).toBe(false);
+  });
+
+  it("carries the title on the tool spans nested under the turn", async () => {
+    const { sigil } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await makeHooks();
+
+    await emitTitle(hooks, "session.created", title);
+    await hooks.toolExecuteBefore(
+      { tool: "bash", sessionID: "sess-1", callID: "tc-1" },
+      { args: {} },
+    );
+    hooks.toolExecuteAfter(
+      { tool: "bash", sessionID: "sess-1", callID: "tc-1", args: {} },
+      { title: "bash", output: "ok", metadata: {} },
+    );
+    await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+
+    expect(sigil.startToolExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationTitle: title }),
+    );
   });
 });
