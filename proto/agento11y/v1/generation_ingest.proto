@@ -1,5 +1,4 @@
-// Canonical Agento11y ingest schema. This is the source of truth for every
-// SDK; proto/sigil/v1 is the frozen legacy copy kept for the migration window.
+// Agento11y ingest schema. This is the source of truth for every SDK.
 syntax = "proto3";
 
 package agento11y.v1;
