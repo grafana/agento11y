@@ -6,9 +6,9 @@ For agents working in a *consumer* project (instrumenting their app, or installi
 
 Read the README and `mise tasks` for the obvious stuff: layout, package names, where languages live. This file only documents what you can't discover by looking.
 
-## Proto is canonical
+## Proto is the source of truth
 
-`proto/agento11y/v1/*.proto` is the source of truth; `proto/sigil/v1` is the frozen legacy copy kept for the migration window. Generated stubs live under each language tree:
+`proto/agento11y/v1/*.proto` is the source of truth. Generated stubs live under each language tree:
 
 - Go: `go/proto/agento11y/`
 - Python: `python/agento11y/internal/gen/agento11y/`
