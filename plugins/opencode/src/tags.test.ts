@@ -32,6 +32,26 @@ describe("buildBuiltinTags", () => {
       in: { cwd: "", gitBranch: "" },
       want: undefined,
     },
+    {
+      name: "subagent set alongside the other keys",
+      in: { cwd: "/repo", gitBranch: "main", isSubagent: true },
+      want: { "git.branch": "main", cwd: "/repo", subagent: "true" },
+    },
+    {
+      name: "subagent absent when false",
+      in: { cwd: "/workspace/repo", gitBranch: "main", isSubagent: false },
+      want: { "git.branch": "main", cwd: "/workspace/repo" },
+    },
+    {
+      name: "subagent only",
+      in: { isSubagent: true },
+      want: { subagent: "true" },
+    },
+    {
+      name: "empty-string inputs with subagent false return undefined",
+      in: { cwd: "", gitBranch: "", isSubagent: false },
+      want: undefined,
+    },
   ];
 
   it.each(cases)("$name", ({ in: input, want }) => {

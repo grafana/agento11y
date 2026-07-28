@@ -59,6 +59,12 @@ const lastGenerationIdBySession = new Map<string, string>();
 // parent/subagent boundary.
 const parentGenerationByChildSession = new Map<string, string>();
 
+// Sessions opencode created as subagents, i.e. `session.created` carried a
+// `Session.parentID` pointing at a different session. Kept separate from
+// `parentGenerationByChildSession`, which only holds children whose parent had
+// an already-recorded generation to freeze.
+const subagentSessions = new Set<string>();
+
 // First streamed assistant part time per message, keyed by
 // `${sessionID}\x00${messageID}`. Captured from `message.part.updated`
 // before the message completes so it survives `metadata_only` (where we
@@ -136,6 +142,7 @@ export function _resetHookState(): void {
   recordedMessages.clear();
   lastGenerationIdBySession.clear();
   parentGenerationByChildSession.clear();
+  subagentSessions.clear();
   firstPartAtByMessage.clear();
   pendingGenerations.clear();
   latestSystemPromptBySession.clear();
@@ -470,13 +477,14 @@ async function recordAssistantMessage(
   ]);
 
   const agentVersion = config.agentVersion || hostVersion;
-  // Resolved per turn so a mid-session checkout shows up on the next
-  // generation. Always sent regardless of content capture mode:
-  // `git.branch` and `cwd` are low-cardinality session metadata, not
-  // message content, matching claude-code/cursor.
+  // `git.branch` is resolved per turn so a mid-session checkout shows up on
+  // the next generation. These are sent regardless of content capture mode:
+  // they are low-cardinality session metadata, not message content, matching
+  // claude-code/cursor.
   const builtinTags = buildBuiltinTags({
     cwd: projectDir,
     gitBranch: resolveGitBranch(projectDir),
+    isSubagent: subagentSessions.has(assistantMsg.sessionID),
   });
   const seed = {
     id: genId,
@@ -580,8 +588,10 @@ function recordHostVersion(properties: unknown): void {
  * session's life, and freezing on a late update could capture a parent turn
  * recorded *after* the spawning one. If the parent has no recorded generation
  * yet at creation (rare — the spawning turn's predecessor is normally already
- * recorded), we skip: an unlinked child is better than a wrong link. The
- * `has(id)` guard is defensive against a duplicate `session.created`.
+ * recorded), we skip the lineage edge: an unlinked child is better than a wrong
+ * link. The `subagent` tag does not depend on that edge, so the session is
+ * still classified as a subagent. The `has(id)` guard is defensive against a
+ * duplicate `session.created`.
  */
 function recordSessionParent(properties: unknown): void {
   const info = recordField(properties, "info");
@@ -589,6 +599,7 @@ function recordSessionParent(properties: unknown): void {
   const id = stringField(info, "id");
   const parentID = stringField(info, "parentID");
   if (!id || !parentID || id === parentID) return;
+  subagentSessions.add(id);
   if (parentGenerationByChildSession.has(id)) return;
   const parentGeneration = lastGenerationIdBySession.get(parentID);
   if (!parentGeneration) return;
@@ -640,6 +651,7 @@ async function handleLifecycle(
       recordedMessages.delete(sessionId);
       lastGenerationIdBySession.delete(sessionId);
       parentGenerationByChildSession.delete(sessionId);
+      subagentSessions.delete(sessionId);
       pendingGenerations.delete(sessionId);
       latestSystemPromptBySession.delete(sessionId);
       sessionContexts.delete(sessionId);
