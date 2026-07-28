@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0] - 2026-07-28
+
+### Documentation
+
+- AI Observability -> Agent Observability rename (#450)
+- sigil -> agento11y rename in docs, examples and errors (#415)
+
 ## [0.14.0] - 2026-07-21
 
 ### Breaking Changes
