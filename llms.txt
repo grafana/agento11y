@@ -73,7 +73,7 @@ The user wants Grafana Agent observability to capture sessions from their coding
 
 | Agent | Plugin | Mechanism |
 |-------|--------|-----------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [`plugins/claude-code/`](https://github.com/grafana/agento11y/tree/main/plugins/claude-code) | Shared `agento11y` Go binary, plugin name `sigil-cc` |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [`plugins/claude-code/`](https://github.com/grafana/agento11y/tree/main/plugins/claude-code) | Shared `agento11y` Go binary, plugin name `agento11y-claude-code` |
 | [Codex](https://developers.openai.com/codex) | [`plugins/codex/`](https://github.com/grafana/agento11y/tree/main/plugins/codex) | Shared `agento11y` Go binary via hooks |
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`plugins/copilot/`](https://github.com/grafana/agento11y/tree/main/plugins/copilot) | Shared `agento11y` Go binary via hooks |
 | [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) | Shared `agento11y` Go binary via hooks |

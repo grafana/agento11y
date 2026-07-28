@@ -27,14 +27,14 @@ agento11y claude
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y claude` registers the `sigil-cc` plugin on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches Claude Code.
+`agento11y claude` registers the `agento11y-claude-code` plugin on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches Claude Code.
 
 <details>
 <summary>Manual plugin registration</summary>
 
 ```
 /plugin marketplace add grafana/agento11y
-/plugin install sigil-cc@grafana-sigil
+/plugin install agento11y-claude-code@agento11y
 ```
 
 </details>
@@ -105,7 +105,7 @@ Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a mi
 | `AGENTO11Y_USER_ID` | from `~/.claude.json` | Override the user id. |
 | `AGENTO11Y_USER_ID_SOURCE` | `email` | Which field to read from `~/.claude.json`: `email` or `accountUuid`. |
 | `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
-| `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `sigil-cc` plugin automatically. Set `false` to pin the installed version. |
+| `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `agento11y-claude-code` plugin automatically. Set `false` to pin the installed version. |
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Claude Code `PreToolUse` hook calls the Agent Observability `/api/v1/hooks:evaluate` API and blocks tool calls denied by guard rules. |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout. Lower = less added latency on every tool call, higher = better tolerance for slow `llm_judge` evaluators. |

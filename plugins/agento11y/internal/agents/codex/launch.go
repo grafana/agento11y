@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,10 +20,9 @@ const (
 	// `codex plugin marketplace add`.
 	marketplaceRepo = "grafana/agento11y"
 	// marketplaceAlias is the marketplace name declared in
-	// .agents/plugins/marketplace.json. Codex derives plugin keys from the
-	// marketplace manifest, so a local snapshot that predates the sigil
-	// rename exposes the plugin only as
-	// legacyPluginName@legacyMarketplaceAlias.
+	// .agents/plugins/marketplace.json. A local snapshot that predates the
+	// sigil rename exposes the plugin only under legacyMarketplaceAlias; see
+	// pluginKeys for the keys that follow from that.
 	marketplaceAlias       = "agento11y"
 	legacyMarketplaceAlias = "grafana-sigil"
 	// PluginName is the codex plugin name declared in
@@ -115,47 +115,82 @@ func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
 	if err := runSteps(ctx, bin, w, [][]string{{"plugin", "marketplace", "add", marketplaceRepo}}); err != nil {
 		return err
 	}
-	return ensurePlugin(ctx, bin, w, false)
+	return ensurePlugin(ctx, bin, w, "")
 }
 
 func defaultRunUpdate(ctx context.Context, bin string, w io.Writer) error {
-	// Snapshot the legacy state before the upgrade: when the refreshed
-	// marketplace copy drops the legacy name, ensurePlugin flips the install
-	// to the renamed plugin and the user must re-trust its hooks.
-	hadLegacy := false
+	// Snapshot the key that answers today. The upgrade below can drop the name
+	// or the alias that key uses, and ensurePlugin then lands on a different
+	// one; codex treats that as a new hook identity, so the user has to
+	// re-trust the hooks.
+	installedKey := ""
 	if out, err := pluginList(ctx, bin); err == nil {
-		hadLegacy = keyEnabled(out, legacyPluginName+"@"+legacyMarketplaceAlias)
+		installedKey = enabledKey(out)
 	}
 	if err := runSteps(ctx, bin, w, [][]string{{"plugin", "marketplace", "upgrade"}}); err != nil {
 		return err
 	}
-	return ensurePlugin(ctx, bin, w, hadLegacy)
+	return ensurePlugin(ctx, bin, w, installedKey)
 }
 
-// ensurePlugin registers the plugin under its current name, falling back to
-// the legacy name when the local marketplace snapshot predates the rename.
+// ensurePlugin registers the plugin under the first key of pluginKeys that
+// codex accepts, then reconciles the state that key implies.
+//
 // After a successful current-name add it removes the legacy entry: the
 // snapshot is post-rename at that point, so a leftover legacy entry can
 // never resolve again and would sit in config.toml as an orphan. Removal is
 // best-effort and exits 0 even when nothing is registered, so it is safe on
-// fresh installs. migrated additionally prints the one-time /hooks re-trust
-// hint — codex treats the renamed plugin as a new hook identity.
-func ensurePlugin(ctx context.Context, bin string, w io.Writer, migrated bool) error {
-	idx, err := runFirst(ctx, bin, w, [][]string{
-		{"plugin", "add", PluginName + "@" + marketplaceAlias},
-		{"plugin", "add", legacyPluginName + "@" + legacyMarketplaceAlias},
-	})
-	if err != nil || idx != 0 {
+// fresh installs.
+//
+// installedKey is the key that answered before this call, empty on a fresh
+// install. When the winning key differs, the install moved and codex sees a
+// new hook identity, so print the one-time /hooks re-trust hint naming the
+// key the user will now find there.
+func ensurePlugin(ctx context.Context, bin string, w io.Writer, installedKey string) error {
+	keys := pluginKeys()
+	candidates := make([][]string, 0, len(keys))
+	for _, k := range keys {
+		candidates = append(candidates, []string{"plugin", "add", k})
+	}
+	idx, err := runFirst(ctx, bin, w, candidates)
+	if err != nil {
 		return err
 	}
-	if migrated {
+	key := keys[idx]
+	// Only the legacy plugin name resolving means the snapshot still predates
+	// the rename: that install is live, so leave it alone.
+	if strings.HasPrefix(key, legacyPluginName+"@") {
+		return nil
+	}
+	if installedKey != "" && installedKey != key {
 		fmt.Fprintf(w,
-			"agento11y: migrated %s@%s to %s@%s — open /hooks inside codex and\n"+
+			"agento11y: migrated %s to %s — open /hooks inside codex and\n"+
 				"           trust the %s hooks to keep exporting turns.\n",
-			legacyPluginName, legacyMarketplaceAlias, PluginName, marketplaceAlias, PluginName)
+			installedKey, key, PluginName)
 	}
 	_, _ = runOutput(ctx, bin, "plugin", "remove", legacyPluginName+"@"+legacyMarketplaceAlias)
 	return nil
+}
+
+// pluginKeys lists the `<plugin>@<marketplace>` keys the launcher installs and
+// accepts, in preference order. codex derives plugin keys from the marketplace
+// manifest and does not document whether `plugin marketplace upgrade` re-keys
+// an existing registration to the manifest's new name, so a registration made
+// before the rename may keep answering to legacyMarketplaceAlias while already
+// serving the renamed plugin. That middle key is therefore a first-class state
+// rather than a fallback.
+//
+// legacyPluginName@marketplaceAlias is deliberately absent: the alias comes
+// from the manifest name, so a snapshot that still lists legacyPluginName is
+// named legacyMarketplaceAlias and the pair cannot occur. Counting it would
+// suppress bootstrap for a key codex can never resolve, and removing it would
+// delete an unrelated marketplace's plugin.
+func pluginKeys() []string {
+	return []string{
+		PluginName + "@" + marketplaceAlias,
+		PluginName + "@" + legacyMarketplaceAlias,
+		legacyPluginName + "@" + legacyMarketplaceAlias,
+	}
 }
 
 // defaultPluginList shells out to `codex plugin list` and returns the raw
@@ -166,12 +201,11 @@ func defaultPluginList(ctx context.Context, bin string) ([]byte, error) {
 	return launcher.Output(ctx, bin, "plugin", "list")
 }
 
-// pluginInstalled reports whether the codex plugin is registered and enabled
-// in codex's plugin store, under either its current or its legacy key. A
-// legacy install counts: while the local marketplace snapshot predates the
-// rename it keeps working as-is, and the periodic update path performs the
-// migration once `codex plugin marketplace upgrade` pulls a post-rename
-// copy.
+// pluginInstalled reports whether any key in pluginKeys is registered and
+// enabled in codex's plugin store. A legacy install counts: while the local
+// marketplace snapshot predates the rename it keeps working as-is, and the
+// periodic update path performs the migration once
+// `codex plugin marketplace upgrade` pulls a post-rename copy.
 //
 // We shell out to `codex plugin list` because it's the source of truth and
 // doesn't depend on the user's $XDG_CONFIG_HOME layout. Anything other than
@@ -184,8 +218,18 @@ func pluginInstalled(ctx context.Context, bin string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return keyEnabled(out, PluginName+"@"+marketplaceAlias) ||
-		keyEnabled(out, legacyPluginName+"@"+legacyMarketplaceAlias), nil
+	return enabledKey(out) != "", nil
+}
+
+// enabledKey returns the first key of pluginKeys that `codex plugin list`
+// marks installed and enabled; empty when none is.
+func enabledKey(out []byte) string {
+	for _, key := range pluginKeys() {
+		if keyEnabled(out, key) {
+			return key
+		}
+	}
+	return ""
 }
 
 // keyEnabled reports whether `codex plugin list` output marks the exact
