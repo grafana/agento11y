@@ -33,6 +33,63 @@ func TestStop_RemovesStatusWhenProcessGone(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "stale status file should be removed")
 }
 
+// TestSaveStatus_ConcurrentReadersSeeWholeFile pins down the atomic write.
+// LoadStatus takes no lock, so an in-place write truncates the file under
+// readers and they fail with "unexpected end of JSON input" - which is how
+// TestEnsureRunning_ConcurrentCallersSpawnOnce used to flake.
+func TestSaveStatus_ConcurrentReadersSeeWholeFile(t *testing.T) {
+	dir := t.TempDir()
+	want := Status{
+		PID:       os.Getpid(),
+		Port:      8765,
+		Endpoint:  "http://127.0.0.1:8765",
+		StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	require.NoError(t, SaveStatus(dir, want))
+
+	const writes = 500
+	writing := make(chan struct{})
+	writeErr := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		defer close(writing)
+		for range writes {
+			if err := SaveStatus(dir, want); err != nil {
+				writeErr <- err
+				return
+			}
+		}
+	})
+
+	var readErr error
+	partial := 0
+	for done := false; !done; {
+		select {
+		case <-writing:
+			done = true
+		default:
+		}
+		s, err := LoadStatus(dir)
+		switch {
+		case err != nil:
+			if readErr == nil {
+				readErr = err
+			}
+		case s == nil || *s != want:
+			partial++
+		}
+	}
+	wg.Wait()
+
+	select {
+	case err := <-writeErr:
+		require.NoError(t, err)
+	default:
+	}
+	require.NoError(t, readErr, "LoadStatus read a status file mid-write")
+	assert.Zero(t, partial, "LoadStatus returned a status that was never written")
+}
+
 func TestStop_EndpointDeadButProcessAlive(t *testing.T) {
 	if _, err := exec.LookPath("sleep"); err != nil {
 		t.Skip("sleep command unavailable")

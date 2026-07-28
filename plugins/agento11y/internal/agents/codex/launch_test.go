@@ -28,31 +28,42 @@ func TestLaunch_MissingCodexBinary(t *testing.T) {
 }
 
 func TestLaunch_SkipsInstallWhenPluginInstalledAndEnabled(t *testing.T) {
-	t.Setenv("SIGIL_AUTO_UPDATE", "false")
-	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
-	withPluginList(t, func(context.Context, string) ([]byte, error) {
-		return []byte("  sigil-codex@grafana-sigil (installed, enabled)\n"), nil
-	})
-	withRunInstall(t, func(context.Context, string, io.Writer) error {
-		t.Fatal("runInstall must not be called when plugin is installed and enabled")
-		return nil
-	})
+	for _, tc := range []struct {
+		name string
+		out  string
+	}{
+		{name: "legacy key", out: "  sigil-codex@grafana-sigil (installed, enabled)\n"},
+		{name: "current key", out: "  agento11y-codex@agento11y (installed, enabled)\n"},
+		{name: "current name at legacy alias", out: "  agento11y-codex@grafana-sigil (installed, enabled)\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SIGIL_AUTO_UPDATE", "false")
+			withLookPath(t, func(string) (string, error) { return "/usr/local/bin/codex", nil })
+			withPluginList(t, func(context.Context, string) ([]byte, error) {
+				return []byte(tc.out), nil
+			})
+			withRunInstall(t, func(context.Context, string, io.Writer) error {
+				t.Fatal("runInstall must not be called when plugin is installed and enabled")
+				return nil
+			})
 
-	var execArgv []string
-	withExecFn(t, func(_ string, argv []string, _ []string) error {
-		execArgv = append([]string{}, argv...)
-		return nil
-	})
+			var execArgv []string
+			withExecFn(t, func(_ string, argv []string, _ []string) error {
+				execArgv = append([]string{}, argv...)
+				return nil
+			})
 
-	var stderr bytes.Buffer
-	if err := Launch(context.Background(), []string{"exec", "hi"}, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"); err != nil {
-		t.Fatalf("Launch returned err: %v", err)
-	}
-	if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/codex", "exec", "hi"}) {
-		t.Fatalf("exec argv = %v", execArgv)
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr non-empty: %q", stderr.String())
+			var stderr bytes.Buffer
+			if err := Launch(context.Background(), []string{"exec", "hi"}, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"); err != nil {
+				t.Fatalf("Launch returned err: %v", err)
+			}
+			if !reflect.DeepEqual(execArgv, []string{"/usr/local/bin/codex", "exec", "hi"}) {
+				t.Fatalf("exec argv = %v", execArgv)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr non-empty: %q", stderr.String())
+			}
+		})
 	}
 }
 
@@ -304,9 +315,9 @@ func TestPluginInstalled_ParsesPluginListOutput(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "current name at legacy alias does not count",
+			name: "current name at legacy alias counts",
 			out:  "  agento11y-codex@grafana-sigil (installed, enabled)\n",
-			want: false,
+			want: true,
 		},
 		{
 			name: "legacy name at current alias does not count",
@@ -509,73 +520,139 @@ func recordCommands(t *testing.T, firstIdx int) (steps, candidates, outputs *[][
 	return steps, candidates, outputs
 }
 
-func TestDefaultRunInstall_RegistersCurrentNameAndRemovesLegacy(t *testing.T) {
-	steps, candidates, outputs := recordCommands(t, 0)
-
-	var out bytes.Buffer
-	require.NoError(t, defaultRunInstall(context.Background(), "/usr/local/bin/codex", &out))
-	require.Equal(t, [][]string{{"plugin", "marketplace", "add", "grafana/agento11y"}}, *steps)
-	require.Equal(t, [][]string{
-		{"plugin", "add", "agento11y-codex@agento11y"},
-		{"plugin", "add", "sigil-codex@grafana-sigil"},
-	}, *candidates)
-	require.Equal(t, [][]string{{"plugin", "remove", "sigil-codex@grafana-sigil"}}, *outputs)
-	// Fresh install, not a migration: no re-trust line beyond PostInstallHint.
-	require.NotContains(t, out.String(), "migrated")
+// codexAddCandidates is the exact `plugin add` sequence ensurePlugin offers,
+// in preference order.
+var codexAddCandidates = [][]string{
+	{"plugin", "add", "agento11y-codex@agento11y"},
+	{"plugin", "add", "agento11y-codex@grafana-sigil"},
+	{"plugin", "add", "sigil-codex@grafana-sigil"},
 }
 
-func TestDefaultRunInstall_PreRenameSnapshotFallsBackToLegacyName(t *testing.T) {
-	_, _, outputs := recordCommands(t, 1)
+const legacyRemoval = "sigil-codex@grafana-sigil"
 
-	var out bytes.Buffer
-	require.NoError(t, defaultRunInstall(context.Background(), "/usr/local/bin/codex", &out))
-	// The legacy install is live; it must not be removed.
-	require.Empty(t, *outputs)
-	require.NotContains(t, out.String(), "migrated")
+func TestDefaultRunInstall_CommandSequences(t *testing.T) {
+	cases := []struct {
+		name        string
+		firstIdx    int
+		wantOutputs [][]string
+	}{
+		{
+			name:        "current key registers and drops the orphaned legacy entry",
+			firstIdx:    0,
+			wantOutputs: [][]string{{"plugin", "remove", legacyRemoval}},
+		},
+		{
+			name:        "registration that kept its pre-rename alias still serves the current name",
+			firstIdx:    1,
+			wantOutputs: [][]string{{"plugin", "remove", legacyRemoval}},
+		},
+		{
+			// The legacy install is live while the snapshot predates the
+			// rename; it must not be removed.
+			name:     "pre-rename snapshot falls back to the legacy name",
+			firstIdx: 2,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			steps, candidates, outputs := recordCommands(t, tc.firstIdx)
+
+			var out bytes.Buffer
+			require.NoError(t, defaultRunInstall(context.Background(), "/usr/local/bin/codex", &out))
+			require.Equal(t, [][]string{{"plugin", "marketplace", "add", "grafana/agento11y"}}, *steps)
+			require.Equal(t, codexAddCandidates, *candidates)
+			if len(tc.wantOutputs) == 0 {
+				require.Empty(t, *outputs)
+			} else {
+				require.Equal(t, tc.wantOutputs, *outputs)
+			}
+			// A fresh install is not a migration: no re-trust line beyond
+			// PostInstallHint.
+			require.NotContains(t, out.String(), "migrated")
+		})
+	}
 }
 
-func TestDefaultRunUpdate_MigratesLegacyInstall(t *testing.T) {
-	withPluginList(t, func(context.Context, string) ([]byte, error) {
-		return []byte("  sigil-codex@grafana-sigil (installed, enabled)\n"), nil
-	})
-	steps, candidates, outputs := recordCommands(t, 0)
+func TestDefaultRunUpdate_CommandSequences(t *testing.T) {
+	cases := []struct {
+		name        string
+		list        string // `codex plugin list` output before the upgrade
+		listErr     bool
+		firstIdx    int
+		wantOutputs [][]string
+		wantHint    string // migration line the user must see; empty means none
+	}{
+		{
+			name:        "legacy install migrates to the current key",
+			list:        "  sigil-codex@grafana-sigil (installed, enabled)\n",
+			firstIdx:    0,
+			wantOutputs: [][]string{{"plugin", "remove", legacyRemoval}},
+			wantHint:    "migrated sigil-codex@grafana-sigil to agento11y-codex@agento11y",
+		},
+		{
+			name:        "legacy install migrates under a registration that kept its alias",
+			list:        "  sigil-codex@grafana-sigil (installed, enabled)\n",
+			firstIdx:    1,
+			wantOutputs: [][]string{{"plugin", "remove", legacyRemoval}},
+			wantHint:    "migrated sigil-codex@grafana-sigil to agento11y-codex@grafana-sigil",
+		},
+		{
+			name:     "pre-rename snapshot stays on the legacy name",
+			list:     "  sigil-codex@grafana-sigil (installed, enabled)\n",
+			firstIdx: 2,
+		},
+		{
+			// The plugin name does not change here, but the key does, and
+			// codex identifies hooks by the whole key.
+			name:        "current name moving off the legacy alias also needs re-trust",
+			list:        "  agento11y-codex@grafana-sigil (installed, enabled)\n",
+			firstIdx:    0,
+			wantOutputs: [][]string{{"plugin", "remove", legacyRemoval}},
+			wantHint:    "migrated agento11y-codex@grafana-sigil to agento11y-codex@agento11y",
+		},
+		{
+			name:        "install already on the current key just refreshes",
+			list:        "  agento11y-codex@agento11y (installed, enabled)\n",
+			firstIdx:    0,
+			wantOutputs: [][]string{{"plugin", "remove", legacyRemoval}},
+		},
+		{
+			// Without a readable key there is nothing to compare against, so
+			// stay quiet rather than guess at a migration.
+			name:        "unreadable plugin list suppresses the hint",
+			listErr:     true,
+			firstIdx:    0,
+			wantOutputs: [][]string{{"plugin", "remove", legacyRemoval}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withPluginList(t, func(context.Context, string) ([]byte, error) {
+				if tc.listErr {
+					return nil, errors.New("codex plugin list failed")
+				}
+				return []byte(tc.list), nil
+			})
+			steps, candidates, outputs := recordCommands(t, tc.firstIdx)
 
-	var out bytes.Buffer
-	require.NoError(t, defaultRunUpdate(context.Background(), "/usr/local/bin/codex", &out))
-	require.Equal(t, [][]string{{"plugin", "marketplace", "upgrade"}}, *steps)
-	require.Equal(t, [][]string{
-		{"plugin", "add", "agento11y-codex@agento11y"},
-		{"plugin", "add", "sigil-codex@grafana-sigil"},
-	}, *candidates)
-	require.Equal(t, [][]string{{"plugin", "remove", "sigil-codex@grafana-sigil"}}, *outputs)
-	got := out.String()
-	require.Contains(t, got, "migrated sigil-codex@grafana-sigil to agento11y-codex@agento11y")
-	require.Contains(t, got, "/hooks")
-}
-
-func TestDefaultRunUpdate_PreRenameSnapshotStaysOnLegacyName(t *testing.T) {
-	withPluginList(t, func(context.Context, string) ([]byte, error) {
-		return []byte("  sigil-codex@grafana-sigil (installed, enabled)\n"), nil
-	})
-	_, _, outputs := recordCommands(t, 1)
-
-	var out bytes.Buffer
-	require.NoError(t, defaultRunUpdate(context.Background(), "/usr/local/bin/codex", &out))
-	require.Empty(t, *outputs)
-	require.NotContains(t, out.String(), "migrated")
-}
-
-func TestDefaultRunUpdate_CurrentInstallRefreshesWithoutMigrationHint(t *testing.T) {
-	withPluginList(t, func(context.Context, string) ([]byte, error) {
-		return []byte("  agento11y-codex@agento11y (installed, enabled)\n"), nil
-	})
-	_, _, outputs := recordCommands(t, 0)
-
-	var out bytes.Buffer
-	require.NoError(t, defaultRunUpdate(context.Background(), "/usr/local/bin/codex", &out))
-	// Legacy removal stays a harmless no-op after migration.
-	require.Equal(t, [][]string{{"plugin", "remove", "sigil-codex@grafana-sigil"}}, *outputs)
-	require.NotContains(t, out.String(), "migrated")
+			var out bytes.Buffer
+			require.NoError(t, defaultRunUpdate(context.Background(), "/usr/local/bin/codex", &out))
+			require.Equal(t, [][]string{{"plugin", "marketplace", "upgrade"}}, *steps)
+			require.Equal(t, codexAddCandidates, *candidates)
+			if len(tc.wantOutputs) == 0 {
+				require.Empty(t, *outputs)
+			} else {
+				require.Equal(t, tc.wantOutputs, *outputs)
+			}
+			got := out.String()
+			if tc.wantHint == "" {
+				require.NotContains(t, got, "migrated")
+				return
+			}
+			require.Contains(t, got, tc.wantHint)
+			require.Contains(t, got, "/hooks")
+		})
+	}
 }
 
 func TestStatus(t *testing.T) {

@@ -29,22 +29,22 @@ agento11y codex
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y codex` registers `sigil-codex@grafana-sigil` on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches Codex.
+`agento11y codex` registers `agento11y-codex@agento11y` on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches Codex.
 
-On first launch only, open `/hooks` inside Codex and trust each `sigil-codex@grafana-sigil` hook. Codex requires this manual review after plugin install.
+On first launch only, open `/hooks` inside Codex and trust each `agento11y-codex@agento11y` hook. Codex requires this manual review after plugin install.
 
 <details>
 <summary>Manual plugin registration</summary>
 
 ```sh
 codex plugin marketplace add grafana/agento11y
-codex plugin add sigil-codex@grafana-sigil
+codex plugin add agento11y-codex@agento11y
 ```
 
 On current Codex builds the `hooks` and `plugin_hooks` features are stable by default (`codex features list` confirms this), so no `config.toml` edits are needed. Older builds gated this on feature flags — if `/hooks` is empty after install, add the following to `~/.codex/config.toml`:
 
 ```toml
-[plugins."sigil-codex@grafana-sigil"]
+[plugins."agento11y-codex@agento11y"]
 enabled = true
 
 [features]
@@ -53,7 +53,7 @@ codex_hooks = true
 
 Older Codex builds use `hooks = true` and `plugin_hooks = true` instead of `codex_hooks`. Run `codex features list` to see which flag names your build accepts.
 
-Restart Codex, open `/hooks`, and trust the five `sigil-codex@grafana-sigil` hooks (first-run review is expected).
+Restart Codex, open `/hooks`, and trust the five `agento11y-codex@agento11y` hooks (first-run review is expected).
 
 </details>
 
@@ -123,7 +123,7 @@ tail -f ~/.local/state/agento11y/logs/agento11y.log
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable Codex `PreToolUse` guards against Agent Observability rules. |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | Allow the tool call when the guard request fails (set `false` for fail-closed). |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-call guard timeout. |
-| `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `sigil-codex` plugin automatically. Set `false` to pin the installed version. |
+| `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `agento11y-codex` plugin automatically. Set `false` to pin the installed version. |
 
 Guard rules can block a tool call or rewrite its arguments (Transform rules, e.g. redacting a secret before the tool runs). Guards only intercept tool calls that Codex routes through `PreToolUse` — Bash, the `apply_patch` variants, and MCP tools. See the [Codex hooks docs](https://developers.openai.com/codex/hooks) for the supported set.
 
@@ -133,7 +133,7 @@ If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your Agent
 
 | Symptom | Try |
 |---|---|
-| `/hooks` is empty | Enable the hook feature flags (`codex features list`), enable `plugins."sigil-codex@grafana-sigil"`, restart Codex. |
+| `/hooks` is empty | Enable the hook feature flags (`codex features list`), enable `plugins."agento11y-codex@agento11y"`, restart Codex. |
 | Hooks listed but inactive | Open `/hooks` and trust each one. |
 | Command not found | Reinstall `agento11y` (see step 1). Check `agento11y --version` and that its install dir is on `PATH`. |
 | No data appears | Let turns finish (interrupted turns are not exported). Then check the debug log. |

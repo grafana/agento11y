@@ -84,6 +84,12 @@ func LoadStatus(dir string) (*Status, error) {
 }
 
 // SaveStatus writes the daemon's status file with 0o600 permissions.
+//
+// The bytes go to a temp file in dir and are renamed into place, so a reader
+// never sees a half-written file. Writing in place would truncate first, and
+// LoadStatus takes no lock: EnsureRunning probes the status before acquiring
+// the daemon lock, and `local status` reads it at any time, so those readers
+// would fail on an empty file while a daemon records itself.
 func SaveStatus(dir string, s Status) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -92,8 +98,27 @@ func SaveStatus(dir string, s Status) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, StatusFile)
-	return os.WriteFile(path, data, 0o600)
+	f, err := os.CreateTemp(dir, StatusFile+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	// A no-op once the rename below succeeds; on any earlier return it keeps
+	// a failed write from leaving the temp file behind.
+	defer func() { _ = os.Remove(tmp) }()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	// CreateTemp opens at 0o600 already; set it explicitly so the file mode
+	// does not depend on the caller's umask.
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, filepath.Join(dir, StatusFile))
 }
 
 // RemoveStatus deletes the status file. Missing-file errors are ignored.
