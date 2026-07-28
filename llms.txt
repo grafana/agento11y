@@ -518,10 +518,11 @@ In the grafana/agento11y repo:
   - `input` and `output` populated with `Message` objects (input = system+user prompt, output = the model reply). If both are empty the tokens/usage still land, but the Agent Observability conversation view shows "No messages in this turn" — silently, with no error. Build messages with the helpers `user_text_message()` / `assistant_text_message()` / `tool_result_message()` (Python) rather than by hand.
   - `response_id` (provider correlation, maps to `gen_ai.response.id`)
   - `response_model` (actual model used)
-  - `stop_reason` / `finish_reason`
+  - `stop_reason` (this is the `set_result` field name — read it from the provider response's finish/stop reason. Do not look for a `finish_reason` field on the generation; `finish_reason` is only the provider's own field name and the OTel attribute `gen_ai.response.finish_reasons`.)
   - Full token usage including `cache_read_input_tokens`, `cache_write_input_tokens`, and `reasoning_tokens` when the provider returns them
 - `MessageRole` has only `USER`, `ASSISTANT`, and `TOOL` — there is no `SYSTEM` (or `DEVELOPER`) member, and `MessageRole.SYSTEM` raises `AttributeError` (Python). Fold the system prompt into the `USER` message (or a text part), or pass it via the generation's `system_prompt` field; prefer the `user_text_message()` / `assistant_text_message()` / `tool_result_message()` helpers.
 - Always check `rec.err()` / `Err()` after the generation recorder closes; SDK validation or enqueue errors are otherwise silent.
+- When a provider call fails, pass the caught **exception object** to `set_call_error(exc)` (Python) — its signature is `set_call_error(error: Exception)`. Passing a string (rather than the exception you caught) can mask the real provider error later in the recorder lifecycle, so a missing API key surfaces as a confusing downstream error instead of the auth failure.
 - Use `AGENTO11Y_TAGS` (client-level) or `tags` on `GenerationStart` for filtering: both export tags on generations. Client-level tags also appear as `agento11y.tag.<key>` on OTel spans and metrics in all SDKs; per-generation tags and `metadata` are export-only everywhere. For end-user identity use `user_id` (sets `user.id` span attribute), not a tag. See [`docs/concepts/tags-and-metadata.md`](https://github.com/grafana/agento11y/blob/main/docs/concepts/tags-and-metadata.md).
 
 ## Validation checklist
