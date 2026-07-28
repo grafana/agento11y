@@ -462,9 +462,9 @@ describe("runPreflightTransform", () => {
 
   it("surfaces a preflight deny without a transform as no-op (cannot block via context)", async () => {
     // The pi `context` event has no `block` field, so a preflight deny
-    // verdict cannot be enforced at this seam. Without transformedInput
-    // there is nothing to apply, so we surface no transform and let the
-    // original messages flow through.
+    // verdict cannot be enforced here. Without transformedInput there is
+    // nothing to apply, so we surface no transform and let the original
+    // messages flow through.
     const { client } = makeClient(async () => ({
       action: "deny",
       reason: "preflight deny",

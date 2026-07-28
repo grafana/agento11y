@@ -100,9 +100,9 @@ export type PreflightTransformResult = { messages: Message[] } | undefined;
  * `undefined` when no usable transform was applied or evaluation failed.
  *
  * Always fails open: pi's `ContextEventResult` has no `block` field, so a
- * preflight deny cannot be enforced at this seam, and any eval error or
- * timeout forwards the original messages. `SIGIL_GUARDS_FAIL_OPEN` only
- * governs the postflight tool-call block decision, so it has no effect here.
+ * preflight deny cannot be enforced here, and any eval error or timeout
+ * forwards the original messages. `SIGIL_GUARDS_FAIL_OPEN` only governs the
+ * postflight tool-call block decision, so it has no effect here.
  */
 export async function runPreflightTransform(
   args: PreflightTransformArgs,

@@ -1,12 +1,17 @@
+import type { Message } from "@grafana/agento11y";
 import type { AssistantMessage, Part } from "@opencode-ai/sdk";
 import { describe, expect, it } from "vitest";
 import { createRedactor } from "./hooks.js";
 import {
+  applyRedactedText,
   legacyToolOverrideNames,
   mapGeneration,
   mapInputMessages,
+  mapOutgoingMessagesForHook,
   mapOutputMessages,
   mapToolDefinitions,
+  type OutgoingMessage,
+  partTextKey,
 } from "./mappers.js";
 
 const redactor = createRedactor();
@@ -471,5 +476,471 @@ describe("mapGeneration", () => {
       cacheReadInputTokens: 20,
       cacheWriteInputTokens: 10,
     });
+  });
+});
+
+function textPart(overrides: Partial<Part> & { text: string }): Part {
+  return {
+    id: "p1",
+    sessionID: "s1",
+    messageID: "m1",
+    type: "text",
+    ...overrides,
+  } as Part;
+}
+
+function outgoing(
+  role: string,
+  parts: Part[],
+  id = "m1",
+): { info: { id: string; role: string; sessionID: string }; parts: Part[] } {
+  return { info: { id, role, sessionID: "s1" }, parts };
+}
+
+describe("mapOutgoingMessagesForHook", () => {
+  const cases: Array<{
+    name: string;
+    input: OutgoingMessage[];
+    expected: Message[];
+  }> = [
+    {
+      name: "user text",
+      input: [outgoing("user", [textPart({ text: "authorization=abc" })])],
+      expected: [
+        { role: "user", parts: [{ type: "text", text: "authorization=abc" }] },
+      ],
+    },
+    {
+      name: "joins multiple text parts of one message",
+      input: [
+        outgoing("user", [
+          textPart({ text: "first" }),
+          textPart({ id: "p2", text: "second" }),
+        ]),
+      ],
+      expected: [
+        { role: "user", parts: [{ type: "text", text: "first\nsecond" }] },
+      ],
+    },
+    {
+      name: "assistant text",
+      input: [outgoing("assistant", [textPart({ text: "sure" })])],
+      expected: [
+        { role: "assistant", parts: [{ type: "text", text: "sure" }] },
+      ],
+    },
+    {
+      name: "skips ignored user text but keeps the slot",
+      input: [
+        outgoing("user", [
+          textPart({ text: "reminder", ignored: true } as any),
+        ]),
+      ],
+      expected: [{ role: "user", parts: [] }],
+    },
+    {
+      name: "skips an empty assistant text part, opencode's signed-reasoning separator",
+      input: [
+        outgoing("assistant", [
+          textPart({ text: "" }),
+          textPart({ id: "p2", text: "done" }),
+        ]),
+      ],
+      expected: [
+        { role: "assistant", parts: [{ type: "text", text: "done" }] },
+      ],
+    },
+    {
+      name: "skips reasoning parts because their provider signature must round-trip",
+      input: [
+        outgoing("assistant", [
+          {
+            id: "p1",
+            sessionID: "s1",
+            messageID: "m1",
+            type: "reasoning",
+            text: "thinking about secrets",
+            time: { start: 1 },
+            metadata: { anthropic: { signature: "sig" } },
+          } as Part,
+        ]),
+      ],
+      expected: [{ role: "assistant", parts: [] }],
+    },
+    {
+      name: "skips tool-call and tool-result content, emitting a placeholder",
+      input: [
+        outgoing("assistant", [
+          {
+            id: "p1",
+            sessionID: "s1",
+            messageID: "m1",
+            type: "tool",
+            callID: "call-1",
+            tool: "bash",
+            state: {
+              status: "completed",
+              input: { command: "echo secret" },
+              output: "secret output",
+              title: "bash",
+              metadata: {},
+              time: { start: 1, end: 2 },
+            },
+          } as Part,
+        ]),
+      ],
+      expected: [{ role: "assistant", parts: [] }],
+    },
+    {
+      name: "emits a placeholder for a null slot",
+      input: [null as unknown as OutgoingMessage],
+      expected: [{ role: "unknown", parts: [] }],
+    },
+    {
+      name: "emits a placeholder for a slot with no role",
+      input: [{ parts: [textPart({ text: "orphan" })] }],
+      expected: [{ role: "unknown", parts: [] }],
+    },
+    {
+      name: "emits a placeholder for a message with no parts",
+      input: [{ info: { id: "m1", role: "user", sessionID: "s1" } }],
+      expected: [{ role: "user", parts: [] }],
+    },
+    {
+      name: "preserves one slot per entry in order",
+      input: [
+        outgoing("user", [textPart({ text: "one" })], "m1"),
+        outgoing("assistant", [], "m2"),
+        outgoing("user", [textPart({ text: "three" })], "m3"),
+      ],
+      expected: [
+        { role: "user", parts: [{ type: "text", text: "one" }] },
+        { role: "assistant", parts: [] },
+        { role: "user", parts: [{ type: "text", text: "three" }] },
+      ],
+    },
+  ];
+
+  it.each(cases)("$name", ({ input, expected }) => {
+    expect(mapOutgoingMessagesForHook(input)).toEqual(expected);
+  });
+});
+
+const toolPart = (messageID: string): Part =>
+  ({
+    id: "p1",
+    sessionID: "s1",
+    messageID,
+    type: "tool",
+    callID: "call-1",
+    tool: "bash",
+    state: {
+      status: "completed",
+      input: { command: "echo secret" },
+      output: "secret output",
+      title: "bash",
+      metadata: {},
+      time: { start: 1, end: 2 },
+    },
+  }) as Part;
+
+const reasoningPart = (text: string): Part =>
+  ({
+    id: "p1",
+    sessionID: "s1",
+    messageID: "m1",
+    type: "reasoning",
+    text,
+    time: { start: 1 },
+    metadata: { anthropic: { signature: "sig" } },
+  }) as Part;
+
+/** The text of every part, in order. `undefined` for a part with no text. */
+function partTexts(
+  messages: OutgoingMessage[],
+): Array<Array<string | undefined>> {
+  return messages.map((msg) =>
+    (msg?.parts ?? []).map((part) => (part as { text?: string }).text),
+  );
+}
+
+describe("applyRedactedText", () => {
+  type ApplyCase = {
+    name: string;
+    /** Built per case: the function writes into the array it is given. */
+    build: () => { messages: OutgoingMessage[]; pinned?: Part };
+    redacted: Message[];
+    /** Rewritten message count, or null when the transform was discarded. */
+    want: number | null;
+    /** New text per part key. Only checked when a case sets it. */
+    wantTextByPart?: Record<string, string>;
+    wantTexts: Array<Array<string | undefined>>;
+    assert?: (args: { messages: OutgoingMessage[]; pinned?: Part }) => void;
+  };
+
+  const cases: ApplyCase[] = [
+    {
+      name: "rewrites aligned text",
+      build: () => ({
+        messages: [outgoing("user", [textPart({ text: "token=alpha" })])],
+      }),
+      redacted: [
+        { role: "user", parts: [{ type: "text", text: "token=[REDACTED]" }] },
+      ],
+      want: 1,
+      wantTextByPart: { [partTextKey("s1", "p1")]: "token=[REDACTED]" },
+      wantTexts: [["token=[REDACTED]"]],
+    },
+    {
+      name: "accepts the content shorthand",
+      build: () => ({
+        messages: [outgoing("user", [textPart({ text: "token=alpha" })])],
+      }),
+      redacted: [{ role: "user", content: "token=[REDACTED]" }],
+      want: 1,
+      wantTexts: [["token=[REDACTED]"]],
+    },
+    {
+      // The common case on a partial match: the server echoes every forwarded
+      // message back and only the matched substrings differ. Rewriting an
+      // unchanged entry would collapse it into its first slot on every step.
+      name: "reports zero rewrites when the text came back unchanged",
+      build: () => ({
+        messages: [
+          outgoing("user", [
+            textPart({ text: "keep" }),
+            textPart({ id: "p2", text: "also keep" }),
+          ]),
+        ],
+      }),
+      redacted: [
+        { role: "user", parts: [{ type: "text", text: "keep\nalso keep" }] },
+      ],
+      want: 0,
+      wantTexts: [["keep", "also keep"]],
+    },
+    {
+      name: "counts only the messages the server changed",
+      build: () => ({
+        messages: [
+          outgoing("user", [textPart({ text: "token=alpha" })], "m1"),
+          outgoing("assistant", [textPart({ id: "p2", text: "sure" })], "m2"),
+        ],
+      }),
+      redacted: [
+        { role: "user", parts: [{ type: "text", text: "token=[R]" }] },
+        { role: "assistant", parts: [{ type: "text", text: "sure" }] },
+      ],
+      want: 1,
+      wantTexts: [["token=[R]"], ["sure"]],
+    },
+    {
+      name: "collapses multiple text parts into the first slot",
+      build: () => ({
+        messages: [
+          outgoing("user", [
+            textPart({ text: "keep" }),
+            textPart({ id: "p2", text: "token=alpha" }),
+          ]),
+        ],
+      }),
+      redacted: [
+        { role: "user", parts: [{ type: "text", text: "keep\ntoken=[R]" }] },
+      ],
+      want: 1,
+      // The emptied slot is reported too: an export that replayed only the
+      // first would repeat the text the collapse removed.
+      wantTextByPart: {
+        [partTextKey("s1", "p1")]: "keep\ntoken=[R]",
+        [partTextKey("s1", "p2")]: "",
+      },
+      wantTexts: [["keep\ntoken=[R]", ""]],
+    },
+    {
+      // Writing "" back would delete content rather than redact it: opencode
+      // drops an empty user text part, then drops the message once no part
+      // survives, which would change the outgoing message count.
+      name: "keeps the text when the server stripped it to nothing",
+      build: () => ({
+        messages: [outgoing("user", [textPart({ text: "token=alpha" })])],
+      }),
+      redacted: [{ role: "user", parts: [{ type: "text", text: "" }] }],
+      want: 0,
+      wantTexts: [["token=alpha"]],
+    },
+    {
+      name: "keeps the text when the content shorthand is empty",
+      build: () => ({
+        messages: [outgoing("user", [textPart({ text: "token=alpha" })])],
+      }),
+      redacted: [{ role: "user", content: "" }],
+      want: 0,
+      wantTexts: [["token=alpha"]],
+    },
+    {
+      name: "keeps the text when the server returned no text for the slot",
+      build: () => ({
+        messages: [outgoing("user", [textPart({ text: "token=alpha" })])],
+      }),
+      redacted: [{ role: "user", parts: [] }],
+      want: 0,
+      wantTexts: [["token=alpha"]],
+    },
+    {
+      name: "discards the transform when the server sent fewer messages",
+      build: () => ({
+        messages: [
+          outgoing("user", [textPart({ text: "token=alpha" })], "m1"),
+          outgoing("user", [textPart({ text: "token=beta" })], "m2"),
+        ],
+      }),
+      redacted: [
+        { role: "user", parts: [{ type: "text", text: "token=[R]" }] },
+      ],
+      want: null,
+      wantTexts: [["token=alpha"], ["token=beta"]],
+    },
+    {
+      name: "discards the transform when the server sent extra messages",
+      build: () => ({
+        messages: [outgoing("user", [textPart({ text: "token=alpha" })])],
+      }),
+      redacted: [
+        { role: "user", parts: [{ type: "text", text: "token=[R]" }] },
+        { role: "user", parts: [{ type: "text", text: "extra" }] },
+      ],
+      want: null,
+      wantTexts: [["token=alpha"]],
+    },
+    {
+      name: "discards the transform when a later slot is missing",
+      build: () => ({
+        messages: [
+          outgoing("user", [textPart({ text: "token=alpha" })], "m1"),
+          outgoing("user", [textPart({ id: "p2", text: "token=beta" })], "m2"),
+        ],
+      }),
+      redacted: [
+        { role: "user", parts: [{ type: "text", text: "token=[R]" }] },
+        undefined as unknown as Message,
+      ],
+      want: null,
+      wantTexts: [["token=alpha"], ["token=beta"]],
+    },
+    {
+      name: "leaves a tool part untouched while rewriting eligible slots",
+      build: () => {
+        const pinned = toolPart("m2");
+        return {
+          pinned,
+          messages: [
+            outgoing("user", [textPart({ text: "token=alpha" })], "m1"),
+            outgoing("assistant", [pinned], "m2"),
+            outgoing("user", [textPart({ text: "token=gamma" })], "m3"),
+          ],
+        };
+      },
+      redacted: [
+        { role: "user", parts: [{ type: "text", text: "token=[R1]" }] },
+        { role: "assistant", parts: [{ type: "text", text: "ignored" }] },
+        { role: "user", parts: [{ type: "text", text: "token=[R3]" }] },
+      ],
+      want: 2,
+      wantTexts: [["token=[R1]"], [undefined], ["token=[R3]"]],
+      assert: ({ messages, pinned }) => {
+        expect(messages[1]?.parts?.[0]).toBe(pinned);
+        expect((pinned as any).state.output).toBe("secret output");
+      },
+    },
+    {
+      name: "leaves reasoning parts untouched",
+      build: () => ({
+        messages: [
+          outgoing("assistant", [
+            reasoningPart("token=alpha"),
+            textPart({ id: "p2", text: "done" }),
+          ]),
+        ],
+      }),
+      redacted: [{ role: "assistant", parts: [{ type: "text", text: "[R]" }] }],
+      want: 1,
+      wantTexts: [["token=alpha", "[R]"]],
+      assert: ({ messages }) => {
+        expect((messages[0]?.parts?.[0] as any).metadata).toEqual({
+          anthropic: { signature: "sig" },
+        });
+      },
+    },
+    {
+      // Whether opencode freezes this hook output is version-dependent (it does
+      // for `output.args` on >=1.14), so the write-back must not rely on
+      // in-place mutation succeeding.
+      name: "clones instead of mutating a frozen text part",
+      build: () => {
+        const pinned = Object.freeze(textPart({ text: "token=alpha" }));
+        return {
+          pinned,
+          messages: [
+            Object.freeze({
+              info: { id: "m1", role: "user", sessionID: "s1" },
+              parts: Object.freeze([pinned]) as unknown as Part[],
+            }),
+          ],
+        };
+      },
+      redacted: [
+        { role: "user", parts: [{ type: "text", text: "token=[R]" }] },
+      ],
+      want: 1,
+      wantTexts: [["token=[R]"]],
+      assert: ({ pinned }) => {
+        expect((pinned as any).text).toBe("token=alpha");
+      },
+    },
+    {
+      name: "discards the transform when a frozen part sits in a frozen array",
+      build: () => {
+        const pinned = Object.freeze(textPart({ text: "token=alpha" }));
+        return {
+          pinned,
+          messages: Object.freeze([
+            {
+              info: { id: "m1", role: "user", sessionID: "s1" },
+              parts: [pinned],
+            },
+          ]) as unknown as OutgoingMessage[],
+        };
+      },
+      redacted: [
+        { role: "user", parts: [{ type: "text", text: "token=[R]" }] },
+      ],
+      want: null,
+      wantTexts: [["token=alpha"]],
+    },
+  ];
+
+  it.each(cases)("$name", ({
+    build,
+    redacted,
+    want,
+    wantTextByPart,
+    wantTexts,
+    assert,
+  }) => {
+    const { messages, pinned } = build();
+    const ids = messages.map((msg) => msg?.info?.id);
+
+    const applied = applyRedactedText(messages, redacted);
+
+    expect(applied === null ? null : applied.messageCount).toBe(want);
+    if (wantTextByPart !== undefined) {
+      expect(Object.fromEntries(applied?.textByPart ?? [])).toEqual(
+        wantTextByPart,
+      );
+    }
+    expect(partTexts(messages)).toEqual(wantTexts);
+    // Message count and order never change, whatever the server returned.
+    expect(messages.map((msg) => msg?.info?.id)).toEqual(ids);
+    assert?.({ messages, pinned });
   });
 });
