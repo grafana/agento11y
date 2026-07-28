@@ -43,7 +43,7 @@ func TestTestSuitesPullPortabilityAndBearerNormalization(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewTestSuitesClient(TestSuitesClientOptions{
-		ControlEndpoint:     server.URL + "/a/grafana-sigil-app",
+		ControlEndpoint:     server.URL + "/a/grafana-agento11y-app",
 		ServiceAccountToken: "bearer token",
 	})
 	if err != nil {
@@ -190,5 +190,46 @@ func TestResolveVersionAliasesAndDraftConflict(t *testing.T) {
 	}
 	if err := validateDraftOptions(suiteVersions(suite)[2], "new", false); ClassifyConflict(err) != ConflictOpenDraft {
 		t.Fatalf("unexpected conflict: %v (%s)", err, ClassifyConflict(err))
+	}
+}
+
+func TestAppPluginPathsUseCurrentPluginID(t *testing.T) {
+	endpointCases := []struct {
+		name  string
+		given string
+		want  string
+	}{
+		{
+			name:  "app ui url is rewritten to the control path",
+			given: "https://stack.grafana.net/a/grafana-agento11y-app",
+			want:  "https://stack.grafana.net/api/plugins/grafana-agento11y-app/resources/eval",
+		},
+		{
+			name:  "deep app ui url drops everything after the app path",
+			given: "https://stack.grafana.net/a/grafana-agento11y-app/experiments/test-suites",
+			want:  "https://stack.grafana.net/api/plugins/grafana-agento11y-app/resources/eval",
+		},
+		{
+			name:  "control path is left alone",
+			given: "https://stack.grafana.net/api/plugins/grafana-agento11y-app/resources/eval",
+			want:  "https://stack.grafana.net/api/plugins/grafana-agento11y-app/resources/eval",
+		},
+	}
+	for _, tc := range endpointCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeControlEndpoint(tc.given)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("normalizeControlEndpoint(%q)=%q want %q", tc.given, got, tc.want)
+			}
+		})
+	}
+
+	client := &Client{grafanaURL: "https://stack.grafana.net"}
+	const wantURL = "https://stack.grafana.net/a/grafana-agento11y-app/offline-experiments/experiments/run%2F1"
+	if got := client.ExperimentURL("run/1"); got != wantURL {
+		t.Fatalf("ExperimentURL=%q want %q", got, wantURL)
 	}
 }

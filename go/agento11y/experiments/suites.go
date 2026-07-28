@@ -18,7 +18,8 @@ import (
 )
 
 const (
-	defaultControlPath      = "/api/plugins/grafana-sigil-app/resources/eval"
+	grafanaAppPath          = "/a/grafana-agento11y-app"
+	defaultControlPath      = "/api/plugins/grafana-agento11y-app/resources/eval"
 	portabilityMetadataKey  = "agento11y.sdk.portability"
 	portabilityVersion      = 1
 	maxControlResponseBytes = 8 << 20
@@ -611,7 +612,7 @@ func normalizeControlEndpoint(value string) (string, error) {
 	}
 	path := strings.TrimRight(parsed.Path, "/")
 	if !strings.HasSuffix(path, defaultControlPath) && !strings.HasSuffix(path, "/api/v1/eval") {
-		if index := strings.Index(path, "/a/grafana-sigil-app"); index >= 0 {
+		if index := strings.Index(path, grafanaAppPath); index >= 0 {
 			path = path[:index]
 		}
 		path = strings.TrimRight(path, "/") + defaultControlPath
