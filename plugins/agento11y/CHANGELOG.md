@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.21.0] - 2026-07-28
+
+### Features
+
+- **plugins**: migrate legacy sigil plugin installs to agento11y (#447)
+
+### Bug Fixes
+
+- **security/high/plugins/agento11y**: update module google.golang.org/grpc to v1.82.1 [security] (#442)
+
+### Documentation
+
+- AI Observability -> Agent Observability rename (#450)
+- sigil -> agento11y rename in docs, examples and errors (#415)
+
 ## [0.20.0] - 2026-07-21
 
 ### Breaking Changes
