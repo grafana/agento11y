@@ -105,24 +105,37 @@ func ApplyEnv(logger *log.Logger) map[string]string {
 	return fileEnv
 }
 
-// LoadDotenv parses the file at path. Missing files return an empty map
-// silently; other errors are logged. Only keys matching AllowedDotenvKey
-// are honoured — defense-in-depth so a stray entry can't override unrelated
-// process state.
+// LoadDotenv parses the file at path, ignoring read errors: a missing,
+// unopenable, or partly unreadable file yields whatever could be parsed (often
+// nothing). Callers that must distinguish "no file" from "could not read the
+// file" want ReadDotenv instead.
+func LoadDotenv(path string, logger *log.Logger) map[string]string {
+	out, _ := ReadDotenv(path, logger)
+	return out
+}
+
+// ReadDotenv parses the file at path and reports read failures. A missing file
+// returns an empty map and a nil error; an open or scan failure returns the
+// pairs parsed so far and the error (also logged). Only keys matching
+// AllowedDotenvKey are honoured — defense-in-depth so a stray entry can't
+// override unrelated process state.
 //
 // Format:
 //   - `KEY=value` one pair per line
 //   - `# comment` lines and trailing ` # comment` on unquoted values
 //   - optional single- or double-quoted values
 //   - optional leading `export ` prefix
-func LoadDotenv(path string, logger *log.Logger) map[string]string {
+func ReadDotenv(path string, logger *log.Logger) (map[string]string, error) {
 	out := map[string]string{}
 	f, err := os.Open(path)
 	if err != nil {
-		if !os.IsNotExist(err) && logger != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		if logger != nil {
 			logger.Printf("dotenv: read %s: %v", path, err)
 		}
-		return out
+		return out, err
 	}
 	defer func() { _ = f.Close() }()
 
@@ -145,10 +158,13 @@ func LoadDotenv(path string, logger *log.Logger) map[string]string {
 			out[key] = value
 		}
 	}
-	if err := scanner.Err(); err != nil && logger != nil {
-		logger.Printf("dotenv: scan %s: %v", path, err)
+	if err := scanner.Err(); err != nil {
+		if logger != nil {
+			logger.Printf("dotenv: scan %s: %v", path, err)
+		}
+		return out, err
 	}
-	return out
+	return out, nil
 }
 
 // AllowedDotenvKey limits which keys the dotenv loader will copy into the

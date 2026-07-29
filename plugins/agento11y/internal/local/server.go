@@ -31,6 +31,7 @@ type Server struct {
 	now        func() time.Time
 	configPath string
 	mux        *http.ServeMux
+	forward    *forwardLoader
 	hub        *eventHub
 	// eventPingInterval overrides defaultEventPingInterval for tests; zero
 	// uses the default.
@@ -39,7 +40,8 @@ type Server struct {
 
 // NewServer builds a Server backed by the given storage. logger may be
 // nil — the server logs only diagnostic information. configPath is the
-// dotenv file the Settings API reads and writes; an empty path disables
+// dotenv file the Settings API reads and writes, and the same file the
+// Cloud forwarder resolves its configuration from; an empty path disables
 // persistence (reads return defaults, writes fail) but keeps the rest of
 // the server usable for tests.
 func NewServer(storage *Storage, logger *log.Logger, configPath string) *Server {
@@ -51,6 +53,7 @@ func NewServer(storage *Storage, logger *log.Logger, configPath string) *Server 
 		logger:     logger,
 		configPath: configPath,
 		now:        func() time.Time { return time.Now().UTC() },
+		forward:    newForwardLoader(configPath, logger),
 		hub:        newEventHub(),
 	}
 	s.mux = s.routes()
@@ -185,17 +188,19 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 
 	receivedAt := s.now().Format(time.RFC3339Nano)
 	resp := generationsResponse{Results: make([]generationResult, 0, len(req.Generations))}
+	accepted := make([]json.RawMessage, 0, len(req.Generations))
 	for _, raw := range req.Generations {
 		var gen storedGeneration
 		if err := json.Unmarshal(raw, &gen); err != nil {
 			resp.Results = append(resp.Results, generationResult{Accepted: false, Error: "decode generation: " + err.Error()})
 			continue
 		}
+		stored := append(json.RawMessage(nil), raw...)
 		rec := generationRecord{
 			ReceivedAt:     receivedAt,
 			GenerationID:   gen.ID,
 			ConversationID: gen.ConversationID,
-			Generation:     append(json.RawMessage(nil), raw...),
+			Generation:     stored,
 		}
 		if err := s.storage.AppendGeneration(rec); err != nil {
 			s.logger.Printf("local: append generations: %v", err)
@@ -206,6 +211,7 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
+		accepted = append(accepted, stored)
 		resp.Results = append(resp.Results, generationResult{
 			GenerationID: gen.ID,
 			Accepted:     true,
@@ -219,6 +225,18 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 			GenerationID:   gen.ID,
 		})
 	}
+
+	// Best-effort Cloud forwarding runs after the local store so a Cloud
+	// failure can never affect the JSONL write or the ack below. Off by
+	// default: when forwarding is disabled load() returns enabled=false and we
+	// spawn nothing.
+	if len(accepted) > 0 && !isForwardedRequest(r) {
+		if cfg := s.forward.load(); cfg.enabled {
+			gens := accepted
+			s.forward.enqueue(forwardLabelGenerations, func() { s.forward.forwardGenerations(cfg, gens) })
+		}
+	}
+
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
@@ -226,6 +244,9 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 // leak spans or metrics to a user-configured global collector. The viewer
 // does not read these signals yet, so the endpoint drains and acknowledges
 // them without persisting a second local data model.
+//
+// When Cloud forwarding is enabled the payload is also relayed to the
+// configured Cloud OTLP endpoint.
 func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxOTLPBodyBytes+1))
 	if err != nil {
@@ -236,6 +257,17 @@ func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
+
+	// Best-effort Cloud forwarding: metrics relay unchanged, trace content is
+	// stripped under a reduced content mode inside forwardOTLP.
+	if signal := otlpSignalFromPath(r.URL.Path); signal != "" && !isForwardedRequest(r) {
+		if cfg := s.forward.load(); cfg.enabled {
+			contentType := r.Header.Get("Content-Type")
+			contentEncoding := r.Header.Get("Content-Encoding")
+			s.forward.enqueue(otlpForwardLabel(signal), func() { s.forward.forwardOTLP(cfg, signal, contentType, contentEncoding, body) })
+		}
+	}
+
 	// OTLP/HTTP collectors return an empty protobuf message on success;
 	// 200 + empty body is accepted by the otlphttp exporter.
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -272,10 +304,15 @@ func (s *Server) handleHookEvaluate(w http.ResponseWriter, r *http.Request) {
 // path for the file. It never includes the endpoint, tenant id, or auth
 // token — those keys are not part of Settings and are never read back into
 // the response.
+//
+// It also carries the daemon's current Cloud forwarding posture so the viewer
+// can show what would leave this machine right now, including a reason when
+// the user opted in but the target is unusable.
 type configResponse struct {
-	Settings Settings `json:"settings"`
-	Preview  string   `json:"preview"`
-	Path     string   `json:"path"`
+	Settings      Settings      `json:"settings"`
+	Preview       string        `json:"preview"`
+	Path          string        `json:"path"`
+	ForwardStatus forwardStatus `json:"forwardStatus"`
 }
 
 // configRequest is the POST :preview / PUT body: the form state the viewer
@@ -336,9 +373,10 @@ func (s *Server) writeConfigResponse(w http.ResponseWriter, settings Settings) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, configResponse{
-		Settings: settings,
-		Preview:  string(preview),
-		Path:     displayConfigPath(s.configPath),
+		Settings:      settings,
+		Preview:       string(preview),
+		Path:          displayConfigPath(s.configPath),
+		ForwardStatus: s.forward.status(),
 	})
 }
 

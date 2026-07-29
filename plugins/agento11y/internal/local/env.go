@@ -83,8 +83,8 @@ func (e LaunchEnv) Apply(env []string) []string {
 	}
 	for _, suffix := range defaultFamilies {
 		if !keptFamilies[suffix] {
-			out = append(out, envconfig.PreferredKey(suffix)+"=local")
-			out = append(out, envconfig.LegacyKey(suffix)+"=local")
+			out = append(out, envconfig.PreferredKey(suffix)+"="+envconfig.LocalAuthPlaceholder)
+			out = append(out, envconfig.LegacyKey(suffix)+"="+envconfig.LocalAuthPlaceholder)
 		}
 	}
 	return out

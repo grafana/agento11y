@@ -34,6 +34,7 @@ func TestParseSettings(t *testing.T) {
 				"SIGIL_DEBUG":                "true",
 				"SIGIL_AUTO_UPDATE":          "false",
 				"SIGIL_USER_ID":              "alice",
+				"SIGIL_LOCAL_FORWARD":        "true",
 			},
 			want: Settings{
 				Capture:      "metadata_only",
@@ -43,7 +44,21 @@ func TestParseSettings(t *testing.T) {
 				Debug:        true,
 				AutoUpdate:   false,
 				UserID:       "alice",
+				LocalForward: true,
 			},
+		},
+		{
+			name: "local forward is opt-in and only truthy values enable it",
+			env:  map[string]string{"SIGIL_LOCAL_FORWARD": "nope"},
+			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
+		},
+		{
+			name: "preferred local forward spelling wins over legacy",
+			env: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true",
+				"SIGIL_LOCAL_FORWARD":     "false",
+			},
+			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true, LocalForward: true},
 		},
 		{
 			name: "advanced capture mode is preserved",
@@ -180,6 +195,21 @@ func TestSettingsUpdates(t *testing.T) {
 				"SIGIL_USER_ID":              "",
 			},
 		},
+		{
+			name: "local forward on is written",
+			in:   Settings{Capture: "full", Guards: guardsOff, AutoUpdate: true, LocalForward: true},
+			want: map[string]string{
+				"SIGIL_CONTENT_CAPTURE_MODE": "full",
+				"SIGIL_TAGS":                 "",
+				"SIGIL_GUARDS_ENABLED":       "false",
+				"SIGIL_GUARDS_FAIL_OPEN":     "",
+				"SIGIL_GUARDS_TIMEOUT_MS":    "",
+				"SIGIL_DEBUG":                "",
+				"SIGIL_AUTO_UPDATE":          "",
+				"SIGIL_USER_ID":              "",
+				"SIGIL_LOCAL_FORWARD":        "true",
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -191,6 +221,12 @@ func TestSettingsUpdates(t *testing.T) {
 			want["SIGIL_ENDPOINT"] = ""
 			want["SIGIL_AUTH_TENANT_ID"] = ""
 			want["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
+			// LOCAL_FORWARD is written explicitly in both directions: only a
+			// literal false on disk can override the value the daemon
+			// materialized into its own environment at boot.
+			if _, ok := want["SIGIL_LOCAL_FORWARD"]; !ok {
+				want["SIGIL_LOCAL_FORWARD"] = "false"
+			}
 			assert.Equal(t, envconfig.ExpandAliases(want), tc.in.Updates())
 		})
 	}
@@ -254,6 +290,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 		Debug:        true,
 		AutoUpdate:   false,
 		UserID:       "alice",
+		LocalForward: true,
 	}
 	got := ParseSettings(in.Updates())
 	assert.Equal(t, in, got)

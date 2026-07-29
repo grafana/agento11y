@@ -98,13 +98,59 @@ SIGIL_UNTERMINATED="oops
 
 func TestLoadDotenvMissingFileSilent(t *testing.T) {
 	var buf bytes.Buffer
-	got := LoadDotenv("/nonexistent/path/config.env", log.New(&buf, "", 0))
+	got, err := ReadDotenv("/nonexistent/path/config.env", log.New(&buf, "", 0))
+	if err != nil {
+		t.Errorf("missing file should not error, got %v", err)
+	}
 	if len(got) != 0 {
 		t.Errorf("expected empty map, got %v", got)
 	}
 	if buf.Len() != 0 {
 		t.Errorf("missing file should not log; got %q", buf.String())
 	}
+}
+
+// TestReadDotenvReportsReadFailures covers what LoadDotenv cannot express:
+// callers that must fail closed need to tell "no file" apart from "the file is
+// there but unreadable".
+func TestReadDotenvReportsReadFailures(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("open fails", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores file permissions")
+		}
+		path := filepath.Join(dir, "unreadable.env")
+		if err := os.WriteFile(path, []byte("AGENTO11Y_LOCAL_FORWARD=false\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o000); err != nil {
+			t.Fatal(err)
+		}
+
+		var buf bytes.Buffer
+		got, err := ReadDotenv(path, log.New(&buf, "", 0))
+		if err == nil {
+			t.Fatalf("expected an error, got map %v", got)
+		}
+		if buf.Len() == 0 {
+			t.Error("an unreadable file should log")
+		}
+		if len(LoadDotenv(path, nil)) != 0 {
+			t.Error("LoadDotenv should still swallow the error and return no pairs")
+		}
+	})
+
+	t.Run("read fails", func(t *testing.T) {
+		// A directory opens fine and fails on the first read.
+		path := filepath.Join(dir, "config.env.d")
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadDotenv(path, nil); err == nil {
+			t.Error("expected a scan error for a directory")
+		}
+	})
 }
 
 func TestApplyEnv(t *testing.T) {

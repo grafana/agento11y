@@ -5,8 +5,11 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/grafana/agento11y/go/agento11y"
 )
 
 func TestParseBool(t *testing.T) {
@@ -228,6 +231,12 @@ func TestLookupEnv(t *testing.T) {
 			if value != tc.wantValue || key != tc.wantKey || ok != tc.wantOK {
 				t.Errorf("LookupEnv() = (%q, %q, %v), want (%q, %q, %v)", value, key, ok, tc.wantValue, tc.wantKey, tc.wantOK)
 			}
+			// LookupMap applies the same precedence to a config map, which is
+			// what the settings page and the local forwarder read.
+			mapValue, mapKey, mapOK := LookupMap(tc.env, "ENDPOINT")
+			if mapValue != tc.wantValue || mapKey != tc.wantKey || mapOK != tc.wantOK {
+				t.Errorf("LookupMap() = (%q, %q, %v), want (%q, %q, %v)", mapValue, mapKey, mapOK, tc.wantValue, tc.wantKey, tc.wantOK)
+			}
 		})
 	}
 }
@@ -243,6 +252,98 @@ func TestSetBothEnv(t *testing.T) {
 		if got := os.Getenv(key); got != "https://x" {
 			t.Errorf("%s = %q, want https://x", key, got)
 		}
+	}
+}
+
+func TestBoolValue(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		def     bool
+		want    bool
+		wantLog string
+	}{
+		{name: "empty_uses_default_true", raw: "", def: true, want: true},
+		{name: "empty_uses_default_false", raw: "", def: false, want: false},
+		{name: "whitespace_uses_default", raw: "   ", def: true, want: true},
+		{name: "true", raw: "true", want: true},
+		{name: "mixed_case_on", raw: "On", want: true},
+		{name: "one", raw: "1", want: true},
+		{name: "yes", raw: "yes", want: true},
+		{name: "padded_true", raw: "  true ", want: true},
+		{name: "false_overrides_default", raw: "false", def: true, want: false},
+		{name: "off_overrides_default", raw: "off", def: true, want: false},
+		{name: "zero_overrides_default", raw: "0", def: true, want: false},
+		{name: "typo_logs_and_uses_default", raw: "ture", def: true, want: true, wantLog: `invalid AGENTO11Y_LOCAL_FORWARD="ture"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := log.New(&buf, "", 0)
+			if got := BoolValue(logger, PreferredKey("LOCAL_FORWARD"), tc.raw, tc.def); got != tc.want {
+				t.Errorf("BoolValue(%q, def=%v) = %v, want %v", tc.raw, tc.def, got, tc.want)
+			}
+			if tc.wantLog != "" && !strings.Contains(buf.String(), tc.wantLog) {
+				t.Errorf("log output = %q, want substring %q", buf.String(), tc.wantLog)
+			}
+			if tc.wantLog == "" && buf.Len() != 0 {
+				t.Errorf("unexpected log output: %q", buf.String())
+			}
+		})
+	}
+}
+
+func TestResolveContentModeValue(t *testing.T) {
+	cases := []struct {
+		name    string
+		key     string
+		raw     string
+		want    agento11y.ContentCaptureMode
+		wantLog string
+	}{
+		{name: "empty_is_metadata_only", raw: "", want: agento11y.ContentCaptureModeMetadataOnly},
+		{name: "whitespace_is_metadata_only", raw: "  ", want: agento11y.ContentCaptureModeMetadataOnly},
+		{name: "full", raw: "full", want: agento11y.ContentCaptureModeFull},
+		{name: "padded_full", raw: " full ", want: agento11y.ContentCaptureModeFull},
+		{name: "no_tool_content", raw: "no_tool_content", want: agento11y.ContentCaptureModeNoToolContent},
+		{name: "explicit_default_is_metadata_only", raw: "default", want: agento11y.ContentCaptureModeMetadataOnly},
+		{
+			name:    "unknown_logs_reported_key",
+			key:     LegacyKey("CONTENT_CAPTURE_MODE"),
+			raw:     "fully",
+			want:    agento11y.ContentCaptureModeMetadataOnly,
+			wantLog: `unknown SIGIL_CONTENT_CAPTURE_MODE="fully"`,
+		},
+		{
+			name:    "unknown_without_key_names_preferred",
+			raw:     "fully",
+			want:    agento11y.ContentCaptureModeMetadataOnly,
+			wantLog: `unknown AGENTO11Y_CONTENT_CAPTURE_MODE="fully"`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := log.New(&buf, "", 0)
+			if got := ResolveContentModeValue(logger, tc.key, tc.raw); got != tc.want {
+				t.Errorf("ResolveContentModeValue(%q) = %v, want %v", tc.raw, got, tc.want)
+			}
+			if tc.wantLog != "" && !strings.Contains(buf.String(), tc.wantLog) {
+				t.Errorf("log output = %q, want substring %q", buf.String(), tc.wantLog)
+			}
+			if tc.wantLog == "" && buf.Len() != 0 {
+				t.Errorf("unexpected log output: %q", buf.String())
+			}
+		})
+	}
+}
+
+// TestAliasSuffixesCoversLocalForward pins LOCAL_FORWARD into the alias
+// families so PinAliasEnvBlank clears it in tests and ExpandAliases mirrors it
+// on write.
+func TestAliasSuffixesCoversLocalForward(t *testing.T) {
+	if !slices.Contains(AliasSuffixes, "LOCAL_FORWARD") {
+		t.Fatal("AliasSuffixes must contain LOCAL_FORWARD")
 	}
 }
 

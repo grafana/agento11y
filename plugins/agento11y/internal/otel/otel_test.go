@@ -142,11 +142,89 @@ func TestProbeConfigNoEndpoint(t *testing.T) {
 }
 
 func TestSignalEndpointURLAppendsOTLPHTTPPaths(t *testing.T) {
-	if got := signalEndpointURL("https://otlp.example/otlp", "traces"); got != "https://otlp.example/otlp/v1/traces" {
+	if got := SignalEndpointURL("https://otlp.example/otlp", "traces"); got != "https://otlp.example/otlp/v1/traces" {
 		t.Fatalf("trace endpoint = %q", got)
 	}
-	if got := signalEndpointURL("https://otlp.example/otlp/v1/traces", "metrics"); got != "https://otlp.example/otlp/v1/metrics" {
+	if got := SignalEndpointURL("https://otlp.example/otlp/v1/traces", "metrics"); got != "https://otlp.example/otlp/v1/metrics" {
 		t.Fatalf("metric endpoint = %q", got)
+	}
+}
+
+// TestExporterHeaders covers the exported header builder the local daemon's
+// Cloud forwarder shares with the exporter: explicit headers pass through, an
+// explicit Authorization wins, and OTEL_AUTH_TOKEN outranks AUTH_TOKEN.
+func TestExporterHeaders(t *testing.T) {
+	basic := func(pair string) string {
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte(pair))
+	}
+	cases := []struct {
+		name       string
+		raw        string
+		tenant     string
+		otelToken  string
+		authToken  string
+		wantAuth   string
+		wantExtras map[string]string
+	}{
+		{
+			name: "synthesizes_from_auth_token", tenant: "tenant", authToken: "token",
+			wantAuth: basic("tenant:token"),
+		},
+		{
+			name: "otel_token_wins", tenant: "tenant", otelToken: "otel", authToken: "token",
+			wantAuth: basic("tenant:otel"),
+		},
+		{
+			name: "explicit_authorization_wins", raw: "Authorization=Bearer explicit",
+			tenant: "tenant", authToken: "token", wantAuth: "Bearer explicit",
+		},
+		{
+			name: "keeps_other_headers", raw: "X-Extra=ok", tenant: "tenant", authToken: "token",
+			wantAuth: basic("tenant:token"), wantExtras: map[string]string{"X-Extra": "ok"},
+		},
+		{
+			name: "no_credentials_means_no_authorization", raw: "X-Extra=ok",
+			wantExtras: map[string]string{"X-Extra": "ok"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ExporterHeaders(tc.raw, tc.tenant, tc.otelToken, tc.authToken)
+			if got["Authorization"] != tc.wantAuth {
+				t.Fatalf("Authorization = %q, want %q", got["Authorization"], tc.wantAuth)
+			}
+			for k, v := range tc.wantExtras {
+				if got[k] != v {
+					t.Fatalf("header %s = %q, want %q", k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
+func TestBasicAuthHeaderValue(t *testing.T) {
+	cases := []struct {
+		name   string
+		tenant string
+		token  string
+		want   string
+		wantOK bool
+	}{
+		{name: "tenant and token", tenant: "123456", token: "glc_secret", want: "Basic " + base64.StdEncoding.EncodeToString([]byte("123456:glc_secret")), wantOK: true},
+		{name: "trims whitespace", tenant: "  123456  ", token: "  glc_secret  ", want: "Basic " + base64.StdEncoding.EncodeToString([]byte("123456:glc_secret")), wantOK: true},
+		{name: "blank tenant", tenant: "  ", token: "glc_secret"},
+		{name: "blank token", tenant: "123456", token: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := BasicAuthHeaderValue(tc.tenant, tc.token)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if got != tc.want {
+				t.Fatalf("value = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

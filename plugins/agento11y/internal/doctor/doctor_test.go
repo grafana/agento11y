@@ -633,6 +633,73 @@ func TestCollectConfig_Tags(t *testing.T) {
 	}
 }
 
+// TestCollectConfig_LocalForward covers the LOCAL_FORWARD attribution: doctor
+// reports shell-first like every other family, and calls out the case where the
+// local daemon (which prefers config.env) would use the other value.
+func TestCollectConfig_LocalForward(t *testing.T) {
+	tests := []struct {
+		name       string
+		osEnv      map[string]string
+		fileEnv    map[string]string
+		wantSet    bool
+		wantValue  string
+		wantSource string
+		wantMsg    string
+	}{
+		{name: "unset"},
+		{
+			name:      "from config.env",
+			fileEnv:   map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true"},
+			wantSet:   true,
+			wantValue: "true", wantSource: sourceConfig,
+		},
+		{
+			name:      "from env",
+			osEnv:     map[string]string{"SIGIL_LOCAL_FORWARD": "true"},
+			wantSet:   true,
+			wantValue: "true", wantSource: sourceEnv,
+		},
+		{
+			// The daemon prefers config.env so it forwards nothing, while
+			// doctor's shell-first precedence reports true.
+			name:      "env and config.env disagree",
+			osEnv:     map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true"},
+			fileEnv:   map[string]string{"AGENTO11Y_LOCAL_FORWARD": "false"},
+			wantSet:   true,
+			wantValue: "true", wantSource: sourceEnv,
+			wantMsg: "the local daemon uses the config.env value",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnv(t)
+			for k, v := range tc.osEnv {
+				t.Setenv(k, v)
+			}
+			sec := collectConfig(tc.osEnv, tc.fileEnv)
+			if sec.LocalForward.Set != tc.wantSet {
+				t.Fatalf("LocalForward.Set = %v, want %v", sec.LocalForward.Set, tc.wantSet)
+			}
+			if sec.LocalForward.Value != tc.wantValue {
+				t.Fatalf("LocalForward.Value = %q, want %q", sec.LocalForward.Value, tc.wantValue)
+			}
+			if sec.LocalForward.Source != tc.wantSource {
+				t.Fatalf("LocalForward.Source = %q, want %q", sec.LocalForward.Source, tc.wantSource)
+			}
+			joined := strings.Join(sec.Messages, " ")
+			if tc.wantMsg == "" {
+				if strings.Contains(joined, "LOCAL_FORWARD") {
+					t.Fatalf("unexpected LOCAL_FORWARD message: %v", sec.Messages)
+				}
+				return
+			}
+			if !strings.Contains(joined, tc.wantMsg) {
+				t.Fatalf("messages %v missing %q", sec.Messages, tc.wantMsg)
+			}
+		})
+	}
+}
+
 func TestRun(t *testing.T) {
 	convOnly := map[string]string{
 		"SIGIL_ENDPOINT":       "https://sigil.example.net",

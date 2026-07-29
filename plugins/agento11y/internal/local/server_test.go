@@ -12,9 +12,13 @@ import (
 	"testing"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/go/agento11y/model"
+	"github.com/grafana/agento11y/go/proto/agento11y/wire"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestServer_GenerationsExport_RecordsAndAccepts(t *testing.T) {
@@ -400,6 +404,10 @@ func TestServer_APIConversations_EmptyStorage(t *testing.T) {
 
 func newTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
+	// The forward loader falls back to the process environment, so a developer
+	// with forwarding and real credentials exported would otherwise have this
+	// suite POST to their live tenant.
+	clearForwardEnv(t)
 	dir := filepath.Join(t.TempDir(), "local")
 	storage, err := NewStorage(dir)
 	if err != nil {
@@ -529,9 +537,15 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	assert.Empty(t, got.Settings.Capture) // unset until the user picks a mode
 	assert.True(t, got.Settings.AutoUpdate)
 	assert.Equal(t, guardsOff, got.Settings.Guards)
+	assert.False(t, got.Settings.LocalForward)
+	assert.Equal(t, forwardStatus{Mode: forwardModeOff}, got.ForwardStatus)
+	assert.Empty(t, got.ForwardStatus.Reason, "forwarding off by default is not a paused state")
 
 	// Save a non-default configuration.
 	resp := putConfig(t, srv, Settings{
+		Endpoint:     "https://cloud.example.test",
+		TenantID:     "12345",
+		Token:        "glc_token",
 		Capture:      "metadata_only",
 		Tags:         []Tag{{Key: "team", Value: "ai"}},
 		Guards:       guardsFailClosed,
@@ -539,6 +553,7 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 		Debug:        true,
 		AutoUpdate:   false,
 		UserID:       "alice",
+		LocalForward: true,
 	})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -550,12 +565,25 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	assert.True(t, saved.Settings.Debug)
 	assert.False(t, saved.Settings.AutoUpdate)
 	assert.Equal(t, "alice", saved.Settings.UserID)
+	assert.True(t, saved.Settings.LocalForward)
+	// The saved toggle plus usable credentials resolve to a live forwarding
+	// posture, reduced to metadata_only by the saved capture mode. No OTLP
+	// endpoint was configured, so that leg reports why it stays off.
+	assert.Equal(t, forwardStatus{
+		Enabled:     true,
+		Mode:        forwardModeMetadataOnly,
+		Generations: true,
+		OTLPReason:  "no OTLP endpoint configured, so traces and metrics are not forwarded",
+	}, saved.ForwardStatus)
 
 	// Preview and on-disk file agree, sorted with the managed header.
 	onDisk, err := os.ReadFile(configPathFor(dir))
 	require.NoError(t, err)
 	assert.Contains(t, string(onDisk), "SIGIL_CONTENT_CAPTURE_MODE=metadata_only")
 	assert.Contains(t, string(onDisk), "SIGIL_GUARDS_TIMEOUT_MS=2000")
+	// Both spellings are written so an older binary still reads the toggle.
+	assert.Contains(t, string(onDisk), "AGENTO11Y_LOCAL_FORWARD=true")
+	assert.Contains(t, string(onDisk), "SIGIL_LOCAL_FORWARD=true")
 	assert.Contains(t, saved.Preview, "SIGIL_USER_ID=alice")
 	assert.True(t, strings.HasPrefix(saved.Preview, "# Managed by `agento11y login`."))
 
@@ -588,6 +616,11 @@ func TestServer_Config_Preview(t *testing.T) {
 	// Opt-out/opt-in keys at their defaults must not appear.
 	assert.NotContains(t, got.Preview, "SIGIL_AUTO_UPDATE")
 	assert.NotContains(t, got.Preview, "SIGIL_DEBUG")
+	// LOCAL_FORWARD is the exception: off is written as an explicit false,
+	// because the daemon prefers config.env and a missing key cannot override
+	// the value it inherited into its own environment at boot.
+	assert.Contains(t, got.Preview, "AGENTO11Y_LOCAL_FORWARD=false")
+	assert.Contains(t, got.Preview, "SIGIL_LOCAL_FORWARD=false")
 	// Preview is read-only: no file should have been created.
 	_, statErr := os.Stat(configPathFor(dir))
 	assert.True(t, os.IsNotExist(statErr))
@@ -658,6 +691,168 @@ func TestServer_Config_RejectsBadBody(t *testing.T) {
 	resp := post(t, srv, "/api/v1/config:preview", "application/json", "{not json")
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	resp.Body.Close()
+}
+
+// newForwardingTestServer builds a server whose config.env enables (or not)
+// Cloud forwarding to the given fake Cloud server. The forward client is
+// pointed at the fake server so its self-signed TLS cert is trusted.
+func newForwardingTestServer(t *testing.T, cloud *httptest.Server, env map[string]string) (*Server, string) {
+	t.Helper()
+	clearForwardEnv(t)
+	dir := filepath.Join(t.TempDir(), "local")
+	storage, err := NewStorage(dir)
+	require.NoError(t, err)
+	s := NewServer(storage, nil, writeConfigEnvFile(t, env))
+	s.forward.client = cloud.Client()
+	return s, dir
+}
+
+// TestServer_Forwarding_OffByDefault covers the opt-in guarantee: without the
+// LOCAL_FORWARD toggle the daemon stores locally and never contacts Cloud.
+func TestServer_Forwarding_OffByDefault(t *testing.T) {
+	hits := make(chan struct{}, 8)
+	cloud := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer cloud.Close()
+
+	s, dir := newForwardingTestServer(t, cloud, map[string]string{
+		"AGENTO11Y_ENDPOINT": cloud.URL, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+	})
+
+	postDiscard(t, s, "/api/v1/generations:export", "application/json",
+		`{"generations":[{"id":"gen-1","conversation_id":"conv-A","model":{"name":"m"}}]}`)
+	postDiscard(t, s, "/otlp/v1/traces", "application/x-protobuf", "")
+	s.forward.wait()
+
+	assert.Len(t, readLines(t, filepath.Join(dir, ConversationsDir, "conv-A.jsonl")), 1)
+	assert.Empty(t, hits, "no Cloud request should be made when forwarding is off")
+}
+
+// TestServer_Forwarding_OnForwardsGeneration covers the toggle-on path through
+// the handler: a stored generation is also POSTed to Cloud, stripped to the
+// configured (default metadata_only) content level.
+func TestServer_Forwarding_OnForwardsGeneration(t *testing.T) {
+	received := make(chan []byte, 1)
+	var gotPath string
+	cloud := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		received <- b
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer cloud.Close()
+
+	s, dir := newForwardingTestServer(t, cloud, map[string]string{
+		"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud.URL,
+		"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+	})
+
+	postDiscard(t, s, "/api/v1/generations:export", "application/json",
+		`{"generations":[{"id":"gen-1","conversation_id":"conv-A","model":{"provider":"p","name":"m"},"system_prompt":"secret"}]}`)
+	s.forward.wait()
+
+	// The local store keeps the full content the forwarded copy dropped.
+	lines := readLines(t, filepath.Join(dir, ConversationsDir, "conv-A.jsonl"))
+	require.Len(t, lines, 1)
+	assert.Contains(t, lines[0], "secret")
+
+	body := <-received
+	assert.Equal(t, wire.GenerationExportHTTPPath, gotPath)
+	req, err := wire.UnmarshalExportGenerationsJSON(body)
+	require.NoError(t, err)
+	require.Len(t, req.GetGenerations(), 1)
+	g := req.GetGenerations()[0]
+	assert.Equal(t, "gen-1", g.GetId())
+	assert.Empty(t, g.GetSystemPrompt(), "default content mode strips the forwarded copy")
+	assert.Equal(t, "metadata_only", g.GetMetadata().GetFields()[model.MetadataKeyContentCaptureMode].GetStringValue())
+}
+
+// TestServer_Forwarding_FailureKeepsLocalStore covers the best-effort
+// guarantee: a Cloud failure leaves the local store and the child's ack intact.
+func TestServer_Forwarding_FailureKeepsLocalStore(t *testing.T) {
+	cloud := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer cloud.Close()
+
+	s, dir := newForwardingTestServer(t, cloud, map[string]string{
+		"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud.URL,
+		"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+	})
+
+	resp := post(t, s, "/api/v1/generations:export", "application/json",
+		`{"generations":[{"id":"gen-1","conversation_id":"conv-A","model":{"name":"m"}}]}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var out generationsResponse
+	decodeJSON(t, resp.Body, &out)
+	require.Len(t, out.Results, 1)
+	assert.True(t, out.Results[0].Accepted, "child ack succeeds despite Cloud failure")
+
+	s.forward.wait()
+	assert.Len(t, readLines(t, filepath.Join(dir, ConversationsDir, "conv-A.jsonl")), 1)
+}
+
+// TestServer_Forwarding_RejectedGenerationNotForwarded covers the ordering
+// contract: only generations the local store accepted are relayed.
+func TestServer_Forwarding_RejectedGenerationNotForwarded(t *testing.T) {
+	received := make(chan []byte, 1)
+	cloud := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		received <- b
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer cloud.Close()
+
+	s, _ := newForwardingTestServer(t, cloud, map[string]string{
+		"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud.URL,
+		"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+	})
+
+	postDiscard(t, s, "/api/v1/generations:export", "application/json",
+		`{"generations":["not-an-object",{"id":"gen-ok","conversation_id":"conv-A","model":{"name":"m"}}]}`)
+	s.forward.wait()
+
+	req, err := wire.UnmarshalExportGenerationsJSON(<-received)
+	require.NoError(t, err)
+	require.Len(t, req.GetGenerations(), 1)
+	assert.Equal(t, "gen-ok", req.GetGenerations()[0].GetId())
+}
+
+// TestServer_Forwarding_RelaysOTLP covers the OTLP leg through the handler:
+// traces are relayed to the configured Cloud OTLP endpoint (stripped, because
+// the default content mode is reduced) while the local ack stays a 200.
+func TestServer_Forwarding_RelaysOTLP(t *testing.T) {
+	type capture struct {
+		path string
+		body []byte
+	}
+	received := make(chan capture, 2)
+	cloud := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		received <- capture{path: r.URL.Path, body: b}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer cloud.Close()
+
+	s, _ := newForwardingTestServer(t, cloud, map[string]string{
+		"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud.URL,
+		"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+		"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": cloud.URL,
+	})
+
+	traces, err := proto.Marshal(traceRequestWithContent())
+	require.NoError(t, err)
+	resp := postBytes(t, s, "/otlp/v1/traces", "application/x-protobuf", traces)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	s.forward.wait()
+
+	c := <-received
+	assert.Equal(t, "/v1/traces", c.path)
+	assertTraceStripped(t, c.body, wire.ContentTypeProto)
 }
 
 // TestServer_APISearch covers the /api/v1/search endpoint: empty query,
@@ -779,4 +974,83 @@ func TestServer_DevAsset_EnvPrecedence(t *testing.T) {
 		t.Setenv("SIGIL_LOCAL_WEB_DIR", legacy)
 		assert.Equal(t, "// legacy", fetchJSX())
 	})
+}
+
+// TestServer_Forwarding_ToggleOffStopsForwarding covers the config.env write
+// path end to end for the case the daemon's own environment disagrees: `local
+// serve` materializes config.env into its process env at boot, so a deleted key
+// would leave forwarding on. Saving Off must write an explicit false and stop
+// the relay without a daemon restart.
+func TestServer_Forwarding_ToggleOffStopsForwarding(t *testing.T) {
+	hits := make(chan struct{}, 4)
+	cloud := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer cloud.Close()
+
+	s, _ := newForwardingTestServer(t, cloud, map[string]string{
+		"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud.URL,
+		"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+	})
+	// What dotenv.ApplyEnv(nil) does at daemon start: both spellings of every
+	// config.env key land in the daemon's own environment.
+	t.Setenv(envconfig.PreferredKey("LOCAL_FORWARD"), "true")
+	t.Setenv(envconfig.LegacyKey("LOCAL_FORWARD"), "true")
+	require.True(t, s.forward.load().enabled)
+
+	resp := putConfig(t, s, Settings{
+		Endpoint: cloud.URL,
+		TenantID: "t",
+		Guards:   guardsOff,
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var saved configResponse
+	decodeJSON(t, resp.Body, &saved)
+	assert.False(t, saved.Settings.LocalForward)
+	assert.Equal(t, forwardStatus{Mode: forwardModeOff}, saved.ForwardStatus)
+
+	onDisk, err := os.ReadFile(s.configPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(onDisk), "AGENTO11Y_LOCAL_FORWARD=false")
+
+	postDiscard(t, s, "/api/v1/generations:export", "application/json",
+		`{"generations":[{"id":"gen-1","conversation_id":"conv-A","model":{"name":"m"}}]}`)
+	s.forward.wait()
+	assert.Empty(t, hits, "forwarding must stop as soon as config.env says false")
+}
+
+// TestServer_Forwarding_DoesNotRelayForwardedPayload covers the loop guard: a
+// payload that already carries another daemon's forward marker is stored but
+// not forwarded again, so two daemons pointed at each other (or one pointed at
+// itself) exchange one copy instead of looping.
+func TestServer_Forwarding_DoesNotRelayForwardedPayload(t *testing.T) {
+	hits := make(chan struct{}, 4)
+	cloud := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer cloud.Close()
+
+	s, dir := newForwardingTestServer(t, cloud, map[string]string{
+		"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud.URL,
+		"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+		"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": cloud.URL,
+	})
+
+	for _, path := range []string{"/api/v1/generations:export", "/otlp/v1/traces"} {
+		req := httptest.NewRequest(http.MethodPost, path,
+			strings.NewReader(`{"generations":[{"id":"gen-1","conversation_id":"conv-A","model":{"name":"m"}}]}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(forwardMarkerHeader, "1")
+		rr := httptest.NewRecorder()
+		s.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+	}
+	s.forward.wait()
+
+	// Stored locally, never relayed.
+	assert.Len(t, readLines(t, filepath.Join(dir, ConversationsDir, "conv-A.jsonl")), 1)
+	assert.Empty(t, hits)
 }
