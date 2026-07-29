@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import mimetypes
 import os
 import secrets
@@ -48,12 +49,15 @@ except Exception:  # pragma: no cover - exercised only in minimal vendored envs
     SpanKind = Status = StatusCode = set_span_in_context = None  # type: ignore[assignment]
     _OTEL_AVAILABLE = False
 
+from ..errors import EvaluationExecutionError, EvaluationTimeoutError, ValidationError
 from ..models import (
     CreateExperimentRequest,
     ExperimentReport,
     ScoreItem,
     ScoreSource,
     ScoreValue,
+    TrialEvaluation,
+    TrialEvaluationStatus,
 )
 from ..redaction import redact_secret_text
 from . import otel
@@ -73,6 +77,10 @@ from .types import (
 if TYPE_CHECKING:  # avoid an import cycle at runtime
     from .client import Client
     from .suites import TestSuitesClient
+
+# Ceiling for Trial.evaluate's poll backoff, in seconds. Each status read is
+# charged a fixed ingest cost, so a long wait must not poll at the floor rate.
+_MAX_EVALUATION_POLL_INTERVAL = 5.0
 
 
 def stable_id(prefix: str, *parts: Any) -> str:
@@ -207,6 +215,7 @@ class Trial:
         self._buffer: list[ScoreItem] = []
         self._accepted = 0
         self._has_final = False
+        self._cloud_evaluated = False
         self._final_passed: bool | None = None
         self._closed = False
         self._score_occurrences: dict[tuple[str, str], int] = {}
@@ -267,8 +276,13 @@ class Trial:
             self.error = str(exc) or (exc_type.__name__ if exc_type else type(exc).__name__)
         elif self.status == TrialStatus.RUNNING.value:
             if not self._has_final:
-                self.status = TrialStatus.FAILED.value
-                self.error = "trial closed without a final score"
+                if self._cloud_evaluated:
+                    # A stored evaluator graded this trial; the verdict and score
+                    # count come from the backend, not from a local final score.
+                    self.status = TrialStatus.COMPLETED.value
+                else:
+                    self.status = TrialStatus.FAILED.value
+                    self.error = "trial closed without a final score"
             elif self._final_passed is None:
                 self.status = TrialStatus.COMPLETED.value
             else:
@@ -450,6 +464,110 @@ class Trial:
 
         self.conversation_id = (conversation_id or "").strip()
         return self
+
+    def evaluate(
+        self,
+        evaluator_id: str,
+        evaluator_version: str = "",
+        timeout: float = 300.0,
+        poll_interval: float = 0.5,
+    ) -> TrialEvaluation:
+        """Runs a stored evaluator against this trial's bound conversation.
+
+        Grades the conversation Agent Observability already stored, using an
+        evaluator defined in your tenant. For an in-process judge, see
+        :meth:`evaluate_output`.
+
+        The current conversation binding is persisted and the anchor generation
+        from :meth:`record_io` is exported before the evaluation is queued, so the
+        evaluator can read the conversation it is asked to grade. A successful
+        evaluation lets the trial close as ``completed`` without a local
+        :meth:`final_score`.
+
+        The evaluator grades the conversation, not one generation, so the score
+        it stores carries this trial's ``conversation_id`` and ``trial_id`` and no
+        ``generation_id``. Read it back from the experiment's scores or from the
+        trial's ``scores`` in :meth:`Experiment.report`; a per-generation score
+        lookup returns nothing. The report's ``pass_rate`` stays unset because
+        that verdict comes from a score stored under the ``final`` key, and a
+        stored evaluator writes under its own key.
+
+        Evaluating each trial in turn blocks the run for as long as the worker
+        takes. To run them concurrently, trigger with
+        :meth:`~agento11y.experiments.Client.trigger_trial_evaluation` and poll
+        with :meth:`~agento11y.experiments.Client.get_trial_evaluation`, both
+        inside the experiment block. Finalizing while an evaluation is still
+        queued raises :class:`~agento11y.errors.ConflictError` with
+        :attr:`~agento11y.errors.ConflictKind.PENDING_EVALUATIONS`.
+
+        ``timeout`` bounds the polling loop, not the whole call: a status request
+        already in flight spends its own retry budget first, so the call can
+        overrun ``timeout``. Worker failure raises
+        :class:`~agento11y.errors.EvaluationExecutionError` and an exceeded
+        deadline raises :class:`~agento11y.errors.EvaluationTimeoutError`. A
+        transport error while polling propagates and abandons the wait; the
+        evaluation keeps running server-side.
+        """
+
+        if not self.conversation_id:
+            raise ValidationError("agento11y trial evaluation validation failed: bind a conversation first")
+        if not (evaluator_id or "").strip():
+            raise ValidationError("agento11y trial evaluation validation failed: evaluator_id is required")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValidationError("agento11y trial evaluation validation failed: timeout must be greater than zero")
+        if not math.isfinite(poll_interval) or poll_interval <= 0:
+            raise ValidationError(
+                "agento11y trial evaluation validation failed: poll_interval must be greater than zero"
+            )
+
+        self._create_trial()
+        self._client.update_trial(
+            self.ref.experiment_id,
+            self.trial_id,
+            conversation_id=self.conversation_id,
+        )
+        # The evaluator reads the stored conversation, so the anchor generation has
+        # to exist before the wait starts, not when the trial closes.
+        self._ensure_generation()
+        # Covers a caller exporting through ``client.core``; this client's own
+        # record_generation already posts synchronously.
+        flush_generations = getattr(self._client, "flush_generations", None)
+        if callable(flush_generations):
+            flush_generations()
+
+        deadline = time.monotonic() + timeout
+        evaluation = self._client.trigger_trial_evaluation(
+            self.ref.experiment_id,
+            self.trial_id,
+            evaluator_id,
+            evaluator_version,
+        )
+        interval = poll_interval
+        max_interval = max(poll_interval, _MAX_EVALUATION_POLL_INTERVAL)
+        while True:
+            if evaluation.status == TrialEvaluationStatus.SUCCESS:
+                # The trial's terminal state stays with close(); a cloud score is
+                # not a local verdict, and mutating status here would swallow a
+                # later exception raised inside the trial block.
+                self._cloud_evaluated = True
+                return evaluation
+            if evaluation.status == TrialEvaluationStatus.FAILED:
+                raise EvaluationExecutionError(evaluation.evaluation_id, evaluation.error)
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise EvaluationTimeoutError(
+                    evaluation.evaluation_id,
+                    f"timed out after {timeout:g} seconds",
+                )
+            # Back off so a long wait costs tens of status reads, not hundreds.
+            time.sleep(min(interval, remaining))
+            interval = min(interval * 2, max_interval)
+            evaluation = self._client.get_trial_evaluation(
+                self.ref.experiment_id,
+                self.trial_id,
+                evaluation.evaluation_id,
+            )
 
     def bind_generation(self, generation_id: str, *, conversation_id: str = "") -> Trial:
         """Attaches this trial's scores to an existing generation.
@@ -1143,7 +1261,12 @@ class Experiment:
         """Finalizes the run. Safe to call once; later calls are no-ops.
 
         ``score_count`` is an optional assertion against the server's stored
-        scores. Leave it unset for normal and distributed runners.
+        scores. Leave it unset for normal and distributed runners. Agent
+        Observability checks it against every score stored for the run, including
+        ones a stored evaluator wrote through :meth:`Trial.evaluate`, so a locally
+        derived count in a run that uses cloud evaluation raises
+        :class:`~agento11y.errors.ConflictError` with
+        :attr:`~agento11y.errors.ConflictKind.SCORE_COUNT_MISMATCH`.
         """
 
         if self._finalized:

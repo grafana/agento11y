@@ -472,6 +472,23 @@ a stored test suite.
 - Local `LLMJudge` and `RegexJudge` helpers do not require an evaluator created
   in Grafana. Frameworks can submit their native grader result and transcript
   through `trial.record_evaluation(...)`.
+- Python only: `trial.evaluate(evaluator_id)` grades the trial's bound
+  conversation with an evaluator that already exists in the tenant, instead of a
+  locally computed score. It blocks until the worker finishes, and the trial then
+  closes as `completed` with no local `final_score`. Requires
+  `trial.bind_conversation(...)` first.
+  - The score is stored against the conversation and the trial, with no
+    `generation_id`, so read it from the experiment's scores or the trial's
+    `scores` in the report rather than from a per-generation lookup.
+  - Leave `score_count` unset when finalizing such a run, and expect the report's
+    `pass_rate` to be unset: it only counts a score stored under the `final` key.
+  - For concurrent evaluations use `client.trigger_trial_evaluation(...)` and
+    `client.get_trial_evaluation(...)`, keeping both the trigger and the polling
+    inside the experiment block. Finalizing while one is still queued raises a
+    recoverable `ConflictError` (`PENDING_EVALUATIONS`) and stops the run.
+  - The trigger and status endpoints need Grafana Cloud gateway routes. Without
+    them the call fails with `401 invalid scope requested`, which is a routing
+    gap rather than a token problem.
 - Catch evaluator exceptions around each trial when one failed judge should not
   abort the whole run.
 

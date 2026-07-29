@@ -3,12 +3,13 @@
 A minimal, runnable set of Agent Observability **experiment** examples using the core
 `agento11y` only — **no framework adapter**.
 
-There are seven entry points:
+There are eight entry points:
 
 | Example | Command | What it demonstrates |
 | --- | --- | --- |
 | Suite-free deterministic eval | `uv run python -m app.run_suite_free_experiment` | Tracking primitives with no stored/local suite and no model dependency |
 | Easy transcript eval | `uv run python -m app.run_experiment` | Candidate transcript, grader transcript, score links, JSON/text artifacts |
+| Stored evaluator eval | `uv run python -m app.run_cloud_evaluator_experiment` | Binds the agent's conversation and grades it with an evaluator stored in your tenant, with no local score |
 | Dashboard image eval | `uv run python -m app.run_dashboard_experiment` | Candidate dashboard spec transcript, rendered pyplot PNG artifact, grader transcript |
 | Notebook walkthrough | `experiment_walkthrough.ipynb` | Step-by-step cloud run, suite association, agent call, score export, finalize |
 | Push stored suite | `uv run python -m app.push_suite` | Upload local YAML cases into Agent Observability test suites, optionally publish |
@@ -29,6 +30,7 @@ callback.
 | LLM judge | Publishes a grader transcript and emits the final score with grader IDs | `app/run_experiment.py` |
 | Tiny agent | Plain Anthropic calls for the candidate and grader | `app/agent.py` |
 | Pyplot artifact | Renders dashboard specs and uploads PNG artifacts | `app/run_dashboard_experiment.py` |
+| `trial.bind_conversation(...)` + `trial.evaluate(...)` | Runs a stored tenant evaluator against the trial's conversation | `app/run_cloud_evaluator_experiment.py` |
 
 ## How it works
 
@@ -96,6 +98,22 @@ already finalized the easy run:
 export AGENTO11Y_EXPERIMENT_ID=dashboard-example-${GIT_SHA:-manual}
 uv run python -m app.run_dashboard_experiment
 ```
+
+To grade with an evaluator that already exists in your tenant instead of scoring
+locally, set its id and run the cloud-evaluator example. `trial.evaluate(...)`
+blocks until the worker finishes, so the run takes as long as the evaluations do:
+
+```bash
+export AGENTO11Y_EXPERIMENT_ID=cloud-evaluator-${GIT_SHA:-manual}
+export AGENTO11Y_EVALUATOR_ID=<an-evaluator-id-in-your-tenant>
+# Optional: pin a version instead of the latest active one.
+export AGENTO11Y_EVALUATOR_VERSION=<version>
+uv run python -m app.run_cloud_evaluator_experiment
+```
+
+The example does not create the evaluator; define it in Agent Observability
+first. Trials close as `completed` with no local `final_score`, and the backend
+counts the stored evaluator's scores.
 
 To push the sample YAML suite into Agent Observability test suites and publish it:
 
