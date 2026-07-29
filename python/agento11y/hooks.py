@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -17,6 +18,8 @@ from .config import HooksConfig
 from .context import conversation_id_from_context
 from .errors import HookDeniedError, HookTransportError
 from .models import Message, MessageRole, Part, PartKind, ToolDefinition
+
+_logger = logging.getLogger("agento11y")
 
 HOOKS_EVALUATE_PATH = "/api/v1/hooks:evaluate"
 HOOK_TIMEOUT_HEADER = "X-Agento11y-Hook-Timeout-Ms"
@@ -203,6 +206,9 @@ def _allow_response() -> HookEvaluateResponse:
 
 def _fail_open_or_raise(fail_open: bool, detail: str) -> HookEvaluateResponse:
     if fail_open:
+        # A dead evaluator allows every request. Without this line that is
+        # completely silent, so an outage looks identical to a clean allow.
+        _logger.warning("agento11y: hook evaluation failed, allowing request (fail_open): %s", detail)
         return _allow_response()
     raise HookTransportError(f"agento11y hook evaluation failed: {detail}")
 

@@ -22,7 +22,7 @@ from opentelemetry.trace import Span, SpanKind, Status, StatusCode, use_span
 
 from . import _experiments_transport
 from . import conversations as _conversations
-from .config import ClientConfig, resolve_config
+from .config import ClientConfig, HooksConfig, resolve_config
 from .context import (
     _pop_capture_mode,
     _push_capture_mode,
@@ -602,6 +602,17 @@ class Client:
                     rec.end()
 
         return out
+
+    @property
+    def hooks_config(self) -> HooksConfig:
+        """Returns a copy of the resolved hook configuration.
+
+        Adapters that call :meth:`evaluate_hook` behind their own timeout need
+        to know the configured fail-open policy so a timeout on their side
+        resolves the same way a transport failure does inside the SDK.
+        """
+
+        return copy.deepcopy(self._config.hooks)
 
     def evaluate_hook(self, request: HookEvaluateRequest) -> HookEvaluateResponse:
         """Evaluates synchronous hook rules for the given request.
