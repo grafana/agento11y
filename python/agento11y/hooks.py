@@ -275,20 +275,33 @@ def _message_role_wire(role: Any) -> str:
 
 
 def _serialize_message(message: Message) -> dict[str, Any]:
+    """Serializes a message for the hooks API.
+
+    Every part carries its ``kind``. The server dispatches on that field and
+    only recovers a missing one for text, so a ``kind``-less thinking, tool
+    call, or tool result part reaches rule evaluation as an empty part: a
+    tool-filter guard sees no tool calls and allows the request.
+
+    Tool arguments and tool result payloads go out as embedded JSON, not
+    base64. The hooks API reads them as raw JSON, so a base64 blob is what
+    argument-level rules end up matching against. Generation export is the
+    other way around, because that is protobuf JSON.
+    """
+
     parts: list[dict[str, Any]] = []
     for part in message.parts:
         if part.kind == PartKind.TEXT and part.text:
-            parts.append({"text": part.text})
+            parts.append({"kind": PartKind.TEXT.value, "text": part.text})
         elif part.kind == PartKind.THINKING and part.thinking:
-            parts.append({"thinking": part.thinking})
+            parts.append({"kind": PartKind.THINKING.value, "thinking": part.thinking})
         elif part.kind == PartKind.TOOL_CALL and part.tool_call is not None:
             payload: dict[str, Any] = {
                 "id": part.tool_call.id,
                 "name": part.tool_call.name,
             }
             if part.tool_call.input_json:
-                payload["input_json"] = base64.b64encode(part.tool_call.input_json).decode("ascii")
-            parts.append({"tool_call": payload})
+                payload["input_json"] = _embedded_json(part.tool_call.input_json)
+            parts.append({"kind": PartKind.TOOL_CALL.value, "tool_call": payload})
         elif part.kind == PartKind.TOOL_RESULT and part.tool_result is not None:
             tr = part.tool_result
             tr_payload: dict[str, Any] = {
@@ -300,19 +313,39 @@ def _serialize_message(message: Message) -> dict[str, Any]:
             if tr.name:
                 tr_payload["name"] = tr.name
             if tr.content_json:
-                tr_payload["content_json"] = base64.b64encode(tr.content_json).decode("ascii")
-            parts.append({"tool_result": tr_payload})
+                tr_payload["content_json"] = _embedded_json(tr.content_json)
+            parts.append({"kind": PartKind.TOOL_RESULT.value, "tool_result": tr_payload})
         else:
             # Fallback: emit a minimal text part so the payload remains valid JSON.
             if part.text:
-                parts.append({"text": part.text})
+                parts.append({"kind": PartKind.TEXT.value, "text": part.text})
     out: dict[str, Any] = {"role": _message_role_wire(message.role), "parts": parts}
     if message.name:
         out["name"] = message.name
     return out
 
 
+def _embedded_json(raw: bytes) -> Any:
+    """Decodes JSON bytes for embedding in the hook payload.
+
+    Bytes that do not parse are sent as a JSON string, which keeps the request
+    body valid and leaves the text visible to rules instead of dropping it.
+    """
+
+    try:
+        return json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return raw.decode("utf-8", errors="replace")
+
+
 def _serialize_tool(tool: ToolDefinition) -> dict[str, Any]:
+    """Serializes a tool definition for the hooks API.
+
+    ``input_schema_json`` stays base64 even though tool call arguments do not:
+    the server decodes the tools list straight into its protobuf type, which
+    rejects embedded JSON for a bytes field.
+    """
+
     out: dict[str, Any] = {"name": tool.name}
     if tool.description:
         out["description"] = tool.description

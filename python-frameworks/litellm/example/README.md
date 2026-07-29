@@ -50,6 +50,20 @@ Open `https://<your-stack>.grafana.net/a/grafana-agento11y-app/conversations`. G
 
 `config.yaml` defines the available models. Add more by following the [LiteLLM model list format](https://docs.litellm.ai/docs/proxy/configs).
 
+## Preflight rule enforcement
+
+`config.yaml` lists `agento11y_callback.agento11y_guards` as a second callback, which evaluates Agent Observability preflight guards before each request reaches the provider. Guards live in Agent Observability, not in this config; refer to [Set up guards](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/guides/guards/) for how to create one, and to the [package README](../README.md#guards) for what a rule does through this adapter.
+
+Three outcomes:
+
+- Allow (no rule matches, or every rule passes): the request goes through and the generation is exported as usual.
+- Deny: the proxy answers `400` with `blocked by guardrail agento11y: <reason> (rule <rule-id>)` and never calls the provider.
+- Evaluator unreachable: `HooksConfig.fail_open` is `True` in `agento11y_callback.py`, so the request is allowed and the proxy logs `agento11y: hook evaluation failed, allowing request (fail_open): ...`. Set `fail_open=False` to fail closed instead; the request then fails with a transport error before the provider is called.
+
+To see the fail-open path, point `AGENTO11Y_ENDPOINT` at an unreachable host and watch the proxy logs while making a request.
+
+Enforcement only happens through the proxy. A direct `litellm.completion()` call in your own process is not guarded, because LiteLLM never runs pre-call hooks on the SDK path.
+
 ## Attributing generations to the calling agent
 
 `agento11y_callback.py` names generations after the proxy only when a request
@@ -87,7 +101,9 @@ Point `config.yaml` at it:
 
 ```yaml
 litellm_settings:
-  callbacks: agento11y_callback_agent_from_key_alias.agento11y_handler
+  callbacks:
+    - agento11y_callback_agent_from_key_alias.agento11y_handler
+    - agento11y_callback.agento11y_guards
 ```
 
 and mount it alongside `config.yaml` in `docker-compose.yaml`:

@@ -8,7 +8,12 @@ model_list:
       model: anthropic/claude-sonnet-4-20250514
 
 litellm_settings:
-  callbacks: agento11y_callback.agento11y_handler
-  # Swap in this callback instead to name callers that send no agent identity
-  # after their virtual key rather than after the proxy:
-  # callbacks: agento11y_callback_agent_from_key_alias.agento11y_handler
+  callbacks:
+    # Swap in agento11y_callback_agent_from_key_alias.agento11y_handler to name
+    # callers that send no agent identity after their virtual key rather than
+    # after the proxy.
+    - agento11y_callback.agento11y_handler
+    # Preflight rule enforcement. Runs on every request; construct it with
+    # default_on=False to require callers to opt in with
+    # "guardrails": ["agento11y"] in their metadata.
+    - agento11y_callback.agento11y_guards
