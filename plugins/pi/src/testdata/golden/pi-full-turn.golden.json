@@ -89,7 +89,8 @@
           "total_tokens": "150",
           "cache_read_input_tokens": "10",
           "cache_write_input_tokens": "0",
-          "reasoning_tokens": "0"
+          "reasoning_tokens": "0",
+          "input_is_disjoint": true
         },
         "stop_reason": "end_turn",
         "started_at": "<NORMALIZED>",

@@ -170,10 +170,13 @@ def map_usage(raw: Any) -> TokenUsage:
         # an unknown provider could report it cache-inclusively. Leave the usage
         # unmarked so consumers fall back to the provider-name heuristic, which
         # is correct for additive providers and correctable for inclusive ones.
+        # Exception: a payload that itself carries an explicit disjoint marker
+        # (e.g. an already-normalized TokenUsage re-mapped by a framework
+        # bridge, as pydantic-ai does) is first-hand knowledge and keeps it.
         # Direct from_anthropic callers (the Anthropic provider wrapper) keep
         # marking, since there the shape is verified.
         usage = from_anthropic(raw)
-        usage.input_is_disjoint = False
+        usage.input_is_disjoint = _read(raw, "input_is_disjoint") is True
         return usage
 
     return from_generic(raw)

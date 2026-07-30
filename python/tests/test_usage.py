@@ -403,6 +403,18 @@ class TestMapUsage:
         # Direct provider-wrapper calls keep marking: there the shape is verified.
         assert from_anthropic({"input_tokens": 100, "output_tokens": 50}).input_is_disjoint is True
 
+    def test_preserves_explicit_marker_on_remapped_usage(self):
+        # Framework bridges (e.g. pydantic-ai) build a normalized TokenUsage and
+        # re-map it through map_usage; the payload's own marker must survive.
+        already_disjoint = TokenUsage(
+            input_tokens=5,
+            output_tokens=5,
+            cache_read_input_tokens=3,
+            cache_write_input_tokens=2,
+            input_is_disjoint=True,
+        )
+        assert map_usage(already_disjoint).input_is_disjoint is True
+
     def test_legacy_fallback(self):
         raw = SimpleNamespace()  # no matching keys at all
         usage = map_usage(raw)

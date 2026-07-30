@@ -326,6 +326,8 @@ describe("mapGenerationResult", () => {
       totalTokens: 165,
       cacheReadInputTokens: 10,
       cacheWriteInputTokens: 5,
+      // pi-ai already normalizes to disjoint buckets in its provider adapters.
+      inputIsDisjoint: true,
     });
     expect(result.responseModel).toBe("claude-sonnet-4-20250514");
     expect(result.stopReason).toBe("end_turn");

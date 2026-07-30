@@ -289,6 +289,12 @@ export function mapGenerationResult(
       totalTokens: msg.usage.totalTokens,
       cacheReadInputTokens: msg.usage.cacheRead,
       cacheWriteInputTokens: msg.usage.cacheWrite,
+      // pi-ai normalizes usage to disjoint buckets in every provider adapter
+      // (openai-completions/openai-responses subtract cached_tokens from the
+      // prompt total, google subtracts cachedContentTokenCount, anthropic is
+      // natively additive), so Usage.input is always fresh here. Without the
+      // marker, consumers would re-subtract cacheRead for openai-through-pi.
+      inputIsDisjoint: true,
     },
     stopReason: mapStopReason(msg.stopReason),
     completedAt: new Date(completedAtMs ?? msg.timestamp),
