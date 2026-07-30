@@ -20,6 +20,7 @@ from agento11y import (
     Part,
     PartKind,
     QueueFullError,
+    TokenUsage,
     ToolExecutionStart,
     ValidationError,
     with_agent_name,
@@ -470,6 +471,44 @@ def test_request_controls_result_overrides_seed_and_sets_span_attrs() -> None:
         assert span.attributes.get("agento11y.framework.langgraph.node") == "answer_node"
         assert span.attributes.get("agento11y.sdk.name") == "sdk-python"
         assert span.attributes.get("gen_ai.response.finish_reasons") == ("end_turn",)
+    finally:
+        client.shutdown()
+        provider.shutdown()
+
+
+def test_generation_span_marks_disjoint_token_semantics() -> None:
+    exporter = CapturingGenerationExporter()
+    span_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    tracer = provider.get_tracer("agento11y-test")
+
+    client = _new_client(exporter, tracer=tracer)
+    try:
+        rec = client.start_generation(GenerationStart(model=ModelRef(provider="openai", name="gpt-5.6-sol")))
+        rec.set_result(
+            usage=TokenUsage(
+                input_tokens=10,
+                output_tokens=4,
+                cache_read_input_tokens=3,
+                input_is_disjoint=True,
+            ),
+            output=_assistant_output("ok"),
+        )
+        rec.end()
+        assert rec.err() is None
+        span = span_exporter.get_finished_spans()[-1]
+        assert span.attributes.get("gen_ai.token.semantics") == "disjoint"
+
+        rec_manual = client.start_generation(GenerationStart(model=ModelRef(provider="openai", name="gpt-5.6-sol")))
+        rec_manual.set_result(
+            usage=TokenUsage(input_tokens=10, output_tokens=4, cache_read_input_tokens=3),
+            output=_assistant_output("ok"),
+        )
+        rec_manual.end()
+        assert rec_manual.err() is None
+        manual_span = span_exporter.get_finished_spans()[-1]
+        assert manual_span.attributes.get("gen_ai.token.semantics") is None
     finally:
         client.shutdown()
         provider.shutdown()

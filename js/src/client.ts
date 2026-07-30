@@ -155,10 +155,11 @@ const metricTokenTypeOutput = 'output';
 const metricTokenTypeCacheRead = 'cache_read';
 const metricTokenTypeCacheWrite = 'cache_write';
 const metricTokenTypeReasoning = 'reasoning';
-// Marks token-usage series already normalized to the disjoint contract so
-// consumers skip cache-inclusive normalization; absence means legacy telemetry.
-const metricAttrTokenSemantics = 'gen_ai.token.semantics';
-const metricTokenSemanticsDisjoint = 'disjoint';
+// Marks token-usage telemetry (metric series and generation spans) already
+// normalized to the disjoint contract so consumers skip cache-inclusive
+// normalization; absence means legacy telemetry.
+const attrTokenSemantics = 'gen_ai.token.semantics';
+const tokenSemanticsDisjoint = 'disjoint';
 
 const durationBucketsSeconds: number[] = [
   0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
@@ -1122,7 +1123,7 @@ export class Agento11yClient {
       [metricAttrTokenType]: tokenType,
     };
     if (generation.usage?.inputIsDisjoint) {
-      attributes[metricAttrTokenSemantics] = metricTokenSemanticsDisjoint;
+      attributes[attrTokenSemantics] = tokenSemanticsDisjoint;
     }
     this.tokenUsageHistogram.record(value, attributes);
   }
@@ -1904,6 +1905,7 @@ function setGenerationSpanAttributes(
       cacheReadInputTokens?: number;
       cacheWriteInputTokens?: number;
       reasoningTokens?: number;
+      inputIsDisjoint?: boolean;
     };
   },
 ): void {
@@ -2013,6 +2015,9 @@ function setGenerationSpanAttributes(
   }
   if ((usage.reasoningTokens ?? 0) !== 0) {
     span.setAttribute(spanAttrReasoningTokens, usage.reasoningTokens ?? 0);
+  }
+  if (usage.inputIsDisjoint) {
+    span.setAttribute(attrTokenSemantics, tokenSemanticsDisjoint);
   }
 }
 

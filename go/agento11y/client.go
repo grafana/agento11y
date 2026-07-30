@@ -229,12 +229,13 @@ const (
 	metricTokenTypeCacheRead    = "cache_read"
 	metricTokenTypeCacheWrite   = "cache_write"
 	metricTokenTypeReasoning    = "reasoning"
-	// metricAttrTokenSemantics marks token-usage series that already follow the
-	// disjoint contract (input is fresh, cache buckets additive). Consumers that
-	// normalize cache-inclusive providers must skip that normalization when this
-	// label is "disjoint"; absence means legacy cache-inclusive telemetry.
-	metricAttrTokenSemantics     = "gen_ai.token.semantics"
-	metricTokenSemanticsDisjoint = "disjoint"
+	// attrTokenSemantics marks token-usage telemetry (metric series and
+	// generation spans) that already follows the disjoint contract (input is
+	// fresh, cache buckets additive). Consumers that normalize cache-inclusive
+	// providers must skip that normalization when this attribute is "disjoint";
+	// absence means legacy cache-inclusive telemetry.
+	attrTokenSemantics     = "gen_ai.token.semantics"
+	tokenSemanticsDisjoint = "disjoint"
 )
 
 // durationBucketsSeconds is the OTel GenAI semantic-convention bucket advice
@@ -1726,6 +1727,9 @@ func generationSpanAttributes(g Generation) []attribute.KeyValue {
 	if g.Usage.ReasoningTokens != 0 {
 		attrs = append(attrs, attribute.Int64(spanAttrReasoningTokens, g.Usage.ReasoningTokens))
 	}
+	if g.Usage.InputIsDisjoint {
+		attrs = append(attrs, attribute.String(attrTokenSemantics, tokenSemanticsDisjoint))
+	}
 
 	return attrs
 }
@@ -2033,7 +2037,7 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 		tokenAttrs = append(tokenAttrs, tagAttrs...)
 		tokenAttrs = append(tokenAttrs, attribute.String(metricAttrTokenType, tokenType))
 		if generation.Usage.InputIsDisjoint {
-			tokenAttrs = append(tokenAttrs, attribute.String(metricAttrTokenSemantics, metricTokenSemanticsDisjoint))
+			tokenAttrs = append(tokenAttrs, attribute.String(attrTokenSemantics, tokenSemanticsDisjoint))
 		}
 		c.instruments.tokenUsage.Record(ctx, value, metric.WithAttributes(tokenAttrs...))
 	}

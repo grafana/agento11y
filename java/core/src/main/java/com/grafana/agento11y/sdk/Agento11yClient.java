@@ -97,10 +97,11 @@ public final class Agento11yClient implements AutoCloseable {
     static final String METRIC_TOKEN_TYPE_CACHE_READ = "cache_read";
     static final String METRIC_TOKEN_TYPE_CACHE_WRITE = "cache_write";
     static final String METRIC_TOKEN_TYPE_REASONING = "reasoning";
-    // Marks token-usage series already normalized to the disjoint contract so
-    // consumers skip cache-inclusive normalization; absence means legacy telemetry.
-    static final String METRIC_ATTR_TOKEN_SEMANTICS = "gen_ai.token.semantics";
-    static final String METRIC_TOKEN_SEMANTICS_DISJOINT = "disjoint";
+    // Marks token-usage telemetry (metric series and generation spans) already
+    // normalized to the disjoint contract so consumers skip cache-inclusive
+    // normalization; absence means legacy telemetry.
+    static final String ATTR_TOKEN_SEMANTICS = "gen_ai.token.semantics";
+    static final String TOKEN_SEMANTICS_DISJOINT = "disjoint";
 
     static final List<Double> DURATION_BUCKETS_SECONDS = List.of(
             0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28,
@@ -1208,6 +1209,9 @@ public final class Agento11yClient implements AutoCloseable {
             span.setAttribute(SPAN_ATTR_CACHE_READ_TOKENS, usage.getCacheReadInputTokens());
             span.setAttribute(SPAN_ATTR_CACHE_WRITE_TOKENS, usage.getCacheWriteInputTokens());
             span.setAttribute(SPAN_ATTR_REASONING_TOKENS, usage.getReasoningTokens());
+            if (usage.getInputIsDisjoint()) {
+                span.setAttribute(ATTR_TOKEN_SEMANTICS, TOKEN_SEMANTICS_DISJOINT);
+            }
         }
     }
 
@@ -1387,7 +1391,7 @@ public final class Agento11yClient implements AutoCloseable {
                         .put(METRIC_ATTR_TOKEN_TYPE, tokenType);
         TokenUsage usage = generation.getUsage();
         if (usage != null && usage.getInputIsDisjoint()) {
-            attrs.put(METRIC_ATTR_TOKEN_SEMANTICS, METRIC_TOKEN_SEMANTICS_DISJOINT);
+            attrs.put(ATTR_TOKEN_SEMANTICS, TOKEN_SEMANTICS_DISJOINT);
         }
         tokenUsageHistogram.record((double) value, attrs.build());
     }

@@ -136,10 +136,11 @@ _metric_token_type_output = "output"
 _metric_token_type_cache_read = "cache_read"
 _metric_token_type_cache_write = "cache_write"
 _metric_token_type_reasoning = "reasoning"
-# Marks token-usage series already normalized to the disjoint contract so
-# consumers skip cache-inclusive normalization; absence means legacy telemetry.
-_metric_attr_token_semantics = "gen_ai.token.semantics"
-_metric_token_semantics_disjoint = "disjoint"
+# Marks token-usage telemetry (metric series and generation spans) already
+# normalized to the disjoint contract so consumers skip cache-inclusive
+# normalization; absence means legacy telemetry.
+_attr_token_semantics = "gen_ai.token.semantics"
+_token_semantics_disjoint = "disjoint"
 
 _DURATION_BUCKETS_SECONDS: tuple[float, ...] = (
     0.01,
@@ -1227,7 +1228,7 @@ class Client:
             _metric_attr_token_type: token_type,
         }
         if generation.usage.input_is_disjoint:
-            attributes[_metric_attr_token_semantics] = _metric_token_semantics_disjoint
+            attributes[_attr_token_semantics] = _token_semantics_disjoint
         self._token_usage_histogram.record(value, attributes=attributes)
 
     def _record_tool_execution_metrics(
@@ -1980,6 +1981,8 @@ def _set_generation_span_attributes(span: Span, generation: Generation) -> None:
         span.set_attribute(_span_attr_cache_write_tokens, usage.cache_write_input_tokens)
     if usage.reasoning_tokens:
         span.set_attribute(_span_attr_reasoning_tokens, usage.reasoning_tokens)
+    if usage.input_is_disjoint:
+        span.set_attribute(_attr_token_semantics, _token_semantics_disjoint)
 
 
 def _set_embedding_start_span_attributes(span: Span, start: EmbeddingStart) -> None:

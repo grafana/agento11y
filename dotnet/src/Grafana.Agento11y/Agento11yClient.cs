@@ -71,10 +71,11 @@ public sealed partial class Agento11yClient : IAsyncDisposable
     internal const string MetricTokenTypeCacheRead = "cache_read";
     internal const string MetricTokenTypeCacheWrite = "cache_write";
     internal const string MetricTokenTypeReasoning = "reasoning";
-    // Marks token-usage series already normalized to the disjoint contract so
-    // consumers skip cache-inclusive normalization; absence means legacy telemetry.
-    internal const string MetricAttrTokenSemantics = "gen_ai.token.semantics";
-    internal const string MetricTokenSemanticsDisjoint = "disjoint";
+    // Marks token-usage telemetry (metric series and generation spans) already
+    // normalized to the disjoint contract so consumers skip cache-inclusive
+    // normalization; absence means legacy telemetry.
+    internal const string AttrTokenSemantics = "gen_ai.token.semantics";
+    internal const string TokenSemanticsDisjoint = "disjoint";
 
     internal static readonly double[] DurationBucketsSeconds =
     {
@@ -1342,6 +1343,11 @@ public sealed partial class Agento11yClient : IAsyncDisposable
         {
             activity.SetTag(SpanAttrReasoningTokens, generation.Usage.ReasoningTokens);
         }
+
+        if (generation.Usage.InputIsDisjoint)
+        {
+            activity.SetTag(AttrTokenSemantics, TokenSemanticsDisjoint);
+        }
     }
 
     internal static void ApplyEmbeddingStartSpanAttributes(Activity activity, EmbeddingStart start)
@@ -1650,7 +1656,7 @@ public sealed partial class Agento11yClient : IAsyncDisposable
                 new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
                 new(SpanAttrAgentName, generation.AgentName ?? string.Empty),
                 new(MetricAttrTokenType, tokenType),
-                new(MetricAttrTokenSemantics, MetricTokenSemanticsDisjoint),
+                new(AttrTokenSemantics, TokenSemanticsDisjoint),
             ]
             :
             [
