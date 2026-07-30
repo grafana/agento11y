@@ -127,6 +127,9 @@ func renderHuman(w io.Writer, r *Report, color, probed bool) {
 	if len(r.Config.Tags) > 0 {
 		writeKV(&b, p, "tags", fmt.Sprintf("%s %s", formatTags(r.Config.Tags), p.faint("("+r.Config.TagsSource+")")))
 	}
+	if r.Config.LocalForward.Set {
+		writeKV(&b, p, "local forwarding", describeEnv(r.Config.LocalForward))
+	}
 	writeMessages(&b, p, r.Config.Messages)
 	b.WriteString("\n")
 

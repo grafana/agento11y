@@ -46,6 +46,7 @@ var AliasSuffixes = []string{
 	"USER_ID_SOURCE",
 	"BIN",
 	"COPILOT_HOOK_SURFACE",
+	"LOCAL_FORWARD", // opt a --local daemon into forwarding to Cloud
 }
 
 // LookupEnv resolves a branded variable from the process env: the first
@@ -55,6 +56,19 @@ var AliasSuffixes = []string{
 func LookupEnv(suffix string) (value, key string, ok bool) {
 	for _, k := range []string{PreferredKey(suffix), LegacyKey(suffix)} {
 		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v, k, true
+		}
+	}
+	return "", "", false
+}
+
+// LookupMap resolves a branded variable from a config map (as returned by
+// dotenv.LoadDotenv) with the same preferred-first precedence LookupEnv
+// applies to the process environment. The returned key names the spelling the
+// value came from.
+func LookupMap(env map[string]string, suffix string) (value, key string, ok bool) {
+	for _, k := range []string{PreferredKey(suffix), LegacyKey(suffix)} {
+		if v := strings.TrimSpace(env[k]); v != "" {
 			return v, k, true
 		}
 	}
@@ -168,6 +182,12 @@ func IsLocalEndpoint(endpoint string) bool {
 	}
 }
 
+// LocalAuthPlaceholder is the stand-in credential used for local endpoints,
+// which do not validate auth. Consumers that must distinguish a placeholder
+// from a real credential (the local daemon's Cloud forwarder refuses to ship
+// to a Cloud tenant with it) compare against this constant.
+const LocalAuthPlaceholder = "local"
+
 // LocalAuthPlaceholders returns non-empty stand-in auth values for local
 // endpoints. The local server does not validate auth, but hook/export code
 // still expects these variables to be populated before it proceeds.
@@ -176,10 +196,10 @@ func LocalAuthPlaceholders(endpoint, tenantID, authToken string) (string, string
 		return tenantID, authToken
 	}
 	if strings.TrimSpace(tenantID) == "" {
-		tenantID = "local"
+		tenantID = LocalAuthPlaceholder
 	}
 	if strings.TrimSpace(authToken) == "" {
-		authToken = "local"
+		authToken = LocalAuthPlaceholder
 	}
 	return tenantID, authToken
 }
@@ -251,13 +271,25 @@ func ParseExtraTags(s string) map[string]string {
 // write to stderr, so callers pass their adapter logger here — the helper
 // never touches stderr itself.
 func ResolveContentMode(logger *log.Logger) agento11y.ContentCaptureMode {
-	v, key, ok := LookupEnv("CONTENT_CAPTURE_MODE")
-	if !ok {
+	v, key, _ := LookupEnv("CONTENT_CAPTURE_MODE")
+	return ResolveContentModeValue(logger, key, v)
+}
+
+// ResolveContentModeValue resolves a ContentCaptureMode from an explicit raw
+// value, applying the same empty/unknown -> metadata_only fall-back as
+// ResolveContentMode. key names the spelling raw came from and is used only in
+// the diagnostic message; an empty key falls back to the preferred spelling.
+func ResolveContentModeValue(logger *log.Logger, key, raw string) agento11y.ContentCaptureMode {
+	v := strings.TrimSpace(raw)
+	if v == "" {
 		return agento11y.ContentCaptureModeMetadataOnly
 	}
 	var mode agento11y.ContentCaptureMode
 	if err := mode.UnmarshalText([]byte(v)); err != nil {
 		if logger != nil {
+			if key == "" {
+				key = PreferredKey("CONTENT_CAPTURE_MODE")
+			}
 			logger.Printf("config: unknown %s=%q; using metadata_only", key, v)
 		}
 		return agento11y.ContentCaptureModeMetadataOnly
@@ -318,6 +350,18 @@ func ResolveGuards(logger *log.Logger) GuardsConfig {
 func resolveGuardsBool(logger *log.Logger, suffix string, def bool) bool {
 	raw, key, ok := LookupEnv(suffix)
 	if !ok {
+		return def
+	}
+	return BoolValue(logger, key, raw, def)
+}
+
+// BoolValue parses a config boolean from raw using the guards whitelist
+// (1/true/yes/on => true, 0/false/no/off => false). Empty returns def; an
+// unrecognised value is reported via logger (when non-nil) and returns def.
+// key is used only in the diagnostic message.
+func BoolValue(logger *log.Logger, key, raw string, def bool) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
 		return def
 	}
 	switch strings.ToLower(raw) {

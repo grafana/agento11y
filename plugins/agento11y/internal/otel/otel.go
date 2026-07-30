@@ -202,13 +202,13 @@ func ProbeConfig() (metrics, traces ProbeTarget, ok bool) {
 		true
 }
 
-// probeSignalURL is signalEndpointURL adjusted for the insecure setting. When
+// probeSignalURL is SignalEndpointURL adjusted for the insecure setting. When
 // the exporter is configured insecure, the SDK's WithInsecure() forces
 // cleartext to the same host:port regardless of the endpoint scheme, so a
 // probe over https would exercise a different transport than real export. Drop
 // to http here to match what export actually does.
 func probeSignalURL(cfg exporterConfig, signal string) string {
-	u := signalEndpointURL(cfg.endpoint, signal)
+	u := SignalEndpointURL(cfg.endpoint, signal)
 	if cfg.insecure {
 		if rest, ok := strings.CutPrefix(u, "https://"); ok {
 			return "http://" + rest
@@ -224,8 +224,12 @@ func cloneHeaders(in map[string]string) map[string]string {
 }
 
 func exporterConfigFromEnv(endpoint string) exporterConfig {
-	headers := parseHeaders(os.Getenv("OTEL_EXPORTER_OTLP_HEADERS"))
-	addAuthHeaderIfMissing(headers)
+	headers := ExporterHeaders(
+		os.Getenv("OTEL_EXPORTER_OTLP_HEADERS"),
+		envconfig.Getenv("AUTH_TENANT_ID"),
+		envconfig.Getenv("OTEL_AUTH_TOKEN"),
+		envconfig.Getenv("AUTH_TOKEN"),
+	)
 	return exporterConfig{
 		endpoint: endpoint,
 		headers:  headers,
@@ -234,7 +238,7 @@ func exporterConfigFromEnv(endpoint string) exporterConfig {
 }
 
 func traceOptions(cfg exporterConfig) []otlptracehttp.Option {
-	opts := []otlptracehttp.Option{otlptracehttp.WithEndpointURL(signalEndpointURL(cfg.endpoint, "traces"))}
+	opts := []otlptracehttp.Option{otlptracehttp.WithEndpointURL(SignalEndpointURL(cfg.endpoint, "traces"))}
 	if len(cfg.headers) > 0 {
 		opts = append(opts, otlptracehttp.WithHeaders(cfg.headers))
 	}
@@ -245,7 +249,7 @@ func traceOptions(cfg exporterConfig) []otlptracehttp.Option {
 }
 
 func metricOptions(cfg exporterConfig) []otlpmetrichttp.Option {
-	opts := []otlpmetrichttp.Option{otlpmetrichttp.WithEndpointURL(signalEndpointURL(cfg.endpoint, "metrics"))}
+	opts := []otlpmetrichttp.Option{otlpmetrichttp.WithEndpointURL(SignalEndpointURL(cfg.endpoint, "metrics"))}
 	if len(cfg.headers) > 0 {
 		opts = append(opts, otlpmetrichttp.WithHeaders(cfg.headers))
 	}
@@ -255,7 +259,11 @@ func metricOptions(cfg exporterConfig) []otlpmetrichttp.Option {
 	return opts
 }
 
-func signalEndpointURL(endpoint, signal string) string {
+// SignalEndpointURL appends the OTLP signal path (/v1/traces or /v1/metrics)
+// to a base endpoint, replacing any existing signal suffix. Exported so other
+// packages — notably the local daemon's Cloud forwarder — build the exact URLs
+// the exporter targets instead of duplicating the path logic.
+func SignalEndpointURL(endpoint, signal string) string {
 	base := strings.TrimRight(strings.TrimSpace(endpoint), "/")
 	for _, suffix := range []string{"/v1/traces", "/v1/metrics"} {
 		base = strings.TrimSuffix(base, suffix)
@@ -263,20 +271,37 @@ func signalEndpointURL(endpoint, signal string) string {
 	return base + "/v1/" + signal
 }
 
-// addAuthHeaderIfMissing synthesizes Basic auth from the branded tenant and
-// token families. Token order: AGENTO11Y_OTEL_AUTH_TOKEN > SIGIL_OTEL_AUTH_TOKEN
-// > AGENTO11Y_AUTH_TOKEN > SIGIL_AUTH_TOKEN. An explicit Authorization value
-// in OTEL_EXPORTER_OTLP_HEADERS always wins over the synthesized header.
-func addAuthHeaderIfMissing(headers map[string]string) {
-	tenant := envconfig.Getenv("AUTH_TENANT_ID")
-	token := firstNonBlank(envconfig.Getenv("OTEL_AUTH_TOKEN"), envconfig.Getenv("AUTH_TOKEN"))
+// BasicAuthHeaderValue returns the Authorization header value the OTLP and
+// generation exporters synthesize from a tenant/token pair:
+// "Basic base64(tenant:token)". ok is false when either credential is blank
+// (after trimming), so callers can decide whether to attach the header.
+func BasicAuthHeaderValue(tenant, token string) (value string, ok bool) {
+	tenant = strings.TrimSpace(tenant)
+	token = strings.TrimSpace(token)
 	if tenant == "" || token == "" {
-		return
+		return "", false
 	}
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(tenant+":"+token)), true
+}
+
+// ExporterHeaders builds the OTLP header set from a raw
+// OTEL_EXPORTER_OTLP_HEADERS value and the tenant/token credentials: the
+// explicit headers, plus Basic auth synthesized from the tenant and the first
+// non-blank of otelToken (OTEL_AUTH_TOKEN) and authToken (AUTH_TOKEN). An
+// explicit Authorization header always wins over the synthesized one.
+//
+// Exported so the local daemon's Cloud forwarder authenticates its OTLP relay
+// exactly the way the real exporter does; passing the values in keeps this
+// usable from a config.env snapshot rather than only the process environment.
+func ExporterHeaders(rawHeaders, tenant, otelToken, authToken string) map[string]string {
+	headers := parseHeaders(rawHeaders)
 	if hasAuthorizationHeader(headers) {
-		return
+		return headers
 	}
-	headers["Authorization"] = "Basic " + base64.StdEncoding.EncodeToString([]byte(tenant+":"+token))
+	if value, ok := BasicAuthHeaderValue(tenant, firstNonBlank(otelToken, authToken)); ok {
+		headers["Authorization"] = value
+	}
+	return headers
 }
 
 func firstNonBlank(values ...string) string {

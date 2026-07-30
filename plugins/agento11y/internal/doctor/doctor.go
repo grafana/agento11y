@@ -62,6 +62,7 @@ var trackedSuffixes = []string{
 	"CONTENT_CAPTURE_MODE",
 	"TAGS",
 	"AUTO_UPDATE",
+	"LOCAL_FORWARD",
 }
 
 // trackedKeys is the full key set SnapshotEnv records: both spellings of the
@@ -142,8 +143,15 @@ type ConfigSection struct {
 	GuardsFellBack      bool              `json:"guards_fell_back,omitempty"`
 	Tags                map[string]string `json:"tags,omitempty"`
 	TagsSource          string            `json:"tags_source,omitempty"`
-	Health              Health            `json:"status"`
-	Messages            []string          `json:"messages,omitempty"`
+	// LocalForward is the resolved LOCAL_FORWARD family: whether a `--local`
+	// daemon also forwards what it captures to Cloud, and where the value came
+	// from. The daemon itself resolves config.env ahead of its own environment
+	// (so a viewer edit takes effect without a restart), which is the opposite
+	// of the shell-first precedence reported here; a conflict is called out in
+	// Messages.
+	LocalForward envValue `json:"local_forward"`
+	Health       Health   `json:"status"`
+	Messages     []string `json:"messages,omitempty"`
 }
 
 // ConversationsSection reports the generation-export pipeline.
@@ -489,6 +497,11 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 		}
 	}
 
+	// LOCAL_FORWARD sends a copy of every --local session to Cloud, so make the
+	// effective value and its source visible.
+	forward := resolveFamily("LOCAL_FORWARD", osEnv, fileEnv)
+	sec.LocalForward = forward.envValue()
+
 	if len(sec.DisallowedKeys) > 0 {
 		sec.Health = HealthWarn
 		sec.Messages = append(sec.Messages,
@@ -511,6 +524,10 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	if tags.legacyWon() {
 		sec.Messages = append(sec.Messages,
 			"tags set via legacy SIGIL_TAGS — this keeps working, but the preferred name is AGENTO11Y_TAGS")
+	}
+	if forward.set && forward.source == sourceEnv && strings.TrimSpace(fileEnv[envconfig.PreferredKey("LOCAL_FORWARD")]+fileEnv[envconfig.LegacyKey("LOCAL_FORWARD")]) != "" {
+		sec.Messages = append(sec.Messages, fmt.Sprintf(
+			"%s is set in the environment and in config.env; the local daemon uses the config.env value", forward.key))
 	}
 	return sec
 }

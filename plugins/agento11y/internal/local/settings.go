@@ -54,6 +54,12 @@ type Settings struct {
 	Debug        bool   `json:"debug"`
 	AutoUpdate   bool   `json:"autoUpdate"`
 	UserID       string `json:"userId"`
+	// LocalForward mirrors AGENTO11Y_LOCAL_FORWARD: when on, a `--local`
+	// daemon also forwards the telemetry it captures to Grafana Cloud. The
+	// local viewer always keeps full content; Capture reduces the forwarded
+	// copy (full vs metadata_only) and, being the shared
+	// CONTENT_CAPTURE_MODE key, also applies to non-local Cloud sessions.
+	LocalForward bool `json:"localForward"`
 }
 
 // ParseSettings hydrates Settings from a dotenv map (as returned by
@@ -65,10 +71,8 @@ type Settings struct {
 // enabled.
 func ParseSettings(env map[string]string) Settings {
 	fam := func(suffix string) string {
-		if v := strings.TrimSpace(env[envconfig.PreferredKey(suffix)]); v != "" {
-			return v
-		}
-		return strings.TrimSpace(env[envconfig.LegacyKey(suffix)])
+		v, _, _ := envconfig.LookupMap(env, suffix)
+		return v
 	}
 	return Settings{
 		Endpoint:     fam("ENDPOINT"),
@@ -83,8 +87,9 @@ func ParseSettings(env map[string]string) Settings {
 		Debug:        envconfig.ParseBoolDefault(fam("DEBUG"), false),
 		// AUTO_UPDATE is opt-out: unset means enabled. This matches
 		// updatecheck.Disabled (only explicit falsey values disable updates).
-		AutoUpdate: envconfig.ParseBoolDefault(fam("AUTO_UPDATE"), true),
-		UserID:     fam("USER_ID"),
+		AutoUpdate:   envconfig.ParseBoolDefault(fam("AUTO_UPDATE"), true),
+		UserID:       fam("USER_ID"),
+		LocalForward: envconfig.ParseBoolDefault(fam("LOCAL_FORWARD"), false),
 	}
 }
 
@@ -150,6 +155,17 @@ func (s Settings) Updates() map[string]string {
 		u["SIGIL_AUTO_UPDATE"] = ""
 	} else {
 		u["SIGIL_AUTO_UPDATE"] = "false"
+	}
+
+	// SIGIL_LOCAL_FORWARD is written explicitly in both directions rather than
+	// deleted when off, the same trick SIGIL_AUTO_UPDATE uses above. The local
+	// daemon materializes its own environment from config.env at boot and falls
+	// back to it, so a deleted key cannot express "off": only an explicit false
+	// on disk turns a running daemon's forwarding off.
+	if s.LocalForward {
+		u["SIGIL_LOCAL_FORWARD"] = "true"
+	} else {
+		u["SIGIL_LOCAL_FORWARD"] = "false"
 	}
 
 	u["SIGIL_USER_ID"] = strings.TrimSpace(s.UserID)

@@ -1432,7 +1432,7 @@
       );
     }
 
-    function ConversationsView({ conversations, tokenPoints, loading, error, query, setQuery, searchInputRef, timeRange, setTimeRange, tokenModel, setTokenModel, chartMetric, setChartMetric, bucketSel, setBucketSel, listSort, setListSort, onOpen, onRefresh, refreshing }) {
+    function ConversationsView({ conversations, tokenPoints, loading, error, query, setQuery, searchInputRef, timeRange, setTimeRange, tokenModel, setTokenModel, chartMetric, setChartMetric, bucketSel, setBucketSel, listSort, setListSort, onOpen, onRefresh, refreshing, onOpenSettings }) {
       const now = Date.now();
       const prices = useModelPrices();
       const range = timeRangeOption(timeRange);
@@ -1711,6 +1711,7 @@
               {searchActive ? "Full-text search runs across all captured sessions." : "Local traces, token accounting, and model usage from this viewer."}
             </Box>
           </PageHero>
+          <ForwardBanner onOpenSettings={onOpenSettings}/>
           <FilterBar
             query={query}
             onQueryChange={setQuery}
@@ -2988,6 +2989,118 @@
       return { ...s, tags: (s.tags || []).map(t => ({ ...t })) };
     }
 
+    // forwardBannerMeta turns the daemon's reported forwarding status into the
+    // pill, accent, and sentence the banner and the settings hero both show.
+    // The saved toggle is deliberately not an input: config.env and the
+    // daemon's own environment can disagree, and only the daemon knows what it
+    // would actually send.
+    function forwardBannerMeta(st) {
+      if (!st) {
+        return { accent: "warning", pill: "Unknown", line: "Couldn't read the daemon's forwarding status." };
+      }
+      if (!st.enabled) {
+        if (st.reason) return { accent: "warning", pill: "Paused", line: `Forwarding is on but paused: ${st.reason}` };
+        return { accent: "success", pill: "Off", line: "Cloud forwarding is off — nothing from local sessions leaves this device." };
+      }
+      const failure = (st.failures || [])[0];
+      if (failure) {
+        return { accent: "error", pill: "Failing", line: `Forwarding is on but the last attempts failed — ${failure.label}: ${failure.detail}` };
+      }
+      // An unrecognised mode must not read as the narrower one: a future mode
+      // could forward more, not less.
+      if (st.mode !== "full" && st.mode !== "metadata_only") {
+        return { accent: "warning", pill: "On", line: `Forwarding is on in a mode this viewer does not know (${st.mode || "unset"}).` };
+      }
+      const parts = [st.mode === "full"
+        ? "Full session content is forwarded to your organization's Grafana Cloud."
+        : "Only usage and session metadata is forwarded — prompts, responses, reasoning text, tool inputs/results, and attached media stay local."];
+      if (!st.generations && st.reason) parts.push(`Generations are paused: ${st.reason}`);
+      if (!st.otlp) parts.push("Traces and metrics are not forwarded.");
+      return {
+        accent: st.mode === "full" ? "warning" : "info",
+        pill: st.mode === "full" ? "Full content" : "Metadata only",
+        line: parts.join(" "),
+      };
+    }
+
+    // ForwardBanner shows what the daemon would send to Cloud, above the
+    // session list. The daemon is shared, so this is machine-wide policy for
+    // every later --local session, not a property of the sessions listed below.
+    //
+    // It is read-only. Changing it means a full config.env write, which the
+    // Cloud settings tab owns; a second writer here would silently revert a
+    // config.env change made after this component mounted.
+    function ForwardBanner({ onOpenSettings }) {
+      const [st, setSt] = useState(null);
+      const [loaded, setLoaded] = useState(false);
+      useEffect(() => {
+        let alive = true;
+        const load = () => {
+          fetch("/api/v1/config")
+            .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+            .then(b => { if (alive) setSt(b && b.forwardStatus ? b.forwardStatus : null); })
+            .catch(() => { if (alive) setSt(null); })
+            .finally(() => { if (alive) setLoaded(true); });
+        };
+        load();
+        // The daemon re-reads config.env whenever it changes, so the posture
+        // moves under an open viewer (an edit, a second tab, agento11y login).
+        // A privacy disclosure that froze at mount would be the wrong default.
+        const id = setInterval(load, 30_000);
+        return () => { alive = false; clearInterval(id); };
+      }, []);
+      if (!loaded) return null;
+      const meta = forwardBannerMeta(st);
+      const accent = meta.accent;
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", marginBottom: 14, borderRadius: 2, border: "1px solid var(--border-weak)", borderLeft: `3px solid var(--${accent}-border)`, background: `var(--${accent}-transparent)` }}>
+          <Icon name="cloud" size={15} style={{ color: `var(--${accent}-text)`, flex: "none" }}/>
+          <span style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--fg3)", flex: "none" }}>What leaves this machine</span>
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: `var(--${accent}-text)`, flex: "none" }}>{meta.pill}</span>
+          <span title={meta.line} style={{ fontSize: 12.5, color: "var(--fg2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{meta.line}</span>
+          <span style={{ flex: 1 }}/>
+          <button type="button" onClick={() => onOpenSettings && onOpenSettings("cloud")} style={{
+            flex: "none", background: "transparent", border: "1px solid var(--border-medium)", borderRadius: 2,
+            color: "var(--fg2)", fontSize: 11.5, fontFamily: "var(--fontFamily)", padding: "3px 9px", cursor: "pointer",
+          }}>Change</button>
+        </div>
+      );
+    }
+
+    // captureForwardMode reports which of the two segmented values a
+    // CONTENT_CAPTURE_MODE forwards as. Everything that is not "full" is
+    // reduced to metadata by the forwarder, so the advanced modes
+    // (no_tool_content, full_with_metadata_spans) read as metadata_only.
+    function captureForwardMode(capture) {
+      return capture === "full" ? "full" : "metadata_only";
+    }
+
+    // forwardLocalMode collapses the two persisted keys the forwarding control
+    // spans (LOCAL_FORWARD and CONTENT_CAPTURE_MODE) into the one segmented
+    // value the UI shows.
+    function forwardLocalMode(form) {
+      if (!form.localForward) return "off";
+      return captureForwardMode(form.capture);
+    }
+
+    // applyForwardLocalMode writes the segmented value back onto both keys.
+    // capture is only rewritten when the mode already set forwards differently,
+    // so an advanced mode set in config.env survives a round-trip through the
+    // toggle: turning the control off leaves capture alone, and picking
+    // Metadata only again does not flatten no_tool_content to metadata_only.
+    // Re-picking the value already shown is a no-op too, which matters because
+    // the segmented control fires for the active option.
+    function applyForwardLocalMode(set, form, mode) {
+      if (mode === forwardLocalMode(form)) return;
+      if (mode === "off") {
+        set({ localForward: false });
+        return;
+      }
+      const patch = { localForward: true };
+      if (captureForwardMode(form.capture) !== mode) patch.capture = mode;
+      set(patch);
+    }
+
     function SettingsSegmented({ value, onChange, options }) {
       return <PillToggle options={options} value={value} onChange={onChange}/>;
     }
@@ -3123,8 +3236,10 @@
     }
 
 
-    function SettingsHero({ form, dirty, path }) {
+    function SettingsHero({ dirty, path, forwardStatus }) {
+      const forwardMeta = forwardBannerMeta(forwardStatus);
       const chips = [
+        { label: "Cloud copy", value: forwardMeta.pill, tone: `var(--${forwardMeta.accent}-text)` },
         { label: "Config", value: dirty ? "Unsaved" : "Synced", tone: dirty ? "var(--brand-orange-text)" : "var(--success-text)" },
       ];
       return (
@@ -3214,8 +3329,13 @@
       );
     }
 
+    const FORWARD_LOCAL_OPTIONS = [
+      { value: "off", label: "Off" },
+      { value: "metadata_only", label: "Metadata only" },
+      { value: "full", label: "Full" },
+    ];
     const SETTINGS_TABS = [
-      { id: "cloud", label: "Cloud", icon: "cloud", desc: "Ingest and auth" },
+      { id: "cloud", label: "Cloud", icon: "cloud", desc: "Ingest, auth, forwarding" },
       { id: "local", label: "Local", icon: "box", desc: "Tags and runtime" },
     ];
     const SETTINGS_TAB_IDS = new Set(SETTINGS_TABS.map(t => t.id));
@@ -3233,12 +3353,18 @@
       return url.pathname + url.search;
     }
 
-    function SettingsCloudTab({ form, set }) {
+    function SettingsCloudTab({ form, set, forwardStatus }) {
+      const forwardMode = forwardLocalMode(form);
+      const advanced = form.capture === "no_tool_content" || form.capture === "full_with_metadata_spans";
+      // The daemon prefers config.env, but it also inherits LOCAL_FORWARD into
+      // its own environment at boot, so "off here, on there" is reachable until
+      // an explicit false is saved.
+      const daemonStillOn = !!(forwardStatus && forwardStatus.enabled) && !form.localForward;
       return (
         <SettingsCard>
           <SectionLabel>Connection</SectionLabel>
           <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg3)", padding: "0 0 10px" }}>
-            These values apply to your Grafana Cloud sessions.
+            These values apply to your Grafana Cloud sessions and to optional forwarding from local mode.
           </div>
           <SettingRow label="Endpoint" help={<>Grafana AI Observability ingest URL.</>}>
             <MonoInput value={form.endpoint} onChange={v => set({ endpoint: v })} placeholder="https://agento11y-prod-….grafana.net" width={320}/>
@@ -3260,6 +3386,16 @@
           </SettingRow>
           <SettingRow label="OTLP endpoint" help={<>For SDK traces and metrics.</>}>
             <MonoInput value={form.otlpEndpoint} onChange={v => set({ otlpEndpoint: v })} placeholder="https://otlp-gateway-….grafana.net/otlp" width={320}/>
+          </SettingRow>
+          <SettingRow
+            label="Forward local sessions to Cloud"
+            help={<>
+              Also send <Mono>--local</Mono> sessions to Grafana Cloud. Needs the credentials above, and applies to every local session on this machine until you turn it off. The local viewer always keeps full content; <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Metadata only</b> forwards usage and session metadata, and <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Full</b> forwards prompts, responses, and tool I/O too. Metadata only and Full write <Mono>CONTENT_CAPTURE_MODE</Mono>, which also decides how much content your non-local Cloud sessions capture.
+              {advanced && <div style={{ color: "var(--warning-text)", marginTop: 6 }}>Advanced capture mode <Mono>{form.capture}</Mono> is set in config.env. Forwarding reduces it to metadata only and <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Metadata only</b> leaves it in place; picking <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Full</b> replaces it for Cloud sessions too.</div>}
+              {daemonStillOn && <div style={{ color: "var(--warning-text)", marginTop: 6 }}>The running daemon is still forwarding — <Mono>LOCAL_FORWARD</Mono> is set in its environment. Saving writes an explicit <Mono>false</Mono> to config.env, which the daemon prefers.</div>}
+            </>}
+          >
+            <SettingsSegmented value={forwardMode} onChange={v => applyForwardLocalMode(set, form, v)} options={FORWARD_LOCAL_OPTIONS}/>
           </SettingRow>
         </SettingsCard>
       );
@@ -3324,10 +3460,10 @@
       );
     }
 
-    function SettingsTabPanels({ activeSettingsTab, form, set, setTag, addTag, removeTag }) {
+    function SettingsTabPanels({ activeSettingsTab, form, set, setTag, addTag, removeTag, forwardStatus }) {
       return (
         <>
-          {activeSettingsTab === "cloud" && <SettingsCloudTab form={form} set={set}/>}
+          {activeSettingsTab === "cloud" && <SettingsCloudTab form={form} set={set} forwardStatus={forwardStatus}/>}
           {activeSettingsTab === "local" && (
             <SettingsLocalTab form={form} set={set} setTag={setTag} addTag={addTag} removeTag={removeTag}/>
           )}
@@ -3340,6 +3476,9 @@
       const [saved, setSaved] = useState(null);
       const [preview, setPreview] = useState("");
       const [path, setPath] = useState("~/.config/agento11y/config.env");
+      // Effective forwarding posture as the daemon resolves it, which can
+      // differ from the saved toggle (unusable endpoint, placeholder creds).
+      const [forwardStatus, setForwardStatus] = useState(null);
       const [loading, setLoading] = useState(true);
       const [error, setError] = useState(null);
       const [toast, setToast] = useState(null);
@@ -3367,6 +3506,7 @@
             setSaved(cloneSettings(body.settings));
             setPreview(body.preview || "");
             if (body.path) setPath(body.path);
+            if (body.forwardStatus) setForwardStatus(body.forwardStatus);
           })
           .catch(e => { if (alive) setError(String(e.message || e)); })
           .finally(() => { if (alive) setLoading(false); });
@@ -3423,6 +3563,7 @@
             setForm(cloneSettings(body.settings));
             setSaved(cloneSettings(body.settings));
             if (typeof body.preview === "string") setPreview(body.preview);
+            if (body.forwardStatus) setForwardStatus(body.forwardStatus);
             showToast("Settings saved to config.env.");
           })
           .catch(e => setError(String(e.message || e)));
@@ -3441,7 +3582,7 @@
 
       return (
         <div style={page}>
-          <SettingsHero form={form} dirty={dirty} path={path}/>
+          <SettingsHero dirty={dirty} path={path} forwardStatus={forwardStatus}/>
 
           {error && <div style={{ marginBottom: 16 }}><Notice kind="error" title="Couldn’t save settings">{error}</Notice></div>}
 
@@ -3455,6 +3596,7 @@
                 setTag={setTag}
                 addTag={addTag}
                 removeTag={removeTag}
+                forwardStatus={forwardStatus}
               />
             </div>
 
@@ -4236,6 +4378,7 @@
                 onOpen={openConv}
                 onRefresh={refreshAll}
                 refreshing={loadingList}
+                onOpenSettings={goSettings}
               />
             )}
             {view === "conversation" && selected && (
