@@ -193,7 +193,10 @@ export function mapGeneration(
       // (input + output + cache_read + cache_write) stays correct instead of
       // double-counting cache. opencode labels the provider "anthropic", which
       // the frontend treats as additive, so this normalization must happen here.
-      inputTokens: Math.max(msg.tokens.input - msg.tokens.cache.read - msg.tokens.cache.write, 0),
+      inputTokens: Math.max(
+        msg.tokens.input - msg.tokens.cache.read - msg.tokens.cache.write,
+        0,
+      ),
       outputTokens: msg.tokens.output,
       reasoningTokens: msg.tokens.reasoning,
       cacheReadInputTokens: msg.tokens.cache.read,
