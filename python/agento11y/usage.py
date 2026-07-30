@@ -38,14 +38,19 @@ def from_openai_chat(raw: Any) -> TokenUsage:
     cache_read = _as_int(
         _read(_read(raw, "prompt_tokens_details"), "cached_tokens"),
     )
+    # cache_creation_tokens only appears on LiteLLM/OpenRouter passthrough shapes
+    # (Anthropic upstream), where prompt_tokens includes cache writes as well as
+    # cache reads — both must come out of fresh input. First-party OpenAI reports
+    # no write bucket in prompt_tokens_details.
+    cache_write = _as_int(
+        _read(_read(raw, "prompt_tokens_details"), "cache_creation_tokens"),
+    )
     return TokenUsage(
-        input_tokens=_fresh_input_tokens(prompt_tokens, cache_read),
+        input_tokens=_fresh_input_tokens(prompt_tokens, cache_read, cache_write),
         output_tokens=_as_int(_read(raw, "completion_tokens")),
         total_tokens=_as_int(_read(raw, "total_tokens")),
         cache_read_input_tokens=cache_read,
-        cache_write_input_tokens=_as_int(
-            _read(_read(raw, "prompt_tokens_details"), "cache_creation_tokens"),
-        ),
+        cache_write_input_tokens=cache_write,
         reasoning_tokens=_as_int(
             _read(_read(raw, "completion_tokens_details"), "reasoning_tokens"),
         ),
@@ -179,10 +184,19 @@ def _read(value: Any, key: str, default: Any = None) -> Any:
     return default
 
 
-def _fresh_input_tokens(raw_input_tokens: int, cache_read_input_tokens: int) -> int:
-    """Convert cache-inclusive input totals into fresh-input tokens."""
+def _fresh_input_tokens(
+    raw_input_tokens: int,
+    cache_read_input_tokens: int,
+    cache_write_input_tokens: int = 0,
+) -> int:
+    """Convert cache-inclusive input totals into fresh-input tokens.
 
-    return max(raw_input_tokens - cache_read_input_tokens, 0)
+    Pass cache_write_input_tokens only when the write bucket is part of the raw
+    input total (LiteLLM/OpenRouter Anthropic-passthrough shapes); first-party
+    OpenAI/Gemini report cache reads only.
+    """
+
+    return max(raw_input_tokens - cache_read_input_tokens - cache_write_input_tokens, 0)
 
 
 def _as_int(value: Any) -> int:

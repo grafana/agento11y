@@ -992,13 +992,21 @@ def test_detailed_token_usage() -> None:
         client.flush()
 
         gen = exporter.requests[0].generations[0]
-        # prompt_tokens (100) is cache-inclusive: fresh input = 100 - 30 cached = 70.
-        assert gen.usage.input_tokens == 70
+        # prompt_tokens (100) is cache-inclusive: fresh = 100 - 30 read - 20 write.
+        assert gen.usage.input_tokens == 50
         assert gen.usage.output_tokens == 50
         assert gen.usage.total_tokens == 150
         assert gen.usage.cache_read_input_tokens == 30
         assert gen.usage.cache_write_input_tokens == 20
         assert gen.usage.reasoning_tokens == 15
+        # Disjoint buckets must reconstruct the provider total.
+        assert (
+            gen.usage.input_tokens
+            + gen.usage.output_tokens
+            + gen.usage.cache_read_input_tokens
+            + gen.usage.cache_write_input_tokens
+            == gen.usage.total_tokens
+        )
     finally:
         client.shutdown()
 

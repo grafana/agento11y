@@ -117,12 +117,18 @@ class TestFromOpenAIChat:
             },
         }
         usage = from_openai_chat(raw)
-        assert usage.input_tokens == 150
+        # prompt_tokens (200) is cache-inclusive: fresh = 200 - 50 read - 20 write.
+        assert usage.input_tokens == 130
         assert usage.output_tokens == 100
         assert usage.total_tokens == 300
         assert usage.cache_read_input_tokens == 50
         assert usage.cache_write_input_tokens == 20
         assert usage.reasoning_tokens == 30
+        # Disjoint buckets must reconstruct the provider total.
+        assert (
+            usage.input_tokens + usage.output_tokens + usage.cache_read_input_tokens + usage.cache_write_input_tokens
+            == usage.total_tokens
+        )
 
     def test_missing_detail_objects(self):
         raw = {
@@ -157,6 +163,40 @@ class TestFromOpenAIChat:
         assert usage.input_tokens == 0
         assert usage.cache_read_input_tokens == 30
 
+    def test_cache_write_subtracted_from_inclusive_input(self):
+        # LiteLLM/OpenRouter Anthropic-passthrough: prompt_tokens includes both
+        # cached reads and cache writes; neither may stay inside fresh input.
+        raw = {
+            "prompt_tokens": 300,
+            "completion_tokens": 100,
+            "total_tokens": 400,
+            "prompt_tokens_details": {
+                "cached_tokens": 150,
+                "cache_creation_tokens": 50,
+            },
+        }
+        usage = from_openai_chat(raw)
+        assert usage.input_tokens == 100
+        assert usage.cache_read_input_tokens == 150
+        assert usage.cache_write_input_tokens == 50
+        assert (
+            usage.input_tokens + usage.output_tokens + usage.cache_read_input_tokens + usage.cache_write_input_tokens
+            == usage.total_tokens
+        )
+
+    def test_cache_write_clamp(self):
+        usage = from_openai_chat(
+            {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "prompt_tokens_details": {
+                    "cached_tokens": 6,
+                    "cache_creation_tokens": 8,
+                },
+            }
+        )
+        assert usage.input_tokens == 0
+
     def test_none(self):
         assert from_openai_chat(None) == TokenUsage()
 
@@ -174,7 +214,7 @@ class TestFromOpenAIChat:
             ),
         )
         usage = from_openai_chat(raw)
-        assert usage.input_tokens == 150
+        assert usage.input_tokens == 140
         assert usage.cache_read_input_tokens == 50
         assert usage.cache_write_input_tokens == 10
         assert usage.reasoning_tokens == 25

@@ -382,10 +382,14 @@ def _extract_detailed_usage(response_obj: Any, slo: dict[str, Any]) -> TokenUsag
     usage.cache_read_input_tokens = detail.cache_read_input_tokens
     usage.cache_write_input_tokens = detail.cache_write_input_tokens
     usage.reasoning_tokens = detail.reasoning_tokens
-    # SLO prompt_tokens are OpenAI-style cache-inclusive counts (cached reads are part
-    # of prompt_tokens). Subtract cache reads to recover fresh, non-cached input so the
-    # disjoint cache_read bucket does not double-count. total_tokens is invariant.
-    usage.input_tokens = max(usage.input_tokens - detail.cache_read_input_tokens, 0)
+    # SLO prompt_tokens are OpenAI-style cache-inclusive counts: cached reads — and,
+    # on Anthropic-passthrough shapes, cache writes — are part of prompt_tokens.
+    # Subtract both buckets to recover fresh, non-cached input so the disjoint cache
+    # buckets do not double-count. total_tokens is invariant.
+    usage.input_tokens = max(
+        usage.input_tokens - detail.cache_read_input_tokens - detail.cache_write_input_tokens,
+        0,
+    )
     return usage
 
 
