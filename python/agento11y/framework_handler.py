@@ -1646,18 +1646,24 @@ def _map_framework_usage(raw_usage: Any):
     input_token_details = _read(raw_usage, "input_token_details")
     output_token_details = _read(raw_usage, "output_token_details")
 
+    # LangChain-style usage_metadata reports cache-inclusive input_tokens with
+    # cache_read AND cache_creation nested in input_token_details. Move both
+    # into their disjoint buckets so fresh input is not double-counted (and the
+    # cache-write premium stays visible). total_tokens is invariant under this
+    # rebucketing (input drops by exactly what the cache buckets gain).
     cache_read = _as_int(_read(input_token_details, "cache_read"))
     if cache_read > 0 and usage.cache_read_input_tokens == 0:
         usage.cache_read_input_tokens = cache_read
-        # LangChain-style usage_metadata reports cache-inclusive input_tokens with
-        # cache_read nested in input_token_details. Move it into the disjoint
-        # cache_read bucket so fresh input is not double-counted. total_tokens is
-        # invariant under this rebucketing (input drops by cache_read, cache_read
-        # rises by the same amount), so it needs no adjustment.
         usage.input_tokens = max(usage.input_tokens - cache_read, 0)
         # First-hand normalization: this handler carved cache_read out of the
         # input, so the result is known-disjoint whatever extractor produced
         # the base usage.
+        usage.input_is_disjoint = True
+
+    cache_write = _as_int(_read(input_token_details, "cache_creation"))
+    if cache_write > 0 and usage.cache_write_input_tokens == 0:
+        usage.cache_write_input_tokens = cache_write
+        usage.input_tokens = max(usage.input_tokens - cache_write, 0)
         usage.input_is_disjoint = True
 
     reasoning = _as_int(_read(output_token_details, "reasoning"))

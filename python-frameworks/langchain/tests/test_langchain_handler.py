@@ -437,7 +437,7 @@ def test_langchain_gemini_tool_calls_map_from_message_fields() -> None:
                                     "input_tokens": 49,
                                     "output_tokens": 51,
                                     "total_tokens": 100,
-                                    "input_token_details": {"cache_read": 7},
+                                    "input_token_details": {"cache_read": 7, "cache_creation": 5},
                                     "output_token_details": {"reasoning": 36},
                                 },
                                 "response_metadata": {
@@ -471,14 +471,24 @@ def test_langchain_gemini_tool_calls_map_from_message_fields() -> None:
         assert output_tool_call.name == "get_weather"
         assert b'"Paris"' in output_tool_call.input_json
 
-        # usage_metadata.input_tokens (49) is cache-inclusive: fresh = 49 - 7 cache_read = 42.
-        assert generation.usage.input_tokens == 42
+        # usage_metadata.input_tokens (49) is cache-inclusive of both nested
+        # buckets: fresh = 49 - 7 cache_read - 5 cache_creation = 37.
+        assert generation.usage.input_tokens == 37
         assert generation.usage.output_tokens == 51
         assert generation.usage.total_tokens == 100
         assert generation.usage.cache_read_input_tokens == 7
+        assert generation.usage.cache_write_input_tokens == 5
         assert generation.usage.reasoning_tokens == 36
-        # The handler carved cache_read out of input itself, so this usage is
-        # known-disjoint and marked.
+        # Disjoint buckets reconstruct the provider total: 37 + 51 + 7 + 5.
+        assert (
+            generation.usage.input_tokens
+            + generation.usage.output_tokens
+            + generation.usage.cache_read_input_tokens
+            + generation.usage.cache_write_input_tokens
+            == generation.usage.total_tokens
+        )
+        # The handler carved both cache buckets out of input itself, so this
+        # usage is known-disjoint and marked.
         assert generation.usage.input_is_disjoint is True
     finally:
         client.shutdown()
