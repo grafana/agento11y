@@ -78,6 +78,9 @@ try {
 }
 ```
 
+The adapter passes the resolved `conversationId` with every preflight hook request. Agent Observability can therefore
+record a denied step in that conversation even when the provider call and generation never happen.
+
 The adapter sends the step messages, model, agent name/version, and conversation preview to Agent Observability. If a guard returns `action: "deny"`, the adapter throws `HookDeniedError` and the provider call is aborted. If a guard returns `transformed_input.messages`, the adapter records the transformed input in the generation; when the AI SDK calls `prepareStep` and the transformed messages can be represented as AI SDK model messages, the adapter also returns those transformed messages to the provider. If a transform is requested but cannot be applied to the provider call, the adapter aborts rather than sending the original messages.
 
 `enableHooks` overrides the client-level switch for this instrumentation. Leave it unset to use `client.config.hooks.enabled`, or set it to `false` to disable hook evaluation for calls made through this adapter. With `failOpen: true`, hook transport errors resolve to allow; set `failOpen: false` for strict paths that should fail closed.

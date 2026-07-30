@@ -1,4 +1,4 @@
-"""OpenAI provider wrappers and strict mappers for Sigil Python SDK."""
+"""OpenAI provider wrappers and strict mappers for agento11y Python SDK."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ _thinking_budget_metadata_key = "agento11y.gen_ai.request.thinking.budget_tokens
 
 @dataclass(slots=True)
 class OpenAIOptions:
-    """Optional Sigil enrichments for OpenAI wrappers."""
+    """Optional agento11y enrichments for OpenAI wrappers."""
 
     provider_name: str = "openai"
     conversation_id: str = ""

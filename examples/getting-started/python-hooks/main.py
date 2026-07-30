@@ -1,4 +1,4 @@
-"""Guarded AI Observability getting-started example - Python + OpenAI.
+"""Guarded Agent Observability getting-started example - Python + OpenAI.
 
 The SDK evaluates an agento11y preflight hook before the provider call. Guard rules
 configured in Grafana Cloud can allow the call, deny it, or return transformed
@@ -106,6 +106,7 @@ try:
                 agent_name="getting-started-hooks",
                 agent_version="1.0.0",
                 model=HookModel(provider="openai", name=model),
+                conversation_id="getting-started-python-hooks",
             ),
             input=HookInput(
                 messages=input_messages,
@@ -165,7 +166,7 @@ except HookDeniedError as exc:
     print(f"Blocked by guard rule {exc.rule_id or '<unknown>'}: {exc.reason}")
 
 else:
-    print("Done - check the AI Observability plugin in your Grafana Cloud stack.")
+    print("Done - check the Agent Observability plugin in your Grafana Cloud stack.")
 
 finally:
     agento11y.shutdown()

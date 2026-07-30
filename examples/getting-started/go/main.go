@@ -1,4 +1,4 @@
-// Minimal AI Observability getting-started example — Go + OpenAI.
+// Minimal Agent Observability getting-started example — Go + OpenAI.
 package main
 
 import (
@@ -110,5 +110,5 @@ func main() {
 		},
 	}, nil)
 
-	fmt.Println("Done — check the AI Observability plugin in your Grafana Cloud stack.")
+	fmt.Println("Done — check the Agent Observability plugin in your Grafana Cloud stack.")
 }

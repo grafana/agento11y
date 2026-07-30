@@ -1,5 +1,5 @@
 /**
- * Minimal AI Observability getting-started example — TypeScript + OpenAI.
+ * Minimal Agent Observability getting-started example — TypeScript + OpenAI.
  */
 
 import "dotenv/config";
@@ -97,5 +97,5 @@ await agento11y.shutdown();
 await tp.shutdown();
 await mp.shutdown();
 console.log(
-  "Done — check the AI Observability plugin in your Grafana Cloud stack.",
+  "Done — check the Agent Observability plugin in your Grafana Cloud stack.",
 );

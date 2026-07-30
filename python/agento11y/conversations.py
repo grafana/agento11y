@@ -1,9 +1,9 @@
-"""Read-only access to Sigil conversations and eval collections.
+"""Read-only access to Agent Observability conversations and eval collections.
 
-Sigil collections group saved conversations. These helpers list collection
+Agent Observability collections group saved conversations. These helpers list collection
 members and fetch conversations with their generations.
 
-Endpoints use the configured Sigil API endpoint and auth headers:
+Endpoints use the configured Agent Observability API endpoint and auth headers:
 
   GET {prefix}/eval/collections/{collection_id}/members  saved conversations in a collection
   GET {prefix}/query/conversations/{conversation_id}     one conversation with generations

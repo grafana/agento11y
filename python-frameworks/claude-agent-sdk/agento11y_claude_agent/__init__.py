@@ -1,4 +1,4 @@
-"""Public exports for Sigil Claude Agent SDK instrumentation."""
+"""Public exports for agento11y Claude Agent SDK instrumentation."""
 
 from __future__ import annotations
 

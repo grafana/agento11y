@@ -3,6 +3,7 @@ import type { Agento11yClient, ContentCaptureMode } from "@grafana/agento11y";
 import type { PluginInput } from "@opencode-ai/plugin";
 import type {
   AssistantMessage,
+  Event,
   Part,
   Permission,
   UserMessage,
@@ -26,6 +27,19 @@ import {
 } from "./telemetry.js";
 
 type OpencodeClient = PluginInput["client"];
+
+/**
+ * Event names opencode declares it can deliver to a plugin. opencode feeds the
+ * `event` hook from its own event bus and publishes members of the SDK's
+ * generated `Event` union. Typing the hook input against that union keeps a
+ * name outside it from compiling.
+ */
+export type OpencodeEventType = Event["type"];
+
+export type OpencodeEvent = {
+  type: OpencodeEventType;
+  properties: unknown;
+};
 
 // Track recorded messages per session for dedup and cleanup
 const recordedMessages = new Map<string, Set<string>>();
@@ -58,6 +72,12 @@ const lastGenerationIdBySession = new Map<string, string>();
 // is NOT the same as `Session.parentID`; only the latter crosses the
 // parent/subagent boundary.
 const parentGenerationByChildSession = new Map<string, string>();
+
+// Sessions opencode created as subagents, i.e. `session.created` carried a
+// `Session.parentID` pointing at a different session. Kept separate from
+// `parentGenerationByChildSession`, which only holds children whose parent had
+// an already-recorded generation to freeze.
+const subagentSessions = new Set<string>();
 
 // First streamed assistant part time per message, keyed by
 // `${sessionID}\x00${messageID}`. Captured from `message.part.updated`
@@ -122,13 +142,25 @@ export function _resetToolExecutionState(): void {
   completedToolExecutions.clear();
 }
 
+// Plugin instances that have been created and not yet shut down. One opencode
+// server can host an instance per directory, and all the state above is
+// module-scoped, so a shutting-down instance must not clear it while a sibling
+// is mid-turn. Dropping `pendingGenerations` there would export that turn
+// without its input, tools, and system prompt. Only the last instance to shut
+// down clears the state, so an earlier instance's sessions stay in the maps
+// until then; `session.deleted` is what normally releases them.
+let liveInstances = 0;
+
 /**
  * Resets every module-level map: the dedup/generation tracking plus the
- * tool-execution maps. Integration tests that drive the full record path
- * (`chat.message` -> `message.updated`) need this between cases. Without it, a
- * reused session/message id hits the dedup early-return in
- * `recordAssistantMessage`, silently skips recording, and produces a
- * misleading green.
+ * tool-execution maps.
+ *
+ * Two callers. Plugin shutdown calls it once the last live plugin instance in
+ * the process has shut down, so this runs in production and not only in tests.
+ * Integration tests that drive the full record path (`chat.message` ->
+ * `message.updated`) also need it between cases: without it, a reused
+ * session/message id hits the dedup early-return in `recordAssistantMessage`,
+ * silently skips recording, and produces a misleading green.
  *
  * @internal Exported for testing.
  */
@@ -136,6 +168,7 @@ export function _resetHookState(): void {
   recordedMessages.clear();
   lastGenerationIdBySession.clear();
   parentGenerationByChildSession.clear();
+  subagentSessions.clear();
   firstPartAtByMessage.clear();
   pendingGenerations.clear();
   latestSystemPromptBySession.clear();
@@ -238,7 +271,7 @@ async function handleEvent(
   redactor: Redactor,
   debugLog: (msg: string, ...args: unknown[]) => void,
   projectDir: string,
-  event: { type: string; properties: unknown },
+  event: OpencodeEvent,
 ): Promise<void> {
   if (event.type === "session.created" || event.type === "session.updated") {
     recordHostVersion(event.properties);
@@ -470,13 +503,14 @@ async function recordAssistantMessage(
   ]);
 
   const agentVersion = config.agentVersion || hostVersion;
-  // Resolved per turn so a mid-session checkout shows up on the next
-  // generation. Always sent regardless of content capture mode:
-  // `git.branch` and `cwd` are low-cardinality session metadata, not
-  // message content, matching claude-code/cursor.
+  // `git.branch` is resolved per turn so a mid-session checkout shows up on
+  // the next generation. These are sent regardless of content capture mode:
+  // they are low-cardinality session metadata, not message content, matching
+  // claude-code/cursor.
   const builtinTags = buildBuiltinTags({
     cwd: projectDir,
     gitBranch: resolveGitBranch(projectDir),
+    isSubagent: subagentSessions.has(assistantMsg.sessionID),
   });
   const seed = {
     id: genId,
@@ -537,7 +571,7 @@ async function recordAssistantMessage(
     }
   } catch (err) {
     debugLog("agento11y generation export failed", err);
-    // Sigil recording failure should never break the plugin
+    // agento11y recording failure should never break the plugin
   }
 
   // Clean up pending generation and per-turn tool records. The completed
@@ -580,8 +614,10 @@ function recordHostVersion(properties: unknown): void {
  * session's life, and freezing on a late update could capture a parent turn
  * recorded *after* the spawning one. If the parent has no recorded generation
  * yet at creation (rare — the spawning turn's predecessor is normally already
- * recorded), we skip: an unlinked child is better than a wrong link. The
- * `has(id)` guard is defensive against a duplicate `session.created`.
+ * recorded), we skip the lineage edge: an unlinked child is better than a wrong
+ * link. The `subagent` tag does not depend on that edge, so the session is
+ * still classified as a subagent. The `has(id)` guard is defensive against a
+ * duplicate `session.created`.
  */
 function recordSessionParent(properties: unknown): void {
   const info = recordField(properties, "info");
@@ -589,6 +625,7 @@ function recordSessionParent(properties: unknown): void {
   const id = stringField(info, "id");
   const parentID = stringField(info, "parentID");
   if (!id || !parentID || id === parentID) return;
+  subagentSessions.add(id);
   if (parentGenerationByChildSession.has(id)) return;
   const parentGeneration = lastGenerationIdBySession.get(parentID);
   if (!parentGeneration) return;
@@ -612,9 +649,10 @@ async function handleLifecycle(
   sigil: Agento11yClient,
   telemetry: TelemetryProviders | null,
   debugLog: (msg: string, ...args: unknown[]) => void,
-  event: { type: string; properties: unknown },
+  shutdownOnce: () => Promise<void>,
+  event: OpencodeEvent,
 ): Promise<void> {
-  const type = event.type as string;
+  const type = event.type;
 
   if (type === "session.idle") {
     // Recording happens live on `message.updated` and `message.part.updated`
@@ -640,6 +678,7 @@ async function handleLifecycle(
       recordedMessages.delete(sessionId);
       lastGenerationIdBySession.delete(sessionId);
       parentGenerationByChildSession.delete(sessionId);
+      subagentSessions.delete(sessionId);
       pendingGenerations.delete(sessionId);
       latestSystemPromptBySession.delete(sessionId);
       sessionContexts.delete(sessionId);
@@ -657,22 +696,14 @@ async function handleLifecycle(
     }
   }
 
-  if (type === "global.disposed") {
-    activeToolExecutions.clear();
-    completedToolExecutions.clear();
-    latestSystemPromptBySession.clear();
-    try {
-      await sigil.shutdown();
-    } catch {
-      // shutdown failure is non-fatal
-    }
-    if (telemetry) {
-      try {
-        await telemetry.shutdown();
-      } catch (err) {
-        debugLog("telemetry shutdown failed", err);
-      }
-    }
+  // Covers hosts older than @opencode-ai/plugin 1.15.11, which have no
+  // `Hooks.dispose`. On those, the per-instance event bus publishes this to its
+  // own subscribers as the instance tears down, so the `event` hook still sees
+  // it. On 1.16 and later the plugin's subscription is closed before the
+  // instance store publishes the event, and `Hooks.dispose` is the trigger that
+  // runs. Both share the same idempotent path.
+  if (type === "server.instance.disposed") {
+    await shutdownOnce();
   }
 }
 
@@ -959,7 +990,7 @@ export function mergeToolSpanRecords(
 }
 
 /**
- * Emit Sigil tool execution spans for a set of completed tool records.
+ * Emit agento11y tool execution spans for a set of completed tool records.
  * Errors thrown by the SDK are swallowed so a span failure cannot break
  * the plugin.
  *
@@ -1025,9 +1056,14 @@ export function emitToolSpans(
 }
 
 export type Agento11yHooks = {
-  event: (input: {
-    event: { type: string; properties: unknown };
-  }) => Promise<void>;
+  event: (input: { event: OpencodeEvent }) => Promise<void>;
+  /**
+   * Flushes and shuts down the agento11y client and the OTel providers. Clears
+   * the module-level hook state once no other plugin instance in the process
+   * is still live. Safe to call more than once: later calls wait on the first
+   * shutdown instead of starting another.
+   */
+  dispose: () => Promise<void>;
   chatMessage: (
     input: {
       sessionID: string;
@@ -1093,14 +1129,44 @@ export async function createAgento11yHooks(
 
   const redactor = new Redactor();
 
-  process.on("beforeExit", () => {
-    sigil.shutdown().catch(() => {});
-    if (telemetry) {
-      telemetry
-        .shutdown()
-        .catch((err) => debugLog("telemetry shutdown failed", err));
-    }
-  });
+  liveInstances += 1;
+
+  // Single shutdown path for every teardown trigger, memoized on a promise
+  // rather than gated by a boolean so a later trigger waits for the in-flight
+  // shutdown instead of returning while the exporters are still draining. The
+  // guard is per plugin instance.
+  let shutdownPromise: Promise<void> | null = null;
+  const shutdownOnce = (): Promise<void> => {
+    shutdownPromise ??= (async () => {
+      process.off("beforeExit", onBeforeExit);
+      liveInstances -= 1;
+      try {
+        await sigil.shutdown();
+      } catch (err) {
+        debugLog("agento11y shutdown failed", err);
+      }
+      if (telemetry) {
+        try {
+          await telemetry.shutdown();
+        } catch (err) {
+          debugLog("telemetry shutdown failed", err);
+        }
+      }
+      if (liveInstances <= 0) _resetHookState();
+    })();
+    return shutdownPromise;
+  };
+
+  const onBeforeExit = (): void => {
+    void shutdownOnce();
+  };
+
+  // Last-resort trigger for hosts that neither invoke `Hooks.dispose` (see the
+  // version note in index.ts) nor deliver the disposal event. It is a weak one,
+  // because `beforeExit` does not fire on SIGINT, SIGTERM, or `process.exit()`.
+  // Deregistering inside `shutdownOnce` keeps a disposed instance from holding a
+  // process listener.
+  process.on("beforeExit", onBeforeExit);
 
   return {
     event: async (input) => {
@@ -1113,7 +1179,16 @@ export async function createAgento11yHooks(
         projectDir,
         input.event,
       );
-      await handleLifecycle(sigil, telemetry, debugLog, input.event);
+      await handleLifecycle(
+        sigil,
+        telemetry,
+        debugLog,
+        shutdownOnce,
+        input.event,
+      );
+    },
+    dispose: async () => {
+      await shutdownOnce();
     },
     chatMessage: (input, output) => {
       handleChatMessage(input, output);

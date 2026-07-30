@@ -1,4 +1,4 @@
-"""LangGraph callback handlers for Sigil generation recording."""
+"""LangGraph callback handlers for agento11y generation recording."""
 
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ class _Agento11yLangGraphBase(Agento11yFrameworkHandlerBase):
 
 
 class Agento11yLangGraphHandler(_Agento11yLangGraphBase, BaseCallbackHandler):
-    """Sync LangGraph callback handler that records Sigil generations."""
+    """Sync LangGraph callback handler that records agento11y generations."""
 
     def on_llm_start(
         self,
@@ -214,7 +214,7 @@ class Agento11yLangGraphHandler(_Agento11yLangGraphBase, BaseCallbackHandler):
 
 
 class Agento11yAsyncLangGraphHandler(_Agento11yLangGraphBase, AsyncCallbackHandler):
-    """Async LangGraph callback handler that records Sigil generations."""
+    """Async LangGraph callback handler that records agento11y generations."""
 
     async def on_llm_start(
         self,

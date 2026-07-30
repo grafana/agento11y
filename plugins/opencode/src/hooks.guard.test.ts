@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Agento11yOpencodeConfig } from "./config.js";
 import { createAgento11yHooks } from "./hooks.js";
+import { emitServerInstanceDisposed } from "./hooks.testutil.js";
 
 type HookServer = {
   server: Server;
@@ -133,7 +134,7 @@ describe("opencode guards", () => {
       },
     });
 
-    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+    await emitServerInstanceDisposed(hooks);
   });
 
   it("replaces frozen tool.execute.before args with the redacted set", async () => {
@@ -186,10 +187,10 @@ describe("opencode guards", () => {
     expect(output.args).toEqual({ command: "echo [REDACTED]" });
     expect(output.args.apiKey).toBeUndefined();
 
-    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+    await emitServerInstanceDisposed(hooks);
   });
 
-  it("leaves tool.execute.before args unchanged when Sigil allows without a transform", async () => {
+  it("leaves tool.execute.before args unchanged when Agent Observability allows without a transform", async () => {
     const hookServer = await startHookServer({
       action: "allow",
       evaluations: [],
@@ -209,10 +210,10 @@ describe("opencode guards", () => {
 
     expect(args).toEqual({ command: "ls" });
 
-    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+    await emitServerInstanceDisposed(hooks);
   });
 
-  it("strips all args when Sigil returns an empty-object transform", async () => {
+  it("strips all args when Agent Observability returns an empty-object transform", async () => {
     const hookServer = await startHookServer({
       action: "allow",
       evaluations: [],
@@ -248,7 +249,7 @@ describe("opencode guards", () => {
     // An intentional "strip all arguments" transform empties the object.
     expect(output.args).toEqual({});
 
-    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+    await emitServerInstanceDisposed(hooks);
   });
 
   it("fails open and leaves args untouched when args are not a plain object", async () => {
@@ -291,10 +292,10 @@ describe("opencode guards", () => {
     // Fail open: the original (unmutated) args are preserved.
     expect(args).toEqual(["ls", "-la"]);
 
-    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+    await emitServerInstanceDisposed(hooks);
   });
 
-  it("sets permission.ask output to deny when Sigil denies", async () => {
+  it("sets permission.ask output to deny when Agent Observability denies", async () => {
     const hookServer = await startHookServer({
       action: "deny",
       reason: "blocked permission",
@@ -339,6 +340,6 @@ describe("opencode guards", () => {
       },
     });
 
-    await hooks.event({ event: { type: "global.disposed", properties: {} } });
+    await emitServerInstanceDisposed(hooks);
   });
 });

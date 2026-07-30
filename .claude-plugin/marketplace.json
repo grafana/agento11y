@@ -1,17 +1,19 @@
 {
-  "name": "grafana-sigil",
+  "name": "agento11y",
   "owner": {
     "name": "Grafana Labs"
   },
   "plugins": [
     {
-      "name": "sigil-cc",
+      "name": "agento11y-claude-code",
       "source": "./plugins/claude-code",
       "description": "Send Claude Code session telemetry to Grafana Agent Observability",
-      "version": "0.4.0",
       "author": {
         "name": "Grafana Labs"
       }
     }
-  ]
+  ],
+  "renames": {
+    "sigil-cc": "agento11y-claude-code"
+  }
 }

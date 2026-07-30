@@ -1,6 +1,6 @@
 # Grafana Agent Observability Go SDK
 
-The agento11y Go SDK records LLM generations and tool calls for [Grafana AI observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/). It emits OpenTelemetry spans and metrics through your existing OTel setup and sends normalized generation payloads through the Agent Observability ingest channel.
+The agento11y Go SDK records LLM generations and tool calls for [Grafana Agent observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/). It emits OpenTelemetry spans and metrics through your existing OTel setup and sends normalized generation payloads through the Agent Observability ingest channel.
 
 ## Install
 
@@ -95,7 +95,7 @@ Framework helpers:
 
 ## Configuration
 
-The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and pass an empty `agento11y.Config{}` — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for the variable names.
+The snippet below configures the SDK explicitly. As an alternative, set `AGENTO11Y_*` environment variables and pass an empty `agento11y.Config{}` — refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/) for the variable names.
 
 ```go
 client := agento11y.NewClient(agento11y.Config{})
@@ -228,6 +228,7 @@ response, err := client.EvaluateHook(ctx, agento11y.HookEvaluateRequest{
 		AgentName:    "support-agent",
 		AgentVersion: "1.0.0",
 		Model:        &agento11y.HookModel{Provider: "openai", Name: "gpt-5"},
+		ConversationID: "support-case-42",
 	},
 	Input: agento11y.HookInput{
 		Messages:            messages,
@@ -248,6 +249,8 @@ if response.TransformedInput != nil && len(response.TransformedInput.Messages) >
 
 `HooksConfig` defaults to `Phases: []HookPhase{HookPhasePreflight}`, `Timeout: 15s`, and fail-open behavior. With fail-open enabled, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `FailOpen` to `agento11y.BoolPtr(false)` for strict paths that should fail closed.
 
+Set `HookContext.ConversationID` to the same ID used by `StartGeneration(...)`. The SDK also reads `WithConversationID(...)` and the active OpenTelemetry span when explicit correlation fields are omitted. This lets Agent Observability retain denied preflight attempts even though no LLM generation is created.
+
 If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `StartGeneration(...)`. For a runnable example, see [`../examples/getting-started/go-hooks/`](../examples/getting-started/go-hooks/).
 
 ## Wiring custom env vars
@@ -255,7 +258,7 @@ If you use transformed input, pass the transformed messages/system prompt to the
 The SDK only auto-loads `AGENTO11Y_*` env vars (`AGENTO11Y_ENDPOINT`, `AGENTO11Y_PROTOCOL`, `AGENTO11Y_AUTH_MODE`, `AGENTO11Y_AUTH_TOKEN`, etc.) when you call `agento11y.NewClient(agento11y.Config{})`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:
 
 ```go
-genToken := strings.TrimSpace(os.Getenv("MY_APP_SIGIL_TOKEN"))
+genToken := strings.TrimSpace(os.Getenv("MY_APP_AGENTO11Y_TOKEN"))
 if genToken != "" {
 	cfg.GenerationExport.Auth = agento11y.AuthConfig{
 		Mode:        agento11y.ExportAuthModeBearer,
@@ -270,6 +273,90 @@ Common topology:
 - Self-hosted direct to the ingest API: generation `tenant` mode.
 - Traces/metrics via OTEL Collector/Alloy: configure exporters in your app OTEL SDK setup.
 - Enterprise proxy: generation `bearer` mode to proxy; proxy authenticates and forwards tenant header upstream.
+
+## Offline experiments
+
+Use `github.com/grafana/agento11y/go/agento11y/experiments` when an existing
+benchmark, CI job, notebook, or agent harness owns execution and Agent
+Observability should track the run. The package publishes typed trials,
+generations, scores, evaluations, usage/cost, and artifacts; it does not
+schedule work.
+
+Suite-free publishing needs `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TOKEN`, and
+optional `AGENTO11Y_AUTH_TENANT_ID`:
+
+```go
+client, err := experiments.NewClientFromEnv()
+if err != nil {
+	return err
+}
+defer client.Shutdown(context.Background())
+
+planned := len(cases) * attempts // optional; never inferred from suite size
+run, err := experiments.WithExperiment(ctx, client, experiments.ExperimentOptions{
+	ExperimentID:      stableResumeID,
+	Name:              "nightly",
+	PlannedTrialCount: &planned,
+	Candidate: &experiments.Candidate{
+		AgentName: "support-agent", ModelName: "gpt-5", GitSHA: gitSHA,
+	},
+}, func(ctx context.Context, run *experiments.Experiment) error {
+	for _, testCase := range cases {
+		for attempt := 1; attempt <= attempts; attempt++ {
+			err := run.WithTrial(ctx, testCase, func(ctx context.Context, trial *experiments.Trial) error {
+				output := runAgent(testCase.Input)
+				trial.RecordIO(experiments.RecordIOOptions{Input: testCase.Input, Output: output})
+				if _, err := trial.CheckScore("json_valid", validJSON(output), experiments.ScoreOptions{}); err != nil {
+					return err
+				}
+				didPass := passed(output)
+				if _, err := trial.FinalScore(score(output), experiments.ScoreOptions{Passed: &didPass}); err != nil {
+					return err
+				}
+				_, err := trial.Flush(ctx) // publish this scored attempt immediately
+				return err
+			}, experiments.TrialOptions{Attempt: attempt})
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+})
+```
+
+Keep `ExperimentID`, case ID, and attempt stable when resuming. The SDK derives
+stable trial/generation/conversation IDs and occurrence-aware score IDs from
+them. Reusing the same case/attempt twice in one run is rejected; increment the
+attempt for genuinely new work. Normal finalization omits `score_count`, which
+is appropriate for distributed runners. Supply `FinalizeOptions.ScoreCount`
+only when the count is an intentional server-side assertion.
+
+Portable suites accept `id`/`test_case_id` and `cases`/`test_cases` YAML aliases:
+
+```go
+suite, err := experiments.LoadSuite("evals/smoke.yaml")
+suites, err := experiments.NewTestSuitesClient(experiments.TestSuitesClientOptions{})
+pushed, err := suites.PushSuite(ctx, *suite, experiments.PushSuiteOptions{
+	Prune: true, Publish: true, Changelog: "nightly sync",
+})
+```
+
+Stored-suite operations additionally use `AGENTO11Y_CONTROL_ENDPOINT` (or
+`AGENTO11Y_GRAFANA_URL`) and `AGENTO11Y_SERVICE_ACCOUNT_TOKEN`. Run ingest
+continues to use the ingest credential. `NewExperimentFromSuite` and
+`WithExperimentFromSuite` resolve exact, `latest`, `latest_published`, or
+`draft` versions before starting, so the selected version is durable.
+
+Local `LLMJudge` and `RegexJudge` helpers require no platform evaluator.
+`Trial.RecordEvaluation` also accepts framework-owned evaluations without
+reinterpreting their transcript. If an evaluation includes a grader generation,
+the SDK publishes and links it before its score. Secret redaction is enabled by
+default for generations, scores, explanations, metadata, and text-like
+artifacts. Experimental trial spans and `gen_ai.evaluation.result` events are
+opt-in with `AGENTO11Y_USE_EXPERIMENTAL_OTEL=true`.
+
+See the runnable [Go streaming example](../examples/experiments/go/).
 
 ## Content Capture Mode
 
@@ -402,7 +489,7 @@ if err != nil {
 fmt.Printf("rating=%s has_bad=%v\n", rating.Rating.Rating, rating.Summary.HasBadRating)
 ```
 
-`SubmitConversationRating` sends requests to `cfg.API.Endpoint`, which should be the Grafana Cloud Agent Observability API URL from AI Observability configuration, and uses the same generation-export auth headers that your client config already resolves.
+`SubmitConversationRating` sends requests to `cfg.API.Endpoint`, which should be the Grafana Cloud Agent Observability API URL from Agent Observability configuration, and uses the same generation-export auth headers that your client config already resolves.
 
 ## Lifecycle requirement
 
@@ -504,7 +591,6 @@ Current Go provider helpers:
 
 The Go SDK ships a local no-Docker conformance harness for the current cross-SDK baseline.
 
-- Shared spec: `docs/references/sdk-conformance-spec.md` (in the sigil repo)
 - Default local command: `mise run sdk:conformance`
 - Direct Go command: `cd go && GOWORK=off go test ./agento11y -run '^TestConformance' -count=1`
 - Current baseline coverage: sync roundtrip, conversation title resolution, user ID resolution, agent name/version resolution, streaming mode + TTFT, tool execution, embeddings, validation/error handling, rating submission, and shutdown flush semantics across exported generation payloads, OTLP spans, OTLP metrics, and local rating HTTP capture

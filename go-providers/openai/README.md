@@ -130,5 +130,5 @@ rec.SetResult(openai.ResponsesFromStream(req, summary))
 Real end-to-end examples using the actual OpenAI SDK (no fake provider calls) are in `sdk_example_test.go`.
 
 ```bash
-SIGIL_RUN_LIVE_EXAMPLES=1 OPENAI_API_KEY=... go test -run Example_withAgento11y -v
+AGENTO11Y_RUN_LIVE_EXAMPLES=1 OPENAI_API_KEY=... go test -run Example_withAgento11y -v
 ```

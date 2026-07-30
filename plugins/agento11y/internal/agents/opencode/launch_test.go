@@ -3,6 +3,7 @@ package opencode
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tailscale/hujson"
 )
 
 func TestLaunch(t *testing.T) {
@@ -424,10 +426,114 @@ func TestLaunch_RefreshesInstalledPluginWhenUpdateDue(t *testing.T) {
 	}
 }
 
-// A config that still references the legacy @grafana/sigil-opencode name must
-// not be refreshed: the refresh installs the renamed package, which would
-// register the plugin twice (once per name).
-func TestLaunch_SkipsRefreshForLegacyPluginName(t *testing.T) {
+// A config that still references the legacy @grafana/sigil-opencode name is
+// rewritten to the renamed package before the probe runs: the old package is
+// frozen on npm, so a legacy entry never sees updates again. OpenCode
+// installs npm plugins listed in its config at startup, so the rewrite alone
+// is enough.
+func TestLaunch_MigratesLegacyConfig(t *testing.T) {
+	const binPath = "/usr/local/bin/opencode"
+
+	cases := []struct {
+		name            string
+		file            string // config basename; "" = opencode.json
+		config          string
+		wantContains    []string
+		wantNotContains []string
+		wantPluginCount int // 0 = skip the standardized entry-count check
+	}{
+		{
+			name:            "string entry replaced",
+			config:          `{"plugin":["@grafana/sigil-opencode"]}`,
+			wantContains:    []string{`"@grafana/agento11y-opencode"`},
+			wantNotContains: []string{"sigil-opencode"},
+			wantPluginCount: 1,
+		},
+		{
+			name:            "pinned entry loses its pin",
+			config:          `{"plugin":["@grafana/sigil-opencode@0.13.0"]}`,
+			wantContains:    []string{`"@grafana/agento11y-opencode"`},
+			wantNotContains: []string{"sigil-opencode", "0.13.0"},
+			wantPluginCount: 1,
+		},
+		{
+			name:            "tuple entry keeps options",
+			config:          `{"plugin":[["@grafana/sigil-opencode@0.13.0",{"enabled":true}]]}`,
+			wantContains:    []string{`"@grafana/agento11y-opencode"`, `{"enabled":true}`},
+			wantNotContains: []string{"sigil-opencode"},
+			wantPluginCount: 1,
+		},
+		{
+			name:            "jsonc comments survive",
+			file:            "opencode.jsonc",
+			config:          "{\n  // my config\n  \"plugin\": [\"@grafana/sigil-opencode\"]\n}\n",
+			wantContains:    []string{"// my config", `"@grafana/agento11y-opencode"`},
+			wantNotContains: []string{"sigil-opencode"},
+			wantPluginCount: 1,
+		},
+		{
+			name:            "both names present removes the legacy entry",
+			config:          `{"plugin":["@grafana/sigil-opencode","@grafana/agento11y-opencode"]}`,
+			wantContains:    []string{`"@grafana/agento11y-opencode"`},
+			wantNotContains: []string{"sigil-opencode"},
+			wantPluginCount: 1,
+		},
+		{
+			name:            "multiple legacy entries collapse to one new entry",
+			config:          `{"plugin":["@grafana/sigil-opencode","@grafana/sigil-opencode@0.13.0"]}`,
+			wantContains:    []string{`"@grafana/agento11y-opencode"`},
+			wantNotContains: []string{"sigil-opencode"},
+			wantPluginCount: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SIGIL_AUTO_UPDATE", "false")
+			file := tc.file
+			if file == "" {
+				file = "opencode.json"
+			}
+			dir := withConfigFiles(t, map[string]string{file: tc.config})
+			withLookPath(t, func(string) (string, error) { return binPath, nil })
+			withRunInstall(t, func(context.Context, string, io.Writer) error {
+				t.Error("runInstall must not be called: the migrated entry counts as installed")
+				return nil
+			})
+			execCalled := false
+			withExecFn(t, func(string, []string, []string) error {
+				execCalled = true
+				return nil
+			})
+
+			var stderr bytes.Buffer
+			require.NoError(t, Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"))
+			assert.True(t, execCalled, "exec must run after migration")
+			assert.Contains(t, stderr.String(), "migrating "+legacyPluginName+" to "+PluginName)
+
+			rewritten, err := os.ReadFile(filepath.Join(dir, file))
+			require.NoError(t, err)
+			for _, want := range tc.wantContains {
+				assert.Contains(t, string(rewritten), want)
+			}
+			for _, notWant := range tc.wantNotContains {
+				assert.NotContains(t, string(rewritten), notWant)
+			}
+			if tc.wantPluginCount > 0 {
+				std, err := hujson.Standardize(rewritten)
+				require.NoError(t, err)
+				var c opencodeConfig
+				require.NoError(t, json.Unmarshal(std, &c))
+				assert.Len(t, c.Plugin, tc.wantPluginCount)
+			}
+		})
+	}
+}
+
+// After a successful migration the probe sees the new package name, so the
+// legacy refresh suppression no longer applies and the normal 24-hour
+// refresh runs.
+func TestLaunch_MigrationRestoresRefresh(t *testing.T) {
 	const binPath = "/usr/local/bin/opencode"
 	state := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", state)
@@ -436,17 +542,63 @@ func TestLaunch_SkipsRefreshForLegacyPluginName(t *testing.T) {
 	withConfig(t, `{"plugin":["@grafana/sigil-opencode"]}`)
 	withLookPath(t, func(string) (string, error) { return binPath, nil })
 	withRunInstall(t, func(context.Context, string, io.Writer) error {
-		t.Fatal("runInstall must not be called when the legacy plugin is installed")
+		t.Fatal("runInstall must not be called: the migrated entry counts as installed")
 		return nil
 	})
+	updateCalls := 0
 	withRunUpdate(t, func(context.Context, string, io.Writer) error {
-		t.Fatal("runUpdate must not be called for a legacy plugin entry")
+		updateCalls++
 		return nil
 	})
 	withExecFn(t, func(string, []string, []string) error { return nil })
 
 	var stderr bytes.Buffer
 	require.NoError(t, Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev"))
+	assert.Equal(t, 1, updateCalls, "refresh must run once migration replaced the legacy entry")
+}
+
+// When the config cannot be rewritten (read-only directory), the migration
+// fails without blocking the launch: the error is logged, a recovery hint
+// reaches stderr, and the legacy refresh-skip stays active so the plugin is
+// not registered twice.
+func TestLaunch_MigrationFailureFallsBackToLegacySkip(t *testing.T) {
+	const binPath = "/usr/local/bin/opencode"
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	t.Setenv("SIGIL_AUTO_UPDATE", "")
+
+	dir := withConfig(t, `{"plugin":["@grafana/sigil-opencode"]}`)
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	withLookPath(t, func(string) (string, error) { return binPath, nil })
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("runInstall must not be called when the legacy plugin is installed")
+		return nil
+	})
+	withRunUpdate(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("runUpdate must not be called while the legacy entry remains")
+		return nil
+	})
+	execCalled := false
+	withExecFn(t, func(string, []string, []string) error {
+		execCalled = true
+		return nil
+	})
+
+	var stderr bytes.Buffer
+	var logbuf bytes.Buffer
+	logger := log.New(&logbuf, "", 0)
+	require.NoError(t, Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, logger, "dev"))
+	assert.True(t, execCalled, "exec must run even when migration fails")
+	assert.Contains(t, stderr.String(), "migration of "+legacyPluginName+" failed")
+	assert.Contains(t, stderr.String(), PluginName)
+	assert.Contains(t, stderr.String(), filepath.Join(dir, "opencode.json"))
+	assert.Contains(t, logbuf.String(), "opencode legacy migration")
+
+	unchanged, err := os.ReadFile(filepath.Join(dir, "opencode.json"))
+	require.NoError(t, err)
+	assert.Equal(t, `{"plugin":["@grafana/sigil-opencode"]}`, string(unchanged), "config must stay untouched on failure")
 }
 
 func TestLaunch_SkipsRefreshWhenUpdateDisabled(t *testing.T) {
@@ -484,19 +636,19 @@ func TestDefaultConfigDir(t *testing.T) {
 
 // withConfig points configDirFn at a temp directory, optionally
 // seeding it with an opencode.json containing the given contents.
-// Pass "" to leave the directory empty.
-func withConfig(t *testing.T, contents string) {
+// Pass "" to leave the directory empty. Returns the config directory.
+func withConfig(t *testing.T, contents string) string {
 	t.Helper()
 	files := map[string]string{}
 	if contents != "" {
 		files["opencode.json"] = contents
 	}
-	withConfigFiles(t, files)
+	return withConfigFiles(t, files)
 }
 
 // withConfigFiles points configDirFn at a temp directory and writes the
-// supplied {basename: contents} files into it.
-func withConfigFiles(t *testing.T, files map[string]string) {
+// supplied {basename: contents} files into it. Returns the config directory.
+func withConfigFiles(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	for name, contents := range files {
@@ -507,6 +659,7 @@ func withConfigFiles(t *testing.T, files map[string]string) {
 	prev := configDirFn
 	t.Cleanup(func() { configDirFn = prev })
 	configDirFn = func() (string, error) { return dir, nil }
+	return dir
 }
 
 func withLookPath(t *testing.T, fn func(string) (string, error)) {

@@ -1,4 +1,4 @@
-"""Public exports for Sigil OpenAI Agents callback handlers."""
+"""Public exports for agento11y OpenAI Agents callback handlers."""
 
 from __future__ import annotations
 
@@ -52,14 +52,14 @@ def create_agento11y_openai_agents_handler(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> Agento11yOpenAIAgentsHandler | Agento11yAsyncOpenAIAgentsHandler:
-    """Create an OpenAI Agents Sigil handler for sync or async flows."""
+    """Create an OpenAI Agents agento11y handler for sync or async flows."""
     if async_handler:
         return Agento11yAsyncOpenAIAgentsHandler(client=client, **handler_kwargs)
     return Agento11yOpenAIAgentsHandler(client=client, **handler_kwargs)
 
 
 class Agento11yOpenAIAgentsRunHooks(RunHooks):
-    """RunHooks bridge that maps OpenAI Agents lifecycle callbacks into Sigil handlers."""
+    """RunHooks bridge that maps OpenAI Agents lifecycle callbacks into agento11y handlers."""
 
     def __init__(
         self,
@@ -233,7 +233,7 @@ def create_agento11y_openai_agents_hooks(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> Agento11yOpenAIAgentsRunHooks:
-    """Create a RunHooks instance wired to Sigil instrumentation."""
+    """Create a RunHooks instance wired to agento11y instrumentation."""
     agento11y_handler = create_agento11y_openai_agents_handler(
         client=client,
         async_handler=async_handler,
@@ -249,7 +249,7 @@ def with_agento11y_openai_agents_hooks(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> dict[str, Any]:
-    """Set OpenAI Agents `hooks` to a valid RunHooks bridge with Sigil instrumentation."""
+    """Set OpenAI Agents `hooks` to a valid RunHooks bridge with agento11y instrumentation."""
     merged = dict(run_options or {})
     existing = merged.get("hooks")
     if isinstance(existing, list):

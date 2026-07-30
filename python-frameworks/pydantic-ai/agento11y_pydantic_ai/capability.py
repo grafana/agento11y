@@ -34,12 +34,12 @@ _PYDANTIC_CONTROL_FLOW: tuple[type[BaseException], ...] = (
 
 
 def create_agento11y_pydantic_ai_handler(*, client: Client, **handler_kwargs: Any) -> Agento11yPydanticAIHandler:
-    """Create a Pydantic AI Sigil handler."""
+    """Create a Pydantic AI agento11y handler."""
     return Agento11yPydanticAIHandler(client=client, **handler_kwargs)
 
 
 class Agento11yPydanticAICapability(AbstractCapability):
-    """Pydantic AI capability bridge that maps lifecycle hooks to Sigil handlers."""
+    """Pydantic AI capability bridge that maps lifecycle hooks to agento11y handlers."""
 
     def __init__(self, agento11y_handler: Agento11yPydanticAIHandler) -> None:
         self._agento11y_handler = agento11y_handler
@@ -198,7 +198,7 @@ class Agento11yPydanticAICapability(AbstractCapability):
 
 
 def create_agento11y_pydantic_ai_capability(*, client: Client, **handler_kwargs: Any) -> Agento11yPydanticAICapability:
-    """Create a Pydantic AI capability wired to Sigil instrumentation."""
+    """Create a Pydantic AI capability wired to agento11y instrumentation."""
     return Agento11yPydanticAICapability(create_agento11y_pydantic_ai_handler(client=client, **handler_kwargs))
 
 
@@ -208,7 +208,7 @@ def with_agento11y_pydantic_ai_capability(
     client: Client,
     **handler_kwargs: Any,
 ) -> list[Any]:
-    """Add a Sigil capability to a list, with double-injection guard."""
+    """Add an agento11y capability to a list, with double-injection guard."""
     result = list(capabilities or [])
     if any(isinstance(cap, Agento11yPydanticAICapability) for cap in result):
         return result

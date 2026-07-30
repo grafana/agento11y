@@ -1,6 +1,6 @@
 // Package codec converts between the public model types and the wire-level
 // agento11y v1 protobuf messages. It exists so producers can hand
-// high-level Generation values to Sigil without re-implementing the SDK's
+// high-level Generation values to Agent Observability without re-implementing the SDK's
 // field mapping or the effective_version hashing rule.
 //
 // Only the producer direction (ToProto) is implemented. A FromProto helper is

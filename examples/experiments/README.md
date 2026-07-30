@@ -1,7 +1,7 @@
 # Experiments (offline evals)
 
 These examples run an agent over a fixed dataset, grade each answer, and publish
-the results to Grafana AI Observability as an **experiment** you can browse and
+the results to Grafana Agent Observability as an **experiment** you can browse and
 compare. This is offline evaluation: you control the inputs, run them in a batch,
 and score the outputs, rather than scoring live production traffic.
 
@@ -23,6 +23,7 @@ A/B testing is just two runs with different experiment ids or tags over the same
 | --- | --- | --- |
 | Framework-free | Python + core `agento11y` | [`python/`](python/) |
 | Framework-free | Go + `agento11y/go` | [`go/`](go/) |
+| Prompt optimizer | Go + `agento11y/go/experiments` | [`go/prompt-optimization/`](go/prompt-optimization/) |
 
 For credentials, see the [credentials section in the repo README](../../README.md#grafana-cloud-credentials).
 Each example's own README covers the run command and the canned-vs-real-model

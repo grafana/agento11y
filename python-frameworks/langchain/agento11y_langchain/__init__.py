@@ -1,4 +1,4 @@
-"""Public exports for Sigil LangChain callback handlers."""
+"""Public exports for agento11y LangChain callback handlers."""
 
 from typing import Any
 
@@ -13,7 +13,7 @@ def create_agento11y_langchain_handler(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> Agento11yLangChainHandler | Agento11yAsyncLangChainHandler:
-    """Create a LangChain Sigil callback handler for sync or async flows."""
+    """Create a LangChain agento11y callback handler for sync or async flows."""
     if async_handler:
         return Agento11yAsyncLangChainHandler(client=client, **handler_kwargs)
     return Agento11yLangChainHandler(client=client, **handler_kwargs)
@@ -26,7 +26,7 @@ def with_agento11y_langchain_callbacks(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> dict[str, Any]:
-    """Append a Sigil callback handler to a LangChain runnable config."""
+    """Append an agento11y callback handler to a LangChain runnable config."""
     merged = dict(config or {})
     existing = merged.get("callbacks")
     if isinstance(existing, list):

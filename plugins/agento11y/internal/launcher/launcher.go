@@ -12,6 +12,7 @@ package launcher
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -76,6 +77,37 @@ func RunSteps(ctx context.Context, bin string, w io.Writer, steps [][]string) er
 		}
 	}
 	return nil
+}
+
+// RunFirst invokes `bin argv...` for each candidate in order until one
+// succeeds, then writes only the successful command's combined output to w
+// and returns the candidate's index. Earlier candidates are expected to fail
+// against plugin stores that predate (or postdate) a plugin rename, so their
+// output is captured into the returned error instead of streamed at the
+// user. When every candidate fails, the index is -1 and the per-candidate
+// errors are joined.
+func RunFirst(ctx context.Context, bin string, w io.Writer, candidates [][]string) (int, error) {
+	name := bin
+	if idx := strings.LastIndexByte(bin, '/'); idx >= 0 {
+		name = bin[idx+1:]
+	}
+	var errs []error
+	for i, argv := range candidates {
+		cmd := exec.CommandContext(ctx, bin, argv...)
+		var buf bytes.Buffer
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+		if err := cmd.Run(); err != nil {
+			if msg := bytes.TrimSpace(buf.Bytes()); len(msg) > 0 {
+				err = fmt.Errorf("%w: %s", err, msg)
+			}
+			errs = append(errs, fmt.Errorf("%s %s: %w", name, strings.Join(argv, " "), err))
+			continue
+		}
+		_, _ = w.Write(buf.Bytes())
+		return i, nil
+	}
+	return -1, errors.Join(errs...)
 }
 
 // BootstrapSpec describes the per-agent variation Bootstrap needs to drive

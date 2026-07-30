@@ -1,4 +1,4 @@
-"""OpenAI Agents callback handlers for Sigil generation recording."""
+"""OpenAI Agents callback handlers for agento11y generation recording."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ class _Agento11yOpenAIAgentsBase(Agento11yFrameworkHandlerBase):
 
 
 class Agento11yOpenAIAgentsHandler(_Agento11yOpenAIAgentsBase):
-    """Sync OpenAI Agents callback handler that records Sigil generations."""
+    """Sync OpenAI Agents callback handler that records agento11y generations."""
 
     def on_llm_start(
         self,
@@ -181,7 +181,7 @@ class Agento11yOpenAIAgentsHandler(_Agento11yOpenAIAgentsBase):
 
 
 class Agento11yAsyncOpenAIAgentsHandler(_Agento11yOpenAIAgentsBase):
-    """Async OpenAI Agents callback handler that records Sigil generations."""
+    """Async OpenAI Agents callback handler that records agento11y generations."""
 
     async def on_llm_start(
         self,

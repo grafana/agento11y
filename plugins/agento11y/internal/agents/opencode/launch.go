@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -68,10 +69,18 @@ var configFileNames = []string{"opencode.json", "opencode.jsonc"}
 // SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT and placeholder auth values so it
 // talks to the in-process receiver instead of Grafana Cloud.
 func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, binaryVersion string) error {
+	// Rewrite a pre-rename @grafana/sigil-opencode config entry to the new
+	// package name before probing: the old package is frozen on npm, so a
+	// legacy entry would otherwise stay pinned to the last pre-rename release
+	// forever. Best-effort — a failure falls through to the legacy
+	// refresh-skip below.
+	migrateLegacyConfig(stderr, logger)
+
 	// The periodic refresh installs PluginSource. When the config still
-	// references the legacy package name, that would register the plugin a
-	// second time under the new name, so skip the refresh for legacy installs
-	// and leave the existing entry alone.
+	// references the legacy package name (because the migration above could
+	// not rewrite it), that would register the plugin a second time under the
+	// new name, so skip the refresh for legacy installs and leave the existing
+	// entry alone.
 	update := runUpdate
 	if src, found, err := installedPluginSource(); err == nil && found && stripNpmVersion(src) == legacyPluginName {
 		update = nil
@@ -116,6 +125,159 @@ func defaultRunUpdate(ctx context.Context, bin string, w io.Writer) error {
 	return launcher.RunSteps(ctx, bin, w, [][]string{
 		{"plugin", PluginSource, "--global", "--force"},
 	})
+}
+
+// migrateLegacyConfig rewrites legacy @grafana/sigil-opencode entries in
+// opencode's global config to the renamed @grafana/agento11y-opencode
+// package. The old package is frozen on npm (releases continue only under
+// the new name), so a legacy entry stays pinned to the last pre-rename
+// release forever. OpenCode installs the npm plugins listed in its config at
+// startup, so rewriting the entry is enough — no install command needed.
+// Version pins are dropped deliberately: pre-rename versions do not exist
+// under the new package name.
+//
+// The rewrite goes through hujson so comments, formatting, and tuple options
+// survive, and the file is replaced atomically (temp file + rename) so a
+// failure never leaves a half-written config. Best-effort: failures are
+// logged and never block the launch — patch/write failures also print a
+// manual-recovery hint on stderr, and the caller's legacy refresh-skip keeps
+// the frozen install working.
+func migrateLegacyConfig(stderr io.Writer, logger *log.Logger) {
+	path, data, err := readConfigFile()
+	if err != nil {
+		logger.Printf("opencode legacy migration: %v", err)
+		return
+	}
+	if data == nil {
+		return
+	}
+	v, err := hujson.Parse(data)
+	if err != nil {
+		logger.Printf("opencode legacy migration: parse %s: %v", path, err)
+		return
+	}
+	ops, err := legacyPluginOps(v)
+	if err != nil {
+		logger.Printf("opencode legacy migration: scan %s: %v", path, err)
+		return
+	}
+	if ops == nil {
+		return
+	}
+	fmt.Fprintf(stderr, "agento11y: migrating %s to %s in %s\n", legacyPluginName, PluginName, path)
+	if err := v.Patch(ops); err != nil {
+		logger.Printf("opencode legacy migration: patch %s: %v", path, err)
+		printMigrationRecoveryHint(stderr, err, path)
+		return
+	}
+	if err := writeConfigAtomic(path, v.Pack()); err != nil {
+		logger.Printf("opencode legacy migration: write %s: %v", path, err)
+		printMigrationRecoveryHint(stderr, err, path)
+		return
+	}
+}
+
+// printMigrationRecoveryHint tells the user how to finish the rename by hand
+// when the automatic rewrite failed, mirroring Bootstrap's recovery wording.
+func printMigrationRecoveryHint(w io.Writer, err error, path string) {
+	fmt.Fprintf(w,
+		"agento11y: migration of %s failed: %v\n"+
+			"agento11y: continuing with the installed version. To migrate manually, edit\n"+
+			"          %s and replace %s with %s.\n",
+		legacyPluginName, err, path, legacyPluginName, PluginName)
+}
+
+// legacyPluginOps builds the RFC 6902 operations rewriting legacy
+// @grafana/sigil-opencode entries in the parsed config: the first legacy
+// entry is replaced with the bare renamed package (a tuple entry keeps its
+// options — only element 0 is replaced), any further legacy entries are
+// removed, and when the new name is already present every legacy entry is
+// removed instead. Matching is version-insensitive. Returns nil when the
+// config has no legacy entry.
+func legacyPluginOps(v hujson.Value) ([]byte, error) {
+	std := v.Clone()
+	std.Standardize()
+	var c opencodeConfig
+	if err := json.Unmarshal(std.Pack(), &c); err != nil {
+		return nil, err
+	}
+	type legacyEntry struct {
+		index int
+		tuple bool
+	}
+	var legacy []legacyEntry
+	hasNew := false
+	for i, raw := range c.Plugin {
+		name, isTuple, ok := pluginEntryName(raw)
+		if !ok {
+			continue
+		}
+		switch stripNpmVersion(name) {
+		case legacyPluginName:
+			legacy = append(legacy, legacyEntry{index: i, tuple: isTuple})
+		case PluginName:
+			hasNew = true
+		}
+	}
+	if len(legacy) == 0 {
+		return nil, nil
+	}
+	type patchOp struct {
+		Op    string `json:"op"`
+		Path  string `json:"path"`
+		Value string `json:"value,omitempty"`
+	}
+	var ops []patchOp
+	// Higher indices first: a removal shifts every entry after it, so
+	// operating back-to-front keeps every remaining path valid.
+	for i, e := range slices.Backward(legacy) {
+		if hasNew || i > 0 {
+			ops = append(ops, patchOp{Op: "remove", Path: fmt.Sprintf("/plugin/%d", e.index)})
+			continue
+		}
+		op := patchOp{Op: "replace", Path: fmt.Sprintf("/plugin/%d", e.index), Value: PluginName}
+		if e.tuple {
+			op.Path += "/0"
+		}
+		ops = append(ops, op)
+	}
+	return json.Marshal(ops)
+}
+
+// writeConfigAtomic replaces path with content through a temp file in the
+// same directory plus rename, so a crash never leaves a half-written config.
+// The original file's permission bits are preserved when they can be read.
+func writeConfigAtomic(path string, content []byte) error {
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("temp file in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("chmod temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("close temp: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		cleanup()
+		return fmt.Errorf("rename to %s: %w", path, err)
+	}
+	return nil
 }
 
 // opencodeConfig is the subset of opencode's global config this launcher
@@ -165,26 +327,9 @@ func Status(_ context.Context) (installed bool, version string, err error) {
 // configured. The file is parsed as JSONC because opencode's docs allow
 // comments and trailing commas.
 func installedPluginSource() (source string, found bool, err error) {
-	dir, err := configDirFn()
+	path, data, err := readConfigFile()
 	if err != nil {
 		return "", false, err
-	}
-	var (
-		data []byte
-		path string
-	)
-	for _, name := range configFileNames {
-		candidate := filepath.Join(dir, name)
-		b, err := os.ReadFile(candidate)
-		if err == nil {
-			data = b
-			path = candidate
-			break
-		}
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		return "", false, fmt.Errorf("read %s: %w", candidate, err)
 	}
 	if data == nil {
 		return "", false, nil
@@ -198,23 +343,8 @@ func installedPluginSource() (source string, found bool, err error) {
 		return "", false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	for _, raw := range c.Plugin {
-		var asString string
-		if err := json.Unmarshal(raw, &asString); err == nil {
-			if sourceMatchesPlugin(asString) {
-				return asString, true, nil
-			}
-			continue
-		}
-		// Tuple form: ["@grafana/agento11y-opencode", {...}]
-		var asTuple []json.RawMessage
-		if err := json.Unmarshal(raw, &asTuple); err != nil {
-			continue
-		}
-		if len(asTuple) == 0 {
-			continue
-		}
-		var name string
-		if err := json.Unmarshal(asTuple[0], &name); err != nil {
+		name, _, ok := pluginEntryName(raw)
+		if !ok {
 			continue
 		}
 		if sourceMatchesPlugin(name) {
@@ -222,6 +352,46 @@ func installedPluginSource() (source string, found bool, err error) {
 		}
 	}
 	return "", false, nil
+}
+
+// pluginEntryName decodes one plugin-array entry, which is either a plain
+// string naming the plugin module or a [name, options] tuple. Returns the
+// entry's name (version pin included, if any), whether the entry was a
+// tuple, and whether decoding succeeded.
+func pluginEntryName(raw json.RawMessage) (name string, tuple, ok bool) {
+	if err := json.Unmarshal(raw, &name); err == nil {
+		return name, false, true
+	}
+	var asTuple []json.RawMessage
+	if err := json.Unmarshal(raw, &asTuple); err != nil || len(asTuple) == 0 {
+		return "", false, false
+	}
+	if err := json.Unmarshal(asTuple[0], &name); err != nil {
+		return "", false, false
+	}
+	return name, true, true
+}
+
+// readConfigFile locates and reads opencode's global config, probing the
+// recognised basenames in precedence order. A missing file returns
+// ("", nil, nil) — opencode has never been configured.
+func readConfigFile() (path string, data []byte, err error) {
+	dir, err := configDirFn()
+	if err != nil {
+		return "", nil, err
+	}
+	for _, name := range configFileNames {
+		candidate := filepath.Join(dir, name)
+		b, err := os.ReadFile(candidate)
+		if err == nil {
+			return candidate, b, nil
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		return "", nil, fmt.Errorf("read %s: %w", candidate, err)
+	}
+	return "", nil, nil
 }
 
 // versionFromNpmSpec returns the pinned version of a scoped npm spec, e.g.

@@ -1,4 +1,4 @@
-// Guarded AI Observability getting-started example - Go + OpenAI.
+// Guarded Agent Observability getting-started example - Go + OpenAI.
 package main
 
 import (
@@ -78,9 +78,10 @@ func main() {
 	hookResponse, err := agento11yClient.EvaluateHook(ctx, agento11y.HookEvaluateRequest{
 		Phase: agento11y.HookPhasePreflight,
 		Context: agento11y.HookContext{
-			AgentName:    "getting-started-hooks",
-			AgentVersion: "1.0.0",
-			Model:        &agento11y.HookModel{Provider: "openai", Name: model},
+			AgentName:      "getting-started-hooks",
+			AgentVersion:   "1.0.0",
+			Model:          &agento11y.HookModel{Provider: "openai", Name: model},
+			ConversationID: "getting-started-go-hooks",
 		},
 		Input: agento11y.HookInput{
 			Messages:            inputMessages,
@@ -145,7 +146,7 @@ func main() {
 		},
 	}, nil)
 
-	log.Println("Done - check the AI Observability plugin in your Grafana Cloud stack.")
+	log.Println("Done - check the Agent Observability plugin in your Grafana Cloud stack.")
 }
 
 func agento11yAPIEndpoint() string {

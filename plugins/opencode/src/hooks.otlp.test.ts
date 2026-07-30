@@ -78,7 +78,9 @@ async function startAgento11yServer(): Promise<{
     server.listen(0, "127.0.0.1", () => {
       const addr = server.address();
       if (!addr || typeof addr === "string") {
-        throw new Error("Sigil server did not bind to a TCP port");
+        throw new Error(
+          "Agent Observability server did not bind to a TCP port",
+        );
       }
       resolve({ server, baseUrl: `http://127.0.0.1:${addr.port}` });
     });
@@ -269,14 +271,13 @@ describe("createAgento11yHooks OTLP wiring", () => {
         properties: { info: { id: sessionID } },
       },
     });
-    // session.idle's forceFlush is fire-and-forget; only global.disposed
-    // awaits shutdown, which drains the OTLP exporters.
-    await hooks.event({
-      event: { type: "global.disposed", properties: {} },
-    });
+    // session.idle's forceFlush is fire-and-forget, so it cannot be awaited
+    // here. Disposal is the awaited path: it shuts the providers down, which
+    // drains the OTLP exporters.
+    await hooks.dispose();
   }
 
-  it("forwards Sigil SDK spans and metrics through the configured OTLP endpoint", async () => {
+  it("forwards agento11y SDK spans and metrics through the configured OTLP endpoint", async () => {
     await runOneTurn(true);
 
     const traceReqs = otlp.requests.filter((r) => r.url === "/otlp/v1/traces");
@@ -450,9 +451,7 @@ describe("createAgento11yHooks OTLP wiring", () => {
         properties: { info: { id: sessionID } },
       },
     });
-    await hooks.event({
-      event: { type: "global.disposed", properties: {} },
-    });
+    await hooks.dispose();
   }
 
   it("exports an error execute_tool span for a tool that never completes in metadata_only", async () => {

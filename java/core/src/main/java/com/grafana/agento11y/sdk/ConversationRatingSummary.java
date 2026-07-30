@@ -2,7 +2,7 @@ package com.grafana.agento11y.sdk;
 
 import java.time.Instant;
 
-/** Aggregated conversation rating summary returned by Sigil. */
+/** Aggregated conversation rating summary returned by Agent Observability. */
 public final class ConversationRatingSummary {
     private int totalCount;
     private int goodCount;

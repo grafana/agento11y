@@ -38,12 +38,12 @@ import (
 // Grafana brand orange, applied throughout the prompt theme.
 const grafanaOrange = lipgloss.Color("#FF671D")
 
-const pluginURL = "https://<your-stack>.grafana.net/plugins/grafana-sigil-app"
+const pluginURL = "https://<your-stack>.grafana.net/plugins/grafana-agento11y-app"
 
-// observabilityURL points at the AI Observability plugin route on the
+// observabilityURL points at the Agent Observability plugin route on the
 // user’s Grafana stack — the page where captured generations, traces, and
 // scores show up after a `agento11y claude` / `agento11y pi` session.
-const observabilityURL = "https://<your-stack>.grafana.net/a/grafana-sigil-app"
+const observabilityURL = "https://<your-stack>.grafana.net/a/grafana-agento11y-app"
 
 // docsURL points at the plugins directory so users can discover every
 // agent adapter we ship (claude-code, codex, cursor, pi, …). Linked as a
@@ -564,7 +564,7 @@ func requireNonEmpty(field string) func(string) error {
 // the huh form exits.
 func welcomeBanner() (string, int) {
 	lines := []string{
-		bannerTitle.Render("Welcome to Grafana AI Observability"),
+		bannerTitle.Render("Welcome to Grafana Agent Observability"),
 		bannerSubtitle.Render("Let's connect your Grafana stack."),
 		"",
 		bannerLabel.Render("Get credentials at:"),

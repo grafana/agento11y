@@ -167,6 +167,38 @@ func TestListConversations_Aggregates(t *testing.T) {
 	}
 }
 
+func TestConversationQueriesUseLatestGenerationRecord(t *testing.T) {
+	s := newStorage(t)
+
+	writeGen(t, s, "conv-retry", "g1", agento11y.Generation{
+		AgentName:   "cursor",
+		Model:       agento11y.ModelRef{Provider: "openai", Name: "gpt-5.5"},
+		StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
+		CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
+		Usage:       agento11y.TokenUsage{},
+	}, "2026-05-21T10:00:01Z")
+	writeGen(t, s, "conv-retry", "g1", agento11y.Generation{
+		AgentName:   "cursor",
+		Model:       agento11y.ModelRef{Provider: "openai", Name: "gpt-5.5"},
+		StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
+		CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
+		Usage:       agento11y.TokenUsage{InputTokens: 12, OutputTokens: 8, TotalTokens: 20},
+	}, "2026-05-21T10:00:02Z")
+
+	summaries, err := s.ListConversations(0)
+	require.NoError(t, err)
+	require.Len(t, summaries, 1)
+	assert.Equal(t, 1, summaries[0].Calls)
+	assert.Equal(t, int64(20), summaries[0].TotalTokens)
+
+	detail, err := s.ConversationDetail("conv-retry")
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	require.Len(t, detail.Generations, 1)
+	assert.Equal(t, "g1", detail.Generations[0].GenerationID)
+	assert.Equal(t, int64(20), detail.Generations[0].TotalTokens)
+}
+
 // TestListConversations_LimitAndEmpty covers the limit knob and the
 // empty-store case in one table.
 func TestListConversations_LimitAndEmpty(t *testing.T) {
@@ -203,6 +235,83 @@ func TestListConversations_LimitAndEmpty(t *testing.T) {
 					t.Errorf("got[%d].id = %q, want %q", i, got[i].ID, id)
 				}
 			}
+		})
+	}
+}
+
+func TestListAndDetailUseCacheAwareTotalFallback(t *testing.T) {
+	s := newStorage(t)
+
+	writeGen(t, s, "conv-cache", "g-cache", agento11y.Generation{
+		Model:       agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
+		StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
+		CompletedAt: mustParse(t, "2026-05-21T10:00:02Z"),
+		Usage: agento11y.TokenUsage{
+			InputTokens:           21,
+			OutputTokens:          10077,
+			CacheReadInputTokens:  297770,
+			CacheWriteInputTokens: 57497,
+		},
+	}, "2026-05-21T10:00:02Z")
+
+	summaries, err := s.ListConversations(0)
+	require.NoError(t, err)
+	require.Len(t, summaries, 1)
+	assert.Equal(t, int64(365365), summaries[0].TotalTokens)
+	assert.Equal(t, TokenBuckets{
+		FreshInput: 21,
+		CacheRead:  297770,
+		CacheWrite: 57497,
+		Output:     10077,
+	}, summaries[0].TokenBuckets)
+
+	detail, err := s.ConversationDetail("conv-cache")
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	require.Len(t, detail.Generations, 1)
+	assert.Equal(t, int64(365365), detail.Generations[0].TotalTokens)
+}
+
+func TestTotalTokensForViewProviderAwareFallback(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider string
+		usage    agento11y.TokenUsage
+		want     int64
+	}{
+		{
+			name:     "explicit total wins",
+			provider: "anthropic",
+			usage:    agento11y.TokenUsage{InputTokens: 1, OutputTokens: 2, TotalTokens: 42, CacheReadInputTokens: 100},
+			want:     42,
+		},
+		{
+			name:     "anthropic cache is additive",
+			provider: "anthropic",
+			usage: agento11y.TokenUsage{
+				InputTokens:           21,
+				OutputTokens:          10077,
+				CacheReadInputTokens:  297770,
+				CacheWriteInputTokens: 57497,
+			},
+			want: 365365,
+		},
+		{
+			name:     "openai cache read is inside input",
+			provider: "openai",
+			usage:    agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
+			want:     150,
+		},
+		{
+			name:     "gemini reasoning stays additive",
+			provider: "gemini",
+			usage:    agento11y.TokenUsage{InputTokens: 80, OutputTokens: 40, CacheReadInputTokens: 20, ReasoningTokens: 10},
+			want:     130,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, totalTokensForView(tc.usage, tc.provider))
 		})
 	}
 }
@@ -303,10 +412,10 @@ func TestConversationDetail(t *testing.T) {
 	})
 }
 
-// TestConversationDetail_ThreadMessages verifies the display-order thread
-// used by the local viewer. The raw generation split is still preserved in
-// Input/Output, but the viewer should not render tool results before their
-// matching assistant tool calls.
+// TestConversationDetail_ThreadMessages verifies the display-order thread used
+// by the local viewer: each step shows its own input followed by its own
+// output, nothing moved or dropped. A tool result is rendered on the step that
+// received it as input — not folded back into the step that issued the call.
 func TestConversationDetail_ThreadMessages(t *testing.T) {
 	toolInput, _ := json.Marshal(map[string]any{"command": "ls"})
 	toolOutput, _ := json.Marshal([]string{"README.md"})
@@ -322,45 +431,37 @@ func TestConversationDetail_ThreadMessages(t *testing.T) {
 		want []wantMessage
 	}{
 		{
-			name: "tool result follows matching tool call",
+			name: "step shows its input then its output",
 			gen: agento11y.Generation{
 				StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
 				CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
 				Input: []agento11y.Message{
 					{Role: agento11y.RoleUser, Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "list files"}}},
-					{Role: agento11y.RoleTool, Parts: []agento11y.Part{{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "Bash", ContentJSON: toolOutput}}}},
-				},
-				Output: []agento11y.Message{
-					{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{ID: "call-1", Name: "Bash", InputJSON: toolInput}}}},
-					{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "README.md"}}},
-				},
-			},
-			want: []wantMessage{
-				{role: agento11y.RoleUser, partKind: agento11y.PartKindText, text: "list files"},
-				{role: agento11y.RoleAssistant, partKind: agento11y.PartKindToolCall, toolCallID: "call-1"},
-				{role: agento11y.RoleTool, partKind: agento11y.PartKindToolResult, toolCallID: "call-1"},
-				{role: agento11y.RoleAssistant, partKind: agento11y.PartKindText, text: "README.md"},
-			},
-		},
-		{
-			name: "assistant text before tool call stays before tool call",
-			gen: agento11y.Generation{
-				StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
-				CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
-				Input: []agento11y.Message{
-					{Role: agento11y.RoleUser, Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "list files"}}},
-					{Role: agento11y.RoleTool, Parts: []agento11y.Part{{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "Bash", ContentJSON: toolOutput}}}},
 				},
 				Output: []agento11y.Message{
 					{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "checking"}}},
 					{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{ID: "call-1", Name: "Bash", InputJSON: toolInput}}}},
-					{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "README.md"}}},
 				},
 			},
 			want: []wantMessage{
 				{role: agento11y.RoleUser, partKind: agento11y.PartKindText, text: "list files"},
 				{role: agento11y.RoleAssistant, partKind: agento11y.PartKindText, text: "checking"},
 				{role: agento11y.RoleAssistant, partKind: agento11y.PartKindToolCall, toolCallID: "call-1"},
+			},
+		},
+		{
+			name: "tool result renders on the step that received it",
+			gen: agento11y.Generation{
+				StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
+				CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
+				Input: []agento11y.Message{
+					{Role: agento11y.RoleTool, Parts: []agento11y.Part{{Kind: agento11y.PartKindToolResult, ToolResult: &agento11y.ToolResult{ToolCallID: "call-1", Name: "Bash", ContentJSON: toolOutput}}}},
+				},
+				Output: []agento11y.Message{
+					{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{{Kind: agento11y.PartKindText, Text: "README.md"}}},
+				},
+			},
+			want: []wantMessage{
 				{role: agento11y.RoleTool, partKind: agento11y.PartKindToolResult, toolCallID: "call-1"},
 				{role: agento11y.RoleAssistant, partKind: agento11y.PartKindText, text: "README.md"},
 			},
@@ -685,4 +786,134 @@ func TestTokenUsagePoints_EmptyStore(t *testing.T) {
 	points, err := s.TokenUsagePoints()
 	require.NoError(t, err)
 	assert.Empty(t, points)
+}
+
+// TestListConversations_WorkspaceFacets checks that the list summary
+// derives the workspace and branch from the generation's cwd/git.branch
+// tags (first non-empty across the conversation) and counts subagent
+// steps by the "parent/child" agent_name suffix. These back the Sessions
+// view's workspace sidebar and orchestration signal.
+func TestListConversations_WorkspaceFacets(t *testing.T) {
+	s := newStorage(t)
+
+	writeGen(t, s, "conv-A", "g1", agento11y.Generation{
+		AgentName:   "claude-code",
+		Model:       agento11y.ModelRef{Name: "claude-opus-4-7"},
+		StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
+		CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
+		Usage:       agento11y.TokenUsage{InputTokens: 10, OutputTokens: 5},
+		Tags:        map[string]string{"cwd": "/some/repo", "git.branch": "main"},
+	}, "2026-05-21T10:00:01Z")
+	// A spawned subagent step: agent_name carries a "parent/child" suffix.
+	// cwd is left blank here to prove the first non-empty wins.
+	writeGen(t, s, "conv-A", "g2", agento11y.Generation{
+		AgentName:   "claude-code/general-purpose",
+		Model:       agento11y.ModelRef{Name: "claude-opus-4-7"},
+		StartedAt:   mustParse(t, "2026-05-21T10:00:02Z"),
+		CompletedAt: mustParse(t, "2026-05-21T10:00:03Z"),
+		Usage:       agento11y.TokenUsage{InputTokens: 4, OutputTokens: 2},
+	}, "2026-05-21T10:00:03Z")
+
+	writeGen(t, s, "conv-B", "g3", agento11y.Generation{
+		AgentName:   "pi",
+		Model:       agento11y.ModelRef{Name: "claude-sonnet-4"},
+		StartedAt:   mustParse(t, "2026-05-21T11:00:00Z"),
+		CompletedAt: mustParse(t, "2026-05-21T11:00:01Z"),
+		Usage:       agento11y.TokenUsage{InputTokens: 3, OutputTokens: 1},
+		Tags:        map[string]string{"cwd": "/other/repo"},
+	}, "2026-05-21T11:00:01Z")
+
+	got, err := s.ListConversations(0)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+
+	byID := map[string]ConversationSummary{}
+	for _, c := range got {
+		byID[c.ID] = c
+	}
+
+	a := byID["conv-A"]
+	assert.Equal(t, "/some/repo", a.Workspace)
+	assert.Equal(t, "main", a.Branch)
+	assert.Equal(t, 1, a.Subagents, "one generation carries a parent/child agent_name suffix")
+
+	b := byID["conv-B"]
+	assert.Equal(t, "/other/repo", b.Workspace)
+	assert.Empty(t, b.Branch)
+	assert.Equal(t, 0, b.Subagents)
+}
+
+// TestConversationDetail_SubagentTreeAndThinking checks that the detail
+// view carries the ParentGenerationIDs edges (used to build the subagent
+// tree) and the thinking flag through to each step.
+func TestConversationDetail_SubagentTreeAndThinking(t *testing.T) {
+	s := newStorage(t)
+
+	thinking := true
+	writeGen(t, s, "conv-T", "parent-1", agento11y.Generation{
+		AgentName:       "claude-code",
+		Model:           agento11y.ModelRef{Name: "claude-opus-4-7"},
+		StartedAt:       mustParse(t, "2026-05-21T10:00:00Z"),
+		CompletedAt:     mustParse(t, "2026-05-21T10:00:01Z"),
+		Usage:           agento11y.TokenUsage{InputTokens: 10, OutputTokens: 5},
+		ThinkingEnabled: &thinking,
+	}, "2026-05-21T10:00:01Z")
+	writeGen(t, s, "conv-T", "child-1", agento11y.Generation{
+		AgentName:           "claude-code/general-purpose",
+		Model:               agento11y.ModelRef{Name: "claude-opus-4-7"},
+		StartedAt:           mustParse(t, "2026-05-21T10:00:02Z"),
+		CompletedAt:         mustParse(t, "2026-05-21T10:00:03Z"),
+		Usage:               agento11y.TokenUsage{InputTokens: 4, OutputTokens: 2},
+		ParentGenerationIDs: []string{"parent-1"},
+	}, "2026-05-21T10:00:03Z")
+
+	got, err := s.ConversationDetail("conv-T")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Generations, 2)
+
+	byID := map[string]GenerationView{}
+	for _, g := range got.Generations {
+		byID[g.GenerationID] = g
+	}
+
+	parent := byID["parent-1"]
+	assert.True(t, parent.ThinkingEnabled, "parent step reasoned")
+	assert.Empty(t, parent.ParentGenerationIDs)
+
+	child := byID["child-1"]
+	assert.False(t, child.ThinkingEnabled)
+	assert.Equal(t, []string{"parent-1"}, child.ParentGenerationIDs, "child links back to its spawning generation")
+}
+
+// TestConversationDetail_MediaPartsPreserved checks that media message
+// parts (upstream #386878f) survive the store round-trip and come back
+// through the query layer with their kind and ordering intact.
+func TestConversationDetail_MediaPartsPreserved(t *testing.T) {
+	s := newStorage(t)
+
+	writeGen(t, s, "conv-M", "g-media", agento11y.Generation{
+		AgentName:   "pi",
+		Model:       agento11y.ModelRef{Name: "claude-opus-4-7"},
+		StartedAt:   mustParse(t, "2026-05-21T10:00:00Z"),
+		CompletedAt: mustParse(t, "2026-05-21T10:00:01Z"),
+		Usage:       agento11y.TokenUsage{InputTokens: 10, OutputTokens: 5},
+		Input: []agento11y.Message{{Role: agento11y.RoleUser, Parts: []agento11y.Part{
+			{Kind: agento11y.PartKindText, Text: "look at this"},
+			{Kind: agento11y.PartKindMedia, Media: &agento11y.Media{Kind: "image", URL: "https://example.com/a.png", MIMEType: "image/png", Name: "a.png"}},
+		}}},
+	}, "2026-05-21T10:00:01Z")
+
+	got, err := s.ConversationDetail("conv-M")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Generations, 1)
+
+	parts := got.Generations[0].Input[0].Parts
+	require.Len(t, parts, 2)
+	assert.Equal(t, agento11y.PartKindText, parts[0].Kind)
+	require.Equal(t, agento11y.PartKindMedia, parts[1].Kind)
+	require.NotNil(t, parts[1].Media)
+	assert.Equal(t, "https://example.com/a.png", parts[1].Media.URL)
+	assert.Equal(t, "image/png", parts[1].Media.MIMEType)
 }

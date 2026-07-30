@@ -1,0 +1,32 @@
+suite_id: dashboard-regression
+name: Dashboard regression
+version: local
+description: Example portable suite used by the stored-suite examples.
+tags:
+  - example
+  - dashboard
+cases:
+  - id: revenue-summary
+    name: Revenue summary
+    category: dashboard
+    input:
+      request: Build a dashboard with revenue, conversion, and retention panels.
+    expected:
+      must_include:
+        - revenue
+        - conversion
+        - retention
+    metadata:
+      source: example
+  - id: latency-summary
+    name: Latency summary
+    category: dashboard
+    input:
+      request: Build a dashboard with p50, p95, and error-rate panels.
+    expected:
+      must_include:
+        - p50
+        - p95
+        - error-rate
+    metadata:
+      source: example

@@ -37,7 +37,7 @@ function makeAssistantMsg(
 }
 
 describe("mapInputMessages", () => {
-  it("maps TextParts to Sigil user messages", () => {
+  it("maps TextParts to agento11y user messages", () => {
     const parts = [
       {
         id: "p1",

@@ -10,6 +10,7 @@
 export interface BuiltinTagInputs {
   cwd?: string;
   gitBranch?: string;
+  isSubagent?: boolean;
 }
 
 export function buildBuiltinTags(
@@ -21,6 +22,9 @@ export function buildBuiltinTags(
   }
   if (in_.cwd) {
     out.cwd = in_.cwd;
+  }
+  if (in_.isSubagent) {
+    out.subagent = "true";
   }
   if (Object.keys(out).length === 0) {
     return undefined;

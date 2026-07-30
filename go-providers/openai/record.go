@@ -11,7 +11,7 @@ import (
 )
 
 // ChatCompletionsNew calls the OpenAI chat-completions API and records the generation.
-// It mirrors providerClient.Chat.Completions.New but adds Sigil recording.
+// It mirrors providerClient.Chat.Completions.New but adds agento11y recording.
 // The native *osdk.ChatCompletion response is returned unchanged.
 func ChatCompletionsNew(
 	ctx context.Context,
@@ -54,7 +54,7 @@ func chatCompletionsNew(
 }
 
 // ChatCompletionsNewStreaming calls the OpenAI streaming chat-completions API and records the generation.
-// It mirrors providerClient.Chat.Completions.NewStreaming but adds Sigil recording.
+// It mirrors providerClient.Chat.Completions.NewStreaming but adds agento11y recording.
 // All chunks are collected into ChatCompletionsStreamSummary; for per-chunk processing use the
 // defer pattern directly with StartStreamingGeneration.
 func ChatCompletionsNewStreaming(
@@ -106,7 +106,7 @@ func ChatCompletionsNewStreaming(
 }
 
 // ResponsesNew calls the OpenAI responses API and records the generation.
-// It mirrors providerClient.Responses.New but adds Sigil recording.
+// It mirrors providerClient.Responses.New but adds agento11y recording.
 func ResponsesNew(
 	ctx context.Context,
 	client *agento11y.Client,
@@ -148,7 +148,7 @@ func responsesNew(
 }
 
 // EmbeddingsNew calls the OpenAI embeddings API and records an embeddings span.
-// It mirrors providerClient.Embeddings.New but adds Sigil recording.
+// It mirrors providerClient.Embeddings.New but adds agento11y recording.
 func EmbeddingsNew(
 	ctx context.Context,
 	client *agento11y.Client,
@@ -197,7 +197,7 @@ func embeddingsNew(
 }
 
 // ResponsesNewStreaming calls the OpenAI streaming responses API and records the generation.
-// It mirrors providerClient.Responses.NewStreaming but adds Sigil recording.
+// It mirrors providerClient.Responses.NewStreaming but adds agento11y recording.
 func ResponsesNewStreaming(
 	ctx context.Context,
 	client *agento11y.Client,

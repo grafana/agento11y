@@ -1,11 +1,11 @@
-# Grafana AI observability: LLM agent instructions
+# Grafana Agent observability: LLM agent instructions
 
-You are a coding agent. The user wants help with [Grafana AI observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/), powered by the open-source agento11y SDKs and plugins in [grafana/agento11y](https://github.com/grafana/agento11y).
+You are a coding agent. The user wants help with [Grafana Agent observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/), powered by the open-source agento11y SDKs and plugins in [grafana/agento11y](https://github.com/grafana/agento11y).
 
 There are two distinct things this file covers. Pick the path that matches the request before doing anything else.
 
-- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, or Pi sent to Grafana AI observability. They are not changing application code.
-- Path B, [Instrument an LLM app or agent](#path-b-instrument-an-llm-app-or-agent): the user wants their own code (an app, agent, framework pipeline) to send generations to Grafana AI observability.
+- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, or Pi sent to Grafana Agent observability. They are not changing application code.
+- Path B, [Instrument an LLM app or agent](#path-b-instrument-an-llm-app-or-agent): the user wants their own code (an app, agent, framework pipeline) to send generations to Grafana Agent observability.
 
 If you cannot tell, ask one clarifying question and stop.
 
@@ -32,23 +32,23 @@ gcx agent skills install agento11y-instrument
 If `gcx` is already installed but the skill is missing, update `gcx` first. Homebrew users can run `brew update && brew upgrade gcx`; script users can re-run the quick install script.
 
 ```text
-Use the `agento11y-instrument` skill to instrument this codebase with Grafana AI observability.
+Use the `agento11y-instrument` skill to instrument this codebase with Grafana Agent observability.
 ```
 
 If skills are unavailable, the install fails, or the request matches Path A, continue with the matching path below.
 
 ## Resources
 
-- Product docs: https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/
+- Product docs: https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/
 - SDK + plugin source: https://github.com/grafana/agento11y
 - Grafana Cloud OTLP setup: https://grafana.com/docs/grafana-cloud/send-data/otlp/send-data-otlp
 
 ## Credentials (both paths)
 
-All four values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the AI Observability plugin in the user's stack:
+All four values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the Agent Observability plugin in the user's stack:
 
 ```
-https://<your-stack>.grafana.net/plugins/grafana-sigil-app
+https://<your-stack>.grafana.net/plugins/grafana-agento11y-app
 ```
 
 Follow *Create a token in Cloud Access Policies* on the Connection page and create one token scoped with `sigil:write`, `metrics:write`, `traces:write`, and `logs:write`. The same token then covers both `AGENTO11Y_AUTH_TOKEN` (Agent Observability ingest) and `OTEL_EXPORTER_OTLP_HEADERS` (OTel traces and metrics).
@@ -67,13 +67,13 @@ printf '%s' '<otlp-instance-id>:<glc_token>' | base64 | tr -d '\n'
 
 # Path A: Monitor a coding agent
 
-The user wants Grafana AI observability to capture sessions from their coding agent. They do not write app code for this; they install a plugin and configure credentials.
+The user wants Grafana Agent observability to capture sessions from their coding agent. They do not write app code for this; they install a plugin and configure credentials.
 
 ## Supported agents
 
 | Agent | Plugin | Mechanism |
 |-------|--------|-----------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [`plugins/claude-code/`](https://github.com/grafana/agento11y/tree/main/plugins/claude-code) | Shared `agento11y` Go binary, plugin name `sigil-cc` |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [`plugins/claude-code/`](https://github.com/grafana/agento11y/tree/main/plugins/claude-code) | Shared `agento11y` Go binary, plugin name `agento11y-claude-code` |
 | [Codex](https://developers.openai.com/codex) | [`plugins/codex/`](https://github.com/grafana/agento11y/tree/main/plugins/codex) | Shared `agento11y` Go binary via hooks |
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`plugins/copilot/`](https://github.com/grafana/agento11y/tree/main/plugins/copilot) | Shared `agento11y` Go binary via hooks |
 | [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) | Shared `agento11y` Go binary via hooks |
@@ -118,14 +118,14 @@ Unknown values fall back to `metadata_only` with a warning. Secret redaction is 
 ## Verifying the install
 
 1. Run the agent normally for one turn (any prompt).
-2. Open Grafana Cloud → AI Observability → Conversations. A new conversation should appear within a few seconds.
+2. Open Grafana Cloud → Agent Observability → Conversations. A new conversation should appear within a few seconds.
 3. If it doesn't, check the launcher's stderr for `agento11y:` warnings and confirm `~/.config/agento11y/config.env` is readable. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
 
 ---
 
 # Path B: Instrument an LLM app or agent
 
-You are acting as a coding agent inside the user's repository. Your goal is to add or improve Grafana AI observability instrumentation with minimal, safe changes.
+You are acting as a coding agent inside the user's repository. Your goal is to add or improve Grafana Agent observability instrumentation with minimal, safe changes.
 
 ## Environment
 
@@ -144,6 +144,8 @@ AGENTO11Y_USER_ID=<end-user id>          # optional; sets the user.id span attri
 OTEL_EXPORTER_OTLP_ENDPOINT=<from stack OpenTelemetry card>
 OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64 of "<otlp-instance-id>:<glc_... token>">
 ```
+
+`AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic` are **required** for Grafana Cloud. The SDK defaults to `protocol=grpc` and `auth_mode=none`; against a Cloud HTTP ingest endpoint those defaults fail with a `401 UNAUTHENTICATED` (grpc is the wrong transport, none sends no auth header) — silently, with no other signal. Always set both explicitly.
 
 Construct the client with no config when the env vars are present; the SDK reads them. Only use explicit `ClientConfig(...)` when the app needs values that aren't in env (e.g. test endpoints).
 
@@ -276,9 +278,9 @@ metrics.setGlobalMeterProvider(mp);
 
 | Language | Package | Core methods |
 |----------|---------|--------------|
-| Go | `github.com/grafana/agento11y/go` | `StartGeneration`, `StartStreamingGeneration`, `StartToolExecution`, `StartEmbedding` |
-| Python | `agento11y` | `start_generation`, `start_streaming_generation`, `start_tool_execution`, `start_embedding` |
-| JS/TS | `@grafana/agento11y` | `startGeneration`, `startStreamingGeneration`, `startToolExecution`, `startEmbedding` |
+| Go | `github.com/grafana/agento11y/go` | `StartGeneration`, `StartStreamingGeneration`, `StartToolExecution`, `StartEmbedding`, `EnqueueWorkflowStep` |
+| Python | `agento11y` | `start_generation`, `start_streaming_generation`, `start_tool_execution`, `start_embedding`, `enqueue_workflow_step` |
+| JS/TS | `@grafana/agento11y` | `startGeneration`, `startStreamingGeneration`, `startToolExecution`, `startEmbedding`, `enqueueWorkflowStep` |
 | Java | `com.grafana.agento11y` | `startGeneration`, `startStreamingGeneration`, `withGeneration`, `withToolExecution` |
 | .NET | `Grafana.Agento11y` | `StartGeneration`, `StartStreamingGeneration`, `StartToolExecution`, `StartEmbedding` |
 
@@ -302,7 +304,7 @@ Framework adapters:
 On generation and tool spans, capture or preserve these when available:
 
 - identity and routing:
-  - `gen_ai.operation.name`
+  - `gen_ai.operation.name` — must be a value the Agent Observability UI recognizes: `generateText` (SYNC default), `streamText` (STREAM default), `embeddings`, `execute_tool`, `framework_chain`, `framework_retriever`. Omit `operation_name` to take the SDK default; never invent one. An unrecognized value (e.g. `"chat"`) still reaches Tempo, but the UI classifies it as `unknown` and renders a synthetic generation node with no attached span — the trace does not appear inside the conversation and the "T" icon is absent even though `trace_id`/`span_id` are set.
   - `agento11y.generation.id`
   - `gen_ai.conversation.id`
   - `gen_ai.agent.name`
@@ -376,14 +378,14 @@ trace_id / span_id     — OTel correlation
 
 There are two layers:
 
-- **Manual SDK API** — use `enqueue_workflow_step(step)` when forwarding pre-built workflow steps or instrumenting custom execution graphs directly. You create step IDs, parent edges, timestamps, input/output state, and linked generation IDs yourself.
-- **Framework adapter** — use the adapter when one exists, such as `Agento11yLangGraphHandler` for LangGraph. The adapter creates workflow steps automatically from framework callbacks.
+- **Manual SDK API** — available in Go (`EnqueueWorkflowStep`), JS/TS (`enqueueWorkflowStep`), and Python (`enqueue_workflow_step`). Use it when forwarding pre-built workflow steps or instrumenting custom execution graphs directly. You create step IDs, parent edges, timestamps, input/output state, and linked generation IDs yourself. (Java and .NET do not expose a workflow-step API.)
+- **Framework adapter (auto-capture)** — **Python only.** Use the adapter when one exists, such as `Agento11yLangGraphHandler` for LangGraph. The adapter creates workflow steps automatically from framework callbacks. Go and JS have no framework-level auto-capture for workflow steps; use the manual API above.
 
 Do not use both paths for the same LangGraph node, or you will record duplicate workflow steps.
 
 ### Manual SDK workflow step API
 
-The SDK client exposes `enqueue_workflow_step(step)` which queues the step for batch export alongside generations. The flush pipeline handles both.
+The SDK client exposes an enqueue method (`EnqueueWorkflowStep` in Go, `enqueueWorkflowStep` in JS/TS, `enqueue_workflow_step` in Python) which queues the step for batch export alongside generations. The flush pipeline handles both. The Python example below shows the shape; the Go and JS APIs take the same fields.
 
 ```python
 from agento11y import Client, WorkflowStep
@@ -450,6 +452,49 @@ Example: an orchestrator spawns agents A, B, C where C depends on A and B:
 - B: `parent_generation_ids = []` (no parents)
 - C: `parent_generation_ids = [A.generation_id, B.generation_id]`
 
+## Python and Go offline experiments
+
+Use `agento11y.experiments` to track work run by an existing benchmark, CI job,
+notebook, or agent harness. The SDK records runs, trials, scores, usage,
+artifacts, and telemetry links; it does not schedule the experiment or require
+a stored test suite.
+
+- Run-side publishing uses `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TOKEN`, and
+  optional `AGENTO11Y_AUTH_TENANT_ID`.
+- Stored suite push/pull is optional and additionally uses
+  `AGENTO11Y_CONTROL_ENDPOINT` and `AGENTO11Y_SERVICE_ACCOUNT_TOKEN`.
+- Only canonical `AGENTO11Y_*` names are supported. Known removed `SIGIL_*`
+  connection and trial-handoff names are ignored and produce a migration
+  warning.
+- Use `trial.record_io(...)` when the harness owns candidate I/O, or
+  `bind_generation`/`bind_conversation`/`bind_trace` when normal instrumentation
+  already emitted it.
+- Local `LLMJudge` and `RegexJudge` helpers do not require an evaluator created
+  in Grafana. Frameworks can submit their native grader result and transcript
+  through `trial.record_evaluation(...)`.
+- Catch evaluator exceptions around each trial when one failed judge should not
+  abort the whole run.
+
+See the [Python experiments guide](https://github.com/grafana/agento11y/blob/main/python/README.md#experiments)
+and [v2 migration guide](https://github.com/grafana/agento11y/blob/main/docs/experiments-python-v2-migration.md).
+
+Go has the tracking-first parity surface at
+`github.com/grafana/agento11y/go/agento11y/experiments`. Construct
+`experiments.Client` from canonical `AGENTO11Y_*` ingest settings, then use
+`WithExperiment` and `Experiment.WithTrial`. Trials can record candidate I/O,
+multiple verifier scores, framework-owned evaluations, usage/cost, and file or
+structured artifacts, and can `Flush` immediately after scoring for streaming
+runners. Stable experiment ID + case ID + explicit attempt gives resumable,
+idempotent identities.
+
+Portable Go suites use `LoadSuite`/`MarshalSuite`/`WriteSuite` and accept both
+`id`/`test_case_id` and `cases`/`test_cases`. Stored suite synchronization uses
+`TestSuitesClient` with `AGENTO11Y_CONTROL_ENDPOINT` and
+`AGENTO11Y_SERVICE_ACCOUNT_TOKEN`; `NewExperimentFromSuite` resolves the exact
+stored version before running. Run/trial/generation/score/artifact writes always
+use the ingest credential. Secret redaction is on by default, and experiment
+OTel spans/events are opt-in via `AGENTO11Y_USE_EXPERIMENTAL_OTEL=true`.
+
 ## Useful examples to copy patterns from
 
 In the grafana/agento11y repo:
@@ -470,10 +515,12 @@ In the grafana/agento11y repo:
 - Ensure non-stream wrappers set `SYNC`, stream wrappers set `STREAM`.
 - Ensure lifecycle flush/shutdown semantics are preserved.
 - When calling `set_result` / `SetResult`, always include all available fields:
+  - `input` and `output` populated with `Message` objects (input = system+user prompt, output = the model reply). If both are empty the tokens/usage still land, but the Agent Observability conversation view shows "No messages in this turn" — silently, with no error. Build messages with the helpers `user_text_message()` / `assistant_text_message()` / `tool_result_message()` (Python) rather than by hand.
   - `response_id` (provider correlation, maps to `gen_ai.response.id`)
   - `response_model` (actual model used)
   - `stop_reason` / `finish_reason`
   - Full token usage including `cache_read_input_tokens`, `cache_write_input_tokens`, and `reasoning_tokens` when the provider returns them
+- `MessageRole` has only `USER`, `ASSISTANT`, and `TOOL` — there is no `SYSTEM` (or `DEVELOPER`) member, and `MessageRole.SYSTEM` raises `AttributeError` (Python). Fold the system prompt into the `USER` message (or a text part), or pass it via the generation's `system_prompt` field; prefer the `user_text_message()` / `assistant_text_message()` / `tool_result_message()` helpers.
 - Always check `rec.err()` / `Err()` after the generation recorder closes; SDK validation or enqueue errors are otherwise silent.
 - Use `AGENTO11Y_TAGS` (client-level) or `tags` on `GenerationStart` for filtering: both export tags on generations. Client-level tags also appear as `agento11y.tag.<key>` on OTel spans and metrics in all SDKs; per-generation tags and `metadata` are export-only everywhere. For end-user identity use `user_id` (sets `user.id` span attribute), not a tag. See [`docs/concepts/tags-and-metadata.md`](https://github.com/grafana/agento11y/blob/main/docs/concepts/tags-and-metadata.md).
 

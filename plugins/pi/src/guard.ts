@@ -35,7 +35,7 @@ const GUARD_BEHAVIOR_HINT =
 
 /**
  * Wraps a rule-authored reason (which may be empty) into a self-explanatory
- * message naming the Grafana AI Observability source, the blocked tool, and
+ * message naming the Grafana Agent Observability source, the blocked tool, and
  * the expected agent behavior.
  *
  * Mirrors `formatPolicyDeny` in the Go guard helper. Keep the wording aligned.
@@ -44,7 +44,7 @@ function formatPolicyDeny(
   toolName: string,
   reason: string | undefined,
 ): string {
-  let msg = `A Grafana AI Observability policy blocked the "${toolName}" tool call, so it was not run.`;
+  let msg = `A Grafana Agent Observability policy blocked the "${toolName}" tool call, so it was not run.`;
   const trimmed = reason?.trim();
   if (trimmed) {
     msg += ` Reason: ${trimmed}`;
@@ -63,7 +63,7 @@ function formatEvalFailure(
   toolName: string,
   detail: string | undefined,
 ): string {
-  let msg = `agento11y could not evaluate the Grafana AI Observability guard for the "${toolName}" tool call, so it was blocked as a safety measure.`;
+  let msg = `agento11y could not evaluate the Grafana Agent Observability guard for the "${toolName}" tool call, so it was blocked as a safety measure.`;
   const trimmed = detail?.trim();
   if (trimmed) {
     msg += ` Details: ${trimmed}`;
@@ -83,7 +83,7 @@ export interface PreflightTransformArgs {
 export type PreflightTransformResult = { messages: Message[] } | undefined;
 
 /**
- * Evaluates the Sigil preflight hook against the outgoing conversation and
+ * Evaluates the Agent Observability preflight hook against the outgoing conversation and
  * returns the redacted messages from `transformedInput.messages`, or
  * `undefined` when no usable transform was applied or evaluation failed.
  *
@@ -125,7 +125,7 @@ export async function runPreflightTransform(
 }
 
 /**
- * Evaluates the Sigil postflight hook for a tool call. Returns a block result
+ * Evaluates the Agent Observability postflight hook for a tool call. Returns a block result
  * when the server denies the call. On transport/timeout/serialization errors,
  * returns `undefined` (allow) when `failOpen` is true and a block result when
  * `failOpen` is false.

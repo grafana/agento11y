@@ -69,6 +69,19 @@ func (u storedUsage) toSDK() agento11y.TokenUsage {
 	}
 }
 
+// storedSkill mirrors the per-generation skill entries the SDK/plugin
+// attaches under the generation's `skills` field. Skills are loaded on
+// demand, so unlike tools they are not derivable from the message
+// content and must be read straight off the stored generation.
+type storedSkill struct {
+	Name        string `json:"name,omitempty"`
+	ID          string `json:"id,omitempty"`
+	Description string `json:"description,omitempty"`
+	Version     string `json:"version,omitempty"`
+	Definition  string `json:"definition,omitempty"`
+	Source      string `json:"source,omitempty"`
+}
+
 type storedGeneration struct {
 	ID                string             `json:"id,omitempty"`
 	ConversationID    string             `json:"conversation_id,omitempty"`
@@ -82,8 +95,49 @@ type storedGeneration struct {
 	StopReason        string             `json:"stop_reason,omitempty"`
 	StartedAt         time.Time          `json:"started_at,omitzero"`
 	CompletedAt       time.Time          `json:"completed_at,omitzero"`
+	Skills            []storedSkill      `json:"skills,omitempty"`
 	Metadata          map[string]any     `json:"metadata,omitempty"`
 	CallError         string             `json:"call_error,omitempty"`
+	// Tags carry the agent's per-session context (cwd, git.branch,
+	// entrypoint, …). ParentGenerationIDs links a subagent's generations
+	// to the generation that spawned them, so the viewer can reconstruct
+	// the subagent tree. Both ride along on the wire verbatim and are only
+	// decoded here.
+	Tags                map[string]string `json:"tags,omitempty"`
+	ParentGenerationIDs []string          `json:"parent_generation_ids,omitempty"`
+	ThinkingEnabled     bool              `json:"thinking_enabled,omitempty"`
+}
+
+// skillViews returns the generation's skills as display-ready views,
+// deduped by name in first-seen order and dropping blank names. The
+// mapper already dedupes, but a generation can be re-exported from a
+// different source, so the viewer must not assume it.
+func (g storedGeneration) skillViews() []SkillView {
+	if len(g.Skills) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]SkillView, 0, len(g.Skills))
+	for _, s := range g.Skills {
+		name := strings.TrimSpace(s.Name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, SkillView{
+			Name:        name,
+			ID:          s.ID,
+			Description: s.Description,
+			Version:     s.Version,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (g storedGeneration) title() string {

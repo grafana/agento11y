@@ -376,7 +376,7 @@ func collectAnalytics(osEnv, fileEnv map[string]string, conversationsConfigured 
 		sec.EndpointVar = "OTEL_EXPORTER_OTLP_ENDPOINT"
 	case conversationsConfigured:
 		// The headline failure: conversations export fine, but analytics
-		// (the AI Observability page) stays empty because no OTLP endpoint
+		// (the Agent Observability page) stays empty because no OTLP endpoint
 		// is configured. dotenv.HasCredentials passes here, so nothing else
 		// the binary does today would flag this.
 		sec.Health = HealthError

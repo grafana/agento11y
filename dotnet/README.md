@@ -29,7 +29,7 @@ dotnet add package Grafana.Agento11y.OpenAI
 # or: Grafana.Agento11y.Anthropic / Grafana.Agento11y.Gemini
 ```
 
-For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance ID, and API token), refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/).
+For a Grafana Cloud setup walkthrough (where to find the endpoint URL, instance ID, and API token), refer to the [Grafana Cloud setup guide](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/).
 
 ## Quickstart (OpenAI Responses wrapper)
 
@@ -330,7 +330,7 @@ var result = await client.SubmitConversationRatingAsync(
 Console.WriteLine($"{result.Rating.Rating} hasBad={result.Summary.HasBadRating}");
 ```
 
-`SubmitConversationRatingAsync(...)` sends requests to `Agento11yClientConfig.Api.Endpoint`, which should be the Grafana Cloud Agent Observability API URL from AI Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
+`SubmitConversationRatingAsync(...)` sends requests to `Agento11yClientConfig.Api.Endpoint`, which should be the Grafana Cloud Agent Observability API URL from Agent Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
 
 ## .NET best practices
 

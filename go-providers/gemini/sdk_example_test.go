@@ -10,7 +10,7 @@ import (
 
 // Example_withAgento11yWrapper shows the one-liner wrapper approach.
 func Example_withAgento11yWrapper() {
-	if os.Getenv("SIGIL_RUN_LIVE_EXAMPLES") != "1" {
+	if os.Getenv("AGENTO11Y_RUN_LIVE_EXAMPLES") != "1" {
 		return
 	}
 
@@ -44,7 +44,7 @@ func Example_withAgento11yWrapper() {
 
 // Example_withAgento11yDefer shows the defer pattern for full control.
 func Example_withAgento11yDefer() {
-	if os.Getenv("SIGIL_RUN_LIVE_EXAMPLES") != "1" {
+	if os.Getenv("AGENTO11Y_RUN_LIVE_EXAMPLES") != "1" {
 		return
 	}
 
@@ -89,7 +89,7 @@ func Example_withAgento11yDefer() {
 
 // Example_withAgento11yStreamingDefer shows the defer pattern for streaming with per-response processing.
 func Example_withAgento11yStreamingDefer() {
-	if os.Getenv("SIGIL_RUN_LIVE_EXAMPLES") != "1" {
+	if os.Getenv("AGENTO11Y_RUN_LIVE_EXAMPLES") != "1" {
 		return
 	}
 

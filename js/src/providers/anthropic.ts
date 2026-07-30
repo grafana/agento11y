@@ -16,7 +16,7 @@ type MessagesCreateRequest = MessageCreateParams & AnyRecord;
 type MessagesCreateResponse = AnthropicMessage & AnyRecord;
 type MessagesStreamEvent = RawMessageStreamEvent & AnyRecord;
 
-/** Optional Sigil fields applied during Anthropic helper mapping. */
+/** Optional agento11y fields applied during Anthropic helper mapping. */
 export interface AnthropicOptions {
   conversationId?: string;
   agentName?: string;

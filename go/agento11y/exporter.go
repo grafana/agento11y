@@ -205,13 +205,17 @@ func newHTTPGenerationExporter(cfg GenerationExportConfig) (generationExporter, 
 	// caller override wins, otherwise the SDK default. headers has any
 	// User-Agent entry removed so it can't blank out the resolved value below.
 	userAgent, headers := splitUserAgent(cfg.Headers)
+	timeout := cfg.HTTPTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
 	return &httpGenerationExporter{
 		endpoint:             urlString,
 		workflowStepEndpoint: workflowStepURLString,
 		userAgent:            userAgent,
 		headers:              headers,
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: timeout,
 		},
 	}, nil
 }
@@ -363,6 +367,9 @@ func mergeGenerationExportConfig(base, override GenerationExportConfig) Generati
 	}
 	if override.PayloadMaxBytes > 0 {
 		out.PayloadMaxBytes = override.PayloadMaxBytes
+	}
+	if override.HTTPTimeout > 0 {
+		out.HTTPTimeout = override.HTTPTimeout
 	}
 	return out
 }
@@ -698,6 +705,13 @@ func resetTimer(timer *time.Timer, duration time.Duration) {
 }
 
 func (c *Client) exportWithRetry(request *agento11yv1.ExportGenerationsRequest) error {
+	return c.exportWithRetryContext(context.Background(), request)
+}
+
+func (c *Client) exportWithRetryContext(ctx context.Context, request *agento11yv1.ExportGenerationsRequest) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	attempts := c.config.GenerationExport.MaxRetries + 1
 	backoff := c.config.GenerationExport.InitialBackoff
 	if backoff <= 0 {
@@ -706,7 +720,7 @@ func (c *Client) exportWithRetry(request *agento11yv1.ExportGenerationsRequest) 
 
 	var lastErr error
 	for attempt := range attempts {
-		timeoutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		response, err := c.exporter.Export(timeoutCtx, request)
 		cancel()
 		if err == nil {
@@ -734,7 +748,18 @@ func (c *Client) exportWithRetry(request *agento11yv1.ExportGenerationsRequest) 
 		if attempt == attempts-1 {
 			break
 		}
-		time.Sleep(backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		}
 		if backoff < c.config.GenerationExport.MaxBackoff {
 			backoff *= 2
 			if backoff > c.config.GenerationExport.MaxBackoff {
@@ -744,6 +769,28 @@ func (c *Client) exportWithRetry(request *agento11yv1.ExportGenerationsRequest) 
 	}
 
 	return lastErr
+}
+
+func (c *Client) exportGeneration(ctx context.Context, generation Generation) error {
+	if err := ValidateGeneration(generation); err != nil {
+		return fmt.Errorf("%w: %v", errGenerationValidation, err)
+	}
+	protoGeneration, err := generationToProto(generation)
+	if err != nil {
+		return err
+	}
+	if maxPayload := c.config.GenerationExport.PayloadMaxBytes; maxPayload > 0 {
+		if payloadSize := proto.Size(protoGeneration); payloadSize > maxPayload {
+			return fmt.Errorf("generation payload exceeds max bytes (%d > %d)", payloadSize, maxPayload)
+		}
+	}
+	if err := c.exportWithRetryContext(ctx, &agento11yv1.ExportGenerationsRequest{
+		Generations: []*agento11yv1.Generation{protoGeneration},
+	}); err != nil {
+		return err
+	}
+	c.recordGeneration(generation)
+	return nil
 }
 
 func (c *Client) exportWorkflowStepsWithRetry(request *agento11yv1.ExportWorkflowStepsRequest) error {

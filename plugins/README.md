@@ -1,8 +1,8 @@
 # Agent Observability plugins for coding agents
 
-Send conversations from your coding agent to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/) — model, tokens, tool calls, timing, and optionally the conversation content.
+Send conversations from your coding agent to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) — model, tokens, tool calls, timing, and optionally the conversation content.
 
-> AI Observability is in [public preview](https://grafana.com/docs/release-life-cycle/).
+Full docs: [Instrument coding agents](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/instrument-coding-agents/).
 
 ## Install
 

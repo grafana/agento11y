@@ -118,6 +118,80 @@ func TestRunSteps(t *testing.T) {
 	}
 }
 
+func TestRunFirst(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses unix shell utilities")
+	}
+	cases := []struct {
+		name         string
+		candidates   [][]string
+		wantIdx      int
+		wantErr      bool
+		wantErrSub   []string
+		wantOutput   []string
+		forbidOutput []string
+	}{
+		{
+			name: "first success wins",
+			candidates: [][]string{
+				{"-c", "echo first"},
+				{"-c", "echo second"},
+			},
+			wantIdx:      0,
+			wantOutput:   []string{"first"},
+			forbidOutput: []string{"second"},
+		},
+		{
+			name: "falls back past failing candidates without streaming their output",
+			candidates: [][]string{
+				{"-c", "echo not this one; exit 1"},
+				{"-c", "echo winner"},
+			},
+			wantIdx:      1,
+			wantOutput:   []string{"winner"},
+			forbidOutput: []string{"not this one"},
+		},
+		{
+			name: "all candidates fail joins errors with captured output",
+			candidates: [][]string{
+				{"-c", "echo boom-a >&2; exit 1"},
+				{"-c", "echo boom-b >&2; exit 2"},
+			},
+			wantIdx:    -1,
+			wantErr:    true,
+			wantErrSub: []string{"boom-a", "boom-b", "sh -c echo boom-a >&2; exit 1"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			idx, err := RunFirst(context.Background(), "/bin/sh", &buf, tc.candidates)
+			if idx != tc.wantIdx {
+				t.Fatalf("idx = %d, want %d", idx, tc.wantIdx)
+			}
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("err = %v, wantErr = %v", err, tc.wantErr)
+			}
+			for _, sub := range tc.wantErrSub {
+				if !strings.Contains(err.Error(), sub) {
+					t.Errorf("err = %v; want substring %q", err, sub)
+				}
+			}
+			got := buf.String()
+			for _, want := range tc.wantOutput {
+				if !strings.Contains(got, want) {
+					t.Errorf("output = %q; want substring %q", got, want)
+				}
+			}
+			for _, forbidden := range tc.forbidOutput {
+				if strings.Contains(got, forbidden) {
+					t.Errorf("output = %q; should not contain %q", got, forbidden)
+				}
+			}
+		})
+	}
+}
+
 func TestOutput(t *testing.T) {
 	cases := []struct {
 		name       string

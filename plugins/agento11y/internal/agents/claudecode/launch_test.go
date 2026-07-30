@@ -197,8 +197,75 @@ func TestLaunch_InstallFailureContinuesToExec(t *testing.T) {
 	if !strings.Contains(got, "network down") {
 		t.Fatalf("stderr missing underlying error: %q", got)
 	}
-	if !strings.Contains(got, "claude plugin install "+PluginName+"@") {
+	if !strings.Contains(got, "claude plugin install "+PluginName+"@"+marketplaceAlias) {
 		t.Fatalf("stderr missing manual install hint: %q", got)
+	}
+	// Pre-rename marketplaces keep the sticky legacy alias; the hint must
+	// include a command that works there too.
+	if !strings.Contains(got, "claude plugin install "+PluginName+"@"+legacyMarketplaceAlias) {
+		t.Fatalf("stderr missing legacy-alias install hint: %q", got)
+	}
+}
+
+func TestLaunch_UpdateFailureHintUsesInstalledKey(t *testing.T) {
+	cases := []struct {
+		name        string
+		installed   string
+		wantLines   []string
+		absentLines []string
+	}{
+		{
+			name:      "current key",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"user"}]}}`,
+			wantLines: []string{
+				"claude plugin marketplace update agento11y\n",
+				"claude plugin update agento11y-claude-code@agento11y\n",
+			},
+			absentLines: []string{"grafana-sigil"},
+		},
+		{
+			name:      "migrated key keeps the sticky legacy alias",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"user"}]}}`,
+			wantLines: []string{
+				"claude plugin marketplace update grafana-sigil\n",
+				"claude plugin update agento11y-claude-code@grafana-sigil\n",
+			},
+			absentLines: []string{"claude plugin install"},
+		},
+		{
+			name:      "legacy key adds the install fallback",
+			installed: `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user"}]}}`,
+			wantLines: []string{
+				"claude plugin marketplace update grafana-sigil\n",
+				"claude plugin update sigil-cc@grafana-sigil\n",
+				"claude plugin install agento11y-claude-code@grafana-sigil",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			dir := t.TempDir()
+			writeInstalled(t, dir, tc.installed)
+			t.Setenv("CLAUDE_CONFIG_DIR", dir)
+
+			withLookPath(t, func(string) (string, error) { return "/usr/local/bin/claude", nil })
+			withRunUpdate(t, func(context.Context, string, io.Writer) error {
+				return errors.New("network down")
+			})
+			withExecFn(t, func(string, []string, []string) error { return nil })
+
+			var stderr bytes.Buffer
+			launchOK(t, nil, io.Discard, &stderr)
+			got := stderr.String()
+			require.Contains(t, got, "update of "+PluginName+" failed")
+			for _, line := range tc.wantLines {
+				require.Contains(t, got, line)
+			}
+			for _, line := range tc.absentLines {
+				require.NotContains(t, got, line)
+			}
+		})
 	}
 }
 
@@ -301,7 +368,19 @@ func TestPluginInstalled_KeyShapes(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name:     "user scope matches anywhere",
+			name:     "current name user scope matches anywhere",
+			write:    true,
+			contents: `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"user"}]}}`,
+			want:     true,
+		},
+		{
+			name:     "current name at sticky legacy alias matches",
+			write:    true,
+			contents: `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"user"}]}}`,
+			want:     true,
+		},
+		{
+			name:     "legacy name user scope matches anywhere",
 			write:    true,
 			contents: `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user"}]}}`,
 			want:     true,
@@ -416,6 +495,16 @@ func TestPluginInstalled_KeyShapes(t *testing.T) {
 	}
 }
 
+func TestInstalledPluginKey_PrefersCurrentName(t *testing.T) {
+	dir := t.TempDir()
+	writeInstalled(t, dir, `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user"}],"agento11y-claude-code@grafana-sigil":[{"scope":"user"}]}}`)
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+
+	key, err := installedPluginKey()
+	require.NoError(t, err)
+	require.Equal(t, "agento11y-claude-code@grafana-sigil", key)
+}
+
 func TestPluginInstalled_GetwdFailureSurfaces(t *testing.T) {
 	dir := t.TempDir()
 	writeInstalled(t, dir, `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"project","projectPath":"/whatever"}]}}`)
@@ -471,6 +560,108 @@ func withRunUpdate(t *testing.T, fn func(context.Context, string, io.Writer) err
 	prev := runUpdate
 	t.Cleanup(func() { runUpdate = prev })
 	runUpdate = fn
+}
+
+func withRunSteps(t *testing.T, fn func(context.Context, string, io.Writer, [][]string) error) {
+	t.Helper()
+	prev := runSteps
+	t.Cleanup(func() { runSteps = prev })
+	runSteps = fn
+}
+
+func withRunFirst(t *testing.T, fn func(context.Context, string, io.Writer, [][]string) (int, error)) {
+	t.Helper()
+	prev := runFirst
+	t.Cleanup(func() { runFirst = prev })
+	runFirst = fn
+}
+
+// recordCommands stubs the runSteps/runFirst seams so the install/update
+// tests can assert the exact claude commands.
+func recordCommands(t *testing.T) (steps, candidates *[][]string) {
+	t.Helper()
+	steps, candidates = &[][]string{}, &[][]string{}
+	withRunSteps(t, func(_ context.Context, _ string, _ io.Writer, s [][]string) error {
+		*steps = append(*steps, s...)
+		return nil
+	})
+	withRunFirst(t, func(_ context.Context, _ string, _ io.Writer, c [][]string) (int, error) {
+		*candidates = append(*candidates, c...)
+		return 0, nil
+	})
+	return steps, candidates
+}
+
+func TestDefaultRunInstall_TriesCurrentNamesFirst(t *testing.T) {
+	steps, candidates := recordCommands(t)
+
+	require.NoError(t, defaultRunInstall(context.Background(), "/usr/local/bin/claude", io.Discard))
+	require.Equal(t, [][]string{{"plugin", "marketplace", "add", "grafana/agento11y"}}, *steps)
+	require.Equal(t, [][]string{
+		{"plugin", "install", "agento11y-claude-code@agento11y"},
+		{"plugin", "install", "agento11y-claude-code@grafana-sigil"},
+		{"plugin", "install", "sigil-cc@grafana-sigil"},
+	}, *candidates)
+}
+
+func TestDefaultRunUpdate_CommandSequences(t *testing.T) {
+	cases := []struct {
+		name           string
+		installed      string // installed_plugins.json content; empty means not written
+		wantSteps      [][]string
+		wantCandidates [][]string // empty means runFirst not called
+	}{
+		{
+			name:      "current key updates in place",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"user"}]}}`,
+			wantSteps: [][]string{
+				{"plugin", "marketplace", "update", "agento11y"},
+				{"plugin", "update", "agento11y-claude-code@agento11y"},
+			},
+		},
+		{
+			name:      "migrated key keeps the sticky legacy alias",
+			installed: `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"user"}]}}`,
+			wantSteps: [][]string{
+				{"plugin", "marketplace", "update", "grafana-sigil"},
+				{"plugin", "update", "agento11y-claude-code@grafana-sigil"},
+			},
+		},
+		{
+			name:      "legacy key falls back to installing the renamed plugin",
+			installed: `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user"}]}}`,
+			wantSteps: [][]string{{"plugin", "marketplace", "update", "grafana-sigil"}},
+			wantCandidates: [][]string{
+				{"plugin", "update", "sigil-cc@grafana-sigil"},
+				{"plugin", "install", "agento11y-claude-code@grafana-sigil"},
+			},
+		},
+		{
+			name: "missing store falls back to current names",
+			wantSteps: [][]string{
+				{"plugin", "marketplace", "update", "agento11y"},
+				{"plugin", "update", "agento11y-claude-code@agento11y"},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.installed != "" {
+				writeInstalled(t, dir, tc.installed)
+			}
+			t.Setenv("CLAUDE_CONFIG_DIR", dir)
+			steps, candidates := recordCommands(t)
+
+			require.NoError(t, defaultRunUpdate(context.Background(), "/usr/local/bin/claude", io.Discard))
+			require.Equal(t, tc.wantSteps, *steps)
+			if len(tc.wantCandidates) == 0 {
+				require.Empty(t, *candidates)
+			} else {
+				require.Equal(t, tc.wantCandidates, *candidates)
+			}
+		})
+	}
 }
 
 func launch(t *testing.T, args []string, stdout, stderr io.Writer) error {

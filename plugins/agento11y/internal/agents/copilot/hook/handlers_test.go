@@ -495,7 +495,7 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 		name string
 		// guards is the GuardsConfig the test passes through cfg.Guards.
 		guards envconfig.GuardsConfig
-		// hookResponse is the JSON the fake Sigil hook server returns.
+		// hookResponse is the JSON the fake Agent Observability hook server returns.
 		// If empty, an allow is returned.
 		hookResponse string
 		// useClosedServer points cfg.Endpoint at a closed listener so
@@ -542,7 +542,7 @@ func TestPreToolUseGuardBehavior(t *testing.T) {
 			// envelope is what Copilot Chat in VS Code reads. The leading
 			// `{"permissionDecision"` matches only the flat copy.
 			wantServerCalled:    true,
-			wantStdoutContains:  []string{`{"permissionDecision":"deny"`, `"hookSpecificOutput"`, `"hookEventName":"PreToolUse"`, `A Grafana AI Observability policy`, `blocked tool`},
+			wantStdoutContains:  []string{`{"permissionDecision":"deny"`, `"hookSpecificOutput"`, `"hookEventName":"PreToolUse"`, `A Grafana Agent Observability policy`, `blocked tool`},
 			wantToolRecordCount: 0,
 		},
 		{

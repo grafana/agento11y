@@ -55,22 +55,194 @@ func TestLaunch_SkipsInstallWhenPackagePresent(t *testing.T) {
 }
 
 // A settings file that still references the pre-rename @grafana/sigil-pi
-// package counts as installed: running `pi install` again would register the
-// extension a second time under the new name.
-func TestLaunch_SkipsInstallWhenLegacyPackagePresent(t *testing.T) {
-	dir := t.TempDir()
-	writeSettings(t, dir, `{"packages":["npm:@grafana/sigil-pi"]}`)
-	t.Setenv("PI_CODING_AGENT_DIR", dir)
+// package is migrated to the renamed package before Bootstrap runs: the old
+// package is frozen on npm, so a legacy entry never sees updates again. The
+// runPi stub does not rewrite the settings file, so the Bootstrap probe still
+// sees the legacy entry as installed afterwards — runInstall must never fire.
+func TestLaunch_MigratesLegacyInstall(t *testing.T) {
+	const (
+		binPath        = "/usr/local/bin/pi"
+		removeGlobal   = "remove npm:@grafana/sigil-pi"
+		installGlobal  = "install npm:@grafana/agento11y-pi"
+		removeProject  = removeGlobal + " -l"
+		installProject = installGlobal + " -l"
+	)
 
-	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/pi", nil })
-	withRunInstall(t, func(context.Context, string, io.Writer) error {
-		t.Fatal("runInstall must not be called when the legacy package is present")
-		return nil
-	})
-	withExecFn(t, func(string, []string, []string) error { return nil })
+	cases := []struct {
+		name      string
+		global    string // global settings.json contents ("" = don't create)
+		project   string // <cwd>/.pi/settings.json contents ("" = don't create)
+		localPkg  string // package.json written to <globalDir>/local-plugin
+		piErrs    map[string]error
+		missingPi bool
 
-	if err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, io.Discard, nopLogger(), "dev"); err != nil {
-		t.Fatalf("Launch returned err: %v", err)
+		wantPiCalls  []string
+		wantStderr   []string
+		wantNoStderr []string
+		wantErr      string
+	}{
+		{
+			name:        "bare legacy entry in global settings",
+			global:      `{"packages":["npm:@grafana/sigil-pi"]}`,
+			wantPiCalls: []string{removeGlobal, installGlobal},
+			wantStderr:  []string{"migrating npm:@grafana/sigil-pi to npm:@grafana/agento11y-pi"},
+		},
+		{
+			name:        "pinned legacy entry",
+			global:      `{"packages":["npm:@grafana/sigil-pi@0.17.0"]}`,
+			wantPiCalls: []string{removeGlobal, installGlobal},
+		},
+		{
+			name:        "object-shaped legacy entry",
+			global:      `{"packages":[{"source":"npm:@grafana/sigil-pi@0.17.0"}]}`,
+			wantPiCalls: []string{removeGlobal, installGlobal},
+		},
+		{
+			name:        "project-scope legacy entry uses -l",
+			global:      `{"packages":[]}`,
+			project:     `{"packages":["npm:@grafana/sigil-pi@0.17.0"]}`,
+			wantPiCalls: []string{removeProject, installProject},
+		},
+		{
+			name:        "legacy entries in both scopes migrate both",
+			global:      `{"packages":["npm:@grafana/sigil-pi"]}`,
+			project:     `{"packages":["npm:@grafana/sigil-pi"]}`,
+			wantPiCalls: []string{removeGlobal, installGlobal, removeProject, installProject},
+		},
+		{
+			name:        "both names present removes only the legacy entry",
+			global:      `{"packages":["npm:@grafana/sigil-pi","npm:@grafana/agento11y-pi"]}`,
+			wantPiCalls: []string{removeGlobal},
+		},
+		{
+			name:         "local-path legacy checkout is left alone",
+			global:       `{"packages":["./local-plugin"]}`,
+			localPkg:     `{"name":"@grafana/sigil-pi"}`,
+			wantNoStderr: []string{"migrating"},
+		},
+		{
+			name:        "remove failure skips install and continues",
+			global:      `{"packages":["npm:@grafana/sigil-pi"]}`,
+			piErrs:      map[string]error{removeGlobal: errors.New("remove boom")},
+			wantPiCalls: []string{removeGlobal},
+			wantStderr: []string{
+				"migration of npm:@grafana/sigil-pi failed",
+				"remove boom",
+				"pi remove npm:@grafana/sigil-pi",
+				"pi install npm:@grafana/agento11y-pi",
+			},
+		},
+		{
+			name:        "remove failure in project scope hints -l",
+			global:      `{"packages":[]}`,
+			project:     `{"packages":["npm:@grafana/sigil-pi"]}`,
+			piErrs:      map[string]error{removeProject: errors.New("remove boom")},
+			wantPiCalls: []string{removeProject},
+			wantStderr: []string{
+				"pi remove npm:@grafana/sigil-pi -l",
+				"pi install npm:@grafana/agento11y-pi -l",
+			},
+		},
+		{
+			name:        "install failure continues",
+			global:      `{"packages":["npm:@grafana/sigil-pi"]}`,
+			piErrs:      map[string]error{installGlobal: errors.New("install boom")},
+			wantPiCalls: []string{removeGlobal, installGlobal},
+			wantStderr: []string{
+				"install boom",
+				"pi install npm:@grafana/agento11y-pi",
+			},
+		},
+		{
+			name:         "missing pi binary skips migration silently",
+			global:       `{"packages":["npm:@grafana/sigil-pi"]}`,
+			missingPi:    true,
+			wantNoStderr: []string{"migrating"},
+			wantErr:      "pi CLI not found",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			globalDir := t.TempDir()
+			projectRoot := t.TempDir()
+			if tc.global != "" {
+				writeSettings(t, globalDir, tc.global)
+			}
+			if tc.project != "" {
+				projectPiDir := filepath.Join(projectRoot, ".pi")
+				if err := os.MkdirAll(projectPiDir, 0o755); err != nil {
+					t.Fatalf("mkdir project .pi: %v", err)
+				}
+				writeSettings(t, projectPiDir, tc.project)
+			}
+			if tc.localPkg != "" {
+				pkgDir := filepath.Join(globalDir, "local-plugin")
+				if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+					t.Fatalf("mkdir local plugin: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(tc.localPkg), 0o600); err != nil {
+					t.Fatalf("write local package.json: %v", err)
+				}
+			}
+			t.Setenv("PI_CODING_AGENT_DIR", globalDir)
+			t.Chdir(projectRoot)
+
+			if tc.missingPi {
+				withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+			} else {
+				withLookPath(t, func(string) (string, error) { return binPath, nil })
+			}
+			withRunInstall(t, func(context.Context, string, io.Writer) error {
+				t.Error("runInstall must not be called: the probe still sees a registered entry")
+				return nil
+			})
+
+			var piCalls []string
+			withRunPi(t, func(_ context.Context, bin string, _ io.Writer, args ...string) error {
+				if bin != binPath {
+					t.Errorf("runPi bin = %q, want %q", bin, binPath)
+				}
+				call := strings.Join(args, " ")
+				piCalls = append(piCalls, call)
+				return tc.piErrs[call]
+			})
+
+			execCalled := false
+			withExecFn(t, func(string, []string, []string) error {
+				execCalled = true
+				return nil
+			})
+
+			var stderr bytes.Buffer
+			err := Launch(context.Background(), nil, nil, strings.NewReader(""), io.Discard, &stderr, nopLogger(), "dev")
+
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want contains %q", err, tc.wantErr)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Launch returned err: %v", err)
+				}
+				if !execCalled {
+					t.Error("execFn was not called: migration must never block the launch")
+				}
+			}
+			if !reflect.DeepEqual(piCalls, tc.wantPiCalls) {
+				t.Errorf("pi calls = %v, want %v", piCalls, tc.wantPiCalls)
+			}
+			for _, want := range tc.wantStderr {
+				if !strings.Contains(stderr.String(), want) {
+					t.Errorf("stderr missing %q: %q", want, stderr.String())
+				}
+			}
+			for _, notWant := range tc.wantNoStderr {
+				if strings.Contains(stderr.String(), notWant) {
+					t.Errorf("stderr must not contain %q: %q", notWant, stderr.String())
+				}
+			}
+		})
 	}
 }
 
@@ -606,6 +778,13 @@ func withRunInstall(t *testing.T, fn func(context.Context, string, io.Writer) er
 	prev := runInstall
 	t.Cleanup(func() { runInstall = prev })
 	runInstall = fn
+}
+
+func withRunPi(t *testing.T, fn func(context.Context, string, io.Writer, ...string) error) {
+	t.Helper()
+	prev := runPi
+	t.Cleanup(func() { runPi = prev })
+	runPi = fn
 }
 
 func withExecFn(t *testing.T, fn func(string, []string, []string) error) {

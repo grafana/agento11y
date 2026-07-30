@@ -1,6 +1,5 @@
 {
-  "name": "sigil-cc",
-  "version": "0.4.0",
+  "name": "agento11y-claude-code",
   "description": "Send Claude Code session telemetry to Grafana Agent Observability",
   "author": {
     "name": "Grafana Labs"
@@ -8,7 +7,7 @@
   "repository": "https://github.com/grafana/agento11y",
   "homepage": "https://github.com/grafana/agento11y/tree/main/plugins/claude-code",
   "license": "Apache-2.0",
-  "keywords": ["telemetry", "observability", "sigil", "grafana"],
+  "keywords": ["telemetry", "observability", "grafana"],
   "hooks": {
     "SessionStart": [
       {

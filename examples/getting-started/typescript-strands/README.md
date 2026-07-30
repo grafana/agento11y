@@ -10,7 +10,7 @@ npm install
 cp .env.example .env
 ```
 
-Configure agento11y, OpenTelemetry, and OpenAI from your Grafana Cloud stack. See the [Grafana Cloud AI Observability getting started docs](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/get-started/grafana-cloud/) for where to find each value:
+Configure agento11y, OpenTelemetry, and OpenAI from your Grafana Cloud stack. See the [Grafana Cloud Agent Observability getting started docs](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/) for where to find each value:
 
 ```bash
 AGENTO11Y_PROTOCOL=http

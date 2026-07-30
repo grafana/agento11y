@@ -208,7 +208,7 @@ func TestMap_ContentCaptureModes(t *testing.T) {
 		name string
 		mode agento11y.ContentCaptureMode
 		// In MetadataOnly we still expect the structural assistant
-		// tool-call message (Sigil needs the call sequence to render
+		// tool-call message (Agent Observability needs the call sequence to render
 		// the conversation), but no text content.
 		wantUserText      bool
 		wantAssistantText bool

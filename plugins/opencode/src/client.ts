@@ -43,9 +43,9 @@ export function createAgento11yClient(
 }
 
 /**
- * Append `/api/v1/generations:export` to a bare Sigil base URL. The SDK's
+ * Append `/api/v1/generations:export` to a bare Agent Observability base URL. The SDK's
  * own normalizer only appends when the URL has no path, which breaks
- * prefix-mounted Sigil deployments (`https://host/prefix`) — so we do it
+ * prefix-mounted Agent Observability deployments (`https://host/prefix`) — so we do it
  * here unconditionally.
  */
 function appendExportPath(endpoint: string): string {

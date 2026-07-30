@@ -10,7 +10,7 @@ import (
 )
 
 // Message calls the Anthropic messages API and records the generation.
-// It mirrors providerClient.Beta.Messages.New but adds Sigil recording.
+// It mirrors providerClient.Beta.Messages.New but adds agento11y recording.
 // The native *asdk.BetaMessage response is returned unchanged.
 func Message(
 	ctx context.Context,
@@ -53,7 +53,7 @@ func message(
 }
 
 // MessageStream calls the Anthropic streaming messages API and records the generation.
-// It mirrors providerClient.Beta.Messages.NewStreaming but adds Sigil recording.
+// It mirrors providerClient.Beta.Messages.NewStreaming but adds agento11y recording.
 // All events are collected into StreamSummary; for per-event processing use the
 // defer pattern directly with StartStreamingGeneration.
 func MessageStream(

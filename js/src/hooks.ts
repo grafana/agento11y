@@ -1,3 +1,5 @@
+import { isSpanContextValid, context as otelContext, trace } from '@opentelemetry/api';
+import { conversationIdFromContext } from './context.js';
 import type {
   HookEvaluateRequest,
   HookEvaluateResponse,
@@ -13,7 +15,7 @@ import type {
 import { asError } from './utils.js';
 
 const hooksEvaluatePath = '/api/v1/hooks:evaluate';
-const hookTimeoutHeader = 'X-Sigil-Hook-Timeout-Ms';
+const hookTimeoutHeader = 'X-Agento11y-Hook-Timeout-Ms';
 
 /**
  * Thrown by framework adapters when hook evaluation returns `action: 'deny'`.
@@ -31,16 +33,16 @@ export class HookDeniedError extends Error {
     super(formatDenyMessage(reason, ruleId));
     this.name = 'HookDeniedError';
     const normalized = reason?.trim() ?? '';
-    this.reason = normalized.length > 0 ? normalized : 'request blocked by Sigil hook rule';
+    this.reason = normalized.length > 0 ? normalized : 'request blocked by Agent Observability hook rule';
     this.ruleId = ruleId;
     this.evaluations = evaluations;
   }
 }
 
 /**
- * Sends a hook evaluation request to the Sigil API.
+ * Sends a hook evaluation request to the Agent Observability API.
  *
- * `apiEndpoint` is the Sigil API base URL (without the `/api/v1/...` suffix).
+ * `apiEndpoint` is the Agent Observability API base URL (without the `/api/v1/...` suffix).
  * `extraHeaders` is merged into the request — typically the same auth headers
  * the SDK uses for generation export.
  *
@@ -131,7 +133,7 @@ function allowResponse(): HookEvaluateResponse {
 
 function formatDenyMessage(reason: string, ruleId: string | undefined): string {
   const trimmedReason = reason?.trim() ?? '';
-  const baseReason = trimmedReason.length > 0 ? trimmedReason : 'request blocked by Sigil hook rule';
+  const baseReason = trimmedReason.length > 0 ? trimmedReason : 'request blocked by Agent Observability hook rule';
   if (ruleId !== undefined && ruleId.length > 0) {
     return `agento11y hook denied by rule ${ruleId}: ${baseReason}`;
   }
@@ -151,7 +153,7 @@ function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean): string {
 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     const parsed = new URL(trimmed);
-    // Preserve a path prefix so prefix-mounted Sigil deployments
+    // Preserve a path prefix so prefix-mounted Agent Observability deployments
     // (https://host/sigil) route /api/v1/hooks:evaluate under the prefix.
     const path = parsed.pathname.replace(/\/+$/, '');
     return `${parsed.protocol}//${parsed.host}${path}`;
@@ -174,18 +176,33 @@ function serializeRequest(request: HookEvaluateRequest): Record<string, unknown>
   return body;
 }
 
-function serializeContext(context: HookEvaluateRequest['context']): Record<string, unknown> {
+function serializeContext(hookContext: HookEvaluateRequest['context']): Record<string, unknown> {
   const out: Record<string, unknown> = {
-    model: { provider: context.model.provider, name: context.model.name },
+    model: { provider: hookContext.model.provider, name: hookContext.model.name },
   };
-  if (context.agentName !== undefined && context.agentName.length > 0) {
-    out.agent_name = context.agentName;
+  if (hookContext.agentName !== undefined && hookContext.agentName.length > 0) {
+    out.agent_name = hookContext.agentName;
   }
-  if (context.agentVersion !== undefined && context.agentVersion.length > 0) {
-    out.agent_version = context.agentVersion;
+  if (hookContext.agentVersion !== undefined && hookContext.agentVersion.length > 0) {
+    out.agent_version = hookContext.agentVersion;
   }
-  if (context.tags !== undefined && Object.keys(context.tags).length > 0) {
-    out.tags = { ...context.tags };
+  if (hookContext.tags !== undefined && Object.keys(hookContext.tags).length > 0) {
+    out.tags = { ...hookContext.tags };
+  }
+  const conversationId = hookContext.conversationId ?? conversationIdFromContext();
+  if (conversationId !== undefined && conversationId.length > 0) {
+    out.conversation_id = conversationId;
+  }
+  const activeSpanContext = trace.getSpan(otelContext.active())?.spanContext();
+  const spanContext =
+    activeSpanContext !== undefined && isSpanContextValid(activeSpanContext) ? activeSpanContext : undefined;
+  const traceId = hookContext.traceId ?? spanContext?.traceId;
+  const spanId = hookContext.spanId ?? spanContext?.spanId;
+  if (traceId !== undefined && traceId.length > 0) {
+    out.trace_id = traceId;
+  }
+  if (spanId !== undefined && spanId.length > 0) {
+    out.span_id = spanId;
   }
   return out;
 }
@@ -251,7 +268,7 @@ function parseTransformedInputPayload(payload: Record<string, unknown>): HookInp
   return parseHookInputWire(raw);
 }
 
-/** Parses `transformed_input` from the Sigil API (SDK-shaped JSON and Go/proto JSON encodings). */
+/** Parses `transformed_input` from the Agent Observability API (SDK-shaped JSON and Go/proto JSON encodings). */
 function parseHookInputWire(raw: Record<string, unknown>): HookInput | undefined {
   const out: HookInput = {};
   const msgs = parseWireMessages(raw.messages);

@@ -20,8 +20,8 @@ function includesToolBodies(contentCapture: ContentCaptureMode): boolean {
 }
 
 /**
- * Map user-side parts to Sigil input messages. No redaction applied — user text is the
- * user's own data and Sigil needs it for prompt analysis when content capture allows it.
+ * Map user-side parts to agento11y input messages. No redaction applied — user text is the
+ * user's own data and Agent Observability needs it for prompt analysis when content capture allows it.
  */
 export function mapInputMessages(
   parts: Part[],
@@ -41,7 +41,7 @@ export function mapInputMessages(
   return messages;
 }
 
-/** Map assistant-side parts to Sigil output messages with redaction. */
+/** Map assistant-side parts to agento11y output messages with redaction. */
 export function mapOutputMessages(
   parts: Part[],
   redactor: Redactor,
@@ -174,7 +174,7 @@ export function mapToolDefinitions(names: Iterable<string>): ToolDefinition[] {
   return [...uniq].sort().map((name) => ({ name, type: "function" }));
 }
 
-/** Map an AssistantMessage + parts to a Sigil GenerationResult with content. */
+/** Map an AssistantMessage + parts to an agento11y GenerationResult with content. */
 export function mapGeneration(
   msg: AssistantMessage,
   userParts: Part[],

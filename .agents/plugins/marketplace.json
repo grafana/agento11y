@@ -1,11 +1,11 @@
 {
-  "name": "grafana-sigil",
+  "name": "agento11y",
   "interface": {
-    "displayName": "Grafana Sigil"
+    "displayName": "Grafana Agent Observability"
   },
   "plugins": [
     {
-      "name": "sigil-codex",
+      "name": "agento11y-codex",
       "source": {
         "source": "local",
         "path": "./plugins/codex"

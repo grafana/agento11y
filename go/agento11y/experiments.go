@@ -310,7 +310,7 @@ func (c *Client) ExperimentURL(runID string) string {
 		out := strings.ReplaceAll(template, "{run_id}", normalized)
 		return strings.ReplaceAll(out, "{base}", base)
 	}
-	return strings.TrimRight(base, "/") + "/a/grafana-sigil-app/offline-experiments/experiments/" + url.PathEscape(normalized)
+	return strings.TrimRight(base, "/") + "/a/grafana-agento11y-app/offline-experiments/experiments/" + url.PathEscape(normalized)
 }
 
 func (c *Client) evalArgs() evalConnectionArgs {
@@ -331,7 +331,10 @@ func (c *Client) experimentRetryPolicy() experimentRetryPolicy {
 		maxRetries:     cfg.MaxRetries,
 		initialBackoff: cfg.InitialBackoff,
 		maxBackoff:     cfg.MaxBackoff,
-		timeout:        defaultExperimentRetryTimeout,
+		timeout:        c.config.ExperimentRetryTimeout,
+	}
+	if policy.timeout <= 0 {
+		policy.timeout = defaultExperimentRetryTimeout
 	}
 	if policy.maxRetries < 0 {
 		policy.maxRetries = 0

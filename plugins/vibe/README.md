@@ -1,6 +1,6 @@
 # Agent Observability for Mistral Vibe
 
-[Mistral Vibe](https://github.com/mistralai/vibe) is sent to [Grafana AI Observability](https://grafana.com/docs/grafana-cloud/machine-learning/ai-observability/) by registering hooks in Mistral Vibe's `hooks.toml` that forward each turn to the `agento11y` binary. `post_agent_turn` exports one generation per turn; `before_tool` enforces Agent Observability guard policy (when enabled); `after_tool` records per-tool timing for tool spans.
+[Mistral Vibe](https://github.com/mistralai/vibe) is sent to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) by registering hooks in Mistral Vibe's `hooks.toml` that forward each turn to the `agento11y` binary. `post_agent_turn` exports one generation per turn; `before_tool` enforces Agent Observability guard policy (when enabled); `after_tool` records per-tool timing for tool spans.
 
 > Status: **Experimental.** Mistral Vibe's hook contract is itself marked experimental and may change between releases; the launcher pins to the shape verified at build time.
 
@@ -72,7 +72,7 @@ Credentials are shared with every other `agento11y` launcher; see [`pi/README.md
 
 ## 3. Verify
 
-Run one agent turn, then open **AI Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds, labelled with agent `mistral-vibe` and conversation id equal to the Mistral Vibe `session_id`.
+Run one agent turn, then open **Agent Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds, labelled with agent `mistral-vibe` and conversation id equal to the Mistral Vibe `session_id`.
 
 ## Guards
 

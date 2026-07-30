@@ -1,4 +1,4 @@
-"""Public exports for the Sigil Python SDK."""
+"""Public exports for the agento11y Python SDK."""
 
 from .cache_diagnostics import (
     CACHE_DIAGNOSTICS_MISS_REASON_KEY,
@@ -35,6 +35,7 @@ from .errors import (
     Agento11yError,
     ClientShutdownError,
     ConflictError,
+    ConflictKind,
     EnqueueError,
     ExperimentTransportError,
     HookDeniedError,
@@ -120,6 +121,7 @@ __all__ = [
     "ClientConfig",
     "ClientShutdownError",
     "ConflictError",
+    "ConflictKind",
     "CACHE_DIAGNOSTICS_MISS_REASON_KEY",
     "CACHE_DIAGNOSTICS_MISSED_INPUT_TOKENS_KEY",
     "CACHE_DIAGNOSTICS_PREVIOUS_MESSAGE_ID_KEY",

@@ -9,3 +9,23 @@ run = "uv sync"
 [tasks.experiment]
 description = "Run the framework-free dataset experiment against Agent Observability"
 run = "uv run python -m app.run_experiment"
+
+[tasks.suite-free]
+description = "Run a deterministic experiment without a test suite"
+run = "uv run python -m app.run_suite_free_experiment"
+
+[tasks.dashboard]
+description = "Run the dashboard image-artifact experiment against Agent Observability"
+run = "uv run python -m app.run_dashboard_experiment"
+
+[tasks.suite-push]
+description = "Push the sample YAML suite into stored test suites"
+run = "uv run python -m app.push_suite"
+
+[tasks.suite-pull]
+description = "Pull a stored test suite as portable YAML"
+run = "uv run python -m app.pull_suite"
+
+[tasks.suite-experiment]
+description = "Pull a stored suite, run it, and publish an experiment"
+run = "uv run python -m app.run_pulled_suite_experiment"

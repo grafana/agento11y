@@ -19,7 +19,7 @@ import (
 
 func TestPostAgentTurn_EndToEnd(t *testing.T) {
 	// Drive the handler through a httptest server playing the role of
-	// the Sigil export endpoint, then assert the offset and token
+	// the Agent Observability export endpoint, then assert the offset and token
 	// snapshot in state were advanced.
 	type captured struct {
 		path string

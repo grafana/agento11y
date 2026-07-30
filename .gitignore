@@ -22,8 +22,7 @@ python-providers/*/build/
 
 *.db
 coverage.out
-plugins/claude-code/sigil-cc
-plugins/codex/sigil-codex
+plugins/agento11y/agento11y
 examples/experiments/go/go
 examples/getting-started/go/go
 examples/getting-started/go-hooks/go-hooks

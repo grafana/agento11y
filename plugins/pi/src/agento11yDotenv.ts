@@ -84,7 +84,7 @@ function configRoot(): string {
 }
 
 /**
- * Resolve the path the sigil dotenv loader reads. Mirrors
+ * Resolve the path the agento11y dotenv loader reads. Mirrors
  * `plugins/agento11y/internal/dotenv/dotenv.go::FilePath` so plain pi and
  * `agento11y pi` read the same file: `<config root>/agento11y/config.env`
  * if that file exists, otherwise the legacy `<config root>/sigil/config.env`

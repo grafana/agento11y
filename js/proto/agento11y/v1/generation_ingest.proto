@@ -1,5 +1,4 @@
-// Canonical Agento11y ingest schema. This is the source of truth for every
-// SDK; proto/sigil/v1 is the frozen legacy copy kept for the migration window.
+// Agento11y ingest schema. This is the source of truth for every SDK.
 syntax = "proto3";
 
 package agento11y.v1;
@@ -177,7 +176,7 @@ message Generation {
   optional bool thinking_enabled = 28;
   repeated string parent_generation_ids = 29;
   // Optional SDK-supplied catalog key. Must match `^sha256:[0-9a-f]{64}$`
-  // when set; ingest rejects any other shape. Sigil falls back to a
+  // when set; ingest rejects any other shape. The backend falls back to a
   // server-computed sha256 of (system_prompt + sorted tools) when omitted.
   optional string effective_version = 30;
 }

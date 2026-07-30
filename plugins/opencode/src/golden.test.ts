@@ -1,7 +1,7 @@
 // OpenCode high-level real-SDK golden test.
 //
 // Drives the OpenCode plugin through `createAgento11yHooks(config, client)`
-// with a fake OpencodeClient. The Sigil JS SDK exporter is pointed at a
+// with a fake OpencodeClient. The agento11y JS SDK exporter is pointed at a
 // local HTTP capture server, and the normalized export body is compared
 // against src/testdata/golden/opencode-full-message.golden.json.
 //
@@ -280,9 +280,10 @@ describe("opencode plugin: real-SDK golden export", () => {
       },
     });
 
-    // Lifecycle: session.idle triggers a flush. session.deleted clears
-    // in-memory dedup state between table cases. global.disposed shuts down
-    // the SDK so the HTTP exporter drains its outbox.
+    // Lifecycle: session.idle triggers a flush. session.deleted clears this
+    // session's in-memory dedup state. dispose() shuts the SDK down so the
+    // HTTP exporter drains its outbox before the assertions below read the
+    // captured requests.
     await hooks.event({
       event: {
         type: "session.idle",
@@ -295,12 +296,7 @@ describe("opencode plugin: real-SDK golden export", () => {
         properties: { info: { id: sessionID } },
       },
     });
-    await hooks.event({
-      event: {
-        type: "global.disposed",
-        properties: {},
-      },
-    });
+    await hooks.dispose();
 
     expect(serverEnv.errors).toEqual([]);
     expect(serverEnv.captures.length).toBeGreaterThanOrEqual(1);

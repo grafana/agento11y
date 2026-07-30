@@ -8,7 +8,7 @@ dependencies = [
     "anthropic>=0.40",
     "matplotlib>=3.8",
     "python-dotenv>=1.0",
-    "agento11y>=0.9.0",
+    "agento11y>=0.11.0",
 ]
 
 [tool.uv.sources]

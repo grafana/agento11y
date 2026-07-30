@@ -21,7 +21,7 @@ from ..version import user_agent
 
 
 class GRPCGenerationExporter:
-    """Sends generation and workflow step batches to the Sigil gRPC services."""
+    """Sends generation and workflow step batches to the Agent Observability gRPC services."""
 
     def __init__(self, endpoint: str, headers: dict[str, str] | None = None, insecure: bool = False) -> None:
         host, implicit_insecure = _parse_endpoint(endpoint)

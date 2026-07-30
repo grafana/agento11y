@@ -298,83 +298,44 @@ def test_resolve_redact_input_messages_defaults_to_false() -> None:
 
 
 def test_resolve_redact_input_messages_explicit_wins_over_env() -> None:
-    assert _resolve_redact_input_messages(False, env={"SIGIL_REDACT_INPUT_MESSAGES": "true"}) is False
-    assert _resolve_redact_input_messages(True, env={"SIGIL_REDACT_INPUT_MESSAGES": "false"}) is True
+    assert _resolve_redact_input_messages(False, env={"AGENTO11Y_REDACT_INPUT_MESSAGES": "true"}) is False
+    assert _resolve_redact_input_messages(True, env={"AGENTO11Y_REDACT_INPUT_MESSAGES": "false"}) is True
 
 
 def test_resolve_redact_input_messages_truthy_tokens() -> None:
     for token in ("1", "true", "TRUE", "yes", "on"):
-        got = _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": token})
+        got = _resolve_redact_input_messages(None, env={"AGENTO11Y_REDACT_INPUT_MESSAGES": token})
         assert got is True, f"token={token!r}"
 
 
 def test_resolve_redact_input_messages_falsy_tokens() -> None:
     for token in ("0", "false", "FALSE", "no", "off"):
-        got = _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": token})
+        got = _resolve_redact_input_messages(None, env={"AGENTO11Y_REDACT_INPUT_MESSAGES": token})
         assert got is False, f"token={token!r}"
 
 
 def test_resolve_redact_input_messages_blank_falls_back_to_false() -> None:
-    assert _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": "   "}) is False
+    assert _resolve_redact_input_messages(None, env={"AGENTO11Y_REDACT_INPUT_MESSAGES": "   "}) is False
 
 
 def test_resolve_redact_input_messages_invalid_warns_and_falls_back(caplog) -> None:
     with caplog.at_level(logging.WARNING, logger="agento11y"):
-        got = _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": "maybe"})
+        got = _resolve_redact_input_messages(None, env={"AGENTO11Y_REDACT_INPUT_MESSAGES": "maybe"})
     assert got is False
     assert any(
-        "SIGIL_REDACT_INPUT_MESSAGES" in record.getMessage() and "maybe" in record.getMessage()
+        "AGENTO11Y_REDACT_INPUT_MESSAGES" in record.getMessage() and "maybe" in record.getMessage()
         for record in caplog.records
     )
 
 
-def test_resolve_redact_input_messages_preferred_key() -> None:
-    assert _resolve_redact_input_messages(None, env={"AGENTO11Y_REDACT_INPUT_MESSAGES": "true"}) is True
-
-
-def test_resolve_redact_input_messages_preferred_wins_over_legacy() -> None:
-    env = {"AGENTO11Y_REDACT_INPUT_MESSAGES": "false", "SIGIL_REDACT_INPUT_MESSAGES": "true"}
-    assert _resolve_redact_input_messages(None, env=env) is False
-
-
-def test_resolve_redact_input_messages_blank_preferred_falls_through_to_legacy() -> None:
-    env = {"AGENTO11Y_REDACT_INPUT_MESSAGES": "   ", "SIGIL_REDACT_INPUT_MESSAGES": "true"}
-    assert _resolve_redact_input_messages(None, env=env) is True
-
-
-def test_resolve_redact_input_messages_explicit_beats_both_prefixes() -> None:
-    env = {"AGENTO11Y_REDACT_INPUT_MESSAGES": "false", "SIGIL_REDACT_INPUT_MESSAGES": "false"}
-    assert _resolve_redact_input_messages(True, env=env) is True
-
-
-def test_resolve_redact_input_messages_invalid_preferred_blocks_valid_legacy(caplog) -> None:
-    env = {"AGENTO11Y_REDACT_INPUT_MESSAGES": "maybe", "SIGIL_REDACT_INPUT_MESSAGES": "true"}
+def test_resolve_redact_input_messages_ignores_legacy_namespace(caplog) -> None:
     with caplog.at_level(logging.WARNING, logger="agento11y"):
-        assert _resolve_redact_input_messages(None, env=env) is False
-    assert any("AGENTO11Y_REDACT_INPUT_MESSAGES" in record.getMessage() for record in caplog.records)
-
-
-def test_create_secret_redaction_sanitizer_reads_preferred_env(monkeypatch) -> None:
-    monkeypatch.setenv("AGENTO11Y_REDACT_INPUT_MESSAGES", "true")
-    sanitizer = create_secret_redaction_sanitizer()
-    generation = Generation(
-        id="gen-env-preferred",
-        mode=GenerationMode.SYNC,
-        operation_name="generateText",
-        model=ModelRef(provider="openai", name="gpt-5"),
-        input=[
-            Message(
-                role=MessageRole.USER,
-                parts=[Part(kind=PartKind.TEXT, text="token glc_abcdefghijklmnopqrstuvwxyz0123")],
-            )
-        ],
-    )
-    sanitized = sanitizer(generation)
-    assert "glc_" not in sanitized.input[0].parts[0].text
+        assert _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": "true"}) is False
+    assert any("SIGIL_REDACT_INPUT_MESSAGES is ignored" in record.getMessage() for record in caplog.records)
 
 
 def test_create_secret_redaction_sanitizer_reads_env(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_REDACT_INPUT_MESSAGES", "true")
+    monkeypatch.setenv("AGENTO11Y_REDACT_INPUT_MESSAGES", "true")
     sanitizer = create_secret_redaction_sanitizer()
     generation = Generation(
         id="gen-env",

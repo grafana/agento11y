@@ -1,4 +1,4 @@
-"""Claude Agent SDK hook handlers for Sigil generation recording."""
+"""Claude Agent SDK hook handlers for agento11y generation recording."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ _metadata_total_cost_usd = "agento11y.claude_agent.total_cost_usd"
 
 
 class Agento11yClaudeAgentHandler:
-    """Records Claude Agent SDK streams and tool hooks into Sigil."""
+    """Records Claude Agent SDK streams and tool hooks into Agent Observability."""
 
     def __init__(
         self,
@@ -116,7 +116,7 @@ class Agento11yClaudeAgentHandler:
         self._skip_next_replayed_prompt = ""
 
     def instrument_options(self, options: ClaudeAgentOptions | None = None) -> ClaudeAgentOptions:
-        """Return Claude options with Sigil hook callbacks attached."""
+        """Return Claude options with agento11y hook callbacks attached."""
 
         options = options or ClaudeAgentOptions()
         hooks = {event: list(matchers) for event, matchers in (options.hooks or {}).items()}
@@ -221,7 +221,7 @@ class Agento11yClaudeAgentHandler:
             self.finish(error=error)
 
     def finish(self, error: BaseException | None = None) -> None:
-        """End the active Sigil generation, exporting any collected result."""
+        """End the active agento11y generation, exporting any collected result."""
 
         if self._finished:
             return
@@ -406,7 +406,7 @@ class Agento11yClaudeAgentHandler:
 
 
 class Agento11yClaudeSDKClient:
-    """Wrap ``ClaudeSDKClient`` and record each response stream to Sigil."""
+    """Wrap ``ClaudeSDKClient`` and record each response stream to Agent Observability."""
 
     def __init__(
         self,
@@ -434,7 +434,7 @@ class Agento11yClaudeSDKClient:
         return await self._claude.__aexit__(exc_type, exc_val, exc_tb)
 
     async def query(self, prompt: str | AsyncIterable[dict[str, Any]], session_id: str = "default") -> None:
-        """Start a Claude query and the matching Sigil generation."""
+        """Start a Claude query and the matching agento11y generation."""
 
         if self._active_handler is not None:
             raise RuntimeError("cannot start a new Claude query before the previous response stream finishes")
@@ -452,13 +452,13 @@ class Agento11yClaudeSDKClient:
             raise
 
     async def receive_response(self) -> AsyncIterator[Any]:
-        """Yield one Claude response stream while recording messages to Sigil."""
+        """Yield one Claude response stream while recording messages to Agent Observability."""
 
         async for message in self._record_messages(self._claude.receive_response()):
             yield message
 
     async def receive_messages(self) -> AsyncIterator[Any]:
-        """Yield all Claude messages while recording messages to Sigil."""
+        """Yield all Claude messages while recording messages to Agent Observability."""
 
         async for message in self._record_messages(self._claude.receive_messages()):
             yield message
@@ -558,7 +558,7 @@ class Agento11yClaudeSDKClient:
 
 
 def create_agento11y_claude_agent_handler(*, client: Client, **handler_kwargs: Any) -> Agento11yClaudeAgentHandler:
-    """Create a Claude Agent SDK Sigil handler."""
+    """Create a Claude Agent SDK agento11y handler."""
 
     return Agento11yClaudeAgentHandler(client=client, **handler_kwargs)
 
@@ -570,7 +570,7 @@ def with_agento11y_claude_agent_options(
     handler: Agento11yClaudeAgentHandler | None = None,
     **handler_kwargs: Any,
 ) -> ClaudeAgentOptions:
-    """Return Claude Agent SDK options with Sigil hooks attached."""
+    """Return Claude Agent SDK options with agento11y hooks attached."""
 
     handler = handler or create_agento11y_claude_agent_handler(client=client, **handler_kwargs)
     return handler.instrument_options(options)
@@ -585,7 +585,7 @@ async def agento11y_query(
     _query_fn: Callable[..., AsyncIterator[Any]] | None = None,
     **handler_kwargs: Any,
 ) -> AsyncIterator[Any]:
-    """Run ``claude_agent_sdk.query`` while recording the stream to Sigil."""
+    """Run ``claude_agent_sdk.query`` while recording the stream to Agent Observability."""
 
     handler = handler or create_agento11y_claude_agent_handler(client=client, **handler_kwargs)
     instrumented_options = handler.instrument_options(options)

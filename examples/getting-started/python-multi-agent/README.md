@@ -26,7 +26,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Open the AI Observability plugin in your Grafana Cloud stack. In the conversation detail you should see:
+Open the Agent Observability plugin in your Grafana Cloud stack. In the conversation detail you should see:
 
 - Three generations, each with its own `agent_name`.
 - The **Graph** tab showing `researcher` and `critic` as root nodes, with `synthesizer` depending on both.

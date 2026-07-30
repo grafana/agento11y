@@ -121,7 +121,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			wantServerCalled: true,
 		},
 		{
-			// The Sigil server marshals the proto bytes input_json field with
+			// The Agent Observability server marshals the proto bytes input_json field with
 			// encoding/json, so the real wire value is a base64 JSON string.
 			name:             "allow with base64 string transform decodes server wire format",
 			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},

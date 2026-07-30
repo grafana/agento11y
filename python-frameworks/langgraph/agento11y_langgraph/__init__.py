@@ -1,4 +1,4 @@
-"""Public exports for Sigil LangGraph callback handlers."""
+"""Public exports for agento11y LangGraph callback handlers."""
 
 from typing import Any
 
@@ -13,7 +13,7 @@ def create_agento11y_langgraph_handler(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> Agento11yLangGraphHandler | Agento11yAsyncLangGraphHandler:
-    """Create a LangGraph Sigil callback handler for sync or async flows."""
+    """Create a LangGraph agento11y callback handler for sync or async flows."""
     if async_handler:
         return Agento11yAsyncLangGraphHandler(client=client, **handler_kwargs)
     return Agento11yLangGraphHandler(client=client, **handler_kwargs)
@@ -26,7 +26,7 @@ def with_agento11y_langgraph_callbacks(
     async_handler: bool = False,
     **handler_kwargs: Any,
 ) -> dict[str, Any]:
-    """Append a Sigil callback handler to a LangGraph invocation config."""
+    """Append an agento11y callback handler to a LangGraph invocation config."""
     merged = dict(config or {})
     existing = merged.get("callbacks")
     if isinstance(existing, list):

@@ -1,4 +1,4 @@
-"""Google ADK callback handlers for Sigil generation recording."""
+"""Google ADK callback handlers for agento11y generation recording."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ class _Agento11yGoogleAdkBase(Agento11yFrameworkHandlerBase):
 
 
 class Agento11yGoogleAdkHandler(_Agento11yGoogleAdkBase):
-    """Sync Google ADK callback handler that records Sigil generations."""
+    """Sync Google ADK callback handler that records agento11y generations."""
 
     def on_llm_start(
         self,
@@ -181,7 +181,7 @@ class Agento11yGoogleAdkHandler(_Agento11yGoogleAdkBase):
 
 
 class Agento11yAsyncGoogleAdkHandler(_Agento11yGoogleAdkBase):
-    """Async Google ADK callback handler that records Sigil generations."""
+    """Async Google ADK callback handler that records agento11y generations."""
 
     async def on_llm_start(
         self,

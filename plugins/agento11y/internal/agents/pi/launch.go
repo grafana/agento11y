@@ -35,7 +35,10 @@ const (
 	// still reference it; treating it as installed avoids registering the
 	// extension twice under both names.
 	legacyPluginName = "@grafana/sigil-pi"
-	npmPrefix        = "npm:"
+	// legacyPluginSource is the npm spec of the pre-rename package, used for
+	// the `pi remove` migration step and the manual recovery hints.
+	legacyPluginSource = npmPrefix + legacyPluginName
+	npmPrefix          = "npm:"
 	// projectConfigDirName is pi's default project config directory. Pi
 	// allows overriding this via package.json `piConfig.configDir`, but the
 	// default `.pi` covers every shipped install.
@@ -47,6 +50,7 @@ var (
 	lookPath   = exec.LookPath
 	execFn     = syscall.Exec
 	runInstall = defaultRunInstall
+	runPi      = defaultRunPi
 )
 
 // Launch resolves the `pi` binary on PATH, ensures the @grafana/agento11y-pi
@@ -59,6 +63,12 @@ var (
 // auto-update checks (pi's own installer handles upgrades) so it is
 // accepted to satisfy the launcher signature and ignored.
 func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.Reader, _, stderr io.Writer, logger *log.Logger, _ string) error {
+	// Rewrite a pre-rename @grafana/sigil-pi npm install to the new package
+	// name before probing: the old package is frozen on npm, so a legacy
+	// entry would otherwise stay pinned to the last pre-rename release
+	// forever. Best-effort — a failure never blocks the launch; a legacy
+	// entry that survives keeps working but never updates.
+	migrateLegacyInstall(ctx, stderr, logger)
 	return launcher.Bootstrap(ctx, launcher.BootstrapSpec{
 		BinName:     "pi",
 		PluginLabel: PluginSource,
@@ -85,10 +95,138 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 }
 
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
-	cmd := exec.CommandContext(ctx, bin, "install", PluginSource)
+	return defaultRunPi(ctx, bin, w, "install", PluginSource)
+}
+
+// defaultRunPi runs `bin args...` writing the child's output to w. The
+// migration uses it for the `pi remove` / `pi install` steps.
+func defaultRunPi(ctx context.Context, bin string, w io.Writer, args ...string) error {
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdout = w
 	cmd.Stderr = w
 	return cmd.Run()
+}
+
+// migrateLegacyInstall rewrites a legacy npm install of @grafana/sigil-pi to
+// the renamed @grafana/agento11y-pi package by running `pi remove` and then
+// `pi install` in each settings scope that still references the legacy spec.
+// The old package is frozen on npm (releases continue only under the new
+// name), so without this rewrite existing installs never see updates again.
+// Version pins are dropped deliberately: pre-rename versions do not exist
+// under the new package name. Local-path installs whose package.json declares
+// the legacy name are developer checkouts, not npm installs, and are left
+// alone.
+//
+// Remove-first is deliberate: if the install step fails, the next probe sees
+// no registered plugin and Bootstrap retries the install through its normal
+// path. Best-effort per scope — failures are logged and never block the
+// launch; remove/install failures also print a manual-recovery hint on
+// stderr. When pi itself is missing from PATH the pre-step stays silent and
+// leaves the reporting to Bootstrap.
+func migrateLegacyInstall(ctx context.Context, stderr io.Writer, logger *log.Logger) {
+	bin, err := lookPath("pi")
+	if err != nil {
+		return
+	}
+	scopes := []struct {
+		pathFn  func() (string, error)
+		project bool
+	}{
+		{settingsPath, false},
+		{projectSettingsPath, true},
+	}
+	for _, scope := range scopes {
+		path, err := scope.pathFn()
+		if err != nil {
+			logger.Printf("pi legacy migration: %v", err)
+			continue
+		}
+		hasLegacy, hasNew, err := scopeLegacyStatus(path)
+		if err != nil {
+			logger.Printf("pi legacy migration probe: %v", err)
+			continue
+		}
+		if !hasLegacy {
+			continue
+		}
+		migrateScope(ctx, bin, scope.project, hasNew, stderr, logger)
+	}
+}
+
+// migrateScope runs the pi CLI commands migrating one settings scope. When
+// the renamed package is already registered there (hasNew), only the legacy
+// entry is removed — installing again would duplicate it. `pi remove` matches
+// npm sources by name only, so a pinned legacy spec is removed too.
+func migrateScope(ctx context.Context, bin string, project, hasNew bool, stderr io.Writer, logger *log.Logger) {
+	suffix := ""
+	if project {
+		suffix = " -l"
+	}
+	fmt.Fprintf(stderr, "agento11y: migrating %s to %s in pi\n", legacyPluginSource, PluginSource)
+	removeArgs := []string{"remove", legacyPluginSource}
+	installArgs := []string{"install", PluginSource}
+	if project {
+		removeArgs = append(removeArgs, "-l")
+		installArgs = append(installArgs, "-l")
+	}
+	if err := runPi(ctx, bin, stderr, removeArgs...); err != nil {
+		logger.Printf("remove %s: %v", legacyPluginSource, err)
+		fmt.Fprintf(stderr,
+			"agento11y: migration of %s failed: %v\n"+
+				"agento11y: continuing with the legacy package. To migrate manually:\n"+
+				"          pi remove %s%s\n",
+			legacyPluginSource, err, legacyPluginSource, suffix)
+		if !hasNew {
+			fmt.Fprintf(stderr, "          pi install %s%s\n", PluginSource, suffix)
+		}
+		return
+	}
+	if hasNew {
+		return
+	}
+	if err := runPi(ctx, bin, stderr, installArgs...); err != nil {
+		logger.Printf("install %s: %v", PluginSource, err)
+		fmt.Fprintf(stderr,
+			"agento11y: migration install of %s failed: %v\n"+
+				"agento11y: to finish the migration manually:\n"+
+				"          pi install %s%s\n",
+			PluginSource, err, PluginSource, suffix)
+	}
+}
+
+// scopeLegacyStatus reports whether one pi settings file registers the legacy
+// @grafana/sigil-pi package through an npm spec (hasLegacy), and whether the
+// renamed package is already registered in the same file through an npm spec
+// or a local path (hasNew). Local-path entries whose package.json declares
+// the legacy name never count as hasLegacy — they are developer checkouts. A
+// missing file means the scope is unused.
+func scopeLegacyStatus(path string) (hasLegacy, hasNew bool, err error) {
+	sources, err := settingsSources(path)
+	if err != nil {
+		return false, false, err
+	}
+	settingsDir := filepath.Dir(path)
+	for _, src := range sources {
+		if after, ok := strings.CutPrefix(src, npmPrefix); ok {
+			switch stripNpmVersion(after) {
+			case legacyPluginName:
+				hasLegacy = true
+			case pluginName:
+				hasNew = true
+			}
+			continue
+		}
+		if filepath.IsAbs(src) || strings.HasPrefix(src, "./") || strings.HasPrefix(src, "../") {
+			p := src
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(settingsDir, p)
+			}
+			if name, ok := localPackageName(p); ok && name == pluginName {
+				hasNew = true
+			}
+		}
+	}
+	return hasLegacy, hasNew, nil
 }
 
 // piSettings is the subset of pi's settings.json this launcher inspects.
@@ -158,18 +296,35 @@ func installedPluginSource() (source string, found bool, err error) {
 // string registering the @grafana/agento11y-pi extension, if any. A missing file
 // is not an error — that scope is just unused.
 func readSettingsAndCheck(path string) (source string, found bool, err error) {
+	sources, err := settingsSources(path)
+	if err != nil {
+		return "", false, err
+	}
+	settingsDir := filepath.Dir(path)
+	for _, src := range sources {
+		if sourceMatchesPlugin(src, settingsDir) {
+			return src, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// settingsSources loads one pi settings file and returns the source string of
+// every package entry, unwrapping both plain-string and `{"source": ...}`
+// object shapes. A missing file is not an error — that scope is just unused.
+func settingsSources(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", false, nil
+			return nil, nil
 		}
-		return "", false, fmt.Errorf("read %s: %w", path, err)
+		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	var s piSettings
 	if err := json.Unmarshal(data, &s); err != nil {
-		return "", false, fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	settingsDir := filepath.Dir(path)
+	sources := make([]string, 0, len(s.Packages))
 	for _, raw := range s.Packages {
 		var src string
 		if err := json.Unmarshal(raw, &src); err != nil {
@@ -181,11 +336,9 @@ func readSettingsAndCheck(path string) (source string, found bool, err error) {
 			}
 			src = asObj.Source
 		}
-		if sourceMatchesPlugin(src, settingsDir) {
-			return src, true, nil
-		}
+		sources = append(sources, src)
 	}
-	return "", false, nil
+	return sources, nil
 }
 
 // versionFromPiSource returns the pinned version of an npm-spec source, e.g.
@@ -250,26 +403,32 @@ func matchesPluginName(name string) bool {
 
 // localPathIsPlugin returns true when path is a directory containing a
 // package.json whose name matches the plugin (current or legacy pre-rename
-// name). Any IO/parse failure means we can't
-// confirm the match — treat as a non-match rather than an error, since the
-// settings file may legitimately reference other local packages we don't
-// own.
+// name).
 func localPathIsPlugin(path string) bool {
+	name, ok := localPackageName(path)
+	return ok && matchesPluginName(name)
+}
+
+// localPackageName returns the package.json name of a local package
+// directory. Any IO/parse failure means we can't confirm the name — treat as
+// unknown rather than an error, since the settings file may legitimately
+// reference other local packages we don't own.
+func localPackageName(path string) (string, bool) {
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
-		return false
+		return "", false
 	}
 	data, err := os.ReadFile(filepath.Join(path, "package.json"))
 	if err != nil {
-		return false
+		return "", false
 	}
 	var pkg struct {
 		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(data, &pkg); err != nil {
-		return false
+		return "", false
 	}
-	return matchesPluginName(pkg.Name)
+	return pkg.Name, true
 }
 
 // settingsPath returns the path to pi's global settings.json, honouring

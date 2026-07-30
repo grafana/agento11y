@@ -1,4 +1,4 @@
-"""Core lifecycle and span behavior tests for Sigil Python SDK."""
+"""Core lifecycle and span behavior tests for agento11y Python SDK."""
 
 from __future__ import annotations
 

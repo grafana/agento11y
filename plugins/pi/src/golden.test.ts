@@ -1,7 +1,7 @@
 // Pi high-level real-SDK golden test.
 //
 // Drives the @grafana/agento11y-pi extension through a faked pi host (event
-// emitter shaped like the upstream ExtensionAPI), pointing the real Sigil
+// emitter shaped like the upstream ExtensionAPI), pointing the real agento11y
 // JS SDK at a local HTTP server that captures the export payload. The
 // normalized capture is compared against
 // src/testdata/golden/pi-full-turn.golden.json.

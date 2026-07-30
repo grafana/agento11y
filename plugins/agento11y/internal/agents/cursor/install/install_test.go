@@ -33,8 +33,8 @@ func TestRun(t *testing.T) {
 		seed string
 		// preserved commands that must survive untouched in their event.
 		preserved map[string][]string
-		// nonSigilEvents are events whose entries Run must not touch at all.
-		nonSigilEvents map[string][]string
+		// nonOursEvents are events whose entries Run must not touch at all.
+		nonOursEvents map[string][]string
 	}{
 		{
 			name: "fresh file create",
@@ -72,7 +72,7 @@ func TestRun(t *testing.T) {
 				"beforeSubmitPrompt": {supersetStart, superconductor},
 				"stop":               {supersetStop},
 			},
-			nonSigilEvents: map[string][]string{
+			nonOursEvents: map[string][]string{
 				"beforeShellExecution": {superconductor},
 			},
 		},
@@ -146,19 +146,19 @@ func TestRun(t *testing.T) {
 
 			got := readEntries(t, hooksPath(home))
 
-			// Every wired event has exactly one Sigil entry, set to wantCmd.
+			// Every wired event has exactly one agento11y entry, set to wantCmd.
 			for _, ev := range cursorEvents {
 				cmds := got[ev]
 				require.NotEmpty(t, cmds, "event %q missing", ev)
-				sigil := sigilCommands(cmds)
-				require.Len(t, sigil, 1, "event %q must have one Sigil entry, got %v", ev, cmds)
-				assert.Equal(t, wantCmd, sigil[0], "event %q", ev)
+				ours := oursCommands(cmds)
+				require.Len(t, ours, 1, "event %q must have one agento11y entry, got %v", ev, cmds)
+				assert.Equal(t, wantCmd, ours[0], "event %q", ev)
 			}
 
 			for ev, want := range tc.preserved {
-				assert.Equal(t, want, nonSigilCommands(got[ev]), "preserved entries for %q", ev)
+				assert.Equal(t, want, nonOursCommands(got[ev]), "preserved entries for %q", ev)
 			}
-			for ev, want := range tc.nonSigilEvents {
+			for ev, want := range tc.nonOursEvents {
 				assert.Equal(t, want, got[ev], "untouched event %q", ev)
 			}
 		})
@@ -367,11 +367,11 @@ func TestInstallThenUninstallRoundTrip(t *testing.T) {
 	got := readEntries(t, hooksPath(home))
 	assert.Equal(t, []string{superconductor}, got["sessionStart"])
 	for _, ev := range cursorEvents {
-		assert.Empty(t, sigilCommands(got[ev]), "event %q still has a Sigil entry", ev)
+		assert.Empty(t, oursCommands(got[ev]), "event %q still has an agento11y entry", ev)
 	}
 }
 
-func TestIsSigilHook(t *testing.T) {
+func TestIsOursHook(t *testing.T) {
 	cases := []struct {
 		cmd  string
 		want bool
@@ -452,7 +452,7 @@ func readEntries(t *testing.T, path string) map[string][]string {
 	return out
 }
 
-func sigilCommands(cmds []string) []string {
+func oursCommands(cmds []string) []string {
 	var out []string
 	for _, c := range cmds {
 		if isOursHook(c) {
@@ -462,7 +462,7 @@ func sigilCommands(cmds []string) []string {
 	return out
 }
 
-func nonSigilCommands(cmds []string) []string {
+func nonOursCommands(cmds []string) []string {
 	var out []string
 	for _, c := range cmds {
 		if !isOursHook(c) {

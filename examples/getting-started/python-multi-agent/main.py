@@ -157,4 +157,4 @@ if synth_rec.err() is not None:
 agento11y.shutdown()
 tp.shutdown()
 mp.shutdown()
-print("Done — check the Graph tab in the conversation detail in AI Observability.")
+print("Done — check the Graph tab in the conversation detail in Agent Observability.")

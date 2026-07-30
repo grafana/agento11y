@@ -6,9 +6,9 @@ For agents working in a *consumer* project (instrumenting their app, or installi
 
 Read the README and `mise tasks` for the obvious stuff: layout, package names, where languages live. This file only documents what you can't discover by looking.
 
-## Proto is canonical
+## Proto is the source of truth
 
-`proto/agento11y/v1/*.proto` is the source of truth; `proto/sigil/v1` is the frozen legacy copy kept for the migration window. Generated stubs live under each language tree:
+`proto/agento11y/v1/*.proto` is the source of truth. Generated stubs live under each language tree:
 
 - Go: `go/proto/agento11y/`
 - Python: `python/agento11y/internal/gen/agento11y/`
@@ -53,7 +53,7 @@ If you change shared-binary behavior, the four glue plugins all see it. The Open
 
 ## Consumer prompt lives in two places
 
-[`llms.txt`](llms.txt) is what this repo ships. There is a second copy of the same prompt rendered by the AI Observability onboarding wizard (a separate Grafana product). When you change user-facing semantics here (new SDK field, renamed env var, new framework adapter), the wizard copy needs the same change. If you're only fixing this repo's internals, the wizard copy doesn't move.
+[`llms.txt`](llms.txt) is what this repo ships. There is a second copy of the same prompt rendered by the Agent Observability onboarding wizard (a separate Grafana product). When you change user-facing semantics here (new SDK field, renamed env var, new framework adapter), the wizard copy needs the same change. If you're only fixing this repo's internals, the wizard copy doesn't move.
 
 ## Running checks
 

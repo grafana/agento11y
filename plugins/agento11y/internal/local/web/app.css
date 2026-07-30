@@ -124,3 +124,28 @@
     @media (prefers-reduced-motion: reduce) {
       [style*="sigil-barin"], [style*="sigil-tin"] { animation: none !important; }
     }
+
+    /* Conversation search: a small spinner in the input's right cluster while a
+       request is in flight, and a 1.2s shimmer for skeleton rows shown before
+       the first results arrive. Both honour reduced-motion. */
+    @keyframes sigil-spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    @keyframes sigil-shim {
+      0%   { background-position: -200px 0; }
+      100% { background-position: calc(200px + 100%) 0; }
+    }
+    .sigil-spin { animation: sigil-spin .7s linear infinite; }
+    .sigil-shim {
+      background: linear-gradient(90deg,
+        rgba(204,204,220,0.04) 0%,
+        rgba(204,204,220,0.10) 50%,
+        rgba(204,204,220,0.04) 100%);
+      background-size: 200px 100%;
+      background-repeat: no-repeat;
+      animation: sigil-shim 1.2s ease-in-out infinite;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .sigil-spin, .sigil-shim { animation: none !important; }
+    }

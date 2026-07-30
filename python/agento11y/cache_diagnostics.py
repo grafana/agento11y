@@ -1,7 +1,4 @@
-"""Cache diagnostics metadata helpers (Anthropic cache-diagnosis beta).
-
-See Sigil documentation: ``docs/guides/cache-diagnostics.md``.
-"""
+"""Cache diagnostics metadata helpers (Anthropic cache-diagnosis beta)."""
 
 from __future__ import annotations
 

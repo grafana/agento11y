@@ -4,8 +4,8 @@
 // Vibe agent plugins. It accepts:
 //
 //	agento11y <agent> hook                                — dispatch a JSON hook payload on stdin to <agent>
-//	agento11y claude   [--local] [--tag k=v] [-- args...] — exec claude after bootstrapping the sigil-cc plugin
-//	agento11y codex    [--local] [--tag k=v] [-- args...] — exec codex after bootstrapping the sigil-codex plugin
+//	agento11y claude   [--local] [--tag k=v] [-- args...] — exec claude after bootstrapping the agento11y-claude-code plugin
+//	agento11y codex    [--local] [--tag k=v] [-- args...] — exec codex after bootstrapping the agento11y-codex plugin
 //	agento11y copilot  [--local] [--tag k=v] [-- args...] — exec copilot after bootstrapping the sigil-copilot plugin
 //	agento11y opencode [--local] [--tag k=v] [-- args...] — exec opencode after bootstrapping the @grafana/agento11y-opencode plugin
 //	agento11y pi       [--local] [--tag k=v] [-- args...] — exec pi after bootstrapping the @grafana/agento11y-pi extension

@@ -23,7 +23,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Google ADK lifecycle adapter for Sigil generation and tool recording. */
+/** Google ADK lifecycle adapter for agento11y generation and tool recording. */
 public final class Agento11yGoogleAdkAdapter {
     private static final String FRAMEWORK_NAME = "google-adk";
     private static final String FRAMEWORK_SOURCE = "handler";
