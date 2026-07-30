@@ -106,6 +106,53 @@ test('strands hook provider records model, tool, and conversation metadata', asy
   assert.deepEqual(toolExecution.result.content, [{ text: '42' }]);
 });
 
+test('strands derived total includes cache buckets under the disjoint contract', async () => {
+  const exporter = new CapturingExporter();
+  const client = new Agento11yClient({
+    generationExporter: exporter,
+    generationExport: { protocol: 'none' },
+  });
+  const provider = new Agento11yStrandsHookProvider(client, {
+    conversationId: 'local-agento11y-strands-demo',
+    agentName: 'local-strands-demo',
+    providerResolver: 'auto',
+  });
+  const agent = fakeAgent();
+
+  provider.beforeInvocation({ agent });
+  provider.beforeModelCall({ agent, model: agent.model });
+  provider.afterModelCall({
+    agent,
+    model: agent.model,
+    stopData: {
+      stopReason: 'end_turn',
+      message: {
+        role: 'assistant',
+        content: [{ text: 'ok' }],
+        metadata: {
+          usage: {
+            inputTokens: 98,
+            outputTokens: 120,
+            cacheReadInputTokens: 30,
+            cacheWriteInputTokens: 10,
+            // No provider totalTokens: the mapper derives it and must follow
+            // the disjoint contract it advertises (input + output + caches).
+          },
+        },
+      },
+    },
+  });
+  provider.afterInvocation({ agent });
+
+  await client.shutdown();
+  const generation = client.debugSnapshot().generations[0];
+  assert.equal(generation.usage.inputTokens, 98);
+  assert.equal(generation.usage.cacheReadInputTokens, 30);
+  assert.equal(generation.usage.cacheWriteInputTokens, 10);
+  assert.equal(generation.usage.totalTokens, 98 + 120 + 30 + 10);
+  assert.equal(generation.usage.inputIsDisjoint, true);
+});
+
 test('withAgento11yStrandsHooks appends a plugin for configs and registers existing agents once', () => {
   const client = new Agento11yClient({ generationExport: { protocol: 'none' } });
   const config = withAgento11yStrandsHooks({ name: 'agent' }, client, { conversationId: 'conversation-1' });

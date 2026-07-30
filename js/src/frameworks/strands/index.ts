@@ -626,10 +626,17 @@ function mapUsage(rawUsage: unknown): TokenUsage | undefined {
   }
   const inputTokens = optionalNumber(read(usage, 'inputTokens')) ?? optionalNumber(read(usage, 'input_tokens'));
   const outputTokens = optionalNumber(read(usage, 'outputTokens')) ?? optionalNumber(read(usage, 'output_tokens'));
+  const cacheReadInputTokens =
+    optionalNumber(read(usage, 'cacheReadInputTokens')) ?? optionalNumber(read(usage, 'cache_read_input_tokens'));
+  const cacheWriteInputTokens =
+    optionalNumber(read(usage, 'cacheWriteInputTokens')) ?? optionalNumber(read(usage, 'cache_write_input_tokens'));
+  // A derived total must follow the disjoint contract this mapper advertises
+  // below: Bedrock's input is additive (non-cached), so cache buckets add on.
   const totalTokens =
     optionalNumber(read(usage, 'totalTokens')) ??
     optionalNumber(read(usage, 'total_tokens')) ??
-    ((inputTokens ?? 0) + (outputTokens ?? 0) || undefined);
+    ((inputTokens ?? 0) + (outputTokens ?? 0) + (cacheReadInputTokens ?? 0) + (cacheWriteInputTokens ?? 0) ||
+      undefined);
   if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
     return undefined;
   }
@@ -637,10 +644,8 @@ function mapUsage(rawUsage: unknown): TokenUsage | undefined {
     inputTokens,
     outputTokens,
     totalTokens,
-    cacheReadInputTokens:
-      optionalNumber(read(usage, 'cacheReadInputTokens')) ?? optionalNumber(read(usage, 'cache_read_input_tokens')),
-    cacheWriteInputTokens:
-      optionalNumber(read(usage, 'cacheWriteInputTokens')) ?? optionalNumber(read(usage, 'cache_write_input_tokens')),
+    cacheReadInputTokens,
+    cacheWriteInputTokens,
     // Bedrock reports additive (non-cached) input, already disjoint-compliant.
     inputIsDisjoint: true,
   };
