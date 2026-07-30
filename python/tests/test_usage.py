@@ -387,6 +387,22 @@ class TestMapUsage:
         assert usage.input_tokens == 100
         assert usage.cache_read_input_tokens == 10
 
+    def test_marks_disjoint_only_for_identified_shapes(self):
+        # Positively identified shapes are normalized by their extractor and
+        # marked; the flat input_tokens catch-all is a guess and must stay
+        # unmarked so consumers can fall back to the provider-name heuristic.
+        assert map_usage({"prompt_tokens": 10, "completion_tokens": 5}).input_is_disjoint is True
+        assert map_usage({"prompt_token_count": 10, "candidates_token_count": 5}).input_is_disjoint is True
+        assert (
+            map_usage(
+                {"input_tokens": 10, "output_tokens": 5, "input_tokens_details": {"cached_tokens": 3}}
+            ).input_is_disjoint
+            is True
+        )
+        assert map_usage({"input_tokens": 100, "output_tokens": 50}).input_is_disjoint is False
+        # Direct provider-wrapper calls keep marking: there the shape is verified.
+        assert from_anthropic({"input_tokens": 100, "output_tokens": 50}).input_is_disjoint is True
+
     def test_legacy_fallback(self):
         raw = SimpleNamespace()  # no matching keys at all
         usage = map_usage(raw)

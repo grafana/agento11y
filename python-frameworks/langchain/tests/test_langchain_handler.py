@@ -374,6 +374,9 @@ def test_langchain_sync_lifecycle_extracts_anthropic_style_usage_and_stop_reason
         assert generation.usage.input_tokens == 42
         assert generation.usage.output_tokens == 17
         assert generation.usage.total_tokens == 59
+        # Flat input_tokens is a guessed shape: it stays unmarked so consumers
+        # apply the provider heuristic (additive for anthropic — same numbers).
+        assert generation.usage.input_is_disjoint is False
         assert generation.stop_reason == "end_turn"
     finally:
         client.shutdown()
@@ -474,6 +477,9 @@ def test_langchain_gemini_tool_calls_map_from_message_fields() -> None:
         assert generation.usage.total_tokens == 100
         assert generation.usage.cache_read_input_tokens == 7
         assert generation.usage.reasoning_tokens == 36
+        # The handler carved cache_read out of input itself, so this usage is
+        # known-disjoint and marked.
+        assert generation.usage.input_is_disjoint is True
     finally:
         client.shutdown()
 

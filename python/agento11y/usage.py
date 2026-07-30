@@ -166,7 +166,15 @@ def map_usage(raw: Any) -> TokenUsage:
         return from_openai_responses(raw)
 
     if _read(raw, "input_tokens") is not None:
-        return from_anthropic(raw)
+        # A flat input_tokens key is a guess, not a verified Anthropic payload:
+        # an unknown provider could report it cache-inclusively. Leave the usage
+        # unmarked so consumers fall back to the provider-name heuristic, which
+        # is correct for additive providers and correctable for inclusive ones.
+        # Direct from_anthropic callers (the Anthropic provider wrapper) keep
+        # marking, since there the shape is verified.
+        usage = from_anthropic(raw)
+        usage.input_is_disjoint = False
+        return usage
 
     return from_generic(raw)
 

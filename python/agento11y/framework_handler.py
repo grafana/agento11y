@@ -1655,14 +1655,18 @@ def _map_framework_usage(raw_usage: Any):
         # invariant under this rebucketing (input drops by cache_read, cache_read
         # rises by the same amount), so it needs no adjustment.
         usage.input_tokens = max(usage.input_tokens - cache_read, 0)
+        # First-hand normalization: this handler carved cache_read out of the
+        # input, so the result is known-disjoint whatever extractor produced
+        # the base usage.
+        usage.input_is_disjoint = True
 
     reasoning = _as_int(_read(output_token_details, "reasoning"))
     if reasoning > 0 and usage.reasoning_tokens == 0:
         usage.reasoning_tokens = reasoning
 
-    # This handler owns the disjoint normalization above, so mark the usage
-    # regardless of which extractor map_usage dispatched to.
-    usage.input_is_disjoint = True
+    # Otherwise keep the extractor's own verdict: shape-specific extractors
+    # (OpenAI/Gemini) mark what they normalized, while guessed shapes stay
+    # unmarked so consumers can apply the provider-name heuristic.
     return usage
 
 
