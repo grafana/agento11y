@@ -114,6 +114,14 @@ function that calls a model and returns a score; a `deterministic` one is a plai
 `experiments.Evaluator(evaluator_id=..., kind=...)` is only the label attached to the score, not the
 logic. (Forking a predefined template is a separate online-eval path, not needed here.)
 
+One exception, for tenants that already have evaluators: if the developer points at an evaluator
+that exists in Agent Observability already, the Python runner can bind the trial to the agent's
+conversation and let that evaluator grade it, instead of writing the check in the runner:
+`trial.bind_conversation(conversation_id)` then `trial.evaluate("<existing-evaluator-id>")`. The
+trial then closes as `completed` with no local `final_score`. Do not create the evaluator to make
+this work, and do not suggest it when the tenant has none; this skill only uses what is already
+there.
+
 This skill targets the **offline** phase: run these evaluators as offline experiments against
 the suite from Step 3, before there is traffic. Do not recommend live/online evaluation to an
 agent with no traffic.

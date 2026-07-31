@@ -44,6 +44,7 @@ class ConflictKind(str, Enum):
 
     SCORE_COUNT_MISMATCH = "score_count_mismatch"
     RUNNING_TRIALS = "running_trials"
+    PENDING_EVALUATIONS = "pending_evaluations"
     TERMINAL = "terminal"
     IMMUTABLE_FIELD = "immutable_field"
     OPEN_DRAFT = "open_draft"
@@ -62,6 +63,7 @@ class ConflictError(Agento11yError):
         return self.kind in {
             ConflictKind.SCORE_COUNT_MISMATCH,
             ConflictKind.RUNNING_TRIALS,
+            ConflictKind.PENDING_EVALUATIONS,
             ConflictKind.OPEN_DRAFT,
         }
 
@@ -72,6 +74,8 @@ def classify_conflict(message: str) -> ConflictKind:
     value = (message or "").lower()
     if "score_count" in value or "score count" in value or ("expected " in value and " scores, found " in value):
         return ConflictKind.SCORE_COUNT_MISMATCH
+    if "pending evaluation" in value:
+        return ConflictKind.PENDING_EVALUATIONS
     if "running trial" in value or ("cannot complete experiment with " in value and " trial" in value):
         return ConflictKind.RUNNING_TRIALS
     if (
@@ -95,6 +99,36 @@ def classify_conflict(message: str) -> ConflictKind:
 
 class ExperimentTransportError(Agento11yError):
     """Raised when an experiment request fails."""
+
+
+class EvaluationExecutionError(Agento11yError):
+    """Raised when a durable trial evaluation finishes unsuccessfully."""
+
+    def __init__(self, evaluation_id: str, detail: str) -> None:
+        normalized_id = (evaluation_id or "").strip()
+        normalized_detail = (detail or "").strip() or "evaluation failed"
+        super().__init__(f"agento11y trial evaluation {normalized_id or 'unknown'} failed: {normalized_detail}")
+        self.evaluation_id = normalized_id
+        self.detail = normalized_detail
+
+    def __reduce__(self) -> "tuple[type[EvaluationExecutionError], tuple[str, str]]":
+        # BaseException.__reduce__ would replay the formatted message as the only
+        # positional argument, which this two-argument signature cannot accept.
+        return (self.__class__, (self.evaluation_id, self.detail))
+
+
+class EvaluationTimeoutError(Agento11yError):
+    """Raised when waiting for a durable trial evaluation times out."""
+
+    def __init__(self, evaluation_id: str, detail: str) -> None:
+        normalized_id = (evaluation_id or "").strip()
+        normalized_detail = (detail or "").strip() or "evaluation timed out"
+        super().__init__(f"agento11y trial evaluation {normalized_id or 'unknown'} timed out: {normalized_detail}")
+        self.evaluation_id = normalized_id
+        self.detail = normalized_detail
+
+    def __reduce__(self) -> "tuple[type[EvaluationTimeoutError], tuple[str, str]]":
+        return (self.__class__, (self.evaluation_id, self.detail))
 
 
 class ScoreExportError(Agento11yError):

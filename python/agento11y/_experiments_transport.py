@@ -11,6 +11,10 @@ for generation export:
                                                         update a typed trial
   POST   /api/v1/experiment-runs/{run_id}/trials/{trial_id}/artifacts:upload
                                                         attach a trial artifact
+  POST   /api/v1/experiment-runs/{run_id}/trials/{trial_id}:evaluate
+                                                        run a stored evaluator
+  GET    /api/v1/experiment-runs/{run_id}/trials/{trial_id}/evaluations/{evaluation_id}
+                                                        read evaluator work status
 
 Reads use the Agent Observability query routes with the same configured endpoint and auth:
 
@@ -25,6 +29,7 @@ resolved endpoint, insecure flag, and auth headers.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -52,6 +57,8 @@ from .models import (
     ExportScoresResponse,
     ScoreItem,
     ScoreValue,
+    TrialEvaluation,
+    TrialEvaluationStatus,
 )
 
 _EVAL_EXPERIMENTS_SUFFIX = "/eval/experiments"
@@ -73,7 +80,8 @@ class RetryPolicy:
 
     Retries cover request timeouts, connection errors, HTTP 429, and HTTP 5xx,
     using exponential backoff bounded by ``max_backoff``. 4xx responses other
-    than 429 are not retried (they are caller errors).
+    than 429 are not retried (they are caller errors), and neither is a 503 that
+    reports a backend capability gap rather than a transient outage.
     """
 
     max_retries: int = 3
@@ -269,6 +277,62 @@ def update_test_case_trial(
     url = _base_url(api_endpoint, insecure) + f"{_EXPERIMENT_RUNS_PREFIX}/{quoted_run_id}/trials/{quoted_trial_id}"
     body = _request_json("PATCH", url, headers, request, retry, ExperimentTransportError, "test case trial update")
     return body if isinstance(body, dict) else {}
+
+
+def trigger_trial_evaluation(
+    *,
+    api_endpoint: str,
+    insecure: bool,
+    headers: dict[str, str],
+    experiment_id: str,
+    trial_id: str,
+    evaluator_id: str,
+    evaluator_version: str = "",
+    retry: RetryPolicy | None = None,
+) -> TrialEvaluation:
+    """Queues a stored evaluator for a trial's bound conversation."""
+
+    run_id, normalized_trial_id = _validate_trial_evaluation_path(experiment_id, trial_id)
+    normalized_evaluator_id = (evaluator_id or "").strip()
+    if normalized_evaluator_id == "":
+        raise ValidationError("agento11y trial evaluation validation failed: evaluator_id is required")
+    payload = {"evaluator_id": normalized_evaluator_id}
+    normalized_version = (evaluator_version or "").strip()
+    if normalized_version:
+        payload["evaluator_version"] = normalized_version
+    url = (
+        _base_url(api_endpoint, insecure)
+        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(run_id, safe='')}/trials/"
+        + f"{urllib_parse.quote(normalized_trial_id, safe='')}:evaluate"
+    )
+    body = _request_json("POST", url, headers, payload, retry, ExperimentTransportError, "trial evaluation trigger")
+    return _parse_trial_evaluation(body)
+
+
+def get_trial_evaluation(
+    *,
+    api_endpoint: str,
+    insecure: bool,
+    headers: dict[str, str],
+    experiment_id: str,
+    trial_id: str,
+    evaluation_id: str,
+    retry: RetryPolicy | None = None,
+) -> TrialEvaluation:
+    """Reads durable status for a triggered trial evaluation."""
+
+    run_id, normalized_trial_id = _validate_trial_evaluation_path(experiment_id, trial_id)
+    normalized_evaluation_id = (evaluation_id or "").strip()
+    if normalized_evaluation_id == "":
+        raise ValidationError("agento11y trial evaluation validation failed: evaluation_id is required")
+    url = (
+        _base_url(api_endpoint, insecure)
+        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(run_id, safe='')}/trials/"
+        + f"{urllib_parse.quote(normalized_trial_id, safe='')}/evaluations/"
+        + urllib_parse.quote(normalized_evaluation_id, safe="")
+    )
+    body = _request_json("GET", url, headers, None, retry, ExperimentTransportError, "trial evaluation status")
+    return _parse_trial_evaluation(body)
 
 
 def upload_trial_artifact(
@@ -545,6 +609,34 @@ def _parse_experiment_run_response(payload: Any) -> Experiment:
     return _parse_experiment(payload)
 
 
+def _parse_trial_evaluation(payload: Any) -> TrialEvaluation:
+    if not isinstance(payload, dict):
+        raise ExperimentTransportError("agento11y trial evaluation transport failed: invalid response payload")
+    raw_status = _str(payload.get("status"))
+    try:
+        # An unknown status fails fast: a newer terminal state would otherwise poll until timeout.
+        status = TrialEvaluationStatus(raw_status)
+    except ValueError as exc:
+        raise ExperimentTransportError(
+            f"agento11y trial evaluation transport failed: unsupported evaluation status {raw_status!r}"
+        ) from exc
+    return TrialEvaluation(
+        evaluation_id=_str(payload.get("evaluation_id")),
+        experiment_id=_str(payload.get("experiment_id")),
+        trial_id=_str(payload.get("trial_id")),
+        test_case_id=_str(payload.get("test_case_id")),
+        conversation_id=_str(payload.get("conversation_id")),
+        evaluator_id=_str(payload.get("evaluator_id")),
+        evaluator_version=_str(payload.get("evaluator_version")),
+        status=status,
+        attempts=_int(payload.get("attempts")),
+        scheduled_at=_parse_ts(payload.get("scheduled_at")),
+        created_at=_parse_ts(payload.get("created_at")),
+        updated_at=_parse_ts(payload.get("updated_at")),
+        error=_str(payload.get("error")),
+    )
+
+
 def _parse_export_scores_response(payload: Any) -> ExportScoresResponse:
     if not isinstance(payload, dict):
         raise ScoreExportError("agento11y score export transport failed: invalid response payload")
@@ -619,6 +711,8 @@ def _request_json(
                 detail = body or str(exc.code)
                 raise ConflictError(f"agento11y {label} conflict: {detail}", kind=classify_conflict(detail)) from exc
             last_detail = f"status {exc.code}: {body or 'unexpected status'}"
+            if _is_capability_gap(exc, body):
+                raise transport_error_cls(f"agento11y {label} transport failed: {last_detail}") from exc
             if exc.code == 429 or 500 <= exc.code < 600:
                 if attempt < policy.max_retries:
                     attempt, backoff = _sleep_backoff(attempt, backoff, policy)
@@ -664,6 +758,8 @@ def _request_bytes_json(
                 detail = body or str(exc.code)
                 raise ConflictError(f"agento11y {label} conflict: {detail}", kind=classify_conflict(detail)) from exc
             last_detail = f"status {exc.code}: {body or 'unexpected status'}"
+            if _is_capability_gap(exc, body):
+                raise transport_error_cls(f"agento11y {label} transport failed: {last_detail}") from exc
             if exc.code == 429 or 500 <= exc.code < 600:
                 if attempt < policy.max_retries:
                     attempt, backoff = _sleep_backoff(attempt, backoff, policy)
@@ -708,6 +804,31 @@ def _read_error_body(exc: urllib_error.HTTPError) -> str:
         return ""
 
 
+# Shape of the plain-text message the ingest control plane returns with a 503:
+# lowercase words ending in "is unavailable", such as "trial evaluation service
+# is unavailable". Proxy and load balancer 503 pages do not match it: they are
+# HTML, and their prose is capitalized and punctuated.
+_CAPABILITY_GAP_MESSAGE = re.compile(r"\A[a-z0-9][a-z0-9 ._-]* is unavailable\Z")
+
+
+def _is_capability_gap(exc: urllib_error.HTTPError, body: str) -> bool:
+    """Whether a 503 means the backend cannot serve this route at all.
+
+    Agent Observability answers 503 when the store behind a route does not
+    implement the feature, so every retry returns the same thing and only
+    spends the budget. A 503 from anything in front of it is usually transient,
+    so the match is kept narrow and an unrecognized 503 still retries.
+    """
+
+    if exc.code != 503:
+        return False
+    headers = getattr(exc, "headers", None)
+    content_type = headers.get("Content-Type", "") if headers is not None else ""
+    if not content_type.strip().lower().startswith("text/plain"):
+        return False
+    return _CAPABILITY_GAP_MESSAGE.match(body.strip()) is not None
+
+
 # --------------------------------------------------------------------------- #
 # URL + value helpers
 # --------------------------------------------------------------------------- #
@@ -728,6 +849,16 @@ def _validate_run_id(run_id: str) -> str:
     if normalized == "":
         raise ValidationError("agento11y experiment validation failed: run_id is required")
     return normalized
+
+
+def _validate_trial_evaluation_path(experiment_id: str, trial_id: str) -> tuple[str, str]:
+    run_id = (experiment_id or "").strip()
+    if run_id == "":
+        raise ValidationError("agento11y trial evaluation validation failed: experiment_id is required")
+    normalized_trial_id = (trial_id or "").strip()
+    if normalized_trial_id == "":
+        raise ValidationError("agento11y trial evaluation validation failed: trial_id is required")
+    return run_id, normalized_trial_id
 
 
 def _base_url(endpoint: str, insecure: bool) -> str:

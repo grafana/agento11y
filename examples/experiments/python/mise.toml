@@ -14,6 +14,10 @@ run = "uv run python -m app.run_experiment"
 description = "Run a deterministic experiment without a test suite"
 run = "uv run python -m app.run_suite_free_experiment"
 
+[tasks.cloud-evaluator]
+description = "Grade trials with an evaluator stored in your Agent Observability tenant"
+run = "uv run python -m app.run_cloud_evaluator_experiment"
+
 [tasks.dashboard]
 description = "Run the dashboard image-artifact experiment against Agent Observability"
 run = "uv run python -m app.run_dashboard_experiment"

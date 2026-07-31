@@ -10,7 +10,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 from agento11y import _experiments_transport as transport
-from agento11y.errors import ConflictError, ConflictKind, NotFoundError, ScoreExportError, ValidationError
+from agento11y.errors import (
+    ConflictError,
+    ConflictKind,
+    ExperimentTransportError,
+    NotFoundError,
+    ScoreExportError,
+    ValidationError,
+)
 from agento11y.experiments import Client as ExperimentClient
 from agento11y.models import (
     CreateExperimentRequest,
@@ -19,6 +26,7 @@ from agento11y.models import (
     ScoreItem,
     ScoreSource,
     ScoreValue,
+    TrialEvaluationStatus,
 )
 
 
@@ -27,13 +35,13 @@ class _Recorder:
 
     def __init__(self) -> None:
         self.requests: list[dict[str, object]] = []
-        self.responses: list[tuple[int, object]] = []
+        self.responses: list[tuple[int, object, str]] = []
         self.lock = threading.Lock()
 
-    def push(self, status: int, body: object) -> None:
-        self.responses.append((status, body))
+    def push(self, status: int, body: object, content_type: str = "") -> None:
+        self.responses.append((status, body, content_type))
 
-    def take(self) -> tuple[int, object]:
+    def take(self) -> tuple[int, object, str]:
         with self.lock:
             if len(self.responses) == 1:
                 return self.responses[0]
@@ -56,10 +64,17 @@ def _make_handler(recorder: _Recorder):
                     else raw,
                 }
             )
-            status, body = recorder.take()
-            encoded = json.dumps(body).encode("utf-8")
+            status, body, content_type = recorder.take()
+            # A bytes body is sent as-is, the way the ingest control plane returns
+            # plain-text errors; anything else is serialized as JSON.
+            if isinstance(body, bytes):
+                encoded = body
+                content_type = content_type or "text/plain; charset=utf-8"
+            else:
+                encoded = json.dumps(body).encode("utf-8")
+                content_type = content_type or "application/json"
             self.send_response(status)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(encoded)))
             self.end_headers()
             self.wfile.write(encoded)
@@ -239,6 +254,7 @@ def test_complete_experiment_finalizes_run() -> None:
     ("message", "kind", "recoverable"),
     [
         ("cannot complete experiment with 2 running trial(s)", ConflictKind.RUNNING_TRIALS, True),
+        ("cannot complete experiment with 2 pending evaluation(s)", ConflictKind.PENDING_EVALUATIONS, True),
         ("expected 12 scores, found 11", ConflictKind.SCORE_COUNT_MISMATCH, True),
         (
             "planned_trial_count conflicts with the existing experiment",
@@ -268,6 +284,303 @@ def test_conflict_has_stable_kind_for_real_server_messages(
             )
         assert caught.value.kind is kind
         assert caught.value.recoverable is recoverable
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _evaluation_body(**overrides: object) -> dict[str, object]:
+    body = {
+        "evaluation_id": "teval_1",
+        "experiment_id": "run_1",
+        "trial_id": "trial_1",
+        "test_case_id": "case-1",
+        "conversation_id": "conv-1",
+        "evaluator_id": "helpfulness",
+        "evaluator_version": "v3",
+        "status": "queued",
+        "attempts": 0,
+        "scheduled_at": "2026-07-23T12:00:00Z",
+        "created_at": "2026-07-23T12:00:00Z",
+        "updated_at": "2026-07-23T12:00:00Z",
+    }
+    body.update(overrides)
+    return body
+
+
+@pytest.mark.parametrize(
+    "trial_id,expected_path,evaluator_version,expected_payload",
+    [
+        pytest.param(
+            "trial/1",
+            "/api/v1/experiment-runs/run_1/trials/trial%2F1:evaluate",
+            "v3",
+            {"evaluator_id": "helpfulness", "evaluator_version": "v3"},
+            id="explicit version",
+        ),
+        pytest.param(
+            "trial/1",
+            "/api/v1/experiment-runs/run_1/trials/trial%2F1:evaluate",
+            "",
+            {"evaluator_id": "helpfulness"},
+            id="latest version",
+        ),
+        pytest.param(
+            "trial:one",
+            "/api/v1/experiment-runs/run_1/trials/trial%3Aone:evaluate",
+            "",
+            {"evaluator_id": "helpfulness"},
+            id="colon in trial id",
+        ),
+    ],
+)
+def test_trigger_trial_evaluation_uses_ingest_route(
+    trial_id: str,
+    expected_path: str,
+    evaluator_version: str,
+    expected_payload: dict[str, str],
+) -> None:
+    recorder = _Recorder()
+    recorder.push(202, _evaluation_body(trial_id=trial_id))
+    server = _serve(recorder)
+    try:
+        evaluation = transport.trigger_trial_evaluation(
+            **_args(server),
+            experiment_id="run_1",
+            trial_id=trial_id,
+            evaluator_id="helpfulness",
+            evaluator_version=evaluator_version,
+        )
+        request = recorder.requests[0]
+        assert request["method"] == "POST"
+        assert request["path"] == expected_path
+        assert request["payload"] == expected_payload
+        assert request["headers"]["authorization"] == _basic("tenant-a", "ingest-token-a")
+        assert evaluation.status == TrialEvaluationStatus.QUEUED
+        assert evaluation.evaluation_id == "teval_1"
+        assert evaluation.scheduled_at is not None and evaluation.scheduled_at.tzinfo == timezone.utc
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_get_trial_evaluation_parses_terminal_failure() -> None:
+    recorder = _Recorder()
+    recorder.push(
+        200,
+        _evaluation_body(
+            status="failed",
+            attempts=4,
+            updated_at="2026-07-23T12:01:00Z",
+            error="budget exhausted",
+        ),
+    )
+    server = _serve(recorder)
+    try:
+        evaluation = transport.get_trial_evaluation(
+            **_args(server),
+            experiment_id="run_1",
+            trial_id="trial_1",
+            evaluation_id="teval_1",
+        )
+        request = recorder.requests[0]
+        assert request["method"] == "GET"
+        assert request["path"] == "/api/v1/experiment-runs/run_1/trials/trial_1/evaluations/teval_1"
+        assert request["payload"] == b""
+        assert evaluation.status == TrialEvaluationStatus.FAILED
+        assert evaluation.status.terminal is True
+        assert evaluation.attempts == 4
+        assert evaluation.error == "budget exhausted"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    "http_status,status,terminal",
+    [
+        pytest.param(202, "queued", False, id="accepted queued"),
+        pytest.param(202, "claimed", False, id="accepted claimed"),
+        pytest.param(200, "success", True, id="terminal success"),
+        pytest.param(200, "failed", True, id="terminal failed"),
+    ],
+)
+def test_get_trial_evaluation_parses_accepted_and_terminal_bodies(
+    http_status: int,
+    status: str,
+    terminal: bool,
+) -> None:
+    recorder = _Recorder()
+    recorder.push(http_status, _evaluation_body(status=status))
+    server = _serve(recorder)
+    try:
+        evaluation = transport.get_trial_evaluation(
+            **_args(server),
+            experiment_id="run_1",
+            trial_id="trial_1",
+            evaluation_id="teval_1",
+        )
+        assert evaluation.status.value == status
+        assert evaluation.status.terminal is terminal
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_get_trial_evaluation_rejects_unknown_status() -> None:
+    recorder = _Recorder()
+    recorder.push(200, _evaluation_body(status="cancelled"))
+    server = _serve(recorder)
+    try:
+        with pytest.raises(ExperimentTransportError, match="unsupported evaluation status 'cancelled'"):
+            transport.get_trial_evaluation(
+                **_args(server),
+                experiment_id="run_1",
+                trial_id="trial_1",
+                evaluation_id="teval_1",
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    "body,content_type,expected_requests",
+    [
+        pytest.param(
+            # Byte-for-byte what Go's http.Error writes, trailing newline included.
+            b"trial evaluation service is unavailable\n",
+            "",
+            1,
+            id="control plane capability gap fails fast",
+        ),
+        pytest.param(
+            b"<html><title>503 Service Temporarily Unavailable</title></html>",
+            "text/html",
+            3,
+            id="proxy html page retries",
+        ),
+        pytest.param(
+            b"The service is unavailable.",
+            "text/html",
+            3,
+            id="iis prose retries",
+        ),
+        pytest.param({"error": "unavailable"}, "", 3, id="json body retries"),
+    ],
+)
+def test_trigger_trial_evaluation_retries_every_503_but_a_capability_gap(
+    body: object, content_type: str, expected_requests: int
+) -> None:
+    recorder = _Recorder()
+    recorder.push(503, body, content_type)
+    server = _serve(recorder)
+    try:
+        with pytest.raises(ExperimentTransportError, match="status 503"):
+            transport.trigger_trial_evaluation(
+                **_args(server),
+                experiment_id="run_1",
+                trial_id="trial_1",
+                evaluator_id="helpfulness",
+            )
+        assert len(recorder.requests) == expected_requests
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    "body,content_type,expected_requests",
+    [
+        pytest.param(b"artifact service is unavailable\n", "", 1, id="capability gap fails fast"),
+        pytest.param(b"upstream connect error", "text/plain", 3, id="transient plain text retries"),
+    ],
+)
+def test_upload_trial_artifact_applies_the_same_503_rule(
+    body: bytes, content_type: str, expected_requests: int
+) -> None:
+    # Artifact upload goes through the raw-bytes request helper rather than the
+    # JSON one, so it needs its own coverage of the retry rule.
+    recorder = _Recorder()
+    recorder.push(503, body, content_type)
+    server = _serve(recorder)
+    try:
+        with pytest.raises(ExperimentTransportError, match="status 503"):
+            transport.upload_trial_artifact(
+                **_args(server),
+                experiment_id="run_1",
+                trial_id="trial_1",
+                name="transcript.txt",
+                kind="output",
+                content=b"hello",
+            )
+        assert len(recorder.requests) == expected_requests
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    "call,error",
+    [
+        pytest.param(
+            lambda args: transport.trigger_trial_evaluation(
+                **args, experiment_id=" ", trial_id="trial_1", evaluator_id="helpfulness"
+            ),
+            "experiment_id is required",
+            id="trigger without experiment",
+        ),
+        pytest.param(
+            lambda args: transport.trigger_trial_evaluation(
+                **args, experiment_id="run_1", trial_id="", evaluator_id="helpfulness"
+            ),
+            "trial_id is required",
+            id="trigger without trial",
+        ),
+        pytest.param(
+            lambda args: transport.trigger_trial_evaluation(
+                **args, experiment_id="run_1", trial_id="trial_1", evaluator_id=" "
+            ),
+            "evaluator_id is required",
+            id="trigger without evaluator",
+        ),
+        pytest.param(
+            lambda args: transport.get_trial_evaluation(
+                **args, experiment_id="run_1", trial_id="trial_1", evaluation_id=""
+            ),
+            "evaluation_id is required",
+            id="status without evaluation",
+        ),
+    ],
+)
+def test_trial_evaluation_validates_route_values_before_requesting(call, error: str) -> None:
+    recorder = _Recorder()
+    server = _serve(recorder)
+    try:
+        with pytest.raises(ValidationError, match=error):
+            call(_args(server))
+        assert recorder.requests == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_experiment_client_triggers_and_reads_trial_evaluation() -> None:
+    recorder = _Recorder()
+    recorder.push(202, _evaluation_body())
+    recorder.push(200, _evaluation_body(status="success", updated_at="2026-07-23T12:01:00Z"))
+    server = _serve(recorder)
+    endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        client = ExperimentClient(endpoint, tenant_id="tenant-a", ingest_token="ingest-token-a")
+        queued = client.trigger_trial_evaluation("run_1", "trial_1", "helpfulness", "v3")
+        completed = client.get_trial_evaluation("run_1", "trial_1", queued.evaluation_id)
+        assert queued.status == TrialEvaluationStatus.QUEUED
+        assert completed.status == TrialEvaluationStatus.SUCCESS
+        assert [request["method"] for request in recorder.requests] == ["POST", "GET"]
+        assert all(
+            request["headers"]["authorization"] == _basic("tenant-a", "ingest-token-a") for request in recorder.requests
+        )
     finally:
         server.shutdown()
         server.server_close()

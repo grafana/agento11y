@@ -747,6 +747,90 @@ Experimental OTel eval spans/events are disabled by default; opt in with
 `use_experimental_otel=True` on `experiments.experiment(...)` or
 `AGENTO11Y_USE_EXPERIMENTAL_OTEL=true`.
 
+### Grading with an evaluator stored in Grafana Cloud
+
+When the grading prompt lives in Agent Observability instead of in the runner,
+bind the trial to the conversation id your normal instrumentation already
+produced and let that evaluator score it. `trial.evaluate(...)` persists the
+binding, triggers the evaluation, and polls until the worker reaches a terminal
+status. The evaluator reads every generation in that conversation, not only the
+last one:
+
+```python
+from agento11y import experiments
+from agento11y.errors import EvaluationExecutionError, EvaluationTimeoutError
+
+with experiments.experiment("nightly", experiment_id="nightly-42") as exp:
+    for case_id, question in CASES:
+        with exp.trial(case_id) as trial:
+            answer = my_agent(question)          # already instrumented
+            trial.bind_conversation(answer.conversation_id)
+            try:
+                evaluation = trial.evaluate("helpfulness")
+            except EvaluationExecutionError as exc:
+                print(f"{case_id}: evaluation {exc.evaluation_id} failed: {exc.detail}")
+                raise
+            except EvaluationTimeoutError as exc:
+                print(f"{case_id}: still pending: {exc.detail}")
+                raise
+            print(case_id, evaluation.status.value, evaluation.attempts)
+```
+
+The evaluator must already exist in Grafana Cloud; the SDK does not create it. A
+trial graded this way closes as `completed` with no local `final_score`.
+
+Three consequences worth knowing before you go looking for the score:
+
+- The score is attached to the conversation and the trial, not to a generation,
+  so a per-generation score lookup returns nothing. Read it from the
+  experiment's scores or from each trial's `scores` in `exp.report()`.
+- `pass_rate` in the report stays unset, because that verdict comes from a score
+  stored under the `final` key and a stored evaluator writes under its own key.
+- Leave `score_count` unset when finalizing. The server counts every stored
+  score for the run, cloud ones included, so a locally derived count raises
+  `ConflictError` with `ConflictKind.SCORE_COUNT_MISMATCH`.
+
+`timeout` bounds the polling loop, not the whole call, and a status request
+already in flight can push the call past it. When the deadline passes the
+evaluation keeps running server-side, so finalizing straight afterwards raises
+`ConflictError` with `ConflictKind.PENDING_EVALUATIONS`. That conflict is
+recoverable: poll to a terminal status, then finalize again.
+
+`trial.evaluate(...)` waits for one evaluation before starting the next. To let
+them run at the same time, trigger without waiting and poll afterwards. Keep both
+loops inside the experiment block: leaving it while an evaluation is queued hits
+the conflict above, and the run stops before it polls anything.
+
+```python
+import time
+
+pending = []
+with experiments.experiment("nightly", experiment_id="nightly-42") as exp:
+    for case_id, question in CASES:
+        with exp.trial(case_id) as trial:
+            answer = my_agent(question)
+            trial.bind_conversation(answer.conversation_id)
+            exp.client.update_trial(exp.experiment_id, trial.trial_id, conversation_id=answer.conversation_id)
+            queued = exp.client.trigger_trial_evaluation(exp.experiment_id, trial.trial_id, "helpfulness")
+            pending.append((case_id, trial.trial_id, queued.evaluation_id))
+            trial.succeed()  # no local final score, so mark it before close()
+
+    for case_id, trial_id, evaluation_id in pending:
+        evaluation = exp.client.get_trial_evaluation(exp.experiment_id, trial_id, evaluation_id)
+        while not evaluation.status.terminal:
+            time.sleep(2)
+            evaluation = exp.client.get_trial_evaluation(exp.experiment_id, trial_id, evaluation_id)
+        print(case_id, evaluation.status.value)
+```
+
+These two endpoints must be routed by the Grafana Cloud gateway for your stack.
+Where they are not, the request is rejected before it reaches Agent
+Observability and the SDK surfaces the gateway's answer,
+`401 invalid scope requested`, which looks like a token problem but is not.
+
+See [`examples/experiments/python/app/run_cloud_evaluator_experiment.py`](https://github.com/grafana/agento11y/blob/main/examples/experiments/python/app/run_cloud_evaluator_experiment.py)
+for a runnable version.
+
 ### Local evaluator helpers
 
 The tracking-first MVP boundary and deferred framework/OTel work are summarized

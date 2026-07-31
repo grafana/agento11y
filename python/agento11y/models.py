@@ -523,6 +523,40 @@ class ExperimentSource(str, Enum):
     COLLECTION = "collection"
 
 
+class TrialEvaluationStatus(str, Enum):
+    """Durable state of a stored evaluator run for an experiment trial."""
+
+    QUEUED = "queued"
+    CLAIMED = "claimed"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+    @property
+    def terminal(self) -> bool:
+        """Whether the worker has finished the evaluation."""
+
+        return self in (TrialEvaluationStatus.SUCCESS, TrialEvaluationStatus.FAILED)
+
+
+@dataclass(slots=True)
+class TrialEvaluation:
+    """Status returned when a trial runs a stored Agent Observability evaluator."""
+
+    evaluation_id: str
+    experiment_id: str
+    trial_id: str
+    test_case_id: str
+    conversation_id: str
+    evaluator_id: str
+    evaluator_version: str
+    status: TrialEvaluationStatus
+    attempts: int = 0
+    scheduled_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    error: str = ""
+
+
 @dataclass(slots=True)
 class ScoreValue:
     """A single typed score value. Exactly one field must be set.

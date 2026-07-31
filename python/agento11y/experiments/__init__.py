@@ -27,6 +27,16 @@ stack id, and ``ingest_token`` your Cloud ingestion API key)::
                 answer = run_agent(case.input)
                 trial.final_score(answer == case.expected, evaluator=verifier)
 
+A stored Agent Observability evaluator can grade a conversation already emitted
+by the agent's normal instrumentation::
+
+    with Experiment(client, experiment_id="run-2", name="cloud eval", suite=suite) as exp:
+        for case in suite.test_cases:
+            with exp.trial(case) as trial:
+                answer, conversation_id = run_instrumented_agent(case.input)
+                trial.bind_conversation(conversation_id)
+                trial.evaluate("helpfulness")
+
 Cross-process (e.g. a verifier container) opens a trial from a serialized ref::
 
     from agento11y.experiments import Trial, TrialRef
@@ -39,6 +49,8 @@ Cross-process (e.g. a verifier container) opens a trial from a serialized ref::
 
 from __future__ import annotations
 
+from ..errors import EvaluationExecutionError, EvaluationTimeoutError
+from ..models import TrialEvaluation, TrialEvaluationStatus
 from . import otel, score
 from .client import Client
 from .evaluators import (
@@ -83,6 +95,10 @@ __all__ = [
     "RegexJudge",
     "ExperimentStatus",
     "TrialStatus",
+    "TrialEvaluation",
+    "TrialEvaluationStatus",
+    "EvaluationExecutionError",
+    "EvaluationTimeoutError",
     "normalize_evaluator_kind",
     "experiment",
     "experiment_from_suite",
