@@ -20,6 +20,30 @@ GOWORK=off go run .
 The canned agent makes no provider call. It needs only `AGENTO11Y_ENDPOINT`,
 `AGENTO11Y_AUTH_TOKEN`, and optional `AGENTO11Y_AUTH_TENANT_ID`.
 
+| Entry point | Command | What it demonstrates |
+| --- | --- | --- |
+| Streaming runner | `GOWORK=off go run .` | Candidate I/O, several verifier scores, usage, cost, artifact |
+| Stored evaluator | `GOWORK=off go run ./cloud-evaluator` | Binds the agent's conversation and grades it with an evaluator stored in your tenant, with no local score |
+| Prompt optimizer | `GOWORK=off go run ./prompt-optimization` | Real-model hill climbing on the finalized report score |
+
+## Stored evaluator
+
+[`cloud-evaluator/`](cloud-evaluator/) grades each trial with an evaluator that
+already exists in your tenant instead of scoring locally. `trial.Evaluate(...)`
+blocks until the worker finishes, so the run takes as long as the evaluations do:
+
+```bash
+export AGENTO11Y_EXPERIMENT_ID=cloud-evaluator-${GIT_SHA:-manual}
+export EVALUATOR_ID=<an-evaluator-id-in-your-tenant>
+# Optional: pin a version instead of the latest active one.
+export EVALUATOR_VERSION=<version>
+GOWORK=off go run ./cloud-evaluator
+```
+
+The example does not create the evaluator; define it in Agent Observability
+first. Trials close as `completed` with no local final score, and the backend
+counts the stored evaluator's scores.
+
 ## Prompt optimization
 
 [`prompt-optimization/`](prompt-optimization/) is a real-model example that

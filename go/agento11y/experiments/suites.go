@@ -36,6 +36,7 @@ type ConflictKind string
 
 const (
 	ConflictScoreCountMismatch ConflictKind = "score_count_mismatch"
+	ConflictPendingEvaluations ConflictKind = "pending_evaluations"
 	ConflictRunningTrials      ConflictKind = "running_trials"
 	ConflictTerminalState      ConflictKind = "terminal_state"
 	ConflictImmutableField     ConflictKind = "immutable_field"
@@ -60,6 +61,8 @@ func ClassifyConflict(err error) ConflictKind {
 	switch {
 	case strings.Contains(text, "score_count") || strings.Contains(text, "score count"):
 		return ConflictScoreCountMismatch
+	case strings.Contains(text, "pending evaluation"):
+		return ConflictPendingEvaluations
 	case strings.Contains(text, "running trial") || strings.Contains(text, "open trial"):
 		return ConflictRunningTrials
 	case strings.Contains(text, "terminal") || strings.Contains(text, "already finalized"):
@@ -798,15 +801,7 @@ func contextOrBackground(ctx context.Context) context.Context {
 	return ctx
 }
 func retryWait(ctx context.Context, attempt int) error {
-	delay := 100 * time.Millisecond * time.Duration(1<<min(attempt, 6))
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-contextOrBackground(ctx).Done():
-		return contextOrBackground(ctx).Err()
-	}
+	return sleepContext(ctx, 100*time.Millisecond*time.Duration(1<<min(attempt, 6)))
 }
 func readBounded(reader io.Reader) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(reader, maxControlResponseBytes+1))

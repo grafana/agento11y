@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -557,5 +558,294 @@ func TestListExperimentScoresParsesTypedScores(t *testing.T) {
 	score := response.Items[0]
 	if score.ScoreID != "score-1" || score.ScoreType != ScoreTypeNumber || score.Value.Number == nil || *score.Value.Number != 0.75 {
 		t.Fatalf("unexpected typed score: %#v", score)
+	}
+}
+
+func trialEvaluationBody(overrides map[string]any) map[string]any {
+	body := map[string]any{
+		"evaluation_id":     "teval-1",
+		"experiment_id":     "exp-1",
+		"trial_id":          "trial-1",
+		"test_case_id":      "case-1",
+		"conversation_id":   "conv-1",
+		"evaluator_id":      "helpfulness",
+		"evaluator_version": "v3",
+		"status":            "queued",
+		"attempts":          float64(0),
+		"scheduled_at":      "2026-07-23T21:30:00Z",
+		"created_at":        "2026-07-23T21:30:00Z",
+		"updated_at":        "2026-07-23T21:30:00Z",
+	}
+	maps.Copy(body, overrides)
+	return body
+}
+
+func TestTriggerTrialEvaluationSendsAdmittedKeysOnly(t *testing.T) {
+	cases := []struct {
+		name        string
+		request     TriggerTrialEvaluationRequest
+		wantPayload map[string]any
+	}{
+		{
+			name:        "unpinned version omits the key",
+			request:     TriggerTrialEvaluationRequest{EvaluatorID: "helpfulness"},
+			wantPayload: map[string]any{"evaluator_id": "helpfulness"},
+		},
+		{
+			name:        "pinned version is sent as given",
+			request:     TriggerTrialEvaluationRequest{EvaluatorID: "helpfulness", EvaluatorVersion: "v3"},
+			wantPayload: map[string]any{"evaluator_id": "helpfulness", "evaluator_version": "v3"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &experimentRecorder{}
+			recorder.push(http.StatusAccepted, trialEvaluationBody(nil))
+			server := httptest.NewServer(recorder.handler(t))
+			defer server.Close()
+
+			client := newExperimentTestClient(t, server.URL)
+			evaluation, err := client.TriggerTrialEvaluation(context.Background(), "exp-1", "trial-1", tc.request)
+			if err != nil {
+				t.Fatalf("trigger trial evaluation: %v", err)
+			}
+			req := recorder.request(0)
+			if req.Method != http.MethodPost || req.Path != "/api/v1/experiment-runs/exp-1/trials/trial-1:evaluate" {
+				t.Fatalf("unexpected request %s %s", req.Method, req.Path)
+			}
+			if !maps.Equal(payloadStrings(t, req.Payload), tc.wantPayload) {
+				t.Fatalf("unexpected trigger body: %#v want %#v", req.Payload, tc.wantPayload)
+			}
+			if evaluation.EvaluationID != "teval-1" || evaluation.Status != TrialEvaluationStatusQueued {
+				t.Fatalf("unexpected evaluation: %#v", evaluation)
+			}
+			if evaluation.Status.Terminal() {
+				t.Fatal("queued evaluation must not be terminal")
+			}
+			if evaluation.CreatedAt == nil || evaluation.ScheduledAt == nil {
+				t.Fatalf("expected parsed timestamps, got %#v", evaluation)
+			}
+		})
+	}
+}
+
+// payloadStrings narrows a decoded JSON body to its string fields so a payload
+// can be compared key by key.
+func payloadStrings(t *testing.T, payload map[string]any) map[string]any {
+	t.Helper()
+	out := make(map[string]any, len(payload))
+	for key, value := range payload {
+		text, ok := value.(string)
+		if !ok {
+			t.Fatalf("unexpected non-string field %q: %#v", key, value)
+		}
+		out[key] = text
+	}
+	return out
+}
+
+func TestTrialEvaluationRoutesEscapeColonInTrialID(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusAccepted, trialEvaluationBody(map[string]any{"trial_id": "trial:one"}))
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	if _, err := client.TriggerTrialEvaluation(context.Background(), "exp-1", "trial:one", TriggerTrialEvaluationRequest{
+		EvaluatorID: "helpfulness",
+	}); err != nil {
+		t.Fatalf("trigger trial evaluation: %v", err)
+	}
+	if got := recorder.request(0).Path; got != "/api/v1/experiment-runs/exp-1/trials/trial%3Aone:evaluate" {
+		t.Fatalf("colon in a trial id must be percent-encoded, got %s", got)
+	}
+	if _, err := client.GetTrialEvaluation(context.Background(), "exp-1", "trial:one", "teval-1"); err != nil {
+		t.Fatalf("get trial evaluation: %v", err)
+	}
+	if got := recorder.request(1).Path; got != "/api/v1/experiment-runs/exp-1/trials/trial%3Aone/evaluations/teval-1" {
+		t.Fatalf("colon in a trial id must be percent-encoded, got %s", got)
+	}
+}
+
+func TestGetTrialEvaluationDecodesWorkerStatus(t *testing.T) {
+	cases := []struct {
+		name      string
+		overrides map[string]any
+		wantErr   error
+		errText   string
+		assert    func(*testing.T, *TrialEvaluation)
+	}{
+		{
+			name:      "success is terminal",
+			overrides: map[string]any{"status": "success", "attempts": float64(1)},
+			assert: func(t *testing.T, evaluation *TrialEvaluation) {
+				if evaluation.Status != TrialEvaluationStatusSuccess || !evaluation.Status.Terminal() || evaluation.Attempts != 1 {
+					t.Fatalf("unexpected evaluation: %#v", evaluation)
+				}
+			},
+		},
+		{
+			name:      "failure carries the worker error",
+			overrides: map[string]any{"status": "failed", "error": "budget exhausted"},
+			assert: func(t *testing.T, evaluation *TrialEvaluation) {
+				if !evaluation.Status.Terminal() || evaluation.Error != "budget exhausted" {
+					t.Fatalf("unexpected evaluation: %#v", evaluation)
+				}
+			},
+		},
+		{
+			name:      "claimed keeps polling",
+			overrides: map[string]any{"status": "claimed"},
+			assert: func(t *testing.T, evaluation *TrialEvaluation) {
+				if evaluation.Status != TrialEvaluationStatusClaimed || evaluation.Status.Terminal() {
+					t.Fatalf("unexpected evaluation: %#v", evaluation)
+				}
+			},
+		},
+		{
+			name:      "unsupported status is rejected",
+			overrides: map[string]any{"status": "abandoned"},
+			wantErr:   ErrExperimentTransportFailed,
+			errText:   "abandoned",
+		},
+		{
+			name:      "missing evaluation id is rejected",
+			overrides: map[string]any{"evaluation_id": ""},
+			wantErr:   ErrExperimentTransportFailed,
+			errText:   "evaluation_id",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &experimentRecorder{}
+			recorder.push(http.StatusOK, trialEvaluationBody(tc.overrides))
+			server := httptest.NewServer(recorder.handler(t))
+			defer server.Close()
+
+			client := newExperimentTestClient(t, server.URL)
+			evaluation, err := client.GetTrialEvaluation(context.Background(), "exp-1", "trial-1", "teval-1")
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected %v, got %v", tc.wantErr, err)
+				}
+				if !strings.Contains(err.Error(), tc.errText) {
+					t.Fatalf("expected %q in the error, got %v", tc.errText, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("get trial evaluation: %v", err)
+			}
+			req := recorder.request(0)
+			if req.Method != http.MethodGet || req.Path != "/api/v1/experiment-runs/exp-1/trials/trial-1/evaluations/teval-1" {
+				t.Fatalf("unexpected request %s %s", req.Method, req.Path)
+			}
+			if req.Payload != nil || req.Headers.Get("Content-Type") != "" {
+				t.Fatalf("status reads must send no body, got payload %#v content type %q", req.Payload, req.Headers.Get("Content-Type"))
+			}
+			tc.assert(t, evaluation)
+		})
+	}
+}
+
+func TestTrialEvaluationValidatesIdentifiers(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusAccepted, trialEvaluationBody(nil))
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "trigger without experiment id",
+			call: func() error {
+				_, err := client.TriggerTrialEvaluation(context.Background(), "  ", "trial-1", TriggerTrialEvaluationRequest{EvaluatorID: "helpfulness"})
+				return err
+			},
+		},
+		{
+			name: "trigger without trial id",
+			call: func() error {
+				_, err := client.TriggerTrialEvaluation(context.Background(), "exp-1", "", TriggerTrialEvaluationRequest{EvaluatorID: "helpfulness"})
+				return err
+			},
+		},
+		{
+			name: "trigger without evaluator id",
+			call: func() error {
+				_, err := client.TriggerTrialEvaluation(context.Background(), "exp-1", "trial-1", TriggerTrialEvaluationRequest{EvaluatorID: " "})
+				return err
+			},
+		},
+		{
+			name: "status without experiment id",
+			call: func() error {
+				_, err := client.GetTrialEvaluation(context.Background(), "", "trial-1", "teval-1")
+				return err
+			},
+		},
+		{
+			name: "status without trial id",
+			call: func() error {
+				_, err := client.GetTrialEvaluation(context.Background(), "exp-1", "", "teval-1")
+				return err
+			},
+		},
+		{
+			name: "status without evaluation id",
+			call: func() error {
+				_, err := client.GetTrialEvaluation(context.Background(), "exp-1", "trial-1", " ")
+				return err
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.call(); !errors.Is(err, ErrExperimentValidationFailed) {
+				t.Fatalf("expected ErrExperimentValidationFailed, got %v", err)
+			}
+		})
+	}
+	if recorder.requestCount() != 0 {
+		t.Fatalf("validation must not issue a request, got %d", recorder.requestCount())
+	}
+}
+
+func TestTrialEvaluationMapsNotFoundAndConflict(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusNotFound, map[string]any{"error": "missing trial"})
+	recorder.push(http.StatusConflict, map[string]any{"error": "experiment is no longer running"})
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	if _, err := client.GetTrialEvaluation(context.Background(), "exp-1", "trial-1", "teval-missing"); !errors.Is(err, ErrExperimentNotFound) {
+		t.Fatalf("expected ErrExperimentNotFound, got %v", err)
+	}
+	if _, err := client.TriggerTrialEvaluation(context.Background(), "exp-1", "trial-1", TriggerTrialEvaluationRequest{
+		EvaluatorID: "helpfulness",
+	}); !errors.Is(err, ErrExperimentConflict) {
+		t.Fatalf("expected ErrExperimentConflict, got %v", err)
+	}
+}
+
+func TestTrialEvaluationRetriesServiceUnavailable(t *testing.T) {
+	recorder := &experimentRecorder{}
+	recorder.push(http.StatusServiceUnavailable, map[string]any{"error": "trial evaluation service is unavailable"})
+	recorder.push(http.StatusAccepted, trialEvaluationBody(nil))
+	server := httptest.NewServer(recorder.handler(t))
+	defer server.Close()
+
+	client := newExperimentTestClient(t, server.URL)
+	if _, err := client.TriggerTrialEvaluation(context.Background(), "exp-1", "trial-1", TriggerTrialEvaluationRequest{
+		EvaluatorID: "helpfulness",
+	}); err != nil {
+		t.Fatalf("trigger trial evaluation: %v", err)
+	}
+	if recorder.requestCount() != 2 {
+		t.Fatalf("expected one retry for a 503, got %d request(s)", recorder.requestCount())
 	}
 }

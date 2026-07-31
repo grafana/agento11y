@@ -154,6 +154,7 @@ The experiments are offline evals: run an agent over a dataset, grade it, and pu
 |-------|---------|
 | Python | [`examples/experiments/python/`](examples/experiments/python/) |
 | Go | [`examples/experiments/go/`](examples/experiments/go/) |
+| Go (evaluator stored in your tenant) | [`examples/experiments/go/cloud-evaluator/`](examples/experiments/go/cloud-evaluator/) |
 
 The reference app is a fuller FastAPI service with framework callbacks and manual instrumentation side by side.
 

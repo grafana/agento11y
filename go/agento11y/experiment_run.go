@@ -37,6 +37,7 @@ type ExperimentRun struct {
 
 	mu                   sync.Mutex
 	accepted             int
+	cloudEvaluated       bool
 	finalized            bool
 	recorders            []*GenerationRecorder
 	trackedIDs           []string
@@ -270,12 +271,20 @@ func (r *ExperimentRun) Finalize(ctx context.Context, status ExperimentStatus, e
 		r.mu.Unlock()
 		return nil
 	}
-	scoreCount := r.accepted
+	var scoreCount *int
+	if !r.cloudEvaluated {
+		// A stored evaluator writes scores the runner never sees, and Agent
+		// Observability checks an asserted count against every stored score, so a
+		// locally accumulated count would conflict once one trial used cloud
+		// evaluation.
+		count := r.accepted
+		scoreCount = &count
+	}
 	r.mu.Unlock()
 	if err := r.client.Flush(ctx); err != nil {
 		return err
 	}
-	_, err := r.client.FinalizeExperiment(ctx, r.RunID, status, CompleteExperimentOptions{ScoreCount: &scoreCount, Error: errorText})
+	_, err := r.client.FinalizeExperiment(ctx, r.RunID, status, CompleteExperimentOptions{ScoreCount: scoreCount, Error: errorText})
 	if err != nil {
 		return err
 	}
@@ -312,6 +321,17 @@ func (r *ExperimentRun) AcceptedScores() int {
 func (r *ExperimentRun) recordAccepted(n int) {
 	r.mu.Lock()
 	r.accepted += n
+	r.mu.Unlock()
+}
+
+// markCloudEvaluated records that a stored evaluator graded one of this run's
+// trials, so finalization stops asserting a locally accumulated score count.
+func (r *ExperimentRun) markCloudEvaluated() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.cloudEvaluated = true
 	r.mu.Unlock()
 }
 

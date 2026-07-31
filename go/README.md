@@ -348,6 +348,76 @@ continues to use the ingest credential. `NewExperimentFromSuite` and
 `WithExperimentFromSuite` resolve exact, `latest`, `latest_published`, or
 `draft` versions before starting, so the selected version is durable.
 
+### Grading with an evaluator stored in your tenant
+
+`Trial.Evaluate` grades the conversation Agent Observability already stored,
+using an evaluator defined in your tenant, instead of a score the runner
+computes. `Trial.EvaluateOutput` is the in-process judge; `Trial.Evaluate` is
+the stored one.
+
+```go
+if err := run.WithTrial(ctx, testCase, func(ctx context.Context, trial *experiments.Trial) error {
+	conversationID := runAgent(ctx, testCase.Input) // already instrumented
+	trial.BindConversation(conversationID)
+
+	// Blocks until the worker reaches a terminal status.
+	evaluation, err := trial.Evaluate(ctx, "helpfulness", experiments.EvaluateOptions{
+		EvaluatorVersion: "v3", // optional; empty pins the latest active version
+	})
+	if err != nil {
+		var failed *agento11y.TrialEvaluationFailedError
+		if errors.As(err, &failed) {
+			log.Printf("evaluation %s failed: %s", failed.EvaluationID, failed.Detail)
+		}
+		return err
+	}
+	log.Printf("stored evaluator finished: %s", evaluation.Status)
+	return nil // no FinalScore: the backend owns the verdict
+}); err != nil {
+	return err
+}
+```
+
+The call persists the trial's conversation binding and exports the anchor
+generation before queueing the evaluation, because the backend rejects an
+evaluation for a trial with no stored conversation. A trial graded this way
+closes as `completed` without a local `FinalScore`; an error returned from the
+trial callback afterwards still closes it as `errored`.
+
+`EvaluateOptions.Timeout` (default 300s) bounds the wait, and `ctx` cancellation
+ends it too. Worker failure returns `*agento11y.TrialEvaluationFailedError`, an
+exceeded deadline returns `*agento11y.TrialEvaluationTimeoutError`, and both
+carry the evaluation ID; `errors.Is` matches `agento11y.ErrTrialEvaluationFailed`
+and `agento11y.ErrTrialEvaluationTimeout`. The poll interval doubles from
+`EvaluateOptions.PollInterval` (default 500ms) up to 5s, so a long wait does not
+keep reading status at the floor rate. The evaluation is keyed by trial,
+conversation, evaluator, and resolved evaluator version, so triggering the same
+combination returns the existing evaluation instead of running it twice, and
+requeues it once it has failed.
+
+Leave `ScoreCount` unset when a run uses cloud evaluation. Agent Observability
+checks an asserted count against every stored score, including the ones the
+stored evaluator wrote, so a locally derived count conflicts. Both
+`experiments.Experiment` and the root-package `ExperimentRun` drop a count of
+their own once one of their trials queued a cloud evaluation. A trial built
+directly with `experiments.NewTrial` (or the root `agento11y.NewTrial`) has no
+run to mark, so a runner that finalizes such a run has to leave the count unset
+itself.
+
+The score is attached to the conversation and the trial with no generation ID, so
+read it from a trial's `Scores` in `Experiment.Report`, not from a per-generation
+lookup. It carries the evaluator's own score key, and only a score under the
+`final` key feeds the report's pass rate, so `Summary.PassRate` stays nil for a
+run graded only in the cloud.
+
+A wait that ends in a timeout, a cancelled context, or a transport error leaves
+the evaluation running server-side. Finalizing the run as `completed` while an
+evaluation is still queued returns `agento11y.ErrExperimentConflict`; call
+`Evaluate` again to wait for the same evaluation, then finalize. `Evaluate` also
+blocks the next trial, so to grade several at once trigger with
+`Client.TriggerTrialEvaluation` and poll `Client.GetTrialEvaluation` yourself,
+keeping both inside the experiment.
+
 Local `LLMJudge` and `RegexJudge` helpers require no platform evaluator.
 `Trial.RecordEvaluation` also accepts framework-owned evaluations without
 reinterpreting their transcript. If an evaluation includes a grader generation,
@@ -356,7 +426,8 @@ default for generations, scores, explanations, metadata, and text-like
 artifacts. Experimental trial spans and `gen_ai.evaluation.result` events are
 opt-in with `AGENTO11Y_USE_EXPERIMENTAL_OTEL=true`.
 
-See the runnable [Go streaming example](../examples/experiments/go/).
+See the runnable [Go streaming example](../examples/experiments/go/) and the
+[stored-evaluator example](../examples/experiments/go/cloud-evaluator/).
 
 ## Content Capture Mode
 

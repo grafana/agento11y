@@ -23,6 +23,49 @@ const (
 	ExperimentSourceCollection ExperimentSource = "collection"
 )
 
+// TrialEvaluationStatus is the durable state of a stored evaluator run for an
+// experiment trial.
+type TrialEvaluationStatus string
+
+const (
+	TrialEvaluationStatusQueued  TrialEvaluationStatus = "queued"
+	TrialEvaluationStatusClaimed TrialEvaluationStatus = "claimed"
+	TrialEvaluationStatusSuccess TrialEvaluationStatus = "success"
+	TrialEvaluationStatusFailed  TrialEvaluationStatus = "failed"
+)
+
+// Terminal reports whether the worker has finished the evaluation.
+func (s TrialEvaluationStatus) Terminal() bool {
+	return s == TrialEvaluationStatusSuccess || s == TrialEvaluationStatusFailed
+}
+
+// TriggerTrialEvaluationRequest queues a stored evaluator for a trial.
+//
+// EvaluatorVersion is optional: an empty version lets Agent Observability pin
+// the latest active version.
+type TriggerTrialEvaluationRequest struct {
+	EvaluatorID      string `json:"evaluator_id"`
+	EvaluatorVersion string `json:"evaluator_version,omitempty"`
+}
+
+// TrialEvaluation is the work row a stored evaluator run is tracked by. Trigger
+// and status requests return the same object.
+type TrialEvaluation struct {
+	EvaluationID     string                `json:"evaluation_id"`
+	ExperimentID     string                `json:"experiment_id"`
+	TrialID          string                `json:"trial_id"`
+	TestCaseID       string                `json:"test_case_id"`
+	ConversationID   string                `json:"conversation_id"`
+	EvaluatorID      string                `json:"evaluator_id"`
+	EvaluatorVersion string                `json:"evaluator_version"`
+	Status           TrialEvaluationStatus `json:"status"`
+	Attempts         int                   `json:"attempts"`
+	ScheduledAt      *time.Time            `json:"scheduled_at,omitempty"`
+	CreatedAt        *time.Time            `json:"created_at,omitempty"`
+	UpdatedAt        *time.Time            `json:"updated_at,omitempty"`
+	Error            string                `json:"error,omitempty"`
+}
+
 type ScoreValue struct {
 	Number *float64 `json:"number,omitempty"`
 	Bool   *bool    `json:"bool,omitempty"`

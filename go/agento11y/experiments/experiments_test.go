@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	agento11y "github.com/grafana/agento11y/go/agento11y"
 	"go.opentelemetry.io/otel"
@@ -599,5 +600,505 @@ func TestExperimentOTelIsOptInAndRedactsEventExplanation(t *testing.T) {
 	spans = recorder.Ended()
 	if len(spans) != 2 || spans[1].Status().Code != codes.Error {
 		t.Fatalf("errored trial must end its span with error status: %#v", spans)
+	}
+}
+
+// trialEvaluationServer serves the ingest routes a cloud-evaluated trial uses.
+// evaluationStatuses is consumed in order by the trigger and each status read;
+// the last entry repeats, so a single "queued" entry keeps polling forever.
+type trialEvaluationServer struct {
+	mu                sync.Mutex
+	requests          []capturedRequest
+	statuses          []string
+	evaluationError   string
+	evaluationID      string
+	onStatusRequest   func(count int)
+	server            *httptest.Server
+	triggerStatusCode int
+	triggerBody       string
+}
+
+func newTrialEvaluationServer(t *testing.T, statuses ...string) *trialEvaluationServer {
+	t.Helper()
+	s := &trialEvaluationServer{statuses: statuses, evaluationID: "teval-1"}
+	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		s.mu.Lock()
+		s.requests = append(s.requests, capturedRequest{Method: r.Method, Path: r.URL.Path, Header: r.Header.Clone(), Body: body})
+		statusReads := 0
+		for _, request := range s.requests {
+			if strings.Contains(request.Path, "/evaluations/") {
+				statusReads++
+			}
+		}
+		hook := s.onStatusRequest
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/experiment-runs:upsert":
+			_, _ = w.Write([]byte(`{"experiment_id":"run-1","name":"run","status":"running"}`))
+		case strings.HasSuffix(r.URL.Path, ":finalize"):
+			_, _ = w.Write([]byte(`{"experiment_id":"run-1","name":"run","status":"completed"}`))
+		case r.URL.Path == "/api/v1/scores:export":
+			_, _ = w.Write([]byte(`{"accepted":1,"results":[{"score_id":"one","accepted":true}]}`))
+		case r.URL.Path == "/api/v1/generations:export":
+			// The exporter checks for one result per exported generation.
+			generations, _ := body["generations"].([]any)
+			results := make([]map[string]any, 0, len(generations))
+			for _, generation := range generations {
+				fields, _ := generation.(map[string]any)
+				id, _ := fields["id"].(string)
+				results = append(results, map[string]any{"generation_id": id, "accepted": true})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, ":evaluate"):
+			if s.triggerStatusCode != 0 {
+				w.WriteHeader(s.triggerStatusCode)
+				_, _ = w.Write([]byte(s.triggerBody))
+				return
+			}
+			s.writeEvaluation(w, s.nextStatus())
+		case strings.Contains(r.URL.Path, "/evaluations/"):
+			if hook != nil {
+				hook(statusReads)
+			}
+			s.writeEvaluation(w, s.nextStatus())
+		default:
+			_, _ = w.Write([]byte(`{"trial_id":"trial","experiment_id":"run-1","test_case_id":"case","attempt":1,"status":"running"}`))
+		}
+	}))
+	t.Cleanup(s.server.Close)
+	return s
+}
+
+func (s *trialEvaluationServer) nextStatus() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.statuses) == 0 {
+		return "queued"
+	}
+	status := s.statuses[len(s.statuses)-1]
+	if len(s.statuses) > 1 {
+		status = s.statuses[0]
+		s.statuses = s.statuses[1:]
+	}
+	return status
+}
+
+func (s *trialEvaluationServer) writeEvaluation(w http.ResponseWriter, status string) {
+	payload := map[string]any{
+		"evaluation_id": s.evaluationID, "experiment_id": "run-1", "trial_id": "trial",
+		"test_case_id": "case", "conversation_id": "conv-1",
+		"evaluator_id": "helpfulness", "evaluator_version": "v3",
+		"status": status, "attempts": 0,
+	}
+	code := http.StatusAccepted
+	if status == "success" || status == "failed" {
+		code = http.StatusOK
+	}
+	if status == "failed" {
+		payload["error"] = s.evaluationError
+	}
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (s *trialEvaluationServer) captured() []capturedRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]capturedRequest(nil), s.requests...)
+}
+
+func (s *trialEvaluationServer) statusRequestCount() int {
+	count := 0
+	for _, request := range s.captured() {
+		if strings.Contains(request.Path, "/evaluations/") {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *trialEvaluationServer) newClient(t *testing.T) *Client {
+	t.Helper()
+	client, err := NewClient(ClientOptions{
+		Endpoint: s.server.URL, TenantID: "123", IngestToken: "token",
+		UseExperimentalOTel: boolPointer(false),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+	return client
+}
+
+func TestClientForwardsTrialEvaluationCalls(t *testing.T) {
+	server := newTrialEvaluationServer(t, "queued")
+	client := server.newClient(t)
+
+	evaluation, err := client.TriggerTrialEvaluation(context.Background(), "exp-1", "trial-1", TriggerTrialEvaluationRequest{
+		EvaluatorID: "helpfulness", EvaluatorVersion: "v3",
+	})
+	if err != nil {
+		t.Fatalf("trigger trial evaluation: %v", err)
+	}
+	if evaluation.Status != TrialEvaluationStatusQueued || evaluation.EvaluationID != "teval-1" {
+		t.Fatalf("unexpected evaluation: %#v", evaluation)
+	}
+	if _, err := client.GetTrialEvaluation(context.Background(), "exp-1", "trial-1", "teval-1"); err != nil {
+		t.Fatalf("get trial evaluation: %v", err)
+	}
+
+	requests := server.captured()
+	if len(requests) != 2 {
+		t.Fatalf("expected a trigger and a status request, got %#v", requests)
+	}
+	trigger := requests[0]
+	if trigger.Method != http.MethodPost || trigger.Path != "/api/v1/experiment-runs/exp-1/trials/trial-1:evaluate" {
+		t.Fatalf("unexpected trigger request %s %s", trigger.Method, trigger.Path)
+	}
+	if trigger.Body["evaluator_id"] != "helpfulness" || trigger.Body["evaluator_version"] != "v3" {
+		t.Fatalf("wrapper must forward evaluator identity unchanged: %#v", trigger.Body)
+	}
+	status := requests[1]
+	if status.Method != http.MethodGet || status.Path != "/api/v1/experiment-runs/exp-1/trials/trial-1/evaluations/teval-1" {
+		t.Fatalf("unexpected status request %s %s", status.Method, status.Path)
+	}
+}
+
+func TestNilClientTrialEvaluationCallsDoNotRequest(t *testing.T) {
+	server := newTrialEvaluationServer(t, "queued")
+	var client *Client
+	if _, err := client.TriggerTrialEvaluation(context.Background(), "exp-1", "trial-1", TriggerTrialEvaluationRequest{
+		EvaluatorID: "helpfulness",
+	}); !errors.Is(err, agento11y.ErrNilClient) {
+		t.Fatalf("expected ErrNilClient, got %v", err)
+	}
+	if _, err := client.GetTrialEvaluation(context.Background(), "exp-1", "trial-1", "teval-1"); !errors.Is(err, agento11y.ErrNilClient) {
+		t.Fatalf("expected ErrNilClient, got %v", err)
+	}
+	if len(server.captured()) != 0 {
+		t.Fatalf("a nil client must not issue requests, got %#v", server.captured())
+	}
+}
+
+func newCloudEvaluatedTrial(t *testing.T, server *trialEvaluationServer) (*Experiment, *Trial) {
+	t.Helper()
+	client := server.newClient(t)
+	experiment, err := NewExperiment(client, ExperimentOptions{
+		ExperimentID: "run-1", Name: "run",
+		Suite: &TestSuite{SuiteID: "suite", TestCases: []TestCase{{TestCaseID: "case", Input: "2+2"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := experiment.Enter(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	trial, err := experiment.NewTrialByCaseID("case")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := trial.Enter(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return experiment, trial
+}
+
+func indexOfRequest(requests []capturedRequest, match func(capturedRequest) bool) int {
+	for i, request := range requests {
+		if match(request) {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestTrialEvaluatePersistsConversationAndClosesCompleted(t *testing.T) {
+	server := newTrialEvaluationServer(t, "queued", "claimed", "success")
+	_, trial := newCloudEvaluatedTrial(t, server)
+	trial.BindConversation("conv-1").RecordIO(RecordIOOptions{Input: "2+2", Output: "4"})
+
+	evaluation, err := trial.Evaluate(context.Background(), "helpfulness", EvaluateOptions{
+		EvaluatorVersion: "v3", PollInterval: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if evaluation.Status != TrialEvaluationStatusSuccess {
+		t.Fatalf("unexpected evaluation: %#v", evaluation)
+	}
+	if err := trial.Close(context.Background(), nil); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if trial.Status != TrialStatusCompleted || trial.Error != "" {
+		t.Fatalf("cloud-evaluated trial must close completed: status=%q error=%q", trial.Status, trial.Error)
+	}
+
+	requests := server.captured()
+	trigger := indexOfRequest(requests, func(r capturedRequest) bool {
+		return r.Method == http.MethodPost && strings.HasSuffix(r.Path, ":evaluate")
+	})
+	if trigger < 0 {
+		t.Fatalf("no evaluation trigger request: %#v", requests)
+	}
+	binding := indexOfRequest(requests, func(r capturedRequest) bool {
+		return r.Method == http.MethodPatch && r.Body["conversation_id"] == "conv-1"
+	})
+	if binding < 0 || binding > trigger {
+		t.Fatalf("conversation must be persisted before the trigger: binding=%d trigger=%d %#v", binding, trigger, requests)
+	}
+	generation := indexOfRequest(requests, func(r capturedRequest) bool {
+		return r.Path == "/api/v1/generations:export"
+	})
+	if generation < 0 || generation > trigger {
+		t.Fatalf("anchor generation must be exported before the trigger: generation=%d trigger=%d", generation, trigger)
+	}
+	if server.statusRequestCount() != 2 {
+		t.Fatalf("expected two status reads for queued then claimed, got %d", server.statusRequestCount())
+	}
+	for _, request := range requests {
+		if request.Path == "/api/v1/scores:export" {
+			t.Fatalf("cloud evaluation must not export a local score: %#v", request.Body)
+		}
+	}
+	terminal := requests[len(requests)-1]
+	if terminal.Method != http.MethodPatch || terminal.Body["status"] != "completed" {
+		t.Fatalf("expected a completed terminal update, got %#v", terminal)
+	}
+	if _, exists := terminal.Body["error"]; exists {
+		t.Fatalf("completed trial must carry no error text: %#v", terminal.Body)
+	}
+}
+
+func TestTrialCallbackErrorAfterCloudEvaluationStillFails(t *testing.T) {
+	server := newTrialEvaluationServer(t, "success")
+	experiment, err := func() (*Experiment, error) {
+		client := server.newClient(t)
+		return NewExperiment(client, ExperimentOptions{ExperimentID: "run-1", Name: "run"})
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := experiment.Enter(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	callbackErr := errors.New("assertion failed after grading")
+	err = experiment.WithTrialByCaseID(context.Background(), "case", func(ctx context.Context, trial *Trial) error {
+		trial.BindConversation("conv-1")
+		if _, evalErr := trial.Evaluate(ctx, "helpfulness", EvaluateOptions{PollInterval: time.Millisecond}); evalErr != nil {
+			return evalErr
+		}
+		return callbackErr
+	})
+	if !errors.Is(err, callbackErr) {
+		t.Fatalf("expected the callback error, got %v", err)
+	}
+	requests := server.captured()
+	terminal := requests[len(requests)-1]
+	if terminal.Method != http.MethodPatch || terminal.Body["status"] != "failed" ||
+		terminal.Body["error"] != callbackErr.Error() {
+		t.Fatalf("callback error must win over cloud evaluation: %#v", terminal)
+	}
+}
+
+func TestTrialEvaluateSurfacesWorkerFailure(t *testing.T) {
+	server := newTrialEvaluationServer(t, "queued", "failed")
+	server.evaluationError = "evaluator budget exhausted"
+	_, trial := newCloudEvaluatedTrial(t, server)
+	trial.BindConversation("conv-1")
+
+	_, err := trial.Evaluate(context.Background(), "helpfulness", EvaluateOptions{PollInterval: time.Millisecond})
+	var failed *agento11y.TrialEvaluationFailedError
+	if !errors.As(err, &failed) {
+		t.Fatalf("expected *TrialEvaluationFailedError, got %v", err)
+	}
+	if failed.EvaluationID != "teval-1" || failed.Detail != "evaluator budget exhausted" {
+		t.Fatalf("unexpected failure detail: %#v", failed)
+	}
+	if !errors.Is(err, agento11y.ErrTrialEvaluationFailed) {
+		t.Fatalf("expected ErrTrialEvaluationFailed, got %v", err)
+	}
+	trial.mu.Lock()
+	cloudEvaluated := trial.cloudEvaluated
+	trial.mu.Unlock()
+	if cloudEvaluated {
+		t.Fatal("a failed evaluation must not mark the trial cloud-evaluated")
+	}
+}
+
+func TestTrialEvaluateTimesOutAndBacksOff(t *testing.T) {
+	server := newTrialEvaluationServer(t, "queued")
+	_, trial := newCloudEvaluatedTrial(t, server)
+	trial.BindConversation("conv-1")
+
+	start := time.Now()
+	_, err := trial.Evaluate(context.Background(), "helpfulness", EvaluateOptions{
+		Timeout: 50 * time.Millisecond, PollInterval: time.Millisecond,
+	})
+	elapsed := time.Since(start)
+	var timedOut *agento11y.TrialEvaluationTimeoutError
+	if !errors.As(err, &timedOut) {
+		t.Fatalf("expected *TrialEvaluationTimeoutError, got %v", err)
+	}
+	if timedOut.EvaluationID != "teval-1" {
+		t.Fatalf("timeout must carry the evaluation ID: %#v", timedOut)
+	}
+	if !errors.Is(err, agento11y.ErrTrialEvaluationTimeout) {
+		t.Fatalf("expected ErrTrialEvaluationTimeout, got %v", err)
+	}
+	// A fixed 1ms interval would issue tens of reads in 50ms.
+	if reads := server.statusRequestCount(); reads > 7 {
+		t.Fatalf("poll interval must back off, got %d status reads in %s", reads, elapsed)
+	}
+}
+
+func TestTrialEvaluateReadsStatusAfterTheFinalSleep(t *testing.T) {
+	server := newTrialEvaluationServer(t, "queued", "success")
+	_, trial := newCloudEvaluatedTrial(t, server)
+	trial.BindConversation("conv-1")
+
+	// A poll interval at least as long as the timeout clamps the only sleep to the
+	// whole budget. The status read still has to happen, or an evaluation that
+	// finishes inside that window is reported as a timeout.
+	evaluation, err := trial.Evaluate(context.Background(), "helpfulness", EvaluateOptions{
+		Timeout: 20 * time.Millisecond, PollInterval: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if evaluation.Status != TrialEvaluationStatusSuccess {
+		t.Fatalf("unexpected evaluation: %#v", evaluation)
+	}
+	if reads := server.statusRequestCount(); reads != 1 {
+		t.Fatalf("expected exactly one status read after the clamped sleep, got %d", reads)
+	}
+}
+
+func TestQueuedEvaluationDropsFinalizeScoreCount(t *testing.T) {
+	server := newTrialEvaluationServer(t, "queued")
+	experiment, trial := newCloudEvaluatedTrial(t, server)
+	trial.BindConversation("conv-1")
+
+	// The evaluation stays queued server-side and its score lands after this run
+	// finalizes, so a caller-supplied count cannot be asserted.
+	if _, err := trial.Evaluate(context.Background(), "helpfulness", EvaluateOptions{
+		Timeout: 5 * time.Millisecond, PollInterval: 10 * time.Millisecond,
+	}); !errors.Is(err, agento11y.ErrTrialEvaluationTimeout) {
+		t.Fatalf("expected ErrTrialEvaluationTimeout, got %v", err)
+	}
+	count := 0
+	if err := experiment.Finalize(context.Background(), ExperimentStatusFailed, FinalizeOptions{
+		ScoreCount: &count, Error: "evaluation timed out",
+	}); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	requests := server.captured()
+	finalize := indexOfRequest(requests, func(r capturedRequest) bool {
+		return strings.HasSuffix(r.Path, ":finalize")
+	})
+	if finalize < 0 {
+		t.Fatalf("no finalize request: %#v", requests)
+	}
+	if _, exists := requests[finalize].Body["score_count"]; exists {
+		t.Fatalf("a cloud-evaluated experiment must not assert a score count: %#v", requests[finalize].Body)
+	}
+}
+
+func TestTrialEvaluateSurfacesTriggerRejection(t *testing.T) {
+	server := newTrialEvaluationServer(t, "queued")
+	server.triggerStatusCode = http.StatusConflict
+	server.triggerBody = `{"error":"experiment is no longer running"}`
+	experiment, trial := newCloudEvaluatedTrial(t, server)
+	trial.BindConversation("conv-1")
+
+	if _, err := trial.Evaluate(context.Background(), "helpfulness", EvaluateOptions{
+		PollInterval: time.Millisecond,
+	}); !errors.Is(err, agento11y.ErrExperimentConflict) {
+		t.Fatalf("expected ErrExperimentConflict, got %v", err)
+	}
+	if server.statusRequestCount() != 0 {
+		t.Fatalf("a rejected trigger must not start polling, got %d status reads", server.statusRequestCount())
+	}
+	experiment.mu.Lock()
+	cloudEvaluated := experiment.cloudEvaluated
+	experiment.mu.Unlock()
+	if cloudEvaluated {
+		t.Fatal("a rejected trigger queues nothing, so the experiment must keep its own score count")
+	}
+}
+
+func TestTrialEvaluateHonorsContextCancellation(t *testing.T) {
+	server := newTrialEvaluationServer(t, "queued")
+	_, trial := newCloudEvaluatedTrial(t, server)
+	trial.BindConversation("conv-1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	server.mu.Lock()
+	// Cancel during the wait. Whether cancellation lands on the in-flight status
+	// read or on the next sleep, Evaluate reports the context error.
+	server.onStatusRequest = func(count int) {
+		if count == 1 {
+			cancel()
+		}
+	}
+	server.mu.Unlock()
+	defer cancel()
+
+	_, err := trial.Evaluate(ctx, "helpfulness", EvaluateOptions{
+		Timeout: 5 * time.Second, PollInterval: time.Millisecond,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	var timedOut *agento11y.TrialEvaluationTimeoutError
+	var failed *agento11y.TrialEvaluationFailedError
+	if errors.As(err, &timedOut) || errors.As(err, &failed) {
+		t.Fatalf("cancellation must not be reported as timeout or failure: %v", err)
+	}
+}
+
+func TestTrialEvaluateRejectsInvalidOptions(t *testing.T) {
+	cases := []struct {
+		name           string
+		bindConversion bool
+		evaluatorID    string
+		options        EvaluateOptions
+	}{
+		{name: "no bound conversation", evaluatorID: "helpfulness"},
+		{name: "empty evaluator id", bindConversion: true, evaluatorID: "  "},
+		{name: "negative timeout", bindConversion: true, evaluatorID: "helpfulness", options: EvaluateOptions{Timeout: -time.Second}},
+		{name: "negative poll interval", bindConversion: true, evaluatorID: "helpfulness", options: EvaluateOptions{PollInterval: -time.Millisecond}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newTrialEvaluationServer(t, "success")
+			client := server.newClient(t)
+			trial, err := NewTrial(client, TrialRef{ExperimentID: "run-1", TestCaseID: "case"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.bindConversion {
+				trial.BindConversation("conv-1")
+			}
+			if _, err := trial.Evaluate(context.Background(), tc.evaluatorID, tc.options); !errors.Is(err, agento11y.ErrExperimentValidationFailed) {
+				t.Fatalf("expected ErrExperimentValidationFailed, got %v", err)
+			}
+			if requests := server.captured(); len(requests) != 0 {
+				t.Fatalf("invalid options must not issue a request, got %#v", requests)
+			}
+		})
+	}
+}
+
+func TestTrialEvaluateDefaultsWaitOptions(t *testing.T) {
+	timeout, pollInterval, err := EvaluateOptions{EvaluatorVersion: "v3"}.resolve()
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if timeout != defaultEvaluationTimeout || pollInterval != defaultEvaluationPollInterval {
+		t.Fatalf("unset durations must use the defaults, got %s and %s", timeout, pollInterval)
 	}
 }
