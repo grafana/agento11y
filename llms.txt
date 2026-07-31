@@ -474,7 +474,9 @@ a stored test suite.
   through `trial.record_evaluation(...)`.
 - Python only: `trial.evaluate(evaluator_id)` grades the trial's bound
   conversation with an evaluator that already exists in the tenant, instead of a
-  locally computed score. It blocks until the worker finishes, and the trial then
+  locally computed score. Experimental: it requires
+  `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` and otherwise raises
+  `ExperimentalFeatureDisabledError` without sending a request. It blocks until the worker finishes, and the trial then
   closes as `completed` with no local `final_score`. Requires
   `trial.bind_conversation(...)` first.
   - The score is stored against the conversation and the trial, with no
@@ -505,7 +507,9 @@ runners. Stable experiment ID + case ID + explicit attempt gives resumable,
 idempotent identities.
 
 The Go SDK can also grade a trial with an evaluator stored in the tenant instead
-of a locally computed score: `trial.Evaluate(ctx, evaluatorID, ...)`. Bind the
+of a locally computed score: `trial.Evaluate(ctx, evaluatorID, ...)`.
+Experimental: it requires `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` and
+otherwise returns `ErrExperimentalFeatureDisabled` without sending a request. Bind the
 agent's conversation first; the call persists that binding, exports the anchor
 generation, queues the stored evaluator, and blocks until the worker reaches a
 terminal status. Such a trial closes as `completed` with no local final score,

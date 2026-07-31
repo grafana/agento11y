@@ -13,6 +13,7 @@ if str(_PYTHON_ROOT) not in sys.path:
 
 import pytest
 from agento11y.config import _WARNED_LEGACY_ENV
+from agento11y.experimental import ENV_ENABLE_EXPERIMENTAL_FEATURES
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse
 
 
@@ -22,6 +23,11 @@ def _clear_agento11y_env(monkeypatch):
     for key in list(os.environ):
         if key.startswith(("AGENTO11Y_", "SIGIL_", "OTEL_")):
             monkeypatch.delenv(key, raising=False)
+    # Experimental features are opt-in for callers but on for the whole suite, so
+    # a test of an experimental feature reads like any other test. Set after the
+    # strip above, which would otherwise remove it. A test that asserts the gate
+    # blocks a call clears it again with monkeypatch.delenv.
+    monkeypatch.setenv(ENV_ENABLE_EXPERIMENTAL_FEATURES, "true")
     _WARNED_LEGACY_ENV.clear()
     yield
     _WARNED_LEGACY_ENV.clear()

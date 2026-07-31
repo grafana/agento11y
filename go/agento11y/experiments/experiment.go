@@ -940,9 +940,18 @@ func (o EvaluateOptions) resolve() (timeout, pollInterval time.Duration, err err
 // Only a trial created by Experiment.Trial or Experiment.WithTrial can mark its
 // experiment, so a caller who built this trial with NewTrial must leave
 // FinalizeOptions.ScoreCount unset when finalizing the run itself.
+//
+// Experimental: requires AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true, otherwise
+// it returns agento11y.ErrExperimentalFeatureDisabled without sending a request.
+// This call can change or be removed in any release.
 func (t *Trial) Evaluate(ctx context.Context, evaluatorID string, options ...EvaluateOptions) (*TrialEvaluation, error) {
 	if t == nil || t.client == nil {
 		return nil, agento11y.ErrNilClient
+	}
+	// Checked before the trial is created and the anchor generation is flushed, so
+	// a blocked call leaves nothing behind.
+	if err := agento11y.RequireExperimental(agento11y.FeatureCloudTrialEvaluation); err != nil {
+		return nil, err
 	}
 	if ctx == nil {
 		ctx = context.Background()

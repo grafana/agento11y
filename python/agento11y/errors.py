@@ -131,6 +131,22 @@ class EvaluationTimeoutError(Agento11yError):
         return (self.__class__, (self.evaluation_id, self.detail))
 
 
+class ExperimentalFeatureDisabledError(Agento11yError):
+    """Raised when an experimental feature is called without the opt-in env var."""
+
+    def __init__(self, feature: str, env_var: str) -> None:
+        normalized_feature = (feature or "").strip() or "this feature"
+        normalized_env = (env_var or "").strip() or "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES"
+        super().__init__(f"agento11y: {normalized_feature} is experimental; set {normalized_env}=true to use it")
+        self.feature = normalized_feature
+        self.env_var = normalized_env
+
+    def __reduce__(self) -> "tuple[type[ExperimentalFeatureDisabledError], tuple[str, str]]":
+        # BaseException.__reduce__ would replay the formatted message as the only
+        # positional argument, which this two-argument signature cannot accept.
+        return (self.__class__, (self.feature, self.env_var))
+
+
 class ScoreExportError(Agento11yError):
     """Raised when a score export request fails at the transport level."""
 

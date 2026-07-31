@@ -1030,7 +1030,13 @@ def test_cloud_evaluation_surface_is_public() -> None:
     import agento11y
     from agento11y import experiments as experiments_module
 
-    for name in ("TrialEvaluation", "TrialEvaluationStatus", "EvaluationExecutionError", "EvaluationTimeoutError"):
+    for name in (
+        "TrialEvaluation",
+        "TrialEvaluationStatus",
+        "EvaluationExecutionError",
+        "EvaluationTimeoutError",
+        "ExperimentalFeatureDisabledError",
+    ):
         assert name in experiments_module.__all__
         assert hasattr(experiments_module, name)
         assert name in agento11y.__all__
@@ -1038,6 +1044,76 @@ def test_cloud_evaluation_surface_is_public() -> None:
     # Pre-existing experiments exports stay available.
     for name in ("Experiment", "Trial", "TrialRef", "TestSuite", "TestCase", "Evaluator"):
         assert name in experiments_module.__all__
+
+
+def test_cloud_evaluation_is_blocked_without_the_experimental_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default a caller sees: no opt-in set, so nothing is sent."""
+
+    from agento11y.errors import ExperimentalFeatureDisabledError
+    from agento11y.experimental import ENV_ENABLE_EXPERIMENTAL_FEATURES
+
+    client = FakeClient()
+    suite = _suite()
+
+    with Experiment(client, experiment_id="run-gated", name="gated", suite=suite) as exp:
+        with exp.trial(suite.test_cases[0]) as trial:
+            trial.bind_conversation("conv-gated")
+            # Cleared rather than set to a falsy value so this exercises the
+            # default, not a specific opt-out spelling.
+            monkeypatch.delenv(ENV_ENABLE_EXPERIMENTAL_FEATURES, raising=False)
+            with pytest.raises(ExperimentalFeatureDisabledError) as blocked:
+                trial.evaluate("helpfulness")
+            trial.final_score(1.0, passed=True)
+
+    message = str(blocked.value)
+    assert "cloud trial evaluation" in message
+    assert ENV_ENABLE_EXPERIMENTAL_FEATURES in message
+    # evaluate() persists the binding and flushes the anchor generation before it
+    # triggers anything. A blocked call must reach neither step. The trial's own
+    # close still writes an update and a flush, so only the evaluation steps are
+    # asserted here.
+    assert client.triggered_evaluations == []
+    assert "trigger" not in client.evaluation_order
+    assert "status" not in client.evaluation_order
+
+
+def test_experimental_gate_reads_truthy_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    from agento11y.experimental import (
+        ENV_ENABLE_EXPERIMENTAL_FEATURES,
+        experimental_features_enabled,
+    )
+
+    for raw, expected in (
+        ("1", True),
+        ("true", True),
+        ("TRUE", True),
+        (" true ", True),
+        ("yes", True),
+        ("on", True),
+        ("", False),
+        ("0", False),
+        ("false", False),
+        ("no", False),
+        ("off", False),
+        ("maybe", False),
+    ):
+        monkeypatch.setenv(ENV_ENABLE_EXPERIMENTAL_FEATURES, raw)
+        assert experimental_features_enabled() is expected, raw
+
+    monkeypatch.delenv(ENV_ENABLE_EXPERIMENTAL_FEATURES, raising=False)
+    assert experimental_features_enabled() is False
+
+
+def test_experimental_feature_disabled_error_survives_pickle() -> None:
+    from agento11y.errors import ExperimentalFeatureDisabledError
+
+    original = ExperimentalFeatureDisabledError("cloud trial evaluation", "AGENTO11Y_X")
+    restored = pickle.loads(pickle.dumps(original))
+    assert restored.feature == original.feature
+    assert restored.env_var == original.env_var
+    assert str(restored) == str(original)
 
 
 def test_trial_cleanup_runs_when_flush_fails() -> None:

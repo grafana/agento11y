@@ -49,7 +49,7 @@ Cross-process (e.g. a verifier container) opens a trial from a serialized ref::
 
 from __future__ import annotations
 
-from ..errors import EvaluationExecutionError, EvaluationTimeoutError
+from ..errors import EvaluationExecutionError, EvaluationTimeoutError, ExperimentalFeatureDisabledError
 from ..models import TrialEvaluation, TrialEvaluationStatus
 from . import otel, score
 from .client import Client
@@ -99,6 +99,7 @@ __all__ = [
     "TrialEvaluationStatus",
     "EvaluationExecutionError",
     "EvaluationTimeoutError",
+    "ExperimentalFeatureDisabledError",
     "normalize_evaluator_kind",
     "experiment",
     "experiment_from_suite",

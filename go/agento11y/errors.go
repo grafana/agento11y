@@ -71,6 +71,9 @@ var (
 	// ErrHookTransportFailed wraps hook evaluation transport failures.
 	// Only surfaced when HooksConfig.FailOpen is false.
 	ErrHookTransportFailed = errors.New("agento11y: hook evaluation transport failed")
+	// ErrExperimentalFeatureDisabled is returned when an experimental feature is
+	// called without EnvEnableExperimentalFeatures set. See RequireExperimental.
+	ErrExperimentalFeatureDisabled = errors.New("agento11y: experimental feature disabled")
 )
 
 // HookDeniedError is returned by EvaluateHook (and surfaced by framework

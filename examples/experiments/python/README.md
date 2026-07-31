@@ -103,7 +103,10 @@ To grade with an evaluator that already exists in your tenant instead of scoring
 locally, set its id and run the cloud-evaluator example. `trial.evaluate(...)`
 blocks until the worker finishes, so the run takes as long as the evaluations do:
 
+Stored-evaluator grading is experimental and refuses to run without the opt-in:
+
 ```bash
+export AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true
 export AGENTO11Y_EXPERIMENT_ID=cloud-evaluator-${GIT_SHA:-manual}
 export AGENTO11Y_EVALUATOR_ID=<an-evaluator-id-in-your-tenant>
 # Optional: pin a version instead of the latest active one.
