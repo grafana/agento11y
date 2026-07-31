@@ -46,6 +46,11 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
+/** Encodes a transformed tool payload the way the server does. */
+function base64Json(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64");
+}
+
 function config(endpoint: string): Agento11yOpencodeConfig {
   return {
     endpoint,
@@ -121,11 +126,11 @@ describe("opencode guards", () => {
             role: "assistant",
             parts: [
               {
-                type: "tool_call",
-                toolCall: {
+                kind: "tool_call",
+                tool_call: {
                   id: "call-1",
                   name: "third-party-test-mcp_third_party_test_mcp_leak_fake_credential",
-                  inputJSON: JSON.stringify({ demo: true }),
+                  input_json: { demo: true },
                 },
               },
             ],
@@ -147,11 +152,14 @@ describe("opencode guards", () => {
             role: "assistant",
             parts: [
               {
-                type: "tool_call",
-                toolCall: {
+                kind: "tool_call",
+                tool_call: {
                   id: "call-1",
                   name: "bash",
-                  inputJSON: JSON.stringify({ command: "echo [REDACTED]" }),
+                  // The server base64-encodes response payloads, so a stub
+                  // sending raw JSON here would exercise a shape it never
+                  // emits. conformance/hooks/README.md.
+                  input_json: base64Json({ command: "echo [REDACTED]" }),
                 },
               },
             ],
@@ -223,8 +231,12 @@ describe("opencode guards", () => {
             role: "assistant",
             parts: [
               {
-                type: "tool_call",
-                toolCall: { id: "call-1", name: "bash", inputJSON: "{}" },
+                kind: "tool_call",
+                tool_call: {
+                  id: "call-1",
+                  name: "bash",
+                  input_json: base64Json({}),
+                },
               },
             ],
           },
@@ -262,11 +274,11 @@ describe("opencode guards", () => {
             role: "assistant",
             parts: [
               {
-                type: "tool_call",
-                toolCall: {
+                kind: "tool_call",
+                tool_call: {
                   id: "call-1",
                   name: "bash",
-                  inputJSON: JSON.stringify({ 0: "x" }),
+                  input_json: base64Json({ 0: "x" }),
                 },
               },
             ],
@@ -328,15 +340,17 @@ describe("opencode guards", () => {
     expect(
       hookServer.captures[0]?.input?.output?.[0]?.parts?.[0],
     ).toMatchObject({
-      type: "tool_call",
-      toolCall: {
+      kind: "tool_call",
+      tool_call: {
         id: "call-1",
         name: "bash",
-        inputJSON: JSON.stringify({
+        // Tool arguments travel as embedded JSON, which is what an
+        // argument-level rule matches on. conformance/hooks/README.md.
+        input_json: {
           pattern: "rm *",
           title: "Run shell command",
           metadata: { command: "rm -rf /tmp/demo" },
-        }),
+        },
       },
     });
 

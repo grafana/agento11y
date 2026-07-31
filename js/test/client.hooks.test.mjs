@@ -97,7 +97,10 @@ test('evaluateHook posts JSON to /api/v1/hooks:evaluate and parses allow respons
         messages: [
           {
             role: 'user',
-            parts: [{ type: 'text', text: 'hello world' }],
+            // The server dispatches parts on a snake_case `kind`; the SDK's
+            // `type` discriminator never reaches it. See
+            // conformance/hooks/README.md.
+            parts: [{ kind: 'text', text: 'hello world' }],
           },
         ],
       },

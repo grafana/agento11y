@@ -215,6 +215,11 @@ description = "Run the Go SDK core conformance harness"
 dir = "go"
 run = "GOWORK=off go test ./agento11y -run '^TestConformance' -count=1"
 
+[tasks."test:go:sdk-hooks-conformance"]
+description = "Run the Go SDK hook tests: wire fixtures and guard behavior"
+dir = "go"
+run = "GOWORK=off go test ./agento11y -run '^TestHook' -count=1"
+
 # --- TypeScript/JavaScript SDK tests ---
 
 [tasks."test:ts:sdk-js"]
@@ -227,6 +232,12 @@ description = "Run TypeScript/JavaScript SDK core conformance tests"
 depends = ["deps"]
 dir = "js"
 run = "pnpm run test:build && node --test test/conformance.test.mjs"
+
+[tasks."test:ts:sdk-hooks-conformance"]
+description = "Run the TypeScript/JavaScript SDK hook tests: wire fixtures and guard behavior"
+depends = ["deps"]
+dir = "js"
+run = "pnpm run test:build && node --test test/hooks.conformance.test.mjs test/hooks.integration.test.mjs"
 
 [tasks."test:ts:sdk-provider-conformance"]
 description = "Run TypeScript/JavaScript provider-wrapper conformance tests"
@@ -254,6 +265,10 @@ run = "uv run --python \"$PYTHON_BIN\" --with '.[dev]' --directory python pytest
 [tasks."test:py:sdk-conformance"]
 description = "Run Python SDK core conformance tests"
 run = "uv run --python \"$PYTHON_BIN\" --with '.[dev]' --directory python pytest tests/test_conformance.py"
+
+[tasks."test:py:sdk-hooks-conformance"]
+description = "Run the Python SDK hook tests: wire fixtures and guard behavior"
+run = "uv run --python \"$PYTHON_BIN\" --with '.[dev]' --directory python pytest tests/test_hooks_conformance.py tests/test_hooks_integration.py"
 
 [tasks."test:py:sdk-openai"]
 description = "Run Python OpenAI provider helper tests"
@@ -427,6 +442,19 @@ mise run test:java:sdk-conformance
 mise run test:cs:sdk-conformance
 """
 
+[tasks."test:sdk:hooks-conformance"]
+description = """
+Run the hook tests in Go, Python, and TypeScript/JavaScript: wire fixtures and
+guard behavior. Java and .NET have no hook support, so they are excluded.
+"""
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+mise run test:go:sdk-hooks-conformance
+mise run test:ts:sdk-hooks-conformance
+mise run test:py:sdk-hooks-conformance
+"""
+
 [tasks."test:sdk:provider-conformance"]
 description = "Run provider-wrapper conformance suites across all shipped SDKs"
 run = """
@@ -458,6 +486,7 @@ run = """
 #!/usr/bin/env bash
 set -euo pipefail
 mise run test:sdk:core-conformance
+mise run test:sdk:hooks-conformance
 mise run test:sdk:provider-conformance
 mise run test:sdk:framework-conformance
 """

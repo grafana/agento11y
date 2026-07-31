@@ -1,6 +1,7 @@
 import { isSpanContextValid, context as otelContext, trace } from '@opentelemetry/api';
 import { conversationIdFromContext } from './context.js';
 import type {
+  Agento11yLogger,
   HookEvaluateRequest,
   HookEvaluateResponse,
   HookEvaluation,
@@ -56,6 +57,8 @@ export async function evaluateHook(params: {
   hooks: HooksConfig;
   request: HookEvaluateRequest;
   fetchImpl?: typeof fetch;
+  /** Receives a warning whenever a failure is swallowed by `failOpen`. */
+  logger?: Agento11yLogger;
 }): Promise<HookEvaluateResponse> {
   const fetchImpl = params.fetchImpl ?? fetch;
   if (!params.hooks.enabled) {
@@ -93,12 +96,14 @@ export async function evaluateHook(params: {
         new Error(
           `agento11y hook evaluation failed: status ${response.status}: ${hookErrorText(responseText, response.status)}`,
         ),
+        params.logger,
       );
     }
     if (responseText.length === 0) {
       return failOpenOrThrow(
         params.hooks.failOpen,
         new Error('agento11y hook evaluation failed: empty response payload'),
+        params.logger,
       );
     }
 
@@ -109,19 +114,38 @@ export async function evaluateHook(params: {
       return failOpenOrThrow(
         params.hooks.failOpen,
         new Error(`agento11y hook evaluation failed: invalid JSON response: ${asError(error).message}`),
+        params.logger,
       );
     }
 
     return parseEvaluateResponse(payload);
   } catch (error) {
-    return failOpenOrThrow(params.hooks.failOpen, asError(error));
+    return failOpenOrThrow(params.hooks.failOpen, hookTransportError(error), params.logger);
   } finally {
     clearTimeout(timer);
   }
 }
 
-function failOpenOrThrow(failOpen: boolean, error: Error): HookEvaluateResponse {
+/**
+ * Labels every transport failure, including the `AbortError` a timeout raises, so
+ * a fail-closed caller can tell a hook failure from any other thrown error. Go
+ * wraps ErrHookTransportFailed and Python raises HookTransportError for the same
+ * reason.
+ */
+function hookTransportError(error: unknown): Error {
+  const converted = asError(error);
+  if (converted.message.startsWith('agento11y hook evaluation failed')) {
+    return converted;
+  }
+  const labelled = new Error(`agento11y hook evaluation failed: ${converted.message}`);
+  labelled.cause = converted;
+  return labelled;
+}
+
+function failOpenOrThrow(failOpen: boolean, error: Error, logger?: Agento11yLogger): HookEvaluateResponse {
   if (failOpen) {
+    // Fail-open turns an evaluator outage into a silent allow, so record it.
+    logger?.warn?.(`agento11y: hook evaluation failed, allowing request (failOpen): ${error.message}`);
     return allowResponse();
   }
   throw error;
@@ -210,21 +234,146 @@ function serializeContext(hookContext: HookEvaluateRequest['context']): Record<s
 function serializeInput(input: HookEvaluateRequest['input']): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (input.messages !== undefined && input.messages.length > 0) {
-    out.messages = input.messages;
+    out.messages = input.messages.map(serializeMessage);
   }
   if (input.tools !== undefined && input.tools.length > 0) {
-    out.tools = input.tools;
+    out.tools = input.tools.map(serializeTool);
   }
   if (input.systemPrompt !== undefined && input.systemPrompt.length > 0) {
     out.system_prompt = input.systemPrompt;
   }
   if (input.output !== undefined && input.output.length > 0) {
-    out.output = input.output;
+    out.output = input.output.map(serializeMessage);
   }
   if (input.conversationPreview !== undefined && input.conversationPreview.length > 0) {
     out.conversation_preview = input.conversationPreview;
   }
   return out;
+}
+
+/**
+ * Maps an SDK message onto the hook wire shape.
+ *
+ * The public `MessagePart` union is camelCase and discriminated by `type`. The
+ * server never reads `type`. It dispatches on a snake_case `kind`, and it
+ * recovers a missing discriminator for text only.
+ *
+ * Passing an SDK object straight to `JSON.stringify` therefore sends every
+ * thinking, tool-call, and tool-result part as an empty part. A tool-filter
+ * guard sees no tool calls in it and allows the request. See
+ * `conformance/hooks/README.md`.
+ */
+function serializeMessage(message: Message): Record<string, unknown> {
+  const parts: Record<string, unknown>[] = [];
+  for (const part of message.parts ?? []) {
+    const serialized = serializeMessagePart(part);
+    if (serialized !== undefined) {
+      parts.push(serialized);
+    }
+  }
+  // `content` is the text shorthand the SDK maps to a text part on export. Do
+  // the same here so rules see the message body.
+  if (parts.length === 0 && message.content !== undefined && message.content.length > 0) {
+    parts.push({ kind: 'text', text: message.content });
+  }
+  const out: Record<string, unknown> = { role: message.role, parts };
+  if (message.name !== undefined && message.name.length > 0) {
+    out.name = message.name;
+  }
+  return out;
+}
+
+function serializeMessagePart(part: MessagePart): Record<string, unknown> | undefined {
+  switch (part.type) {
+    case 'text':
+      return part.text.length > 0 ? { kind: 'text', text: part.text } : undefined;
+    case 'thinking':
+      return part.thinking.length > 0 ? { kind: 'thinking', thinking: part.thinking } : undefined;
+    case 'tool_call': {
+      const call: Record<string, unknown> = { name: part.toolCall.name };
+      if (part.toolCall.id !== undefined && part.toolCall.id.length > 0) {
+        call.id = part.toolCall.id;
+      }
+      if (part.toolCall.inputJSON !== undefined && part.toolCall.inputJSON.length > 0) {
+        call.input_json = embeddedJSON(part.toolCall.inputJSON);
+      }
+      return { kind: 'tool_call', tool_call: call };
+    }
+    case 'tool_result': {
+      const result: Record<string, unknown> = {};
+      if (part.toolResult.toolCallId !== undefined && part.toolResult.toolCallId.length > 0) {
+        result.tool_call_id = part.toolResult.toolCallId;
+      }
+      if (part.toolResult.name !== undefined && part.toolResult.name.length > 0) {
+        result.name = part.toolResult.name;
+      }
+      if (part.toolResult.isError === true) {
+        result.is_error = true;
+      }
+      if (part.toolResult.content !== undefined && part.toolResult.content.length > 0) {
+        result.content = part.toolResult.content;
+      }
+      if (part.toolResult.contentJSON !== undefined && part.toolResult.contentJSON.length > 0) {
+        result.content_json = embeddedJSON(part.toolResult.contentJSON);
+      }
+      return { kind: 'tool_result', tool_result: result };
+    }
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Tool definitions travel base64 even though tool-call arguments do not: the
+ * server decodes `input.tools` straight into its protobuf `ToolDefinition`,
+ * whose `input_schema_json` is a bytes field. A schema under any other key is
+ * ignored, and raw JSON under `input_schema_json` fails that decode, which makes
+ * the server answer 400 for the whole evaluation.
+ */
+function serializeTool(tool: ToolDefinition): Record<string, unknown> {
+  const out: Record<string, unknown> = { name: tool.name };
+  if (tool.description !== undefined && tool.description.length > 0) {
+    out.description = tool.description;
+  }
+  if (tool.type !== undefined && tool.type.length > 0) {
+    out.type = tool.type;
+  }
+  if (tool.inputSchemaJSON !== undefined && tool.inputSchemaJSON.length > 0) {
+    out.input_schema_json = base64FromUtf8(tool.inputSchemaJSON);
+  }
+  return out;
+}
+
+/**
+ * Embeds a JSON payload the server reads as raw JSON. Text that does not parse
+ * is sent as a JSON string, which keeps the body valid and leaves the value
+ * visible to rules instead of dropping it. Go and Python do the same.
+ */
+function embeddedJSON(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function base64FromUtf8(text: string): string {
+  const g = globalThis as typeof globalThis & {
+    Buffer?: { from(data: string, enc: string): { toString(enc: string): string } };
+    btoa?: (data: string) => string;
+  };
+  if (g.Buffer !== undefined) {
+    return g.Buffer.from(text, 'utf8').toString('base64');
+  }
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  if (g.btoa !== undefined) {
+    return g.btoa(binary);
+  }
+  throw new Error('agento11y hook evaluation failed: no base64 encoder available');
 }
 
 function parseEvaluateResponse(payload: unknown): HookEvaluateResponse {
@@ -334,29 +483,63 @@ function parseWireToolDefinition(rec: Record<string, unknown>): ToolDefinition |
   }
   const schemaKey = rec.input_schema_json ?? rec.inputSchemaJson ?? rec.inputSchemaJSON;
   if (typeof schemaKey === 'string' && schemaKey.length > 0) {
-    out.inputSchemaJSON = maybeDecodeGoProtoJSONBytes(schemaKey);
+    out.inputSchemaJSON = decodeWireJSONPayload(schemaKey);
   }
   return out;
 }
 
-function maybeDecodeGoProtoJSONBytes(value: string): string {
-  if (!/^[A-Za-z0-9+/]+=*$/.test(value) || value.length < 4) {
+/**
+ * Recovers a response-side JSON payload. The server marshals the protobuf bytes
+ * fields `input_json`, `content_json`, and `input_schema_json` with Go's
+ * `encoding/json`, so they arrive base64-encoded inside a JSON string.
+ *
+ * The result is always a JSON document: base64 that decodes to something else,
+ * and a string that is neither base64 nor JSON, are kept as a JSON string so the
+ * text survives. Go and Python apply the same rule; see
+ * `conformance/hooks/README.md`.
+ */
+function decodeWireJSONPayload(value: string): string {
+  const decoded = base64ToUtf8(value);
+  if (decoded !== undefined) {
+    return isJSONDocument(decoded) ? decoded : JSON.stringify(decoded);
+  }
+  if (isJSONDocument(value)) {
     return value;
   }
+  return JSON.stringify(value);
+}
+
+function isJSONDocument(text: string): boolean {
   try {
-    const g = globalThis as typeof globalThis & {
-      Buffer?: { from(data: string, enc: string): { toString(enc: string): string } };
-    };
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Decodes strict base64, matching Go's `StdEncoding` and Python's `validate=True`. */
+function base64ToUtf8(value: string): string | undefined {
+  if (value.length === 0 || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    return undefined;
+  }
+  const g = globalThis as typeof globalThis & {
+    Buffer?: { from(data: string, enc: string): { toString(enc: string): string } };
+    atob?: (data: string) => string;
+  };
+  try {
     if (g.Buffer !== undefined) {
-      const text = g.Buffer.from(value, 'base64').toString('utf8');
-      if (text.length > 0) {
-        return text;
-      }
+      return g.Buffer.from(value, 'base64').toString('utf8');
+    }
+    if (g.atob !== undefined) {
+      const binary = g.atob(value);
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
     }
   } catch {
-    /* ignore */
+    return undefined;
   }
-  return value;
+  return undefined;
 }
 
 function parseWireMessages(raw: unknown): Message[] | undefined {
@@ -417,61 +600,123 @@ function wireRoleToSdk(role: unknown): string {
   return 'user';
 }
 
-function parseWireMessagePart(rec: Record<string, unknown>): MessagePart | undefined {
-  const typ = rec.type;
-  if (typ === 'text' && typeof rec.text === 'string') {
-    return { type: 'text', text: rec.text };
-  }
-  if (typ === 'thinking' && typeof rec.thinking === 'string') {
-    return { type: 'thinking', thinking: rec.thinking };
-  }
-  if (typ === 'tool_call' && isRecord(rec.toolCall)) {
-    const tc = parseWireToolCallPart(rec.toolCall);
-    return tc !== undefined ? { type: 'tool_call', toolCall: tc } : undefined;
-  }
-  if (typ === 'tool_result' && isRecord(rec.toolResult)) {
-    const tr = parseWireToolResultPart(rec.toolResult);
-    return tr !== undefined ? { type: 'tool_result', toolResult: tr } : undefined;
-  }
+/** The part kinds the server dispatches on, and the only ones this SDK can hold. */
+type WirePartKind = 'text' | 'thinking' | 'tool_call' | 'tool_result';
 
+/** The payload fields of one wire part, read out of whichever shape carried them. */
+interface WirePartFields {
+  text?: string;
+  thinking?: string;
+  toolCall?: Record<string, unknown>;
+  toolResult?: Record<string, unknown>;
+}
+
+function parseWireMessagePart(rec: Record<string, unknown>): MessagePart | undefined {
+  const fields = wirePartFields(rec);
+  const kind = wirePartKind(rec, fields);
+  if (kind === undefined) {
+    return undefined;
+  }
+  switch (kind) {
+    case 'text':
+      return fields.text !== undefined ? { type: 'text', text: fields.text } : undefined;
+    case 'thinking':
+      return fields.thinking !== undefined ? { type: 'thinking', thinking: fields.thinking } : undefined;
+    case 'tool_call': {
+      if (fields.toolCall === undefined) {
+        return undefined;
+      }
+      const tc = parseWireToolCallPart(fields.toolCall);
+      return tc !== undefined ? { type: 'tool_call', toolCall: tc } : undefined;
+    }
+    case 'tool_result': {
+      if (fields.toolResult === undefined) {
+        return undefined;
+      }
+      const tr = parseWireToolResultPart(fields.toolResult);
+      return tr !== undefined ? { type: 'tool_result', toolResult: tr } : undefined;
+    }
+  }
+}
+
+/**
+ * Reads the payload fields of one wire part.
+ *
+ * Three shapes reach this parser: the server's snake_case body, an echo of this
+ * SDK's own camelCase part, and a protobuf `Part` marshalled with Go's
+ * `encoding/json`, which nests the oneof under a capitalized `Payload` object. A
+ * `Payload` that holds none of the four fields is ignored rather than treated as
+ * an empty part, so the top-level fields still get their chance.
+ */
+function wirePartFields(rec: Record<string, unknown>): WirePartFields {
   const payload = rec.Payload ?? rec.payload;
   if (isRecord(payload)) {
-    if (typeof payload.Text === 'string') {
-      return { type: 'text', text: payload.Text };
-    }
-    if (typeof payload.Thinking === 'string') {
-      return { type: 'thinking', thinking: payload.Thinking };
-    }
-    if (isRecord(payload.ToolCall)) {
-      const tc = parseWireToolCallPart(payload.ToolCall);
-      return tc !== undefined ? { type: 'tool_call', toolCall: tc } : undefined;
-    }
-    if (isRecord(payload.ToolResult)) {
-      const tr = parseWireToolResultPart(payload.ToolResult);
-      return tr !== undefined ? { type: 'tool_result', toolResult: tr } : undefined;
+    const nested = collectWirePartFields(payload.Text, payload.Thinking, payload.ToolCall, payload.ToolResult);
+    if (Object.keys(nested).length > 0) {
+      return nested;
     }
   }
+  return collectWirePartFields(
+    rec.text,
+    rec.thinking,
+    rec.tool_call ?? rec.toolCall,
+    rec.tool_result ?? rec.toolResult,
+  );
+}
 
-  const kind = typeof rec.kind === 'string' ? rec.kind : '';
-  if (kind === 'text' && typeof rec.text === 'string') {
-    return { type: 'text', text: rec.text };
-  }
-  if (kind === 'thinking' && typeof rec.thinking === 'string') {
-    return { type: 'thinking', thinking: rec.thinking };
-  }
-  if (kind === 'tool_call') {
-    const rawTc = rec.tool_call ?? rec.toolCall;
-    if (isRecord(rawTc)) {
-      const tc = parseWireToolCallPart(rawTc);
-      return tc !== undefined ? { type: 'tool_call', toolCall: tc } : undefined;
+function collectWirePartFields(
+  rawText: unknown,
+  rawThinking: unknown,
+  rawToolCall: unknown,
+  rawToolResult: unknown,
+): WirePartFields {
+  const text = optionalStringField(rawText);
+  const thinking = optionalStringField(rawThinking);
+  return {
+    ...(text !== undefined ? { text } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+    ...(isRecord(rawToolCall) ? { toolCall: rawToolCall } : {}),
+    ...(isRecord(rawToolResult) ? { toolResult: rawToolResult } : {}),
+  };
+}
+
+/**
+ * Resolves the kind to read a part as, and commits to it. A part that names its
+ * kind is never rebuilt from another kind's field, so a `tool_call` that arrives
+ * without its payload object is dropped rather than turned into the text that
+ * happens to sit next to it. Go and Python resolve the kind the same way; see
+ * `conformance/hooks/README.md`.
+ */
+function wirePartKind(rec: Record<string, unknown>, fields: WirePartFields): WirePartKind | undefined {
+  const declared = optionalStringField(rec.kind) ?? optionalStringField(rec.type);
+  if (declared !== undefined) {
+    switch (declared) {
+      case 'text':
+      case 'thinking':
+      case 'tool_call':
+      case 'tool_result':
+        return declared;
+      default:
+        // A kind this SDK does not know, which the server can only have sent as
+        // text, so text is all there is to recover from it.
+        return 'text';
     }
   }
-  if (kind === 'tool_result') {
-    const rawTr = rec.tool_result ?? rec.toolResult;
-    if (isRecord(rawTr)) {
-      const tr = parseWireToolResultPart(rawTr);
-      return tr !== undefined ? { type: 'tool_result', toolResult: tr } : undefined;
-    }
+  // A part without a discriminator is still recoverable from whichever payload
+  // field is set, and dropping it would lose a transform the caller was asked to
+  // apply. The server always sets `kind`, so this only covers a hand-written,
+  // proto-JSON, or Go-marshalled body. Go and Python keep the same tolerance.
+  if (fields.toolCall !== undefined) {
+    return 'tool_call';
+  }
+  if (fields.toolResult !== undefined) {
+    return 'tool_result';
+  }
+  if (fields.thinking !== undefined) {
+    return 'thinking';
+  }
+  if (fields.text !== undefined) {
+    return 'text';
   }
   return undefined;
 }
@@ -487,7 +732,9 @@ function parseWireToolCallPart(rec: Record<string, unknown>): ToolCallPart | und
   }
   const rawInput = rec.input_json ?? rec.inputJson ?? rec.inputJSON;
   if (typeof rawInput === 'string' && rawInput.length > 0) {
-    out.inputJSON = maybeDecodeGoProtoJSONBytes(rawInput);
+    out.inputJSON = decodeWireJSONPayload(rawInput);
+  } else if (isRecord(rawInput) || Array.isArray(rawInput)) {
+    out.inputJSON = JSON.stringify(rawInput);
   }
   return out;
 }
@@ -507,7 +754,9 @@ function parseWireToolResultPart(rec: Record<string, unknown>): ToolResultPart |
   }
   const rawCj = rec.content_json ?? rec.contentJson ?? rec.contentJSON;
   if (typeof rawCj === 'string' && rawCj.length > 0) {
-    out.contentJSON = maybeDecodeGoProtoJSONBytes(rawCj);
+    out.contentJSON = decodeWireJSONPayload(rawCj);
+  } else if (isRecord(rawCj) || Array.isArray(rawCj)) {
+    out.contentJSON = JSON.stringify(rawCj);
   }
   if (rec.is_error === true || rec.isError === true) {
     out.isError = true;

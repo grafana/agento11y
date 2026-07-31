@@ -577,6 +577,7 @@ export class Agento11yClient {
       extraHeaders: this.config.generationExport.headers,
       hooks: effectiveHooks,
       request,
+      logger: this.logger,
     });
   }
 
