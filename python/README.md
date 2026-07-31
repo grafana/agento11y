@@ -311,6 +311,16 @@ if response.transformed_input is not None:
 
 `HooksConfig` defaults to `phases=["preflight"]`, `timeout_seconds=15.0`, and `fail_open=True`. With fail-open enabled, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `fail_open=False` for strict paths that should fail closed.
 
+`evaluate_hook` also takes a keyword-only `hooks` override that replaces the client's resolved hook configuration for that one call. It does not mutate the client, so later calls use the client configuration again:
+
+```python
+from dataclasses import replace
+
+response = client.evaluate_hook(request, hooks=replace(client.hooks_config, fail_open=False))
+```
+
+Use it when your caller has to tell a server allow from an allow the SDK synthesized after a failure. The response carries no marker separating the two, so a fail-open allow otherwise looks like a completed evaluation. `agento11y-litellm` calls fail-closed this way and applies the configured `fail_open` policy itself, after recording the failure as a guardrail verdict.
+
 Set `HookContext.conversation_id` to the same ID used by `start_generation(...)`. The SDK also reads `with_conversation_id(...)` and the active OpenTelemetry span when explicit correlation fields are omitted. This lets Agent Observability retain denied preflight attempts even though no LLM generation is created.
 
 If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `start_generation(...)`. For a runnable example, see `../examples/getting-started/python-hooks/`.

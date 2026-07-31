@@ -6,6 +6,7 @@ import contextlib
 import json
 import threading
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
@@ -367,6 +368,62 @@ def test_evaluate_hook_skips_mismatched_phase() -> None:
         client.shutdown()
         server.shutdown()
         server.server_close()
+
+
+def test_evaluate_hook_override_forces_fail_closed() -> None:
+    """A per-call override lets a caller see the transport failure itself.
+
+    An adapter that reports a verdict to an external system has to distinguish
+    a server allow from an SDK fail-open allow, and the response carries no
+    marker separating the two.
+    """
+    client = _new_client("http://127.0.0.1:1", hooks=HooksConfig(enabled=True, fail_open=True))
+    try:
+        with pytest.raises(HookTransportError):
+            client.evaluate_hook(
+                _preflight_request(),
+                hooks=replace(client.hooks_config, fail_open=False),
+            )
+
+        assert client.hooks_config.fail_open is True
+    finally:
+        client.shutdown()
+
+
+def test_evaluate_hook_override_enables_a_disabled_client_for_one_call() -> None:
+    with _capturing_hook_server({"action": "allow"}) as (captured, base_url):
+        client = _new_client(base_url, hooks=HooksConfig(enabled=False))
+        try:
+            response = client.evaluate_hook(
+                _preflight_request(),
+                hooks=HooksConfig(enabled=True, phases=["preflight"], fail_open=False),
+            )
+            assert response.action == "allow"
+            assert captured["path"] == "/api/v1/hooks:evaluate"
+
+            assert client.hooks_config.enabled is False
+            # The client's own configuration still short-circuits.
+            captured.clear()
+            assert client.evaluate_hook(_preflight_request()).action == "allow"
+            assert captured == {}
+        finally:
+            client.shutdown()
+
+
+def test_evaluate_hook_without_override_keeps_client_configuration() -> None:
+    client = _new_client("http://127.0.0.1:1", hooks=HooksConfig(enabled=True, fail_open=True))
+    try:
+        assert client.evaluate_hook(_preflight_request()).action == "allow"
+    finally:
+        client.shutdown()
+
+
+def _preflight_request() -> HookEvaluateRequest:
+    return HookEvaluateRequest(
+        phase=HookPhase.PREFLIGHT.value,
+        context=HookContext(model=HookModel(provider="openai", name="gpt-4o")),
+        input=HookInput(),
+    )
 
 
 def test_evaluate_hook_serializes_tool_definitions_including_deferred() -> None:
