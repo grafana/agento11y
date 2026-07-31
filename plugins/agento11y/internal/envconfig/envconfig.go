@@ -335,14 +335,7 @@ func ResolveGuards(logger *log.Logger) GuardsConfig {
 		FailOpen:  resolveGuardsBool(logger, "GUARDS_FAIL_OPEN", defaultGuardsFailOpen),
 	}
 	if v, key, ok := LookupEnv("GUARDS_TIMEOUT_MS"); ok {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			if logger != nil {
-				logger.Printf("config: invalid %s=%q; using %d", key, v, DefaultGuardsTimeoutMs)
-			}
-		} else {
-			cfg.TimeoutMs = n
-		}
+		cfg.TimeoutMs = IntValue(logger, key, v, DefaultGuardsTimeoutMs)
 	}
 	return cfg
 }
@@ -353,6 +346,24 @@ func resolveGuardsBool(logger *log.Logger, suffix string, def bool) bool {
 		return def
 	}
 	return BoolValue(logger, key, raw, def)
+}
+
+// IntValue parses a positive config integer from raw. Empty returns def; a
+// non-numeric, zero, or negative value is reported via logger (when non-nil)
+// and returns def. key is used only in the diagnostic message.
+func IntValue(logger *log.Logger, key, raw string, def int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		if logger != nil {
+			logger.Printf("config: invalid %s=%q; using %d", key, raw, def)
+		}
+		return def
+	}
+	return n
 }
 
 // BoolValue parses a config boolean from raw using the guards whitelist

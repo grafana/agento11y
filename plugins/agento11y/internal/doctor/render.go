@@ -130,6 +130,12 @@ func renderHuman(w io.Writer, r *Report, color, probed bool) {
 	if r.Config.LocalForward.Set {
 		writeKV(&b, p, "local forwarding", describeEnv(r.Config.LocalForward))
 	}
+	// Only worth a line once the user has opted into forwarding: with
+	// LOCAL_FORWARD unset chaining is always off, and that is already what the
+	// absent line above says.
+	if r.Config.LocalForward.Set {
+		writeKV(&b, p, "local guard checks", describeLocalHookForward(p, r.Config.LocalHookForward))
+	}
 	writeMessages(&b, p, r.Config.Messages)
 	b.WriteString("\n")
 
@@ -230,6 +236,16 @@ func describeGuards(p palette, c ConfigSection) string {
 		out += " " + p.faint("(invalid value, fell back)")
 	}
 	return out
+}
+
+// describeLocalHookForward renders whether a --local session's guard checks
+// reach Cloud, which is how a user learns their tool calls leave the machine
+// even under a reduced content capture mode.
+func describeLocalHookForward(p palette, h HookForwardSection) string {
+	if h.Enabled {
+		return "local hook evaluation reaches Cloud " + p.faint("(tool calls, and the conversation an agent runs a preflight check on, are sent for evaluation whatever the capture mode)")
+	}
+	return p.faint("not forwarded (" + h.Reason + ")")
 }
 
 func describeProbe(p *ProbeResult) string {

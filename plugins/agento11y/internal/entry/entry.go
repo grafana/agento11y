@@ -72,14 +72,37 @@ var (
 	localBannerURL   = lipgloss.NewStyle().Underline(true)
 )
 
-func renderLocalBanner(uiURL string) string {
-	lines := []string{
-		localBannerTitle.Render("agento11y local mode"),
-		localBannerLabel.Render("Captured agent data stays on this machine."),
-		"",
-		localBannerLabel.Render("View ") + localBannerURL.Render(uiURL),
+func renderLocalBanner(uiURL string, posture local.ForwardPosture, postureErr error) string {
+	privacy := localPrivacyLines(posture, postureErr == nil)
+	lines := make([]string, 0, len(privacy)+3)
+	lines = append(lines, localBannerTitle.Render("agento11y local mode"))
+	for _, line := range privacy {
+		lines = append(lines, localBannerLabel.Render(line))
 	}
+	lines = append(lines, "", localBannerLabel.Render("View ")+localBannerURL.Render(uiURL))
 	return localBannerBox.Render(strings.Join(lines, "\n"))
+}
+
+// localPrivacyLines describes what leaves the machine in this session. The
+// daemon is shared and re-reads config.env, so the claim has to come from the
+// posture it reports rather than from the fact that --local was passed.
+func localPrivacyLines(posture local.ForwardPosture, known bool) []string {
+	switch {
+	case !known:
+		// The daemon did not answer. Say what is certain (the local store)
+		// rather than guess at the forwarding posture.
+		return []string{"Captured agent data is recorded on this machine."}
+	case !posture.Enabled:
+		return []string{"Captured agent data stays on this machine."}
+	case posture.Hooks:
+		return []string{
+			"Captured agent data is also forwarded to Grafana Cloud (" + posture.Mode + ").",
+			"Guard checks send tool calls, and any conversation checked before it is sent",
+			"to the model, to Cloud regardless of that mode.",
+		}
+	default:
+		return []string{"Captured agent data is also forwarded to Grafana Cloud (" + posture.Mode + ")."}
+	}
 }
 
 const usageLine = "usage: agento11y login | agento11y doctor [--json] [--probe] | agento11y local start|status|stop | agento11y cursor install|uninstall | agento11y <agent> hook | agento11y <claude|codex|copilot|opencode|pi|vibe> [--local] [--tag key=value]... [-- args...]"
@@ -593,7 +616,13 @@ func setupLocalLaunch(stderr io.Writer) (endpoint, otlp string, err error) {
 	endpoint = status.Endpoint
 	otlp = status.Endpoint + "/otlp"
 
-	_, _ = fmt.Fprintln(stderr, renderLocalBanner(status.Endpoint))
+	posture, postureErr := local.FetchForwardPosture(ctx, status.Endpoint)
+	if postureErr != nil {
+		// The banner falls back to wording that is true in every posture, which
+		// on its own reads like "nothing is forwarded". Say why it is hedged.
+		_, _ = fmt.Fprintf(stderr, "agento11y: could not read the daemon's forwarding posture: %v\n", postureErr)
+	}
+	_, _ = fmt.Fprintln(stderr, renderLocalBanner(status.Endpoint, posture, postureErr))
 	return endpoint, otlp, nil
 }
 

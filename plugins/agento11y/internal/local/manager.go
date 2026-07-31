@@ -333,6 +333,58 @@ func processLooksLikeDaemon(pid int) (bool, error) {
 	return strings.HasPrefix(base, "agento11y") || strings.HasPrefix(base, "sigil") || base == "main", nil
 }
 
+// ForwardPosture is what a running daemon would send to Cloud right now, for
+// callers outside the viewer. The launcher prints a privacy claim before
+// handing the terminal to the agent, and only the daemon knows the resolved
+// answer: it reads config.env ahead of its own environment, so the launcher's
+// process environment can disagree with it.
+type ForwardPosture struct {
+	// Enabled reports whether captured sessions are forwarded at all.
+	Enabled bool
+	// Mode is the content level of the forwarded copy (forwardMode*).
+	Mode string
+	// Hooks reports whether guard evaluation is relayed to Cloud, which sends
+	// the content being evaluated regardless of Mode. See handleHookEvaluate.
+	Hooks bool
+}
+
+// FetchForwardPosture asks a running daemon what it would forward. A non-nil
+// error means the daemon could not be reached or did not answer in time, in
+// which case the caller must not claim any particular posture, and should say
+// why: the hedged wording it falls back to is otherwise indistinguishable from
+// a daemon that reported "nothing is forwarded".
+func FetchForwardPosture(ctx context.Context, endpoint string) (ForwardPosture, error) {
+	if strings.TrimSpace(endpoint) == "" {
+		return ForwardPosture{}, errors.New("no daemon endpoint")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/api/v1/config", nil)
+	if err != nil {
+		return ForwardPosture{}, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ForwardPosture{}, err
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != http.StatusOK {
+		return ForwardPosture{}, fmt.Errorf("GET %s returned HTTP %d", req.URL, resp.StatusCode)
+	}
+	var body configResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
+		return ForwardPosture{}, fmt.Errorf("decode config from %s: %w", req.URL, err)
+	}
+	return ForwardPosture{
+		Enabled: body.ForwardStatus.Enabled,
+		Mode:    body.ForwardStatus.Mode,
+		Hooks:   body.ForwardStatus.Hooks,
+	}, nil
+}
+
 // endpointAlive returns true when GET <endpoint>/healthz responds within
 // 500ms. /healthz is the JSON liveness probe; / now serves the viewer
 // HTML and would be wasteful (and ambiguous) to fetch on every check.
