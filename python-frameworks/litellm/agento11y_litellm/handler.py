@@ -77,6 +77,15 @@ _TEXT_CONTENT_PART_TYPES = frozenset({"text", "input_text", "output_text", _REFU
 # ``output_text``.
 _REASONING_TEXT_PART_TYPES = frozenset({"summary_text", "reasoning_text", "output_text", "text"})
 
+# Responses API items that carry tool history. Chat hangs a call off an assistant
+# message and sends the result as a ``tool`` role message; the Responses API
+# sends both as top-level items with no role at all. Other tool item types
+# (``computer_call``, ``mcp_call``, ``image_generation_call``) keep their payload
+# in shapes of their own and are not mapped.
+_RESPONSES_TOOL_CALL_ITEM_TYPE = "function_call"
+_RESPONSES_TOOL_RESULT_ITEM_TYPE = "function_call_output"
+_RESPONSES_TOOL_ITEM_TYPES = frozenset({_RESPONSES_TOOL_CALL_ITEM_TYPE, _RESPONSES_TOOL_RESULT_ITEM_TYPE})
+
 # Metadata keys consulted, in order, to name the agent behind a request.
 # ``agent_id`` is LiteLLM's own identity field, filled in by the proxy from the
 # ``x-litellm-agent-id`` header or from an ``agent_id`` on the calling virtual
@@ -84,6 +93,17 @@ _REASONING_TEXT_PART_TYPES = frozenset({"summary_text", "reasoning_text", "outpu
 # themselves rather than to the proxy. Override via ``agent_name_metadata_keys``
 # to consult different keys, or pass ``("agent_name",)`` to opt out.
 DEFAULT_AGENT_NAME_METADATA_KEYS = ("agent_name", "agent_id")
+
+# Metadata keys consulted, in order, to group requests into one conversation,
+# followed by LiteLLM's own session fields.
+_CONVERSATION_ID_METADATA_KEYS = ("conversation_id", "session_id", "thread_id")
+_LITELLM_SESSION_KEYS = ("litellm_session_id", "litellm_trace_id")
+
+FRAMEWORK_TAGS = {
+    "agento11y.framework.name": "litellm",
+    "agento11y.framework.source": "handler",
+    "agento11y.framework.language": "python",
+}
 
 
 def _make_tool_call_part(*, call_id: str, name: str, arguments: str) -> Part:
@@ -112,6 +132,11 @@ def _map_messages(messages: Any) -> tuple[list[Message], str]:
     ``anthropic_messages`` call type can also carry OpenAI-shaped messages once
     a caller replays LiteLLM's own normalized history, so both vocabularies are
     read per message instead of branching on the route.
+
+    ``/v1/responses`` sends its ``input`` list here too, and tool history in that
+    list is not role-shaped: the model's call is a top-level ``function_call``
+    item and the result a ``function_call_output`` item, both mapped before the
+    role dispatch.
     """
     if not messages:
         return [], ""
@@ -132,6 +157,13 @@ def _map_messages(messages: Any) -> tuple[list[Message], str]:
             continue
 
         if not isinstance(msg, dict):
+            continue
+
+        item_type = str(msg.get("type") or "").lower()
+        if item_type in _RESPONSES_TOOL_ITEM_TYPES:
+            tool_message = _map_responses_tool_item(msg, item_type)
+            if tool_message is not None:
+                out.append(tool_message)
             continue
 
         role = (msg.get("role") or "").lower()
@@ -190,6 +222,43 @@ def _map_messages(messages: Any) -> tuple[list[Message], str]:
         out.append(Message(role=mapped_role, parts=parts))
 
     return out, "\n\n".join(system_chunks)
+
+
+def _map_responses_tool_item(item: dict[str, Any], item_type: str) -> Message | None:
+    """Map a Responses API ``function_call``/``function_call_output`` item.
+
+    A ``function_call`` becomes an assistant TOOL_CALL and a
+    ``function_call_output`` a TOOL_RESULT, which is what the chat shape maps to,
+    so a rule that matches tool history matches the same conversation on either
+    route. Dropping them would leave a tool-using turn looking like it called
+    nothing: preflight tool filters would see no history to deny on, and the
+    recorded generation would lose its calls and results.
+
+    ``call_id`` pairs a call with its result. ``id`` is the item's own id and is
+    only a fallback, matching ``_map_responses_output``.
+    """
+    call_id = str(item.get("call_id") or item.get("id") or "")
+    name = str(item.get("name") or "")
+
+    if item_type == _RESPONSES_TOOL_CALL_ITEM_TYPE:
+        if not name:
+            return None
+        return Message(
+            role=MessageRole.ASSISTANT,
+            parts=[_make_tool_call_part(call_id=call_id, name=name, arguments=str(item.get("arguments") or ""))],
+        )
+
+    if item_type != _RESPONSES_TOOL_RESULT_ITEM_TYPE:
+        return None
+
+    # ``output`` is a string or a list of content parts. A result whose output is
+    # not text still records the pairing, so the call it answers does not read as
+    # unanswered.
+    return _tool_result_message(
+        content=_extract_text_content(item.get("output")),
+        tool_call_id=call_id,
+        name=name,
+    )
 
 
 def _map_thinking_parts(message: dict[str, Any]) -> list[Part]:
@@ -365,22 +434,10 @@ def _map_responses_output(response: Any) -> list[Message]:
                 out.append(Message(role=MessageRole.ASSISTANT, parts=parts))
             continue
 
-        if item_type == "function_call":
-            name = item.get("name") or ""
-            if not name:
-                continue
-            out.append(
-                Message(
-                    role=MessageRole.ASSISTANT,
-                    parts=[
-                        _make_tool_call_part(
-                            call_id=item.get("call_id") or item.get("id") or "",
-                            name=name,
-                            arguments=item.get("arguments") or "",
-                        )
-                    ],
-                )
-            )
+        if item_type == _RESPONSES_TOOL_CALL_ITEM_TYPE:
+            tool_message = _map_responses_tool_item(item, item_type)
+            if tool_message is not None:
+                out.append(tool_message)
             continue
 
         text = _extract_text_content(item.get("content"))
@@ -488,7 +545,16 @@ def _map_tool_definitions(kwargs: dict[str, Any]) -> list[ToolDefinition]:
     logs flat tools with ``parameters``. ``tool_definitions`` reads all three.
     """
     optional_params = kwargs.get("optional_params") or {}
-    tools = optional_params.get("tools")
+    return _map_tools_list(optional_params.get("tools"))
+
+
+def _map_tools_list(tools: Any) -> list[ToolDefinition]:
+    """Map an OpenAI-format ``tools`` list to agento11y ToolDefinitions.
+
+    Takes the list itself so it serves both the logging path
+    (``kwargs["optional_params"]["tools"]``) and the proxy pre-call path
+    (``data["tools"]``).
+    """
     if not tools or not isinstance(tools, list):
         return []
 
@@ -596,16 +662,26 @@ def _routing_metadata(slo: dict[str, Any]) -> dict[str, str]:
 
 
 def _metadata_sources(kwargs: dict[str, Any]) -> list[dict[str, Any]]:
-    """Collect the metadata dicts LiteLLM may attach to a request.
+    """Collect the metadata dicts LiteLLM may attach to a logged request."""
+    return _metadata_sources_from(kwargs.get("litellm_params") or {})
+
+
+def _metadata_sources_from(container: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect the metadata dicts LiteLLM may attach under ``container``.
 
     Chat completions carry client metadata in ``metadata``; assistant and thread
     routes use ``litellm_metadata``; metadata passed through the Router lands one
     level deeper, under ``metadata.metadata``.
+
+    The container is ``kwargs["litellm_params"]`` on the logging path and the raw
+    request body on the proxy pre-call path, where the same keys sit at the top
+    level.
     """
-    litellm_params = kwargs.get("litellm_params") or {}
+    if not isinstance(container, dict):
+        return []
     sources: list[dict[str, Any]] = []
     for key in ("metadata", "litellm_metadata"):
-        candidate = litellm_params.get(key)
+        candidate = container.get(key)
         if not isinstance(candidate, dict):
             continue
         sources.append(candidate)
@@ -613,6 +689,34 @@ def _metadata_sources(kwargs: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(nested, dict):
             sources.append(nested)
     return sources
+
+
+def _resolve_conversation_id_from(container: dict[str, Any], sources: list[dict[str, Any]]) -> str:
+    """Resolve a conversation id from metadata, then LiteLLM's session fields.
+
+    Checks metadata keys first (conversation_id, session_id, thread_id), then
+    LiteLLM's built-in session tracking fields (litellm_session_id,
+    litellm_trace_id) in both metadata and ``container``. Returns "" when none
+    is present, so callers can apply their own fallback.
+    """
+    value = _first_metadata_value(sources, _CONVERSATION_ID_METADATA_KEYS)
+    if value:
+        return value
+
+    for key in _LITELLM_SESSION_KEYS:
+        value = _first_metadata_value(sources, (key,)) or container.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _request_tags_from(sources: list[dict[str, Any]]) -> list[str]:
+    """Collect LiteLLM request tags (``metadata.tags``) from metadata sources."""
+    for source in sources:
+        tags = source.get("tags")
+        if isinstance(tags, list):
+            return [str(tag) for tag in tags if tag]
+    return []
 
 
 def _first_metadata_value(sources: list[dict[str, Any]], keys: tuple[str, ...]) -> str:
@@ -744,17 +848,9 @@ class Agento11yLiteLLMLogger(CustomLogger):
         then LiteLLM's built-in session tracking fields (litellm_session_id,
         litellm_trace_id) in both metadata and litellm_params.
         """
-        sources = _metadata_sources(kwargs)
-        value = _first_metadata_value(sources, ("conversation_id", "session_id", "thread_id"))
-        if value:
-            return value
-
         litellm_params = kwargs.get("litellm_params") or {}
-        for key in ("litellm_session_id", "litellm_trace_id"):
-            value = _first_metadata_value(sources, (key,)) or litellm_params.get(key)
-            if value:
-                return str(value)
-        return self._conversation_id
+        resolved = _resolve_conversation_id_from(litellm_params, _metadata_sources_from(litellm_params))
+        return resolved or self._conversation_id
 
     def _record_generation(
         self,
@@ -772,11 +868,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
 
         is_stream = bool(slo.get("stream"))
 
-        tags: dict[str, str] = {
-            "agento11y.framework.name": "litellm",
-            "agento11y.framework.source": "handler",
-            "agento11y.framework.language": "python",
-        }
+        tags: dict[str, str] = dict(FRAMEWORK_TAGS)
         request_tags = slo.get("request_tags") or []
         for tag_value in request_tags:
             tag_str = str(tag_value)
@@ -879,11 +971,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
         dimensions = _safe_cast(optional_params, "dimensions", int)
         encoding_format = optional_params.get("encoding_format") or ""
 
-        tags: dict[str, str] = {
-            "agento11y.framework.name": "litellm",
-            "agento11y.framework.source": "handler",
-            "agento11y.framework.language": "python",
-        }
+        tags: dict[str, str] = dict(FRAMEWORK_TAGS)
         for tag_value in slo.get("request_tags") or []:
             tag_str = str(tag_value)
             tags[f"litellm.tag.{tag_str}"] = tag_str

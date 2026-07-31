@@ -2145,6 +2145,70 @@ def test_responses_api_reasoning_and_tool_call_mapped() -> None:
         client.shutdown()
 
 
+def test_responses_api_input_tool_items_mapped() -> None:
+    """Responses input keeps tool history in items without a role.
+
+    The logged ``messages`` are the ``input`` list as it arrived: the model's
+    call is a top-level ``function_call`` item and the result a
+    ``function_call_output`` item, neither carrying a role. Mapping only
+    role-shaped messages records a tool-using turn as if nothing was called.
+    """
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="aresponses",
+            custom_llm_provider="openai",
+            model="openai/gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": [{"type": "input_text", "text": "weather in Berlin?"}]},
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": '{"city": "Berlin"}',
+                },
+                {"type": "function_call_output", "call_id": "call_1", "output": "20C"},
+            ],
+            response={
+                "id": "resp_3",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "20C in Berlin"}],
+                    }
+                ],
+            },
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert [m.role for m in gen.input] == [MessageRole.USER, MessageRole.ASSISTANT, MessageRole.TOOL]
+        assert gen.input[0].parts[0].text == "weather in Berlin?"
+
+        tool_call = gen.input[1].parts[0].tool_call
+        # ``call_id`` pairs the call with its result; ``fc_1`` is the item's own id.
+        assert tool_call.id == "call_1"
+        assert tool_call.name == "get_weather"
+        assert tool_call.input_json == b'{"city": "Berlin"}'
+
+        tool_result = gen.input[2].parts[0].tool_result
+        assert tool_result.tool_call_id == "call_1"
+        assert tool_result.content == "20C"
+    finally:
+        client.shutdown()
+
+
 def test_anthropic_messages_output_mapped() -> None:
     """/v1/messages is chat-normalized by LiteLLM, so the chat mappers apply.
 

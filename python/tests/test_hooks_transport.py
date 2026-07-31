@@ -25,8 +25,13 @@ from agento11y import (
     HookPhase,
     HooksConfig,
     HookTransportError,
+    Message,
     MessageRole,
+    Part,
+    PartKind,
+    ToolCall,
     ToolDefinition,
+    ToolResult,
     hook_denied_from_response,
     user_text_message,
     with_conversation_id,
@@ -388,6 +393,92 @@ def test_evaluate_hook_serializes_tool_definitions_including_deferred() -> None:
     assert [t["name"] for t in tools] == ["search", "approve_refund"]
     assert "deferred" not in tools[0]
     assert tools[1]["deferred"] is True
+
+
+def test_evaluate_hook_tags_every_part_with_its_kind() -> None:
+    """Guards dispatch on ``kind``, and only a text part survives without one.
+
+    A tool call sent without ``kind`` arrives at rule evaluation as an empty
+    part, so a tool-filter guard finds no tool calls and allows the request.
+    Tool arguments have to be embedded JSON for the same reason: the server
+    reads them as raw JSON, so a base64 blob is what an argument-level rule
+    like ``shell_exec(*cmd*)`` would match against.
+    """
+
+    messages = [
+        Message(
+            role=MessageRole.ASSISTANT,
+            parts=[
+                Part(kind=PartKind.THINKING, thinking="weighing options"),
+                Part(kind=PartKind.TEXT, text="running it"),
+                Part(
+                    kind=PartKind.TOOL_CALL,
+                    tool_call=ToolCall(id="call_1", name="shell_exec", input_json=b'{"cmd":"ls"}'),
+                ),
+            ],
+        ),
+        Message(
+            role=MessageRole.TOOL,
+            parts=[
+                Part(
+                    kind=PartKind.TOOL_RESULT,
+                    tool_result=ToolResult(tool_call_id="call_1", content="ok", content_json=b'{"status":"ok"}'),
+                )
+            ],
+        ),
+    ]
+
+    with _capturing_hook_server({"action": "allow", "evaluations": []}) as (captured, base_url):
+        client = _new_client(base_url, hooks=HooksConfig(enabled=True, phases=["preflight"]))
+        try:
+            client.evaluate_hook(
+                HookEvaluateRequest(
+                    phase=HookPhase.PREFLIGHT.value,
+                    context=HookContext(model=HookModel(provider="openai", name="gpt-4o")),
+                    input=HookInput(messages=messages),
+                )
+            )
+        finally:
+            client.shutdown()
+
+    wire_messages = captured["payload"]["input"]["messages"]
+    assert [[part["kind"] for part in message["parts"]] for message in wire_messages] == [
+        ["thinking", "text", "tool_call"],
+        ["tool_result"],
+    ]
+    tool_call = wire_messages[0]["parts"][2]["tool_call"]
+    assert tool_call["name"] == "shell_exec"
+    assert tool_call["input_json"] == {"cmd": "ls"}
+    tool_result = wire_messages[1]["parts"][0]["tool_result"]
+    assert tool_result["tool_call_id"] == "call_1"
+    assert tool_result["content_json"] == {"status": "ok"}
+
+
+def test_evaluate_hook_keeps_unparseable_tool_args_as_text() -> None:
+    """Bytes that are not JSON still have to leave the SDK as valid JSON."""
+
+    messages = [
+        Message(
+            role=MessageRole.ASSISTANT,
+            parts=[Part(kind=PartKind.TOOL_CALL, tool_call=ToolCall(name="shell_exec", input_json=b"not json"))],
+        )
+    ]
+
+    with _capturing_hook_server({"action": "allow", "evaluations": []}) as (captured, base_url):
+        client = _new_client(base_url, hooks=HooksConfig(enabled=True, phases=["preflight"]))
+        try:
+            client.evaluate_hook(
+                HookEvaluateRequest(
+                    phase=HookPhase.PREFLIGHT.value,
+                    context=HookContext(model=HookModel(provider="openai", name="gpt-4o")),
+                    input=HookInput(messages=messages),
+                )
+            )
+        finally:
+            client.shutdown()
+
+    tool_call = captured["payload"]["input"]["messages"][0]["parts"][0]["tool_call"]
+    assert tool_call["input_json"] == "not json"
 
 
 @contextlib.contextmanager
