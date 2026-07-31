@@ -18,10 +18,8 @@ from agento11y import (
     ModelRef,
     Part,
     PartKind,
-    ToolCall,
-    ToolDefinition,
-    ToolResult,
 )
+from agento11y.payload_mapping import content_parts, content_text, tool_definitions
 from agento11y.usage import from_anthropic
 
 if TYPE_CHECKING:
@@ -166,7 +164,7 @@ def _messages_from_request_response(
     thinking_budget = _anthropic_thinking_budget(_read(request, "thinking"))
     input_messages, system_prompt = _map_input_messages(request)
     output_message = _map_output_message(response)
-    tools = _map_tools(_read(request, "tools"))
+    tools = tool_definitions(_read(request, "tools"))
     usage = from_anthropic(_read(response, "usage"))
     usage_metadata = _anthropic_usage_metadata(_read(response, "usage"))
 
@@ -235,7 +233,7 @@ def _messages_from_stream(
             thinking_enabled=_anthropic_thinking_enabled(_read(request, "thinking")),
             input=input_messages,
             output=[],
-            tools=_map_tools(_read(request, "tools")),
+            tools=tool_definitions(_read(request, "tools")),
             tags=dict(opts.tags),
             metadata=_merge_metadata(
                 _metadata_with_thinking_budget(
@@ -277,7 +275,7 @@ def _start_payload(request: MessageCreateParams, options: AnthropicOptions, mode
         top_p=_as_float_or_none(_read(request, "top_p")),
         tool_choice=_canonical_tool_choice(_read(request, "tool_choice")),
         thinking_enabled=_anthropic_thinking_enabled(_read(request, "thinking")),
-        tools=_map_tools(_read(request, "tools")),
+        tools=tool_definitions(_read(request, "tools")),
         tags=dict(options.tags),
         metadata=_metadata_with_thinking_budget(
             options.metadata,
@@ -292,9 +290,9 @@ def _map_input_messages(request: MessageCreateParams) -> tuple[list[Message], st
 
     for raw_message in _as_list(_read(request, "messages")):
         role = _normalize_role(_as_str(_read(raw_message, "role")))
-        parts = _map_parts(_read(raw_message, "content"), role_hint=role)
+        parts = content_parts(_read(raw_message, "content"), role_hint=role)
         if not parts:
-            text = _extract_text(_read(raw_message, "content"))
+            text = content_text(_read(raw_message, "content"))
             if text:
                 parts = [Part(kind=PartKind.TEXT, text=text)]
 
@@ -314,9 +312,9 @@ def _map_input_messages(request: MessageCreateParams) -> tuple[list[Message], st
 
 
 def _map_output_message(response: AnthropicMessage) -> Message | None:
-    parts = _map_parts(_read(response, "content"), role_hint=MessageRole.ASSISTANT)
+    parts = content_parts(_read(response, "content"), role_hint=MessageRole.ASSISTANT)
     if not parts:
-        text = _extract_text(_read(response, "content"))
+        text = content_text(_read(response, "content"))
         if text:
             parts = [Part(kind=PartKind.TEXT, text=text)]
 
@@ -327,69 +325,6 @@ def _map_output_message(response: AnthropicMessage) -> Message | None:
         role=MessageRole.ASSISTANT,
         parts=parts,
     )
-
-
-def _map_parts(content: Any, role_hint: MessageRole) -> list[Part]:
-    blocks = _as_list(content)
-    if not blocks and isinstance(content, str):
-        text = content.strip()
-        return [Part(kind=PartKind.TEXT, text=text)] if text else []
-
-    parts: list[Part] = []
-    for block in blocks:
-        block_type = _as_str(_read(block, "type")).lower()
-        if block_type == "text":
-            text = _as_str(_read(block, "text"))
-            if text:
-                parts.append(Part(kind=PartKind.TEXT, text=text))
-            continue
-
-        if block_type == "thinking":
-            thinking = _as_str(_read(block, "thinking")) or _as_str(_read(block, "text"))
-            if thinking:
-                parts.append(Part(kind=PartKind.THINKING, thinking=thinking))
-            continue
-
-        if block_type == "redacted_thinking":
-            thinking = _as_str(_read(block, "data")) or _as_str(_read(block, "text"))
-            if thinking:
-                parts.append(Part(kind=PartKind.THINKING, thinking=thinking))
-            continue
-
-        if block_type in {"tool_use", "server_tool_use", "mcp_tool_use"}:
-            tool_name = _as_str(_read(block, "name"))
-            tool_id = _as_str(_read(block, "id"))
-            tool_input = _read(block, "input")
-            parts.append(
-                Part(
-                    kind=PartKind.TOOL_CALL,
-                    tool_call=ToolCall(
-                        id=tool_id,
-                        name=tool_name,
-                        input_json=_json_bytes(tool_input),
-                    ),
-                )
-            )
-            continue
-
-        if block_type == "tool_result" or role_hint == MessageRole.TOOL:
-            tool_call_id = _as_str(_read(block, "tool_use_id")) or _as_str(_read(block, "tool_call_id"))
-            content_text = _extract_text(_read(block, "content"))
-            parts.append(
-                Part(
-                    kind=PartKind.TOOL_RESULT,
-                    tool_result=ToolResult(
-                        tool_call_id=tool_call_id,
-                        name=_as_str(_read(block, "name")),
-                        content=content_text,
-                        content_json=_json_bytes(_read(block, "content")),
-                        is_error=_as_bool(_read(block, "is_error")),
-                    ),
-                )
-            )
-            continue
-
-    return parts
 
 
 def _extract_system_prompt(raw_system: Any) -> str:
@@ -406,24 +341,6 @@ def _extract_system_prompt(raw_system: Any) -> str:
             chunks.append(text)
 
     return "\n".join(chunks)
-
-
-def _map_tools(raw_tools: Any) -> list[ToolDefinition]:
-    tools: list[ToolDefinition] = []
-    for raw_tool in _as_list(raw_tools):
-        name = _as_str(_read(raw_tool, "name"))
-        if not name:
-            continue
-        tools.append(
-            ToolDefinition(
-                name=name,
-                description=_as_str(_read(raw_tool, "description")),
-                type=_as_str(_read(raw_tool, "type")) or "function",
-                input_schema_json=_json_bytes(_read(raw_tool, "input_schema")),
-            )
-        )
-
-    return tools
 
 
 def _extract_stream_output_text(events: list[RawMessageStreamEvent]) -> str:
@@ -444,7 +361,7 @@ def _extract_stream_output_text(events: list[RawMessageStreamEvent]) -> str:
                 chunks.append(text)
                 continue
 
-        text = _extract_text(_read(event, "text"))
+        text = content_text(_read(event, "text"))
         if text:
             chunks.append(text)
 
@@ -604,43 +521,6 @@ def _to_plain(value: Any) -> Any:
     return str(value)
 
 
-def _extract_text(value: Any) -> str:
-    if value is None:
-        return ""
-
-    if isinstance(value, str):
-        return value.strip()
-
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace").strip()
-
-    if isinstance(value, Mapping):
-        text = _as_str(value.get("text"))
-        if text:
-            return text
-        content = value.get("content")
-        if content is not None:
-            return _extract_text(content)
-        return ""
-
-    if isinstance(value, list | tuple):
-        chunks: list[str] = []
-        for item in value:
-            chunk = _extract_text(item)
-            if chunk:
-                chunks.append(chunk)
-        return "\n".join(chunks)
-
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        try:
-            return _extract_text(model_dump(mode="json"))
-        except TypeError:
-            return _extract_text(model_dump())
-
-    return _as_str(value)
-
-
 def _read(value: Any, key: str, default: Any = None) -> Any:
     if value is None:
         return default
@@ -679,18 +559,6 @@ def _as_str(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return str(value).strip()
-
-
-def _as_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"true", "1", "yes", "on"}:
-            return True
-        if lowered in {"false", "0", "no", "off"}:
-            return False
-    return False
 
 
 def _as_int(value: Any) -> int:

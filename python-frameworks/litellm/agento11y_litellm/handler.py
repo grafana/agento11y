@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -25,7 +24,8 @@ from agento11y.models import (
     ToolDefinition,
     ToolResult,
 )
-from agento11y.usage import from_openai_chat
+from agento11y.payload_mapping import content_parts, tool_definitions
+from agento11y.usage import map_usage
 from litellm.integrations.custom_logger import CustomLogger
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,43 @@ _CHAT_CALL_TYPES = frozenset(
     }
 )
 
+_RESPONSES_CALL_TYPES = frozenset({"responses", "aresponses"})
+
+_ANTHROPIC_MESSAGES_CALL_TYPES = frozenset({"anthropic_messages", "aanthropic_messages"})
+
+_GENERATION_CALL_TYPES = _CHAT_CALL_TYPES | _RESPONSES_CALL_TYPES | _ANTHROPIC_MESSAGES_CALL_TYPES
+
 _EMBEDDING_CALL_TYPES = frozenset({"embedding", "aembedding"})
+
+# Provider recorded when LiteLLM never resolved one. Failures raised before a
+# deployment is picked (budget, auth, no healthy deployment) carry an empty
+# custom_llm_provider, and the SDK rejects a generation without a provider, so
+# without a sentinel the failure is not recorded at all.
+#
+# The SDK's own marker for an unresolved provider is "custom"
+# (``_is_unknown_provider`` in ``agento11y/framework_handler.py``). The LiteLLM
+# name is used instead so the value points at what produced the event; the
+# tradeoff is that these events do not read as "provider unknown" to SDK-side
+# checks that only look for "" or "custom".
+_UNKNOWN_PROVIDER_SENTINEL = "litellm"
+
+_UNKNOWN_MODEL_SENTINEL = "unknown"
+
+# Responses API content part for a refused turn. It keeps its text in
+# ``refusal`` instead of ``text`` (LiteLLM's own ``ContentPartDonePartRefusal``).
+_REFUSAL_CONTENT_PART_TYPE = "refusal"
+
+# Content part types that carry plain text. ``text`` covers OpenAI chat and
+# Anthropic content blocks; ``input_text``/``output_text`` cover the Responses
+# API. A refusal is the only text a refused turn has, so it is read here too,
+# the way the OpenAI provider wrappers surface it.
+_TEXT_CONTENT_PART_TYPES = frozenset({"text", "input_text", "output_text", _REFUSAL_CONTENT_PART_TYPE})
+
+# Content part types inside a Responses API ``reasoning`` output item. OpenAI
+# sends ``summary_text``/``reasoning_text``; LiteLLM's chat-to-Responses bridge,
+# which serves every provider without a native Responses config, sends
+# ``output_text``.
+_REASONING_TEXT_PART_TYPES = frozenset({"summary_text", "reasoning_text", "output_text", "text"})
 
 # Metadata keys consulted, in order, to name the agent behind a request.
 # ``agent_id`` is LiteLLM's own identity field, filled in by the proxy from the
@@ -62,19 +98,47 @@ def _make_tool_call_part(*, call_id: str, name: str, arguments: str) -> Part:
     )
 
 
-def _map_messages(messages: list[dict[str, Any]] | None) -> tuple[list[Message], str]:
-    """Map OpenAI-format messages to agento11y Messages, extracting system prompt."""
+def _map_messages(messages: Any) -> tuple[list[Message], str]:
+    """Map a logged LiteLLM request to agento11y Messages, extracting system prompt.
+
+    Chat routes log OpenAI-format message dicts. Text completion routes log the
+    raw ``prompt`` instead (``function_setup`` in LiteLLM's ``utils.py``), which
+    is a string, a list of strings, or a list of token-id lists. Token ids carry
+    no text, so they are skipped.
+
+    ``/v1/messages`` is the exception: LiteLLM normalizes the *response* to chat
+    shape but logs the request messages as they arrived, so content is a list of
+    Anthropic blocks (``tool_use``, ``tool_result``, ``thinking``). The same
+    ``anthropic_messages`` call type can also carry OpenAI-shaped messages once
+    a caller replays LiteLLM's own normalized history, so both vocabularies are
+    read per message instead of branching on the route.
+    """
     if not messages:
+        return [], ""
+
+    if isinstance(messages, str):
+        messages = [messages]
+
+    if not isinstance(messages, list):
         return [], ""
 
     out: list[Message] = []
     system_chunks: list[str] = []
 
     for msg in messages:
+        if isinstance(msg, str):
+            if msg:
+                out.append(Message(role=MessageRole.USER, parts=[Part(kind=PartKind.TEXT, text=msg)]))
+            continue
+
+        if not isinstance(msg, dict):
+            continue
+
         role = (msg.get("role") or "").lower()
-        content = _extract_text_content(msg.get("content"))
+        raw_content = msg.get("content")
 
         if role in {"system", "developer"}:
+            content = _extract_text_content(raw_content)
             if content:
                 system_chunks.append(content)
             continue
@@ -85,29 +149,43 @@ def _map_messages(messages: list[dict[str, Any]] | None) -> tuple[list[Message],
         elif role == "tool":
             mapped_role = MessageRole.TOOL
 
-        parts: list[Part] = []
-
         if mapped_role == MessageRole.TOOL:
+            # OpenAI-shaped tool message: the result is the whole content and
+            # the ids live on the message. Anthropic puts results in
+            # ``tool_result`` blocks of a user message, handled below.
             out.append(
                 _tool_result_message(
-                    content=content,
+                    content=_extract_text_content(raw_content),
                     tool_call_id=msg.get("tool_call_id", ""),
                     name=msg.get("name", ""),
                 )
             )
             continue
 
-        if mapped_role == MessageRole.ASSISTANT:
-            parts.extend(_map_thinking_parts(msg))
+        parts = content_parts(raw_content)
 
-        if content:
-            parts.append(Part(kind=PartKind.TEXT, text=content))
+        if mapped_role == MessageRole.ASSISTANT and not any(part.kind == PartKind.THINKING for part in parts):
+            # OpenAI-shaped reasoning lives beside the content, not in it. Skip
+            # it when the content already carried thinking blocks, since
+            # ``reasoning_content`` repeats them.
+            parts = _map_thinking_parts(msg) + parts
+
+        if not parts:
+            # Content shapes ``content_parts`` has nothing to say about: a bare
+            # string, or a dict that only stringifies.
+            content = _extract_text_content(raw_content)
+            if content:
+                parts.append(Part(kind=PartKind.TEXT, text=content))
 
         if mapped_role == MessageRole.ASSISTANT:
             parts.extend(_map_tool_call_parts(msg.get("tool_calls")))
 
         if not parts:
             continue
+
+        if any(part.kind == PartKind.TOOL_RESULT for part in parts):
+            # An Anthropic ``tool_result`` block arrives on a user message.
+            mapped_role = MessageRole.TOOL
 
         out.append(Message(role=mapped_role, parts=parts))
 
@@ -191,6 +269,13 @@ def _map_response_output(response: Any) -> list[Message]:
 
     Reads from the StandardLoggingPayload ``response`` field (dict or str)
     so that LiteLLM redaction settings are honoured.
+
+    Chat shape (``choices[].message``) covers every route that reaches here,
+    including ``/v1/messages``: LiteLLM converts the Anthropic response to a
+    chat ``ModelResponse`` before it builds the payload
+    (``Logging._handle_anthropic_messages_response_logging``). A provider-shaped
+    payload still falls back to the Anthropic content blocks rather than
+    recording an empty turn.
     """
     if response is None:
         return []
@@ -205,7 +290,8 @@ def _map_response_output(response: Any) -> list[Message]:
 
     choices = response.get("choices")
     if not choices:
-        return []
+        parts = content_parts(response.get("content"), role_hint=MessageRole.ASSISTANT)
+        return [Message(role=MessageRole.ASSISTANT, parts=parts)] if parts else []
 
     out: list[Message] = []
     for choice in choices:
@@ -214,6 +300,10 @@ def _map_response_output(response: Any) -> list[Message]:
 
         response_message = choice.get("message")
         if not isinstance(response_message, dict):
+            # Text completions put the completion in choices[].text.
+            text = choice.get("text")
+            if isinstance(text, str) and text:
+                out.append(Message(role=MessageRole.ASSISTANT, parts=[Part(kind=PartKind.TEXT, text=text)]))
             continue
 
         content = response_message.get("content") or ""
@@ -234,8 +324,79 @@ def _map_response_output(response: Any) -> list[Message]:
     return out
 
 
+def _map_responses_output(response: Any) -> list[Message]:
+    """Map a Responses API SLO response to agento11y output Messages.
+
+    Unlike ``/v1/messages``, LiteLLM does not normalize ``/v1/responses`` to a
+    chat ``ModelResponse``, so the logged payload keeps the native
+    ``ResponsesAPIResponse`` shape: ``output`` is a list of items typed
+    ``message`` (``content[].output_text``), ``reasoning``, or
+    ``function_call``.
+    """
+    if isinstance(response, str):
+        return _map_response_output(response)
+
+    if not isinstance(response, dict):
+        return []
+
+    output = response.get("output")
+    if not isinstance(output, list):
+        return []
+
+    out: list[Message] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+
+        item_type = (item.get("type") or "").lower()
+
+        if item_type == "reasoning":
+            # ``summary`` and ``content`` hold different text (a visible summary
+            # and the raw reasoning), so both are kept when present.
+            parts = [
+                Part(kind=PartKind.THINKING, thinking=text)
+                for text in (
+                    _join_text_parts(item.get("summary"), _REASONING_TEXT_PART_TYPES),
+                    _join_text_parts(item.get("content"), _REASONING_TEXT_PART_TYPES),
+                )
+                if text
+            ]
+            if parts:
+                out.append(Message(role=MessageRole.ASSISTANT, parts=parts))
+            continue
+
+        if item_type == "function_call":
+            name = item.get("name") or ""
+            if not name:
+                continue
+            out.append(
+                Message(
+                    role=MessageRole.ASSISTANT,
+                    parts=[
+                        _make_tool_call_part(
+                            call_id=item.get("call_id") or item.get("id") or "",
+                            name=name,
+                            arguments=item.get("arguments") or "",
+                        )
+                    ],
+                )
+            )
+            continue
+
+        text = _extract_text_content(item.get("content"))
+        if text:
+            out.append(Message(role=MessageRole.ASSISTANT, parts=[Part(kind=PartKind.TEXT, text=text)]))
+
+    return out
+
+
 def _extract_text_content(content: Any) -> str:
     """Extract text from OpenAI message content (string or content parts array)."""
+    return _join_text_parts(content, _TEXT_CONTENT_PART_TYPES)
+
+
+def _join_text_parts(content: Any, part_types: frozenset[str]) -> str:
+    """Join the text of every content part whose ``type`` is in ``part_types``."""
     if content is None:
         return ""
     if isinstance(content, str):
@@ -243,8 +404,16 @@ def _extract_text_content(content: Any) -> str:
     if isinstance(content, list):
         texts = []
         for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                texts.append(item.get("text", ""))
+            if isinstance(item, dict):
+                part_type = item.get("type")
+                if part_type not in part_types:
+                    continue
+                # ``text`` can be present and null: LiteLLM's chat-to-Responses
+                # bridge emits one output_text part per choice even when the
+                # message content is None (a tool-call-only turn).
+                text = item.get("refusal") if part_type == _REFUSAL_CONTENT_PART_TYPE else item.get("text")
+                if isinstance(text, str) and text:
+                    texts.append(text)
             elif isinstance(item, str):
                 texts.append(item)
         return " ".join(texts)
@@ -270,46 +439,60 @@ def _datetime_to_utc(dt: datetime | None) -> datetime | None:
 
 
 def _extract_stop_reason(response: Any) -> str:
-    """Extract finish_reason from the SLO response dict."""
+    """Extract finish_reason from the SLO response dict.
+
+    Falls back to a top-level ``stop_reason`` for the same reason
+    ``_map_response_output`` falls back to content blocks: the payload is
+    normally chat-shaped, but a provider-shaped one should not lose the reason.
+    """
     if not isinstance(response, dict):
         return ""
     choices = response.get("choices")
     if not choices:
-        return ""
+        return str(response.get("stop_reason") or "")
     first_choice = choices[0]
     if not isinstance(first_choice, dict):
         return ""
     return first_choice.get("finish_reason") or ""
 
 
+def _extract_responses_stop_reason(response: Any) -> str:
+    """Derive a stop reason from the Responses API terminal status.
+
+    ``ResponsesAPIResponse`` has no ``finish_reason``, so ``status`` stands in
+    for it. Normalized the same way the OpenAI provider wrappers in Python, Go,
+    and JS do it: ``completed`` becomes ``stop``, an ``incomplete`` status
+    reports ``incomplete_details.reason``, anything else is the status itself.
+    """
+    if not isinstance(response, dict):
+        return ""
+
+    status = str(response.get("status") or "").lower()
+    details = response.get("incomplete_details")
+    reason = str((details.get("reason") if isinstance(details, dict) else "") or "").lower()
+
+    if status == "incomplete" and reason:
+        return reason
+    if status == "completed":
+        return "stop"
+    return status
+
+
 def _map_tool_definitions(kwargs: dict[str, Any]) -> list[ToolDefinition]:
-    """Extract tool schemas from optional_params."""
+    """Extract tool schemas from optional_params.
+
+    The shape follows the route, and one call type can produce more than one:
+    ``/v1/messages`` against Anthropic logs Anthropic tools (flat, with
+    ``input_schema``), the same call type bridged to a chat provider logs the
+    translated OpenAI tools (nested under ``function``), and ``/v1/responses``
+    logs flat tools with ``parameters``. ``tool_definitions`` reads all three.
+    """
     optional_params = kwargs.get("optional_params") or {}
     tools = optional_params.get("tools")
     if not tools or not isinstance(tools, list):
         return []
 
-    out: list[ToolDefinition] = []
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        tool_type = tool.get("type", "")
-        function = tool.get("function") or {}
-        name = function.get("name", "")
-        if not name:
-            continue
-        description = function.get("description", "")
-        parameters = function.get("parameters")
-        schema_json = json.dumps(parameters).encode("utf-8") if parameters else b""
-        out.append(
-            ToolDefinition(
-                name=name,
-                description=description,
-                type=tool_type,
-                input_schema_json=schema_json,
-            )
-        )
-    return out
+    return tool_definitions(tools)
 
 
 def _safe_cast(params: dict[str, Any], key: str, cast: type) -> Any:
@@ -371,6 +554,47 @@ def _response_model(response_obj: Any) -> str:
     return getattr(response_obj, "model", "") or ""
 
 
+def _resolve_model_ref(slo: dict[str, Any]) -> ModelRef:
+    """Resolve the provider and a bare model name from a LiteLLM SLO.
+
+    ``slo["model"]`` is ``reconstruct_model_name`` output, which returns the
+    router deployment string, so a proxied call reports ``openai/gpt-4o-mini``
+    rather than ``gpt-4o-mini``. Cost and catalog lookups downstream match on
+    the bare name, so prefer ``hidden_params["litellm_model_name"]`` (the name
+    LiteLLM sent to the provider) over ``slo["model"]``, and strip one leading
+    ``<custom_llm_provider>/`` segment from whichever name is used. Only that one
+    prefix is stripped: an Azure deployment alias (``azure/my-deployment``) names
+    a deployment rather than a catalog model, and there is no catalog name to map
+    it to, so the alias is kept.
+
+    A failure raised before LiteLLM picked a deployment (budget, auth, no
+    healthy deployment) carries no provider and sometimes no model. Those get
+    sentinels so SDK validation keeps the event instead of rejecting it.
+    """
+    provider = str(slo.get("custom_llm_provider") or "").lower()
+    hidden_params = slo.get("hidden_params") or {}
+    name = str(hidden_params.get("litellm_model_name") or slo.get("model") or "")
+
+    if provider:
+        name = name.removeprefix(f"{provider}/")
+    else:
+        provider = _UNKNOWN_PROVIDER_SENTINEL
+        name = name or str(slo.get("model_group") or "")
+
+    return ModelRef(provider=provider, name=name or _UNKNOWN_MODEL_SENTINEL)
+
+
+def _routing_metadata(slo: dict[str, Any]) -> dict[str, str]:
+    """Keep the router deployment identity that ``_resolve_model_ref`` strips."""
+    hidden_params = slo.get("hidden_params") or {}
+    routing = {
+        "agento11y.framework.litellm.model": slo.get("model") or "",
+        "agento11y.framework.litellm.model_group": slo.get("model_group") or "",
+        "agento11y.framework.litellm.model_id": slo.get("model_id") or hidden_params.get("model_id") or "",
+    }
+    return {key: str(value) for key, value in routing.items() if value}
+
+
 def _metadata_sources(kwargs: dict[str, Any]) -> list[dict[str, Any]]:
     """Collect the metadata dicts LiteLLM may attach to a request.
 
@@ -406,7 +630,13 @@ def _first_metadata_value(sources: list[dict[str, Any]], keys: tuple[str, ...]) 
 
 
 def _extract_detailed_usage(response_obj: Any, slo: dict[str, Any]) -> TokenUsage:
-    """Build TokenUsage with detailed breakdowns from response_obj, basic counts from SLO."""
+    """Build TokenUsage with detailed breakdowns from response_obj, basic counts from SLO.
+
+    The breakdown field names differ per route: chat responses nest them under
+    ``prompt_tokens_details``/``completion_tokens_details``, the Responses API
+    under ``input_tokens_details``/``output_tokens_details``. ``map_usage``
+    picks the mapping from the shape it gets.
+    """
     usage = TokenUsage(
         input_tokens=slo.get("prompt_tokens") or 0,
         output_tokens=slo.get("completion_tokens") or 0,
@@ -420,7 +650,7 @@ def _extract_detailed_usage(response_obj: Any, slo: dict[str, Any]) -> TokenUsag
     if resp_usage is None:
         return usage
 
-    detail = from_openai_chat(resp_usage)
+    detail = map_usage(resp_usage)
     usage.cache_read_input_tokens = detail.cache_read_input_tokens
     usage.cache_write_input_tokens = detail.cache_write_input_tokens
     usage.reasoning_tokens = detail.reasoning_tokens
@@ -537,7 +767,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
         is_failure: bool,
     ) -> None:
         call_type = slo.get("call_type") or ""
-        if call_type and call_type not in _CHAT_CALL_TYPES:
+        if call_type and call_type not in _GENERATION_CALL_TYPES:
             return
 
         is_stream = bool(slo.get("stream"))
@@ -554,7 +784,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
         # extra_tags take precedence
         tags.update(self._extra_tags)
 
-        metadata: dict[str, Any] = dict(self._extra_metadata)
+        metadata: dict[str, Any] = {**_routing_metadata(slo), **self._extra_metadata}
 
         model_params = slo.get("model_parameters") or {}
         temperature = _safe_cast(model_params, "temperature", float)
@@ -564,12 +794,8 @@ class Agento11yLiteLLMLogger(CustomLogger):
         system_prompt = ""
         input_messages: list[Message] = []
         if self._capture_inputs:
-            raw_messages = slo.get("messages")
-            if isinstance(raw_messages, list):
-                input_messages, system_prompt = _map_messages(raw_messages)
+            input_messages, system_prompt = _map_messages(slo.get("messages"))
 
-        provider = (slo.get("custom_llm_provider") or "").lower()
-        model_name = slo.get("model") or ""
         gen_id = slo.get("id") or ""
         user_id = slo.get("end_user") or ""
         conversation_id = self._resolve_conversation_id(kwargs)
@@ -578,7 +804,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
 
         seed = GenerationStart(
             id=gen_id,
-            model=ModelRef(provider=provider, name=model_name),
+            model=_resolve_model_ref(slo),
             mode=GenerationMode.STREAM if is_stream else GenerationMode.SYNC,
             system_prompt=system_prompt,
             temperature=temperature,
@@ -614,13 +840,14 @@ class Agento11yLiteLLMLogger(CustomLogger):
 
             slo_response = slo.get("response")
 
-            output_messages: list[Message] = []
-            if self._capture_outputs:
-                output_messages = _map_response_output(slo_response)
+            if call_type in _RESPONSES_CALL_TYPES:
+                map_output, extract_stop_reason = _map_responses_output, _extract_responses_stop_reason
+            else:
+                map_output, extract_stop_reason = _map_response_output, _extract_stop_reason
 
+            output_messages = map_output(slo_response) if self._capture_outputs else []
             usage = _extract_detailed_usage(response_obj, slo)
-
-            stop_reason = _extract_stop_reason(slo_response)
+            stop_reason = extract_stop_reason(slo_response)
 
             recorder.set_result(
                 generation=Generation(
@@ -635,7 +862,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
             recorder.end()
             err = recorder.err()
             if err is not None:
-                logger.warning("agento11y: recorder error: %s", err)
+                logger.error("agento11y: generation dropped: %s", err)
 
     def _record_embedding(
         self,
@@ -647,11 +874,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
         *,
         is_failure: bool,
     ) -> None:
-        model_name = slo.get("model") or ""
-        if not model_name:
-            return
-
-        provider = (slo.get("custom_llm_provider") or "").lower()
+        model_ref = _resolve_model_ref(slo)
         optional_params = kwargs.get("optional_params") or {}
         dimensions = _safe_cast(optional_params, "dimensions", int)
         encoding_format = optional_params.get("encoding_format") or ""
@@ -668,7 +891,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
 
         recorder = self._client.start_embedding(
             EmbeddingStart(
-                model=ModelRef(provider=provider, name=model_name),
+                model=model_ref,
                 agent_name=self._resolve_agent_name(kwargs),
                 agent_version=self._resolve_agent_version(kwargs),
                 dimensions=dimensions,
@@ -696,7 +919,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
                     input_count=_embedding_input_count(inputs),
                     input_tokens=slo.get("prompt_tokens") or 0,
                     input_texts=input_texts,
-                    response_model=_response_model(response_obj) or model_name,
+                    response_model=_response_model(response_obj) or model_ref.name,
                     dimensions=dimensions or _embedding_dimensions_from_response(response_obj),
                 )
             )
@@ -704,4 +927,6 @@ class Agento11yLiteLLMLogger(CustomLogger):
             recorder.end()
             err = recorder.err()
             if err is not None:
-                logger.warning("agento11y: embedding recorder error: %s", err)
+                # Unlike a generation, the embedding span is still emitted; it
+                # carries the validation error instead of the recorded values.
+                logger.error("agento11y: embedding validation failed: %s", err)

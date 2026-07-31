@@ -185,11 +185,18 @@ The callback file reads connection details from environment variables. Adjust th
 ## Behavior
 
 - Mode mapping: non-stream calls -> `SYNC`, stream calls -> `STREAM` with first-token timestamp.
-- Provider detection: uses `custom_llm_provider` from LiteLLM's standard logging object.
+- Provider detection: uses `custom_llm_provider` from LiteLLM's standard logging object. A call that fails before the router picks a deployment, for example a budget or auth rejection, has no provider. It is reported under the provider `litellm` instead of being dropped.
+- Model name: a proxied call is reported with the bare model name (`gpt-4o-mini`), not the router deployment string (`openai/gpt-4o-mini`), so cost and catalog lookups match it. The router names are kept in generation metadata under `agento11y.framework.litellm.model`, `.model_group`, and `.model_id`. Embedding spans carry the model name only. An Azure deployment alias (`azure/my-deployment`) is reported as it is, because there is no catalog model with that name.
 - Failed calls are recorded with the error attached via `set_call_error`.
-- Chat completion call types (`completion`, `acompletion`, `text_completion`, `atext_completion`) are recorded as generations.
+- Recorded call types:
+  - chat completions (`completion`, `acompletion`)
+  - text completions (`text_completion`, `atext_completion`). The prompt is recorded as a user message. Pre-tokenized prompts (lists of token ids) carry no text and are skipped.
+  - the Responses API (`responses`, `aresponses`, `/v1/responses`). Text, reasoning, and tool calls in the output are recorded. That route has no `finish_reason`, so the stop reason comes from the response `status`: `completed` becomes `stop`, and an incomplete response reports `incomplete_details.reason`.
+  - the Anthropic Messages API (`anthropic_messages`, `aanthropic_messages`, `/v1/messages`)
+- Only text content is recorded. Images, audio, and other non-text parts are skipped. Anthropic-native `tool_use` and `tool_result` blocks on `/v1/messages` are skipped, as are `function_call` and `function_call_output` history items in `/v1/responses` input. OpenAI-format `tool_calls` and `tool` messages are recorded, and so are tool calls in `/v1/responses` output.
+- Tool definitions are read from the request `tools` in the OpenAI chat schema (`{"type": "function", "function": {...}}`). The flat Responses API tool schema is not recognized, so those requests report no tool definitions.
 - Embedding call types (`embedding`, `aembedding`) are recorded as OTel embedding spans (no generation export). The span carries input/token counts and dimensions; the input text is attached only when the handler's `capture_inputs` is set and the SDK's `EmbeddingCaptureConfig.capture_input=True`. Embedding spans require a configured OTel tracer.
-- Image, audio, and transcription call types are skipped.
+- Image generation, audio, and transcription call types are skipped.
 - Framework tags are always set:
   - `agento11y.framework.name=litellm`
   - `agento11y.framework.source=handler`
