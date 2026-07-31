@@ -66,6 +66,32 @@ func writeConfigEnvFile(t *testing.T, lines map[string]string) string {
 // forwarding without enabling guards, which is most of the table below.
 const guardsOffHookReason = "GUARDS_ENABLED is off"
 
+// contentMarker is in every content-bearing value of contentRichGeneration, so
+// one scan of a forwarded payload covers the string, bytes, and metadata fields
+// together. Nothing the strip retains contains it.
+const contentMarker = "secret"
+
+// legacyConversationTitleKey is the pre-rename spelling of
+// metadataKeyConversationTitle, used both as a span attribute and as a
+// generation metadata key. An older installed exporter
+// (@grafana/agento11y-pi, -opencode, or a sigil-era SDK) can still send it to a
+// current daemon, so both spellings have to be dropped.
+const legacyConversationTitleKey = "sigil.conversation.title"
+
+// traceContentKeys are the span attribute keys that must not leave the host
+// under a reduced content mode. The spellings are the test's own, never
+// contentcapture's constants: a test reading the same constant production reads
+// would follow a renamed key instead of catching it, and the spelling is what a
+// span carries on the wire.
+var traceContentKeys = []string{
+	"agento11y.conversation.title",
+	legacyConversationTitleKey,
+	"gen_ai.embeddings.input_texts",
+	"gen_ai.tool.description",
+	"gen_ai.tool.call.arguments",
+	"gen_ai.tool.call.result",
+}
+
 func TestForwardLoader_Resolve(t *testing.T) {
 	const cloud = "https://cloud.example.test/"
 	cases := []struct {
@@ -605,62 +631,81 @@ func TestForwardLoader_ReloadsOnConfigChange(t *testing.T) {
 	assert.True(t, l.load().enabled)
 }
 
-// TestStripGenerationProto_ClearsContentKeepsStructure asserts the daemon-side
-// proto strip clears the content fields the SDK's stripContent /
-// stripMessageContent clear (go/agento11y/content_capture.go) while preserving
-// message structure, tool names, usage, tags, and unrelated metadata. The two
-// lists are kept in sync by hand, so a new content field in the proto needs a
-// case here and in stripGenerationProto.
-func TestStripGenerationProto_ClearsContentKeepsStructure(t *testing.T) {
-	g := contentRichGeneration(t)
-	stripGenerationProto(g)
+// TestBuildGenerationPayload_StripsThroughSharedPolicy covers the daemon's half
+// of a reduced forward: buildGenerationPayload runs the shared strip over the
+// decoded proto and then relabels the copy. Which fields carry content is
+// contentcapture's contract, asserted field by field in that package, so this
+// test asserts the call happens on the payload path and that the relabel
+// follows it.
+func TestBuildGenerationPayload_StripsThroughSharedPolicy(t *testing.T) {
+	cases := []struct {
+		name   string
+		gen    *agento11yv1.Generation
+		assert func(t *testing.T, g *agento11yv1.Generation)
+	}{
+		{
+			// Every content value in the fixture is marked, so one scan of the
+			// forwarded bytes covers the string, bytes, and metadata fields
+			// alike without restating contentcapture's field list here.
+			name: "content_and_mirrors_removed",
+			gen:  contentRichGeneration(t),
+			assert: func(t *testing.T, g *agento11yv1.Generation) {
+				raw, err := proto.Marshal(g)
+				require.NoError(t, err)
+				assert.NotContains(t, strings.ToLower(string(raw)), contentMarker)
 
-	assert.Empty(t, g.GetSystemPrompt(), "system prompt cleared")
-	assert.Nil(t, g.GetRawArtifacts(), "raw artifacts cleared")
-	assert.Equal(t, strippedCallError, g.GetCallError(), "call error replaced")
+				// Structure the reduced copy still has to carry.
+				assert.Equal(t, "gen-1", g.GetId())
+				assert.Equal(t, "sdk_error", g.GetCallError())
+				assert.Equal(t, "do_thing", g.GetTools()[0].GetName())
+				assert.Equal(t, "t1", g.GetInput()[1].GetParts()[0].GetToolResult().GetToolCallId())
+				assert.Equal(t, int64(10), g.GetUsage().GetInputTokens())
+				assert.Equal(t, "structural", g.GetMetadata().GetFields()["keep_me"].GetStringValue())
+			},
+		},
+		{
+			// LaunchEnv.Apply forces CONTENT_CAPTURE_MODE=full into the agent so
+			// the local viewer keeps everything, so every payload the daemon
+			// forwards arrives stamped "full" and the reduced copy has to say
+			// otherwise.
+			name: "incoming_full_stamp_is_relabeled",
+			gen: &agento11yv1.Generation{
+				Id:       "gen-1",
+				Metadata: mustStruct(t, map[string]any{model.MetadataKeyContentCaptureMode: "full"}),
+			},
+			assert: func(t *testing.T, g *agento11yv1.Generation) {
+				assert.Len(t, g.GetMetadata().GetFields(), 1, "only the rewritten stamp is left")
+			},
+		},
+		{
+			// The strip leaves Metadata unset when content keys were all it
+			// held, so the relabel has to build the container instead of
+			// writing through a nil map.
+			name: "stamp_added_when_metadata_ends_up_empty",
+			gen: &agento11yv1.Generation{
+				Id:       "gen-1",
+				Metadata: mustStruct(t, map[string]any{metadataKeyConversationTitle: "secret title"}),
+			},
+			assert: func(t *testing.T, g *agento11yv1.Generation) {
+				assert.NotContains(t, g.GetMetadata().GetFields(), metadataKeyConversationTitle)
+				assert.Len(t, g.GetMetadata().GetFields(), 1, "only the stamp is left")
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := buildGenerationPayload([]json.RawMessage{generationRawJSON(t, tc.gen)}, true)
+			require.NoError(t, err)
+			req, err := wire.UnmarshalExportGenerationsJSON(payload)
+			require.NoError(t, err)
+			require.Len(t, req.GetGenerations(), 1)
 
-	// Input user text cleared; part still present (kind preserved).
-	require.Len(t, g.GetInput()[0].GetParts(), 2)
-	assert.Empty(t, g.GetInput()[0].GetParts()[0].GetText())
-
-	// Output thinking + tool-call arguments cleared; tool-call name kept.
-	out := g.GetOutput()[0].GetParts()
-	assert.Empty(t, out[0].GetThinking())
-	assert.Nil(t, out[1].GetToolCall().GetInputJson())
-	assert.Equal(t, "do_thing", out[1].GetToolCall().GetName())
-
-	// Tool-result content cleared; identifiers kept.
-	tr := g.GetInput()[1].GetParts()[0].GetToolResult()
-	assert.Empty(t, tr.GetContent())
-	assert.Nil(t, tr.GetContentJson())
-	assert.Equal(t, "t1", tr.GetToolCallId())
-
-	// Media URL cleared (it carries data: URIs for pasted images and files);
-	// the part and its descriptive fields stay.
-	media := g.GetInput()[0].GetParts()[1].GetMedia()
-	assert.Empty(t, media.GetUrl())
-	assert.Equal(t, "image", media.GetKind())
-	assert.Equal(t, "screenshot.png", media.GetName())
-
-	// Tool description + schema cleared; name kept.
-	assert.Empty(t, g.GetTools()[0].GetDescription())
-	assert.Nil(t, g.GetTools()[0].GetInputSchemaJson())
-	assert.Equal(t, "do_thing", g.GetTools()[0].GetName())
-
-	// Metadata: content mirrors dropped (both the current and the pre-rename
-	// title key), marker rewritten, unrelated keys kept.
-	fields := g.GetMetadata().GetFields()
-	assert.NotContains(t, fields, metadataKeyCallError)
-	assert.NotContains(t, fields, metadataKeyConversationTitle)
-	assert.NotContains(t, fields, legacyConversationTitleKey)
-	assert.Equal(t, "metadata_only", fields[model.MetadataKeyContentCaptureMode].GetStringValue())
-	assert.Equal(t, "structural", fields["keep_me"].GetStringValue())
-
-	// Structural top-level fields untouched.
-	assert.Equal(t, "gen-1", g.GetId())
-	assert.Equal(t, "conv-1", g.GetConversationId())
-	assert.Equal(t, int64(10), g.GetUsage().GetInputTokens())
-	assert.Equal(t, "test", g.GetTags()["env"])
+			g := req.GetGenerations()[0]
+			assert.Equal(t, model.ContentCaptureModeMetadataOnly,
+				g.GetMetadata().GetFields()[model.MetadataKeyContentCaptureMode].GetStringValue())
+			tc.assert(t, g)
+		})
+	}
 }
 
 func TestForwardLoader_ForwardGenerations(t *testing.T) {
@@ -1092,6 +1137,154 @@ func TestBuildGenerationPayload_DiscardsUnknownFields(t *testing.T) {
 	assert.NotContains(t, string(payload), "not_a_field_yet")
 }
 
+// TestStripTraceContent_RemovesContentKeepsStructure covers the daemon's span
+// rewrite. The daemon cannot reuse the SDK's span redaction: the SDK redacts at
+// emit time, swapping the raw provider message for the category before
+// RecordError on a generation span (go/agento11y/client.go) and skipping
+// RecordError altogether on tool and embedding spans, while these spans are
+// already finished and must be rewritten. contentcapture shares only the keys
+// and the two replacement strings, so the cases below pin the wire keys, the
+// exception event name, and both replacement status messages.
+func TestStripTraceContent_RemovesContentKeepsStructure(t *testing.T) {
+	// One case per content key: the key goes, a structural neighbour stays.
+	for _, key := range traceContentKeys {
+		t.Run("drops_"+key, func(t *testing.T) {
+			span := &tracepb.Span{Attributes: []*commonpb.KeyValue{
+				stringKV(key, "secret"),
+				stringKV("gen_ai.tool.name", "do_thing"),
+			}}
+			stripTraceContent(traceRequestForSpans(span))
+			assert.Equal(t, []string{"gen_ai.tool.name"}, attributeKeys(span.GetAttributes()))
+		})
+	}
+
+	// A surviving event's own attributes go through the same filter.
+	t.Run("event_attributes_filtered", func(t *testing.T) {
+		event := &tracepb.Span_Event{Name: "structural-event", Attributes: []*commonpb.KeyValue{
+			stringKV("gen_ai.tool.call.result", "secret result"),
+			stringKV("gen_ai.tool.name", "do_thing"),
+		}}
+		stripTraceContent(traceRequestForSpans(&tracepb.Span{Events: []*tracepb.Span_Event{event}}))
+		assert.Equal(t, []string{"gen_ai.tool.name"}, attributeKeys(event.GetAttributes()))
+	})
+
+	cases := []struct {
+		name string
+		span *tracepb.Span
+		// wantAttrs and wantEvents are the surviving keys and event names in
+		// order; wantStatus is the forwarded status message.
+		wantAttrs  []string
+		wantEvents []string
+		wantStatus string
+	}{
+		{
+			// RecordError puts the raw provider text on the exception event's
+			// attributes, so the whole event goes rather than being filtered.
+			// Every other event stays.
+			name: "exception_event_dropped_structural_event_kept",
+			span: &tracepb.Span{
+				Events: []*tracepb.Span_Event{
+					{Name: "exception", Attributes: []*commonpb.KeyValue{stringKV("exception.message", "secret")}},
+					{Name: "structural-event"},
+				},
+			},
+			wantAttrs:  []string{},
+			wantEvents: []string{"structural-event"},
+		},
+		{
+			// The status message is built from the same raw provider error the
+			// exception event carried, so it is replaced by the classified
+			// category, which carries no content and stays on the span.
+			name: "error_category_replaces_status_message",
+			span: &tracepb.Span{
+				Status: &tracepb.Status{
+					Code:    tracepb.Status_STATUS_CODE_ERROR,
+					Message: "secret provider error: messages.1.content secret fragment",
+				},
+				Attributes: []*commonpb.KeyValue{
+					stringKV("error.category", "rate_limit"),
+					stringKV("gen_ai.tool.call.arguments", "secret args"),
+					stringKV("gen_ai.tool.name", "do_thing"),
+				},
+				Events: []*tracepb.Span_Event{{Name: "exception"}},
+			},
+			wantAttrs:  []string{"error.category", "gen_ai.tool.name"},
+			wantEvents: []string{},
+			wantStatus: "rate_limit",
+		},
+		{
+			// The category is read by a scan over the whole attribute list, so
+			// it resolves from the last position as well as the first. The
+			// strip's own stripSpanStatus-before-filter ordering is not
+			// observable here: error.category is not a content key, so it
+			// survives the filter either way.
+			name: "error_category_resolves_from_last_attribute",
+			span: &tracepb.Span{
+				Status: &tracepb.Status{Code: tracepb.Status_STATUS_CODE_ERROR, Message: "secret provider error"},
+				Attributes: []*commonpb.KeyValue{
+					stringKV("gen_ai.tool.call.arguments", "secret args"),
+					stringKV("gen_ai.tool.description", "secret description"),
+					stringKV("error.category", "timeout"),
+				},
+			},
+			wantAttrs:  []string{"error.category"},
+			wantEvents: []string{},
+			wantStatus: "timeout",
+		},
+		{
+			name: "missing_error_category_falls_back",
+			span: &tracepb.Span{
+				Status:     &tracepb.Status{Code: tracepb.Status_STATUS_CODE_ERROR, Message: "secret provider error"},
+				Attributes: []*commonpb.KeyValue{stringKV("gen_ai.tool.name", "do_thing")},
+			},
+			wantAttrs:  []string{"gen_ai.tool.name"},
+			wantEvents: []string{},
+			wantStatus: "sdk_error",
+		},
+		{
+			// An empty category is no category: it would leave the forwarded span
+			// with no signal that the call failed.
+			name: "empty_error_category_falls_back",
+			span: &tracepb.Span{
+				Status:     &tracepb.Status{Code: tracepb.Status_STATUS_CODE_ERROR, Message: "secret provider error"},
+				Attributes: []*commonpb.KeyValue{stringKV("error.category", "")},
+			},
+			wantAttrs:  []string{"error.category"},
+			wantEvents: []string{},
+			wantStatus: "sdk_error",
+		},
+		{
+			// A non-error status carries no meaning in the message field, so
+			// there is nothing to replace it with.
+			name: "non_error_status_message_cleared",
+			span: &tracepb.Span{
+				Status: &tracepb.Status{Code: tracepb.Status_STATUS_CODE_OK, Message: "secret detail"},
+			},
+			wantAttrs:  []string{},
+			wantEvents: []string{},
+			wantStatus: "",
+		},
+		{
+			// The in-place filters skip nil entries rather than relaying them.
+			name: "nil_attributes_and_events_dropped",
+			span: &tracepb.Span{
+				Attributes: []*commonpb.KeyValue{nil, stringKV("gen_ai.tool.name", "do_thing"), nil},
+				Events:     []*tracepb.Span_Event{nil, {Name: "structural-event"}},
+			},
+			wantAttrs:  []string{"gen_ai.tool.name"},
+			wantEvents: []string{"structural-event"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stripTraceContent(traceRequestForSpans(tc.span))
+			assert.Equal(t, tc.wantAttrs, attributeKeys(tc.span.GetAttributes()))
+			assert.Equal(t, tc.wantEvents, eventNames(tc.span.GetEvents()))
+			assert.Equal(t, tc.wantStatus, tc.span.GetStatus().GetMessage())
+		})
+	}
+}
+
 // assertTraceStripped decodes an uncompressed OTLP trace export and asserts the
 // content attributes, exception event, and raw error status message were
 // removed while structural attributes and events survive.
@@ -1105,11 +1298,7 @@ func assertTraceStripped(t *testing.T, body []byte, contentType string) {
 	}
 	span := got.GetResourceSpans()[0].GetScopeSpans()[0].GetSpans()[0]
 	keys := attributeKeys(span.GetAttributes())
-	for _, blocked := range []string{
-		"gen_ai.tool.call.arguments", "gen_ai.tool.call.result",
-		"gen_ai.tool.description", metadataKeyConversationTitle,
-		legacyConversationTitleKey, "gen_ai.embeddings.input_texts",
-	} {
+	for _, blocked := range traceContentKeys {
 		assert.NotContains(t, keys, blocked)
 	}
 	assert.Contains(t, keys, "gen_ai.tool.name")
@@ -1143,6 +1332,9 @@ func fakeForwardConfig(t *testing.T, cloudURL string, strip bool) forwardConfig 
 	}
 }
 
+// contentRichGeneration builds a generation with every content-bearing field
+// populated. Each of those values contains contentMarker; every field the strip
+// retains is free of it.
 func contentRichGeneration(t *testing.T) *agento11yv1.Generation {
 	t.Helper()
 	return &agento11yv1.Generation{
@@ -1190,7 +1382,7 @@ func contentRichGeneration(t *testing.T) *agento11yv1.Generation {
 		Tools: []*agento11yv1.ToolDefinition{{
 			Name:            "do_thing",
 			Description:     "secret tool description",
-			InputSchemaJson: []byte(`{"type":"object"}`),
+			InputSchemaJson: []byte(`{"type":"object","description":"secret schema"}`),
 		}},
 		RawArtifacts: []*agento11yv1.Artifact{{
 			Kind:    agento11yv1.ArtifactKind_ARTIFACT_KIND_REQUEST,
@@ -1200,7 +1392,7 @@ func contentRichGeneration(t *testing.T) *agento11yv1.Generation {
 			model.MetadataKeyContentCaptureMode: "full",
 			metadataKeyConversationTitle:        "secret title",
 			legacyConversationTitleKey:          "secret legacy title",
-			metadataKeyCallError:                "boom: secret detail",
+			"call_error":                        "boom: secret detail",
 			"keep_me":                           "structural",
 		}),
 	}
@@ -1218,6 +1410,16 @@ func generationRawJSON(t *testing.T, g *agento11yv1.Generation) json.RawMessage 
 	return req.Generations[0]
 }
 
+// traceRequestForSpans wraps spans in the one-resource, one-scope envelope the
+// strip walks.
+func traceRequestForSpans(spans ...*tracepb.Span) *coltracepb.ExportTraceServiceRequest {
+	return &coltracepb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{
+			ScopeSpans: []*tracepb.ScopeSpans{{Spans: spans}},
+		}},
+	}
+}
+
 func traceRequestWithContent() *coltracepb.ExportTraceServiceRequest {
 	span := &tracepb.Span{
 		Name: "chat claude",
@@ -1228,7 +1430,7 @@ func traceRequestWithContent() *coltracepb.ExportTraceServiceRequest {
 			Message: "secret provider error: messages.1.content secret prompt fragment",
 		},
 		Attributes: []*commonpb.KeyValue{
-			stringKV(spanAttrErrorCategory, "invalid_request"),
+			stringKV("error.category", "invalid_request"),
 			stringKV("gen_ai.tool.call.arguments", "secret args"),
 			stringKV("gen_ai.tool.call.result", "secret result"),
 			stringKV("gen_ai.tool.description", "secret description"),
@@ -1243,11 +1445,7 @@ func traceRequestWithContent() *coltracepb.ExportTraceServiceRequest {
 			{Name: "structural-event", Attributes: []*commonpb.KeyValue{stringKV("gen_ai.tool.name", "do_thing")}},
 		},
 	}
-	return &coltracepb.ExportTraceServiceRequest{
-		ResourceSpans: []*tracepb.ResourceSpans{{
-			ScopeSpans: []*tracepb.ScopeSpans{{Spans: []*tracepb.Span{span}}},
-		}},
-	}
+	return traceRequestForSpans(span)
 }
 
 func stringKV(key, value string) *commonpb.KeyValue {
@@ -1271,6 +1469,14 @@ func attributeKeys(attrs []*commonpb.KeyValue) []string {
 	out := make([]string, 0, len(attrs))
 	for _, kv := range attrs {
 		out = append(out, kv.GetKey())
+	}
+	return out
+}
+
+func eventNames(events []*tracepb.Span_Event) []string {
+	out := make([]string, 0, len(events))
+	for _, e := range events {
+		out = append(out, e.GetName())
 	}
 	return out
 }

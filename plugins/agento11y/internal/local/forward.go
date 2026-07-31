@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/go/agento11y/contentcapture"
 	"github.com/grafana/agento11y/go/agento11y/model"
 	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
 	"github.com/grafana/agento11y/go/proto/agento11y/wire"
@@ -55,11 +56,12 @@ const forwardLabelGenerations = "generations"
 // verdict the agent acts on, so it is worth surfacing in the same place.
 const forwardLabelHooks = "hooks"
 
-// hookEvaluatePath is the Cloud hook endpoint the daemon relays to. There is
-// no wire.HooksEvaluateHTTPPath constant, and adding one to
-// go/proto/agento11y/wire would not help: this module builds against the
-// released github.com/grafana/agento11y/go tag, so a new constant there is
-// unusable until the next go/v* release.
+// hookEvaluatePath is the Cloud hook endpoint the daemon relays to. There is no
+// wire.HooksEvaluateHTTPPath constant to use instead: CI and installed builds
+// resolve github.com/grafana/agento11y/go through this module's go.mod pin
+// (GOWORK=off), so a constant added to go/proto/agento11y/wire is unusable here
+// until the pin moves (see go.mod). A local build resolves the SDK through
+// go.work and would compile against a constant CI cannot see.
 const hookEvaluatePath = "/api/v1/hooks:evaluate"
 
 // otlpForwardLabel names one OTLP signal leg in the failure ring.
@@ -70,48 +72,6 @@ func otlpForwardLabel(signal string) string { return "otlp/" + signal }
 // pointed at each other (or one pointed at itself through a hand-written
 // local ingest endpoint) exchange one copy instead of looping.
 const forwardMarkerHeader = "X-Agento11y-Local-Forwarded"
-
-// strippedCallError replaces a generation's raw CallError when forwarding a
-// reduced copy. The SDK's stripContent uses a classified error category here;
-// the daemon does not classify, so it mirrors stripContent's no-category
-// fall-back.
-const strippedCallError = "sdk_error"
-
-// metadataKeyCallError mirrors the metadata key the SDK uses to surface the
-// raw call error. Stripping deletes it and replaces CallError itself.
-const metadataKeyCallError = "call_error"
-
-// legacyConversationTitleKey is the pre-rename spelling of
-// metadataKeyConversationTitle (see wire.go). An older installed plugin
-// (@grafana/agento11y-pi, -opencode, or a sigil-era SDK) can export to a
-// freshly updated daemon, so the strip path drops both.
-const legacyConversationTitleKey = "sigil.conversation.title"
-
-// exceptionEventName is the span event RecordError emits. Its
-// exception.message/exception.stacktrace attributes can carry raw content, so
-// the daemon drops these events when forwarding a reduced content mode.
-const exceptionEventName = "exception"
-
-// spanAttrErrorCategory is the classified error category the SDK sets
-// alongside an error status (go/agento11y/client.go). It carries no content,
-// so the reduced trace forward reuses it as the replacement status message.
-const spanAttrErrorCategory = "error.category"
-
-// traceContentAttributes are the span attribute keys that carry user content.
-// Under a reduced forward mode the daemon deletes these before relaying spans
-// to Cloud. The set mirrors the content-bearing span attribute constants in
-// go/agento11y/client.go: tool call arguments/results, tool descriptions, the
-// conversation title (the same string as the metadata key), and embedding input
-// texts. Generation prompt/response text never reaches spans (it travels via
-// the proto generation export).
-var traceContentAttributes = map[string]struct{}{
-	"gen_ai.tool.call.arguments":    {},
-	"gen_ai.tool.call.result":       {},
-	"gen_ai.tool.description":       {},
-	metadataKeyConversationTitle:    {},
-	legacyConversationTitleKey:      {},
-	"gen_ai.embeddings.input_texts": {},
-}
 
 // forwardConfig is the resolved forwarding configuration for one load cycle.
 // The two legs resolve independently: generation export needs Cloud
@@ -781,92 +741,36 @@ func buildGenerationPayload(raw []json.RawMessage, strip bool) ([]byte, error) {
 		return nil, err
 	}
 	for _, gen := range req.GetGenerations() {
-		stripGenerationProto(gen)
+		// contentcapture owns which fields carry content, for both the struct
+		// the SDK reduces before export and the wire proto a forwarder holds.
+		// The empty error category keeps this path's existing fall-back: the
+		// daemon holds a call_error string rather than an error, so it cannot
+		// classify one.
+		contentcapture.StripGeneration(gen, "")
+		relabelContentCaptureMode(gen)
 	}
 	return wire.MarshalExportGenerationsJSON(&req)
 }
 
-// stripGenerationProto reduces a generation to metadata_only on the wire-level
-// proto: it clears the system prompt, raw artifacts, conversation title, and
-// per-message text/thinking/tool/media content, replaces the raw call error,
-// drops tool descriptions and schemas, and stamps the metadata_only marker.
+// relabelContentCaptureMode stamps the forwarded copy as metadata_only.
 //
-// The field list has to track the SDK's stripContent/stripMessageContent
-// (go/agento11y/content_capture.go) by hand: those operate on
-// agento11y.Generation and there is no reverse mapping from the wire proto, so
-// a new content field in the proto must be added here too.
-func stripGenerationProto(g *agento11yv1.Generation) {
+// This is not part of stripping and stays with the daemon. The SDK stamps every
+// mode before it reduces, so contentcapture leaves the marker alone; the daemon
+// receives generations the launcher forced to "full" (LaunchEnv.Apply, env.go)
+// so the local viewer keeps everything, and relaying a reduced copy under that
+// marker would have Cloud-side validation reject the now-empty parts.
+//
+// The container is built when absent: an exporter can send no metadata at all,
+// and the strip clears an emptied Struct, so a write through GetFields() would
+// assign to a nil map.
+func relabelContentCaptureMode(g *agento11yv1.Generation) {
 	if g == nil {
 		return
 	}
-	g.SystemPrompt = ""
-	g.RawArtifacts = nil
-	if g.CallError != "" {
-		g.CallError = strippedCallError
+	if g.GetMetadata().GetFields() == nil {
+		g.Metadata = &structpb.Struct{Fields: map[string]*structpb.Value{}}
 	}
-	for _, m := range g.GetInput() {
-		stripMessageProto(m)
-	}
-	for _, m := range g.GetOutput() {
-		stripMessageProto(m)
-	}
-	for _, tool := range g.GetTools() {
-		if tool == nil {
-			continue
-		}
-		tool.Description = ""
-		tool.InputSchemaJson = nil
-	}
-	stripGenerationMetadata(g)
-}
-
-func stripMessageProto(m *agento11yv1.Message) {
-	if m == nil {
-		return
-	}
-	for _, p := range m.GetParts() {
-		switch payload := p.GetPayload().(type) {
-		case *agento11yv1.Part_Text:
-			payload.Text = ""
-		case *agento11yv1.Part_Thinking:
-			payload.Thinking = ""
-		case *agento11yv1.Part_ToolCall:
-			if payload.ToolCall != nil {
-				payload.ToolCall.InputJson = nil
-			}
-		case *agento11yv1.Part_ToolResult:
-			if payload.ToolResult != nil {
-				payload.ToolResult.Content = ""
-				payload.ToolResult.ContentJson = nil
-			}
-		case *agento11yv1.Part_Media:
-			// Media.url carries data: URIs for pasted images and files
-			// (go/agento11y/codec), so it is content, not a reference.
-			if payload.Media != nil {
-				payload.Media.Url = ""
-			}
-		}
-	}
-}
-
-// stripGenerationMetadata drops the content-bearing metadata mirrors
-// (call_error, conversation title under both spellings) and overwrites the
-// content-capture marker to metadata_only. The incoming marker is "full" (the
-// local child captures full), so it must be rewritten or Cloud-side validation
-// would reject the now-empty parts.
-func stripGenerationMetadata(g *agento11yv1.Generation) {
-	md := g.GetMetadata()
-	if md == nil {
-		md = &structpb.Struct{}
-		g.Metadata = md
-	}
-	if md.Fields == nil {
-		md.Fields = map[string]*structpb.Value{}
-	}
-	delete(md.Fields, metadataKeyCallError)
-	delete(md.Fields, metadataKeyConversationTitle)
-	delete(md.Fields, legacyConversationTitleKey)
-	md.Fields[model.MetadataKeyContentCaptureMode] = structpb.NewStringValue(model.ContentCaptureModeMetadataOnly)
+	g.Metadata.Fields[model.MetadataKeyContentCaptureMode] = structpb.NewStringValue(model.ContentCaptureModeMetadataOnly)
 }
 
 // forwardOTLP relays an OTLP payload to the corresponding Cloud signal URL.
@@ -974,11 +878,11 @@ func stripSpanStatus(span *tracepb.Span) {
 		status.Message = ""
 		return
 	}
-	if category := stringAttribute(span.GetAttributes(), spanAttrErrorCategory); category != "" {
+	if category := stringAttribute(span.GetAttributes(), contentcapture.ErrorCategoryAttributeKey); category != "" {
 		status.Message = category
 		return
 	}
-	status.Message = strippedCallError
+	status.Message = contentcapture.StrippedCallError
 }
 
 // stringAttribute returns the string value of one span attribute, or "".
@@ -991,18 +895,12 @@ func stringAttribute(attrs []*commonpb.KeyValue, key string) string {
 	return ""
 }
 
+// filterContentAttributes drops the content-bearing attributes, in place, from
+// one span's or one event's attribute list.
 func filterContentAttributes(attrs []*commonpb.KeyValue) []*commonpb.KeyValue {
-	out := attrs[:0]
-	for _, kv := range attrs {
-		if kv == nil {
-			continue
-		}
-		if _, blocked := traceContentAttributes[kv.GetKey()]; blocked {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
+	return slices.DeleteFunc(attrs, func(kv *commonpb.KeyValue) bool {
+		return kv == nil || contentcapture.IsTraceContentAttribute(kv.GetKey())
+	})
 }
 
 func stripSpanEvents(events []*tracepb.Span_Event) []*tracepb.Span_Event {
@@ -1011,7 +909,7 @@ func stripSpanEvents(events []*tracepb.Span_Event) []*tracepb.Span_Event {
 		if e == nil {
 			continue
 		}
-		if e.GetName() == exceptionEventName {
+		if e.GetName() == contentcapture.ExceptionEventName {
 			continue
 		}
 		e.Attributes = filterContentAttributes(e.GetAttributes())
