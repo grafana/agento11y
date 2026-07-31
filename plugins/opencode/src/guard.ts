@@ -58,6 +58,18 @@ function formatPolicyDeny(
 }
 
 /**
+ * Marks a deny that reports a failed guard evaluation rather than a policy
+ * decision. The local daemon returns it when its chained Cloud hook call fails
+ * and `GUARDS_FAIL_OPEN` is false, and its reason already explains that, so it
+ * must not be wrapped by `formatPolicyDeny`.
+ *
+ * Mirrors `EvaluationFailureRuleID` in
+ * `plugins/agento11y/internal/agents/guard/toolcall.go` and the same constant in
+ * `plugins/pi/src/guard.ts`. Keep the three in sync.
+ */
+const EVALUATION_FAILURE_RULE_ID = "__agento11y_guard_evaluation_failure";
+
+/**
  * Fail-closed message used when the guard evaluation request fails. Explicitly
  * distinguishes the infrastructure failure from a policy decision.
  *
@@ -115,6 +127,13 @@ export async function runToolCallGuard(args: GuardArgs): Promise<GuardResult> {
 
     const resp = await args.client.evaluateHook(req, { enabled: true });
     if (resp.action === "deny") {
+      // No rule produced this deny, and its reason already says so.
+      if (resp.ruleId === EVALUATION_FAILURE_RULE_ID) {
+        return {
+          block: true,
+          reason: resp.reason ?? formatEvalFailure(args.toolName, undefined),
+        };
+      }
       return {
         block: true,
         reason: formatPolicyDeny(args.toolName, resp.reason),

@@ -94,6 +94,25 @@ describe("runToolCallGuard", () => {
     expect(result.reason).toContain("Stop and tell the user");
   });
 
+  it("returns the raw reason for an evaluation-failure deny", async () => {
+    // The local daemon answers with this rule id when its own chained Cloud
+    // hook call failed under GUARDS_FAIL_OPEN=false. No policy ran, so the
+    // message must not claim one blocked the call.
+    const { client } = makeClient(async () => ({
+      action: "deny",
+      ruleId: "__agento11y_guard_evaluation_failure",
+      reason:
+        'agento11y could not evaluate the Grafana Agent Observability guard for the "bash" tool call, so it was blocked as a safety measure. Details: connection refused',
+      evaluations: [],
+    }));
+
+    const result = await runToolCallGuard(makeArgs({ client }));
+    expectBlock(result);
+    expect(result.reason).toContain("could not evaluate");
+    expect(result.reason).toContain("connection refused");
+    expect(result.reason).not.toContain("A Grafana Agent Observability policy");
+  });
+
   it("omits the Reason clause when the deny reason is empty", async () => {
     const { client } = makeClient(async () => ({
       action: "deny",

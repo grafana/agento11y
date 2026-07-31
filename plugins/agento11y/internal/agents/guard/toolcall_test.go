@@ -33,6 +33,8 @@ func TestEvaluateToolCall(t *testing.T) {
 		toolName               string
 		wantAction             agento11y.HookAction
 		wantReasonSub          string
+		wantNoReasonSub        string
+		wantRuleID             string
 		wantUpdatedInput       string
 		wantLogSub             string
 		wantNoLogSub           string
@@ -77,6 +79,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			toolName:         "bash",
 			wantAction:       agento11y.HookActionDeny,
 			wantReasonSub:    "blocked tool",
+			wantRuleID:       "r-1",
 			wantServerCalled: true,
 		},
 		{
@@ -174,6 +177,19 @@ func TestEvaluateToolCall(t *testing.T) {
 			toolName:         "bash",
 			wantAction:       agento11y.HookActionDeny,
 			wantReasonSub:    "blocked tool",
+			wantRuleID:       "r-1",
+			wantServerCalled: true,
+		},
+		{
+			// No rule ran, so the reason must reach the user as written.
+			name:             "evaluation-failure deny is not reported as a policy deny",
+			cfg:              envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true},
+			serverResponds:   `{"action":"deny","rule_id":"` + EvaluationFailureRuleID + `","reason":"` + "agento11y could not evaluate the guard" + `"}`,
+			toolName:         "bash",
+			wantAction:       agento11y.HookActionDeny,
+			wantReasonSub:    "could not evaluate",
+			wantNoReasonSub:  "policy blocked",
+			wantRuleID:       EvaluationFailureRuleID,
 			wantServerCalled: true,
 		},
 		{
@@ -242,6 +258,12 @@ func TestEvaluateToolCall(t *testing.T) {
 			}
 			if tt.wantReasonSub != "" && !strings.Contains(res.Reason, tt.wantReasonSub) {
 				t.Fatalf("Reason = %q, want substring %q", res.Reason, tt.wantReasonSub)
+			}
+			if tt.wantNoReasonSub != "" && strings.Contains(res.Reason, tt.wantNoReasonSub) {
+				t.Fatalf("Reason = %q, must not contain %q", res.Reason, tt.wantNoReasonSub)
+			}
+			if res.RuleID != tt.wantRuleID {
+				t.Errorf("RuleID = %q, want %q", res.RuleID, tt.wantRuleID)
 			}
 			if string(res.UpdatedInputJSON) != tt.wantUpdatedInput {
 				t.Errorf("UpdatedInputJSON = %q, want %q", res.UpdatedInputJSON, tt.wantUpdatedInput)

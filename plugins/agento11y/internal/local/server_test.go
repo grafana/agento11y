@@ -2,18 +2,25 @@ package local
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/go/agento11y/model"
 	"github.com/grafana/agento11y/go/proto/agento11y/wire"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/stretchr/testify/assert"
@@ -118,9 +125,9 @@ func TestServer_HookEvaluate_Allow(t *testing.T) {
 	resp := post(t, s, "/api/v1/hooks:evaluate", "application/json", body)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	var out hookResponse
+	var out agento11y.HookEvaluateResponse
 	decodeJSON(t, resp.Body, &out)
-	assert.Equal(t, "allow", out.Action)
+	assert.Equal(t, agento11y.HookActionAllow, out.Action)
 	assert.NotNil(t, out.Evaluations)
 
 	_, err := os.Stat(filepath.Join(dir, "hooks.jsonl"))
@@ -160,6 +167,8 @@ func TestServer_Routing(t *testing.T) {
 		{name: "healthz serves JSON", method: http.MethodGet, path: "/healthz", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"status":"ok"`},
 		{name: "unknown route", method: http.MethodPost, path: "/api/v1/unknown", body: "{}", want: http.StatusNotFound},
 		{name: "wrong method on generations export", method: http.MethodPut, path: "/api/v1/generations:export", body: "{}", want: http.StatusMethodNotAllowed},
+		{name: "hook evaluate serves JSON", method: http.MethodPost, path: "/api/v1/hooks:evaluate", body: `{"phase":"postflight"}`, want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"action":"allow"`},
+		{name: "wrong method on hook evaluate", method: http.MethodGet, path: "/api/v1/hooks:evaluate", want: http.StatusMethodNotAllowed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -568,11 +577,13 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	assert.True(t, saved.Settings.LocalForward)
 	// The saved toggle plus usable credentials resolve to a live forwarding
 	// posture, reduced to metadata_only by the saved capture mode. No OTLP
-	// endpoint was configured, so that leg reports why it stays off.
+	// endpoint was configured, so that leg reports why it stays off. Guards
+	// were saved on, so the hook leg is live as well.
 	assert.Equal(t, forwardStatus{
 		Enabled:     true,
 		Mode:        forwardModeMetadataOnly,
 		Generations: true,
+		Hooks:       true,
 		OTLPReason:  "no OTLP endpoint configured, so traces and metrics are not forwarded",
 	}, saved.ForwardStatus)
 
@@ -853,6 +864,448 @@ func TestServer_Forwarding_RelaysOTLP(t *testing.T) {
 	c := <-received
 	assert.Equal(t, "/v1/traces", c.path)
 	assertTraceStripped(t, c.body, wire.ContentTypeProto)
+}
+
+// hookCloud is a fake Cloud hook endpoint: it records what the daemon relayed
+// and answers with a canned status and body, both settable between calls.
+//
+// It serves TLS because resolveForwardConfig refuses an http://127.0.0.1
+// endpoint as a hook target, so an https test server is what lets the server
+// tests go through the real gate instead of around it. newForwardingTestServer
+// trusts its cert, and the relay-level tests inject srv.Client() themselves.
+type hookCloud struct {
+	srv *httptest.Server
+
+	// Set before or between calls, read by the handler.
+	status  int
+	respond string
+	delay   time.Duration
+
+	// The hook path is synchronous, so unlike the generations and OTLP legs
+	// no wait() is needed before reading these — but the other legs in this
+	// file are async against the same server, so recording is still guarded.
+	mu      sync.Mutex
+	n       int
+	path    string
+	body    string
+	headers http.Header
+}
+
+func newHookCloud(t *testing.T) *hookCloud {
+	t.Helper()
+	c := &hookCloud{status: http.StatusOK, respond: `{"action":"allow","evaluations":[]}`}
+	c.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		c.record(r.URL.Path, body, r.Header.Clone())
+		if c.delay > 0 {
+			time.Sleep(c.delay)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(c.status)
+		_, _ = io.WriteString(w, c.respond)
+	}))
+	t.Cleanup(c.srv.Close)
+	return c
+}
+
+func (c *hookCloud) record(path string, body []byte, headers http.Header) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+	c.path, c.body, c.headers = path, string(body), headers
+}
+
+func (c *hookCloud) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+func (c *hookCloud) lastCall() (path, body string, headers http.Header) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.path, c.body, c.headers
+}
+
+// hookEnv is the config.env a chaining daemon needs: forwarding on, guards on,
+// and usable Cloud credentials pointed at the fake Cloud.
+// An override with an empty value removes the key, so a case can express "this
+// one gate is not satisfied" without restating the other four.
+func hookEnv(cloudURL string, extra map[string]string) map[string]string {
+	env := map[string]string{
+		"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloudURL,
+		"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+		"AGENTO11Y_GUARDS_ENABLED": "true",
+	}
+	maps.Copy(env, extra)
+	maps.DeleteFunc(env, func(_, v string) bool { return v == "" })
+	return env
+}
+
+// postHook issues a hook evaluation and returns the status plus the verdict
+// the calling agent would act on. Each opt rewrites the request before it is
+// served.
+func postHook(t *testing.T, s *Server, body string, headers map[string]string, opts ...func(*http.Request) *http.Request) (int, agento11y.HookEvaluateResponse) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks:evaluate", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	for _, opt := range opts {
+		req = opt(req)
+	}
+	rr := httptest.NewRecorder()
+	s.ServeHTTP(rr, req)
+	resp := rr.Result()
+	defer func() { _ = resp.Body.Close() }()
+	var out agento11y.HookEvaluateResponse
+	if resp.StatusCode == http.StatusOK {
+		decodeJSON(t, resp.Body, &out)
+	}
+	return resp.StatusCode, out
+}
+
+const hookToolCallBody = `{"phase":"postflight","context":{"agent_name":"claude-code"},"input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash"}}]}]}}`
+
+// abortDuringCall is a postHook option that cancels the request context shortly
+// after the request is issued, the way an agent that hit its own hook deadline
+// (or a user who interrupted) drops the call while Cloud is still stalling.
+// Pair it with a Cloud delay longer than the cancel.
+func abortDuringCall(t *testing.T) func(*http.Request) *http.Request {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	return func(r *http.Request) *http.Request { return r.WithContext(ctx) }
+}
+
+// TestServer_HookEvaluate_Gates covers when a --local hook evaluation reaches
+// Cloud. Chaining needs both the forwarding opt-in and guards: telemetry
+// forwarding is what the user consented to, and a guard check ships the tool
+// call itself.
+func TestServer_HookEvaluate_Gates(t *testing.T) {
+	cases := []struct {
+		name      string
+		override  map[string]string // applied on top of hookEnv
+		wantChain bool
+		wantWhy   string // substring of forwardStatus.HookReason
+	}{
+		{
+			name:     "forwarding_off",
+			override: map[string]string{"AGENTO11Y_LOCAL_FORWARD": ""},
+			// Forwarding off at all is not a paused state, so no leg has
+			// anything to explain.
+			wantWhy: "",
+		},
+		{
+			name:     "guards_off",
+			override: map[string]string{"AGENTO11Y_GUARDS_ENABLED": ""},
+			wantWhy:  "GUARDS_ENABLED",
+		},
+		{
+			name:     "placeholder_credentials",
+			override: map[string]string{"AGENTO11Y_AUTH_TOKEN": envconfig.LocalAuthPlaceholder},
+			wantWhy:  "placeholder",
+		},
+		{name: "both_on", wantChain: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cloud := newHookCloud(t)
+			cloud.respond = `{"action":"deny","rule_id":"r1","reason":"nope"}`
+			s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, tc.override))
+
+			status, out := postHook(t, s, hookToolCallBody, nil)
+			require.Equal(t, http.StatusOK, status)
+			st := s.forward.status()
+			assert.Equal(t, tc.wantChain, st.Hooks)
+			if tc.wantChain {
+				assert.Equal(t, 1, cloud.count())
+				assert.Equal(t, agento11y.HookActionDeny, out.Action)
+				assert.Empty(t, st.HookReason, "a live hook leg has nothing to explain")
+				return
+			}
+			assert.Zero(t, cloud.count(), "a refused hook leg must make no outbound request")
+			assert.Equal(t, agento11y.HookActionAllow, out.Action)
+			if tc.wantWhy == "" {
+				assert.Empty(t, st.HookReason)
+			} else {
+				assert.Contains(t, st.HookReason, tc.wantWhy)
+			}
+		})
+	}
+}
+
+// TestServer_HookEvaluate_CloudVerdict covers the verdicts a chained call
+// returns to the calling agent: the action, the rule that produced it, a
+// transform, and the per-rule evaluations.
+func TestServer_HookEvaluate_CloudVerdict(t *testing.T) {
+	cases := []struct {
+		name       string
+		respond    string
+		wantAction agento11y.HookAction
+		wantRuleID string
+		wantReason string
+		assertMore func(t *testing.T, out agento11y.HookEvaluateResponse)
+	}{
+		{
+			name:       "allow",
+			respond:    `{"action":"allow","evaluations":[]}`,
+			wantAction: agento11y.HookActionAllow,
+		},
+		{
+			name:       "deny",
+			respond:    `{"action":"deny","rule_id":"r1","reason":"blocked by policy"}`,
+			wantAction: agento11y.HookActionDeny,
+			wantRuleID: "r1",
+			wantReason: "blocked by policy",
+		},
+		{
+			name:       "transform",
+			respond:    `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"echo safe"}}}]}]}}`,
+			wantAction: agento11y.HookActionAllow,
+			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+				require.NotNil(t, out.TransformedInput)
+				require.Len(t, out.TransformedInput.Output, 1)
+				parts := out.TransformedInput.Output[0].Parts
+				require.Len(t, parts, 1)
+				require.NotNil(t, parts[0].ToolCall)
+				assert.JSONEq(t, `{"command":"echo safe"}`, string(parts[0].ToolCall.InputJSON))
+			},
+		},
+		{
+			name:       "evaluations_preserved_in_order",
+			respond:    `{"action":"allow","evaluations":[{"rule_id":"first","passed":true},{"rule_id":"second","passed":false}]}`,
+			wantAction: agento11y.HookActionAllow,
+			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+				require.Len(t, out.Evaluations, 2)
+				assert.Equal(t, "first", out.Evaluations[0].RuleID)
+				assert.Equal(t, "second", out.Evaluations[1].RuleID)
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cloud := newHookCloud(t)
+			cloud.respond = tc.respond
+			s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+
+			status, out := postHook(t, s, hookToolCallBody, nil)
+			require.Equal(t, http.StatusOK, status)
+			require.Equal(t, 1, cloud.count())
+			path, _, _ := cloud.lastCall()
+			assert.Equal(t, hookEvaluatePath, path)
+			assert.Equal(t, tc.wantAction, out.Action)
+			assert.Equal(t, tc.wantRuleID, out.RuleID)
+			assert.Equal(t, tc.wantReason, out.Reason)
+			if tc.assertMore != nil {
+				tc.assertMore(t, out)
+			}
+			st := s.forward.status()
+			assert.Empty(t, st.Failures)
+			assert.Zero(t, st.HookFailOpens)
+		})
+	}
+}
+
+// TestServer_HookEvaluate_FailModes covers what the agent is told when the
+// Cloud call does not produce a verdict. Fail-open keeps the local allow;
+// fail-closed denies, and that deny has to be labelled as an evaluation
+// failure or every consumer renders it as "a policy blocked this call".
+func TestServer_HookEvaluate_FailModes(t *testing.T) {
+	cases := []struct {
+		name         string
+		status       int
+		respond      string
+		closeCloud   bool
+		abortMidCall bool // the agent stops waiting while Cloud stalls
+		failOpen     bool
+		wantAction   agento11y.HookAction
+		wantFailure  string // substring of the recorded failure; "" means none
+	}{
+		{name: "unreachable_fail_open", closeCloud: true, failOpen: true, wantAction: agento11y.HookActionAllow, wantFailure: "POST"},
+		{name: "unreachable_fail_closed", closeCloud: true, wantAction: agento11y.HookActionDeny, wantFailure: "POST"},
+		{name: "status_503_fail_closed", status: http.StatusServiceUnavailable, respond: `{"error":"down"}`, wantAction: agento11y.HookActionDeny, wantFailure: "status 503"},
+		{name: "bad_json_fail_open", respond: `{"action":`, failOpen: true, wantAction: agento11y.HookActionAllow, wantFailure: "decode response"},
+		{name: "bad_json_fail_closed", respond: `{"action":`, wantAction: agento11y.HookActionDeny, wantFailure: "decode response"},
+		// An abandoned wait is neither: the agent already applied its own fail
+		// mode, so no verdict this handler writes is acted on. Counting it
+		// would report an unchecked allow that never reached an agent.
+		{name: "caller_abort_fail_open", abortMidCall: true, failOpen: true},
+		{name: "caller_abort_fail_closed", abortMidCall: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cloud := newHookCloud(t)
+			if tc.status != 0 {
+				cloud.status = tc.status
+			}
+			if tc.respond != "" {
+				cloud.respond = tc.respond
+			}
+			var opts []func(*http.Request) *http.Request
+			if tc.abortMidCall {
+				cloud.delay = 500 * time.Millisecond
+				opts = append(opts, abortDuringCall(t))
+			}
+			s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, map[string]string{
+				"AGENTO11Y_GUARDS_FAIL_OPEN": strconv.FormatBool(tc.failOpen),
+			}))
+			if tc.closeCloud {
+				cloud.srv.Close()
+			}
+
+			code, out := postHook(t, s, hookToolCallBody, nil, opts...)
+			st := s.forward.status()
+
+			if tc.abortMidCall {
+				assert.Empty(t, st.Failures, "a caller-side abort is not a Cloud delivery failure")
+				assert.Zero(t, st.HookFailOpens, "nor a tool call allowed without a verdict")
+				return
+			}
+
+			require.Equal(t, http.StatusOK, code, "a failed evaluation is still a verdict, not an HTTP error")
+			assert.Equal(t, tc.wantAction, out.Action)
+
+			if tc.wantAction == agento11y.HookActionDeny {
+				assert.Equal(t, guard.EvaluationFailureRuleID, out.RuleID)
+				assert.Contains(t, out.Reason, "could not evaluate")
+				assert.Contains(t, out.Reason, `"Bash"`, "the reason names the blocked call")
+				assert.NotContains(t, out.Reason, "policy blocked")
+			}
+
+			require.Len(t, st.Failures, 1)
+			assert.Equal(t, forwardLabelHooks, st.Failures[0].Label)
+			assert.Contains(t, st.Failures[0].Detail, tc.wantFailure)
+			// A fail-open allow is byte-identical to a Cloud allow, so the
+			// sticky counter is the only durable trace that no guard ran.
+			if tc.failOpen {
+				assert.Equal(t, 1, st.HookFailOpens)
+			} else {
+				assert.Zero(t, st.HookFailOpens)
+			}
+		})
+	}
+}
+
+// TestServer_HookEvaluate_FailOpenCountSurvivesRecovery covers why the
+// fail-open count is not part of the failure ring: the ring is cleared by the
+// next delivery, and a guard that stopped enforcing for a while has to stay
+// visible after Cloud comes back.
+func TestServer_HookEvaluate_FailOpenCountSurvivesRecovery(t *testing.T) {
+	cloud := newHookCloud(t)
+	cloud.status = http.StatusServiceUnavailable
+	s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+
+	_, out := postHook(t, s, hookToolCallBody, nil)
+	require.Equal(t, agento11y.HookActionAllow, out.Action)
+	require.Equal(t, 1, s.forward.status().HookFailOpens)
+
+	cloud.status = http.StatusOK
+	_, out = postHook(t, s, hookToolCallBody, nil)
+	require.Equal(t, agento11y.HookActionAllow, out.Action)
+
+	st := s.forward.status()
+	assert.Empty(t, st.Failures, "a delivered evaluation clears the ring")
+	assert.Equal(t, 1, st.HookFailOpens, "but not the record that one call went unchecked")
+}
+
+// TestServer_HookEvaluate_RelayShape covers what the daemon puts on the wire:
+// the received bytes unchanged, the loop marker, Cloud auth, and the budget
+// derived from the calling agent's own deadline.
+func TestServer_HookEvaluate_RelayShape(t *testing.T) {
+	cloud := newHookCloud(t)
+	cloud.respond = `{"action":"allow"}`
+	s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+
+	// A preflight request carrying a field this daemon's SDK version does not
+	// know about. Relaying the bytes is what keeps that field intact.
+	body := `{"phase":"preflight","context":{"agent_name":"pi"},"future_field":{"trace_id":"t1"}}`
+	status, out := postHook(t, s, body, map[string]string{legacyHookTimeoutHeader: "5000"})
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionAllow, out.Action)
+
+	require.Equal(t, 1, cloud.count())
+	_, sent, headers := cloud.lastCall()
+	assert.Equal(t, body, sent)
+	assert.NotEmpty(t, headers.Get(forwardMarkerHeader))
+	assert.Equal(t, "t", headers.Get(wire.TenantHeaderName))
+	assert.True(t, strings.HasPrefix(headers.Get("Authorization"), "Basic "))
+	// The legacy spelling was propagated under the branded one, minus the
+	// margin that keeps the Cloud call ahead of the agent's own deadline.
+	assert.Equal(t, "4750", headers.Get(hookTimeoutHeader))
+}
+
+// TestServer_HookEvaluate_DoesNotChainRelayedRequest covers the loop guard: a
+// daemon whose ENDPOINT was hand-set to another daemon must answer a relayed
+// request from its own verdict.
+func TestServer_HookEvaluate_DoesNotChainRelayedRequest(t *testing.T) {
+	cloud := newHookCloud(t)
+	cloud.respond = `{"action":"deny","rule_id":"r1"}`
+	s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+
+	status, out := postHook(t, s, hookToolCallBody, map[string]string{forwardMarkerHeader: "1"})
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionAllow, out.Action)
+	assert.Zero(t, cloud.count())
+}
+
+// TestServer_HookEvaluate_RejectsBadRequestsBeforeChaining covers the
+// validation the chaining must not weaken: neither a malformed body nor an
+// oversized one may reach Cloud.
+func TestServer_HookEvaluate_RejectsBadRequestsBeforeChaining(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{name: "invalid_json", body: `{"phase":`, wantStatus: http.StatusBadRequest},
+		{name: "oversized_body", body: `{"phase":"postflight","pad":"` + strings.Repeat("x", maxHookBodyBytes) + `"}`, wantStatus: http.StatusRequestEntityTooLarge},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cloud := newHookCloud(t)
+			s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+
+			status, _ := postHook(t, s, tc.body, nil)
+			assert.Equal(t, tc.wantStatus, status)
+			assert.Zero(t, cloud.count(), "a request the daemon rejects never reaches Cloud")
+		})
+	}
+}
+
+// TestServer_HookEvaluate_ConfigChangeAppliesWithoutRestart covers the
+// no-restart contract for the guard knobs: they are resolved through the
+// file-first reader, not envconfig.ResolveGuards, so flipping guards in
+// config.env reaches a running daemon.
+func TestServer_HookEvaluate_ConfigChangeAppliesWithoutRestart(t *testing.T) {
+	cloud := newHookCloud(t)
+	cloud.respond = `{"action":"deny","rule_id":"r1","reason":"nope"}`
+	env := hookEnv(cloud.srv.URL, map[string]string{"AGENTO11Y_GUARDS_ENABLED": "false"})
+	s, _ := newForwardingTestServer(t, cloud.srv, env)
+
+	_, out := postHook(t, s, hookToolCallBody, nil)
+	require.Equal(t, agento11y.HookActionAllow, out.Action)
+	require.Zero(t, cloud.count())
+
+	env["AGENTO11Y_GUARDS_ENABLED"] = "true"
+	var b []byte
+	for k, v := range env {
+		b = fmt.Appendf(b, "%s=%s\n", k, v)
+	}
+	require.NoError(t, os.WriteFile(s.configPath, b, 0o600))
+	// Force a distinct mtime so the loader's size+mtime cache notices an edit
+	// that landed inside the filesystem's timestamp granularity.
+	future := time.Now().Add(2 * time.Second)
+	require.NoError(t, os.Chtimes(s.configPath, future, future))
+
+	_, out = postHook(t, s, hookToolCallBody, nil)
+	assert.Equal(t, agento11y.HookActionDeny, out.Action)
+	assert.Equal(t, 1, cloud.count())
 }
 
 // TestServer_APISearch covers the /api/v1/search endpoint: empty query,

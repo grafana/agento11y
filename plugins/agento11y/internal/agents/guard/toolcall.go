@@ -38,10 +38,29 @@ func formatPolicyDeny(toolName, reason string) string {
 	return msg + "\n\n" + guardBehaviorHint
 }
 
-// formatEvalFailure is the fail-closed message used when the guard could not
+// EvaluationFailureRuleID marks a deny that reports a failed guard evaluation
+// rather than a policy decision. The local daemon sets it on the fail-closed
+// response it returns when its chained Cloud hook call fails, and every
+// consumer of a deny checks for it before wrapping the reason in
+// "a policy blocked this call" language, which would be wrong here.
+//
+// The value is chosen not to collide with a Cloud rule ID rather than
+// guaranteed not to: nothing in this repo validates Cloud's ID space. A rule
+// that did use this exact string would have its deny rendered as an evaluation
+// failure.
+//
+// Mirrored in plugins/pi/src/guard.ts and plugins/opencode/src/guard.ts. The
+// three are compared by TestEvaluationFailureRuleID_MatchesPlugins, because a
+// silent drift here would revert the honest fail-closed message with every
+// suite still green.
+const EvaluationFailureRuleID = "__agento11y_guard_evaluation_failure"
+
+// FormatEvalFailure is the fail-closed message used when the guard could not
 // be evaluated (missing credentials or transport failure). It explicitly
-// distinguishes the infrastructure failure from a policy decision.
-func formatEvalFailure(toolName, detail string) string {
+// distinguishes the infrastructure failure from a policy decision. Exported so
+// the local daemon's chained Cloud hook call produces the same wording as the
+// cloud-only path.
+func FormatEvalFailure(toolName, detail string) string {
 	msg := fmt.Sprintf("agento11y could not evaluate the Grafana Agent Observability guard for the %q tool call, so it was blocked as a safety measure.", toolName)
 	if d := strings.TrimSpace(detail); d != "" {
 		msg += " Details: " + d
@@ -131,7 +150,7 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 		}
 		return Result{
 			Action: agento11y.HookActionDeny,
-			Reason: formatEvalFailure(in.ToolName, "missing AGENTO11Y_ENDPOINT/AGENTO11Y_AUTH_TENANT_ID/AGENTO11Y_AUTH_TOKEN"),
+			Reason: FormatEvalFailure(in.ToolName, "missing AGENTO11Y_ENDPOINT/AGENTO11Y_AUTH_TENANT_ID/AGENTO11Y_AUTH_TOKEN"),
 		}
 	}
 
@@ -204,7 +223,7 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 		}
 		return Result{
 			Action: agento11y.HookActionDeny,
-			Reason: formatEvalFailure(in.ToolName, err.Error()),
+			Reason: FormatEvalFailure(in.ToolName, err.Error()),
 		}
 	}
 
@@ -239,6 +258,15 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 		ruleID := ""
 		if resp != nil {
 			ruleID = resp.RuleID
+		}
+		// No rule produced this deny, and its reason already says so, so it must
+		// not go through formatPolicyDeny. See EvaluationFailureRuleID.
+		if ruleID == EvaluationFailureRuleID {
+			return Result{
+				Action: agento11y.HookActionDeny,
+				Reason: ruleReason,
+				RuleID: ruleID,
+			}
 		}
 		return Result{
 			Action: agento11y.HookActionDeny,

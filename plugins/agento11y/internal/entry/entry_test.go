@@ -885,6 +885,60 @@ func inProcessDaemon(t *testing.T) (dir string, baseURL string) {
 	return dir, ts.URL
 }
 
+// TestRenderLocalBanner_PrivacyClaimTracksPosture covers the one sentence in
+// the launcher banner that can be false: with forwarding on, and especially
+// with guard evaluation chained to Cloud, "stays on this machine" is wrong.
+func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
+	cases := []struct {
+		name       string
+		posture    local.ForwardPosture
+		postureErr error
+		want       []string
+		wantNone   []string
+	}{
+		{
+			name:     "forwarding_off",
+			want:     []string{"stays on this machine"},
+			wantNone: []string{"Grafana Cloud"},
+		},
+		{
+			name:     "forwarding_on",
+			posture:  local.ForwardPosture{Enabled: true, Mode: "metadata_only"},
+			want:     []string{"forwarded to Grafana Cloud", "metadata_only"},
+			wantNone: []string{"stays on this machine", "Guard checks"},
+		},
+		{
+			name:    "guards_chained",
+			posture: local.ForwardPosture{Enabled: true, Mode: "metadata_only", Hooks: true},
+			// Naming only tool calls would be too narrow: pi checks the
+			// outgoing conversation before it is sent to the model, and that
+			// request is relayed too.
+			want:     []string{"forwarded to Grafana Cloud", "Guard checks send tool calls", "before it is sent"},
+			wantNone: []string{"stays on this machine"},
+		},
+		{
+			// The daemon did not answer, so no posture may be claimed either
+			// way.
+			name:       "posture_unknown",
+			posture:    local.ForwardPosture{Enabled: true, Hooks: true},
+			postureErr: errors.New("connection refused"),
+			want:       []string{"recorded on this machine"},
+			wantNone:   []string{"stays on this machine", "Grafana Cloud"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderLocalBanner("http://127.0.0.1:8765", tc.posture, tc.postureErr)
+			for _, want := range tc.want {
+				assert.Contains(t, got, want)
+			}
+			for _, none := range tc.wantNone {
+				assert.NotContains(t, got, none)
+			}
+		})
+	}
+}
+
 // TestRun_LauncherLocalFlagInjectsOpts checks that --local before --
 // boots the receiver and surfaces a populated local env to every launcher.
 // The full launcher path (env injection, exec) is covered by each agent's

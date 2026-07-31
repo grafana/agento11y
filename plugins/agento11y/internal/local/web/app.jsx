@@ -2989,6 +2989,11 @@
       return { ...s, tags: (s.tags || []).map(t => ({ ...t })) };
     }
 
+    // GUARD_CONTENT_NOTE is the one carve-out in the capture-mode promise: a
+    // chained guard check relays the content being evaluated. See
+    // handleHookEvaluate in internal/local/server.go.
+    const GUARD_CONTENT_NOTE = "Guards are on: tool calls, and the conversation an agent runs a preflight check on, are sent to Cloud for evaluation regardless of the capture mode.";
+
     // forwardBannerMeta turns the daemon's reported forwarding status into the
     // pill, accent, and sentence the banner and the settings hero both show.
     // The saved toggle is deliberately not an input: config.env and the
@@ -3000,25 +3005,54 @@
       }
       if (!st.enabled) {
         if (st.reason) return { accent: "warning", pill: "Paused", line: `Forwarding is on but paused: ${st.reason}` };
+        // The hook leg is one of the legs st.enabled sums, so nothing is
+        // relayed here.
         return { accent: "success", pill: "Off", line: "Cloud forwarding is off — nothing from local sessions leaves this device." };
       }
-      const failure = (st.failures || [])[0];
+      // Guard disclosures hold whatever else the status says, so every branch
+      // below that reports forwarding as on appends them. Failures are kept per
+      // leg: a failing generations or OTLP leg must not hide that guard checks
+      // are still shipping content, nor swallow the unchecked-allow count.
+      const disclosures = [];
+      if (st.hooks) disclosures.push(GUARD_CONTENT_NOTE);
+      if (st.hookFailOpens > 0) disclosures.push(st.hookFailOpens === 1
+        ? "1 guard check ran without a Cloud verdict and was allowed."
+        : `${st.hookFailOpens} guard checks ran without a Cloud verdict and were allowed.`);
+      const failures = st.failures || [];
+      const failure = failures[0];
       if (failure) {
-        return { accent: "error", pill: "Failing", line: `Forwarding is on but the last attempts failed — ${failure.label}: ${failure.detail}` };
+        // Name the other failing legs instead of letting the most recent one
+        // stand for all of them.
+        const others = [...new Set(failures.map(f => f.label))].filter(l => l !== failure.label);
+        const also = others.length > 0 ? ` (also failing: ${others.join(", ")})` : "";
+        return {
+          accent: "error",
+          pill: "Failing",
+          line: [`Forwarding is on but the last attempts failed — ${failure.label}: ${failure.detail}${also}`, ...disclosures].join(" "),
+        };
       }
       // An unrecognised mode must not read as the narrower one: a future mode
       // could forward more, not less.
       if (st.mode !== "full" && st.mode !== "metadata_only") {
-        return { accent: "warning", pill: "On", line: `Forwarding is on in a mode this viewer does not know (${st.mode || "unset"}).` };
+        return { accent: "warning", pill: "On", line: [`Forwarding is on in a mode this viewer does not know (${st.mode || "unset"}).`, ...disclosures].join(" ") };
       }
+      // With guards chained, only reasoning text and media are still local:
+      // the guard request carries tool calls, and for a preflight check the
+      // prompts and responses too, so those cannot be listed as local here.
+      const metadataLine = st.hooks
+        ? "Session capture forwards usage and session metadata only — reasoning text and attached media stay local."
+        : "Only usage and session metadata is forwarded — prompts, responses, reasoning text, tool inputs/results, and attached media stay local.";
       const parts = [st.mode === "full"
         ? "Full session content is forwarded to your organization's Grafana Cloud."
-        : "Only usage and session metadata is forwarded — prompts, responses, reasoning text, tool inputs/results, and attached media stay local."];
+        : metadataLine];
       if (!st.generations && st.reason) parts.push(`Generations are paused: ${st.reason}`);
       if (!st.otlp) parts.push("Traces and metrics are not forwarded.");
+      parts.push(...disclosures);
       return {
-        accent: st.mode === "full" ? "warning" : "info",
-        pill: st.mode === "full" ? "Full content" : "Metadata only",
+        // A metadata_only forward with guards chained still ships content, so
+        // it does not get the calm accent or the reassuring pill.
+        accent: st.mode === "full" || st.hooks ? "warning" : "info",
+        pill: st.mode === "full" ? "Full content" : (st.hooks ? "Metadata + guard content" : "Metadata only"),
         line: parts.join(" "),
       };
     }
@@ -3360,6 +3394,9 @@
       // its own environment at boot, so "off here, on there" is reachable until
       // an explicit false is saved.
       const daemonStillOn = !!(forwardStatus && forwardStatus.enabled) && !form.localForward;
+      // Say it next to the control that sets the capture mode, not only in the
+      // banner.
+      const guardsChained = !!(forwardStatus && forwardStatus.hooks);
       return (
         <SettingsCard>
           <SectionLabel>Connection</SectionLabel>
@@ -3393,6 +3430,7 @@
               Also send <Mono>--local</Mono> sessions to Grafana Cloud. Needs the credentials above, and applies to every local session on this machine until you turn it off. The local viewer always keeps full content; <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Metadata only</b> forwards usage and session metadata, and <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Full</b> forwards prompts, responses, and tool I/O too. Metadata only and Full write <Mono>CONTENT_CAPTURE_MODE</Mono>, which also decides how much content your non-local Cloud sessions capture.
               {advanced && <div style={{ color: "var(--warning-text)", marginTop: 6 }}>Advanced capture mode <Mono>{form.capture}</Mono> is set in config.env. Forwarding reduces it to metadata only and <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Metadata only</b> leaves it in place; picking <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Full</b> replaces it for Cloud sessions too.</div>}
               {daemonStillOn && <div style={{ color: "var(--warning-text)", marginTop: 6 }}>The running daemon is still forwarding — <Mono>LOCAL_FORWARD</Mono> is set in its environment. Saving writes an explicit <Mono>false</Mono> to config.env, which the daemon prefers.</div>}
+              {guardsChained && <div style={{ color: "var(--warning-text)", marginTop: 6 }}>{GUARD_CONTENT_NOTE} The daemon relays <Mono>--local</Mono> guard checks to Cloud so your Cloud rules still apply; turn off <Mono>GUARDS_ENABLED</Mono> or forwarding to stop it.</div>}
             </>}
           >
             <SettingsSegmented value={forwardMode} onChange={v => applyForwardLocalMode(set, form, v)} options={FORWARD_LOCAL_OPTIONS}/>

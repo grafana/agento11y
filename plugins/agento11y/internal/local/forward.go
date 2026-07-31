@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -36,15 +37,30 @@ import (
 const maxInFlightForwards = 8
 
 // maxRecordedForwardFailures caps the failure ring the loader keeps for
-// forwardStatus. The daemon's logger writes to io.Discard unless debug logging
-// is on, so the status endpoint is the only channel a runtime failure (rotated
-// token, unreachable Cloud) can reach the user through.
+// forwardStatus, per leg. The daemon's logger writes to io.Discard unless debug
+// logging is on, so the status endpoint is the only channel a runtime failure
+// (rotated token, unreachable Cloud) can reach the user through. The cap is
+// per-label because the legs fail at wildly different rates: the hook leg
+// records once per tool call, and a global ring would let it evict a
+// generation export Cloud has been rejecting all session.
 const maxRecordedForwardFailures = 5
 
 // forwardLabelGenerations names the generation-export leg in the failure ring.
-// The two legs are recorded and cleared independently, so the label a queued
+// The legs are recorded and cleared independently, so the label a queued
 // payload is dropped under must match the one its POST reports.
 const forwardLabelGenerations = "generations"
+
+// forwardLabelHooks names the guard-evaluation leg in the failure ring. Unlike
+// the other two legs this one is synchronous: a failure here changes the
+// verdict the agent acts on, so it is worth surfacing in the same place.
+const forwardLabelHooks = "hooks"
+
+// hookEvaluatePath is the Cloud hook endpoint the daemon relays to. There is
+// no wire.HooksEvaluateHTTPPath constant, and adding one to
+// go/proto/agento11y/wire would not help: this module builds against the
+// released github.com/grafana/agento11y/go tag, so a new constant there is
+// unusable until the next go/v* release.
+const hookEvaluatePath = "/api/v1/hooks:evaluate"
 
 // otlpForwardLabel names one OTLP signal leg in the failure ring.
 func otlpForwardLabel(signal string) string { return "otlp/" + signal }
@@ -119,21 +135,37 @@ type forwardConfig struct {
 	otlpEndpoint string            // base OTLP endpoint ("" = not forwarded)
 	otlpHeaders  map[string]string // the exporter's header set for this endpoint
 	otlpReason   string            // why OTLP is not forwarded
+
+	hookURL     string            // Cloud /api/v1/hooks:evaluate URL ("" = not chained)
+	hookHeaders map[string]string // Basic auth + tenant header, same pair as generations
+	hookReason  string            // why hook evaluation is not chained to Cloud
+
+	// failOpen and timeoutMs are the guard policy the chained hook call
+	// applies: whether a failed Cloud evaluation allows the tool call, and
+	// the budget used when the agent propagates no deadline of its own. They
+	// hold their documented defaults (fail open, DefaultGuardsTimeoutMs) on
+	// every path that refuses the hook leg, so a partially resolved config
+	// never reads as an explicit "fail closed".
+	failOpen  bool
+	timeoutMs int
 }
 
 // disabledReasons joins the per-leg refusal reasons for logging, or "" when
-// both legs are live (or forwarding is simply off). One reason shared by both
+// every leg is live (or forwarding is simply off). One reason shared by all
 // legs is a whole-config refusal and drops the per-leg prefixes.
 func (c forwardConfig) disabledReasons() string {
-	if c.genReason == c.otlpReason {
+	if c.genReason == c.otlpReason && c.genReason == c.hookReason {
 		return c.genReason
 	}
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, 3)
 	if c.genReason != "" {
 		parts = append(parts, "generations: "+c.genReason)
 	}
 	if c.otlpReason != "" {
 		parts = append(parts, "otlp: "+c.otlpReason)
+	}
+	if c.hookReason != "" {
+		parts = append(parts, "hooks: "+c.hookReason)
 	}
 	return strings.Join(parts, "; ")
 }
@@ -158,10 +190,12 @@ type forwardLoader struct {
 	cached       forwardConfig
 	loggedReason string // last refusal logged, so we log it only once
 
-	// failMu guards the failure ring, which is written from forward
-	// goroutines and read by the status endpoint.
-	failMu   sync.Mutex
-	failures []forwardFailure
+	// failMu guards the failure ring and the fail-open counter, which are
+	// written from forward goroutines and the hook handler and read by the
+	// status endpoint.
+	failMu    sync.Mutex
+	failures  []forwardFailure
+	failOpens int
 }
 
 func newForwardLoader(path string, logger *log.Logger) *forwardLoader {
@@ -225,6 +259,10 @@ type forwardStatus struct {
 	// credentials the generation export cannot use.
 	Generations bool `json:"generations"`
 	OTLP        bool `json:"otlp"`
+	// Hooks reports whether guard evaluation from a --local session is
+	// relayed to Cloud. It is gated harder than the other two legs, so it can
+	// be off while both of them deliver.
+	Hooks bool `json:"hooks"`
 	// Reason explains why generations are not forwarded although the user
 	// opted in (empty endpoint, placeholder credentials, unreadable config).
 	// Empty when forwarding is simply not enabled.
@@ -232,11 +270,20 @@ type forwardStatus struct {
 	// OTLPReason is the same for the OTLP leg (no endpoint configured, or a
 	// local endpoint that would loop back into this daemon).
 	OTLPReason string `json:"otlpReason,omitempty"`
+	// HookReason is the same for the hook leg (guards off, a local endpoint
+	// with no Cloud rules to consult, or unusable credentials).
+	HookReason string `json:"hookReason,omitempty"`
 	// Failures are the forward attempts that failed since the last success,
 	// most recent first. Non-empty means the current posture is not actually
 	// delivering, which no other channel would tell the user about: the
 	// daemon's logger is discarded unless debug logging is on.
 	Failures []forwardFailure `json:"failures,omitempty"`
+	// HookFailOpens counts the tool calls allowed since the daemon started
+	// because a chained guard evaluation failed and GUARDS_FAIL_OPEN was on.
+	// Unlike Failures it is never cleared: the agent cannot tell such an allow
+	// from a Cloud allow, so a count that a later success wiped would leave no
+	// trace that the guard did not run.
+	HookFailOpens int `json:"hookFailOpens,omitempty"`
 }
 
 // forwardFailure is one failed forward attempt, kept so the viewer can show
@@ -259,13 +306,16 @@ const (
 func (l *forwardLoader) status() forwardStatus {
 	cfg := l.load()
 	st := forwardStatus{
-		Enabled:     cfg.enabled,
-		Mode:        forwardModeOff,
-		Generations: cfg.genURL != "",
-		OTLP:        cfg.otlpEndpoint != "",
-		Reason:      cfg.genReason,
-		OTLPReason:  cfg.otlpReason,
-		Failures:    l.recentFailures(),
+		Enabled:       cfg.enabled,
+		Mode:          forwardModeOff,
+		Generations:   cfg.genURL != "",
+		OTLP:          cfg.otlpEndpoint != "",
+		Hooks:         cfg.hookURL != "",
+		Reason:        cfg.genReason,
+		OTLPReason:    cfg.otlpReason,
+		HookReason:    cfg.hookReason,
+		Failures:      l.recentFailures(),
+		HookFailOpens: l.recentFailOpens(),
 	}
 	switch {
 	case !cfg.enabled:
@@ -298,8 +348,18 @@ func (l *forwardLoader) resolve() (forwardConfig, error) {
 // l.mu held.
 func (l *forwardLoader) unreadableConfig(err error) forwardConfig {
 	// Both os.Stat's and os.Open's errors already name the path.
-	cfg := forwardConfig{genReason: "config.env unreadable: " + err.Error()}
+	//
+	// The guard knobs hold their defaults rather than their zero values: an
+	// unreadable file is not an explicit "fail closed", and the hook leg is
+	// refused here anyway, so a tool call proceeds. The two telemetry legs fail
+	// closed, the enforcement leg effectively fails open.
+	cfg := forwardConfig{
+		failOpen:  true,
+		timeoutMs: envconfig.DefaultGuardsTimeoutMs,
+		genReason: "config.env unreadable: " + err.Error(),
+	}
 	cfg.otlpReason = cfg.genReason
+	cfg.hookReason = cfg.genReason
 	l.logDisabled(cfg.disabledReasons())
 	return cfg
 }
@@ -308,15 +368,19 @@ func (l *forwardLoader) unreadableConfig(err error) forwardConfig {
 // snapshot. It is the single resolution path: both the forward legs and the
 // viewer's status read it, so they cannot drift.
 func resolveForwardConfig(logger *log.Logger, get envReader) forwardConfig {
+	// Refusing every leg still resolves the guard policy to its defaults, so
+	// no caller can read a half-built config as an explicit "fail closed".
+	off := forwardConfig{failOpen: true, timeoutMs: envconfig.DefaultGuardsTimeoutMs}
 	if !boolFamily(logger, get, "LOCAL_FORWARD", false) {
-		return forwardConfig{}
+		return off
 	}
 
 	endpoint, _ := get.family("ENDPOINT")
 	tenant, _ := get.family("AUTH_TENANT_ID")
 	token, _ := get.family("AUTH_TOKEN")
 
-	cfg := forwardConfig{strip: contentModeFamily(logger, get) != agento11y.ContentCaptureModeFull}
+	cfg := off
+	cfg.strip = contentModeFamily(logger, get) != agento11y.ContentCaptureModeFull
 
 	if reason := forwardDisabledReason(endpoint, tenant, token); reason != "" {
 		cfg.genReason = reason
@@ -335,8 +399,71 @@ func resolveForwardConfig(logger *log.Logger, get envReader) forwardConfig {
 		cfg.otlpHeaders = otlpForwardHeaders(get, tenant)
 	}
 
-	cfg.enabled = cfg.genURL != "" || cfg.otlpEndpoint != ""
+	// The guard knobs are resolved through the same file-first reader as
+	// everything else here, not envconfig.ResolveGuards: that helper reads the
+	// process environment only, so a config.env edit would not reach the
+	// running daemon.
+	cfg.failOpen = boolFamily(logger, get, "GUARDS_FAIL_OPEN", true)
+	cfg.timeoutMs = intFamily(logger, get, "GUARDS_TIMEOUT_MS", envconfig.DefaultGuardsTimeoutMs)
+	if reason := hookForwardDisabledReason(boolFamily(logger, get, "GUARDS_ENABLED", false), endpoint, tenant, token); reason != "" {
+		cfg.hookReason = reason
+	} else if hookURL := hookEvaluateURL(endpoint); hookURL == "" {
+		cfg.hookReason = "hook endpoint: " + endpoint + " has no host"
+	} else {
+		cfg.hookURL = hookURL
+		cfg.hookHeaders = generationForwardHeaders(tenant, token)
+	}
+
+	cfg.enabled = cfg.genURL != "" || cfg.otlpEndpoint != "" || cfg.hookURL != ""
 	return cfg
+}
+
+// hookForwardDisabledReason reports why hook evaluation from a --local session
+// must not be relayed to Cloud, or "" when it may be.
+//
+// The hook leg is gated harder than the generation leg on purpose.
+// forwardDisabledReason accepts a local endpoint with empty or placeholder
+// credentials because posting telemetry to a second local daemon is a
+// legitimate setup; a hook chain to a local endpoint is not. It is either this
+// daemon (a recursion) or another always-allow stub, which would answer allow
+// while the user believes their Cloud rules ran.
+func hookForwardDisabledReason(guardsEnabled bool, endpoint, tenant, token string) string {
+	switch {
+	case !guardsEnabled:
+		return envconfig.PreferredKey("GUARDS_ENABLED") + " is off, so there are no guards to enforce"
+	case endpoint == "":
+		return envconfig.PreferredKey("ENDPOINT") + " is empty"
+	case envconfig.IsLocalEndpoint(endpoint):
+		return "endpoint " + endpoint + " is local, so there are no Cloud rules to consult"
+	case tenant == "" || token == "" || tenant == envconfig.LocalAuthPlaceholder || token == envconfig.LocalAuthPlaceholder:
+		return "Cloud credentials are missing or are the " + envconfig.LocalAuthPlaceholder + " placeholder"
+	default:
+		return ""
+	}
+}
+
+// HookForwardReason reports why `agento11y <agent> --local` would not relay
+// guard evaluation to Cloud for the given resolved settings, or "" when it
+// would. Exported so `agento11y doctor` reports the gate the daemon actually
+// applies instead of reconstructing it from the same inputs.
+func HookForwardReason(forwardEnabled, guardsEnabled bool, endpoint, tenant, token string) string {
+	if !forwardEnabled {
+		return envconfig.PreferredKey("LOCAL_FORWARD") + " is off, so local sessions never contact Cloud"
+	}
+	return hookForwardDisabledReason(guardsEnabled, strings.TrimSpace(endpoint), strings.TrimSpace(tenant), strings.TrimSpace(token))
+}
+
+// hookEvaluateURL builds the Cloud hook URL for an API endpoint: scheme and
+// host are kept, any path is dropped, and the hook path is appended. Mirrors
+// the SDK's baseURLFromAPIEndpoint (go/agento11y/rating.go), which is
+// unexported. Returns "" when the endpoint has no usable host, which the
+// caller reports as a refusal rather than POSTing to a relative URL.
+func hookEvaluateURL(endpoint string) string {
+	u, err := url.Parse(ensureEndpointScheme(endpoint))
+	if err != nil || strings.TrimSpace(u.Host) == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host + hookEvaluatePath
 }
 
 // generationForwardHeaders builds the auth headers the generation export
@@ -446,6 +573,20 @@ func boolFamily(logger *log.Logger, r envReader, suffix string, def bool) bool {
 	return envconfig.BoolValue(logger, key, raw, def)
 }
 
+// intFamily parses a branded integer setting out of an envReader. A
+// non-numeric, zero, or negative value is reported under the spelling it was
+// set with and falls back to def, as does a value that is not set at all.
+// Validation is envconfig.IntValue, shared with envconfig.ResolveGuards, so
+// the daemon and the cloud-only hook path agree on what an invalid value means.
+// The returned value is always positive when def is.
+func intFamily(logger *log.Logger, r envReader, suffix string, def int) int {
+	raw, key := r.family(suffix)
+	if key == "" {
+		key = envconfig.PreferredKey(suffix)
+	}
+	return envconfig.IntValue(logger, key, raw, def)
+}
+
 // contentModeFamily resolves the configured content capture mode out of an
 // envReader. This is the mode the forwarded copy is reduced to; the local store
 // always keeps full content.
@@ -510,8 +651,8 @@ func (l *forwardLoader) logDisabled(reason string) {
 }
 
 // recordFailuref appends a failed attempt to the ring the status endpoint
-// serves, keeping the most recent maxRecordedForwardFailures. It also logs,
-// which only reaches a user who enabled debug logging.
+// serves, keeping the most recent maxRecordedForwardFailures for that leg. It
+// also logs, which only reaches a user who enabled debug logging.
 func (l *forwardLoader) recordFailuref(label, format string, args ...any) {
 	detail := fmt.Sprintf(format, args...)
 	l.logger.Printf("local forward: %s: %s", label, detail)
@@ -523,22 +664,50 @@ func (l *forwardLoader) recordFailuref(label, format string, args ...any) {
 		Label:  label,
 		Detail: detail,
 	})
-	if len(l.failures) > maxRecordedForwardFailures {
-		l.failures = l.failures[len(l.failures)-maxRecordedForwardFailures:]
+	// Trim this leg only. The hook leg records once per tool call, so a
+	// global trim would silently drop the one entry another leg had.
+	// Iterating backwards makes the deletions safe: they only shift entries
+	// after i, and every index this loop still has to visit is before it.
+	kept := 0
+	for i, f := range slices.Backward(l.failures) {
+		if f.Label != label {
+			continue
+		}
+		kept++
+		if kept > maxRecordedForwardFailures {
+			l.failures = slices.Delete(l.failures, i, i+1)
+		}
 	}
+}
+
+// recordFailOpen counts a tool call that was allowed without a Cloud verdict.
+// Unlike the failure ring this counter is never cleared: a fail-open allow is
+// byte-identical to a Cloud allow in the response the agent acts on, so the
+// count is the only durable trace that the guard did not actually run.
+func (l *forwardLoader) recordFailOpen() {
+	l.failMu.Lock()
+	defer l.failMu.Unlock()
+	l.failOpens++
 }
 
 // recordSuccess clears the recorded failures for one leg, so
 // forwardStatus.Failures means "failing since that leg's last delivery" rather
-// than "failed at some point". Generations and OTLP fail independently: a
-// healthy metrics relay must not hide a generation export Cloud keeps
-// rejecting.
+// than "failed at some point". The legs fail independently: a healthy metrics
+// relay must not hide a generation export Cloud keeps rejecting.
 func (l *forwardLoader) recordSuccess(label string) {
 	l.failMu.Lock()
 	defer l.failMu.Unlock()
 	l.failures = slices.DeleteFunc(l.failures, func(f forwardFailure) bool {
 		return f.Label == label
 	})
+}
+
+// recentFailOpens returns how many tool calls have been allowed without a
+// Cloud verdict since the daemon started.
+func (l *forwardLoader) recentFailOpens() int {
+	l.failMu.Lock()
+	defer l.failMu.Unlock()
+	return l.failOpens
 }
 
 // recentFailures returns the recorded failures most recent first.

@@ -27,6 +27,7 @@ import (
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/updatecheck"
 )
 
@@ -63,6 +64,11 @@ var trackedSuffixes = []string{
 	"TAGS",
 	"AUTO_UPDATE",
 	"LOCAL_FORWARD",
+	// GUARDS_ENABLED is tracked for LocalHookForward only. Everything else
+	// reads the guard settings through envconfig.ResolveGuards, which is the
+	// hook process's view; the local daemon resolves this one config.env-first
+	// and that comparison needs both sources attributed.
+	"GUARDS_ENABLED",
 }
 
 // trackedKeys is the full key set SnapshotEnv records: both spellings of the
@@ -150,8 +156,26 @@ type ConfigSection struct {
 	// of the shell-first precedence reported here; a conflict is called out in
 	// Messages.
 	LocalForward envValue `json:"local_forward"`
-	Health       Health   `json:"status"`
-	Messages     []string `json:"messages,omitempty"`
+	// LocalHookForward is the combination users cannot infer from the two
+	// settings above: whether a `--local` session's guard checks are relayed to
+	// Cloud, which sends the content being evaluated whatever the capture mode
+	// says. See handleHookEvaluate in internal/local/server.go.
+	LocalHookForward HookForwardSection `json:"local_hook_forward"`
+	Health           Health             `json:"status"`
+	Messages         []string           `json:"messages,omitempty"`
+}
+
+// HookForwardSection is the resolved local-mode guard chaining posture. The
+// gate itself lives in the local package so the daemon and this report cannot
+// describe different rules.
+//
+// Its inputs are resolved config.env-first, unlike every other field here,
+// because this line describes what the daemon does and the daemon prefers
+// config.env over its own boot-time environment. When the two precedences
+// disagree about the answer, ConfigSection.Messages says so.
+type HookForwardSection struct {
+	Enabled bool   `json:"enabled"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // ConversationsSection reports the generation-export pipeline.
@@ -502,6 +526,23 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	forward := resolveFamily("LOCAL_FORWARD", osEnv, fileEnv)
 	sec.LocalForward = forward.envValue()
 
+	// Guard chaining needs the forwarding opt-in, guards, a Cloud endpoint,
+	// and real credentials. Each of those is reported separately above and in
+	// the conversations section; the combination is what decides whether tool
+	// calls from a --local session are sent to Cloud, so state it outright.
+	//
+	// The daemon owns this decision and resolves config.env ahead of its own
+	// environment, so the inputs are resolved that way here too. Reporting the
+	// shell-first answer would let doctor print "not forwarded" while the daemon
+	// relays every tool call.
+	hookReason := hookForwardReason(daemonFamily, osEnv, fileEnv)
+	sec.LocalHookForward = HookForwardSection{Enabled: hookReason == "", Reason: hookReason}
+	if shellReason := hookForwardReason(resolveFamily, osEnv, fileEnv); (shellReason == "") != (hookReason == "") {
+		sec.Health = HealthWarn
+		sec.Messages = append(sec.Messages,
+			"config.env and the environment disagree about local guard chaining; the line above reports the daemon's answer, which prefers config.env")
+	}
+
 	if len(sec.DisallowedKeys) > 0 {
 		sec.Health = HealthWarn
 		sec.Messages = append(sec.Messages,
@@ -530,6 +571,21 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 			"%s is set in the environment and in config.env; the local daemon uses the config.env value", forward.key))
 	}
 	return sec
+}
+
+// hookForwardReason resolves the local guard-chaining gate with the given
+// precedence, so the same inputs can be read the daemon's way (config.env
+// first) and the shell's way and compared.
+func hookForwardReason(resolve func(suffix string, osEnv, fileEnv map[string]string) resolved, osEnv, fileEnv map[string]string) string {
+	forward := resolve("LOCAL_FORWARD", osEnv, fileEnv)
+	guards := resolve("GUARDS_ENABLED", osEnv, fileEnv)
+	return local.HookForwardReason(
+		forward.set && envconfig.ParseBool(forward.value),
+		guards.set && envconfig.ParseBool(guards.value),
+		resolve("ENDPOINT", osEnv, fileEnv).value,
+		resolve("AUTH_TENANT_ID", osEnv, fileEnv).value,
+		resolve("AUTH_TOKEN", osEnv, fileEnv).value,
+	)
 }
 
 func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string) {
@@ -624,6 +680,26 @@ func resolveFamily(suffix string, osEnv, fileEnv map[string]string) resolved {
 	}
 	winner.conflict = other.set && other.value != winner.value
 	return winner
+}
+
+// daemonFamily resolves an alias family the way the local daemon does — file
+// preferred > file legacy > shell preferred > shell legacy — which is the
+// inverse of resolveFamily's source precedence. The daemon's own environment
+// was populated from config.env at boot, so preferring the file is what lets a
+// config.env edit reach a running daemon; anything describing daemon behavior
+// has to read it the same way.
+func daemonFamily(suffix string, osEnv, fileEnv map[string]string) resolved {
+	for _, env := range []struct {
+		values map[string]string
+		source string
+	}{{fileEnv, sourceConfig}, {osEnv, sourceEnv}} {
+		for _, key := range []string{envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix)} {
+			if v, ok := env.values[key]; ok && strings.TrimSpace(v) != "" {
+				return resolved{set: true, value: strings.TrimSpace(v), source: env.source, key: key}
+			}
+		}
+	}
+	return resolved{}
 }
 
 // tokenPrefix returns the non-sensitive scheme marker of a token (everything

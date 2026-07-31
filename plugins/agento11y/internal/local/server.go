@@ -1,6 +1,7 @@
 package local
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
@@ -95,7 +97,7 @@ func (s *Server) routes() *http.ServeMux {
 	// the path from API.Endpoint before appending /api/v1/hooks:evaluate,
 	// so we must accept the bare path too — otherwise local hook
 	// evaluation 404s.
-	mux.HandleFunc("POST /api/v1/hooks:evaluate", s.handleHookEvaluate)
+	mux.HandleFunc("POST "+hookEvaluatePath, s.handleHookEvaluate)
 	return mux
 }
 
@@ -274,14 +276,18 @@ func (s *Server) handleOTLP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// hookResponse is the allow-only payload returned to the SDK. It matches
-// the agento11y.HookEvaluateResponse JSON shape so the SDK decodes it
-// without complaint.
-type hookResponse struct {
-	Action      string `json:"action"`
-	Evaluations []any  `json:"evaluations"`
-}
-
+// handleHookEvaluate answers the synchronous guard check every host agent runs
+// before (or right after) a tool call. The local verdict is always allow —
+// there is no local guards engine yet — but when the daemon is configured to
+// forward and guards are on, the request is relayed to Cloud so `--local` still
+// enforces the rules the user configured there.
+//
+// Note what that means for content: a chained evaluation sends whatever the
+// agent asked to have checked — the tool call for a postflight check, the whole
+// outgoing conversation for a preflight one — to Cloud in full, whatever
+// CONTENT_CAPTURE_MODE says, because a guard cannot evaluate what it cannot
+// see. The viewer, the launcher banner, and `agento11y doctor` all report the
+// resolved posture for that reason.
 func (s *Server) handleHookEvaluate(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxHookBodyBytes+1))
 	if err != nil {
@@ -296,7 +302,47 @@ func (s *Server) handleHookEvaluate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, hookResponse{Action: "allow", Evaluations: []any{}})
+
+	resp := agento11y.HookEvaluateResponse{
+		Action:      agento11y.HookActionAllow,
+		Evaluations: []agento11y.HookEvaluation{},
+	}
+
+	// Never chain a payload another daemon relayed here, which would loop.
+	if !isForwardedRequest(r) {
+		if cfg := s.forward.load(); cfg.hookURL != "" {
+			s.chainHookEvaluate(r, cfg, body, &resp)
+		}
+	}
+	s.writeJSON(w, http.StatusOK, resp)
+}
+
+// chainHookEvaluate replaces the local verdict with Cloud's. A failed call
+// follows the resolved fail mode: fail-open keeps the local allow, fail-closed
+// denies with a response labelled as an evaluation failure so no consumer
+// reports it as a policy decision.
+func (s *Server) chainHookEvaluate(r *http.Request, cfg forwardConfig, body []byte, resp *agento11y.HookEvaluateResponse) {
+	timeout := hookTimeoutFromHeader(r, time.Duration(cfg.timeoutMs)*time.Millisecond)
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	cloud, err := s.forward.evaluateCloudHook(ctx, cfg, timeout, body)
+	switch {
+	case err == nil:
+		*resp = cloud
+	case isCallerAbort(err):
+		// The agent stopped waiting, so whatever this handler writes is not a
+		// verdict anything acted on. Leaving the counters alone here is the
+		// same call evaluateCloudHook makes for the failure ring: a count of
+		// abandoned waits would report unchecked allows that never happened.
+	case cfg.failOpen:
+		// The agent cannot tell this allow from a Cloud allow, so count it:
+		// the failure ring is cleared by the next success, and a guard that
+		// silently stopped enforcing would otherwise leave no trace.
+		s.forward.recordFailOpen()
+	default:
+		*resp = denyFromCloudError(body, err)
+	}
 }
 
 // configResponse is the GET /api/v1/config and PUT /api/v1/config payload:

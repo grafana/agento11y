@@ -33,10 +33,17 @@ import (
 // clearForwardEnv blanks every variable the forward loader reads so a test's
 // config.env file, not the ambient environment, decides the outcome. Without
 // this a developer with AGENTO11Y_LOCAL_FORWARD and real credentials exported
-// would have the suite POST to their live tenant.
+// would have the suite POST to their live tenant, and one with
+// AGENTO11Y_GUARDS_ENABLED=true would have the hook leg chain to it.
+//
+// PinAliasEnvBlank covers both spellings of every alias family, which includes
+// LOCAL_FORWARD and the three GUARDS_* keys the hook leg reads.
 func clearForwardEnv(t *testing.T) {
 	t.Helper()
 	envconfig.PinAliasEnvBlank(t)
+	for _, suffix := range []string{"LOCAL_FORWARD", "GUARDS_ENABLED", "GUARDS_FAIL_OPEN", "GUARDS_TIMEOUT_MS"} {
+		require.Contains(t, envconfig.AliasSuffixes, suffix, "clearForwardEnv relies on PinAliasEnvBlank covering %s", suffix)
+	}
 	// The loader also falls back to the bare OTLP variables, which are not part
 	// of an alias family.
 	for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_INSECURE"} {
@@ -55,6 +62,10 @@ func writeConfigEnvFile(t *testing.T, lines map[string]string) string {
 	return path
 }
 
+// guardsOffHookReason is the hook leg's refusal for every case that enables
+// forwarding without enabling guards, which is most of the table below.
+const guardsOffHookReason = "GUARDS_ENABLED is off"
+
 func TestForwardLoader_Resolve(t *testing.T) {
 	const cloud = "https://cloud.example.test/"
 	cases := []struct {
@@ -65,6 +76,8 @@ func TestForwardLoader_Resolve(t *testing.T) {
 		wantStatusMode   string
 		wantStatusReason bool
 		wantOTLP         bool
+		wantHookURL      string
+		wantHookReason   string // substring; "" means the reason must be empty
 	}{
 		{
 			// Credentials the generation export cannot use, but a usable OTLP
@@ -80,6 +93,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantStatusMode:   forwardModeMetadataOnly,
 			wantStatusReason: true,
 			wantOTLP:         true,
+			wantHookReason:   guardsOffHookReason,
 		},
 		{
 			name:           "disabled_when_toggle_unset",
@@ -93,6 +107,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantEnabled:    true,
 			wantStrip:      true,
 			wantStatusMode: forwardModeMetadataOnly,
+			wantHookReason: guardsOffHookReason,
 		},
 		{
 			name:           "enabled_full_does_not_strip",
@@ -100,6 +115,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantEnabled:    true,
 			wantStrip:      false,
 			wantStatusMode: forwardModeFull,
+			wantHookReason: guardsOffHookReason,
 		},
 		{
 			name:           "advanced_capture_mode_still_strips",
@@ -107,6 +123,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantEnabled:    true,
 			wantStrip:      true,
 			wantStatusMode: forwardModeMetadataOnly,
+			wantHookReason: guardsOffHookReason,
 		},
 		{
 			name:           "legacy_spellings_resolve",
@@ -114,6 +131,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantEnabled:    true,
 			wantStrip:      false,
 			wantStatusMode: forwardModeFull,
+			wantHookReason: guardsOffHookReason,
 		},
 		{
 			// Both spellings present: the preferred one decides, matching
@@ -128,6 +146,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantEnabled:    true,
 			wantStrip:      false,
 			wantStatusMode: forwardModeFull,
+			wantHookReason: guardsOffHookReason,
 		},
 		{
 			name:           "allows_local_endpoint",
@@ -135,6 +154,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantEnabled:    true,
 			wantStrip:      true,
 			wantStatusMode: forwardModeMetadataOnly,
+			wantHookReason: guardsOffHookReason,
 		},
 		{
 			name:           "allows_local_endpoint_with_placeholder_creds",
@@ -142,6 +162,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantEnabled:    true,
 			wantStrip:      true,
 			wantStatusMode: forwardModeMetadataOnly,
+			wantHookReason: guardsOffHookReason,
 		},
 		{
 			name:           "allows_local_endpoint_without_creds",
@@ -149,6 +170,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantEnabled:    true,
 			wantStrip:      true,
 			wantStatusMode: forwardModeMetadataOnly,
+			wantHookReason: guardsOffHookReason,
 		},
 		{
 			name:             "refuses_placeholder_creds",
@@ -156,6 +178,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantEnabled:      false,
 			wantStatusMode:   forwardModeOff,
 			wantStatusReason: true,
+			wantHookReason:   guardsOffHookReason,
 		},
 		{
 			name:             "refuses_empty_endpoint",
@@ -163,6 +186,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantEnabled:      false,
 			wantStatusMode:   forwardModeOff,
 			wantStatusReason: true,
+			wantHookReason:   guardsOffHookReason,
 		},
 		{
 			name:             "refuses_invalid_endpoint",
@@ -170,6 +194,84 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantEnabled:      false,
 			wantStatusMode:   forwardModeOff,
 			wantStatusReason: true,
+			wantHookReason:   guardsOffHookReason,
+		},
+		{
+			// The hook leg needs both toggles. Forwarding alone leaves guard
+			// evaluation local, which is what every existing case above
+			// asserts implicitly.
+			name: "hooks_refused_when_guards_off",
+			lines: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
+				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+			},
+			wantEnabled:    true,
+			wantStrip:      true,
+			wantStatusMode: forwardModeMetadataOnly,
+			wantHookReason: "GUARDS_ENABLED",
+		},
+		{
+			name: "hooks_chain_when_guards_on",
+			lines: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
+				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+				"AGENTO11Y_GUARDS_ENABLED": "true",
+			},
+			wantEnabled:    true,
+			wantStrip:      true,
+			wantStatusMode: forwardModeMetadataOnly,
+			wantHookURL:    "https://cloud.example.test/api/v1/hooks:evaluate",
+		},
+		{
+			// A local endpoint is a legitimate generation target but never a
+			// hook target: it is either this daemon or another always-allow
+			// stub.
+			name: "hooks_refused_for_local_endpoint",
+			lines: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": "http://127.0.0.1:8080",
+				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+				"AGENTO11Y_GUARDS_ENABLED": "true",
+			},
+			wantEnabled:    true,
+			wantStrip:      true,
+			wantStatusMode: forwardModeMetadataOnly,
+			wantHookReason: "is local",
+		},
+		{
+			name: "hooks_refused_without_credentials",
+			lines: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
+				"AGENTO11Y_AUTH_TENANT_ID": "t",
+				"AGENTO11Y_GUARDS_ENABLED": "true",
+			},
+			wantEnabled:      false,
+			wantStatusMode:   forwardModeOff,
+			wantStatusReason: true,
+			wantHookReason:   "Cloud credentials are missing",
+		},
+		{
+			name: "hooks_refused_for_placeholder_credentials",
+			lines: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
+				"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": envconfig.LocalAuthPlaceholder,
+				"AGENTO11Y_GUARDS_ENABLED": "true",
+			},
+			wantEnabled:      false,
+			wantStatusMode:   forwardModeOff,
+			wantStatusReason: true,
+			wantHookReason:   "placeholder",
+		},
+		{
+			name: "hooks_resolve_from_legacy_spellings",
+			lines: map[string]string{
+				"SIGIL_LOCAL_FORWARD": "true", "SIGIL_ENDPOINT": cloud,
+				"SIGIL_AUTH_TENANT_ID": "t", "SIGIL_AUTH_TOKEN": "k",
+				"SIGIL_GUARDS_ENABLED": "true",
+			},
+			wantEnabled:    true,
+			wantStrip:      true,
+			wantStatusMode: forwardModeMetadataOnly,
+			wantHookURL:    "https://cloud.example.test/api/v1/hooks:evaluate",
 		},
 	}
 	for _, tc := range cases {
@@ -182,11 +284,30 @@ func TestForwardLoader_Resolve(t *testing.T) {
 				assert.Equal(t, tc.wantStrip, cfg.strip)
 				assert.Equal(t, tc.wantOTLP, cfg.otlpEndpoint != "")
 			}
+			// The guard policy resolves to its documented defaults on every
+			// path, including the ones that refuse every leg, so no consumer
+			// can read a half-built config as an explicit "fail closed".
+			assert.Equal(t, envconfig.DefaultGuardsTimeoutMs, cfg.timeoutMs)
+			assert.True(t, cfg.failOpen)
+
+			assert.Equal(t, tc.wantHookURL, cfg.hookURL)
+			switch {
+			case tc.wantHookURL != "":
+				assert.Empty(t, cfg.hookReason, "a live hook leg has nothing to explain")
+			case tc.wantHookReason == "":
+				// Forwarding off at all is not a paused state, so the reason
+				// is empty there too, same as the generations leg.
+				assert.Empty(t, cfg.hookReason)
+			default:
+				assert.Contains(t, cfg.hookReason, tc.wantHookReason)
+			}
 			st := l.status()
 			assert.Equal(t, tc.wantEnabled, st.Enabled)
 			assert.Equal(t, tc.wantStatusMode, st.Mode)
 			assert.Equal(t, tc.wantOTLP, st.OTLP)
 			assert.Equal(t, cfg.genURL != "", st.Generations)
+			assert.Equal(t, tc.wantHookURL != "", st.Hooks)
+			assert.Equal(t, cfg.hookReason, st.HookReason)
 			if tc.wantStatusReason {
 				assert.NotEmpty(t, st.Reason)
 			} else {
@@ -225,6 +346,145 @@ func TestForwardLoader_ConfigFileBeatsProcessEnv(t *testing.T) {
 		"AGENTO11Y_AUTH_TOKEN":     "k",
 	})
 	assert.True(t, newForwardLoader(path, nil).load().enabled)
+}
+
+// TestHookEvaluateURL covers the URL join the hook leg uses: any path on the
+// configured API endpoint is dropped before the hook path is appended, and a
+// hostless endpoint yields "" so the caller refuses instead of POSTing to a
+// relative URL.
+func TestHookEvaluateURL(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "appends_path", in: "https://cloud.example.test", want: "https://cloud.example.test/api/v1/hooks:evaluate"},
+		{name: "drops_trailing_slash", in: "https://cloud.example.test/", want: "https://cloud.example.test/api/v1/hooks:evaluate"},
+		{name: "drops_existing_path", in: "https://cloud.example.test/api/v1/generations:export", want: "https://cloud.example.test/api/v1/hooks:evaluate"},
+		{name: "keeps_port", in: "https://cloud.example.test:8443/base", want: "https://cloud.example.test:8443/api/v1/hooks:evaluate"},
+		{name: "schemeless_gets_https", in: "cloud.example.test", want: "https://cloud.example.test/api/v1/hooks:evaluate"},
+		{name: "keeps_http_scheme", in: "http://cloud.example.test", want: "http://cloud.example.test/api/v1/hooks:evaluate"},
+		{name: "empty_endpoint", in: "", want: ""},
+		{name: "unparseable_endpoint", in: "http://%", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, hookEvaluateURL(tc.in))
+		})
+	}
+}
+
+// TestForwardLoader_GuardPolicyResolution covers the two guard knobs the
+// chained hook call applies. They go through the file-first envReader rather
+// than envconfig.ResolveGuards, so a config.env edit reaches a running daemon.
+func TestForwardLoader_GuardPolicyResolution(t *testing.T) {
+	const cloud = "https://cloud.example.test/"
+	base := map[string]string{
+		"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud,
+		"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+		"AGENTO11Y_GUARDS_ENABLED": "true",
+	}
+	cases := []struct {
+		name          string
+		extra         map[string]string
+		processEnv    map[string]string
+		wantFailOpen  bool
+		wantTimeoutMs int
+	}{
+		{
+			name:          "defaults",
+			wantFailOpen:  true,
+			wantTimeoutMs: envconfig.DefaultGuardsTimeoutMs,
+		},
+		{
+			name:          "explicit_values",
+			extra:         map[string]string{"AGENTO11Y_GUARDS_FAIL_OPEN": "false", "AGENTO11Y_GUARDS_TIMEOUT_MS": "9000"},
+			wantFailOpen:  false,
+			wantTimeoutMs: 9000,
+		},
+		{
+			name:          "legacy_spellings",
+			extra:         map[string]string{"SIGIL_GUARDS_FAIL_OPEN": "no", "SIGIL_GUARDS_TIMEOUT_MS": "2500"},
+			wantFailOpen:  false,
+			wantTimeoutMs: 2500,
+		},
+		{
+			name:          "invalid_timeout_falls_back",
+			extra:         map[string]string{"AGENTO11Y_GUARDS_TIMEOUT_MS": "soon"},
+			wantFailOpen:  true,
+			wantTimeoutMs: envconfig.DefaultGuardsTimeoutMs,
+		},
+		{
+			name:          "non_positive_timeout_falls_back",
+			extra:         map[string]string{"AGENTO11Y_GUARDS_TIMEOUT_MS": "-1"},
+			wantFailOpen:  true,
+			wantTimeoutMs: envconfig.DefaultGuardsTimeoutMs,
+		},
+		{
+			// The daemon's own environment holds the boot-time values, so the
+			// file has to win or a viewer edit would need a restart.
+			name:          "config_file_beats_process_env",
+			extra:         map[string]string{"AGENTO11Y_GUARDS_TIMEOUT_MS": "4000", "AGENTO11Y_GUARDS_FAIL_OPEN": "false"},
+			processEnv:    map[string]string{"AGENTO11Y_GUARDS_TIMEOUT_MS": "1000", "AGENTO11Y_GUARDS_FAIL_OPEN": "true"},
+			wantFailOpen:  false,
+			wantTimeoutMs: 4000,
+		},
+		{
+			name:          "process_env_used_when_file_is_silent",
+			processEnv:    map[string]string{"AGENTO11Y_GUARDS_TIMEOUT_MS": "1000", "AGENTO11Y_GUARDS_FAIL_OPEN": "false"},
+			wantFailOpen:  false,
+			wantTimeoutMs: 1000,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearForwardEnv(t)
+			for k, v := range tc.processEnv {
+				t.Setenv(k, v)
+			}
+			lines := map[string]string{}
+			maps.Copy(lines, base)
+			maps.Copy(lines, tc.extra)
+			cfg := newForwardLoader(writeConfigEnvFile(t, lines), nil).load()
+			require.NotEmpty(t, cfg.hookURL)
+			assert.Equal(t, tc.wantFailOpen, cfg.failOpen)
+			assert.Equal(t, tc.wantTimeoutMs, cfg.timeoutMs)
+		})
+	}
+}
+
+// TestHookForwardReason covers the gate `agento11y doctor` shares with the
+// daemon, so the report cannot describe a posture the daemon does not apply.
+func TestHookForwardReason(t *testing.T) {
+	const cloud = "https://cloud.example.test/"
+	cases := []struct {
+		name       string
+		forward    bool
+		guards     bool
+		endpoint   string
+		tenant     string
+		token      string
+		wantReason string // substring; "" means chaining is live
+	}{
+		{name: "live", forward: true, guards: true, endpoint: cloud, tenant: "t", token: "k"},
+		{name: "forward_off", guards: true, endpoint: cloud, tenant: "t", token: "k", wantReason: "LOCAL_FORWARD"},
+		{name: "guards_off", forward: true, endpoint: cloud, tenant: "t", token: "k", wantReason: "GUARDS_ENABLED"},
+		{name: "empty_endpoint", forward: true, guards: true, tenant: "t", token: "k", wantReason: "ENDPOINT"},
+		{name: "local_endpoint", forward: true, guards: true, endpoint: "http://localhost:8080", tenant: "t", token: "k", wantReason: "is local"},
+		{name: "missing_token", forward: true, guards: true, endpoint: cloud, tenant: "t", wantReason: "Cloud credentials"},
+		{name: "placeholder_tenant", forward: true, guards: true, endpoint: cloud, tenant: envconfig.LocalAuthPlaceholder, token: "k", wantReason: "placeholder"},
+		{name: "whitespace_token", forward: true, guards: true, endpoint: cloud, tenant: "t", token: "  ", wantReason: "Cloud credentials"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := HookForwardReason(tc.forward, tc.guards, tc.endpoint, tc.tenant, tc.token)
+			if tc.wantReason == "" {
+				assert.Empty(t, got)
+			} else {
+				assert.Contains(t, got, tc.wantReason)
+			}
+		})
+	}
 }
 
 func TestEnsureEndpointScheme(t *testing.T) {
@@ -730,6 +990,33 @@ func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 	assert.Empty(t, l.status().Failures)
 }
 
+// TestForwardLoader_FailureRingIsPerLeg covers the ring's capacity: the hook
+// leg records once per tool call, so a global cap would let a chatty leg evict
+// the one entry another leg had, which is the only report that leg gets.
+func TestForwardLoader_FailureRingIsPerLeg(t *testing.T) {
+	clearForwardEnv(t)
+	l := newForwardLoader(writeConfigEnvFile(t, nil), nil)
+
+	l.recordFailuref(forwardLabelGenerations, "generation export rejected")
+	l.recordFailuref(otlpForwardLabel("traces"), "traces rejected")
+	for i := range maxRecordedForwardFailures * 2 {
+		l.recordFailuref(forwardLabelHooks, "hook call %d failed", i)
+	}
+
+	byLabel := map[string]int{}
+	for _, f := range l.status().Failures {
+		byLabel[f.Label]++
+	}
+	assert.Equal(t, map[string]int{
+		forwardLabelGenerations:    1,
+		otlpForwardLabel("traces"): 1,
+		forwardLabelHooks:          maxRecordedForwardFailures,
+	}, byLabel)
+
+	// Within a leg the cap keeps the most recent attempts.
+	assert.Contains(t, l.status().Failures[0].Detail, "hook call 9 failed")
+}
+
 // TestForwardLoader_StatusReportsUnreadableConfig covers the fail-closed
 // branch: an unreadable config.env disables forwarding and says why, rather
 // than falling back to the daemon's boot-time environment.
@@ -781,6 +1068,13 @@ func assertForwardRefusedAsUnreadable(t *testing.T, path string) *forwardLoader 
 	assert.False(t, st.Enabled)
 	assert.Equal(t, forwardModeOff, st.Mode)
 	assert.Contains(t, st.Reason, "config.env unreadable")
+	assert.Contains(t, st.HookReason, "config.env unreadable")
+	// The guard knobs keep their documented defaults. An unreadable file is
+	// not an explicit "fail closed", and reading it as one would be the
+	// opposite of what a user who never set the key asked for.
+	cfg := l.load()
+	assert.True(t, cfg.failOpen)
+	assert.Equal(t, envconfig.DefaultGuardsTimeoutMs, cfg.timeoutMs)
 	return l
 }
 

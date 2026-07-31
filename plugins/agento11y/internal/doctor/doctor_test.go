@@ -4,11 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
+
+// mergeEnv returns the union of the given env maps, later entries winning.
+func mergeEnv(envs ...map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, env := range envs {
+		maps.Copy(out, env)
+	}
+	return out
+}
 
 // isolateEnv points the dotenv/state roots at a fresh tempdir and clears the
 // tracked env vars so a test never reads the developer's real config.
@@ -695,6 +706,157 @@ func TestCollectConfig_LocalForward(t *testing.T) {
 			}
 			if !strings.Contains(joined, tc.wantMsg) {
 				t.Fatalf("messages %v missing %q", sec.Messages, tc.wantMsg)
+			}
+		})
+	}
+}
+
+// TestCollectConfig_LocalHookForward covers the derived line: whether a
+// --local session's guard checks reach Cloud. It is the combination of four
+// separately reported settings, and it is the one that decides whether tool
+// calls leave the machine under a reduced capture mode.
+func TestCollectConfig_LocalHookForward(t *testing.T) {
+	const cloud = "https://cloud.example.test"
+	// The table below builds osEnv by hand, so it cannot catch a family
+	// missing from the snapshot the binary actually passes in. Without this,
+	// a shell-exported guard toggle is invisible to doctor while the daemon
+	// acts on it.
+	for _, suffix := range []string{"LOCAL_FORWARD", "GUARDS_ENABLED", "ENDPOINT", "AUTH_TENANT_ID", "AUTH_TOKEN"} {
+		if !slices.Contains(trackedSuffixes, suffix) {
+			t.Fatalf("%s must be in trackedSuffixes or SnapshotEnv drops it and this report reads it as unset", suffix)
+		}
+	}
+	cloudCreds := map[string]string{
+		"AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+	}
+	tests := []struct {
+		name        string
+		env         map[string]string // shell
+		fileEnv     map[string]string // config.env
+		wantEnabled bool
+		wantReason  string // substring
+		wantMessage string // substring of a ConfigSection message; "" means none
+	}{
+		{
+			name: "forward and guards on with credentials",
+			env: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_GUARDS_ENABLED": "true",
+				"AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+			},
+			wantEnabled: true,
+		},
+		{
+			name: "forwarding off",
+			env: map[string]string{
+				"AGENTO11Y_GUARDS_ENABLED": "true",
+				"AGENTO11Y_ENDPOINT":       cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+			},
+			wantReason: "LOCAL_FORWARD",
+		},
+		{
+			name: "guards off",
+			env: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true",
+				"AGENTO11Y_ENDPOINT":      cloud, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+			},
+			wantReason: "GUARDS_ENABLED",
+		},
+		{
+			name: "local endpoint",
+			env: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_GUARDS_ENABLED": "true",
+				"AGENTO11Y_ENDPOINT": "http://127.0.0.1:8765", "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
+			},
+			wantReason: "is local",
+		},
+		{
+			name: "placeholder credentials",
+			env: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_GUARDS_ENABLED": "true",
+				"AGENTO11Y_ENDPOINT": cloud, "AGENTO11Y_AUTH_TENANT_ID": "local", "AGENTO11Y_AUTH_TOKEN": "local",
+			},
+			wantReason: "placeholder",
+		},
+		{
+			name: "missing credentials",
+			env: map[string]string{
+				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_GUARDS_ENABLED": "true",
+				"AGENTO11Y_ENDPOINT": cloud,
+			},
+			wantReason: "Cloud credentials",
+		},
+		{
+			// The daemon prefers config.env over its own environment, so a
+			// config.env that turns guards on is what it acts on. Reporting
+			// the shell's answer here would print "not forwarded" while every
+			// tool call is being sent to Cloud.
+			name:        "config.env enables what the shell disables",
+			env:         mergeEnv(cloudCreds, map[string]string{"AGENTO11Y_GUARDS_ENABLED": "false"}),
+			fileEnv:     map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_GUARDS_ENABLED": "true"},
+			wantEnabled: true,
+			wantMessage: "disagree about local guard chaining",
+		},
+		{
+			name:        "config.env disables what the shell enables",
+			env:         mergeEnv(cloudCreds, map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_GUARDS_ENABLED": "true"}),
+			fileEnv:     map[string]string{"AGENTO11Y_GUARDS_ENABLED": "false"},
+			wantReason:  "GUARDS_ENABLED",
+			wantMessage: "disagree about local guard chaining",
+		},
+		{
+			// Agreeing sources must not produce the warning.
+			name:        "both sources agree",
+			env:         mergeEnv(cloudCreds, map[string]string{"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_GUARDS_ENABLED": "true"}),
+			fileEnv:     map[string]string{"AGENTO11Y_GUARDS_ENABLED": "true"},
+			wantEnabled: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnv(t)
+			// ResolveGuards reads the process environment directly, so the
+			// guard toggle has to be exported as well as passed in.
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+
+			sec := collectConfig(tc.env, tc.fileEnv)
+			if tc.wantMessage == "" {
+				for _, m := range sec.Messages {
+					if strings.Contains(m, "disagree about local guard chaining") {
+						t.Fatalf("unexpected precedence warning: %q", m)
+					}
+				}
+			} else if !slices.ContainsFunc(sec.Messages, func(m string) bool { return strings.Contains(m, tc.wantMessage) }) {
+				t.Fatalf("messages = %q, want one containing %q", sec.Messages, tc.wantMessage)
+			}
+			if sec.LocalHookForward.Enabled != tc.wantEnabled {
+				t.Fatalf("LocalHookForward.Enabled = %v, want %v (reason %q)", sec.LocalHookForward.Enabled, tc.wantEnabled, sec.LocalHookForward.Reason)
+			}
+			if tc.wantReason == "" {
+				if sec.LocalHookForward.Reason != "" {
+					t.Fatalf("Reason = %q, want empty", sec.LocalHookForward.Reason)
+				}
+			} else if !strings.Contains(sec.LocalHookForward.Reason, tc.wantReason) {
+				t.Fatalf("Reason = %q, want substring %q", sec.LocalHookForward.Reason, tc.wantReason)
+			}
+
+			// The rendered report must state the Cloud reach only when it is
+			// real, and must give the reason otherwise.
+			var buf bytes.Buffer
+			renderHuman(&buf, &Report{Config: sec}, false, false)
+			rendered := buf.String()
+			if tc.wantEnabled {
+				if !strings.Contains(rendered, "local hook evaluation reaches Cloud") {
+					t.Fatalf("rendered report missing the Cloud reach line:\n%s", rendered)
+				}
+				return
+			}
+			if strings.Contains(rendered, "local hook evaluation reaches Cloud") {
+				t.Fatalf("rendered report claims Cloud reach when the leg is off:\n%s", rendered)
+			}
+			if sec.LocalForward.Set && !strings.Contains(rendered, tc.wantReason) {
+				t.Fatalf("rendered report missing reason %q:\n%s", tc.wantReason, rendered)
 			}
 		})
 	}
