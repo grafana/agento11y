@@ -208,6 +208,110 @@ func (c *Client) UpdateTrial(ctx context.Context, experimentID, trialID string, 
 	return &out, nil
 }
 
+// TriggerTrialEvaluation queues a stored tenant evaluator against the
+// conversation bound to a trial. The trial must exist, belong to a running
+// external experiment, and already have a conversation.
+//
+// A queued or claimed evaluation comes back with a non-terminal status; poll
+// GetTrialEvaluation until Status.Terminal() is true. The evaluation is keyed by
+// trial, conversation, evaluator, and resolved evaluator version, so triggering
+// the same combination returns the existing evaluation instead of running it
+// twice, and requeues it once it has failed.
+func (c *Client) TriggerTrialEvaluation(ctx context.Context, experimentID, trialID string, req TriggerTrialEvaluationRequest) (*TrialEvaluation, error) {
+	if c == nil {
+		return nil, ErrNilClient
+	}
+	normalizedRunID := strings.TrimSpace(experimentID)
+	if normalizedRunID == "" {
+		return nil, fmt.Errorf("%w: experiment_id is required for trial evaluation", ErrExperimentValidationFailed)
+	}
+	normalizedTrialID := strings.TrimSpace(trialID)
+	if normalizedTrialID == "" {
+		return nil, fmt.Errorf("%w: trial_id is required", ErrExperimentValidationFailed)
+	}
+	req.EvaluatorID = strings.TrimSpace(req.EvaluatorID)
+	if req.EvaluatorID == "" {
+		return nil, fmt.Errorf("%w: evaluator_id is required", ErrExperimentValidationFailed)
+	}
+	req.EvaluatorVersion = strings.TrimSpace(req.EvaluatorVersion)
+	args := c.evalArgs()
+	base, err := baseURLFromAPIEndpoint(args.endpoint, args.insecure)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrExperimentTransportFailed, err)
+	}
+	endpoint := strings.TrimRight(base, "/") + experimentRunsPrefix + "/" + url.PathEscape(normalizedRunID) +
+		"/trials/" + escapeTrialPathSegment(normalizedTrialID) + ":evaluate"
+	var out TrialEvaluation
+	if err := c.requestEvalJSON(ctx, http.MethodPost, endpoint, args.headers, req, &out, ErrExperimentTransportFailed, "trial evaluation trigger"); err != nil {
+		return nil, err
+	}
+	if err := validateTrialEvaluation(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetTrialEvaluation reads durable status for a triggered trial evaluation.
+func (c *Client) GetTrialEvaluation(ctx context.Context, experimentID, trialID, evaluationID string) (*TrialEvaluation, error) {
+	if c == nil {
+		return nil, ErrNilClient
+	}
+	normalizedRunID := strings.TrimSpace(experimentID)
+	if normalizedRunID == "" {
+		return nil, fmt.Errorf("%w: experiment_id is required for trial evaluation", ErrExperimentValidationFailed)
+	}
+	normalizedTrialID := strings.TrimSpace(trialID)
+	if normalizedTrialID == "" {
+		return nil, fmt.Errorf("%w: trial_id is required", ErrExperimentValidationFailed)
+	}
+	normalizedEvaluationID := strings.TrimSpace(evaluationID)
+	if normalizedEvaluationID == "" {
+		return nil, fmt.Errorf("%w: evaluation_id is required", ErrExperimentValidationFailed)
+	}
+	args := c.evalArgs()
+	base, err := baseURLFromAPIEndpoint(args.endpoint, args.insecure)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrExperimentTransportFailed, err)
+	}
+	endpoint := strings.TrimRight(base, "/") + experimentRunsPrefix + "/" + url.PathEscape(normalizedRunID) +
+		"/trials/" + escapeTrialPathSegment(normalizedTrialID) +
+		"/evaluations/" + url.PathEscape(normalizedEvaluationID)
+	var out TrialEvaluation
+	if err := c.requestEvalJSON(ctx, http.MethodGet, endpoint, args.headers, nil, &out, ErrExperimentTransportFailed, "trial evaluation status"); err != nil {
+		return nil, err
+	}
+	if err := validateTrialEvaluation(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// escapeTrialPathSegment escapes a trial id for the trial evaluation routes.
+// url.PathEscape leaves ":" alone, and the ingest router reads the ":evaluate"
+// verb off the raw path segment before it decodes the id, so an unescaped colon
+// in a trial id would change which route the request reaches.
+func escapeTrialPathSegment(value string) string {
+	return strings.ReplaceAll(url.PathEscape(value), ":", "%3A")
+}
+
+// validateTrialEvaluation rejects a response the SDK cannot act on. Status is a
+// named string type, so an unrecognized terminal state would otherwise read as
+// non-terminal and poll until the caller's deadline. A missing evaluation ID
+// would turn the next status read into a validation error that blames the
+// caller's arguments.
+func validateTrialEvaluation(out *TrialEvaluation) error {
+	switch out.Status {
+	case TrialEvaluationStatusQueued, TrialEvaluationStatusClaimed,
+		TrialEvaluationStatusSuccess, TrialEvaluationStatusFailed:
+	default:
+		return fmt.Errorf("%w: unsupported evaluation status %q", ErrExperimentTransportFailed, string(out.Status))
+	}
+	if strings.TrimSpace(out.EvaluationID) == "" {
+		return fmt.Errorf("%w: evaluation response carries no evaluation_id", ErrExperimentTransportFailed)
+	}
+	return nil
+}
+
 func (c *Client) UploadTrialArtifact(ctx context.Context, experimentID, trialID string, artifact TrialArtifactUpload) (*TrialArtifact, error) {
 	if c == nil {
 		return nil, ErrNilClient

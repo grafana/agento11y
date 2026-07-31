@@ -35,6 +35,17 @@ const (
 	TrialStatusSkipped   = agento11y.TrialStatusSkipped
 )
 
+type TrialEvaluation = agento11y.TrialEvaluation
+type TrialEvaluationStatus = agento11y.TrialEvaluationStatus
+type TriggerTrialEvaluationRequest = agento11y.TriggerTrialEvaluationRequest
+
+const (
+	TrialEvaluationStatusQueued  = agento11y.TrialEvaluationStatusQueued
+	TrialEvaluationStatusClaimed = agento11y.TrialEvaluationStatusClaimed
+	TrialEvaluationStatusSuccess = agento11y.TrialEvaluationStatusSuccess
+	TrialEvaluationStatusFailed  = agento11y.TrialEvaluationStatusFailed
+)
+
 type EvaluatorKind = agento11y.EvaluatorKind
 
 const (

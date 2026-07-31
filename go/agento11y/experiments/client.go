@@ -146,6 +146,26 @@ func (c *Client) UpdateTrial(ctx context.Context, experimentID, trialID string, 
 	return c.core.UpdateTrial(ctx, experimentID, trialID, req)
 }
 
+// TriggerTrialEvaluation queues a stored tenant evaluator for the conversation
+// bound to a trial. The returned evaluation is usually still queued; read
+// GetTrialEvaluation until Status.Terminal() is true, or use Trial.Evaluate to
+// wait. The evaluator ID and version are sent as given, like every other
+// resource identifier in this package.
+func (c *Client) TriggerTrialEvaluation(ctx context.Context, experimentID, trialID string, req TriggerTrialEvaluationRequest) (*TrialEvaluation, error) {
+	if c == nil || c.core == nil {
+		return nil, agento11y.ErrNilClient
+	}
+	return c.core.TriggerTrialEvaluation(ctx, experimentID, trialID, req)
+}
+
+// GetTrialEvaluation reads durable status for a triggered trial evaluation.
+func (c *Client) GetTrialEvaluation(ctx context.Context, experimentID, trialID, evaluationID string) (*TrialEvaluation, error) {
+	if c == nil || c.core == nil {
+		return nil, agento11y.ErrNilClient
+	}
+	return c.core.GetTrialEvaluation(ctx, experimentID, trialID, evaluationID)
+}
+
 func (c *Client) ExportScores(ctx context.Context, scores []ScoreItem) (*agento11y.ExportScoresResponse, error) {
 	if c == nil || c.core == nil {
 		return nil, agento11y.ErrNilClient
