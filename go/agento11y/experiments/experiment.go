@@ -50,12 +50,13 @@ type Experiment struct {
 	autoFinalize     bool
 	useOTel          bool
 
-	mu        sync.Mutex
-	status    ExperimentStatus
-	accepted  int
-	finalized bool
-	open      map[string]*Trial
-	claimed   map[string]struct{}
+	mu             sync.Mutex
+	status         ExperimentStatus
+	accepted       int
+	cloudEvaluated bool
+	finalized      bool
+	open           map[string]*Trial
+	claimed        map[string]struct{}
 }
 
 func NewExperiment(client *Client, opts ExperimentOptions) (*Experiment, error) {
@@ -306,7 +307,14 @@ func withTrial(ctx context.Context, trial *Trial, fn func(context.Context, *Tria
 }
 
 type FinalizeOptions struct {
-	Error      string
+	Error string
+	// ScoreCount asserts how many scores the run stored. Leave it unset unless a
+	// distributed runner knows the total: Agent Observability checks it against
+	// every score stored for the run, including ones a stored evaluator wrote
+	// through Trial.Evaluate, so a locally derived count in a cloud-evaluated run
+	// fails with agento11y.ErrExperimentConflict. Finalize drops the count when a
+	// trial of this Experiment used Trial.Evaluate in this process; a runner that
+	// evaluates in another process has to leave it unset itself.
 	ScoreCount *int
 }
 
@@ -335,6 +343,12 @@ func (e *Experiment) Finalize(ctx context.Context, status ExperimentStatus, opti
 		if err := trial.Close(ctx, nil); err != nil {
 			closeErrors = append(closeErrors, err)
 		}
+	}
+	e.mu.Lock()
+	cloudEvaluated := e.cloudEvaluated
+	e.mu.Unlock()
+	if cloudEvaluated {
+		opts.ScoreCount = nil
 	}
 	if len(closeErrors) > 0 {
 		status = ExperimentStatusFailed
@@ -401,6 +415,17 @@ func (e *Experiment) recordAccepted(count int) {
 	e.mu.Unlock()
 }
 
+// markCloudEvaluated records that a stored evaluator was queued for one of this
+// experiment's trials, so Finalize stops asserting a caller-supplied score count.
+func (e *Experiment) markCloudEvaluated() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.cloudEvaluated = true
+	e.mu.Unlock()
+}
+
 type Trial struct {
 	client     *Client
 	experiment *Experiment
@@ -431,6 +456,7 @@ type Trial struct {
 	buffer             []ScoreItem
 	accepted           int
 	hasFinal           bool
+	cloudEvaluated     bool
 	finalPassed        *bool
 	occurrences        map[string]int
 	artifacts          []ExperimentArtifactRef
@@ -545,6 +571,10 @@ func (t *Trial) Close(ctx context.Context, callbackErr error) error {
 		t.Status, t.Error = TrialStatusErrored, callbackErr.Error()
 	} else if t.Status == TrialStatusRunning {
 		switch {
+		case !t.hasFinal && t.cloudEvaluated:
+			// A stored evaluator graded this trial; the verdict and the score count
+			// come from the backend, not from a local final score.
+			t.Status = TrialStatusCompleted
 		case !t.hasFinal:
 			t.Status, t.Error = TrialStatusFailed, "trial closed without a final score"
 		case t.finalPassed == nil:
@@ -849,6 +879,199 @@ func (t *Trial) RecordEvaluation(ctx context.Context, result EvaluationResult, o
 	}, scoreID)
 }
 
+const (
+	defaultEvaluationTimeout      = 300 * time.Second
+	defaultEvaluationPollInterval = 500 * time.Millisecond
+	// Ceiling for the Evaluate poll backoff, so a long wait does not keep reading
+	// status at the floor rate.
+	maxEvaluationPollInterval = 5 * time.Second
+)
+
+// EvaluateOptions configures Trial.Evaluate. A zero Timeout or PollInterval
+// uses the default; a negative one is rejected.
+type EvaluateOptions struct {
+	// EvaluatorVersion pins a stored evaluator version. Empty lets Agent
+	// Observability pin the latest active version.
+	EvaluatorVersion string
+	// Timeout bounds the wait for a terminal status. Defaults to 300s.
+	Timeout time.Duration
+	// PollInterval is the first delay between status reads, doubling up to 5s.
+	// Defaults to 500ms.
+	PollInterval time.Duration
+}
+
+func (o EvaluateOptions) resolve() (timeout, pollInterval time.Duration, err error) {
+	if o.Timeout < 0 {
+		return 0, 0, fmt.Errorf("%w: evaluation timeout must not be negative", agento11y.ErrExperimentValidationFailed)
+	}
+	if o.PollInterval < 0 {
+		return 0, 0, fmt.Errorf("%w: evaluation poll interval must not be negative", agento11y.ErrExperimentValidationFailed)
+	}
+	timeout, pollInterval = o.Timeout, o.PollInterval
+	if timeout == 0 {
+		timeout = defaultEvaluationTimeout
+	}
+	if pollInterval == 0 {
+		pollInterval = defaultEvaluationPollInterval
+	}
+	return timeout, pollInterval, nil
+}
+
+// Evaluate runs a stored evaluator against this trial's bound conversation.
+//
+// It grades the conversation Agent Observability already stored, using an
+// evaluator defined in your tenant. For an in-process judge, see EvaluateOutput.
+//
+// The current conversation binding is persisted and the anchor generation from
+// RecordIO is exported before the evaluation is queued, so the evaluator can
+// read the conversation it is asked to grade. A successful evaluation lets the
+// trial close as completed without a local FinalScore. Queuing one also makes
+// Experiment.Finalize drop a caller-supplied ScoreCount, since the evaluator
+// writes a score this process never sees.
+//
+// Options.Timeout and ctx both bound the wait. The timeout bounds the polling
+// loop, not the whole call: a status request already in flight spends its own
+// retry budget first. Worker failure returns *agento11y.TrialEvaluationFailedError
+// and an exceeded deadline returns *agento11y.TrialEvaluationTimeoutError, both
+// carrying the evaluation ID. A cancelled context returns ctx.Err(). A transport
+// error while polling propagates and abandons the wait; the evaluation keeps
+// running server-side, and triggering it again returns the same row.
+//
+// Only a trial created by Experiment.Trial or Experiment.WithTrial can mark its
+// experiment, so a caller who built this trial with NewTrial must leave
+// FinalizeOptions.ScoreCount unset when finalizing the run itself.
+func (t *Trial) Evaluate(ctx context.Context, evaluatorID string, options ...EvaluateOptions) (*TrialEvaluation, error) {
+	if t == nil || t.client == nil {
+		return nil, agento11y.ErrNilClient
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	opts := EvaluateOptions{}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	evaluatorID = strings.TrimSpace(evaluatorID)
+	if evaluatorID == "" {
+		return nil, fmt.Errorf("%w: evaluator_id is required", agento11y.ErrExperimentValidationFailed)
+	}
+	timeout, pollInterval, err := opts.resolve()
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	conversationID := t.ConversationID
+	t.mu.Unlock()
+	if conversationID == "" {
+		return nil, fmt.Errorf("%w: bind a conversation before evaluating a trial", agento11y.ErrExperimentValidationFailed)
+	}
+
+	if err := t.create(ctx); err != nil {
+		return nil, evaluationRequestError(ctx, err)
+	}
+	// BindConversation and RecordIO are local until now, and the backend rejects
+	// an evaluation for a trial with no stored conversation.
+	if _, err := t.client.UpdateTrial(ctx, t.Ref.ExperimentID, t.TrialID, agento11y.UpdateTrialRequest{
+		ConversationID: conversationID,
+	}); err != nil {
+		return nil, evaluationRequestError(ctx, err)
+	}
+	// The evaluator reads the stored conversation, so the anchor generation has to
+	// exist before the wait starts, not when the trial closes.
+	if err := t.ensureGeneration(ctx); err != nil {
+		return nil, evaluationRequestError(ctx, err)
+	}
+	if err := t.client.Flush(ctx); err != nil {
+		return nil, evaluationRequestError(ctx, err)
+	}
+
+	deadline := time.Now().Add(timeout)
+	evaluation, err := t.client.TriggerTrialEvaluation(ctx, t.Ref.ExperimentID, t.TrialID, agento11y.TriggerTrialEvaluationRequest{
+		EvaluatorID: evaluatorID, EvaluatorVersion: opts.EvaluatorVersion,
+	})
+	if err != nil {
+		return nil, evaluationRequestError(ctx, err)
+	}
+	// The evaluation row exists from here on, and the score it writes counts toward
+	// the experiment's stored total whether or not this wait sees it finish.
+	t.experiment.markCloudEvaluated()
+	// Back off so a long wait costs tens of status reads, not hundreds. A caller
+	// who asked for a slower cadence than the cap keeps it.
+	interval := pollInterval
+	maxInterval := max(pollInterval, maxEvaluationPollInterval)
+	for {
+		switch evaluation.Status {
+		case agento11y.TrialEvaluationStatusSuccess:
+			// The trial's terminal state stays with Close: a cloud score is not a
+			// local verdict, and setting Status here would swallow an error the
+			// trial callback returns afterwards.
+			t.mu.Lock()
+			t.cloudEvaluated = true
+			t.mu.Unlock()
+			return evaluation, nil
+		case agento11y.TrialEvaluationStatusFailed:
+			return nil, &agento11y.TrialEvaluationFailedError{
+				EvaluationID: evaluation.EvaluationID, Detail: evaluation.Error,
+			}
+		case agento11y.TrialEvaluationStatusQueued, agento11y.TrialEvaluationStatusClaimed:
+		default:
+			// Unreachable: Client.TriggerTrialEvaluation and Client.GetTrialEvaluation
+			// reject a status the SDK does not know.
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, evaluationTimeoutError(evaluation.EvaluationID, timeout)
+		}
+		if err := sleepContext(ctx, min(interval, remaining)); err != nil {
+			return nil, err
+		}
+		interval = min(interval*2, maxInterval)
+		// Every sleep is followed by a status read, including the one clamped to the
+		// remaining budget, so an evaluation that finishes in the last window is not
+		// reported as a timeout.
+		evaluation, err = t.client.GetTrialEvaluation(ctx, t.Ref.ExperimentID, t.TrialID, evaluation.EvaluationID)
+		if err != nil {
+			return nil, evaluationRequestError(ctx, err)
+		}
+	}
+}
+
+// evaluationRequestError keeps cancellation a single error shape. The eval
+// transport reports a cancelled request as agento11y.ErrExperimentTransportFailed
+// with the context error only in its message, so errors.Is(err, context.Canceled)
+// would not hold for a caller who cancelled the wait.
+func evaluationRequestError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
+}
+
+func evaluationTimeoutError(evaluationID string, timeout time.Duration) error {
+	return &agento11y.TrialEvaluationTimeoutError{
+		EvaluationID: evaluationID,
+		Detail:       fmt.Sprintf("waited %s", timeout),
+	}
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	ctx = contextOrBackground(ctx)
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// EvaluateOutput grades the trial's output with an in-process evaluator and
+// records the result as a local score. For an evaluator stored in your tenant,
+// see Evaluate.
 func (t *Trial) EvaluateOutput(ctx context.Context, evaluator OutputEvaluator, input EvaluationInput, options ...RecordEvaluationOptions) (ScoreItem, error) {
 	if evaluator == nil {
 		return ScoreItem{}, errors.New("output evaluator is required")

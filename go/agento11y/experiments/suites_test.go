@@ -3,6 +3,7 @@ package experiments
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -190,6 +191,30 @@ func TestResolveVersionAliasesAndDraftConflict(t *testing.T) {
 	}
 	if err := validateDraftOptions(suiteVersions(suite)[2], "new", false); ClassifyConflict(err) != ConflictOpenDraft {
 		t.Fatalf("unexpected conflict: %v (%s)", err, ClassifyConflict(err))
+	}
+}
+
+func TestClassifyConflictKinds(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want ConflictKind
+	}{
+		{
+			name: "pending evaluations",
+			text: "status 409: cannot complete experiment with 2 pending evaluation(s)",
+			want: ConflictPendingEvaluations,
+		},
+		{name: "running trials", text: "status 409: experiment has 1 running trial", want: ConflictRunningTrials},
+		{name: "terminal state", text: "status 409: experiment already finalized", want: ConflictTerminalState},
+		{name: "unrelated", text: "status 409: something else", want: ConflictUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClassifyConflict(errors.New(tc.text)); got != tc.want {
+				t.Fatalf("ClassifyConflict(%q) = %s, want %s", tc.text, got, tc.want)
+			}
+		})
 	}
 }
 

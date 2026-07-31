@@ -24,6 +24,7 @@ A/B testing is just two runs with different experiment ids or tags over the same
 | Framework-free | Python + core `agento11y` | [`python/`](python/) |
 | Framework-free | Go + `agento11y/go` | [`go/`](go/) |
 | Prompt optimizer | Go + `agento11y/go/experiments` | [`go/prompt-optimization/`](go/prompt-optimization/) |
+| Stored evaluator | Go + `agento11y/go/experiments` | [`go/cloud-evaluator/`](go/cloud-evaluator/) |
 
 For credentials, see the [credentials section in the repo README](../../README.md#grafana-cloud-credentials).
 Each example's own README covers the run command and the canned-vs-real-model

@@ -52,6 +52,14 @@ var (
 	ErrExperimentConflict = errors.New("agento11y: experiment conflict")
 	// ErrExperimentTransportFailed wraps experiment lifecycle transport failures.
 	ErrExperimentTransportFailed = errors.New("agento11y: experiment transport failed")
+	// ErrTrialEvaluationFailed is returned when a stored evaluator finishes a
+	// trial evaluation unsuccessfully. Use errors.As with
+	// *TrialEvaluationFailedError to read the evaluation ID.
+	ErrTrialEvaluationFailed = errors.New("agento11y: trial evaluation failed")
+	// ErrTrialEvaluationTimeout is returned when waiting for a trial evaluation
+	// exceeds the caller's deadline. Use errors.As with
+	// *TrialEvaluationTimeoutError to read the evaluation ID.
+	ErrTrialEvaluationTimeout = errors.New("agento11y: trial evaluation timed out")
 	// ErrScoreValidationFailed wraps score export validation failures.
 	ErrScoreValidationFailed = errors.New("agento11y: score validation failed")
 	// ErrScoreExportFailed wraps score export transport failures or rejected scores.
@@ -88,4 +96,53 @@ func (e *HookDeniedError) Error() string {
 // Unwrap exposes ErrHookDenied for errors.Is matching.
 func (e *HookDeniedError) Unwrap() error {
 	return ErrHookDenied
+}
+
+// TrialEvaluationFailedError is returned when a stored evaluator ends a trial
+// evaluation unsuccessfully. The evaluation keeps its row server-side, so
+// triggering the same evaluator again requeues it.
+type TrialEvaluationFailedError struct {
+	EvaluationID string
+	Detail       string
+}
+
+// Error formats the backend failure reason and the evaluation it came from.
+func (e *TrialEvaluationFailedError) Error() string {
+	return trialEvaluationMessage("failed", e.EvaluationID, e.Detail)
+}
+
+// Unwrap exposes ErrTrialEvaluationFailed for errors.Is matching.
+func (e *TrialEvaluationFailedError) Unwrap() error {
+	return ErrTrialEvaluationFailed
+}
+
+// TrialEvaluationTimeoutError is returned when a trial evaluation has not
+// reached a terminal status before the caller's deadline. The evaluation keeps
+// running server-side.
+type TrialEvaluationTimeoutError struct {
+	EvaluationID string
+	Detail       string
+}
+
+// Error formats the wait that was abandoned and the evaluation it was for.
+func (e *TrialEvaluationTimeoutError) Error() string {
+	return trialEvaluationMessage("timed out", e.EvaluationID, e.Detail)
+}
+
+// Unwrap exposes ErrTrialEvaluationTimeout for errors.Is matching.
+func (e *TrialEvaluationTimeoutError) Unwrap() error {
+	return ErrTrialEvaluationTimeout
+}
+
+// trialEvaluationMessage formats one trial evaluation error. A blank detail is
+// dropped instead of restating the outcome.
+func trialEvaluationMessage(outcome, evaluationID, detail string) string {
+	id := strings.TrimSpace(evaluationID)
+	if id == "" {
+		id = "unknown"
+	}
+	if detail = strings.TrimSpace(detail); detail == "" {
+		return fmt.Sprintf("agento11y trial evaluation %s %s", id, outcome)
+	}
+	return fmt.Sprintf("agento11y trial evaluation %s %s: %s", id, outcome, detail)
 }
