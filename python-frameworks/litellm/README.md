@@ -127,7 +127,7 @@ Guards are configured in Agent Observability, not in `config.yaml`. Refer to [Se
 
 Evaluator guards work as documented there: preflight sees messages, system prompt, and tool definitions; postflight adds the response. `deny` returns 400 to the proxy client, except for a postflight deny on a streamed response, which is only recorded (see [Postflight](#postflight)); `warn` allows the request and records the verdict. Three things behave differently through this adapter:
 
-- Redact guards do not change what the model sees. That page says the SDK uses `transformed_input` for the LLM call; this adapter ignores it. Redaction still applies to evaluators in later guards, which run server-side against the redacted input.
+- Redact guards change what the model sees, though not on every route and not in every case. The adapter writes a preflight verdict's `transformed_input` into the outgoing body when it can apply the whole transform, and forwards the request as the client sent it when it cannot. Redaction always applies to evaluators in later guards, which run server-side against the redacted input, whether or not the request itself was rewritten. See [Transformed requests](#transformed-requests) for the routes and the cases that skip.
 - Preflight tool filter guards match tool calls that are already in the request history, which means the client has executed them. They block the next call in an agent loop rather than the tool itself. To block a proposed call before the client runs it, put the tool filter guard in the postflight phase, which sees the tool calls the model just produced.
 - `model.provider` match filters are unreliable, because the provider is not known until LiteLLM's router picks a deployment, which happens after the guard runs. Match on `agent_name`, `model.name`, or tags instead.
 
@@ -225,6 +225,7 @@ Guardrail options are keyword-only, and `create_agento11y_litellm_guardrail` acc
 | `agent_version` | `str` | `""` | Fallback agent version |
 | `max_concurrent_evaluations` | `int` | `32` | Ceiling on hook evaluations in flight at once |
 | `request_timeout_seconds` | `float` | `2.0` | How long the proxy waits for a free thread plus a verdict |
+| `apply_transforms` | `bool` | `True` | Write `transformed_input` from a preflight allow verdict into the outgoing request (see [Transformed requests](#transformed-requests)) |
 | `extra_tags` | `dict[str, str]` | `None` | Additional tags merged into every hook evaluation context |
 | `guardrail_name` | `str` | `"agento11y"` | Name used for per-request opt-in and in the 400 response |
 | `default_on` | `bool` | `False` | Run on every request instead of only on opted-in ones |
@@ -237,6 +238,30 @@ Runtime behavior:
 - Hook evaluations correlate to the proxy request span, so a guard verdict lines up with its request in traces.
 - Register both the guardrail and the logger. The guardrail does not export generations, and having both in `litellm.callbacks` still exports exactly one generation per request.
 - A non-streaming postflight deny costs a generation record. LiteLLM defers success logging until after post-call guardrails run and drops it when one of them raises, and the failure path does not reach this package's callback either, so the blocked request exports no generation at all. The provider was still called and billed. The verdict itself is in `standard_logging_guardrail_information`. A streamed deny keeps its generation, because nothing is raised there.
+
+### Transformed requests
+
+A preflight redact guard returns the rewritten request as `transformed_input`. The guardrail writes that into a new request body and gives the new body to the proxy. The proxy forwards it to the provider and to any later callback. The deny check runs before the rewrite, so a denied request never reaches the provider, rewritten or not. `apply_transforms=False` turns off the rewrite and leaves the deny check in place.
+
+Only preflight rewrites anything. A postflight transform is ignored: the provider has already answered, and LiteLLM takes no replacement response from the post-call hook.
+
+A redacted system prompt is written back on every route that has a place for one: `system` on `/v1/messages`, `instructions` on `/v1/responses`, and a `system` message on chat routes. `/v1/completions` and `/v1/images/generations` carry a bare `prompt`, so they get no system prompt rewrite.
+
+Redacted messages are written back on chat and `/v1/messages` requests only. `/v1/responses` keeps its input in `input` and the two `prompt` routes keep theirs in `prompt`, and none of those three takes chat messages.
+
+The rewrite changes text and nothing else. Tool calls, tool call ids, images, and an Anthropic `cache_control` breakpoint are copied through, so a message carrying them can still be redacted instead of failing the rewrite.
+
+Reasoning is copied through as well, and that one is a gap. The adapter leaves reasoning as the client sent it, whether it arrived as `reasoning_content` or as a thinking block: a provider validates a reasoning payload against its own signature and rejects a rewritten one. So a redact rule that rewrites the reasoning of an assistant turn has no effect, and a secret in reasoning text reaches the provider even when the same secret is redacted out of the message text.
+
+A rewrite is all or nothing. When the guardrail cannot apply the whole transform, it forwards the request as the client sent it and logs a WARNING from `agento11y_litellm.guard` naming the reason. Nothing marks the generation, so a redact rule whose transform never reached the provider looks the same as a rule that matched and allowed. When you adopt a redact rule, grep the proxy log for `agento11y: skipping`, the prefix every one of these warnings carries.
+
+The rewrite is also skipped when:
+
+- The transform does not line up with the request one to one. The guardrail matches messages by position, so the number of messages, and the number of text values inside each message, have to agree with what the guard evaluated.
+- A system prompt or an Anthropic `tool_result` is spread over more than one content block and a block carries fields of its own. One block is rewritten in place and keeps its fields. More than one has to collapse into a single string, and there is no way to split that string back into per-block values.
+- Every message in the request is a system or developer message. Writing the prompt into one place would leave the message list empty, and every route rejects that.
+
+A rule that rewrites a message or a system prompt to the empty string changes nothing. An empty value cannot be told apart from "no transform" on the wire.
 
 ## LiteLLM Proxy (Docker)
 

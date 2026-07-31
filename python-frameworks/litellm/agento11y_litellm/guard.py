@@ -37,6 +37,8 @@ from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail
 from litellm.types.guardrails import GuardrailEventHooks
 
 from .handler import (
+    _ANTHROPIC_MESSAGES_CALL_TYPES,
+    _RESPONSES_CALL_TYPES,
     DEFAULT_AGENT_NAME_METADATA_KEYS,
     FRAMEWORK_TAGS,
     _extract_text_content,
@@ -114,9 +116,52 @@ GUARDED_CALL_TYPES = frozenset(
 # completion and image generation use ``prompt``.
 _INPUT_KEYS = ("messages", "input", "prompt")
 
+# The subset of ``_INPUT_KEYS`` that carries a list of messages. ``prompt`` is
+# left out: a text completion prompt is a string or a list of strings, and
+# neither takes a message.
+_MESSAGE_LIST_KEYS = ("messages", "input")
+
 # Body keys that carry the system prompt outside the message list:
 # ``/v1/messages`` sends ``system``, ``/v1/responses`` sends ``instructions``.
 _SYSTEM_PROMPT_KEYS = ("system", "instructions")
+
+# Where a route takes a system prompt the request body did not already carry.
+# ``/v1/messages`` accepts only ``user`` and ``assistant`` in ``messages`` and
+# rejects a ``system`` role outright; ``/v1/responses`` keeps its items in
+# ``input`` and its prompt in ``instructions``. Chat routes are absent on
+# purpose: a ``system`` message is their normal form.
+#
+# ``_apply_system_prompt`` reads this dict by call type, unlike everything else
+# here, because the target cannot be inferred from a body that has no system
+# prompt yet. LiteLLM's Anthropic adapter route reports call type
+# ``text_completion``, so this dict has no entry for it, and an Anthropic body
+# arriving that way gets a ``system`` message rather than a top-level ``system``
+# field. That route translates the body to chat format before it reaches the
+# provider, so the message survives.
+_ROUTE_SYSTEM_PROMPT_KEY = {
+    **{call_type: "system" for call_type in _ANTHROPIC_MESSAGES_CALL_TYPES},
+    **{call_type: "instructions" for call_type in _RESPONSES_CALL_TYPES},
+}
+
+# Roles whose content ``_map_messages`` folds into the system prompt instead of
+# the message list, so a transformed message list never contains them.
+_SYSTEM_ROLES = frozenset({"system", "developer"})
+
+# Content block types that carry plain text, across the chat and Responses
+# vocabularies.
+#
+# Deliberately narrower than what ``content_parts`` reads as text, which also
+# covers ``refusal``: a refusal block is the provider's own wording, not
+# something a request rewrites. See ``_is_text_block``.
+_TEXT_BLOCK_TYPES = frozenset({"text", "input_text", "output_text"})
+
+# Fields a text content block can carry and still survive a collapse into one
+# string. The system prompt rewrite collapses more than one block that way.
+# Anything else the block held (Anthropic ``cache_control``, ``citations``) would
+# be dropped, so that rewrite is skipped instead. The message rewrite has no such
+# limit: it writes text into the block the caller sent and leaves its other
+# fields alone.
+_TRANSFORMABLE_BLOCK_KEYS = frozenset({"type", "text"})
 
 _GUARD_FRAMEWORK_TAGS = {**FRAMEWORK_TAGS, "agento11y.framework.source": "guardrail"}
 
@@ -152,6 +197,7 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
         agent_version: str = "",
         max_concurrent_evaluations: int = 32,
         request_timeout_seconds: float = 2.0,
+        apply_transforms: bool = True,
         extra_tags: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -198,6 +244,7 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
         self._agent_version = agent_version
         self._max_concurrent_evaluations = max_concurrent_evaluations
         self._request_timeout_seconds = request_timeout_seconds
+        self._apply_transforms = apply_transforms
         self._extra_tags = dict(extra_tags) if extra_tags else {}
         self._executor = ThreadPoolExecutor(max_workers=self._max_concurrent_evaluations)
 
@@ -207,11 +254,12 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ) -> None:
+    ) -> dict | None:
         """Blocks the request when an agento11y preflight rule denies it.
 
-        Returns ``None`` on allow so the proxy forwards the request body
-        untouched.
+        Returns a new request body when an allow verdict carried a transform the
+        adapter could apply. Returns ``None`` otherwise, and the proxy then
+        forwards the caller's body untouched.
 
         Every gate that ends in "do not evaluate" sits outside the decorated
         body, so a request this guardrail did not check records no verdict at
@@ -245,7 +293,9 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
             return None
 
         try:
-            return await self._run_preflight(user_api_key_dict=user_api_key_dict, data=data, hook_input=hook_input)
+            return await self._run_preflight(
+                user_api_key_dict=user_api_key_dict, data=data, hook_input=hook_input, call_type=call_type
+            )
         except HookTransportError as exc:
             if not self._fail_open:
                 raise
@@ -348,12 +398,14 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
             return None
 
     @log_guardrail_information
-    async def _run_preflight(self, *, user_api_key_dict: UserAPIKeyAuth, data: dict, hook_input: HookInput) -> None:
+    async def _run_preflight(
+        self, *, user_api_key_dict: UserAPIKeyAuth, data: dict, hook_input: HookInput, call_type: str
+    ) -> dict | None:
         """Evaluate preflight rules and translate a deny into a proxy 400.
 
-        ``transformed_input`` from the evaluator is ignored: applying it would
-        drop every tool call and tool result, because the SDK's wire parser
-        keeps only text and thinking parts.
+        On allow, the verdict's transform is written back into the request. The
+        deny check runs before this method looks at that transform, so a denied
+        request never reaches the provider, rewritten or not.
         """
         request = HookEvaluateRequest(
             phase=HookPhase.PREFLIGHT.value,
@@ -363,10 +415,20 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
 
         response = await self._evaluate(request)
         denied = hook_denied_from_response(response)
-        if denied is None:
-            return None
+        if denied is not None:
+            raise self._denied_exception(denied)
 
-        raise self._denied_exception(denied)
+        if not self._apply_transforms:
+            return None
+        try:
+            return _apply_transform(data, response.transformed_input, call_type)
+        except Exception as exc:  # noqa: BLE001
+            # A body shape the transform code did not expect must not fail the
+            # request. Raising here reaches the proxy as a 500. That is the
+            # opposite of ``fail_open``, and of this module's rule that a request
+            # goes out untouched rather than half-rewritten.
+            logger.warning("agento11y: skipping transform, applying it failed: %s: %s", type(exc).__name__, exc)
+            return None
 
     @log_guardrail_information
     async def _enforce_postflight(
@@ -378,10 +440,10 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
     ) -> None:
         """Evaluate postflight rules and translate a deny into a proxy 400.
 
-        Runs for a response the proxy has not sent yet. ``transformed_input`` is
-        ignored for the same reason as preflight: the SDK's wire parser keeps
-        only text and thinking parts, so applying it would drop tool calls and
-        tool results.
+        Runs for a response the proxy has not sent yet. ``transformed_input``
+        is ignored: the preflight rewrite applies to the request, and LiteLLM
+        takes no replacement response from this hook, so a postflight transform
+        has nowhere to go.
 
         The decorator infers the recorded guardrail mode from the wrapped
         function's name and falls back to ``self.event_hook`` for a name it does
@@ -640,6 +702,388 @@ def _response_payload(response: Any) -> Any:
     except Exception:  # noqa: BLE001
         logger.debug("agento11y: could not read %s as a response payload", type(response).__name__)
         return None
+
+
+def _apply_transform(data: dict, transformed: HookInput | None, call_type: str) -> dict | None:
+    """Write an allow verdict's ``transformed_input`` back into the request body.
+
+    Returns a new body for the proxy to forward, or ``None`` when nothing was
+    applied. ``ProxyLogging.process_pre_call_hook_response`` uses a returned dict
+    as the request body and hands it to the remaining callbacks, so this is what
+    reaches the provider; ``None`` forwards the caller's body untouched.
+
+    The caller's dict is never mutated. A guardrail that edited it in place would
+    also edit the body LiteLLM logs and the one other callbacks already hold.
+
+    The system prompt and the message list are applied independently. A system
+    prompt is one string with one place to go; a message list is matched to the
+    request by position and can fail that match. Tying them together would mean a
+    system-prompt rule never takes effect on a conversation whose messages did
+    not line up.
+    """
+    if transformed is None or (not transformed.messages and not transformed.system_prompt):
+        return None
+
+    out = dict(data)
+    # Messages first, so a skip warning indexes the list the caller sent. The
+    # system prompt rewrite can drop a system message, which shifts every index
+    # after it.
+    changed = _apply_messages(out, transformed.messages)
+    changed = _apply_system_prompt(out, transformed.system_prompt, call_type) or changed
+    return out if changed else None
+
+
+def _apply_system_prompt(data: dict, system_prompt: str, call_type: str) -> bool:
+    """Write a transformed system prompt back into the field that carried it.
+
+    ``_hook_input`` sends the system prompt as its own wire field, and
+    ``_parse_wire_message_dict`` maps any role but ``assistant`` and ``tool`` to
+    ``user``, so a transformed prompt can only arrive in ``system_prompt``.
+
+    The value replaces the whole system prompt, because that is what was
+    evaluated: ``_hook_input`` joins the top-level field and every system or
+    developer message in the input list into one string. The body can hold system
+    content in more than one carrier at once, meaning the top-level field and any
+    ``system`` or ``developer`` message. The rewrite writes the transformed value
+    into one carrier and removes the rest, so a body that kept its prompt in two
+    places is not left half-rewritten.
+
+    The rewrite is skipped, with a warning, when:
+
+    - The body has nowhere to put a prompt.
+    - Removing the other carriers would leave the input list empty.
+    - The target holds content blocks a rewrite would strip fields from.
+
+    An empty transformed value means no change. ``_parse_hook_input_wire`` drops
+    an empty ``system_prompt``, so "clear the system prompt" cannot be expressed
+    on the wire and is indistinguishable from "no transform".
+    """
+    if not system_prompt:
+        return False
+
+    input_key = next((key for key in _MESSAGE_LIST_KEYS if isinstance(data.get(key), list) and data[key]), "")
+    items = data[input_key] if input_key else []
+    system_indices = _system_message_indices(items)
+    top_level_carriers = [key for key in _SYSTEM_PROMPT_KEYS if data.get(key)]
+    top_level_key = top_level_carriers[0] if top_level_carriers else _ROUTE_SYSTEM_PROMPT_KEY.get(call_type, "")
+
+    if not top_level_key and not input_key:
+        # Text completion and image generation have nowhere to put a system
+        # prompt: the body is a bare ``prompt``.
+        logger.warning(
+            "agento11y: skipping system prompt transform, request body has no system prompt field or message list"
+        )
+        return False
+
+    if top_level_key:
+        if system_indices and len(system_indices) == len(items):
+            logger.warning(
+                "agento11y: skipping system prompt transform, dropping the system messages would leave %r empty",
+                input_key,
+            )
+            return False
+        value, reason = _rewritten_system_value(data.get(top_level_key), system_prompt)
+        if reason:
+            logger.warning(
+                "agento11y: skipping system prompt transform, %r carries %s",
+                top_level_key,
+                reason,
+            )
+            return False
+        data[top_level_key] = value
+        for key in top_level_carriers[1:]:
+            data.pop(key, None)
+        if system_indices:
+            dropped = set(system_indices)
+            data[input_key] = [item for index, item in enumerate(items) if index not in dropped]
+        return True
+
+    if system_indices:
+        first, rest = system_indices[0], set(system_indices[1:])
+        content, reason = _rewritten_system_value(items[first].get("content"), system_prompt)
+        if reason:
+            logger.warning(
+                "agento11y: skipping system prompt transform, message %d carries %s",
+                first,
+                reason,
+            )
+            return False
+        data[input_key] = [
+            {**item, "content": content} if index == first else item
+            for index, item in enumerate(items)
+            if index not in rest
+        ]
+        return True
+
+    data[input_key] = [{"role": "system", "content": system_prompt}, *items]
+    return True
+
+
+def _rewritten_system_value(value: Any, system_prompt: str) -> tuple[Any | None, str]:
+    """Return ``value`` carrying ``system_prompt``, or why it cannot.
+
+    A string field takes the text directly. A lone text block keeps its own
+    fields and takes the new text, so an Anthropic ``cache_control`` breakpoint
+    survives a redaction. More than one block collapses into one string. That is
+    safe only when no block carries fields of its own: the evaluated prompt was
+    their joined text, and there is no way back to per-block values.
+    """
+    if not isinstance(value, list):
+        return system_prompt, ""
+    if len(value) == 1 and isinstance(value[0], dict) and str(value[0].get("type") or "").lower() in _TEXT_BLOCK_TYPES:
+        return [{**value[0], "text": system_prompt}], ""
+    reason = _block_collapse_reason(value)
+    return (None, reason) if reason else (system_prompt, "")
+
+
+def _apply_messages(data: dict, messages: Sequence[Message]) -> bool:
+    """Write transformed text back into the messages the caller sent.
+
+    Each transformed message is matched to the request message at the same
+    position, and only the text is replaced: a string ``content`` takes the new
+    text, a text content block takes it in place, and a tool result takes the
+    rewritten result. Everything else on the message is left as it arrived, so
+    tool calls, reasoning, images, and an Anthropic ``cache_control`` breakpoint
+    survive a redaction instead of blocking it. ``plugins/pi/src/mappers.ts``
+    writes a transform back the same way.
+
+    ``system`` and ``developer`` messages take no part in the matching and stay
+    where they are: ``_hook_input`` sends the system prompt as its own field, so
+    the transformed list never contains them.
+
+    This function writes nothing unless it can write every transformed message,
+    and it logs a warning saying why: a half-rewritten conversation is worse than
+    an untouched one. Cases that skip:
+
+    - The body keeps its input somewhere other than ``messages``.
+      ``/v1/responses`` uses ``input`` and text completion uses ``prompt``, and
+      neither key takes chat messages.
+    - The transformed list is a different length than the messages it matches, so
+      the positions no longer line up.
+    - A transformed message carries a different number of values than the request
+      message has places to put them, so the positions no longer line up inside
+      that one message either.
+    """
+    if not messages:
+        return False
+
+    original = data.get("messages")
+    if not isinstance(original, list) or not original:
+        logger.warning("agento11y: skipping message transform, request body has no chat message list to rewrite")
+        return False
+
+    system_indices = set(_system_message_indices(original))
+    numbered = [(index, message) for index, message in enumerate(original) if index not in system_indices]
+
+    if len(messages) != len(numbered):
+        # The forward mapping drops a message it cannot turn into text, and a rule
+        # is free to return a shorter list, so matching by position here would
+        # write a transform onto the wrong turn.
+        logger.warning(
+            "agento11y: skipping message transform, the transform carries %d messages and the request has %d, "
+            "so the positions no longer line up",
+            len(messages),
+            len(numbered),
+        )
+        return False
+
+    rewritten: dict[int, Any] = {}
+    for (index, message), transformed in zip(numbered, messages, strict=True):
+        updated, reason = _rewrite_message(message, transformed)
+        if reason:
+            logger.warning("agento11y: skipping message transform, message %d %s", index, reason)
+            return False
+        if updated is not None:
+            rewritten[index] = updated
+
+    if not rewritten:
+        return False
+
+    data["messages"] = [rewritten.get(index, message) for index, message in enumerate(original)]
+    return True
+
+
+def _rewrite_message(original: Any, transformed: Message) -> tuple[Any | None, str]:
+    """Return the request message carrying ``transformed``'s text, or why it cannot.
+
+    A ``tool`` message is matched as a whole rather than block by block, because
+    that is how ``_map_messages`` read it: one tool result holding all of its
+    content.
+
+    Returns ``(None, "")`` when the transform has nothing to write for this
+    message. That is the normal case for an assistant turn that only called a
+    tool. It also covers a message a rule rewrote to nothing: the wire shape
+    drops an empty text part, so "redact this message away" cannot be expressed
+    and reads as "no change".
+
+    The message and any block list it holds are copied rather than edited, so the
+    body the caller still holds, and the one LiteLLM logs, keep the original text.
+    """
+    if not isinstance(original, dict):
+        return None, "has no object form"
+
+    texts = [part.text for part in transformed.parts if part.kind == PartKind.TEXT and part.text]
+    results = [
+        part.tool_result.content
+        for part in transformed.parts
+        if part.kind == PartKind.TOOL_RESULT and part.tool_result is not None
+    ]
+    if not texts and not results:
+        return None, ""
+
+    content = original.get("content")
+
+    if isinstance(content, (str, list)) and str(original.get("role") or "").lower() == "tool":
+        return _rewritten_tool_message(original, texts + results)
+
+    if isinstance(content, str):
+        # A string is one part on the way out, so it takes one value back.
+        values = texts + results
+        if len(values) != 1:
+            return None, f"holds one string and the transform carries {len(values)} values for it"
+        return ({**original, "content": values[0]}, "") if values[0] != content else (None, "")
+
+    if isinstance(content, list):
+        blocks, reason = _rewrite_blocks(content, texts, results)
+        if blocks is None:
+            return None, reason
+        return ({**original, "content": blocks}, "") if blocks != content else (None, "")
+
+    # A tool-call-only assistant turn has no content at all, and the transform
+    # carries text for it only if a rule invented some.
+    return None, "carries no content the transform can be written into"
+
+
+def _rewrite_blocks(
+    content: Sequence[Any], texts: Sequence[str], results: Sequence[str]
+) -> tuple[list[Any] | None, str]:
+    """Write transformed values into a content block list, or explain why not.
+
+    Blocks are matched to values in the order ``content_parts`` read them: the
+    nth text block takes the nth transformed text, and the nth ``tool_result``
+    block the nth transformed result. A block that carried no text produced no
+    part and takes no value, which is what keeps the two orders aligned. Every
+    other block (image, ``tool_use``, ``thinking``) is copied through.
+
+    The counts have to match exactly, in both directions. One value too few means
+    a block would keep text a rule redacted, and one too many means a value has
+    nowhere to go; either way this is not the request the guard evaluated.
+    """
+    text_slots = [index for index, block in enumerate(content) if _is_text_block(block)]
+    if len(text_slots) != len(texts):
+        return None, (
+            f"holds {_counted(len(text_slots), 'text block', 'text blocks')} "
+            f"and the transform carries {_counted(len(texts), 'text', 'texts')}"
+        )
+
+    result_slots = [index for index, block in enumerate(content) if _is_tool_result_block(block)]
+    if len(result_slots) != len(results):
+        return None, (
+            f"holds {_counted(len(result_slots), 'tool result block', 'tool result blocks')} "
+            f"and the transform carries {_counted(len(results), 'tool result', 'tool results')}"
+        )
+
+    rewritten: dict[int, Any] = {}
+    for slot, text in zip(text_slots, texts, strict=True):
+        rewritten[slot] = {**content[slot], "text": text}
+    for slot, result in zip(result_slots, results, strict=True):
+        block = _rewritten_tool_result(content[slot], result)
+        if block is None:
+            return None, f"holds a tool result block at position {slot} a rewrite cannot reproduce"
+        rewritten[slot] = block
+
+    return [rewritten.get(index, block) for index, block in enumerate(content)], ""
+
+
+def _is_text_block(block: Any) -> bool:
+    """Report whether ``content_parts`` read this block as one text part.
+
+    A block whose text is blank produced no part, so it takes no value back. A
+    ``refusal`` block is left out even though it does produce a text part: it is
+    the provider's own wording, not something a request rewrites, so a
+    conversation replaying one comes out one value short and skips the rewrite.
+    """
+    if not isinstance(block, dict):
+        return False
+    if str(block.get("type") or "").lower() not in _TEXT_BLOCK_TYPES:
+        return False
+    return bool(str(block.get("text") or "").strip())
+
+
+def _is_tool_result_block(block: Any) -> bool:
+    """Report whether ``content_parts`` read this block as one tool result part.
+
+    ``tool_result`` is the one spelling it reads. A provider-specific variant such
+    as ``web_search_tool_result`` is not mapped forward, so nothing comes back for
+    it and it takes no value.
+    """
+    return isinstance(block, dict) and str(block.get("type") or "").lower() == "tool_result"
+
+
+def _counted(count: int, singular: str, plural: str) -> str:
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def _rewritten_tool_message(original: dict[str, Any], values: Sequence[str]) -> tuple[Any | None, str]:
+    """Return an OpenAI ``tool`` message carrying the rewritten result, or why it cannot.
+
+    ``_map_messages`` reads the whole content of a tool message as one tool
+    result, so the transform carries one value for it however many blocks that
+    content held. Counting text blocks against the transform here, the way a user
+    or assistant message is counted, would find no text to match a tool result
+    against and skip the rewrite of the whole conversation with it.
+    """
+    if len(values) != 1:
+        return None, (
+            f"holds one tool result and the transform carries {_counted(len(values), 'value', 'values')} for it"
+        )
+    updated = _rewritten_tool_result(original, values[0])
+    if updated is None:
+        return None, "holds tool result content a rewrite cannot reproduce"
+    return (updated, "") if updated != original else (None, "")
+
+
+def _rewritten_tool_result(block: dict[str, Any], result: str) -> dict[str, Any] | None:
+    """Write a rewritten tool result into the ``content`` that carried it.
+
+    Takes an Anthropic ``tool_result`` block or an OpenAI ``tool`` message; both
+    hold the result in ``content``. ``content_parts`` flattens that content to
+    text, so a string takes the rewritten value directly and a lone text block
+    takes it while keeping its other fields. Returns ``None`` for content holding
+    more than one nested block, or one nested block that is not text: their joined
+    text is what was evaluated, and there is no way back to per-block values.
+    """
+    nested = block.get("content")
+    if isinstance(nested, list):
+        if len(nested) != 1 or not _is_text_block(nested[0]):
+            return None
+        return {**block, "content": [{**nested[0], "text": result}]}
+    return {**block, "content": result}
+
+
+def _system_message_indices(messages: Any) -> list[int]:
+    """Positions of the system and developer messages in a chat message list."""
+    if not isinstance(messages, list):
+        return []
+    return [
+        index
+        for index, message in enumerate(messages)
+        if isinstance(message, dict) and str(message.get("role") or "").lower() in _SYSTEM_ROLES
+    ]
+
+
+def _block_collapse_reason(content: Sequence[Any]) -> str:
+    """Say what a collapse of these blocks into one string would lose.
+
+    Returns an empty string when the collapse loses nothing.
+    """
+    for block in content:
+        if not isinstance(block, dict) or str(block.get("type") or "").lower() not in _TEXT_BLOCK_TYPES:
+            return "non-text content"
+        extra = sorted(set(block) - _TRANSFORMABLE_BLOCK_KEYS)
+        if extra:
+            return f"content block fields a rewrite cannot reproduce: {', '.join(extra)}"
+    return ""
 
 
 def _resolve_provider(data: dict, model_name: str) -> str:

@@ -75,6 +75,56 @@ def test_parse_hook_response_transformed_messages_numeric_proto_role() -> None:
     assert parsed.transformed_input.messages[0].role == MessageRole.ASSISTANT
 
 
+def test_parse_hook_response_keeps_a_tool_using_conversation() -> None:
+    """A transform of an agent turn keeps its tool history, part for part.
+
+    ``agento11y_litellm.guard`` matches transformed messages to the request by
+    position, so every message has to come back and in order. The one thing the
+    parser cannot recover is the role: ``system`` arrives as ``user``, because
+    the wire enum has no value for it.
+    """
+    from agento11y.hooks import _parse_response
+
+    parsed = _parse_response(
+        {
+            "action": "allow",
+            "transformed_input": {
+                "messages": [
+                    {"role": "user", "parts": [{"kind": "text", "text": "list the temp dir"}]},
+                    {
+                        "role": "assistant",
+                        "parts": [{"kind": "tool_call", "tool_call": {"id": "call_1", "name": "shell_exec"}}],
+                    },
+                    {
+                        "role": "tool",
+                        "parts": [{"kind": "tool_result", "tool_result": {"tool_call_id": "call_1", "content": "ok"}}],
+                    },
+                    {"role": "system", "parts": [{"kind": "text", "text": "policy"}]},
+                ],
+            },
+        }
+    )
+
+    assert parsed.transformed_input is not None
+    messages = parsed.transformed_input.messages
+    assert [m.role for m in messages] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+        MessageRole.USER,
+    ]
+    assert [[p.kind for p in m.parts] for m in messages] == [
+        [PartKind.TEXT],
+        [PartKind.TOOL_CALL],
+        [PartKind.TOOL_RESULT],
+        [PartKind.TEXT],
+    ]
+    assert messages[1].parts[0].tool_call is not None
+    assert messages[1].parts[0].tool_call.name == "shell_exec"
+    assert messages[2].parts[0].tool_result is not None
+    assert messages[2].parts[0].tool_result.content == "ok"
+
+
 def test_evaluate_hook_disabled_short_circuits() -> None:
     class _Handler(BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802
