@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/grafana/agento11y/go/agento11y/contentcapture"
 	"github.com/grafana/agento11y/go/agento11y/model"
 )
 
@@ -33,7 +34,10 @@ const (
 	//
 	// Note: user-provided Metadata and Tags are NOT stripped — callers are
 	// responsible for ensuring these maps do not contain sensitive content
-	// when using MetadataOnly mode.
+	// when using MetadataOnly mode. The exception is the metadata keys the SDK
+	// itself mirrors content into. The call error and the conversation title,
+	// under both the current and the pre-rename spelling, are removed no matter
+	// who wrote them.
 	ContentCaptureModeMetadataOnly
 	// ContentCaptureModeFullWithMetadataSpans splits the proto and span paths
 	// for generation content. Use this mode when the gRPC ingest destination is
@@ -61,7 +65,10 @@ const (
 const (
 	// Pinned to the model package so the shared validator and SDK stripping logic stay
 	// in lockstep.
-	metadataKeyContentCaptureMode                = model.MetadataKeyContentCaptureMode
+	metadataKeyContentCaptureMode = model.MetadataKeyContentCaptureMode
+	// Pinned to the contentcapture package. See its package doc for why the
+	// policy lives there.
+	metadataKeyCallError                         = contentcapture.MetadataKeyCallError
 	contentCaptureModeValueMetaOnly              = model.ContentCaptureModeMetadataOnly
 	contentCaptureModeValueFull                  = "full"
 	contentCaptureModeValueNoToolContent         = "no_tool_content"
@@ -115,50 +122,94 @@ func stampContentCaptureMetadata(g *Generation, mode ContentCaptureMode) {
 // message structure (roles, part kinds), tool names/IDs, usage, timing, and
 // all other metadata fields. errorCategory is the classified error category
 // (e.g. "rate_limit", "timeout") used to replace the raw CallError text.
+//
+// What counts as content lives in agento11y/contentcapture, shared with the
+// wire-proto shape a forwarder reduces.
 func stripContent(g *Generation, errorCategory string) {
-	g.SystemPrompt = ""
-	g.Artifacts = nil
+	contentcapture.Strip(generationTarget{g: g}, errorCategory)
+}
 
-	if g.CallError != "" {
-		if errorCategory != "" {
-			g.CallError = errorCategory
-		} else {
-			g.CallError = "sdk_error"
-		}
-	}
-	delete(g.Metadata, "call_error")
+// generationTarget adapts the public Generation struct to
+// contentcapture.Target.
+type generationTarget struct {
+	g *Generation
+}
 
-	g.ConversationTitle = ""
-	delete(g.Metadata, spanAttrConversationTitle)
+func (t generationTarget) ClearSystemPrompt() { t.g.SystemPrompt = "" }
 
-	for i := range g.Input {
-		stripMessageContent(&g.Input[i])
+func (t generationTarget) ClearArtifacts() { t.g.Artifacts = nil }
+
+func (t generationTarget) ClearConversationTitle() { t.g.ConversationTitle = "" }
+
+func (t generationTarget) CallError() string { return t.g.CallError }
+
+func (t generationTarget) SetCallError(callError string) { t.g.CallError = callError }
+
+func (t generationTarget) DeleteMetadata(key string) { delete(t.g.Metadata, key) }
+
+// NormalizeMetadata is a no-op on this shape: codec.ToProto encodes an emptied
+// metadata map as an unset Struct, so there is nothing to reconcile.
+func (t generationTarget) NormalizeMetadata() {}
+
+func (t generationTarget) EachPart(fn func(contentcapture.PartTarget)) {
+	for i := range t.g.Input {
+		eachStructPart(&t.g.Input[i], fn)
 	}
-	for i := range g.Output {
-		stripMessageContent(&g.Output[i])
-	}
-	for i := range g.Tools {
-		g.Tools[i].Description = ""
-		g.Tools[i].InputSchema = nil
+	for i := range t.g.Output {
+		eachStructPart(&t.g.Output[i], fn)
 	}
 }
 
-func stripMessageContent(m *Message) {
-	for i := range m.Parts {
-		m.Parts[i].Text = ""
-		m.Parts[i].Thinking = ""
-		if m.Parts[i].ToolCall != nil {
-			m.Parts[i].ToolCall.InputJSON = nil
-		}
-		if m.Parts[i].ToolResult != nil {
-			m.Parts[i].ToolResult.Content = ""
-			m.Parts[i].ToolResult.ContentJSON = nil
-		}
-		if m.Parts[i].Media != nil {
-			m.Parts[i].Media.URL = ""
-		}
+func (t generationTarget) EachTool(fn func(contentcapture.ToolTarget)) {
+	for i := range t.g.Tools {
+		fn(toolTarget{tool: &t.g.Tools[i]})
 	}
 }
+
+func eachStructPart(message *Message, fn func(contentcapture.PartTarget)) {
+	for i := range message.Parts {
+		fn(partTarget{part: &message.Parts[i]})
+	}
+}
+
+// partTarget adapts one Part to contentcapture.PartTarget. A struct part
+// carries each payload in its own field, so a clear that does not apply to the
+// part writes a zero value over a zero value.
+type partTarget struct {
+	part *Part
+}
+
+func (t partTarget) ClearText() { t.part.Text = "" }
+
+func (t partTarget) ClearThinking() { t.part.Thinking = "" }
+
+func (t partTarget) ClearToolCallInput() {
+	if t.part.ToolCall != nil {
+		t.part.ToolCall.InputJSON = nil
+	}
+}
+
+func (t partTarget) ClearToolResult() {
+	if t.part.ToolResult != nil {
+		t.part.ToolResult.Content = ""
+		t.part.ToolResult.ContentJSON = nil
+	}
+}
+
+func (t partTarget) ClearMediaURL() {
+	if t.part.Media != nil {
+		t.part.Media.URL = ""
+	}
+}
+
+// toolTarget adapts one ToolDefinition to contentcapture.ToolTarget.
+type toolTarget struct {
+	tool *ToolDefinition
+}
+
+func (t toolTarget) ClearDescription() { t.tool.Description = "" }
+
+func (t toolTarget) ClearInputSchema() { t.tool.InputSchema = nil }
 
 // resolveToolContentCaptureMode resolves the effective content capture mode for
 // a tool execution from the per-tool override, parent generation context, and

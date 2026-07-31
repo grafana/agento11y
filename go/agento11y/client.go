@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/grafana/agento11y/go/agento11y/contentcapture"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -193,14 +194,19 @@ const (
 	sdkName             = "sdk-go"
 	sdkUserAgentProduct = "agento11y-sdk-go"
 
+	// Some keys below carry user content, and spanAttrErrorCategory carries the
+	// category that replaces redacted error text. Those resolve through
+	// agento11y/contentcapture so that a process reducing this SDK's payloads
+	// reads the same declarations as the emit sites. The remaining keys are
+	// metadata and are declared here.
 	spanAttrGenerationID           = "agento11y.generation.id"
 	spanAttrConversationID         = "gen_ai.conversation.id"
-	spanAttrConversationTitle      = "agento11y.conversation.title"
+	spanAttrConversationTitle      = contentcapture.ConversationTitleKey
 	spanAttrUserID                 = "user.id"
 	spanAttrAgentName              = "gen_ai.agent.name"
 	spanAttrAgentVersion           = "gen_ai.agent.version"
 	spanAttrErrorType              = "error.type"
-	spanAttrErrorCategory          = "error.category"
+	spanAttrErrorCategory          = contentcapture.ErrorCategoryAttributeKey
 	spanAttrOperationName          = "gen_ai.operation.name"
 	spanAttrProviderName           = "gen_ai.provider.name"
 	spanAttrRequestModel           = "gen_ai.request.model"
@@ -216,7 +222,7 @@ const (
 	spanAttrInputTokens            = "gen_ai.usage.input_tokens"
 	spanAttrOutputTokens           = "gen_ai.usage.output_tokens"
 	spanAttrEmbeddingInputCount    = "gen_ai.embeddings.input_count"
-	spanAttrEmbeddingInputTexts    = "gen_ai.embeddings.input_texts"
+	spanAttrEmbeddingInputTexts    = contentcapture.EmbeddingInputTextsAttributeKey
 	spanAttrEmbeddingDimCount      = "gen_ai.embeddings.dimension.count"
 	spanAttrRequestEncodingFormats = "gen_ai.request.encoding_formats"
 	spanAttrCacheReadTokens        = "gen_ai.usage.cache_read_input_tokens"
@@ -225,9 +231,9 @@ const (
 	spanAttrToolName               = "gen_ai.tool.name"
 	spanAttrToolCallID             = "gen_ai.tool.call.id"
 	spanAttrToolType               = "gen_ai.tool.type"
-	spanAttrToolDescription        = "gen_ai.tool.description"
-	spanAttrToolCallArguments      = "gen_ai.tool.call.arguments"
-	spanAttrToolCallResult         = "gen_ai.tool.call.result"
+	spanAttrToolDescription        = contentcapture.ToolDescriptionAttributeKey
+	spanAttrToolCallArguments      = contentcapture.ToolCallArgumentsAttributeKey
+	spanAttrToolCallResult         = contentcapture.ToolCallResultAttributeKey
 	spanAttrTagPrefix              = "agento11y.tag."
 
 	metricOperationDuration     = "gen_ai.client.operation.duration"
@@ -969,7 +975,7 @@ func (r *GenerationRecorder) End() {
 	if callErr != nil {
 		callErrorCategory = classifyErrorCategory(callErr, false)
 		if callErrorCategory == "" {
-			callErrorCategory = "sdk_error"
+			callErrorCategory = contentcapture.StrippedCallError
 		}
 	}
 
@@ -1119,9 +1125,9 @@ func syncCanonicalMetadataMirrors(g *Generation) {
 		delete(g.Metadata, spanAttrConversationTitle)
 	}
 	if g.CallError != "" {
-		g.Metadata["call_error"] = g.CallError
+		g.Metadata[metadataKeyCallError] = g.CallError
 	} else {
-		delete(g.Metadata, "call_error")
+		delete(g.Metadata, metadataKeyCallError)
 	}
 }
 
@@ -1494,7 +1500,7 @@ func (r *GenerationRecorder) normalizeGeneration(raw Generation, completedAt tim
 		if g.Metadata == nil {
 			g.Metadata = map[string]any{}
 		}
-		g.Metadata["call_error"] = callErr.Error()
+		g.Metadata[metadataKeyCallError] = callErr.Error()
 	}
 
 	g.Usage = g.Usage.Normalize()
