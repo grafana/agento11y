@@ -12,14 +12,14 @@ import logging
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
-from functools import lru_cache
+from dataclasses import replace
+from functools import lru_cache, partial
 from typing import TYPE_CHECKING, Any
 
 import litellm
 from agento11y import Client
 from agento11y.errors import HookTransportError
 from agento11y.hooks import (
-    HookAction,
     HookContext,
     HookEvaluateRequest,
     HookEvaluateResponse,
@@ -152,6 +152,25 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
             **kwargs,
         )
         self._client = client
+        # Snapshotted once: ``Client.hooks_config`` deep-copies on every read,
+        # and the client resolves its configuration at construction, so a
+        # per-request read would only pay for the copy.
+        hooks = client.hooks_config
+        # ``resolve_config`` normalizes an empty phase list to ``["preflight"]``,
+        # and the SDK defends against an empty one anyway; mirroring that keeps
+        # an empty list from reading as "preflight not configured".
+        phases = hooks.phases or [HookPhase.PREFLIGHT.value]
+        self._preflight_configured = hooks.enabled and HookPhase.PREFLIGHT.value in phases
+        self._fail_open = hooks.fail_open
+        # Evaluations are submitted fail-closed so an SDK-side transport failure
+        # reaches this adapter instead of resolving to a synthetic allow.
+        self._fail_closed_hooks = replace(hooks, fail_open=False)
+        if not self._preflight_configured:
+            logger.warning(
+                "agento11y: guardrail %r is registered but the client's hooks config does not enable preflight; "
+                "no request will be evaluated",
+                self.guardrail_name,
+            )
         self._agent_name = agent_name
         self._agent_name_metadata_keys = tuple(agent_name_metadata_keys)
         self._agent_version = agent_version
@@ -174,11 +193,22 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
 
         Every gate that ends in "do not evaluate" sits outside the decorated
         body, so a request this guardrail did not check records no verdict at
-        all: the guardrail is not enabled for the request, the route carries
-        input this adapter cannot map, or the mapped input is empty. The proxy
-        applies the enablement gate before calling in, so that one only matters
-        for direct invocation.
+        all: the client's hooks config does not enable preflight, the guardrail
+        is not enabled for the request, the route carries input this adapter
+        cannot map, or the mapped input is empty. The proxy applies the
+        enablement gate before calling in, so that one only matters for direct
+        invocation.
+
+        A failed evaluation does record a verdict: the exception crosses
+        ``_run_preflight``'s decorator, which files
+        ``guardrail_failed_to_respond``, and this method then applies
+        ``HooksConfig.fail_open``.
         """
+        # Checked first: the result cannot change per request.
+        if not self._preflight_configured:
+            logger.debug("agento11y: skipping preflight evaluation, the client's hooks config disables preflight")
+            return None
+
         if not self.should_run_guardrail(data, GuardrailEventHooks.pre_call):
             return None
 
@@ -193,7 +223,17 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
             logger.debug("agento11y: skipping preflight evaluation, request carries no evaluable text")
             return None
 
-        return await self._run_preflight(user_api_key_dict=user_api_key_dict, data=data, hook_input=hook_input)
+        try:
+            return await self._run_preflight(user_api_key_dict=user_api_key_dict, data=data, hook_input=hook_input)
+        except HookTransportError as exc:
+            if not self._fail_open:
+                raise
+            logger.warning(
+                "agento11y: guardrail %r allowing request (fail_open): %s",
+                self.guardrail_name,
+                exc,
+            )
+            return None
 
     @log_guardrail_information
     async def _run_preflight(self, *, user_api_key_dict: UserAPIKeyAuth, data: dict, hook_input: HookInput) -> None:
@@ -267,9 +307,15 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
         for a worker and time running the evaluation. A timed-out evaluation
         that has started keeps its pool slot until urllib finishes.
 
-        Transport failures are already resolved inside the SDK according to
-        ``HooksConfig.fail_open``; the adapter's own timeout and unexpected
-        failures follow the same policy.
+        The call goes out fail-closed regardless of the configured policy, so a
+        transport failure raises here instead of resolving to an allow inside
+        the SDK: an allow the SDK synthesized is indistinguishable from a server
+        allow. Never return a synthetic allow from here, because LiteLLM files
+        it as a completed check. Every failure crosses the recording decorator
+        instead, and LiteLLM files it as ``guardrail_failed_to_respond`` with
+        the real duration. ``async_pre_call_hook`` applies
+        ``HooksConfig.fail_open`` afterwards, so the allow-or-raise outcome
+        still follows the configured policy.
         """
         try:
             loop = asyncio.get_running_loop()
@@ -277,22 +323,20 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
             evaluation = loop.run_in_executor(
                 self._executor,
                 context.run,
-                self._client.evaluate_hook,
+                # Bound with partial because run_in_executor takes no keyword
+                # arguments.
+                partial(self._client.evaluate_hook, hooks=self._fail_closed_hooks),
                 request,
             )
             return await asyncio.wait_for(evaluation, self._request_timeout_seconds)
         except HookTransportError:
             raise
-        except asyncio.TimeoutError:
-            return self._fail_open_or_raise(f"timed out after {self._request_timeout_seconds}s")
+        except asyncio.TimeoutError as exc:
+            raise HookTransportError(
+                f"agento11y hook evaluation failed: timed out after {self._request_timeout_seconds}s"
+            ) from exc
         except Exception as exc:  # noqa: BLE001
-            return self._fail_open_or_raise(f"{type(exc).__name__}: {exc}")
-
-    def _fail_open_or_raise(self, detail: str) -> HookEvaluateResponse:
-        if self._client.hooks_config.fail_open:
-            logger.warning("agento11y: preflight hook evaluation failed, allowing request (fail_open): %s", detail)
-            return HookEvaluateResponse(action=HookAction.ALLOW.value)
-        raise HookTransportError(f"agento11y hook evaluation failed: {detail}")
+            raise HookTransportError(f"agento11y hook evaluation failed: {type(exc).__name__}: {exc}") from exc
 
 
 def _resolve_provider(data: dict, model_name: str) -> str:
