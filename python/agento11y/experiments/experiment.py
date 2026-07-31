@@ -48,6 +48,7 @@ except Exception:  # pragma: no cover - exercised only in minimal vendored envs
     SpanKind = Status = StatusCode = set_span_in_context = None  # type: ignore[assignment]
     _OTEL_AVAILABLE = False
 
+from ..errors import TrialEvaluationFailedError, TrialEvaluationTimeoutError, ValidationError
 from ..models import (
     CreateExperimentRequest,
     ExperimentReport,
@@ -65,6 +66,8 @@ from .types import (
     ExperimentStatus,
     TestCase,
     TestSuite,
+    TrialEvaluation,
+    TrialEvaluationStatus,
     TrialRef,
     TrialStatus,
     _first_nonblank,
@@ -207,6 +210,7 @@ class Trial:
         self._buffer: list[ScoreItem] = []
         self._accepted = 0
         self._has_final = False
+        self._cloud_evaluated = False
         self._final_passed: bool | None = None
         self._closed = False
         self._score_occurrences: dict[tuple[str, str], int] = {}
@@ -266,7 +270,11 @@ class Trial:
             self.status = TrialStatus.ERRORED.value
             self.error = str(exc) or (exc_type.__name__ if exc_type else type(exc).__name__)
         elif self.status == TrialStatus.RUNNING.value:
-            if not self._has_final:
+            if not self._has_final and self._cloud_evaluated:
+                # The backend owns both the evaluator's verdict and its score.
+                self.status = TrialStatus.COMPLETED.value
+                self.error = ""
+            elif not self._has_final:
                 self.status = TrialStatus.FAILED.value
                 self.error = "trial closed without a final score"
             elif self._final_passed is None:
@@ -468,6 +476,82 @@ class Trial:
         if conversation_id:
             self.conversation_id = conversation_id.strip()
         return self
+
+    def evaluate(
+        self,
+        evaluator_id: str,
+        *,
+        evaluator_version: str = "",
+        timeout: float = 300.0,
+        poll_interval: float = 0.5,
+    ) -> TrialEvaluation:
+        """Runs a stored tenant evaluator against this trial's conversation.
+
+        The conversation binding and any anchor generation from :meth:`record_io`
+        are persisted before the evaluator is queued. The call blocks until the
+        worker succeeds, fails, or ``timeout`` elapses. Polling backs off from
+        ``poll_interval`` to at most five seconds.
+        """
+
+        normalized_evaluator_id = (evaluator_id or "").strip()
+        if not normalized_evaluator_id:
+            raise ValidationError("agento11y trial evaluation validation failed: evaluator_id is required")
+        if timeout < 0:
+            raise ValidationError("agento11y trial evaluation validation failed: timeout must not be negative")
+        if poll_interval < 0:
+            raise ValidationError("agento11y trial evaluation validation failed: poll_interval must not be negative")
+        if not self.conversation_id:
+            raise ValidationError(
+                "agento11y trial evaluation validation failed: bind a conversation before evaluating a trial"
+            )
+        resolved_timeout = timeout or 300.0
+        resolved_poll_interval = poll_interval or 0.5
+
+        self._create_trial()
+        # bind_conversation is intentionally local until here; the trigger route
+        # rejects trials whose durable row has no conversation.
+        self._client.update_trial(
+            self.ref.experiment_id,
+            self.trial_id,
+            conversation_id=self.conversation_id,
+        )
+        # A stored evaluator reads the exported conversation, not local state.
+        self.flush()
+
+        evaluation = self._client.trigger_trial_evaluation(
+            self.ref.experiment_id,
+            self.trial_id,
+            normalized_evaluator_id,
+            evaluator_version=(evaluator_version or "").strip(),
+        )
+        if self._experiment is not None:
+            self._experiment._cloud_evaluated = True
+
+        deadline = time.monotonic() + resolved_timeout
+        interval = resolved_poll_interval
+        max_interval = max(resolved_poll_interval, 5.0)
+        while True:
+            if evaluation.status is TrialEvaluationStatus.SUCCESS:
+                self._cloud_evaluated = True
+                return evaluation
+            if evaluation.status is TrialEvaluationStatus.FAILED:
+                raise TrialEvaluationFailedError(evaluation.evaluation_id, evaluation.error)
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TrialEvaluationTimeoutError(
+                    evaluation.evaluation_id,
+                    f"waited {resolved_timeout:g}s",
+                )
+            time.sleep(min(interval, remaining))
+            interval = min(interval * 2, max_interval)
+            # Always read once after a sleep clamped to the remaining budget; the
+            # evaluator may have finished inside that final window.
+            evaluation = self._client.get_trial_evaluation(
+                self.ref.experiment_id,
+                self.trial_id,
+                evaluation.evaluation_id,
+            )
 
     def record_io(
         self,
@@ -1002,6 +1086,7 @@ class Experiment:
         )
         self.status = "running"
         self._accepted = 0
+        self._cloud_evaluated = False
         self._finalized = False
         self._open_trials: dict[str, Trial] = {}
         self._claimed_trial_ids: set[str] = set()
@@ -1159,6 +1244,9 @@ class Experiment:
             status_value = ExperimentStatus.FAILED.value
             close_summary = "; ".join(str(exc) or type(exc).__name__ for exc in close_errors)
             error = "; ".join(part for part in (error, f"trial close failed: {close_summary}") if part)
+            score_count = None
+        if self._cloud_evaluated:
+            # Stored evaluators write scores this process cannot count.
             score_count = None
         self.status = status_value
         try:

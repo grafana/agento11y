@@ -46,6 +46,8 @@ from .errors import (
     RatingConflictError,
     RatingTransportError,
     ScoreExportError,
+    TrialEvaluationFailedError,
+    TrialEvaluationTimeoutError,
     ValidationError,
 )
 from .hooks import (
@@ -173,6 +175,8 @@ __all__ = [
     "RatingConflictError",
     "RatingTransportError",
     "ScoreExportError",
+    "TrialEvaluationFailedError",
+    "TrialEvaluationTimeoutError",
     "ScoreItem",
     "ScoreSource",
     "ScoreValue",

@@ -472,6 +472,10 @@ a stored test suite.
 - Local `LLMJudge` and `RegexJudge` helpers do not require an evaluator created
   in Grafana. Frameworks can submit their native grader result and transcript
   through `trial.record_evaluation(...)`.
+- `trial.evaluate(...)` runs an evaluator stored in the tenant against the
+  trial's bound conversation and waits for it to finish. It can close the trial
+  without a local final score; leave `score_count` unset because the backend
+  writes the evaluator's score.
 - Catch evaluator exceptions around each trial when one failed judge should not
   abort the whole run.
 

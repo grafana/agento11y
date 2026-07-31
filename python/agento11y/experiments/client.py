@@ -24,7 +24,7 @@ from ..models import (
     TokenUsage,
 )
 from ..redaction import redact_secret_text, redact_secret_value
-from .types import _first_nonblank
+from .types import TrialEvaluation, _first_nonblank
 
 TENANT_HEADER = "X-Scope-OrgID"
 INGEST_ACTOR_HEADER = _transport.INGEST_ACTOR_HEADER
@@ -205,6 +205,43 @@ class Client:
             request=request,
             retry=self._retry,
         )
+
+    def trigger_trial_evaluation(
+        self,
+        experiment_id: str,
+        trial_id: str,
+        evaluator_id: str,
+        *,
+        evaluator_version: str = "",
+    ) -> TrialEvaluation:
+        """Queues a stored tenant evaluator against a trial's conversation."""
+
+        payload = _transport.trigger_trial_evaluation(
+            **self._args(),
+            experiment_id=experiment_id,
+            trial_id=trial_id,
+            evaluator_id=evaluator_id,
+            evaluator_version=evaluator_version,
+            retry=self._retry,
+        )
+        return TrialEvaluation.from_dict(payload)
+
+    def get_trial_evaluation(
+        self,
+        experiment_id: str,
+        trial_id: str,
+        evaluation_id: str,
+    ) -> TrialEvaluation:
+        """Reads durable status for a triggered trial evaluation."""
+
+        payload = _transport.get_trial_evaluation(
+            **self._args(),
+            experiment_id=experiment_id,
+            trial_id=trial_id,
+            evaluation_id=evaluation_id,
+            retry=self._retry,
+        )
+        return TrialEvaluation.from_dict(payload)
 
     # --- scores ----------------------------------------------------------- #
 

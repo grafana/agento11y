@@ -12,6 +12,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
+from agento11y.errors import TrialEvaluationFailedError, TrialEvaluationTimeoutError, ValidationError
 from agento11y.experiments import (
     EvaluationResult,
     Evaluator,
@@ -22,6 +23,8 @@ from agento11y.experiments import (
     TestCase,
     TestSuite,
     Trial,
+    TrialEvaluation,
+    TrialEvaluationStatus,
     TrialRef,
     otel,
     score,
@@ -47,6 +50,8 @@ class FakeClient:
         self.trial_updates: list[tuple] = []
         self.artifacts: list[tuple] = []
         self.calls: list[str] = []
+        self.evaluation_responses: list[TrialEvaluation] = []
+        self.evaluation_triggers: list[tuple[str, str, str, str]] = []
 
     def upsert_experiment(self, request: CreateExperimentRequest):
         self.upserts.append(request)
@@ -72,6 +77,17 @@ class FakeClient:
     def update_trial(self, experiment_id, trial_id, **kwargs) -> dict:
         self.trial_updates.append((experiment_id, trial_id, kwargs.get("status"), kwargs))
         return {"trial_id": trial_id}
+
+    def trigger_trial_evaluation(
+        self, experiment_id, trial_id, evaluator_id, *, evaluator_version=""
+    ) -> TrialEvaluation:
+        self.calls.append("trigger_trial_evaluation")
+        self.evaluation_triggers.append((experiment_id, trial_id, evaluator_id, evaluator_version))
+        return self.evaluation_responses.pop(0)
+
+    def get_trial_evaluation(self, experiment_id, trial_id, evaluation_id) -> TrialEvaluation:
+        self.calls.append("get_trial_evaluation")
+        return self.evaluation_responses.pop(0)
 
     def upload_artifact(
         self,
@@ -707,6 +723,101 @@ def test_trial_without_final_score_fails() -> None:
     assert trial.status == "failed"
     assert trial.error == "trial closed without a final score"
     assert client.trial_updates and client.trial_updates[0][2] == "completed"
+
+
+def _trial_evaluation(status: TrialEvaluationStatus, *, error: str = "") -> TrialEvaluation:
+    return TrialEvaluation(
+        evaluation_id="eval-1",
+        experiment_id="run-cloud",
+        trial_id="trial-cloud",
+        test_case_id="case-cloud",
+        conversation_id="conv-1",
+        evaluator_id="helpfulness",
+        evaluator_version="v3",
+        status=status,
+        error=error,
+    )
+
+
+def test_stored_evaluator_completes_trial_and_drops_score_count() -> None:
+    client = FakeClient()
+    client.evaluation_responses = [
+        _trial_evaluation(TrialEvaluationStatus.QUEUED),
+        _trial_evaluation(TrialEvaluationStatus.SUCCESS),
+    ]
+    exp = Experiment(client, experiment_id="run-cloud", name="cloud", auto_finalize=False)
+    with exp:
+        with exp.trial("case-cloud") as trial:
+            trial.bind_conversation("conv-1").record_io(input="2+2", output="4")
+            evaluation = trial.evaluate("helpfulness", evaluator_version="v3", timeout=0.1, poll_interval=0.001)
+
+    exp.finalize(score_count=1)
+
+    assert evaluation.status is TrialEvaluationStatus.SUCCESS
+    assert trial.status == "completed"
+    assert trial.error == ""
+    assert client.evaluation_triggers == [("run-cloud", trial.trial_id, "helpfulness", "v3")]
+    binding_updates = [update for update in client.trial_updates if update[3].get("conversation_id") == "conv-1"]
+    assert binding_updates
+    assert client.generations == [trial.generation_id]
+    assert client.finalized == [("run-cloud", "completed", None)]
+
+
+def test_stored_evaluator_failure_carries_evaluation_details() -> None:
+    client = FakeClient()
+    client.evaluation_responses = [_trial_evaluation(TrialEvaluationStatus.FAILED, error="evaluator budget exhausted")]
+    trial = Trial.from_ref(client, TrialRef(experiment_id="run-cloud", test_case_id="case-cloud"))
+    trial.bind_conversation("conv-1")
+
+    with pytest.raises(TrialEvaluationFailedError) as caught:
+        trial.evaluate("helpfulness")
+
+    assert caught.value.evaluation_id == "eval-1"
+    assert caught.value.detail == "evaluator budget exhausted"
+    assert not trial._cloud_evaluated
+
+
+def test_stored_evaluator_timeout_polls_after_final_sleep(monkeypatch) -> None:
+    client = FakeClient()
+    client.evaluation_responses = [
+        _trial_evaluation(TrialEvaluationStatus.QUEUED),
+        _trial_evaluation(TrialEvaluationStatus.QUEUED),
+    ]
+    trial = Trial.from_ref(client, TrialRef(experiment_id="run-cloud", test_case_id="case-cloud"))
+    trial.bind_conversation("conv-1")
+    ticks = iter([0.0, 0.0, 0.02])
+    experiment_module = sys.modules["agento11y.experiments.experiment"]
+    monkeypatch.setattr(experiment_module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(experiment_module.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(TrialEvaluationTimeoutError) as caught:
+        trial.evaluate("helpfulness", timeout=0.01, poll_interval=0.02)
+
+    assert caught.value.evaluation_id == "eval-1"
+    assert client.calls.count("get_trial_evaluation") == 1
+
+
+@pytest.mark.parametrize(
+    ("conversation_id", "evaluator_id", "timeout", "poll_interval"),
+    [
+        ("", "helpfulness", 1.0, 0.1),
+        ("conv-1", " ", 1.0, 0.1),
+        ("conv-1", "helpfulness", -1.0, 0.1),
+        ("conv-1", "helpfulness", 1.0, -0.1),
+    ],
+)
+def test_stored_evaluator_validates_before_requests(
+    conversation_id: str, evaluator_id: str, timeout: float, poll_interval: float
+) -> None:
+    client = FakeClient()
+    trial = Trial.from_ref(client, TrialRef(experiment_id="run-cloud", test_case_id="case-cloud"))
+    trial.bind_conversation(conversation_id)
+
+    with pytest.raises(ValidationError):
+        trial.evaluate(evaluator_id, timeout=timeout, poll_interval=poll_interval)
+
+    assert client.trials == []
+    assert client.trial_updates == []
 
 
 def test_trial_cleanup_runs_when_flush_fails() -> None:

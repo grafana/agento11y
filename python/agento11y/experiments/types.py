@@ -41,6 +41,66 @@ class TrialStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class TrialEvaluationStatus(str, Enum):
+    """Durable state of a stored evaluator run for an experiment trial."""
+
+    QUEUED = "queued"
+    CLAIMED = "claimed"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+    @property
+    def terminal(self) -> bool:
+        """Whether the evaluator worker has finished."""
+
+        return self in {TrialEvaluationStatus.SUCCESS, TrialEvaluationStatus.FAILED}
+
+
+@dataclass(slots=True)
+class TrialEvaluation:
+    """Durable work row returned when a stored evaluator is triggered or polled."""
+
+    evaluation_id: str
+    experiment_id: str = ""
+    trial_id: str = ""
+    test_case_id: str = ""
+    conversation_id: str = ""
+    evaluator_id: str = ""
+    evaluator_version: str = ""
+    status: TrialEvaluationStatus = TrialEvaluationStatus.QUEUED
+    attempts: int = 0
+    scheduled_at: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    error: str = ""
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> TrialEvaluation:
+        """Builds an evaluation from the experiment API response."""
+
+        return cls(
+            evaluation_id=str(payload.get("evaluation_id") or ""),
+            experiment_id=str(payload.get("experiment_id") or ""),
+            trial_id=str(payload.get("trial_id") or ""),
+            test_case_id=str(payload.get("test_case_id") or ""),
+            conversation_id=str(payload.get("conversation_id") or ""),
+            evaluator_id=str(payload.get("evaluator_id") or ""),
+            evaluator_version=str(payload.get("evaluator_version") or ""),
+            status=TrialEvaluationStatus(str(payload.get("status") or "").strip().lower()),
+            attempts=int(payload.get("attempts") or 0),
+            scheduled_at=_optional_str(payload.get("scheduled_at")),
+            created_at=_optional_str(payload.get("created_at")),
+            updated_at=_optional_str(payload.get("updated_at")),
+            error=str(payload.get("error") or ""),
+        )
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
 class EvaluatorKind(str, Enum):
     """The OTel-aligned evaluator type vocabulary.
 

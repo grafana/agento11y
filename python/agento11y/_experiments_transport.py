@@ -9,6 +9,10 @@ for generation export:
   POST   /api/v1/experiment-runs/{run_id}/trials     create or claim a typed trial
   PATCH  /api/v1/experiment-runs/{run_id}/trials/{trial_id}
                                                         update a typed trial
+  POST   /api/v1/experiment-runs/{run_id}/trials/{trial_id}:evaluate
+                                                        queue a stored evaluator
+  GET    /api/v1/experiment-runs/{run_id}/trials/{trial_id}/evaluations/{evaluation_id}
+                                                        read evaluator status
   POST   /api/v1/experiment-runs/{run_id}/trials/{trial_id}/artifacts:upload
                                                         attach a trial artifact
 
@@ -269,6 +273,82 @@ def update_test_case_trial(
     url = _base_url(api_endpoint, insecure) + f"{_EXPERIMENT_RUNS_PREFIX}/{quoted_run_id}/trials/{quoted_trial_id}"
     body = _request_json("PATCH", url, headers, request, retry, ExperimentTransportError, "test case trial update")
     return body if isinstance(body, dict) else {}
+
+
+def trigger_trial_evaluation(
+    *,
+    api_endpoint: str,
+    insecure: bool,
+    headers: dict[str, str],
+    experiment_id: str,
+    trial_id: str,
+    evaluator_id: str,
+    evaluator_version: str = "",
+    retry: RetryPolicy | None = None,
+) -> dict[str, Any]:
+    """Queues a stored tenant evaluator against a trial's conversation."""
+
+    run_id = _validate_run_id(experiment_id)
+    normalized_trial_id = (trial_id or "").strip()
+    if not normalized_trial_id:
+        raise ValidationError("agento11y trial evaluation validation failed: trial_id is required")
+    normalized_evaluator_id = (evaluator_id or "").strip()
+    if not normalized_evaluator_id:
+        raise ValidationError("agento11y trial evaluation validation failed: evaluator_id is required")
+    url = (
+        _base_url(api_endpoint, insecure)
+        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(run_id, safe='')}/trials/"
+        + f"{urllib_parse.quote(normalized_trial_id, safe='')}:evaluate"
+    )
+    payload = {"evaluator_id": normalized_evaluator_id}
+    normalized_version = (evaluator_version or "").strip()
+    if normalized_version:
+        payload["evaluator_version"] = normalized_version
+    body = _request_json("POST", url, headers, payload, retry, ExperimentTransportError, "trial evaluation trigger")
+    return _validate_trial_evaluation_response(body)
+
+
+def get_trial_evaluation(
+    *,
+    api_endpoint: str,
+    insecure: bool,
+    headers: dict[str, str],
+    experiment_id: str,
+    trial_id: str,
+    evaluation_id: str,
+    retry: RetryPolicy | None = None,
+) -> dict[str, Any]:
+    """Reads durable status for a triggered trial evaluation."""
+
+    run_id = _validate_run_id(experiment_id)
+    normalized_trial_id = (trial_id or "").strip()
+    if not normalized_trial_id:
+        raise ValidationError("agento11y trial evaluation validation failed: trial_id is required")
+    normalized_evaluation_id = (evaluation_id or "").strip()
+    if not normalized_evaluation_id:
+        raise ValidationError("agento11y trial evaluation validation failed: evaluation_id is required")
+    url = (
+        _base_url(api_endpoint, insecure)
+        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(run_id, safe='')}/trials/"
+        + f"{urllib_parse.quote(normalized_trial_id, safe='')}/evaluations/"
+        + urllib_parse.quote(normalized_evaluation_id, safe="")
+    )
+    body = _request_json("GET", url, headers, None, retry, ExperimentTransportError, "trial evaluation status")
+    return _validate_trial_evaluation_response(body)
+
+
+def _validate_trial_evaluation_response(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ExperimentTransportError("agento11y trial evaluation transport failed: invalid response payload")
+    evaluation_id = _str(payload.get("evaluation_id")).strip()
+    if not evaluation_id:
+        raise ExperimentTransportError("agento11y trial evaluation transport failed: response carries no evaluation_id")
+    status = _str(payload.get("status")).strip().lower()
+    if status not in {"queued", "claimed", "success", "failed"}:
+        raise ExperimentTransportError(
+            f"agento11y trial evaluation transport failed: unsupported evaluation status {status!r}"
+        )
+    return dict(payload)
 
 
 def upload_trial_artifact(

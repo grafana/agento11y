@@ -10,8 +10,16 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 from agento11y import _experiments_transport as transport
-from agento11y.errors import ConflictError, ConflictKind, NotFoundError, ScoreExportError, ValidationError
+from agento11y.errors import (
+    ConflictError,
+    ConflictKind,
+    ExperimentTransportError,
+    NotFoundError,
+    ScoreExportError,
+    ValidationError,
+)
 from agento11y.experiments import Client as ExperimentClient
+from agento11y.experiments import TrialEvaluationStatus
 from agento11y.models import (
     CreateExperimentRequest,
     ExperimentEvaluator,
@@ -230,6 +238,60 @@ def test_complete_experiment_finalizes_run() -> None:
         }
         assert run.status == "completed"
         assert not hasattr(run, "score_count")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_trial_evaluation_trigger_and_status_routes() -> None:
+    recorder = _Recorder()
+    evaluation = {
+        "evaluation_id": "eval-1",
+        "experiment_id": "run/1",
+        "trial_id": "trial:1",
+        "evaluator_id": "helpfulness",
+        "evaluator_version": "v3",
+        "status": "queued",
+    }
+    recorder.push(202, evaluation)
+    recorder.push(200, {**evaluation, "status": "success", "attempts": 1})
+    server = _serve(recorder)
+    try:
+        client = ExperimentClient(
+            _args(server)["api_endpoint"],
+            tenant_id="tenant-a",
+            ingest_token="ingest-token-a",
+        )
+        queued = client.trigger_trial_evaluation("run/1", "trial:1", "helpfulness", evaluator_version="v3")
+        finished = client.get_trial_evaluation("run/1", "trial:1", queued.evaluation_id)
+
+        assert queued.status is TrialEvaluationStatus.QUEUED
+        assert finished.status is TrialEvaluationStatus.SUCCESS
+        assert finished.attempts == 1
+        assert recorder.requests[0]["path"] == "/api/v1/experiment-runs/run%2F1/trials/trial%3A1:evaluate"
+        assert recorder.requests[0]["payload"] == {
+            "evaluator_id": "helpfulness",
+            "evaluator_version": "v3",
+        }
+        assert recorder.requests[1]["path"] == ("/api/v1/experiment-runs/run%2F1/trials/trial%3A1/evaluations/eval-1")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("payload", [{"status": "queued"}, {"evaluation_id": "eval-1", "status": "mystery"}])
+def test_trial_evaluation_rejects_unusable_response(payload: dict[str, str]) -> None:
+    recorder = _Recorder()
+    recorder.push(202, payload)
+    server = _serve(recorder)
+    try:
+        with pytest.raises(ExperimentTransportError):
+            transport.trigger_trial_evaluation(
+                **_args(server),
+                experiment_id="run-1",
+                trial_id="trial-1",
+                evaluator_id="helpfulness",
+            )
     finally:
         server.shutdown()
         server.server_close()

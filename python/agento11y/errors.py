@@ -97,6 +97,32 @@ class ExperimentTransportError(Agento11yError):
     """Raised when an experiment request fails."""
 
 
+class TrialEvaluationFailedError(Agento11yError):
+    """Raised when a stored evaluator finishes a trial unsuccessfully."""
+
+    def __init__(self, evaluation_id: str, detail: str = "") -> None:
+        self.evaluation_id = (evaluation_id or "").strip()
+        self.detail = (detail or "").strip()
+        normalized_id = self.evaluation_id or "unknown"
+        message = f"agento11y trial evaluation {normalized_id} failed"
+        if self.detail:
+            message += f": {self.detail}"
+        super().__init__(message)
+
+
+class TrialEvaluationTimeoutError(Agento11yError):
+    """Raised when waiting for a stored evaluator exceeds its deadline."""
+
+    def __init__(self, evaluation_id: str, detail: str = "") -> None:
+        self.evaluation_id = (evaluation_id or "").strip()
+        self.detail = (detail or "").strip()
+        normalized_id = self.evaluation_id or "unknown"
+        message = f"agento11y trial evaluation {normalized_id} timed out"
+        if self.detail:
+            message += f": {self.detail}"
+        super().__init__(message)
+
+
 class ScoreExportError(Agento11yError):
     """Raised when a score export request fails at the transport level."""
 

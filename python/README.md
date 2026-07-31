@@ -804,6 +804,40 @@ Evaluator exceptions intentionally propagate after marking the current trial
 errored. To continue a batch after one judge failure, catch the exception around
 each `with exp.trial(...)` block.
 
+### Grading with a stored evaluator
+
+`trial.evaluate(...)` runs an evaluator stored in your Agent Observability tenant
+against the conversation already bound to the trial. Unlike
+`trial.evaluate_output(...)`, the backend owns the grading call and writes the
+score:
+
+```python
+with experiments.experiment("stored evaluator", experiment_id="run-1") as exp:
+    with exp.trial("case-1") as trial:
+        conversation_id = run_instrumented_agent("Capital of France?")
+        trial.bind_conversation(conversation_id)
+        evaluation = trial.evaluate(
+            "helpfulness",
+            evaluator_version="v3",  # optional; empty selects the latest active version
+        )
+        print(evaluation.status)
+```
+
+The call persists the conversation binding, flushes any anchor generation from
+`record_io(...)`, queues the evaluator, and polls until it succeeds or fails.
+`timeout` defaults to 300 seconds and `poll_interval` starts at 500 ms, doubling
+up to five seconds. Worker failures raise `TrialEvaluationFailedError`; timeouts
+raise `TrialEvaluationTimeoutError`. Both exceptions expose `evaluation_id` and
+`detail`, and a timeout leaves the evaluation running server-side.
+
+A successful stored evaluation lets the trial close as `completed` without a
+local `final_score(...)`. Because the backend writes a score the runner cannot
+count, an owning `Experiment` drops a caller-supplied `score_count` after an
+evaluation is queued. Standalone trials cannot mark their owning run, so callers
+using `Trial.from_ref(...)` must leave `score_count` unset themselves. For
+parallel grading, use `Client.trigger_trial_evaluation(...)` and
+`Client.get_trial_evaluation(...)` directly.
+
 See the [Experiments v2 migration guide](https://github.com/grafana/agento11y/blob/main/docs/experiments-python-v2-migration.md)
 before upgrading a v1 runner.
 
