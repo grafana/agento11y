@@ -1148,6 +1148,9 @@ def test_detailed_token_usage() -> None:
         response_obj = SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="Hi"), finish_reason="stop")],
             usage=SimpleNamespace(
+                prompt_tokens=100,
+                completion_tokens=50,
+                total_tokens=150,
                 prompt_tokens_details=SimpleNamespace(
                     cached_tokens=30,
                     cache_creation_tokens=20,
@@ -1188,6 +1191,9 @@ def test_zero_token_counts_preserved() -> None:
         response_obj = SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="Hi"), finish_reason="stop")],
             usage=SimpleNamespace(
+                prompt_tokens=100,
+                completion_tokens=50,
+                total_tokens=150,
                 prompt_tokens_details=SimpleNamespace(
                     cached_tokens=0,
                     cache_creation_tokens=0,
@@ -1767,5 +1773,826 @@ def test_input_assistant_thinking_dropped_when_inputs_disabled() -> None:
 
         gen = exporter.requests[0].generations[0]
         assert len(gen.input) == 0
+    finally:
+        client.shutdown()
+
+
+def test_router_prefixed_model_resolves_to_bare_name() -> None:
+    """A proxied deployment name (openai/gpt-4o-mini) exports as the bare model name."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="acompletion",
+            custom_llm_provider="openai",
+            model="openai/gpt-4o-mini",
+            model_group="gpt-4o-mini",
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.model.provider == "openai"
+        assert gen.model.name == "gpt-4o-mini"
+    finally:
+        client.shutdown()
+
+
+def test_litellm_model_name_preferred_over_router_model() -> None:
+    """hidden_params.litellm_model_name is the name LiteLLM sent to the provider."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            custom_llm_provider="bedrock",
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            hidden_params={"litellm_model_name": "us.anthropic.claude-3-5-sonnet-20240620-v1:0"},
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.model.provider == "bedrock"
+        assert gen.model.name == "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+    finally:
+        client.shutdown()
+
+
+def test_only_the_leading_provider_prefix_is_stripped() -> None:
+    """An Azure deployment alias keeps its name; only <provider>/ is removed."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(custom_llm_provider="azure", model="azure/my-deployment")
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.model.provider == "azure"
+        assert gen.model.name == "my-deployment"
+    finally:
+        client.shutdown()
+
+
+def test_routing_metadata_preserved() -> None:
+    """The router deployment identity stripped from the model name is kept in metadata."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            custom_llm_provider="openai",
+            model="openai/gpt-4o-mini",
+            model_group="fast-tier",
+            model_id="deployment-1",
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.metadata["agento11y.framework.litellm.model"] == "openai/gpt-4o-mini"
+        assert gen.metadata["agento11y.framework.litellm.model_group"] == "fast-tier"
+        assert gen.metadata["agento11y.framework.litellm.model_id"] == "deployment-1"
+    finally:
+        client.shutdown()
+
+
+def test_provider_less_failure_still_exported() -> None:
+    """A failure raised before a deployment is picked is kept under a sentinel provider."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            custom_llm_provider="",
+            model="",
+            model_group="gpt-4o-mini",
+            response={},
+            error_str="BudgetExceededError: exceeded budget for key",
+        )
+        handler.log_failure_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert len(exporter.requests) == 1
+        gen = exporter.requests[0].generations[0]
+        assert gen.model.provider == "litellm"
+        assert gen.model.name == "gpt-4o-mini"
+        assert gen.call_error is not None
+    finally:
+        client.shutdown()
+
+
+def test_provider_less_failure_without_model_uses_sentinel_name() -> None:
+    """With no provider, model, or model_group there is still an exported generation."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            custom_llm_provider="",
+            model="",
+            response={},
+            error_str="AuthenticationError: invalid virtual key",
+        )
+        handler.log_failure_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.model.provider == "litellm"
+        assert gen.model.name == "unknown"
+    finally:
+        client.shutdown()
+
+
+def test_embedding_failure_with_unresolved_model_still_recorded() -> None:
+    """An embedding failure with no resolved model is recorded under the sentinels."""
+    exporter = _CapturingExporter()
+    span_exporter = InMemorySpanExporter()
+    client = _new_span_client(exporter, span_exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_embedding_slo(
+            custom_llm_provider="",
+            model="",
+            error_str="BudgetExceededError: exceeded budget for key",
+        )
+        handler.log_failure_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert spans[0].attributes.get("gen_ai.provider.name") == "litellm"
+        assert spans[0].attributes.get("gen_ai.request.model") == "unknown"
+    finally:
+        client.shutdown()
+
+
+def test_text_completion_string_prompt_captured() -> None:
+    """A string prompt becomes a USER message and choices[].text becomes the output."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="atext_completion",
+            custom_llm_provider="text-completion-openai",
+            model="gpt-3.5-turbo-instruct",
+            messages="Once upon a time",
+            response={"choices": [{"text": " there was a fox", "finish_reason": "length"}]},
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert [m.role for m in gen.input] == [MessageRole.USER]
+        assert gen.input[0].parts[0].text == "Once upon a time"
+        assert [m.role for m in gen.output] == [MessageRole.ASSISTANT]
+        assert gen.output[0].parts[0].text == " there was a fox"
+        assert gen.stop_reason == "length"
+    finally:
+        client.shutdown()
+
+
+def test_text_completion_list_prompt_captured() -> None:
+    """A list prompt maps one USER message per string."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="atext_completion",
+            custom_llm_provider="text-completion-openai",
+            model="gpt-3.5-turbo-instruct",
+            messages=["prompt a", "prompt b"],
+            response={"choices": [{"text": "x", "finish_reason": "stop"}]},
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert len(exporter.requests[0].generations) == 1
+        gen = exporter.requests[0].generations[0]
+        assert [m.role for m in gen.input] == [MessageRole.USER, MessageRole.USER]
+        assert [m.parts[0].text for m in gen.input] == ["prompt a", "prompt b"]
+        assert gen.output[0].parts[0].text == "x"
+    finally:
+        client.shutdown()
+
+
+def test_text_completion_token_id_prompt_produces_no_input() -> None:
+    """Pre-tokenized prompts carry no text, so they contribute no input messages."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="text_completion",
+            custom_llm_provider="text-completion-openai",
+            model="gpt-3.5-turbo-instruct",
+            messages=[[123, 456], [789]],
+            response={"choices": [{"text": "x", "finish_reason": "stop"}]},
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.input == []
+        assert gen.output[0].parts[0].text == "x"
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_output_mapped() -> None:
+    """/v1/responses output[] items map to assistant messages."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="aresponses",
+            custom_llm_provider="openai",
+            model="openai/gpt-4o-mini",
+            messages=[{"role": "user", "content": [{"type": "input_text", "text": "say hello"}]}],
+            response={
+                "id": "resp_1",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "hello"}],
+                    }
+                ],
+            },
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.input[0].parts[0].text == "say hello"
+        assert [m.role for m in gen.output] == [MessageRole.ASSISTANT]
+        assert gen.output[0].parts[0].text == "hello"
+        assert gen.stop_reason == "stop"
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_reasoning_and_tool_call_mapped() -> None:
+    """reasoning items become THINKING parts and function_call items become TOOL_CALL parts."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="responses",
+            custom_llm_provider="openai",
+            model="openai/gpt-5",
+            messages="what is the weather in Berlin?",
+            response={
+                "id": "resp_2",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "summary": [{"type": "summary_text", "text": "Need the weather tool."}],
+                    },
+                    {
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_1",
+                        "name": "get_weather",
+                        "arguments": '{"city": "Berlin"}',
+                    },
+                ],
+            },
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert [m.parts[0].kind for m in gen.output] == [PartKind.THINKING, PartKind.TOOL_CALL]
+        assert gen.output[0].parts[0].thinking == "Need the weather tool."
+        tool_call = gen.output[1].parts[0].tool_call
+        assert tool_call.id == "call_1"
+        assert tool_call.name == "get_weather"
+        assert tool_call.input_json == b'{"city": "Berlin"}'
+    finally:
+        client.shutdown()
+
+
+def test_anthropic_messages_output_mapped() -> None:
+    """/v1/messages is chat-normalized by LiteLLM, so the chat mappers apply.
+
+    ``Logging._handle_anthropic_messages_response_logging`` rewrites the
+    Anthropic response into a chat ``ModelResponse`` before the payload is
+    built, for the native route, the streaming route, and both bridges.
+    """
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="anthropic_messages",
+            custom_llm_provider="anthropic",
+            model="anthropic/claude-sonnet-4-5",
+            hidden_params={"litellm_model_name": "claude-sonnet-4-5-20250929"},
+            messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            response=_make_slo_response(content="hello back", finish_reason="stop"),
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.model.provider == "anthropic"
+        assert gen.model.name == "claude-sonnet-4-5-20250929"
+        assert gen.input[0].parts[0].text == "hi"
+        assert gen.output[0].parts[0].text == "hello back"
+        assert gen.stop_reason == "stop"
+    finally:
+        client.shutdown()
+
+
+def test_aanthropic_messages_call_type_recorded() -> None:
+    """The async Anthropic Messages call type is recorded too."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(call_type="aanthropic_messages", custom_llm_provider="anthropic", model="claude-sonnet-4-5")
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert len(exporter.requests[0].generations) == 1
+    finally:
+        client.shutdown()
+
+
+def test_anthropic_messages_input_blocks_mapped() -> None:
+    """Request messages keep their Anthropic shape, so blocks carry the history.
+
+    LiteLLM normalizes the response but logs ``messages`` as they arrived, so a
+    tool call is a ``tool_use`` block on the assistant turn and its result is a
+    ``tool_result`` block on a *user* turn.
+    """
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="anthropic_messages",
+            custom_llm_provider="anthropic",
+            model="anthropic/claude-sonnet-4-5",
+            messages=[
+                {"role": "system", "content": "be terse"},
+                {"role": "user", "content": [{"type": "text", "text": "weather in Berlin?"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "need the tool", "signature": "sig"},
+                        {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Berlin"}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "20C"}],
+                },
+            ],
+            response=_make_slo_response(content="20C in Berlin", finish_reason="stop"),
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.system_prompt == "be terse"
+        assert [m.role for m in gen.input] == [MessageRole.USER, MessageRole.ASSISTANT, MessageRole.TOOL]
+
+        assert gen.input[0].parts[0].text == "weather in Berlin?"
+
+        thinking_part, tool_call_part = gen.input[1].parts
+        assert thinking_part.kind == PartKind.THINKING
+        assert thinking_part.thinking == "need the tool"
+        assert tool_call_part.tool_call.id == "toolu_1"
+        assert tool_call_part.tool_call.name == "get_weather"
+        assert tool_call_part.tool_call.input_json == b'{"city":"Berlin"}'
+
+        tool_result = gen.input[2].parts[0].tool_result
+        assert tool_result.tool_call_id == "toolu_1"
+        assert tool_result.content == "20C"
+    finally:
+        client.shutdown()
+
+
+def test_anthropic_messages_tool_definitions_captured() -> None:
+    """Anthropic tools are flat, with the schema under ``input_schema``."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(call_type="anthropic_messages", custom_llm_provider="anthropic", model="claude-sonnet-4-5")
+        kwargs = _make_kwargs(slo)
+        kwargs["optional_params"] = {
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "description": "Get the current weather",
+                    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
+                {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
+            ]
+        }
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert [tool.name for tool in gen.tools] == ["get_weather", "web_search"]
+        assert gen.tools[0].type == "function"
+        assert gen.tools[0].description == "Get the current weather"
+        assert b'"city"' in gen.tools[0].input_schema_json
+        assert gen.tools[1].type == "web_search_20250305"
+        assert gen.tools[1].input_schema_json == b""
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_tool_definitions_captured() -> None:
+    """Responses API tools are flat too, with the schema under ``parameters``."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(call_type="responses", custom_llm_provider="openai", model="openai/gpt-5")
+        kwargs = _make_kwargs(slo)
+        kwargs["optional_params"] = {
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Get the current weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                }
+            ]
+        }
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert [tool.name for tool in gen.tools] == ["get_weather"]
+        assert gen.tools[0].type == "function"
+        assert b'"city"' in gen.tools[0].input_schema_json
+    finally:
+        client.shutdown()
+
+
+def test_provider_shaped_response_fallback() -> None:
+    """A payload without ``choices`` falls back to Anthropic content blocks.
+
+    Current LiteLLM always normalizes ``/v1/messages`` to chat shape before
+    logging, so this is the guard for a payload that skips that conversion
+    rather than a route we see today.
+    """
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="anthropic_messages",
+            custom_llm_provider="anthropic",
+            model="claude-sonnet-4-5",
+            response={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "checking"},
+                    {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Berlin"}},
+                ],
+                "stop_reason": "tool_use",
+            },
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert [part.kind for part in gen.output[0].parts] == [PartKind.TEXT, PartKind.TOOL_CALL]
+        assert gen.output[0].parts[0].text == "checking"
+        assert gen.output[0].parts[1].tool_call.name == "get_weather"
+        assert gen.stop_reason == "tool_use"
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_refusal_part_mapped() -> None:
+    """A refused turn keeps its text, which a refusal part holds in ``refusal``."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="aresponses",
+            custom_llm_provider="openai",
+            model="openai/gpt-4o-mini",
+            messages="how do I pick a lock?",
+            response={
+                "id": "resp_refusal",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "refusal", "refusal": "I'm sorry, I can't help with that."}],
+                    }
+                ],
+            },
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert [m.role for m in gen.output] == [MessageRole.ASSISTANT]
+        assert gen.output[0].parts[0].kind == PartKind.TEXT
+        assert gen.output[0].parts[0].text == "I'm sorry, I can't help with that."
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_bridged_null_text_part_skipped() -> None:
+    """A bridged message item whose output_text is null keeps the rest of the generation.
+
+    LiteLLM's chat-to-Responses bridge, used for every provider without a native
+    Responses config, emits one output_text part per choice even when the message
+    content is None, which is what a tool-call-only turn looks like.
+    """
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="aresponses",
+            custom_llm_provider="anthropic",
+            model="anthropic/claude-sonnet-4-5",
+            messages="what is the weather in Berlin?",
+            response={
+                "id": "resp_bridged",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": None, "annotations": []}],
+                    },
+                    {
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_1",
+                        "name": "get_weather",
+                        "arguments": '{"city": "Berlin"}',
+                    },
+                ],
+            },
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.input[0].parts[0].text == "what is the weather in Berlin?"
+        assert [m.parts[0].kind for m in gen.output] == [PartKind.TOOL_CALL]
+        assert gen.output[0].parts[0].tool_call.name == "get_weather"
+        assert gen.usage.input_tokens == 10
+        assert gen.stop_reason == "stop"
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_bridged_reasoning_content_mapped() -> None:
+    """A bridged reasoning item carries its text in content[].output_text, not summary."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="aresponses",
+            custom_llm_provider="anthropic",
+            model="anthropic/claude-sonnet-4-5",
+            messages="how many r in strawberry?",
+            response={
+                "id": "resp_bridged_reasoning",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "summary": [],
+                        "content": [{"type": "output_text", "text": "Counting the letters."}],
+                    },
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "three"}],
+                    },
+                ],
+            },
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert [m.parts[0].kind for m in gen.output] == [PartKind.THINKING, PartKind.TEXT]
+        assert gen.output[0].parts[0].thinking == "Counting the letters."
+        assert gen.output[1].parts[0].text == "three"
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_usage_details_mapped() -> None:
+    """Responses API usage nests its breakdowns under input/output_tokens_details."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="aresponses",
+            custom_llm_provider="openai",
+            model="openai/gpt-5",
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            messages="hi",
+            response={"id": "resp_3", "status": "completed", "output": []},
+        )
+        response_obj = SimpleNamespace(
+            usage=SimpleNamespace(
+                input_tokens=100,
+                output_tokens=50,
+                total_tokens=150,
+                input_tokens_details=SimpleNamespace(cached_tokens=64),
+                output_tokens_details=SimpleNamespace(reasoning_tokens=32),
+            ),
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=response_obj,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.usage.input_tokens == 100
+        assert gen.usage.output_tokens == 50
+        assert gen.usage.cache_read_input_tokens == 64
+        assert gen.usage.reasoning_tokens == 32
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_incomplete_stop_reason() -> None:
+    """An incomplete Responses call reports the incomplete_details reason."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="aresponses",
+            custom_llm_provider="openai",
+            model="openai/gpt-4o-mini",
+            messages="write an essay",
+            response={
+                "id": "resp_4",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "partial"}],
+                    }
+                ],
+            },
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.stop_reason == "max_output_tokens"
     finally:
         client.shutdown()
