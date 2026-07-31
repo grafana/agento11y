@@ -16,7 +16,7 @@
           {
             "type": "command",
             "command": "agento11y claude-code hook || sigil claude-code hook",
-            "timeout": 2000
+            "timeout": 5
           }
         ]
       }
@@ -28,7 +28,7 @@
           {
             "type": "command",
             "command": "agento11y claude-code hook || sigil claude-code hook",
-            "timeout": 2000
+            "timeout": 10
           }
         ]
       }
@@ -40,7 +40,7 @@
           {
             "type": "command",
             "command": "agento11y claude-code hook || sigil claude-code hook",
-            "timeout": 10000
+            "timeout": 20
           }
         ]
       }
@@ -52,7 +52,7 @@
           {
             "type": "command",
             "command": "agento11y claude-code hook || sigil claude-code hook",
-            "timeout": 10000
+            "timeout": 20
           }
         ]
       }
