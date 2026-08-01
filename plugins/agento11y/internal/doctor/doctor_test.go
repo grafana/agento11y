@@ -644,6 +644,152 @@ func TestCollectConfig_Tags(t *testing.T) {
 	}
 }
 
+// TestCollectConfig_Local covers the LOCAL row: doctor reports the value the
+// launcher acts on (shell before config.env), renders it, warns when the value
+// is not a boolean, and states that local mode stops at the launcher.
+func TestCollectConfig_Local(t *testing.T) {
+	// The table below builds osEnv by hand, so it cannot catch a family missing
+	// from the snapshot the binary actually passes in. Without the entry, a
+	// shell-exported AGENTO11Y_LOCAL reads as unset here while the launcher acts
+	// on it.
+	if !slices.Contains(trackedSuffixes, "LOCAL") {
+		t.Fatal("LOCAL must be in trackedSuffixes or SnapshotEnv drops it and this report reads it as unset")
+	}
+	const scopeMsg = "local mode covers `agento11y <agent>` launches"
+	tests := []struct {
+		name            string
+		osEnv           map[string]string
+		fileEnv         map[string]string
+		wantValue       string // "" means the family is unset
+		wantSource      string
+		wantInvalid     bool
+		wantHealth      Health
+		wantScopeMsg    bool
+		wantMsg         string // substring of a ConfigSection message
+		wantRendered    []string
+		wantNotRendered []string
+	}{
+		{
+			name:            "unset",
+			wantHealth:      HealthOK,
+			wantNotRendered: []string{"local mode"},
+		},
+		{
+			name:         "from config.env",
+			fileEnv:      map[string]string{"AGENTO11Y_LOCAL": "true"},
+			wantValue:    "true",
+			wantSource:   sourceConfig,
+			wantHealth:   HealthOK,
+			wantScopeMsg: true,
+			wantRendered: []string{"local mode", "true (config.env)"},
+		},
+		{
+			name:         "from env",
+			osEnv:        map[string]string{"AGENTO11Y_LOCAL": "true"},
+			wantValue:    "true",
+			wantSource:   sourceEnv,
+			wantHealth:   HealthOK,
+			wantScopeMsg: true,
+			wantRendered: []string{"local mode", "true (env)"},
+		},
+		{
+			name:         "legacy spelling",
+			osEnv:        map[string]string{"SIGIL_LOCAL": "on"},
+			wantValue:    "on",
+			wantSource:   sourceEnv,
+			wantHealth:   HealthOK,
+			wantScopeMsg: true,
+			wantMsg:      "the preferred name is AGENTO11Y_LOCAL",
+			wantRendered: []string{"on (env)"},
+		},
+		{
+			// The one-off Cloud session: the shell value is what the launcher
+			// acts on, so it is what doctor must report.
+			name:            "shell false overrides config.env true",
+			osEnv:           map[string]string{"AGENTO11Y_LOCAL": "false"},
+			fileEnv:         map[string]string{"AGENTO11Y_LOCAL": "true"},
+			wantValue:       "false",
+			wantSource:      sourceEnv,
+			wantHealth:      HealthOK,
+			wantRendered:    []string{"false (env)"},
+			wantNotRendered: []string{"invalid value"},
+		},
+		{
+			// The launcher ignores a value outside the boolean whitelist, so a
+			// report that prints it plainly confirms the wrong belief.
+			name:         "value outside the boolean whitelist",
+			osEnv:        map[string]string{"AGENTO11Y_LOCAL": "enabled"},
+			wantValue:    "enabled",
+			wantSource:   sourceEnv,
+			wantInvalid:  true,
+			wantHealth:   HealthWarn,
+			wantMsg:      "the AGENTO11Y_LOCAL value is not a boolean; local mode stays off",
+			wantRendered: []string{"enabled (env)", "invalid value, local mode is off"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnv(t)
+			sec := collectConfig(tc.osEnv, tc.fileEnv)
+			if sec.Local.Set != (tc.wantValue != "") {
+				t.Fatalf("Local.Set = %v, want %v", sec.Local.Set, tc.wantValue != "")
+			}
+			if sec.Local.Value != tc.wantValue {
+				t.Fatalf("Local.Value = %q, want %q", sec.Local.Value, tc.wantValue)
+			}
+			if sec.Local.Source != tc.wantSource {
+				t.Fatalf("Local.Source = %q, want %q", sec.Local.Source, tc.wantSource)
+			}
+			if sec.LocalInvalid != tc.wantInvalid {
+				t.Fatalf("LocalInvalid = %v, want %v", sec.LocalInvalid, tc.wantInvalid)
+			}
+			if sec.Health != tc.wantHealth {
+				t.Fatalf("Health = %q, want %q (messages %v)", sec.Health, tc.wantHealth, sec.Messages)
+			}
+
+			joined := strings.Join(sec.Messages, " ")
+			if tc.wantMsg != "" && !strings.Contains(joined, tc.wantMsg) {
+				t.Fatalf("messages %v missing %q", sec.Messages, tc.wantMsg)
+			}
+			if got := strings.Contains(joined, scopeMsg); got != tc.wantScopeMsg {
+				t.Fatalf("scope message present = %v, want %v (messages %v)", got, tc.wantScopeMsg, sec.Messages)
+			}
+
+			var buf bytes.Buffer
+			renderHuman(&buf, &Report{Config: sec}, false, false)
+			rendered := buf.String()
+			for _, want := range tc.wantRendered {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("rendered report missing %q:\n%s", want, rendered)
+				}
+			}
+			for _, none := range tc.wantNotRendered {
+				if strings.Contains(rendered, none) {
+					t.Fatalf("rendered report contains %q:\n%s", none, rendered)
+				}
+			}
+		})
+	}
+}
+
+// TestCollect_LocalModeScopeReachesTheReport pins the wiring: the scope message
+// has to survive Collect, not just collectConfig, or the whole warning is
+// invisible in the command a user actually runs.
+func TestCollect_LocalModeScopeReachesTheReport(t *testing.T) {
+	isolateEnv(t)
+	stubSeams(t)
+	writeConfig(t, "AGENTO11Y_LOCAL=true\n")
+
+	r := Collect(context.Background(), Options{}, Params{Version: "1.2.3"})
+	if !r.Config.Local.Set || r.Config.Local.Value != "true" {
+		t.Fatalf("Config.Local = %+v, want the config.env value", r.Config.Local)
+	}
+	joined := strings.Join(r.Config.Messages, " ")
+	if !strings.Contains(joined, "local mode covers `agento11y <agent>` launches") {
+		t.Fatalf("report messages %v missing the local-mode scope message", r.Config.Messages)
+	}
+}
+
 // TestCollectConfig_LocalForward covers the LOCAL_FORWARD attribution: doctor
 // reports shell-first like every other family, and calls out the case where the
 // local daemon (which prefers config.env) would use the other value.
@@ -683,10 +829,9 @@ func TestCollectConfig_LocalForward(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// collectConfig resolves LOCAL_FORWARD from its arguments, so the
+			// table needs no exported values.
 			isolateEnv(t)
-			for k, v := range tc.osEnv {
-				t.Setenv(k, v)
-			}
 			sec := collectConfig(tc.osEnv, tc.fileEnv)
 			if sec.LocalForward.Set != tc.wantSet {
 				t.Fatalf("LocalForward.Set = %v, want %v", sec.LocalForward.Set, tc.wantSet)

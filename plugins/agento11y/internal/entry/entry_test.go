@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,8 +34,17 @@ import (
 // single hook or launcher dispatch test reading the developer's real
 // ~/.config/agento11y/config.env would leak SIGIL_* values (e.g. guard flags)
 // into every later test in the package.
+//
+// It clears both spellings of every alias family for the same reason, and
+// isolateDotenvHome pins them per test on top of that. A developer shell that
+// exports AGENTO11Y_LOCAL=true would otherwise route every launcher test into
+// local mode, and the daemon those tests would start is this test binary.
 func TestMain(m *testing.M) {
 	loginRun = func(context.Context, login.RunOpts) error { return login.ErrNotInteractive }
+	for _, suffix := range envconfig.AliasSuffixes {
+		_ = os.Unsetenv(envconfig.PreferredKey(suffix))
+		_ = os.Unsetenv(envconfig.LegacyKey(suffix))
+	}
 	tmp, err := os.MkdirTemp("", "sigil-entry-test-home-*")
 	if err != nil {
 		panic(err)
@@ -45,6 +55,20 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = os.RemoveAll(tmp)
 	os.Exit(code)
+}
+
+// TestAliasEnvIsScrubbedForThePackage pins the TestMain guard. Launcher tests
+// that do not call isolateDotenvHome run against the process environment, and a
+// shell AGENTO11Y_LOCAL=true would send them into local mode, where the daemon
+// they start is this test binary running the whole suite again.
+func TestAliasEnvIsScrubbedForThePackage(t *testing.T) {
+	for _, suffix := range envconfig.AliasSuffixes {
+		for _, key := range []string{envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix)} {
+			if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+				t.Errorf("%s = %q at test start; TestMain must clear every alias family", key, v)
+			}
+		}
+	}
 }
 
 func TestRun_VersionFlag(t *testing.T) {
@@ -78,6 +102,9 @@ func TestRun_UsageOnZeroArgs(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "usage:") {
 		t.Fatalf("stderr missing usage message: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "[--local|--no-local]") {
+		t.Fatalf("usage does not offer --no-local: %q", stderr.String())
 	}
 }
 
@@ -853,6 +880,15 @@ func intPtr(c int) *int { return &c }
 // uses, so URL routing and JSONL writes are real.
 func inProcessDaemon(t *testing.T) (dir string, baseURL string) {
 	t.Helper()
+	dir, baseURL, _ = inProcessDaemonWithStartCount(t)
+	return dir, baseURL
+}
+
+// inProcessDaemonWithStartCount is inProcessDaemon plus a counter of daemon
+// starts, so a test can prove that a suppressed local mode starts nothing.
+func inProcessDaemonWithStartCount(t *testing.T) (dir string, baseURL string, starts *int) {
+	t.Helper()
+	starts = new(int)
 	dir = filepath.Join(t.TempDir(), "local")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -872,6 +908,7 @@ func inProcessDaemon(t *testing.T) (dir string, baseURL string) {
 	colon := strings.LastIndex(host, ":")
 	port, _ := strconv.Atoi(host[colon+1:])
 	restore := local.SetStartDaemonForTesting(func(_ context.Context, _ string, _ *log.Logger) (*local.Status, error) {
+		*starts++
 		s := local.Status{
 			PID:       os.Getpid(),
 			Port:      port,
@@ -882,7 +919,7 @@ func inProcessDaemon(t *testing.T) (dir string, baseURL string) {
 		return &s, nil
 	})
 	t.Cleanup(restore)
-	return dir, ts.URL
+	return dir, ts.URL, starts
 }
 
 // TestRenderLocalBanner_PrivacyClaimTracksPosture covers the one sentence in
@@ -928,7 +965,7 @@ func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := renderLocalBanner("http://127.0.0.1:8765", tc.posture, tc.postureErr)
+			got := renderLocalBanner("http://127.0.0.1:8765", tc.posture, tc.postureErr, "")
 			for _, want := range tc.want {
 				assert.Contains(t, got, want)
 			}
@@ -975,6 +1012,201 @@ func TestRun_LauncherLocalFlagInjectsOpts(t *testing.T) {
 			assert.Equal(t, daemonURL, gotEnv.Endpoint)
 			assert.Equal(t, daemonURL+"/otlp", gotEnv.OTLPEndpoint)
 			assert.Contains(t, stderr.String(), "agento11y local mode")
+		})
+	}
+}
+
+// TestRun_LauncherLocalFromEnv covers the LOCAL alias family as a persistent
+// stand-in for --local, plus the two ways to force one Cloud session while it
+// is on: a shell override and --no-local.
+func TestRun_LauncherLocalFromEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		shellEnv   map[string]string
+		configEnv  string   // config.env contents; written when non-empty
+		argv       []string // launcher-side args, before any `--`
+		wantLocal  bool
+		wantSource string // variable the banner names, or "" for no source line
+	}{
+		{
+			name:       "shell preferred spelling",
+			shellEnv:   map[string]string{"AGENTO11Y_LOCAL": "true"},
+			wantLocal:  true,
+			wantSource: "AGENTO11Y_LOCAL",
+		},
+		{
+			name:       "config.env",
+			configEnv:  "AGENTO11Y_LOCAL=true\n",
+			wantLocal:  true,
+			wantSource: "AGENTO11Y_LOCAL",
+		},
+		{
+			// The banner names the spelling the user set, so a legacy setter
+			// greps for a variable that is in their config.
+			name:       "shell legacy spelling",
+			shellEnv:   map[string]string{"SIGIL_LOCAL": "on"},
+			wantLocal:  true,
+			wantSource: "SIGIL_LOCAL",
+		},
+		{
+			name:       "config.env legacy spelling",
+			configEnv:  "SIGIL_LOCAL=true\n",
+			wantLocal:  true,
+			wantSource: "SIGIL_LOCAL",
+		},
+		{
+			// A shell value beats a config.env one, so this is the one-off
+			// Cloud session for a user who set the file value.
+			name:      "shell false beats config.env true",
+			shellEnv:  map[string]string{"AGENTO11Y_LOCAL": "false"},
+			configEnv: "AGENTO11Y_LOCAL=true\n",
+		},
+		{
+			name:     "unsupported boolean",
+			shellEnv: map[string]string{"AGENTO11Y_LOCAL": "enabled"},
+		},
+		{
+			name:     "no-local beats env",
+			shellEnv: map[string]string{"AGENTO11Y_LOCAL": "true"},
+			argv:     []string{"--no-local"},
+		},
+		{
+			name:     "no-local after local",
+			shellEnv: map[string]string{"AGENTO11Y_LOCAL": "true"},
+			argv:     []string{"--local", "--no-local"},
+		},
+		{
+			name:     "local after no-local",
+			shellEnv: map[string]string{"AGENTO11Y_LOCAL": "true"},
+			argv:     []string{"--no-local", "--local"},
+		},
+		{
+			// Nothing in the environment asked for local mode, so the banner
+			// must not blame one.
+			name:      "flag only",
+			argv:      []string{"--local"},
+			wantLocal: true,
+		},
+		{
+			// The user asked for local mode in this command, so the setting is
+			// not what they need to know about.
+			name:      "flag with env on",
+			shellEnv:  map[string]string{"AGENTO11Y_LOCAL": "true"},
+			argv:      []string{"--local"},
+			wantLocal: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := isolateDotenvHome(t)
+			if tc.configEnv != "" {
+				cfgDir := filepath.Join(dir, "config", "agento11y")
+				require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.env"), []byte(tc.configEnv), 0o600))
+			}
+			for k, v := range tc.shellEnv {
+				t.Setenv(k, v)
+			}
+			_, daemonURL, starts := inProcessDaemonWithStartCount(t)
+
+			// No credentials are configured, so a Cloud session prompts for
+			// login and a local one does not.
+			loginCalls := 0
+			withStubLoginRun(t, func(context.Context, login.RunOpts) error {
+				loginCalls++
+				return login.ErrNotInteractive
+			})
+
+			var gotEnv *local.LaunchEnv
+			called := false
+			withStubLauncher(t, "claude", func(_ context.Context, _ []string, env *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
+				called = true
+				gotEnv = env
+				return nil
+			})
+
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run(append([]string{"claude"}, tc.argv...), strings.NewReader(""), &stdout, &stderr)
+			})
+			require.Nil(t, gotExit, "stderr=%q", stderr.String())
+			require.True(t, called, "launcher was not called")
+
+			if !tc.wantLocal {
+				assert.Nil(t, gotEnv)
+				assert.Equal(t, 0, *starts, "daemon must not start")
+				assert.NotContains(t, stderr.String(), "agento11y local mode")
+				assert.Equal(t, 1, loginCalls, "a Cloud session with no credentials prompts for login")
+				if slices.Contains(tc.argv, "--no-local") {
+					// The agent and anything it starts inherit this environment,
+					// where dotenv materialized the family under both spellings.
+					assert.Equal(t, "false", envconfig.Getenv("LOCAL"))
+				}
+				return
+			}
+
+			require.NotNil(t, gotEnv)
+			assert.Equal(t, daemonURL, gotEnv.Endpoint)
+			assert.Equal(t, daemonURL+"/otlp", gotEnv.OTLPEndpoint)
+			assert.Contains(t, stderr.String(), "agento11y local mode")
+			assert.Equal(t, 0, loginCalls, "local mode injects placeholder credentials instead of prompting")
+			if tc.wantSource != "" {
+				assert.Contains(t, stderr.String(), "(enabled by "+tc.wantSource+")")
+			} else {
+				assert.NotContains(t, stderr.String(), "(enabled by")
+			}
+		})
+	}
+}
+
+// TestRun_LauncherLocalDaemonFailure covers the failure a user did not ask for:
+// with the setting on, a daemon that will not start blocks every launch, and
+// the error has to name the setting and the way past it.
+func TestRun_LauncherLocalDaemonFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		shellEnv map[string]string
+		argv     []string
+		wantHint bool
+	}{
+		{
+			name:     "env driven",
+			shellEnv: map[string]string{"AGENTO11Y_LOCAL": "true"},
+			wantHint: true,
+		},
+		{
+			// The user asked for local mode in this command, so a bare failure
+			// is the whole answer.
+			name: "flag only",
+			argv: []string{"--local"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			for k, v := range tc.shellEnv {
+				t.Setenv(k, v)
+			}
+			restore := local.SetStartDaemonForTesting(func(context.Context, string, *log.Logger) (*local.Status, error) {
+				return nil, errors.New("port 8765 is taken")
+			})
+			t.Cleanup(restore)
+			withStubLauncher(t, "claude", func(_ context.Context, _ []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
+				t.Fatal("launcher must not be called when the receiver did not start")
+				return nil
+			})
+
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run(append([]string{"claude"}, tc.argv...), strings.NewReader(""), &stdout, &stderr)
+			})
+			require.NotNil(t, gotExit)
+			assert.Equal(t, 1, *gotExit)
+			assert.Contains(t, stderr.String(), "failed to start local receiver")
+			if tc.wantHint {
+				assert.Contains(t, stderr.String(), "local mode is on because AGENTO11Y_LOCAL is set")
+				assert.Contains(t, stderr.String(), "--no-local")
+			} else {
+				assert.NotContains(t, stderr.String(), "--no-local")
+			}
 		})
 	}
 }

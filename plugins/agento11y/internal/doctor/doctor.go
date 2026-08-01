@@ -63,6 +63,7 @@ var trackedSuffixes = []string{
 	"CONTENT_CAPTURE_MODE",
 	"TAGS",
 	"AUTO_UPDATE",
+	"LOCAL",
 	"LOCAL_FORWARD",
 	// GUARDS_ENABLED is tracked for LocalHookForward only. Everything else
 	// reads the guard settings through envconfig.ResolveGuards, which is the
@@ -149,6 +150,13 @@ type ConfigSection struct {
 	GuardsFellBack      bool              `json:"guards_fell_back,omitempty"`
 	Tags                map[string]string `json:"tags,omitempty"`
 	TagsSource          string            `json:"tags_source,omitempty"`
+	// Local is the resolved LOCAL family: whether `agento11y <agent>` starts in
+	// local mode without --local, and where the value came from.
+	Local envValue `json:"local"`
+	// LocalInvalid reports that the LOCAL value is set to something outside the
+	// boolean whitelist. The launcher ignores such a value, so the report has to
+	// say the setting is not in effect.
+	LocalInvalid bool `json:"local_invalid,omitempty"`
 	// LocalForward is the resolved LOCAL_FORWARD family: whether a `--local`
 	// daemon also forwards what it captures to Cloud, and where the value came
 	// from. The daemon itself resolves config.env ahead of its own environment
@@ -521,6 +529,13 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 		}
 	}
 
+	// LOCAL turns every launcher run into a local session, so report the
+	// effective value and where it came from.
+	localMode := resolveFamily("LOCAL", osEnv, fileEnv)
+	localOn, localValid := envconfig.ParseBoolValue(localMode.value)
+	sec.Local = localMode.envValue()
+	sec.LocalInvalid = localMode.set && !localValid
+
 	// LOCAL_FORWARD sends a copy of every --local session to Cloud, so make the
 	// effective value and its source visible.
 	forward := resolveFamily("LOCAL_FORWARD", osEnv, fileEnv)
@@ -569,6 +584,22 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	if forward.set && forward.source == sourceEnv && strings.TrimSpace(fileEnv[envconfig.PreferredKey("LOCAL_FORWARD")]+fileEnv[envconfig.LegacyKey("LOCAL_FORWARD")]) != "" {
 		sec.Messages = append(sec.Messages, fmt.Sprintf(
 			"%s is set in the environment and in config.env; the local daemon uses the config.env value", forward.key))
+	}
+	if sec.LocalInvalid {
+		sec.Health = HealthWarn
+		sec.Messages = append(sec.Messages, fmt.Sprintf(
+			"the %s value is not a boolean; local mode stays off", localMode.key))
+	}
+	if localMode.legacyWon() {
+		sec.Messages = append(sec.Messages,
+			"local mode set via legacy SIGIL_LOCAL — this keeps working, but the preferred name is AGENTO11Y_LOCAL")
+	}
+	if localOn {
+		// The launcher is the only thing that reads this family, so a user who
+		// reads it as "nothing leaves this machine" is wrong about every other
+		// way a session starts.
+		sec.Messages = append(sec.Messages,
+			"local mode covers `agento11y <agent>` launches; sessions the host agent starts on its own, such as Cursor or a plain `claude`, keep exporting to the configured endpoint")
 	}
 	return sec
 }

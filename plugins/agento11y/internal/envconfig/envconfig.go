@@ -46,6 +46,7 @@ var AliasSuffixes = []string{
 	"USER_ID_SOURCE",
 	"BIN",
 	"COPILOT_HOOK_SURFACE",
+	"LOCAL",         // default `agento11y <agent>` launches to local mode, as if --local was passed
 	"LOCAL_FORWARD", // opt a --local daemon into forwarding to Cloud
 }
 
@@ -129,29 +130,37 @@ func ExpandAliases(updates map[string]string) map[string]string {
 	return out
 }
 
-// ParseBool mirrors the SDK's parseBool whitelist (1/true/yes/on).
-func ParseBool(raw string) bool {
+// ParseBoolValue parses a boolean config value against the 1/true/yes/on and
+// 0/false/no/off whitelist. ok is false for anything else, so a caller can tell
+// an unrecognised value from a false one and report it.
+func ParseBoolValue(raw string) (value, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "1", "true", "yes", "on":
-		return true
+		return true, true
+	case "0", "false", "no", "off":
+		return false, true
 	default:
-		return false
+		return false, false
 	}
 }
 
+// ParseBool mirrors the SDK's parseBool whitelist (1/true/yes/on). Every other
+// value is false, whether it is a recognised negative or a typo.
+func ParseBool(raw string) bool {
+	value, _ := ParseBoolValue(raw)
+	return value
+}
+
 // ParseBoolDefault parses a boolean config value, returning def when the value
-// is empty or unrecognised. It honours the same 1/true/yes/on and
-// 0/false/no/off whitelist as resolveGuardsBool, so callers that read SIGIL_*
-// booleans from a dotenv map (rather than os.Getenv) get identical semantics.
+// is empty or unrecognised. It honours the same whitelist as resolveGuardsBool,
+// so callers that read SIGIL_* booleans from a dotenv map (rather than
+// os.Getenv) get identical semantics.
 func ParseBoolDefault(raw string, def bool) bool {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
+	value, ok := ParseBoolValue(raw)
+	if !ok {
 		return def
 	}
+	return value
 }
 
 // EnvOr returns the value of key if non-empty (after trimming), else fallback.

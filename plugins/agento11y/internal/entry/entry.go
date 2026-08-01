@@ -3,19 +3,23 @@
 // binary used by the Claude Code, Codex, Copilot, Cursor, OpenCode, pi, and
 // Vibe agent plugins. It accepts:
 //
-//	agento11y <agent> hook                                — dispatch a JSON hook payload on stdin to <agent>
-//	agento11y claude   [--local] [--tag k=v] [-- args...] — exec claude after bootstrapping the agento11y-claude-code plugin
-//	agento11y codex    [--local] [--tag k=v] [-- args...] — exec codex after bootstrapping the agento11y-codex plugin
-//	agento11y copilot  [--local] [--tag k=v] [-- args...] — exec copilot after bootstrapping the sigil-copilot plugin
-//	agento11y opencode [--local] [--tag k=v] [-- args...] — exec opencode after bootstrapping the @grafana/agento11y-opencode plugin
-//	agento11y pi       [--local] [--tag k=v] [-- args...] — exec pi after bootstrapping the @grafana/agento11y-pi extension
-//	agento11y vibe     [--local] [--tag k=v] [-- args...] — exec vibe after installing the sigil hook in vibe's hooks.toml
-//	agento11y cursor   install|uninstall                  — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
-//	agento11y local start|status|stop                     — manage the local capture daemon
-//	agento11y --version                                   — print the build version
+//	agento11y <agent> hook                                            — dispatch a JSON hook payload on stdin to <agent>
+//	agento11y claude   [--local|--no-local] [--tag k=v] [-- args...]  — exec claude after bootstrapping the agento11y-claude-code plugin
+//	agento11y codex    [--local|--no-local] [--tag k=v] [-- args...]  — exec codex after bootstrapping the agento11y-codex plugin
+//	agento11y copilot  [--local|--no-local] [--tag k=v] [-- args...]  — exec copilot after bootstrapping the sigil-copilot plugin
+//	agento11y opencode [--local|--no-local] [--tag k=v] [-- args...]  — exec opencode after bootstrapping the @grafana/agento11y-opencode plugin
+//	agento11y pi       [--local|--no-local] [--tag k=v] [-- args...]  — exec pi after bootstrapping the @grafana/agento11y-pi extension
+//	agento11y vibe     [--local|--no-local] [--tag k=v] [-- args...]  — exec vibe after installing the sigil hook in vibe's hooks.toml
+//	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
+//	agento11y local start|status|stop                                 — manage the local capture daemon
+//	agento11y --version                                               — print the build version
 //
 // --tag is repeatable and adds key=value pairs to SIGIL_TAGS so they land
 // on every generation the launched session produces.
+//
+// --local can also be turned on for every launch with AGENTO11Y_LOCAL=true in
+// the shell or in config.env. --no-local runs one session against Cloud while
+// that setting stays on.
 //
 // Unknown agents and unknown verbs exit with code 2 and a usage message on
 // stderr. For hook agents the binary must never crash the calling agent
@@ -72,10 +76,17 @@ var (
 	localBannerURL   = lipgloss.NewStyle().Underline(true)
 )
 
-func renderLocalBanner(uiURL string, posture local.ForwardPosture, postureErr error) string {
+// renderLocalBanner draws the local-mode banner. envKey names the variable that
+// turned local mode on (AGENTO11Y_LOCAL or the legacy SIGIL_LOCAL), and is
+// empty when a flag on this command line did.
+func renderLocalBanner(uiURL string, posture local.ForwardPosture, postureErr error, envKey string) string {
 	privacy := localPrivacyLines(posture, postureErr == nil)
 	lines := make([]string, 0, len(privacy)+3)
-	lines = append(lines, localBannerTitle.Render("agento11y local mode"))
+	title := localBannerTitle.Render("agento11y local mode")
+	if envKey != "" {
+		title += "  " + localBannerLabel.Render("(enabled by "+envKey+")")
+	}
+	lines = append(lines, title)
 	for _, line := range privacy {
 		lines = append(lines, localBannerLabel.Render(line))
 	}
@@ -105,7 +116,7 @@ func localPrivacyLines(posture local.ForwardPosture, known bool) []string {
 	}
 }
 
-const usageLine = "usage: agento11y login | agento11y doctor [--json] [--probe] | agento11y local start|status|stop | agento11y cursor install|uninstall | agento11y <agent> hook | agento11y <claude|codex|copilot|opencode|pi|vibe> [--local] [--tag key=value]... [-- args...]"
+const usageLine = "usage: agento11y login | agento11y doctor [--json] [--probe] | agento11y local start|status|stop | agento11y cursor install|uninstall | agento11y <agent> hook | agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
 
 // version is the build version received from the calling main package via
 // Main. It stays a package var (defaulting to "dev") so tests can override
@@ -219,8 +230,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		// only in $XDG_CONFIG_HOME/agento11y/config.env reaches local.StateDir()
 		// when --local is used. Otherwise the daemon dir is resolved against
 		// the wrong root.
-		dotenv.ApplyEnv(nil)
-		launcherArgs, localEnv, ok := parseLauncherArgs(args[0], args[1:], stderr)
+		//
+		// The LOCAL family is read around that merge, not after it: ApplyEnv
+		// writes the winning value under both spellings, which erases which one
+		// the user set, and the banner names that spelling.
+		localValue, localKey, inShell := envconfig.LookupEnv("LOCAL")
+		fileEnv := dotenv.ApplyEnv(nil)
+		if !inShell {
+			localValue, localKey, _ = envconfig.LookupMap(fileEnv, "LOCAL")
+		}
+		envLocal := localEnvRequest{on: envconfig.ParseBool(localValue), key: localKey}
+
+		launcherArgs, localEnv, ok := parseLauncherArgs(args[0], args[1:], stderr, envLocal)
 		if !ok {
 			return
 		}
@@ -441,9 +462,22 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) {
 	}
 }
 
+// localEnvRequest is the LOCAL family as the launcher acts on it: whether it
+// turns local mode on, and the spelling that set it so diagnostics can name a
+// variable the user actually set.
+type localEnvRequest struct {
+	on  bool
+	key string
+}
+
 // parseLauncherArgs splits sigil-side tokens from forwarded args at the
 // first `--`. Recognised sigil-side flags are:
 //   - `--local`, which redirects the launched agent at the local receiver.
+//     envLocal carries the same request from the LOCAL env family, which the
+//     caller resolves across the shell and config.env.
+//   - `--no-local`, which forces a Cloud session for this run. It wins over
+//     both `--local` and the env family, whatever the argument order, so a
+//     user with local mode on by default can opt out once.
 //   - `--tag key=value` (repeatable; also `--tag=key=value`), which adds
 //     a tag to SIGIL_TAGS so it lands on every generation the session
 //     produces. Flag tags merge onto (and override) any SIGIL_TAGS already
@@ -451,8 +485,9 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) {
 //
 // Any other token before `--` is an error.
 //
-// Returns the forwarded args plus a non-nil *local.LaunchEnv when --local
-// was set; the env values point at the local daemon. When --tag is used,
+// Returns the forwarded args plus a non-nil *local.LaunchEnv when the session
+// is local, that is when `--local` or the env family asked for it and
+// `--no-local` did not; the env values point at the local daemon. When --tag is used,
 // SIGIL_TAGS is updated in the current process environment so the exec'd
 // child (which inherits os.Environ via local.Environ) sees it.
 //
@@ -461,7 +496,7 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) {
 //     forgot the separator, so we point them at `agento11y <name> -- <args>`.
 //   - `--` is present but unrecognised tokens precede it: those are
 //     genuinely unknown sigil-side options, so we name them explicitly.
-func parseLauncherArgs(name string, rest []string, stderr io.Writer) ([]string, *local.LaunchEnv, bool) {
+func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal localEnvRequest) ([]string, *local.LaunchEnv, bool) {
 	sep := -1
 	for i, a := range rest {
 		if a == "--" {
@@ -479,14 +514,17 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer) ([]string, 
 		forwarded = rest[sep+1:]
 	}
 
-	localRequested := false
+	localFlag := false
+	noLocalFlag := false
 	var flagTags []string
 	var unknown []string
 	for i := 0; i < len(launcherSide); i++ {
 		tok := launcherSide[i]
 		switch {
 		case tok == "--local":
-			localRequested = true
+			localFlag = true
+		case tok == "--no-local":
+			noLocalFlag = true
 		case tok == "--tag":
 			if i+1 >= len(launcherSide) {
 				_, _ = fmt.Fprintln(stderr, "agento11y: --tag requires a key=value argument")
@@ -531,9 +569,23 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer) ([]string, 
 		envconfig.SetBothEnv("TAGS", mergeTags(envconfig.Getenv("TAGS"), flagTags))
 	}
 
+	if noLocalFlag {
+		// The agent, its hooks, and any nested agento11y call inherit this
+		// environment, where dotenv already materialized the family under both
+		// spellings. Leaving it true there would describe a session that is not
+		// local. --tag writes back for the same reason.
+		envconfig.SetBothEnv("LOCAL", "false")
+	}
+
 	var localEnv *local.LaunchEnv
-	if localRequested {
-		endpoint, otlp, err := setupLocalLaunch(stderr)
+	if !noLocalFlag && (localFlag || envLocal.on) {
+		// An explicit --local speaks for itself, so name the variable only when
+		// it is what turned local mode on.
+		sourceKey := envLocal.key
+		if localFlag {
+			sourceKey = ""
+		}
+		endpoint, otlp, err := setupLocalLaunch(stderr, sourceKey)
 		if err != nil {
 			exit(1)
 			return nil, nil, false
@@ -601,8 +653,9 @@ func mergeTags(existing string, flagTags []string) string {
 }
 
 // setupLocalLaunch starts the local receiver if needed and returns the
-// endpoint URLs the launcher should pass to the agent.
-func setupLocalLaunch(stderr io.Writer) (endpoint, otlp string, err error) {
+// endpoint URLs the launcher should pass to the agent. envKey names the
+// variable that turned local mode on, or is empty when a flag did.
+func setupLocalLaunch(stderr io.Writer, envKey string) (endpoint, otlp string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -610,6 +663,12 @@ func setupLocalLaunch(stderr io.Writer) (endpoint, otlp string, err error) {
 	status, err := local.EnsureRunning(ctx, dir, nil)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "agento11y: failed to start local receiver: %v\n", err)
+		if envKey != "" {
+			// The user did not ask for local mode in this command, so the
+			// failure looks like the launcher is broken. Name the setting and
+			// the way past it.
+			_, _ = fmt.Fprintf(stderr, "agento11y: local mode is on because %s is set; pass --no-local to run this session against Grafana Cloud\n", envKey)
+		}
 		return "", "", err
 	}
 
@@ -622,7 +681,7 @@ func setupLocalLaunch(stderr io.Writer) (endpoint, otlp string, err error) {
 		// on its own reads like "nothing is forwarded". Say why it is hedged.
 		_, _ = fmt.Fprintf(stderr, "agento11y: could not read the daemon's forwarding posture: %v\n", postureErr)
 	}
-	_, _ = fmt.Fprintln(stderr, renderLocalBanner(status.Endpoint, posture, postureErr))
+	_, _ = fmt.Fprintln(stderr, renderLocalBanner(status.Endpoint, posture, postureErr, envKey))
 	return endpoint, otlp, nil
 }
 

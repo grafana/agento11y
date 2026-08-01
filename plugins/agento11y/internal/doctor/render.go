@@ -127,6 +127,13 @@ func renderHuman(w io.Writer, r *Report, color, probed bool) {
 	if len(r.Config.Tags) > 0 {
 		writeKV(&b, p, "tags", fmt.Sprintf("%s %s", formatTags(r.Config.Tags), p.faint("("+r.Config.TagsSource+")")))
 	}
+	if r.Config.Local.Set {
+		localMode := describeEnv(r.Config.Local)
+		if r.Config.LocalInvalid {
+			localMode += " " + p.faint("(invalid value, local mode is off)")
+		}
+		writeKV(&b, p, "local mode", localMode)
+	}
 	if r.Config.LocalForward.Set {
 		writeKV(&b, p, "local forwarding", describeEnv(r.Config.LocalForward))
 	}
