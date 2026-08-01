@@ -749,6 +749,12 @@ Experimental OTel eval spans/events are disabled by default; opt in with
 
 ### Grading with an evaluator stored in Grafana Cloud
 
+> **Experimental.** Set `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` to use
+> this. Without it, `trial.evaluate(...)`, `client.trigger_trial_evaluation(...)`,
+> and `client.get_trial_evaluation(...)` raise
+> `agento11y.ExperimentalFeatureDisabledError` without sending a request.
+> Experimental features can change or be removed in any release.
+
 When the grading prompt lives in Agent Observability instead of in the runner,
 bind the trial to the conversation id your normal instrumentation already
 produced and let that evaluator score it. `trial.evaluate(...)` persists the

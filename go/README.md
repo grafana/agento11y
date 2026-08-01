@@ -350,6 +350,12 @@ continues to use the ingest credential. `NewExperimentFromSuite` and
 
 ### Grading with an evaluator stored in your tenant
 
+> **Experimental.** Set `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` to use
+> this. Without it, `Trial.Evaluate`, `Client.TriggerTrialEvaluation`, and
+> `Client.GetTrialEvaluation` return `agento11y.ErrExperimentalFeatureDisabled`
+> without sending a request. Experimental features can change or be removed in
+> any release.
+
 `Trial.Evaluate` grades the conversation Agent Observability already stored,
 using an evaluator defined in your tenant, instead of a score the runner
 computes. `Trial.EvaluateOutput` is the in-process judge; `Trial.Evaluate` is

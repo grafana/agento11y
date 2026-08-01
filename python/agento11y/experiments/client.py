@@ -16,6 +16,7 @@ from typing import Any
 from .. import _experiments_transport as _transport
 from ..config import _warn_legacy_env
 from ..errors import ScoreExportError
+from ..experimental import FEATURE_CLOUD_TRIAL_EVALUATION, require_experimental
 from ..models import (
     CreateExperimentRequest,
     Experiment,
@@ -214,7 +215,16 @@ class Client:
         evaluator_id: str,
         evaluator_version: str = "",
     ) -> TrialEvaluation:
-        """Queues a stored evaluator for a trial's bound conversation."""
+        """Queues a stored evaluator for a trial's bound conversation.
+
+        .. warning::
+
+           Experimental. Requires ``AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true``,
+           otherwise this raises
+           :class:`~agento11y.errors.ExperimentalFeatureDisabledError`.
+        """
+
+        require_experimental(FEATURE_CLOUD_TRIAL_EVALUATION)
 
         return _transport.trigger_trial_evaluation(
             **self._args(),
@@ -231,7 +241,16 @@ class Client:
         trial_id: str,
         evaluation_id: str,
     ) -> TrialEvaluation:
-        """Reads durable status for a triggered trial evaluation."""
+        """Reads durable status for a triggered trial evaluation.
+
+        .. warning::
+
+           Experimental. Requires ``AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true``,
+           otherwise this raises
+           :class:`~agento11y.errors.ExperimentalFeatureDisabledError`.
+        """
+
+        require_experimental(FEATURE_CLOUD_TRIAL_EVALUATION)
 
         return _transport.get_trial_evaluation(
             **self._args(),

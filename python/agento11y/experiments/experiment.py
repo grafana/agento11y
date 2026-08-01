@@ -50,6 +50,7 @@ except Exception:  # pragma: no cover - exercised only in minimal vendored envs
     _OTEL_AVAILABLE = False
 
 from ..errors import EvaluationExecutionError, EvaluationTimeoutError, ValidationError
+from ..experimental import FEATURE_CLOUD_TRIAL_EVALUATION, require_experimental
 from ..models import (
     CreateExperimentRequest,
     ExperimentReport,
@@ -507,7 +508,19 @@ class Trial:
         deadline raises :class:`~agento11y.errors.EvaluationTimeoutError`. A
         transport error while polling propagates and abandons the wait; the
         evaluation keeps running server-side.
+
+        .. warning::
+
+           Experimental. Requires ``AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true``,
+           otherwise this raises
+           :class:`~agento11y.errors.ExperimentalFeatureDisabledError` without
+           sending a request. This method can change or be removed in any
+           release.
         """
+
+        # Checked before the trial is created and the anchor generation is
+        # flushed, so a blocked call leaves nothing behind.
+        require_experimental(FEATURE_CLOUD_TRIAL_EVALUATION)
 
         if not self.conversation_id:
             raise ValidationError("agento11y trial evaluation validation failed: bind a conversation first")

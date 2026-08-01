@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -1100,5 +1101,46 @@ func TestTrialEvaluateDefaultsWaitOptions(t *testing.T) {
 	}
 	if timeout != defaultEvaluationTimeout || pollInterval != defaultEvaluationPollInterval {
 		t.Fatalf("unset durations must use the defaults, got %s and %s", timeout, pollInterval)
+	}
+}
+
+// clearExperimentalGate removes the opt-in for one test so the assertions see
+// what a caller who never set the variable sees. t.Setenv records the previous
+// value and restores it on cleanup; os.Unsetenv then removes the variable
+// outright, which an empty string would not do.
+func clearExperimentalGate(t *testing.T) {
+	t.Helper()
+	t.Setenv(agento11y.EnvEnableExperimentalFeatures, "")
+	if err := os.Unsetenv(agento11y.EnvEnableExperimentalFeatures); err != nil {
+		t.Fatalf("unset %s: %v", agento11y.EnvEnableExperimentalFeatures, err)
+	}
+}
+
+func TestCloudTrialEvaluationBlockedWithoutTheGate(t *testing.T) {
+	server := newTrialEvaluationServer(t, "success")
+	// Built while the gate is still on, so the block below is the gate and not a
+	// setup failure.
+	_, trial := newCloudEvaluatedTrial(t, server)
+	trial.BindConversation("conv-1")
+	client := server.newClient(t)
+	before := len(server.captured())
+
+	clearExperimentalGate(t)
+
+	if _, err := trial.Evaluate(context.Background(), "helpfulness"); !errors.Is(err, agento11y.ErrExperimentalFeatureDisabled) {
+		t.Fatalf("expected ErrExperimentalFeatureDisabled from Trial.Evaluate, got %v", err)
+	}
+	if _, err := client.TriggerTrialEvaluation(context.Background(), "run-1", "trial-1", TriggerTrialEvaluationRequest{
+		EvaluatorID: "helpfulness",
+	}); !errors.Is(err, agento11y.ErrExperimentalFeatureDisabled) {
+		t.Fatalf("expected ErrExperimentalFeatureDisabled from TriggerTrialEvaluation, got %v", err)
+	}
+	if _, err := client.GetTrialEvaluation(context.Background(), "run-1", "trial-1", "teval-1"); !errors.Is(err, agento11y.ErrExperimentalFeatureDisabled) {
+		t.Fatalf("expected ErrExperimentalFeatureDisabled from GetTrialEvaluation, got %v", err)
+	}
+	// Trial.Evaluate persists the conversation binding and flushes the anchor
+	// generation before triggering. A blocked call must do none of that.
+	if got := len(server.captured()) - before; got != 0 {
+		t.Fatalf("a blocked experimental call must not issue a request, got %d", got)
 	}
 }

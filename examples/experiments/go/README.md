@@ -32,7 +32,10 @@ The canned agent makes no provider call. It needs only `AGENTO11Y_ENDPOINT`,
 already exists in your tenant instead of scoring locally. `trial.Evaluate(...)`
 blocks until the worker finishes, so the run takes as long as the evaluations do:
 
+Stored-evaluator grading is experimental and refuses to run without the opt-in:
+
 ```bash
+export AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true
 export AGENTO11Y_EXPERIMENT_ID=cloud-evaluator-${GIT_SHA:-manual}
 export EVALUATOR_ID=<an-evaluator-id-in-your-tenant>
 # Optional: pin a version instead of the latest active one.
