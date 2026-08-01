@@ -336,8 +336,11 @@ def _tool_result_message(*, content: str, tool_call_id: str, name: str) -> Messa
 def _map_response_output(response: Any) -> list[Message]:
     """Map SLO response to agento11y output Messages.
 
-    Reads from the StandardLoggingPayload ``response`` field (dict or str)
-    so that LiteLLM redaction settings are honoured.
+    Takes a response payload as a dict or a string. The logger passes the
+    StandardLoggingPayload ``response`` field, which LiteLLM has already
+    redacted. The guard passes the live response object instead, because a rule
+    has to see the content the caller would see, so a postflight evaluation
+    sends unredacted output even under ``turn_off_message_logging``.
 
     Chat shape (``choices[].message``) covers every route that reaches here,
     including ``/v1/messages``: LiteLLM converts the Anthropic response to a

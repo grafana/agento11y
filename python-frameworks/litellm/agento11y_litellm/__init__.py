@@ -46,11 +46,15 @@ def create_agento11y_litellm_guardrail(
     extra_tags: dict[str, str] | None = None,
     guardrail_name: str = DEFAULT_GUARDRAIL_NAME,
     default_on: bool = False,
+    event_hook: str | Sequence[str] | None = None,
 ) -> Agento11yLiteLLMGuardrail:
-    """Create a LiteLLM guardrail that enforces agento11y preflight hook rules.
+    """Create a LiteLLM guardrail that enforces agento11y hook rules.
 
-    Enforcement only happens behind the LiteLLM proxy; pre-call hooks are never
+    Enforcement only happens behind the LiteLLM proxy; call hooks are never
     invoked on the ``litellm.completion()`` SDK path.
+
+    ``event_hook`` selects the phases: ``"pre_call"`` (the default) for
+    preflight, ``"post_call"`` for postflight, or both as a list.
     """
     return Agento11yLiteLLMGuardrail(
         client=client,
@@ -62,6 +66,7 @@ def create_agento11y_litellm_guardrail(
         extra_tags=extra_tags,
         guardrail_name=guardrail_name,
         default_on=default_on,
+        event_hook=event_hook,
     )
 
 

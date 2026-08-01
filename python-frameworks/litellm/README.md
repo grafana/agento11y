@@ -117,18 +117,18 @@ A key alias names a credential rather than an agent, so it is not consulted by d
 
 ## Guards
 
-`Agento11yLiteLLMGuardrail` evaluates Agent Observability preflight guards before a request reaches the provider, and blocks it with HTTP 400 when a guard denies. It is a `CustomGuardrail`, so it gets LiteLLM's per-request and per-team opt-in, `default_on`, guardrail results in the standard logging payload, and an OTel guardrail span.
+`Agento11yLiteLLMGuardrail` evaluates Agent Observability guards on a proxy request: preflight guards before the request reaches the provider, postflight guards against the provider response. A deny returns HTTP 400 to the caller, including on a request that asked to stream, which is rejected before the first chunk. The one exception is a postflight deny on a streamed response: the output is already delivered, so the verdict is only recorded. It is a `CustomGuardrail`, so it gets LiteLLM's per-request and per-team opt-in, `default_on`, guardrail results in the standard logging payload, and an OTel guardrail span.
 
-Enforcement only works behind the LiteLLM proxy. Pre-call hooks are a proxy-only LiteLLM feature; a direct `litellm.completion()` SDK call never invokes them and is never guarded.
+Enforcement only works behind the LiteLLM proxy. Call hooks are a proxy-only LiteLLM feature; a direct `litellm.completion()` SDK call never invokes them and is never guarded.
 
-Only preflight is supported. The guardrail defaults to `event_hook="pre_call"`, and constructing it with `event_hook="post_call"` or `event_hook="during_call"` raises at proxy startup rather than registering a guardrail that silently never runs.
+`event_hook` selects the phases: `"pre_call"` (the default) for preflight, `"post_call"` for postflight, `["pre_call", "post_call"]` for both. `"during_call"` raises at proxy startup: LiteLLM runs it in parallel with the provider call, so it cannot save spend, and it is never given the response, so all it could do is repeat the preflight check after the call has started.
 
 Guards are configured in Agent Observability, not in `config.yaml`. Refer to [Set up guards](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/guides/guards/) for guard types, priority, and match filters.
 
-Evaluator guards work as documented there, against the request: messages, system prompt, and tool definitions. `deny` returns 400 to the proxy client and the provider is never called; `warn` allows the request and records the verdict. Three things behave differently through this adapter:
+Evaluator guards work as documented there: preflight sees messages, system prompt, and tool definitions; postflight adds the response. `deny` returns 400 to the proxy client, except for a postflight deny on a streamed response, which is only recorded (see [Postflight](#postflight)); `warn` allows the request and records the verdict. Three things behave differently through this adapter:
 
 - Redact guards do not change what the model sees. That page says the SDK uses `transformed_input` for the LLM call; this adapter ignores it. Redaction still applies to evaluators in later guards, which run server-side against the redacted input.
-- Tool filter guards match tool calls that are already in the request history, which means the client has executed them. They block the next call in an agent loop rather than the tool itself. Blocking a proposed call before it runs is postflight, which is not implemented here.
+- Preflight tool filter guards match tool calls that are already in the request history, which means the client has executed them. They block the next call in an agent loop rather than the tool itself. To block a proposed call before the client runs it, put the tool filter guard in the postflight phase, which sees the tool calls the model just produced.
 - `model.provider` match filters are unreliable, because the provider is not known until LiteLLM's router picks a deployment, which happens after the guard runs. Match on `agent_name`, `model.name`, or tags instead.
 
 ### Guarded routes
@@ -145,7 +145,34 @@ The guard reads the request body as the client sent it, before LiteLLM translate
 
 Every other route LiteLLM runs pre-call hooks on is skipped: embeddings, moderation, rerank, audio, realtime, MCP tool calls, and native pass-through endpoints (`/anthropic/v1/messages`, `/vertex_ai/...`). Their bodies are provider-native or carry no messages, so there is nothing for a content or system-prompt rule to match. They are skipped rather than evaluated against empty input, because an evaluation with no input returns allow and records a verdict that reads like a completed check. A skipped request records no verdict at all, and nothing on those routes is ever blocked, including by rules that only match on `agent_name`, `model.name`, or tags.
 
+Postflight skips the same routes, by a different test. The post-call hook is not given a call type, so the guard reads the request body: a body it cannot take messages, a prompt, or a system prompt from is skipped, which is what a pass-through body looks like (the provider-native payload sits one level down, under `data`).
+
 A guarded request whose input maps to no text is skipped the same way: a token-id `prompt`, or content that is entirely images or audio.
+
+### Postflight
+
+Postflight guards run after the provider has answered. They see the same request input as preflight plus the response, and they cannot prevent spend: the call is already made and billed by the time the rule runs. Postflight decides whether the output reaches the caller, not whether it costs money.
+
+What a deny does depends on how the response is delivered. This was verified against a running proxy on LiteLLM 1.89.1:
+
+| Delivery | Deny outcome |
+|---|---|
+| Non-streaming (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`) | The caller gets HTTP 400 naming the guardrail and the rule's reason. The provider output never leaves the proxy. |
+| Streaming (`/v1/chat/completions`) | The caller already has the whole response. The verdict is recorded and logged at WARNING; nothing is blocked. |
+| Streaming (`/v1/responses`, `/v1/messages`) | Nothing runs. No hook request, no verdict, no log line. |
+
+Neither streaming case is a configuration choice. On a streamed chat completion LiteLLM flushes every chunk, then runs post-call guardrails on the assembled response (`_run_deferred_stream_guardrails`) and swallows whatever they raise. It attaches that deferred pass only to a `CustomStreamWrapper`, and `/v1/responses` and `/v1/messages` stream through their own iterators, so postflight never runs on them at all. Treat postflight on streaming traffic as detection that feeds evaluation and alerting, not as enforcement, and do not rely on it for those two routes.
+
+Postflight has two independent gates, and both must be open:
+
+- LiteLLM: the guardrail is constructed with `event_hook="post_call"` (or a list containing it). With the default `"pre_call"`, LiteLLM never calls the post-call hook.
+- SDK: `HooksConfig.phases` must contain `"postflight"`. It defaults to `["preflight"]`, and `evaluate_hook` returns allow without contacting the server for a phase that is not listed.
+
+A guardrail whose mode has no matching `HooksConfig.phases` entry logs a WARNING at startup and evaluates nothing for that phase. The request is skipped rather than evaluated, so it records no verdict either.
+
+The response is mapped per route: `choices[].message` for chat completions and for an assembled stream, `output` items for `/v1/responses`, and Anthropic content blocks for `/v1/messages`. Tool calls in the response keep their `tool_call` kind, so a postflight tool filter guard matches them. A response with no mappable text (an embedding, an image, an empty turn) is skipped and records no verdict.
+
+The guard reads the response the provider produced, not the copy LiteLLM logs, so `turn_off_message_logging` does not apply to it. Enabling postflight sends response content to the hooks API even on a deployment that keeps it out of its logs.
 
 Enable hooks on the agento11y client and list the guardrail next to the logger:
 
@@ -154,10 +181,24 @@ Enable hooks on the agento11y client and list the guardrail next to the logger:
 from agento11y import Client, ClientConfig, HooksConfig
 from agento11y_litellm import Agento11yLiteLLMGuardrail, Agento11yLiteLLMLogger
 
-client = Client(ClientConfig(hooks=HooksConfig(enabled=True, timeout_seconds=2.0)))
+client = Client(
+    ClientConfig(
+        hooks=HooksConfig(
+            enabled=True,
+            timeout_seconds=2.0,
+            # Drop "postflight" to run request rules only.
+            phases=["preflight", "postflight"],
+        )
+    )
+)
 
 agento11y_handler = Agento11yLiteLLMLogger(client=client, agent_name="litellm-proxy")
-agento11y_guards = Agento11yLiteLLMGuardrail(client=client, agent_name="litellm-proxy", default_on=True)
+agento11y_guards = Agento11yLiteLLMGuardrail(
+    client=client,
+    agent_name="litellm-proxy",
+    default_on=True,
+    event_hook=["pre_call", "post_call"],
+)
 ```
 
 ```yaml
@@ -168,7 +209,7 @@ litellm_settings:
     - agento11y_callback.agento11y_guards
 ```
 
-LiteLLM runs any `CustomGuardrail` in `litellm.callbacks` on the pre-call path, so the guardrail needs no separate `guardrails:` block.
+LiteLLM runs any `CustomGuardrail` in `litellm.callbacks` on both the pre-call and post-call paths, so the guardrail needs no separate `guardrails:` block.
 
 With `default_on=False`, a request opts in with `"guardrails": ["agento11y"]` in its metadata.
 
@@ -178,7 +219,7 @@ Guardrail options are keyword-only, and `create_agento11y_litellm_guardrail` acc
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `client` | `agento11y.Client` | required | agento11y SDK client instance, with `hooks.enabled=True` and `"preflight"` in `hooks.phases` |
+| `client` | `agento11y.Client` | required | agento11y SDK client instance, with `hooks.enabled=True` and the phase to evaluate in `hooks.phases` |
 | `agent_name` | `str` | `""` | Fallback agent name when the request carries no agent identity |
 | `agent_name_metadata_keys` | `Sequence[str]` | `("agent_name", "agent_id")` | Metadata keys consulted, in order, to name the agent |
 | `agent_version` | `str` | `""` | Fallback agent version |
@@ -187,13 +228,15 @@ Guardrail options are keyword-only, and `create_agento11y_litellm_guardrail` acc
 | `extra_tags` | `dict[str, str]` | `None` | Additional tags merged into every hook evaluation context |
 | `guardrail_name` | `str` | `"agento11y"` | Name used for per-request opt-in and in the 400 response |
 | `default_on` | `bool` | `False` | Run on every request instead of only on opted-in ones |
+| `event_hook` | `str \| Sequence[str]` | `"pre_call"` | Phases to run: `"pre_call"`, `"post_call"`, or both |
 
 Runtime behavior:
 
 - Evaluation runs on a pool of `max_concurrent_evaluations` threads, so it does not block the proxy event loop. `request_timeout_seconds` covers waiting for a free thread as well as the evaluation itself, and a thread stays busy until its evaluation actually finishes, so a slow evaluator can keep the pool saturated for longer than that timeout.
-- A transport failure, a timeout, or an unexpected error follows `HooksConfig.fail_open`: allow and log at WARNING when `True` (the default), raise `HookTransportError` when `False`. Either way the verdict is recorded as `guardrail_failed_to_respond`, not `success`, so a dead evaluator shows up in spend logs and logging callbacks.
+- A transport failure, a timeout, or an unexpected error follows `HooksConfig.fail_open`: allow and log at WARNING when `True` (the default), raise `HookTransportError` when `False`. Either way the verdict is recorded as `guardrail_failed_to_respond`, not `success`, so a dead evaluator shows up in spend logs and logging callbacks. Fail-closed costs more on postflight than on preflight: the provider has already answered and billed, and the caller gets HTTP 500 instead of the response.
 - Hook evaluations correlate to the proxy request span, so a guard verdict lines up with its request in traces.
 - Register both the guardrail and the logger. The guardrail does not export generations, and having both in `litellm.callbacks` still exports exactly one generation per request.
+- A non-streaming postflight deny costs a generation record. LiteLLM defers success logging until after post-call guardrails run and drops it when one of them raises, and the failure path does not reach this package's callback either, so the blocked request exports no generation at all. The provider was still called and billed. The verdict itself is in `standard_logging_guardrail_information`. A streamed deny keeps its generation, because nothing is raised there.
 
 ## LiteLLM Proxy (Docker)
 
