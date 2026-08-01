@@ -272,7 +272,7 @@ func describeAgent(p palette, a AgentStatus) string {
 	if a.Health == HealthSkipped {
 		return agentNote(p, p.faint("not found on PATH"), a.Note)
 	}
-	// Hook-file based agent (copilot): capture doesn't depend on the CLI being
+	// Hook-file based agent (copilot, vibe): capture doesn't depend on the CLI being
 	// on PATH, so report install state with its own wording and no PATH
 	// qualifiers.
 	if a.notInstalledLabel != "" {

@@ -9,6 +9,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe"
 )
 
 // statusFn is the non-mutating per-agent probe each launcher package exposes.
@@ -26,12 +27,12 @@ type agentProbe struct {
 	// agents (cursor) that the agento11y binary never installs.
 	status statusFn
 	// configBased is true when status reads install state from files and needs
-	// no binary on PATH (claude, opencode, pi, copilot). For these, doctor
+	// no binary on PATH (claude, opencode, pi, copilot, vibe). For these, doctor
 	// reports install state even when the CLI is absent. CLI-dependent probes
 	// (codex) shell out to the binary, so they're skipped when it's missing.
 	configBased bool
 	// notInstalledLabel overrides the default "plugin not installed" wording
-	// for agents whose capture isn't plugin-based (copilot uses hooks).
+	// for agents whose capture isn't plugin-based (copilot and vibe use hooks).
 	notInstalledLabel string
 	// note annotates the agent in the report.
 	note string
@@ -49,6 +50,7 @@ var agentProbes = []agentProbe{
 	{name: "copilot", bin: "copilot", status: copilot.Status, configBased: true, notInstalledLabel: "not configured", note: "hook-based"},
 	{name: "opencode", bin: "opencode", status: opencode.Status, configBased: true},
 	{name: "pi", bin: "pi", status: pi.Status, configBased: true},
+	{name: "vibe", bin: "vibe", status: vibe.Status, configBased: true, notInstalledLabel: "not configured", note: "hook-based"},
 	{name: "cursor", bin: "cursor", status: nil, note: "hook-based; configured in Cursor settings"},
 }
 

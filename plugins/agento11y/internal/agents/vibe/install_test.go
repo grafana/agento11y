@@ -185,6 +185,90 @@ func TestEnsureHookInstalled_QuotesExecutablePath(t *testing.T) {
 	}
 }
 
+func TestHooksInstalled(t *testing.T) {
+	entryCmd := func(name, typ, command string) string {
+		return "[[hooks]]\nname = \"" + name + "\"\ntype = \"" + typ + "\"\ncommand = \"" + command + "\"\ntimeout = 30\n\n"
+	}
+	entry := func(name, typ string) string {
+		return entryCmd(name, typ, "agento11y vibe hook")
+	}
+	all := entry("agento11y", "post_agent_turn") +
+		entry("agento11y-before-tool", "before_tool") +
+		entry("agento11y-after-tool", "after_tool")
+	allLegacy := entryCmd("sigil", "post_agent_turn", "sigil vibe hook") +
+		entryCmd("sigil-before-tool", "before_tool", "sigil vibe hook") +
+		entryCmd("sigil-after-tool", "after_tool", "sigil vibe hook")
+	staleCommand := entryCmd("agento11y", "post_agent_turn", "/old/path/agento11y vibe hook") +
+		entryCmd("agento11y-before-tool", "before_tool", "/old/path/agento11y vibe hook") +
+		entryCmd("agento11y-after-tool", "after_tool", "/old/path/agento11y vibe hook")
+	userHook := entry("user-custom", "after_tool")
+
+	tests := []struct {
+		name    string
+		file    string
+		write   bool // false leaves hooks.toml absent
+		want    bool
+		wantErr bool
+	}{
+		{name: "all entries present", file: all, write: true, want: true},
+		{name: "all entries plus hand-authored hook", file: userHook + all, write: true, want: true},
+		// Legacy sigil-named entries keep firing until the next launch
+		// rewrites them, so they count as installed.
+		{name: "legacy entry names", file: allLegacy, write: true, want: true},
+		{name: "current and legacy names mixed", file: entry("agento11y", "post_agent_turn") + entryCmd("sigil-before-tool", "before_tool", "sigil vibe hook") + entry("agento11y-after-tool", "after_tool"), write: true, want: true},
+		{name: "legacy entries with one missing", file: entryCmd("sigil", "post_agent_turn", "sigil vibe hook") + entryCmd("sigil-before-tool", "before_tool", "sigil vibe hook"), write: true},
+		// The command is never compared: an install written by a binary at a
+		// different path still fires.
+		{name: "stale command", file: staleCommand, write: true, want: true},
+		{name: "one entry missing", file: entry("agento11y", "post_agent_turn") + entry("agento11y-before-tool", "before_tool"), write: true},
+		{name: "only hand-authored hooks", file: userHook, write: true},
+		{name: "empty file", file: "", write: true},
+		{name: "no file"},
+		{name: "invalid toml", file: "[[hooks]\nname =", write: true, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("VIBE_HOME", dir)
+			if tt.write {
+				if err := os.WriteFile(filepath.Join(dir, "hooks.toml"), []byte(tt.file), 0o644); err != nil {
+					t.Fatalf("seed: %v", err)
+				}
+			}
+			got, err := HooksInstalled()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("HooksInstalled() error = nil, want non-nil")
+				}
+			} else if err != nil {
+				t.Fatalf("HooksInstalled(): %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("HooksInstalled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestHooksInstalled_AfterInstall pins the probe to the writer: whatever
+// ensureHookInstalled writes must read back as installed.
+func TestHooksInstalled_AfterInstall(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("VIBE_HOME", dir)
+
+	if _, _, err := ensureHookInstalled(); err != nil {
+		t.Fatalf("ensureHookInstalled: %v", err)
+	}
+	got, err := HooksInstalled()
+	if err != nil {
+		t.Fatalf("HooksInstalled() after install: %v", err)
+	}
+	if !got {
+		t.Errorf("HooksInstalled() = false after install, want true")
+	}
+}
+
 func TestVibeHome_HonorsEnv(t *testing.T) {
 	t.Setenv("VIBE_HOME", "/custom/vibe-root")
 	got, err := vibeHome()

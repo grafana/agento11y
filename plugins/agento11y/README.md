@@ -1,6 +1,6 @@
 # agento11y
 
-The launcher binary behind the [Claude Code](../claude-code), [Codex](../codex), [Copilot](../copilot), [Cursor](../cursor), [OpenCode](../opencode), and [pi](../pi) plugins for [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
+The launcher binary behind the [Claude Code](../claude-code), [Codex](../codex), [Copilot](../copilot), [Cursor](../cursor), [OpenCode](../opencode), [pi](../pi), and [Vibe](../vibe) plugins for [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
 The command was renamed from `sigil`. Every install method also installs a `sigil` alias, which will be removed in a future release.
 
@@ -61,6 +61,7 @@ Then follow your agent's quickstart:
 - [Cursor](../cursor/README.md)
 - [OpenCode](../opencode/README.md)
 - [pi](../pi/README.md)
+- [Vibe](../vibe/README.md)
 
 ## Tagging sessions
 
@@ -72,7 +73,7 @@ agento11y claude --tag project=hackathon --tag team=ai
 agento11y claude --tag project=hackathon -- --resume
 ```
 
-The same flag works for every launcher (`claude`, `codex`, `copilot`, `opencode`, `pi`) and combines with `--local`.
+The same flag works for every launcher (`claude`, `codex`, `copilot`, `opencode`, `pi`, `vibe`) and combines with `--local`.
 
 ## Content capture
 
