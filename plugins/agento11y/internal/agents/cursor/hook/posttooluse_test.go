@@ -80,20 +80,37 @@ func TestPostToolUse_KeepsContentInFullMode(t *testing.T) {
 	}
 }
 
+// The failure message is the one content field the SDK still forwards to the
+// span status and error event under no_tool_content, so it is gated on `full`
+// mode and redacted here rather than at emit.
 func TestPostToolUseFailure_RecordsErrorStatusAndMessage(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	logger := log.New(&bytes.Buffer{}, "", 0)
-	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}
 
 	cases := []struct {
 		name     string
+		mode     agento11y.ContentCaptureMode
 		errorRaw json.RawMessage
 		want     string
 	}{
-		{"string error", json.RawMessage(`"boom"`), "boom"},
-		{"object with message", json.RawMessage(`{"message":"timeout","code":"E1"}`), "timeout"},
-		{"empty error", json.RawMessage(``), ""},
-		{"object without message", json.RawMessage(`{"code":"E1"}`), ""},
+		{"string error", agento11y.ContentCaptureModeFull, json.RawMessage(`"boom"`), "boom"},
+		{"object with message", agento11y.ContentCaptureModeFull, json.RawMessage(`{"message":"timeout","code":"E1"}`), "timeout"},
+		{"empty error", agento11y.ContentCaptureModeFull, json.RawMessage(``), ""},
+		{"object without message", agento11y.ContentCaptureModeFull, json.RawMessage(`{"code":"E1"}`), ""},
+		{
+			"redacts tier 1 token",
+			agento11y.ContentCaptureModeFull,
+			json.RawMessage(`"deploy.sh exited 1: authenticated with glc_abcdefghijklmnopqrstuvwxyz"`),
+			"deploy.sh exited 1: authenticated with [REDACTED:grafana-cloud-token]",
+		},
+		{
+			"redacts tier 2 env assignment",
+			agento11y.ContentCaptureModeFull,
+			json.RawMessage(`{"message":"env dump: API_KEY=kR7fQ2wLmZ9xTb4vNc1JhY6s"}`),
+			"env dump:[REDACTED:env-secret-value]",
+		},
+		{"dropped in no_tool_content", agento11y.ContentCaptureModeNoToolContent, json.RawMessage(`"boom"`), ""},
+		{"dropped in metadata_only", agento11y.ContentCaptureModeMetadataOnly, json.RawMessage(`"boom"`), ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -104,7 +121,7 @@ func TestPostToolUseFailure_RecordsErrorStatusAndMessage(t *testing.T) {
 				GenerationID:   "gen",
 				ToolName:       "Bash",
 				Error:          tc.errorRaw,
-			}, cfg, logger, true)
+			}, config.Config{ContentCapture: tc.mode}, logger, true)
 
 			got := fragment.LoadTolerant("conv", "gen", logger)
 			if got == nil || len(got.Tools) != 1 {

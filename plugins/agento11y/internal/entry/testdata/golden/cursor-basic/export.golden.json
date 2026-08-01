@@ -13,7 +13,7 @@
           {
             "parts": [
               {
-                "text": "list go files"
+                "text": "list go files using [REDACTED:grafana-cloud-token]"
               }
             ],
             "role": "MESSAGE_ROLE_USER"
@@ -22,7 +22,7 @@
             "parts": [
               {
                 "tool_result": {
-                  "content_json": "eyJzdGRvdXQiOiJtYWluLmdvXG51dGlsLmdvIiwiZXhpdF9jb2RlIjowfQ==",
+                  "content_json": "eyJleGl0X2NvZGUiOjAsInN0ZG91dCI6Im1haW4uZ29cbnV0aWwuZ29cbmF1dGhlbnRpY2F0ZWQgd2l0aCBbUkVEQUNURUQ6Z3JhZmFuYS1jbG91ZC10b2tlbl0ifQ==",
                   "name": "Bash",
                   "tool_call_id": "tu-1"
                 }
@@ -32,7 +32,7 @@
           }
         ],
         "metadata": {
-          "agento11y.conversation.title": "list go files",
+          "agento11y.conversation.title": "list go files using [REDACTED:grafana-cloud-token]",
           "agento11y.sdk.content_capture_mode": "full",
           "agento11y.sdk.name": "sdk-go",
           "agento11y.user.id": "test-user"
@@ -49,7 +49,7 @@
               {
                 "tool_call": {
                   "id": "tu-1",
-                  "input_json": "eyJjb21tYW5kIjoibHMgKi5nbyJ9",
+                  "input_json": "eyJhcGlfa2V5IjoiW1JFREFDVEVEOmpzb24tc2VjcmV0LWZpZWxkXSIsImNvbW1hbmQiOiJscyAqLmdvIn0=",
                   "name": "Bash"
                 }
               }
@@ -59,7 +59,7 @@
           {
             "parts": [
               {
-                "text": "Found two go files: main.go and util.go."
+                "text": "Found two go files: main.go and util.go. Deployed with [REDACTED:grafana-cloud-token]."
               }
             ],
             "role": "MESSAGE_ROLE_ASSISTANT"

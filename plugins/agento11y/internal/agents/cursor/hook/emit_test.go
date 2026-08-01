@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
@@ -70,6 +74,91 @@ func TestEmitGenerationSendsCursorUserAgent(t *testing.T) {
 
 	if !strings.HasPrefix(gotUA, "agento11y-plugin-cursor/") {
 		t.Fatalf("User-Agent = %q, want agento11y-plugin-cursor/ prefix", gotUA)
+	}
+}
+
+// Tool arguments and results reach the OTel span on a path the generation
+// export never touches, so the mapper's redaction does not cover them. The
+// span carries the same bytes and needs its own pass.
+func TestEmitToolSpans_RedactsContent(t *testing.T) {
+	const token = "glc_abcdefghijklmnopqrstuvwxyz"
+	const apiKey = "kR7fQ2wLmZ9xTb4vNc1JhY6s"
+
+	recorder := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	logger := log.New(io.Discard, "", 0)
+	client := agento11y.NewClient(agento11y.Config{
+		ContentCapture: agento11y.ContentCaptureModeFull,
+		Tracer:         tp.Tracer("test"),
+		Logger:         logger,
+	})
+	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+	frag := &fragment.Fragment{
+		ConversationID: "conv",
+		GenerationID:   "gen-1",
+		Tools: []fragment.ToolRecord{{
+			ToolName:    "Bash",
+			ToolUseID:   "tu-1",
+			ToolInput:   json.RawMessage(`{"command":"deploy.sh","api_key":"` + apiKey + `"}`),
+			ToolOutput:  json.RawMessage(`{"stdout":"authenticated with ` + token + `"}`),
+			Status:      "completed",
+			CompletedAt: "2026-04-28T12:00:05Z",
+		}},
+	}
+	gen := agento11y.Generation{
+		ID:             "gen-1",
+		ConversationID: "conv",
+		AgentName:      mapper.AgentName,
+		Model:          agento11y.ModelRef{Provider: "openai", Name: "gpt-5-cursor"},
+		CompletedAt:    time.Date(2026, 4, 28, 12, 0, 30, 0, time.UTC),
+	}
+
+	emitToolSpans(context.Background(), client, frag, gen, logger)
+	_ = client.Shutdown(context.Background())
+	_ = tp.Shutdown(context.Background())
+
+	var attrs map[string]string
+	for _, s := range recorder.Ended() {
+		if !strings.HasPrefix(s.Name(), "execute_tool ") {
+			continue
+		}
+		attrs = map[string]string{}
+		for _, kv := range s.Attributes() {
+			attrs[string(kv.Key)] = kv.Value.AsString()
+		}
+	}
+	if attrs == nil {
+		t.Fatal("no execute_tool span recorded")
+	}
+
+	cases := []struct {
+		attr     string
+		wantMark string
+	}{
+		{"gen_ai.tool.call.arguments", "[REDACTED:json-secret-field]"},
+		{"gen_ai.tool.call.result", "[REDACTED:grafana-cloud-token]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.attr, func(t *testing.T) {
+			got, ok := attrs[tc.attr]
+			if !ok {
+				t.Fatalf("span is missing %s; recorded attributes: %v", tc.attr, attrs)
+			}
+			for _, secret := range []string{token, apiKey} {
+				if strings.Contains(got, secret) {
+					t.Errorf("%s leaks %q: %s", tc.attr, secret, got)
+				}
+			}
+			if !strings.Contains(got, tc.wantMark) {
+				t.Errorf("%s = %s; want it to contain %s", tc.attr, got, tc.wantMark)
+			}
+		})
+	}
+	if args := attrs["gen_ai.tool.call.arguments"]; !strings.Contains(args, "deploy.sh") {
+		t.Errorf("non-secret argument dropped: %s", args)
 	}
 }
 

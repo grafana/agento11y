@@ -82,13 +82,13 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana
 
 </details>
 
-To also send the conversation text, add this to your `config.env`:
+To also send the conversation text (with automatic secret redaction), add this to your `config.env`:
 
 ```dotenv
 AGENTO11Y_CONTENT_CAPTURE_MODE=full
 ```
 
-Cursor content is not passed through the shared redactor before export. Avoid `full` when prompts, replies, or tool output may contain secrets.
+Captured prompt, assistant, and tool content is redacted before export.
 
 ## 4. Verify
 

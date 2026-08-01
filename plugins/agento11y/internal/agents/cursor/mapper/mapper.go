@@ -1,7 +1,10 @@
 // Package mapper turns the on-disk Fragment + Session + StopPayload into a
-// agento11y Generation suitable for emission via the Go SDK. Unlike the
-// claudecode mapper there is no redactor — content passes through verbatim
-// in `full` mode.
+// agento11y Generation suitable for emission via the Go SDK. Every content
+// field it exports — conversation title, user prompt, assistant text, tool
+// arguments, tool results and the stop error — goes through internal/redact
+// first. The mapper is the only redaction boundary for the generation
+// export: the emit client sets no GenerationSanitizer, so nothing downstream
+// scrubs. Tool spans take a separate path and are redacted in hook/emit.go.
 package mapper
 
 import (
@@ -16,6 +19,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/tags"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/gitbranch"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/mapperutil"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/timeutil"
 )
 
@@ -90,6 +94,8 @@ func MapFragment(in Inputs) Mapped {
 
 	stopStatus := resolveStopStatus(in.Stop)
 
+	red := redact.New()
+
 	var workspaceRoot string
 	if in.Session != nil && len(in.Session.WorkspaceRoots) > 0 {
 		workspaceRoot = in.Session.WorkspaceRoots[0]
@@ -100,7 +106,9 @@ func MapFragment(in Inputs) Mapped {
 		cursorVersion = in.Session.CursorVersion
 		userEmail = in.Session.UserEmail
 		isBackgroundAgent = in.Session.IsBackgroundAgent
-		conversationTitle = in.Session.ConversationTitle
+		// Tier 1 only. The title is a truncated first prompt, so tier 2's
+		// `KEY: value` heuristic would over-redact ordinary human text.
+		conversationTitle = red.RedactLightweight(in.Session.ConversationTitle)
 	}
 
 	tagMap := tags.Build(tags.BuiltinInputs{
@@ -138,7 +146,7 @@ func MapFragment(in Inputs) Mapped {
 		ContentCapture:    in.ContentCapture,
 	}
 
-	input, output := buildMessages(frag, in.ContentCapture)
+	input, output := buildMessages(frag, in.ContentCapture, red)
 
 	gen := agento11y.Generation{
 		ID:                frag.GenerationID,
@@ -169,7 +177,7 @@ func MapFragment(in Inputs) Mapped {
 		StopStatus: stopStatus,
 	}
 	if stopStatus == StopStatusError {
-		mapped.CallError = extractCallError(in.Stop)
+		mapped.CallError = extractCallError(in.Stop, red)
 	}
 	return mapped
 }
@@ -195,19 +203,23 @@ func resolveStopStatus(stop *StopInput) StopStatus {
 // extractCallError reads Cursor's `error` field (string or {message, code})
 // from the StopInput. Returns errCursorStop when nothing parseable is
 // available.
-func extractCallError(stop *StopInput) error {
+//
+// The message reaches the export as `generation.call_error` and as the span
+// status, so it is redacted here. Tier 1 only: an error message is prose,
+// and the SDK's own sanitizer applies the same tier to call_error.
+func extractCallError(stop *StopInput, red *redact.Redactor) error {
 	if stop == nil || len(stop.Error) == 0 {
 		return errCursorStop
 	}
 	var asString string
 	if err := json.Unmarshal(stop.Error, &asString); err == nil && asString != "" {
-		return errors.New(asString)
+		return errors.New(red.RedactLightweight(asString))
 	}
 	var asObj struct {
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(stop.Error, &asObj); err == nil && asObj.Message != "" {
-		return errors.New(asObj.Message)
+		return errors.New(red.RedactLightweight(asObj.Message))
 	}
 	return errCursorStop
 }
@@ -242,7 +254,7 @@ func buildToolDefinitions(tools []fragment.ToolRecord) []agento11y.ToolDefinitio
 	return mapperutil.SortedToolDefinitions(names)
 }
 
-func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (input, output []agento11y.Message) {
+func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, red *redact.Redactor) (input, output []agento11y.Message) {
 	// Normalize so the rest of this function only deals with the three real
 	// content-gating modes. envconfig.ResolveContentMode does this at the
 	// config layer too, but mappers re-apply it for callers (including tests)
@@ -256,7 +268,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (
 		input = append(input, agento11y.Message{
 			Role: agento11y.RoleUser,
 			Parts: []agento11y.Part{
-				agento11y.TextPart(frag.UserPrompt),
+				agento11y.TextPart(red.Redact(frag.UserPrompt)),
 			},
 		})
 	}
@@ -276,7 +288,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (
 					Name: t.ToolName,
 					InputJSON: func() []byte {
 						if mode == agento11y.ContentCaptureModeFull {
-							return t.ToolInput
+							return red.RedactJSON(t.ToolInput)
 						}
 						return nil
 					}(),
@@ -301,7 +313,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (
 						ToolResult: &agento11y.ToolResult{
 							ToolCallID:  t.ToolUseID,
 							Name:        t.ToolName,
-							ContentJSON: t.ToolOutput,
+							ContentJSON: red.RedactJSON(t.ToolOutput),
 							IsError:     t.Status == "error",
 						},
 					},
@@ -339,7 +351,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (
 		if strings.TrimSpace(text) != "" {
 			output = append(output, agento11y.Message{
 				Role:  agento11y.RoleAssistant,
-				Parts: []agento11y.Part{agento11y.TextPart(text)},
+				Parts: []agento11y.Part{agento11y.TextPart(red.Redact(text))},
 			})
 		}
 	}
