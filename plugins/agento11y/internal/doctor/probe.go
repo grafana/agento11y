@@ -1,13 +1,16 @@
 package doctor
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/grafana/agento11y/go/proto/agento11y/wire"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 )
 
@@ -30,7 +33,7 @@ var probeClient = &http.Client{Timeout: probeTimeout}
 // abort the report. insecure mirrors SIGIL_INSECURE so a scheme-less endpoint
 // resolves to http here just as the SDK exporter does; otherwise the probe
 // would hit https and report a cleartext setup as unreachable.
-func defaultProbeConversations(ctx context.Context, endpoint, tenant, token string, insecure bool) *ProbeResult {
+func defaultProbeConversations(ctx context.Context, endpoint string, tenant envValue, token string, insecure bool) *ProbeResult {
 	target, err := wire.NormalizeGenerationExportURL(endpoint, insecure)
 	if err != nil {
 		return &ProbeResult{Message: "invalid endpoint: " + err.Error()}
@@ -44,39 +47,64 @@ func defaultProbeConversations(ctx context.Context, endpoint, tenant, token stri
 		return &ProbeResult{URL: target, Message: err.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if tenant != "" {
-		req.Header.Set("X-Scope-OrgID", tenant)
+	if tenant.Value != "" {
+		req.Header.Set("X-Scope-OrgID", tenant.Value)
 	}
 	if token != "" {
-		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(tenant+":"+token)))
+		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(tenant.Value+":"+token)))
 	}
 
 	res := doProbe(target, req)
-	if res.authFailure() {
+	switch {
+	case res.credentialsRejected():
+		// Sigil's tenant auth answers 401 for every auth failure on this
+		// endpoint, a missing write scope included, so name the scope here
+		// too — last, because it is the rarest cause.
+		res.Message = credentialsRejectedMessage(tenant) +
+			". A token without the sigil:write scope is rejected the same way"
+	case res.scopeDenied():
 		res.Message = "endpoint rejected auth — token likely missing sigil:write scope"
 	}
 	return res
 }
 
+// credentialsRejectedMessage explains an HTTP 401: the endpoint refused the
+// credentials and does not say which one is wrong. Name the token first and
+// the tenant id second, with its resolved value, because a wrong tenant id
+// reads exactly like a bad token from here. tenant is the tenant id the
+// request authenticated with; a zero value means the request did not use one,
+// and then the message says nothing about a variable the request never read.
+func credentialsRejectedMessage(tenant envValue) string {
+	const rejected = "credentials rejected: the token may be invalid or expired"
+	if !tenant.Set {
+		return rejected
+	}
+	return fmt.Sprintf("%s, or %s (%s) may be wrong",
+		rejected, cmp.Or(tenant.Key, envconfig.PreferredKey("AUTH_TENANT_ID")), tenant.Value)
+}
+
 // defaultProbeOTLP checks the OTLP metrics and traces endpoints, reusing the
 // resolved signal URLs and synthesized auth headers from internal/otel. Each
 // signal is POSTed an empty JSON body so the edge auth layer is exercised
-// without pushing data; 401/403 indicate the token is missing
-// metrics:write/traces:write. The real exporter sends protobuf, so an endpoint
-// that validates content-type before auth could answer 400/415 here; against
-// Grafana's OTLP gateway auth precedes parsing, so 200/401/403 is what's seen.
-func defaultProbeOTLP(ctx context.Context) *AnalyticsProbe {
+// without pushing data; 401 means the credentials were refused and 403 that
+// the token is missing metrics:write/traces:write. The real exporter sends
+// protobuf, so an endpoint that validates content-type before auth could
+// answer 400/415 here; against Grafana's OTLP gateway auth precedes parsing,
+// so 200/401/403 is what's seen. tenant is the tenant id the exporter
+// authenticates with, zero when an explicit Authorization header does instead;
+// it is only used to name the variable in a 401 message.
+func defaultProbeOTLP(ctx context.Context, tenant envValue) *AnalyticsProbe {
 	metrics, traces, ok := otel.ProbeConfig()
 	if !ok {
 		return nil
 	}
 	return &AnalyticsProbe{
-		Metrics: probeOTLPSignal(ctx, metrics),
-		Traces:  probeOTLPSignal(ctx, traces),
+		Metrics: probeOTLPSignal(ctx, metrics, tenant),
+		Traces:  probeOTLPSignal(ctx, traces, tenant),
 	}
 }
 
-func probeOTLPSignal(ctx context.Context, target otel.ProbeTarget) *ProbeResult {
+func probeOTLPSignal(ctx context.Context, target otel.ProbeTarget, tenant envValue) *ProbeResult {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
@@ -90,7 +118,10 @@ func probeOTLPSignal(ctx context.Context, target otel.ProbeTarget) *ProbeResult 
 	}
 
 	res := doProbe(target.URL, req)
-	if res.authFailure() {
+	switch {
+	case res.credentialsRejected():
+		res.Message = credentialsRejectedMessage(tenant)
+	case res.scopeDenied():
 		res.Message = "missing metrics:write/traces:write scope"
 	}
 	return res
