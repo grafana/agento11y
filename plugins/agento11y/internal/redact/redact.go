@@ -2,96 +2,107 @@ package redact
 
 import (
 	"regexp"
+	"strings"
 )
 
-type pattern struct {
+// secretPattern is one compiled pattern from the generated table in
+// patterns_gen.go. The table comes from redaction/patterns.json, which also
+// feeds the four SDKs; edit that file and run `mise run generate:redaction` to
+// change a pattern.
+type secretPattern struct {
+	id string
+	re *regexp.Regexp
+}
+
+// tier2Pattern carries a replacement template that keeps the matched key and
+// rewrites only the value, so JSON and env syntax survive redaction.
+type tier2Pattern struct {
 	id          string
 	re          *regexp.Regexp
-	tier        int // 1 = high-confidence, 2 = heuristic
 	replacement string
 }
 
-// compiledPatterns holds the package-wide set of regex patterns. Compiled
-// once at process start so callers don't pay the regex-compile cost on every
-// redaction and so any Redactor — including the zero value — uses the same
-// rules. Keeping state here, not on the receiver, means `redact.Redactor{}`
-// and `&redact.Redactor{}` behave identically to `redact.New()` and can never
-// silently no-op because patterns were left nil.
-var compiledPatterns = compilePatterns()
-
-func compilePatterns() []pattern {
-	defs := []struct {
-		id   string
-		expr string
-		tier int
-	}{
-		// Tier 1: high-confidence token formats
-		{"grafana-cloud-token", `\bglc_[A-Za-z0-9_-]{20,}`, 1},
-		{"grafana-service-account-token", `\bglsa_[A-Za-z0-9_-]{20,}`, 1},
-		{"aws-access-token", `\b(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16}\b`, 1},
-		{"github-pat", `\bghp_[A-Za-z0-9_]{36,}`, 1},
-		{"github-oauth", `\bgho_[A-Za-z0-9_]{36,}`, 1},
-		{"github-app-token", `\bghs_[A-Za-z0-9_]{36,}`, 1},
-		{"github-fine-grained-pat", `\bgithub_pat_[A-Za-z0-9_]{82}`, 1},
-		{"anthropic-api-key", `\bsk-ant-api03-[a-zA-Z0-9_-]{93}AA`, 1},
-		{"anthropic-admin-key", `\bsk-ant-admin01-[a-zA-Z0-9_-]{93}AA`, 1},
-		{"openai-api-key", `\bsk-[a-zA-Z0-9]{20}T3BlbkFJ[a-zA-Z0-9]{20}`, 1},
-		{"openai-project-key", `\bsk-proj-[a-zA-Z0-9_-]{40,}`, 1},
-		{"openai-svcacct-key", `\bsk-svcacct-[a-zA-Z0-9_-]{40,}`, 1},
-		{"gcp-api-key", `\bAIza[A-Za-z0-9_-]{35}`, 1},
-		{"private-key", `-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----`, 1},
-		{"connection-string", `(?:postgres|mysql|mongodb|redis|amqp)://[^\s'"]+@[^\s'"]+`, 1},
-		{"bearer-token", `[Bb]earer\s+[A-Za-z0-9_.\-~+/]{20,}={0,3}`, 1},
-		{"slack-token", `\bxox[bporas]-[A-Za-z0-9-]{10,}`, 1},
-		{"stripe-key", `\b[sr]k_(?:live|test)_[A-Za-z0-9]{20,}`, 1},
-		{"sendgrid-api-key", `\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}`, 1},
-		{"twilio-api-key", `\bSK[a-f0-9]{32}`, 1},
-		{"npm-token", `\bnpm_[A-Za-z0-9]{36}`, 1},
-		{"pypi-token", `\bpypi-[A-Za-z0-9_-]{50,}`, 1},
-
-		// Tier 2: heuristic patterns
-		{"env-secret-value", `(?i)(?:^|\W|_)(?:PASSWORD|SECRET|TOKEN|KEY|CREDENTIAL|API_KEY|PRIVATE_KEY|ACCESS_KEY)\s*[=:]\s*\S+`, 2},
-		{"json-secret-field", `(?i)"(?:password|secret|token|credential|api_?key|private_?key|access_?key|client_?secret|auth_?token|secret_?key)"\s*:\s*"[^"]+"`, 2},
+// tier1Combined alternates all tier1Patterns into a single regex so each input
+// is scanned once instead of once per pattern. Each pattern is wrapped in a
+// capturing group; the matched group index identifies which pattern fired.
+// Scanning once is also what makes plugin output identical to the SDKs': with
+// per-pattern passes an earlier pattern can rewrite text a later one would
+// have matched.
+var tier1Combined = func() *regexp.Regexp {
+	parts := make([]string, len(tier1Patterns))
+	for i, p := range tier1Patterns {
+		parts[i] = "(" + p.re.String() + ")"
 	}
+	return regexp.MustCompile(strings.Join(parts, "|"))
+}()
 
-	out := make([]pattern, 0, len(defs))
-	for _, d := range defs {
-		out = append(out, pattern{
-			id:          d.id,
-			re:          regexp.MustCompile(d.expr),
-			tier:        d.tier,
-			replacement: "[REDACTED:" + d.id + "]",
-		})
-	}
-	return out
+// Options configures a Redactor.
+type Options struct {
+	// RedactEmailAddresses turns on the email pattern. It defaults to false:
+	// agent transcripts routinely carry commit authors and reviewer addresses,
+	// and redacting them costs more context than it protects. See
+	// redaction/README.md.
+	RedactEmailAddresses bool
 }
 
 // Redactor applies Tier 1 (high-confidence) and Tier 2 (heuristic) secret
-// patterns. The zero value is ready to use; New is kept for symmetry with
-// other "constructor returns *T" packages and is the recommended call site.
-type Redactor struct{}
+// patterns. The zero value is ready to use and leaves email addresses alone.
+type Redactor struct {
+	includeEmail bool
+}
 
-// New returns a Redactor pointer. Equivalent to &Redactor{} — kept as a stable
-// API surface for callers that prefer constructor style.
+// New returns a Redactor with email redaction off.
 func New() *Redactor { return &Redactor{} }
+
+// NewWithOptions returns a Redactor configured by opts.
+func NewWithOptions(opts Options) *Redactor {
+	return &Redactor{includeEmail: opts.RedactEmailAddresses}
+}
 
 // Redact applies both Tier 1 and Tier 2 patterns.
 func (r *Redactor) Redact(text string) string {
-	return redactText(text, 2)
+	text = r.redactTier1(text)
+	for _, p := range tier2Patterns {
+		text = p.re.ReplaceAllString(text, p.replacement)
+	}
+	return text
 }
 
 // RedactLightweight applies only Tier 1 (high-confidence) patterns.
 func (r *Redactor) RedactLightweight(text string) string {
-	return redactText(text, 1)
+	return r.redactTier1(text)
 }
 
-func redactText(text string, maxTier int) string {
-	result := text
-	for _, p := range compiledPatterns {
-		if p.tier > maxTier {
-			continue
-		}
-		result = p.re.ReplaceAllString(result, p.replacement)
+// redactTier1 applies the combined tier 1 scan and, when enabled, the email
+// pattern. Both redaction modes share it.
+func (r *Redactor) redactTier1(text string) string {
+	text = replaceTier1(text)
+	if r.includeEmail {
+		text = emailPattern.re.ReplaceAllString(text, "[REDACTED:"+emailPattern.id+"]")
 	}
-	return result
+	return text
+}
+
+func replaceTier1(s string) string {
+	matches := tier1Combined.FindAllStringSubmatchIndex(s, -1)
+	if len(matches) == 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	last := 0
+	for _, m := range matches {
+		b.WriteString(s[last:m[0]])
+		for g := 1; g <= len(tier1Patterns); g++ {
+			if m[2*g] >= 0 {
+				b.WriteString("[REDACTED:")
+				b.WriteString(tier1Patterns[g-1].id)
+				b.WriteByte(']')
+				break
+			}
+		}
+		last = m[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }

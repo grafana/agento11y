@@ -39,6 +39,7 @@
   },
   "devDependencies": {
     "@grafana/agento11y": "workspace:*",
+    "@grafana/agento11y-core": "workspace:*",
     "@opencode-ai/plugin": "1.3.13",
     "@opencode-ai/sdk": "1.3.13",
     "@opentelemetry/api": "1.9.1",

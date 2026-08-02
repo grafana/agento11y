@@ -64,3 +64,41 @@ python3 -m pip install grpcio-tools==1.80.0 protobuf==6.31.1
 ```
 
 The Python script prefers an existing Python that already has `grpcio-tools` installed (`PYTHON_BIN`, defaults to `python3`); otherwise it falls back to `uv run --with grpcio-tools==<pinned> --with protobuf==<pinned>`. Install [uv](https://docs.astral.sh/uv/) and you don't need to install the Python tools globally.
+
+## Regenerating secret-redaction patterns
+
+The secret patterns live at [`redaction/patterns.json`](../redaction/patterns.json). It is the only editable copy. After editing it, regenerate every engine's table from the repo root:
+
+```bash
+mise run generate:redaction
+```
+
+That writes five files:
+
+| Output | Consumer |
+| --- | --- |
+| `go/agento11y/redaction_patterns_gen.go` | Go SDK |
+| `python/agento11y/_redaction_patterns.py` | Python SDK |
+| `js/src/redaction-patterns.generated.ts` | JS SDK and, through `@grafana/agento11y-core`, the opencode plugin |
+| `dotnet/src/Grafana.Agento11y/RedactionPatterns.g.cs` | .NET SDK |
+| `plugins/agento11y/internal/redact/patterns_gen.go` | shared `agento11y` binary |
+
+The generator validates the table before it writes anything. It rejects:
+
+- Lookahead, lookbehind and backreferences, which RE2 cannot compile.
+- `\s`, `\w` and `\d`, which mean ASCII in Go and JavaScript and Unicode in Python and .NET.
+- A capturing group in a tier 1 pattern. Every engine maps the index of the matched group back to a pattern id, and an extra group shifts that mapping.
+
+`redaction/README.md` lists the rules in full.
+
+The generator formats its Go, Python and TypeScript output with `gofmt`, `ruff format` and `biome`, all through stdin, so those three tools must be on `PATH` (`mise install` provides them). The drift job has no .NET SDK, so the generator emits the C# output already formatted. `mise run lint:cs` checks it with a second `dotnet format` pass that names the file, because `dotnet format` skips `*.g.cs` by default.
+
+The plugin gets its own generated table rather than importing the SDK's: `plugins/agento11y` pins a released SDK version and builds with `GOWORK=off`, so importing would tie it to the SDK release cadence.
+
+### Drift check
+
+`mise run check:redaction` runs the generator's invariant tests, regenerates every table into a temporary directory, and diffs them against the committed tree. It diffs the paths the generator prints, so adding an output target needs no change here. It runs in CI in the `Protobuf drift` job and fails the build if anyone edits a generated table by hand or edits `patterns.json` without regenerating.
+
+### Conformance
+
+`mise run test:sdk:redaction-conformance` runs the shared fixtures in `redaction/fixtures/` through all six engines. [`redaction/README.md`](../redaction/README.md) covers how to add a pattern and what the fixtures assert.

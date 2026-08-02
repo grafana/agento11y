@@ -1,5 +1,6 @@
 import type { AssistantMessage, Part } from "@opencode-ai/sdk";
 import { describe, expect, it } from "vitest";
+import { createRedactor } from "./hooks.js";
 import {
   legacyToolOverrideNames,
   mapGeneration,
@@ -7,9 +8,8 @@ import {
   mapOutputMessages,
   mapToolDefinitions,
 } from "./mappers.js";
-import { Redactor } from "./redact.js";
 
-const redactor = new Redactor();
+const redactor = createRedactor();
 
 function makeAssistantMsg(
   overrides?: Partial<AssistantMessage>,

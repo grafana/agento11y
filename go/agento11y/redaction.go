@@ -67,36 +67,20 @@ type SecretRedactionOptions struct {
 	RedactEmailAddresses *bool
 }
 
+// secretPattern is one compiled pattern from the generated table in
+// redaction_patterns_gen.go. Edit redaction/patterns.json and run
+// `mise run generate:redaction` to change the table.
 type secretPattern struct {
 	id string
 	re *regexp.Regexp
 }
 
-// tier1Patterns covers high-confidence secret formats. Applied by both the
-// full and lightweight redactors.
-var tier1Patterns = []secretPattern{
-	{"grafana-cloud-token", regexp.MustCompile(`\bglc_[A-Za-z0-9_-]{20,}`)},
-	{"grafana-service-account-token", regexp.MustCompile(`\bglsa_[A-Za-z0-9_-]{20,}`)},
-	{"aws-access-token", regexp.MustCompile(`\b(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16}\b`)},
-	{"github-pat", regexp.MustCompile(`\bghp_[A-Za-z0-9_]{36,}`)},
-	{"github-oauth", regexp.MustCompile(`\bgho_[A-Za-z0-9_]{36,}`)},
-	{"github-app-token", regexp.MustCompile(`\bghs_[A-Za-z0-9_]{36,}`)},
-	{"github-fine-grained-pat", regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{82}`)},
-	{"anthropic-api-key", regexp.MustCompile(`\bsk-ant-api03-[a-zA-Z0-9_-]{93}AA`)},
-	{"anthropic-admin-key", regexp.MustCompile(`\bsk-ant-admin01-[a-zA-Z0-9_-]{93}AA`)},
-	{"openai-api-key", regexp.MustCompile(`\bsk-[a-zA-Z0-9]{20}T3BlbkFJ[a-zA-Z0-9]{20}`)},
-	{"openai-project-key", regexp.MustCompile(`\bsk-proj-[a-zA-Z0-9_-]{40,}`)},
-	{"openai-svcacct-key", regexp.MustCompile(`\bsk-svcacct-[a-zA-Z0-9_-]{40,}`)},
-	{"gcp-api-key", regexp.MustCompile(`\bAIza[A-Za-z0-9_-]{35}`)},
-	{"private-key", regexp.MustCompile(`-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----`)},
-	{"connection-string", regexp.MustCompile(`(?:postgres|mysql|mongodb|redis|amqp)://[^\s'"]+@[^\s'"]+`)},
-	{"bearer-token", regexp.MustCompile(`[Bb]earer\s+[A-Za-z0-9_.\-~+/]{20,}={0,3}`)},
-	{"slack-token", regexp.MustCompile(`\bxox[bporas]-[A-Za-z0-9-]{10,}`)},
-	{"stripe-key", regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{20,}`)},
-	{"sendgrid-api-key", regexp.MustCompile(`\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}`)},
-	{"twilio-api-key", regexp.MustCompile(`\bSK[a-f0-9]{32}`)},
-	{"npm-token", regexp.MustCompile(`\bnpm_[A-Za-z0-9]{36}`)},
-	{"pypi-token", regexp.MustCompile(`\bpypi-[A-Za-z0-9_-]{50,}`)},
+// tier2Pattern carries a replacement template that keeps the matched key and
+// rewrites only the value, so JSON and env syntax survive redaction.
+type tier2Pattern struct {
+	id          string
+	re          *regexp.Regexp
+	replacement string
 }
 
 // tier1Combined alternates all tier1Patterns into a single regex so each input
@@ -110,34 +94,20 @@ var tier1Combined = func() *regexp.Regexp {
 	return regexp.MustCompile(strings.Join(parts, "|"))
 }()
 
-// emailPattern is toggleable via SecretRedactionOptions.RedactEmailAddresses.
-var emailPattern = secretPattern{
-	id: "email",
-	re: regexp.MustCompile(`(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b`),
-}
-
-// envSecretPattern covers heuristic env-style key/value assignments. Applied
-// only by the full redactor (skipped for assistant text/thinking in
-// lightweight mode) to avoid mangling natural-language strings.
-var envSecretPattern = secretPattern{
-	id: "env-secret-value",
-	re: regexp.MustCompile(`(?i)((?:PASSWORD|SECRET|TOKEN|KEY|CREDENTIAL|API_KEY|PRIVATE_KEY|ACCESS_KEY)\s*[=:]\s*)([^\s"{}\[\],]+)`),
-}
-
-// redactFull applies tier 1, optional email, and env-style patterns. Use for
+// redactFull applies tier 1, optional email, and tier 2 patterns. Use for
 // tool-call args, tool-result content, system prompts, and any field where
 // arbitrary content can be expected (env dumps, shell output).
 func redactFull(s string, includeEmail bool) string {
-	s = redactTier1String(s)
-	if includeEmail {
-		s = emailPattern.re.ReplaceAllString(s, "[REDACTED:"+emailPattern.id+"]")
+	s = redactLight(s, includeEmail)
+	for _, p := range tier2Patterns {
+		s = p.re.ReplaceAllString(s, p.replacement)
 	}
-	return envSecretPattern.re.ReplaceAllString(s, "${1}[REDACTED:"+envSecretPattern.id+"]")
+	return s
 }
 
 // redactLight applies tier 1 and optional email patterns only. Use for
-// assistant text and reasoning, where env-style heuristics would cause too many
-// false positives, and for short metadata strings (titles, error messages).
+// assistant text and reasoning, where the tier 2 heuristics would cause too
+// many false positives, and for short metadata strings (titles, error messages).
 func redactLight(s string, includeEmail bool) string {
 	s = redactTier1String(s)
 	if includeEmail {
@@ -153,7 +123,10 @@ func redactFullBytes(src []byte, includeEmail bool) []byte {
 	if includeEmail {
 		src = emailPattern.re.ReplaceAll(src, []byte("[REDACTED:"+emailPattern.id+"]"))
 	}
-	return envSecretPattern.re.ReplaceAll(src, []byte("${1}[REDACTED:"+envSecretPattern.id+"]"))
+	for _, p := range tier2Patterns {
+		src = p.re.ReplaceAll(src, []byte(p.replacement))
+	}
+	return src
 }
 
 func redactTier1String(s string) string {
@@ -247,7 +220,7 @@ func newSecretRedactionSanitizer(lookup envLookup, opts SecretRedactionOptions) 
 		}
 		// ConversationTitle and CallError are short natural-language strings;
 		// lightweight redaction (tier 1 + email) avoids mangling them with the
-		// env-style heuristic.
+		// tier 2 heuristics.
 		if g.ConversationTitle != "" {
 			g.ConversationTitle = redactLight(g.ConversationTitle, includeEmail)
 		}
@@ -267,8 +240,8 @@ func newSecretRedactionSanitizer(lookup envLookup, opts SecretRedactionOptions) 
 	}
 }
 
-// textMode is which tier to apply to PartKindText for a given role; thinking,
-// tool-call, and tool-result parts use a fixed tier regardless.
+// textMode is which redaction mode to apply to PartKindText for a given role;
+// thinking, tool-call, and tool-result parts use a fixed mode regardless.
 type textMode int
 
 const (
@@ -277,9 +250,9 @@ const (
 	textModeFull
 )
 
-// inputTextMode picks the tier for an Input message's text part. Historic
-// assistant turns and tool results in Input always get role-aware redaction;
-// user text is only redacted when the caller opts in.
+// inputTextMode picks the redaction mode for an Input message's text part.
+// Historic assistant turns and tool results in Input always get role-aware
+// redaction; user text is only redacted when the caller opts in.
 func inputTextMode(role Role, redactUserInput bool) textMode {
 	switch role {
 	case RoleUser:

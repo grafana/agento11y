@@ -19,8 +19,8 @@ export {
   withUserId,
 } from './context.js';
 export { HookDeniedError } from './hooks.js';
-export type { SecretRedactionOptions } from './redaction.js';
-export { createSecretRedactionSanitizer } from './redaction.js';
+export type { SecretRedactionOptions, SecretTextRedactionOptions } from './redaction.js';
+export { createSecretRedactionSanitizer, redactSecretText, redactSecretTextLightweight } from './redaction.js';
 export type {
   Agento11yDebugSnapshot,
   Agento11yLogger,

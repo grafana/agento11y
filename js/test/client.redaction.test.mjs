@@ -268,7 +268,9 @@ test('secret redaction sanitizer redacts assistant and tool messages in input', 
   assert.doesNotMatch(sanitized.input[0].parts[0].thinking, /glc_/);
   assert.match(sanitized.input[0].parts[0].thinking, /\[REDACTED:grafana-cloud-token\]/);
   assert.doesNotMatch(sanitized.input[0].parts[1].toolCall.inputJSON, /glc_/);
-  assert.match(sanitized.input[0].parts[1].toolCall.inputJSON, /\[REDACTED:grafana-cloud-token\]/);
+  // `json-secret-field` replaces the whole quoted value of a secret-looking JSON
+  // key, so its label wins over the tier 1 one that matched inside the value.
+  assert.match(sanitized.input[0].parts[1].toolCall.inputJSON, /\[REDACTED:json-secret-field\]/);
   assert.doesNotMatch(sanitized.input[1].parts[0].toolResult.content, /glc_/);
   assert.doesNotMatch(sanitized.input[1].parts[0].toolResult.content, /hunter2secret123/);
   assert.match(sanitized.input[1].parts[0].toolResult.content, /\[REDACTED:grafana-cloud-token\]/);
