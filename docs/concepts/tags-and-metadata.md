@@ -126,6 +126,8 @@ Codex and copilot also add their own `codex.*` and `copilot.*` keys, so this tab
 | `pi.tokens_before` | Pi's estimate of the context size before a compaction, in tokens. Compaction generations only. The estimate covers the whole conversation, not this call's input tokens. | pi |
 | `pi.compaction.reason` | What triggered the compaction: `manual` (`/compact` or `ctx.compact()`), `threshold` (context limit), or `overflow` (context-overflow recovery). | pi |
 | `pi.compaction.will_retry` | `true` when pi retries the turn it aborted to run this compaction. Only overflow recovery retries. | pi |
+| `pi.fork.parent_session_id` | Conversation id of the session a fork was taken from. On the fork's first generation only. | pi |
+| `pi.fork.parent_generation_id` | Generation id of the trunk turn the fork continues from. Ships as metadata rather than a parent edge, because the trunk only holds that generation if it ran instrumented. | pi |
 
 ## See also
 

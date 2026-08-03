@@ -127,6 +127,15 @@ The plugin exports each of those calls as its own generation so they show up in 
 
 Two cases export nothing, because no model call happened: an extension supplied the compaction, or you navigated the tree without asking for a summary. Older pi versions record no usage on the entry; those still export a generation, with timing and metadata but no token counts.
 
+## Forked sessions
+
+`pi --fork` and the in-TUI `/fork` and `/clone` start a new conversation that carries a copy of the trunk's history. The fork's first generation gets no `parent_generation_ids`, because the trunk turn it continues from was only exported if the trunk itself ran instrumented, and a fork can be taken from a session recorded before this plugin was installed. The link to the trunk ships as metadata instead:
+
+- `pi.fork.parent_session_id` — conversation id of the trunk.
+- `pi.fork.parent_generation_id` — generation id of the trunk turn the fork continues from.
+
+The fork's own turns link to each other as usual. Both keys are omitted when the plugin cannot name the trunk turn: the trunk session file is unreadable, the fork header carries no usable timestamp, or the trunk inherited the turn from an older session instead of running it (a fork of a fork). If `pi --fork` starts on a session file whose header cannot be read, the plugin cannot tell the fork from a resume and links turns as usual; a fork taken inside the session is recognized either way, because pi reports it.
+
 ## Redaction
 
 Before any generation leaves the process, the SDK scrubs known token formats, PEM private keys, database URLs, `KEY=value` pairs, bearer tokens, and email addresses. Matches become `[REDACTED:<id>]`. User input messages are redacted by default; set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to leave them unchanged.

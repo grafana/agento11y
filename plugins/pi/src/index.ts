@@ -12,6 +12,7 @@ import { detectPiVersion } from "./detectPiVersion.js";
 import { resolveGitBranch } from "./git.js";
 import { runPreflightTransform, runToolCallGuard } from "./guard.js";
 import {
+  type PiGenerationParent,
   resolvePiGenerationLineage,
   resolvePiSummaryLineage,
   type SessionManagerLike,
@@ -41,6 +42,14 @@ import {
   toolResultText,
   userMessageText,
 } from "./mappers.js";
+import {
+  type ConversationRecord,
+  NOT_FORKED,
+  resolveSessionOrigin,
+  resolveSessionStart,
+  type SessionHeaderSourceLike,
+  type SessionOrigin,
+} from "./sessionOrigin.js";
 import { buildBuiltinTags } from "./tags.js";
 import {
   createTelemetryProviders,
@@ -110,6 +119,20 @@ export default function (pi: ExtensionAPI) {
   // `getBranch()`; this set covers the fallback.
   const exportedSummaryEntryIds = new Set<string>();
 
+  // Where each conversation came from. Filled at `session_start` and, for a
+  // conversation id that appears without one, on first sight at `turn_end`,
+  // so the session header is read once per conversation rather than per
+  // turn. Cleared by resetSessionState.
+  const sessionOrigins = new Map<string, SessionOrigin>();
+
+  // Conversation the plugin is attributing turns to, and when that
+  // conversation began. Set on every `session_start`, and deliberately kept
+  // across `resetSessionState` and `session_shutdown`: a fork tears the old
+  // session down first (agent-session-runtime.js teardownCurrent), and a
+  // `--no-session` fork writes no `parentSession`, so this record is the
+  // only reference to the trunk it came from. See sessionOrigin.ts.
+  let currentConversation: ConversationRecord | undefined;
+
   function resetTurnState() {
     turnStartTime = 0;
     firstTokenTime = 0;
@@ -137,6 +160,7 @@ export default function (pi: ExtensionAPI) {
     compactionStartedAt = undefined;
     branchSummaryStartedAt = undefined;
     exportedSummaryEntryIds.clear();
+    sessionOrigins.clear();
   }
 
   /**
@@ -212,7 +236,7 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    const conversationId = sessionManager?.getSessionId?.() || undefined;
+    const conversationId = readSessionId(sessionManager);
 
     // Entry timestamps are ISO strings stamped when the entry is appended,
     // i.e. after the summarization call finished. No pi event carries a
@@ -240,10 +264,17 @@ export default function (pi: ExtensionAPI) {
       logger.debug("getSessionName failed", err);
     }
 
+    // A summary taken right after a fork sits on top of an inherited turn,
+    // so its parent is subject to the same trunk boundary as a turn's. See
+    // sessionOrigin.ts.
+    const origin: SessionOrigin = conversationId
+      ? sessionOriginFor(conversationId, sessionManager)
+      : NOT_FORKED;
     const lineage = resolvePiSummaryLineage(
       sessionManager,
       entryId,
       conversationId,
+      { origin },
     );
 
     const seed = mapSummaryGenerationStart({
@@ -261,7 +292,8 @@ export default function (pi: ExtensionAPI) {
       startedAt,
       tags,
       generationId: lineage.generationId,
-      parentGenerationIds: lineage.parentGenerationIds,
+      parentGenerationIds: parentEdge(lineage.parent),
+      metadata: forkMetadata(lineage.parent, origin),
     });
 
     const result = mapSummaryGenerationResult({
@@ -289,6 +321,40 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
+  /**
+   * Origin of `conversationId`, read from the session header on first sight
+   * and cached for the rest of the conversation. A session's header never
+   * changes; a fork produces a new conversation id and so a fresh lookup.
+   */
+  function sessionOriginFor(
+    conversationId: string,
+    sessionManager: SessionHeaderSourceLike | undefined | null,
+  ): SessionOrigin {
+    const cached = sessionOrigins.get(conversationId);
+    if (cached) return cached;
+    const origin = resolveSessionOrigin(sessionManager);
+    sessionOrigins.set(conversationId, origin);
+    return origin;
+  }
+
+  /**
+   * Current conversation id, or undefined when the runtime cannot report
+   * one. Never throws: a failure here must not disable the plugin.
+   */
+  function readSessionId(
+    sessionManager:
+      | { getSessionId?: () => string | undefined }
+      | undefined
+      | null,
+  ): string | undefined {
+    try {
+      return sessionManager?.getSessionId?.() || undefined;
+    } catch (err) {
+      logger.debug("getSessionId failed", err);
+      return undefined;
+    }
+  }
+
   function cacheAssistantModel(message: PiAssistantMessage) {
     lastSeenModel = {
       provider: message.provider,
@@ -296,7 +362,7 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     try {
       if (sigil) {
         try {
@@ -307,7 +373,25 @@ export default function (pi: ExtensionAPI) {
       }
 
       sigil = null;
+      const trunk = currentConversation;
       await resetSessionState();
+
+      // Resolve the origin here, while the conversation the session came
+      // from is still known: with `--no-session` the header cannot say.
+      const startedConversationId = readSessionId(ctx.sessionManager);
+      const { startedAt, origin } = resolveSessionStart(ctx.sessionManager, {
+        forked: event.reason === "fork",
+        trunk,
+      });
+      if (startedConversationId) {
+        currentConversation = {
+          id: startedConversationId,
+          startedAt: startedAt ?? new Date().toISOString(),
+        };
+        sessionOrigins.set(startedConversationId, origin);
+      } else {
+        currentConversation = undefined;
+      }
 
       config = await loadConfig();
       if (!config) return;
@@ -316,17 +400,19 @@ export default function (pi: ExtensionAPI) {
         config = { ...config, agentVersion: detectPiVersion() };
       }
 
-      // Note: conversationId is read fresh per turn from
-      // ctx.sessionManager.getSessionId() so fork/branch reassignments
-      // (session-manager.js:927,961) are reflected without restarting
-      // the plugin. We intentionally do NOT cache it here.
+      // Note: the conversation id a generation carries is read fresh per
+      // turn from ctx.sessionManager.getSessionId() so fork/branch
+      // reassignments (session-manager.js:927,961) are reflected without
+      // restarting the plugin. `currentConversation` above records which
+      // conversation this process is on, and is only read when a later fork
+      // needs to name its trunk.
 
       // Set up OTel providers if OTLP is configured.
       // Pass the pi session id as service.instance.id so concurrent pi
       // sessions on the same machine emit distinct OTel metric series.
       if (config.otlp) {
         try {
-          const instanceId = ctx.sessionManager.getSessionId() || randomUUID();
+          const instanceId = startedConversationId ?? randomUUID();
           telemetry = createTelemetryProviders(config.otlp, instanceId);
         } catch (err) {
           logger.error("failed to create OTel providers", err);
@@ -651,10 +737,17 @@ export default function (pi: ExtensionAPI) {
       // so the assistant entry is not yet in the tree at that point. By
       // `turn_end` it has been appended and any subsequent extension
       // mutations have settled.
-      const lineage = resolvePiGenerationLineage(
+      //
+      // A fork's parent turn may belong to the trunk conversation, in which
+      // case no edge is emitted. See sessionOrigin.ts.
+      const origin: SessionOrigin = conversationId
+        ? sessionOriginFor(conversationId, ctx.sessionManager)
+        : NOT_FORKED;
+      const { generationId, parent } = resolvePiGenerationLineage(
         ctx.sessionManager,
         msg,
         conversationId,
+        { origin },
       );
 
       // Prefer pi's user-set session name; otherwise derive from the first
@@ -683,8 +776,9 @@ export default function (pi: ExtensionAPI) {
         tags: builtinTags,
         systemPrompt: currentSystemPrompt,
         requestControls: currentRequestControls,
-        generationId: lineage.generationId,
-        parentGenerationIds: lineage.parentGenerationIds,
+        generationId,
+        parentGenerationIds: parentEdge(parent),
+        metadata: forkMetadata(parent, origin),
       });
 
       const toolResults = (event.toolResults ?? []) as PiToolResult[];
@@ -841,11 +935,48 @@ export default function (pi: ExtensionAPI) {
  * be read without importing pi's model types.
  */
 interface PiSummaryContext {
-  sessionManager?: SessionManagerLike & {
-    getSessionId?: () => string | undefined;
-    getSessionName?: () => string | undefined;
-  };
+  sessionManager?: SessionManagerLike &
+    SessionHeaderSourceLike & {
+      getSessionId?: () => string | undefined;
+      getSessionName?: () => string | undefined;
+    };
   model?: { provider?: unknown; id?: unknown };
+}
+
+/**
+ * The parent edge to export. Only a parent generation that belongs to this
+ * conversation can be one; see `lineage.ts`.
+ */
+function parentEdge(
+  parent: PiGenerationParent | undefined,
+): string[] | undefined {
+  return parent?.kind === "own" ? parent.generationIds : undefined;
+}
+
+/**
+ * The trunk link a fork cannot express as an edge.
+ *
+ * It ships as metadata because the trunk generation only exists in the
+ * backend if the trunk itself ran instrumented, and a fork can be taken from
+ * a session recorded before this plugin was installed. Metadata, not a tag,
+ * because tags are low-cardinality session context (`cwd`, `git.branch`) and
+ * a session id is not. The key names follow `codex.parent_session_id`
+ * (plugins/agento11y/internal/agents/codex/mapper/mapper.go), which emits the
+ * edge when it can resolve the parent generation and falls back to metadata
+ * when it cannot.
+ */
+function forkMetadata(
+  parent: PiGenerationParent | undefined,
+  origin: SessionOrigin,
+): Record<string, string> | undefined {
+  if (parent?.kind !== "trunk") return undefined;
+  if (!parent.trunkGenerationId || !origin.trunkConversationId) {
+    return undefined;
+  }
+  return {
+    "pi.fork.parent_session_id": origin.trunkConversationId,
+    "pi.fork.parent_generation_id": parent.trunkGenerationId,
+  };
 }
 
 /**

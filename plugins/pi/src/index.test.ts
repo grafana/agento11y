@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   loadConfigMock,
@@ -3876,6 +3879,531 @@ describe("extension lifecycle", () => {
       expect(seeds[0]!.id).toBe(stablePiGenerationId("pi-conv-1", "c1"));
       expect(seeds[0]!.parentGenerationIds).toBeUndefined();
       expect(loggerMock.error).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("generation lineage on a forked session", () => {
+    // These tests drive the real header read in sessionOrigin.ts against
+    // session files on disk, so they cover the wiring, not just the pure
+    // lineage function.
+    const TRUNK_ID = "0199aaaa-1111-7000-8000-aaaaaaaaaaaa";
+    const FORK_ID = "0199bbbb-2222-7000-8000-bbbbbbbbbbbb";
+    const TRUNK_STARTED_AT = "2020-01-01T00:00:00.000Z";
+    const BEFORE_FORK = "2020-01-01T00:00:30.000Z";
+    const FORKED_AT = "2020-01-01T00:01:00.000Z";
+    const AFTER_FORK = "2020-01-01T00:02:00.000Z";
+
+    let dir: string;
+    let trunkFile: string;
+    let forkFile: string;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "pi-fork-lineage-"));
+      trunkFile = join(dir, "trunk.jsonl");
+      forkFile = join(dir, "fork.jsonl");
+      writeSessionFile(trunkFile, trunkHeader());
+      writeSessionFile(forkFile, forkHeader());
+    });
+
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    function writeSessionFile(path: string, header: Record<string, unknown>) {
+      writeFileSync(path, `${JSON.stringify(header)}\n`);
+    }
+
+    function trunkHeader(): Record<string, unknown> {
+      return {
+        type: "session",
+        version: 3,
+        id: TRUNK_ID,
+        timestamp: TRUNK_STARTED_AT,
+        cwd: "/fixture/worktree",
+      };
+    }
+
+    function forkHeader(
+      overrides: Record<string, unknown> = {},
+    ): Record<string, unknown> {
+      return {
+        type: "session",
+        version: 3,
+        id: FORK_ID,
+        timestamp: FORKED_AT,
+        cwd: "/fixture/worktree",
+        parentSession: trunkFile,
+        ...overrides,
+      };
+    }
+
+    interface ForkSeed {
+      id?: string;
+      parentGenerationIds?: string[];
+      metadata?: Record<string, unknown>;
+    }
+
+    function setupForkClient() {
+      const seeds: ForkSeed[] = [];
+      const recorder = {
+        setResult: vi.fn(),
+        setCallError: vi.fn(),
+        setFirstTokenAt: vi.fn(),
+      };
+      const sigil: Agento11yLike = {
+        startStreamingGeneration: vi.fn(async (seed, run) => {
+          seeds.push(seed as ForkSeed);
+          await run(recorder);
+        }),
+        startGeneration: vi.fn(async (seed, run) => {
+          seeds.push(seed as ForkSeed);
+          await run(recorder);
+        }),
+        startToolExecution: vi.fn(() => ({
+          setResult: vi.fn(),
+          setCallError: vi.fn(),
+          end: vi.fn(),
+          getError: vi.fn(),
+        })),
+        shutdown: vi.fn(async () => {}),
+      };
+      loadConfigMock.mockResolvedValue({
+        endpoint: "http://localhost:8080/api/v1/generations:export",
+        auth: { mode: "none" },
+        agentName: "pi",
+        contentCapture: "metadata_only",
+      });
+      createAgento11yClientMock.mockReturnValue(sigil);
+      return { sigil, seeds };
+    }
+
+    function messageEntry(
+      id: string,
+      parentId: string | null,
+      role: string,
+      timestamp: string,
+      message: unknown = { role },
+    ) {
+      return { type: "message", id, parentId, timestamp, message };
+    }
+
+    /**
+     * The fork's branch: `a1` was copied from the trunk with its id and
+     * timestamp intact, `u2` and `a2` are the fork's own first turn.
+     */
+    function forkBranch(assistantMsg: unknown) {
+      return [
+        messageEntry("u1", null, "user", BEFORE_FORK),
+        messageEntry("a1", "u1", "assistant", BEFORE_FORK),
+        messageEntry("u2", "a1", "user", AFTER_FORK),
+        messageEntry("a2", "u2", "assistant", AFTER_FORK, assistantMsg),
+      ];
+    }
+
+    /** The fork's second turn, appended to `forkBranch`. */
+    function forkBranchTurnTwo(first: unknown, second: unknown) {
+      return [
+        ...forkBranch(first),
+        messageEntry("u3", "a2", "user", "2020-01-01T00:03:00.000Z"),
+        messageEntry(
+          "a3",
+          "u3",
+          "assistant",
+          "2020-01-01T00:03:01.000Z",
+          second,
+        ),
+      ];
+    }
+
+    function ctxForSession(
+      sessionFile: string,
+      sessionId: string,
+      branch: unknown[],
+    ) {
+      return {
+        sessionManager: {
+          getSessionFile: () => sessionFile,
+          getSessionId: () => sessionId,
+          getBranch: () => branch,
+        },
+      };
+    }
+
+    it("suppresses the parent edge and records the trunk link as metadata", async () => {
+      const { seeds } = setupForkClient();
+      const msg = assistantMessage();
+      const ctx = ctxForSession(forkFile, FORK_ID, forkBranch(msg));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+
+      expect(seeds).toHaveLength(1);
+      expect(seeds[0]!.id).toBe(stablePiGenerationId(FORK_ID, "a2"));
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+      expect(seeds[0]!.metadata).toEqual({
+        "pi.fork.parent_session_id": TRUNK_ID,
+        "pi.fork.parent_generation_id": stablePiGenerationId(TRUNK_ID, "a1"),
+      });
+    });
+
+    it("links the fork's second turn to its first", async () => {
+      const { seeds } = setupForkClient();
+      const first = assistantMessage();
+      const second = assistantMessage();
+      let branch: unknown[] = forkBranch(first);
+      const ctx = {
+        sessionManager: {
+          getSessionFile: () => forkFile,
+          getSessionId: () => FORK_ID,
+          getBranch: () => branch,
+        },
+      };
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: first, toolResults: [] }, ctx);
+
+      branch = forkBranchTurnTwo(first, second);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: second, toolResults: [] }, ctx);
+
+      expect(seeds).toHaveLength(2);
+      expect(seeds[1]!.id).toBe(stablePiGenerationId(FORK_ID, "a3"));
+      expect(seeds[1]!.parentGenerationIds).toEqual([
+        stablePiGenerationId(FORK_ID, "a2"),
+      ]);
+      expect(seeds[1]!.metadata).toBeUndefined();
+    });
+
+    it("links a resumed fork's turn to the fork's own earlier turn", async () => {
+      // `pi -c` on a forked session: the header still says fork, and this
+      // plugin instance has exported nothing yet, but the parent turn was
+      // added after the fork so its generation exists under FORK_ID.
+      const { seeds } = setupForkClient();
+      const second = assistantMessage();
+      const ctx = ctxForSession(
+        forkFile,
+        FORK_ID,
+        forkBranchTurnTwo(assistantMessage(), second),
+      );
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: second, toolResults: [] }, ctx);
+
+      expect(seeds[0]!.parentGenerationIds).toEqual([
+        stablePiGenerationId(FORK_ID, "a2"),
+      ]);
+      expect(seeds[0]!.metadata).toBeUndefined();
+    });
+
+    it("keeps the edge on a --session continuation of the trunk", async () => {
+      // Same branch shape, but the header has no parentSession. A fresh
+      // process resuming the trunk has exported nothing yet, and the
+      // parent generation exists under this very conversation id.
+      const { seeds } = setupForkClient();
+      const msg = assistantMessage();
+      const ctx = ctxForSession(trunkFile, TRUNK_ID, forkBranch(msg));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+
+      expect(seeds[0]!.parentGenerationIds).toEqual([
+        stablePiGenerationId(TRUNK_ID, "a1"),
+      ]);
+      expect(seeds[0]!.metadata).toBeUndefined();
+    });
+
+    it("re-resolves fork state when the session is cloned mid-process", async () => {
+      // `/clone` emits session_start with reason "fork" and hands the
+      // extension a session manager pointing at the new file
+      // (agent-session-runtime.js). The trunk's answer must not be reused.
+      const { seeds } = setupForkClient();
+      const trunkMsg = assistantMessage();
+      const forkMsg = assistantMessage();
+      let sessionFile = trunkFile;
+      let sessionId = TRUNK_ID;
+      let branch: unknown[] = forkBranch(trunkMsg);
+      const ctx = {
+        sessionManager: {
+          getSessionFile: () => sessionFile,
+          getSessionId: () => sessionId,
+          getBranch: () => branch,
+        },
+      };
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: trunkMsg, toolResults: [] }, ctx);
+
+      sessionFile = forkFile;
+      sessionId = FORK_ID;
+      branch = forkBranch(forkMsg);
+      await pi.emit(
+        "session_start",
+        { reason: "fork", previousSessionFile: trunkFile },
+        ctx,
+      );
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: forkMsg, toolResults: [] }, ctx);
+
+      expect(seeds).toHaveLength(2);
+      expect(seeds[0]!.parentGenerationIds).toEqual([
+        stablePiGenerationId(TRUNK_ID, "a1"),
+      ]);
+      expect(seeds[1]!.parentGenerationIds).toBeUndefined();
+      expect(seeds[1]!.metadata).toEqual({
+        "pi.fork.parent_session_id": TRUNK_ID,
+        "pi.fork.parent_generation_id": stablePiGenerationId(TRUNK_ID, "a1"),
+      });
+    });
+
+    it("suppresses the edge without metadata when the trunk file is unreadable", async () => {
+      writeSessionFile(
+        forkFile,
+        forkHeader({ parentSession: join(dir, "deleted-trunk.jsonl") }),
+      );
+      const { seeds } = setupForkClient();
+      const msg = assistantMessage();
+      const ctx = ctxForSession(forkFile, FORK_ID, forkBranch(msg));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+      expect(seeds[0]!.metadata).toBeUndefined();
+    });
+
+    it("suppresses the edge without metadata when the fork header has no timestamp", async () => {
+      // Nothing places the parent on either side of the fork, so neither
+      // an edge nor a trunk pointer can be trusted.
+      const { seeds } = setupForkClient();
+      const header = forkHeader();
+      delete header.timestamp;
+      writeSessionFile(forkFile, header);
+      const msg = assistantMessage();
+      const ctx = ctxForSession(forkFile, FORK_ID, forkBranch(msg));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+      expect(seeds[0]!.metadata).toBeUndefined();
+    });
+
+    it("uses getHeader when the runtime exposes it, without touching the file", async () => {
+      // The production path: a real SessionManager answers getHeader() from
+      // memory, so only the trunk file is ever read.
+      const { seeds } = setupForkClient();
+      const msg = assistantMessage();
+      const getSessionFile = vi.fn(() => forkFile);
+      const ctx = {
+        sessionManager: {
+          getHeader: () => forkHeader(),
+          getSessionFile,
+          getSessionId: () => FORK_ID,
+          getBranch: () => forkBranch(msg),
+        },
+      };
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+      expect(seeds[0]!.metadata).toEqual({
+        "pi.fork.parent_session_id": TRUNK_ID,
+        "pi.fork.parent_generation_id": stablePiGenerationId(TRUNK_ID, "a1"),
+      });
+      expect(getSessionFile).not.toHaveBeenCalled();
+    });
+
+    it("reads the fork header once per conversation", async () => {
+      const { seeds } = setupForkClient();
+      const msg = assistantMessage();
+      const getSessionFile = vi.fn(() => forkFile);
+      const ctx = {
+        sessionManager: {
+          getSessionFile,
+          getSessionId: () => FORK_ID,
+          getBranch: () => forkBranch(msg),
+        },
+      };
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      for (let i = 0; i < 3; i++) {
+        await pi.emit("turn_start", {}, ctx);
+        await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+      }
+
+      expect(seeds).toHaveLength(3);
+      expect(getSessionFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("omits the trunk generation id when the parent predates the trunk session", async () => {
+      // A fork of a fork: the trunk copied `a1` in from an older session and
+      // never exported it, so no generation for it exists under TRUNK_ID
+      // either. The edge stays suppressed, the metadata goes away.
+      writeSessionFile(trunkFile, {
+        ...trunkHeader(),
+        timestamp: "2020-01-01T00:00:45.000Z",
+      });
+      const { seeds } = setupForkClient();
+      const msg = assistantMessage();
+      const ctx = ctxForSession(forkFile, FORK_ID, forkBranch(msg));
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+      expect(seeds[0]!.metadata).toBeUndefined();
+    });
+
+    it("suppresses the edge on an in-memory fork, whose header names no trunk", async () => {
+      // `pi --no-session` plus `/fork`: createBranchedSession writes no
+      // `parentSession` when the manager does not persist, and there is no
+      // session file either, so the session_start reason and the trunk the
+      // plugin was already on are all it has to work from.
+      const { seeds } = setupForkClient();
+      const trunkMsg = assistantMessage();
+      const forkMsg = assistantMessage();
+      // An in-memory manager answers getHeader() from memory. The header
+      // carries the new id and the fork instant, but no parentSession.
+      let header: Record<string, unknown> = {
+        type: "session",
+        id: TRUNK_ID,
+        timestamp: TRUNK_STARTED_AT,
+      };
+      let branch: unknown[] = forkBranch(trunkMsg);
+      const ctx = {
+        sessionManager: {
+          getHeader: () => header,
+          getSessionFile: () => undefined,
+          getSessionId: () => header.id as string,
+          getBranch: () => branch,
+        },
+      };
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", { reason: "startup" }, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: trunkMsg, toolResults: [] }, ctx);
+
+      header = { type: "session", id: FORK_ID, timestamp: FORKED_AT };
+      branch = forkBranch(forkMsg);
+      await pi.emit("session_start", { reason: "fork" }, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: forkMsg, toolResults: [] }, ctx);
+
+      expect(seeds).toHaveLength(2);
+      expect(seeds[0]!.parentGenerationIds).toEqual([
+        stablePiGenerationId(TRUNK_ID, "a1"),
+      ]);
+      // The defect this guards against: hashing the copied entry with the
+      // fork's conversation id names a generation nobody exported.
+      expect(seeds[1]!.id).toBe(stablePiGenerationId(FORK_ID, "a2"));
+      expect(seeds[1]!.parentGenerationIds).toBeUndefined();
+      expect(seeds[1]!.metadata).toEqual({
+        "pi.fork.parent_session_id": TRUNK_ID,
+        "pi.fork.parent_generation_id": stablePiGenerationId(TRUNK_ID, "a1"),
+      });
+    });
+
+    it("suppresses the edge on an in-memory fork with no trunk to name", async () => {
+      // Same path, but the plugin never saw the trunk conversation, so it
+      // has no trunk id. The edge must still go.
+      const { seeds } = setupForkClient();
+      const msg = assistantMessage();
+      const ctx = {
+        sessionManager: {
+          getHeader: () => ({
+            type: "session",
+            id: FORK_ID,
+            timestamp: FORKED_AT,
+          }),
+          getSessionFile: () => undefined,
+          getSessionId: () => FORK_ID,
+          getBranch: () => forkBranch(msg),
+        },
+      };
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", { reason: "fork" }, ctx);
+      await pi.emit("turn_start", {}, ctx);
+      await pi.emit("turn_end", { message: msg, toolResults: [] }, ctx);
+
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+      expect(seeds[0]!.metadata).toBeUndefined();
+    });
+
+    it("suppresses the edge for a compaction taken before the fork's first turn", async () => {
+      // The summary's parent is the inherited assistant entry, so it sits on
+      // the trunk side of the fork just as a turn's parent would.
+      const { seeds } = setupForkClient();
+      const compaction = {
+        type: "compaction",
+        id: "c1",
+        parentId: "a1",
+        timestamp: AFTER_FORK,
+        summary: "Earlier: we forked and compacted straight away.",
+      };
+      const ctx = {
+        sessionManager: {
+          getSessionFile: () => forkFile,
+          getSessionId: () => FORK_ID,
+          getBranch: () => [
+            messageEntry("u1", null, "user", BEFORE_FORK),
+            messageEntry("a1", "u1", "assistant", BEFORE_FORK),
+            compaction,
+          ],
+        },
+        model: defaultModel,
+      };
+
+      const pi = new FakePi();
+      registerExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      await pi.emit("session_before_compact", { reason: "manual" }, ctx);
+      await pi.emit(
+        "session_compact",
+        { compactionEntry: compaction, fromExtension: false },
+        ctx,
+      );
+
+      expect(seeds).toHaveLength(1);
+      expect(seeds[0]!.id).toBe(stablePiGenerationId(FORK_ID, "c1"));
+      expect(seeds[0]!.parentGenerationIds).toBeUndefined();
+      expect(seeds[0]!.metadata).toEqual({
+        "pi.fork.parent_session_id": TRUNK_ID,
+        "pi.fork.parent_generation_id": stablePiGenerationId(TRUNK_ID, "a1"),
+      });
     });
   });
 });

@@ -202,6 +202,11 @@ export interface MapGenerationStartOptions {
    * previous assistant turn on the same branch.
    */
   parentGenerationIds?: string[];
+  /**
+   * Extra generation metadata. Merged with the metadata this mapper derives
+   * from `requestControls`; derived keys win on collision.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 /** Build the GenerationStart seed from an assistant message and context. */
@@ -221,6 +226,7 @@ export function mapGenerationStart(
     requestControls,
     generationId,
     parentGenerationIds,
+    metadata,
   } = opts;
   // Tags on the seed override client-level SIGIL_TAGS (the SDK merges
   // `{...clientTags, ...seedTags}`), matching claude-code/cursor.
@@ -247,6 +253,7 @@ export function mapGenerationStart(
   if (systemPrompt && systemPrompt.length > 0) {
     start.systemPrompt = systemPrompt;
   }
+  const startMetadata: Record<string, unknown> = { ...metadata };
   if (requestControls) {
     if (typeof requestControls.maxTokens === "number") {
       start.maxTokens = requestControls.maxTokens;
@@ -263,11 +270,12 @@ export function mapGenerationStart(
     if (typeof requestControls.thinkingBudgetTokens === "number") {
       // The SDK reads `agento11y.gen_ai.request.thinking.budget_tokens` from
       // generation metadata and surfaces it as the matching span attribute.
-      start.metadata = {
-        "agento11y.gen_ai.request.thinking.budget_tokens":
-          requestControls.thinkingBudgetTokens,
-      };
+      startMetadata["agento11y.gen_ai.request.thinking.budget_tokens"] =
+        requestControls.thinkingBudgetTokens;
     }
+  }
+  if (Object.keys(startMetadata).length > 0) {
+    start.metadata = startMetadata;
   }
   return start;
 }
@@ -408,6 +416,8 @@ export interface MapSummaryGenerationStartOptions {
   tags?: Record<string, string>;
   generationId?: string;
   parentGenerationIds?: string[];
+  /** Extra generation metadata, e.g. the fork's trunk link. */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -437,6 +447,9 @@ export function mapSummaryGenerationStart(
   }
   if (opts.parentGenerationIds && opts.parentGenerationIds.length > 0) {
     start.parentGenerationIds = opts.parentGenerationIds;
+  }
+  if (opts.metadata && Object.keys(opts.metadata).length > 0) {
+    start.metadata = { ...opts.metadata };
   }
   return start;
 }
