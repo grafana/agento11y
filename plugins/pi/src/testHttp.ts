@@ -18,6 +18,37 @@ export interface HookCall {
   body: HookRequestBody;
 }
 
+/**
+ * One serialized message part as the server reads it: a snake_case `kind`
+ * discriminator plus a payload under a snake_case key. The SDK's own camelCase
+ * `type` / `toolCall` shape must never appear on the wire.
+ * conformance/hooks/README.md.
+ */
+export interface WirePart {
+  kind?: "text" | "thinking" | "tool_call" | "tool_result";
+  text?: string;
+  thinking?: string;
+  tool_call?: {
+    id?: string;
+    name?: string;
+    /** Embedded JSON, not a JSON string: the server reads it as raw JSON. */
+    input_json?: unknown;
+  };
+  tool_result?: {
+    tool_call_id?: string;
+    name?: string;
+    content?: string;
+    content_json?: unknown;
+    is_error?: boolean;
+  };
+}
+
+export interface WireMessage {
+  role?: string;
+  name?: string;
+  parts?: WirePart[];
+}
+
 /** Shape of the serialized hook request body the plugin sends (snake_case). */
 export interface HookRequestBody {
   phase?: string;
@@ -27,8 +58,8 @@ export interface HookRequestBody {
     agent_version?: string;
   };
   input?: {
-    messages?: unknown[];
-    output?: unknown[];
+    messages?: WireMessage[];
+    output?: WireMessage[];
   };
 }
 
