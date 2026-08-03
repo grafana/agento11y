@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
 	"go.opentelemetry.io/otel/attribute"
@@ -29,6 +30,27 @@ func TestDefaultConfigGenerationExportMessageAndPayloadLimits(t *testing.T) {
 	}
 	if cfg.GenerationExport.PayloadMaxBytes != defaultGenerationPayloadMaxBytes {
 		t.Fatalf("expected payload max bytes %d, got %d", defaultGenerationPayloadMaxBytes, cfg.GenerationExport.PayloadMaxBytes)
+	}
+}
+
+func TestMetricIdentityAttributesDetachModelStorage(t *testing.T) {
+	backing := "prefix " + strings.Repeat("model", 32) + " suffix"
+	model := backing[len("prefix ") : len(backing)-len(" suffix")]
+
+	attrs := metricIdentityAttributes("anthropic", model, "assistant", "")
+	var got string
+	for _, attr := range attrs {
+		if attr.Key == spanAttrRequestModel {
+			got = attr.Value.AsString()
+			break
+		}
+	}
+
+	if got != model {
+		t.Fatalf("model attribute = %q, want %q", got, model)
+	}
+	if unsafe.StringData(got) == unsafe.StringData(model) {
+		t.Fatal("model attribute still shares the caller's backing storage")
 	}
 }
 
