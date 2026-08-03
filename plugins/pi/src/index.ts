@@ -11,7 +11,11 @@ import { loadConfig } from "./config.js";
 import { detectPiVersion } from "./detectPiVersion.js";
 import { resolveGitBranch } from "./git.js";
 import { runPreflightTransform, runToolCallGuard } from "./guard.js";
-import { resolvePiGenerationLineage } from "./lineage.js";
+import {
+  resolvePiGenerationLineage,
+  resolvePiSummaryLineage,
+  type SessionManagerLike,
+} from "./lineage.js";
 import { logger } from "./logger.js";
 import {
   applyRedactedText,
@@ -20,11 +24,17 @@ import {
   mapAgentMessagesForHook,
   mapGenerationResult,
   mapGenerationStart,
+  mapSummaryGenerationResult,
+  mapSummaryGenerationStart,
   mapTools,
   mapUserMessage,
+  PI_USAGE_TOKEN_FIELDS,
   type PiAssistantMessage,
+  type PiSummaryEntryLike,
+  type PiSummaryKind,
   type PiToolInfo,
   type PiToolResult,
+  type PiUsageLike,
   type PiUserMessage,
   resolveConversationTitle,
   type ToolTiming,
@@ -85,6 +95,21 @@ export default function (pi: ExtensionAPI) {
   // boundaries (never in resetTurnState).
   let firstUserText: string | undefined;
 
+  // Start timestamps for pi's own summarization LLM calls. Written by the
+  // `session_before_*` handler, which is the only start signal pi gives us
+  // (those events are `hasHandlers`-gated, so registering the handler is what
+  // makes pi emit them), and consumed by the matching terminal event. A new
+  // start overwrites any pending one, because an aborted or failed compaction
+  // emits no terminal event at all and would otherwise leak its start time
+  // into a later export.
+  let compactionStartedAt: number | undefined;
+  let branchSummaryStartedAt: number | undefined;
+  // Summary entry ids already exported, so one entry never produces two
+  // generations with the same id. `resolveSummaryEntry` corrects the entry
+  // `session_compact` hands back, but only on runtimes that expose
+  // `getBranch()`; this set covers the fallback.
+  const exportedSummaryEntryIds = new Set<string>();
+
   function resetTurnState() {
     turnStartTime = 0;
     firstTokenTime = 0;
@@ -109,6 +134,159 @@ export default function (pi: ExtensionAPI) {
     lastSeenModel = null;
     currentSystemPrompt = undefined;
     currentRequestControls = {};
+    compactionStartedAt = undefined;
+    branchSummaryStartedAt = undefined;
+    exportedSummaryEntryIds.clear();
+  }
+
+  /**
+   * Resolve the model for a summarization call. Compaction and branch
+   * summaries run outside the agent loop and carry no model metadata, so read
+   * pi's live `ctx.model` first and fall back to the model cached from the
+   * last assistant message.
+   */
+  function resolveSummaryModel(
+    ctx: PiSummaryContext,
+  ): { provider: string; name: string } | null {
+    const provider = ctx?.model?.provider;
+    const id = ctx?.model?.id;
+    if (
+      typeof provider === "string" &&
+      provider.length > 0 &&
+      typeof id === "string" &&
+      id.length > 0
+    ) {
+      // Assistant messages carry `model.id` as their `model` field, so use the
+      // id (not the display name) to keep turn and summary generations on the
+      // same model identity.
+      return { provider, name: id };
+    }
+    return lastSeenModel;
+  }
+
+  /**
+   * Export one generation for a completed pi summarization call.
+   *
+   * Skips are logged at debug level. An extension-supplied summary and an
+   * event outside an active session are routine; the rest are anomalies that
+   * still must not interrupt the host.
+   */
+  async function exportSummaryGeneration(
+    kind: PiSummaryKind,
+    eventEntry: unknown,
+    ctx: PiSummaryContext,
+    extras: {
+      startedAt?: number;
+      reason?: string;
+      willRetry?: boolean;
+    },
+  ): Promise<void> {
+    if (!sigil || !config) {
+      logger.debug(`${kind}: skipped, no active session`);
+      return;
+    }
+
+    const sessionManager = ctx?.sessionManager;
+    const entry = resolveSummaryEntry(kind, sessionManager, eventEntry);
+    if (!entry) {
+      logger.debug(`${kind}: skipped, no summary entry on the event`);
+      return;
+    }
+    if (entry.fromHook === true) {
+      logger.debug(`${kind}: skipped, summary came from an extension`);
+      return;
+    }
+    const entryId = entry.id;
+    if (!entryId) {
+      logger.debug(`${kind}: skipped, summary entry has no id`);
+      return;
+    }
+    if (exportedSummaryEntryIds.has(entryId)) {
+      logger.debug(`${kind}: skipped, entry ${entryId} already exported`);
+      return;
+    }
+
+    const model = resolveSummaryModel(ctx);
+    if (!model) {
+      logger.debug(`${kind}: skipped, no model could be resolved`);
+      return;
+    }
+
+    const conversationId = sessionManager?.getSessionId?.() || undefined;
+
+    // Entry timestamps are ISO strings stamped when the entry is appended,
+    // i.e. after the summarization call finished. No pi event carries a
+    // timestamp, so this is the only end time available.
+    const parsedCompletedAt = entry.timestamp
+      ? Date.parse(entry.timestamp)
+      : Number.NaN;
+    const completedAt = Number.isFinite(parsedCompletedAt)
+      ? parsedCompletedAt
+      : Date.now();
+    // Clamp: a start recorded before a clock adjustment (or an entry
+    // timestamp written by another machine) must not invert the window.
+    const startedAt = Math.min(extras.startedAt ?? completedAt, completedAt);
+
+    const summaryCwd = process.cwd();
+    const tags = buildBuiltinTags({
+      cwd: summaryCwd,
+      gitBranch: resolveGitBranch(summaryCwd),
+    });
+
+    let sessionName: string | undefined;
+    try {
+      sessionName = sessionManager?.getSessionName?.();
+    } catch (err) {
+      logger.debug("getSessionName failed", err);
+    }
+
+    const lineage = resolvePiSummaryLineage(
+      sessionManager,
+      entryId,
+      conversationId,
+    );
+
+    const seed = mapSummaryGenerationStart({
+      kind,
+      conversationId,
+      conversationTitle: resolveConversationTitle({
+        sessionName,
+        firstUserText,
+        conversationId,
+        contentCapture: config.contentCapture,
+      }),
+      agentName: config.agentName,
+      agentVersion: config.agentVersion,
+      model,
+      startedAt,
+      tags,
+      generationId: lineage.generationId,
+      parentGenerationIds: lineage.parentGenerationIds,
+    });
+
+    const result = mapSummaryGenerationResult({
+      entry,
+      contentCapture: config.contentCapture,
+      completedAt,
+      responseModel: model.name,
+      reason: extras.reason,
+      willRetry: extras.willRetry,
+    });
+
+    // SYNC, not STREAM: there is no token stream and no TTFT signal for these
+    // calls. The SYNC path defaults `operationName` to `generateText`, which
+    // also discriminates them from turns (`streamText`).
+    await sigil.startGeneration(seed, async (recorder) => {
+      recorder.setResult(result);
+    });
+    // Only mark the entry exported once the recorder accepted it, so a
+    // failed export can be retried by a later event for the same entry.
+    exportedSummaryEntryIds.add(entryId);
+    logger.debug(
+      `summary generation queued, kind=${kind} entry=${entryId} tokens=${
+        result.usage?.totalTokens ?? "unknown"
+      }`,
+    );
   }
 
   function cacheAssistantModel(message: PiAssistantMessage) {
@@ -570,6 +748,78 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  // Pi runs compaction and branch summarization outside the agent loop, so
+  // none of the turn/message events fire for them. The `session_before_*`
+  // events are the only start signal, and registering a handler is what makes
+  // pi emit them at all (`hasHandlers`-gated). These handlers must not return
+  // a value: pi reads a returned object as a cancel/replace instruction.
+  pi.on("session_before_compact", async (_event, _ctx) => {
+    compactionStartedAt = Date.now();
+    // Manual /compact disconnects from the agent before aborting the in-flight
+    // turn, so that turn's `turn_end` never reaches us. Drop its buffered
+    // state here instead of letting the abandoned prompt and stale timers
+    // attach to the next exported generation. Threshold and overflow
+    // compaction run after `turn_end`, where this is a no-op: the buffer is
+    // already drained and the next `turn_start` resets the timers.
+    resetTurnState();
+    pendingInputMessages.length = 0;
+    currentRequestControls = {};
+  });
+
+  pi.on("session_before_tree", async (_event, _ctx) => {
+    branchSummaryStartedAt = Date.now();
+  });
+
+  pi.on("session_compact", async (event, ctx) => {
+    // Consume the pending start unconditionally, including on the skip paths
+    // below: a start that produced no export must not be reused by the next
+    // compaction.
+    const startedAt = compactionStartedAt;
+    compactionStartedAt = undefined;
+    try {
+      if (event.fromExtension === true) {
+        logger.debug("compaction: skipped, supplied by an extension");
+        return;
+      }
+      // `reason` and `willRetry` were added to this event after the pinned pi
+      // version, so read them structurally.
+      const raw = event as { reason?: unknown; willRetry?: unknown };
+      await exportSummaryGeneration("compaction", event.compactionEntry, ctx, {
+        startedAt,
+        reason: typeof raw.reason === "string" ? raw.reason : undefined,
+        willRetry:
+          typeof raw.willRetry === "boolean" ? raw.willRetry : undefined,
+      });
+    } catch (err) {
+      logger.error(
+        `session_compact failed, entry=${entryIdOf(event.compactionEntry)}`,
+        err,
+      );
+    }
+  });
+
+  pi.on("session_tree", async (event, ctx) => {
+    const startedAt = branchSummaryStartedAt;
+    branchSummaryStartedAt = undefined;
+    try {
+      // `session_tree` fires for every navigation; only the summarizing ones
+      // carry a summary entry, and only those involved a model call.
+      if (!event.summaryEntry) return;
+      if (event.fromExtension === true) {
+        logger.debug("branch_summary: skipped, supplied by an extension");
+        return;
+      }
+      await exportSummaryGeneration("branch_summary", event.summaryEntry, ctx, {
+        startedAt,
+      });
+    } catch (err) {
+      logger.error(
+        `session_tree failed, entry=${entryIdOf(event.summaryEntry)}`,
+        err,
+      );
+    }
+  });
+
   pi.on("session_shutdown", async (_event, _ctx) => {
     if (sigil) {
       try {
@@ -583,6 +833,110 @@ export default function (pi: ExtensionAPI) {
     lastSeenModel = null;
     await resetSessionState();
   });
+}
+
+/**
+ * Slice of pi's `ExtensionContext` the summary export path reads. Structural
+ * so the test fakes stay small and so `ctx.model` (typed as `Model<any>`) can
+ * be read without importing pi's model types.
+ */
+interface PiSummaryContext {
+  sessionManager?: SessionManagerLike & {
+    getSessionId?: () => string | undefined;
+    getSessionName?: () => string | undefined;
+  };
+  model?: { provider?: unknown; id?: unknown };
+}
+
+/**
+ * Pick the entry to export.
+ *
+ * Only compaction needs a lookup of its own. `session_compact` resolves its
+ * entry by summary text and takes the first match in the whole session file,
+ * so two byte-identical summaries make the event point at an older entry. The
+ * correction is positional, not textual: pi appends the compaction entry and
+ * emits the event immediately after, so the newest `compaction` entry on the
+ * active branch is the one that was just written. `session_tree` looks its
+ * entry up by id (`getEntry(summaryId)`), so its event entry is already exact
+ * and is used as-is.
+ */
+function resolveSummaryEntry(
+  kind: PiSummaryKind,
+  sessionManager: PiSummaryContext["sessionManager"],
+  eventEntry: unknown,
+): PiSummaryEntryLike | null {
+  if (kind !== "compaction") return toPiSummaryEntry(eventEntry);
+  try {
+    const branch = sessionManager?.getBranch?.();
+    if (Array.isArray(branch)) {
+      for (let i = branch.length - 1; i >= 0; i--) {
+        const candidate = branch[i] as { type?: unknown } | undefined;
+        if (!candidate || candidate.type !== "compaction") continue;
+        const mapped = toPiSummaryEntry(candidate);
+        if (mapped?.id) return mapped;
+        break;
+      }
+    }
+  } catch (err) {
+    logger.debug("getBranch failed while resolving the summary entry", err);
+  }
+  return toPiSummaryEntry(eventEntry);
+}
+
+/** Entry id for a log line, or `unknown` when the value carries none. */
+function entryIdOf(value: unknown): string {
+  return toPiSummaryEntry(value)?.id ?? "unknown";
+}
+
+/**
+ * Read pi's `CompactionEntry` / `BranchSummaryEntry` structurally. `usage` is
+ * absent from the dev-pinned pi types and `tokensBefore` only exists on
+ * compaction entries, so nothing here may assume a field is present.
+ */
+function toPiSummaryEntry(value: unknown): PiSummaryEntryLike | null {
+  if (!value || typeof value !== "object") return null;
+  const src = value as Record<string, unknown>;
+  const entry: PiSummaryEntryLike = {};
+  if (typeof src.id === "string" && src.id.length > 0) entry.id = src.id;
+  if (typeof src.timestamp === "string") entry.timestamp = src.timestamp;
+  if (typeof src.summary === "string") entry.summary = src.summary;
+  if (typeof src.tokensBefore === "number") {
+    entry.tokensBefore = src.tokensBefore;
+  }
+  if (src.fromHook === true) entry.fromHook = true;
+  const usage = toPiUsage(src.usage);
+  if (usage) entry.usage = usage;
+  return entry;
+}
+
+/**
+ * Copy the numeric fields of a pi `Usage` object. Returns `undefined` when the
+ * value is not an object or carries no finite number, so a malformed usage
+ * object is indistinguishable from an absent one. Whether the token block
+ * itself is exported is decided by `mapSummaryGenerationResult`, which needs
+ * at least one token count and ignores a cost-only object.
+ */
+function toPiUsage(value: unknown): PiUsageLike | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const src = value as Record<string, unknown>;
+  const out: PiUsageLike = {};
+  let seen = false;
+  for (const key of PI_USAGE_TOKEN_FIELDS) {
+    const raw = src[key];
+    if (typeof raw === "number" && Number.isFinite(raw)) {
+      out[key] = raw;
+      seen = true;
+    }
+  }
+  const cost = src.cost;
+  if (cost && typeof cost === "object") {
+    const total = (cost as Record<string, unknown>).total;
+    if (typeof total === "number" && Number.isFinite(total)) {
+      out.cost = { total };
+      seen = true;
+    }
+  }
+  return seen ? out : undefined;
 }
 
 /** @internal Exported for testing. */

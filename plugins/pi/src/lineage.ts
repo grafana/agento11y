@@ -28,8 +28,10 @@ export interface SessionManagerLike {
 /**
  * Minimal `SessionEntry` shape: just the fields we read. `getBranch()`
  * returns mixed entry types (message, thinking_level_change, model_change,
- * compaction, …); we only treat `type === "message"` entries with an
- * assistant message as relevant.
+ * compaction, branch_summary, …). Only `type === "message"` entries with an
+ * assistant message can be a lineage parent; the other types are walked
+ * through. `compaction` and `branch_summary` entries get a generation id of
+ * their own instead, see {@link resolvePiSummaryLineage}.
  */
 export interface SessionEntryLike {
   type?: string;
@@ -129,11 +131,56 @@ export function resolvePiGenerationLineage(
   // assistant turn; on branched trees it is the assistant turn at the
   // branch point, not the most recent chronological assistant entry from
   // a sibling branch.
-  const parentId = findParentAssistantEntryId(
-    currentEntry,
-    branch,
-    assistantEntries,
-  );
+  const parentId = findParentAssistantEntryId(currentEntry, branch);
+  if (!parentId) return { generationId };
+
+  return {
+    generationId,
+    parentGenerationIds: [stablePiGenerationId(conversationId, parentId)],
+  };
+}
+
+/**
+ * Resolve `{ generationId, parentGenerationIds }` for a host summarization
+ * entry (`compaction` or `branch_summary`) identified by its entry id.
+ *
+ * Unlike {@link resolvePiGenerationLineage}, the subject is not a message, so
+ * there is nothing to match by object identity: pi hands us the entry itself.
+ * The id is hashed straight from `entryId`, which means it stays deterministic
+ * even on runtimes that do not expose `getBranch()`; only the parent lookup
+ * needs the branch.
+ *
+ * The parent is the nearest ancestor assistant message entry. Pi appends the
+ * summary entry as a child of the current leaf, which is frequently a
+ * `toolResult` message or a `model_change` entry rather than an assistant
+ * message, so the walk goes through the parentId chain instead of assuming the
+ * immediate parent.
+ */
+export function resolvePiSummaryLineage(
+  sessionManager: SessionManagerLike | undefined | null,
+  entryId: string,
+  conversationId: string | undefined,
+): PiGenerationLineage {
+  if (!conversationId || !entryId) return {};
+
+  const generationId = stablePiGenerationId(conversationId, entryId);
+
+  if (!sessionManager || typeof sessionManager.getBranch !== "function") {
+    return { generationId };
+  }
+
+  let branch: SessionEntryLike[];
+  try {
+    branch = sessionManager.getBranch();
+  } catch {
+    return { generationId };
+  }
+  if (!Array.isArray(branch) || branch.length === 0) return { generationId };
+
+  const entry = branch.find((e) => e.id === entryId);
+  if (!entry) return { generationId };
+
+  const parentId = findParentAssistantEntryId(entry, branch);
   if (!parentId) return { generationId };
 
   return {
@@ -144,25 +191,17 @@ export function resolvePiGenerationLineage(
 
 /**
  * Walk the parentId chain from `entry` toward the root and return the id of
- * the nearest ancestor that is an assistant message entry. Returns
- * `undefined` for the first assistant turn on the branch.
- *
- * `branch` is used to look up entries by id; `assistantEntries` is the
- * pre-filtered list, used to detect when an ancestor is itself an
- * assistant entry.
+ * the nearest ancestor that is an assistant message entry. `branch` is used to
+ * look up entries by id. Returns `undefined` for the first assistant turn on
+ * the branch.
  */
 function findParentAssistantEntryId(
   entry: SessionEntryLike,
   branch: SessionEntryLike[],
-  assistantEntries: SessionEntryLike[],
 ): string | undefined {
   const byId = new Map<string, SessionEntryLike>();
   for (const e of branch) {
     if (typeof e.id === "string") byId.set(e.id, e);
-  }
-  const assistantIds = new Set<string>();
-  for (const e of assistantEntries) {
-    if (typeof e.id === "string") assistantIds.add(e.id);
   }
 
   let cursor = entry.parentId;
@@ -171,7 +210,7 @@ function findParentAssistantEntryId(
     seen.add(cursor);
     const parent = byId.get(cursor);
     if (!parent) return undefined;
-    if (assistantIds.has(cursor)) return cursor;
+    if (isAssistantMessageEntry(parent)) return cursor;
     cursor = parent.parentId ?? null;
   }
   return undefined;

@@ -7,10 +7,14 @@ import {
   mapAgentMessagesForHook,
   mapGenerationResult,
   mapGenerationStart,
+  mapPiUsage,
+  mapSummaryGenerationResult,
+  mapSummaryGenerationStart,
   mapTools,
   mapUserMessage,
   type PiAgentMessage,
   type PiAssistantMessage,
+  type PiSummaryEntryLike,
   type PiToolInfo,
   type PiToolResult,
   type PiUserMessage,
@@ -1404,5 +1408,341 @@ describe("applyRedactedText", () => {
       type: "text",
       text: "original",
     });
+  });
+});
+
+describe("mapPiUsage", () => {
+  it.each([
+    {
+      name: "full usage block",
+      usage: {
+        input: 120000,
+        output: 8000,
+        cacheRead: 40,
+        cacheWrite: 12,
+        totalTokens: 128052,
+        cost: { total: 2.5 },
+      },
+      want: {
+        inputTokens: 120000,
+        outputTokens: 8000,
+        totalTokens: 128052,
+        cacheReadInputTokens: 40,
+        cacheWriteInputTokens: 12,
+      },
+    },
+    {
+      name: "missing optional fields default to 0",
+      usage: { input: 10, output: 5 },
+      want: {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheWriteInputTokens: 0,
+      },
+    },
+    {
+      name: "absent cost is not part of the token mapping",
+      usage: {
+        input: 1,
+        output: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 3,
+      },
+      want: {
+        inputTokens: 1,
+        outputTokens: 2,
+        totalTokens: 3,
+        cacheReadInputTokens: 0,
+        cacheWriteInputTokens: 0,
+      },
+    },
+    {
+      name: "empty usage maps to all zeros",
+      usage: {},
+      want: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheWriteInputTokens: 0,
+      },
+    },
+  ])("maps $name", ({ usage, want }) => {
+    expect(mapPiUsage(usage)).toEqual(want);
+  });
+
+  it("produces the same fields the turn path exports", () => {
+    // Guard against drift: mapGenerationResult must stay byte-identical to
+    // mapPiUsage so turn and summary generations report tokens the same way.
+    const msg = makeMsg();
+    expect(mapGenerationResult(msg, [], "metadata_only").usage).toEqual(
+      mapPiUsage(msg.usage),
+    );
+  });
+});
+
+function makeSummaryEntry(
+  overrides?: Partial<PiSummaryEntryLike>,
+): PiSummaryEntryLike {
+  return {
+    id: "c1",
+    timestamp: "2025-01-01T00:00:05.000Z",
+    summary: "Earlier we refactored the exporter and fixed two tests.",
+    tokensBefore: 152000,
+    usage: {
+      input: 120000,
+      output: 8000,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 128000,
+      cost: { total: 2.5 },
+    },
+    ...overrides,
+  };
+}
+
+describe("mapSummaryGenerationStart", () => {
+  const baseOpts = {
+    kind: "compaction" as const,
+    conversationId: "conv-1",
+    conversationTitle: "refactor the exporter",
+    agentName: "pi",
+    agentVersion: "0.82.1",
+    model: { provider: "anthropic", name: "claude-sonnet-4" },
+    startedAt: 1_700_000_000_000,
+  };
+
+  it("maps conversation, agent, model and timing fields", () => {
+    const start = mapSummaryGenerationStart(baseOpts);
+    expect(start.conversationId).toBe("conv-1");
+    expect(start.conversationTitle).toBe("refactor the exporter");
+    expect(start.agentName).toBe("pi");
+    expect(start.agentVersion).toBe("0.82.1");
+    expect(start.effectiveVersion).toBe("0.82.1");
+    expect(start.model).toEqual({
+      provider: "anthropic",
+      name: "claude-sonnet-4",
+    });
+    expect(start.startedAt).toEqual(new Date(1_700_000_000_000));
+  });
+
+  it("does not set operationName so the SYNC default generateText applies", () => {
+    expect(mapSummaryGenerationStart(baseOpts).operationName).toBeUndefined();
+  });
+
+  it("omits conversationTitle when it is unavailable", () => {
+    const start = mapSummaryGenerationStart({
+      ...baseOpts,
+      conversationTitle: undefined,
+    });
+    expect("conversationTitle" in start).toBe(false);
+  });
+
+  it("adds pi.call_kind on top of the built-in tags", () => {
+    const start = mapSummaryGenerationStart({
+      ...baseOpts,
+      tags: { cwd: "/repo", "git.branch": "main" },
+    });
+    expect(start.tags).toEqual({
+      cwd: "/repo",
+      "git.branch": "main",
+      "pi.call_kind": "compaction",
+    });
+  });
+
+  it.each(["compaction", "branch_summary"] as const)("tags kind %s", (kind) => {
+    const start = mapSummaryGenerationStart({ ...baseOpts, kind });
+    expect(start.tags?.["pi.call_kind"]).toBe(kind);
+  });
+
+  it("emits pi.call_kind even when there are no built-in tags", () => {
+    expect(
+      mapSummaryGenerationStart({ ...baseOpts, tags: undefined }).tags,
+    ).toEqual({ "pi.call_kind": "compaction" });
+  });
+
+  it("sets the deterministic id and parent lineage when supplied", () => {
+    const start = mapSummaryGenerationStart({
+      ...baseOpts,
+      generationId: "pi-abc",
+      parentGenerationIds: ["pi-def"],
+    });
+    expect(start.id).toBe("pi-abc");
+    expect(start.parentGenerationIds).toEqual(["pi-def"]);
+  });
+
+  it("omits id and parentGenerationIds when lineage is unavailable", () => {
+    const start = mapSummaryGenerationStart({
+      ...baseOpts,
+      generationId: undefined,
+      parentGenerationIds: [],
+    });
+    expect(start.id).toBeUndefined();
+    expect(start.parentGenerationIds).toBeUndefined();
+  });
+});
+
+describe("mapSummaryGenerationResult", () => {
+  const completedAt = 1_700_000_005_000;
+
+  it("maps usage, stop reason, completion time and metadata", () => {
+    const result = mapSummaryGenerationResult({
+      entry: makeSummaryEntry(),
+      contentCapture: "full",
+      completedAt,
+      reason: "threshold",
+      willRetry: false,
+    });
+    expect(result.usage).toEqual({
+      inputTokens: 120000,
+      outputTokens: 8000,
+      totalTokens: 128000,
+      cacheReadInputTokens: 0,
+      cacheWriteInputTokens: 0,
+    });
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.completedAt).toEqual(new Date(completedAt));
+    expect(result.metadata).toEqual({
+      cost_usd: 2.5,
+      "pi.tokens_before": 152000,
+      "pi.compaction.reason": "threshold",
+      "pi.compaction.will_retry": false,
+    });
+  });
+
+  it.each([
+    "full",
+    "no_tool_content",
+    "full_with_metadata_spans",
+  ] as const)("keeps the summary as one assistant text part in %s", (contentCapture) => {
+    const result = mapSummaryGenerationResult({
+      entry: makeSummaryEntry(),
+      contentCapture,
+      completedAt,
+    });
+    expect(result.output).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "text",
+            text: "Earlier we refactored the exporter and fixed two tests.",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("drops the summary text in metadata_only but keeps usage and metadata", () => {
+    const result = mapSummaryGenerationResult({
+      entry: makeSummaryEntry(),
+      contentCapture: "metadata_only",
+      completedAt,
+    });
+    expect(result.output).toBeUndefined();
+    expect(result.usage).toBeDefined();
+    expect(result.metadata?.["pi.tokens_before"]).toBe(152000);
+    // The summary must not be smuggled through metadata: content capture
+    // never strips metadata or tags.
+    expect(JSON.stringify(result)).not.toContain("refactored the exporter");
+  });
+
+  it("omits output for an empty or whitespace-only summary", () => {
+    expect(
+      mapSummaryGenerationResult({
+        entry: makeSummaryEntry({ summary: "   " }),
+        contentCapture: "full",
+        completedAt,
+      }).output,
+    ).toBeUndefined();
+    expect(
+      mapSummaryGenerationResult({
+        entry: makeSummaryEntry({ summary: undefined }),
+        contentCapture: "full",
+        completedAt,
+      }).output,
+    ).toBeUndefined();
+  });
+
+  it("omits usage entirely when the entry has none", () => {
+    const result = mapSummaryGenerationResult({
+      entry: makeSummaryEntry({ usage: undefined }),
+      contentCapture: "full",
+      completedAt,
+    });
+    expect(result.usage).toBeUndefined();
+    // tokensBefore is a context estimate, not this call's input tokens, so it
+    // must not be substituted for the missing usage.
+    expect(result.metadata?.["pi.tokens_before"]).toBe(152000);
+    expect(result.metadata?.cost_usd).toBeUndefined();
+  });
+
+  it("omits usage when the entry reports a cost but no token counts", () => {
+    // Mapping this would export five zeros, which reads as "no tokens used"
+    // instead of "the host did not report tokens". The cost still stands on
+    // its own.
+    const result = mapSummaryGenerationResult({
+      entry: makeSummaryEntry({ usage: { cost: { total: 1.75 } } }),
+      contentCapture: "full",
+      completedAt,
+    });
+    expect(result.usage).toBeUndefined();
+    expect(result.metadata?.cost_usd).toBe(1.75);
+  });
+
+  it("records a zero cost, like the turn path does", () => {
+    const result = mapSummaryGenerationResult({
+      entry: makeSummaryEntry({
+        usage: { input: 1, output: 2, totalTokens: 3, cost: { total: 0 } },
+      }),
+      contentCapture: "full",
+      completedAt,
+    });
+    expect(result.metadata?.cost_usd).toBe(0);
+  });
+
+  it("omits cost_usd when pi priced nothing", () => {
+    const result = mapSummaryGenerationResult({
+      entry: makeSummaryEntry({
+        usage: { input: 1, output: 2, totalTokens: 3, cost: {} },
+      }),
+      contentCapture: "full",
+      completedAt,
+    });
+    expect(result.metadata).not.toHaveProperty("cost_usd");
+  });
+
+  it("omits compaction-only metadata for a branch summary", () => {
+    const result = mapSummaryGenerationResult({
+      entry: makeSummaryEntry({ tokensBefore: undefined }),
+      contentCapture: "full",
+      completedAt,
+    });
+    expect(result.metadata).toEqual({ cost_usd: 2.5 });
+  });
+
+  it("records will_retry=true for overflow recovery", () => {
+    const result = mapSummaryGenerationResult({
+      entry: makeSummaryEntry(),
+      contentCapture: "full",
+      completedAt,
+      reason: "overflow",
+      willRetry: true,
+    });
+    expect(result.metadata?.["pi.compaction.reason"]).toBe("overflow");
+    expect(result.metadata?.["pi.compaction.will_retry"]).toBe(true);
+  });
+
+  it("sets responseModel when the resolved model is known", () => {
+    const result = mapSummaryGenerationResult({
+      entry: makeSummaryEntry(),
+      contentCapture: "full",
+      completedAt,
+      responseModel: "claude-sonnet-4",
+    });
+    expect(result.responseModel).toBe("claude-sonnet-4");
   });
 });

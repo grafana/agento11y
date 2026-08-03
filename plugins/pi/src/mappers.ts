@@ -3,6 +3,7 @@ import type {
   GenerationResult,
   GenerationStart,
   Message,
+  TokenUsage,
   ToolDefinition,
 } from "@grafana/agento11y";
 
@@ -18,6 +19,14 @@ function includesToolBodies(contentCapture: ContentCaptureMode): boolean {
     contentCapture === "full" || contentCapture === "full_with_metadata_spans"
   );
 }
+
+/**
+ * Tag key marking a generation that pi's host made outside a user turn.
+ * Values: `compaction` (context compaction) and `branch_summary` (tree
+ * navigation summary). Prefixed with `pi.` because no cross-launcher
+ * convention exists for host-initiated model calls.
+ */
+const PI_CALL_KIND_TAG = "pi.call_kind";
 
 /**
  * Pi's ToolInfo shape from @mariozechner/pi-coding-agent.
@@ -283,13 +292,7 @@ export function mapGenerationResult(
   const result: GenerationResult = {
     responseId: msg.responseId,
     responseModel: msg.model,
-    usage: {
-      inputTokens: msg.usage.input,
-      outputTokens: msg.usage.output,
-      totalTokens: msg.usage.totalTokens,
-      cacheReadInputTokens: msg.usage.cacheRead,
-      cacheWriteInputTokens: msg.usage.cacheWrite,
-    },
+    usage: mapPiUsage(msg.usage),
     stopReason: mapStopReason(msg.stopReason),
     completedAt: new Date(completedAtMs ?? msg.timestamp),
     metadata:
@@ -310,6 +313,206 @@ export function mapGenerationResult(
   ];
   if (output.length > 0) {
     result.output = output;
+  }
+
+  return result;
+}
+
+/**
+ * Pi's `Usage` shape, read structurally. Every field is optional because the
+ * plugin also reads usage off persisted session entries written by older pi
+ * versions, where the field may be missing entirely.
+ */
+export interface PiUsageLike {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  totalTokens?: number;
+  cost?: { total?: number };
+}
+
+/**
+ * Map pi usage to the SDK's `TokenUsage`. Shared by the turn path and the
+ * summary path so the two cannot drift.
+ *
+ * The field set is narrower than pi's `Usage`. `reasoning` and `cacheWrite1h`
+ * are not forwarded, and `totalTokens` is passed through as pi computes it
+ * (`input + output + cacheRead + cacheWrite`) instead of being recomputed to
+ * the Go launchers' `input + output`. Either change would move existing golden
+ * fixtures, so both stay as they are.
+ */
+export function mapPiUsage(usage: PiUsageLike): TokenUsage {
+  return {
+    inputTokens: usage.input ?? 0,
+    outputTokens: usage.output ?? 0,
+    totalTokens: usage.totalTokens ?? 0,
+    cacheReadInputTokens: usage.cacheRead ?? 0,
+    cacheWriteInputTokens: usage.cacheWrite ?? 0,
+  };
+}
+
+/** Token-count fields on pi's `Usage`. The `cost` block is not one of them. */
+export const PI_USAGE_TOKEN_FIELDS = [
+  "input",
+  "output",
+  "cacheRead",
+  "cacheWrite",
+  "totalTokens",
+] as const;
+
+/**
+ * True when the host reported at least one token count. A usage object that
+ * carries only a cost says nothing about tokens, and every token field is
+ * serialized on the exported record, so mapping it would report "0 tokens"
+ * where the truth is "unknown".
+ */
+function hasPiTokenCounts(usage: PiUsageLike): boolean {
+  return PI_USAGE_TOKEN_FIELDS.some((key) => Number.isFinite(usage[key]));
+}
+
+/**
+ * Which host summarization call produced a generation. `compaction` covers
+ * manual `/compact`, `ctx.compact()`, threshold auto-compaction, and
+ * context-overflow recovery; `branch_summary` covers tree-navigation
+ * summaries.
+ */
+export type PiSummaryKind = "compaction" | "branch_summary";
+
+/**
+ * Fields read off pi's persisted `CompactionEntry` / `BranchSummaryEntry`.
+ * Structural and fully optional: `usage` was added to those entries after the
+ * dev-pinned pi version, so it must degrade to `undefined` rather than fail
+ * type checking.
+ */
+export interface PiSummaryEntryLike {
+  id?: string;
+  timestamp?: string;
+  summary?: string;
+  /** Pre-compaction context estimate. Compaction entries only. */
+  tokensBefore?: number;
+  usage?: PiUsageLike;
+  /** True when an extension supplied the summary and no model call happened. */
+  fromHook?: boolean;
+}
+
+/** Inputs for {@link mapSummaryGenerationStart}. */
+export interface MapSummaryGenerationStartOptions {
+  kind: PiSummaryKind;
+  conversationId?: string;
+  conversationTitle?: string;
+  agentName: string;
+  agentVersion?: string;
+  model: { provider: string; name: string };
+  startedAt: number;
+  tags?: Record<string, string>;
+  generationId?: string;
+  parentGenerationIds?: string[];
+}
+
+/**
+ * Build the `GenerationStart` seed for a host summarization call.
+ *
+ * No `operationName` is set on purpose: the SYNC path (`startGeneration`)
+ * defaults it to `generateText`, which discriminates these calls from turns
+ * (`streamText`) without adding a new `gen_ai.operation.name` label value.
+ */
+export function mapSummaryGenerationStart(
+  opts: MapSummaryGenerationStartOptions,
+): GenerationStart {
+  const start: GenerationStart = {
+    conversationId: opts.conversationId,
+    ...(opts.conversationTitle
+      ? { conversationTitle: opts.conversationTitle }
+      : {}),
+    agentName: opts.agentName,
+    agentVersion: opts.agentVersion,
+    effectiveVersion: opts.agentVersion,
+    model: opts.model,
+    startedAt: new Date(opts.startedAt),
+    tags: { ...opts.tags, [PI_CALL_KIND_TAG]: opts.kind },
+  };
+  if (opts.generationId) {
+    start.id = opts.generationId;
+  }
+  if (opts.parentGenerationIds && opts.parentGenerationIds.length > 0) {
+    start.parentGenerationIds = opts.parentGenerationIds;
+  }
+  return start;
+}
+
+/** Inputs for {@link mapSummaryGenerationResult}. */
+export interface MapSummaryGenerationResultOptions {
+  entry: PiSummaryEntryLike;
+  contentCapture: ContentCaptureMode;
+  completedAt: number;
+  responseModel?: string;
+  /** `manual` | `threshold` | `overflow`, compaction only. */
+  reason?: string;
+  /** True when the aborted turn is retried after this compaction. */
+  willRetry?: boolean;
+}
+
+/**
+ * Build the `GenerationResult` for a host summarization call.
+ *
+ * The summary text goes in `output` as a single assistant text part, never in
+ * metadata or tags: content capture strips `output` but never touches
+ * `metadata`/`tags`, so a summary in metadata would leak in `metadata_only`.
+ * The gate is `contentCapture !== "metadata_only"`, matching assistant text on
+ * the turn path — the summary is assistant text, not a tool body, so the
+ * `no_tool_content` split does not apply to it.
+ *
+ * `usage` is omitted entirely when the entry reports no token counts. The
+ * exported record always serializes every token field, so a zeroed block
+ * reads as "this call used 0 tokens" rather than "the host did not say".
+ * `tokensBefore` is a context estimate for the whole conversation, not this
+ * call's input token count, so it stays in metadata.
+ *
+ * `cost_usd` is set whenever pi priced the call, including a cost of `0`,
+ * which is what the turn path does in {@link mapGenerationResult}.
+ */
+export function mapSummaryGenerationResult(
+  opts: MapSummaryGenerationResultOptions,
+): GenerationResult {
+  const { entry, contentCapture, completedAt } = opts;
+
+  const metadata: Record<string, unknown> = {};
+  const cost = entry.usage?.cost?.total;
+  if (typeof cost === "number") {
+    metadata.cost_usd = cost;
+  }
+  if (typeof entry.tokensBefore === "number") {
+    metadata["pi.tokens_before"] = entry.tokensBefore;
+  }
+  if (typeof opts.reason === "string" && opts.reason.length > 0) {
+    metadata["pi.compaction.reason"] = opts.reason;
+  }
+  if (typeof opts.willRetry === "boolean") {
+    metadata["pi.compaction.will_retry"] = opts.willRetry;
+  }
+
+  const result: GenerationResult = {
+    stopReason: "end_turn",
+    completedAt: new Date(completedAt),
+    metadata,
+  };
+  if (opts.responseModel) {
+    result.responseModel = opts.responseModel;
+  }
+  if (entry.usage && hasPiTokenCounts(entry.usage)) {
+    result.usage = mapPiUsage(entry.usage);
+  }
+
+  const summary = entry.summary;
+  if (
+    contentCapture !== "metadata_only" &&
+    typeof summary === "string" &&
+    summary.trim().length > 0
+  ) {
+    result.output = [
+      { role: "assistant", parts: [{ type: "text", text: summary }] },
+    ];
   }
 
   return result;
