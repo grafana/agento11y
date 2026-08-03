@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
 	"go.opentelemetry.io/otel/attribute"
@@ -29,6 +30,37 @@ func TestDefaultConfigGenerationExportMessageAndPayloadLimits(t *testing.T) {
 	}
 	if cfg.GenerationExport.PayloadMaxBytes != defaultGenerationPayloadMaxBytes {
 		t.Fatalf("expected payload max bytes %d, got %d", defaultGenerationPayloadMaxBytes, cfg.GenerationExport.PayloadMaxBytes)
+	}
+}
+
+func TestMetricStringAttributeDetachesStorage(t *testing.T) {
+	backing := "prefix " + strings.Repeat("value", 32) + " suffix"
+	value := backing[len("prefix ") : len(backing)-len(" suffix")]
+
+	got := metricStringAttribute("key", value).Value.AsString()
+
+	if got != value {
+		t.Fatalf("metric attribute = %q, want %q", got, value)
+	}
+	if unsafe.StringData(got) == unsafe.StringData(value) {
+		t.Fatal("metric attribute still shares the caller's backing storage")
+	}
+}
+
+func TestMetricTagAttributesDetachStorage(t *testing.T) {
+	backing := "prefix " + strings.Repeat("tag", 32) + " suffix"
+	value := backing[len("prefix ") : len(backing)-len(" suffix")]
+
+	attrs := metricTagAttributes(map[string]string{"stack_id": value})
+	if len(attrs) != 1 {
+		t.Fatalf("metric tag attribute count = %d, want 1", len(attrs))
+	}
+	got := attrs[0].Value.AsString()
+	if got != value {
+		t.Fatalf("metric tag attribute = %q, want %q", got, value)
+	}
+	if unsafe.StringData(got) == unsafe.StringData(value) {
+		t.Fatal("metric tag attribute still shares the caller's backing storage")
 	}
 }
 

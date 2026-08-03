@@ -2050,15 +2050,15 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 	// Include per-request context tags (WithTag/WithTags) as metric dimensions
 	// alongside the static client tags. Callers are responsible for keeping
 	// context-tag values low-cardinality since they become metric labels.
-	tagAttrs := tagAttributes(mergeTags(c.config.Tags, TagsFromContext(ctx)))
+	tagAttrs := metricTagAttributes(mergeTags(c.config.Tags, TagsFromContext(ctx)))
 	durationAttrs := append(
-		[]attribute.KeyValue{attribute.String(spanAttrOperationName, operationName(generation))},
+		[]attribute.KeyValue{metricStringAttribute(spanAttrOperationName, operationName(generation))},
 		identityAttrs...,
 	)
 	durationAttrs = append(durationAttrs, tagAttrs...)
 	durationAttrs = append(durationAttrs,
-		attribute.String(spanAttrErrorType, errorType),
-		attribute.String(spanAttrErrorCategory, errorCategory),
+		metricStringAttribute(spanAttrErrorType, errorType),
+		metricStringAttribute(spanAttrErrorCategory, errorCategory),
 	)
 	c.instruments.operationDuration.Record(ctx, duration, metric.WithAttributes(durationAttrs...))
 
@@ -2067,11 +2067,11 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 			return
 		}
 		tokenAttrs := append(
-			[]attribute.KeyValue{attribute.String(spanAttrOperationName, operationName(generation))},
+			[]attribute.KeyValue{metricStringAttribute(spanAttrOperationName, operationName(generation))},
 			identityAttrs...,
 		)
 		tokenAttrs = append(tokenAttrs, tagAttrs...)
-		tokenAttrs = append(tokenAttrs, attribute.String(metricAttrTokenType, tokenType))
+		tokenAttrs = append(tokenAttrs, metricStringAttribute(metricAttrTokenType, tokenType))
 		c.instruments.tokenUsage.Record(ctx, value, metric.WithAttributes(tokenAttrs...))
 	}
 
@@ -2132,13 +2132,13 @@ func (c *Client) recordEmbeddingMetrics(
 	identityAttrs := metricIdentityAttributes(provider, model, agentName, seed.AgentVersion)
 	tagAttrs := c.clientTagMetricAttributes()
 	durationAttrs := append(
-		[]attribute.KeyValue{attribute.String(spanAttrOperationName, defaultEmbeddingOperationName)},
+		[]attribute.KeyValue{metricStringAttribute(spanAttrOperationName, defaultEmbeddingOperationName)},
 		identityAttrs...,
 	)
 	durationAttrs = append(durationAttrs, tagAttrs...)
 	durationAttrs = append(durationAttrs,
-		attribute.String(spanAttrErrorType, errorType),
-		attribute.String(spanAttrErrorCategory, errorCategory),
+		metricStringAttribute(spanAttrErrorType, errorType),
+		metricStringAttribute(spanAttrErrorCategory, errorCategory),
 	)
 	c.instruments.operationDuration.Record(
 		ctx,
@@ -2148,11 +2148,11 @@ func (c *Client) recordEmbeddingMetrics(
 
 	if result.InputTokens != 0 {
 		tokenAttrs := append(
-			[]attribute.KeyValue{attribute.String(spanAttrOperationName, defaultEmbeddingOperationName)},
+			[]attribute.KeyValue{metricStringAttribute(spanAttrOperationName, defaultEmbeddingOperationName)},
 			identityAttrs...,
 		)
 		tokenAttrs = append(tokenAttrs, tagAttrs...)
-		tokenAttrs = append(tokenAttrs, attribute.String(metricAttrTokenType, metricTokenTypeInput))
+		tokenAttrs = append(tokenAttrs, metricStringAttribute(metricAttrTokenType, metricTokenTypeInput))
 		c.instruments.tokenUsage.Record(
 			ctx,
 			result.InputTokens,
@@ -2183,13 +2183,13 @@ func (c *Client) recordToolExecutionMetrics(ctx context.Context, seed ToolExecut
 	}
 	attrs := metricIdentityAttributes(seed.RequestProvider, seed.RequestModel, seed.AgentName, seed.AgentVersion)
 	attrs = append([]attribute.KeyValue{
-		attribute.String(spanAttrOperationName, "execute_tool"),
-		attribute.String(spanAttrToolName, strings.TrimSpace(seed.ToolName)),
+		metricStringAttribute(spanAttrOperationName, "execute_tool"),
+		metricStringAttribute(spanAttrToolName, strings.TrimSpace(seed.ToolName)),
 	}, attrs...)
 	attrs = append(attrs, c.clientTagMetricAttributes()...)
 	attrs = append(attrs,
-		attribute.String(spanAttrErrorType, errorType),
-		attribute.String(spanAttrErrorCategory, errorCategory),
+		metricStringAttribute(spanAttrErrorType, errorType),
+		metricStringAttribute(spanAttrErrorCategory, errorCategory),
 	)
 	c.instruments.operationDuration.Record(
 		ctx,
@@ -2240,19 +2240,34 @@ func (c *Client) clientTagMetricAttributes() []attribute.KeyValue {
 	if c == nil {
 		return nil
 	}
-	return tagAttributes(c.config.Tags)
+	return metricTagAttributes(c.config.Tags)
 }
 
 func metricIdentityAttributes(provider, model, agentName, agentVersion string) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
-		attribute.String(spanAttrProviderName, strings.TrimSpace(provider)),
-		attribute.String(spanAttrRequestModel, strings.TrimSpace(model)),
-		attribute.String(spanAttrAgentName, strings.TrimSpace(agentName)),
+		metricStringAttribute(spanAttrProviderName, strings.TrimSpace(provider)),
+		metricStringAttribute(spanAttrRequestModel, strings.TrimSpace(model)),
+		metricStringAttribute(spanAttrAgentName, strings.TrimSpace(agentName)),
 	}
 	if version := strings.TrimSpace(agentVersion); version != "" {
-		attrs = append(attrs, attribute.String(spanAttrAgentVersion, version))
+		attrs = append(attrs, metricStringAttribute(spanAttrAgentVersion, version))
 	}
 	return attrs
+}
+
+func metricTagAttributes(tags map[string]string) []attribute.KeyValue {
+	attrs := tagAttributes(tags)
+	for i := range attrs {
+		attrs[i] = metricStringAttribute(string(attrs[i].Key), attrs[i].Value.AsString())
+	}
+	return attrs
+}
+
+// metricStringAttribute detaches label values from caller-owned backing
+// storage. Cumulative metric aggregators may retain the first attribute set for
+// every series for the lifetime of the process.
+func metricStringAttribute(key, value string) attribute.KeyValue {
+	return attribute.String(key, strings.Clone(value))
 }
 
 func countToolCalls(messages []Message) int {
