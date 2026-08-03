@@ -187,7 +187,7 @@ See the [Grafana Cloud Agent observability getting started docs](https://grafana
 
 ## Plugins for coding agents
 
-Plugins can record sessions from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, and Pi without changing application code. See [`plugins/README.md`](plugins/README.md) for install and config per agent.
+Plugins can record sessions from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, Pi, and Vibe without changing application code. See [`plugins/README.md`](plugins/README.md) for install and config per agent.
 
 ## Why Grafana Agent observability
 

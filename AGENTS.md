@@ -37,12 +37,13 @@ CI runs `mise run check:proto` and fails the build if the committed stubs drift 
 
 | Plugin dir | What it actually is |
 |------------|---------------------|
-| `plugins/agento11y/` | The shared Go binary, installed as `agento11y` (`brew install grafana/grafana/agento11y`; the old `sigil` name still works but will be removed). Has subcommands `claude`, `codex`, `copilot`, `cursor`, `opencode`, `pi`, `login`. This is also what consumers use. |
+| `plugins/agento11y/` | The shared Go binary, installed as `agento11y` (`brew install grafana/grafana/agento11y`; the old `sigil` name still works but will be removed). Has subcommands `claude`, `codex`, `copilot`, `cursor`, `opencode`, `pi`, `vibe`, `login`, `doctor`, `local`. This is also what consumers use. |
 | `plugins/claude-code/`, `plugins/codex/`, `plugins/copilot/`, `plugins/cursor/` | Thin glue: hook scripts and READMEs that wire the host agent to the shared `agento11y` binary. No independent code paths. |
 | `plugins/opencode/` | Independent npm package `@grafana/agento11y-opencode`. Runs in-process inside opencode through its TypeScript plugin API; `agento11y opencode` installs and launches it. |
 | `plugins/pi/` | Independent npm package `@grafana/agento11y-pi`. Runs in-process inside pi; `agento11y pi` installs and launches it. |
+| `plugins/vibe/` | README only. `agento11y vibe` upserts three `[[hooks]]` entries into `hooks.toml` under `$VIBE_HOME` (default `~/.vibe`) and sets `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` on the child so vibe loads them. |
 
-If you change shared-binary behavior, the four glue plugins all see it. The OpenCode and pi plugins evolve independently, but the shared binary owns their install/launch flow.
+If you change shared-binary behavior, the four glue plugins and vibe all see it. The OpenCode and pi plugins evolve independently, but the shared binary owns their install/launch flow.
 
 ## Cross-language conventions
 
