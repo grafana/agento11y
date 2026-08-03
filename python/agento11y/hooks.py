@@ -17,7 +17,7 @@ from opentelemetry import trace
 from .config import HooksConfig
 from .context import conversation_id_from_context
 from .errors import HookDeniedError, HookTransportError
-from .models import Message, MessageRole, Part, PartKind, ToolDefinition
+from .models import Message, MessageRole, Part, PartKind, ToolCall, ToolDefinition, ToolResult
 
 _logger = logging.getLogger("agento11y")
 
@@ -25,6 +25,12 @@ HOOKS_EVALUATE_PATH = "/api/v1/hooks:evaluate"
 HOOK_TIMEOUT_HEADER = "X-Agento11y-Hook-Timeout-Ms"
 DEFAULT_HOOK_TIMEOUT = 15.0
 _MAX_HOOK_RESPONSE_BYTES = 4 << 20
+
+# MessageRole enum values from proto/agento11y/v1/generation_ingest.proto, as an
+# emitter that marshals the generated structs with a plain JSON encoder sends
+# them. Kept as literals so the hook path does not pull in the protobuf stubs.
+_PROTO_ROLE_ASSISTANT = 2
+_PROTO_ROLE_TOOL = 3
 
 
 class HookPhase(str, Enum):
@@ -206,8 +212,7 @@ def _allow_response() -> HookEvaluateResponse:
 
 def _fail_open_or_raise(fail_open: bool, detail: str) -> HookEvaluateResponse:
     if fail_open:
-        # A dead evaluator allows every request. Without this line that is
-        # completely silent, so an outage looks identical to a clean allow.
+        # Fail-open turns an evaluator outage into a silent allow, so record it.
         _logger.warning("agento11y: hook evaluation failed, allowing request (fail_open): %s", detail)
         return _allow_response()
     raise HookTransportError(f"agento11y hook evaluation failed: {detail}")
@@ -277,15 +282,15 @@ def _message_role_wire(role: Any) -> str:
 def _serialize_message(message: Message) -> dict[str, Any]:
     """Serializes a message for the hooks API.
 
-    Every part carries its ``kind``. The server dispatches on that field and
-    only recovers a missing one for text, so a ``kind``-less thinking, tool
-    call, or tool result part reaches rule evaluation as an empty part: a
-    tool-filter guard sees no tool calls and allows the request.
+    Every part carries its ``kind``. The server dispatches on that field, and it
+    recovers a missing one for text only. A ``kind``-less thinking, tool call, or
+    tool result part therefore reaches rule evaluation as an empty part, and a
+    tool-filter guard sees no tool calls in it and allows the request.
 
-    Tool arguments and tool result payloads go out as embedded JSON, not
-    base64. The hooks API reads them as raw JSON, so a base64 blob is what
-    argument-level rules end up matching against. Generation export is the
-    other way around, because that is protobuf JSON.
+    Tool arguments and tool result payloads go out as embedded JSON, not base64.
+    The hooks API reads them as raw JSON, so a base64 blob is what argument-level
+    rules end up matching against. Responses come back the other way around,
+    because those are protobuf JSON. See ``conformance/hooks/README.md``.
     """
 
     parts: list[dict[str, Any]] = []
@@ -295,23 +300,23 @@ def _serialize_message(message: Message) -> dict[str, Any]:
         elif part.kind == PartKind.THINKING and part.thinking:
             parts.append({"kind": PartKind.THINKING.value, "thinking": part.thinking})
         elif part.kind == PartKind.TOOL_CALL and part.tool_call is not None:
-            payload: dict[str, Any] = {
-                "id": part.tool_call.id,
-                "name": part.tool_call.name,
-            }
+            payload: dict[str, Any] = {"name": part.tool_call.name}
+            if part.tool_call.id:
+                payload["id"] = part.tool_call.id
             if part.tool_call.input_json:
                 payload["input_json"] = _embedded_json(part.tool_call.input_json)
             parts.append({"kind": PartKind.TOOL_CALL.value, "tool_call": payload})
         elif part.kind == PartKind.TOOL_RESULT and part.tool_result is not None:
             tr = part.tool_result
-            tr_payload: dict[str, Any] = {
-                "is_error": tr.is_error,
-                "content": tr.content,
-            }
+            tr_payload: dict[str, Any] = {}
             if tr.tool_call_id:
                 tr_payload["tool_call_id"] = tr.tool_call_id
             if tr.name:
                 tr_payload["name"] = tr.name
+            if tr.is_error:
+                tr_payload["is_error"] = True
+            if tr.content:
+                tr_payload["content"] = tr.content
             if tr.content_json:
                 tr_payload["content_json"] = _embedded_json(tr.content_json)
             parts.append({"kind": PartKind.TOOL_RESULT.value, "tool_result": tr_payload})
@@ -326,10 +331,11 @@ def _serialize_message(message: Message) -> dict[str, Any]:
 
 
 def _embedded_json(raw: bytes) -> Any:
-    """Decodes JSON bytes for embedding in the hook payload.
+    """Decodes JSON bytes for embedding in a hook request.
 
     Bytes that do not parse are sent as a JSON string, which keeps the request
-    body valid and leaves the text visible to rules instead of dropping it.
+    body valid and leaves the text visible to rules instead of dropping it. Go
+    and JS do the same.
     """
 
     try:
@@ -341,9 +347,11 @@ def _embedded_json(raw: bytes) -> Any:
 def _serialize_tool(tool: ToolDefinition) -> dict[str, Any]:
     """Serializes a tool definition for the hooks API.
 
-    ``input_schema_json`` stays base64 even though tool call arguments do not:
-    the server decodes the tools list straight into its protobuf type, which
-    rejects embedded JSON for a bytes field.
+    ``input_schema_json`` stays base64 even though tool call arguments do not: the
+    server decodes the tools list straight into its protobuf type, whose
+    ``input_schema_json`` is a bytes field. A schema under any other key is
+    ignored, and embedded JSON under this key fails that decode, which makes the
+    server answer 400 for the whole evaluation.
     """
 
     out: dict[str, Any] = {"name": tool.name}
@@ -408,18 +416,50 @@ def _parse_hook_input_wire(data: Any) -> HookInput | None:
     sp = data.get("system_prompt")
     if isinstance(sp, str) and sp != "":
         out.system_prompt = sp
-    raw_msgs = data.get("messages")
-    if isinstance(raw_msgs, list):
-        msgs: list[Message] = []
-        for item in raw_msgs:
-            m = _parse_wire_message_dict(item)
-            if m is not None:
-                msgs.append(m)
-        if msgs:
-            out.messages = msgs
-    if out.messages or out.conversation_preview or out.system_prompt:
+    messages = _parse_wire_messages(data.get("messages"))
+    if messages:
+        out.messages = messages
+    output = _parse_wire_messages(data.get("output"))
+    if output:
+        out.output = output
+    raw_tools = data.get("tools")
+    if isinstance(raw_tools, list):
+        tools: list[ToolDefinition] = []
+        for item in raw_tools:
+            tool = _parse_wire_tool_dict(item)
+            if tool is not None:
+                tools.append(tool)
+        if tools:
+            out.tools = tools
+    if out.messages or out.output or out.tools or out.conversation_preview or out.system_prompt:
         return out
     return None
+
+
+def _parse_wire_messages(raw: Any) -> list[Message]:
+    if not isinstance(raw, list):
+        return []
+    out: list[Message] = []
+    for item in raw:
+        message = _parse_wire_message_dict(item)
+        if message is not None:
+            out.append(message)
+    return out
+
+
+def _parse_wire_tool_dict(item: Any) -> ToolDefinition | None:
+    if not isinstance(item, dict):
+        return None
+    name = _string_field(item.get("name"))
+    if name == "":
+        return None
+    return ToolDefinition(
+        name=name,
+        description=_string_field(item.get("description")),
+        type=_string_field(item.get("type")),
+        input_schema_json=_wire_json_bytes(item.get("input_schema_json")),
+        deferred=item.get("deferred") is True,
+    )
 
 
 def _parse_wire_message_dict(item: Any) -> Message | None:
@@ -428,9 +468,9 @@ def _parse_wire_message_dict(item: Any) -> Message | None:
     role_val = item.get("role", "user")
     role = MessageRole.USER
     if isinstance(role_val, int):
-        if role_val == 2:
+        if role_val == _PROTO_ROLE_ASSISTANT:
             role = MessageRole.ASSISTANT
-        elif role_val == 3:
+        elif role_val == _PROTO_ROLE_TOOL:
             role = MessageRole.TOOL
     else:
         role_raw = str(role_val).lower()
@@ -443,18 +483,118 @@ def _parse_wire_message_dict(item: Any) -> Message | None:
         return Message(role=role, parts=[])
     parts: list[Part] = []
     for pr in parts_raw:
-        if not isinstance(pr, dict):
-            continue
-        txt = pr.get("text")
-        if isinstance(txt, str) and txt != "":
-            parts.append(Part(kind=PartKind.TEXT, text=txt))
-            continue
-        think = pr.get("thinking")
-        if isinstance(think, str) and think != "":
-            parts.append(Part(kind=PartKind.THINKING, thinking=think))
+        part = _parse_wire_part_dict(pr)
+        if part is not None:
+            parts.append(part)
     name = item.get("name")
     n = str(name) if isinstance(name, str) else ""
     return Message(role=role, parts=parts, name=n)
+
+
+def _parse_wire_part_dict(pr: Any) -> Part | None:
+    """Reconstructs one wire part, keying off ``kind`` and falling back to payload keys.
+
+    Tool call and tool result payloads arrive base64-encoded because the server
+    marshals its protobuf bytes fields with encoding/json. A parser that skipped
+    those two kinds would drop the transform a guard asked the caller to apply,
+    and report nothing.
+
+    The server always sets ``kind``, so the payload-key fallback only covers a
+    hand-written or protobuf-JSON body. Go and JS keep the same tolerance.
+    """
+
+    if not isinstance(pr, dict):
+        return None
+    kind = _string_field(pr.get("kind"))
+    raw_call = pr.get("tool_call")
+    raw_result = pr.get("tool_result")
+    if kind == "":
+        if isinstance(raw_call, dict):
+            kind = PartKind.TOOL_CALL.value
+        elif isinstance(raw_result, dict):
+            kind = PartKind.TOOL_RESULT.value
+        elif isinstance(pr.get("thinking"), str) and pr.get("thinking") != "":
+            kind = PartKind.THINKING.value
+        elif isinstance(pr.get("text"), str) and pr.get("text") != "":
+            kind = PartKind.TEXT.value
+        else:
+            return None
+    if kind == PartKind.TOOL_CALL.value:
+        if not isinstance(raw_call, dict):
+            return None
+        name = _string_field(raw_call.get("name"))
+        if name == "":
+            return None
+        return Part(
+            kind=PartKind.TOOL_CALL,
+            tool_call=ToolCall(
+                name=name,
+                id=_string_field(raw_call.get("id")),
+                input_json=_wire_json_bytes(raw_call.get("input_json")),
+            ),
+        )
+    if kind == PartKind.TOOL_RESULT.value:
+        if not isinstance(raw_result, dict):
+            return None
+        return Part(
+            kind=PartKind.TOOL_RESULT,
+            tool_result=ToolResult(
+                tool_call_id=_string_field(raw_result.get("tool_call_id")),
+                name=_string_field(raw_result.get("name")),
+                content=_string_field(raw_result.get("content")),
+                content_json=_wire_json_bytes(raw_result.get("content_json")),
+                is_error=raw_result.get("is_error") is True,
+            ),
+        )
+    if kind == PartKind.THINKING.value:
+        thinking = _string_field(pr.get("thinking"))
+        return Part(kind=PartKind.THINKING, thinking=thinking) if thinking else None
+    text = _string_field(pr.get("text"))
+    return Part(kind=PartKind.TEXT, text=text) if text else None
+
+
+def _wire_json_bytes(value: Any) -> bytes:
+    """Recovers a response-side JSON payload as raw bytes.
+
+    The server base64-encodes protobuf bytes fields, so the common case is a
+    base64 string holding a JSON document. The result is always a JSON document:
+    base64 that decodes to something else, and a string that is neither base64
+    nor JSON, are kept as a JSON string so the text survives. Go and JS apply the
+    same rule; see ``conformance/hooks/README.md``.
+    """
+
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, separators=(",", ":")).encode("utf-8")
+    if not isinstance(value, str) or value == "":
+        return b""
+    decoded = _decode_base64(value)
+    if decoded is not None:
+        if _is_json_document(decoded):
+            return decoded
+        return _json_string_bytes(decoded.decode("utf-8", errors="replace"))
+    raw = value.encode("utf-8")
+    if _is_json_document(raw):
+        return raw
+    return _json_string_bytes(value)
+
+
+def _decode_base64(value: str) -> bytes | None:
+    try:
+        return base64.b64decode(value, validate=True)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _is_json_document(raw: bytes) -> bool:
+    try:
+        json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def _json_string_bytes(text: str) -> bytes:
+    return json.dumps(text).encode("utf-8")
 
 
 def _string_field(value: Any) -> str:

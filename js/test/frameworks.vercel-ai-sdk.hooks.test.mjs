@@ -59,7 +59,9 @@ test('vercel ai sdk preflight allows step when hook returns allow', async () => 
     assert.equal(receivedBody.context.model.provider, 'openai');
     assert.equal(receivedBody.context.model.name, 'gpt-4o');
     assert.equal(receivedBody.context.conversation_id, 'conv-allow');
-    assert.equal(receivedBody.input.messages[0].role, 'user');
+    assert.deepEqual(receivedBody.input.messages, [
+      { role: 'user', parts: [{ kind: 'text', text: 'how do I make pasta?' }] },
+    ]);
   } finally {
     await client.shutdown();
     await close(server);
@@ -79,8 +81,10 @@ test('vercel ai sdk prepareStep preflight returns transformed messages for ai sd
       JSON.stringify({
         action: 'allow',
         evaluations: [],
+        // The server returns messages as parts; its wire message has no
+        // `content` field. conformance/hooks/README.md.
         transformed_input: {
-          messages: [{ role: 'user', content: 'redacted question' }],
+          messages: [{ role: 'user', parts: [{ kind: 'text', text: 'redacted question' }] }],
         },
       }),
     );
@@ -114,9 +118,14 @@ test('vercel ai sdk prepareStep preflight returns transformed messages for ai sd
       response: { id: 'resp-prepare-transform', modelId: 'gpt-4o' },
     });
 
-    assert.equal(receivedBody.input.messages[0].content, 'original secret question');
+    // The adapter maps AI SDK messages to the `content` shorthand. The hooks
+    // API has no `content` field on a message, so it only reaches rule
+    // evaluation as a text part. conformance/hooks/README.md.
+    assert.deepEqual(receivedBody.input.messages, [
+      { role: 'user', parts: [{ kind: 'text', text: 'original secret question' }] },
+    ]);
     assert.deepEqual(prepareResult, {
-      messages: [{ role: 'user', content: 'redacted question' }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'redacted question' }] }],
     });
   } finally {
     await client.shutdown();
@@ -134,8 +143,10 @@ test('vercel ai sdk prepareStep preflight rejects unsupported transformed messag
       JSON.stringify({
         action: 'allow',
         evaluations: [],
+        // A tool message whose only part is text has no AI SDK equivalent, and
+        // this is the shape the server emits for it.
         transformed_input: {
-          messages: [{ role: 'tool', content: 'redacted tool result' }],
+          messages: [{ role: 'tool', parts: [{ kind: 'text', text: 'redacted tool result' }] }],
         },
       }),
     );
@@ -180,7 +191,7 @@ test('vercel ai sdk legacy step-start preflight rejects transformed messages tha
         action: 'allow',
         evaluations: [],
         transformed_input: {
-          messages: [{ role: 'user', content: 'redacted question' }],
+          messages: [{ role: 'user', parts: [{ kind: 'text', text: 'redacted question' }] }],
         },
       }),
     );

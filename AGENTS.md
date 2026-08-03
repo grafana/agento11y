@@ -55,6 +55,10 @@ If you change shared-binary behavior, the four glue plugins all see it. The Open
 
 [`llms.txt`](llms.txt) is what this repo ships. There is a second copy of the same prompt rendered by the Agent Observability onboarding wizard (a separate Grafana product). When you change user-facing semantics here (new SDK field, renamed env var, new framework adapter), the wizard copy needs the same change. If you're only fixing this repo's internals, the wizard copy doesn't move.
 
+## Hook wire fixtures are checked by hand
+
+`conformance/hooks/` pins the `POST /api/v1/hooks:evaluate` body and responses. That endpoint has no generated stubs, so the fixtures are the contract, and the SDK suites check themselves against the fixtures rather than against the server. If you change a fixture, run the new shape through the server's hook decoder yourself first. `conformance/hooks/README.md` documents the encodings, which the proto does not describe.
+
 ## Running checks
 
 `mise run check` is the full local CI gate: lint + typecheck + proto-drift + every SDK suite. For a focused change, run the matching narrow task (e.g. `mise run test:py:sdk-langgraph`); the full gate is slow.
