@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.20.0] - 2026-08-03
+
+### Features
+
+- **plugins/pi**: export compaction and branch-summary generations (#495)
+- **plugins/agento11y**: support Cloud guards in --local mode (#487)
+
+### Bug Fixes
+
+- **plugins/pi**: stop a forked session from linking to a missing parent (#509)
+
 ## [0.19.0] - 2026-07-28
 
 ### Documentation
