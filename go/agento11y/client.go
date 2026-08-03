@@ -2246,7 +2246,10 @@ func (c *Client) clientTagMetricAttributes() []attribute.KeyValue {
 func metricIdentityAttributes(provider, model, agentName, agentVersion string) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		attribute.String(spanAttrProviderName, strings.TrimSpace(provider)),
-		attribute.String(spanAttrRequestModel, strings.TrimSpace(model)),
+		// Cumulative metric aggregators retain the first attribute set for each
+		// series. Some provider decoders return model names backed by the complete
+		// JSON request, so detach this small value before handing it to OTel.
+		attribute.String(spanAttrRequestModel, strings.Clone(strings.TrimSpace(model))),
 		attribute.String(spanAttrAgentName, strings.TrimSpace(agentName)),
 	}
 	if version := strings.TrimSpace(agentVersion); version != "" {
