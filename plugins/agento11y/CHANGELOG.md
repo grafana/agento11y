@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.23.0] - 2026-08-03
+
+### Features
+
+- **plugins/agento11y**: add a vibe probe to doctor (#500)
+- **plugins/agento11y**: redact secrets in Cursor content (#501)
+- **plugins/agento11y**: enable local mode with AGENTO11Y_LOCAL env var (#499)
+- **plugins/agento11y**: support Cloud guards in --local mode (#487)
+- **plugins/agento11y**: opt-in Cloud forwarding for local sessions (#484)
+
+### Bug Fixes
+
+- **security/unknown/plugins/agento11y**: update module go.opentelemetry.io/otel to v1.44.0 [security] (#464)
+- **plugins/agento11y**: correct doctor version, alignment, and agent install state (#505)
+
 ## [0.22.0] - 2026-07-28
 
 ### Features
