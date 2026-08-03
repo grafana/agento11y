@@ -130,9 +130,12 @@ func TestProbeOTLP(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", srv.URL)
-	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant-1")
-	t.Setenv("SIGIL_AUTH_TOKEN", "glc_tok")
+	// The probe reads the process env, so clear the host's config and point
+	// the preferred spelling at the test server.
+	isolateEnv(t)
+	t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", srv.URL)
+	t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "tenant-1")
+	t.Setenv("AGENTO11Y_AUTH_TOKEN", "glc_tok")
 	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "")
 
 	probe := defaultProbeOTLP(context.Background())
@@ -150,9 +153,12 @@ func TestProbeOTLP(t *testing.T) {
 	}
 }
 
+// With no OTLP endpoint configured there is nothing to probe. isolateEnv
+// clears every spelling of the endpoint, including the preferred
+// AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT, so a configured host shell cannot
+// turn this into a live request.
 func TestProbeOTLP_NoEndpoint(t *testing.T) {
-	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	isolateEnv(t)
 	if got := defaultProbeOTLP(context.Background()); got != nil {
 		t.Fatalf("expected nil probe when no endpoint configured, got %+v", got)
 	}

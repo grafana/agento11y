@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/grafana/agento11y/go/proto/agento11y/wire"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
@@ -209,18 +211,48 @@ type AnalyticsSection struct {
 	Probe       *AnalyticsProbe `json:"probe,omitempty"`
 }
 
+// InstallState is the outcome of an agent's install probe. It is tri-state
+// because the probe can fail (an unreadable hook file, a CLI that errors):
+// reporting such an agent as not installed would state a fact doctor never
+// established.
+type InstallState string
+
+const (
+	InstallStateInstalled    InstallState = "installed"
+	InstallStateNotInstalled InstallState = "not_installed"
+	InstallStateUnknown      InstallState = "unknown"
+)
+
+// orUnknown maps any value outside the domain, including the zero value, to
+// unknown. A status built without the field must not read as a definite
+// "not installed", which is the false negative the tri-state removes.
+func (s InstallState) orUnknown() InstallState {
+	switch s {
+	case InstallStateInstalled, InstallStateNotInstalled, InstallStateUnknown:
+		return s
+	default:
+		return InstallStateUnknown
+	}
+}
+
+// MarshalJSON keeps the JSON contract inside the domain: the field is always
+// one of the three states, never an empty string.
+func (s InstallState) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(s.orUnknown()))
+}
+
 // AgentStatus reports one host agent's detection + install state. HookBased is
 // set for agents the agento11y binary never installs (cursor): their capture is
 // wired into the host's own hook settings, so install state isn't something
 // doctor can read.
 type AgentStatus struct {
-	Name      string `json:"name"`
-	OnPath    bool   `json:"on_path"`
-	Installed bool   `json:"installed"`
-	HookBased bool   `json:"hook_based,omitempty"`
-	Version   string `json:"version,omitempty"`
-	Note      string `json:"note,omitempty"`
-	Health    Health `json:"status"`
+	Name      string       `json:"name"`
+	OnPath    bool         `json:"on_path"`
+	Install   InstallState `json:"install_state"`
+	HookBased bool         `json:"hook_based,omitempty"`
+	Version   string       `json:"version,omitempty"`
+	Note      string       `json:"note,omitempty"`
+	Health    Health       `json:"status"`
 
 	// notInstalledLabel overrides the human "plugin not installed" wording for
 	// non-plugin agents (copilot). Human-only; not part of the JSON contract.
@@ -388,6 +420,15 @@ func collectConversations(osEnv, fileEnv map[string]string) ConversationsSection
 			missing = append(missing, "AGENTO11Y_AUTH_TOKEN")
 		}
 		sec.Messages = append(sec.Messages, "incomplete credentials; missing "+strings.Join(missing, ", "))
+	}
+	// A set endpoint still has to be a URL the exporter can build a request
+	// from. Without this the offline run calls a malformed endpoint healthy and
+	// only --probe, which needs the network, reports the problem.
+	if endpoint.set {
+		if _, err := wire.NormalizeGenerationExportURL(endpoint.value, resolveInsecure(osEnv, fileEnv)); err != nil {
+			sec.Health = HealthError
+			sec.Messages = append(sec.Messages, fmt.Sprintf("%s is not a usable endpoint: %v", endpoint.key, err))
+		}
 	}
 	for _, r := range []resolved{endpoint, tenant, token} {
 		if r.conflict {
@@ -619,11 +660,20 @@ func hookForwardReason(resolve func(suffix string, osEnv, fileEnv map[string]str
 	)
 }
 
+// resolveInsecure reads the INSECURE flag, which picks http over https for a
+// scheme-less endpoint. The offline endpoint check and the live probe resolve
+// it here so they cannot disagree about the same endpoint.
+func resolveInsecure(osEnv, fileEnv map[string]string) bool {
+	return envconfig.ParseBool(resolveFamily("INSECURE", osEnv, fileEnv).value)
+}
+
 func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string) {
-	if r.Conversations.configured() {
+	// An endpoint the offline check already rejected has nothing to probe:
+	// probing it would report the same fault a second and third time. Inside
+	// configured(), HealthError can only come from that check.
+	if r.Conversations.configured() && r.Conversations.Health != HealthError {
 		token := resolveFamily("AUTH_TOKEN", osEnv, fileEnv).value
-		insecure := envconfig.ParseBool(resolveFamily("INSECURE", osEnv, fileEnv).value)
-		res := probeConversationsFn(ctx, r.Conversations.Endpoint.Value, r.Conversations.TenantID.Value, token, insecure)
+		res := probeConversationsFn(ctx, r.Conversations.Endpoint.Value, r.Conversations.TenantID.Value, token, resolveInsecure(osEnv, fileEnv))
 		r.Conversations.Probe = res
 		switch {
 		case res.authFailure():
