@@ -1,6 +1,6 @@
 module github.com/grafana/agento11y/plugins/agento11y
 
-go 1.25.7
+go 1.26
 
 require (
 	github.com/charmbracelet/huh v1.0.0
@@ -11,7 +11,7 @@ require (
 	github.com/grafana/agento11y/go v0.15.1-0.20260731161227-97bfa653b7ae
 	github.com/pelletier/go-toml/v2 v2.4.0
 	github.com/stretchr/testify v1.11.1
-	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
+	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.43.0
