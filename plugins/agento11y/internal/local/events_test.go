@@ -108,37 +108,72 @@ func TestServer_Events_ClosesOnServerClose(t *testing.T) {
 	}
 }
 
-// TestServer_Events_BroadcastsEveryGenerationInBurst posts an export
-// with two generations and asserts both broadcast frames arrive on the
-// stream, so a burst export does not collapse into a single event on
-// the server side.
-func TestServer_Events_BroadcastsEveryGenerationInBurst(t *testing.T) {
-	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s)
-	defer ts.Close()
+// TestServer_Events_BroadcastsOnePerConversation posts batched exports and
+// asserts one frame per conversation the request wrote to: a five-record
+// batch for one conversation emits a single event, and a batch spanning
+// two conversations emits one event each. A per-generation event would
+// multiply the viewer's full-store refetches during an import.
+func TestServer_Events_BroadcastsOnePerConversation(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []changeEvent
+	}{
+		{
+			name: "five generations one conversation",
+			body: `{"generations":[
+				{"id":"gen-1","conversation_id":"conv-A"},
+				{"id":"gen-2","conversation_id":"conv-A"},
+				{"id":"gen-3","conversation_id":"conv-A"},
+				{"id":"gen-4","conversation_id":"conv-A"},
+				{"id":"gen-5","conversation_id":"conv-A"}
+			]}`,
+			want: []changeEvent{{ConversationID: "conv-A", GenerationID: "gen-5"}},
+		},
+		{
+			name: "batch spanning two conversations",
+			body: `{"generations":[
+				{"id":"gen-1","conversation_id":"session-1"},
+				{"id":"gen-2","conversation_id":"session-2"},
+				{"id":"gen-3","conversation_id":"session-1"}
+			]}`,
+			want: []changeEvent{
+				{ConversationID: "session-1", GenerationID: "gen-3"},
+				{ConversationID: "session-2", GenerationID: "gen-2"},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestServer(t)
+			ts := httptest.NewServer(s)
+			defer ts.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	stream := openEventStream(t, ctx, ts.URL)
-	defer stream.close()
-	require.NoError(t, stream.waitForComment(2*time.Second))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			stream := openEventStream(t, ctx, ts.URL)
+			defer stream.close()
+			require.NoError(t, stream.waitForComment(2*time.Second))
 
-	body := `{"generations":[
-		{"id":"gen-1","conversation_id":"conv-A"},
-		{"id":"gen-2","conversation_id":"conv-B"}
-	]}`
-	postResp, err := http.Post(ts.URL+"/api/v1/generations:export", "application/json", strings.NewReader(body))
-	require.NoError(t, err)
-	postResp.Body.Close()
+			postResp, err := http.Post(ts.URL+"/api/v1/generations:export", "application/json", strings.NewReader(tc.body))
+			require.NoError(t, err)
+			postResp.Body.Close()
 
-	first, err := stream.nextEvent(2 * time.Second)
-	require.NoError(t, err)
-	second, err := stream.nextEvent(2 * time.Second)
-	require.NoError(t, err)
+			var got []changeEvent
+			for range tc.want {
+				ev, err := stream.nextEvent(2 * time.Second)
+				require.NoError(t, err)
+				got = append(got, ev)
+			}
+			assert.ElementsMatch(t, tc.want, got)
 
-	got := []changeEvent{first, second}
-	assert.Contains(t, got, changeEvent{ConversationID: "conv-A", GenerationID: "gen-1"})
-	assert.Contains(t, got, changeEvent{ConversationID: "conv-B", GenerationID: "gen-2"})
+			// No further frame: the batch is one event per conversation, not
+			// one per generation.
+			if ev, err := stream.nextEvent(300 * time.Millisecond); err == nil {
+				t.Fatalf("unexpected extra event %+v", ev)
+			}
+		})
+	}
 }
 
 // TestServer_Events_HeartbeatComment exercises the ping branch of the

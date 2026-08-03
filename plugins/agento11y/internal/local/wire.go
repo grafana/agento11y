@@ -82,30 +82,23 @@ type storedSkill struct {
 	Source      string `json:"source,omitempty"`
 }
 
+// storedGeneration is a stored generation with everything the detail view
+// and search read. It embeds summaryGeneration, so the two projections
+// cannot drift on a shared field's JSON tag or Go type: encoding/json
+// inlines an untagged embedded struct, and Go promotes its methods.
 type storedGeneration struct {
-	ID                string             `json:"id,omitempty"`
-	ConversationID    string             `json:"conversation_id,omitempty"`
-	ConversationTitle string             `json:"conversation_title,omitempty"`
-	AgentName         string             `json:"agent_name,omitempty"`
-	Model             agento11y.ModelRef `json:"model,omitzero"`
-	ResponseModel     string             `json:"response_model,omitempty"`
-	Input             []storedMessage    `json:"input,omitempty"`
-	Output            []storedMessage    `json:"output,omitempty"`
-	Usage             storedUsage        `json:"usage,omitzero"`
-	StopReason        string             `json:"stop_reason,omitempty"`
-	StartedAt         time.Time          `json:"started_at,omitzero"`
-	CompletedAt       time.Time          `json:"completed_at,omitzero"`
-	Skills            []storedSkill      `json:"skills,omitempty"`
-	Metadata          map[string]any     `json:"metadata,omitempty"`
-	CallError         string             `json:"call_error,omitempty"`
-	// Tags carry the agent's per-session context (cwd, git.branch,
-	// entrypoint, …). ParentGenerationIDs links a subagent's generations
-	// to the generation that spawned them, so the viewer can reconstruct
-	// the subagent tree. Both ride along on the wire verbatim and are only
-	// decoded here.
-	Tags                map[string]string `json:"tags,omitempty"`
-	ParentGenerationIDs []string          `json:"parent_generation_ids,omitempty"`
-	ThinkingEnabled     bool              `json:"thinking_enabled,omitempty"`
+	summaryGeneration
+	ConversationID string          `json:"conversation_id,omitempty"`
+	Input          []storedMessage `json:"input,omitempty"`
+	Output         []storedMessage `json:"output,omitempty"`
+	StopReason     string          `json:"stop_reason,omitempty"`
+	Skills         []storedSkill   `json:"skills,omitempty"`
+	// ParentGenerationIDs links a subagent's generations to the generation
+	// that spawned them, so the viewer can reconstruct the subagent tree.
+	// Only the full projection decodes it. The Go side copies the values to
+	// the detail view without reading them.
+	ParentGenerationIDs []string `json:"parent_generation_ids,omitempty"`
+	ThinkingEnabled     bool     `json:"thinking_enabled,omitempty"`
 }
 
 // skillViews returns the generation's skills as display-ready views,
@@ -140,7 +133,47 @@ func (g storedGeneration) skillViews() []SkillView {
 	return out
 }
 
-func (g storedGeneration) title() string {
+// summaryRecord is one JSONL line decoded down to the fields the
+// conversation list and the token chart read. It exists so a list or
+// metrics request never materialises the stored input and output message
+// trees: encoding/json skips the fields this struct omits, and a stored
+// tree of a few megabytes then costs nothing beyond the line scan.
+type summaryRecord struct {
+	ReceivedAt     string            `json:"received_at"`
+	GenerationID   string            `json:"generation_id"`
+	ConversationID string            `json:"conversation_id"`
+	Generation     summaryGeneration `json:"generation"`
+}
+
+func (r summaryRecord) generationID() string {
+	if id := strings.TrimSpace(r.GenerationID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(r.Generation.ID)
+}
+
+// summaryGeneration is the stored generation projected onto the fields the
+// list and the token chart read. storedGeneration embeds it, so every
+// field here is shared with the full decode by construction. Tags carry
+// the agent's per-session context (cwd, git.branch, entrypoint, …).
+type summaryGeneration struct {
+	ID                string             `json:"id,omitempty"`
+	ConversationTitle string             `json:"conversation_title,omitempty"`
+	AgentName         string             `json:"agent_name,omitempty"`
+	Model             agento11y.ModelRef `json:"model,omitzero"`
+	ResponseModel     string             `json:"response_model,omitempty"`
+	Usage             storedUsage        `json:"usage,omitzero"`
+	StartedAt         time.Time          `json:"started_at,omitzero"`
+	CompletedAt       time.Time          `json:"completed_at,omitzero"`
+	Metadata          map[string]any     `json:"metadata,omitempty"`
+	CallError         string             `json:"call_error,omitempty"`
+	Tags              map[string]string  `json:"tags,omitempty"`
+}
+
+// title is the conversation title a generation carries: the explicit field
+// first, then the metadata key the SDK writes. storedGeneration promotes
+// this method, so the list and the detail view read the same rule.
+func (g summaryGeneration) title() string {
 	if strings.TrimSpace(g.ConversationTitle) != "" {
 		return g.ConversationTitle
 	}
@@ -153,7 +186,9 @@ func (g storedGeneration) title() string {
 	return ""
 }
 
-func (g storedGeneration) modelName() string {
+// modelName prefers the model the provider answered with over the model the
+// request asked for.
+func (g summaryGeneration) modelName() string {
 	if g.ResponseModel != "" {
 		return g.ResponseModel
 	}

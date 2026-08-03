@@ -4,10 +4,10 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -107,11 +107,80 @@ type ConversationDetail struct {
 	Generations []GenerationView `json:"generations"`
 }
 
-// ListConversations walks the conversations directory and produces one
-// ConversationSummary per file, sorted newest-first by last_activity.
-// A missing directory returns an empty slice (first-launch case).
-// limit ≤ 0 means unbounded.
-func (s *Storage) ListConversations(limit int) ([]ConversationSummary, error) {
+// ConversationListOptions bounds one conversation-list request.
+//
+// The page is cut before any file is decoded: entries are ordered by file
+// modification time (newest first) and only the requested page is
+// summarised, so the cost of a request follows Limit rather than the size
+// of the store.
+type ConversationListOptions struct {
+	// Limit caps how many conversations are summarised and returned.
+	// ≤ 0 means unbounded.
+	Limit int
+	// Since drops conversations whose last activity predates it. The bound
+	// is inclusive, so a conversation whose last activity is exactly Since
+	// is kept. It applies to the file modification time, which for these
+	// append-only files is the last activity. Zero means no lower bound.
+	Since time.Time
+}
+
+// ListConversations produces one ConversationSummary per conversation
+// file, newest-first by file modification time with ties broken by
+// conversation id, so paging is deterministic. total counts the
+// conversation files in the store before Limit and Since: a caller holding
+// one page still knows whether the store is empty. A missing directory
+// returns an empty slice and a zero total (first-launch case).
+//
+// The limit can apply before the decode only because the order comes from
+// the file modification time rather than the decoded last_activity. For an
+// append-only JSONL file the two agree. A copy or restore that rewrites
+// modification times can reorder the list until the next append.
+func (s *Storage) ListConversations(opts ConversationListOptions) (page []ConversationSummary, total int, err error) {
+	files, err := s.conversationFiles()
+	if err != nil {
+		return nil, 0, err
+	}
+	capacity := len(files)
+	if opts.Limit > 0 && opts.Limit < capacity {
+		capacity = opts.Limit
+	}
+	out := make([]ConversationSummary, 0, capacity)
+	var skipped int
+	defer func() { s.logSkipped("list conversations", skipped) }()
+	for _, f := range files {
+		// Files are newest-first, so the first one below the bound ends
+		// the walk without opening it.
+		if !opts.Since.IsZero() && f.modTime.Before(opts.Since) {
+			break
+		}
+		sum, ok, n, err := summariseConversationFile(f.path)
+		skipped += n
+		if err != nil {
+			return nil, 0, err
+		}
+		if !ok {
+			continue // empty or all-invalid file
+		}
+		out = append(out, sum)
+		if opts.Limit > 0 && len(out) == opts.Limit {
+			break
+		}
+	}
+	return out, len(files), nil
+}
+
+// conversationFile is one conversation JSONL file with the modification
+// time the list and metrics endpoints order and filter on.
+type conversationFile struct {
+	id      string
+	path    string
+	modTime time.Time
+}
+
+// conversationFiles lists the conversation files newest-first by
+// modification time, breaking ties by id so a page boundary is stable
+// across requests. A missing directory yields no files and no error.
+func (s *Storage) conversationFiles() ([]conversationFile, error) {
 	dir := filepath.Join(s.dir, ConversationsDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -120,39 +189,46 @@ func (s *Storage) ListConversations(limit int) ([]ConversationSummary, error) {
 		}
 		return nil, err
 	}
-	out := make([]ConversationSummary, 0, len(entries))
+	out := make([]conversationFile, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
 			continue
 		}
-		sum, ok, err := summariseConversationFile(filepath.Join(dir, e.Name()))
+		info, err := e.Info()
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue // removed between ReadDir and Info
+			}
 			return nil, err
 		}
-		if !ok {
-			continue // empty or all-invalid file
-		}
-		out = append(out, sum)
+		out = append(out, conversationFile{
+			id:      strings.TrimSuffix(e.Name(), ".jsonl"),
+			path:    filepath.Join(dir, e.Name()),
+			modTime: info.ModTime(),
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].LastActivity.After(out[j].LastActivity)
+		if !out[i].modTime.Equal(out[j].modTime) {
+			return out[i].modTime.After(out[j].modTime)
+		}
+		return out[i].id < out[j].id
 	})
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
 	return out, nil
 }
 
 // summariseConversationFile reads one per-conversation JSONL file and
-// returns its aggregated summary. Returns (_, false, nil) when the file
-// has no decodable records.
-func summariseConversationFile(path string) (ConversationSummary, bool, error) {
+// returns its aggregated summary plus the number of lines it could not
+// decode. It decodes the summary projection only, so a conversation holding
+// megabytes of messages costs the line scan and nothing more. ok is false
+// when the file has no decodable records.
+func summariseConversationFile(path string) (ConversationSummary, bool, int, error) {
 	agents := map[string]struct{}{}
 	models := map[string]struct{}{}
 	var sum ConversationSummary
 	var hasError, seen bool
 
-	err := scanLatestGenerationRecords(path, func(r generationRecord, gen storedGeneration) {
+	skipped, err := scanLatestSummaryRecords(path, func(rec summaryRecord) {
+		r, gen := rec, rec.Generation
 		seen = true
 		if sum.ID == "" {
 			sum.ID = r.ConversationID
@@ -208,10 +284,10 @@ func summariseConversationFile(path string) (ConversationSummary, bool, error) {
 		}
 	})
 	if err != nil {
-		return ConversationSummary{}, false, err
+		return ConversationSummary{}, false, skipped, err
 	}
 	if !seen {
-		return ConversationSummary{}, false, nil
+		return ConversationSummary{}, false, skipped, nil
 	}
 	sum.Agents = sortedKeys(agents)
 	sum.Models = sortedKeys(models)
@@ -219,7 +295,7 @@ func summariseConversationFile(path string) (ConversationSummary, bool, error) {
 	if hasError {
 		sum.Status = "err"
 	}
-	return sum, true, nil
+	return sum, true, skipped, nil
 }
 
 // ConversationDetail returns the chronological generation list for one
@@ -231,7 +307,7 @@ func (s *Storage) ConversationDetail(id string) (*ConversationDetail, error) {
 	}
 	path := filepath.Join(s.dir, ConversationsDir, id+".jsonl")
 	out := &ConversationDetail{ID: id}
-	err := scanLatestGenerationRecords(path, func(_ generationRecord, gen storedGeneration) {
+	skipped, err := scanLatestGenerationRecords(path, func(_ generationRecord, gen storedGeneration) {
 		if out.Title == "" && gen.title() != "" {
 			out.Title = gen.title()
 		}
@@ -263,6 +339,7 @@ func (s *Storage) ConversationDetail(id string) (*ConversationDetail, error) {
 		view.Skills = gen.skillViews()
 		out.Generations = append(out.Generations, view)
 	})
+	s.logSkipped("conversation "+id, skipped)
 	if err != nil {
 		return nil, err
 	}
@@ -318,48 +395,189 @@ type TokenUsagePoint struct {
 	TokenBuckets
 }
 
-// TokenUsagePoints walks every conversation file and returns one point
-// per generation that recorded any token usage, sorted oldest-first.
+// TokenUsageOptions bounds one token-metrics request.
+type TokenUsageOptions struct {
+	// Since drops generations older than it, and drops whole conversation
+	// files whose modification time is below it before any decode. Zero
+	// means no lower bound.
+	Since time.Time
+	// Interval is the bucket width. Zero asks for a derived interval that
+	// keeps the response under maxTokenUsageBuckets buckets.
+	Interval time.Duration
+}
+
+// maxTokenUsageBuckets caps how many buckets a derived interval produces.
+// The viewer draws at most CHART_BUCKET_MAX bars, so this is a safety
+// bound on the response rather than a display choice.
+const maxTokenUsageBuckets = 500
+
+// tokenUsageIntervals is the ladder a derived interval is picked from.
+// Every step divides the next, so a client that buckets on one step can
+// fold points aggregated on a finer step without splitting a bucket
+// across two bars. This list and BUCKET_INTERVALS_MS in app.jsx must stay
+// equal; TestBucketLaddersAgree checks that.
+var tokenUsageIntervals = []time.Duration{
+	10 * time.Second,
+	30 * time.Second,
+	time.Minute,
+	5 * time.Minute,
+	15 * time.Minute,
+	30 * time.Minute,
+	time.Hour,
+	2 * time.Hour,
+	4 * time.Hour,
+	12 * time.Hour,
+	24 * time.Hour,
+	7 * 24 * time.Hour,
+}
+
+// TokenUsagePoints returns token usage aggregated per interval bucket and
+// model, oldest-first, plus the interval used. Empty buckets are omitted,
+// so the response holds at most one point per model and provider per
+// non-empty bucket.
+//
 // A missing conversations dir yields no points (first-launch case).
-func (s *Storage) TokenUsagePoints() ([]TokenUsagePoint, error) {
-	dir := filepath.Join(s.dir, ConversationsDir)
-	entries, err := os.ReadDir(dir)
+func (s *Storage) TokenUsagePoints(opts TokenUsageOptions) ([]TokenUsagePoint, time.Duration, error) {
+	files, err := s.conversationFiles()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
+		return nil, 0, err
 	}
-	var out []TokenUsagePoint
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
+	var raw []TokenUsagePoint
+	var skipped int
+	defer func() { s.logSkipped("token metrics", skipped) }()
+	for _, f := range files {
+		// Files are newest-first, so the first one below the bound ends
+		// the walk without opening it.
+		if !opts.Since.IsZero() && f.modTime.Before(opts.Since) {
+			break
+		}
+		n, err := scanLatestSummaryRecords(f.path, func(rec summaryRecord) {
+			p, ok := tokenUsagePoint(rec)
+			if !ok {
+				return
+			}
+			if !opts.Since.IsZero() && p.Timestamp.Before(opts.Since) {
+				return
+			}
+			raw = append(raw, p)
+		})
+		skipped += n
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	interval := opts.Interval
+	if interval <= 0 {
+		interval = deriveTokenUsageInterval(raw, opts.Since)
+	}
+	return bucketTokenUsagePoints(raw, interval), interval, nil
+}
+
+// deriveTokenUsageInterval picks the smallest ladder step that keeps the
+// requested range under maxTokenUsageBuckets buckets.
+func deriveTokenUsageInterval(points []TokenUsagePoint, since time.Time) time.Duration {
+	var first, last time.Time
+	for _, p := range points {
+		if first.IsZero() || p.Timestamp.Before(first) {
+			first = p.Timestamp
+		}
+		if p.Timestamp.After(last) {
+			last = p.Timestamp
+		}
+	}
+	if !since.IsZero() && since.After(first) {
+		first = since
+	}
+	span := last.Sub(first)
+	for _, step := range tokenUsageIntervals {
+		if span/step <= maxTokenUsageBuckets {
+			return step
+		}
+	}
+	return tokenUsageIntervals[len(tokenUsageIntervals)-1]
+}
+
+// bucketTokenUsagePoints sums points into (bucket start, model, provider)
+// groups, ordered by timestamp then model then provider so the chart reads
+// them in one pass.
+func bucketTokenUsagePoints(points []TokenUsagePoint, interval time.Duration) []TokenUsagePoint {
+	type bucketKey struct {
+		start    int64
+		model    string
+		provider string
+	}
+	indexByKey := map[bucketKey]int{}
+	// A bucket holds one point per model and provider, so the output is
+	// bounded by the bucket count however many generations came in.
+	out := make([]TokenUsagePoint, 0, min(len(points), 4*maxTokenUsageBuckets))
+	for _, p := range points {
+		start := intervalStart(p.Timestamp, interval)
+		key := bucketKey{start: start.UnixNano(), model: p.Model, provider: p.Provider}
+		if idx, ok := indexByKey[key]; ok {
+			out[idx].TokenBuckets = out[idx].TokenBuckets.plus(p.TokenBuckets)
 			continue
 		}
-		err := scanLatestGenerationRecords(filepath.Join(dir, e.Name()), func(r generationRecord, gen storedGeneration) {
-			if p, ok := tokenUsagePoint(r, gen); ok {
-				out = append(out, p)
-			}
+		indexByKey[key] = len(out)
+		out = append(out, TokenUsagePoint{
+			Timestamp:    start,
+			Model:        p.Model,
+			Provider:     p.Provider,
+			TokenBuckets: p.TokenBuckets,
 		})
-		if err != nil {
-			return nil, err
-		}
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].Timestamp.Before(out[j].Timestamp)
+		if !out[i].Timestamp.Equal(out[j].Timestamp) {
+			return out[i].Timestamp.Before(out[j].Timestamp)
+		}
+		if out[i].Model != out[j].Model {
+			return out[i].Model < out[j].Model
+		}
+		return out[i].Provider < out[j].Provider
 	})
-	return out, nil
+	return out
+}
+
+// intervalStart floors t onto the interval grid measured from the Unix
+// epoch, so a bucket boundary is the same instant for every client that
+// divides time the same way. time.Time.Truncate cannot stand in: it
+// measures from year 1, which shifts the 7-day step by three days against
+// a client flooring from the epoch.
+//
+// t must be within the range UnixNano covers. tokenUsagePoint drops any
+// generation whose timestamp falls outside that range before reaching here.
+func intervalStart(t time.Time, interval time.Duration) time.Time {
+	if interval <= 0 {
+		return t.UTC()
+	}
+	nanos := t.UnixNano()
+	step := int64(interval)
+	floored := nanos / step
+	if nanos < 0 && nanos%step != 0 {
+		floored--
+	}
+	return time.Unix(0, floored*step).UTC()
+}
+
+// nanosRepresentable reports whether t is inside the range UnixNano
+// covers, roughly the years 1678 to 2262. Outside it UnixNano wraps, and
+// bucketing would move the point to a plausible-looking wrong date instead
+// of an obviously wrong one. time.Parse accepts years up to 9999.
+func nanosRepresentable(t time.Time) bool {
+	return !t.Before(time.Unix(0, math.MinInt64)) && !t.After(time.Unix(0, math.MaxInt64))
 }
 
 // tokenUsagePoint builds a TokenUsagePoint from one record. ok is false
-// when the generation recorded no tokens or has no usable timestamp, so
-// the caller can skip it rather than plot a zero-height bar at the epoch.
-func tokenUsagePoint(r generationRecord, gen storedGeneration) (TokenUsagePoint, bool) {
+// when the generation recorded no tokens, has no usable timestamp, or
+// carries a timestamp bucketing cannot place, so the caller can skip it
+// rather than plot a zero-height bar at the epoch.
+func tokenUsagePoint(rec summaryRecord) (TokenUsagePoint, bool) {
+	gen := rec.Generation
 	buckets := disjointTokenUsage(gen.Usage.toSDK(), gen.Model.Provider)
 	if buckets == (TokenBuckets{}) {
 		return TokenUsagePoint{}, false
 	}
-	when := generationTime(gen, r)
-	if when.IsZero() {
+	when := generationTime(gen, rec.ReceivedAt)
+	if when.IsZero() || !nanosRepresentable(when) {
 		return TokenUsagePoint{}, false
 	}
 	return TokenUsagePoint{
@@ -372,14 +590,14 @@ func tokenUsagePoint(r generationRecord, gen storedGeneration) (TokenUsagePoint,
 
 // generationTime is the wall-clock moment a generation ran, preferring
 // started_at, then completed_at, then the receiver's arrival time.
-func generationTime(gen storedGeneration, r generationRecord) time.Time {
+func generationTime(gen summaryGeneration, receivedAt string) time.Time {
 	if !gen.StartedAt.IsZero() {
 		return gen.StartedAt
 	}
 	if !gen.CompletedAt.IsZero() {
 		return gen.CompletedAt
 	}
-	when, _ := time.Parse(time.RFC3339Nano, r.ReceivedAt)
+	when, _ := time.Parse(time.RFC3339Nano, receivedAt)
 	return when
 }
 
@@ -493,38 +711,65 @@ func threadMessages(input, output []agento11y.Message) []agento11y.Message {
 	return messages
 }
 
-// scanGenerationRecords walks one per-conversation JSONL file calling visit
-// for every decodable record. A missing file is not an error; lines that
-// fail to decode (truncated mid-append, future-schema, …) are skipped.
-func scanGenerationRecords(path string, visit func(generationRecord, storedGeneration)) error {
+// scanJSONL walks one per-conversation JSONL file, calling decode on every
+// non-empty line and visit on each value decode accepts. A missing file is
+// not an error. It returns how many lines decode rejected (a tail truncated
+// mid-append is the usual reason), so the caller can report a file the
+// viewer is only partly reading.
+func scanJSONL[T any](path string, decode func([]byte) (T, bool), visit func(T)) (skipped int, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return 0, nil
 		}
-		return err
+		return 0, err
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
 	// JSONL lines can hold full transcripts; bump the buffer well above
 	// the default 64 KiB.
-	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
+	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
 			continue
 		}
-		var rec generationRecord
-		if err := json.Unmarshal(line, &rec); err != nil {
+		value, ok := decode(line)
+		if !ok {
+			skipped++
 			continue
 		}
-		var gen storedGeneration
-		if err := json.Unmarshal(rec.Generation, &gen); err != nil {
-			continue
-		}
-		visit(rec, gen)
+		visit(value)
 	}
-	return sc.Err()
+	return skipped, sc.Err()
+}
+
+// scanLatestJSONL is scanJSONL keeping only the last line per key, so a
+// re-exported generation replaces the earlier copy of itself. Values whose
+// key is empty are all kept, in file order.
+func scanLatestJSONL[T any](path string, decode func([]byte) (T, bool), keyOf func(T) string, visit func(T)) (int, error) {
+	indexByKey := map[string]int{}
+	var values []T
+	skipped, err := scanJSONL(path, decode, func(value T) {
+		key := keyOf(value)
+		if key == "" {
+			values = append(values, value)
+			return
+		}
+		if idx, ok := indexByKey[key]; ok {
+			values[idx] = value
+			return
+		}
+		indexByKey[key] = len(values)
+		values = append(values, value)
+	})
+	if err != nil {
+		return skipped, err
+	}
+	for _, value := range values {
+		visit(value)
+	}
+	return skipped, nil
 }
 
 type scannedGenerationRecord struct {
@@ -532,34 +777,64 @@ type scannedGenerationRecord struct {
 	gen    storedGeneration
 }
 
-func scanLatestGenerationRecords(path string, visit func(generationRecord, storedGeneration)) error {
-	indexByID := map[string]int{}
-	var records []scannedGenerationRecord
-	lineNo := 0
-	err := scanGenerationRecords(path, func(r generationRecord, gen storedGeneration) {
-		lineNo++
-		id := strings.TrimSpace(r.GenerationID)
-		if id == "" {
-			id = strings.TrimSpace(gen.ID)
-		}
-		if id == "" {
-			id = "\x00line:" + strconv.Itoa(lineNo)
-		}
-		scanned := scannedGenerationRecord{record: r, gen: gen}
-		if idx, ok := indexByID[id]; ok {
-			records[idx] = scanned
-			return
-		}
-		indexByID[id] = len(records)
-		records = append(records, scanned)
-	})
-	if err != nil {
-		return err
+// decodeGenerationRecord decodes one JSONL line into the full stored
+// generation, including the input and output message trees. Only the
+// detail view and search need those.
+//
+// A line whose generation the full struct rejects falls back to the summary
+// projection, so the detail view and the list accept the same lines: a
+// record with an input tree this build cannot read still shows its header,
+// tokens and timings rather than disappearing from a conversation the list
+// counted.
+func decodeGenerationRecord(line []byte) (scannedGenerationRecord, bool) {
+	var rec generationRecord
+	if err := json.Unmarshal(line, &rec); err != nil {
+		return scannedGenerationRecord{}, false
 	}
-	for _, r := range records {
+	var gen storedGeneration
+	if err := json.Unmarshal(rec.Generation, &gen); err != nil {
+		var summary summaryGeneration
+		if err := json.Unmarshal(rec.Generation, &summary); err != nil {
+			return scannedGenerationRecord{}, false
+		}
+		gen = storedGeneration{summaryGeneration: summary, ConversationID: rec.ConversationID}
+	}
+	return scannedGenerationRecord{record: rec, gen: gen}, true
+}
+
+// scanLatestGenerationRecords walks one per-conversation JSONL file calling
+// visit for the newest copy of every decodable record. The detail view and
+// search need the full stored generation, message trees included.
+func scanLatestGenerationRecords(path string, visit func(generationRecord, storedGeneration)) (int, error) {
+	return scanLatestJSONL(path, decodeGenerationRecord, func(r scannedGenerationRecord) string {
+		return r.generationID()
+	}, func(r scannedGenerationRecord) {
 		visit(r.record, r.gen)
+	})
+}
+
+func (r scannedGenerationRecord) generationID() string {
+	if id := strings.TrimSpace(r.record.GenerationID); id != "" {
+		return id
 	}
-	return nil
+	return strings.TrimSpace(r.gen.ID)
+}
+
+// scanLatestSummaryRecords walks one per-conversation JSONL file decoding
+// only the summary projection, no input or output message trees, and
+// keeping the last record per generation id.
+func scanLatestSummaryRecords(path string, visit func(summaryRecord)) (int, error) {
+	return scanLatestJSONL(path, decodeSummaryRecord, func(r summaryRecord) string {
+		return r.generationID()
+	}, visit)
+}
+
+func decodeSummaryRecord(line []byte) (summaryRecord, bool) {
+	var rec summaryRecord
+	if err := json.Unmarshal(line, &rec); err != nil {
+		return summaryRecord{}, false
+	}
+	return rec, true
 }
 
 // extractTools walks the assistant's output messages and collects the

@@ -70,7 +70,7 @@ func (l *forwardLoader) evaluateCloudHook(ctx context.Context, cfg forwardConfig
 	req.Header.Set("Content-Type", wire.ContentTypeJSON)
 	// The marker is what stops a daemon whose ENDPOINT was hand-set to its own
 	// address from chaining the relayed copy again.
-	req.Header.Set(forwardMarkerHeader, "1")
+	req.Header.Set(ForwardMarkerHeader, "1")
 	req.Header.Set(hookTimeoutHeader, strconv.FormatInt(timeout.Milliseconds(), 10))
 	for k, v := range cfg.hookHeaders {
 		if v != "" {

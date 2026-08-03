@@ -2,6 +2,12 @@ package local
 
 import (
 	"encoding/json"
+	"log"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -105,7 +111,15 @@ func TestListConversations_Aggregates(t *testing.T) {
 	// list should still surface it via the received_at fallback.
 	writeGen(t, s, "conv-C", "g5", agento11y.Generation{AgentName: "vistra"}, "2026-05-21T11:10:00Z")
 
-	got, err := s.ListConversations(0)
+	// The order comes from the file modification time, and on Linux the three
+	// writes above land in one filesystem timestamp tick, which leaves them
+	// tied. Pin each file to its last received_at so the expected order is the
+	// one the records describe.
+	setConversationModTime(t, s, "conv-A", mustParse(t, "2026-05-21T10:00:13Z"))
+	setConversationModTime(t, s, "conv-B", mustParse(t, "2026-05-21T11:00:01Z"))
+	setConversationModTime(t, s, "conv-C", mustParse(t, "2026-05-21T11:10:00Z"))
+
+	got, _, err := s.ListConversations(ConversationListOptions{})
 	if err != nil {
 		t.Fatalf("ListConversations: %v", err)
 	}
@@ -185,7 +199,7 @@ func TestConversationQueriesUseLatestGenerationRecord(t *testing.T) {
 		Usage:       agento11y.TokenUsage{InputTokens: 12, OutputTokens: 8, TotalTokens: 20},
 	}, "2026-05-21T10:00:02Z")
 
-	summaries, err := s.ListConversations(0)
+	summaries, _, err := s.ListConversations(ConversationListOptions{})
 	require.NoError(t, err)
 	require.Len(t, summaries, 1)
 	assert.Equal(t, 1, summaries[0].Calls)
@@ -211,19 +225,25 @@ func TestListConversations_LimitAndEmpty(t *testing.T) {
 	}{
 		{name: "missing dir returns empty", seed: 0, limit: 0, wantLen: 0},
 		{name: "limit caps result, newest first", seed: 5, limit: 2, wantLen: 2, wantIDs: []string{"conv-E", "conv-D"}},
+		{name: "unbounded returns every conversation", seed: 5, limit: 0, wantLen: 5, wantIDs: []string{"conv-E", "conv-D", "conv-C", "conv-B", "conv-A"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStorage(t)
 			for i := 0; i < tc.seed; i++ {
-				writeGen(t, s, "conv-"+string(rune('A'+i)), "g"+string(rune('0'+i)), agento11y.Generation{
+				id := "conv-" + string(rune('A'+i))
+				writeGen(t, s, id, "g"+string(rune('0'+i)), agento11y.Generation{
 					AgentName:   "pi",
 					Model:       agento11y.ModelRef{Name: "m"},
 					StartedAt:   mustParse(t, "2026-05-21T10:00:00Z").Add(time.Duration(i) * time.Minute),
 					CompletedAt: mustParse(t, "2026-05-21T10:00:01Z").Add(time.Duration(i) * time.Minute),
 				}, "2026-05-21T10:00:01Z")
+				// One tick holds every write on Linux, so the modification
+				// times tie and the newest-first order falls back to the id.
+				// Pin them a minute apart, matching the seeded activity.
+				setConversationModTime(t, s, id, mustParse(t, "2026-05-21T10:00:01Z").Add(time.Duration(i)*time.Minute))
 			}
-			got, err := s.ListConversations(tc.limit)
+			got, _, err := s.ListConversations(ConversationListOptions{Limit: tc.limit})
 			if err != nil {
 				t.Fatalf("err = %v", err)
 			}
@@ -236,6 +256,166 @@ func TestListConversations_LimitAndEmpty(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestListConversations_BoundedPage proves the page is cut before any
+// conversation file is decoded: entries are ordered by modification time,
+// the limit ends the walk, and ?since= drops older files. Files past the
+// page are made unreadable, so a request that would open one fails and a
+// bounded request cannot pass by accident.
+func TestListConversations_BoundedPage(t *testing.T) {
+	modTimes := map[string]string{
+		"conv-a": "2026-08-03T12:00:00Z",
+		"conv-b": "2026-08-03T11:00:00Z",
+		"conv-c": "2026-08-03T10:00:00Z",
+	}
+	oldestFirst := []string{"conv-c", "conv-b", "conv-a"}
+
+	cases := []struct {
+		name string
+		opts ConversationListOptions
+		// blockFrom makes the files older than position blockFrom (in the
+		// returned newest-first order) unreadable. -1 blocks nothing.
+		blockFrom int
+		wantIDs   []string
+		wantErr   bool
+	}{
+		{name: "newest modification time first", blockFrom: -1, wantIDs: []string{"conv-a", "conv-b", "conv-c"}},
+		{name: "limit stops before the older files", opts: ConversationListOptions{Limit: 2}, blockFrom: 2, wantIDs: []string{"conv-a", "conv-b"}},
+		{name: "since excludes older files before decoding", opts: ConversationListOptions{Since: mustParse(t, "2026-08-03T11:30:00Z")}, blockFrom: 1, wantIDs: []string{"conv-a"}},
+		{name: "since bound is inclusive", opts: ConversationListOptions{Since: mustParse(t, "2026-08-03T11:00:00Z")}, blockFrom: 2, wantIDs: []string{"conv-a", "conv-b"}},
+		{name: "unbounded request reads every file", blockFrom: 2, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.blockFrom >= 0 {
+				requireUnreadableFilesSupported(t)
+			}
+			s := newStorage(t)
+			// Write oldest-first so the modification times below are the
+			// only thing the order can come from.
+			for _, id := range oldestFirst {
+				writeGen(t, s, id, "g-"+id, agento11y.Generation{
+					AgentName:   "pi",
+					Model:       agento11y.ModelRef{Name: "m"},
+					StartedAt:   mustParse(t, modTimes[id]),
+					CompletedAt: mustParse(t, modTimes[id]),
+					Usage:       agento11y.TokenUsage{InputTokens: 1, OutputTokens: 1},
+				}, modTimes[id])
+				setConversationModTime(t, s, id, mustParse(t, modTimes[id]))
+			}
+			if tc.blockFrom >= 0 {
+				for _, id := range []string{"conv-a", "conv-b", "conv-c"}[tc.blockFrom:] {
+					blockConversationFile(t, s, id)
+				}
+			}
+
+			got, _, err := s.ListConversations(tc.opts)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			ids := make([]string, 0, len(got))
+			for _, c := range got {
+				ids = append(ids, c.ID)
+			}
+			assert.Equal(t, tc.wantIDs, ids)
+		})
+	}
+}
+
+// TestListConversations_SkipsMessageTrees proves the summary decoder never
+// materialises the stored input and output trees. The second case stores
+// trees that are not message-shaped at all: the summary reads them, and so
+// does the detail view, which falls back to the same projection and shows
+// the turn without messages instead of dropping it.
+func TestListConversations_SkipsMessageTrees(t *testing.T) {
+	big := strings.Repeat("x", 1<<20)
+	cases := []struct {
+		name         string
+		inputOutput  string
+		wantMessages bool
+	}{
+		{
+			name:         "one megabyte message trees",
+			inputOutput:  `"input":[{"role":"user","parts":[{"text":"` + big + `"}]}],"output":[{"role":"assistant","parts":[{"text":"` + big + `"}]}]`,
+			wantMessages: true,
+		},
+		{
+			name:        "trees that are not message shaped",
+			inputOutput: `"input":42,"output":"not-a-message"`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStorage(t)
+			gen := `{"id":"g1","conversation_id":"conv-big","conversation_title":"big session",` +
+				`"agent_name":"pi","model":{"provider":"anthropic","name":"claude-sonnet-4"},` +
+				`"usage":{"input_tokens":10,"output_tokens":5},` +
+				`"started_at":"2026-08-03T10:00:00Z","completed_at":"2026-08-03T10:00:02Z",` +
+				`"tags":{"cwd":"/repo"},` + tc.inputOutput + `}`
+			require.NoError(t, s.AppendGeneration(generationRecord{
+				ReceivedAt:     "2026-08-03T10:00:02Z",
+				GenerationID:   "g1",
+				ConversationID: "conv-big",
+				Generation:     json.RawMessage(gen),
+			}))
+
+			got, _, err := s.ListConversations(ConversationListOptions{})
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Equal(t, "conv-big", got[0].ID)
+			assert.Equal(t, "big session", got[0].Title)
+			assert.Equal(t, 1, got[0].Calls)
+			assert.Equal(t, int64(15), got[0].TotalTokens)
+			assert.Equal(t, []string{"claude-sonnet-4"}, got[0].Models)
+			assert.Equal(t, "/repo", got[0].Workspace)
+
+			// The detail view accepts every line the list counted, so a row
+			// in the list always opens.
+			detail, err := s.ConversationDetail("conv-big")
+			require.NoError(t, err)
+			require.NotNil(t, detail)
+			require.Len(t, detail.Generations, 1)
+			assert.Equal(t, int64(15), detail.Generations[0].TotalTokens)
+			if tc.wantMessages {
+				assert.NotEmpty(t, detail.Generations[0].Messages)
+			} else {
+				assert.Empty(t, detail.Generations[0].Messages, "an unreadable tree contributes no messages")
+			}
+		})
+	}
+}
+
+// setConversationModTime pins one conversation file's modification time.
+// The list and metrics endpoints order and filter on that timestamp.
+func setConversationModTime(t *testing.T, s *Storage, convID string, when time.Time) {
+	t.Helper()
+	path := filepath.Join(s.Dir(), ConversationsDir, convID+".jsonl")
+	require.NoError(t, os.Chtimes(path, when, when))
+}
+
+// blockConversationFile makes one conversation file unreadable, so any
+// request that opens it fails. Tests use it to prove a bounded request
+// never touches the files past its page.
+func blockConversationFile(t *testing.T, s *Storage, convID string) {
+	t.Helper()
+	path := filepath.Join(s.Dir(), ConversationsDir, convID+".jsonl")
+	require.NoError(t, os.Chmod(path, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+}
+
+// requireUnreadableFilesSupported skips tests that rely on a file being
+// unreadable, which neither Windows ACLs nor a root user honour.
+func requireUnreadableFilesSupported(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("posix-only permission check")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions")
 	}
 }
 
@@ -254,7 +434,7 @@ func TestListAndDetailUseCacheAwareTotalFallback(t *testing.T) {
 		},
 	}, "2026-05-21T10:00:02Z")
 
-	summaries, err := s.ListConversations(0)
+	summaries, _, err := s.ListConversations(ConversationListOptions{})
 	require.NoError(t, err)
 	require.Len(t, summaries, 1)
 	assert.Equal(t, int64(365365), summaries[0].TotalTokens)
@@ -719,7 +899,7 @@ func TestDisjointTokenUsage(t *testing.T) {
 // TestTokenUsagePoints seeds generations across conversations and checks
 // the flattened, time-sorted points: provider-aware buckets, model and
 // provider tagging, the received_at timestamp fallback, and that
-// zero-token generations are dropped.
+// zero-token generations and timestamps bucketing cannot place are dropped.
 func TestTokenUsagePoints(t *testing.T) {
 	s := newStorage(t)
 
@@ -750,9 +930,20 @@ func TestTokenUsagePoints(t *testing.T) {
 		StartedAt: mustParse(t, "2026-05-21T08:00:00Z"),
 	}, "2026-05-21T08:00:00Z")
 
-	points, err := s.TokenUsagePoints()
+	// Past the year UnixNano covers: bucketing would wrap this into 1715 and
+	// add phantom tokens to a real bar, so the point is dropped.
+	writeGen(t, s, "conv-E", "g5", agento11y.Generation{
+		Model:       agento11y.ModelRef{Provider: "anthropic", Name: "claude-opus-4-7"},
+		StartedAt:   mustParse(t, "2300-01-01T00:00:00Z"),
+		CompletedAt: mustParse(t, "2300-01-01T00:00:01Z"),
+		Usage:       agento11y.TokenUsage{InputTokens: 7, OutputTokens: 3},
+	}, "2300-01-01T00:00:01Z")
+
+	// One-minute buckets keep every seeded generation in its own bucket.
+	points, interval, err := s.TokenUsagePoints(TokenUsageOptions{Interval: time.Minute})
 	require.NoError(t, err)
-	require.Len(t, points, 3, "zero-token generation should be dropped")
+	assert.Equal(t, time.Minute, interval)
+	require.Len(t, points, 3, "zero-token and unplaceable generations should be dropped")
 
 	// Sorted oldest-first: g2 (09:00) → g1 (10:00) → g3 (12:00 received_at).
 	assert.Equal(t, "gpt-5-omni", points[0].Model)
@@ -767,9 +958,9 @@ func TestTokenUsagePoints(t *testing.T) {
 		TokenBuckets: TokenBuckets{FreshInput: 70, CacheRead: 30, Output: 40, Reasoning: 10},
 	}, points[0])
 
-	// g1 Anthropic: cache stays additive.
+	// g1 Anthropic: cache stays additive; the point carries its bucket start.
 	assert.Equal(t, TokenUsagePoint{
-		Timestamp:    mustParse(t, "2026-05-21T10:00:10Z"),
+		Timestamp:    mustParse(t, "2026-05-21T10:00:00Z"),
 		Model:        "claude-sonnet-4",
 		Provider:     "anthropic",
 		TokenBuckets: TokenBuckets{FreshInput: 100, CacheRead: 30, CacheWrite: 20, Output: 50},
@@ -779,13 +970,153 @@ func TestTokenUsagePoints(t *testing.T) {
 	assert.Equal(t, mustParse(t, "2026-05-21T12:00:00Z"), points[2].Timestamp)
 }
 
+// TestTokenUsagePoints_Buckets covers the aggregation the chart reads: one
+// point per bucket and model, ordered by timestamp then model, plus the
+// range bound and the derived interval.
+func TestTokenUsagePoints_Buckets(t *testing.T) {
+	type seed struct {
+		conv  string
+		gen   string
+		model string
+		when  string
+		in    int64
+		out   int64
+	}
+	hourSeeds := []seed{
+		{conv: "conv-1", gen: "g1", model: "model-a", when: "2026-08-03T10:05:00Z", in: 10},
+		{conv: "conv-1", gen: "g2", model: "model-a", when: "2026-08-03T10:55:00Z", in: 20},
+		{conv: "conv-2", gen: "g3", model: "model-b", when: "2026-08-03T10:30:00Z", in: 7},
+		{conv: "conv-1", gen: "g4", model: "model-a", when: "2026-08-03T11:05:00Z", in: 5},
+	}
+
+	cases := []struct {
+		name         string
+		seeds        []seed
+		opts         TokenUsageOptions
+		wantInterval time.Duration
+		wantPoints   []TokenUsagePoint
+	}{
+		{
+			name:         "hourly buckets group by model",
+			seeds:        hourSeeds,
+			opts:         TokenUsageOptions{Interval: time.Hour},
+			wantInterval: time.Hour,
+			wantPoints: []TokenUsagePoint{
+				{Timestamp: mustParse(t, "2026-08-03T10:00:00Z"), Model: "model-a", TokenBuckets: TokenBuckets{FreshInput: 30}},
+				{Timestamp: mustParse(t, "2026-08-03T10:00:00Z"), Model: "model-b", TokenBuckets: TokenBuckets{FreshInput: 7}},
+				{Timestamp: mustParse(t, "2026-08-03T11:00:00Z"), Model: "model-a", TokenBuckets: TokenBuckets{FreshInput: 5}},
+			},
+		},
+		{
+			name:         "since drops earlier buckets",
+			seeds:        hourSeeds,
+			opts:         TokenUsageOptions{Interval: time.Hour, Since: mustParse(t, "2026-08-03T11:00:00Z")},
+			wantInterval: time.Hour,
+			wantPoints: []TokenUsagePoint{
+				{Timestamp: mustParse(t, "2026-08-03T11:00:00Z"), Model: "model-a", TokenBuckets: TokenBuckets{FreshInput: 5}},
+			},
+		},
+		{
+			name: "derived interval keeps the bucket count bounded",
+			seeds: []seed{
+				{conv: "conv-1", gen: "g1", model: "model-a", when: "2026-07-04T00:00:00Z", in: 1},
+				{conv: "conv-2", gen: "g2", model: "model-a", when: "2026-08-03T00:00:00Z", in: 2},
+			},
+			// 30 days at one-hour buckets is 720, above the 500 cap, so the
+			// next ladder step is used.
+			wantInterval: 2 * time.Hour,
+			wantPoints: []TokenUsagePoint{
+				{Timestamp: mustParse(t, "2026-07-04T00:00:00Z"), Model: "model-a", TokenBuckets: TokenBuckets{FreshInput: 1}},
+				{Timestamp: mustParse(t, "2026-08-03T00:00:00Z"), Model: "model-a", TokenBuckets: TokenBuckets{FreshInput: 2}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStorage(t)
+			for _, sd := range tc.seeds {
+				writeGen(t, s, sd.conv, sd.gen, agento11y.Generation{
+					Model:     agento11y.ModelRef{Name: sd.model},
+					StartedAt: mustParse(t, sd.when),
+					Usage:     agento11y.TokenUsage{InputTokens: sd.in, OutputTokens: sd.out},
+				}, sd.when)
+			}
+			points, interval, err := s.TokenUsagePoints(tc.opts)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantInterval, interval)
+			assert.Equal(t, tc.wantPoints, points)
+		})
+	}
+}
+
+// TestTokenUsagePoints_ScaleFollowsBucketsNotGenerations seeds a store the
+// size an import produces and asserts the response follows the bucket and
+// model count: six hourly buckets across three models stay at 18 points
+// and well under 100 KB, whatever the generation count is.
+func TestTokenUsagePoints_ScaleFollowsBucketsNotGenerations(t *testing.T) {
+	s := newStorage(t)
+	const (
+		generations = 60_000
+		perConv     = 1_000
+	)
+	models := []string{"model-a", "model-b", "model-c"}
+	start := mustParse(t, "2026-08-03T06:00:00Z")
+
+	for conv := range generations / perConv {
+		convID := "conv-" + strconv.Itoa(conv)
+		recs := make([]generationRecord, 0, perConv)
+		for i := range perConv {
+			n := conv*perConv + i
+			genID := "g-" + strconv.Itoa(n)
+			// Spread the generations across a six-hour window and three
+			// models; each carries one input token.
+			raw, err := json.Marshal(agento11y.Generation{
+				ID:             genID,
+				ConversationID: convID,
+				Model:          agento11y.ModelRef{Name: models[n%len(models)]},
+				StartedAt:      start.Add(time.Duration(n%(6*60)) * time.Minute),
+				Usage:          agento11y.TokenUsage{InputTokens: 1},
+			})
+			require.NoError(t, err)
+			recs = append(recs, generationRecord{
+				ReceivedAt:     start.Format(time.RFC3339Nano),
+				GenerationID:   genID,
+				ConversationID: convID,
+				Generation:     raw,
+			})
+		}
+		written, err := s.AppendGenerations(convID, recs)
+		require.NoError(t, err)
+		require.Equal(t, perConv, written)
+	}
+
+	points, interval, err := s.TokenUsagePoints(TokenUsageOptions{
+		Since:    start,
+		Interval: time.Hour,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, time.Hour, interval)
+	assert.LessOrEqual(t, len(points), 6*len(models), "points follow buckets times models")
+
+	var total int64
+	for _, p := range points {
+		total += p.FreshInput
+	}
+	assert.Equal(t, int64(generations), total, "bucketing must preserve every token")
+
+	body, err := json.Marshal(map[string]any{"points": points, "interval_seconds": 3600})
+	require.NoError(t, err)
+	assert.Less(t, len(body), 100*1024, "token chart payload must stay under 100 KB")
+}
+
 // TestTokenUsagePoints_EmptyStore checks that TokenUsagePoints returns
 // no points and no error before any conversations exist.
 func TestTokenUsagePoints_EmptyStore(t *testing.T) {
 	s := newStorage(t)
-	points, err := s.TokenUsagePoints()
+	points, interval, err := s.TokenUsagePoints(TokenUsageOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, points)
+	assert.Equal(t, 10*time.Second, interval, "an empty range derives the finest bucket")
 }
 
 // TestListConversations_WorkspaceFacets checks that the list summary
@@ -823,7 +1154,7 @@ func TestListConversations_WorkspaceFacets(t *testing.T) {
 		Tags:        map[string]string{"cwd": "/other/repo"},
 	}, "2026-05-21T11:00:01Z")
 
-	got, err := s.ListConversations(0)
+	got, _, err := s.ListConversations(ConversationListOptions{})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 
@@ -916,4 +1247,49 @@ func TestConversationDetail_MediaPartsPreserved(t *testing.T) {
 	require.NotNil(t, parts[1].Media)
 	assert.Equal(t, "https://example.com/a.png", parts[1].Media.URL)
 	assert.Equal(t, "image/png", parts[1].Media.MIMEType)
+}
+
+// TestReadsReportSkippedLines covers a line no projection can decode: the
+// truncated tail an interrupted append leaves behind. Every read drops it,
+// keeps the records around it, and says so once per request.
+func TestReadsReportSkippedLines(t *testing.T) {
+	s := newStorage(t)
+	var logs strings.Builder
+	s.SetLogger(log.New(&logs, "", 0))
+
+	writeGen(t, s, "conv-A", "g1", agento11y.Generation{
+		Model:       agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
+		StartedAt:   mustParse(t, "2026-08-03T10:00:00Z"),
+		CompletedAt: mustParse(t, "2026-08-03T10:00:01Z"),
+		Usage:       agento11y.TokenUsage{InputTokens: 10, OutputTokens: 5},
+	}, "2026-08-03T10:00:01Z")
+	path := filepath.Join(s.Dir(), ConversationsDir, "conv-A.jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString(`{"received_at":"2026-08-03T10:00:02Z","generation` + "\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	convs, total, err := s.ListConversations(ConversationListOptions{})
+	require.NoError(t, err)
+	require.Len(t, convs, 1)
+	assert.Equal(t, 1, total)
+	assert.Equal(t, 1, convs[0].Calls)
+
+	detail, err := s.ConversationDetail("conv-A")
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	assert.Len(t, detail.Generations, 1)
+
+	points, _, err := s.TokenUsagePoints(TokenUsageOptions{Interval: time.Minute})
+	require.NoError(t, err)
+	assert.Len(t, points, 1)
+
+	for _, want := range []string{
+		"local: list conversations: skipped 1 unparseable lines",
+		"local: conversation conv-A: skipped 1 unparseable lines",
+		"local: token metrics: skipped 1 unparseable lines",
+	} {
+		assert.Contains(t, logs.String(), want)
+	}
 }

@@ -3,11 +3,17 @@ package local
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStorage_AppendsJSONL(t *testing.T) {
@@ -62,22 +68,28 @@ func TestStorage_FilePermissions(t *testing.T) {
 }
 
 // TestAppendGeneration covers generation storage: populated
-// conversation IDs land in conversations/<id>.jsonl, and missing or
-// path-shaped IDs are rejected.
+// conversation IDs go to conversations/<id>.jsonl, missing or path-shaped
+// IDs are rejected, and a conversations directory that disappeared under a
+// running daemon is recreated so ingest and export recover.
 func TestAppendGeneration(t *testing.T) {
 	cases := []struct {
-		name     string
-		convID   string
-		wantPath string
-		wantErr  bool
+		name      string
+		convID    string
+		removeDir bool
+		wantPath  string
+		wantErr   bool
 	}{
 		{name: "populated id writes per-conversation file", convID: "conv-A", wantPath: "conv-A.jsonl"},
+		{name: "missing conversations dir is recreated", convID: "conv-A", removeDir: true, wantPath: "conv-A.jsonl"},
 		{name: "empty id rejected", convID: "", wantErr: true},
 		{name: "path id rejected", convID: "../runs", wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStorage(t)
+			if tc.removeDir {
+				require.NoError(t, os.RemoveAll(filepath.Join(s.Dir(), ConversationsDir)))
+			}
 			rec := generationRecord{
 				ConversationID: tc.convID,
 				GenerationID:   "gen-1",
@@ -94,9 +106,7 @@ func TestAppendGeneration(t *testing.T) {
 			if err != nil {
 				t.Fatalf("AppendGeneration: %v", err)
 			}
-			if _, err := os.Stat(filepath.Join(s.Dir(), ConversationsDir, tc.wantPath)); err != nil {
-				t.Fatalf("expected file %s: %v", tc.wantPath, err)
-			}
+			assert.Len(t, readLines(t, filepath.Join(s.Dir(), ConversationsDir, tc.wantPath)), 1)
 		})
 	}
 }
@@ -111,6 +121,118 @@ func assertConversationDirEmpty(t *testing.T, s *Storage) {
 	if len(entries) != 0 {
 		t.Fatalf("%s not empty: %v", convDir, entries)
 	}
+}
+
+// TestAppendGenerations covers the batch append path the ingest handler
+// uses: every record for one conversation goes through a single file open
+// and close cycle, a mid-batch write failure keeps the records written
+// before it, and a record from another conversation is refused.
+func TestAppendGenerations(t *testing.T) {
+	cases := []struct {
+		name           string
+		records        int
+		mixConvID      bool
+		failWriteAfter int
+		wantWritten    int
+		wantLines      int
+		wantErr        bool
+		wantOpens      int
+	}{
+		{name: "five records share one open cycle", records: 5, wantWritten: 5, wantLines: 5, wantOpens: 1},
+		{name: "third write fails", records: 5, failWriteAfter: 2, wantWritten: 2, wantLines: 2, wantErr: true, wantOpens: 1},
+		{name: "foreign conversation id refused", records: 2, mixConvID: true, wantErr: true, wantOpens: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStorage(t)
+			opener := &countingOpener{failWriteAfter: tc.failWriteAfter}
+			s.openAppend = opener.open
+
+			recs := make([]generationRecord, 0, tc.records)
+			for i := range tc.records {
+				rec := generationRecord{
+					ConversationID: "conv-batch",
+					GenerationID:   "gen-" + strconv.Itoa(i),
+					Generation:     json.RawMessage(`{"id":"gen-` + strconv.Itoa(i) + `"}`),
+				}
+				if tc.mixConvID && i == 1 {
+					rec.ConversationID = "conv-other"
+				}
+				recs = append(recs, rec)
+			}
+
+			written, err := s.AppendGenerations("conv-batch", recs)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.wantWritten, written)
+
+			path := filepath.Join(s.Dir(), ConversationsDir, "conv-batch.jsonl")
+			if tc.wantLines == 0 {
+				_, statErr := os.Stat(path)
+				assert.True(t, os.IsNotExist(statErr), "no file expected, stat err = %v", statErr)
+			} else {
+				assert.Len(t, readLines(t, path), tc.wantLines)
+			}
+			opens, closes := opener.counts()
+			assert.Equal(t, tc.wantOpens, opens, "file opens")
+			assert.Equal(t, opens, closes, "every open must be closed")
+		})
+	}
+}
+
+// countingOpener wraps the real appender, counting open and close cycles
+// so the batch tests can prove one request costs one open per
+// conversation. failWriteAfter > 0 fails every write past that count.
+type countingOpener struct {
+	mu             sync.Mutex
+	opens          int
+	closes         int
+	writes         int
+	failWriteAfter int
+}
+
+func (o *countingOpener) open(path string) (io.WriteCloser, error) {
+	f, err := openAppendFile(path)
+	if err != nil {
+		return nil, err
+	}
+	o.mu.Lock()
+	o.opens++
+	o.mu.Unlock()
+	return &countingFile{owner: o, file: f}, nil
+}
+
+func (o *countingOpener) counts() (opens, closes int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.opens, o.closes
+}
+
+type countingFile struct {
+	owner *countingOpener
+	file  io.WriteCloser
+}
+
+func (f *countingFile) Write(p []byte) (int, error) {
+	f.owner.mu.Lock()
+	f.owner.writes++
+	n := f.owner.writes
+	failAfter := f.owner.failWriteAfter
+	f.owner.mu.Unlock()
+	if failAfter > 0 && n > failAfter {
+		return 0, errors.New("no space left on device")
+	}
+	return f.file.Write(p)
+}
+
+func (f *countingFile) Close() error {
+	f.owner.mu.Lock()
+	f.owner.closes++
+	f.owner.mu.Unlock()
+	return f.file.Close()
 }
 
 func TestStorage_ConcurrentAppends(t *testing.T) {

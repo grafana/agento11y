@@ -50,6 +50,9 @@ func NewServer(storage *Storage, logger *log.Logger, configPath string) *Server 
 	if logger == nil {
 		logger = log.New(io.Discard, "", 0)
 	}
+	if storage != nil {
+		storage.SetLogger(logger)
+	}
 	s := &Server{
 		storage:    storage,
 		logger:     logger,
@@ -172,6 +175,14 @@ type generationRecord struct {
 	Generation     json.RawMessage `json:"generation"`
 }
 
+// pendingGeneration is one decoded generation waiting to be appended,
+// carrying its position in the request so the per-record result keeps its
+// request position.
+type pendingGeneration struct {
+	index  int
+	record generationRecord
+}
+
 func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxGenerationBodyBytes+1))
 	if err != nil {
@@ -189,43 +200,86 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	receivedAt := s.now().Format(time.RFC3339Nano)
-	resp := generationsResponse{Results: make([]generationResult, 0, len(req.Generations))}
-	accepted := make([]json.RawMessage, 0, len(req.Generations))
-	for _, raw := range req.Generations {
+	resp := generationsResponse{Results: make([]generationResult, len(req.Generations))}
+
+	// Group the request by conversation so each conversation file is opened
+	// once, however many generations the batch carries for it. Results stay
+	// indexed by request position: grouping does not reorder them.
+	var order []string
+	groups := map[string][]pendingGeneration{}
+	stored := make([]json.RawMessage, len(req.Generations))
+	for i, raw := range req.Generations {
 		var gen storedGeneration
 		if err := json.Unmarshal(raw, &gen); err != nil {
-			resp.Results = append(resp.Results, generationResult{Accepted: false, Error: "decode generation: " + err.Error()})
+			resp.Results[i] = generationResult{Accepted: false, Error: "decode generation: " + err.Error()}
 			continue
 		}
-		stored := append(json.RawMessage(nil), raw...)
-		rec := generationRecord{
-			ReceivedAt:     receivedAt,
-			GenerationID:   gen.ID,
-			ConversationID: gen.ConversationID,
-			Generation:     stored,
+		// json.Unmarshal allocates a fresh slice per RawMessage element, so
+		// raw is private to this request and needs no copy.
+		stored[i] = raw
+		if _, ok := groups[gen.ConversationID]; !ok {
+			order = append(order, gen.ConversationID)
 		}
-		if err := s.storage.AppendGeneration(rec); err != nil {
+		groups[gen.ConversationID] = append(groups[gen.ConversationID], pendingGeneration{
+			index: i,
+			record: generationRecord{
+				ReceivedAt:     receivedAt,
+				GenerationID:   gen.ID,
+				ConversationID: gen.ConversationID,
+				Generation:     stored[i],
+			},
+		})
+	}
+
+	// One change event per conversation the request wrote to. The viewer
+	// coalesces a burst into a single refresh anyway, so a per-generation
+	// event would multiply full-store refetches during a large import.
+	var events []changeEvent
+	for _, convID := range order {
+		pending := groups[convID]
+		recs := make([]generationRecord, len(pending))
+		for i, p := range pending {
+			recs[i] = p.record
+		}
+		written, err := s.storage.AppendGenerations(convID, recs)
+		if err != nil {
 			s.logger.Printf("local: append generations: %v", err)
-			resp.Results = append(resp.Results, generationResult{
-				GenerationID: gen.ID,
-				Accepted:     false,
-				Error:        err.Error(),
-			})
-			continue
 		}
-		accepted = append(accepted, stored)
-		resp.Results = append(resp.Results, generationResult{
-			GenerationID: gen.ID,
-			Accepted:     true,
-		})
-		// Notify connected viewers so the list (and any open matching
-		// conversation) refreshes without waiting for the backstop poll.
-		// Broadcast is non-blocking; a stalled subscriber cannot stall
-		// ingest.
-		s.hub.broadcast(changeEvent{
-			ConversationID: gen.ConversationID,
-			GenerationID:   gen.ID,
-		})
+		// A short write always carries an error today. Copy the message into
+		// a local first, so a future path that returns a short count with a
+		// nil error cannot dereference err here.
+		reason := "append rejected"
+		if err != nil {
+			reason = err.Error()
+		}
+		for i, p := range pending {
+			result := generationResult{GenerationID: p.record.GenerationID, Accepted: i < written}
+			if !result.Accepted {
+				result.Error = reason
+				stored[p.index] = nil
+			}
+			resp.Results[p.index] = result
+		}
+		if written > 0 {
+			events = append(events, changeEvent{
+				ConversationID: convID,
+				GenerationID:   recs[written-1].GenerationID,
+			})
+		}
+	}
+
+	// Notify connected viewers so the list (and any open matching
+	// conversation) refreshes without waiting for the backstop poll.
+	// Broadcast is non-blocking; a stalled subscriber cannot stall ingest.
+	for _, ev := range events {
+		s.hub.broadcast(ev)
+	}
+
+	accepted := make([]json.RawMessage, 0, len(req.Generations))
+	for _, raw := range stored {
+		if raw != nil {
+			accepted = append(accepted, raw)
+		}
 	}
 
 	// Best-effort Cloud forwarding runs after the local store so a Cloud
@@ -446,16 +500,34 @@ func (s *Server) decodeConfigRequest(w http.ResponseWriter, r *http.Request) (Se
 	return req.Settings, true
 }
 
+// conversationListLimit caps how many conversations the list endpoint
+// summarises when the client does not pass a limit. The cost of a request
+// follows this number, not the size of the store, and the viewer's list is
+// not virtualised, so an unbounded default would hurt both ends. Same
+// idiom as searchResultLimit: the default lives in the handler, and
+// Storage.ListConversations keeps ≤ 0 as unbounded for its own callers.
+const conversationListLimit = 200
+
 // handleListConversations returns the aggregated conversation list as
-// JSON. The response is newest-first.
+// JSON. The response is newest-first. ?limit= caps the page and ?since=
+// (RFC 3339) drops conversations whose file is older, both applied before
+// any conversation file is decoded. For an append-only file the
+// modification time is the last activity; see ConversationListOptions.
+//
+// total_conversations counts the conversation files in the store, before
+// either bound. The viewer needs it to tell an empty store from an empty
+// range: with a range-scoped page it cannot otherwise distinguish first
+// launch from a quiet week, and the two want different notices.
 func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request) {
-	limit := 0
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			limit = n
-		}
+	limit, ok := limitParam(w, r, conversationListLimit)
+	if !ok {
+		return
 	}
-	convs, err := s.storage.ListConversations(limit)
+	since, ok := sinceParam(w, r)
+	if !ok {
+		return
+	}
+	convs, total, err := s.storage.ListConversations(ConversationListOptions{Limit: limit, Since: since})
 	if err != nil {
 		s.logger.Printf("local: list conversations: %v", err)
 		http.Error(w, "list conversations: "+err.Error(), http.StatusInternalServerError)
@@ -467,7 +539,28 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 		// guarding.
 		convs = []ConversationSummary{}
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"conversations": convs})
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"conversations":       convs,
+		"total_conversations": total,
+	})
+}
+
+// limitParam reads a ?limit= page size, falling back to def when the
+// parameter is absent. A non-positive or unparseable value is a client
+// error. ?since= and ?interval= reject a bad value the same way: a client
+// that means "everything" passes a large number, not a value the server has
+// to guess at.
+func limitParam(w http.ResponseWriter, r *http.Request, def int) (int, bool) {
+	raw := r.URL.Query().Get("limit")
+	if raw == "" {
+		return def, true
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		http.Error(w, "invalid limit: want a positive number", http.StatusBadRequest)
+		return 0, false
+	}
+	return n, true
 }
 
 // searchResultLimit caps the number of hits the search endpoint returns
@@ -527,11 +620,28 @@ func (s *Server) handleSearchCapabilities(w http.ResponseWriter, _ *http.Request
 	})
 }
 
-// handleTokenMetrics returns one token-usage point per recorded
-// generation as JSON. The viewer buckets these by time to draw the
-// token-usage chart; an empty store returns an empty array, never null.
-func (s *Server) handleTokenMetrics(w http.ResponseWriter, _ *http.Request) {
-	points, err := s.storage.TokenUsagePoints()
+// handleTokenMetrics returns token usage aggregated per bucket and model
+// as JSON, for the viewer's token chart. ?since= (RFC 3339) bounds the
+// range and ?interval= sets the bucket width in seconds; when the client
+// omits the interval the server derives one from the span it found and
+// reports it as interval_seconds, which the viewer widens its bars to so a
+// server bucket never straddles two of them. An empty store returns an
+// empty array, never null.
+func (s *Server) handleTokenMetrics(w http.ResponseWriter, r *http.Request) {
+	since, ok := sinceParam(w, r)
+	if !ok {
+		return
+	}
+	var interval time.Duration
+	if raw := r.URL.Query().Get("interval"); raw != "" {
+		seconds, err := strconv.Atoi(raw)
+		if err != nil || seconds <= 0 {
+			http.Error(w, "invalid interval: want a positive number of seconds", http.StatusBadRequest)
+			return
+		}
+		interval = time.Duration(seconds) * time.Second
+	}
+	points, used, err := s.storage.TokenUsagePoints(TokenUsageOptions{Since: since, Interval: interval})
 	if err != nil {
 		s.logger.Printf("local: token metrics: %v", err)
 		http.Error(w, "token metrics: "+err.Error(), http.StatusInternalServerError)
@@ -540,7 +650,27 @@ func (s *Server) handleTokenMetrics(w http.ResponseWriter, _ *http.Request) {
 	if points == nil {
 		points = []TokenUsagePoint{}
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"points": points})
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"points":           points,
+		"interval_seconds": int64(used.Seconds()),
+	})
+}
+
+// sinceParam reads the shared ?since= lower bound. RFC 3339 is the only
+// accepted spelling, the one toISOString() produces, and an unparseable
+// value is a client error rather than a silently ignored filter. A missing
+// parameter returns the zero time (no bound).
+func sinceParam(w http.ResponseWriter, r *http.Request) (time.Time, bool) {
+	raw := r.URL.Query().Get("since")
+	if raw == "" {
+		return time.Time{}, true
+	}
+	since, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		http.Error(w, "invalid since: want an RFC 3339 timestamp", http.StatusBadRequest)
+		return time.Time{}, false
+	}
+	return since, true
 }
 
 // handleConversationDetail returns the per-conversation generation

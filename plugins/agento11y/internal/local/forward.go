@@ -67,11 +67,15 @@ const hookEvaluatePath = "/api/v1/hooks:evaluate"
 // otlpForwardLabel names one OTLP signal leg in the failure ring.
 func otlpForwardLabel(signal string) string { return "otlp/" + signal }
 
-// forwardMarkerHeader is set on every forwarded request. A daemon that
+// ForwardMarkerHeader is set on every forwarded request. A daemon that
 // receives a payload carrying it does not forward again, so two daemons
 // pointed at each other (or one pointed at itself through a hand-written
 // local ingest endpoint) exchange one copy instead of looping.
-const forwardMarkerHeader = "X-Agento11y-Local-Forwarded"
+//
+// It is exported so an in-process producer that exports through the local
+// ingest endpoint can mark its own requests and keep them from reaching
+// Cloud. A history import that writes months of transcripts needs this.
+const ForwardMarkerHeader = "X-Agento11y-Local-Forwarded"
 
 // forwardConfig is the resolved forwarding configuration for one load cycle.
 // The two legs resolve independently: generation export needs Cloud
@@ -582,7 +586,7 @@ func forwardDisabledReason(endpoint, tenant, token string) string {
 	// A local receiver (http://127.0.0.1, ::1, localhost) is a valid forward
 	// target — e.g. a separate daemon — and does not validate auth, so empty
 	// or placeholder credentials must not pause forwarding to it. The
-	// forwardMarkerHeader on the outbound request is what stops a daemon
+	// ForwardMarkerHeader on the outbound request is what stops a daemon
 	// pointed at itself from relaying the same payload again.
 	if envconfig.IsLocalEndpoint(endpoint) {
 		return ""
@@ -934,7 +938,7 @@ func (l *forwardLoader) post(url, contentType, contentEncoding string, headers m
 	if contentEncoding != "" {
 		req.Header.Set("Content-Encoding", contentEncoding)
 	}
-	req.Header.Set(forwardMarkerHeader, "1")
+	req.Header.Set(ForwardMarkerHeader, "1")
 	for k, v := range headers {
 		if v != "" {
 			req.Header.Set(k, v)
@@ -959,11 +963,12 @@ func (l *forwardLoader) post(url, contentType, contentEncoding string, headers m
 }
 
 // isForwardedRequest reports whether an inbound payload already came from
-// another daemon's forwarder. Relaying it again would loop between two daemons
-// pointed at each other, or between one daemon and itself when the ingest
-// endpoint is hand-set to this daemon's own address.
+// another daemon's forwarder, or from an in-process producer that marked it.
+// Relaying it again would loop between two daemons pointed at each other, or
+// between one daemon and itself when the ingest endpoint is hand-set to this
+// daemon's own address.
 func isForwardedRequest(r *http.Request) bool {
-	return r.Header.Get(forwardMarkerHeader) != ""
+	return r.Header.Get(ForwardMarkerHeader) != ""
 }
 
 // otlpSignalFromPath maps an OTLP receiver path to its signal name.
