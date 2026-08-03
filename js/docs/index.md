@@ -6,6 +6,10 @@ This directory contains public SDK usage docs for the TypeScript/JavaScript pack
 
 - SDK overview and core API: `../README.md`
 
+## Feature Guides
+
+- `experiments.md`
+
 ## Provider Guides
 
 - `providers/openai.md`

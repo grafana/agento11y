@@ -560,3 +560,58 @@ console.log(result.rating.rating, result.summary.hasBadRating);
 ```
 
 `submitConversationRating` sends requests to `api.endpoint`, which should be the Grafana Cloud Agent Observability API URL from Agent Observability configuration, and uses the same generation-export auth headers already configured on the SDK client.
+
+## Experiments
+
+Offline evals: run an agent over a dataset, grade it, and publish runs, trials,
+and scores to Agent Observability. The API lives on a separate subpath, so
+importing the core package never pulls experiments code into an edge-runtime
+bundle:
+
+```ts
+import { ExperimentsClient, withExperiment } from "@grafana/agento11y/experiments";
+
+const client = new ExperimentsClient({
+  endpoint: process.env.AGENTO11Y_ENDPOINT,
+  tenantId: process.env.AGENTO11Y_AUTH_TENANT_ID,
+  ingestToken: process.env.AGENTO11Y_AUTH_TOKEN,
+});
+
+const suite = {
+  suiteId: "smoke",
+  name: "Smoke",
+  testCases: [{ testCaseId: "add", input: "2+2", expected: "4" }],
+};
+const verifier = { evaluatorId: "exact", version: "1", kind: "deterministic" };
+
+await withExperiment(client, { experimentId: "run-1", name: "smoke run", suite }, async (experiment) => {
+  for (const testCase of suite.testCases) {
+    await experiment.withTrial(testCase, async (trial) => {
+      const answer = await runAgent(testCase.input);
+      trial.recordIO({ input: testCase.input, output: answer });
+      trial.finalScore(answer === testCase.expected, { evaluator: verifier });
+    });
+  }
+});
+```
+
+`withExperiment` finalizes the run on both the success and the failure path, and
+`withTrial` closes the trial and terminalizes it as `errored` when the callback
+throws. Use `Experiment.start`, `trial.start()`, and `close()` directly when a
+runner owns its own control flow.
+
+An evaluator stored in your tenant can also grade a trial, instead of a score
+computed in the runner. That path is experimental and requires
+`AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true`:
+
+```ts
+await experiment.withTrial(testCase, async (trial) => {
+  const { conversationId } = await runInstrumentedAgent(testCase.input);
+  trial.bindConversation(conversationId);
+  await trial.evaluate("helpfulness");
+});
+```
+
+See [`docs/experiments.md`](docs/experiments.md) for the full surface: score
+kinds, local judges, artifacts, reports, portable and stored suites, cross-process
+trials, and experimental OpenTelemetry trial telemetry.

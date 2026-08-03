@@ -1,0 +1,45 @@
+{
+  "comment": "stable_id vectors: SHA-1 over the parts joined with \\x1f, lowercase hex truncated to 16 characters, prefixed with the kind and a hyphen. A null part keeps its separator slot.",
+  "vectors": [
+    { "prefix": "trial", "parts": ["abc"], "id": "trial-a9993e364706816a" },
+    { "prefix": "trial", "parts": [1], "id": "trial-356a192b7913b04c" },
+    { "prefix": "trial", "parts": ["1"], "id": "trial-356a192b7913b04c" },
+    { "prefix": "trial", "parts": ["1.0"], "id": "trial-e8dc057d3346e56a" },
+    { "prefix": "trial", "parts": ["a", null, "b"], "id": "trial-e69b7ae7f775b317" },
+    {
+      "prefix": "trial",
+      "parts": ["conformance-run", "capital-france", 1],
+      "id": "trial-e82b5e46a40a37e5"
+    },
+    {
+      "prefix": "gen",
+      "parts": ["conformance-run", "capital-france", 1],
+      "id": "gen-e82b5e46a40a37e5"
+    },
+    {
+      "prefix": "conv",
+      "parts": ["conformance-run", "capital-france", 1],
+      "id": "conv-e82b5e46a40a37e5"
+    },
+    {
+      "prefix": "score",
+      "parts": ["conformance-run", "trial-e82b5e46a40a37e5", "final", "exact"],
+      "id": "score-06b71bce427d6b90"
+    },
+    {
+      "prefix": "score",
+      "parts": ["conformance-run", "trial-e82b5e46a40a37e5", "final", "exact", 2],
+      "id": "score-2f8734188d24d0a4"
+    },
+    {
+      "prefix": "gen",
+      "parts": ["score-06b71bce427d6b90", "grader"],
+      "id": "gen-fb285b0f7e8a31c3"
+    },
+    {
+      "prefix": "conv",
+      "parts": ["score-06b71bce427d6b90", "grader"],
+      "id": "conv-fb285b0f7e8a31c3"
+    }
+  ]
+}

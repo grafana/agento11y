@@ -13,7 +13,7 @@ import type {
   ToolDefinition,
   ToolResultPart,
 } from './types.js';
-import { asError } from './utils.js';
+import { asError, baseURLFromAPIEndpoint } from './utils.js';
 
 const hooksEvaluatePath = '/api/v1/hooks:evaluate';
 const hookTimeoutHeader = 'X-Agento11y-Hook-Timeout-Ms';
@@ -165,30 +165,8 @@ function formatDenyMessage(reason: string, ruleId: string | undefined): string {
 }
 
 function buildHooksEvaluateEndpoint(endpoint: string, insecure: boolean): string {
-  const baseURL = baseURLFromAPIEndpoint(endpoint, insecure);
+  const baseURL = baseURLFromAPIEndpoint(endpoint, insecure, 'agento11y hook evaluation failed');
   return `${baseURL}${hooksEvaluatePath}`;
-}
-
-function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean): string {
-  const trimmed = endpoint.trim();
-  if (trimmed.length === 0) {
-    throw new Error('agento11y hook evaluation failed: api endpoint is required');
-  }
-
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    const parsed = new URL(trimmed);
-    // Preserve a path prefix so prefix-mounted Agent Observability deployments
-    // (https://host/sigil) route /api/v1/hooks:evaluate under the prefix.
-    const path = parsed.pathname.replace(/\/+$/, '');
-    return `${parsed.protocol}//${parsed.host}${path}`;
-  }
-
-  const withoutScheme = trimmed.startsWith('grpc://') ? trimmed.slice('grpc://'.length) : trimmed;
-  const host = withoutScheme.split('/')[0]?.trim();
-  if (host === undefined || host.length === 0) {
-    throw new Error('agento11y hook evaluation failed: api endpoint host is required');
-  }
-  return `${insecure ? 'http' : 'https'}://${host}`;
 }
 
 function serializeRequest(request: HookEvaluateRequest): Record<string, unknown> {

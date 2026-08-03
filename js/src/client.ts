@@ -67,6 +67,7 @@ import type {
 } from './types.js';
 import {
   asError,
+  baseURLFromAPIEndpoint,
   cloneArtifact,
   cloneEmbeddingResult,
   cloneEmbeddingStart,
@@ -2189,30 +2190,8 @@ function normalizeConversationRatingInput(input: ConversationRatingInput): Conve
 }
 
 function buildConversationRatingEndpoint(endpoint: string, insecure: boolean, conversationId: string): string {
-  const baseURL = baseURLFromAPIEndpoint(endpoint, insecure);
+  const baseURL = baseURLFromAPIEndpoint(endpoint, insecure, 'agento11y conversation rating transport failed');
   return `${baseURL}/api/v1/conversations/${encodeURIComponent(conversationId)}/ratings`;
-}
-
-function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean): string {
-  const trimmed = endpoint.trim();
-  if (trimmed.length === 0) {
-    throw new Error('agento11y conversation rating transport failed: api endpoint is required');
-  }
-
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    const parsed = new URL(trimmed);
-    // Preserve a path prefix so prefix-mounted Agent Observability deployments
-    // (https://host/sigil) route /api/v1/conversations/... under the prefix.
-    const path = parsed.pathname.replace(/\/+$/, '');
-    return `${parsed.protocol}//${parsed.host}${path}`;
-  }
-
-  const withoutScheme = trimmed.startsWith('grpc://') ? trimmed.slice('grpc://'.length) : trimmed;
-  const host = withoutScheme.split('/')[0]?.trim();
-  if (host === undefined || host.length === 0) {
-    throw new Error('agento11y conversation rating transport failed: api endpoint host is required');
-  }
-  return `${insecure ? 'http' : 'https'}://${host}`;
 }
 
 function parseSubmitConversationRatingResponse(payload: unknown): SubmitConversationRatingResponse {

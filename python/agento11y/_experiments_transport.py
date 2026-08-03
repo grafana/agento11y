@@ -620,8 +620,15 @@ def _parse_trial_evaluation(payload: Any) -> TrialEvaluation:
         raise ExperimentTransportError(
             f"agento11y trial evaluation transport failed: unsupported evaluation status {raw_status!r}"
         ) from exc
+    evaluation_id = _str(payload.get("evaluation_id")).strip()
+    if not evaluation_id:
+        # Without an id the next status read would fail as a validation error that
+        # blames the caller's arguments. Go and JavaScript reject it here too.
+        raise ExperimentTransportError(
+            "agento11y trial evaluation transport failed: evaluation response carries no evaluation_id"
+        )
     return TrialEvaluation(
-        evaluation_id=_str(payload.get("evaluation_id")),
+        evaluation_id=evaluation_id,
         experiment_id=_str(payload.get("experiment_id")),
         trial_id=_str(payload.get("trial_id")),
         test_case_id=_str(payload.get("test_case_id")),
