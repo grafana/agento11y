@@ -26,7 +26,10 @@ from agento11y_litellm import (
     create_agento11y_litellm_guardrail,
 )
 from litellm.exceptions import GuardrailRaisedException
+from litellm.integrations import custom_guardrail
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import ModelResponse
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
@@ -542,7 +545,7 @@ def test_transformed_input_is_ignored(hook_server):
     assert data["messages"] == [{"role": "user", "content": "hello"}]
 
 
-@pytest.mark.parametrize("mode", ["post_call", "during_call", "logging_only"])
+@pytest.mark.parametrize("mode", ["during_call", "logging_only"])
 def test_unsupported_modes_rejected_at_construction(mode):
     client = _new_client("http://127.0.0.1:1")
     with pytest.raises(ValueError, match=mode):
@@ -565,8 +568,39 @@ def test_pre_call_mode_is_accepted_in_every_shape(hook_server, event_hook):
 
 def test_unsupported_mode_in_list_rejected_at_construction():
     client = _new_client("http://127.0.0.1:1")
-    with pytest.raises(ValueError, match="post_call"):
-        Agento11yLiteLLMGuardrail(client=client, event_hook=["pre_call", "post_call"])
+    with pytest.raises(ValueError, match="during_call"):
+        Agento11yLiteLLMGuardrail(client=client, event_hook=["pre_call", "during_call"])
+
+
+@pytest.mark.parametrize("event_hook", [[], (), set()], ids=["list", "tuple", "set"])
+def test_empty_event_hook_rejected_at_construction(event_hook):
+    """An empty sequence matches no mode, so the guardrail would never run."""
+    client = _new_client("http://127.0.0.1:1")
+    with pytest.raises(ValueError, match="at least one mode"):
+        Agento11yLiteLLMGuardrail(client=client, event_hook=event_hook)
+
+
+@pytest.mark.parametrize(
+    ("event_hook", "want"),
+    [
+        pytest.param(("pre_call", "post_call"), ["pre_call", "post_call"], id="tuple"),
+        pytest.param({"pre_call"}, ["pre_call"], id="set"),
+        pytest.param((GuardrailEventHooks.pre_call,), ["pre_call"], id="tuple-of-enums"),
+    ],
+)
+def test_a_sequence_of_modes_is_normalized_to_a_list(hook_server, event_hook, want):
+    """LiteLLM matches a list and compares anything else to the mode string.
+
+    A tuple or a set never equals ``"pre_call"``, so an unnormalized one builds
+    a guardrail that runs on no phase and says nothing about it.
+    """
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, event_hook=event_hook, default_on=True)
+
+    assert guard.event_hook == want
+    assert guard.should_run_guardrail(_request_data(), GuardrailEventHooks.pre_call) is True
+    assert _call(guard, _request_data()) is None
+    assert len(hook_server.requests) == 1
 
 
 @pytest.mark.parametrize(
@@ -608,23 +642,55 @@ def test_client_without_preflight_records_no_verdict(hook_server, hooks):
 
 
 @pytest.mark.parametrize(
-    "hooks",
+    ("kwargs", "hooks", "want"),
     [
-        HooksConfig(enabled=False),
-        HooksConfig(enabled=True, phases=["postflight"]),
+        pytest.param(
+            {},
+            HooksConfig(enabled=False),
+            ("preflight", "no request will be evaluated"),
+            id="hooks-disabled",
+        ),
+        pytest.param(
+            {},
+            HooksConfig(enabled=True, phases=["postflight"]),
+            ("preflight", "no request will be evaluated"),
+            id="preflight-phase-not-configured",
+        ),
+        pytest.param(
+            {"event_hook": "post_call"},
+            HooksConfig(enabled=True, phases=["preflight"]),
+            ("postflight", "no request will be evaluated"),
+            id="postflight-phase-not-configured",
+        ),
+        pytest.param(
+            {"event_hook": ["pre_call", "post_call"]},
+            HooksConfig(enabled=True, phases=["preflight"]),
+            ("postflight", "that phase will not be evaluated"),
+            id="one-of-two-phases-configured",
+        ),
     ],
-    ids=["hooks-disabled", "preflight-phase-not-configured"],
 )
-def test_client_without_preflight_warns_at_construction(hook_server, caplog, hooks):
+def test_guardrail_warns_at_construction_about_an_unconfigured_phase(hook_server, caplog, kwargs, hooks, want):
+    """A mode with no matching ``HooksConfig.phases`` entry is silent otherwise."""
     client = _new_client(hook_server.url, hooks=hooks)
 
     with caplog.at_level(logging.WARNING):
-        Agento11yLiteLLMGuardrail(client=client, default_on=True, guardrail_name="agento11y-preflight")
+        Agento11yLiteLLMGuardrail(client=client, default_on=True, guardrail_name="agento11y-guard", **kwargs)
 
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 1
-    assert "agento11y-preflight" in warnings[0].getMessage()
-    assert "no request will be evaluated" in warnings[0].getMessage()
+    assert "agento11y-guard" in warnings[0].getMessage()
+    for fragment in want:
+        assert fragment in warnings[0].getMessage()
+
+
+def test_a_guardrail_whose_every_phase_is_configured_warns_about_nothing(hook_server, caplog):
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["preflight", "postflight"]))
+
+    with caplog.at_level(logging.WARNING):
+        Agento11yLiteLLMGuardrail(client=client, default_on=True, event_hook=["pre_call", "post_call"])
+
+    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
 
 
 def test_guardrail_not_enabled_for_request_is_skipped(hook_server):
@@ -916,6 +982,487 @@ def test_guardrail_and_logger_register_without_double_export(hook_server):
     assert len(generations) == 1
 
 
+def _chat_response(content: str = "here is the secret") -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-1",
+        model="gpt-4o",
+        choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": content}}],
+    )
+
+
+def _responses_api_response(content: str = "here is the secret") -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp-1",
+        created_at=1,
+        model="gpt-4o",
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg-1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": content, "annotations": []}],
+            }
+        ],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+        status="completed",
+    )
+
+
+_NO_RESPONSE = object()
+
+
+def _post_call(
+    guard: Agento11yLiteLLMGuardrail,
+    data: dict[str, Any],
+    response: Any = _NO_RESPONSE,
+) -> Any:
+    """Run the post-call hook, defaulting to a plain chat response.
+
+    ``None`` is itself a response under test, so the default is a sentinel.
+    """
+    return asyncio.run(
+        guard.async_post_call_success_hook(
+            data=data,
+            user_api_key_dict=_UserAPIKey(),
+            response=_chat_response() if response is _NO_RESPONSE else response,
+        )
+    )
+
+
+def _postflight_guard(client: Client, **kwargs: Any) -> Agento11yLiteLLMGuardrail:
+    return Agento11yLiteLLMGuardrail(client=client, event_hook="post_call", default_on=True, **kwargs)
+
+
+def test_postflight_allow_returns_none_and_leaves_the_response_untouched(hook_server):
+    hook_server.response = {"action": "allow"}
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["preflight", "postflight"]))
+    guard = _postflight_guard(client)
+    response = _chat_response()
+    before = response.model_dump()
+
+    assert _post_call(guard, _request_data(), response) is None
+
+    assert len(hook_server.requests) == 1
+    assert response.model_dump() == before
+
+
+def test_postflight_request_carries_the_phase_the_request_and_the_output(hook_server):
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = _postflight_guard(client, agent_version="1.2.3", extra_tags={"team": "search"})
+    data = _request_data(
+        messages=[
+            {"role": "system", "content": "policy"},
+            {"role": "user", "content": "hello"},
+        ],
+        metadata={"agent_id": "search-agent", "session_id": "conv-7"},
+    )
+
+    assert _post_call(guard, data) is None
+
+    payload = hook_server.payloads[0]
+    assert payload["phase"] == "postflight"
+    assert payload["context"]["agent_name"] == "search-agent"
+    assert payload["context"]["conversation_id"] == "conv-7"
+    assert payload["context"]["model"] == {"provider": "openai", "name": "gpt-4o"}
+    assert payload["context"]["tags"]["team"] == "search"
+    assert payload["input"]["system_prompt"] == "policy"
+    assert [m["parts"][0]["text"] for m in payload["input"]["messages"]] == ["hello"]
+    assert [m["role"] for m in payload["input"]["output"]] == ["assistant"]
+    assert [part["text"] for m in payload["input"]["output"] for part in m["parts"]] == ["here is the secret"]
+
+
+@pytest.mark.parametrize(
+    ("response", "want_texts"),
+    [
+        pytest.param(_chat_response("chat text"), ["chat text"], id="chat_model_response"),
+        pytest.param(_responses_api_response("responses text"), ["responses text"], id="responses_api_response"),
+        pytest.param(
+            {
+                "id": "msg-1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "anthropic text"}],
+                "stop_reason": "end_turn",
+            },
+            ["anthropic text"],
+            id="anthropic_messages_dict",
+        ),
+    ],
+)
+def test_postflight_maps_the_output_of_every_response_shape(hook_server, response, want_texts):
+    """Each route hands the hook a different object.
+
+    ``/v1/chat/completions`` and streamed responses arrive as a ``ModelResponse``,
+    ``/v1/responses`` as a ``ResponsesAPIResponse``, and ``/v1/messages`` as a
+    plain Anthropic-shaped dict. A mapper that reads only ``choices`` sends an
+    empty output for two of the three, and a rule written against the response
+    matches nothing.
+    """
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = _postflight_guard(client)
+
+    assert _post_call(guard, _request_data(), response) is None
+
+    output = hook_server.payloads[0]["input"]["output"]
+    assert [part["text"] for m in output for part in m["parts"]] == want_texts
+
+
+def test_postflight_tool_calls_in_the_output_keep_their_kind(hook_server):
+    """A tool-filter guard blocks a proposed call only if it arrives as a tool_call part."""
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = _postflight_guard(client)
+    response = ModelResponse(
+        id="chatcmpl-1",
+        model="gpt-4o",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "shell_exec", "arguments": '{"cmd":"rm -rf /"}'},
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+
+    assert _post_call(guard, _request_data(), response) is None
+
+    output = hook_server.payloads[0]["input"]["output"]
+    assert [[part["kind"] for part in m["parts"]] for m in output] == [["tool_call"]]
+    assert output[0]["parts"][0]["tool_call"]["name"] == "shell_exec"
+    assert output[0]["parts"][0]["tool_call"]["input_json"] == {"cmd": "rm -rf /"}
+
+
+def test_postflight_deny_blocks_a_non_streaming_response(hook_server):
+    """A non-streaming deny reaches the caller as a 400 and the output is suppressed.
+
+    Verified against a live proxy: ``ProxyLogging.post_call_success_hook`` is
+    awaited before the route serializes the response, so the exception replaces
+    the provider output instead of arriving after it.
+    """
+    hook_server.response = {"action": "deny", "rule_id": "no-secrets", "reason": "sensitive output"}
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = _postflight_guard(client, guardrail_name="agento11y-postflight")
+    data = _request_data()
+
+    with pytest.raises(GuardrailRaisedException) as excinfo:
+        _post_call(guard, data)
+
+    assert "sensitive output" in str(excinfo.value)
+    assert "no-secrets" in str(excinfo.value)
+    assert excinfo.value.guardrail_name == "agento11y-postflight"
+    assert excinfo.value.status_code == 400
+    entries = data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_intervened"]
+
+
+def test_postflight_deny_on_a_streamed_response_records_without_blocking(hook_server, caplog):
+    """A streamed response is already delivered, so a deny can only be recorded.
+
+    LiteLLM runs this hook on the assembled response after the last chunk has
+    been flushed (``_run_deferred_stream_guardrails``) and swallows whatever it
+    raises, so raising would produce a proxy traceback and nothing else.
+    """
+    hook_server.response = {"action": "deny", "rule_id": "no-secrets", "reason": "sensitive output"}
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = _postflight_guard(client)
+    data = _request_data(stream=True)
+    response = _chat_response()
+
+    with caplog.at_level(logging.WARNING):
+        assert _post_call(guard, data, response) is None
+
+    assert response.choices[0].message.content == "here is the secret"
+    assert any("already been delivered" in record.getMessage() for record in caplog.records)
+    entries = data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["guardrail_intervened"]
+    assert entries[0]["guardrail_response"]["reason"] == "sensitive output"
+    # The only field that tells a recorded deny apart from an enforced one.
+    assert entries[0]["guardrail_response"]["enforced"] is False
+
+
+def test_streamed_deny_record_carries_its_own_timings(hook_server):
+    """The record is written by hand, so it has to carry what the decorator would.
+
+    Without timings the OTel exporter stamps the guardrail span at export time
+    and reports a near-zero duration.
+    """
+    hook_server.response = {"action": "deny", "rule_id": "no-secrets", "reason": "sensitive output"}
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = _postflight_guard(client)
+    data = _request_data(stream=True)
+
+    assert _post_call(guard, data) is None
+
+    entry = data["metadata"]["standard_logging_guardrail_information"][0]
+    assert entry["start_time"] is not None
+    assert entry["end_time"] >= entry["start_time"]
+    assert entry["duration"] >= 0
+
+
+class _NeverSelfRecorded:
+    """Stands in for the flag LiteLLM added in 1.95.0, on a version without it."""
+
+    def set(self, value: bool) -> None:
+        return None
+
+    def get(self) -> bool:
+        return False
+
+    def reset(self, token: Any) -> None:
+        return None
+
+
+@pytest.mark.parametrize(
+    ("hook_response", "hook_status", "want_status"),
+    [
+        pytest.param({"action": "allow"}, 200, "success", id="allow"),
+        pytest.param(
+            {"action": "deny", "rule_id": "no-secrets", "reason": "sensitive output"},
+            200,
+            "guardrail_intervened",
+            id="deny",
+        ),
+        pytest.param({}, 500, "guardrail_failed_to_respond", id="evaluation-failed"),
+    ],
+)
+def test_a_streamed_verdict_is_recorded_once_without_litellm_s_self_record_flag(
+    hook_server,
+    monkeypatch,
+    hook_response,
+    hook_status,
+    want_status,
+):
+    """LiteLLM before 1.95.0 has no flag for a guardrail that files its own verdict.
+
+    On those versions ``log_guardrail_information`` appends a passing entry after
+    a normal return whatever the wrapped function recorded, so a hand-filed deny
+    reads as denied and passed at once. This package supports 1.82.3, so the
+    streamed path files every verdict itself and stays undecorated.
+    """
+    monkeypatch.setattr(custom_guardrail, "_guardrail_self_recorded", _NeverSelfRecorded(), raising=False)
+    hook_server.response = hook_response
+    hook_server.status = hook_status
+    client = _new_client(
+        hook_server.url,
+        hooks=HooksConfig(enabled=True, phases=["postflight"], timeout_seconds=1.0, fail_open=True),
+    )
+    guard = _postflight_guard(client)
+    data = _request_data(stream=True)
+
+    assert _post_call(guard, data) is None
+
+    assert _only_guardrail_entry(data)["guardrail_status"] == want_status
+
+
+@pytest.mark.parametrize("stream", [1, "true", "True"], ids=["int", "lowercase-string", "string"])
+def test_postflight_deny_blocks_a_request_whose_stream_flag_is_truthy_but_not_true(hook_server, stream):
+    """LiteLLM streams on ``data["stream"] is True`` and nothing coerces the value.
+
+    A client that sends ``"stream": 1`` is served non-streamed, so a deny has to
+    raise. Reading the flag as truthy would take the record-only branch and hand
+    the denied content to the caller with HTTP 200.
+    """
+    hook_server.response = {"action": "deny", "rule_id": "no-secrets", "reason": "sensitive output"}
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = _postflight_guard(client)
+
+    with pytest.raises(GuardrailRaisedException):
+        _post_call(guard, _request_data(stream=stream))
+
+
+def test_preflight_deny_blocks_a_streaming_request(hook_server):
+    """Only postflight downgrades to recording on a stream.
+
+    Preflight runs before routing, so a streamed request is rejected before the
+    first chunk and the caller still gets a 400.
+    """
+    hook_server.response = {"action": "deny", "rule_id": "no-secrets", "reason": "blocked"}
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+
+    with pytest.raises(GuardrailRaisedException):
+        _call(guard, _request_data(stream=True))
+
+
+def test_postflight_allow_records_a_success_verdict(hook_server):
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = _postflight_guard(client)
+    data = _request_data()
+
+    _post_call(guard, data)
+
+    entries = data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_status"] for entry in entries] == ["success"]
+    assert entries[0]["guardrail_name"] == DEFAULT_GUARDRAIL_NAME
+
+
+@pytest.mark.parametrize(
+    "hooks",
+    [
+        HooksConfig(enabled=False),
+        HooksConfig(enabled=True),
+        HooksConfig(enabled=True, phases=["preflight"]),
+    ],
+    ids=["hooks-disabled", "default-phases", "postflight-phase-not-configured"],
+)
+def test_postflight_does_not_run_when_the_sdk_phase_is_not_configured(hook_server, hooks):
+    """``mode: post_call`` is only one of the two gates; ``HooksConfig.phases`` is the other.
+
+    The gate has to sit outside the decorated body. Left to
+    ``Client.evaluate_hook``, it returns allow without contacting the server and
+    the decorator records a passed check, so a deployment that enabled
+    ``post_call`` and left ``HooksConfig`` alone reports every response as
+    evaluated and passed.
+    """
+    client = _new_client(hook_server.url, hooks=hooks)
+    guard = _postflight_guard(client)
+    response = _chat_response()
+    data = _request_data()
+
+    assert _post_call(guard, data, response) is None
+    assert hook_server.requests == []
+    assert "standard_logging_guardrail_information" not in data["metadata"]
+
+
+def test_postflight_does_not_run_on_a_body_it_cannot_read_input_from(hook_server):
+    """Stands in for the call-type gate preflight applies.
+
+    The post-call hook is not given a call type, and a native pass-through body
+    sits under ``data["data"]``, so the request input is the only signal that
+    this is not a route the adapter guards.
+    """
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = _postflight_guard(client)
+    data = {
+        "model": "claude-3-5-sonnet",
+        "data": {"messages": [{"role": "user", "content": "hello"}]},
+        "metadata": {},
+    }
+
+    assert _post_call(guard, data) is None
+    assert hook_server.requests == []
+    assert "standard_logging_guardrail_information" not in data["metadata"]
+
+
+def test_postflight_transport_failure_fail_closed_raises(hook_server):
+    """Fail-closed turns an already-billed provider success into a proxy 500."""
+    hook_server.status = 500
+    client = _new_client(
+        hook_server.url,
+        hooks=HooksConfig(enabled=True, phases=["postflight"], timeout_seconds=1.0, fail_open=False),
+    )
+    guard = _postflight_guard(client)
+    data = _request_data()
+
+    with pytest.raises(HookTransportError):
+        _post_call(guard, data)
+
+    assert _only_guardrail_entry(data)["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+def test_postflight_does_not_run_when_the_guardrail_is_not_enabled_for_the_request(hook_server):
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = Agento11yLiteLLMGuardrail(client=client, event_hook="post_call", default_on=False)
+    data = _request_data()
+
+    assert _post_call(guard, data) is None
+    assert hook_server.requests == []
+    assert "standard_logging_guardrail_information" not in data["metadata"]
+
+
+def test_postflight_does_not_run_on_a_preflight_only_guardrail(hook_server):
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["preflight", "postflight"]))
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+
+    assert _post_call(guard, _request_data()) is None
+    assert hook_server.requests == []
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        pytest.param(litellm.ImageResponse(created=1, data=[{"url": "https://example.test/cat.png"}]), id="image"),
+        pytest.param(_chat_response(""), id="empty_content"),
+        pytest.param(None, id="no_response"),
+    ],
+)
+def test_postflight_records_no_verdict_when_the_response_carries_no_text(hook_server, response):
+    """A response this adapter cannot read is skipped rather than sent as empty output.
+
+    An evaluation with no output returns allow and records a verdict that reads
+    like a completed check.
+    """
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = _postflight_guard(client)
+    data = _request_data()
+
+    assert _post_call(guard, data, response) is None
+    assert hook_server.requests == []
+    assert "standard_logging_guardrail_information" not in data["metadata"]
+
+
+def test_both_phases_evaluate_exactly_once_each_for_one_request(hook_server):
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["preflight", "postflight"]))
+    guard = Agento11yLiteLLMGuardrail(client=client, event_hook=["pre_call", "post_call"], default_on=True)
+    data = _request_data()
+
+    assert _call(guard, data) is None
+    assert _post_call(guard, data) is None
+
+    assert [payload["phase"] for payload in hook_server.payloads] == ["preflight", "postflight"]
+    entries = data["metadata"]["standard_logging_guardrail_information"]
+    assert len(entries) == 2
+
+
+@pytest.mark.parametrize(
+    "event_hook",
+    ["post_call", GuardrailEventHooks.post_call, ["post_call"]],
+    ids=["string", "enum", "list"],
+)
+def test_post_call_mode_is_accepted_in_every_shape(hook_server, event_hook):
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = Agento11yLiteLLMGuardrail(client=client, event_hook=event_hook, default_on=True)
+
+    assert guard.event_hook == event_hook
+    assert _post_call(guard, _request_data()) is None
+    assert len(hook_server.requests) == 1
+
+
+def test_postflight_slow_server_honors_request_timeout_and_names_the_phase(hook_server, caplog):
+    hook_server.delay = 1.0
+    client = _new_client(
+        hook_server.url,
+        hooks=HooksConfig(enabled=True, phases=["postflight"], timeout_seconds=5.0, fail_open=True),
+    )
+    guard = _postflight_guard(client, request_timeout_seconds=0.1)
+
+    data = _request_data()
+
+    with caplog.at_level(logging.WARNING):
+        assert _post_call(guard, data) is None
+
+    assert any(
+        "postflight hook evaluation failed" in record.getMessage() and "timed out after 0.1s" in record.getMessage()
+        for record in caplog.records
+    )
+    entry = _only_guardrail_entry(data)
+    assert entry["guardrail_status"] == "guardrail_failed_to_respond"
+    assert entry["duration"] >= 0.1
+
+
 def test_public_factory_builds_a_configured_guardrail():
     client = _new_client("http://127.0.0.1:1")
     guard = create_agento11y_litellm_guardrail(
@@ -931,6 +1478,13 @@ def test_public_factory_builds_a_configured_guardrail():
     assert guard.guardrail_name == "agento11y-preflight"
     assert guard.default_on is True
     assert guard.event_hook is GuardrailEventHooks.pre_call
+
+
+def test_public_factory_accepts_postflight_mode():
+    client = _new_client("http://127.0.0.1:1")
+    guard = create_agento11y_litellm_guardrail(client=client, event_hook=["pre_call", "post_call"])
+
+    assert guard.event_hook == ["pre_call", "post_call"]
 
 
 def _only_guardrail_entry(data: dict[str, Any]) -> dict[str, Any]:

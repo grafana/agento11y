@@ -1,8 +1,9 @@
-"""LiteLLM guardrail that enforces Agent Observability preflight hook rules.
+"""LiteLLM guardrail that enforces Agent Observability hook rules.
 
-Pre-call hooks are a proxy-only LiteLLM feature: ``ProxyLogging.pre_call_hook``
-invokes them, and nothing on the ``litellm.completion()`` SDK path does. A direct
-SDK call is therefore never guarded by this class.
+Call hooks are a proxy-only LiteLLM feature: ``ProxyLogging.pre_call_hook`` and
+``ProxyLogging.post_call_success_hook`` invoke them, and nothing on the
+``litellm.completion()`` SDK path does. A direct SDK call is therefore never
+guarded by this class.
 """
 
 from __future__ import annotations
@@ -13,13 +14,15 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import replace
+from datetime import datetime
 from functools import lru_cache, partial
 from typing import TYPE_CHECKING, Any
 
 import litellm
 from agento11y import Client
-from agento11y.errors import HookTransportError
+from agento11y.errors import HookDeniedError, HookTransportError
 from agento11y.hooks import (
+    HookAction,
     HookContext,
     HookEvaluateRequest,
     HookEvaluateResponse,
@@ -39,6 +42,8 @@ from .handler import (
     _extract_text_content,
     _first_metadata_value,
     _map_messages,
+    _map_response_output,
+    _map_responses_output,
     _map_tools_list,
     _metadata_sources_from,
     _request_tags_from,
@@ -63,8 +68,18 @@ DEFAULT_GUARDRAIL_NAME = "agento11y"
 UNKNOWN_PROVIDER = "unknown"
 UNKNOWN_MODEL = "unknown"
 
-# Only preflight is wired up. post_call arrives with postflight support.
-SUPPORTED_EVENT_HOOKS = (GuardrailEventHooks.pre_call,)
+# ``during_call`` (``async_moderation_hook``) is not supported. It runs in
+# parallel with the provider call, so it cannot save spend, and it is never
+# handed the response, so all it can do is repeat the preflight check after the
+# call has already started. A ``during_call`` deny does suppress the output:
+# LiteLLM awaits the moderation gather before it reads the provider response.
+SUPPORTED_EVENT_HOOKS = (GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call)
+
+# The hook phase each supported mode evaluates.
+PHASE_FOR_EVENT_HOOK = {
+    GuardrailEventHooks.pre_call.value: HookPhase.PREFLIGHT.value,
+    GuardrailEventHooks.post_call.value: HookPhase.POSTFLIGHT.value,
+}
 
 # Call types this adapter can read request input from.
 #
@@ -107,20 +122,25 @@ _GUARD_FRAMEWORK_TAGS = {**FRAMEWORK_TAGS, "agento11y.framework.source": "guardr
 
 
 class Agento11yLiteLLMGuardrail(CustomGuardrail):
-    """Evaluates agento11y hook rules before a proxy request reaches the provider.
+    """Evaluates agento11y hook rules around a proxy request.
 
     Deliberately not a subclass of ``Agento11yLiteLLMLogger``. Both objects sit
     in ``litellm.callbacks`` at once, and a bare ``CustomGuardrail`` is harmless
     there only because it inherits ``CustomLogger``'s no-op logging methods. Give
     this class the logger's export behavior and every generation exports twice.
 
-    ``ProxyLogging.pre_call_hook`` walks ``litellm.callbacks`` and runs every
-    ``CustomGuardrail`` it finds, so a dotted path next to the logger is enough::
+    ``ProxyLogging.pre_call_hook`` and ``ProxyLogging.post_call_success_hook``
+    walk ``litellm.callbacks`` and run every ``CustomGuardrail`` they find, so a
+    dotted path next to the logger is enough::
 
         litellm_settings:
           callbacks:
             - agento11y_callback.agento11y_handler
             - agento11y_callback.agento11y_guards
+
+    ``event_hook`` selects the phases: ``pre_call`` (the default) evaluates
+    preflight rules before the provider is called, ``post_call`` evaluates
+    postflight rules against the response, and a list runs both.
     """
 
     def __init__(
@@ -140,14 +160,15 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
         if request_timeout_seconds <= 0:
             raise ValueError(f"request_timeout_seconds must be greater than zero, got {request_timeout_seconds}")
 
-        event_hook = kwargs.pop("event_hook", None)
-        _reject_unsupported_event_hooks(event_hook)
+        event_hook = _normalized_event_hook(kwargs.pop("event_hook", None))
 
         super().__init__(
             guardrail_name=kwargs.pop("guardrail_name", None) or DEFAULT_GUARDRAIL_NAME,
             supported_event_hooks=list(SUPPORTED_EVENT_HOOKS),
             # Kept as configured so LiteLLM's tag-conditional Mode form keeps
-            # working.
+            # working. An unset mode means preflight only: LiteLLM reads None as
+            # "every phase", which would start sending postflight evaluations
+            # for every existing deployment on upgrade.
             event_hook=GuardrailEventHooks.pre_call if event_hook is None else event_hook,
             **kwargs,
         )
@@ -158,19 +179,20 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
         hooks = client.hooks_config
         # ``resolve_config`` normalizes an empty phase list to ``["preflight"]``,
         # and the SDK defends against an empty one anyway; mirroring that keeps
-        # an empty list from reading as "preflight not configured".
+        # an empty list from reading as "no phase configured".
         phases = hooks.phases or [HookPhase.PREFLIGHT.value]
-        self._preflight_configured = hooks.enabled and HookPhase.PREFLIGHT.value in phases
+        self._configured_phases = frozenset(phases) if hooks.enabled else frozenset()
+        # The phases the configured modes evaluate. An unset mode is preflight,
+        # the same default ``super().__init__`` is given above.
+        self._guarded_phases = frozenset(
+            PHASE_FOR_EVENT_HOOK[mode]
+            for mode in _event_hook_values(event_hook) or [GuardrailEventHooks.pre_call.value]
+        )
         self._fail_open = hooks.fail_open
         # Evaluations are submitted fail-closed so an SDK-side transport failure
         # reaches this adapter instead of resolving to a synthetic allow.
         self._fail_closed_hooks = replace(hooks, fail_open=False)
-        if not self._preflight_configured:
-            logger.warning(
-                "agento11y: guardrail %r is registered but the client's hooks config does not enable preflight; "
-                "no request will be evaluated",
-                self.guardrail_name,
-            )
+        self._warn_about_unconfigured_phases()
         self._agent_name = agent_name
         self._agent_name_metadata_keys = tuple(agent_name_metadata_keys)
         self._agent_version = agent_version
@@ -193,11 +215,10 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
 
         Every gate that ends in "do not evaluate" sits outside the decorated
         body, so a request this guardrail did not check records no verdict at
-        all: the client's hooks config does not enable preflight, the guardrail
-        is not enabled for the request, the route carries input this adapter
-        cannot map, or the mapped input is empty. The proxy applies the
-        enablement gate before calling in, so that one only matters for direct
-        invocation.
+        all: the SDK is not configured for the phase, the guardrail is not
+        enabled for the request, the route carries input this adapter cannot
+        map, or the mapped input is empty. The proxy applies the enablement gate
+        before calling in, so that one only matters for direct invocation.
 
         A failed evaluation does record a verdict: the exception crosses
         ``_run_preflight``'s decorator, which files
@@ -205,8 +226,8 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
         ``HooksConfig.fail_open``.
         """
         # Checked first: the result cannot change per request.
-        if not self._preflight_configured:
-            logger.debug("agento11y: skipping preflight evaluation, the client's hooks config disables preflight")
+        if not self._phase_configured(HookPhase.PREFLIGHT):
+            logger.debug("agento11y: skipping preflight evaluation, the SDK is not configured for the phase")
             return None
 
         if not self.should_run_guardrail(data, GuardrailEventHooks.pre_call):
@@ -235,6 +256,97 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
             )
             return None
 
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+    ) -> None:
+        """Evaluates agento11y postflight rules against the provider response.
+
+        Returns ``None`` so LiteLLM keeps the response it already has; a deny is
+        signalled by raising, not by returning a replacement.
+
+        The provider has already been called and billed by the time this runs.
+        Postflight decides whether the output reaches the caller, not whether the
+        request costs money.
+
+        What a deny can do depends on how the response is delivered:
+
+        - Non-streaming: ``ProxyLogging.post_call_success_hook`` is awaited in
+          ``base_process_llm_request`` before the route serializes anything, so
+          raising returns HTTP 400 and the provider output never leaves the
+          proxy.
+        - Streaming: LiteLLM has already flushed every chunk and calls this hook
+          on the assembled response from ``_run_deferred_stream_guardrails``,
+          which catches whatever it raises. A deny is recorded and logged in
+          ``_detect_postflight`` instead of raised, because raising buys nothing
+          and costs a traceback in the proxy log. Only a ``CustomStreamWrapper``
+          gets that deferred pass, so a streamed ``/v1/responses`` or
+          ``/v1/messages`` response never reaches this hook at all and produces
+          no verdict.
+
+        This class deliberately implements neither
+        ``async_post_call_streaming_iterator_hook`` nor ``apply_guardrail``.
+        Defining either makes ``_run_deferred_stream_guardrails`` take a
+        different branch and skip this hook on the streaming path, and
+        ``apply_guardrail`` also reroutes the non-streaming path through
+        ``UnifiedLLMGuardrails``, which bypasses this method as well.
+
+        Every gate that ends in "do not evaluate" sits above the two evaluating
+        methods, so a request this guardrail did not check records no verdict.
+
+        A failed evaluation does record a verdict: it is filed as
+        ``guardrail_failed_to_respond``, by the decorator on the enforcing path
+        and by hand on the streamed one, and this method then applies
+        ``HooksConfig.fail_open``.
+        """
+        # Checked first: the result cannot change per request.
+        if not self._phase_configured(HookPhase.POSTFLIGHT):
+            logger.debug("agento11y: skipping postflight evaluation, the SDK is not configured for the phase")
+            return None
+
+        if not self.should_run_guardrail(data, GuardrailEventHooks.post_call):
+            return None
+
+        hook_input = _hook_input(data)
+        if not hook_input.messages and not hook_input.system_prompt:
+            # Stands in for the call-type gate preflight applies: this hook is
+            # not given a call type, and a body this adapter cannot read input
+            # from is the same signal. It is also what a native pass-through
+            # request looks like, whose provider-native body sits under
+            # ``data["data"]``, so those routes stay unguarded on both phases.
+            logger.debug("agento11y: skipping postflight evaluation, request carries no evaluable text")
+            return None
+
+        output = _map_output_messages(response)
+        if not output:
+            # An embedding, an image, or a turn whose content this adapter
+            # cannot turn into text. Evaluating it would send empty output, get
+            # an allow back, and record a verdict that reads like a check.
+            logger.debug("agento11y: skipping postflight evaluation, response carries no evaluable text")
+            return None
+
+        hook_input.output = output
+
+        # LiteLLM decides to stream on ``data["stream"] is True``, so a body
+        # carrying ``1`` or ``"true"`` is served non-streamed and has to take the
+        # enforcing branch. The value is whatever the client sent; nothing
+        # coerces it before the hook runs.
+        run = self._detect_postflight if data.get("stream") is True else self._enforce_postflight
+
+        try:
+            return await run(user_api_key_dict=user_api_key_dict, data=data, hook_input=hook_input)
+        except HookTransportError as exc:
+            if not self._fail_open:
+                raise
+            logger.warning(
+                "agento11y: guardrail %r allowing the response (fail_open): %s",
+                self.guardrail_name,
+                exc,
+            )
+            return None
+
     @log_guardrail_information
     async def _run_preflight(self, *, user_api_key_dict: UserAPIKeyAuth, data: dict, hook_input: HookInput) -> None:
         """Evaluate preflight rules and translate a deny into a proxy 400.
@@ -254,10 +366,161 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
         if denied is None:
             return None
 
-        detail = f"{denied.reason} (rule {denied.rule_id})" if denied.rule_id else denied.reason
-        raise GuardrailRaisedException(
+        raise self._denied_exception(denied)
+
+    @log_guardrail_information
+    async def _enforce_postflight(
+        self,
+        *,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict,
+        hook_input: HookInput,
+    ) -> None:
+        """Evaluate postflight rules and translate a deny into a proxy 400.
+
+        Runs for a response the proxy has not sent yet. ``transformed_input`` is
+        ignored for the same reason as preflight: the SDK's wire parser keeps
+        only text and thinking parts, so applying it would drop tool calls and
+        tool results.
+
+        The decorator infers the recorded guardrail mode from the wrapped
+        function's name and falls back to ``self.event_hook`` for a name it does
+        not know (``custom_guardrail.py``). A guardrail registered for both modes
+        therefore records both modes on each entry; the phase is unambiguous in
+        the hook request itself.
+        """
+        response = await self._evaluate(self._postflight_request(data, user_api_key_dict, hook_input))
+        denied = hook_denied_from_response(response)
+        if denied is None:
+            return None
+
+        raise self._denied_exception(denied)
+
+    async def _detect_postflight(
+        self,
+        *,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict,
+        hook_input: HookInput,
+    ) -> None:
+        """Evaluate postflight rules for a response the caller already has.
+
+        A deny cannot be enforced on a streamed response, so it is recorded as an
+        intervention that says so and nothing is raised.
+
+        Deliberately not wrapped in ``log_guardrail_information``: a deny has to
+        be filed by hand, and the decorator files a normal return as ``success``
+        on top of it. Its flag for a guardrail that records its own verdict
+        (``_guardrail_self_recorded``) only exists from LiteLLM 1.95.0, and this
+        package supports 1.82.3, so relying on it would double-file every
+        streamed verdict on an older proxy. Every outcome is therefore recorded
+        here, including the two the decorator would have handled.
+        """
+        request = self._postflight_request(data, user_api_key_dict, hook_input)
+
+        started = datetime.now()
+        try:
+            response = await self._evaluate(request)
+        except HookTransportError as exc:
+            self._record_postflight_verdict(data, started, "guardrail_failed_to_respond", str(exc))
+            raise
+
+        denied = hook_denied_from_response(response)
+        if denied is None:
+            self._record_postflight_verdict(data, started, "success", {"action": HookAction.ALLOW.value})
+            return None
+
+        logger.warning(
+            "agento11y: postflight rule denied a streamed response that has already been delivered "
+            "to the caller, recording the verdict only: %s",
+            _denial_detail(denied),
+        )
+        self._record_postflight_verdict(
+            data,
+            started,
+            "guardrail_intervened",
+            {
+                "action": HookAction.DENY.value,
+                "rule_id": denied.rule_id,
+                "reason": denied.reason,
+                # The only field that tells a recorded deny from an enforced one.
+                "enforced": False,
+            },
+        )
+        return None
+
+    def _postflight_request(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        hook_input: HookInput,
+    ) -> HookEvaluateRequest:
+        return HookEvaluateRequest(
+            phase=HookPhase.POSTFLIGHT.value,
+            context=self._context(data, user_api_key_dict),
+            input=hook_input,
+        )
+
+    def _record_postflight_verdict(self, data: dict, started: datetime, status: str, payload: Any) -> None:
+        """File one postflight verdict the way the decorator would.
+
+        The timings are passed for the reason the decorator passes them: without
+        them the OTel exporter stamps the guardrail span at export time and
+        reports a near-zero duration.
+        """
+        ended = datetime.now()
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=payload,
+            request_data=data,
+            guardrail_status=status,
+            start_time=started.timestamp(),
+            end_time=ended.timestamp(),
+            duration=(ended - started).total_seconds(),
+            event_type=GuardrailEventHooks.post_call,
+        )
+
+    def _phase_configured(self, phase: HookPhase) -> bool:
+        """Whether the SDK will evaluate this phase against the server.
+
+        Mirrors the gate in ``agento11y.hooks.evaluate_hook``, which returns
+        allow without contacting the server when hooks are disabled or the phase
+        is not listed. Reading it here keeps that case out of the decorated
+        body: the decorator would otherwise record a passed check, so an
+        operator who set ``event_hook="post_call"`` but left ``HooksConfig``
+        alone would see "N evaluated, N passed" for rules that never ran.
+        """
+        return phase.value in self._configured_phases
+
+    def _warn_about_unconfigured_phases(self) -> None:
+        """Warn at startup about a phase this guardrail runs but the SDK will not evaluate.
+
+        A guardrail whose mode has no matching ``HooksConfig.phases`` entry is
+        silent otherwise: it skips every request and records no verdict.
+        """
+        unconfigured = sorted(self._guarded_phases - self._configured_phases)
+        if not unconfigured:
+            return
+
+        if self._guarded_phases & self._configured_phases:
+            logger.warning(
+                "agento11y: guardrail %r runs on %s but the client's hooks config does not enable it; "
+                "that phase will not be evaluated",
+                self.guardrail_name,
+                ", ".join(unconfigured),
+            )
+            return
+
+        logger.warning(
+            "agento11y: guardrail %r is registered but the client's hooks config does not enable %s; "
+            "no request will be evaluated",
+            self.guardrail_name,
+            ", ".join(unconfigured),
+        )
+
+    def _denied_exception(self, denied: HookDeniedError) -> GuardrailRaisedException:
+        return GuardrailRaisedException(
             guardrail_name=self.guardrail_name,
-            message=f"blocked by guardrail {self.guardrail_name}: {detail}",
+            message=f"blocked by guardrail {self.guardrail_name}: {_denial_detail(denied)}",
             should_wrap_with_default_message=False,
         )
 
@@ -313,9 +576,9 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
         allow. Never return a synthetic allow from here, because LiteLLM files
         it as a completed check. Every failure crosses the recording decorator
         instead, and LiteLLM files it as ``guardrail_failed_to_respond`` with
-        the real duration. ``async_pre_call_hook`` applies
-        ``HooksConfig.fail_open`` afterwards, so the allow-or-raise outcome
-        still follows the configured policy.
+        the real duration. The calling hook applies ``HooksConfig.fail_open``
+        afterwards, so the allow-or-raise outcome still follows the configured
+        policy.
         """
         try:
             loop = asyncio.get_running_loop()
@@ -333,10 +596,50 @@ class Agento11yLiteLLMGuardrail(CustomGuardrail):
             raise
         except asyncio.TimeoutError as exc:
             raise HookTransportError(
-                f"agento11y hook evaluation failed: timed out after {self._request_timeout_seconds}s"
+                f"agento11y {request.phase} hook evaluation failed: timed out after {self._request_timeout_seconds}s"
             ) from exc
         except Exception as exc:  # noqa: BLE001
-            raise HookTransportError(f"agento11y hook evaluation failed: {type(exc).__name__}: {exc}") from exc
+            raise HookTransportError(
+                f"agento11y {request.phase} hook evaluation failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
+
+def _denial_detail(denied: HookDeniedError) -> str:
+    """Render a deny verdict as one line of reason plus rule id."""
+    return f"{denied.reason} (rule {denied.rule_id})" if denied.rule_id else denied.reason
+
+
+def _map_output_messages(response: Any) -> list[Message]:
+    """Map a provider response into agento11y output messages.
+
+    Each route hands the post-call hook a different object: a ``ModelResponse``
+    for chat completions and for an assembled stream, a ``ResponsesAPIResponse``
+    for ``/v1/responses``, and a plain Anthropic-shaped dict for ``/v1/messages``
+    (LiteLLM normalizes that one to chat shape for logging, but not here).
+
+    The shape is read off the payload rather than off a call type, because this
+    hook is not given one.
+    """
+    payload = _response_payload(response)
+    if payload is None:
+        return []
+    if isinstance(payload, dict) and not payload.get("choices") and isinstance(payload.get("output"), list):
+        return _map_responses_output(payload)
+    return _map_response_output(payload)
+
+
+def _response_payload(response: Any) -> Any:
+    """Reduce a LiteLLM response object to the dict or string the mappers read."""
+    if response is None or isinstance(response, (str, dict)):
+        return response
+    dump = getattr(response, "model_dump", None)
+    if dump is None:
+        return None
+    try:
+        return dump()
+    except Exception:  # noqa: BLE001
+        logger.debug("agento11y: could not read %s as a response payload", type(response).__name__)
+        return None
 
 
 def _resolve_provider(data: dict, model_name: str) -> str:
@@ -376,19 +679,35 @@ def _provider_for_model(model_name: str) -> str:
     return provider or UNKNOWN_PROVIDER
 
 
-def _reject_unsupported_event_hooks(event_hook: Any) -> None:
-    """Raise on any configured mode other than ``pre_call``.
+def _normalized_event_hook(event_hook: Any) -> Any:
+    """Validate the configured mode and coerce it to a shape LiteLLM matches.
 
-    A guardrail configured with an unsupported mode would silently never run;
-    failing at construction surfaces the misconfiguration at proxy startup.
+    A guardrail that runs on no phase runs silently, so both ways of building
+    one fail at construction instead:
+
+    - A mode this adapter does not implement. ``during_call`` and
+      ``logging_only`` are valid LiteLLM modes, so nothing downstream objects.
+    - A sequence with no modes in it, which matches nothing whatever its type.
+
+    A tuple or a set is rewritten as a list. ``_event_hook_is_event_type``
+    special-cases a list and a ``Mode`` and compares everything else to the mode
+    string, an equality no tuple or set can satisfy.
     """
     supported = {hook.value for hook in SUPPORTED_EVENT_HOOKS}
-    for mode in _event_hook_values(event_hook):
+    modes = _event_hook_values(event_hook)
+    for mode in modes:
         if mode not in supported:
             raise ValueError(
-                f"Agento11yLiteLLMGuardrail does not support mode {mode!r}; "
-                f"supported modes: {sorted(supported)}. Postflight evaluation is not implemented yet."
+                f"Agento11yLiteLLMGuardrail does not support mode {mode!r}; supported modes: {sorted(supported)}."
             )
+    if isinstance(event_hook, (list, tuple, set)):
+        if not modes:
+            raise ValueError(
+                f"Agento11yLiteLLMGuardrail needs at least one mode, got {event_hook!r}; "
+                f"supported modes: {sorted(supported)}."
+            )
+        return modes
+    return event_hook
 
 
 def _event_hook_values(event_hook: Any) -> list[str]:
