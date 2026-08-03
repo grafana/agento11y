@@ -171,6 +171,24 @@ func TestGenerationExporterFlushesByInterval(t *testing.T) {
 	}
 }
 
+func TestResetBatchClearsReferences(t *testing.T) {
+	first := 1
+	second := 2
+	batch := []*int{&first, &second}
+	backing := batch
+
+	batch = resetBatch(batch)
+
+	if len(batch) != 0 {
+		t.Fatalf("reset batch length = %d, want 0", len(batch))
+	}
+	for i, value := range backing {
+		if value != nil {
+			t.Errorf("backing array slot %d still retains a reference", i)
+		}
+	}
+}
+
 func TestShutdownFlushesPendingGenerations(t *testing.T) {
 	exporter := &capturingGenerationExporter{}
 	client := NewClient(Config{

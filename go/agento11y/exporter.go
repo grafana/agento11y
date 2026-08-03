@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -539,9 +540,9 @@ func (c *Client) runExportWorker() {
 			return nil
 		}
 
-		request := &agento11yv1.ExportGenerationsRequest{Generations: generationBatch}
+		request := &agento11yv1.ExportGenerationsRequest{Generations: slices.Clone(generationBatch)}
 		err := c.exportWithRetry(request)
-		generationBatch = generationBatch[:0]
+		generationBatch = resetBatch(generationBatch)
 		return err
 	}
 	flushWorkflowSteps := func() error {
@@ -549,9 +550,9 @@ func (c *Client) runExportWorker() {
 			return nil
 		}
 
-		request := &agento11yv1.ExportWorkflowStepsRequest{WorkflowSteps: workflowStepBatch}
+		request := &agento11yv1.ExportWorkflowStepsRequest{WorkflowSteps: slices.Clone(workflowStepBatch)}
 		err := c.exportWorkflowStepsWithRetry(request)
-		workflowStepBatch = workflowStepBatch[:0]
+		workflowStepBatch = resetBatch(workflowStepBatch)
 		return err
 	}
 	flushAll := func() error {
@@ -692,6 +693,13 @@ func (c *Client) runExportWorker() {
 			resetTimer(timer, flushInterval)
 		}
 	}
+}
+
+// resetBatch clears pointer slots before reusing the backing array so exported
+// payloads can be garbage collected while the batch is empty.
+func resetBatch[T any](batch []*T) []*T {
+	clear(batch)
+	return batch[:0]
 }
 
 func resetTimer(timer *time.Timer, duration time.Duration) {
