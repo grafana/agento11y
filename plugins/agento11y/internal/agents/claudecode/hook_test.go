@@ -17,7 +17,9 @@ import (
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -335,11 +337,19 @@ func runHookForTest(t *testing.T, input hookInput) string {
 	return logs.String()
 }
 
+// hookFixtureTimestamp is the timestamp every fixture line shares unless a
+// test needs distinct times to assert span windows.
+const hookFixtureTimestamp = "2025-06-01T12:00:00Z"
+
 func buildHookUserJSONL(sessionID, text string) string {
+	return buildHookUserJSONLAt(sessionID, text, hookFixtureTimestamp)
+}
+
+func buildHookUserJSONLAt(sessionID, text, ts string) string {
 	line := map[string]any{
 		"type":      "user",
 		"sessionId": sessionID,
-		"timestamp": "2025-06-01T12:00:00Z",
+		"timestamp": ts,
 		"version":   "1.0.0",
 		"message": map[string]any{
 			"role":    "user",
@@ -351,17 +361,36 @@ func buildHookUserJSONL(sessionID, text string) string {
 }
 
 func buildHookAssistantJSONL(sessionID, requestID, stopReason, text string, outputTokens int64) string {
+	return buildHookAssistantJSONLAt(sessionID, requestID, stopReason, text, outputTokens, hookFixtureTimestamp)
+}
+
+func buildHookAssistantJSONLAt(sessionID, requestID, stopReason, text string, outputTokens int64, ts string) string {
+	return buildHookAssistantLineAt(sessionID, requestID, stopReason, ts,
+		[]any{map[string]any{"type": "text", "text": text}}, outputTokens)
+}
+
+// buildHookAssistantToolUseJSONLAt builds an assistant turn that calls one tool.
+func buildHookAssistantToolUseJSONLAt(sessionID, requestID, toolUseID, toolName, ts string) string {
+	return buildHookAssistantLineAt(sessionID, requestID, "tool_use", ts, []any{map[string]any{
+		"type":  "tool_use",
+		"id":    toolUseID,
+		"name":  toolName,
+		"input": map[string]any{"command": "ls"},
+	}}, 7)
+}
+
+func buildHookAssistantLineAt(sessionID, requestID, stopReason, ts string, content []any, outputTokens int64) string {
 	line := map[string]any{
 		"type":      "assistant",
 		"sessionId": sessionID,
-		"timestamp": "2025-06-01T12:00:00Z",
+		"timestamp": ts,
 		"version":   "1.0.0",
 		"requestId": requestID,
 		"message": map[string]any{
 			"model":       "claude-opus-4",
 			"stop_reason": stopReason,
 			"usage":       map[string]any{"input_tokens": 3, "output_tokens": outputTokens},
-			"content":     []any{map[string]any{"type": "text", "text": text}},
+			"content":     content,
 		},
 	}
 	data, _ := json.Marshal(line)
@@ -369,10 +398,14 @@ func buildHookAssistantJSONL(sessionID, requestID, stopReason, text string, outp
 }
 
 func buildHookToolResultJSONL(sessionID, toolUseID, content string) string {
+	return buildHookToolResultJSONLAt(sessionID, toolUseID, content, hookFixtureTimestamp)
+}
+
+func buildHookToolResultJSONLAt(sessionID, toolUseID, content, ts string) string {
 	line := map[string]any{
 		"type":      "user",
 		"sessionId": sessionID,
-		"timestamp": "2025-06-01T12:00:00Z",
+		"timestamp": ts,
 		"version":   "1.0.0",
 		"message": map[string]any{
 			"role": "user",
@@ -669,6 +702,9 @@ func newSpanRecordingClient(t *testing.T, mode agento11y.ContentCaptureMode) (*a
 	client := agento11y.NewClient(agento11y.Config{
 		Tracer:         tp.Tracer("test"),
 		ContentCapture: mode,
+		// Spans are the subject here; keep the export transport out of it so
+		// shutdown does not try to reach a real endpoint.
+		GenerationExport: agento11y.GenerationExportConfig{Protocol: agento11y.GenerationExportProtocolNone},
 	})
 	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
 	return client, recorder
@@ -693,18 +729,214 @@ func spanAttr(s sdktrace.ReadOnlySpan, key string) string {
 	return ""
 }
 
+// TestGenerationStart_CarriesStartedAt pins the field the span window depends
+// on: the projection must carry the mapped StartedAt, not drop it.
+func TestGenerationStart_CarriesStartedAt(t *testing.T) {
+	completed := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		gen  agento11y.Generation
+	}{
+		{
+			name: "normal turn",
+			gen: agento11y.Generation{
+				ID:             "gen-1",
+				ConversationID: "sess-1",
+				AgentName:      AgentName,
+				StartedAt:      completed.Add(-2 * time.Second),
+				CompletedAt:    completed,
+			},
+		},
+		{
+			name: "zero start",
+			gen: agento11y.Generation{
+				ID:          "gen-2",
+				AgentName:   AgentName,
+				CompletedAt: completed,
+			},
+		},
+		{
+			name: "synthesized subagent",
+			gen: agento11y.Generation{
+				ID:                  "gen-3",
+				AgentName:           AgentName + "/explorer",
+				ParentGenerationIDs: []string{"gen-1"},
+				StartedAt:           completed,
+				CompletedAt:         completed.Add(1200 * time.Millisecond),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := generationStart(tt.gen)
+			if !got.StartedAt.Equal(tt.gen.StartedAt) {
+				t.Errorf("StartedAt = %v, want %v", got.StartedAt, tt.gen.StartedAt)
+			}
+			if got.ID != tt.gen.ID || got.AgentName != tt.gen.AgentName {
+				t.Errorf("identity fields not carried: %+v", got)
+			}
+		})
+	}
+}
+
+// TestRecord_GenerationSpanWindowNotInverted pins the reported symptom: a Stop
+// hook replays a turn that finished 30 seconds earlier, so a span start taken
+// from wall clock falls after the span end.
+func TestRecord_GenerationSpanWindowNotInverted(t *testing.T) {
+	client, recorder := newSpanRecordingClient(t, agento11y.ContentCaptureModeMetadataOnly)
+
+	completed := time.Now().Add(-30 * time.Second)
+	gen := agento11y.Generation{
+		ID:             "gen-late-export",
+		ConversationID: "sess-1",
+		AgentName:      AgentName,
+		Mode:           agento11y.GenerationModeSync,
+		OperationName:  "generateText",
+		Model:          agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4-20250514"},
+		StartedAt:      completed.Add(-2 * time.Second),
+		CompletedAt:    completed,
+	}
+
+	if err := emit.Record(context.Background(), client, generationStart(gen), gen, nil, nil); err != nil {
+		t.Fatalf("emit.Record: %v", err)
+	}
+	_ = client.Shutdown(context.Background())
+
+	spans := spansByName(recorder.Ended(), "generateText")
+	if len(spans) != 1 {
+		t.Fatalf("got %d generateText spans, want 1", len(spans))
+	}
+	got := spans[0].EndTime().Sub(spans[0].StartTime())
+	if got < 0 {
+		t.Fatalf("span duration = %v, want non-negative (start %v after end %v)",
+			got, spans[0].StartTime(), spans[0].EndTime())
+	}
+	if got != 2*time.Second {
+		t.Errorf("span duration = %v, want 2s from the mapped window", got)
+	}
+}
+
+// TestHook_SpanWindowsFromTranscript runs Hook itself over a transcript with
+// distinct timestamps and asserts the recorded span windows. It covers the
+// wiring the helper-level tests cannot: re-inlining the GenerationStart literal
+// in Hook, or dropping the tool-result timestamps on the way to emitToolSpans,
+// fails here.
+func TestHook_SpanWindowsFromTranscript(t *testing.T) {
+	const (
+		sessionID = "span-window-session"
+		promptAt  = "2025-06-01T12:00:00Z"
+		callAt    = "2025-06-01T12:00:01Z"
+		resultAt  = "2025-06-01T12:00:02.2Z"
+		replyAt   = "2025-06-01T12:00:03Z"
+	)
+
+	jsonl := strings.Join([]string{
+		buildHookUserJSONLAt(sessionID, "list the files", promptAt),
+		buildHookAssistantToolUseJSONLAt(sessionID, "req_a", "tu_1", "Bash", callAt),
+		buildHookToolResultJSONLAt(sessionID, "tu_1", "a.go\nb.go", resultAt),
+		buildHookAssistantJSONLAt(sessionID, "req_b", "end_turn", "two files", 5, replyAt),
+	}, "\n") + "\n"
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	if err := os.WriteFile(path, []byte(jsonl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := installGlobalSpanRecorder(t)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	// AGENTO11Y_* wins over SIGIL_*, so pin both spellings before pointing the
+	// export at the stub: an ambient endpoint would send this fixture to a real
+	// backend.
+	envconfig.PinAliasEnvBlank(t)
+	server := httptest.NewServer(http.HandlerFunc(acceptGenerationExport))
+	defer server.Close()
+	setHookExportEnv(t, server.URL)
+
+	logs := runHookForTest(t, hookInput{
+		HookEventName:  "Stop",
+		SessionID:      sessionID,
+		TranscriptPath: path,
+	})
+	if !strings.Contains(logs, "produced 2 generations") {
+		t.Fatalf("hook did not produce two generations:\n%s", logs)
+	}
+
+	genSpans := spansByName(recorder.Ended(), "generateText")
+	if len(genSpans) != 2 {
+		t.Fatalf("got %d generateText spans, want 2", len(genSpans))
+	}
+	// The tool-use turn runs from the prompt to its own completion, the closing
+	// turn from the tool result to its completion.
+	wantGenDurations := []time.Duration{time.Second, 800 * time.Millisecond}
+	for i, want := range wantGenDurations {
+		if got := genSpans[i].EndTime().Sub(genSpans[i].StartTime()); got != want {
+			t.Errorf("generateText span[%d] duration = %v, want %v", i, got, want)
+		}
+	}
+
+	toolSpans := spansByName(recorder.Ended(), "execute_tool")
+	if len(toolSpans) != 1 {
+		t.Fatalf("got %d execute_tool spans, want 1", len(toolSpans))
+	}
+	if got := toolSpans[0].EndTime().Sub(toolSpans[0].StartTime()); got != 1200*time.Millisecond {
+		t.Errorf("execute_tool span duration = %v, want 1.2s (call to tool_result)", got)
+	}
+}
+
+// installGlobalSpanRecorder records the spans Hook produces. Hook builds its own
+// client and only sets a tracer when an OTLP endpoint is configured, so with the
+// endpoint blank the SDK falls back to the global provider.
+func installGlobalSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		_ = tp.Shutdown(context.Background())
+	})
+	return recorder
+}
+
+// acceptGenerationExport accepts every generation in the request so the SDK's
+// cardinality check passes and the exporter does not retry.
+func acceptGenerationExport(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Generations []struct {
+			ID string `json:"id"`
+		} `json:"generations"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	resp := struct {
+		Results []map[string]any `json:"results"`
+	}{Results: make([]map[string]any, 0, len(req.Generations))}
+	for _, g := range req.Generations {
+		resp.Results = append(resp.Results, map[string]any{"generation_id": g.ID, "accepted": true})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 func TestEmitToolSpans(t *testing.T) {
 	ts := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name        string
-		gen         agento11y.Generation
-		results     map[string]*agento11y.ToolResult
-		contentMode agento11y.ContentCaptureMode
-		wantSpans   int
-		wantNames   []string
-		wantArgs    map[string]string
-		wantResults map[string]string
+		name          string
+		gen           agento11y.Generation
+		results       map[string]*agento11y.ToolResult
+		resultAt      map[string]time.Time
+		contentMode   agento11y.ContentCaptureMode
+		wantSpans     int
+		wantNames     []string
+		wantArgs      map[string]string
+		wantResults   map[string]string
+		wantStarts    map[string]time.Time
+		wantDurations map[string]time.Duration
 	}{
 		{
 			name: "no tool calls",
@@ -737,9 +969,10 @@ func TestEmitToolSpans(t *testing.T) {
 					}},
 				}},
 			},
-			contentMode: agento11y.ContentCaptureModeMetadataOnly,
-			wantSpans:   1,
-			wantNames:   []string{"Read"},
+			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
+			wantSpans:     1,
+			wantNames:     []string{"Read"},
+			wantDurations: map[string]time.Duration{"Read": 0},
 		},
 		{
 			name: "multiple tool calls with full content and results",
@@ -822,6 +1055,107 @@ func TestEmitToolSpans(t *testing.T) {
 			wantSpans:   1,
 			wantNames:   []string{"Write"},
 		},
+		{
+			name: "tool result timestamp drives duration",
+			gen: agento11y.Generation{
+				CompletedAt: ts,
+				Output: []agento11y.Message{{
+					Role: agento11y.RoleAssistant,
+					Parts: []agento11y.Part{{
+						Kind:     agento11y.PartKindToolCall,
+						ToolCall: &agento11y.ToolCall{ID: "tc_1", Name: "Bash"},
+					}},
+				}},
+			},
+			resultAt:      map[string]time.Time{"tc_1": ts.Add(1200 * time.Millisecond)},
+			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
+			wantSpans:     1,
+			wantNames:     []string{"Bash"},
+			wantDurations: map[string]time.Duration{"Bash": 1200 * time.Millisecond},
+		},
+		{
+			name: "zero result timestamp collapses to zero width",
+			gen: agento11y.Generation{
+				CompletedAt: ts,
+				Output: []agento11y.Message{{
+					Role: agento11y.RoleAssistant,
+					Parts: []agento11y.Part{{
+						Kind:     agento11y.PartKindToolCall,
+						ToolCall: &agento11y.ToolCall{ID: "tc_1", Name: "Bash"},
+					}},
+				}},
+			},
+			// The mapper drops unparseable timestamps rather than storing the
+			// zero value, so this pins the window against a caller that does not.
+			resultAt:      map[string]time.Time{"tc_1": {}},
+			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
+			wantSpans:     1,
+			wantNames:     []string{"Bash"},
+			wantDurations: map[string]time.Duration{"Bash": 0},
+		},
+		{
+			// A zero generation completion is the case that used to invert the
+			// span: the SDK stamps the start with the current time, which is
+			// after every transcript timestamp. Both ends move to the result.
+			name: "zero generation completion anchors on the result",
+			gen: agento11y.Generation{
+				Output: []agento11y.Message{{
+					Role: agento11y.RoleAssistant,
+					Parts: []agento11y.Part{{
+						Kind:     agento11y.PartKindToolCall,
+						ToolCall: &agento11y.ToolCall{ID: "tc_1", Name: "Bash"},
+					}},
+				}},
+			},
+			resultAt:      map[string]time.Time{"tc_1": ts},
+			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
+			wantSpans:     1,
+			wantNames:     []string{"Bash"},
+			wantStarts:    map[string]time.Time{"Bash": ts},
+			wantDurations: map[string]time.Duration{"Bash": 0},
+		},
+		{
+			name: "result before the call clamps to zero width",
+			gen: agento11y.Generation{
+				CompletedAt: ts,
+				Output: []agento11y.Message{{
+					Role: agento11y.RoleAssistant,
+					Parts: []agento11y.Part{{
+						Kind:     agento11y.PartKindToolCall,
+						ToolCall: &agento11y.ToolCall{ID: "tc_1", Name: "Bash"},
+					}},
+				}},
+			},
+			resultAt:      map[string]time.Time{"tc_1": ts.Add(-time.Second)},
+			contentMode:   agento11y.ContentCaptureModeMetadataOnly,
+			wantSpans:     1,
+			wantNames:     []string{"Bash"},
+			wantDurations: map[string]time.Duration{"Bash": 0},
+		},
+		{
+			name: "parallel calls keep distinct ends",
+			gen: agento11y.Generation{
+				CompletedAt: ts,
+				Output: []agento11y.Message{{
+					Role: agento11y.RoleAssistant,
+					Parts: []agento11y.Part{
+						{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{ID: "tc_1", Name: "Read"}},
+						{Kind: agento11y.PartKindToolCall, ToolCall: &agento11y.ToolCall{ID: "tc_2", Name: "Bash"}},
+					},
+				}},
+			},
+			resultAt: map[string]time.Time{
+				"tc_1": ts.Add(500 * time.Millisecond),
+				"tc_2": ts.Add(1200 * time.Millisecond),
+			},
+			contentMode: agento11y.ContentCaptureModeMetadataOnly,
+			wantSpans:   2,
+			wantNames:   []string{"Read", "Bash"},
+			wantDurations: map[string]time.Duration{
+				"Read": 500 * time.Millisecond,
+				"Bash": 1200 * time.Millisecond,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -832,7 +1166,7 @@ func TestEmitToolSpans(t *testing.T) {
 				results = map[string]*agento11y.ToolResult{}
 			}
 
-			emitToolSpans(context.Background(), client, tt.gen, results)
+			emitToolSpans(context.Background(), client, tt.gen, results, tt.resultAt)
 			_ = client.Shutdown(context.Background())
 
 			toolSpans := spansByName(recorder.Ended(), "execute_tool")
@@ -865,6 +1199,16 @@ func TestEmitToolSpans(t *testing.T) {
 						}
 					}
 				}
+				if want, ok := tt.wantStarts[wantName]; ok {
+					if got := s.StartTime(); !got.Equal(want) {
+						t.Errorf("span[%d] start = %v, want %v", i, got, want)
+					}
+				}
+				if want, ok := tt.wantDurations[wantName]; ok {
+					if got := s.EndTime().Sub(s.StartTime()); got != want {
+						t.Errorf("span[%d] duration = %v, want %v", i, got, want)
+					}
+				}
 			}
 		})
 	}
@@ -888,7 +1232,7 @@ func TestEmitToolSpans_ErrorStatus(t *testing.T) {
 		"tc_err": {ToolCallID: "tc_err", Content: "denied", IsError: true},
 	}
 
-	emitToolSpans(context.Background(), client, gen, results)
+	emitToolSpans(context.Background(), client, gen, results, nil)
 	_ = client.Shutdown(context.Background())
 
 	spans := spansByName(recorder.Ended(), "execute_tool")

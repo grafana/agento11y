@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
@@ -83,6 +84,113 @@ func makeMultiToolResultLine(results map[string]string) transcript.Line {
 	}
 }
 
+// atTime returns a copy of line stamped with ts, so timing tests can order
+// lines without changing the shared fixture builders.
+func atTime(line transcript.Line, ts string) transcript.Line {
+	line.Timestamp = ts
+	return line
+}
+
+// onSidechain marks a line as belonging to a subagent chain.
+func onSidechain(line transcript.Line) transcript.Line {
+	line.IsSidechain = true
+	return line
+}
+
+// TestProcess_GenerationWindowFromPrecedingLine covers the derived generation
+// start: the transcript has no request-start field, so the previous line on the
+// same chain stands in for it, clamped because transcript timestamps are not
+// strictly monotonic.
+func TestProcess_GenerationWindowFromPrecedingLine(t *testing.T) {
+	const (
+		t0      = "2025-06-01T12:00:00Z"
+		t0Plus1 = "2025-06-01T12:00:01Z"
+		t0Plus2 = "2025-06-01T12:00:02Z"
+		t0Plus3 = "2025-06-01T12:00:03Z"
+	)
+	reply := func(requestID, ts string) transcript.Line {
+		return atTime(makeAssistantFragment(requestID, 40, []transcript.ContentBlock{
+			{Type: "text", Text: "done"},
+		}, "end_turn"), ts)
+	}
+
+	// window is the expected window of one produced generation, in order.
+	type window struct {
+		start     string
+		duration  time.Duration
+		sidechain bool
+	}
+
+	tests := []struct {
+		name  string
+		lines []transcript.Line
+		want  []window
+	}{
+		{
+			name: "assistant reply after tool result",
+			lines: []transcript.Line{
+				atTime(makeToolResultLine("tu_1", "ok"), t0),
+				reply("req-a", t0Plus2),
+			},
+			want: []window{{start: t0, duration: 2 * time.Second}},
+		},
+		{
+			name: "non-monotonic transcript clamps to completion",
+			lines: []transcript.Line{
+				atTime(makeUserLine("hello"), t0Plus1),
+				reply("req-a", t0),
+			},
+			want: []window{{start: t0, duration: 0}},
+		},
+		{
+			name:  "batch starts with an assistant line",
+			lines: []transcript.Line{reply("req-a", t0)},
+			want:  []window{{start: t0, duration: 0}},
+		},
+		{
+			// The reason prevAt is keyed by chain: each reply must take the
+			// timestamp of its own chain's previous line, not of the line that
+			// happens to sit before it in the file.
+			name: "interleaved chains keep separate cursors",
+			lines: []transcript.Line{
+				onSidechain(atTime(makeUserLine("spawn subagent work"), t0)),
+				atTime(makeUserLine("unrelated main-chain prompt"), t0Plus1),
+				onSidechain(reply("req-side", t0Plus2)),
+				reply("req-main", t0Plus3),
+			},
+			want: []window{
+				{start: t0, duration: 2 * time.Second, sidechain: true},
+				{start: t0Plus1, duration: 2 * time.Second},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gens, _ := Process(tt.lines, &state.Session{}, Options{SessionID: "sess-1"}, nil)
+			if len(gens) != len(tt.want) {
+				t.Fatalf("got %d generations, want %d", len(gens), len(tt.want))
+			}
+
+			for i, want := range tt.want {
+				wantStart, err := time.Parse(time.RFC3339, want.start)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !gens[i].StartedAt.Equal(wantStart) {
+					t.Errorf("gen[%d].StartedAt = %v, want %v", i, gens[i].StartedAt, wantStart)
+				}
+				if got := gens[i].CompletedAt.Sub(gens[i].StartedAt); got != want.duration {
+					t.Errorf("gen[%d] window = %v, want %v", i, got, want.duration)
+				}
+				if got := gens[i].Tags["subagent"] == "true"; got != want.sidechain {
+					t.Errorf("gen[%d] subagent = %v, want %v", i, got, want.sidechain)
+				}
+			}
+		})
+	}
+}
+
 func TestProcess_SinglePromptResponse(t *testing.T) {
 	lines := []transcript.Line{
 		makeUserLine("What is Go?"),
@@ -92,7 +200,7 @@ func TestProcess_SinglePromptResponse(t *testing.T) {
 	}
 
 	st := &state.Session{}
-	gens := Process(lines, st, Options{SessionID: "sess-1"}, nil)
+	gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, nil)
 
 	if len(gens) != 1 {
 		t.Fatalf("got %d generations, want 1", len(gens))
@@ -147,7 +255,7 @@ func TestProcess_SkippedLines(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			st := &state.Session{}
-			gens := Process(tt.lines, st, Options{SessionID: "sess-1"}, nil)
+			gens, _ := Process(tt.lines, st, Options{SessionID: "sess-1"}, nil)
 			if len(gens) != 0 {
 				t.Errorf("got %d generations, want 0", len(gens))
 			}
@@ -162,7 +270,7 @@ func TestProcess_SubagentTag(t *testing.T) {
 	line.IsSidechain = true
 
 	st := &state.Session{}
-	gens := Process([]transcript.Line{line}, st, Options{SessionID: "sess-1"}, nil)
+	gens, _ := Process([]transcript.Line{line}, st, Options{SessionID: "sess-1"}, nil)
 
 	if len(gens) != 1 {
 		t.Fatalf("got %d generations, want 1 (sidechain should not be skipped)", len(gens))
@@ -192,7 +300,7 @@ func TestProcess_ContentModes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			st := &state.Session{}
-			gens := Process(lines, st, Options{SessionID: "sess-1"}, tt.redactor)
+			gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, tt.redactor)
 			if len(gens) != 1 {
 				t.Fatal("expected 1 generation")
 			}
@@ -278,7 +386,7 @@ func TestProcess_ConversationTitle(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			st := tt.state
-			gens := Process(tt.lines, &st, Options{SessionID: "sess-1"}, nil)
+			gens, _ := Process(tt.lines, &st, Options{SessionID: "sess-1"}, nil)
 
 			if st.Title != tt.wantTitle {
 				t.Errorf("state.Title = %q, want %q", st.Title, tt.wantTitle)
@@ -309,7 +417,7 @@ func TestProcess_ToolUses(t *testing.T) {
 	}
 
 	st := &state.Session{}
-	gens := Process(lines, st, Options{SessionID: "sess-1"}, nil)
+	gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, nil)
 
 	if len(gens) != 2 {
 		t.Fatalf("got %d generations, want 2", len(gens))
@@ -329,7 +437,7 @@ func TestProcess_DeduplicatedTools(t *testing.T) {
 	}
 
 	st := &state.Session{}
-	gens := Process(lines, st, Options{SessionID: "sess-1"}, nil)
+	gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, nil)
 
 	if len(gens[0].Tools) != 2 {
 		t.Fatalf("got %d tools, want 2 (deduplicated)", len(gens[0].Tools))
@@ -349,7 +457,7 @@ func TestProcess_ThinkingEnabled(t *testing.T) {
 	}
 
 	st := &state.Session{}
-	gens := Process(lines, st, Options{SessionID: "sess-1"}, nil)
+	gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, nil)
 
 	if len(gens) != 1 {
 		t.Fatal("expected 1 generation")
@@ -368,7 +476,7 @@ func TestProcess_ContentCaptureRedaction(t *testing.T) {
 	}
 
 	st := &state.Session{}
-	gens := Process(lines, st, Options{SessionID: "sess-1"}, redact.New())
+	gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, redact.New())
 
 	gen := gens[0]
 	// User prompt gets Tier 1 redaction
@@ -427,7 +535,7 @@ func TestProcess_Tags(t *testing.T) {
 			line.Entrypoint = tt.entry
 
 			st := &state.Session{}
-			gens := Process([]transcript.Line{line}, st, Options{SessionID: "sess-1", ExtraTags: tt.extras}, nil)
+			gens, _ := Process([]transcript.Line{line}, st, Options{SessionID: "sess-1", ExtraTags: tt.extras}, nil)
 
 			tags := gens[0].Tags
 			if (tags == nil) != tt.wantNil {
@@ -439,6 +547,155 @@ func TestProcess_Tags(t *testing.T) {
 			for k, v := range tt.wantTags {
 				if tags[k] != v {
 					t.Errorf("tags[%q] = %q, want %q", k, tags[k], v)
+				}
+			}
+		})
+	}
+}
+
+// TestProcess_SubagentWindow covers the synthesised subagent generation: it runs
+// from the spawning turn's completion to the tool_result that carries the
+// subagent output, clamped when the transcript is not monotonic.
+func TestProcess_SubagentWindow(t *testing.T) {
+	const (
+		promptAt = "2025-06-01T12:00:00Z"
+		spawnAt  = "2025-06-01T12:00:01Z"
+		resultAt = "2025-06-01T12:00:02.2Z"
+	)
+	spawn := func(ts string) transcript.Line {
+		return atTime(makeAssistantFragment("req-a", 30, []transcript.ContentBlock{
+			{Type: "tool_use", ID: "agent_1", Name: "Agent", Input: json.RawMessage(`{"subagent_type":"explore"}`)},
+		}, "tool_use"), ts)
+	}
+
+	tests := []struct {
+		name         string
+		spawnLineAt  string
+		resultLineAt string
+		wantStart    string
+		wantDuration time.Duration
+	}{
+		{
+			name:         "result after the spawning turn",
+			spawnLineAt:  spawnAt,
+			resultLineAt: resultAt,
+			wantStart:    spawnAt,
+			wantDuration: 1200 * time.Millisecond,
+		},
+		{
+			name:         "result before the spawning turn clamps to zero width",
+			spawnLineAt:  spawnAt,
+			resultLineAt: promptAt,
+			wantStart:    promptAt,
+			wantDuration: 0,
+		},
+		{
+			// Without a spawn timestamp the parent completion is the zero time.
+			// Keeping it would leave the span start to wall clock while the span
+			// ended in the past, which is the inversion this ticket removes.
+			name:         "spawning turn without a timestamp collapses to the result",
+			spawnLineAt:  "",
+			resultLineAt: resultAt,
+			wantStart:    resultAt,
+			wantDuration: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := []transcript.Line{
+				atTime(makeUserLine("research this"), promptAt),
+				spawn(tt.spawnLineAt),
+				atTime(makeToolResultLine("agent_1", "agent output"), tt.resultLineAt),
+			}
+			gens, _ := Process(lines, &state.Session{}, Options{SessionID: "sess-1"}, nil)
+			if len(gens) != 2 {
+				t.Fatalf("got %d generations, want 2 (spawning turn, subagent)", len(gens))
+			}
+			sub := gens[1]
+			if sub.AgentName != agentName+"/explore" {
+				t.Fatalf("gen[1].AgentName = %q, want the synthesised subagent", sub.AgentName)
+			}
+
+			wantStart, err := time.Parse(time.RFC3339Nano, tt.wantStart)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !sub.StartedAt.Equal(wantStart) {
+				t.Errorf("StartedAt = %v, want %v", sub.StartedAt, wantStart)
+			}
+			if got := sub.CompletedAt.Sub(sub.StartedAt); got != tt.wantDuration {
+				t.Errorf("window = %v, want %v", got, tt.wantDuration)
+			}
+		})
+	}
+}
+
+// TestProcess_ToolResultTimestamps covers the second return value: when each
+// tool call's result arrived, which the hook turns into the end of the
+// execute_tool span. A call is in the map only when its result line carried a
+// parseable timestamp.
+func TestProcess_ToolResultTimestamps(t *testing.T) {
+	const (
+		callAt   = "2025-06-01T12:00:00Z"
+		firstAt  = "2025-06-01T12:00:00.5Z"
+		secondAt = "2025-06-01T12:00:01.2Z"
+	)
+	call := atTime(makeAssistantFragment("req-a", 30, []transcript.ContentBlock{
+		{Type: "tool_use", ID: "tu_1", Name: "Read", Input: json.RawMessage(`{}`)},
+		{Type: "tool_use", ID: "tu_2", Name: "Bash", Input: json.RawMessage(`{}`)},
+	}, "tool_use"), callAt)
+
+	tests := []struct {
+		name  string
+		lines []transcript.Line
+		want  map[string]string // tool call ID -> RFC3339 timestamp
+	}{
+		{
+			name: "parallel results keep their own timestamps",
+			lines: []transcript.Line{
+				call,
+				atTime(makeToolResultLine("tu_1", "contents"), firstAt),
+				atTime(makeToolResultLine("tu_2", "ok"), secondAt),
+			},
+			want: map[string]string{"tu_1": firstAt, "tu_2": secondAt},
+		},
+		{
+			name:  "result without a timestamp is absent",
+			lines: []transcript.Line{call, makeToolResultLine("tu_1", "contents")},
+			want:  map[string]string{},
+		},
+		{
+			name:  "result with an unparseable timestamp is absent",
+			lines: []transcript.Line{call, atTime(makeToolResultLine("tu_1", "contents"), "not-a-timestamp")},
+			want:  map[string]string{},
+		},
+		{
+			name:  "call without a result is absent",
+			lines: []transcript.Line{call},
+			want:  map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, resultAt := Process(tt.lines, &state.Session{}, Options{SessionID: "sess-1"}, nil)
+
+			if len(resultAt) != len(tt.want) {
+				t.Fatalf("got %d tool-result timestamps (%v), want %d", len(resultAt), resultAt, len(tt.want))
+			}
+			for id, wantRaw := range tt.want {
+				got, ok := resultAt[id]
+				if !ok {
+					t.Errorf("missing timestamp for %q", id)
+					continue
+				}
+				want, err := time.Parse(time.RFC3339, wantRaw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !got.Equal(want) {
+					t.Errorf("%s = %v, want %v", id, got, want)
 				}
 			}
 		})
@@ -458,7 +715,7 @@ func TestProcess_ToolResultsInInput(t *testing.T) {
 	}
 
 	st := &state.Session{}
-	gens := Process(lines, st, Options{SessionID: "sess-1"}, redact.New())
+	gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, redact.New())
 
 	if len(gens) != 2 {
 		t.Fatalf("got %d gens, want 2", len(gens))
@@ -699,7 +956,7 @@ func TestCoalesce_PreservesContextWhenAssistantArrivesInLaterBatch(t *testing.T)
 		t.Fatalf("second Coalesce offset = %d, want 300", secondOffset)
 	}
 
-	gens := Process(secondLines, &state.Session{}, Options{SessionID: "sess-1"}, nil)
+	gens, _ := Process(secondLines, &state.Session{}, Options{SessionID: "sess-1"}, nil)
 	if len(gens) != 1 {
 		t.Fatalf("got %d generations, want 1", len(gens))
 	}
@@ -759,7 +1016,7 @@ func TestProcess_ToolResultContentFormats(t *testing.T) {
 			}
 
 			st := &state.Session{}
-			gens := Process(lines, st, Options{SessionID: "sess-1"}, redact.New())
+			gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, redact.New())
 
 			if len(gens) != 2 {
 				t.Fatalf("got %d gens, want 2", len(gens))
@@ -983,7 +1240,7 @@ func TestProcess_ParentGenerationIDs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			st := &state.Session{}
-			gens := Process(tt.lines, st, Options{SessionID: "sess-1"}, nil)
+			gens, _ := Process(tt.lines, st, Options{SessionID: "sess-1"}, nil)
 
 			if len(gens) != tt.wantGenCount {
 				t.Fatalf("got %d generations, want %d", len(gens), tt.wantGenCount)
@@ -1026,7 +1283,7 @@ func TestProcess_EffectiveVersionStableAcrossToolSubsets(t *testing.T) {
 	}
 
 	st := &state.Session{}
-	gens := Process(lines, st, Options{SessionID: "sess-1"}, nil)
+	gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, nil)
 
 	if len(gens) != 2 {
 		t.Fatalf("got %d generations, want 2", len(gens))
@@ -1062,7 +1319,7 @@ func TestProcess_UserPromptRedaction(t *testing.T) {
 			}
 
 			st := &state.Session{}
-			gens := Process(lines, st, Options{SessionID: "sess-1"}, tt.redactor)
+			gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, tt.redactor)
 
 			if gens[0].Input == nil {
 				t.Fatal("expected Input to be present")

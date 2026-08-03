@@ -36,7 +36,7 @@ func TestIntegration_EndToEnd(t *testing.T) {
 	}
 
 	coalesced, safeOffset := Coalesce(lines)
-	gens := Process(coalesced, &st, Options{SessionID: "sess-integration"}, redact.New())
+	gens, _ := Process(coalesced, &st, Options{SessionID: "sess-integration"}, redact.New())
 	if len(gens) == 0 {
 		t.Fatal("expected at least 1 generation")
 	}
@@ -97,7 +97,7 @@ func TestIntegration_EndToEnd(t *testing.T) {
 	}
 
 	coalesced3, _ := Coalesce(lines3)
-	gens3 := Process(coalesced3, &st2, Options{SessionID: "sess-integration"}, nil)
+	gens3, _ := Process(coalesced3, &st2, Options{SessionID: "sess-integration"}, nil)
 	if len(gens3) != 1 {
 		t.Fatalf("third run produced %d generations, want 1", len(gens3))
 	}
@@ -122,7 +122,7 @@ func TestIntegration_ConversationTitlePersistence(t *testing.T) {
 	st := state.Load(sessionID)
 	lines, _, _ := transcript.Read(jsonlPath, 0)
 	coalesced, offset := Coalesce(lines)
-	Process(coalesced, &st, Options{SessionID: "sess-title"}, nil)
+	_, _ = Process(coalesced, &st, Options{SessionID: "sess-title"}, nil)
 	st.Offset = offset
 	if err := state.Save(sessionID, st); err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func TestIntegration_StreamingFragments(t *testing.T) {
 		t.Fatalf("got %d coalesced lines, want 2", len(coalesced))
 	}
 
-	gens := Process(coalesced, st, Options{SessionID: "sess-stream"}, nil)
+	gens, _ := Process(coalesced, st, Options{SessionID: "sess-stream"}, nil)
 	if len(gens) != 1 {
 		t.Fatalf("got %d generations, want 1", len(gens))
 	}
