@@ -18,6 +18,7 @@ import {
   mapError,
   mapGeneration,
   mapToolDefinitions,
+  type OpencodeTokens,
 } from "./mappers.js";
 import { Redactor } from "./redact.js";
 import { buildBuiltinTags } from "./tags.js";
@@ -86,8 +87,29 @@ const subagentSessions = new Set<string>();
 // recorded.
 const firstPartAtByMessage = new Map<string, number>();
 
+// Token counts summed over every provider step of one assistant message, keyed
+// by `${sessionID}\x00${messageID}`. opencode adds each step's cost to
+// `AssistantMessage.cost` but overwrites `AssistantMessage.tokens` with the
+// latest step, so a multi-step message pairs last-step tokens with all-steps
+// cost. `StepFinishPart` carries the per-step counts on `message.part.updated`,
+// so this also works in `metadata_only`, where message bodies are never
+// fetched. Consumed and cleared when the message is recorded.
+//
+// opencode 1.18.x runs one step per message, except when `Effect.retry` in
+// `session/processor.ts` retries a stream attempt. This code still sums,
+// because hosts back to `@opencode-ai/plugin` ^1.2.16 are supported.
+const stepTokensByMessage = new Map<string, OpencodeTokens>();
+
 function messageKey(sessionID: string, messageID: string): string {
   return `${sessionID}\x00${messageID}`;
+}
+
+/** Drop every entry of a message-keyed map that belongs to one session. */
+function deleteSessionEntries<V>(map: Map<string, V>, sessionID: string): void {
+  const prefix = `${sessionID}\x00`;
+  for (const key of map.keys()) {
+    if (key.startsWith(prefix)) map.delete(key);
+  }
 }
 
 // Pending generation store: user-side data captured before assistant responds
@@ -186,6 +208,7 @@ export function _resetHookState(): void {
   parentGenerationByChildSession.clear();
   subagentSessions.clear();
   firstPartAtByMessage.clear();
+  stepTokensByMessage.clear();
   pendingGenerations.clear();
   latestSystemPromptBySession.clear();
   latestSessionTitleBySession.clear();
@@ -299,15 +322,7 @@ async function handleEvent(
     return;
   }
   if (event.type === "message.part.updated") {
-    await handleMessagePartUpdated(
-      sigil,
-      config,
-      client,
-      redactor,
-      debugLog,
-      projectDir,
-      event.properties,
-    );
+    handleMessagePartUpdated(event.properties);
     return;
   }
   if (event.type !== "message.updated") return;
@@ -354,40 +369,66 @@ async function handleEvent(
   );
 }
 
-async function handleMessagePartUpdated(
-  sigil: Agento11yClient,
-  config: Agento11yOpencodeConfig,
-  client: OpencodeClient,
-  redactor: Redactor,
-  debugLog: (msg: string, ...args: unknown[]) => void,
-  projectDir: string,
-  properties: unknown,
-): Promise<void> {
+/**
+ * Consume a streamed part: the time-to-first-token signal and, for
+ * `step-finish`, that step's token counts.
+ *
+ * Does not export. `Session.updateMessage` publishes `message.updated` at every
+ * step-finish and again on completion, abort, and error. A host that delivers
+ * parts therefore delivers the terminal message update too, so recording waits
+ * for that instead.
+ */
+function handleMessagePartUpdated(properties: unknown): void {
   const part = recordField(properties, "part");
-  recordFirstPartTime(part);
-  if (stringField(part, "type") !== "step-finish") return;
+  if (!part) return;
+  // `Session.fork` clones a finished message under fresh ids, then republishes
+  // its parts. Nothing reads per-message state after the message is recorded,
+  // so drop those parts rather than let them fill the maps.
   const sessionID = stringField(part, "sessionID");
   const messageID = stringField(part, "messageID");
   if (!sessionID || !messageID) return;
+  if (recordedMessages.get(sessionID)?.has(messageID)) return;
+  recordFirstPartTime(part, sessionID, messageID);
+  accumulateStepTokens(part, messageKey(sessionID, messageID));
+}
 
-  try {
-    const response = await client.session.message({
-      path: { id: sessionID, messageID },
-    });
-    if (response.data?.info?.role !== "assistant") return;
-    await recordAssistantMessage(
-      sigil,
-      config,
-      client,
-      redactor,
-      debugLog,
-      projectDir,
-      response.data.info as AssistantMessage,
-      response.data.parts ?? [],
-    );
-  } catch (err) {
-    debugLog("failed to export terminal message part", err);
-  }
+/**
+ * Add one `step-finish` part's token counts to its message's running totals.
+ * A field that is not a finite number contributes nothing, so a malformed
+ * payload cannot poison the totals with NaN. opencode floors its own counts at
+ * zero in `Session.getUsage`, so only junk reaches that guard.
+ */
+function accumulateStepTokens(
+  part: Record<string, unknown>,
+  key: string,
+): void {
+  if (stringField(part, "type") !== "step-finish") return;
+  const tokens = recordField(part, "tokens");
+  if (!tokens) return;
+  const cache = recordField(tokens, "cache");
+  const step = {
+    input: numberField(tokens, "input"),
+    output: numberField(tokens, "output"),
+    reasoning: numberField(tokens, "reasoning"),
+    read: numberField(cache, "read"),
+    write: numberField(cache, "write"),
+  };
+  // No parseable count means no observed usage. Storing zeros here would look
+  // like a real all-zero step and suppress the `msg.tokens` fallback.
+  if (Object.values(step).every((count) => count === undefined)) return;
+
+  const totals = stepTokensByMessage.get(key) ?? {
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    cache: { read: 0, write: 0 },
+  };
+  totals.input += step.input ?? 0;
+  totals.output += step.output ?? 0;
+  totals.reasoning += step.reasoning ?? 0;
+  totals.cache.read += step.read ?? 0;
+  totals.cache.write += step.write ?? 0;
+  stepTokensByMessage.set(key, totals);
 }
 
 /**
@@ -402,13 +443,13 @@ async function handleMessagePartUpdated(
  * parts (whose timestamp lives under `state.time`) and any part lacking a
  * `time` field still yield a signal. First write wins.
  */
-function recordFirstPartTime(part: Record<string, unknown> | undefined): void {
-  if (!part) return;
+function recordFirstPartTime(
+  part: Record<string, unknown>,
+  sessionID: string,
+  messageID: string,
+): void {
   const type = stringField(part, "type");
   if (type !== "text" && type !== "reasoning" && type !== "tool") return;
-  const sessionID = stringField(part, "sessionID");
-  const messageID = stringField(part, "messageID");
-  if (!sessionID || !messageID) return;
   const key = messageKey(sessionID, messageID);
   if (firstPartAtByMessage.has(key)) return;
   const rawStart = recordField(part, "time")?.start;
@@ -436,10 +477,12 @@ async function recordAssistantMessage(
     },
   });
 
-  // Only record terminal messages
-  const isTerminal =
-    assistantMsg.finish || assistantMsg.error || assistantMsg.time.completed;
+  // Only record terminal messages. `finish` is not terminal: opencode sets it
+  // at every `step-finish`, so only `error` or `time.completed` end a message.
+  const isTerminal = assistantMsg.error || assistantMsg.time.completed;
   if (!isTerminal) return;
+
+  const msgKey = messageKey(assistantMsg.sessionID, assistantMsg.id);
 
   // Dedup
   const sessionSet =
@@ -553,12 +596,23 @@ async function recordAssistantMessage(
     ...(builtinTags && { tags: builtinTags }),
   };
 
+  // Without an observed step the export pairs last-step tokens with all-steps
+  // cost, the mismatch this accumulator removes. A turn that aborts before its
+  // first step-finish hits the fallback legitimately, so log at debug.
+  const stepTokens = stepTokensByMessage.get(msgKey);
+  if (stepTokens === undefined) {
+    debugLog(
+      `no step-finish tokens observed for session=${assistantMsg.sessionID} message=${assistantMsg.id}; using the message's own token counts`,
+    );
+  }
+
   const result = mapGeneration(
     assistantMsg,
     includeMessageBodies ? (pending?.userParts ?? []) : [],
     assistantParts,
     redactor,
     config.contentCapture,
+    stepTokens,
   );
 
   const spanOpts = {
@@ -576,9 +630,7 @@ async function recordAssistantMessage(
   // opencode streams provider responses, so generations are exported with
   // mode=STREAM. The SDK only records the gen_ai.client.time_to_first_token
   // histogram for streaming generations.
-  const firstAt = firstPartAtByMessage.get(
-    messageKey(assistantMsg.sessionID, assistantMsg.id),
-  );
+  const firstAt = firstPartAtByMessage.get(msgKey);
 
   try {
     if (assistantMsg.error) {
@@ -606,13 +658,12 @@ async function recordAssistantMessage(
   // another export path fires for the same session.
   pendingGenerations.delete(assistantMsg.sessionID);
   completedToolExecutions.delete(assistantMsg.sessionID);
-  firstPartAtByMessage.delete(
-    messageKey(assistantMsg.sessionID, assistantMsg.id),
-  );
+  firstPartAtByMessage.delete(msgKey);
+  stepTokensByMessage.delete(msgKey);
 }
 
 function isTerminalMessageUpdate(msg: MessageUpdatedInfo): boolean {
-  return Boolean(msg.finish || msg.error || msg.time?.completed);
+  return Boolean(msg.error || msg.time?.completed);
 }
 
 /** Join OpenCode's system entries. Omit the field when all are empty. */
@@ -697,9 +748,8 @@ async function handleLifecycle(
   const type = event.type;
 
   if (type === "session.idle") {
-    // Recording happens live on `message.updated` and `message.part.updated`
-    // (step-finish). Idle only flushes already-recorded events; it does not
-    // refetch session history.
+    // Recording happens live on `message.updated`. Idle only flushes
+    // already-recorded events; it does not refetch session history.
     //
     // Fire-and-forget: a stuck OTLP endpoint must not block session.idle for
     // up to ~30s (BatchSpanProcessor default) per turn.
@@ -726,16 +776,9 @@ async function handleLifecycle(
       latestSessionTitleBySession.delete(sessionId);
       sessionContexts.delete(sessionId);
       completedToolExecutions.delete(sessionId);
-      for (const key of activeToolExecutions.keys()) {
-        if (key.startsWith(`${sessionId}\x00`)) {
-          activeToolExecutions.delete(key);
-        }
-      }
-      for (const key of firstPartAtByMessage.keys()) {
-        if (key.startsWith(`${sessionId}\x00`)) {
-          firstPartAtByMessage.delete(key);
-        }
-      }
+      deleteSessionEntries(activeToolExecutions, sessionId);
+      deleteSessionEntries(firstPartAtByMessage, sessionId);
+      deleteSessionEntries(stepTokensByMessage, sessionId);
     }
   }
 
@@ -922,6 +965,14 @@ function recordField(
   const field = (value as Record<string, unknown>)[key];
   return field && typeof field === "object"
     ? (field as Record<string, unknown>)
+    : undefined;
+}
+
+function numberField(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === "number" && Number.isFinite(field)
+    ? field
     : undefined;
 }
 

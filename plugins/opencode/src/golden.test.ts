@@ -94,6 +94,9 @@ function closeServer(server: Server): Promise<void> {
 
 // Build one assistant reply with a completed tool call and the composed
 // system prompt OpenCode delivers through `experimental.chat.system.transform`.
+// One provider step, as OpenCode 1.18.x emits for a normal turn, so the step's
+// tokens and `assistantMessage.tokens` agree; multi-step summation is covered in
+// hooks.tokens.test.ts.
 function opencodeMessageFixture() {
   const sessionID = "opencode-sess-1";
   const messageID = "msg-1";
@@ -140,6 +143,22 @@ function opencodeMessageFixture() {
     },
     finish: "end_turn",
   } as const;
+  const stepFinishParts = [
+    {
+      id: "assist-step-1",
+      sessionID,
+      messageID,
+      type: "step-finish",
+      reason: "end_turn",
+      cost: 0.005,
+      tokens: {
+        input: 200,
+        output: 50,
+        reasoning: 0,
+        cache: { read: 30, write: 0 },
+      },
+    },
+  ];
   const assistantParts = [
     {
       id: "assist-text-1",
@@ -172,6 +191,7 @@ function opencodeMessageFixture() {
     userParts,
     assistantMessage,
     assistantParts,
+    stepFinishParts,
     effectiveSystem,
   };
 }
@@ -235,6 +255,7 @@ describe("opencode plugin: real-SDK golden export", () => {
       userParts,
       assistantMessage,
       assistantParts,
+      stepFinishParts,
       effectiveSystem,
     } = opencodeMessageFixture();
 
@@ -283,6 +304,11 @@ describe("opencode plugin: real-SDK golden export", () => {
       { sessionID, model: { id: assistantMessage.modelID } },
       { system: effectiveSystem },
     );
+    for (const part of stepFinishParts) {
+      await hooks.event({
+        event: { type: "message.part.updated", properties: { part } },
+      });
+    }
     await hooks.event({
       event: {
         type: "message.updated",
@@ -336,8 +362,10 @@ describe("opencode plugin: real-SDK golden export", () => {
     expect(turn.agent_name).toBe("opencode:build");
     expect(turn.model.name).toBe("claude-sonnet-4-opencode");
     expect(turn.model.provider).toBe("anthropic");
+    // Accumulated from the step-finish part, not read off the message.
     expect(String(turn.usage.input_tokens)).toBe("200");
     expect(String(turn.usage.output_tokens)).toBe("50");
+    expect(String(turn.usage.cache_read_input_tokens)).toBe("30");
   }
 
   it("matches the recorded golden for a complete assistant turn", async () => {

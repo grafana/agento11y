@@ -434,4 +434,42 @@ describe("mapGeneration", () => {
     expect(result.stopReason).toBe("end_turn");
     expect(result.completedAt).toBeInstanceOf(Date);
   });
+
+  it("prefers accumulated step tokens over the message's last-step tokens", () => {
+    // msg.cost covers every step; msg.tokens only the last one.
+    const msg = makeAssistantMsg({ cost: 0.06 });
+    const result = mapGeneration(msg, [], [], redactor, "full", {
+      input: 310,
+      output: 60,
+      reasoning: 15,
+      cache: { read: 70, write: 14 },
+    });
+    expect(result.usage).toEqual({
+      inputTokens: 310,
+      outputTokens: 60,
+      reasoningTokens: 15,
+      cacheReadInputTokens: 70,
+      cacheWriteInputTokens: 14,
+    });
+    expect(result.metadata?.cost).toBe(0.06);
+  });
+
+  it("keeps input cache-adjusted and reasoning out of output", () => {
+    // opencode's getUsage subtracts cache read/write from input and reasoning
+    // from output, so these pass through as reported: 80, not 80 + 20 + 10, and
+    // 25, not 25 + 7.
+    const result = mapGeneration(makeAssistantMsg(), [], [], redactor, "full", {
+      input: 80,
+      output: 25,
+      reasoning: 7,
+      cache: { read: 20, write: 10 },
+    });
+    expect(result.usage).toEqual({
+      inputTokens: 80,
+      outputTokens: 25,
+      reasoningTokens: 7,
+      cacheReadInputTokens: 20,
+      cacheWriteInputTokens: 10,
+    });
+  });
 });
