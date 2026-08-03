@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.17.0] - 2026-08-03
+
+### Features
+
+- **plugins/agento11y**: support Cloud guards in --local mode (#487)
+
+### Bug Fixes
+
+- **plugins/opencode**: accumulate step-finish tokens across a message (#502)
+
 ## [0.16.0] - 2026-07-28
 
 ### Features
