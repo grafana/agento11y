@@ -48,6 +48,7 @@ package entry
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -205,7 +206,7 @@ func runGoldenScenario(t *testing.T, name string) {
 	// normalization that drops or rewrites content cannot hide a leak.
 	for _, secret := range sc.RawSecrets {
 		for i, cap := range captured {
-			if strings.Contains(string(cap.body), secret) {
+			if secretLeaked(cap.body, secret) {
 				t.Fatalf("scenario %s: raw secret %q leaked in export request[%d]: %s",
 					name, secret, i, cap.body)
 			}
@@ -614,6 +615,90 @@ func normalizeCapturedBodies(t *testing.T, captured []capturedRequest) []goldenE
 		out = append(out, goldenExport{Path: cap.path, Generations: gens})
 	}
 	return out
+}
+
+// secretLeaked reports whether secret appears in an export body, either as
+// plain text or inside a base64-encoded bytes field. Proto JSON encodes
+// `bytes` fields — `tool_call.input_json` and `tool_result.content_json` —
+// as base64, so a plain substring search misses a secret that only lives in
+// tool arguments or tool results.
+func secretLeaked(body []byte, secret string) bool {
+	if bytes.Contains(body, []byte(secret)) {
+		return true
+	}
+	var decoded any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return false
+	}
+	return leafLeaks(decoded, secret)
+}
+
+// leafLeaks walks the decoded body and checks every string leaf twice: as
+// itself, and as base64. The plain check matters because the top-level scan
+// runs against the escaped body, so a secret containing a newline, quote or
+// backslash — a PEM private key, for one — hides behind its escape sequences
+// there.
+func leafLeaks(v any, secret string) bool {
+	switch x := v.(type) {
+	case string:
+		if strings.Contains(x, secret) {
+			return true
+		}
+		raw, err := base64.StdEncoding.DecodeString(x)
+		return err == nil && bytes.Contains(raw, []byte(secret))
+	case []any:
+		for _, item := range x {
+			if leafLeaks(item, secret) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, item := range x {
+			if leafLeaks(item, secret) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The secret guard is the one assertion UPDATE_GOLDENS cannot launder, so it
+// gets its own test. Both encodings a secret can hide behind are covered:
+// base64, which protojson uses for `bytes` fields, and JSON string escapes.
+func TestSecretLeaked(t *testing.T) {
+	const pem = "-----BEGIN PRIVATE KEY-----\nMIIBVgIBADAN\n-----END PRIVATE KEY-----"
+	blob := base64.StdEncoding.EncodeToString([]byte(`{"api_key":"kR7fQ2wLmZ9xTb4vNc1JhY6s"}`))
+
+	cases := []struct {
+		name   string
+		body   string
+		secret string
+		want   bool
+	}{
+		{"plain text", `{"text":"use glc_token"}`, "glc_token", true},
+		{"base64 bytes field", `{"input_json":"` + blob + `"}`, "kR7fQ2wLmZ9xTb4vNc1JhY6s", true},
+		{"redacted base64 bytes field", `{"input_json":"` + base64.StdEncoding.EncodeToString([]byte(`{"api_key":"[REDACTED:json-secret-field]"}`)) + `"}`, "kR7fQ2wLmZ9xTb4vNc1JhY6s", false},
+		{"absent", `{"text":"nothing here"}`, "glc_token", false},
+		// The body stores this one as `\n` escapes, so only the decoded
+		// leaf matches.
+		{"escaped newlines", string(mustMarshalJSON(t, map[string]string{"text": pem})), pem, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := secretLeaked([]byte(tc.body), tc.secret); got != tc.want {
+				t.Errorf("secretLeaked(%s, %q) = %v; want %v", tc.body, tc.secret, got, tc.want)
+			}
+		})
+	}
+}
+
+func mustMarshalJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return data
 }
 
 // generationSortKey returns the `id` field of a generation so requests with

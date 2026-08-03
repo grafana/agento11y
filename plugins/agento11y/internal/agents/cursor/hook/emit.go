@@ -11,6 +11,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
 )
 
@@ -62,12 +63,17 @@ func emitGeneration(ctx context.Context, client *agento11y.Client, frag *fragmen
 // spans interleave on the generation timeline in wall-clock order (CALL→TOOL
 // →CALL→TOOL) rather than collapsing onto the generation's completed_at.
 //
-// Tool argument/result content is forwarded as-is. Capture-mode clamping
-// happens at the fragment-write boundary (postToolUse drops bytes for any
-// mode other than `full`), so by the time we emit, t.ToolInput/Output are
-// already empty in metadata_only / no_tool_content. The SDK additionally
+// Tool argument/result content goes through the shared redactor before it
+// reaches the span, mirroring codex. This is a second boundary: the mapper
+// redacts the generation export, and the span carries its own copy of the
+// same bytes. t.ErrorMessage needs no pass here — postToolUse already
+// redacted it, the same split codex uses. Capture-mode clamping happens at
+// the fragment-write boundary (postToolUse drops bytes for any mode other
+// than `full`), so by the time we emit, t.ToolInput/Output and t.ErrorMessage
+// are already empty in metadata_only / no_tool_content. The SDK additionally
 // honors Generation.ContentCapture when serializing the span.
 func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, gen agento11y.Generation, logger *log.Logger) {
+	red := redact.New()
 	for i := range frag.Tools {
 		t := &frag.Tools[i]
 		if t.ToolName == "" {
@@ -87,12 +93,8 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment
 		})
 
 		end := agento11y.ToolExecutionEnd{CompletedAt: completedAt}
-		if len(t.ToolInput) > 0 {
-			end.Arguments = string(t.ToolInput)
-		}
-		if len(t.ToolOutput) > 0 {
-			end.Result = string(t.ToolOutput)
-		}
+		end.Arguments = red.RedactJSONForText(t.ToolInput)
+		end.Result = red.RedactJSONForText(t.ToolOutput)
 		if t.Status == "error" {
 			toolRec.SetExecError(emit.ToolError(t.ErrorMessage))
 		}

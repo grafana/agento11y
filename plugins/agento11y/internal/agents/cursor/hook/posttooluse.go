@@ -8,6 +8,7 @@ import (
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
 // PostToolUse appends a ToolRecord to the fragment. The same handler covers
@@ -15,9 +16,9 @@ import (
 // (postToolUseFailure) — pass isFailure=true for the latter so the resulting
 // record gets `status="error"` and the extracted error message.
 //
-// Tool input/output are dropped at fragment-write time when the active
-// content-capture mode isn't `full`. We never persist bytes we don't intend
-// to export.
+// Tool input/output and the failure message are dropped at fragment-write
+// time when the active content-capture mode isn't `full`. We never persist
+// bytes we don't intend to export.
 func PostToolUse(p Payload, cfg config.Config, logger *log.Logger, isFailure bool) {
 	if p.ConversationID == "" || p.GenerationID == "" {
 		label := "postToolUse"
@@ -32,7 +33,7 @@ func PostToolUse(p Payload, cfg config.Config, logger *log.Logger, isFailure boo
 	var errorMsg string
 	if isFailure {
 		status = "error"
-		errorMsg = extractToolError(p.Error)
+		errorMsg = errorMessageForMode(p.Error, cfg.ContentCapture)
 	}
 
 	rec := fragment.ToolRecord{
@@ -66,6 +67,18 @@ func PostToolUse(p Payload, cfg config.Config, logger *log.Logger, isFailure boo
 		logger.Printf("%s: save: %v", label, err)
 		return
 	}
+}
+
+// errorMessageForMode returns the redacted tool failure message in `full` mode
+// and "" in every other mode, so the span falls back to the generic "tool
+// returned error". The message is tool content, and it is the one content field
+// the SDK forwards to the span status and error event under no_tool_content.
+// codex and copilot gate and redact the same field the same way.
+func errorMessageForMode(raw json.RawMessage, mode agento11y.ContentCaptureMode) string {
+	if mode != agento11y.ContentCaptureModeFull {
+		return ""
+	}
+	return redact.New().Redact(extractToolError(raw))
 }
 
 // extractToolError parses the polymorphic `error` field into a single string.
