@@ -73,43 +73,86 @@ func (p palette) glyph(h Health) string {
 	}
 }
 
+// reportBody accumulates the human report so key/value lines can be padded
+// once the whole report is known. The column width is the widest key the run
+// actually rendered; a constant would be overflowed by the longest keys.
+type reportBody struct {
+	lines    []bodyLine
+	keyWidth int
+}
+
+// bodyLine is either a literal line (text) or a key/value pair padded when
+// the body is flushed. isKV is the discriminator, so an empty key still
+// renders its line instead of dropping it.
+type bodyLine struct {
+	text  string
+	key   string
+	value string
+	isKV  bool
+}
+
+func (b *reportBody) textf(format string, args ...any) {
+	b.lines = append(b.lines, bodyLine{text: fmt.Sprintf(format, args...)})
+}
+
+func (b *reportBody) kv(key, value string) {
+	b.lines = append(b.lines, bodyLine{key: key, value: value, isKV: true})
+	if w := len(key) + len(":"); w > b.keyWidth {
+		b.keyWidth = w
+	}
+}
+
+func (b *reportBody) flush(p palette) string {
+	var out strings.Builder
+	for _, line := range b.lines {
+		if !line.isKV {
+			out.WriteString(line.text)
+			continue
+		}
+		fmt.Fprintf(&out, "  %s %s\n", p.faint(padRight(line.key+":", b.keyWidth)), line.value)
+	}
+	return out.String()
+}
+
 // renderHuman writes the colored (or plain) report. probed reports whether
 // live probes ran; when they didn't, a hint nudges the user toward --probe
 // since the section verdicts are config-only and don't test credentials.
 func renderHuman(w io.Writer, r *Report, color, probed bool) {
 	p := palette{color: color}
-	var b strings.Builder
+	var b reportBody
 
-	fmt.Fprintf(&b, "%s %s\n\n", p.heading("agento11y doctor"), p.faint("v"+r.Binary.Version))
+	// Print the version as stamped, the way `agento11y --version` does. The
+	// release ldflags already carry the `v` prefix.
+	b.textf("%s %s\n\n", p.heading("agento11y doctor"), p.faint(r.Binary.Version))
 
 	// Conversations pipeline.
 	writeSection(&b, p, "Conversations (generation export)", r.Conversations.Health)
-	writeKV(&b, p, "endpoint", describeEnv(r.Conversations.Endpoint))
-	writeKV(&b, p, "tenant id", describeEnv(r.Conversations.TenantID))
-	writeKV(&b, p, "auth token", describeToken(r.Conversations.Token))
+	b.kv("endpoint", describeEnv(r.Conversations.Endpoint))
+	b.kv("tenant id", describeEnv(r.Conversations.TenantID))
+	b.kv("auth token", describeToken(r.Conversations.Token))
 	if r.Conversations.Probe != nil {
-		writeKV(&b, p, "probe", describeProbe(r.Conversations.Probe))
+		b.kv("probe", describeProbe(r.Conversations.Probe))
 	}
 	writeMessages(&b, p, r.Conversations.Messages)
-	b.WriteString("\n")
+	b.textf("\n")
 
 	// Analytics pipeline.
 	writeSection(&b, p, "Analytics (OTLP metrics & traces)", r.Analytics.Health)
 	if r.Analytics.Endpoint.Set {
-		writeKV(&b, p, "endpoint", fmt.Sprintf("%s %s", r.Analytics.Endpoint.Value, p.faint("("+r.Analytics.EndpointVar+", "+r.Analytics.Endpoint.Source+")")))
+		b.kv("endpoint", fmt.Sprintf("%s %s", r.Analytics.Endpoint.Value, p.faint("("+r.Analytics.EndpointVar+", "+r.Analytics.Endpoint.Source+")")))
 	} else {
-		writeKV(&b, p, "endpoint", p.faint("not set"))
+		b.kv("endpoint", p.faint("not set"))
 	}
 	if r.Analytics.Probe != nil {
 		if r.Analytics.Probe.Metrics != nil {
-			writeKV(&b, p, "metrics probe", describeProbe(r.Analytics.Probe.Metrics))
+			b.kv("metrics probe", describeProbe(r.Analytics.Probe.Metrics))
 		}
 		if r.Analytics.Probe.Traces != nil {
-			writeKV(&b, p, "traces probe", describeProbe(r.Analytics.Probe.Traces))
+			b.kv("traces probe", describeProbe(r.Analytics.Probe.Traces))
 		}
 	}
 	writeMessages(&b, p, r.Analytics.Messages)
-	b.WriteString("\n")
+	b.textf("\n")
 
 	// Config.
 	writeSection(&b, p, "Config", r.Config.Health)
@@ -117,44 +160,44 @@ func renderHuman(w io.Writer, r *Report, color, probed bool) {
 	if r.Config.Exists {
 		exists = "present"
 	}
-	writeKV(&b, p, "file", fmt.Sprintf("%s %s", r.Config.Path, p.faint("("+exists+")")))
+	b.kv("file", fmt.Sprintf("%s %s", r.Config.Path, p.faint("("+exists+")")))
 	mode := r.Config.ContentCaptureMode
 	if r.Config.ContentModeFellBack {
 		mode += " " + p.faint("(invalid value, fell back)")
 	}
-	writeKV(&b, p, "content capture", mode)
-	writeKV(&b, p, "guards", describeGuards(p, r.Config))
+	b.kv("content capture", mode)
+	b.kv("guards", describeGuards(p, r.Config))
 	if len(r.Config.Tags) > 0 {
-		writeKV(&b, p, "tags", fmt.Sprintf("%s %s", formatTags(r.Config.Tags), p.faint("("+r.Config.TagsSource+")")))
+		b.kv("tags", fmt.Sprintf("%s %s", formatTags(r.Config.Tags), p.faint("("+r.Config.TagsSource+")")))
 	}
 	if r.Config.Local.Set {
 		localMode := describeEnv(r.Config.Local)
 		if r.Config.LocalInvalid {
 			localMode += " " + p.faint("(invalid value, local mode is off)")
 		}
-		writeKV(&b, p, "local mode", localMode)
+		b.kv("local mode", localMode)
 	}
 	if r.Config.LocalForward.Set {
-		writeKV(&b, p, "local forwarding", describeEnv(r.Config.LocalForward))
+		b.kv("local forwarding", describeEnv(r.Config.LocalForward))
 	}
 	// Only worth a line once the user has opted into forwarding: with
 	// LOCAL_FORWARD unset chaining is always off, and that is already what the
 	// absent line above says.
 	if r.Config.LocalForward.Set {
-		writeKV(&b, p, "local guard checks", describeLocalHookForward(p, r.Config.LocalHookForward))
+		b.kv("local guard checks", describeLocalHookForward(p, r.Config.LocalHookForward))
 	}
 	writeMessages(&b, p, r.Config.Messages)
-	b.WriteString("\n")
+	b.textf("\n")
 
 	// Agents.
-	fmt.Fprintf(&b, "%s\n", p.sectionTitle("Coding agents", HealthOK))
+	b.textf("%s\n", p.sectionTitle("Coding agents", HealthOK))
 	for _, a := range r.Agents {
-		writeKV(&b, p, a.Name, describeAgent(p, a))
+		b.kv(a.Name, describeAgent(p, a))
 	}
 	if r.AutoUpdateDisabled {
-		writeKV(&b, p, "auto-update", p.faint("disabled (SIGIL_AUTO_UPDATE)"))
+		b.kv("auto-update", p.faint("disabled (SIGIL_AUTO_UPDATE)"))
 	}
-	b.WriteString("\n")
+	b.textf("\n")
 
 	// Summary.
 	writeSummary(&b, p, r)
@@ -162,34 +205,30 @@ func renderHuman(w io.Writer, r *Report, color, probed bool) {
 		writeProbeHint(&b, p, r)
 	}
 
-	_, _ = io.WriteString(w, b.String())
+	_, _ = io.WriteString(w, b.flush(p))
 }
 
 // writeProbeHint nudges toward --probe when the report is config-only and
 // there is something to probe. Without it, the section verdicts reflect only
 // that credentials are present, not that they work.
-func writeProbeHint(b *strings.Builder, p palette, r *Report) {
+func writeProbeHint(b *reportBody, p palette, r *Report) {
 	if !r.Conversations.configured() && !r.Analytics.Endpoint.Set {
 		return
 	}
-	fmt.Fprintf(b, "\n%s\n", p.faint("Verdicts above check configuration only. Run `agento11y doctor --probe` to test credentials against the endpoints."))
+	b.textf("\n%s\n", p.faint("Verdicts above check configuration only. Run `agento11y doctor --probe` to test credentials against the endpoints."))
 }
 
-func writeSection(b *strings.Builder, p palette, title string, h Health) {
-	fmt.Fprintf(b, "%s %s\n", p.glyph(h), p.sectionTitle(title, h))
+func writeSection(b *reportBody, p palette, title string, h Health) {
+	b.textf("%s %s\n", p.glyph(h), p.sectionTitle(title, h))
 }
 
-func writeKV(b *strings.Builder, p palette, key, value string) {
-	fmt.Fprintf(b, "  %s %s\n", p.faint(padRight(key+":", 16)), value)
-}
-
-func writeMessages(b *strings.Builder, p palette, messages []string) {
+func writeMessages(b *reportBody, p palette, messages []string) {
 	for _, m := range messages {
-		fmt.Fprintf(b, "  %s %s\n", p.glyph(HealthWarn), m)
+		b.textf("  %s %s\n", p.glyph(HealthWarn), m)
 	}
 }
 
-func writeSummary(b *strings.Builder, p palette, r *Report) {
+func writeSummary(b *reportBody, p palette, r *Report) {
 	var broken []string
 	if r.Conversations.Health == HealthError {
 		broken = append(broken, "conversations")
@@ -201,11 +240,10 @@ func writeSummary(b *strings.Builder, p palette, r *Report) {
 		broken = append(broken, "config")
 	}
 	if len(broken) == 0 {
-		fmt.Fprintf(b, "%s %s\n", p.glyph(HealthOK), "no problems detected")
+		b.textf("%s %s\n", p.glyph(HealthOK), "no problems detected")
 		return
 	}
-	fmt.Fprintf(b, "%s %s\n", p.glyph(HealthError),
-		fmt.Sprintf("%d problem(s): %s misconfigured", len(broken), strings.Join(broken, ", ")))
+	b.textf("%s %d problem(s): %s misconfigured\n", p.glyph(HealthError), len(broken), strings.Join(broken, ", "))
 }
 
 func describeEnv(v envValue) string {
@@ -270,32 +308,42 @@ func describeProbe(p *ProbeResult) string {
 }
 
 func describeAgent(p palette, a AgentStatus) string {
-	// Hook-only agents (cursor) are detected purely by PATH presence.
+	// Hook-only agents (cursor) are detected purely by PATH presence. Their
+	// version is the agento11y binary's, so it is rendered exactly as the
+	// report heading renders it.
 	if a.HookBased {
-		return agentNote(p, joinAgent("detected", a.Version), a.Note)
+		return agentNote(p, joinVersion("detected", a.Version), a.Note)
 	}
 	// The install probe never ran: a CLI-dependent agent whose binary is
 	// absent, or a hook-only agent off PATH.
 	if a.Health == HealthSkipped {
 		return agentNote(p, p.faint("not found on PATH"), a.Note)
 	}
+	// The probe ran and errored, or the state was never set. Say the state is
+	// unknown instead of picking one of the two known states; the note carries
+	// the reason.
+	install := a.Install.orUnknown()
+	if install == InstallStateUnknown {
+		return agentNote(p, "install state unknown", a.Note)
+	}
+	installed := install == InstallStateInstalled
 	// Hook-file based agent (copilot, vibe): capture doesn't depend on the CLI being
 	// on PATH, so report install state with its own wording and no PATH
 	// qualifiers.
 	if a.notInstalledLabel != "" {
 		state := a.notInstalledLabel
-		if a.Installed {
+		if installed {
 			state = "installed"
 		}
 		return agentNote(p, joinAgent(state, a.Version), a.Note)
 	}
-	// The probe ran. Report install state, only claiming "on PATH" when true so
-	// config-based agents installed without the CLI present aren't mislabeled.
+	// Report install state, only claiming "on PATH" when true so config-based
+	// agents installed without the CLI present aren't mislabeled.
 	var state string
 	switch {
-	case a.Installed && a.OnPath:
+	case installed && a.OnPath:
 		state = "installed"
-	case a.Installed:
+	case installed:
 		state = "installed " + p.faint("(CLI not on PATH)")
 	case a.OnPath:
 		state = "on PATH, plugin not installed"
@@ -305,11 +353,25 @@ func describeAgent(p palette, a AgentStatus) string {
 	return agentNote(p, joinAgent(state, a.Version), a.Note)
 }
 
+// joinAgent appends a host agent's own version to its state, prefixed with
+// `v` when it is a bare number. Some agents report a dist-tag instead of a
+// number (opencode and pi return the tail of an npm spec, so a `@next`
+// install reports `next`), and `vnext` would be wrong.
 func joinAgent(state, version string) string {
-	if version != "" {
-		return state + " v" + version
+	if version != "" && version[0] >= '0' && version[0] <= '9' {
+		version = "v" + version
 	}
-	return state
+	return joinVersion(state, version)
+}
+
+// joinVersion appends a version to a state as-is. The agento11y binary version
+// goes through here, so the heading and cursor's line print the same string
+// the build stamped, and the `v` prefix stays in the ldflags alone.
+func joinVersion(state, version string) string {
+	if version == "" {
+		return state
+	}
+	return state + " " + version
 }
 
 func agentNote(p palette, body, note string) string {

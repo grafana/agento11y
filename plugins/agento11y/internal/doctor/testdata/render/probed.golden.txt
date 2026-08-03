@@ -1,0 +1,28 @@
+agento11y doctor v0.22.0
+
+✓ Conversations (generation export)
+  endpoint:           https://sigil.example (env)
+  tenant id:          12345 (env)
+  auth token:         set (glc_…, env)
+  probe:              HTTP 200
+
+✗ Analytics (OTLP metrics & traces)
+  endpoint:           https://otlp.example/otlp (AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT, env)
+  metrics probe:      HTTP 200
+  traces probe:       HTTP 403 — missing metrics:write/traces:write scope
+  ! OTLP endpoint rejected auth (401/403) — the token is likely missing metrics:write/traces:write scope
+
+✓ Config
+  file:               /home/u/.config/agento11y/config.env (present)
+  content capture:    full
+  guards:             enabled (timeout 1500ms, fail-open)
+  tags:               env=prod, team=assistant (config.env)
+  local forwarding:   true (env)
+  local guard checks: local hook evaluation reaches Cloud (tool calls, and the conversation an agent runs a preflight check on, are sent for evaluation whatever the capture mode)
+
+Coding agents
+  claude:             installed v0.3.0
+  codex:              not found on PATH
+  cursor:             detected v0.22.0 (hook-based; configured in Cursor settings)
+
+✗ 1 problem(s): analytics misconfigured

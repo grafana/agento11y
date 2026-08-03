@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 // mergeEnv returns the union of the given env maps, later entries winning.
@@ -22,13 +24,26 @@ func mergeEnv(envs ...map[string]string) map[string]string {
 }
 
 // isolateEnv points the dotenv/state roots at a fresh tempdir and clears the
-// tracked env vars so a test never reads the developer's real config.
+// branded env vars so a test never reads the developer's real config.
+//
+// It clears every AGENTO11Y_* and SIGIL_* key the shell exports rather than a
+// hand-listed subset: doctor and envconfig read families that trackedKeys does
+// not cover (GUARDS_TIMEOUT_MS, GUARDS_FAIL_OPEN), so on a configured machine
+// the host value would decide the result.
 func isolateEnv(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(key, "AGENTO11Y_") || strings.HasPrefix(key, "SIGIL_") {
+			t.Setenv(key, "")
+		}
+	}
+	// trackedKeys adds the unbranded OTel vars and any branded key the shell
+	// happens not to export.
 	for _, k := range trackedKeys {
 		t.Setenv(k, "")
 	}
@@ -165,6 +180,27 @@ func TestCollectConversations(t *testing.T) {
 			osEnv:      map[string]string{"SIGIL_ENDPOINT": "https://x", "SIGIL_AUTH_TENANT_ID": "1", "SIGIL_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthOK,
 			wantMsg:    "preferred names are AGENTO11Y_*",
+		},
+		{
+			// Set credentials alone are not a working config: an endpoint the
+			// exporter cannot build a request from fails without --probe.
+			name:       "malformed endpoint fails offline",
+			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "not a url ://", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
+			wantHealth: HealthError,
+			wantMsg:    "AGENTO11Y_ENDPOINT is not a usable endpoint",
+		},
+		{
+			name:       "endpoint with an empty host fails offline",
+			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "https:///generations", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
+			wantHealth: HealthError,
+			wantMsg:    "not a usable endpoint",
+		},
+		{
+			// The exporter prepends https:// (http:// under INSECURE) to a
+			// scheme-less endpoint, so it is usable and doctor must accept it.
+			name:       "scheme-less endpoint stays valid",
+			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "collector.local:4317", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
+			wantHealth: HealthOK,
 		},
 	}
 	for _, tc := range tests {
@@ -327,11 +363,14 @@ func TestCollectAnalytics(t *testing.T) {
 
 func TestRunProbes(t *testing.T) {
 	tests := []struct {
-		name          string
-		conv          *ProbeResult
-		otlp          *AnalyticsProbe
-		wantConv      Health
-		wantAnalytics Health
+		name string
+		conv *ProbeResult
+		otlp *AnalyticsProbe
+		// convHealth is the verdict the offline collectors reached; "" means ok.
+		convHealth      Health
+		wantConv        Health
+		wantAnalytics   Health
+		wantConvSkipped bool
 	}{
 		{
 			name:          "all reachable",
@@ -368,6 +407,17 @@ func TestRunProbes(t *testing.T) {
 			wantConv:      HealthOK,
 			wantAnalytics: HealthOK,
 		},
+		{
+			// The offline endpoint check already failed, so probing would
+			// report the same fault a second and third time.
+			name:            "endpoint already rejected offline is not probed",
+			conv:            &ProbeResult{StatusCode: 0, Message: "invalid endpoint: parse …"},
+			otlp:            &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200, OK: true}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			convHealth:      HealthError,
+			wantConv:        HealthError,
+			wantAnalytics:   HealthOK,
+			wantConvSkipped: true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -376,12 +426,17 @@ func TestRunProbes(t *testing.T) {
 			probeConversationsFn = func(context.Context, string, string, string, bool) *ProbeResult { return tc.conv }
 			probeOTLPFn = func(context.Context) *AnalyticsProbe { return tc.otlp }
 
+			convHealth := tc.convHealth
+			if convHealth == "" {
+				convHealth = HealthOK
+			}
 			r := &Report{
 				Conversations: ConversationsSection{
 					Endpoint: envValue{Set: true, Value: "https://sigil.example.net"},
 					TenantID: envValue{Set: true, Value: "t"},
 					Token:    tokenValue{Set: true},
-					Health:   HealthOK,
+					Health:   convHealth,
+					Messages: []string{"AGENTO11Y_ENDPOINT is not a usable endpoint: …"},
 				},
 				Analytics: AnalyticsSection{
 					Endpoint: envValue{Set: true, Value: "https://otlp.example.net"},
@@ -391,6 +446,16 @@ func TestRunProbes(t *testing.T) {
 			runProbes(context.Background(), r, map[string]string{}, nil)
 			if r.Conversations.Health != tc.wantConv {
 				t.Fatalf("conversations health = %q, want %q", r.Conversations.Health, tc.wantConv)
+			}
+			if tc.wantConvSkipped {
+				if r.Conversations.Probe != nil {
+					t.Fatalf("conversations probe ran = %+v, want skipped", r.Conversations.Probe)
+				}
+				if len(r.Conversations.Messages) != 1 {
+					t.Fatalf("conversations messages = %v, want the offline message alone", r.Conversations.Messages)
+				}
+			} else if r.Conversations.Probe == nil {
+				t.Fatal("conversations probe did not run")
 			}
 			if r.Analytics.Health != tc.wantAnalytics {
 				t.Fatalf("analytics health = %q, want %q", r.Analytics.Health, tc.wantAnalytics)
@@ -550,12 +615,12 @@ func TestCollectConfig_Guards(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// ResolveGuards reads the process env directly, so isolateEnv has to
+			// clear the host's GUARDS_* values before the case sets its own.
 			isolateEnv(t)
-			// ResolveGuards reads the process env directly, so clear the guard
-			// vars first to keep the baseline independent of the host shell.
-			t.Setenv("SIGIL_GUARDS_ENABLED", tc.enabled)
-			t.Setenv("SIGIL_GUARDS_TIMEOUT_MS", tc.timeout)
-			t.Setenv("SIGIL_GUARDS_FAIL_OPEN", tc.failOpen)
+			t.Setenv(envconfig.PreferredKey("GUARDS_ENABLED"), tc.enabled)
+			t.Setenv(envconfig.PreferredKey("GUARDS_TIMEOUT_MS"), tc.timeout)
+			t.Setenv(envconfig.PreferredKey("GUARDS_FAIL_OPEN"), tc.failOpen)
 
 			sec := collectConfig(nil, nil)
 			if sec.GuardsEnabled != tc.wantEnabled {

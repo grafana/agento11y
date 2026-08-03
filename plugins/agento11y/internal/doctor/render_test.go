@@ -9,7 +9,7 @@ import (
 
 func sampleReport() *Report {
 	return &Report{
-		Binary: BinarySection{Version: "1.2.3"},
+		Binary: BinarySection{Version: "v1.2.3"},
 		Config: ConfigSection{
 			Path: "/tmp/agento11y/config.env", Exists: true,
 			ContentCaptureMode: "metadata_only", Health: HealthOK,
@@ -25,8 +25,8 @@ func sampleReport() *Report {
 			Messages: []string{"no OTLP endpoint set"},
 		},
 		Agents: []AgentStatus{
-			{Name: "claude", OnPath: true, Installed: true, Version: "0.3.0", Health: HealthOK},
-			{Name: "cursor", OnPath: true, HookBased: true, Version: "1.2.3", Note: "hook-based", Health: HealthOK},
+			{Name: "claude", OnPath: true, Install: InstallStateInstalled, Version: "0.3.0", Health: HealthOK},
+			{Name: "cursor", OnPath: true, HookBased: true, Version: "v1.2.3", Note: "hook-based", Health: HealthOK},
 		},
 	}
 }
@@ -70,6 +70,62 @@ func TestRenderHuman_NoColorIsPlain(t *testing.T) {
 	}
 }
 
+// The binary version is printed exactly as the build stamped it, in the
+// heading and in cursor's line, which reports the same string. The `v` prefix
+// lives in the release ldflags (-X main.version=v{{ .Version }}) and nowhere
+// else, so a build that stamps it and one that doesn't both render one `v`.
+func TestRenderHuman_BinaryVersionPrintedAsStamped(t *testing.T) {
+	for _, version := range []string{"v0.22.0", "0.22.0", "dev"} {
+		t.Run(version, func(t *testing.T) {
+			r := sampleReport()
+			r.Binary.Version = version
+			r.Agents = []AgentStatus{{Name: "cursor", OnPath: true, HookBased: true, Version: version, Health: HealthOK}}
+			var buf bytes.Buffer
+			renderHuman(&buf, r, false, false)
+			out := buf.String()
+			heading, _, _ := strings.Cut(out, "\n")
+			if want := "agento11y doctor " + version; heading != want {
+				t.Fatalf("heading = %q, want %q", heading, want)
+			}
+			if want := "detected " + version + "\n"; !strings.Contains(out, want) {
+				t.Fatalf("cursor line missing %q:\n%s", want, out)
+			}
+		})
+	}
+}
+
+// Every value starts in the same column, whatever the longest key is.
+func TestReportBody_PadsToWidestKey(t *testing.T) {
+	var b reportBody
+	b.kv("tags", "my_label=my_value")
+	b.kv("local forwarding", "true")
+	b.kv("local guard checks", "not forwarded")
+
+	want := strings.Join([]string{
+		"  tags:               my_label=my_value",
+		"  local forwarding:   true",
+		"  local guard checks: not forwarded",
+		"",
+	}, "\n")
+	if got := b.flush(palette{}); got != want {
+		t.Fatalf("flush =\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// A key/value line renders whatever its key is. The line kind, not the key's
+// content, decides how it is written, so an agent whose name resolves to an
+// empty string still gets a row.
+func TestReportBody_EmptyKeyStillRenders(t *testing.T) {
+	var b reportBody
+	b.kv("", "orphan")
+	b.kv("k", "v")
+
+	want := "  :  orphan\n  k: v\n"
+	if got := b.flush(palette{}); got != want {
+		t.Fatalf("flush = %q, want %q", got, want)
+	}
+}
+
 func TestRenderHuman_ProbeHint(t *testing.T) {
 	const hint = "agento11y doctor --probe"
 	nothingProbeable := func() *Report {
@@ -106,14 +162,26 @@ func TestDescribeAgent(t *testing.T) {
 		agent AgentStatus
 		want  string
 	}{
-		{name: "hook-based", agent: AgentStatus{HookBased: true, OnPath: true, Version: "1.2.3", Note: "hook-based", Health: HealthOK}, want: "detected v1.2.3 (hook-based)"},
-		{name: "skipped not on path", agent: AgentStatus{OnPath: false, Health: HealthSkipped}, want: "not found on PATH"},
-		{name: "installed on path", agent: AgentStatus{OnPath: true, Installed: true, Version: "0.3.0", Health: HealthOK}, want: "installed v0.3.0"},
-		{name: "config-based installed without cli", agent: AgentStatus{OnPath: false, Installed: true, Version: "2.0.0", Health: HealthOK}, want: "installed (CLI not on PATH) v2.0.0"},
-		{name: "on path not installed", agent: AgentStatus{OnPath: true, Installed: false, Health: HealthWarn}, want: "on PATH, plugin not installed"},
-		{name: "config-based not installed without cli", agent: AgentStatus{OnPath: false, Installed: false, Health: HealthWarn}, want: "plugin not installed"},
-		{name: "hook-file based installed (copilot)", agent: AgentStatus{OnPath: false, Installed: true, notInstalledLabel: "not configured", Note: "hook-based", Health: HealthOK}, want: "installed (hook-based)"},
-		{name: "hook-file based not configured ignores PATH (copilot)", agent: AgentStatus{OnPath: true, Installed: false, notInstalledLabel: "not configured", Note: "hook-based", Health: HealthWarn}, want: "not configured (hook-based)"},
+		// cursor reports the agento11y binary version, which the release ldflags
+		// stamp with the `v` and a dev build reports as a bare word. It is
+		// printed as stamped, the way the heading prints it.
+		{name: "hook-based", agent: AgentStatus{HookBased: true, OnPath: true, Version: "v1.2.3", Note: "hook-based", Health: HealthOK}, want: "detected v1.2.3 (hook-based)"},
+		{name: "hook-based unstamped version", agent: AgentStatus{HookBased: true, OnPath: true, Version: "0.22.0", Health: HealthOK}, want: "detected 0.22.0"},
+		{name: "hook-based dev version", agent: AgentStatus{HookBased: true, OnPath: true, Version: "dev", Health: HealthOK}, want: "detected dev"},
+		// A host agent's own version is numeric (claude) or a dist-tag
+		// (opencode, pi, from an npm spec); only the number takes the prefix.
+		{name: "agent dist-tag version", agent: AgentStatus{OnPath: true, Install: InstallStateInstalled, Version: "next", Health: HealthOK}, want: "installed next"},
+		{name: "skipped not on path", agent: AgentStatus{OnPath: false, Install: InstallStateUnknown, Health: HealthSkipped}, want: "not found on PATH"},
+		{name: "installed on path", agent: AgentStatus{OnPath: true, Install: InstallStateInstalled, Version: "0.3.0", Health: HealthOK}, want: "installed v0.3.0"},
+		{name: "config-based installed without cli", agent: AgentStatus{OnPath: false, Install: InstallStateInstalled, Version: "2.0.0", Health: HealthOK}, want: "installed (CLI not on PATH) v2.0.0"},
+		{name: "on path not installed", agent: AgentStatus{OnPath: true, Install: InstallStateNotInstalled, Health: HealthWarn}, want: "on PATH, plugin not installed"},
+		{name: "config-based not installed without cli", agent: AgentStatus{OnPath: false, Install: InstallStateNotInstalled, Health: HealthWarn}, want: "plugin not installed"},
+		{name: "hook-file based installed (copilot)", agent: AgentStatus{OnPath: false, Install: InstallStateInstalled, notInstalledLabel: "not configured", Note: "hook-based", Health: HealthOK}, want: "installed (hook-based)"},
+		{name: "hook-file based not configured ignores PATH (copilot)", agent: AgentStatus{OnPath: true, Install: InstallStateNotInstalled, notInstalledLabel: "not configured", Note: "hook-based", Health: HealthWarn}, want: "not configured (hook-based)"},
+		// A probe that errored: one line must not assert a known state and an
+		// unknown one at the same time.
+		{name: "probe errored", agent: AgentStatus{OnPath: true, Install: InstallStateUnknown, Note: "stat hooks.json: operation not permitted", Health: HealthWarn}, want: "install state unknown (stat hooks.json: operation not permitted)"},
+		{name: "hook-file based probe errored (copilot)", agent: AgentStatus{OnPath: false, Install: InstallStateUnknown, notInstalledLabel: "not configured", Note: "hook-based; stat hooks.json: operation not permitted", Health: HealthWarn}, want: "install state unknown (hook-based; stat hooks.json: operation not permitted)"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

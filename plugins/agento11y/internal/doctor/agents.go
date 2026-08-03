@@ -66,7 +66,9 @@ func defaultCollectAgents(ctx context.Context, binaryVersion string) []AgentStat
 }
 
 func probeAgent(ctx context.Context, probe agentProbe, binaryVersion string) AgentStatus {
-	a := AgentStatus{Name: probe.name, Note: probe.note, notInstalledLabel: probe.notInstalledLabel}
+	// Unknown until a probe says otherwise: every early return below leaves
+	// the install state undetermined.
+	a := AgentStatus{Name: probe.name, Install: InstallStateUnknown, Note: probe.note, notInstalledLabel: probe.notInstalledLabel}
 	_, lookErr := lookPath(probe.bin)
 	a.OnPath = lookErr == nil
 
@@ -94,15 +96,18 @@ func probeAgent(ctx context.Context, probe agentProbe, binaryVersion string) Age
 
 	installed, version, err := probe.status(ctx)
 	if err != nil {
+		// The state stays unknown and the renderer says so; the note carries
+		// the reason the probe could not answer.
 		a.Health = HealthWarn
-		a.Note = appendNote(a.Note, "install state unknown: "+err.Error())
+		a.Note = appendNote(a.Note, err.Error())
 		return a
 	}
-	a.Installed = installed
 	a.Version = version
 	if installed {
+		a.Install = InstallStateInstalled
 		a.Health = HealthOK
 	} else {
+		a.Install = InstallStateNotInstalled
 		a.Health = HealthWarn
 	}
 	return a

@@ -2,7 +2,9 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -38,23 +40,60 @@ func TestDefaultCollectAgents(t *testing.T) {
 		byName[a.Name] = a
 	}
 
-	if a := byName["claude"]; !a.OnPath || !a.Installed || a.Version != "0.3.0" || a.Health != HealthOK {
+	if a := byName["claude"]; !a.OnPath || a.Install != InstallStateInstalled || a.Version != "0.3.0" || a.Health != HealthOK {
 		t.Fatalf("claude = %+v", a)
 	}
-	if a := byName["codex"]; a.OnPath || a.Health != HealthSkipped {
-		t.Fatalf("codex = %+v, want not-on-path/skipped", a)
+	if a := byName["codex"]; a.OnPath || a.Health != HealthSkipped || a.Install != InstallStateUnknown {
+		t.Fatalf("codex = %+v, want not-on-path/skipped/unknown", a)
 	}
-	if a := byName["cfgcli"]; a.OnPath || !a.Installed || a.Version != "2.0.0" || a.Health != HealthOK {
+	if a := byName["cfgcli"]; a.OnPath || a.Install != InstallStateInstalled || a.Version != "2.0.0" || a.Health != HealthOK {
 		t.Fatalf("cfgcli = %+v, want not-on-path but installed/ok via config probe", a)
 	} else if a.notInstalledLabel != "not configured" {
 		t.Fatalf("cfgcli notInstalledLabel = %q, want propagated from probe", a.notInstalledLabel)
 	}
-	if a := byName["errcli"]; !a.OnPath || a.Health != HealthWarn || a.Installed {
-		t.Fatalf("errcli = %+v, want on-path/warn/not-installed", a)
-	} else if a.Note == "" {
-		t.Fatalf("errcli note should record the probe error")
+	// A probe that errors leaves the state unknown. Reporting not_installed
+	// here would put a false negative in the --json contract.
+	if a := byName["errcli"]; !a.OnPath || a.Health != HealthWarn || a.Install != InstallStateUnknown {
+		t.Fatalf("errcli = %+v, want on-path/warn/unknown", a)
+	} else if !strings.Contains(a.Note, "probe boom") {
+		t.Fatalf("errcli note = %q, want the probe error", a.Note)
 	}
 	if a := byName["cursor"]; !a.OnPath || !a.HookBased || a.Version != "9.9.9" || a.Health != HealthOK {
 		t.Fatalf("cursor = %+v, want on-path/hook-based/sigil-version/ok", a)
+	}
+
+	// The JSON contract carries the tri-state, not a bool that would read as
+	// "not installed" for a state doctor never determined.
+	encoded, err := json.Marshal(byName["errcli"])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if fields["install_state"] != string(InstallStateUnknown) {
+		t.Fatalf("errcli install_state = %v, want %q", fields["install_state"], InstallStateUnknown)
+	}
+	if _, ok := fields["installed"]; ok {
+		t.Fatalf("errcli JSON still carries an installed bool: %s", encoded)
+	}
+}
+
+// An AgentStatus built without an install state must not read as a definite
+// "not installed" in either output. The zero value is outside the domain, so
+// both the renderer and the JSON contract map it to unknown.
+func TestAgentStatus_UnsetInstallStateIsUnknown(t *testing.T) {
+	a := AgentStatus{Name: "claude", OnPath: true, Health: HealthWarn}
+
+	if got, want := describeAgent(palette{}, a), "install state unknown"; got != want {
+		t.Fatalf("describeAgent = %q, want %q", got, want)
+	}
+	encoded, err := json.Marshal(a)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"install_state":"unknown"`) {
+		t.Fatalf("JSON = %s, want install_state unknown", encoded)
 	}
 }
