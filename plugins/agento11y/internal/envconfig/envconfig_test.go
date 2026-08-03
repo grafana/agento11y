@@ -35,6 +35,42 @@ func TestParseBool(t *testing.T) {
 	}
 }
 
+// TestParseBoolValue covers the whole whitelist, which the README documents as
+// the accepted values for AGENTO11Y_LOCAL, and the ok flag callers use to tell
+// an unrecognised value from a false one.
+func TestParseBoolValue(t *testing.T) {
+	cases := []struct {
+		in     string
+		want   bool
+		wantOK bool
+	}{
+		{in: "1", want: true, wantOK: true},
+		{in: "true", want: true, wantOK: true},
+		{in: "yes", want: true, wantOK: true},
+		{in: "on", want: true, wantOK: true},
+		{in: " ON ", want: true, wantOK: true},
+		{in: "0", wantOK: true},
+		{in: "false", wantOK: true},
+		{in: "no", wantOK: true},
+		{in: "off", wantOK: true},
+		{in: ""},
+		{in: "enabled"},
+	}
+	for _, tc := range cases {
+		got, gotOK := ParseBoolValue(tc.in)
+		if got != tc.want || gotOK != tc.wantOK {
+			t.Errorf("ParseBoolValue(%q) = (%v, %v), want (%v, %v)", tc.in, got, gotOK, tc.want, tc.wantOK)
+		}
+		// An unrecognised value is the only case where the default shows.
+		if got := ParseBoolDefault(tc.in, true); got != (tc.want || !tc.wantOK) {
+			t.Errorf("ParseBoolDefault(%q, true) = %v, want %v", tc.in, got, tc.want || !tc.wantOK)
+		}
+		if got := ParseBoolDefault(tc.in, false); got != tc.want {
+			t.Errorf("ParseBoolDefault(%q, false) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestEnvOr(t *testing.T) {
 	t.Setenv("SIGIL_TEST_PRESENT", "present")
 	t.Setenv("SIGIL_TEST_EMPTY", "")
@@ -338,12 +374,16 @@ func TestResolveContentModeValue(t *testing.T) {
 	}
 }
 
-// TestAliasSuffixesCoversLocalForward pins LOCAL_FORWARD into the alias
-// families so PinAliasEnvBlank clears it in tests and ExpandAliases mirrors it
-// on write.
-func TestAliasSuffixesCoversLocalForward(t *testing.T) {
-	if !slices.Contains(AliasSuffixes, "LOCAL_FORWARD") {
-		t.Fatal("AliasSuffixes must contain LOCAL_FORWARD")
+// TestAliasSuffixesCoversLocalFamilies pins LOCAL and LOCAL_FORWARD into the
+// alias families so PinAliasEnvBlank clears them in tests and ExpandAliases
+// mirrors them on write. LOCAL decides whether a launcher starts in local mode,
+// so an unpinned developer shell value would silently reroute launcher tests to
+// the local daemon.
+func TestAliasSuffixesCoversLocalFamilies(t *testing.T) {
+	for _, suffix := range []string{"LOCAL", "LOCAL_FORWARD"} {
+		if !slices.Contains(AliasSuffixes, suffix) {
+			t.Fatalf("AliasSuffixes must contain %s", suffix)
+		}
 	}
 }
 
