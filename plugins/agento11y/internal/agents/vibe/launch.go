@@ -46,6 +46,16 @@ func Launch(_ context.Context, args []string, localEnv *local.LaunchEnv, _ io.Re
 	return nil
 }
 
+// Status reports whether agento11y capture is configured for vibe. Capture is
+// driven by the agento11y-owned entries the launcher merges into vibe's
+// hooks.toml, so doctor checks for those. The hooks file carries no version,
+// so version is always empty. It never installs, updates, or removes
+// anything — `agento11y doctor` relies on this.
+func Status(_ context.Context) (installed bool, version string, err error) {
+	installed, err = HooksInstalled()
+	return installed, "", err
+}
+
 // installHook upserts the sigil entry into hooks.toml and reports the
 // outcome on stderr. Failures are logged but never block the launch:
 // the user explicitly asked to run vibe, so an agento11y install hiccup must

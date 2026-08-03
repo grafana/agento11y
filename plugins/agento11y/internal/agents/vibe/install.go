@@ -2,6 +2,7 @@ package vibe
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -49,13 +50,25 @@ func desiredHooks(command string) []hooksFileEntry {
 	}
 }
 
-// legacyHookNames are the pre-rename entry names. They are dropped on merge
-// so an install refreshed from an older version does not fire every hook
-// twice (once per name).
-var legacyHookNames = map[string]bool{
-	"sigil":             true,
-	"sigil-before-tool": true,
-	"sigil-after-tool":  true,
+// legacyHookNames maps each agento11y-owned entry name to the pre-rename name
+// an older version wrote. The merge drops legacy entries so a refreshed
+// install does not fire every hook twice (once per name), but HooksInstalled
+// still counts them: they keep capturing until the next launch replaces them,
+// and doctor must not report a working install as broken.
+var legacyHookNames = map[string]string{
+	"agento11y":             "sigil",
+	"agento11y-before-tool": "sigil-before-tool",
+	"agento11y-after-tool":  "sigil-after-tool",
+}
+
+// isLegacyHookName reports whether name is a pre-rename entry name.
+func isLegacyHookName(name string) bool {
+	for _, legacy := range legacyHookNames {
+		if name == legacy {
+			return true
+		}
+	}
+	return false
 }
 
 // vibeHome returns the root vibe config directory. It honors VIBE_HOME
@@ -79,6 +92,48 @@ func hooksFilePath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, "hooks.toml"), nil
+}
+
+// HooksInstalled reports whether every agento11y-owned entry is present in
+// vibe's hooks.toml, under its current or its pre-rename name. It reads the
+// file directly, so `agento11y doctor` can report install state without vibe
+// on PATH. Read-only: it never merges or writes.
+//
+// A hooks.toml holding only hand-authored hooks does not count as installed.
+func HooksInstalled() (bool, error) {
+	path, err := hooksFilePath()
+	if err != nil {
+		return false, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	// Only the entry names matter, so decode those and ignore every other key
+	// a hand-authored hook may carry.
+	var doc struct {
+		Hooks []struct {
+			Name string `toml:"name"`
+		} `toml:"hooks"`
+	}
+	if err := toml.Unmarshal(data, &doc); err != nil {
+		return false, fmt.Errorf("parse %s: %w", path, err)
+	}
+	present := map[string]bool{}
+	for _, entry := range doc.Hooks {
+		present[entry.Name] = true
+	}
+	for _, want := range desiredHooks("") {
+		legacy := legacyHookNames[want.Name]
+		if present[want.Name] || (legacy != "" && present[legacy]) {
+			continue
+		}
+		return false, nil
+	}
+	return true, nil
 }
 
 // ensureHookInstalled merges an agento11y-owned post_agent_turn entry into
@@ -210,7 +265,7 @@ func dropLegacyHooks(hooks []any) []any {
 	out := hooks[:0]
 	for _, raw := range hooks {
 		if entry, ok := raw.(map[string]any); ok {
-			if name, _ := entry["name"].(string); legacyHookNames[name] {
+			if name, _ := entry["name"].(string); isLegacyHookName(name) {
 				continue
 			}
 		}

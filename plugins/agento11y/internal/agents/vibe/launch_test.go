@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -74,6 +75,63 @@ func TestLaunch_VibeNotOnPath(t *testing.T) {
 	err := Launch(context.Background(), nil, nil, nil, io.Discard, io.Discard, logger, "v")
 	if err == nil || !strings.Contains(err.Error(), "vibe CLI not found") {
 		t.Errorf("Launch err = %v, want vibe CLI not found", err)
+	}
+}
+
+func TestStatus(t *testing.T) {
+	hook := func(name, typ string) string {
+		return "[[hooks]]\nname = \"" + name + "\"\ntype = \"" + typ + "\"\ncommand = \"agento11y vibe hook\"\ntimeout = 30\n\n"
+	}
+	all := hook("agento11y", "post_agent_turn") +
+		hook("agento11y-before-tool", "before_tool") +
+		hook("agento11y-after-tool", "after_tool")
+
+	tests := []struct {
+		name          string
+		hooksFile     string
+		wantInstalled bool
+	}{
+		{name: "all hooks present", hooksFile: all, wantInstalled: true},
+		{name: "hooks file absent"},
+		{name: "hooks file without agento11y entries", hooksFile: hook("user-custom", "after_tool")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("VIBE_HOME", dir)
+			if tt.hooksFile != "" {
+				if err := os.WriteFile(filepath.Join(dir, "hooks.toml"), []byte(tt.hooksFile), 0o644); err != nil {
+					t.Fatalf("seed: %v", err)
+				}
+			}
+
+			installed, version, err := Status(context.Background())
+			if err != nil {
+				t.Fatalf("Status: %v", err)
+			}
+			if installed != tt.wantInstalled {
+				t.Errorf("installed = %v, want %v", installed, tt.wantInstalled)
+			}
+			if version != "" {
+				t.Errorf("version = %q, want empty: hooks.toml carries no version", version)
+			}
+		})
+	}
+}
+
+func TestStatus_ReportsUnreadableConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("VIBE_HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, "hooks.toml"), []byte("[[hooks]\nname ="), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	installed, _, err := Status(context.Background())
+	if err == nil {
+		t.Fatalf("Status err = nil, want parse error")
+	}
+	if installed {
+		t.Errorf("installed = true on parse error, want false")
 	}
 }
 
