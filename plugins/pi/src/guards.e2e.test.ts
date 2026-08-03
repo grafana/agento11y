@@ -203,11 +203,14 @@ describe("pi guards: real-SDK over HTTP", () => {
           expect(server.hookCalls).toHaveLength(1);
           const call = server.hookCalls[0]!;
           expect(call.phase).toBe("preflight");
-          // The forwarded body carried the unredacted original.
-          const sent = call.body.input?.messages as
-            | Array<{ parts: Array<{ text: string }> }>
-            | undefined;
-          expect(sent?.[0]?.parts[0]?.text).toBe("email leak@example.com");
+          // The forwarded body carried the unredacted original. The server
+          // dispatches on the snake_case `kind`, so the part carries it and
+          // nothing else. conformance/hooks/README.md.
+          const sent = call.body.input?.messages;
+          expect(sent?.[0]?.role).toBe("user");
+          expect(sent?.[0]?.parts).toEqual([
+            { kind: "text", text: "email leak@example.com" },
+          ]);
         },
       },
       {
@@ -228,11 +231,25 @@ describe("pi guards: real-SDK over HTTP", () => {
           },
         ]),
         messages: () => [toolResultMsg("out sk-deadbeef")],
-        assert: ({ event }) => {
+        assert: ({ event, server }) => {
           expect((event.messages[0] as PiToolResult).content[0]).toMatchObject({
             type: "text",
             text: "out [REDACTED_API_KEY]",
           });
+          // The server dispatches on the snake_case `kind`. An untagged
+          // tool_result part arrives empty, so redaction has nothing to
+          // rewrite. conformance/hooks/README.md.
+          const sent = server.hookCalls[0]!.body.input?.messages;
+          expect(sent?.[0]?.parts).toEqual([
+            {
+              kind: "tool_result",
+              tool_result: {
+                tool_call_id: "tc-1",
+                name: "bash",
+                content: "out sk-deadbeef",
+              },
+            },
+          ]);
         },
       },
       {
@@ -248,7 +265,7 @@ describe("pi guards: real-SDK over HTTP", () => {
             { type: "text", text: "answer original" },
           ]),
         ],
-        assert: ({ event }) => {
+        assert: ({ event, server }) => {
           const asst = event.messages[1] as PiAssistantMessage;
           expect(asst.content[0]).toEqual({
             type: "thinking",
@@ -258,6 +275,13 @@ describe("pi guards: real-SDK over HTTP", () => {
             type: "text",
             text: "answer red",
           });
+          // `mapAssistantMessageForHook` drops thinking blocks on purpose
+          // (their provider signature must round-trip unchanged), so the
+          // assistant message goes out as one text part.
+          const sent = server.hookCalls[0]!.body.input?.messages;
+          expect(sent?.[1]?.parts).toEqual([
+            { kind: "text", text: "answer original" },
+          ]);
         },
       },
       {
@@ -401,6 +425,28 @@ describe("pi guards: real-SDK over HTTP", () => {
           expect(result).toBeUndefined();
           expect(event.input).toEqual({ command: "echo [REDACTED]" });
           expect(server.hookCalls[0]!.phase).toBe("postflight");
+        },
+      },
+      {
+        // A tool-filter rule matches only what the server can decode. The
+        // server dispatches on the snake_case `kind`. A part tagged only with
+        // the SDK's camelCase `type` arrives empty, so a tool-filter rule sees
+        // no tool calls. conformance/hooks/README.md.
+        name: "sends the tool call as a kind:tool_call part with embedded input_json",
+        assert: ({ server }) => {
+          const sent = server.hookCalls[0]!.body.input?.output;
+          expect(sent?.[0]?.parts).toEqual([
+            {
+              kind: "tool_call",
+              tool_call: {
+                id: "tc-1",
+                name: "bash",
+                // Tool arguments travel as embedded JSON, which is what an
+                // argument-level rule matches on.
+                input_json: { command: "echo sk-real-secret" },
+              },
+            },
+          ]);
         },
       },
       {
