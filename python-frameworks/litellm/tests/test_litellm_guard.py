@@ -591,12 +591,40 @@ def test_invalid_limits_rejected_at_construction(kwargs, match):
     ],
     ids=["hooks-disabled", "preflight-phase-not-configured"],
 )
-def test_sdk_hook_configuration_short_circuits(hook_server, hooks):
+def test_client_without_preflight_records_no_verdict(hook_server, hooks):
+    """A client that does not enable preflight makes the guardrail a no-op.
+
+    Reaching the SDK would return a synthetic allow, which LiteLLM records as a
+    completed check: a proxy whose hooks are switched off would report a green
+    guard verdict on every request.
+    """
     client = _new_client(hook_server.url, hooks=hooks)
     guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+    data = _request_data()
 
-    assert _call(guard, _request_data()) is None
+    assert _call(guard, data) is None
     assert hook_server.requests == []
+    assert "standard_logging_guardrail_information" not in data["metadata"]
+
+
+@pytest.mark.parametrize(
+    "hooks",
+    [
+        HooksConfig(enabled=False),
+        HooksConfig(enabled=True, phases=["postflight"]),
+    ],
+    ids=["hooks-disabled", "preflight-phase-not-configured"],
+)
+def test_client_without_preflight_warns_at_construction(hook_server, caplog, hooks):
+    client = _new_client(hook_server.url, hooks=hooks)
+
+    with caplog.at_level(logging.WARNING):
+        Agento11yLiteLLMGuardrail(client=client, default_on=True, guardrail_name="agento11y-preflight")
+
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "agento11y-preflight" in warnings[0].getMessage()
+    assert "no request will be evaluated" in warnings[0].getMessage()
 
 
 def test_guardrail_not_enabled_for_request_is_skipped(hook_server):
@@ -637,20 +665,53 @@ def test_transport_failure_fail_open_allows_and_warns(hook_server, caplog):
     hook_server.close()  # nothing is listening on that port any more
     client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, timeout_seconds=1.0, fail_open=True))
     guard = Agento11yLiteLLMGuardrail(client=client, default_on=True, request_timeout_seconds=5.0)
+    data = _request_data()
 
     with caplog.at_level(logging.WARNING):
-        assert _call(guard, _request_data()) is None
+        assert _call(guard, data) is None
 
-    assert any("allowing request (fail_open)" in record.getMessage() for record in caplog.records)
+    warnings = [record for record in caplog.records if "allowing request (fail_open)" in record.getMessage()]
+    assert len(warnings) == 1
+    entry = _only_guardrail_entry(data)
+    assert entry["guardrail_status"] == "guardrail_failed_to_respond"
+    assert entry["duration"] > 0
 
 
 def test_transport_failure_fail_closed_raises(hook_server):
     hook_server.close()
     client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, timeout_seconds=1.0, fail_open=False))
     guard = Agento11yLiteLLMGuardrail(client=client, default_on=True, request_timeout_seconds=5.0)
+    data = _request_data()
 
     with pytest.raises(HookTransportError):
-        _call(guard, _request_data())
+        _call(guard, data)
+
+    entry = _only_guardrail_entry(data)
+    assert entry["guardrail_status"] == "guardrail_failed_to_respond"
+    assert entry["duration"] > 0
+
+
+def test_unexpected_evaluation_error_is_recorded_as_failed_to_respond(hook_server, monkeypatch):
+    """An adapter bug must not be filed as a completed guard check.
+
+    Fail-open still allows the request, but the recorded verdict has to say the
+    evaluation never produced one.
+    """
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, timeout_seconds=1.0, fail_open=True))
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True, request_timeout_seconds=5.0)
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(client, "evaluate_hook", _boom)
+    data = _request_data()
+
+    assert _call(guard, data) is None
+
+    entry = _only_guardrail_entry(data)
+    assert entry["guardrail_status"] == "guardrail_failed_to_respond"
+    assert "RuntimeError" in str(entry["guardrail_response"])
+    assert "boom" in str(entry["guardrail_response"])
 
 
 def test_slow_server_honors_request_timeout_and_fails_open(hook_server, caplog):
@@ -658,9 +719,11 @@ def test_slow_server_honors_request_timeout_and_fails_open(hook_server, caplog):
     client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, timeout_seconds=5.0, fail_open=True))
     guard = Agento11yLiteLLMGuardrail(client=client, default_on=True, request_timeout_seconds=0.1)
 
+    data = _request_data()
+
     async def _run() -> tuple[Any, float]:
         started = time.monotonic()
-        result = await _evaluate(guard, _request_data())
+        result = await _evaluate(guard, data)
         return result, time.monotonic() - started
 
     with caplog.at_level(logging.WARNING):
@@ -670,16 +733,26 @@ def test_slow_server_honors_request_timeout_and_fails_open(hook_server, caplog):
 
     assert result is None
     assert elapsed < 0.9
-    assert any("timed out after 0.1s" in record.getMessage() for record in caplog.records)
+    warnings = [record for record in caplog.records if "allowing request (fail_open)" in record.getMessage()]
+    assert len(warnings) == 1
+    assert "timed out after 0.1s" in warnings[0].getMessage()
+    entry = _only_guardrail_entry(data)
+    assert entry["guardrail_status"] == "guardrail_failed_to_respond"
+    assert entry["duration"] >= 0.1
 
 
 def test_adapter_timeout_respects_fail_closed(hook_server):
     hook_server.delay = 1.0
     client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, timeout_seconds=5.0, fail_open=False))
     guard = Agento11yLiteLLMGuardrail(client=client, default_on=True, request_timeout_seconds=0.1)
+    data = _request_data()
 
     with pytest.raises(HookTransportError, match="timed out"):
-        _call(guard, _request_data())
+        _call(guard, data)
+
+    entry = _only_guardrail_entry(data)
+    assert entry["guardrail_status"] == "guardrail_failed_to_respond"
+    assert entry["duration"] >= 0.1
 
 
 def test_event_loop_stays_responsive_during_evaluation(hook_server):
@@ -858,6 +931,13 @@ def test_public_factory_builds_a_configured_guardrail():
     assert guard.guardrail_name == "agento11y-preflight"
     assert guard.default_on is True
     assert guard.event_hook is GuardrailEventHooks.pre_call
+
+
+def _only_guardrail_entry(data: dict[str, Any]) -> dict[str, Any]:
+    """Return the single guardrail entry LiteLLM recorded for the request."""
+    entries = data["metadata"]["standard_logging_guardrail_information"]
+    assert len(entries) == 1
+    return entries[0]
 
 
 async def _evaluate(guard: Agento11yLiteLLMGuardrail, data: dict[str, Any]) -> Any:

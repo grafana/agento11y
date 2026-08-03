@@ -178,7 +178,7 @@ Guardrail options are keyword-only, and `create_agento11y_litellm_guardrail` acc
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `client` | `agento11y.Client` | required | agento11y SDK client instance, with `hooks.enabled=True` |
+| `client` | `agento11y.Client` | required | agento11y SDK client instance, with `hooks.enabled=True` and `"preflight"` in `hooks.phases` |
 | `agent_name` | `str` | `""` | Fallback agent name when the request carries no agent identity |
 | `agent_name_metadata_keys` | `Sequence[str]` | `("agent_name", "agent_id")` | Metadata keys consulted, in order, to name the agent |
 | `agent_version` | `str` | `""` | Fallback agent version |
@@ -191,7 +191,7 @@ Guardrail options are keyword-only, and `create_agento11y_litellm_guardrail` acc
 Runtime behavior:
 
 - Evaluation runs on a pool of `max_concurrent_evaluations` threads, so it does not block the proxy event loop. `request_timeout_seconds` covers waiting for a free thread as well as the evaluation itself, and a thread stays busy until its evaluation actually finishes, so a slow evaluator can keep the pool saturated for longer than that timeout.
-- A timeout or an unexpected error follows `HooksConfig.fail_open`: allow and log at WARNING when `True` (the default), raise `HookTransportError` when `False`. A dead evaluator allows all traffic, and the log line is the only sign of it.
+- A transport failure, a timeout, or an unexpected error follows `HooksConfig.fail_open`: allow and log at WARNING when `True` (the default), raise `HookTransportError` when `False`. Either way the verdict is recorded as `guardrail_failed_to_respond`, not `success`, so a dead evaluator shows up in spend logs and logging callbacks.
 - Hook evaluations correlate to the proxy request span, so a guard verdict lines up with its request in traces.
 - Register both the guardrail and the logger. The guardrail does not export generations, and having both in `litellm.callbacks` still exports exactly one generation per request.
 

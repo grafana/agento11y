@@ -614,7 +614,12 @@ class Client:
 
         return copy.deepcopy(self._config.hooks)
 
-    def evaluate_hook(self, request: HookEvaluateRequest) -> HookEvaluateResponse:
+    def evaluate_hook(
+        self,
+        request: HookEvaluateRequest,
+        *,
+        hooks: HooksConfig | None = None,
+    ) -> HookEvaluateResponse:
         """Evaluates synchronous hook rules for the given request.
 
         Use this to enforce preflight (or postflight, when supported) guardrails
@@ -627,6 +632,20 @@ class Client:
         transport/decode failures also resolve to ``allow`` so the LLM call
         proceeds; set ``hooks.fail_open=False`` to surface
         :class:`agento11y.errors.HookTransportError` instead.
+
+        ``hooks`` replaces the resolved client configuration for this call only,
+        field for field. It is not a partial override: the JS SDK's
+        ``evaluateHook(request, hooksConfigOverride)`` merges the fields it is
+        given over the client configuration, while this parameter substitutes
+        the whole dataclass, so an omitted field falls back to the
+        ``HooksConfig`` default rather than the client's value. Build the
+        override from :attr:`hooks_config` with :func:`dataclasses.replace` to
+        keep every field the caller does not mean to change.
+
+        An adapter that reports the verdict to an external system passes
+        ``fail_open=False`` here: an allow the SDK synthesized for a dead
+        evaluator is otherwise indistinguishable from a server allow, so the
+        adapter would file a failed evaluation as a completed check.
         """
 
         self._assert_open()
@@ -634,7 +653,7 @@ class Client:
             api_endpoint=self._config.api.endpoint,
             insecure=self._config.generation_export.insecure,
             extra_headers=self._config.generation_export.headers,
-            hooks=self._config.hooks,
+            hooks=self._config.hooks if hooks is None else hooks,
             request=request,
         )
 
