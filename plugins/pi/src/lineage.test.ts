@@ -1,29 +1,38 @@
 import { describe, expect, it } from "vitest";
 import {
+  type PiGenerationLineage,
   resolvePiGenerationLineage,
   resolvePiSummaryLineage,
   type SessionEntryLike,
   stablePiGenerationId,
 } from "./lineage.js";
+import { NOT_FORKED, type SessionOrigin } from "./sessionOrigin.js";
 
 function assistantEntry(
   id: string,
   parentId: string | null,
   message: unknown = { role: "assistant" },
+  timestamp?: string,
 ): SessionEntryLike {
   return {
     type: "message",
     id,
     parentId,
+    timestamp,
     message: message as { role?: string },
   };
 }
 
-function userEntry(id: string, parentId: string | null): SessionEntryLike {
+function userEntry(
+  id: string,
+  parentId: string | null,
+  timestamp?: string,
+): SessionEntryLike {
   return {
     type: "message",
     id,
     parentId,
+    timestamp,
     message: { role: "user" },
   };
 }
@@ -38,6 +47,13 @@ function toolResultEntry(
     parentId,
     message: { role: "toolResult" },
   };
+}
+
+/** The parent edge the caller would export, if any. */
+function ownParentIds(lineage: PiGenerationLineage): string[] | undefined {
+  return lineage.parent?.kind === "own"
+    ? lineage.parent.generationIds
+    : undefined;
 }
 
 function nonMessageEntry(
@@ -161,9 +177,7 @@ describe("resolvePiGenerationLineage", () => {
     const sm = { getBranch: () => branch };
     const lineage = resolvePiGenerationLineage(sm, assistantMsg, "conv");
     expect(lineage.generationId).toBe(stablePiGenerationId("conv", "a2"));
-    expect(lineage.parentGenerationIds).toEqual([
-      stablePiGenerationId("conv", "a1"),
-    ]);
+    expect(ownParentIds(lineage)).toEqual([stablePiGenerationId("conv", "a1")]);
   });
 
   it("falls back to latest assistant entry when message identity does not match", () => {
@@ -180,7 +194,7 @@ describe("resolvePiGenerationLineage", () => {
       "conv",
     );
     expect(lineage.generationId).toBe(stablePiGenerationId("conv", "a1"));
-    expect(lineage.parentGenerationIds).toBeUndefined();
+    expect(ownParentIds(lineage)).toBeUndefined();
   });
 
   it("omits parentGenerationIds for the first assistant turn", () => {
@@ -192,7 +206,7 @@ describe("resolvePiGenerationLineage", () => {
     const sm = { getBranch: () => branch };
     const lineage = resolvePiGenerationLineage(sm, assistantMsg, "conv");
     expect(lineage.generationId).toBe(stablePiGenerationId("conv", "a1"));
-    expect(lineage.parentGenerationIds).toBeUndefined();
+    expect(ownParentIds(lineage)).toBeUndefined();
   });
 
   it("links a linear second assistant turn to the first one", () => {
@@ -206,9 +220,7 @@ describe("resolvePiGenerationLineage", () => {
     const sm = { getBranch: () => branch };
     const lineage = resolvePiGenerationLineage(sm, second, "conv");
     expect(lineage.generationId).toBe(stablePiGenerationId("conv", "a2"));
-    expect(lineage.parentGenerationIds).toEqual([
-      stablePiGenerationId("conv", "a1"),
-    ]);
+    expect(ownParentIds(lineage)).toEqual([stablePiGenerationId("conv", "a1")]);
   });
 
   it("walks through non-message entries when finding the parent assistant", () => {
@@ -224,9 +236,7 @@ describe("resolvePiGenerationLineage", () => {
     ];
     const sm = { getBranch: () => branch };
     const lineage = resolvePiGenerationLineage(sm, assistantMsg, "conv");
-    expect(lineage.parentGenerationIds).toEqual([
-      stablePiGenerationId("conv", "a1"),
-    ]);
+    expect(ownParentIds(lineage)).toEqual([stablePiGenerationId("conv", "a1")]);
   });
 
   it("walks through user entries to the previous assistant on the branch", () => {
@@ -242,9 +252,7 @@ describe("resolvePiGenerationLineage", () => {
     ];
     const sm = { getBranch: () => branch };
     const lineage = resolvePiGenerationLineage(sm, assistantMsg, "conv");
-    expect(lineage.parentGenerationIds).toEqual([
-      stablePiGenerationId("conv", "a1"),
-    ]);
+    expect(ownParentIds(lineage)).toEqual([stablePiGenerationId("conv", "a1")]);
   });
 
   it("picks the assistant entry on the active branch, not the most recent chronological one", () => {
@@ -263,11 +271,9 @@ describe("resolvePiGenerationLineage", () => {
     const sm = { getBranch: () => branch };
     const lineage = resolvePiGenerationLineage(sm, assistantMsg, "conv");
     expect(lineage.generationId).toBe(stablePiGenerationId("conv", "a3"));
-    expect(lineage.parentGenerationIds).toEqual([
-      stablePiGenerationId("conv", "a1"),
-    ]);
+    expect(ownParentIds(lineage)).toEqual([stablePiGenerationId("conv", "a1")]);
     // Should not link to the abandoned sibling assistant entry.
-    expect(lineage.parentGenerationIds).not.toContain(
+    expect(ownParentIds(lineage)).not.toContain(
       stablePiGenerationId("conv", "a2"),
     );
   });
@@ -333,9 +339,7 @@ describe("resolvePiSummaryLineage", () => {
     const sm = { getBranch: () => branch };
     const lineage = resolvePiSummaryLineage(sm, "c1", "conv");
     expect(lineage.generationId).toBe(stablePiGenerationId("conv", "c1"));
-    expect(lineage.parentGenerationIds).toEqual([
-      stablePiGenerationId("conv", "a1"),
-    ]);
+    expect(ownParentIds(lineage)).toEqual([stablePiGenerationId("conv", "a1")]);
   });
 
   it("walks through an intervening toolResult message entry", () => {
@@ -348,9 +352,9 @@ describe("resolvePiSummaryLineage", () => {
       compactionEntry("c1", "t1"),
     ];
     const sm = { getBranch: () => branch };
-    expect(
-      resolvePiSummaryLineage(sm, "c1", "conv").parentGenerationIds,
-    ).toEqual([stablePiGenerationId("conv", "a1")]);
+    expect(ownParentIds(resolvePiSummaryLineage(sm, "c1", "conv"))).toEqual([
+      stablePiGenerationId("conv", "a1"),
+    ]);
   });
 
   it("walks through an intervening model_change entry", () => {
@@ -361,9 +365,9 @@ describe("resolvePiSummaryLineage", () => {
       compactionEntry("c1", "mc1"),
     ];
     const sm = { getBranch: () => branch };
-    expect(
-      resolvePiSummaryLineage(sm, "c1", "conv").parentGenerationIds,
-    ).toEqual([stablePiGenerationId("conv", "a1")]);
+    expect(ownParentIds(resolvePiSummaryLineage(sm, "c1", "conv"))).toEqual([
+      stablePiGenerationId("conv", "a1"),
+    ]);
   });
 
   it("walks through both a toolResult and a model_change entry", () => {
@@ -377,9 +381,7 @@ describe("resolvePiSummaryLineage", () => {
     const sm = { getBranch: () => branch };
     const lineage = resolvePiSummaryLineage(sm, "c1", "conv");
     expect(lineage.generationId).toBe(stablePiGenerationId("conv", "c1"));
-    expect(lineage.parentGenerationIds).toEqual([
-      stablePiGenerationId("conv", "a1"),
-    ]);
+    expect(ownParentIds(lineage)).toEqual([stablePiGenerationId("conv", "a1")]);
   });
 
   it("omits parentGenerationIds when no assistant entry precedes the summary", () => {
@@ -390,7 +392,7 @@ describe("resolvePiSummaryLineage", () => {
     const sm = { getBranch: () => branch };
     const lineage = resolvePiSummaryLineage(sm, "c1", "conv");
     expect(lineage.generationId).toBe(stablePiGenerationId("conv", "c1"));
-    expect(lineage.parentGenerationIds).toBeUndefined();
+    expect(ownParentIds(lineage)).toBeUndefined();
   });
 
   it("resolves a branch_summary entry the same way", () => {
@@ -402,9 +404,7 @@ describe("resolvePiSummaryLineage", () => {
     const sm = { getBranch: () => branch };
     const lineage = resolvePiSummaryLineage(sm, "b1", "conv");
     expect(lineage.generationId).toBe(stablePiGenerationId("conv", "b1"));
-    expect(lineage.parentGenerationIds).toEqual([
-      stablePiGenerationId("conv", "a1"),
-    ]);
+    expect(ownParentIds(lineage)).toEqual([stablePiGenerationId("conv", "a1")]);
   });
 
   it("differs from the turn generation id for the same conversation", () => {
@@ -417,5 +417,215 @@ describe("resolvePiSummaryLineage", () => {
     expect(resolvePiSummaryLineage(sm, "c1", "conv").generationId).not.toBe(
       stablePiGenerationId("conv", "a1"),
     );
+  });
+
+  it("reports a trunk parent for a summary taken right after a fork", () => {
+    // Compacting before the fork's first turn parents the summary on an
+    // inherited assistant entry, whose generation belongs to the trunk.
+    const branch: SessionEntryLike[] = [
+      userEntry("u1", null, "2020-01-01T00:00:30.000Z"),
+      assistantEntry(
+        "a1",
+        "u1",
+        { role: "assistant" },
+        "2020-01-01T00:00:30.000Z",
+      ),
+      { ...compactionEntry("c1", "a1"), timestamp: "2020-01-01T00:02:00.000Z" },
+    ];
+    const sm = { getBranch: () => branch };
+    const lineage = resolvePiSummaryLineage(sm, "c1", "fork-conv", {
+      origin: {
+        forked: true,
+        forkedAt: "2020-01-01T00:01:00.000Z",
+        trunkConversationId: "trunk-conv",
+        trunkStartedAt: "2020-01-01T00:00:00.000Z",
+      },
+    });
+
+    expect(lineage.generationId).toBe(stablePiGenerationId("fork-conv", "c1"));
+    expect(lineage.parent).toEqual({
+      kind: "trunk",
+      trunkGenerationId: stablePiGenerationId("trunk-conv", "a1"),
+    });
+  });
+});
+
+describe("resolvePiGenerationLineage on a forked session", () => {
+  // `a1` below was copied from the trunk, so it keeps its trunk id and a
+  // timestamp older than the fork. See sessionOrigin.ts for that boundary.
+  const TRUNK = "trunk-conv";
+  const FORK = "fork-conv";
+  const TRUNK_STARTED_AT = "2020-01-01T00:00:00.000Z";
+  const BEFORE_FORK = "2020-01-01T00:00:30.000Z";
+  const FORKED_AT = "2020-01-01T00:01:00.000Z";
+  const AFTER_FORK = "2020-01-01T00:02:00.000Z";
+
+  const forkOrigin: SessionOrigin = {
+    forked: true,
+    forkedAt: FORKED_AT,
+    trunkConversationId: TRUNK,
+    trunkStartedAt: TRUNK_STARTED_AT,
+  };
+
+  /**
+   * Inherited assistant `a1`, then the fork's own `u2` -> `a2`. `parentAt`
+   * stamps the inherited turn; `null` leaves it unstamped.
+   */
+  function forkBranch(
+    assistantMsg: unknown,
+    parentAt: string | null = BEFORE_FORK,
+  ): SessionEntryLike[] {
+    const at = parentAt ?? undefined;
+    return [
+      userEntry("u1", null, at),
+      assistantEntry("a1", "u1", { role: "assistant" }, at),
+      userEntry("u2", "a1", AFTER_FORK),
+      assistantEntry("a2", "u2", assistantMsg, AFTER_FORK),
+    ];
+  }
+
+  it.each([
+    {
+      name: "the parent was copied from the trunk",
+      options: { origin: forkOrigin },
+      parentAt: BEFORE_FORK,
+      wantParent: {
+        kind: "trunk",
+        trunkGenerationId: stablePiGenerationId(TRUNK, "a1"),
+      },
+    },
+    {
+      name: "the parent is stamped exactly at the fork instant",
+      options: { origin: forkOrigin },
+      parentAt: FORKED_AT,
+      wantParent: {
+        kind: "trunk",
+        trunkGenerationId: stablePiGenerationId(TRUNK, "a1"),
+      },
+    },
+    {
+      name: "the trunk conversation id is unknown",
+      options: { origin: { forked: true, forkedAt: FORKED_AT } },
+      parentAt: BEFORE_FORK,
+      wantParent: { kind: "trunk", trunkGenerationId: undefined },
+    },
+    {
+      name: "the trunk's own start time is unknown",
+      options: {
+        origin: {
+          forked: true,
+          forkedAt: FORKED_AT,
+          trunkConversationId: TRUNK,
+        },
+      },
+      parentAt: BEFORE_FORK,
+      wantParent: { kind: "trunk", trunkGenerationId: undefined },
+    },
+    {
+      name: "the parent predates the trunk session, as on a fork of a fork",
+      // The trunk inherited `a1` from an older session and never exported
+      // it, so no generation for it exists under the trunk either.
+      options: {
+        origin: { ...forkOrigin, trunkStartedAt: "2020-01-01T00:00:45.000Z" },
+      },
+      parentAt: BEFORE_FORK,
+      wantParent: { kind: "trunk", trunkGenerationId: undefined },
+    },
+    {
+      name: "the fork header carries no timestamp",
+      options: { origin: { forked: true, trunkConversationId: TRUNK } },
+      parentAt: BEFORE_FORK,
+      wantParent: { kind: "unknown" },
+    },
+    {
+      name: "the fork header timestamp is unparseable",
+      options: {
+        origin: {
+          forked: true,
+          forkedAt: "whenever",
+          trunkConversationId: TRUNK,
+        },
+      },
+      parentAt: BEFORE_FORK,
+      wantParent: { kind: "unknown" },
+    },
+    {
+      name: "the parent entry carries no timestamp",
+      options: { origin: forkOrigin },
+      parentAt: null,
+      wantParent: { kind: "unknown" },
+    },
+    {
+      name: "the session is a --session continuation, not a fork",
+      // The generation for `a1` exists under this very conversation id.
+      // Suppressing here would split one conversation into two roots.
+      options: { origin: NOT_FORKED },
+      parentAt: BEFORE_FORK,
+      wantParent: {
+        kind: "own",
+        generationIds: [stablePiGenerationId(FORK, "a1")],
+      },
+    },
+    {
+      name: "no options are passed at all",
+      options: undefined,
+      parentAt: BEFORE_FORK,
+      wantParent: {
+        kind: "own",
+        generationIds: [stablePiGenerationId(FORK, "a1")],
+      },
+    },
+  ])("resolves the parent as $wantParent.kind when $name", ({
+    options,
+    parentAt,
+    wantParent,
+  }) => {
+    const assistantMsg = { role: "assistant" };
+    const sm = { getBranch: () => forkBranch(assistantMsg, parentAt) };
+
+    const lineage = resolvePiGenerationLineage(sm, assistantMsg, FORK, options);
+
+    expect(lineage.generationId).toBe(stablePiGenerationId(FORK, "a2"));
+    expect(lineage.parent).toEqual(wantParent);
+  });
+
+  it("emits the edge when the parent was added after the fork", () => {
+    // The fork's second turn. Nothing here depends on what this process
+    // exported, so a process that resumed the fork resolves it the same way.
+    const assistantMsg = { role: "assistant" };
+    const branch: SessionEntryLike[] = [
+      ...forkBranch({ role: "assistant" }),
+      userEntry("u3", "a2", "2020-01-01T00:03:00.000Z"),
+      assistantEntry("a3", "u3", assistantMsg, "2020-01-01T00:03:01.000Z"),
+    ];
+    const sm = { getBranch: () => branch };
+
+    const lineage = resolvePiGenerationLineage(sm, assistantMsg, FORK, {
+      origin: forkOrigin,
+    });
+
+    expect(lineage.generationId).toBe(stablePiGenerationId(FORK, "a3"));
+    expect(lineage.parent).toEqual({
+      kind: "own",
+      generationIds: [stablePiGenerationId(FORK, "a2")],
+    });
+  });
+
+  it("reports no parent for a fork taken before the first turn", () => {
+    // A fork with nothing inherited: the first generation is a genuine root
+    // and there is no trunk link.
+    const assistantMsg = { role: "assistant" };
+    const branch: SessionEntryLike[] = [
+      userEntry("u1", null, AFTER_FORK),
+      assistantEntry("a1", "u1", assistantMsg, AFTER_FORK),
+    ];
+    const sm = { getBranch: () => branch };
+
+    const lineage = resolvePiGenerationLineage(sm, assistantMsg, FORK, {
+      origin: forkOrigin,
+    });
+
+    expect(lineage.generationId).toBe(stablePiGenerationId(FORK, "a1"));
+    expect(lineage.parent).toBeUndefined();
   });
 });

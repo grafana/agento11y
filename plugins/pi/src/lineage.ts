@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { SessionOrigin } from "./sessionOrigin.js";
 
 /**
  * Lineage helpers for deterministic, branch-aware Pi generation IDs.
@@ -37,13 +38,44 @@ export interface SessionEntryLike {
   type?: string;
   id?: string;
   parentId?: string | null;
+  /** ISO-8601, set by pi when the entry is appended. */
+  timestamp?: string;
   message?: { role?: string } | null;
 }
+
+/** Extra context that decides whether a parent edge is safe to emit. */
+export interface ResolveLineageOptions {
+  /** Where this session came from. See `sessionOrigin.ts`. */
+  origin?: SessionOrigin;
+}
+
+/**
+ * The turn that precedes the one being exported. Exactly one shape, so a
+ * caller cannot emit an edge and a trunk pointer at the same time.
+ */
+export type PiGenerationParent =
+  /** The parent generation exists under this conversation id. */
+  | { kind: "own"; generationIds: string[] }
+  /**
+   * A fork copied the parent entry in, so its generation belongs to the
+   * trunk conversation and no edge is emitted. `trunkGenerationId` names
+   * that generation, and is absent when the trunk is unknown or cannot have
+   * exported the entry.
+   */
+  | { kind: "trunk"; trunkGenerationId?: string }
+  /**
+   * A fork where either the header timestamp or the parent entry's
+   * timestamp is missing or unparseable, so the parent cannot be placed on
+   * either side of the fork. Nothing is emitted: an id built on a guess
+   * would name a generation that may not exist.
+   */
+  | { kind: "unknown" };
 
 /** What `resolvePiGenerationLineage` returns. Empty when no lineage. */
 export interface PiGenerationLineage {
   generationId?: string;
-  parentGenerationIds?: string[];
+  /** Absent for the first assistant turn on the branch. */
+  parent?: PiGenerationParent;
 }
 
 /**
@@ -63,8 +95,8 @@ export function stablePiGenerationId(
 }
 
 /**
- * Resolve `{ generationId, parentGenerationIds }` for the assistant turn
- * currently being exported.
+ * Resolve `{ generationId, parent }` for the assistant turn currently being
+ * exported.
  *
  * Strategy:
  *  1. Read the active branch via `sessionManager.getBranch()`. Bail with an
@@ -78,11 +110,15 @@ export function stablePiGenerationId(
  * The first assistant turn on a branch produces no parent. When the branch
  * is unavailable (older runtimes) or no assistant entry can be found, the
  * helper returns `{}` so the SDK keeps its existing fallback behavior.
+ *
+ * On a forked session the parent may be an entry copied from the trunk. See
+ * `sessionOrigin.ts` for why such a parent gets no edge.
  */
 export function resolvePiGenerationLineage(
   sessionManager: SessionManagerLike | undefined | null,
   assistantMessage: unknown,
   conversationId: string | undefined,
+  options: ResolveLineageOptions = {},
 ): PiGenerationLineage {
   if (!conversationId) return {};
   if (!sessionManager || typeof sessionManager.getBranch !== "function") {
@@ -131,18 +167,24 @@ export function resolvePiGenerationLineage(
   // assistant turn; on branched trees it is the assistant turn at the
   // branch point, not the most recent chronological assistant entry from
   // a sibling branch.
-  const parentId = findParentAssistantEntryId(currentEntry, branch);
-  if (!parentId) return { generationId };
+  const parentEntry = findParentAssistantEntry(currentEntry, branch);
+  const parentId = parentEntry?.id;
+  if (!parentEntry || typeof parentId !== "string") return { generationId };
 
   return {
     generationId,
-    parentGenerationIds: [stablePiGenerationId(conversationId, parentId)],
+    parent: resolveParent(
+      parentEntry,
+      parentId,
+      conversationId,
+      options.origin,
+    ),
   };
 }
 
 /**
- * Resolve `{ generationId, parentGenerationIds }` for a host summarization
- * entry (`compaction` or `branch_summary`) identified by its entry id.
+ * Resolve `{ generationId, parent }` for a host summarization entry
+ * (`compaction` or `branch_summary`) identified by its entry id.
  *
  * Unlike {@link resolvePiGenerationLineage}, the subject is not a message, so
  * there is nothing to match by object identity: pi hands us the entry itself.
@@ -154,12 +196,14 @@ export function resolvePiGenerationLineage(
  * summary entry as a child of the current leaf, which is frequently a
  * `toolResult` message or a `model_change` entry rather than an assistant
  * message, so the walk goes through the parentId chain instead of assuming the
- * immediate parent.
+ * immediate parent. On a fork that parent can be an entry copied from the
+ * trunk, which gets no edge for the same reason a turn's does not.
  */
 export function resolvePiSummaryLineage(
   sessionManager: SessionManagerLike | undefined | null,
   entryId: string,
   conversationId: string | undefined,
+  options: ResolveLineageOptions = {},
 ): PiGenerationLineage {
   if (!conversationId || !entryId) return {};
 
@@ -180,25 +224,111 @@ export function resolvePiSummaryLineage(
   const entry = branch.find((e) => e.id === entryId);
   if (!entry) return { generationId };
 
-  const parentId = findParentAssistantEntryId(entry, branch);
-  if (!parentId) return { generationId };
+  const parentEntry = findParentAssistantEntry(entry, branch);
+  const parentId = parentEntry?.id;
+  if (!parentEntry || typeof parentId !== "string") return { generationId };
 
   return {
     generationId,
-    parentGenerationIds: [stablePiGenerationId(conversationId, parentId)],
+    parent: resolveParent(
+      parentEntry,
+      parentId,
+      conversationId,
+      options.origin,
+    ),
   };
 }
 
 /**
- * Walk the parentId chain from `entry` toward the root and return the id of
- * the nearest ancestor that is an assistant message entry. `branch` is used to
- * look up entries by id. Returns `undefined` for the first assistant turn on
- * the branch.
+ * Build the pointer to the parent turn's generation. `entry` is the assistant
+ * message entry that precedes the exported one, and `entryId` its id.
  */
-function findParentAssistantEntryId(
+function resolveParent(
+  entry: SessionEntryLike,
+  entryId: string,
+  conversationId: string,
+  origin: SessionOrigin | undefined,
+): PiGenerationParent {
+  switch (classifyParentEntry(entry, origin)) {
+    case "own":
+      return {
+        kind: "own",
+        generationIds: [stablePiGenerationId(conversationId, entryId)],
+      };
+    case "trunk":
+      return {
+        kind: "trunk",
+        trunkGenerationId: trunkGenerationIdFor(entry, entryId, origin),
+      };
+    default:
+      return { kind: "unknown" };
+  }
+}
+
+/**
+ * Decide which conversation the parent entry's generation belongs to.
+ *
+ * Outside a fork it is always this one: either this process exported the
+ * parent turn, or an earlier process did under the same conversation id (a
+ * `--session` continuation). The edge assumes that export succeeded; a turn
+ * whose export threw leaves the next turn pointing at a generation that was
+ * never ingested.
+ *
+ * Inside a fork the boundary is the header timestamp. A fork copies the
+ * trunk's entries with their timestamps and stamps its header at fork time,
+ * so every entry at or before that instant came from the trunk. Both
+ * timestamps come from the fork's own session file, so the check works in
+ * the process that forked and in any later one that resumes it.
+ */
+function classifyParentEntry(
+  entry: SessionEntryLike,
+  origin: SessionOrigin | undefined,
+): "own" | "trunk" | "unknown" {
+  if (!origin?.forked) return "own";
+  const forkedAt = parseTimestamp(origin.forkedAt);
+  const entryAt = parseTimestamp(entry.timestamp);
+  if (forkedAt === undefined || entryAt === undefined) return "unknown";
+  return entryAt <= forkedAt ? "trunk" : "own";
+}
+
+/**
+ * Generation id of the copied parent turn in the trunk conversation.
+ *
+ * Absent when the trunk cannot have exported that turn. A fork of a fork
+ * inherits entries the intermediate session copied in and never exported
+ * itself; those are stamped before the trunk's own start, so the trunk holds
+ * no generation for them and hashing one with the trunk's id would name
+ * nothing.
+ */
+function trunkGenerationIdFor(
+  entry: SessionEntryLike,
+  entryId: string,
+  origin: SessionOrigin | undefined,
+): string | undefined {
+  if (!origin?.trunkConversationId) return undefined;
+  const trunkStartedAt = parseTimestamp(origin.trunkStartedAt);
+  const entryAt = parseTimestamp(entry.timestamp);
+  if (trunkStartedAt === undefined || entryAt === undefined) return undefined;
+  if (entryAt <= trunkStartedAt) return undefined;
+  return stablePiGenerationId(origin.trunkConversationId, entryId);
+}
+
+function parseTimestamp(value: string | undefined): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
+/**
+ * Walk the parentId chain from `entry` toward the root and return the
+ * nearest ancestor that is an assistant message entry. Returns `undefined`
+ * for the first assistant turn on the branch. `branch` is used to look up
+ * entries by id.
+ */
+function findParentAssistantEntry(
   entry: SessionEntryLike,
   branch: SessionEntryLike[],
-): string | undefined {
+): SessionEntryLike | undefined {
   const byId = new Map<string, SessionEntryLike>();
   for (const e of branch) {
     if (typeof e.id === "string") byId.set(e.id, e);
@@ -210,7 +340,7 @@ function findParentAssistantEntryId(
     seen.add(cursor);
     const parent = byId.get(cursor);
     if (!parent) return undefined;
-    if (isAssistantMessageEntry(parent)) return cursor;
+    if (isAssistantMessageEntry(parent)) return parent;
     cursor = parent.parentId ?? null;
   }
   return undefined;

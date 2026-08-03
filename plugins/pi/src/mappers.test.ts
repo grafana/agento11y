@@ -266,6 +266,42 @@ describe("mapGenerationStart", () => {
     expect(start.metadata).toBeUndefined();
   });
 
+  it("passes caller metadata through", () => {
+    const start = mapGenerationStart(makeMsg(), {
+      conversationId: "s",
+      agentName: "pi",
+      startedAt: 0,
+      metadata: { "pi.fork.parent_session_id": "trunk-conv" },
+    });
+    expect(start.metadata).toEqual({
+      "pi.fork.parent_session_id": "trunk-conv",
+    });
+  });
+
+  it("merges caller metadata with the thinking budget instead of overwriting it", () => {
+    const start = mapGenerationStart(makeMsg(), {
+      conversationId: "s",
+      agentName: "pi",
+      startedAt: 0,
+      metadata: { "pi.fork.parent_session_id": "trunk-conv" },
+      requestControls: { thinkingBudgetTokens: 4096 },
+    });
+    expect(start.metadata).toEqual({
+      "pi.fork.parent_session_id": "trunk-conv",
+      "agento11y.gen_ai.request.thinking.budget_tokens": 4096,
+    });
+  });
+
+  it("omits metadata when the caller passes an empty bag", () => {
+    const start = mapGenerationStart(makeMsg(), {
+      conversationId: "s",
+      agentName: "pi",
+      startedAt: 0,
+      metadata: {},
+    });
+    expect(start.metadata).toBeUndefined();
+  });
+
   it("copies generationId to start.id when set", () => {
     const start = mapGenerationStart(makeMsg(), {
       conversationId: "s",
@@ -1582,6 +1618,20 @@ describe("mapSummaryGenerationStart", () => {
     });
     expect(start.id).toBeUndefined();
     expect(start.parentGenerationIds).toBeUndefined();
+  });
+
+  it("copies supplied metadata, e.g. a fork's trunk link", () => {
+    const metadata = { "pi.fork.parent_session_id": "trunk-conv" };
+    const start = mapSummaryGenerationStart({ ...baseOpts, metadata });
+    expect(start.metadata).toEqual(metadata);
+    expect(start.metadata).not.toBe(metadata);
+  });
+
+  it("omits metadata when none is supplied", () => {
+    expect(mapSummaryGenerationStart(baseOpts).metadata).toBeUndefined();
+    expect(
+      mapSummaryGenerationStart({ ...baseOpts, metadata: {} }).metadata,
+    ).toBeUndefined();
   });
 });
 
