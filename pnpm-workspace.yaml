@@ -8,7 +8,7 @@ overrides:
   lodash: 4.18.1
   lodash-es: 4.18.1
   '@mikro-orm/knex': 6.6.14
-  fast-uri: 3.1.4
+  fast-uri: 3.1.5
   hono: 4.12.34
   tar: 7.5.21
   ws: 8.21.0
@@ -49,3 +49,5 @@ minimumReleaseAgeExclude:
   - undici@7.29.0
   # Renovate security update: ip-address@10.3.1
   - ip-address@10.3.1
+  # Renovate security update: fast-uri@3.1.5
+  - fast-uri@3.1.5
