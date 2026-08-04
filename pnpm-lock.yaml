@@ -14,7 +14,7 @@ overrides:
   tar: 7.5.21
   ws: 8.21.0
   '@tootallnate/once': 2.0.1
-  undici: 7.28.0
+  undici: 7.29.0
   fast-xml-builder: 1.1.7
   '@hono/node-server': 2.0.10
   ip-address: 10.1.1
@@ -3894,8 +3894,8 @@ packages:
   undici-types@7.19.2:
     resolution: {integrity: sha512-qYVnV5OEm2AW8cJMCpdV20CDyaN3g0AjDlOGf1OW4iaDEx8MwdtChUp4zu4H0VP3nDRF/8RKWH+IPp9uW0YGZg==}
 
-  undici@7.28.0:
-    resolution: {integrity: sha512-cRZYrTDwWznlnRiPjggAGxZXanty6M8RV1ff8Wm4LWXBp7/IG8v5DnOm74DtUBp9OONpK75YlPnIjQqX0dBDtA==}
+  undici@7.29.0:
+    resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
     engines: {node: '>=20.18.1'}
 
   unique-filename@1.1.1:
@@ -5123,7 +5123,7 @@ snapshots:
       partial-json: 0.1.7
       proxy-agent: 6.5.0
       typebox: 1.1.34
-      undici: 7.28.0
+      undici: 7.29.0
       zod-to-json-schema: 3.25.2(zod@4.3.6)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
@@ -5154,7 +5154,7 @@ snapshots:
       proper-lockfile: 4.1.2
       strip-ansi: 7.2.0
       typebox: 1.1.34
-      undici: 7.28.0
+      undici: 7.29.0
       uuid: 14.0.0
       yaml: 2.8.3
     optionalDependencies:
@@ -8671,7 +8671,7 @@ snapshots:
 
   undici-types@7.19.2: {}
 
-  undici@7.28.0: {}
+  undici@7.29.0: {}
 
   unique-filename@1.1.1:
     dependencies:
