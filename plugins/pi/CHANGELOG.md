@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.21.0] - 2026-08-04
+
+_No user-facing changes._
+
 ## [0.20.0] - 2026-08-03
 
 ### Features
