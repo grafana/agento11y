@@ -14,6 +14,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/mapperutil"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/timeutil"
 )
 
 const (
@@ -140,32 +141,46 @@ type agentCall struct {
 	subagentType string               // lowercased subagent_type from tool input; empty falls back to "subagent"
 }
 
-// Process walks transcript lines and produces Generation records.
-// It updates st.Title with the conversation title if discovered.
+// Process walks transcript lines and produces Generation records, plus the
+// timestamp of every tool_result line keyed by tool call ID. The caller uses
+// those timestamps as the end of each execute_tool span; without them a tool
+// span has no width, because a tool call and its result live on separate lines.
+// A tool call ID is present in that map only when its result line carried a
+// parseable timestamp, so a present key always means a usable end time.
+// Process updates st.Title with the conversation title if discovered.
 //
-// Claude Code subagents do not produce their own transcript lines — the only
-// evidence of their execution is the Agent tool_use (spawn) and the matching
-// tool_result (output). Process synthesises a generation for each completed
-// Agent call so that the agento11y dependency graph can display the DAG.
-func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact.Redactor) []agento11y.Generation {
+// Claude Code subagents do not produce their own lines in the main transcript —
+// the only evidence of their execution is the Agent tool_use (spawn) and the
+// matching tool_result (output). Process synthesises a generation for each
+// completed Agent call so that the agento11y dependency graph can display the
+// DAG.
+func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact.Redactor) ([]agento11y.Generation, map[string]time.Time) {
 	var (
 		gens []agento11y.Generation
 		uctx userContext
+		// toolResultAt records when each tool call's result arrived.
+		toolResultAt = map[string]time.Time{}
 		// agentCalls indexes Agent tool_use call IDs to the generation that
 		// emitted them, so we can synthesise subagent generations when the
 		// matching tool_result arrives.
 		agentCalls = make(map[string]agentCall)
+		// prevAt holds the timestamp of the previous processed line per chain,
+		// keyed by line.IsSidechain. A sidechain line belongs to a subagent turn,
+		// so the two chains must not hand each other a request time. Claude Code
+		// writes sidechain lines to separate subagent transcripts, so on the
+		// current format only the main-chain key is ever set.
+		prevAt = map[bool]time.Time{}
 	)
 
 	for _, line := range lines {
 		switch line.Type {
 		case "user":
-			processUserLine(line, &uctx, st, r, opts)
+			processUserLine(line, &uctx, st, r, opts, toolResultAt)
 			// Synthesise subagent generations from Agent tool results.
 			gens = append(gens, synthesiseSubagentGens(line, &uctx, agentCalls, opts)...)
 
 		case "assistant":
-			if gen, ok := processAssistantLine(line, &uctx, st, opts, r); ok {
+			if gen, ok := processAssistantLine(line, &uctx, st, opts, r, prevAt[line.IsSidechain]); ok {
 				// Index Agent tool calls from this generation's output.
 				for _, msg := range gen.Output {
 					for _, part := range msg.Parts {
@@ -185,6 +200,12 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 				gens = append(gens, gen)
 			}
 		}
+
+		// Advance the cursor only after the line is handled: an assistant line
+		// must not seed its own start, or every window collapses to zero.
+		if at := timeutil.ParseTimestamp(line.Timestamp, time.Time{}); !at.IsZero() {
+			prevAt[line.IsSidechain] = at
+		}
 	}
 
 	title := conversationTitle(st, opts.SessionID, r)
@@ -192,7 +213,20 @@ func Process(lines []transcript.Line, st *state.Session, opts Options, r *redact
 		gens[i].ConversationTitle = title
 	}
 
-	return gens
+	return gens, toolResultAt
+}
+
+// clampSpanStart returns the start of a generation window whose end is fixed at
+// completedAt. derivedStart comes from another transcript line, so it is used
+// only when it is present and not after completedAt; anything else collapses the
+// window to completedAt. Transcript timestamps are optional and not strictly
+// monotonic, and a window that inverts reaches the trace store as the unsigned
+// wrap of a negative duration instead of a latency.
+func clampSpanStart(derivedStart, completedAt time.Time) time.Time {
+	if derivedStart.IsZero() || derivedStart.After(completedAt) {
+		return completedAt
+	}
+	return derivedStart
 }
 
 // conversationTitle returns a truncated version of the session title derived
@@ -234,7 +268,11 @@ func synthesiseSubagentGens(line transcript.Line, uctx *userContext, calls map[s
 				continue
 			}
 
-			completedAt, _ := time.Parse(time.RFC3339Nano, line.Timestamp)
+			completedAt := timeutil.ParseTimestamp(line.Timestamp, time.Time{})
+
+			// The subagent ran between the spawning turn's completion and the
+			// tool_result that carries its output.
+			startedAt := clampSpanStart(ac.parentGen.CompletedAt, completedAt)
 
 			suffix := ac.subagentType
 			if suffix == "" {
@@ -253,7 +291,7 @@ func synthesiseSubagentGens(line transcript.Line, uctx *userContext, calls map[s
 				OperationName:       "generateText",
 				Model:               ac.parentGen.Model,
 				StopReason:          "end_turn",
-				StartedAt:           ac.parentGen.CompletedAt,
+				StartedAt:           startedAt,
 				CompletedAt:         completedAt,
 				Tags:                buildTags(line, true, opts.ExtraTags),
 			}
@@ -279,7 +317,11 @@ func subagentGenID(sessionID, toolCallID string) string {
 	return uuid.NewSHA1(uuid.NameSpaceDNS, []byte(sessionID+":subagent:"+toolCallID)).String()
 }
 
-func processUserLine(line transcript.Line, uctx *userContext, st *state.Session, r *redact.Redactor, opts Options) {
+// processUserLine folds one user line into uctx: a plain prompt, or the tool
+// results that answer the previous assistant turn. Every tool result with a
+// parseable line timestamp also records it in toolResultAt, so the caller can
+// give the execute_tool span a real end time.
+func processUserLine(line transcript.Line, uctx *userContext, st *state.Session, r *redact.Redactor, opts Options, toolResultAt map[string]time.Time) {
 	var msg transcript.UserMessage
 	if err := json.Unmarshal(line.Message, &msg); err != nil {
 		opts.logf("unmarshal user message: %v", err)
@@ -301,6 +343,9 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 		return
 	}
 
+	// Every tool_result block on this line shares the line's timestamp.
+	resultAt := timeutil.ParseTimestamp(line.Timestamp, time.Time{})
+
 	var toolParts []agento11y.Part
 	for _, b := range blocks {
 		if b.Type == "text" && b.Text != "" {
@@ -311,6 +356,9 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 			}
 		}
 		if b.Type == "tool_result" {
+			if b.ToolUseID != "" && !resultAt.IsZero() {
+				toolResultAt[b.ToolUseID] = resultAt
+			}
 			content := b.Content()
 			if r != nil {
 				content = r.Redact(content)
@@ -333,7 +381,10 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 	}
 }
 
-func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Session, opts Options, r *redact.Redactor) (agento11y.Generation, bool) {
+// processAssistantLine maps one coalesced assistant line to a generation.
+// requestAt is the timestamp of the previous line on the same chain, zero when
+// the batch opens on an assistant line.
+func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Session, opts Options, r *redact.Redactor, requestAt time.Time) (agento11y.Generation, bool) {
 	var msg transcript.AssistantMessage
 	if err := json.Unmarshal(line.Message, &msg); err != nil {
 		opts.logf("unmarshal assistant message: %v", err)
@@ -349,7 +400,12 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 
 	isSidechain := line.IsSidechain
 
-	completedAt, _ := time.Parse(time.RFC3339Nano, line.Timestamp)
+	completedAt := timeutil.ParseTimestamp(line.Timestamp, time.Time{})
+
+	// The transcript records no request-start time. The previous line on this
+	// chain (the user prompt, or the tool_result that unblocked the turn) is the
+	// closest real one.
+	startedAt := clampSpanStart(requestAt, completedAt)
 
 	usage := agento11y.TokenUsage{
 		InputTokens:           msg.Usage.InputTokens,
@@ -376,7 +432,7 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 		ResponseModel: msg.Model,
 		Usage:         usage,
 		StopReason:    msg.StopReason,
-		StartedAt:     completedAt, // no real start time; set equal to avoid zero-value skip in SDK metrics
+		StartedAt:     startedAt,
 		CompletedAt:   completedAt,
 		Tags:          buildTags(line, isSidechain, opts.ExtraTags),
 	}

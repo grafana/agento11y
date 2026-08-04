@@ -171,7 +171,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		r = redact.New()
 	}
 
-	gens := mapper.Process(lines, &st, mapper.Options{
+	gens, toolResultAt := mapper.Process(lines, &st, mapper.Options{
 		SessionID: input.SessionID,
 		Logger:    logger,
 		ExtraTags: extraTags,
@@ -199,22 +199,8 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	toolResults := buildToolResultMap(gens)
 
 	for _, gen := range gens {
-		genStart := agento11y.GenerationStart{
-			ID:                  gen.ID,
-			ConversationID:      gen.ConversationID,
-			ConversationTitle:   gen.ConversationTitle,
-			AgentName:           gen.AgentName,
-			AgentVersion:        gen.AgentVersion,
-			Mode:                gen.Mode,
-			OperationName:       gen.OperationName,
-			Model:               gen.Model,
-			ParentGenerationIDs: gen.ParentGenerationIDs,
-			Tags:                gen.Tags,
-			Metadata:            gen.Metadata,
-		}
-
-		if err := emit.Record(hookCtx, client, genStart, gen, nil, func(genCtx context.Context) {
-			emitToolSpans(genCtx, client, gen, toolResults)
+		if err := emit.Record(hookCtx, client, generationStart(gen), gen, nil, func(genCtx context.Context) {
+			emitToolSpans(genCtx, client, gen, toolResults, toolResultAt)
 		}); err != nil {
 			logger.Printf("enqueue: %v", err)
 		}
@@ -376,6 +362,31 @@ func parseHookInput(r io.Reader) (*hookInput, error) {
 	return &input, nil
 }
 
+// generationStart projects a mapped generation onto the span seed the SDK
+// needs to open the generation span.
+//
+// StartedAt has to travel with it. When it is zero the SDK stamps the span
+// start with time.Now(), while End stamps the span end with the transcript's
+// CompletedAt. The hook runs after the turn finished, so the window inverts and
+// a trace store renders the unsigned wrap of a negative duration: 2^64
+// nanoseconds, or 213504 days.
+func generationStart(gen agento11y.Generation) agento11y.GenerationStart {
+	return agento11y.GenerationStart{
+		ID:                  gen.ID,
+		ConversationID:      gen.ConversationID,
+		ConversationTitle:   gen.ConversationTitle,
+		AgentName:           gen.AgentName,
+		AgentVersion:        gen.AgentVersion,
+		Mode:                gen.Mode,
+		OperationName:       gen.OperationName,
+		Model:               gen.Model,
+		ParentGenerationIDs: gen.ParentGenerationIDs,
+		Tags:                gen.Tags,
+		Metadata:            gen.Metadata,
+		StartedAt:           gen.StartedAt,
+	}
+}
+
 // buildToolResultMap indexes tool results by their call ID across all generations.
 // Tool results appear in the Input of the generation that follows the tool call.
 func buildToolResultMap(gens []agento11y.Generation) map[string]*agento11y.ToolResult {
@@ -392,14 +403,41 @@ func buildToolResultMap(gens []agento11y.Generation) map[string]*agento11y.ToolR
 	return m
 }
 
-// emitToolSpans creates execute_tool spans for each tool call in the generation output.
-func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.Generation, results map[string]*agento11y.ToolResult) {
+// toolSpanWindow resolves the [start, end] window of an execute_tool span from
+// the completion of the turn that requested the tool and the timestamp of the
+// matching tool_result line. Either can be missing or out of order, and any such
+// pair collapses to a zero-width span rather than one that inverts.
+//
+// A zero genCompletedAt is the case worth spelling out: the SDK then stamps the
+// span start with the current time, which is after every transcript timestamp,
+// so pairing it with a result timestamp would invert the window. Anchor both
+// ends on the result instead.
+//
+// This differs from emit.ToolSpanWindow, which backdates a known duration from
+// the tool's own completion timestamp. Claude Code reports no tool duration, and
+// the window measures the gap between two transcript lines, so it includes any
+// time the user spent approving the call.
+func toolSpanWindow(genCompletedAt, resultAt time.Time) (startedAt, completedAt time.Time) {
+	if genCompletedAt.IsZero() {
+		return resultAt, resultAt
+	}
+	if !resultAt.After(genCompletedAt) {
+		return genCompletedAt, genCompletedAt
+	}
+	return genCompletedAt, resultAt
+}
+
+// emitToolSpans creates execute_tool spans for each tool call in the generation
+// output, windowed by toolSpanWindow from the generation's completion and the
+// matching tool_result timestamp in resultAt.
+func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.Generation, results map[string]*agento11y.ToolResult, resultAt map[string]time.Time) {
 	for _, msg := range gen.Output {
 		for _, part := range msg.Parts {
 			if part.ToolCall == nil {
 				continue
 			}
 			tc := part.ToolCall
+			startedAt, completedAt := toolSpanWindow(gen.CompletedAt, resultAt[tc.ID])
 			start := agento11y.ToolExecutionStart{
 				ToolName:        tc.Name,
 				ToolCallID:      tc.ID,
@@ -409,12 +447,12 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, gen agento11y.
 				AgentVersion:    gen.AgentVersion,
 				RequestModel:    gen.Model.Name,
 				RequestProvider: gen.Model.Provider,
-				StartedAt:       gen.CompletedAt,
+				StartedAt:       startedAt,
 			}
 			_, toolRec := client.StartToolExecution(ctx, start)
 
 			end := agento11y.ToolExecutionEnd{
-				CompletedAt: gen.CompletedAt,
+				CompletedAt: completedAt,
 				Arguments:   string(tc.InputJSON),
 			}
 			if tr, ok := results[tc.ID]; ok {

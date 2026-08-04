@@ -49,7 +49,7 @@ func TestLiveTranscripts(t *testing.T) {
 			}
 			coalesced, safeOffset := Coalesce(lines)
 			st := &state.Session{}
-			gens := Process(coalesced, st, Options{SessionID: "live-test"}, nil)
+			gens, _ := Process(coalesced, st, Options{SessionID: "live-test"}, nil)
 
 			var inTokens, outTokens int64
 			var fieldErrors []string
