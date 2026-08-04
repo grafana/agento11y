@@ -59,10 +59,10 @@ func stubSeams(t *testing.T) {
 		collectAgents, probeConversationsFn, probeOTLPFn = prevAgents, prevConv, prevOTLP
 	})
 	collectAgents = func(context.Context, string) []AgentStatus { return nil }
-	probeConversationsFn = func(context.Context, string, string, string, bool) *ProbeResult {
+	probeConversationsFn = func(context.Context, string, envValue, string, bool) *ProbeResult {
 		return &ProbeResult{StatusCode: 200, OK: true}
 	}
-	probeOTLPFn = func(context.Context) *AnalyticsProbe { return nil }
+	probeOTLPFn = func(context.Context, envValue) *AnalyticsProbe { return nil }
 }
 
 func writeConfig(t *testing.T, content string) {
@@ -371,6 +371,8 @@ func TestRunProbes(t *testing.T) {
 		wantConv        Health
 		wantAnalytics   Health
 		wantConvSkipped bool
+		wantConvMsgs    int
+		wantOTLPMsgs    int
 	}{
 		{
 			name:          "all reachable",
@@ -380,9 +382,18 @@ func TestRunProbes(t *testing.T) {
 			wantAnalytics: HealthOK,
 		},
 		{
-			name:          "auth failure escalates",
+			// The probe line already prints the message, so the
+			// section must not repeat it.
+			name:          "401 escalates without repeating the probe message",
+			conv:          &ProbeResult{StatusCode: 401, Message: "credentials rejected"},
+			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 401, Message: "credentials rejected"}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			wantConv:      HealthError,
+			wantAnalytics: HealthError,
+		},
+		{
+			name:          "403 escalates without repeating the probe message",
 			conv:          &ProbeResult{StatusCode: 403, Message: "missing sigil:write"},
-			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 401}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200, OK: true}, Traces: &ProbeResult{StatusCode: 403, Message: "missing traces:write"}},
 			wantConv:      HealthError,
 			wantAnalytics: HealthError,
 		},
@@ -392,6 +403,8 @@ func TestRunProbes(t *testing.T) {
 			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 0, Message: "timeout"}, Traces: &ProbeResult{StatusCode: 0, Message: "timeout"}},
 			wantConv:      HealthError,
 			wantAnalytics: HealthError,
+			wantConvMsgs:  1,
+			wantOTLPMsgs:  1,
 		},
 		{
 			name:          "5xx escalates",
@@ -399,6 +412,8 @@ func TestRunProbes(t *testing.T) {
 			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 500}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
 			wantConv:      HealthError,
 			wantAnalytics: HealthError,
+			wantConvMsgs:  1,
+			wantOTLPMsgs:  1,
 		},
 		{
 			name:          "benign 4xx stays healthy",
@@ -417,26 +432,35 @@ func TestRunProbes(t *testing.T) {
 			wantConv:        HealthError,
 			wantAnalytics:   HealthOK,
 			wantConvSkipped: true,
+			wantConvMsgs:    1, // the offline message, alone
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			prevConv, prevOTLP := probeConversationsFn, probeOTLPFn
 			t.Cleanup(func() { probeConversationsFn, probeOTLPFn = prevConv, prevOTLP })
-			probeConversationsFn = func(context.Context, string, string, string, bool) *ProbeResult { return tc.conv }
-			probeOTLPFn = func(context.Context) *AnalyticsProbe { return tc.otlp }
+			probeConversationsFn = func(context.Context, string, envValue, string, bool) *ProbeResult { return tc.conv }
+			var gotOTLPTenant envValue
+			probeOTLPFn = func(_ context.Context, tenant envValue) *AnalyticsProbe {
+				gotOTLPTenant = tenant
+				return tc.otlp
+			}
 
-			convHealth := tc.convHealth
+			// A case that starts in error reached that verdict offline, so it
+			// carries the offline check's message into the probe stage.
+			convHealth, convMsgs := tc.convHealth, []string(nil)
 			if convHealth == "" {
 				convHealth = HealthOK
+			} else {
+				convMsgs = []string{"AGENTO11Y_ENDPOINT is not a usable endpoint: …"}
 			}
 			r := &Report{
 				Conversations: ConversationsSection{
 					Endpoint: envValue{Set: true, Value: "https://sigil.example.net"},
-					TenantID: envValue{Set: true, Value: "t"},
+					TenantID: envValue{Set: true, Value: "t", Key: "AGENTO11Y_AUTH_TENANT_ID"},
 					Token:    tokenValue{Set: true},
 					Health:   convHealth,
-					Messages: []string{"AGENTO11Y_ENDPOINT is not a usable endpoint: …"},
+					Messages: convMsgs,
 				},
 				Analytics: AnalyticsSection{
 					Endpoint: envValue{Set: true, Value: "https://otlp.example.net"},
@@ -451,14 +475,54 @@ func TestRunProbes(t *testing.T) {
 				if r.Conversations.Probe != nil {
 					t.Fatalf("conversations probe ran = %+v, want skipped", r.Conversations.Probe)
 				}
-				if len(r.Conversations.Messages) != 1 {
-					t.Fatalf("conversations messages = %v, want the offline message alone", r.Conversations.Messages)
-				}
 			} else if r.Conversations.Probe == nil {
 				t.Fatal("conversations probe did not run")
+			} else if r.Conversations.Probe.Message != tc.conv.Message {
+				// The section drops its own message on an auth failure, so the
+				// probe result must keep the explanation both renderers print.
+				t.Fatalf("probe message = %q, want %q", r.Conversations.Probe.Message, tc.conv.Message)
 			}
 			if r.Analytics.Health != tc.wantAnalytics {
 				t.Fatalf("analytics health = %q, want %q", r.Analytics.Health, tc.wantAnalytics)
+			}
+			if gotOTLPTenant != r.Conversations.TenantID {
+				t.Fatalf("OTLP probe tenant = %+v, want %+v", gotOTLPTenant, r.Conversations.TenantID)
+			}
+			if len(r.Conversations.Messages) != tc.wantConvMsgs {
+				t.Fatalf("conversations messages = %v, want %d", r.Conversations.Messages, tc.wantConvMsgs)
+			}
+			if len(r.Analytics.Messages) != tc.wantOTLPMsgs {
+				t.Fatalf("analytics messages = %v, want %d", r.Analytics.Messages, tc.wantOTLPMsgs)
+			}
+		})
+	}
+}
+
+func TestOTLPProbeTenant(t *testing.T) {
+	tenant := envValue{Set: true, Value: "t", Key: "AGENTO11Y_AUTH_TENANT_ID"}
+	tests := []struct {
+		name    string
+		headers string
+		want    envValue
+	}{
+		{name: "no headers", want: tenant},
+		{name: "headers without authorization", headers: "X-Extra=1", want: tenant},
+		{
+			// An explicit Authorization header replaces the Basic auth
+			// built from the tenant id, so the request never reads it.
+			name:    "explicit authorization drops the tenant",
+			headers: "Authorization=Bearer explicit",
+		},
+		{name: "authorization with no value is ignored", headers: "Authorization=", want: tenant},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			osEnv := map[string]string{}
+			if tc.headers != "" {
+				osEnv["OTEL_EXPORTER_OTLP_HEADERS"] = tc.headers
+			}
+			if got := otlpProbeTenant(tenant, osEnv, nil); got != tc.want {
+				t.Fatalf("tenant = %+v, want %+v", got, tc.want)
 			}
 		})
 	}

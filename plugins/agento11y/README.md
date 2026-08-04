@@ -107,11 +107,13 @@ The two pipelines are independent and fail independently:
 
 The common failure is conversations showing up while the analytics page stays empty: the OTLP endpoint is unset, or the token lacks the metrics/traces scopes. `agento11y doctor` flags that case explicitly and exits non-zero when a pipeline is broken.
 
-Add `--probe` to send a lightweight request to each endpoint and report the HTTP status (a 401/403 on the OTLP path means the token is missing `metrics:write`/`traces:write`):
+Add `--probe` to send a lightweight request to each endpoint and report the HTTP status:
 
 ```sh
 agento11y doctor --probe
 ```
+
+A 403 means the token is missing a write scope. A 401 means the endpoint refused the credentials without saying why: the token may be invalid or expired, or `AGENTO11Y_AUTH_TENANT_ID` may be wrong.
 
 For support, capture the machine-readable report — it never includes the auth token value:
 

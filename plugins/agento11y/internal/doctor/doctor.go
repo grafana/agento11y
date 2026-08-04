@@ -268,13 +268,26 @@ type ProbeResult struct {
 }
 
 func (p *ProbeResult) authFailure() bool {
-	return p != nil && (p.StatusCode == 401 || p.StatusCode == 403)
+	return p.credentialsRejected() || p.scopeDenied()
+}
+
+// credentialsRejected reports HTTP 401: the endpoint refused the credentials.
+// The status does not say which credential is wrong, so each probe names the
+// candidates for its own endpoint.
+func (p *ProbeResult) credentialsRejected() bool {
+	return p != nil && p.StatusCode == 401
+}
+
+// scopeDenied reports HTTP 403: the credentials authenticated, but the token
+// is not allowed to write.
+func (p *ProbeResult) scopeDenied() bool {
+	return p != nil && p.StatusCode == 403
 }
 
 // unreachable reports a probe outcome that means a configured pipeline can't
 // deliver: a transport error (no HTTP response, e.g. DNS failure, connection
 // refused, or timeout) or a 5xx server error. 401/403 are handled separately
-// as a scope problem (authFailure). Other 4xx are not treated as broken because
+// as an auth problem (authFailure). Other 4xx are not treated as broken because
 // the minimal probe body ({}) can draw a benign 400/415 from an endpoint that
 // validates the body before auth.
 func (p *ProbeResult) unreachable() bool {
@@ -673,12 +686,12 @@ func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string)
 	// configured(), HealthError can only come from that check.
 	if r.Conversations.configured() && r.Conversations.Health != HealthError {
 		token := resolveFamily("AUTH_TOKEN", osEnv, fileEnv).value
-		res := probeConversationsFn(ctx, r.Conversations.Endpoint.Value, r.Conversations.TenantID.Value, token, resolveInsecure(osEnv, fileEnv))
+		res := probeConversationsFn(ctx, r.Conversations.Endpoint.Value, r.Conversations.TenantID, token, resolveInsecure(osEnv, fileEnv))
 		r.Conversations.Probe = res
 		switch {
 		case res.authFailure():
+			// No section message: the probe line states the cause.
 			r.Conversations.Health = HealthError
-			r.Conversations.Messages = append(r.Conversations.Messages, res.Message)
 		case res.unreachable():
 			r.Conversations.Health = HealthError
 			r.Conversations.Messages = append(r.Conversations.Messages,
@@ -686,14 +699,14 @@ func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string)
 		}
 	}
 	if r.Analytics.Endpoint.Set {
-		probe := probeOTLPFn(ctx)
+		probe := probeOTLPFn(ctx, otlpProbeTenant(r.Conversations.TenantID, osEnv, fileEnv))
 		r.Analytics.Probe = probe
 		if probe != nil {
 			switch {
 			case probe.Metrics.authFailure() || probe.Traces.authFailure():
+				// No section message: each signal's probe line states
+				// its own cause.
 				r.Analytics.Health = HealthError
-				r.Analytics.Messages = append(r.Analytics.Messages,
-					"OTLP endpoint rejected auth (401/403) — the token is likely missing metrics:write/traces:write scope")
 			case probe.Metrics.unreachable() || probe.Traces.unreachable():
 				r.Analytics.Health = HealthError
 				r.Analytics.Messages = append(r.Analytics.Messages,
@@ -701,6 +714,18 @@ func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string)
 			}
 		}
 	}
+}
+
+// otlpProbeTenant is the tenant id the OTLP request authenticates with, or a
+// zero value when it authenticates with something else. internal/otel builds
+// Basic auth from the tenant id only when OTEL_EXPORTER_OTLP_HEADERS carries
+// no Authorization entry (otel.ExporterHeaders); with an explicit header the
+// tenant id never reaches the request, so a 401 must not point at it.
+func otlpProbeTenant(tenant envValue, osEnv, fileEnv map[string]string) envValue {
+	if headersHaveAuthorization(resolveEnv("OTEL_EXPORTER_OTLP_HEADERS", osEnv, fileEnv).value) {
+		return envValue{}
+	}
+	return tenant
 }
 
 // resolved is the effective value of an env var plus where it came from:
