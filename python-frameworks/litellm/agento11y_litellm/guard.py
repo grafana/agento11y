@@ -44,12 +44,11 @@ from .handler import (
     _extract_text_content,
     _first_metadata_value,
     _map_messages,
-    _map_response_output,
-    _map_responses_output,
     _map_tools_list,
     _metadata_sources_from,
     _request_tags_from,
     _resolve_conversation_id_from,
+    _select_output_mappers,
 )
 
 if TYPE_CHECKING:
@@ -680,14 +679,15 @@ def _map_output_messages(response: Any) -> list[Message]:
     (LiteLLM normalizes that one to chat shape for logging, but not here).
 
     The shape is read off the payload rather than off a call type, because this
-    hook is not given one.
+    hook is not given one. The logger shares the rule through
+    ``_select_output_mappers``, so a guard verdict and the exported generation
+    read one response the same way.
     """
     payload = _response_payload(response)
     if payload is None:
         return []
-    if isinstance(payload, dict) and not payload.get("choices") and isinstance(payload.get("output"), list):
-        return _map_responses_output(payload)
-    return _map_response_output(payload)
+    map_output, _ = _select_output_mappers("", payload)
+    return map_output(payload)
 
 
 def _response_payload(response: Any) -> Any:
