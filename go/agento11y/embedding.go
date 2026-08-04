@@ -1,6 +1,9 @@
 package agento11y
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const defaultEmbeddingOperationName = "embeddings"
 
@@ -38,11 +41,11 @@ type EmbeddingResult struct {
 
 func cloneEmbeddingStart(in EmbeddingStart) EmbeddingStart {
 	return EmbeddingStart{
-		Model:          in.Model,
-		AgentName:      in.AgentName,
-		AgentVersion:   in.AgentVersion,
+		Model:          cloneModelRef(in.Model),
+		AgentName:      strings.Clone(in.AgentName),
+		AgentVersion:   strings.Clone(in.AgentVersion),
 		Dimensions:     cloneInt64Ptr(in.Dimensions),
-		EncodingFormat: in.EncodingFormat,
+		EncodingFormat: strings.Clone(in.EncodingFormat),
 		Tags:           cloneTags(in.Tags),
 		Metadata:       cloneMetadata(in.Metadata),
 		StartedAt:      in.StartedAt,
@@ -54,7 +57,7 @@ func cloneEmbeddingResult(in EmbeddingResult) EmbeddingResult {
 		InputCount:    in.InputCount,
 		InputTokens:   in.InputTokens,
 		InputTexts:    cloneStringSlice(in.InputTexts),
-		ResponseModel: in.ResponseModel,
+		ResponseModel: strings.Clone(in.ResponseModel),
 		Dimensions:    cloneInt64Ptr(in.Dimensions),
 	}
 }
@@ -64,6 +67,8 @@ func cloneStringSlice(in []string) []string {
 		return nil
 	}
 	out := make([]string, len(in))
-	copy(out, in)
+	for i := range in {
+		out[i] = strings.Clone(in[i])
+	}
 	return out
 }

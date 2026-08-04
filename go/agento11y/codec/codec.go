@@ -15,7 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"maps"
+	"slices"
 	"strings"
 
 	"github.com/grafana/agento11y/go/agento11y/model"
@@ -35,30 +35,30 @@ func ToProto(g model.Generation) (*agento11yv1.Generation, error) {
 	}
 
 	out := &agento11yv1.Generation{
-		Id:             g.ID,
-		ConversationId: g.ConversationID,
-		AgentName:      g.AgentName,
-		AgentVersion:   g.AgentVersion,
-		OperationName:  g.OperationName,
+		Id:             strings.Clone(g.ID),
+		ConversationId: strings.Clone(g.ConversationID),
+		AgentName:      strings.Clone(g.AgentName),
+		AgentVersion:   strings.Clone(g.AgentVersion),
+		OperationName:  strings.Clone(g.OperationName),
 		Mode:           generationModeToProto(g.Mode),
-		TraceId:        g.TraceID,
-		SpanId:         g.SpanID,
+		TraceId:        strings.Clone(g.TraceID),
+		SpanId:         strings.Clone(g.SpanID),
 		Model: &agento11yv1.ModelRef{
-			Provider: g.Model.Provider,
-			Name:     g.Model.Name,
+			Provider: strings.Clone(g.Model.Provider),
+			Name:     strings.Clone(g.Model.Name),
 		},
-		ResponseId:          g.ResponseID,
-		ResponseModel:       g.ResponseModel,
-		SystemPrompt:        g.SystemPrompt,
+		ResponseId:          strings.Clone(g.ResponseID),
+		ResponseModel:       strings.Clone(g.ResponseModel),
+		SystemPrompt:        strings.Clone(g.SystemPrompt),
 		Input:               messagesToProto(g.Input),
 		Output:              messagesToProto(g.Output),
 		Tools:               toolsToProto(g.Tools),
 		Usage:               usageToProto(g.Usage),
-		StopReason:          g.StopReason,
+		StopReason:          strings.Clone(g.StopReason),
 		Tags:                cloneTags(g.Tags),
 		Metadata:            metadata,
 		RawArtifacts:        artifactsToProto(g.Artifacts),
-		CallError:           g.CallError,
+		CallError:           strings.Clone(g.CallError),
 		MaxTokens:           cloneInt64Ptr(g.MaxTokens),
 		Temperature:         cloneFloat64Ptr(g.Temperature),
 		TopP:                cloneFloat64Ptr(g.TopP),
@@ -99,20 +99,20 @@ func WorkflowStepToProto(step model.WorkflowStep) (*agento11yv1.WorkflowStep, er
 	}
 
 	out := &agento11yv1.WorkflowStep{
-		Id:                  step.ID,
-		ConversationId:      step.ConversationID,
-		StepName:            step.StepName,
-		Framework:           step.Framework,
+		Id:                  strings.Clone(step.ID),
+		ConversationId:      strings.Clone(step.ConversationID),
+		StepName:            strings.Clone(step.StepName),
+		Framework:           strings.Clone(step.Framework),
 		InputState:          inputState,
 		OutputState:         outputState,
-		Error:               step.Error,
+		Error:               strings.Clone(step.Error),
 		Tags:                cloneTags(step.Tags),
 		LinkedGenerationIds: cloneStringSlice(step.LinkedGenerationIDs),
 		ParentStepIds:       cloneStringSlice(step.ParentStepIDs),
-		AgentName:           step.AgentName,
-		AgentVersion:        step.AgentVersion,
-		TraceId:             step.TraceID,
-		SpanId:              step.SpanID,
+		AgentName:           strings.Clone(step.AgentName),
+		AgentVersion:        strings.Clone(step.AgentVersion),
+		TraceId:             strings.Clone(step.TraceID),
+		SpanId:              strings.Clone(step.SpanID),
 		Metadata:            metadata,
 	}
 	if !step.StartedAt.IsZero() {
@@ -162,7 +162,7 @@ func messagesToProto(messages []model.Message) []*agento11yv1.Message {
 	for i := range messages {
 		out = append(out, &agento11yv1.Message{
 			Role:  roleToProto(messages[i].Role),
-			Name:  messages[i].Name,
+			Name:  strings.Clone(messages[i].Name),
 			Parts: partsToProto(messages[i].Parts),
 		})
 	}
@@ -192,32 +192,32 @@ func partsToProto(parts []model.Part) []*agento11yv1.Part {
 	for i := range parts {
 		part := &agento11yv1.Part{}
 		if providerType := parts[i].Metadata.ProviderType; providerType != "" {
-			part.Metadata = &agento11yv1.PartMetadata{ProviderType: providerType}
+			part.Metadata = &agento11yv1.PartMetadata{ProviderType: strings.Clone(providerType)}
 		}
 
 		switch parts[i].Kind {
 		case model.PartKindText:
-			part.Payload = &agento11yv1.Part_Text{Text: parts[i].Text}
+			part.Payload = &agento11yv1.Part_Text{Text: strings.Clone(parts[i].Text)}
 		case model.PartKindThinking:
-			part.Payload = &agento11yv1.Part_Thinking{Thinking: parts[i].Thinking}
+			part.Payload = &agento11yv1.Part_Thinking{Thinking: strings.Clone(parts[i].Thinking)}
 		case model.PartKindToolCall:
 			if parts[i].ToolCall == nil {
 				continue
 			}
 			part.Payload = &agento11yv1.Part_ToolCall{ToolCall: &agento11yv1.ToolCall{
-				Id:        parts[i].ToolCall.ID,
-				Name:      parts[i].ToolCall.Name,
-				InputJson: append([]byte(nil), parts[i].ToolCall.InputJSON...),
+				Id:        strings.Clone(parts[i].ToolCall.ID),
+				Name:      strings.Clone(parts[i].ToolCall.Name),
+				InputJson: slices.Clone(parts[i].ToolCall.InputJSON),
 			}}
 		case model.PartKindToolResult:
 			if parts[i].ToolResult == nil {
 				continue
 			}
 			part.Payload = &agento11yv1.Part_ToolResult{ToolResult: &agento11yv1.ToolResult{
-				ToolCallId:  parts[i].ToolResult.ToolCallID,
-				Name:        parts[i].ToolResult.Name,
-				Content:     parts[i].ToolResult.Content,
-				ContentJson: append([]byte(nil), parts[i].ToolResult.ContentJSON...),
+				ToolCallId:  strings.Clone(parts[i].ToolResult.ToolCallID),
+				Name:        strings.Clone(parts[i].ToolResult.Name),
+				Content:     strings.Clone(parts[i].ToolResult.Content),
+				ContentJson: slices.Clone(parts[i].ToolResult.ContentJSON),
 				IsError:     parts[i].ToolResult.IsError,
 			}}
 		case model.PartKindMedia:
@@ -225,10 +225,10 @@ func partsToProto(parts []model.Part) []*agento11yv1.Part {
 				continue
 			}
 			part.Payload = &agento11yv1.Part_Media{Media: &agento11yv1.Media{
-				Kind:     parts[i].Media.Kind,
-				Url:      parts[i].Media.URL,
-				MimeType: parts[i].Media.MIMEType,
-				Name:     parts[i].Media.Name,
+				Kind:     strings.Clone(parts[i].Media.Kind),
+				Url:      strings.Clone(parts[i].Media.URL),
+				MimeType: strings.Clone(parts[i].Media.MIMEType),
+				Name:     strings.Clone(parts[i].Media.Name),
 			}}
 		}
 
@@ -245,10 +245,10 @@ func toolsToProto(tools []model.ToolDefinition) []*agento11yv1.ToolDefinition {
 	out := make([]*agento11yv1.ToolDefinition, 0, len(tools))
 	for i := range tools {
 		out = append(out, &agento11yv1.ToolDefinition{
-			Name:            tools[i].Name,
-			Description:     tools[i].Description,
-			Type:            tools[i].Type,
-			InputSchemaJson: append([]byte(nil), tools[i].InputSchema...),
+			Name:            strings.Clone(tools[i].Name),
+			Description:     strings.Clone(tools[i].Description),
+			Type:            strings.Clone(tools[i].Type),
+			InputSchemaJson: slices.Clone(tools[i].InputSchema),
 			Deferred:        tools[i].Deferred,
 		})
 	}
@@ -275,11 +275,11 @@ func artifactsToProto(artifacts []model.Artifact) []*agento11yv1.Artifact {
 	for i := range artifacts {
 		out = append(out, &agento11yv1.Artifact{
 			Kind:        artifactKindToProto(artifacts[i].Kind),
-			Name:        artifacts[i].Name,
-			ContentType: artifacts[i].ContentType,
-			Payload:     append([]byte(nil), artifacts[i].Payload...),
-			RecordId:    artifacts[i].RecordID,
-			Uri:         artifacts[i].URI,
+			Name:        strings.Clone(artifacts[i].Name),
+			ContentType: strings.Clone(artifacts[i].ContentType),
+			Payload:     slices.Clone(artifacts[i].Payload),
+			RecordId:    strings.Clone(artifacts[i].RecordID),
+			Uri:         strings.Clone(artifacts[i].URI),
 		})
 	}
 	return out
@@ -305,7 +305,9 @@ func cloneTags(in map[string]string) map[string]string {
 		return nil
 	}
 	out := make(map[string]string, len(in))
-	maps.Copy(out, in)
+	for key, value := range in {
+		out[strings.Clone(key)] = strings.Clone(value)
+	}
 	return out
 }
 
@@ -329,7 +331,7 @@ func cloneStringPtr(in *string) *string {
 	if in == nil {
 		return nil
 	}
-	out := *in
+	out := strings.Clone(*in)
 	return &out
 }
 
@@ -346,6 +348,8 @@ func cloneStringSlice(in []string) []string {
 		return nil
 	}
 	out := make([]string, len(in))
-	copy(out, in)
+	for i := range in {
+		out[i] = strings.Clone(in[i])
+	}
 	return out
 }

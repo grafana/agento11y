@@ -6,11 +6,42 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/grafana/agento11y/go/agento11y/codec"
 	"github.com/grafana/agento11y/go/agento11y/model"
 	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
 )
+
+func TestToProtoDetachesCallerStringStorage(t *testing.T) {
+	backing := "prefix " + strings.Repeat("retained-value", 32) + " suffix"
+	value := backing[len("prefix ") : len(backing)-len(" suffix")]
+
+	got, err := codec.ToProto(model.Generation{
+		Model: model.ModelRef{Name: value},
+		Input: []model.Message{{
+			Parts: []model.Part{{Kind: model.PartKindText, Text: value}},
+		}},
+		Tags: map[string]string{"tag": value},
+	})
+	if err != nil {
+		t.Fatalf("ToProto: %v", err)
+	}
+
+	assertDetachedString(t, got.GetModel().GetName(), value)
+	assertDetachedString(t, got.GetInput()[0].GetParts()[0].GetText(), value)
+	assertDetachedString(t, got.GetTags()["tag"], value)
+}
+
+func assertDetachedString(t *testing.T, got, want string) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("cloned string = %q, want %q", got, want)
+	}
+	if got != "" && unsafe.StringData(got) == unsafe.StringData(want) {
+		t.Fatal("cloned string still shares caller backing storage")
+	}
+}
 
 func TestToProtoMode(t *testing.T) {
 	cases := []struct {

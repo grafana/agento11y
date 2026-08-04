@@ -1,6 +1,9 @@
 package agento11y
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // ToolExecutionStart seeds a tool execution span before the tool call runs.
 type ToolExecutionStart struct {
@@ -32,4 +35,22 @@ type ToolExecutionEnd struct {
 	Arguments   any
 	Result      any
 	CompletedAt time.Time
+}
+
+func cloneToolExecutionStart(in ToolExecutionStart) ToolExecutionStart {
+	return ToolExecutionStart{
+		ToolName:          strings.Clone(in.ToolName),
+		ToolCallID:        strings.Clone(in.ToolCallID),
+		ToolType:          strings.Clone(in.ToolType),
+		ToolDescription:   strings.Clone(in.ToolDescription),
+		ConversationID:    strings.Clone(in.ConversationID),
+		ConversationTitle: strings.Clone(in.ConversationTitle),
+		AgentName:         strings.Clone(in.AgentName),
+		AgentVersion:      strings.Clone(in.AgentVersion),
+		RequestModel:      strings.Clone(in.RequestModel),
+		RequestProvider:   strings.Clone(in.RequestProvider),
+		StartedAt:         in.StartedAt,
+		IncludeContent:    in.IncludeContent,
+		ContentCapture:    in.ContentCapture,
+	}
 }

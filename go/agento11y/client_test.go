@@ -64,6 +64,129 @@ func TestMetricTagAttributesDetachStorage(t *testing.T) {
 	}
 }
 
+func TestNewClientDetachesConfigStorage(t *testing.T) {
+	backing := "prefix " + strings.Repeat("config-value", 32) + " suffix"
+	value := backing[len("prefix ") : len(backing)-len(" suffix")]
+	insecure := false
+	debug := false
+	client, _, _ := newTestClient(t, Config{
+		GenerationExport: GenerationExportConfig{Insecure: &insecure},
+		Debug:            &debug,
+		Tags:             map[string]string{value: value},
+	})
+
+	var storedKey string
+	for key := range client.config.Tags {
+		if key == value {
+			storedKey = key
+			break
+		}
+	}
+	if storedKey == "" {
+		t.Fatal("caller config tag missing from client")
+	}
+	assertStringDetached(t, storedKey, value)
+	assertStringDetached(t, client.config.Tags[storedKey], value)
+	insecure = true
+	debug = true
+	if *client.config.GenerationExport.Insecure {
+		t.Fatal("client retained caller's Insecure pointer")
+	}
+	if *client.config.Debug {
+		t.Fatal("client retained caller's Debug pointer")
+	}
+}
+
+func TestGenerationSpanDetachesResultStorage(t *testing.T) {
+	backing := "prefix " + strings.Repeat("model", 32) + " suffix"
+	model := backing[len("prefix ") : len(backing)-len(" suffix")]
+	client, spanRecorder, _ := newTestClient(t, Config{})
+	_, recorder := client.StartGeneration(context.Background(), GenerationStart{})
+
+	recorder.SetResult(Generation{Model: ModelRef{Name: model}}, nil)
+	recorder.End()
+
+	span := onlyGenerationSpan(t, spanRecorder.Ended())
+	got := spanAttributeMap(span)[spanAttrRequestModel].AsString()
+	assertStringDetached(t, got, model)
+}
+
+func TestGenerationRecorderSetResultDetachesStorage(t *testing.T) {
+	backing := "prefix " + strings.Repeat("model", 32) + " suffix"
+	model := backing[len("prefix ") : len(backing)-len(" suffix")]
+	recorder := &GenerationRecorder{}
+
+	recorder.SetResult(Generation{Model: ModelRef{Name: model}}, nil)
+
+	assertStringDetached(t, recorder.generation.Model.Name, model)
+}
+
+func TestGenerationMetadataFallbackDetachesSpanStorage(t *testing.T) {
+	backing := "prefix " + strings.Repeat("conversation", 32) + " suffix"
+	title := backing[len("prefix ") : len(backing)-len(" suffix")]
+	client, spanRecorder, _ := newTestClient(t, Config{})
+	_, recorder := client.StartGeneration(context.Background(), GenerationStart{})
+
+	recorder.SetResult(Generation{Metadata: map[string]any{spanAttrConversationTitle: title}}, nil)
+	recorder.End()
+
+	span := onlyGenerationSpan(t, spanRecorder.Ended())
+	got := spanAttributeMap(span)[spanAttrConversationTitle].AsString()
+	assertStringDetached(t, got, title)
+}
+
+func TestRecorderEndReleasesTransferredInputs(t *testing.T) {
+	generation := &GenerationRecorder{
+		generation:    Generation{SystemPrompt: "large"},
+		extraMetadata: map[string]any{"large": "value"},
+		callErr:       errors.New("call"),
+		mapErr:        errors.New("map"),
+	}
+	generation.End()
+	if generation.generation.SystemPrompt != "" || generation.extraMetadata != nil || generation.callErr != nil || generation.mapErr != nil {
+		t.Fatal("generation recorder retained transferred inputs after End")
+	}
+
+	embedding := &EmbeddingRecorder{
+		result:  EmbeddingResult{InputTexts: []string{"large"}},
+		callErr: errors.New("call"),
+	}
+	embedding.End()
+	if len(embedding.result.InputTexts) != 0 || embedding.callErr != nil {
+		t.Fatal("embedding recorder retained transferred inputs after End")
+	}
+
+	tool := &ToolExecutionRecorder{
+		result:  ToolExecutionEnd{Arguments: "large", Result: "large"},
+		execErr: errors.New("exec"),
+	}
+	tool.End()
+	if tool.result.Arguments != nil || tool.result.Result != nil || tool.execErr != nil {
+		t.Fatal("tool recorder retained transferred inputs after End")
+	}
+}
+
+func TestLiveRecorderEndReleasesCompletedState(t *testing.T) {
+	client, _, _ := newTestClient(t, Config{})
+	_, generation := client.StartGeneration(context.Background(), GenerationStart{
+		Model: ModelRef{Provider: "test", Name: "model"},
+	})
+	generation.SetResult(Generation{Output: []Message{AssistantTextMessage("done")}}, nil)
+	generation.End()
+	if generation.client != nil || generation.ctx != nil || generation.span != nil || generation.seed.Model.Name != "" || generation.persist != nil {
+		t.Fatal("generation recorder retained completed recording state after End")
+	}
+
+	_, embedding := client.StartEmbedding(context.Background(), EmbeddingStart{
+		Model: ModelRef{Provider: "test", Name: "model"},
+	})
+	embedding.SetResult(EmbeddingResult{InputCount: 1, InputTexts: []string{"done"}})
+	embedding.End()
+	if embedding.client != nil || embedding.ctx != nil || embedding.span != nil || embedding.seed.Model.Name != "" {
+		t.Fatal("embedding recorder retained completed recording state after End")
+	}
+}
+
 func TestStartGenerationEnqueuesArtifacts(t *testing.T) {
 	client, recorder, _ := newTestClient(t, Config{
 		Now: func() time.Time {
@@ -1198,6 +1321,44 @@ func TestToolExecutionRecorderContentCapture(t *testing.T) {
 			t.Fatal("expected no tool content with IncludeContent: false")
 		}
 	})
+}
+
+func TestToolExecutionDetachesTrimmedNameAndJSONContent(t *testing.T) {
+	nameBacking := strings.Repeat(" ", 128) + "weather" + strings.Repeat(" ", 128)
+	trimmedName := strings.TrimSpace(nameBacking)
+	jsonBacking := "prefix:" + `{"city":"Paris"}` + ":suffix"
+	arguments := jsonBacking[len("prefix:") : len(jsonBacking)-len(":suffix")]
+	padding := strings.Repeat(" ", 128)
+	resultBacking := append([]byte(padding), []byte(`{"temp":18}`)...)
+	resultBacking = append(resultBacking, []byte(padding)...)
+	client, spanRecorder, _ := newTestClient(t, Config{})
+
+	_, recorder := client.StartToolExecution(context.Background(), ToolExecutionStart{
+		ToolName:       nameBacking,
+		IncludeContent: true,
+	})
+	assertStringDetached(t, recorder.seed.ToolName, trimmedName)
+	recorder.SetResult(ToolExecutionEnd{Arguments: arguments, Result: resultBacking})
+	recorder.End()
+
+	span := onlyToolSpan(t, spanRecorder.Ended())
+	got := spanAttributeMap(span)[spanAttrToolCallArguments].AsString()
+	assertStringDetached(t, got, arguments)
+	gotResult := spanAttributeMap(span)[spanAttrToolCallResult].AsString()
+	const wantResult = `{"temp":18}`
+	if gotResult != wantResult {
+		t.Fatalf("tool result = %q, want %q", gotResult, wantResult)
+	}
+	resultBacking[len(padding)+2] = 'X'
+	if gotResult != wantResult {
+		t.Fatal("tool result still shares caller byte storage")
+	}
+	if recorder.result.Arguments != nil {
+		t.Fatal("tool recorder retained transferred arguments after End")
+	}
+	if recorder.client != nil || recorder.ctx != nil || recorder.span != nil || recorder.seed.ToolName != "" {
+		t.Fatal("tool recorder retained completed recording state after End")
+	}
 }
 
 func TestToolExecutionRecorderErrorSetsStatusAndType(t *testing.T) {

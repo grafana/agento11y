@@ -2,11 +2,27 @@ package agento11y
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
+
+func TestContextHelpersDetachCallerStorage(t *testing.T) {
+	backing := "prefix " + strings.Repeat("context-value", 32) + " suffix"
+	value := backing[len("prefix ") : len(backing)-len(" suffix")]
+
+	ctx := WithConversationTitle(context.Background(), value)
+	title, ok := ConversationTitleFromContext(ctx)
+	if !ok {
+		t.Fatal("conversation title missing from context")
+	}
+	assertStringDetached(t, title, value)
+
+	ctx = WithTag(ctx, "origin", value)
+	assertStringDetached(t, TagsFromContext(ctx)["origin"], value)
+}
 
 func TestContextTagsOnGenerationSpanMetricsAndExport(t *testing.T) {
 	metricReader := sdkmetric.NewManualReader()

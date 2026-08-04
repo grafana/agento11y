@@ -29,6 +29,7 @@ func WithMissedInputTokens(n int64) CacheDiagnosticsOption {
 
 // WithPreviousMessageID sets the provider response ID compared against.
 func WithPreviousMessageID(id string) CacheDiagnosticsOption {
+	id = strings.Clone(id)
 	return func(c *cacheDiagnosticsConfig) {
 		c.previousMessageID = id
 	}
@@ -67,11 +68,11 @@ func SetCacheDiagnostics(rec *GenerationRecorder, missReason string, opts ...Cac
 	// Replace prior optional keys so a second call does not leave stale values.
 	delete(rec.extraMetadata, CacheDiagnosticsMissedInputTokensKey)
 	delete(rec.extraMetadata, CacheDiagnosticsPreviousMessageIDKey)
-	rec.extraMetadata[CacheDiagnosticsMissReasonKey] = missReason
+	rec.extraMetadata[CacheDiagnosticsMissReasonKey] = strings.Clone(missReason)
 	if cfg.missedInputTokens != nil {
 		rec.extraMetadata[CacheDiagnosticsMissedInputTokensKey] = strconv.FormatInt(*cfg.missedInputTokens, 10)
 	}
 	if id := strings.TrimSpace(cfg.previousMessageID); id != "" {
-		rec.extraMetadata[CacheDiagnosticsPreviousMessageIDKey] = id
+		rec.extraMetadata[CacheDiagnosticsPreviousMessageIDKey] = strings.Clone(id)
 	}
 }

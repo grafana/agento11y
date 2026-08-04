@@ -88,11 +88,11 @@ func mergeHooksConfig(base, override HooksConfig) HooksConfig {
 	// want hooks on.
 	out := HooksConfig{
 		Enabled: override.Enabled,
-		Phases:  append([]HookPhase(nil), base.Phases...),
+		Phases:  cloneHookPhases(base.Phases),
 		Timeout: base.Timeout,
 	}
 	if len(override.Phases) > 0 {
-		out.Phases = append([]HookPhase(nil), override.Phases...)
+		out.Phases = cloneHookPhases(override.Phases)
 	}
 	if override.Timeout > 0 {
 		out.Timeout = override.Timeout
@@ -103,6 +103,17 @@ func mergeHooksConfig(base, override HooksConfig) HooksConfig {
 	} else if base.FailOpen != nil {
 		v := *base.FailOpen
 		out.FailOpen = &v
+	}
+	return out
+}
+
+func cloneHookPhases(in []HookPhase) []HookPhase {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]HookPhase, len(in))
+	for i := range in {
+		out[i] = HookPhase(strings.Clone(string(in[i])))
 	}
 	return out
 }

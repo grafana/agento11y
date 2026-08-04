@@ -1,6 +1,7 @@
 package agento11y
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -437,12 +438,15 @@ func NewClient(config Config) *Client {
 	if cfg.AgentName == "" {
 		cfg.AgentName = defaults.AgentName
 	}
+	cfg.AgentName = strings.Clone(cfg.AgentName)
 	if cfg.AgentVersion == "" {
 		cfg.AgentVersion = defaults.AgentVersion
 	}
+	cfg.AgentVersion = strings.Clone(cfg.AgentVersion)
 	if cfg.UserID == "" {
 		cfg.UserID = defaults.UserID
 	}
+	cfg.UserID = strings.Clone(cfg.UserID)
 	// Merge env-derived tags as a base layer; caller tags win on key collision.
 	// mergeTags returns a fresh map, so later caller mutations don't reach the client.
 	cfg.Tags = mergeTags(defaults.Tags, cfg.Tags)
@@ -451,6 +455,9 @@ func NewClient(config Config) *Client {
 	}
 	if cfg.Debug == nil {
 		cfg.Debug = defaults.Debug
+	}
+	if cfg.Debug != nil {
+		cfg.Debug = BoolPtr(*cfg.Debug)
 	}
 	if cfg.GenerationExport.Headers != nil {
 		// Defensive copy to insulate the client from later mutations of the
@@ -784,11 +791,11 @@ func (c *Client) StartToolExecution(ctx context.Context, start ToolExecutionStar
 		ctx = context.Background()
 	}
 
-	seed := start
-	seed.ToolName = strings.TrimSpace(seed.ToolName)
-	if seed.ToolName == "" {
+	start.ToolName = strings.TrimSpace(start.ToolName)
+	if start.ToolName == "" {
 		return ctx, &ToolExecutionRecorder{}
 	}
+	seed := cloneToolExecutionStart(start)
 
 	// Read conversation ID from context when explicit field is empty.
 	if seed.ConversationID == "" {
@@ -907,7 +914,7 @@ func (r *GenerationRecorder) SetResult(g Generation, err error) {
 		return
 	}
 	r.mu.Lock()
-	r.generation = g
+	r.generation = cloneGeneration(g)
 	r.mapErr = err
 	r.hasResult = true
 	r.mu.Unlock()
@@ -934,11 +941,16 @@ func (r *GenerationRecorder) End() {
 	}
 	r.ended = true
 	callErr := r.callErr
+	r.callErr = nil
 	mapErr := r.mapErr
+	r.mapErr = nil
 	generation := r.generation
+	r.generation = Generation{}
 	firstTokenAt := r.firstTokenAt
 	extraMeta := cloneMetadata(r.extraMetadata)
+	r.extraMetadata = nil
 	persist := r.persist
+	r.persist = nil
 	r.mu.Unlock()
 
 	// No-op recorder: no client/span means nothing to finalize.
@@ -958,7 +970,7 @@ func (r *GenerationRecorder) End() {
 		if panicked {
 			r.contentCaptureMode = ContentCaptureModeMetadataOnly
 		} else {
-			normalized = sanitized
+			normalized = cloneGeneration(sanitized)
 		}
 	}
 
@@ -1020,7 +1032,7 @@ func (r *GenerationRecorder) End() {
 	}
 
 	r.mu.Lock()
-	r.lastGeneration = cloneGeneration(normalized)
+	r.lastGeneration = normalized
 	r.mu.Unlock()
 
 	var enqueueErr error
@@ -1082,6 +1094,10 @@ func (r *GenerationRecorder) End() {
 	// rec.Err reports local validation/enqueue failures only.
 	r.mu.Lock()
 	r.finalErr = combineAllErrors(enqueueErr)
+	r.client = nil
+	r.ctx = nil
+	r.span = nil
+	r.seed = GenerationStart{}
 	r.mu.Unlock()
 }
 
@@ -1170,7 +1186,9 @@ func (r *EmbeddingRecorder) End() {
 	}
 	r.ended = true
 	callErr := r.callErr
-	result := cloneEmbeddingResult(r.result)
+	r.callErr = nil
+	result := r.result
+	r.result = EmbeddingResult{}
 	hasResult := r.hasResult
 	r.mu.Unlock()
 
@@ -1179,7 +1197,7 @@ func (r *EmbeddingRecorder) End() {
 	}
 
 	completedAt := r.client.now().UTC()
-	normalized := r.normalizeEmbeddingResult(result)
+	normalized := result
 
 	r.span.SetName(embeddingSpanName(r.seed.Model.Name))
 	r.span.SetAttributes(embeddingSpanEndAttributes(normalized, hasResult, r.client.config.EmbeddingCapture, r.contentCaptureMode)...)
@@ -1242,6 +1260,10 @@ func (r *EmbeddingRecorder) End() {
 
 	r.mu.Lock()
 	r.finalErr = localErr
+	r.client = nil
+	r.ctx = nil
+	r.span = nil
+	r.seed = EmbeddingStart{}
 	r.mu.Unlock()
 }
 
@@ -1299,7 +1321,9 @@ func (r *ToolExecutionRecorder) End() {
 	}
 	r.ended = true
 	execErr := r.execErr
+	r.execErr = nil
 	end := r.result
+	r.result = ToolExecutionEnd{}
 	r.mu.Unlock()
 
 	// No-op recorder.
@@ -1368,6 +1392,10 @@ func (r *ToolExecutionRecorder) End() {
 
 	r.mu.Lock()
 	r.finalErr = finalErr
+	r.client = nil
+	r.ctx = nil
+	r.span = nil
+	r.seed = ToolExecutionStart{}
 	r.mu.Unlock()
 }
 
@@ -1387,7 +1415,9 @@ func (r *ToolExecutionRecorder) Err() error {
 // ---------------------------------------------------------------------------
 
 func (r *GenerationRecorder) normalizeGeneration(raw Generation, completedAt time.Time, callErr error, extraMetadata map[string]any) Generation {
-	g := cloneGeneration(raw)
+	// SetResult detached raw from caller-owned storage. End transfers that
+	// recorder-owned value here, so normalization can safely mutate it in place.
+	g := raw
 
 	if g.ID == "" {
 		g.ID = r.seed.ID
@@ -1465,9 +1495,9 @@ func (r *GenerationRecorder) normalizeGeneration(raw Generation, completedAt tim
 	if conversationTitle == "" {
 		conversationTitle = metadataString(g.Metadata, spanAttrConversationTitle)
 	}
-	g.ConversationTitle = conversationTitle
+	g.ConversationTitle = strings.Clone(conversationTitle)
 	if conversationTitle != "" {
-		g.Metadata[spanAttrConversationTitle] = conversationTitle
+		g.Metadata[spanAttrConversationTitle] = g.ConversationTitle
 	}
 	if g.UserID == "" {
 		g.UserID = metadataString(g.Metadata, metadataUserIDKey)
@@ -1477,8 +1507,8 @@ func (r *GenerationRecorder) normalizeGeneration(raw Generation, completedAt tim
 		g.UserID = metadataString(g.Metadata, spanAttrUserID)
 	}
 	if userID := strings.TrimSpace(g.UserID); userID != "" {
-		g.UserID = userID
-		g.Metadata[metadataUserIDKey] = userID
+		g.UserID = strings.Clone(userID)
+		g.Metadata[metadataUserIDKey] = g.UserID
 	}
 	g.Metadata[sdkMetadataKeyName] = sdkName
 
@@ -1494,21 +1524,18 @@ func (r *GenerationRecorder) normalizeGeneration(raw Generation, completedAt tim
 	}
 
 	if callErr != nil {
+		callErrorText := strings.Clone(callErr.Error())
 		if g.CallError == "" {
-			g.CallError = callErr.Error()
+			g.CallError = callErrorText
 		}
 		if g.Metadata == nil {
 			g.Metadata = map[string]any{}
 		}
-		g.Metadata[metadataKeyCallError] = callErr.Error()
+		g.Metadata[metadataKeyCallError] = callErrorText
 	}
 
 	g.Usage = g.Usage.Normalize()
 	return g
-}
-
-func (r *EmbeddingRecorder) normalizeEmbeddingResult(raw EmbeddingResult) EmbeddingResult {
-	return cloneEmbeddingResult(raw)
 }
 
 func combineAllErrors(errs ...error) error {
@@ -2340,7 +2367,7 @@ func serializeToolContent(value any) (string, error) {
 			return "", nil
 		}
 		if json.Valid([]byte(trimmed)) {
-			return trimmed, nil
+			return strings.Clone(trimmed), nil
 		}
 		data, err := json.Marshal(trimmed)
 		if err != nil {
@@ -2348,14 +2375,14 @@ func serializeToolContent(value any) (string, error) {
 		}
 		return string(data), nil
 	case []byte:
-		trimmed := strings.TrimSpace(string(v))
-		if trimmed == "" {
+		trimmed := bytes.TrimSpace(v)
+		if len(trimmed) == 0 {
 			return "", nil
 		}
-		if json.Valid([]byte(trimmed)) {
-			return trimmed, nil
+		if json.Valid(trimmed) {
+			return string(trimmed), nil
 		}
-		data, err := json.Marshal(trimmed)
+		data, err := json.Marshal(string(trimmed))
 		if err != nil {
 			return "", err
 		}
@@ -2396,7 +2423,9 @@ func mergeTags(base, override map[string]string) map[string]string {
 	if out == nil {
 		out = map[string]string{}
 	}
-	maps.Copy(out, override)
+	for key, value := range override {
+		out[strings.Clone(key)] = strings.Clone(value)
+	}
 	return out
 }
 
@@ -2409,7 +2438,12 @@ func mergeMetadata(base, override map[string]any) map[string]any {
 	if out == nil {
 		out = map[string]any{}
 	}
-	maps.Copy(out, override)
+	for key, value := range override {
+		if text, ok := value.(string); ok {
+			value = strings.Clone(text)
+		}
+		out[strings.Clone(key)] = value
+	}
 	return out
 }
 
