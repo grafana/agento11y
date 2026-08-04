@@ -1,0 +1,108 @@
+{
+  "run_upsert": {
+    "method": "POST",
+    "path": "/api/v1/experiment-runs:upsert",
+    "body": {
+      "name": "conformance run",
+      "source": { "kind": "sdk", "id": "${SDK_ID}" },
+      "experiment_id": "conformance-run",
+      "tags": ["conformance"],
+      "suite_id": "conformance-suite",
+      "suite_version": "1.0.0",
+      "planned_trial_count": 1
+    }
+  },
+  "trial_create": {
+    "method": "POST",
+    "path": "/api/v1/experiment-runs/conformance-run/trials",
+    "body": {
+      "trial_id": "trial-e82b5e46a40a37e5",
+      "test_case_id": "capital-france",
+      "attempt": 1,
+      "status": "running"
+    }
+  },
+  "trial_patch_conversation": {
+    "method": "PATCH",
+    "path": "/api/v1/experiment-runs/conformance-run/trials/trial-e82b5e46a40a37e5",
+    "body": {
+      "conversation_id": "conv-agent-1"
+    }
+  },
+  "trial_evaluate": {
+    "method": "POST",
+    "path": "/api/v1/experiment-runs/conformance-run/trials/trial-e82b5e46a40a37e5:evaluate",
+    "body": {
+      "evaluator_id": "helpfulness",
+      "evaluator_version": "2"
+    }
+  },
+  "trial_evaluate_latest_version": {
+    "method": "POST",
+    "path": "/api/v1/experiment-runs/conformance-run/trials/trial-e82b5e46a40a37e5:evaluate",
+    "body": {
+      "evaluator_id": "helpfulness"
+    }
+  },
+  "trial_evaluation_status": {
+    "method": "GET",
+    "path": "/api/v1/experiment-runs/conformance-run/trials/trial-e82b5e46a40a37e5/evaluations/eval-conformance-1",
+    "body": null
+  },
+  "trial_evaluate_reserved_trial_id": {
+    "comment": "A trial id containing ':' and '/' must not shadow the ':evaluate' verb.",
+    "method": "POST",
+    "path": "/api/v1/experiment-runs/conformance-run/trials/trial%3Aone%2Fblue:evaluate",
+    "body": {
+      "evaluator_id": "helpfulness"
+    }
+  },
+  "trial_patch_terminal": {
+    "method": "PATCH",
+    "path": "/api/v1/experiment-runs/conformance-run/trials/trial-e82b5e46a40a37e5",
+    "body": {
+      "status": "completed",
+      "conversation_id": "conv-agent-1"
+    }
+  },
+  "scores_export": {
+    "method": "POST",
+    "path": "/api/v1/scores:export",
+    "body": {
+      "scores": [
+        {
+          "score_id": "score-06b71bce427d6b90",
+          "evaluator_id": "exact",
+          "evaluator_version": "1",
+          "score_key": "final",
+          "value": { "bool": true },
+          "conversation_id": "conv-agent-1",
+          "experiment_id": "conformance-run",
+          "trial_id": "trial-e82b5e46a40a37e5",
+          "test_case_id": "capital-france",
+          "passed": true,
+          "explanation": "matched the expected answer",
+          "created_at": "2026-01-01T00:00:00Z",
+          "source": { "kind": "experiment", "id": "conformance-run" }
+        }
+      ]
+    }
+  },
+  "run_finalize": {
+    "method": "POST",
+    "path": "/api/v1/experiment-runs/conformance-run:finalize",
+    "body": {
+      "status": "completed",
+      "source": { "kind": "sdk", "id": "${SDK_ID}" }
+    }
+  },
+  "run_finalize_with_score_count": {
+    "method": "POST",
+    "path": "/api/v1/experiment-runs/conformance-run:finalize",
+    "body": {
+      "status": "completed",
+      "source": { "kind": "sdk", "id": "${SDK_ID}" },
+      "score_count": 1
+    }
+  }
+}

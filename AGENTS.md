@@ -47,7 +47,7 @@ If you change shared-binary behavior, the four glue plugins all see it. The Open
 ## Cross-language conventions
 
 - Use `cache_write_input_tokens`, not `cache_creation_input_tokens`. This was renamed in cbe0363; pretrained models tend to suggest the old name, so don't follow them.
-- Conformance suites cross-check the SDKs. `mise run test:sdk:conformance` runs core, provider-wrapper, and framework-adapter conformance across Go/Python/JS/Java/.NET. If you change behavior in one SDK, expect to update fixtures or matching code in the others.
+- Conformance suites cross-check the SDKs. `mise run test:sdk:conformance` runs core, provider-wrapper, framework-adapter, hook, and experiment conformance across Go/Python/JS/Java/.NET. If you change behavior in one SDK, expect to update fixtures or matching code in the others.
 - Python has one package per framework (`agento11y-langgraph`, `agento11y-openai`, …). JS has one package with subpath exports (`@grafana/agento11y/langgraph`). Don't reflexively assume one layout for the other.
 - Python version bumps go through `mise run sdk:py:bump <VERSION>`. It updates all 13 `pyproject.toml` files and their internal `agento11y>=…` pins atomically. Hand-editing one file leaves the other twelve inconsistent.
 
@@ -55,9 +55,9 @@ If you change shared-binary behavior, the four glue plugins all see it. The Open
 
 [`llms.txt`](llms.txt) is what this repo ships. There is a second copy of the same prompt rendered by the Agent Observability onboarding wizard (a separate Grafana product). When you change user-facing semantics here (new SDK field, renamed env var, new framework adapter), the wizard copy needs the same change. If you're only fixing this repo's internals, the wizard copy doesn't move.
 
-## Hook wire fixtures are checked by hand
+## Hook and experiment wire fixtures are checked by hand
 
-`conformance/hooks/` pins the `POST /api/v1/hooks:evaluate` body and responses. That endpoint has no generated stubs, so the fixtures are the contract, and the SDK suites check themselves against the fixtures rather than against the server. If you change a fixture, run the new shape through the server's hook decoder yourself first. `conformance/hooks/README.md` documents the encodings, which the proto does not describe.
+`conformance/hooks/` pins the `POST /api/v1/hooks:evaluate` body and responses, and `conformance/experiments/` pins the experiment ingest bodies and responses. Neither endpoint group has generated stubs, so the fixtures are the contract, and the SDK suites check themselves against the fixtures rather than against the server. If you change a fixture, run the new shape through the server's decoder yourself first. Each directory's `README.md` documents the encodings, which the proto does not describe.
 
 ## Running checks
 

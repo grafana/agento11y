@@ -170,22 +170,64 @@ type NodeHash = {
   digest(encoding: 'hex'): string;
 };
 
+type HashAlgorithm = 'sha1' | 'sha256';
+
 type NodeCrypto = {
-  createHash(algorithm: 'sha256'): NodeHash;
+  createHash(algorithm: HashAlgorithm): NodeHash;
 };
 
 function sha256Hex(input: string): string {
+  return hashHex('sha256', input);
+}
+
+/**
+ * SHA-1 hex digest. Used by the experiments stable-id derivation, which has to
+ * stay byte-identical with Go's and Python's `stable_id`.
+ */
+export function sha1Hex(input: string): string {
+  return hashHex('sha1', input);
+}
+
+function hashHex(algorithm: HashAlgorithm, input: string): string {
   const nodeCrypto = resolveNodeCrypto();
   if (nodeCrypto === undefined) {
-    throw new Error('sha256 hashing is unavailable in this JavaScript runtime');
+    throw new Error(`${algorithm} hashing is unavailable in this JavaScript runtime`);
   }
-  return nodeCrypto.createHash('sha256').update(input).digest('hex');
+  return nodeCrypto.createHash(algorithm).update(input).digest('hex');
 }
 
 function resolveNodeCrypto(): NodeCrypto | undefined {
   const processWithBuiltins = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process;
   const module = processWithBuiltins?.getBuiltinModule?.('crypto') as NodeCrypto | undefined;
   return typeof module?.createHash === 'function' ? module : undefined;
+}
+
+/**
+ * Converts a configured API endpoint into an HTTP base URL.
+ *
+ * Accepts an absolute `http(s)://` URL, a `grpc://` URL, or a bare `host:port`.
+ * A path prefix on an absolute URL is preserved so prefix-mounted deployments
+ * (`https://host/sigil`) keep routing under the prefix. `label` prefixes the
+ * error messages so a caller can tell which feature failed.
+ */
+export function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean, label: string): string {
+  const trimmed = endpoint.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`${label}: api endpoint is required`);
+  }
+
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    const parsed = new URL(trimmed);
+    const path = parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.protocol}//${parsed.host}${path}`;
+  }
+
+  const withoutScheme = trimmed.startsWith('grpc://') ? trimmed.slice('grpc://'.length) : trimmed;
+  const host = withoutScheme.split('/')[0]?.trim();
+  if (host === undefined || host.length === 0) {
+    throw new Error(`${label}: api endpoint host is required`);
+  }
+  return `${insecure ? 'http' : 'https'}://${host}`;
 }
 
 export function cloneGeneration(generation: Generation): Generation {

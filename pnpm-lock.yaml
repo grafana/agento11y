@@ -81,6 +81,9 @@ importers:
       openai:
         specifier: ^6.27.0
         version: 6.33.0(ws@8.21.0)(zod@4.3.6)
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
     devDependencies:
       '@opentelemetry/context-async-hooks':
         specifier: 2.6.1

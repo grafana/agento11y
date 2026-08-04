@@ -154,6 +154,67 @@ export function createSecretRedactionSanitizer(
   };
 }
 
+const sharedRedactor = new SecretRedactor(true);
+
+/**
+ * Redacts known secret formats from free text.
+ *
+ * Used by the experiments surface for score explanations, artifact text, and
+ * telemetry strings, matching Python's `redact_secret_text`.
+ */
+export function redactSecretText(value: string): string {
+  if (value.length === 0) {
+    return value;
+  }
+  return sharedRedactor.redact(value);
+}
+
+/**
+ * Redacts secrets in every string reachable from `value`, rebuilding arrays and
+ * objects. Matches Python's `redact_secret_value`.
+ *
+ * Every non-array object is walked, including a class instance and a
+ * `null`-prototype object. Missing a secret matters more here than preserving an
+ * exotic shape, and Python's `isinstance(item, dict)` covers subclasses the same
+ * way. A Date, Map, Set, RegExp, Error, or typed array passes through unchanged.
+ */
+export function redactSecretValue<T>(value: T): T {
+  if (typeof value === 'string') {
+    return redactSecretText(value) as unknown as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactSecretValue(entry)) as unknown as T;
+  }
+  if (isWalkableObject(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      out[key] = redactSecretValue(entry);
+    }
+    return out as unknown as T;
+  }
+  return value;
+}
+
+/**
+ * Whether `value` is an object whose own string properties should be walked.
+ *
+ * A built-in wrapper (Date, Map, Set, RegExp, Error, a typed array) is left alone:
+ * rebuilding it as a plain object would change the payload's shape, and its
+ * secrets, if any, are not in its own enumerable string properties.
+ */
+function isWalkableObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  if (value instanceof Date || value instanceof RegExp || value instanceof Error) {
+    return false;
+  }
+  if (value instanceof Map || value instanceof Set || ArrayBuffer.isView(value)) {
+    return false;
+  }
+  return true;
+}
+
 function sanitizeMessage(message: Message, redactor: SecretRedactor, defaultTextMode: 'none' | 'light' | 'full'): void {
   if (typeof message.content === 'string') {
     message.content = redactString(message.content, redactor, defaultTextMode);

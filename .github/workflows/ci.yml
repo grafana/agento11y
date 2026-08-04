@@ -107,6 +107,11 @@ jobs:
       - name: Hook conformance
         run: mise run test:sdk:hooks-conformance
 
+      # The experiment ingest routes have no generated stubs either, so
+      # conformance/experiments/ is their only cross-language contract.
+      - name: Experiment conformance
+        run: mise run test:sdk:experiments-conformance
+
   go-module:
     name: Go module
     runs-on: ubuntu-latest

@@ -148,7 +148,7 @@ export function mergeConfig(
   };
 }
 
-function defaultEnv(): Record<string, string | undefined> {
+export function defaultEnv(): Record<string, string | undefined> {
   // Edge runtimes (for example Cloudflare Workers) may not define `process`.
   // Fall back to an empty env object so default config resolution stays safe.
   if (typeof process !== 'undefined' && process.env !== undefined) {
@@ -169,7 +169,7 @@ function envOverrides(env: Record<string, string | undefined>, logger: Agento11y
   if (protocol !== undefined)
     generationExport.protocol = protocol.value.toLowerCase() as GenerationExportConfig['protocol'];
   const insecure = envTrimmed(env, envInsecure);
-  if (insecure !== undefined) generationExport.insecure = parseBool(insecure.value);
+  if (insecure !== undefined) generationExport.insecure = parseTruthy(insecure.value);
   const headers = envTrimmed(env, envHeaders);
   if (headers !== undefined) generationExport.headers = parseCsvKv(headers.value);
 
@@ -219,7 +219,7 @@ function envOverrides(env: Record<string, string | undefined>, logger: Agento11y
     }
   }
   const debug = envTrimmed(env, envDebug);
-  if (debug !== undefined) out.debug = parseBool(debug.value);
+  if (debug !== undefined) out.debug = parseTruthy(debug.value);
 
   return out;
 }
@@ -284,7 +284,16 @@ export function envTrimmed(
   return undefined;
 }
 
-function parseBool(raw: string): boolean {
+/**
+ * Parses the SDK's accepted truthy spellings: `1`, `true`, `yes`, `on`, in any
+ * casing and with surrounding whitespace. Every other value, including an empty
+ * string, is false.
+ *
+ * Go (`ExperimentalFeaturesEnabled`) and Python (`_TRUTHY`) accept the same set.
+ * `redaction.ts` keeps its own list because it also has to tell a false value from
+ * a typo; every caller that only needs true or false uses this one.
+ */
+export function parseTruthy(raw: string): boolean {
   const v = raw.trim().toLowerCase();
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
@@ -353,7 +362,7 @@ function mergeAuthConfig(config: ExportAuthConfig | undefined): ExportAuthConfig
 // rejecting cross-mode mixes only forced extra cleanup upstream. Callers who
 // want strict validation should check their AuthConfig before constructing
 // the client.
-function resolveHeadersWithAuth(
+export function resolveHeadersWithAuth(
   headers: Record<string, string> | undefined,
   auth: ExportAuthConfig,
   label: string,

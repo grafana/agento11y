@@ -15,6 +15,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./experiments": {
+      "types": "./dist/experiments/index.d.ts",
+      "import": "./dist/experiments/index.js"
+    },
     "./langchain": {
       "types": "./dist/frameworks/langchain/index.d.ts",
       "import": "./dist/frameworks/langchain/index.js"
@@ -80,7 +84,8 @@
     "@opentelemetry/sdk-metrics": "^2.1.0",
     "@opentelemetry/sdk-trace-base": "^2.5.0",
     "llamaindex": "^0.12.1",
-    "openai": "^6.27.0"
+    "openai": "^6.27.0",
+    "yaml": "^2.8.3"
   },
   "peerDependencies": {
     "@strands-agents/sdk": "^1.0.0-rc.5"
