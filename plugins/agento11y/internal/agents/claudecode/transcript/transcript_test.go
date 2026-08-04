@@ -309,6 +309,47 @@ func TestRead_EndOffset_CRLF(t *testing.T) {
 	}
 }
 
+// TestRead_SubagentAttribution pins the fields a sidechain line carries. The
+// importer maps a subagent transcript back to the Agent tool call that spawned
+// it through AgentID, and the mapper names the turn from AttributionAgent, so a
+// decoding regression here silently flattens every subagent turn into the main
+// thread.
+func TestRead_SubagentAttribution(t *testing.T) {
+	content := `{"type":"assistant","sessionId":"s1","isSidechain":true,"agentId":"a18f9a9d9f1f3d28e","attributionAgent":"general-purpose","message":{"model":"test","content":[{"type":"thinking","thinking":"weighing the options"},{"type":"text","text":"done"}],"usage":{"output_tokens":1}}}
+`
+	lines, _, err := Read(writeTempFile(t, content), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("got %d lines, want 1", len(lines))
+	}
+	line := lines[0]
+	if !line.IsSidechain {
+		t.Error("IsSidechain = false, want true")
+	}
+	if line.AgentID != "a18f9a9d9f1f3d28e" {
+		t.Errorf("AgentID = %q, want a18f9a9d9f1f3d28e", line.AgentID)
+	}
+	if line.AttributionAgent != "general-purpose" {
+		t.Errorf("AttributionAgent = %q, want general-purpose", line.AttributionAgent)
+	}
+
+	var msg AssistantMessage
+	if err := json.Unmarshal(line.Message, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.Content) != 2 {
+		t.Fatalf("got %d content blocks, want 2", len(msg.Content))
+	}
+	if msg.Content[0].Thinking != "weighing the options" {
+		t.Errorf("Thinking = %q, want \"weighing the options\"", msg.Content[0].Thinking)
+	}
+	if msg.Content[0].Text != "" {
+		t.Errorf("Text = %q, want empty: a thinking block writes its own key", msg.Content[0].Text)
+	}
+}
+
 func TestRead_FileNotFound(t *testing.T) {
 	_, _, err := Read("/nonexistent/path.jsonl", 0)
 	if err == nil {

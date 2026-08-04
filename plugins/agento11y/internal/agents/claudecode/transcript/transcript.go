@@ -23,6 +23,17 @@ type Line struct {
 	IsSidechain bool            `json:"isSidechain"`
 	Message     json.RawMessage `json:"message"`
 
+	// AgentID identifies the subagent that produced a sidechain line. Claude
+	// Code names the subagent's own transcript file after it
+	// (subagents/agent-<agentId>.jsonl); the history importer matches a
+	// subagent transcript to its parent from that filename rather than from
+	// this field.
+	AgentID string `json:"agentId"`
+	// AttributionAgent is the subagent type a sidechain line ran under, for
+	// example "general-purpose". The mapper appends it to the agent name so a
+	// subagent turn is distinguishable from a main-thread one.
+	AttributionAgent string `json:"attributionAgent"`
+
 	// EndOffset is the byte position after this line in the transcript file.
 	// Set by Read(), not deserialized from JSON.
 	EndOffset int64 `json:"-"`
@@ -44,6 +55,11 @@ type ContentBlock struct {
 	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
+	// Thinking holds the reasoning text of a "thinking" block, which Claude
+	// Code writes under its own key rather than under "text". The mapper does
+	// not export the text (a block can exceed 50 KB); the field exists so a
+	// decoded block reflects the on-disk shape.
+	Thinking string `json:"thinking,omitempty"`
 }
 
 // Usage tracks token consumption for an assistant message.

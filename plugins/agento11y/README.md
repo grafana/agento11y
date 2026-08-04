@@ -88,6 +88,49 @@ Unknown values fall back to `metadata_only` with a warning. `default` is accepte
 
 A plugin can only export fields the host agent passes through to it, so individual plugins may capture less than the SDK matrix shows. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the SDK-level behavior matrix and plugin defaults.
 
+## Local mode and history import
+
+`agento11y <agent> --local` records the session to a JSONL store on this machine and opens a viewer at `http://127.0.0.1:8765`. Start and stop the daemon by hand with `agento11y local start|status|stop`.
+
+The viewer starts empty: it holds only the sessions captured after you installed agento11y. `agento11y history import` backfills the ones an agent already wrote to disk.
+
+```sh
+# See what would be imported. Nothing is decoded, exported, or stored.
+agento11y history import claude-code --dry-run
+
+# Import into the local store on this machine.
+agento11y history import claude-code --local
+
+# Import into Grafana Cloud, the default without --local.
+agento11y history import claude-code
+```
+
+Supported agents are `claude-code` and `codex`. `agento11y history import` with no agent lists them.
+
+`--local` picks the endpoint. Without it, the import exports to the configured Grafana Cloud endpoint, exactly as a live session does. With it, the import exports to the local daemon on this machine.
+
+A dry run reads up to 1 MiB of each session file (a head and a tail window) to count turns and read session metadata. Nothing from those bytes is decoded into prompt or response text, shown, exported, or stored.
+
+Without `--since`, an import covers the last 90 days. The local store is a linear scan over JSONL files, so an unbounded first import makes the viewer slow before you have used it. Pass `--since 365d`, `--since 2026-01-01T00:00:00Z`, or any duration to widen the window, and `--until` to bound the other end.
+
+The rest of the flags:
+
+- `--source` restricts the import to one discovered path (repeatable). It filters the paths discovery already found; it cannot add a path outside the agent's roots.
+- `--workspace` keeps only sessions whose workspace path contains the given text.
+- `--max-sessions` and `--max-turns` cap how many sessions the run imports and how many turns it takes from each.
+- `--all` skips the picker, `--yes` skips the confirmation.
+- `--dry-run` prints the plan and imports nothing.
+- `--force` re-exports turns the ledger already records.
+- `--local` targets the local daemon instead of Grafana Cloud.
+
+Without a terminal there is no picker and no confirmation, so the command prints the plan and imports nothing. Pass `--all --yes` to import from a script.
+
+The viewer offers the same import in two places: a banner on the Sessions page, and Settings, then History, for the full form. An import there runs in the background and reports progress live; you can cancel it, and a cancelled run keeps what it already imported.
+
+A local import never leaves this machine. Whether an import stays local follows from the endpoint, not from the flag. An import that exports to a loopback endpoint sets the daemon's forwarding marker on every request, and captures full content, matching live local capture. The daemon stores a marked backfill without relaying it to Grafana Cloud, whatever `AGENTO11Y_LOCAL_FORWARD` and `AGENTO11Y_CONTENT_CAPTURE_MODE` are set to. An import that reaches `127.0.0.1` is therefore marked even when it was started without `--local`. An import without `--local` and with a Cloud endpoint configured does leave the machine, which is the point of it.
+
+Each imported turn is recorded in a per-agent ledger under `~/.local/state/agento11y/history/ledger/`. The ledger holds hashes, statuses, and counts, never paths or content. Re-running an import skips the turns the ledger already records, so an import is safe to repeat and a cancelled or failed run resumes where it stopped. `--force` re-exports those turns under the same generation IDs, so the export replaces the stored copy rather than adding a second one.
+
 ## Auto-update
 
 `agento11y claude`, `agento11y codex`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out.

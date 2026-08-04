@@ -1,4 +1,4 @@
-package claudecode
+package userid
 
 import (
 	"os"
@@ -22,7 +22,7 @@ func writeClaudeJSON(t *testing.T, dir, contents string) string {
 	return path
 }
 
-func TestLoadUserIDFromClaudeJSON(t *testing.T) {
+func TestLoadFromClaudeJSON(t *testing.T) {
 	tests := []struct {
 		name     string
 		contents string
@@ -49,15 +49,15 @@ func TestLoadUserIDFromClaudeJSON(t *testing.T) {
 				writeClaudeJSON(t, dir, tt.contents)
 			}
 
-			got := loadUserIDFromClaudeJSON(path, tt.source)
+			got := loadFromClaudeJSON(path, tt.source)
 			if got != tt.want {
-				t.Errorf("loadUserIDFromClaudeJSON = %q, want %q", got, tt.want)
+				t.Errorf("loadFromClaudeJSON = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestResolveUserID(t *testing.T) {
+func TestResolve(t *testing.T) {
 	tests := []struct {
 		name      string
 		envUserID string
@@ -136,9 +136,9 @@ func TestResolveUserID(t *testing.T) {
 				writeClaudeJSON(t, home, tt.contents)
 			}
 
-			got := resolveUserID()
+			got := Resolve()
 			if got != tt.want {
-				t.Errorf("resolveUserID() = %q, want %q", got, tt.want)
+				t.Errorf("Resolve() = %q, want %q", got, tt.want)
 			}
 		})
 	}

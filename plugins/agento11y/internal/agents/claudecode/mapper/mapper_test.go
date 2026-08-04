@@ -1341,3 +1341,231 @@ func TestProcess_UserPromptRedaction(t *testing.T) {
 		})
 	}
 }
+
+// TestCoalesce_AnsweredToolUse covers the transcripts where Claude Code leaves
+// stop_reason null on every assistant line: every subagent transcript, and
+// every main-thread transcript from versions 2.0.62 to 2.1.63. Without the
+// tool_result completion rule those runs map to nothing.
+func TestCoalesce_AnsweredToolUse(t *testing.T) {
+	sidechain := func(l transcript.Line) transcript.Line {
+		l.IsSidechain = true
+		l.AttributionAgent = "general-purpose"
+		return l
+	}
+
+	tests := []struct {
+		name           string
+		lines          []transcript.Line
+		wantLines      int
+		wantOffset     int64
+		wantStopReason string
+	}{
+		{
+			name: "answered tool_use completes the turn",
+			lines: func() []transcript.Line {
+				prompt := sidechain(makeUserLine("inspect the repo"))
+				frag1 := sidechain(makeAssistantFragment("req-side", 4, []transcript.ContentBlock{
+					{Type: "text", Text: "Looking."},
+				}, ""))
+				frag1.EndOffset = 150
+				frag2 := sidechain(makeAssistantFragment("req-side", 4, []transcript.ContentBlock{
+					{Type: "tool_use", ID: "tu_side", Name: "Read", Input: json.RawMessage(`{"file_path":"x.go"}`)},
+				}, ""))
+				frag2.EndOffset = 250
+				result := sidechain(makeToolResultLine("tu_side", "file contents"))
+				result.EndOffset = 350
+				return []transcript.Line{prompt, frag1, frag2, result}
+			}(),
+			wantLines:      2,
+			wantOffset:     250,
+			wantStopReason: "tool_use",
+		},
+		{
+			name: "unanswered tool_use waits for its result",
+			lines: func() []transcript.Line {
+				prompt := sidechain(makeUserLine("inspect the repo"))
+				frag := sidechain(makeAssistantFragment("req-side", 4, []transcript.ContentBlock{
+					{Type: "tool_use", ID: "tu_side", Name: "Read", Input: json.RawMessage(`{}`)},
+				}, ""))
+				frag.EndOffset = 150
+				return []transcript.Line{prompt, frag}
+			}(),
+			wantLines:  0,
+			wantOffset: 0,
+		},
+		{
+			// A main-thread turn is completed by the same rule. Versions 2.0.62
+			// to 2.1.63 wrote stop_reason null there too, and a tool_result only
+			// exists because the assistant message that called the tool was
+			// finished.
+			name: "a main-thread turn with an answered tool_use completes",
+			lines: func() []transcript.Line {
+				prompt := makeUserLine("inspect the repo")
+				frag1 := makeAssistantFragment("req-main", 4, []transcript.ContentBlock{
+					{Type: "text", Text: "Looking."},
+				}, "")
+				frag1.EndOffset = 100
+				frag2 := makeAssistantFragment("req-main", 4, []transcript.ContentBlock{
+					{Type: "tool_use", ID: "tu_main", Name: "Read", Input: json.RawMessage(`{}`)},
+				}, "")
+				frag2.EndOffset = 150
+				result := makeToolResultLine("tu_main", "file contents")
+				result.EndOffset = 250
+				return []transcript.Line{prompt, frag1, frag2, result}
+			}(),
+			wantLines:      2,
+			wantOffset:     150,
+			wantStopReason: "tool_use",
+		},
+		{
+			name: "an unanswered main-thread turn waits",
+			lines: func() []transcript.Line {
+				prompt := makeUserLine("inspect the repo")
+				frag := makeAssistantFragment("req-main", 4, []transcript.ContentBlock{
+					{Type: "tool_use", ID: "tu_main", Name: "Read", Input: json.RawMessage(`{}`)},
+				}, "")
+				frag.EndOffset = 150
+				return []transcript.Line{prompt, frag}
+			}(),
+			wantLines:  0, // nothing is safe until the turn is known to be complete
+			wantOffset: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines, offset := Coalesce(tt.lines)
+			if len(lines) != tt.wantLines {
+				t.Fatalf("got %d lines, want %d", len(lines), tt.wantLines)
+			}
+			if offset != tt.wantOffset {
+				t.Fatalf("offset = %d, want %d", offset, tt.wantOffset)
+			}
+			if tt.wantStopReason == "" {
+				return
+			}
+			var msg transcript.AssistantMessage
+			if err := json.Unmarshal(lines[len(lines)-1].Message, &msg); err != nil {
+				t.Fatal(err)
+			}
+			if msg.StopReason != tt.wantStopReason {
+				t.Fatalf("StopReason = %q, want %q", msg.StopReason, tt.wantStopReason)
+			}
+			if len(msg.Content) != 2 || msg.Content[1].Type != "tool_use" {
+				t.Fatalf("merged content = %+v, want text plus tool_use", msg.Content)
+			}
+		})
+	}
+}
+
+// TestCoalesceSession_WholeSession covers the importer's reader: a transcript
+// on disk is complete, so its last turn is kept even when nothing marks it
+// finished. A subagent run ends in a plain-text answer with stop_reason null
+// and no tool call, which is exactly that case.
+func TestCoalesceSession_WholeSession(t *testing.T) {
+	prompt := makeUserLine("summarize the repo")
+	prompt.EndOffset = 50
+	call := makeAssistantFragment("req-1", 4, []transcript.ContentBlock{
+		{Type: "tool_use", ID: "tu_1", Name: "Read", Input: json.RawMessage(`{}`)},
+	}, "")
+	call.EndOffset = 150
+	result := makeToolResultLine("tu_1", "file contents")
+	result.EndOffset = 250
+	answer := makeAssistantFragment("req-2", 9, []transcript.ContentBlock{
+		{Type: "text", Text: "Here is the summary."},
+	}, "")
+	answer.EndOffset = 350
+	lines := []transcript.Line{prompt, call, result, answer}
+
+	live, _ := Coalesce(lines)
+	if len(live) != 2 {
+		t.Fatalf("Coalesce kept %d lines, want 2 (everything after the last complete turn is held back)", len(live))
+	}
+
+	whole := CoalesceSession(lines)
+	if len(whole) != 4 {
+		t.Fatalf("CoalesceSession kept %d lines, want 4", len(whole))
+	}
+	gens, _ := Process(whole, &state.Session{}, Options{SessionID: "sess"}, nil)
+	if len(gens) != 2 {
+		t.Fatalf("got %d generations, want 2", len(gens))
+	}
+	last := gens[len(gens)-1]
+	if len(last.Output) != 1 || last.Output[0].Parts[0].Text != "Here is the summary." {
+		t.Fatalf("final turn output = %+v, want the plain-text answer", last.Output)
+	}
+}
+
+func TestProcess_SidechainAgentName(t *testing.T) {
+	tests := []struct {
+		name             string
+		sidechain        bool
+		attributionAgent string
+		want             string
+	}{
+		{name: "main thread", want: "claude-code"},
+		{name: "sidechain with a type", sidechain: true, attributionAgent: "General-Purpose", want: "claude-code/general-purpose"},
+		{name: "sidechain without a type", sidechain: true, want: "claude-code"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			line := makeAssistantLine("claude-sonnet-4-20250514", 30, []transcript.ContentBlock{
+				{Type: "text", Text: "done"},
+			}, "end_turn")
+			line.IsSidechain = tt.sidechain
+			line.AttributionAgent = tt.attributionAgent
+
+			gens, _ := Process([]transcript.Line{makeUserLine("go"), line}, &state.Session{}, Options{SessionID: "sess-1"}, nil)
+			if len(gens) != 1 {
+				t.Fatalf("got %d generations, want 1", len(gens))
+			}
+			if gens[0].AgentName != tt.want {
+				t.Fatalf("AgentName = %q, want %q", gens[0].AgentName, tt.want)
+			}
+		})
+	}
+}
+
+// TestProcess_SuppressSyntheticSubagentToolCallIDs covers the import case where
+// the subagent's own transcript is mapped separately. Keeping the synthetic
+// summary as well would show the same subagent run twice.
+func TestProcess_SuppressSyntheticSubagentToolCallIDs(t *testing.T) {
+	spawn := makeAssistantLine("claude-sonnet-4-20250514", 30, []transcript.ContentBlock{
+		{Type: "tool_use", ID: "tu_agent", Name: "Agent", Input: json.RawMessage(`{"subagent_type":"explorer"}`)},
+	}, "tool_use")
+	lines := []transcript.Line{
+		makeUserLine("explore"),
+		spawn,
+		makeToolResultLine("tu_agent", "subagent summary"),
+	}
+
+	tests := []struct {
+		name      string
+		suppress  map[string]bool
+		wantGens  int
+		wantAgent string
+	}{
+		{name: "live capture keeps the summary", wantGens: 2, wantAgent: "claude-code/explorer"},
+		{name: "import suppresses the summary", suppress: map[string]bool{"tu_agent": true}, wantGens: 1},
+		{name: "an unrelated id suppresses nothing", suppress: map[string]bool{"tu_other": true}, wantGens: 2, wantAgent: "claude-code/explorer"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gens, _ := Process(lines, &state.Session{}, Options{
+				SessionID:                            "sess-1",
+				SuppressSyntheticSubagentToolCallIDs: tt.suppress,
+			}, nil)
+			if len(gens) != tt.wantGens {
+				t.Fatalf("got %d generations, want %d", len(gens), tt.wantGens)
+			}
+			if tt.wantAgent == "" {
+				return
+			}
+			if gens[len(gens)-1].AgentName != tt.wantAgent {
+				t.Fatalf("AgentName = %q, want %q", gens[len(gens)-1].AgentName, tt.wantAgent)
+			}
+		})
+	}
+}

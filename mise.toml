@@ -691,6 +691,39 @@ echo "No Go SDK framework mocks to generate yet."
 description = "Generate all mock implementations"
 depends = ["generate:mocks:sdk-go", "generate:mocks:sdk-go-providers", "generate:mocks:sdk-go-frameworks"]
 
+[tasks."local:vendor-assets"]
+description = "Re-download the third-party assets the local viewer serves"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The local viewer ships React, Babel, and its two fonts in the binary rather
+# than pulling them from a CDN: it renders private session data, so opening it
+# must not tell a third party that you did, and it has to work offline.
+# Versions are pinned here. Bumping one means editing this task, not the files.
+REACT=18.3.1
+BABEL=7.29.0
+# Google serves a content-hashed URL per font revision. Re-fetch these from
+# https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=Roboto+Mono:wght@400..500&display=swap
+# with a browser User-Agent when bumping, and take the latin subset (U+0000-00FF).
+INTER_URL="https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7W0Q5nw.woff2"
+ROBOTO_MONO_URL="https://fonts.gstatic.com/s/robotomono/v31/L0x5DF4xlVMF-BfR8bXMIjhLq3-cXbKD.woff2"
+
+web=plugins/agento11y/internal/local/web
+mkdir -p "$web/vendor" "$web/fonts"
+
+fetch() { echo "==> $2"; curl -fsSL -o "$2" "$1"; }
+
+fetch "https://unpkg.com/react@$REACT/umd/react.production.min.js"         "$web/vendor/react.production.min.js"
+fetch "https://unpkg.com/react-dom@$REACT/umd/react-dom.production.min.js" "$web/vendor/react-dom.production.min.js"
+fetch "https://unpkg.com/@babel/standalone@$BABEL/babel.min.js"            "$web/vendor/babel.min.js"
+fetch "$INTER_URL"       "$web/fonts/inter-latin.woff2"
+fetch "$ROBOTO_MONO_URL" "$web/fonts/roboto-mono-latin.woff2"
+
+echo "==> vendored:"
+ls -la "$web/vendor" "$web/fonts"
+"""
+
 [tasks.check]
 description = "Run lint + typecheck + tests"
 depends = ["lint", "typecheck", "check:proto"]
