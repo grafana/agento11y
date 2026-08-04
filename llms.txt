@@ -4,7 +4,7 @@ You are a coding agent. The user wants help with [Grafana Agent observability](h
 
 There are two distinct things this file covers. Pick the path that matches the request before doing anything else.
 
-- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, or Pi sent to Grafana Agent observability. They are not changing application code.
+- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, Pi, or Vibe sent to Grafana Agent observability. They are not changing application code.
 - Path B, [Instrument an LLM app or agent](#path-b-instrument-an-llm-app-or-agent): the user wants their own code (an app, agent, framework pipeline) to send generations to Grafana Agent observability.
 
 If you cannot tell, ask one clarifying question and stop.
@@ -78,7 +78,8 @@ The user wants Grafana Agent observability to capture sessions from their coding
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`plugins/copilot/`](https://github.com/grafana/agento11y/tree/main/plugins/copilot) | Shared `agento11y` Go binary via hooks |
 | [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) | Shared `agento11y` Go binary via hooks |
 | [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/agento11y/tree/main/plugins/opencode) | Shared `agento11y` Go binary, installs `@grafana/agento11y-opencode` |
-| [Pi](https://github.com/badlogic/pi) | [`plugins/pi/`](https://github.com/grafana/agento11y/tree/main/plugins/pi) | Independent npm package `@grafana/agento11y-pi` |
+| [Pi](https://github.com/earendil-works/pi) | [`plugins/pi/`](https://github.com/grafana/agento11y/tree/main/plugins/pi) | Independent npm package `@grafana/agento11y-pi` |
+| [Vibe](https://github.com/mistralai/vibe) | [`plugins/vibe/`](https://github.com/grafana/agento11y/tree/main/plugins/vibe) | Shared `agento11y` Go binary via `hooks.toml` |
 
 ## Fast path
 
@@ -90,7 +91,7 @@ Install the `agento11y` binary (renamed from `sigil`; the old name still works b
 
 The script installs to `~/.local/bin`; `go install` puts the binary in `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`.
 
-Then launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, or `pi`. On first run it installs the plugin, prompts for credentials, writes `~/.config/agento11y/config.env`, and launches the agent.
+Then launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, or `vibe`. On first run it wires the agent up, prompts for credentials, writes `~/.config/agento11y/config.env`, and launches the agent.
 
 Cursor has no launcher (it is a GUI app). After installing the binary, wire its hooks once with `agento11y cursor install` (it merges into `~/.cursor/hooks.json` and prompts for credentials on first run); `agento11y cursor uninstall` removes them. See [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) for details.
 
@@ -111,7 +112,7 @@ Coding-agent plugins default to `metadata_only`: only model, tokens, tool names,
 
 Accepted values depend on the plugin surface:
 
-- Claude Code, Codex, Copilot, Cursor (shared `agento11y` binary), OpenCode (`@grafana/agento11y-opencode`), and Pi (`@grafana/agento11y-pi`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
+- Claude Code, Codex, Copilot, Cursor, Vibe (shared `agento11y` binary), OpenCode (`@grafana/agento11y-opencode`), and Pi (`@grafana/agento11y-pi`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
 
 Unknown values fall back to `metadata_only` with a warning. Secret redaction is plugin-specific. Capture modes choose which fields ship, not whether the shipped fields are scrubbed. Treat content capture as opt-in for shared/production machines.
 
@@ -501,8 +502,7 @@ a stored test suite.
 - Catch evaluator exceptions around each trial when one failed judge should not
   abort the whole run.
 
-See the [Python experiments guide](https://github.com/grafana/agento11y/blob/main/python/README.md#experiments)
-and [v2 migration guide](https://github.com/grafana/agento11y/blob/main/docs/experiments-python-v2-migration.md).
+See the [Python experiments guide](https://github.com/grafana/agento11y/blob/main/python/README.md#experiments).
 
 Go has the tracking-first parity surface at
 `github.com/grafana/agento11y/go/agento11y/experiments`. Construct
