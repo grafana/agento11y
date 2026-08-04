@@ -30,6 +30,10 @@ func TestDefaultCollectAgents(t *testing.T) {
 		// runs even when the binary is absent from PATH. notInstalledLabel must
 		// propagate from the probe table into the status.
 		{name: "cfgcli", bin: "cfgcli", configBased: true, notInstalledLabel: "not configured", status: func(context.Context) (bool, string, error) { return true, "2.0.0", nil }},
+		// A probe can read a version from a store entry that does not register the
+		// plugin here. The version is dropped so the JSON report cannot contradict
+		// the install state, the way the human report already can't.
+		{name: "stalever", bin: "stalever", configBased: true, status: func(context.Context) (bool, string, error) { return false, "1.2.3", nil }},
 		{name: "errcli", bin: "errcli", status: func(context.Context) (bool, string, error) { return false, "", errors.New("probe boom") }},
 		{name: "cursor", bin: "cursor", status: nil, note: "hook-based"},
 	}
@@ -50,6 +54,9 @@ func TestDefaultCollectAgents(t *testing.T) {
 		t.Fatalf("cfgcli = %+v, want not-on-path but installed/ok via config probe", a)
 	} else if a.notInstalledLabel != "not configured" {
 		t.Fatalf("cfgcli notInstalledLabel = %q, want propagated from probe", a.notInstalledLabel)
+	}
+	if a := byName["stalever"]; a.Install != InstallStateNotInstalled || a.Version != "" || a.Health != HealthWarn {
+		t.Fatalf("stalever = %+v, want not-installed/no-version/warn", a)
 	}
 	// A probe that errors leaves the state unknown. Reporting not_installed
 	// here would put a false negative in the --json contract.

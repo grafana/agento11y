@@ -759,6 +759,21 @@ func TestStripNpmVersion(t *testing.T) {
 	}
 }
 
+// writeFiles writes each entry under root, creating parent directories. Keys
+// are slash-separated paths relative to root.
+func writeFiles(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for rel, contents := range files {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+}
+
 func writeSettings(t *testing.T, dir, contents string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(contents), 0o600); err != nil {
@@ -820,21 +835,162 @@ func TestVersionFromPiSource(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
+	// Files are written relative to a temporary cwd. `agent/` is the global
+	// agent directory (PI_CODING_AGENT_DIR) and `.pi/` is the project scope, so
+	// one table covers both, and the real developer's pi state cannot leak in.
 	tests := []struct {
 		name          string
-		settings      string
+		files         map[string]string
 		wantInstalled bool
 		wantVersion   string
 	}{
-		{name: "installed reports version", settings: `{"packages":["npm:@grafana/agento11y-pi@0.1.1"]}`, wantInstalled: true, wantVersion: "0.1.1"},
-		{name: "legacy name installed reports version", settings: `{"packages":["npm:@grafana/sigil-pi@0.17.0"]}`, wantInstalled: true, wantVersion: "0.17.0"},
-		{name: "not installed", settings: `{"packages":[]}`, wantInstalled: false},
+		{
+			name:          "installed reports pinned spec version",
+			files:         map[string]string{"agent/settings.json": `{"packages":["npm:@grafana/agento11y-pi@0.1.1"]}`},
+			wantInstalled: true,
+			wantVersion:   "0.1.1",
+		},
+		{
+			name:          "legacy name installed reports pinned spec version",
+			files:         map[string]string{"agent/settings.json": `{"packages":["npm:@grafana/sigil-pi@0.17.0"]}`},
+			wantInstalled: true,
+			wantVersion:   "0.17.0",
+		},
+		{name: "not installed", files: map[string]string{"agent/settings.json": `{"packages":[]}`}, wantInstalled: false},
+		// The common real install: a bare spec, which pins nothing. Only the tree
+		// npm installed says which version is running.
+		{
+			name: "bare spec resolves from the installed tree",
+			files: map[string]string{
+				"agent/settings.json": `{"packages":["npm:@grafana/agento11y-pi"]}`,
+				"agent/npm/node_modules/@grafana/agento11y-pi/package.json": `{"name":"@grafana/agento11y-pi","version":"0.19.0"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.19.0",
+		},
+		// A pinned spec records what was asked for; the tree records what is there.
+		{
+			name: "installed tree wins over a disagreeing pinned spec",
+			files: map[string]string{
+				"agent/settings.json": `{"packages":["npm:@grafana/agento11y-pi@0.1.1"]}`,
+				"agent/npm/node_modules/@grafana/agento11y-pi/package.json": `{"name":"@grafana/agento11y-pi","version":"0.19.0"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.19.0",
+		},
+		{
+			name: "dist tag resolves from the installed tree",
+			files: map[string]string{
+				"agent/settings.json": `{"packages":["npm:@grafana/agento11y-pi@next"]}`,
+				"agent/npm/node_modules/@grafana/agento11y-pi/package.json": `{"name":"@grafana/agento11y-pi","version":"0.20.0-rc.1"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.20.0-rc.1",
+		},
+		{
+			name: "legacy name resolves from the installed tree",
+			files: map[string]string{
+				"agent/settings.json": `{"packages":["npm:@grafana/sigil-pi"]}`,
+				"agent/npm/node_modules/@grafana/sigil-pi/package.json": `{"name":"@grafana/sigil-pi","version":"0.17.0"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.17.0",
+		},
+		// The tree of another package must not answer for ours.
+		{
+			name: "unrelated installed tree is ignored",
+			files: map[string]string{
+				"agent/settings.json":                                `{"packages":["npm:@grafana/agento11y-pi"]}`,
+				"agent/npm/node_modules/@grafana/other/package.json": `{"name":"@grafana/other","version":"9.9.9"}`,
+			},
+			wantInstalled: true,
+		},
+		// Reads of another tool's files are best-effort: no tree, or an unreadable
+		// one, means the version is unknown, never an error.
+		{
+			name:          "bare spec with no installed tree",
+			files:         map[string]string{"agent/settings.json": `{"packages":["npm:@grafana/agento11y-pi"]}`},
+			wantInstalled: true,
+		},
+		{
+			name: "malformed installed package.json",
+			files: map[string]string{
+				"agent/settings.json": `{"packages":["npm:@grafana/agento11y-pi"]}`,
+				"agent/npm/node_modules/@grafana/agento11y-pi/package.json": `{"name":`,
+			},
+			wantInstalled: true,
+		},
+		{
+			name: "installed package.json without a version",
+			files: map[string]string{
+				"agent/settings.json": `{"packages":["npm:@grafana/agento11y-pi"]}`,
+				"agent/npm/node_modules/@grafana/agento11y-pi/package.json": `{"name":"@grafana/agento11y-pi"}`,
+			},
+			wantInstalled: true,
+		},
+		// A local checkout reports the version its own package.json declares.
+		{
+			name: "local path source reports its package version",
+			files: map[string]string{
+				"agent/settings.json":             `{"packages":["./local-plugin"]}`,
+				"agent/local-plugin/package.json": `{"name":"@grafana/agento11y-pi","version":"0.21.0-dev"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.21.0-dev",
+		},
+		{
+			name: "local path source without a version",
+			files: map[string]string{
+				"agent/settings.json":             `{"packages":["./local-plugin"]}`,
+				"agent/local-plugin/package.json": `{"name":"@grafana/agento11y-pi"}`,
+			},
+			wantInstalled: true,
+		},
+		// A leftover npm tree is not what pi loads for a local-path entry, so the
+		// checkout's own version answers.
+		{
+			name: "local path source ignores a leftover npm tree",
+			files: map[string]string{
+				"agent/settings.json":                                       `{"packages":["./local-plugin"]}`,
+				"agent/local-plugin/package.json":                           `{"name":"@grafana/agento11y-pi","version":"0.21.0-dev"}`,
+				"agent/npm/node_modules/@grafana/agento11y-pi/package.json": `{"name":"@grafana/agento11y-pi","version":"0.19.0"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.21.0-dev",
+		},
+		// Project scope: `pi install -l` writes <cwd>/.pi/settings.json and npm
+		// installs under <cwd>/.pi/npm.
+		{
+			name: "project scope resolves from the project npm tree",
+			files: map[string]string{
+				".pi/settings.json": `{"packages":["npm:@grafana/agento11y-pi"]}`,
+				".pi/npm/node_modules/@grafana/agento11y-pi/package.json": `{"name":"@grafana/agento11y-pi","version":"0.18.0"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.18.0",
+		},
+		// The global scope is checked first, so its tree answers even when the
+		// project scope also registers the plugin.
+		{
+			name: "global scope wins over project scope",
+			files: map[string]string{
+				"agent/settings.json": `{"packages":["npm:@grafana/agento11y-pi"]}`,
+				"agent/npm/node_modules/@grafana/agento11y-pi/package.json": `{"name":"@grafana/agento11y-pi","version":"0.19.0"}`,
+				".pi/settings.json": `{"packages":["npm:@grafana/agento11y-pi"]}`,
+				".pi/npm/node_modules/@grafana/agento11y-pi/package.json": `{"name":"@grafana/agento11y-pi","version":"0.18.0"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.19.0",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			t.Setenv("PI_CODING_AGENT_DIR", dir)
-			writeSettings(t, dir, tc.settings)
+			// Status also reads <cwd>/.pi/settings.json, so the cwd is pinned to a
+			// temporary directory even for global-scope cases.
+			root := t.TempDir()
+			t.Chdir(root)
+			t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(root, "agent"))
+			writeFiles(t, root, tc.files)
 
 			installed, version, err := Status(context.Background())
 			if err != nil {

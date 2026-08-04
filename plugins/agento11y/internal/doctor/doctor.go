@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -67,11 +69,14 @@ var trackedSuffixes = []string{
 	"AUTO_UPDATE",
 	"LOCAL",
 	"LOCAL_FORWARD",
-	// GUARDS_ENABLED is tracked for LocalHookForward only. Everything else
-	// reads the guard settings through envconfig.ResolveGuards, which is the
-	// hook process's view; the local daemon resolves this one config.env-first
-	// and that comparison needs both sources attributed.
+	// The guard families are resolved from the snapshot, not from the process
+	// env. A family missing here is never recorded by SnapshotEnv, so a
+	// shell-exported value would read as unset while the hooks act on it. The
+	// human row attributes GUARDS_ENABLED alone; the other two are read for
+	// their effective values and to name an invalid one.
 	"GUARDS_ENABLED",
+	"GUARDS_FAIL_OPEN",
+	"GUARDS_TIMEOUT_MS",
 }
 
 // trackedKeys is the full key set SnapshotEnv records: both spellings of the
@@ -87,7 +92,6 @@ var trackedKeys = func() []string {
 // Options are the parsed doctor flags.
 type Options struct {
 	JSON    bool
-	Probe   bool
 	NoColor bool
 }
 
@@ -103,12 +107,16 @@ type Params struct {
 // Report is the full diagnostic. Field names and the `status` strings are the
 // stable contract for `--json` / support tooling.
 type Report struct {
-	Binary             BinarySection        `json:"agento11y"`
-	Config             ConfigSection        `json:"config"`
-	Conversations      ConversationsSection `json:"conversations"`
-	Analytics          AnalyticsSection     `json:"analytics"`
-	Agents             []AgentStatus        `json:"agents"`
-	AutoUpdateDisabled bool                 `json:"auto_update_disabled"`
+	Binary        BinarySection        `json:"agento11y"`
+	Config        ConfigSection        `json:"config"`
+	Conversations ConversationsSection `json:"conversations"`
+	Analytics     AnalyticsSection     `json:"analytics"`
+	Agents        []AgentStatus        `json:"agents"`
+	// AutoUpdate is the resolved AUTO_UPDATE family. It carries provenance only:
+	// updatecheck.Disabled() owns the verdict below, so the rule that decides
+	// which values opt out stays in one place.
+	AutoUpdate         envValue `json:"auto_update"`
+	AutoUpdateDisabled bool     `json:"auto_update_disabled"`
 }
 
 // BinarySection reports the binary's build version.
@@ -141,17 +149,32 @@ type tokenValue struct {
 // ConfigSection reports config.env validity and the resolved feature settings
 // that every agent hook reads (content capture, guards, tags).
 type ConfigSection struct {
-	Path                string            `json:"path"`
-	Exists              bool              `json:"exists"`
-	DisallowedKeys      []string          `json:"disallowed_keys,omitempty"`
-	ContentCaptureMode  string            `json:"content_capture_mode"`
-	ContentModeFellBack bool              `json:"content_mode_fell_back"`
-	GuardsEnabled       bool              `json:"guards_enabled"`
-	GuardsTimeoutMs     int               `json:"guards_timeout_ms"`
-	GuardsFailOpen      bool              `json:"guards_fail_open"`
-	GuardsFellBack      bool              `json:"guards_fell_back,omitempty"`
-	Tags                map[string]string `json:"tags,omitempty"`
-	TagsSource          string            `json:"tags_source,omitempty"`
+	Path               string   `json:"path"`
+	Exists             bool     `json:"exists"`
+	DisallowedKeys     []string `json:"disallowed_keys,omitempty"`
+	ContentCaptureMode string   `json:"content_capture_mode"`
+	// ContentModeKey and ContentModeSource name where the effective mode came
+	// from. They are empty when no variable supplied it, which includes the case
+	// where a variable was set to a value envconfig rejected: the mode in force is
+	// then the built-in one, and ContentModeFellBack plus a section message name
+	// the variable to fix.
+	ContentModeKey      string `json:"content_capture_key,omitempty"`
+	ContentModeSource   string `json:"content_capture_source,omitempty"`
+	ContentModeFellBack bool   `json:"content_mode_fell_back"`
+	GuardsEnabled       bool   `json:"guards_enabled"`
+	GuardsTimeoutMs     int    `json:"guards_timeout_ms"`
+	GuardsFailOpen      bool   `json:"guards_fail_open"`
+	GuardsFellBack      bool   `json:"guards_fell_back,omitempty"`
+	// GuardsKey and GuardsSource name the GUARDS_ENABLED spelling that decided
+	// whether guards run. The timeout and fail mode have their own families; the
+	// human row reports one key, so this is the key it reports. Both are empty
+	// when GUARDS_ENABLED supplied no usable value, so the row reports the
+	// built-in default rather than crediting a rejected value.
+	GuardsKey    string            `json:"guards_key,omitempty"`
+	GuardsSource string            `json:"guards_source,omitempty"`
+	Tags         map[string]string `json:"tags,omitempty"`
+	TagsKey      string            `json:"tags_key,omitempty"`
+	TagsSource   string            `json:"tags_source,omitempty"`
 	// Local is the resolved LOCAL family: whether `agento11y <agent>` starts in
 	// local mode without --local, and where the value came from.
 	Local envValue `json:"local"`
@@ -204,11 +227,10 @@ func (s ConversationsSection) configured() bool {
 
 // AnalyticsSection reports the OTLP metrics + traces pipeline.
 type AnalyticsSection struct {
-	Endpoint    envValue        `json:"endpoint"`
-	EndpointVar string          `json:"endpoint_var,omitempty"`
-	Health      Health          `json:"status"`
-	Messages    []string        `json:"messages,omitempty"`
-	Probe       *AnalyticsProbe `json:"probe,omitempty"`
+	Endpoint envValue        `json:"endpoint"`
+	Health   Health          `json:"status"`
+	Messages []string        `json:"messages,omitempty"`
+	Probe    *AnalyticsProbe `json:"probe,omitempty"`
 }
 
 // InstallState is the outcome of an agent's install probe. It is tri-state
@@ -250,9 +272,11 @@ type AgentStatus struct {
 	OnPath    bool         `json:"on_path"`
 	Install   InstallState `json:"install_state"`
 	HookBased bool         `json:"hook_based,omitempty"`
-	Version   string       `json:"version,omitempty"`
-	Note      string       `json:"note,omitempty"`
-	Health    Health       `json:"status"`
+	// Version is the installed plugin's own build identifier, which for a plugin
+	// whose manifest declares no version is the commit it was installed from.
+	Version string `json:"version,omitempty"`
+	Note    string `json:"note,omitempty"`
+	Health  Health `json:"status"`
 
 	// notInstalledLabel overrides the human "plugin not installed" wording for
 	// non-plugin agents (copilot). Human-only; not part of the JSON contract.
@@ -286,12 +310,33 @@ func (p *ProbeResult) scopeDenied() bool {
 
 // unreachable reports a probe outcome that means a configured pipeline can't
 // deliver: a transport error (no HTTP response, e.g. DNS failure, connection
-// refused, or timeout) or a 5xx server error. 401/403 are handled separately
-// as an auth problem (authFailure). Other 4xx are not treated as broken because
-// the minimal probe body ({}) can draw a benign 400/415 from an endpoint that
-// validates the body before auth.
+// refused, or timeout) or a 5xx server error. Every other failing status is
+// classified on its own: 401 and 403 by authFailure, 3xx by redirected, 404 by
+// routeMissing, and the rest by accepted.
 func (p *ProbeResult) unreachable() bool {
 	return p != nil && (p.StatusCode == 0 || p.StatusCode >= 500)
+}
+
+// accepted reports the statuses that prove a pipeline can deliver. Ingest
+// answers the export POST itself: the generation-export route answers 202 and
+// the OTLP gateway answers 200. A 405 also counts, because a method-restricted
+// route still proves the request reached the service and passed auth.
+func (p *ProbeResult) accepted() bool {
+	return p != nil && ((p.StatusCode >= 200 && p.StatusCode < 300) || p.StatusCode == http.StatusMethodNotAllowed)
+}
+
+// routeMissing reports a 404. The host answered, but the export route is not
+// registered there, so the endpoint points at some other service. Every host
+// serves a 404 for an unknown path, which is why a reachable endpoint that
+// answers one is still a broken pipeline.
+func (p *ProbeResult) routeMissing() bool {
+	return p != nil && p.StatusCode == http.StatusNotFound
+}
+
+// redirected reports a 3xx, which means the URL points at something other than
+// an ingest endpoint. See probeClient for why the probe never follows it.
+func (p *ProbeResult) redirected() bool {
+	return p != nil && p.StatusCode >= 300 && p.StatusCode < 400
 }
 
 // AnalyticsProbe holds the per-signal OTLP probe results.
@@ -335,7 +380,7 @@ func Run(ctx context.Context, args []string, p Params) int {
 			return 2
 		}
 	} else {
-		renderHuman(p.Stdout, report, !opts.NoColor, opts.Probe)
+		renderHuman(p.Stdout, report, !opts.NoColor)
 	}
 	return report.exitCode()
 }
@@ -344,21 +389,23 @@ func parseFlags(args []string, stderr io.Writer) (Options, error) {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "usage: agento11y doctor [--json] [--probe] [--no-color]")
+		_, _ = fmt.Fprintln(stderr, "usage: agento11y doctor [--json] [--no-color]")
 		_, _ = fmt.Fprintln(stderr)
 		_, _ = fmt.Fprintln(stderr, "Report the health of the conversations and analytics export pipelines,")
 		_, _ = fmt.Fprintln(stderr, "config validity, and installed host-agent plugins.")
 		_, _ = fmt.Fprintln(stderr)
 		_, _ = fmt.Fprintln(stderr, "  --json       emit a stable JSON report (for support tooling)")
-		_, _ = fmt.Fprintln(stderr, "  --probe      send live requests to the endpoints and report HTTP status")
 		_, _ = fmt.Fprintln(stderr, "  --no-color   disable ANSI colors")
 	}
 	var opts Options
-	var online bool
 	fs.BoolVar(&opts.JSON, "json", false, "emit a JSON report")
-	fs.BoolVar(&opts.Probe, "probe", false, "send live requests to the endpoints")
-	fs.BoolVar(&online, "online", false, "alias for --probe")
 	fs.BoolVar(&opts.NoColor, "no-color", false, "disable ANSI colors")
+	// Probing is unconditional, so --probe and its --online alias do nothing.
+	// They stay accepted, and out of the usage text, so the scripts and runbooks
+	// that pass them keep working.
+	var ignored bool
+	fs.BoolVar(&ignored, "probe", false, "accepted for backwards compatibility; probes always run")
+	fs.BoolVar(&ignored, "online", false, "accepted for backwards compatibility; probes always run")
 	if err := fs.Parse(args); err != nil {
 		return Options{}, err
 	}
@@ -366,12 +413,13 @@ func parseFlags(args []string, stderr io.Writer) (Options, error) {
 		fs.Usage()
 		return Options{}, fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
-	opts.Probe = opts.Probe || online
 	return opts, nil
 }
 
 // Collect builds the report. It reads config.env and the env snapshot but
-// performs no mutations. Network probes run only when opts.Probe is set.
+// performs no mutations, and it probes the configured endpoints over the
+// network. A config-only verdict cannot tell a working endpoint from one that
+// drops every export, so the probes are not optional.
 func Collect(ctx context.Context, opts Options, p Params) *Report {
 	fileEnv := dotenv.LoadDotenv(dotenv.FilePath(), nil)
 	osEnv := p.OSEnv
@@ -385,11 +433,10 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 	r.Analytics = collectAnalytics(osEnv, fileEnv, r.Conversations.configured())
 	r.Config = collectConfig(osEnv, fileEnv)
 	r.Agents = collectAgents(ctx, r.Binary.Version)
+	r.AutoUpdate = resolveFamily("AUTO_UPDATE", osEnv, fileEnv).envValue()
 	r.AutoUpdateDisabled = updatecheck.Disabled()
 
-	if opts.Probe {
-		runProbes(ctx, r, osEnv, fileEnv)
-	}
+	runProbes(ctx, r, osEnv, fileEnv)
 	return r
 }
 
@@ -401,6 +448,75 @@ func (r *Report) exitCode() int {
 		return 1
 	}
 	return 0
+}
+
+// apiURLHint is the one correction every wrong-endpoint message ends with, so
+// a user who pasted a stack URL or an app-page URL reads the same fix.
+// Connection is what the app and the docs call the page that holds the URL.
+const apiURLHint = "Copy the API URL from the Agent Observability app's Connection page " +
+	"(e.g. https://agento11y-prod-<region>.grafana.net)."
+
+// grafanaAppPath is where Grafana serves the Agent Observability app pages.
+// login.go prints this URL after a successful login, so it is one of the two
+// app URLs a user pastes into the endpoint variable.
+const grafanaAppPath = "/a/grafana-agento11y-app"
+
+// grafanaCloudDomains are the domains Grafana serves Cloud stacks and Agent
+// Observability cells from. The host shape check applies only inside them: a
+// self-hosted Sigil or a test collector can use any hostname, so warning about
+// those would be noise.
+var grafanaCloudDomains = []string{".grafana.net", ".grafana-dev.net", ".grafana-ops.net"}
+
+// apiHostPrefixes are the first-label prefixes of every real API host:
+// sigil-prod-<region>, agento11y-prod-<region>, sigil-dev-001,
+// sigil-dev-<region>, agento11y-dev-001, sigil-ops-001, sigilai. A prefix
+// check, not a region list, which would go stale with every new cell.
+var apiHostPrefixes = []string{"sigil", "agento11y"}
+
+// isGrafanaAppPage reports a path that serves Grafana app UI instead of the
+// ingest API: the plugin pages under /plugins/, or the Agent Observability app
+// under /a/grafana-agento11y-app. Both are URLs users copy out of the browser
+// or out of this tool's own login output. The ingest API carries neither prefix
+// on any host, so the export POST is redirected to /login and every generation
+// is lost. A bare /a/ does not match, because a self-hosted deployment could
+// legitimately sit under it.
+func isGrafanaAppPage(path string) bool {
+	if strings.Contains(path, "/plugins/") {
+		return true
+	}
+	trimmed := strings.TrimRight(path, "/")
+	return trimmed == grafanaAppPath || strings.HasPrefix(trimmed, grafanaAppPath+"/")
+}
+
+// endpointShapeMessage reports a normalized endpoint URL that does not look
+// like an Agent Observability API URL. fatal marks the shape that cannot work
+// on any host; the rest are warnings, because a hostname heuristic can go
+// stale, and the probe escalates a warned endpoint when it really does
+// redirect the export POST.
+func endpointShapeMessage(key, target string) (msg string, fatal bool) {
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return "", false
+	}
+	// The path check ignores the host, so it also covers a stack on a custom
+	// domain.
+	if isGrafanaAppPage(parsed.Path) {
+		return key + " points at a Grafana app page, not the Agent Observability API. " + apiURLHint, true
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if !slices.ContainsFunc(grafanaCloudDomains, func(d string) bool { return strings.HasSuffix(host, d) }) {
+		return "", false
+	}
+	label, _, _ := strings.Cut(host, ".")
+	if slices.ContainsFunc(apiHostPrefixes, func(p string) bool { return strings.HasPrefix(label, p) }) {
+		return "", false
+	}
+	if strings.HasPrefix(label, "otlp-gateway-") {
+		return key + " is the OTLP gateway, which takes metrics and traces, not conversations. " +
+			"That value belongs in AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT. " + apiURLHint, false
+	}
+	return key + " does not look like an Agent Observability API URL: " + host +
+		" is a Grafana Cloud stack or another Cloud service. " + apiURLHint, false
 }
 
 func collectConversations(osEnv, fileEnv map[string]string) ConversationsSection {
@@ -435,18 +551,32 @@ func collectConversations(osEnv, fileEnv map[string]string) ConversationsSection
 		sec.Messages = append(sec.Messages, "incomplete credentials; missing "+strings.Join(missing, ", "))
 	}
 	// A set endpoint still has to be a URL the exporter can build a request
-	// from. Without this the offline run calls a malformed endpoint healthy and
-	// only --probe, which needs the network, reports the problem.
+	// from. Checking the shape here reports a malformed endpoint without waiting
+	// on the network, and gives runProbes a reason to skip it.
+	var target string
 	if endpoint.set {
-		if _, err := wire.NormalizeGenerationExportURL(endpoint.value, resolveInsecure(osEnv, fileEnv)); err != nil {
+		normalized, err := wire.NormalizeGenerationExportURL(endpoint.value, resolveInsecure(osEnv, fileEnv))
+		if err != nil {
 			sec.Health = HealthError
 			sec.Messages = append(sec.Messages, fmt.Sprintf("%s is not a usable endpoint: %v", endpoint.key, err))
+		}
+		target = normalized
+	}
+	// A usable URL can still be the wrong URL. Run the shape check only when
+	// nothing else failed, so it cannot downgrade a missing-credentials or
+	// malformed-endpoint error to a warning.
+	if target != "" && sec.Health == HealthOK {
+		if msg, fatal := endpointShapeMessage(endpoint.key, target); msg != "" {
+			sec.Health = HealthWarn
+			if fatal {
+				sec.Health = HealthError
+			}
+			sec.Messages = append(sec.Messages, msg)
 		}
 	}
 	for _, r := range []resolved{endpoint, tenant, token} {
 		if r.conflict {
-			sec.Messages = append(sec.Messages, fmt.Sprintf(
-				"%s and its other spelling are both set with different values; using %s", r.key, r.key))
+			sec.Messages = append(sec.Messages, conflictMessage(r))
 		}
 	}
 	if endpoint.legacyWon() || tenant.legacyWon() || token.legacyWon() {
@@ -464,10 +594,8 @@ func collectAnalytics(osEnv, fileEnv map[string]string, conversationsConfigured 
 	switch {
 	case brandedOTLP.set:
 		sec.Endpoint = brandedOTLP.envValue()
-		sec.EndpointVar = brandedOTLP.key
 	case stdOTLP.set:
 		sec.Endpoint = stdOTLP.envValue()
-		sec.EndpointVar = "OTEL_EXPORTER_OTLP_ENDPOINT"
 	case conversationsConfigured:
 		// The headline failure: conversations export fine, but analytics
 		// (the Agent Observability page) stays empty because no OTLP endpoint
@@ -484,8 +612,7 @@ func collectAnalytics(osEnv, fileEnv map[string]string, conversationsConfigured 
 		return sec
 	}
 	if brandedOTLP.conflict {
-		sec.Messages = append(sec.Messages, fmt.Sprintf(
-			"%s and its other spelling are both set with different values; using %s", brandedOTLP.key, brandedOTLP.key))
+		sec.Messages = append(sec.Messages, conflictMessage(brandedOTLP))
 	}
 	if brandedOTLP.legacyWon() {
 		sec.Messages = append(sec.Messages,
@@ -514,7 +641,7 @@ func collectAnalytics(osEnv, fileEnv map[string]string, conversationsConfigured 
 // analyticsAuthResolvable reports whether the OTLP exporter would have a
 // credential: an explicit Authorization header, or a tenant + token pair that
 // internal/otel turns into Basic auth. It does not validate the credential —
-// `--probe` does that against the live endpoint.
+// the probe does that against the live endpoint.
 func analyticsAuthResolvable(osEnv, fileEnv map[string]string) bool {
 	if headersHaveAuthorization(resolveEnv("OTEL_EXPORTER_OTLP_HEADERS", osEnv, fileEnv).value) {
 		return true
@@ -553,24 +680,45 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	}
 	sec.DisallowedKeys = disallowedKeys(path)
 
-	// ResolveContentMode logs a line when it falls back from an invalid value,
-	// so a capturing logger doubles as the fell-back signal.
+	// ResolveContentModeValue logs a line when it falls back from an invalid
+	// value, so a capturing logger doubles as the fell-back signal.
+	contentMode := resolveFamily("CONTENT_CAPTURE_MODE", osEnv, fileEnv)
 	var buf bytes.Buffer
-	mode := envconfig.ResolveContentMode(log.New(&buf, "", 0))
+	mode := envconfig.ResolveContentModeValue(log.New(&buf, "", 0), contentMode.key, contentMode.value)
 	sec.ContentCaptureMode = mode.String()
 	sec.ContentModeFellBack = buf.Len() > 0
+	// A rejected value did not supply the mode in force, so the row credits no
+	// variable for it and reports the built-in default instead.
+	if !sec.ContentModeFellBack {
+		sec.ContentModeKey = contentMode.key
+		sec.ContentModeSource = contentMode.source
+	}
 
 	// Guards are the shared pre-tool-call enforcement flags every agent hook
 	// reads via envconfig.ResolveGuards. They default off, so surface the
 	// effective values to confirm whether guards actually run and with what
-	// timeout / fail mode. ResolveGuards logs on an invalid value, so a
-	// capturing logger doubles as the fell-back signal, same as content mode.
-	var guardBuf bytes.Buffer
-	guards := envconfig.ResolveGuards(log.New(&guardBuf, "", 0))
+	// timeout / fail mode. The lookup resolves them from the same pre-merge
+	// snapshot every other row is attributed with, while the parsing and the
+	// defaults stay in envconfig, shared with the hooks. No logger is needed:
+	// invalidGuardKeys names the rejected variables.
+	guardsEnabled := resolveFamily("GUARDS_ENABLED", osEnv, fileEnv)
+	guardsTimeout := resolveFamily("GUARDS_TIMEOUT_MS", osEnv, fileEnv)
+	guardsFailOpen := resolveFamily("GUARDS_FAIL_OPEN", osEnv, fileEnv)
+	guards := envconfig.ResolveGuardsWith(nil, func(suffix string) (value, key string, ok bool) {
+		r := resolveFamily(suffix, osEnv, fileEnv)
+		return r.value, r.key, r.set
+	})
 	sec.GuardsEnabled = guards.Enabled
 	sec.GuardsTimeoutMs = guards.TimeoutMs
 	sec.GuardsFailOpen = guards.FailOpen
-	sec.GuardsFellBack = guardBuf.Len() > 0
+	invalidGuards := invalidGuardKeys(guardsEnabled, guardsTimeout, guardsFailOpen)
+	sec.GuardsFellBack = len(invalidGuards) > 0
+	// Same rule as the mode above: a rejected GUARDS_ENABLED value did not decide
+	// whether guards run, so the row names no variable for it.
+	if _, ok := envconfig.ParseBoolValue(guardsEnabled.value); ok {
+		sec.GuardsKey = guardsEnabled.key
+		sec.GuardsSource = guardsEnabled.source
+	}
 
 	// The TAGS family attaches key=value tags to every generation. They
 	// aren't secret, so surface the resolved set (and where it came from) to
@@ -579,6 +727,7 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	if tags.set {
 		if parsed := envconfig.ParseExtraTags(tags.value); len(parsed) > 0 {
 			sec.Tags = parsed
+			sec.TagsKey = tags.key
 			sec.TagsSource = tags.source
 		}
 	}
@@ -620,16 +769,18 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	if sec.ContentModeFellBack {
 		sec.Health = HealthWarn
 		sec.Messages = append(sec.Messages,
-			fmt.Sprintf("the CONTENT_CAPTURE_MODE value is invalid; using %s", mode))
+			fmt.Sprintf("the %s value is invalid; using %s", contentMode.key, mode))
 	}
-	if sec.GuardsFellBack {
+	// One message per rejected variable: the row names the GUARDS_ENABLED
+	// spelling alone, so this is the only place a reader learns which guard value
+	// is broken.
+	for _, key := range invalidGuards {
 		sec.Health = HealthWarn
 		sec.Messages = append(sec.Messages,
-			"a GUARDS_* value is invalid; falling back to defaults")
+			fmt.Sprintf("the %s value is invalid; guards use the default", key))
 	}
 	if tags.conflict {
-		sec.Messages = append(sec.Messages, fmt.Sprintf(
-			"%s and its other spelling are both set with different values; using %s", tags.key, tags.key))
+		sec.Messages = append(sec.Messages, conflictMessage(tags))
 	}
 	if tags.legacyWon() {
 		sec.Messages = append(sec.Messages,
@@ -658,6 +809,31 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	return sec
 }
 
+// invalidGuardKeys names the GUARDS_* variables whose values envconfig rejects,
+// in the order the guards row prints them. The envconfig parsers the hooks
+// resolve with decide validity, so doctor cannot call a value good that a hook
+// throws away. The row attributes GUARDS_ENABLED alone, so these names are the
+// only place a reader learns which guard value is broken.
+func invalidGuardKeys(enabled, timeout, failOpen resolved) []string {
+	isBool := func(raw string) bool { _, ok := envconfig.ParseBoolValue(raw); return ok }
+	isTimeout := func(raw string) bool { _, ok := envconfig.ParseIntValue(raw); return ok }
+
+	var keys []string
+	for _, family := range []struct {
+		value resolved
+		valid func(string) bool
+	}{
+		{enabled, isBool},
+		{timeout, isTimeout},
+		{failOpen, isBool},
+	} {
+		if family.value.set && !family.valid(family.value.value) {
+			keys = append(keys, family.value.key)
+		}
+	}
+	return keys
+}
+
 // hookForwardReason resolves the local guard-chaining gate with the given
 // precedence, so the same inputs can be read the daemon's way (config.env
 // first) and the shell's way and compared.
@@ -680,22 +856,56 @@ func resolveInsecure(osEnv, fileEnv map[string]string) bool {
 	return envconfig.ParseBool(resolveFamily("INSECURE", osEnv, fileEnv).value)
 }
 
+// endpointKey is the endpoint variable spelling to name in a message. The
+// resolved key wins, so a SIGIL_* setup reads its own name back; the preferred
+// spelling is the fallback when the report carries no key.
+func endpointKey(v envValue) string {
+	if v.Key != "" {
+		return v.Key
+	}
+	return envconfig.PreferredKey("ENDPOINT")
+}
+
 func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string) {
 	// An endpoint the offline check already rejected has nothing to probe:
 	// probing it would report the same fault a second and third time. Inside
-	// configured(), HealthError can only come from that check.
+	// configured(), HealthError means a malformed endpoint or an app-page path,
+	// and probing would report that fault again.
 	if r.Conversations.configured() && r.Conversations.Health != HealthError {
 		token := resolveFamily("AUTH_TOKEN", osEnv, fileEnv).value
 		res := probeConversationsFn(ctx, r.Conversations.Endpoint.Value, r.Conversations.TenantID, token, resolveInsecure(osEnv, fileEnv))
 		r.Conversations.Probe = res
 		switch {
 		case res.authFailure():
-			// No section message: the probe line states the cause.
 			r.Conversations.Health = HealthError
+			// The row shows the status and the URL, so the diagnosis (bad token,
+			// wrong tenant id, missing write scope) is carried here or nowhere in
+			// the human report.
+			r.Conversations.Messages = append(r.Conversations.Messages,
+				"the conversations endpoint rejected the export request: "+describeProbe(res))
+		case res.redirected():
+			r.Conversations.Health = HealthError
+			r.Conversations.Messages = append(r.Conversations.Messages,
+				"the conversations endpoint redirected the export request ("+describeProbe(res)+"), so "+
+					endpointKey(r.Conversations.Endpoint)+" is not an Agent Observability API URL. "+apiURLHint)
 		case res.unreachable():
 			r.Conversations.Health = HealthError
 			r.Conversations.Messages = append(r.Conversations.Messages,
 				"could not reach the conversations endpoint: "+describeProbe(res))
+		case res.routeMissing():
+			r.Conversations.Health = HealthError
+			r.Conversations.Messages = append(r.Conversations.Messages,
+				"the conversations endpoint has no generation-export route (HTTP 404), so "+
+					endpointKey(r.Conversations.Endpoint)+" is not an Agent Observability API URL. "+apiURLHint)
+		case !res.accepted():
+			// A 400 or 415 can come from an endpoint that validates the body
+			// before auth, and the probe posts a minimal {}. Warn rather than
+			// fail, but never call it healthy: the real route answers 202.
+			if r.Conversations.Health == HealthOK {
+				r.Conversations.Health = HealthWarn
+			}
+			r.Conversations.Messages = append(r.Conversations.Messages,
+				"the conversations endpoint answered "+describeProbe(res)+" instead of HTTP 202; exports may be dropped")
 		}
 	}
 	if r.Analytics.Endpoint.Set {
@@ -704,13 +914,36 @@ func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string)
 		if probe != nil {
 			switch {
 			case probe.Metrics.authFailure() || probe.Traces.authFailure():
-				// No section message: each signal's probe line states
-				// its own cause.
 				r.Analytics.Health = HealthError
-			case probe.Metrics.unreachable() || probe.Traces.unreachable():
+				r.Analytics.Messages = append(r.Analytics.Messages, otlpAuthMessages(probe)...)
+			case probe.Metrics.redirected() || probe.Traces.redirected():
 				r.Analytics.Health = HealthError
 				r.Analytics.Messages = append(r.Analytics.Messages,
-					"could not reach the OTLP endpoint — metrics and traces will not be exported")
+					"the OTLP endpoint redirected the export request, so it is not an OTLP ingest URL "+
+						"(e.g. https://otlp-gateway-prod-<region>.grafana.net/otlp)")
+			case probe.Metrics.unreachable() || probe.Traces.unreachable():
+				r.Analytics.Health = HealthError
+				// The row shows the status and the URL, so the cause (DNS failure,
+				// refused connection, TLS error, timeout, 5xx body) is carried here or
+				// nowhere in the human report.
+				r.Analytics.Messages = append(r.Analytics.Messages,
+					"could not reach the OTLP endpoint: "+describeProbe(firstUnreachable(probe))+
+						"; metrics and traces will not be exported")
+			case probe.Metrics.routeMissing() || probe.Traces.routeMissing():
+				r.Analytics.Health = HealthError
+				r.Analytics.Messages = append(r.Analytics.Messages,
+					"the OTLP endpoint has no ingest route (HTTP 404), so it is not an OTLP ingest URL "+
+						"(e.g. https://otlp-gateway-prod-<region>.grafana.net/otlp)")
+			case !probe.Metrics.accepted() || !probe.Traces.accepted():
+				// The probe posts JSON where the exporter posts protobuf, so a
+				// collector that parses before it authenticates can answer 400 or
+				// 415 while real exports still land. Warn, don't fail.
+				if r.Analytics.Health == HealthOK {
+					r.Analytics.Health = HealthWarn
+				}
+				r.Analytics.Messages = append(r.Analytics.Messages,
+					"the OTLP endpoint did not accept the probe; the probe posts JSON where the exporter posts "+
+						"protobuf, so this can be benign")
 			}
 		}
 	}
@@ -728,16 +961,55 @@ func otlpProbeTenant(tenant envValue, osEnv, fileEnv map[string]string) envValue
 	return tenant
 }
 
+// otlpAuthMessages diagnoses the OTLP signals whose auth failed. The rows show
+// the status and the URL, so the diagnosis (bad token, wrong tenant id, missing
+// write scope) is carried here or nowhere in the human report. Metrics and
+// traces authenticate with the same credentials, so a failure both share is
+// described once; each signal gets its own line only when the two failed
+// differently.
+func otlpAuthMessages(p *AnalyticsProbe) []string {
+	rejected := func(subject string, res *ProbeResult) string {
+		return "the OTLP endpoint rejected the " + subject + ": " + describeProbe(res)
+	}
+	if p.Metrics.authFailure() && p.Traces.authFailure() &&
+		p.Metrics.StatusCode == p.Traces.StatusCode && p.Metrics.Message == p.Traces.Message {
+		return []string{rejected("metrics and traces exports", p.Metrics)}
+	}
+	var msgs []string
+	for _, signal := range []struct {
+		name string
+		res  *ProbeResult
+	}{{"metrics", p.Metrics}, {"traces", p.Traces}} {
+		if signal.res.authFailure() {
+			msgs = append(msgs, rejected(signal.name+" export", signal.res))
+		}
+	}
+	return msgs
+}
+
+// firstUnreachable returns the signal probe that could not deliver, so the
+// message names one concrete failure instead of both.
+func firstUnreachable(p *AnalyticsProbe) *ProbeResult {
+	if p.Metrics.unreachable() {
+		return p.Metrics
+	}
+	return p.Traces
+}
+
 // resolved is the effective value of an env var plus where it came from:
 // key is the spelling that won (AGENTO11Y_* or SIGIL_*), and conflict reports
 // that the other spelling also resolves — to a different value — under the
-// same source precedence.
+// same source precedence. otherKey and otherSource describe that losing
+// spelling, so a message can name the variable to edit instead of calling it
+// "the other spelling"; both are empty unless conflict is set.
 type resolved struct {
-	set      bool
-	value    string
-	source   string
-	key      string
-	conflict bool
+	set         bool
+	value       string
+	source      string
+	key         string
+	conflict    bool
+	otherKey    string
+	otherSource string
 }
 
 func (r resolved) envValue() envValue {
@@ -751,6 +1023,50 @@ func (r resolved) tokenValue() tokenValue {
 // legacyWon reports that the value came from the legacy SIGIL_* spelling.
 func (r resolved) legacyWon() bool {
 	return r.set && strings.HasPrefix(r.key, "SIGIL_")
+}
+
+// conflictMessage describes an alias family whose two spellings hold different
+// values: which variable each value came from, which one is in force, and
+// which one to delete. Both spellings name the same setting, so a reader who
+// is only told the winner cannot tell what the other value even was.
+func conflictMessage(r resolved) string {
+	var b strings.Builder
+	if r.source == r.otherSource {
+		fmt.Fprintf(&b, "%s and %s are both set in %s, to different values; using %s",
+			r.key, r.otherKey, sourceLabel(r.source), r.key)
+	} else {
+		fmt.Fprintf(&b, "%s is set in %s and %s in %s, to different values; using %s",
+			r.key, sourceLabel(r.source), r.otherKey, sourceLabel(r.otherSource), r.key)
+	}
+	if r.legacyWon() {
+		// The preferred spelling loses only across sources: resolveFamily picks it
+		// whenever both spellings come from the same place.
+		b.WriteString(", because the environment outranks config.env")
+	}
+	legacyKey, legacySource := r.key, r.source
+	if !r.legacyWon() {
+		legacyKey, legacySource = r.otherKey, r.otherSource
+	}
+	fmt.Fprintf(&b, ". %s is the old name for the same setting: %s.", legacyKey, clearHint(legacySource))
+	return b.String()
+}
+
+// clearHint names the action that clears a variable, which depends on where it
+// is set: an exported variable is unset, a config.env line is deleted.
+func clearHint(source string) string {
+	if source == sourceConfig {
+		return "remove it from config.env"
+	}
+	return "unset it"
+}
+
+// sourceLabel spells a source for prose. The rows print the bare `env` and
+// `config.env` labels, which a sentence cannot reuse as-is.
+func sourceLabel(source string) string {
+	if source == sourceConfig {
+		return "config.env"
+	}
+	return "the environment"
 }
 
 // resolveEnv mirrors dotenv.ApplyEnv precedence for one exact key: a
@@ -784,7 +1100,10 @@ func resolveFamily(suffix string, osEnv, fileEnv map[string]string) resolved {
 	if !winner.set {
 		return resolved{}
 	}
-	winner.conflict = other.set && other.value != winner.value
+	if other.set && other.value != winner.value {
+		winner.conflict = true
+		winner.otherKey, winner.otherSource = other.key, other.source
+	}
 	return winner
 }
 

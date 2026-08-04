@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"log"
 	"maps"
 	"os"
 	"path/filepath"
@@ -27,9 +29,8 @@ func mergeEnv(envs ...map[string]string) map[string]string {
 // branded env vars so a test never reads the developer's real config.
 //
 // It clears every AGENTO11Y_* and SIGIL_* key the shell exports rather than a
-// hand-listed subset: doctor and envconfig read families that trackedKeys does
-// not cover (GUARDS_TIMEOUT_MS, GUARDS_FAIL_OPEN), so on a configured machine
-// the host value would decide the result.
+// hand-listed subset, so a family a test does not name cannot let a host value
+// decide the result.
 func isolateEnv(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -86,16 +87,17 @@ func TestParseFlags(t *testing.T) {
 		name      string
 		args      []string
 		wantJSON  bool
-		wantProbe bool
 		wantColor bool // NoColor
 		wantErr   bool
 	}{
 		{name: "no flags"},
 		{name: "json", args: []string{"--json"}, wantJSON: true},
-		{name: "probe", args: []string{"--probe"}, wantProbe: true},
-		{name: "online alias", args: []string{"--online"}, wantProbe: true},
 		{name: "no-color", args: []string{"--no-color"}, wantColor: true},
-		{name: "combined", args: []string{"--json", "--probe", "--no-color"}, wantJSON: true, wantProbe: true, wantColor: true},
+		// Probing is unconditional now. The old flags must still parse, so a
+		// script or runbook that passes them does not start failing.
+		{name: "probe is accepted and ignored", args: []string{"--probe"}},
+		{name: "online alias is accepted and ignored", args: []string{"--online"}},
+		{name: "combined", args: []string{"--json", "--probe", "--no-color"}, wantJSON: true, wantColor: true},
 		{name: "unknown flag", args: []string{"--nope"}, wantErr: true},
 		{name: "positional arg", args: []string{"extra"}, wantErr: true},
 	}
@@ -111,7 +113,7 @@ func TestParseFlags(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if opts.JSON != tc.wantJSON || opts.Probe != tc.wantProbe || opts.NoColor != tc.wantColor {
+			if opts.JSON != tc.wantJSON || opts.NoColor != tc.wantColor {
 				t.Fatalf("opts = %+v", opts)
 			}
 		})
@@ -148,7 +150,10 @@ func TestReportExitCode(t *testing.T) {
 
 func TestCollectConversations(t *testing.T) {
 	tests := []struct {
-		name       string
+		name string
+		// endpoint is shorthand for a fully configured section with that
+		// endpoint; set osEnv instead to control the other credentials.
+		endpoint   string
 		osEnv      map[string]string
 		wantHealth Health
 		wantMsg    string
@@ -183,7 +188,7 @@ func TestCollectConversations(t *testing.T) {
 		},
 		{
 			// Set credentials alone are not a working config: an endpoint the
-			// exporter cannot build a request from fails without --probe.
+			// exporter cannot build a request from fails without the network.
 			name:       "malformed endpoint fails offline",
 			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "not a url ://", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthError,
@@ -202,15 +207,118 @@ func TestCollectConversations(t *testing.T) {
 			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "collector.local:4317", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
 			wantHealth: HealthOK,
 		},
+		{
+			// The reported failure: the Agent Observability app page pasted in as
+			// the endpoint. Every export is redirected to /login, so doctor must
+			// say so without the network.
+			name:       "app page path fails offline",
+			endpoint:   "https://mystack.grafana.net/plugins/grafana-agento11y-app",
+			wantHealth: HealthError,
+			wantMsg:    "points at a Grafana app page",
+		},
+		{
+			// The path check ignores the host, so a stack on a custom domain is
+			// caught too.
+			name:       "app page path on a custom domain fails offline",
+			endpoint:   "https://grafana.example.com/plugins/grafana-agento11y-app",
+			wantHealth: HealthError,
+			wantMsg:    "points at a Grafana app page",
+		},
+		{
+			name:       "another plugins path fails offline",
+			endpoint:   "https://host/plugins/x",
+			wantHealth: HealthError,
+			wantMsg:    "points at a Grafana app page",
+		},
+		{
+			// The other app URL: login.go prints this one after a successful
+			// login, so it is at least as likely a paste as the plugin page.
+			name:       "app path fails offline",
+			endpoint:   "https://mystack.grafana.net/a/grafana-agento11y-app",
+			wantHealth: HealthError,
+			wantMsg:    "points at a Grafana app page",
+		},
+		{
+			name:       "app path on a custom domain fails offline",
+			endpoint:   "https://grafana.example.com/a/grafana-agento11y-app",
+			wantHealth: HealthError,
+			wantMsg:    "points at a Grafana app page",
+		},
+		{
+			name:       "a page under the app path fails offline",
+			endpoint:   "https://grafana.example.com/a/grafana-agento11y-app/conversations",
+			wantHealth: HealthError,
+			wantMsg:    "points at a Grafana app page",
+		},
+		{
+			// A bare /a/ is not judged: a self-hosted deployment could sit there.
+			name:       "another app path is not judged",
+			endpoint:   "https://grafana.example.com/a/other-app",
+			wantHealth: HealthOK,
+		},
+		{
+			name:       "grafana cloud stack host warns",
+			endpoint:   "https://mystack.grafana.net",
+			wantHealth: HealthWarn,
+			wantMsg:    "does not look like an Agent Observability API URL",
+		},
+		{
+			name:       "otlp gateway in the conversations variable warns",
+			endpoint:   "https://otlp-gateway-prod-us-east-2.grafana.net/otlp",
+			wantHealth: HealthWarn,
+			wantMsg:    "belongs in AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT",
+		},
+		// Every real API host shape: the first label starts with sigil or
+		// agento11y, so none of them warns.
+		{name: "prod sigil cell", endpoint: "https://sigil-prod-us-east-0.grafana.net", wantHealth: HealthOK},
+		{name: "prod agento11y cell", endpoint: "https://agento11y-prod-us-east-0.grafana.net", wantHealth: HealthOK},
+		{name: "dev sigil cell", endpoint: "https://sigil-dev-001.grafana-dev.net", wantHealth: HealthOK},
+		{name: "regional dev sigil cell", endpoint: "https://sigil-dev-eu-west-2.grafana-dev.net", wantHealth: HealthOK},
+		{name: "dev agento11y cell", endpoint: "https://agento11y-dev-001.grafana-dev.net", wantHealth: HealthOK},
+		{name: "ops sigil cell", endpoint: "https://sigil-ops-001.grafana-ops.net", wantHealth: HealthOK},
+		{name: "sigilai", endpoint: "https://sigilai.grafana.net", wantHealth: HealthOK},
+		// Outside the Grafana-owned domains the host is not judged at all: a
+		// self-hosted Sigil or a test collector can use any hostname.
+		{name: "self-hosted host is not judged", endpoint: "https://sigil.example", wantHealth: HealthOK},
+		{name: "internal host is not judged", endpoint: "https://sigil.internal.example", wantHealth: HealthOK},
+		{name: "single-label host is not judged", endpoint: "https://x", wantHealth: HealthOK},
+		{name: "scheme-less collector is not judged", endpoint: "collector.local:4317", wantHealth: HealthOK},
+		{name: "loopback receiver is not judged", endpoint: "http://127.0.0.1:9000", wantHealth: HealthOK},
+		{
+			// The shape heuristic must not turn an error into a warning.
+			name:       "suspicious host does not downgrade a credentials error",
+			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "https://mystack.grafana.net", "AGENTO11Y_AUTH_TENANT_ID": "1"},
+			wantHealth: HealthError,
+			wantMsg:    "incomplete credentials; missing AGENTO11Y_AUTH_TOKEN",
+		},
+		{
+			name:       "malformed endpoint error survives the shape check",
+			osEnv:      map[string]string{"AGENTO11Y_ENDPOINT": "https:///plugins/grafana-agento11y-app", "AGENTO11Y_AUTH_TENANT_ID": "1", "AGENTO11Y_AUTH_TOKEN": "glc_t"},
+			wantHealth: HealthError,
+			wantMsg:    "not a usable endpoint",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sec := collectConversations(tc.osEnv, nil)
+			osEnv := tc.osEnv
+			if tc.endpoint != "" {
+				osEnv = map[string]string{
+					"AGENTO11Y_ENDPOINT":       tc.endpoint,
+					"AGENTO11Y_AUTH_TENANT_ID": "1",
+					"AGENTO11Y_AUTH_TOKEN":     "glc_t",
+				}
+			}
+			sec := collectConversations(osEnv, nil)
 			if sec.Health != tc.wantHealth {
-				t.Fatalf("health = %q, want %q", sec.Health, tc.wantHealth)
+				t.Fatalf("health = %q, want %q (messages %v)", sec.Health, tc.wantHealth, sec.Messages)
 			}
 			if tc.wantMsg != "" && !strings.Contains(strings.Join(sec.Messages, " "), tc.wantMsg) {
 				t.Fatalf("messages %v missing %q", sec.Messages, tc.wantMsg)
+			}
+			// The shorthand configures the preferred spellings only, so a healthy
+			// section must be silent: any message there is a stray shape warning.
+			if tc.endpoint != "" && tc.wantHealth == HealthOK && len(sec.Messages) != 0 {
+				t.Fatalf("healthy section carries messages %v", sec.Messages)
 			}
 		})
 	}
@@ -244,6 +352,32 @@ func TestCollectConversationsConflictingTokens(t *testing.T) {
 	}
 }
 
+// TestRenderHuman_RowNamesOnlyTheWinningSpelling walks the whole path from the
+// snapshot to the rendered row. A row that named the losing spelling would send
+// a user to edit a value the binary never reads.
+func TestRenderHuman_RowNamesOnlyTheWinningSpelling(t *testing.T) {
+	osEnv := map[string]string{
+		"AGENTO11Y_ENDPOINT":       "https://shell.example",
+		"AGENTO11Y_AUTH_TENANT_ID": "12345",
+		"AGENTO11Y_AUTH_TOKEN":     "glc_shell",
+	}
+	fileEnv := map[string]string{"SIGIL_ENDPOINT": "https://file.example"}
+
+	var buf bytes.Buffer
+	renderHuman(&buf, &Report{Conversations: collectConversations(osEnv, fileEnv)}, false)
+	out := buf.String()
+
+	if want := "https://shell.example (AGENTO11Y_ENDPOINT, env)"; !strings.Contains(out, want) {
+		t.Fatalf("endpoint row missing %q:\n%s", want, out)
+	}
+	endpointRow, _, _ := strings.Cut(out[strings.Index(out, "endpoint:"):], "\n")
+	for _, loser := range []string{"SIGIL_ENDPOINT", sourceConfig, "file.example"} {
+		if strings.Contains(endpointRow, loser) {
+			t.Fatalf("endpoint row %q names the losing spelling %q", endpointRow, loser)
+		}
+	}
+}
+
 func TestResolveFamilySourceBeatsSpelling(t *testing.T) {
 	osEnv := map[string]string{"SIGIL_ENDPOINT": "shell-legacy"}
 	fileEnv := map[string]string{"AGENTO11Y_ENDPOINT": "file-preferred"}
@@ -253,6 +387,60 @@ func TestResolveFamilySourceBeatsSpelling(t *testing.T) {
 	}
 	if !r.conflict {
 		t.Fatalf("expected conflict flag when spellings disagree: %+v", r)
+	}
+}
+
+// TestConflictMessage checks the sentence a user reads when both spellings of
+// one setting are set. It has to name the losing variable and where it is set:
+// the two spellings are the same setting, so a reader told only the winner
+// cannot tell what to change.
+func TestConflictMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		osEnv   map[string]string
+		fileEnv map[string]string
+		want    string
+	}{
+		{
+			name:  "both in the environment",
+			osEnv: map[string]string{"AGENTO11Y_ENDPOINT": "https://a", "SIGIL_ENDPOINT": "https://b"},
+			want: "AGENTO11Y_ENDPOINT and SIGIL_ENDPOINT are both set in the environment, to different values; " +
+				"using AGENTO11Y_ENDPOINT. SIGIL_ENDPOINT is the old name for the same setting: unset it.",
+		},
+		{
+			name:    "both in config.env",
+			fileEnv: map[string]string{"AGENTO11Y_ENDPOINT": "https://a", "SIGIL_ENDPOINT": "https://b"},
+			want: "AGENTO11Y_ENDPOINT and SIGIL_ENDPOINT are both set in config.env, to different values; " +
+				"using AGENTO11Y_ENDPOINT. SIGIL_ENDPOINT is the old name for the same setting: remove it from config.env.",
+		},
+		{
+			name:    "preferred in the environment beats legacy in config.env",
+			osEnv:   map[string]string{"AGENTO11Y_ENDPOINT": "https://a"},
+			fileEnv: map[string]string{"SIGIL_ENDPOINT": "https://b"},
+			want: "AGENTO11Y_ENDPOINT is set in the environment and SIGIL_ENDPOINT in config.env, to different values; " +
+				"using AGENTO11Y_ENDPOINT. SIGIL_ENDPOINT is the old name for the same setting: remove it from config.env.",
+		},
+		{
+			// The surprising case: the old name wins. Naming the rule is the only
+			// way a reader can tell why the config.env value is not in force.
+			name:    "legacy in the environment beats preferred in config.env",
+			osEnv:   map[string]string{"SIGIL_ENDPOINT": "https://b"},
+			fileEnv: map[string]string{"AGENTO11Y_ENDPOINT": "https://a"},
+			want: "SIGIL_ENDPOINT is set in the environment and AGENTO11Y_ENDPOINT in config.env, to different values; " +
+				"using SIGIL_ENDPOINT, because the environment outranks config.env. " +
+				"SIGIL_ENDPOINT is the old name for the same setting: unset it.",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := resolveFamily("ENDPOINT", tc.osEnv, tc.fileEnv)
+			if !r.conflict {
+				t.Fatalf("resolveFamily = %+v, want a conflict", r)
+			}
+			if got := conflictMessage(r); got != tc.want {
+				t.Fatalf("conflictMessage =\n%s\nwant\n%s", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -289,7 +477,8 @@ func TestCollectAnalytics(t *testing.T) {
 			wantHealth:   HealthOK,
 			wantEndpoint: "https://preferred",
 			wantVar:      "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT",
-			wantMsg:      "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT and its other spelling are both set with different values",
+			wantMsg: "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT and SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT are both set in the environment, " +
+				"to different values; using AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT",
 		},
 		{
 			name: "standard otel fallback with auth via SIGIL_AUTH_TOKEN",
@@ -351,8 +540,8 @@ func TestCollectAnalytics(t *testing.T) {
 			if tc.wantEndpoint != "" && sec.Endpoint.Value != tc.wantEndpoint {
 				t.Fatalf("endpoint = %q, want %q", sec.Endpoint.Value, tc.wantEndpoint)
 			}
-			if tc.wantVar != "" && sec.EndpointVar != tc.wantVar {
-				t.Fatalf("endpoint var = %q, want %q", sec.EndpointVar, tc.wantVar)
+			if tc.wantVar != "" && sec.Endpoint.Key != tc.wantVar {
+				t.Fatalf("endpoint key = %q, want %q", sec.Endpoint.Key, tc.wantVar)
 			}
 			if tc.wantMsg != "" && !strings.Contains(strings.Join(sec.Messages, " "), tc.wantMsg) {
 				t.Fatalf("messages %v missing %q", sec.Messages, tc.wantMsg)
@@ -366,13 +555,24 @@ func TestRunProbes(t *testing.T) {
 		name string
 		conv *ProbeResult
 		otlp *AnalyticsProbe
-		// convHealth is the verdict the offline collectors reached; "" means ok.
+		// convHealth and analyticsHealth are the verdicts the offline collectors
+		// reached; "" means ok.
 		convHealth      Health
+		analyticsHealth Health
+		// convKey is the endpoint spelling that won; "" leaves it unset.
+		convKey         string
 		wantConv        Health
 		wantAnalytics   Health
 		wantConvSkipped bool
-		wantConvMsgs    int
-		wantOTLPMsgs    int
+		// wantConvMsgs and wantOTLPMsgs are the section message counts. A probe
+		// that repeats what its own row prints shows up as an extra message here.
+		wantConvMsgs int
+		wantOTLPMsgs int
+		// wantConvMsg and wantAnalyticsMsg are substrings the section messages must
+		// carry. The probe rows show only the status and the URL, so a cause the
+		// message drops is absent from the whole human report.
+		wantConvMsg      string
+		wantAnalyticsMsg string
 	}{
 		{
 			name:          "all reachable",
@@ -382,49 +582,189 @@ func TestRunProbes(t *testing.T) {
 			wantAnalytics: HealthOK,
 		},
 		{
-			// The probe line already prints the message, so the
-			// section must not repeat it.
-			name:          "401 escalates without repeating the probe message",
-			conv:          &ProbeResult{StatusCode: 401, Message: "credentials rejected"},
-			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 401, Message: "credentials rejected"}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
-			wantConv:      HealthError,
-			wantAnalytics: HealthError,
+			// The row prints the status alone, so the section message has to
+			// carry the credential diagnosis.
+			name:             "401 escalates and reports why auth failed",
+			conv:             &ProbeResult{StatusCode: 401, Message: "credentials rejected"},
+			otlp:             &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 401, Message: "credentials rejected"}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			wantConv:         HealthError,
+			wantAnalytics:    HealthError,
+			wantConvMsgs:     1,
+			wantOTLPMsgs:     1,
+			wantConvMsg:      "the conversations endpoint rejected the export request: HTTP 401: credentials rejected",
+			wantAnalyticsMsg: "the OTLP endpoint rejected the metrics export: HTTP 401: credentials rejected",
 		},
 		{
-			name:          "403 escalates without repeating the probe message",
-			conv:          &ProbeResult{StatusCode: 403, Message: "missing sigil:write"},
-			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200, OK: true}, Traces: &ProbeResult{StatusCode: 403, Message: "missing traces:write"}},
-			wantConv:      HealthError,
-			wantAnalytics: HealthError,
+			name:             "403 escalates and reports the missing scope",
+			conv:             &ProbeResult{StatusCode: 403, Message: "missing sigil:write"},
+			otlp:             &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200, OK: true}, Traces: &ProbeResult{StatusCode: 403, Message: "missing traces:write"}},
+			wantConv:         HealthError,
+			wantAnalytics:    HealthError,
+			wantConvMsgs:     1,
+			wantOTLPMsgs:     1,
+			wantConvMsg:      "the conversations endpoint rejected the export request: HTTP 403: missing sigil:write",
+			wantAnalyticsMsg: "the OTLP endpoint rejected the traces export: HTTP 403: missing traces:write",
 		},
 		{
-			name:          "transport error escalates",
-			conv:          &ProbeResult{StatusCode: 0, Message: "connection refused"},
-			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 0, Message: "timeout"}, Traces: &ProbeResult{StatusCode: 0, Message: "timeout"}},
+			// Both signals authenticate with the same credentials, so one
+			// diagnosis covers them and is printed once.
+			name:             "both OTLP signals failing the same way share one message",
+			conv:             &ProbeResult{StatusCode: 202, OK: true},
+			otlp:             &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 401, Message: "credentials rejected"}, Traces: &ProbeResult{StatusCode: 401, Message: "credentials rejected"}},
+			wantConv:         HealthOK,
+			wantAnalytics:    HealthError,
+			wantOTLPMsgs:     1,
+			wantAnalyticsMsg: "the OTLP endpoint rejected the metrics and traces exports: HTTP 401: credentials rejected",
+		},
+		{
+			// A token that carries one write scope and not the other fails the
+			// signals differently, and each failure is its own diagnosis.
+			name:             "OTLP signals failing differently get a line each",
+			conv:             &ProbeResult{StatusCode: 202, OK: true},
+			otlp:             &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 401, Message: "credentials rejected"}, Traces: &ProbeResult{StatusCode: 403, Message: "missing traces:write"}},
+			wantConv:         HealthOK,
+			wantAnalytics:    HealthError,
+			wantOTLPMsgs:     2,
+			wantAnalyticsMsg: "the OTLP endpoint rejected the traces export: HTTP 403: missing traces:write",
+		},
+		{
+			name:             "transport error escalates",
+			conv:             &ProbeResult{StatusCode: 0, Message: "connection refused"},
+			otlp:             &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 0, Message: "dial tcp: lookup otlp.example: no such host"}, Traces: &ProbeResult{StatusCode: 0, Message: "dial tcp: lookup otlp.example: no such host"}},
+			wantConv:         HealthError,
+			wantAnalytics:    HealthError,
+			wantConvMsgs:     1,
+			wantOTLPMsgs:     1,
+			wantConvMsg:      "no response: connection refused",
+			wantAnalyticsMsg: "no response: dial tcp: lookup otlp.example: no such host",
+		},
+		{
+			name:             "5xx escalates",
+			conv:             &ProbeResult{StatusCode: 503},
+			otlp:             &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 500}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			wantConv:         HealthError,
+			wantAnalytics:    HealthError,
+			wantConvMsgs:     1,
+			wantOTLPMsgs:     1,
+			wantConvMsg:      "HTTP 503",
+			wantAnalyticsMsg: "HTTP 500",
+		},
+		{
+			// The endpoint answered, but it bounced the export POST somewhere
+			// else, so nothing is ingested.
+			name:          "conversations redirect escalates",
+			conv:          &ProbeResult{StatusCode: 302, Message: "redirected to /login"},
+			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200, OK: true}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
 			wantConv:      HealthError,
-			wantAnalytics: HealthError,
+			wantAnalytics: HealthOK,
 			wantConvMsgs:  1,
-			wantOTLPMsgs:  1,
+			wantConvMsg:   "is not an Agent Observability API URL",
 		},
 		{
-			name:          "5xx escalates",
-			conv:          &ProbeResult{StatusCode: 503},
-			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 500}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			// The legacy spelling won, so the message must name it rather than
+			// the preferred one the user never set.
+			name:          "redirect message names the resolved endpoint key",
+			conv:          &ProbeResult{StatusCode: 302, Message: "redirected to /login"},
+			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200, OK: true}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			convKey:       "SIGIL_ENDPOINT",
 			wantConv:      HealthError,
-			wantAnalytics: HealthError,
+			wantAnalytics: HealthOK,
 			wantConvMsgs:  1,
-			wantOTLPMsgs:  1,
+			wantConvMsg:   "SIGIL_ENDPOINT is not an Agent Observability API URL",
 		},
 		{
-			name:          "benign 4xx stays healthy",
-			conv:          &ProbeResult{StatusCode: 400},
-			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 415}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			name:             "otlp metrics redirect escalates",
+			conv:             &ProbeResult{StatusCode: 200, OK: true},
+			otlp:             &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 307, Message: "redirected to /login"}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			wantConv:         HealthOK,
+			wantAnalytics:    HealthError,
+			wantOTLPMsgs:     1,
+			wantAnalyticsMsg: "the OTLP endpoint redirected the export request, so it is not an OTLP ingest URL",
+		},
+		{
+			// Either signal redirecting is enough to condemn the endpoint.
+			name:             "otlp traces redirect escalates",
+			conv:             &ProbeResult{StatusCode: 200, OK: true},
+			otlp:             &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200, OK: true}, Traces: &ProbeResult{StatusCode: 302, Message: "redirected to /login"}},
+			wantConv:         HealthOK,
+			wantAnalytics:    HealthError,
+			wantOTLPMsgs:     1,
+			wantAnalyticsMsg: "the OTLP endpoint redirected the export request, so it is not an OTLP ingest URL",
+		},
+		{
+			// The host answered but does not serve the export route, so the
+			// endpoint belongs to some other service. Every host 404s an unknown
+			// path, so this must never read as healthy.
+			name:             "404 escalates on both pipelines",
+			conv:             &ProbeResult{StatusCode: 404},
+			otlp:             &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 404}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			wantConv:         HealthError,
+			wantAnalytics:    HealthError,
+			wantConvMsgs:     1,
+			wantOTLPMsgs:     1,
+			wantConvMsg:      "no generation-export route (HTTP 404)",
+			wantAnalyticsMsg: "no ingest route (HTTP 404)",
+		},
+		{
+			// A body-validating endpoint can answer 400/415 to the minimal probe
+			// body while real exports work, so warn instead of failing. The real
+			// export route answers 202, so it cannot pass either.
+			name:             "body rejection warns",
+			conv:             &ProbeResult{StatusCode: 400},
+			otlp:             &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 415}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			wantConv:         HealthWarn,
+			wantAnalytics:    HealthWarn,
+			wantConvMsgs:     1,
+			wantOTLPMsgs:     1,
+			wantConvMsg:      "answered HTTP 400 instead of HTTP 202",
+			wantAnalyticsMsg: "did not accept the probe",
+		},
+		{
+			// 405 is the one non-2xx that passes: a method-restricted route still
+			// proves the request reached the service and passed auth.
+			name:          "405 stays healthy",
+			conv:          &ProbeResult{StatusCode: 405, OK: true},
+			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 405, OK: true}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
 			wantConv:      HealthOK,
 			wantAnalytics: HealthOK,
 		},
 		{
+			// A probe warning must not clear the offline endpoint error either.
+			name:            "body rejection does not downgrade an analytics error",
+			conv:            &ProbeResult{StatusCode: 202, OK: true},
+			otlp:            &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 400}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			analyticsHealth: HealthError,
+			wantConv:        HealthOK,
+			wantAnalytics:   HealthError,
+			wantOTLPMsgs:    1,
+		},
+		{
+			// Only HealthError suppresses probing, which is what makes the
+			// offline shape heuristic safe: a warned endpoint is still probed,
+			// and the redirect proves it is broken.
+			name:          "warned endpoint is probed and escalated",
+			conv:          &ProbeResult{StatusCode: 302, Message: "redirected to /login"},
+			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200, OK: true}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			convHealth:    HealthWarn,
+			wantConv:      HealthError,
+			wantAnalytics: HealthOK,
+			wantConvMsgs:  2, // the offline warning, plus the probe verdict
+			wantConvMsg:   "is not an Agent Observability API URL",
+		},
+		{
+			// A reachable endpoint does not clear the offline warning either.
+			name:          "warned endpoint that answers stays warned",
+			conv:          &ProbeResult{StatusCode: 202, OK: true},
+			otlp:          &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200, OK: true}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
+			convHealth:    HealthWarn,
+			wantConv:      HealthWarn,
+			wantAnalytics: HealthOK,
+			wantConvMsgs:  1, // the offline warning, alone
+		},
+		{
 			// The offline endpoint check already failed, so probing would
-			// report the same fault a second and third time.
+			// report the same fault a second and third time. This covers both
+			// offline rejections: a malformed endpoint and an app-page path.
 			name:            "endpoint already rejected offline is not probed",
 			conv:            &ProbeResult{StatusCode: 0, Message: "invalid endpoint: parse …"},
 			otlp:            &AnalyticsProbe{Metrics: &ProbeResult{StatusCode: 200, OK: true}, Traces: &ProbeResult{StatusCode: 200, OK: true}},
@@ -454,9 +794,13 @@ func TestRunProbes(t *testing.T) {
 			} else {
 				convMsgs = []string{"AGENTO11Y_ENDPOINT is not a usable endpoint: …"}
 			}
+			analyticsHealth := tc.analyticsHealth
+			if analyticsHealth == "" {
+				analyticsHealth = HealthOK
+			}
 			r := &Report{
 				Conversations: ConversationsSection{
-					Endpoint: envValue{Set: true, Value: "https://sigil.example.net"},
+					Endpoint: envValue{Set: true, Value: "https://sigil.example.net", Key: tc.convKey},
 					TenantID: envValue{Set: true, Value: "t", Key: "AGENTO11Y_AUTH_TENANT_ID"},
 					Token:    tokenValue{Set: true},
 					Health:   convHealth,
@@ -464,12 +808,15 @@ func TestRunProbes(t *testing.T) {
 				},
 				Analytics: AnalyticsSection{
 					Endpoint: envValue{Set: true, Value: "https://otlp.example.net"},
-					Health:   HealthOK,
+					Health:   analyticsHealth,
 				},
 			}
 			runProbes(context.Background(), r, map[string]string{}, nil)
 			if r.Conversations.Health != tc.wantConv {
 				t.Fatalf("conversations health = %q, want %q", r.Conversations.Health, tc.wantConv)
+			}
+			if tc.wantConvMsg != "" && !strings.Contains(strings.Join(r.Conversations.Messages, " "), tc.wantConvMsg) {
+				t.Fatalf("conversations messages %v missing %q", r.Conversations.Messages, tc.wantConvMsg)
 			}
 			if tc.wantConvSkipped {
 				if r.Conversations.Probe != nil {
@@ -478,12 +825,15 @@ func TestRunProbes(t *testing.T) {
 			} else if r.Conversations.Probe == nil {
 				t.Fatal("conversations probe did not run")
 			} else if r.Conversations.Probe.Message != tc.conv.Message {
-				// The section drops its own message on an auth failure, so the
-				// probe result must keep the explanation both renderers print.
+				// The JSON report prints the probe result as it stands, so the
+				// section must not edit the explanation out of it.
 				t.Fatalf("probe message = %q, want %q", r.Conversations.Probe.Message, tc.conv.Message)
 			}
 			if r.Analytics.Health != tc.wantAnalytics {
 				t.Fatalf("analytics health = %q, want %q", r.Analytics.Health, tc.wantAnalytics)
+			}
+			if tc.wantAnalyticsMsg != "" && !strings.Contains(strings.Join(r.Analytics.Messages, " "), tc.wantAnalyticsMsg) {
+				t.Fatalf("analytics messages %v missing %q", r.Analytics.Messages, tc.wantAnalyticsMsg)
 			}
 			if gotOTLPTenant != r.Conversations.TenantID {
 				t.Fatalf("OTLP probe tenant = %+v, want %+v", gotOTLPTenant, r.Conversations.TenantID)
@@ -629,64 +979,208 @@ func TestCollectConfig_PathResolution(t *testing.T) {
 	}
 }
 
+// TestCollectConfig_ContentMode covers the content capture row: the effective
+// mode, and which variable supplied it. Doctor resolves the mode from the env
+// snapshot so it can attribute the value; the parsing and the fall-back stay in
+// envconfig, shared with the hooks.
 func TestCollectConfig_ContentMode(t *testing.T) {
 	tests := []struct {
 		name         string
-		mode         string
+		osEnv        map[string]string
+		fileEnv      map[string]string
 		wantMode     string
+		wantKey      string
+		wantSource   string
 		wantFellBack bool
 		wantHealth   Health // "" = don't assert
+		wantMsg      string // substring of a ConfigSection message
+		wantRendered string
 	}{
-		{name: "invalid mode falls back", mode: "bogus", wantMode: "metadata_only", wantFellBack: true, wantHealth: HealthWarn},
-		{name: "valid mode no fallback", mode: "full", wantMode: "full", wantFellBack: false},
+		{
+			// Nothing is configured, so the row has to say the value is the
+			// built-in one rather than a choice the user made.
+			name: "unset uses the built-in default", wantMode: "metadata_only",
+			wantRendered: "content capture: metadata_only (default)",
+		},
+		{
+			// The rejected value did not supply the mode in force, so the row credits
+			// the built-in default and the message names the variable to fix. Naming
+			// the variable on the row would make it identical to a valid value.
+			name: "invalid mode falls back", osEnv: map[string]string{"SIGIL_CONTENT_CAPTURE_MODE": "bogus"},
+			wantMode: "metadata_only", wantFellBack: true, wantHealth: HealthWarn,
+			wantMsg:      "the SIGIL_CONTENT_CAPTURE_MODE value is invalid; using metadata_only",
+			wantRendered: "content capture: metadata_only (default)",
+		},
+		{
+			name: "from the shell", osEnv: map[string]string{"AGENTO11Y_CONTENT_CAPTURE_MODE": "full"},
+			wantMode: "full", wantKey: "AGENTO11Y_CONTENT_CAPTURE_MODE", wantSource: sourceEnv,
+			wantRendered: "content capture: full (AGENTO11Y_CONTENT_CAPTURE_MODE, env)",
+		},
+		{
+			name: "from config.env", fileEnv: map[string]string{"AGENTO11Y_CONTENT_CAPTURE_MODE": "no_tool_content"},
+			wantMode: "no_tool_content", wantKey: "AGENTO11Y_CONTENT_CAPTURE_MODE", wantSource: sourceConfig,
+			wantRendered: "content capture: no_tool_content (AGENTO11Y_CONTENT_CAPTURE_MODE, config.env)",
+		},
+		{
+			// The shell wins, so the row must not name the config.env value the
+			// hooks never see.
+			name:  "shell wins over config.env",
+			osEnv: map[string]string{"AGENTO11Y_CONTENT_CAPTURE_MODE": "full"},
+			fileEnv: map[string]string{
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "metadata_only",
+			},
+			wantMode: "full", wantKey: "AGENTO11Y_CONTENT_CAPTURE_MODE", wantSource: sourceEnv,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateEnv(t)
-			t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", tc.mode)
 
-			sec := collectConfig(nil, nil)
+			sec := collectConfig(tc.osEnv, tc.fileEnv)
 			if sec.ContentModeFellBack != tc.wantFellBack {
 				t.Fatalf("ContentModeFellBack = %v, want %v", sec.ContentModeFellBack, tc.wantFellBack)
 			}
 			if sec.ContentCaptureMode != tc.wantMode {
 				t.Fatalf("mode = %q, want %q", sec.ContentCaptureMode, tc.wantMode)
 			}
+			if sec.ContentModeKey != tc.wantKey || sec.ContentModeSource != tc.wantSource {
+				t.Fatalf("content mode provenance = %q/%q, want %q/%q",
+					sec.ContentModeKey, sec.ContentModeSource, tc.wantKey, tc.wantSource)
+			}
 			if tc.wantHealth != "" && sec.Health != tc.wantHealth {
 				t.Fatalf("health = %q, want %q", sec.Health, tc.wantHealth)
+			}
+			if tc.wantMsg != "" && !strings.Contains(strings.Join(sec.Messages, " "), tc.wantMsg) {
+				t.Fatalf("messages %v missing %q", sec.Messages, tc.wantMsg)
+			}
+			if tc.wantRendered == "" {
+				return
+			}
+			var buf bytes.Buffer
+			renderHuman(&buf, &Report{Config: sec}, false)
+			if !strings.Contains(buf.String(), tc.wantRendered) {
+				t.Fatalf("rendered report missing %q:\n%s", tc.wantRendered, buf.String())
 			}
 		})
 	}
 }
 
+// TestCollectConfig_ContentModeReadsTheSnapshot pins the wiring: the mode is
+// resolved from the snapshot doctor was handed, not from the process env after
+// the dotenv merge. Reading the process env would attribute every config.env
+// value to the shell.
+func TestCollectConfig_ContentModeReadsTheSnapshot(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", "full")
+
+	sec := collectConfig(nil, map[string]string{"AGENTO11Y_CONTENT_CAPTURE_MODE": "no_tool_content"})
+	if sec.ContentCaptureMode != "no_tool_content" || sec.ContentModeSource != sourceConfig {
+		t.Fatalf("mode = %q from %q, want no_tool_content from config.env", sec.ContentCaptureMode, sec.ContentModeSource)
+	}
+}
+
 func TestCollectConfig_Guards(t *testing.T) {
+	// The guard families have to be in the snapshot the binary passes in, or a
+	// shell-exported timeout reads as unset here while the hooks act on it.
+	for _, suffix := range []string{"GUARDS_ENABLED", "GUARDS_FAIL_OPEN", "GUARDS_TIMEOUT_MS"} {
+		if !slices.Contains(trackedSuffixes, suffix) {
+			t.Fatalf("trackedSuffixes is missing %s, so SnapshotEnv would not record it", suffix)
+		}
+	}
 	tests := []struct {
 		name          string
-		enabled       string
-		timeout       string
-		failOpen      string
+		osEnv         map[string]string
+		fileEnv       map[string]string
 		wantEnabled   bool
 		wantTimeoutMs int
 		wantFailOpen  bool
 		wantFellBack  bool
+		wantKey       string
+		wantSource    string
 		wantHealth    Health // "" = don't assert
+		wantMsg       string // substring of a ConfigSection message
+		wantRendered  string
 	}{
-		{name: "unset uses defaults", wantEnabled: false, wantTimeoutMs: 1500, wantFailOpen: true},
-		{name: "enabled fail-open", enabled: "true", wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true},
-		{name: "enabled fail-closed with timeout", enabled: "1", timeout: "500", failOpen: "false", wantEnabled: true, wantTimeoutMs: 500, wantFailOpen: false},
-		{name: "invalid enabled falls back", enabled: "maybe", wantEnabled: false, wantTimeoutMs: 1500, wantFailOpen: true, wantFellBack: true, wantHealth: HealthWarn},
-		{name: "invalid timeout falls back", enabled: "true", timeout: "-1", wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true, wantFellBack: true, wantHealth: HealthWarn},
+		{
+			name: "unset uses defaults", wantEnabled: false, wantTimeoutMs: 1500, wantFailOpen: true,
+			wantRendered: "guards:          disabled (default)",
+		},
+		{
+			name: "enabled fail-open", osEnv: map[string]string{"AGENTO11Y_GUARDS_ENABLED": "true"},
+			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true,
+			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceEnv,
+			wantRendered: "guards:          enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
+		},
+		{
+			name: "enabled fail-closed with timeout from config.env",
+			fileEnv: map[string]string{
+				"AGENTO11Y_GUARDS_ENABLED":    "1",
+				"AGENTO11Y_GUARDS_TIMEOUT_MS": "500",
+				"AGENTO11Y_GUARDS_FAIL_OPEN":  "false",
+			},
+			wantEnabled: true, wantTimeoutMs: 500, wantFailOpen: false,
+			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceConfig,
+			wantRendered: "guards:          enabled, timeout 500ms, fail-closed (AGENTO11Y_GUARDS_ENABLED, config.env)",
+		},
+		{
+			name: "legacy spelling", osEnv: map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true,
+			wantKey: "SIGIL_GUARDS_ENABLED", wantSource: sourceEnv,
+			wantRendered: "guards:          enabled, timeout 1500ms, fail-open (SIGIL_GUARDS_ENABLED, env)",
+		},
+		{
+			// The rejected value did not decide whether guards run, so the row credits
+			// the built-in default and the message names the variable to fix.
+			name: "invalid enabled falls back", osEnv: map[string]string{"AGENTO11Y_GUARDS_ENABLED": "maybe"},
+			wantEnabled: false, wantTimeoutMs: 1500, wantFailOpen: true, wantFellBack: true,
+			wantHealth:   HealthWarn,
+			wantMsg:      "the AGENTO11Y_GUARDS_ENABLED value is invalid; guards use the default",
+			wantRendered: "guards:          disabled (default)",
+		},
+		{
+			// GUARDS_ENABLED is fine, so the row keeps naming it. Only the message can
+			// say the timeout is the broken value.
+			name: "invalid timeout falls back",
+			osEnv: map[string]string{
+				"AGENTO11Y_GUARDS_ENABLED":    "true",
+				"AGENTO11Y_GUARDS_TIMEOUT_MS": "-1",
+			},
+			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true, wantFellBack: true,
+			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceEnv, wantHealth: HealthWarn,
+			wantMsg:      "the AGENTO11Y_GUARDS_TIMEOUT_MS value is invalid; guards use the default",
+			wantRendered: "guards:          enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
+		},
+		{
+			// The fail mode is the third family, and it is the one the row never names.
+			name: "invalid fail-open falls back",
+			fileEnv: map[string]string{
+				"AGENTO11Y_GUARDS_ENABLED":   "true",
+				"AGENTO11Y_GUARDS_FAIL_OPEN": "fals",
+			},
+			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true, wantFellBack: true,
+			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceConfig, wantHealth: HealthWarn,
+			wantMsg:      "the AGENTO11Y_GUARDS_FAIL_OPEN value is invalid; guards use the default",
+			wantRendered: "guards:          enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, config.env)",
+		},
+		{
+			// Only GUARDS_ENABLED names the row, and it is unset, so the row
+			// reports the default even though a timeout is configured.
+			name:    "timeout alone leaves the row on its default",
+			fileEnv: map[string]string{"AGENTO11Y_GUARDS_TIMEOUT_MS": "800"},
+			// TimeoutMs is still resolved; the row just cannot claim a key for it.
+			wantEnabled: false, wantTimeoutMs: 800, wantFailOpen: true,
+			wantRendered: "guards:          disabled (default)",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// ResolveGuards reads the process env directly, so isolateEnv has to
-			// clear the host's GUARDS_* values before the case sets its own.
+			// collectConfig reads guards from the snapshot alone, but it still calls
+			// dotenv.FilePath(), which follows HOME. Without isolateEnv the developer's
+			// own config.env decides Path, Exists and DisallowedKeys, which the
+			// rendered rows below are matched against.
 			isolateEnv(t)
-			t.Setenv(envconfig.PreferredKey("GUARDS_ENABLED"), tc.enabled)
-			t.Setenv(envconfig.PreferredKey("GUARDS_TIMEOUT_MS"), tc.timeout)
-			t.Setenv(envconfig.PreferredKey("GUARDS_FAIL_OPEN"), tc.failOpen)
 
-			sec := collectConfig(nil, nil)
+			sec := collectConfig(tc.osEnv, tc.fileEnv)
 			if sec.GuardsEnabled != tc.wantEnabled {
 				t.Fatalf("GuardsEnabled = %v, want %v", sec.GuardsEnabled, tc.wantEnabled)
 			}
@@ -699,8 +1193,71 @@ func TestCollectConfig_Guards(t *testing.T) {
 			if sec.GuardsFellBack != tc.wantFellBack {
 				t.Fatalf("GuardsFellBack = %v, want %v", sec.GuardsFellBack, tc.wantFellBack)
 			}
+			if sec.GuardsKey != tc.wantKey || sec.GuardsSource != tc.wantSource {
+				t.Fatalf("guards provenance = %q/%q, want %q/%q",
+					sec.GuardsKey, sec.GuardsSource, tc.wantKey, tc.wantSource)
+			}
 			if tc.wantHealth != "" && sec.Health != tc.wantHealth {
 				t.Fatalf("health = %q, want %q", sec.Health, tc.wantHealth)
+			}
+			if tc.wantMsg != "" && !strings.Contains(strings.Join(sec.Messages, " "), tc.wantMsg) {
+				t.Fatalf("messages %v missing %q", sec.Messages, tc.wantMsg)
+			}
+			if tc.wantRendered == "" {
+				return
+			}
+			var buf bytes.Buffer
+			renderHuman(&buf, &Report{Config: sec}, false)
+			if !strings.Contains(buf.String(), tc.wantRendered) {
+				t.Fatalf("rendered report missing %q:\n%s", tc.wantRendered, buf.String())
+			}
+		})
+	}
+}
+
+// TestCollectConfig_GuardsFaultsMatchEnvconfig pins doctor's fault detection to
+// envconfig's. collectConfig names the rejected variable itself rather than
+// reading the resolver's diagnostics, so without this a rule that changed in
+// envconfig alone would leave doctor calling a discarded value good, or naming a
+// variable the hooks accepted.
+func TestCollectConfig_GuardsFaultsMatchEnvconfig(t *testing.T) {
+	envs := []map[string]string{
+		nil,
+		{"AGENTO11Y_GUARDS_ENABLED": "true"},
+		{"AGENTO11Y_GUARDS_ENABLED": "maybe"},
+		{"AGENTO11Y_GUARDS_TIMEOUT_MS": "500"},
+		{"AGENTO11Y_GUARDS_TIMEOUT_MS": "0"},
+		{"SIGIL_GUARDS_TIMEOUT_MS": "abc"},
+		{"AGENTO11Y_GUARDS_FAIL_OPEN": "off"},
+		{"AGENTO11Y_GUARDS_FAIL_OPEN": "fals"},
+		{"AGENTO11Y_GUARDS_ENABLED": "ture", "SIGIL_GUARDS_TIMEOUT_MS": "-3"},
+	}
+	for _, osEnv := range envs {
+		// fmt prints a map in sorted key order, so the subtest name is stable.
+		t.Run(fmt.Sprint(osEnv), func(t *testing.T) {
+			isolateEnv(t)
+
+			// The resolver's own diagnostics are the reference: it logs one line per
+			// value it rejects.
+			var buf bytes.Buffer
+			envconfig.ResolveGuardsWith(log.New(&buf, "", 0), func(suffix string) (value, key string, ok bool) {
+				r := resolveFamily(suffix, osEnv, nil)
+				return r.value, r.key, r.set
+			})
+			logged := buf.String()
+
+			sec := collectConfig(osEnv, nil)
+			if want := logged != ""; sec.GuardsFellBack != want {
+				t.Fatalf("GuardsFellBack = %v, want %v (envconfig logged %q)", sec.GuardsFellBack, want, logged)
+			}
+			messages := strings.Join(sec.Messages, " ")
+			for key := range osEnv {
+				if !strings.Contains(logged, key+"=") {
+					continue
+				}
+				if !strings.Contains(messages, key) {
+					t.Fatalf("envconfig rejected %s but messages %v do not name it", key, sec.Messages)
+				}
 			}
 		})
 	}
@@ -741,7 +1298,8 @@ func TestCollectConfig_Tags(t *testing.T) {
 			},
 			wantTags:   map[string]string{"env": "prod"},
 			wantSource: sourceEnv,
-			wantMsg:    "AGENTO11Y_TAGS and its other spelling are both set with different values; using AGENTO11Y_TAGS",
+			wantMsg: "AGENTO11Y_TAGS and SIGIL_TAGS are both set in the environment, to different values; using AGENTO11Y_TAGS. " +
+				"SIGIL_TAGS is the old name for the same setting: unset it.",
 		},
 		{
 			name:       "legacy-only tags suggest migration",
@@ -810,7 +1368,7 @@ func TestCollectConfig_Local(t *testing.T) {
 			wantSource:   sourceConfig,
 			wantHealth:   HealthOK,
 			wantScopeMsg: true,
-			wantRendered: []string{"local mode", "true (config.env)"},
+			wantRendered: []string{"local mode", "true (AGENTO11Y_LOCAL, config.env)"},
 		},
 		{
 			name:         "from env",
@@ -819,7 +1377,7 @@ func TestCollectConfig_Local(t *testing.T) {
 			wantSource:   sourceEnv,
 			wantHealth:   HealthOK,
 			wantScopeMsg: true,
-			wantRendered: []string{"local mode", "true (env)"},
+			wantRendered: []string{"local mode", "true (AGENTO11Y_LOCAL, env)"},
 		},
 		{
 			name:         "legacy spelling",
@@ -829,7 +1387,7 @@ func TestCollectConfig_Local(t *testing.T) {
 			wantHealth:   HealthOK,
 			wantScopeMsg: true,
 			wantMsg:      "the preferred name is AGENTO11Y_LOCAL",
-			wantRendered: []string{"on (env)"},
+			wantRendered: []string{"on (SIGIL_LOCAL, env)"},
 		},
 		{
 			// The one-off Cloud session: the shell value is what the launcher
@@ -840,20 +1398,22 @@ func TestCollectConfig_Local(t *testing.T) {
 			wantValue:       "false",
 			wantSource:      sourceEnv,
 			wantHealth:      HealthOK,
-			wantRendered:    []string{"false (env)"},
+			wantRendered:    []string{"false (AGENTO11Y_LOCAL, env)"},
 			wantNotRendered: []string{"invalid value"},
 		},
 		{
-			// The launcher ignores a value outside the boolean whitelist, so a
-			// report that prints it plainly confirms the wrong belief.
-			name:         "value outside the boolean whitelist",
-			osEnv:        map[string]string{"AGENTO11Y_LOCAL": "enabled"},
-			wantValue:    "enabled",
-			wantSource:   sourceEnv,
-			wantInvalid:  true,
-			wantHealth:   HealthWarn,
-			wantMsg:      "the AGENTO11Y_LOCAL value is not a boolean; local mode stays off",
-			wantRendered: []string{"enabled (env)", "invalid value, local mode is off"},
+			// The launcher ignores a value outside the boolean whitelist, so the row
+			// states the mode in force and keeps the rejected value in its one
+			// trailer. Printing "enabled" as the state would confirm the wrong belief.
+			name:            "value outside the boolean whitelist",
+			osEnv:           map[string]string{"AGENTO11Y_LOCAL": "enabled"},
+			wantValue:       "enabled",
+			wantSource:      sourceEnv,
+			wantInvalid:     true,
+			wantHealth:      HealthWarn,
+			wantMsg:         "the AGENTO11Y_LOCAL value is not a boolean; local mode stays off",
+			wantRendered:    []string{`local mode:      off (AGENTO11Y_LOCAL="enabled" is not a boolean, env)`},
+			wantNotRendered: []string{"enabled (AGENTO11Y_LOCAL, env)", "invalid value, local mode is off"},
 		},
 	}
 	for _, tc := range tests {
@@ -885,7 +1445,7 @@ func TestCollectConfig_Local(t *testing.T) {
 			}
 
 			var buf bytes.Buffer
-			renderHuman(&buf, &Report{Config: sec}, false, false)
+			renderHuman(&buf, &Report{Config: sec}, false)
 			rendered := buf.String()
 			for _, want := range tc.wantRendered {
 				if !strings.Contains(rendered, want) {
@@ -1088,11 +1648,6 @@ func TestCollectConfig_LocalHookForward(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateEnv(t)
-			// ResolveGuards reads the process environment directly, so the
-			// guard toggle has to be exported as well as passed in.
-			for k, v := range tc.env {
-				t.Setenv(k, v)
-			}
 
 			sec := collectConfig(tc.env, tc.fileEnv)
 			if tc.wantMessage == "" {
@@ -1118,15 +1673,15 @@ func TestCollectConfig_LocalHookForward(t *testing.T) {
 			// The rendered report must state the Cloud reach only when it is
 			// real, and must give the reason otherwise.
 			var buf bytes.Buffer
-			renderHuman(&buf, &Report{Config: sec}, false, false)
+			renderHuman(&buf, &Report{Config: sec}, false)
 			rendered := buf.String()
 			if tc.wantEnabled {
-				if !strings.Contains(rendered, "local hook evaluation reaches Cloud") {
+				if !strings.Contains(rendered, "forwarded to Cloud") {
 					t.Fatalf("rendered report missing the Cloud reach line:\n%s", rendered)
 				}
 				return
 			}
-			if strings.Contains(rendered, "local hook evaluation reaches Cloud") {
+			if strings.Contains(rendered, "forwarded to Cloud") {
 				t.Fatalf("rendered report claims Cloud reach when the leg is off:\n%s", rendered)
 			}
 			if sec.LocalForward.Set && !strings.Contains(rendered, tc.wantReason) {
@@ -1174,6 +1729,48 @@ func TestRun(t *testing.T) {
 				for _, key := range []string{"agento11y", "config", "conversations", "analytics", "agents"} {
 					if _, ok := report[key]; !ok {
 						t.Fatalf("JSON missing section %q", key)
+					}
+				}
+			},
+		},
+		{
+			// Support reads this shape. Each reported value carries the winning key
+			// and source, one field per fact, and never the token itself.
+			name: "json carries provenance for every reported value",
+			args: []string{"--json"},
+			osEnv: mergeEnv(healthy, map[string]string{
+				"AGENTO11Y_AUTH_TOKEN":           "glc_secret",
+				"AGENTO11Y_TAGS":                 "env=prod",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "full",
+				"AGENTO11Y_GUARDS_ENABLED":       "true",
+				"AGENTO11Y_AUTO_UPDATE":          "false",
+			}),
+			stub:     true,
+			wantCode: 0,
+			check: func(t *testing.T, stdout string) {
+				if strings.Contains(stdout, "glc_secret") {
+					t.Fatalf("token value leaked into JSON output:\n%s", stdout)
+				}
+				// endpoint.key already carries the endpoint variable name, so the
+				// second field for the same fact is gone.
+				if strings.Contains(stdout, "endpoint_var") {
+					t.Fatalf("endpoint_var is still in the JSON contract:\n%s", stdout)
+				}
+				var report Report
+				if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+					t.Fatalf("invalid JSON: %v", err)
+				}
+				for _, field := range []struct{ name, got, want string }{
+					{"analytics.endpoint.key", report.Analytics.Endpoint.Key, "SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"},
+					{"config.tags_key", report.Config.TagsKey, "AGENTO11Y_TAGS"},
+					{"config.content_capture_key", report.Config.ContentModeKey, "AGENTO11Y_CONTENT_CAPTURE_MODE"},
+					{"config.content_capture_source", report.Config.ContentModeSource, sourceEnv},
+					{"config.guards_key", report.Config.GuardsKey, "AGENTO11Y_GUARDS_ENABLED"},
+					{"config.guards_source", report.Config.GuardsSource, sourceEnv},
+					{"auto_update.key", report.AutoUpdate.Key, "AGENTO11Y_AUTO_UPDATE"},
+				} {
+					if field.got != field.want {
+						t.Errorf("%s = %q, want %q", field.name, field.got, field.want)
 					}
 				}
 			},

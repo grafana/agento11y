@@ -63,6 +63,12 @@ func LookupEnv(suffix string) (value, key string, ok bool) {
 	return "", "", false
 }
 
+// Lookup resolves an alias family to its value and the spelling that won.
+// LookupEnv is the process-env implementation; doctor supplies one backed by
+// its pre-merge snapshot so it can attribute a value to the shell or
+// config.env.
+type Lookup func(suffix string) (value, key string, ok bool)
+
 // LookupMap resolves a branded variable from a config map (as returned by
 // dotenv.LoadDotenv) with the same preferred-first precedence LookupEnv
 // applies to the process environment. The returned key names the spelling the
@@ -338,19 +344,27 @@ const (
 // results across plugins. Hooks must not write to stderr, so callers pass
 // their adapter logger here.
 func ResolveGuards(logger *log.Logger) GuardsConfig {
+	return ResolveGuardsWith(logger, LookupEnv)
+}
+
+// ResolveGuardsWith resolves the guard configuration from an arbitrary lookup,
+// applying the same defaults and diagnostics as ResolveGuards. Doctor passes a
+// lookup backed by its env snapshot so it reports the values the hooks resolve
+// and can name the variable each one came from.
+func ResolveGuardsWith(logger *log.Logger, look Lookup) GuardsConfig {
 	cfg := GuardsConfig{
-		Enabled:   resolveGuardsBool(logger, "GUARDS_ENABLED", defaultGuardsEnabled),
+		Enabled:   resolveGuardsBool(logger, look, "GUARDS_ENABLED", defaultGuardsEnabled),
 		TimeoutMs: DefaultGuardsTimeoutMs,
-		FailOpen:  resolveGuardsBool(logger, "GUARDS_FAIL_OPEN", defaultGuardsFailOpen),
+		FailOpen:  resolveGuardsBool(logger, look, "GUARDS_FAIL_OPEN", defaultGuardsFailOpen),
 	}
-	if v, key, ok := LookupEnv("GUARDS_TIMEOUT_MS"); ok {
+	if v, key, ok := look("GUARDS_TIMEOUT_MS"); ok {
 		cfg.TimeoutMs = IntValue(logger, key, v, DefaultGuardsTimeoutMs)
 	}
 	return cfg
 }
 
-func resolveGuardsBool(logger *log.Logger, suffix string, def bool) bool {
-	raw, key, ok := LookupEnv(suffix)
+func resolveGuardsBool(logger *log.Logger, look Lookup, suffix string, def bool) bool {
+	raw, key, ok := look(suffix)
 	if !ok {
 		return def
 	}
@@ -365,14 +379,27 @@ func IntValue(logger *log.Logger, key, raw string, def int) int {
 	if raw == "" {
 		return def
 	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
+	n, ok := ParseIntValue(raw)
+	if !ok {
 		if logger != nil {
 			logger.Printf("config: invalid %s=%q; using %d", key, raw, def)
 		}
 		return def
 	}
 	return n
+}
+
+// ParseIntValue parses a positive config integer. ok is false for a
+// non-numeric, zero, or negative value, which is what IntValue reports and
+// falls back on. A caller that only needs to know whether a value would be
+// rejected, such as doctor naming the variable to fix, uses this rather than
+// restating the rule.
+func ParseIntValue(raw string) (value int, ok bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 // BoolValue parses a config boolean from raw using the guards whitelist

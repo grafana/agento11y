@@ -18,15 +18,21 @@ var probeTenant = envValue{Set: true, Value: "tenant-1", Key: "AGENTO11Y_AUTH_TE
 
 func TestProbeConversations(t *testing.T) {
 	tests := []struct {
-		name    string
-		status  int
-		badURL  bool // probe an unparseable endpoint instead of the test server
-		wantOK  bool
-		wantMsg []string // substrings the probe message must contain
-		skipMsg []string // substrings the probe message must not contain
-		wantErr bool     // transport error: status 0 with a message, server never hit
+		name        string
+		status      int
+		location    string // Location header the probed handler sets
+		endpointSuf string // appended to the test server URL to form the endpoint
+		badURL      bool   // probe an unparseable endpoint instead of the test server
+		wantOK      bool
+		wantErr     bool     // transport error: status 0 with a message, server never hit
+		wantPath    string   // probed path; defaults to wire.GenerationExportHTTPPath
+		wantMsg     []string // substrings the probe message must contain
+		skipMsg     []string // substrings the probe message must not contain
+		wantNoMsg   bool     // the probe must report no message at all
 	}{
 		{name: "200 ok", status: 200, wantOK: true},
+		{name: "202 accepted", status: 202, wantOK: true},
+		{name: "405 method not allowed proves reach", status: 405, wantOK: true},
 		{
 			// 401 is what a bad token and a wrong tenant id both
 			// return, so the message must not blame the scope.
@@ -41,24 +47,56 @@ func TestProbeConversations(t *testing.T) {
 		{
 			name:    "403 blames scope",
 			status:  403,
-			wantMsg: []string{"missing sigil:write scope"},
+			wantMsg: []string{"missing the sigil:write scope"},
 			skipMsg: []string{"credentials rejected"},
 		},
-		{name: "400 reachable", status: 400, wantOK: false},
+		{name: "400 does not count", status: 400, wantOK: false},
+		{name: "404 does not count", status: 404, wantOK: false},
 		{name: "invalid endpoint", badURL: true, wantErr: true},
+		{
+			// The reported failure: a Grafana stack URL bounces the export POST
+			// to /login. Following it would report the login page's 200.
+			name: "302 is not followed", status: 302, location: "/login",
+			wantOK: false, wantMsg: []string{"redirected to /login"},
+		},
+		{name: "301 without a location is not followed", status: 301, wantOK: false, wantNoMsg: true},
+		{
+			// The exporters append the export path to whatever endpoint is
+			// configured, so a base-path endpoint must be probed the same way.
+			name: "base path endpoint gets the export path", status: 200, endpointSuf: "/plugins/grafana-agento11y-app",
+			wantOK: true, wantPath: "/plugins/grafana-agento11y-app" + wire.GenerationExportHTTPPath,
+		},
+		{
+			name: "endpoint already ending in the export path is not doubled", status: 200,
+			endpointSuf: wire.GenerationExportHTTPPath, wantOK: true,
+		},
+		{
+			// Routes are registered exactly, so the canonical path is probed.
+			name: "trailing slash after the export path is trimmed", status: 200,
+			endpointSuf: wire.GenerationExportHTTPPath + "/", wantOK: true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var gotPath, gotTenant, gotAuth string
+			var redirectTargetHit bool
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/login" {
+					redirectTargetHit = true
+					w.WriteHeader(200)
+					return
+				}
 				gotPath = r.URL.Path
 				gotTenant = r.Header.Get("X-Scope-OrgID")
 				gotAuth = r.Header.Get("Authorization")
+				if tc.location != "" {
+					w.Header().Set("Location", tc.location)
+				}
 				w.WriteHeader(tc.status)
 			}))
 			defer srv.Close()
 
-			url := srv.URL
+			url := srv.URL + tc.endpointSuf
 			if tc.badURL {
 				url = "://bad"
 			}
@@ -76,6 +114,14 @@ func TestProbeConversations(t *testing.T) {
 			if res.OK != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", res.OK, tc.wantOK)
 			}
+			if redirectTargetHit {
+				t.Fatal("probe followed the redirect")
+			}
+			// Asserted so a redirect without a Location header cannot render a
+			// dangling "redirected to ".
+			if tc.wantNoMsg && res.Message != "" {
+				t.Fatalf("message = %q, want none", res.Message)
+			}
 			for _, want := range tc.wantMsg {
 				if !strings.Contains(res.Message, want) {
 					t.Fatalf("message %q missing %q", res.Message, want)
@@ -86,8 +132,12 @@ func TestProbeConversations(t *testing.T) {
 					t.Fatalf("message %q must not contain %q", res.Message, skip)
 				}
 			}
-			if gotPath != wire.GenerationExportHTTPPath {
-				t.Fatalf("probe hit %q, want %q", gotPath, wire.GenerationExportHTTPPath)
+			wantPath := tc.wantPath
+			if wantPath == "" {
+				wantPath = wire.GenerationExportHTTPPath
+			}
+			if gotPath != wantPath {
+				t.Fatalf("probe hit %q, want %q", gotPath, wantPath)
 			}
 			wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("tenant-1:glc_tok"))
 			if gotTenant != "tenant-1" || gotAuth != wantAuth {
@@ -171,7 +221,7 @@ func TestProbeOTLP(t *testing.T) {
 			name:    "403 blames scope",
 			status:  403,
 			tenant:  probeTenant,
-			wantMsg: []string{"missing metrics:write/traces:write scope"},
+			wantMsg: []string{"missing the metrics:write/traces:write scope"},
 			skipMsg: []string{"credentials rejected"},
 		},
 	}

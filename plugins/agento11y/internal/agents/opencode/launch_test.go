@@ -662,6 +662,27 @@ func withConfigFiles(t *testing.T, files map[string]string) string {
 	return dir
 }
 
+// withCache points cacheDirFn at a temp directory and writes the supplied
+// files into it, creating parent directories. Keys are slash-separated paths
+// relative to the cache directory. Returns the cache directory.
+func withCache(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for rel, contents := range files {
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	prev := cacheDirFn
+	t.Cleanup(func() { cacheDirFn = prev })
+	cacheDirFn = func() (string, error) { return dir, nil }
+	return dir
+}
+
 func withLookPath(t *testing.T, fn func(string) (string, error)) {
 	t.Helper()
 	prev := lookPath
@@ -723,23 +744,163 @@ func TestVersionFromNpmSpec(t *testing.T) {
 
 func TestStatus(t *testing.T) {
 	tests := []struct {
-		name          string
-		config        string
+		name   string
+		config string
+		// cache holds files written under the fake opencode cache directory,
+		// keyed by slash-separated relative path.
+		cache         map[string]string
 		wantInstalled bool
 		wantVersion   string
 	}{
 		{name: "installed", config: `{"plugin":["@grafana/agento11y-opencode@0.6.0"]}`, wantInstalled: true, wantVersion: "0.6.0"},
 		{name: "legacy name installed", config: `{"plugin":["@grafana/sigil-opencode@0.13.0"]}`, wantInstalled: true, wantVersion: "0.13.0"},
 		{name: "not installed", config: `{"plugin":["other-plugin"]}`, wantInstalled: false},
+		// The common real install: a bare spec, which opencode resolves as
+		// `<name>@latest` and installs into its cache under that raw spec.
+		{
+			name:   "bare spec resolves from the cache tree",
+			config: `{"plugin":["@grafana/agento11y-opencode"]}`,
+			cache: map[string]string{
+				"packages/@grafana/agento11y-opencode@latest/node_modules/@grafana/agento11y-opencode/package.json": `{"name":"@grafana/agento11y-opencode","version":"0.19.0"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.19.0",
+		},
+		{
+			name:   "bare legacy spec resolves from the cache tree",
+			config: `{"plugin":["@grafana/sigil-opencode"]}`,
+			cache: map[string]string{
+				"packages/@grafana/sigil-opencode@latest/node_modules/@grafana/sigil-opencode/package.json": `{"name":"@grafana/sigil-opencode","version":"0.13.0"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.13.0",
+		},
+		// A dist tag is passed through as written, so the cache directory is
+		// named with the tag and only the tree knows the number.
+		{
+			name:   "dist tag resolves from the cache tree",
+			config: `{"plugin":["@grafana/agento11y-opencode@next"]}`,
+			cache: map[string]string{
+				"packages/@grafana/agento11y-opencode@next/node_modules/@grafana/agento11y-opencode/package.json": `{"name":"@grafana/agento11y-opencode","version":"0.20.0-rc.1"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.20.0-rc.1",
+		},
+		// The cache is what opencode loads, so it wins over a disagreeing pin.
+		{
+			name:   "cache tree wins over a disagreeing pinned spec",
+			config: `{"plugin":["@grafana/agento11y-opencode@0.6.0"]}`,
+			cache: map[string]string{
+				"packages/@grafana/agento11y-opencode@0.6.0/node_modules/@grafana/agento11y-opencode/package.json": `{"name":"@grafana/agento11y-opencode","version":"0.6.1"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.6.1",
+		},
+		// A cache directory for a different spec is not what opencode loads for
+		// this config entry, so it must not answer.
+		{
+			name:   "cache tree for another spec is ignored",
+			config: `{"plugin":["@grafana/agento11y-opencode"]}`,
+			cache: map[string]string{
+				"packages/@grafana/agento11y-opencode@0.6.0/node_modules/@grafana/agento11y-opencode/package.json": `{"name":"@grafana/agento11y-opencode","version":"0.6.0"}`,
+			},
+			wantInstalled: true,
+		},
+		// Pre-migration opencode installed plugins straight under the cache root.
+		{
+			name:   "legacy cache layout",
+			config: `{"plugin":["@grafana/agento11y-opencode"]}`,
+			cache: map[string]string{
+				"node_modules/@grafana/agento11y-opencode/package.json": `{"name":"@grafana/agento11y-opencode","version":"0.18.0"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.18.0",
+		},
+		{
+			name:   "current cache layout wins over the legacy one",
+			config: `{"plugin":["@grafana/agento11y-opencode"]}`,
+			cache: map[string]string{
+				"packages/@grafana/agento11y-opencode@latest/node_modules/@grafana/agento11y-opencode/package.json": `{"name":"@grafana/agento11y-opencode","version":"0.19.0"}`,
+				"node_modules/@grafana/agento11y-opencode/package.json":                                             `{"name":"@grafana/agento11y-opencode","version":"0.18.0"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.19.0",
+		},
+		// Cache reads are best-effort: an absent or unreadable tree means the
+		// version is unknown, and a pinned spec still answers.
+		{
+			name:          "bare spec with no cache tree",
+			config:        `{"plugin":["@grafana/agento11y-opencode"]}`,
+			wantInstalled: true,
+		},
+		{
+			name:   "malformed cache package.json falls back to the pinned spec",
+			config: `{"plugin":["@grafana/agento11y-opencode@0.6.0"]}`,
+			cache: map[string]string{
+				"packages/@grafana/agento11y-opencode@0.6.0/node_modules/@grafana/agento11y-opencode/package.json": `{"name":`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.6.0",
+		},
+		{
+			name:   "cache package.json without a version",
+			config: `{"plugin":["@grafana/agento11y-opencode"]}`,
+			cache: map[string]string{
+				"packages/@grafana/agento11y-opencode@latest/node_modules/@grafana/agento11y-opencode/package.json": `{"name":"@grafana/agento11y-opencode"}`,
+			},
+			wantInstalled: true,
+		},
+		// A tuple entry carries options next to the spec; the spec still resolves.
+		{
+			name:   "tuple entry resolves from the cache tree",
+			config: `{"plugin":[["@grafana/agento11y-opencode",{"foo":true}]]}`,
+			cache: map[string]string{
+				"packages/@grafana/agento11y-opencode@latest/node_modules/@grafana/agento11y-opencode/package.json": `{"name":"@grafana/agento11y-opencode","version":"0.19.0"}`,
+			},
+			wantInstalled: true,
+			wantVersion:   "0.19.0",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			withConfig(t, tc.config)
+			withCache(t, tc.cache)
 
 			installed, version, err := Status(context.Background())
 			require.NoError(t, err)
 			require.Equal(t, tc.wantInstalled, installed)
 			require.Equal(t, tc.wantVersion, version)
+		})
+	}
+}
+
+func TestDefaultCacheDir(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", "/custom/cache")
+	got, err := defaultCacheDir()
+	require.NoError(t, err)
+	assert.Equal(t, "/custom/cache/opencode", got)
+
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", "/home/user")
+	got, err = defaultCacheDir()
+	require.NoError(t, err)
+	assert.Equal(t, "/home/user/.cache/opencode", got)
+}
+
+func TestCachedPackageSpec(t *testing.T) {
+	cases := []struct {
+		source string
+		want   string
+	}{
+		// opencode rewrites a bare name to `<name>@latest` before installing, and
+		// names the cache directory after the spec it installed.
+		{source: "@grafana/agento11y-opencode", want: "@grafana/agento11y-opencode@latest"},
+		{source: "@grafana/agento11y-opencode@0.6.0", want: "@grafana/agento11y-opencode@0.6.0"},
+		{source: "@grafana/agento11y-opencode@next", want: "@grafana/agento11y-opencode@next"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.source, func(t *testing.T) {
+			require.Equal(t, tc.want, cachedPackageSpec(tc.source))
 		})
 	}
 }

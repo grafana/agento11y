@@ -71,6 +71,39 @@ func TestParseBoolValue(t *testing.T) {
 	}
 }
 
+// TestParseIntValue pins the rule IntValue falls back on, which doctor reads to
+// name a rejected timeout without restating what counts as valid.
+func TestParseIntValue(t *testing.T) {
+	cases := []struct {
+		in     string
+		want   int
+		wantOK bool
+	}{
+		{in: "1500", want: 1500, wantOK: true},
+		{in: " 500 ", want: 500, wantOK: true},
+		{in: ""},
+		{in: "abc"},
+		{in: "0"},
+		{in: "-1"},
+		{in: "1.5"},
+	}
+	for _, tc := range cases {
+		got, gotOK := ParseIntValue(tc.in)
+		if got != tc.want || gotOK != tc.wantOK {
+			t.Errorf("ParseIntValue(%q) = (%d, %v), want (%d, %v)", tc.in, got, gotOK, tc.want, tc.wantOK)
+		}
+		// IntValue treats an empty value as "unset" rather than a fault, so it is
+		// the one input where the two disagree.
+		wantIntValue := 42
+		if tc.wantOK {
+			wantIntValue = tc.want
+		}
+		if got := IntValue(nil, "AGENTO11Y_GUARDS_TIMEOUT_MS", tc.in, 42); got != wantIntValue {
+			t.Errorf("IntValue(%q, def 42) = %d, want %d", tc.in, got, wantIntValue)
+		}
+	}
+}
+
 func TestEnvOr(t *testing.T) {
 	t.Setenv("SIGIL_TEST_PRESENT", "present")
 	t.Setenv("SIGIL_TEST_EMPTY", "")
@@ -117,6 +150,11 @@ func TestParseExtraTags(t *testing.T) {
 	}
 }
 
+// TestResolveGuards drives both entry points over the same cases: ResolveGuards
+// reads the process env, and ResolveGuardsWith reads the same values through a
+// map-backed Lookup, which is how doctor resolves them from its pre-merge
+// snapshot. Sharing the table anchors both to a concrete GuardsConfig, so the
+// two cannot drift into agreeing on a wrong answer.
 func TestResolveGuards(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -225,17 +263,67 @@ func TestResolveGuards(t *testing.T) {
 				t.Setenv(k, v)
 			}
 
-			var buf bytes.Buffer
-			logger := log.New(&buf, "", 0)
-			got := ResolveGuards(logger)
-			if got != tt.want {
-				t.Errorf("ResolveGuards() = %+v, want %+v", got, tt.want)
+			for _, entry := range []struct {
+				name    string
+				resolve func(*log.Logger) GuardsConfig
+			}{
+				{"ResolveGuards", ResolveGuards},
+				{"ResolveGuardsWith", func(l *log.Logger) GuardsConfig {
+					return ResolveGuardsWith(l, mapLookup(tt.env))
+				}},
+			} {
+				var buf bytes.Buffer
+				got := entry.resolve(log.New(&buf, "", 0))
+				if got != tt.want {
+					t.Errorf("%s() = %+v, want %+v", entry.name, got, tt.want)
+				}
+				if tt.wantLog != "" && !strings.Contains(buf.String(), tt.wantLog) {
+					t.Errorf("%s log output = %q, want substring %q", entry.name, buf.String(), tt.wantLog)
+				}
+				if tt.wantLog == "" && buf.Len() != 0 {
+					t.Errorf("%s unexpected log output: %q", entry.name, buf.String())
+				}
 			}
-			if tt.wantLog != "" && !strings.Contains(buf.String(), tt.wantLog) {
-				t.Errorf("log output = %q, want substring %q", buf.String(), tt.wantLog)
+		})
+	}
+}
+
+// mapLookup is a Lookup backed by a plain map, standing in for the pre-merge
+// env snapshot doctor resolves from.
+func mapLookup(env map[string]string) Lookup {
+	return func(suffix string) (value, key string, ok bool) {
+		return LookupMap(env, suffix)
+	}
+}
+
+// TestResolveContentMode covers the process-env wrapper: which spelling supplies
+// the mode, which is the one thing the value-level table below cannot reach.
+func TestResolveContentMode(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want agento11y.ContentCaptureMode
+	}{
+		{name: "unset is metadata_only", want: agento11y.ContentCaptureModeMetadataOnly},
+		{name: "preferred spelling", env: map[string]string{"AGENTO11Y_CONTENT_CAPTURE_MODE": "full"}, want: agento11y.ContentCaptureModeFull},
+		{name: "legacy spelling", env: map[string]string{"SIGIL_CONTENT_CAPTURE_MODE": "no_tool_content"}, want: agento11y.ContentCaptureModeNoToolContent},
+		{
+			name: "preferred wins over legacy",
+			env: map[string]string{
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "full",
+				"SIGIL_CONTENT_CAPTURE_MODE":     "no_tool_content",
+			},
+			want: agento11y.ContentCaptureModeFull,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			PinAliasEnvBlank(t)
+			for k, v := range tt.env {
+				t.Setenv(k, v)
 			}
-			if tt.wantLog == "" && buf.Len() != 0 {
-				t.Errorf("unexpected log output: %q", buf.String())
+			if got := ResolveContentMode(nil); got != tt.want {
+				t.Errorf("ResolveContentMode() = %v, want %v", got, tt.want)
 			}
 		})
 	}

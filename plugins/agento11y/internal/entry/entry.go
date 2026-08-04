@@ -116,7 +116,7 @@ func localPrivacyLines(posture local.ForwardPosture, known bool) []string {
 	}
 }
 
-const usageLine = "usage: agento11y login | agento11y doctor [--json] [--probe] | agento11y local start|status|stop | agento11y cursor install|uninstall | agento11y <agent> hook | agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
+const usageLine = "usage: agento11y login | agento11y doctor [--json] | agento11y local start|status|stop | agento11y cursor install|uninstall | agento11y <agent> hook | agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
 
 // version is the build version received from the calling main package via
 // Main. It stays a package var (defaulting to "dev") so tests can override
