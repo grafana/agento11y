@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.24.0] - 2026-08-04
+
+### Features
+
+- **plugins/agento11y**: check credentials and accept flags in login (#530)
+- **plugins/agento11y**: import Claude Code and Codex session history (#531)
+
+### Bug Fixes
+
+- **plugins/agento11y**: improve doctor endpoint checks (#520)
+- **plugins/agento11y**: separate 401 and 403 in doctor --probe (#508)
+- **plugins/agento11y**: give Claude Code spans real time windows (#519)
+
+### Performance
+
+- **plugins/agento11y**: stop decoding all files on each local viewer request (#521)
+
+### Documentation
+
+- add Vibe to agent list and fix auto-update docs (#507)
+
 ## [0.23.0] - 2026-08-03
 
 ### Features
