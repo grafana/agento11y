@@ -123,6 +123,7 @@ func fullContentGeneration() *agento11yv1.Generation {
 			CacheReadInputTokens:  16,
 			CacheWriteInputTokens: 8,
 			ReasoningTokens:       4,
+			InputSemantics:        agento11yv1.TokenInputSemantics_TOKEN_INPUT_SEMANTICS_INCLUSIVE,
 		},
 		StopReason:  "end_turn",
 		StartedAt:   timestamppb.New(fixedTime().Add(-time.Second)),

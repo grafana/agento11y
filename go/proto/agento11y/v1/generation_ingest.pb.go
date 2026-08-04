@@ -126,6 +126,62 @@ func (MessageRole) EnumDescriptor() ([]byte, []int) {
 	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{1}
 }
 
+// TokenInputSemantics declares what input_tokens covers, so consumers never
+// have to guess from the provider name.
+type TokenInputSemantics int32
+
+const (
+	// Provider-raw or legacy telemetry. input_tokens follows whatever
+	// convention the provider used; consumers may fall back to a
+	// provider-name heuristic.
+	TokenInputSemantics_TOKEN_INPUT_SEMANTICS_UNSPECIFIED TokenInputSemantics = 0
+	// OTel GenAI semantic conventions: input_tokens includes all input token
+	// types — cache_read_input_tokens and cache_write_input_tokens are
+	// subsets of it, not additions. Fresh (non-cached, non-cache-written)
+	// input is derived as input_tokens - cache_read - cache_write.
+	// https://github.com/open-telemetry/semantic-conventions-genai/blob/main/model/gen-ai/registry.yaml
+	TokenInputSemantics_TOKEN_INPUT_SEMANTICS_INCLUSIVE TokenInputSemantics = 1
+)
+
+// Enum value maps for TokenInputSemantics.
+var (
+	TokenInputSemantics_name = map[int32]string{
+		0: "TOKEN_INPUT_SEMANTICS_UNSPECIFIED",
+		1: "TOKEN_INPUT_SEMANTICS_INCLUSIVE",
+	}
+	TokenInputSemantics_value = map[string]int32{
+		"TOKEN_INPUT_SEMANTICS_UNSPECIFIED": 0,
+		"TOKEN_INPUT_SEMANTICS_INCLUSIVE":   1,
+	}
+)
+
+func (x TokenInputSemantics) Enum() *TokenInputSemantics {
+	p := new(TokenInputSemantics)
+	*p = x
+	return p
+}
+
+func (x TokenInputSemantics) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TokenInputSemantics) Descriptor() protoreflect.EnumDescriptor {
+	return file_agento11y_v1_generation_ingest_proto_enumTypes[2].Descriptor()
+}
+
+func (TokenInputSemantics) Type() protoreflect.EnumType {
+	return &file_agento11y_v1_generation_ingest_proto_enumTypes[2]
+}
+
+func (x TokenInputSemantics) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TokenInputSemantics.Descriptor instead.
+func (TokenInputSemantics) EnumDescriptor() ([]byte, []int) {
+	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{2}
+}
+
 type ArtifactKind int32
 
 const (
@@ -165,11 +221,11 @@ func (x ArtifactKind) String() string {
 }
 
 func (ArtifactKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_agento11y_v1_generation_ingest_proto_enumTypes[2].Descriptor()
+	return file_agento11y_v1_generation_ingest_proto_enumTypes[3].Descriptor()
 }
 
 func (ArtifactKind) Type() protoreflect.EnumType {
-	return &file_agento11y_v1_generation_ingest_proto_enumTypes[2]
+	return &file_agento11y_v1_generation_ingest_proto_enumTypes[3]
 }
 
 func (x ArtifactKind) Number() protoreflect.EnumNumber {
@@ -178,7 +234,7 @@ func (x ArtifactKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ArtifactKind.Descriptor instead.
 func (ArtifactKind) EnumDescriptor() ([]byte, []int) {
-	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{2}
+	return file_agento11y_v1_generation_ingest_proto_rawDescGZIP(), []int{3}
 }
 
 type ExportGenerationsRequest struct {
@@ -904,15 +960,31 @@ func (x *ToolDefinition) GetDeferred() bool {
 }
 
 type TokenUsage struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	InputTokens           int64                  `protobuf:"varint,1,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"`
-	OutputTokens          int64                  `protobuf:"varint,2,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
-	TotalTokens           int64                  `protobuf:"varint,3,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
-	CacheReadInputTokens  int64                  `protobuf:"varint,4,opt,name=cache_read_input_tokens,json=cacheReadInputTokens,proto3" json:"cache_read_input_tokens,omitempty"`
-	CacheWriteInputTokens int64                  `protobuf:"varint,5,opt,name=cache_write_input_tokens,json=cacheWriteInputTokens,proto3" json:"cache_write_input_tokens,omitempty"`
-	ReasoningTokens       int64                  `protobuf:"varint,6,opt,name=reasoning_tokens,json=reasoningTokens,proto3" json:"reasoning_tokens,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Input (prompt) tokens. When input_semantics is INCLUSIVE this covers all
+	// input token types, including both cache buckets, per OTel GenAI semconv.
+	InputTokens int64 `protobuf:"varint,1,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"`
+	// Output (completion) tokens. reasoning_tokens is a sub-bucket of this
+	// value when the provider reports it, never an addition.
+	OutputTokens int64 `protobuf:"varint,2,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
+	// Provider-reported total when available. When derived by an SDK under
+	// INCLUSIVE semantics: total = input_tokens + output_tokens.
+	TotalTokens int64 `protobuf:"varint,3,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
+	// Input tokens served from a provider-managed cache. Included in
+	// input_tokens under INCLUSIVE semantics.
+	CacheReadInputTokens int64 `protobuf:"varint,4,opt,name=cache_read_input_tokens,json=cacheReadInputTokens,proto3" json:"cache_read_input_tokens,omitempty"`
+	// Input tokens written to a provider-managed cache. Included in
+	// input_tokens under INCLUSIVE semantics.
+	CacheWriteInputTokens int64 `protobuf:"varint,5,opt,name=cache_write_input_tokens,json=cacheWriteInputTokens,proto3" json:"cache_write_input_tokens,omitempty"`
+	// Provider-reported reasoning/thinking tokens; explanatory sub-bucket of
+	// output_tokens, never additive.
+	ReasoningTokens int64 `protobuf:"varint,6,opt,name=reasoning_tokens,json=reasoningTokens,proto3" json:"reasoning_tokens,omitempty"`
+	// Self-describing semantics marker set by SDK adapters that positively
+	// identified the provider payload shape. Manual user-supplied usage and
+	// guessed shapes leave it UNSPECIFIED.
+	InputSemantics TokenInputSemantics `protobuf:"varint,8,opt,name=input_semantics,json=inputSemantics,proto3,enum=agento11y.v1.TokenInputSemantics" json:"input_semantics,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *TokenUsage) Reset() {
@@ -985,6 +1057,13 @@ func (x *TokenUsage) GetReasoningTokens() int64 {
 		return x.ReasoningTokens
 	}
 	return 0
+}
+
+func (x *TokenUsage) GetInputSemantics() TokenInputSemantics {
+	if x != nil {
+		return x.InputSemantics
+	}
+	return TokenInputSemantics_TOKEN_INPUT_SEMANTICS_UNSPECIFIED
 }
 
 type Artifact struct {
@@ -1724,7 +1803,7 @@ const file_agento11y_v1_generation_ingest_proto_rawDesc = "" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x12\n" +
 	"\x04type\x18\x03 \x01(\tR\x04type\x12*\n" +
 	"\x11input_schema_json\x18\x04 \x01(\fR\x0finputSchemaJson\x12\x1a\n" +
-	"\bdeferred\x18\x05 \x01(\bR\bdeferred\"\xb5\x02\n" +
+	"\bdeferred\x18\x05 \x01(\bR\bdeferred\"\x81\x03\n" +
 	"\n" +
 	"TokenUsage\x12!\n" +
 	"\finput_tokens\x18\x01 \x01(\x03R\vinputTokens\x12#\n" +
@@ -1732,7 +1811,8 @@ const file_agento11y_v1_generation_ingest_proto_rawDesc = "" +
 	"\ftotal_tokens\x18\x03 \x01(\x03R\vtotalTokens\x125\n" +
 	"\x17cache_read_input_tokens\x18\x04 \x01(\x03R\x14cacheReadInputTokens\x127\n" +
 	"\x18cache_write_input_tokens\x18\x05 \x01(\x03R\x15cacheWriteInputTokens\x12)\n" +
-	"\x10reasoning_tokens\x18\x06 \x01(\x03R\x0freasoningTokensJ\x04\b\a\x10\bR\x1bcache_creation_input_tokens\"\xba\x01\n" +
+	"\x10reasoning_tokens\x18\x06 \x01(\x03R\x0freasoningTokens\x12J\n" +
+	"\x0finput_semantics\x18\b \x01(\x0e2!.agento11y.v1.TokenInputSemanticsR\x0einputSemanticsJ\x04\b\a\x10\bR\x1bcache_creation_input_tokens\"\xba\x01\n" +
 	"\bArtifact\x12.\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1a.agento11y.v1.ArtifactKindR\x04kind\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12!\n" +
@@ -1830,7 +1910,10 @@ const file_agento11y_v1_generation_ingest_proto_rawDesc = "" +
 	"\x18MESSAGE_ROLE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11MESSAGE_ROLE_USER\x10\x01\x12\x1a\n" +
 	"\x16MESSAGE_ROLE_ASSISTANT\x10\x02\x12\x15\n" +
-	"\x11MESSAGE_ROLE_TOOL\x10\x03*\x9f\x01\n" +
+	"\x11MESSAGE_ROLE_TOOL\x10\x03*a\n" +
+	"\x13TokenInputSemantics\x12%\n" +
+	"!TOKEN_INPUT_SEMANTICS_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fTOKEN_INPUT_SEMANTICS_INCLUSIVE\x10\x01*\x9f\x01\n" +
 	"\fArtifactKind\x12\x1d\n" +
 	"\x19ARTIFACT_KIND_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15ARTIFACT_KIND_REQUEST\x10\x01\x12\x1a\n" +
@@ -1854,73 +1937,75 @@ func file_agento11y_v1_generation_ingest_proto_rawDescGZIP() []byte {
 	return file_agento11y_v1_generation_ingest_proto_rawDescData
 }
 
-var file_agento11y_v1_generation_ingest_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_agento11y_v1_generation_ingest_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_agento11y_v1_generation_ingest_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_agento11y_v1_generation_ingest_proto_goTypes = []any{
 	(GenerationMode)(0),                 // 0: agento11y.v1.GenerationMode
 	(MessageRole)(0),                    // 1: agento11y.v1.MessageRole
-	(ArtifactKind)(0),                   // 2: agento11y.v1.ArtifactKind
-	(*ExportGenerationsRequest)(nil),    // 3: agento11y.v1.ExportGenerationsRequest
-	(*ExportGenerationsResponse)(nil),   // 4: agento11y.v1.ExportGenerationsResponse
-	(*ExportGenerationResult)(nil),      // 5: agento11y.v1.ExportGenerationResult
-	(*ModelRef)(nil),                    // 6: agento11y.v1.ModelRef
-	(*PartMetadata)(nil),                // 7: agento11y.v1.PartMetadata
-	(*ToolCall)(nil),                    // 8: agento11y.v1.ToolCall
-	(*ToolResult)(nil),                  // 9: agento11y.v1.ToolResult
-	(*Media)(nil),                       // 10: agento11y.v1.Media
-	(*Part)(nil),                        // 11: agento11y.v1.Part
-	(*Message)(nil),                     // 12: agento11y.v1.Message
-	(*ToolDefinition)(nil),              // 13: agento11y.v1.ToolDefinition
-	(*TokenUsage)(nil),                  // 14: agento11y.v1.TokenUsage
-	(*Artifact)(nil),                    // 15: agento11y.v1.Artifact
-	(*Generation)(nil),                  // 16: agento11y.v1.Generation
-	(*ExportWorkflowStepsRequest)(nil),  // 17: agento11y.v1.ExportWorkflowStepsRequest
-	(*ExportWorkflowStepsResponse)(nil), // 18: agento11y.v1.ExportWorkflowStepsResponse
-	(*ExportWorkflowStepResult)(nil),    // 19: agento11y.v1.ExportWorkflowStepResult
-	(*WorkflowStep)(nil),                // 20: agento11y.v1.WorkflowStep
-	nil,                                 // 21: agento11y.v1.Generation.TagsEntry
-	nil,                                 // 22: agento11y.v1.WorkflowStep.TagsEntry
-	(*timestamppb.Timestamp)(nil),       // 23: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),             // 24: google.protobuf.Struct
+	(TokenInputSemantics)(0),            // 2: agento11y.v1.TokenInputSemantics
+	(ArtifactKind)(0),                   // 3: agento11y.v1.ArtifactKind
+	(*ExportGenerationsRequest)(nil),    // 4: agento11y.v1.ExportGenerationsRequest
+	(*ExportGenerationsResponse)(nil),   // 5: agento11y.v1.ExportGenerationsResponse
+	(*ExportGenerationResult)(nil),      // 6: agento11y.v1.ExportGenerationResult
+	(*ModelRef)(nil),                    // 7: agento11y.v1.ModelRef
+	(*PartMetadata)(nil),                // 8: agento11y.v1.PartMetadata
+	(*ToolCall)(nil),                    // 9: agento11y.v1.ToolCall
+	(*ToolResult)(nil),                  // 10: agento11y.v1.ToolResult
+	(*Media)(nil),                       // 11: agento11y.v1.Media
+	(*Part)(nil),                        // 12: agento11y.v1.Part
+	(*Message)(nil),                     // 13: agento11y.v1.Message
+	(*ToolDefinition)(nil),              // 14: agento11y.v1.ToolDefinition
+	(*TokenUsage)(nil),                  // 15: agento11y.v1.TokenUsage
+	(*Artifact)(nil),                    // 16: agento11y.v1.Artifact
+	(*Generation)(nil),                  // 17: agento11y.v1.Generation
+	(*ExportWorkflowStepsRequest)(nil),  // 18: agento11y.v1.ExportWorkflowStepsRequest
+	(*ExportWorkflowStepsResponse)(nil), // 19: agento11y.v1.ExportWorkflowStepsResponse
+	(*ExportWorkflowStepResult)(nil),    // 20: agento11y.v1.ExportWorkflowStepResult
+	(*WorkflowStep)(nil),                // 21: agento11y.v1.WorkflowStep
+	nil,                                 // 22: agento11y.v1.Generation.TagsEntry
+	nil,                                 // 23: agento11y.v1.WorkflowStep.TagsEntry
+	(*timestamppb.Timestamp)(nil),       // 24: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),             // 25: google.protobuf.Struct
 }
 var file_agento11y_v1_generation_ingest_proto_depIdxs = []int32{
-	16, // 0: agento11y.v1.ExportGenerationsRequest.generations:type_name -> agento11y.v1.Generation
-	5,  // 1: agento11y.v1.ExportGenerationsResponse.results:type_name -> agento11y.v1.ExportGenerationResult
-	7,  // 2: agento11y.v1.Part.metadata:type_name -> agento11y.v1.PartMetadata
-	8,  // 3: agento11y.v1.Part.tool_call:type_name -> agento11y.v1.ToolCall
-	9,  // 4: agento11y.v1.Part.tool_result:type_name -> agento11y.v1.ToolResult
-	10, // 5: agento11y.v1.Part.media:type_name -> agento11y.v1.Media
+	17, // 0: agento11y.v1.ExportGenerationsRequest.generations:type_name -> agento11y.v1.Generation
+	6,  // 1: agento11y.v1.ExportGenerationsResponse.results:type_name -> agento11y.v1.ExportGenerationResult
+	8,  // 2: agento11y.v1.Part.metadata:type_name -> agento11y.v1.PartMetadata
+	9,  // 3: agento11y.v1.Part.tool_call:type_name -> agento11y.v1.ToolCall
+	10, // 4: agento11y.v1.Part.tool_result:type_name -> agento11y.v1.ToolResult
+	11, // 5: agento11y.v1.Part.media:type_name -> agento11y.v1.Media
 	1,  // 6: agento11y.v1.Message.role:type_name -> agento11y.v1.MessageRole
-	11, // 7: agento11y.v1.Message.parts:type_name -> agento11y.v1.Part
-	2,  // 8: agento11y.v1.Artifact.kind:type_name -> agento11y.v1.ArtifactKind
-	0,  // 9: agento11y.v1.Generation.mode:type_name -> agento11y.v1.GenerationMode
-	6,  // 10: agento11y.v1.Generation.model:type_name -> agento11y.v1.ModelRef
-	12, // 11: agento11y.v1.Generation.input:type_name -> agento11y.v1.Message
-	12, // 12: agento11y.v1.Generation.output:type_name -> agento11y.v1.Message
-	13, // 13: agento11y.v1.Generation.tools:type_name -> agento11y.v1.ToolDefinition
-	14, // 14: agento11y.v1.Generation.usage:type_name -> agento11y.v1.TokenUsage
-	23, // 15: agento11y.v1.Generation.started_at:type_name -> google.protobuf.Timestamp
-	23, // 16: agento11y.v1.Generation.completed_at:type_name -> google.protobuf.Timestamp
-	21, // 17: agento11y.v1.Generation.tags:type_name -> agento11y.v1.Generation.TagsEntry
-	24, // 18: agento11y.v1.Generation.metadata:type_name -> google.protobuf.Struct
-	15, // 19: agento11y.v1.Generation.raw_artifacts:type_name -> agento11y.v1.Artifact
-	20, // 20: agento11y.v1.ExportWorkflowStepsRequest.workflow_steps:type_name -> agento11y.v1.WorkflowStep
-	19, // 21: agento11y.v1.ExportWorkflowStepsResponse.results:type_name -> agento11y.v1.ExportWorkflowStepResult
-	23, // 22: agento11y.v1.WorkflowStep.started_at:type_name -> google.protobuf.Timestamp
-	23, // 23: agento11y.v1.WorkflowStep.completed_at:type_name -> google.protobuf.Timestamp
-	24, // 24: agento11y.v1.WorkflowStep.input_state:type_name -> google.protobuf.Struct
-	24, // 25: agento11y.v1.WorkflowStep.output_state:type_name -> google.protobuf.Struct
-	22, // 26: agento11y.v1.WorkflowStep.tags:type_name -> agento11y.v1.WorkflowStep.TagsEntry
-	24, // 27: agento11y.v1.WorkflowStep.metadata:type_name -> google.protobuf.Struct
-	3,  // 28: agento11y.v1.GenerationIngestService.ExportGenerations:input_type -> agento11y.v1.ExportGenerationsRequest
-	17, // 29: agento11y.v1.WorkflowStepIngestService.ExportWorkflowSteps:input_type -> agento11y.v1.ExportWorkflowStepsRequest
-	4,  // 30: agento11y.v1.GenerationIngestService.ExportGenerations:output_type -> agento11y.v1.ExportGenerationsResponse
-	18, // 31: agento11y.v1.WorkflowStepIngestService.ExportWorkflowSteps:output_type -> agento11y.v1.ExportWorkflowStepsResponse
-	30, // [30:32] is the sub-list for method output_type
-	28, // [28:30] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	12, // 7: agento11y.v1.Message.parts:type_name -> agento11y.v1.Part
+	2,  // 8: agento11y.v1.TokenUsage.input_semantics:type_name -> agento11y.v1.TokenInputSemantics
+	3,  // 9: agento11y.v1.Artifact.kind:type_name -> agento11y.v1.ArtifactKind
+	0,  // 10: agento11y.v1.Generation.mode:type_name -> agento11y.v1.GenerationMode
+	7,  // 11: agento11y.v1.Generation.model:type_name -> agento11y.v1.ModelRef
+	13, // 12: agento11y.v1.Generation.input:type_name -> agento11y.v1.Message
+	13, // 13: agento11y.v1.Generation.output:type_name -> agento11y.v1.Message
+	14, // 14: agento11y.v1.Generation.tools:type_name -> agento11y.v1.ToolDefinition
+	15, // 15: agento11y.v1.Generation.usage:type_name -> agento11y.v1.TokenUsage
+	24, // 16: agento11y.v1.Generation.started_at:type_name -> google.protobuf.Timestamp
+	24, // 17: agento11y.v1.Generation.completed_at:type_name -> google.protobuf.Timestamp
+	22, // 18: agento11y.v1.Generation.tags:type_name -> agento11y.v1.Generation.TagsEntry
+	25, // 19: agento11y.v1.Generation.metadata:type_name -> google.protobuf.Struct
+	16, // 20: agento11y.v1.Generation.raw_artifacts:type_name -> agento11y.v1.Artifact
+	21, // 21: agento11y.v1.ExportWorkflowStepsRequest.workflow_steps:type_name -> agento11y.v1.WorkflowStep
+	20, // 22: agento11y.v1.ExportWorkflowStepsResponse.results:type_name -> agento11y.v1.ExportWorkflowStepResult
+	24, // 23: agento11y.v1.WorkflowStep.started_at:type_name -> google.protobuf.Timestamp
+	24, // 24: agento11y.v1.WorkflowStep.completed_at:type_name -> google.protobuf.Timestamp
+	25, // 25: agento11y.v1.WorkflowStep.input_state:type_name -> google.protobuf.Struct
+	25, // 26: agento11y.v1.WorkflowStep.output_state:type_name -> google.protobuf.Struct
+	23, // 27: agento11y.v1.WorkflowStep.tags:type_name -> agento11y.v1.WorkflowStep.TagsEntry
+	25, // 28: agento11y.v1.WorkflowStep.metadata:type_name -> google.protobuf.Struct
+	4,  // 29: agento11y.v1.GenerationIngestService.ExportGenerations:input_type -> agento11y.v1.ExportGenerationsRequest
+	18, // 30: agento11y.v1.WorkflowStepIngestService.ExportWorkflowSteps:input_type -> agento11y.v1.ExportWorkflowStepsRequest
+	5,  // 31: agento11y.v1.GenerationIngestService.ExportGenerations:output_type -> agento11y.v1.ExportGenerationsResponse
+	19, // 32: agento11y.v1.WorkflowStepIngestService.ExportWorkflowSteps:output_type -> agento11y.v1.ExportWorkflowStepsResponse
+	31, // [31:33] is the sub-list for method output_type
+	29, // [29:31] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_agento11y_v1_generation_ingest_proto_init() }
@@ -1941,7 +2026,7 @@ func file_agento11y_v1_generation_ingest_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agento11y_v1_generation_ingest_proto_rawDesc), len(file_agento11y_v1_generation_ingest_proto_rawDesc)),
-			NumEnums:      3,
+			NumEnums:      4,
 			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   2,
