@@ -33,6 +33,19 @@ var probeClient = &http.Client{
 	},
 }
 
+// ProbeConversations checks credentials against the generation-export endpoint
+// and reports the outcome. It is the exported entry point for callers outside
+// this package: `agento11y login` uses it to check the collected credentials
+// before writing config.env. It routes through the same seam `agento11y
+// doctor` uses, so both commands send one request shape and tests can
+// substitute a stub. The tenant id arrives as a plain string
+// because login holds a value the user just typed rather than one resolved
+// from the environment; it is wrapped in the envValue the seam takes, with no
+// key, so a 401 message names the variable the value will be written to.
+func ProbeConversations(ctx context.Context, endpoint, tenant, token string, insecure bool) *ProbeResult {
+	return probeConversationsFn(ctx, endpoint, envValue{Set: tenant != "", Value: tenant}, token, insecure)
+}
+
 // defaultProbeConversations checks the generation-export endpoint with the
 // same headers a real export sends: HTTP Basic auth (base64(tenant:token))
 // plus the X-Scope-OrgID tenant header, matching the SDK exporter's

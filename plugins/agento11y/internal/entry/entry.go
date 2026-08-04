@@ -121,7 +121,9 @@ func localPrivacyLines(posture local.ForwardPosture, known bool) []string {
 // come from the importer registry: adding an importer must not need an edit
 // here.
 func usageLine() string {
-	return "usage: agento11y login | agento11y doctor [--json] | agento11y local start|status|stop | " +
+	return "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] " +
+		"[--otlp-endpoint url] [--no-verify] [--yes] | agento11y doctor [--json] | " +
+		"agento11y local start|status|stop | " +
 		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
 		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
 }
@@ -205,7 +207,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// hook dispatch so it can run without a verb argument and without an
 	// agent name. It owns its own flag parsing.
 	if args[0] == "login" {
-		runLoginCommand(args[1:], stderr)
+		runLoginCommand(args[1:], stdin, stderr)
 		return
 	}
 
@@ -285,6 +287,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 				// either succeeded or no TTY; continue.
 			case errors.Is(err, login.ErrAborted):
 				_, _ = fmt.Fprintln(stderr, "agento11y: setup aborted; continuing without capture")
+			case errors.Is(err, login.ErrNotVerified):
+				logger.Printf("auto-login: %v", err)
+				_, _ = fmt.Fprintln(stderr, "agento11y: credentials not saved; continuing without capture")
 			default:
 				logger.Printf("auto-login: %v", err)
 				_, _ = fmt.Fprintf(stderr, "agento11y: setup failed (%v); continuing without capture\n", err)
@@ -361,27 +366,64 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	}
 }
 
-// runLoginCommand handles `agento11y login`. The flow is interactive-only: any
-// args (including unknown flags) are rejected with exit 2. Non-interactive
-// callers should set AGENTO11Y_* env vars (the legacy SIGIL_* names still work)
-// or edit $XDG_CONFIG_HOME/agento11y/config.env directly.
-func runLoginCommand(args []string, stderr io.Writer) {
+// runLoginCommand handles `agento11y login`. Values can arrive as flags, on
+// stdin (--token-stdin), or from the prompt; whatever is still missing after
+// the flags is asked for, and a run that supplies --endpoint, --tenant, and a
+// token needs no terminal at all. Misuse of the flags exits 2, a refused or
+// failed save exits 1.
+func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "usage: agento11y login")
+		_, _ = fmt.Fprintln(stderr, "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] [--otlp-endpoint url] [--no-verify] [--yes]")
 		_, _ = fmt.Fprintln(stderr)
-		_, _ = fmt.Fprintln(stderr, "Interactively save agento11y credentials to $XDG_CONFIG_HOME/agento11y/config.env")
+		_, _ = fmt.Fprintln(stderr, "Save agento11y credentials to $XDG_CONFIG_HOME/agento11y/config.env")
 		_, _ = fmt.Fprintln(stderr, "(or the old $XDG_CONFIG_HOME/sigil/config.env if only that file exists).")
+		_, _ = fmt.Fprintln(stderr, "Values not given as flags are prompted for. Before writing the file, login sends")
+		_, _ = fmt.Fprintln(stderr, "one request to the endpoint to check the credentials, unless --no-verify is passed.")
+		_, _ = fmt.Fprintln(stderr)
+		_, _ = fmt.Fprintln(stderr, "  --endpoint url        conversations API URL")
+		_, _ = fmt.Fprintln(stderr, "  --tenant id           instance ID")
+		_, _ = fmt.Fprintln(stderr, "  --token value         access-policy token with the sigil:write scope")
+		_, _ = fmt.Fprintln(stderr, "  --token-stdin         read the token from stdin; needs --endpoint and --tenant")
+		_, _ = fmt.Fprintln(stderr, "  --otlp-endpoint url   OTLP endpoint for SDK traces and metrics")
+		_, _ = fmt.Fprintln(stderr, "  --no-verify           write the file without checking the credentials")
+		_, _ = fmt.Fprintln(stderr, "  --yes                 save even when the check fails")
 	}
+	var (
+		endpoint     string
+		tenant       string
+		token        string
+		otlpEndpoint string
+		tokenStdin   bool
+		noVerify     bool
+		assumeYes    bool
+	)
+	fs.StringVar(&endpoint, "endpoint", "", "conversations API URL")
+	fs.StringVar(&tenant, "tenant", "", "instance ID")
+	fs.StringVar(&token, "token", "", "access-policy token")
+	fs.BoolVar(&tokenStdin, "token-stdin", false, "read the token from stdin")
+	fs.StringVar(&otlpEndpoint, "otlp-endpoint", "", "OTLP endpoint")
+	fs.BoolVar(&noVerify, "no-verify", false, "skip the credential check")
+	fs.BoolVar(&assumeYes, "yes", false, "save even when the check fails")
 	if err := fs.Parse(args); err != nil {
 		exit(2)
 		return
 	}
 	if fs.NArg() > 0 {
+		_, _ = fmt.Fprintf(stderr, "agento11y login: unexpected arguments: %v\n", fs.Args())
 		fs.Usage()
 		exit(2)
 		return
+	}
+
+	if tokenStdin {
+		var ok bool
+		token, ok = readTokenStdin(fs, endpoint, tenant, stdin, stderr)
+		if !ok {
+			exit(2)
+			return
+		}
 	}
 
 	dotenv.ApplyEnv(nil)
@@ -394,6 +436,12 @@ func runLoginCommand(args []string, stderr io.Writer) {
 		ShowNextStep: true,
 		Stderr:       stderr,
 		Logger:       logger,
+		Endpoint:     endpoint,
+		TenantID:     tenant,
+		Token:        token,
+		OTLPEndpoint: otlpEndpoint,
+		SkipVerify:   noVerify,
+		AssumeYes:    assumeYes,
 	})
 	switch {
 	case err == nil:
@@ -401,8 +449,12 @@ func runLoginCommand(args []string, stderr io.Writer) {
 	case errors.Is(err, login.ErrAborted):
 		_, _ = fmt.Fprintln(stderr, "Aborted.")
 		return
+	case errors.Is(err, login.ErrNotVerified):
+		_, _ = fmt.Fprintln(stderr, "agento11y login: nothing was saved. Fix the values and run `agento11y login` again, or pass --yes to save them as they are.")
+		exit(1)
+		return
 	case errors.Is(err, login.ErrNotInteractive):
-		_, _ = fmt.Fprintln(stderr, "agento11y login: cannot prompt because stdin is not a terminal. Run from an interactive shell, or set AGENTO11Y_ENDPOINT, AGENTO11Y_AUTH_TENANT_ID and AGENTO11Y_AUTH_TOKEN in your environment (the legacy SIGIL_* names still work).")
+		_, _ = fmt.Fprintln(stderr, "agento11y login: cannot prompt because stdin is not a terminal. Run from an interactive shell, pass --endpoint, --tenant and --token (or --token-stdin), or set AGENTO11Y_ENDPOINT, AGENTO11Y_AUTH_TENANT_ID and AGENTO11Y_AUTH_TOKEN in your environment (the legacy SIGIL_* names still work).")
 		exit(1)
 		return
 	default:
@@ -410,6 +462,55 @@ func runLoginCommand(args []string, stderr io.Writer) {
 		exit(1)
 		return
 	}
+}
+
+// readTokenStdin reads the token for --token-stdin. Consuming stdin leaves
+// the prompt library without an input source, so the flag is only accepted
+// when --endpoint and --tenant supply the other two required values and no
+// value has to be asked for. (A failed credential check can still ask "Save
+// anyway?" when stderr is a terminal; pass --yes or --no-verify to keep a
+// script from stopping there.) --token names a second source for one value,
+// so the two flags cannot be combined. ok is false when the caller must exit
+// with a usage error.
+func readTokenStdin(fs *flag.FlagSet, endpoint, tenant string, stdin io.Reader, stderr io.Writer) (string, bool) {
+	passed := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { passed[f.Name] = true })
+	if passed["token"] {
+		_, _ = fmt.Fprintln(stderr, "agento11y login: --token and --token-stdin are mutually exclusive; pass the token one way only")
+		return "", false
+	}
+
+	var missing []string
+	if strings.TrimSpace(endpoint) == "" {
+		missing = append(missing, "--endpoint")
+	}
+	if strings.TrimSpace(tenant) == "" {
+		missing = append(missing, "--tenant")
+	}
+	if len(missing) > 0 {
+		_, _ = fmt.Fprintf(stderr, "agento11y login: --token-stdin also requires %s\n", strings.Join(missing, " and "))
+		return "", false
+	}
+
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agento11y login: could not read the token from stdin: %v\n", err)
+		return "", false
+	}
+	// A token is one line. Surrounding whitespace is dropped, which is what
+	// login.Run does with every value anyway. An embedded newline is rejected
+	// rather than trimmed: the config file stores one value per line, so
+	// writing such a token would split the line and corrupt the file.
+	token := strings.TrimSpace(string(data))
+	if token == "" {
+		_, _ = fmt.Fprintln(stderr, "agento11y login: --token-stdin was passed but stdin carried no token")
+		return "", false
+	}
+	if strings.ContainsAny(token, "\r\n") {
+		_, _ = fmt.Fprintln(stderr, "agento11y login: the token read from stdin spans more than one line")
+		return "", false
+	}
+	return token, true
 }
 
 // runCursorInstall handles `agento11y cursor install` and `sigil cursor
@@ -454,6 +555,9 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 			// either succeeded or no TTY; nothing to report.
 		case errors.Is(err, login.ErrAborted):
 			_, _ = fmt.Fprintln(stderr, "agento11y: setup aborted; run `agento11y login` when ready")
+		case errors.Is(err, login.ErrNotVerified):
+			logger.Printf("auto-login: %v", err)
+			_, _ = fmt.Fprintln(stderr, "agento11y: credentials not saved; run `agento11y login` when ready")
 		default:
 			logger.Printf("auto-login: %v", err)
 			_, _ = fmt.Fprintf(stderr, "agento11y: setup failed (%v); run `agento11y login` when ready\n", err)

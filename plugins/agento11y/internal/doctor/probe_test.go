@@ -257,7 +257,7 @@ func TestProbeOTLP(t *testing.T) {
 			if !hitMetrics || !hitTraces {
 				t.Fatalf("both signals must be probed: metrics=%v traces=%v", hitMetrics, hitTraces)
 			}
-			if probe.Metrics.StatusCode != tc.status || !probe.Metrics.authFailure() {
+			if probe.Metrics.StatusCode != tc.status || !probe.Metrics.AuthFailure() {
 				t.Fatalf("metrics probe = %+v", probe.Metrics)
 			}
 			for _, signal := range []*ProbeResult{probe.Metrics, probe.Traces} {

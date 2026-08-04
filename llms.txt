@@ -95,7 +95,15 @@ Then launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `c
 
 Cursor has no launcher (it is a GUI app). After installing the binary, wire its hooks once with `agento11y cursor install` (it merges into `~/.cursor/hooks.json` and prompts for credentials on first run); `agento11y cursor uninstall` removes them. See [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) for details.
 
-To skip the prompt, write the config file by hand:
+To skip the prompt, pass the values as flags:
+
+```sh
+agento11y login --endpoint <your-agento11y-api-url> --tenant <your-instance-id> --token glc_...
+```
+
+`--endpoint`, `--tenant`, and a token together need no terminal, so this works over SSH, in a devcontainer, and from a script. `--token-stdin` reads the token from stdin instead of the command line and requires the other two flags. `--otlp-endpoint` sets the OTLP endpoint, `--no-verify` skips the credential check, and `--yes` saves even when that check fails. If the check fails and stdin is a terminal, login still asks whether to save anyway, so pass `--yes` or `--no-verify` in a script that runs under a pty.
+
+Or write the config file by hand:
 
 ```dotenv
 AGENTO11Y_ENDPOINT=<your-agento11y-api-url>
@@ -104,7 +112,7 @@ AGENTO11Y_AUTH_TOKEN=glc_...
 AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=<otlp-gateway-url>
 ```
 
-To re-enter credentials later, run `agento11y login`.
+To re-enter credentials later, run `agento11y login`. It asks for the endpoint, the tenant ID, the token, and an optional OTLP endpoint, then for content capture mode, session tags, and guards. Before writing the file, login sends one request to the endpoint with the credentials and reports what came back; run `agento11y doctor` to repeat that check later.
 
 ## Content capture
 
