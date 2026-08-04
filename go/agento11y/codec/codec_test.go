@@ -36,6 +36,28 @@ func TestToProtoMode(t *testing.T) {
 	}
 }
 
+func TestToProtoInputSemantics(t *testing.T) {
+	cases := []struct {
+		name      string
+		semantics model.TokenInputSemantics
+		want      agento11yv1.TokenInputSemantics
+	}{
+		{name: "unspecified", semantics: model.TokenInputSemanticsUnspecified, want: agento11yv1.TokenInputSemantics_TOKEN_INPUT_SEMANTICS_UNSPECIFIED},
+		{name: "inclusive", semantics: model.TokenInputSemanticsInclusive, want: agento11yv1.TokenInputSemantics_TOKEN_INPUT_SEMANTICS_INCLUSIVE},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := codec.ToProto(model.Generation{Usage: model.TokenUsage{InputTokens: 1, InputSemantics: tc.semantics}})
+			if err != nil {
+				t.Fatalf("ToProto: %v", err)
+			}
+			if got.GetUsage().GetInputSemantics() != tc.want {
+				t.Errorf("input semantics %v -> %v, want %v", tc.semantics, got.GetUsage().GetInputSemantics(), tc.want)
+			}
+		})
+	}
+}
+
 func TestToProtoRolesAndParts(t *testing.T) {
 	g := model.Generation{
 		Input: []model.Message{{

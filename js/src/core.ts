@@ -69,6 +69,7 @@ export type {
   PartMetadata,
   RecorderCallback,
   SubmitConversationRatingResponse,
+  TokenInputSemantics,
   TokenUsage,
   ToolCallPart,
   ToolDefinition,
