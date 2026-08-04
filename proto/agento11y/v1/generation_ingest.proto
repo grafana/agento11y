@@ -94,15 +94,46 @@ message ToolDefinition {
   bool deferred = 5;
 }
 
+// TokenInputSemantics declares what input_tokens covers, so consumers never
+// have to guess from the provider name.
+enum TokenInputSemantics {
+  // Provider-raw or legacy telemetry. input_tokens follows whatever
+  // convention the provider used; consumers may fall back to a
+  // provider-name heuristic.
+  TOKEN_INPUT_SEMANTICS_UNSPECIFIED = 0;
+  // OTel GenAI semantic conventions: input_tokens includes all input token
+  // types — cache_read_input_tokens and cache_write_input_tokens are
+  // subsets of it, not additions. Fresh (non-cached, non-cache-written)
+  // input is derived as input_tokens - cache_read - cache_write.
+  // https://github.com/open-telemetry/semantic-conventions-genai/blob/main/model/gen-ai/registry.yaml
+  TOKEN_INPUT_SEMANTICS_INCLUSIVE = 1;
+}
+
 message TokenUsage {
+  // Input (prompt) tokens. When input_semantics is INCLUSIVE this covers all
+  // input token types, including both cache buckets, per OTel GenAI semconv.
   int64 input_tokens = 1;
+  // Output (completion) tokens. reasoning_tokens is a sub-bucket of this
+  // value when the provider reports it, never an addition.
   int64 output_tokens = 2;
+  // Provider-reported total when available. When derived by an SDK under
+  // INCLUSIVE semantics: total = input_tokens + output_tokens.
   int64 total_tokens = 3;
+  // Input tokens served from a provider-managed cache. Included in
+  // input_tokens under INCLUSIVE semantics.
   int64 cache_read_input_tokens = 4;
+  // Input tokens written to a provider-managed cache. Included in
+  // input_tokens under INCLUSIVE semantics.
   int64 cache_write_input_tokens = 5;
+  // Provider-reported reasoning/thinking tokens; explanatory sub-bucket of
+  // output_tokens, never additive.
   int64 reasoning_tokens = 6;
   reserved 7;
   reserved "cache_creation_input_tokens";
+  // Self-describing semantics marker set by SDK adapters that positively
+  // identified the provider payload shape. Manual user-supplied usage and
+  // guessed shapes leave it UNSPECIFIED.
+  TokenInputSemantics input_semantics = 8;
 }
 
 enum ArtifactKind {
