@@ -276,7 +276,11 @@ func TestConformance_MessageSyncNormalization(t *testing.T) {
 	if generation.StopReason != "end_turn" {
 		t.Fatalf("unexpected stop reason: %q", generation.StopReason)
 	}
-	if generation.Usage.TotalTokens != 162 || generation.Usage.CacheReadInputTokens != 30 || generation.Usage.CacheWriteInputTokens != 10 {
+	// Inclusive contract: input = 120 + 30 + 10 summed up per the semconv
+	// Anthropic rule; total = input + output.
+	if generation.Usage.InputTokens != 160 || generation.Usage.TotalTokens != 202 ||
+		generation.Usage.CacheReadInputTokens != 30 || generation.Usage.CacheWriteInputTokens != 10 ||
+		generation.Usage.InputSemantics != agento11y.TokenInputSemanticsInclusive {
 		t.Fatalf("unexpected usage mapping: %#v", generation.Usage)
 	}
 	if generation.ThinkingEnabled == nil || !*generation.ThinkingEnabled {

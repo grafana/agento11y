@@ -532,8 +532,15 @@ function mapGeminiUsage(rawUsage: unknown): TokenUsage | undefined {
   if (reasoningTokens !== undefined) {
     out.reasoningTokens = reasoningTokens;
   }
+  if (Object.keys(out).length === 0) {
+    return undefined;
+  }
+  // Gemini's promptTokenCount already includes cachedContentTokenCount, which
+  // is the inclusive contract as-is. tool_use_prompt handling stays unchanged
+  // pending the open contract decision (see the rollout plan).
+  out.inputSemantics = 'inclusive';
 
-  return Object.keys(out).length > 0 ? out : undefined;
+  return out;
 }
 
 function geminiUsageMetadata(rawUsage: unknown): Record<string, unknown> | undefined {

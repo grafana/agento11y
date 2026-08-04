@@ -40,9 +40,13 @@ public sealed class AnthropicConformanceTests
         Assert.Equal(2L, ReadMetadataLong(generation, "agento11y.gen_ai.usage.server_tool_use.web_search_requests"));
         var webFetchRequests = TryReadMetadataLong(generation, "agento11y.gen_ai.usage.server_tool_use.web_fetch_requests") ?? 0L;
         Assert.Equal(2L + webFetchRequests, ReadMetadataLong(generation, "agento11y.gen_ai.usage.server_tool_use.total_requests"));
-        Assert.Equal(162, generation.Usage.TotalTokens);
+        // Inclusive contract: input sums Anthropic's additive buckets up
+        // (120 + 30 + 10 = 160); total = input + output.
+        Assert.Equal(160, generation.Usage.InputTokens);
+        Assert.Equal(202, generation.Usage.TotalTokens);
         Assert.Equal(30, generation.Usage.CacheReadInputTokens);
         Assert.Equal(10, generation.Usage.CacheWriteInputTokens);
+        Assert.Equal(TokenInputSemantics.Inclusive, generation.Usage.InputSemantics);
         Assert.Empty(generation.Artifacts);
     }
 
@@ -68,7 +72,9 @@ public sealed class AnthropicConformanceTests
         Assert.Equal(3L, ReadMetadataLong(generation, "agento11y.gen_ai.usage.server_tool_use.web_search_requests"));
         var streamWebFetchRequests = TryReadMetadataLong(generation, "agento11y.gen_ai.usage.server_tool_use.web_fetch_requests") ?? 0L;
         Assert.Equal(3L + streamWebFetchRequests, ReadMetadataLong(generation, "agento11y.gen_ai.usage.server_tool_use.total_requests"));
-        Assert.Equal(105, generation.Usage.TotalTokens);
+        // Inclusive contract: input = 80 + 8 read + 4 creation = 92; total = 92 + 25.
+        Assert.Equal(117, generation.Usage.TotalTokens);
+        Assert.Equal(TokenInputSemantics.Inclusive, generation.Usage.InputSemantics);
         Assert.Contains(generation.Artifacts, artifact => artifact.Kind == ArtifactKind.ProviderEvent);
     }
 

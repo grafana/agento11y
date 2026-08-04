@@ -490,6 +490,9 @@ public static class GeminiGenerationMapper
         var reasoningTokens = usage.ThoughtsTokenCount ?? 0;
         var totalTokens = usage.TotalTokenCount ?? (inputTokens + outputTokens + toolUsePromptTokens + reasoningTokens);
 
+        // PromptTokenCount already includes CachedContentTokenCount: inclusive
+        // as-is. tool_use_prompt handling stays unchanged pending the open
+        // contract decision (see the rollout plan).
         return new TokenUsage
         {
             InputTokens = inputTokens,
@@ -497,6 +500,7 @@ public static class GeminiGenerationMapper
             TotalTokens = totalTokens,
             CacheReadInputTokens = usage.CachedContentTokenCount ?? 0,
             ReasoningTokens = reasoningTokens,
+            InputSemantics = TokenInputSemantics.Inclusive,
         };
     }
 

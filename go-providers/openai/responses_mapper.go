@@ -499,12 +499,15 @@ func mapResponsesTools(value any) []agento11y.ToolDefinition {
 }
 
 func mapResponsesUsage(usage responses.ResponseUsage) agento11y.TokenUsage {
+	// The Responses API input_tokens already includes cached tokens, which is
+	// the inclusive contract as-is.
 	return agento11y.TokenUsage{
 		InputTokens:          usage.InputTokens,
 		OutputTokens:         usage.OutputTokens,
 		TotalTokens:          usage.TotalTokens,
 		CacheReadInputTokens: usage.InputTokensDetails.CachedTokens,
 		ReasoningTokens:      usage.OutputTokensDetails.ReasoningTokens,
+		InputSemantics:       agento11y.TokenInputSemanticsInclusive,
 	}
 }
 
