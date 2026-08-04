@@ -668,18 +668,6 @@ func TestRun_LoginSubcommand_AbortedExits0(t *testing.T) {
 	}
 }
 
-func TestRun_LoginSubcommand_BadFlagExits2(t *testing.T) {
-	isolateDotenvHome(t)
-
-	var stdout, stderr bytes.Buffer
-	gotExit := withExit(t, func() {
-		run([]string{"login", "--no-such-flag"}, strings.NewReader(""), &stdout, &stderr)
-	})
-	if gotExit == nil || *gotExit != 2 {
-		t.Fatalf("exit = %v, want 2", gotExit)
-	}
-}
-
 func TestRun_LauncherAutoPromptsWhenCredsMissing(t *testing.T) {
 	isolateDotenvHome(t)
 	t.Setenv("SIGIL_ENDPOINT", "")
@@ -1427,5 +1415,196 @@ func TestRun_LauncherTagFlagInvalid(t *testing.T) {
 			assert.Equal(t, 2, *gotExit)
 			assert.Contains(t, stderr.String(), tc.wantStderrContain)
 		})
+	}
+}
+
+// TestRun_LoginSubcommandFlags covers the flag surface of `agento11y login`:
+// which values reach RunOpts, and which combinations the command refuses
+// before it ever prompts.
+func TestRun_LoginSubcommandFlags(t *testing.T) {
+	cases := []struct {
+		name  string
+		args  []string
+		stdin string
+		// stubErr is what the stubbed login.Run returns, for the cases that
+		// check how the command reports an outcome rather than how it parses
+		// its flags.
+		stubErr    error
+		wantExit   *int
+		wantOpts   *login.RunOpts
+		wantStderr []string
+	}{
+		{
+			name: "every value as a flag",
+			args: []string{
+				"login",
+				"--endpoint", "https://example.invalid",
+				"--tenant", "123",
+				"--token", "secret-token",
+				"--otlp-endpoint", "https://otlp.example",
+				"--no-verify",
+				"--yes",
+			},
+			wantOpts: &login.RunOpts{
+				Endpoint:     "https://example.invalid",
+				TenantID:     "123",
+				Token:        "secret-token",
+				OTLPEndpoint: "https://otlp.example",
+				SkipVerify:   true,
+				AssumeYes:    true,
+				ShowNextStep: true,
+			},
+		},
+		{
+			name:  "token from stdin loses the surrounding whitespace",
+			args:  []string{"login", "--endpoint", "https://example.invalid", "--tenant", "123", "--token-stdin", "--no-verify"},
+			stdin: "  secret-token  \n",
+			wantOpts: &login.RunOpts{
+				Endpoint:     "https://example.invalid",
+				TenantID:     "123",
+				Token:        "secret-token",
+				SkipVerify:   true,
+				ShowNextStep: true,
+			},
+		},
+		{
+			// The config file stores one value per line, so a token that
+			// spans two lines would split the line it is written on.
+			name:       "token from stdin spanning two lines",
+			args:       []string{"login", "--endpoint", "https://example.invalid", "--tenant", "123", "--token-stdin"},
+			stdin:      "first-line\nsecond-line\n",
+			wantExit:   intPtr(2),
+			wantStderr: []string{"more than one line"},
+		},
+		{
+			name:       "token from stdin without the other required flags",
+			args:       []string{"login", "--token-stdin"},
+			stdin:      "secret-token\n",
+			wantExit:   intPtr(2),
+			wantStderr: []string{"--token-stdin", "--endpoint", "--tenant"},
+		},
+		{
+			name:       "token from stdin without a tenant",
+			args:       []string{"login", "--endpoint", "https://example.invalid", "--token-stdin"},
+			stdin:      "secret-token\n",
+			wantExit:   intPtr(2),
+			wantStderr: []string{"--tenant"},
+		},
+		{
+			name:       "two token sources",
+			args:       []string{"login", "--endpoint", "https://example.invalid", "--tenant", "123", "--token", "secret", "--token-stdin"},
+			stdin:      "other\n",
+			wantExit:   intPtr(2),
+			wantStderr: []string{"mutually exclusive"},
+		},
+		{
+			name:       "empty stdin",
+			args:       []string{"login", "--endpoint", "https://example.invalid", "--tenant", "123", "--token-stdin"},
+			stdin:      "\n",
+			wantExit:   intPtr(2),
+			wantStderr: []string{"no token"},
+		},
+		{
+			name:       "positional argument",
+			args:       []string{"login", "unexpected"},
+			wantExit:   intPtr(2),
+			wantStderr: []string{"unexpected arguments", "usage: agento11y login"},
+		},
+		{
+			name:     "unknown flag",
+			args:     []string{"login", "--no-such-flag"},
+			wantExit: intPtr(2),
+		},
+		{
+			// The endpoint refused the credentials and the user did not
+			// override the save, so nothing was written and the command says
+			// how to save them anyway.
+			name:       "credentials the endpoint refused",
+			args:       []string{"login"},
+			stubErr:    login.ErrNotVerified,
+			wantExit:   intPtr(1),
+			wantOpts:   &login.RunOpts{ShowNextStep: true},
+			wantStderr: []string{"nothing was saved", "--yes"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			var got *login.RunOpts
+			withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) error {
+				got = &opts
+				return c.stubErr
+			})
+
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run(c.args, strings.NewReader(c.stdin), &stdout, &stderr)
+			})
+			switch {
+			case c.wantExit == nil && gotExit != nil:
+				t.Fatalf("exit = %d, want no exit (stderr: %s)", *gotExit, stderr.String())
+			case c.wantExit != nil && (gotExit == nil || *gotExit != *c.wantExit):
+				t.Fatalf("exit = %v, want %d", gotExit, *c.wantExit)
+			}
+			for _, want := range c.wantStderr {
+				if !strings.Contains(stderr.String(), want) {
+					t.Errorf("stderr missing %q:\n%s", want, stderr.String())
+				}
+			}
+			if c.wantOpts == nil {
+				if got != nil {
+					t.Errorf("login ran with %+v, want no run at all", *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("login did not run (stderr: %s)", stderr.String())
+			}
+			want := *c.wantOpts
+			// Stderr, Logger, and Stdin are wiring, not user input.
+			if got.Endpoint != want.Endpoint || got.TenantID != want.TenantID || got.Token != want.Token ||
+				got.OTLPEndpoint != want.OTLPEndpoint || got.SkipVerify != want.SkipVerify ||
+				got.AssumeYes != want.AssumeYes || got.ShowNextStep != want.ShowNextStep {
+				t.Errorf("RunOpts =\n%+v\nwant\n%+v", *got, want)
+			}
+		})
+	}
+}
+
+// TestRun_LauncherAutoLoginKeepsNextStepQuiet pins the automatic login the
+// launchers fire: same flow, no next-step hint, and no flag-supplied values.
+func TestRun_LauncherAutoLoginKeepsNextStepQuiet(t *testing.T) {
+	isolateDotenvHome(t)
+	t.Setenv("SIGIL_ENDPOINT", "")
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+	t.Setenv("SIGIL_AUTH_TOKEN", "")
+
+	var got *login.RunOpts
+	withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) error {
+		got = &opts
+		return login.ErrNotInteractive
+	})
+	withStubLauncher(t, "pi", func(context.Context, []string, *local.LaunchEnv, io.Reader, io.Writer, io.Writer, *log.Logger, string) error {
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"pi", "--"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	if gotExit != nil {
+		t.Fatalf("exit = %v, want no exit", *gotExit)
+	}
+	if got == nil {
+		t.Fatal("auto-login did not run")
+	}
+	if got.ShowNextStep {
+		t.Error("auto-login must leave ShowNextStep false")
+	}
+	if got.SkipVerify || got.AssumeYes {
+		t.Errorf("auto-login must verify and must not assume yes: %+v", *got)
+	}
+	if got.Endpoint != "" || got.TenantID != "" || got.Token != "" || got.OTLPEndpoint != "" {
+		t.Errorf("auto-login must supply no explicit values: %+v", *got)
 	}
 }

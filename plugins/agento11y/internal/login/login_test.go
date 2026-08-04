@@ -1,13 +1,19 @@
 package login
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
@@ -266,9 +272,10 @@ func TestValidateGuardTimeout(t *testing.T) {
 }
 
 // TestBuildUpdates pins the dotenv write rules for the optional preferences:
-// content capture mode and the guard-enabled flag are always written; tags
-// and OTLP delete on empty; guard timeout and fail mode only appear when
-// guards are enabled.
+// the four capture keys are written only when the form ran; content capture
+// mode and the guard-enabled flag are then always written; tags and OTLP
+// delete on empty; guard timeout and fail mode only appear when guards are
+// enabled.
 func TestBuildUpdates(t *testing.T) {
 	cases := []struct {
 		name string
@@ -276,13 +283,35 @@ func TestBuildUpdates(t *testing.T) {
 		want map[string]string
 	}{
 		{
-			name: "credentials only, guards off",
+			// The form never ran, so the capture keys stay out of the update
+			// map and WriteDotenv leaves whatever the file holds. The values
+			// below are seeds, and a seed can come from an AGENTO11Y_*
+			// variable exported in the current shell.
+			name: "promptless run leaves the capture keys alone",
 			in: formValues{
 				endpoint:    "https://sigil.example.com",
 				tenantID:    "123",
 				token:       "glc_abc",
-				contentMode: "metadata_only",
-				guards:      guardsOff,
+				contentMode: "full",
+				tags:        "session=demo",
+				guards:      guardsOpen,
+			},
+			want: map[string]string{
+				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":              "123",
+				"SIGIL_AUTH_TOKEN":                  "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
+			},
+		},
+		{
+			name: "credentials only, guards off",
+			in: formValues{
+				endpoint:        "https://sigil.example.com",
+				tenantID:        "123",
+				token:           "glc_abc",
+				contentMode:     "metadata_only",
+				guards:          guardsOff,
+				capturePrompted: true,
 				// guardTimeout is ignored while guards are off
 				guardTimeout: "1500",
 			},
@@ -299,12 +328,13 @@ func TestBuildUpdates(t *testing.T) {
 		{
 			name: "stale content mode normalised, tags trimmed",
 			in: formValues{
-				endpoint:    "https://sigil.example.com",
-				tenantID:    "123",
-				token:       "glc_abc",
-				contentMode: "bogus",
-				tags:        "  team=ai  ",
-				guards:      guardsOff,
+				endpoint:        "https://sigil.example.com",
+				tenantID:        "123",
+				token:           "glc_abc",
+				contentMode:     "bogus",
+				tags:            "  team=ai  ",
+				guards:          guardsOff,
+				capturePrompted: true,
 			},
 			want: map[string]string{
 				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
@@ -319,13 +349,14 @@ func TestBuildUpdates(t *testing.T) {
 		{
 			name: "guards fail-open with timeout",
 			in: formValues{
-				endpoint:     "https://sigil.example.com",
-				tenantID:     "123",
-				token:        "glc_abc",
-				otelEndpoint: "https://otlp.example.com",
-				contentMode:  "full",
-				guards:       guardsOpen,
-				guardTimeout: " 2000 ",
+				endpoint:        "https://sigil.example.com",
+				tenantID:        "123",
+				token:           "glc_abc",
+				otelEndpoint:    "https://otlp.example.com",
+				contentMode:     "full",
+				guards:          guardsOpen,
+				guardTimeout:    " 2000 ",
+				capturePrompted: true,
 			},
 			want: map[string]string{
 				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
@@ -342,12 +373,13 @@ func TestBuildUpdates(t *testing.T) {
 		{
 			name: "guards fail-closed, blank timeout clears key",
 			in: formValues{
-				endpoint:     "https://sigil.example.com",
-				tenantID:     "123",
-				token:        "glc_abc",
-				contentMode:  "no_tool_content",
-				guards:       guardsClosed,
-				guardTimeout: "   ",
+				endpoint:        "https://sigil.example.com",
+				tenantID:        "123",
+				token:           "glc_abc",
+				contentMode:     "no_tool_content",
+				guards:          guardsClosed,
+				guardTimeout:    "   ",
+				capturePrompted: true,
 			},
 			want: map[string]string{
 				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
@@ -389,6 +421,503 @@ func TestAllowEmptyURL(t *testing.T) {
 			err := allowEmptyURL(c.in)
 			if (err != nil) != c.wantErr {
 				t.Errorf("allowEmptyURL(%q) err = %v, wantErr = %v", c.in, err, c.wantErr)
+			}
+		})
+	}
+}
+
+// probeCall records one credential check so tests can assert both the values
+// the probe received and the moment it ran.
+type probeCall struct {
+	endpoint      string
+	tenant        string
+	token         string
+	insecure      bool
+	configWritten bool
+}
+
+// stubProbe returns a ProbeFunc that always answers res and appends its
+// arguments to calls. configPath is stat-ed on every call so a test can prove
+// the check ran before the dotenv file was written.
+func stubProbe(res *doctor.ProbeResult, configPath string, calls *[]probeCall) ProbeFunc {
+	return func(_ context.Context, endpoint, tenant, token string, insecure bool) *doctor.ProbeResult {
+		_, err := os.Stat(configPath)
+		*calls = append(*calls, probeCall{
+			endpoint:      endpoint,
+			tenant:        tenant,
+			token:         token,
+			insecure:      insecure,
+			configWritten: err == nil,
+		})
+		return res
+	}
+}
+
+// runNonInteractive drives Run the way `agento11y login --endpoint --tenant
+// --token` does: every required value arrives as a flag, so no terminal and
+// no form are involved.
+func runNonInteractive(t *testing.T, opts RunOpts) (string, error) {
+	t.Helper()
+	clearSeededEnv(t)
+	envconfig.PinAliasEnvBlank(t)
+	var stderr bytes.Buffer
+	opts.Stdin = nonTTYStdin(t)
+	opts.Stderr = &stderr
+	err := Run(context.Background(), opts)
+	return stderr.String(), err
+}
+
+// TestRun_VerifiesBeforeWriting covers every outcome of the credential check:
+// what the user is told, and whether the dotenv file is written.
+func TestRun_VerifiesBeforeWriting(t *testing.T) {
+	const (
+		endpoint = "https://agento11y.example.com"
+		tenant   = "123"
+		token    = "glc_secret"
+	)
+	cases := []struct {
+		name       string
+		res        *doctor.ProbeResult
+		skipVerify bool
+		assumeYes  bool
+		wantErr    error
+		wantProbe  bool
+		wantWrite  bool
+		wantStderr []string
+		denyStderr []string
+	}{
+		{
+			name:       "accepted",
+			res:        &doctor.ProbeResult{URL: endpoint + "/api/v1/generations:export", StatusCode: 200, OK: true},
+			wantProbe:  true,
+			wantWrite:  true,
+			wantStderr: []string{"accepted these credentials"},
+		},
+		{
+			name:      "unauthorized",
+			res:       &doctor.ProbeResult{URL: endpoint + "/api/v1/generations:export", StatusCode: 401, Message: "endpoint rejected auth — token likely missing sigil:write scope"},
+			wantErr:   ErrNotVerified,
+			wantProbe: true,
+			wantStderr: []string{
+				"rejected these credentials (HTTP 401)",
+				`Tenant ID "123"`,
+				"auth token",
+				"sigil:write",
+			},
+		},
+		{
+			name:      "forbidden",
+			res:       &doctor.ProbeResult{URL: endpoint + "/api/v1/generations:export", StatusCode: 403},
+			wantErr:   ErrNotVerified,
+			wantProbe: true,
+			wantStderr: []string{
+				"rejected these credentials (HTTP 403)",
+				`Tenant ID "123"`,
+				"sigil:write",
+			},
+		},
+		{
+			name:      "other status",
+			res:       &doctor.ProbeResult{URL: endpoint + "/api/v1/generations:export", StatusCode: 502},
+			wantErr:   ErrNotVerified,
+			wantProbe: true,
+			wantStderr: []string{
+				"answered HTTP 502",
+				endpoint + "/api/v1/generations:export",
+			},
+			denyStderr: []string{"sigil:write"},
+		},
+		{
+			// doctor leaves a 4xx other than 401/403 healthy, because the
+			// probe's `{}` body can draw a benign 400 or 415 from an endpoint
+			// that validates the body before auth. Login is about to write
+			// these values to disk, so it reports the status and asks first.
+			name:      "benign 4xx still blocks an unattended save",
+			res:       &doctor.ProbeResult{URL: endpoint + "/api/v1/generations:export", StatusCode: 400},
+			wantErr:   ErrNotVerified,
+			wantProbe: true,
+			wantStderr: []string{
+				"answered HTTP 400",
+				endpoint + "/api/v1/generations:export",
+			},
+		},
+		{
+			name:      "transport failure",
+			res:       &doctor.ProbeResult{URL: endpoint, Message: "dial tcp 10.0.0.1:443: connect: connection refused"},
+			wantErr:   ErrNotVerified,
+			wantProbe: true,
+			wantStderr: []string{
+				"Could not reach " + endpoint,
+				"connection refused",
+			},
+		},
+		{
+			name:      "timeout",
+			res:       &doctor.ProbeResult{URL: endpoint, Message: "context deadline exceeded (Client.Timeout exceeded while awaiting headers)"},
+			wantErr:   ErrNotVerified,
+			wantProbe: true,
+			wantStderr: []string{
+				"Could not reach " + endpoint,
+				"context deadline exceeded",
+			},
+		},
+		{
+			name:      "save override accepted with --yes",
+			res:       &doctor.ProbeResult{URL: endpoint, StatusCode: 403},
+			assumeYes: true,
+			wantProbe: true,
+			wantWrite: true,
+			wantStderr: []string{
+				"rejected these credentials (HTTP 403)",
+			},
+		},
+		{
+			name:       "verification skipped",
+			skipVerify: true,
+			wantWrite:  true,
+			denyStderr: []string{"accepted these credentials"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.env")
+			var calls []probeCall
+			probe := stubProbe(c.res, path, &calls)
+			if !c.wantProbe {
+				probe = func(context.Context, string, string, string, bool) *doctor.ProbeResult {
+					t.Fatal("probe must not run")
+					return nil
+				}
+			}
+
+			stderr, err := runNonInteractive(t, RunOpts{
+				ConfigPath: path,
+				Endpoint:   endpoint,
+				TenantID:   tenant,
+				Token:      token,
+				SkipVerify: c.skipVerify,
+				AssumeYes:  c.assumeYes,
+				Probe:      probe,
+			})
+			if !errors.Is(err, c.wantErr) {
+				t.Fatalf("Run err = %v, want %v", err, c.wantErr)
+			}
+			if c.wantProbe {
+				if len(calls) != 1 {
+					t.Fatalf("probe ran %d times, want 1", len(calls))
+				}
+				got := calls[0]
+				if got.endpoint != endpoint || got.tenant != tenant || got.token != token {
+					t.Errorf("probe args = %+v, want endpoint %q tenant %q token %q", got, endpoint, tenant, token)
+				}
+				if got.configWritten {
+					t.Error("dotenv file already existed when the probe ran; the check must come first")
+				}
+			}
+			_, statErr := os.Stat(path)
+			if written := statErr == nil; written != c.wantWrite {
+				t.Errorf("dotenv written = %v, want %v", written, c.wantWrite)
+			}
+			for _, want := range c.wantStderr {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("stderr missing %q:\n%s", want, stderr)
+				}
+			}
+			for _, deny := range c.denyStderr {
+				if strings.Contains(stderr, deny) {
+					t.Errorf("stderr must not contain %q:\n%s", deny, stderr)
+				}
+			}
+		})
+	}
+}
+
+// TestRun_ProbeResolvesInsecureLikeExporter pins that the check inherits the
+// INSECURE family, so a scheme-less endpoint is probed over http exactly as
+// the exporter would send it.
+func TestRun_ProbeResolvesInsecureLikeExporter(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		file string
+		env  map[string]string
+		want bool
+	}{
+		{name: "unset", want: false},
+		{name: "from dotenv", file: "SIGIL_INSECURE=true\n", want: true},
+		{name: "from process env", env: map[string]string{"AGENTO11Y_INSECURE": "true"}, want: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clearSeededEnv(t)
+			envconfig.PinAliasEnvBlank(t)
+			for k, v := range c.env {
+				t.Setenv(k, v)
+			}
+			path := writeDotenv(t, c.file)
+			var calls []probeCall
+			var stderr bytes.Buffer
+			err := Run(context.Background(), RunOpts{
+				ConfigPath: path,
+				Stdin:      nonTTYStdin(t),
+				Stderr:     &stderr,
+				Endpoint:   "https://agento11y.example.com",
+				TenantID:   "123",
+				Token:      "glc_secret",
+				Probe:      stubProbe(&doctor.ProbeResult{StatusCode: 200, OK: true}, path, &calls),
+			})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(calls) != 1 {
+				t.Fatalf("probe ran %d times, want 1", len(calls))
+			}
+			if calls[0].insecure != c.want {
+				t.Errorf("probe insecure = %v, want %v", calls[0].insecure, c.want)
+			}
+		})
+	}
+}
+
+// TestRun_ExplicitValues covers the flag path: explicit values beat every
+// seed, all three required values remove the need for a terminal, and a
+// missing one still refuses to run without a prompt.
+func TestRun_ExplicitValues(t *testing.T) {
+	const existing = "SIGIL_ENDPOINT=https://old.example\n" +
+		"SIGIL_AUTH_TENANT_ID=111\n" +
+		"SIGIL_AUTH_TOKEN=old-token\n"
+
+	cases := []struct {
+		name string
+		file string
+		env  map[string]string
+		opts RunOpts
+		// wantErr is a sentinel the error must wrap; wantErrText is a
+		// substring the message must name, used where the complaint points
+		// at a flag rather than a sentinel.
+		wantErr     error
+		wantErrText string
+		want        map[string]string
+	}{
+		{
+			name: "flags override existing configuration",
+			file: existing,
+			opts: RunOpts{
+				Endpoint: "https://new.example",
+				TenantID: "222",
+				Token:    "new-token",
+			},
+			want: map[string]string{
+				"AGENTO11Y_ENDPOINT":       "https://new.example",
+				"AGENTO11Y_AUTH_TENANT_ID": "222",
+				"AGENTO11Y_AUTH_TOKEN":     "new-token",
+				"SIGIL_ENDPOINT":           "https://new.example",
+			},
+		},
+		{
+			name: "otlp endpoint is persisted",
+			opts: RunOpts{
+				Endpoint:     "https://new.example",
+				TenantID:     "222",
+				Token:        "new-token",
+				OTLPEndpoint: "https://otlp.example",
+			},
+			want: map[string]string{
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":     "https://otlp.example",
+			},
+		},
+		{
+			name: "token flag overrides the seeded token",
+			file: existing,
+			opts: RunOpts{
+				Endpoint: "https://new.example",
+				TenantID: "222",
+				Token:    "kept-explicitly",
+			},
+			want: map[string]string{"AGENTO11Y_AUTH_TOKEN": "kept-explicitly"},
+		},
+		{
+			// A run that never opens the form leaves every capture setting as
+			// it is on disk.
+			name: "capture settings on disk survive a promptless run",
+			file: "SIGIL_CONTENT_CAPTURE_MODE=full\n" +
+				"SIGIL_TAGS=team=ai\n" +
+				"SIGIL_GUARDS_ENABLED=true\n" +
+				"SIGIL_GUARDS_FAIL_OPEN=false\n" +
+				"SIGIL_GUARDS_TIMEOUT_MS=2500\n",
+			opts: RunOpts{
+				Endpoint: "https://new.example",
+				TenantID: "222",
+				Token:    "new-token",
+			},
+			want: map[string]string{
+				"SIGIL_CONTENT_CAPTURE_MODE": "full",
+				"SIGIL_TAGS":                 "team=ai",
+				"SIGIL_GUARDS_ENABLED":       "true",
+				"SIGIL_GUARDS_FAIL_OPEN":     "false",
+				"SIGIL_GUARDS_TIMEOUT_MS":    "2500",
+			},
+		},
+		{
+			// The launcher writes `agento11y claude --tag session=demo` into
+			// AGENTO11Y_TAGS before it auto-fires login, and a user can
+			// export AGENTO11Y_CONTENT_CAPTURE_MODE in their shell. Neither
+			// is a saved preference, so a run that never shows the form must
+			// not persist them.
+			name: "capture settings from the shell are not persisted",
+			env: map[string]string{
+				"AGENTO11Y_TAGS":                 "session=demo",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "full",
+			},
+			opts: RunOpts{
+				Endpoint: "https://new.example",
+				TenantID: "222",
+				Token:    "new-token",
+			},
+			want: map[string]string{
+				"SIGIL_TAGS":                     "",
+				"AGENTO11Y_TAGS":                 "",
+				"SIGIL_CONTENT_CAPTURE_MODE":     "",
+				"AGENTO11Y_CONTENT_CAPTURE_MODE": "",
+			},
+		},
+		{
+			name:    "missing token still needs a terminal",
+			file:    "",
+			opts:    RunOpts{Endpoint: "https://new.example", TenantID: "222"},
+			wantErr: ErrNotInteractive,
+		},
+		{
+			name:    "missing endpoint still needs a terminal",
+			opts:    RunOpts{TenantID: "222", Token: "new-token"},
+			wantErr: ErrNotInteractive,
+		},
+		{
+			name:        "malformed endpoint flag is rejected before prompting",
+			opts:        RunOpts{Endpoint: "not-a-url", TenantID: "222", Token: "new-token"},
+			wantErrText: "--endpoint",
+		},
+		{
+			name:        "malformed otlp endpoint flag is rejected",
+			opts:        RunOpts{Endpoint: "https://new.example", TenantID: "222", Token: "t", OTLPEndpoint: "not-a-url"},
+			wantErrText: "--otlp-endpoint",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			clearSeededEnv(t)
+			envconfig.PinAliasEnvBlank(t)
+			for k, v := range c.env {
+				t.Setenv(k, v)
+			}
+			path := writeDotenv(t, c.file)
+			opts := c.opts
+			opts.ConfigPath = path
+			opts.Stdin = nonTTYStdin(t)
+			opts.Stderr = io.Discard
+			opts.SkipVerify = true
+
+			err := Run(context.Background(), opts)
+			if c.wantErrText != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErrText) {
+					t.Fatalf("Run err = %v, want a complaint naming %s", err, c.wantErrText)
+				}
+				return
+			}
+			if c.wantErr != nil {
+				if !errors.Is(err, c.wantErr) {
+					t.Fatalf("Run err = %v, want %v", err, c.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			saved := dotenv.LoadDotenv(path, nil)
+			for k, want := range c.want {
+				if saved[k] != want {
+					t.Errorf("saved[%q] = %q, want %q", k, saved[k], want)
+				}
+			}
+		})
+	}
+}
+
+// TestPrintNextStep pins which diagnostic command each outcome names.
+func TestPrintNextStep(t *testing.T) {
+	cases := []struct {
+		name    string
+		outcome verifyOutcome
+		want    []string
+		deny    []string
+	}{
+		{
+			name:    "verified",
+			outcome: verifyPassed,
+			want:    []string{"agento11y doctor", "if the data does not appear"},
+			deny:    []string{"--probe"},
+		},
+		{
+			name:    "skipped",
+			outcome: verifySkipped,
+			want:    []string{"Verification was skipped", "agento11y doctor"},
+			deny:    []string{"--probe"},
+		},
+		{
+			name:    "saved after a failed check",
+			outcome: verifyOverridden,
+			want:    []string{"did not accept these credentials", "agento11y doctor"},
+			deny:    []string{"--probe"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			printNextStep(&buf, c.outcome)
+			got := buf.String()
+			if !strings.Contains(got, "agento11y claude") {
+				t.Errorf("next step must still name the launchers:\n%s", got)
+			}
+			for _, want := range c.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("output missing %q:\n%s", want, got)
+				}
+			}
+			for _, deny := range c.deny {
+				if strings.Contains(got, deny) {
+					t.Errorf("output must not contain %q:\n%s", deny, got)
+				}
+			}
+		})
+	}
+}
+
+// TestRun_NextStepOnlyWhenAsked pins that the automatic login the launchers
+// fire (ShowNextStep false) still saves and verifies, but stays quiet about
+// what to run next — the launcher is about to start the agent anyway.
+func TestRun_NextStepOnlyWhenAsked(t *testing.T) {
+	for _, show := range []bool{true, false} {
+		t.Run(fmt.Sprintf("ShowNextStep=%v", show), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.env")
+			var calls []probeCall
+			stderr, err := runNonInteractive(t, RunOpts{
+				ConfigPath:   path,
+				ShowNextStep: show,
+				Endpoint:     "https://agento11y.example.com",
+				TenantID:     "123",
+				Token:        "glc_secret",
+				Probe:        stubProbe(&doctor.ProbeResult{StatusCode: 200, OK: true}, path, &calls),
+			})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(calls) != 1 {
+				t.Fatalf("probe ran %d times, want 1", len(calls))
+			}
+			if _, statErr := os.Stat(path); statErr != nil {
+				t.Fatalf("dotenv not written: %v", statErr)
+			}
+			if got := strings.Contains(stderr, "agento11y doctor"); got != show {
+				t.Errorf("next-step hint printed = %v, want %v:\n%s", got, show, stderr)
 			}
 		})
 	}

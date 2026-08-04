@@ -42,6 +42,30 @@ Verify the install with `agento11y --version`.
 
 All hosts read the same config file at `~/.config/agento11y/config.env`. If you only have the old `~/.config/sigil/config.env`, that file is read and updated instead. The first run of `agento11y claude`, `agento11y opencode`, or `agento11y pi` prompts for your endpoint, tenant ID, token, and OTLP endpoint and writes them there; run `agento11y login` to re-enter them later. After the connection details, `agento11y login` shows an optional preferences step for content capture mode, session tags, and guards — leave it at the defaults to keep the current behaviour. Cursor has no launcher, so wire it once with `agento11y cursor install` (which also prompts on first run) and remove it with `agento11y cursor uninstall`.
 
+Before anything is written, login sends one request to the configured endpoint with the credentials you gave it. If the endpoint rejects them, login prints why and asks whether to save anyway.
+
+The connection values can also come from flags, which is what a script or a devcontainer wants. The preferences have no flags; set them in the config file or answer the prompt.
+
+```sh
+agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token glc_...
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--endpoint url` | conversations API URL |
+| `--tenant id` | instance ID |
+| `--token value` | access-policy token with the `sigil:write` scope |
+| `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant` |
+| `--otlp-endpoint url` | OTLP endpoint for SDK traces and metrics |
+| `--no-verify` | write the file without checking the credentials |
+| `--yes` | save even when the check fails |
+
+Passing `--endpoint`, `--tenant`, and a token together skips the value prompts, so login works over SSH, in a devcontainer, and from a script. One prompt can still appear: if the credential check fails and stdin is a terminal, login asks whether to save anyway. Pass `--yes` (or `--no-verify`) so a script never stops there. Keeping a token out of your shell history:
+
+```sh
+printf %s "$TOKEN" | agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token-stdin
+```
+
 To preconfigure without the prompt, create the file:
 
 ```dotenv

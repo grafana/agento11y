@@ -291,7 +291,10 @@ type ProbeResult struct {
 	Message    string `json:"message,omitempty"`
 }
 
-func (p *ProbeResult) authFailure() bool {
+// AuthFailure reports a probe the endpoint answered with 401 or 403, which
+// means the tenant and token were rejected as one Basic credential. It is
+// exported so `agento11y login` classifies a result exactly as doctor does.
+func (p *ProbeResult) AuthFailure() bool {
 	return p.credentialsRejected() || p.scopeDenied()
 }
 
@@ -308,13 +311,22 @@ func (p *ProbeResult) scopeDenied() bool {
 	return p != nil && p.StatusCode == 403
 }
 
+// NoResponse reports a probe that never got an HTTP response at all: a DNS
+// failure, a refused connection, or a timeout. Exported for the same reason
+// as AuthFailure.
+func (p *ProbeResult) NoResponse() bool {
+	return p != nil && p.StatusCode == 0
+}
+
 // unreachable reports a probe outcome that means a configured pipeline can't
 // deliver: a transport error (no HTTP response, e.g. DNS failure, connection
 // refused, or timeout) or a 5xx server error. Every other failing status is
-// classified on its own: 401 and 403 by authFailure, 3xx by redirected, 404 by
-// routeMissing, and the rest by accepted.
+// classified on its own: 401 and 403 by AuthFailure, 3xx by redirected, 404 by
+// routeMissing, and the rest by accepted. `agento11y login` is deliberately
+// stricter: it reports every non-success status before it writes those values
+// to disk.
 func (p *ProbeResult) unreachable() bool {
-	return p != nil && (p.StatusCode == 0 || p.StatusCode >= 500)
+	return p != nil && (p.NoResponse() || p.StatusCode >= 500)
 }
 
 // accepted reports the statuses that prove a pipeline can deliver. Ingest
@@ -876,7 +888,7 @@ func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string)
 		res := probeConversationsFn(ctx, r.Conversations.Endpoint.Value, r.Conversations.TenantID, token, resolveInsecure(osEnv, fileEnv))
 		r.Conversations.Probe = res
 		switch {
-		case res.authFailure():
+		case res.AuthFailure():
 			r.Conversations.Health = HealthError
 			// The row shows the status and the URL, so the diagnosis (bad token,
 			// wrong tenant id, missing write scope) is carried here or nowhere in
@@ -913,7 +925,7 @@ func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string)
 		r.Analytics.Probe = probe
 		if probe != nil {
 			switch {
-			case probe.Metrics.authFailure() || probe.Traces.authFailure():
+			case probe.Metrics.AuthFailure() || probe.Traces.AuthFailure():
 				r.Analytics.Health = HealthError
 				r.Analytics.Messages = append(r.Analytics.Messages, otlpAuthMessages(probe)...)
 			case probe.Metrics.redirected() || probe.Traces.redirected():
@@ -971,7 +983,7 @@ func otlpAuthMessages(p *AnalyticsProbe) []string {
 	rejected := func(subject string, res *ProbeResult) string {
 		return "the OTLP endpoint rejected the " + subject + ": " + describeProbe(res)
 	}
-	if p.Metrics.authFailure() && p.Traces.authFailure() &&
+	if p.Metrics.AuthFailure() && p.Traces.AuthFailure() &&
 		p.Metrics.StatusCode == p.Traces.StatusCode && p.Metrics.Message == p.Traces.Message {
 		return []string{rejected("metrics and traces exports", p.Metrics)}
 	}
@@ -980,7 +992,7 @@ func otlpAuthMessages(p *AnalyticsProbe) []string {
 		name string
 		res  *ProbeResult
 	}{{"metrics", p.Metrics}, {"traces", p.Traces}} {
-		if signal.res.authFailure() {
+		if signal.res.AuthFailure() {
 			msgs = append(msgs, rejected(signal.name+" export", signal.res))
 		}
 	}
