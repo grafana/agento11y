@@ -1,8 +1,11 @@
 services:
   litellm-proxy:
     build:
-      context: ../../../..
-      dockerfile: sdks/python-frameworks/litellm/example/Dockerfile
+      # The repo root: the Dockerfile installs the SDK from this checkout.
+      # Dockerfile.dockerignore keeps the context down to the two directories it
+      # copies.
+      context: ../../..
+      dockerfile: python-frameworks/litellm/example/Dockerfile
     ports:
       - "4000:4000"
     environment:
@@ -11,7 +14,15 @@ services:
       AGENTO11Y_ENDPOINT: ${AGENTO11Y_ENDPOINT}
       AGENTO11Y_AUTH_TENANT_ID: ${AGENTO11Y_AUTH_TENANT_ID}
       AGENTO11Y_AUTH_TOKEN: ${AGENTO11Y_AUTH_TOKEN}
+      # Names generations from requests that carry no agent identity.
+      AGENTO11Y_AGENT_NAME: ${AGENTO11Y_AGENT_NAME:-litellm-proxy}
+      # OTel traces and metrics are a separate channel from generation export,
+      # and the SDK sends nothing on it until these are set. See the README.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
     volumes:
       - ./config.yaml:/app/config.yaml
       - ./agento11y_callback.py:/app/agento11y_callback.py
+      # Mounted so switching config.yaml to it needs no compose change.
+      - ./agento11y_callback_agent_from_key_alias.py:/app/agento11y_callback_agent_from_key_alias.py
     command: ["--config", "/app/config.yaml", "--port", "4000"]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -29,6 +29,10 @@ from agento11y.usage import map_usage
 from litellm.integrations.custom_logger import CustomLogger
 
 logger = logging.getLogger(__name__)
+
+# Signatures of the two payload readers ``_select_output_mappers`` returns.
+OutputMapper = Callable[[Any], list[Message]]
+StopReasonReader = Callable[[Any], str]
 
 _CHAT_CALL_TYPES = frozenset(
     {
@@ -538,6 +542,56 @@ def _extract_responses_stop_reason(response: Any) -> str:
     return status
 
 
+def _select_output_mappers(call_type: str, response: Any) -> tuple[OutputMapper, StopReasonReader]:
+    """Pick the output mapper and stop-reason reader for a logged payload.
+
+    The payload shape decides, and the call type is only the fallback for a
+    payload that shows neither shape. LiteLLM serves ``/v1/responses`` on a
+    provider with no native Responses API by bridging the call to chat
+    completions, and it then logs the chat ``ModelResponse`` under call type
+    ``aresponses``. Reading that payload with the Responses mappers finds no
+    ``output`` list and no ``status``, so the generation used to export with no
+    output and no stop reason for every non-OpenAI provider.
+
+    ``choices`` wins over ``output``: a chat payload is unambiguous, while a
+    Responses payload has no ``choices`` at all.
+    """
+    if isinstance(response, dict):
+        if response.get("choices") is not None:
+            return _map_response_output, _extract_stop_reason
+        if isinstance(response.get("output"), list):
+            return _map_responses_output, _extract_responses_stop_reason
+    if call_type in _RESPONSES_CALL_TYPES:
+        return _map_responses_output, _extract_responses_stop_reason
+    return _map_response_output, _extract_stop_reason
+
+
+def _responses_instructions(kwargs: dict[str, Any], slo: dict[str, Any]) -> str:
+    """Read the ``instructions`` a ``/v1/responses`` request carried.
+
+    ``instructions`` is that route's system prompt, and LiteLLM keeps it out of
+    the logged ``messages`` on both the native path and the chat bridge. Without
+    this the generation exports with an empty system prompt, and because an agent
+    version is a hash of system prompt plus tools, all Responses traffic collapses
+    into one version.
+
+    The proxy request body is the last source and the only one that has it behind
+    the proxy; the two parameter dicts cover a direct ``litellm.responses()``
+    call, which has no proxy request to read.
+    """
+    for container in (
+        slo.get("model_parameters") or {},
+        kwargs.get("optional_params") or {},
+        ((kwargs.get("litellm_params") or {}).get("proxy_server_request") or {}).get("body") or {},
+    ):
+        if not isinstance(container, dict):
+            continue
+        value = container.get("instructions")
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _map_tool_definitions(kwargs: dict[str, Any]) -> list[ToolDefinition]:
     """Extract tool schemas from optional_params.
 
@@ -676,6 +730,13 @@ def _metadata_sources_from(container: dict[str, Any]) -> list[dict[str, Any]]:
     routes use ``litellm_metadata``; metadata passed through the Router lands one
     level deeper, under ``metadata.metadata``.
 
+    ``requester_metadata`` is the copy of the client's ``metadata`` that the
+    proxy keeps once it has overwritten ``metadata`` with its own request state.
+    It is the only copy on ``/v1/messages`` and ``/v1/responses``: both routes
+    hand the callback a ``litellm_metadata`` full of proxy fields and no
+    client-supplied key, so without it every request on those routes falls back
+    to the handler's static agent name.
+
     The container is ``kwargs["litellm_params"]`` on the logging path and the raw
     request body on the proxy pre-call path, where the same keys sit at the top
     level.
@@ -688,9 +749,10 @@ def _metadata_sources_from(container: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(candidate, dict):
             continue
         sources.append(candidate)
-        nested = candidate.get("metadata")
-        if isinstance(nested, dict):
-            sources.append(nested)
+        for nested_key in ("metadata", "requester_metadata"):
+            nested = candidate.get(nested_key)
+            if isinstance(nested, dict):
+                sources.append(nested)
     return sources
 
 
@@ -844,16 +906,23 @@ class Agento11yLiteLLMLogger(CustomLogger):
         """Resolve agent_version from per-request metadata, falling back to static."""
         return _first_metadata_value(_metadata_sources(kwargs), ("agent_version",)) or self._agent_version
 
-    def _resolve_conversation_id(self, kwargs: dict[str, Any]) -> str:
+    def _resolve_conversation_id(self, kwargs: dict[str, Any], slo: dict[str, Any]) -> str:
         """Resolve conversation_id from per-request metadata, falling back to static.
 
         Checks metadata keys first (conversation_id, session_id, thread_id),
         then LiteLLM's built-in session tracking fields (litellm_session_id,
-        litellm_trace_id) in both metadata and litellm_params.
+        litellm_trace_id) in both metadata and litellm_params, and last the
+        logged payload's own ``trace_id``.
+
+        The payload is the only place ``/v1/messages`` carries the trace id: that
+        route leaves ``litellm_params`` without one, so before this fallback its
+        generations exported with an empty conversation id, which leaves them out
+        of every conversation and out of conversation search. Where both are set
+        they hold the same id, so the fallback never regroups another route.
         """
         litellm_params = kwargs.get("litellm_params") or {}
         resolved = _resolve_conversation_id_from(litellm_params, _metadata_sources_from(litellm_params))
-        return resolved or self._conversation_id
+        return resolved or str(slo.get("trace_id") or "") or self._conversation_id
 
     def _record_generation(
         self,
@@ -890,10 +959,12 @@ class Agento11yLiteLLMLogger(CustomLogger):
         input_messages: list[Message] = []
         if self._capture_inputs:
             input_messages, system_prompt = _map_messages(slo.get("messages"))
+            if not system_prompt and call_type in _RESPONSES_CALL_TYPES:
+                system_prompt = _responses_instructions(kwargs, slo)
 
         gen_id = slo.get("id") or ""
         user_id = slo.get("end_user") or ""
-        conversation_id = self._resolve_conversation_id(kwargs)
+        conversation_id = self._resolve_conversation_id(kwargs, slo)
         started_at = _datetime_to_utc(start_time)
         tools = _map_tool_definitions(kwargs)
 
@@ -934,11 +1005,7 @@ class Agento11yLiteLLMLogger(CustomLogger):
                     recorder.set_call_error(RuntimeError(error_str))
 
             slo_response = slo.get("response")
-
-            if call_type in _RESPONSES_CALL_TYPES:
-                map_output, extract_stop_reason = _map_responses_output, _extract_responses_stop_reason
-            else:
-                map_output, extract_stop_reason = _map_response_output, _extract_stop_reason
+            map_output, extract_stop_reason = _select_output_mappers(call_type, slo_response)
 
             output_messages = map_output(slo_response) if self._capture_outputs else []
             usage = _extract_detailed_usage(response_obj, slo)

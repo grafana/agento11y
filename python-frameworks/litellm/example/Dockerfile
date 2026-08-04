@@ -1,7 +1,13 @@
-FROM ghcr.io/berriai/litellm:v1.82.3-stable.patch.2@sha256:9e1536c6a9219519f024f221706b20b012ca5176988164798adc5c7fe011e5d5
+FROM ghcr.io/berriai/litellm:v1.95.0@sha256:af806882b7a6ced41658db5b6a7e98ed7b9b51d03b935e0417bf1c8552d688af
 
-COPY sdks/python /tmp/agento11y
-COPY sdks/python-frameworks/litellm /tmp/agento11y-litellm
+COPY python /tmp/agento11y
+COPY python-frameworks/litellm /tmp/agento11y-litellm
 
-RUN pip install --no-cache-dir /tmp/agento11y /tmp/agento11y-litellm && \
+# The image ships a uv-managed venv at /app/.venv with no pip in it, so pip is
+# bootstrapped before the two local packages are installed. Installing from
+# PyPI instead needs the same bootstrap:
+#   RUN python -m ensurepip --upgrade && \
+#       python -m pip install --no-cache-dir agento11y agento11y-litellm
+RUN python -m ensurepip --upgrade && \
+    python -m pip install --no-cache-dir /tmp/agento11y /tmp/agento11y-litellm && \
     rm -rf /tmp/agento11y /tmp/agento11y-litellm

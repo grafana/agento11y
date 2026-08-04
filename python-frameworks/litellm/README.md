@@ -1,45 +1,72 @@
-# Agent Observability Python Framework Module: LiteLLM
+# Agent Observability for LiteLLM
 
-`agento11y-litellm` is a LiteLLM callback handler that exports generation telemetry to Agent Observability.
+The `agento11y-litellm` package sends what your [LiteLLM](https://docs.litellm.ai/) calls do to Grafana Cloud Agent Observability.
+Register one callback and every completion is exported as a generation, with its messages, tokens, cost, tool calls, and errors.
+Add a second callback and Agent Observability guards can block a request before it reaches the provider.
 
-## Installation
+It works in your own process and inside the LiteLLM proxy.
+Guards need the proxy, because LiteLLM only runs call hooks there.
+
+## Before you begin
+
+You need Python 3.10 or later, and an endpoint, instance ID, and token.
+To enable the product and collect those three values, refer to [Set up Agent Observability](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/get-started/grafana-cloud/).
+
+Install the packages:
 
 ```bash
-pip install agento11y agento11y-litellm
-pip install litellm
+pip install agento11y agento11y-litellm litellm
 ```
 
-## Quickstart
+## Export generations from your app
 
-```python
-import litellm
-from agento11y import Client
-from agento11y_litellm import Agento11yLiteLLMLogger
+The client reads its connection details from the environment, so `Client()` takes no arguments:
 
-client = Client()
-handler = Agento11yLiteLLMLogger(client=client)
-
-litellm.callbacks = [handler]
-
-response = litellm.completion(
-    model="openai/gpt-4o-mini",
-    messages=[{"role": "user", "content": "Hello!"}],
-)
-print(response.choices[0].message.content)
-
-client.shutdown()
+```bash
+export AGENTO11Y_ENDPOINT=https://your-agento11y.grafana.net
+export AGENTO11Y_PROTOCOL=http
+export AGENTO11Y_AUTH_MODE=basic
+export AGENTO11Y_AUTH_TENANT_ID=your-instance-id
+export AGENTO11Y_AUTH_TOKEN=glc_your_token
 ```
 
-## Streaming
+Grafana Cloud needs both `AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic`.
+The SDK otherwise defaults to gRPC with no authentication, and a Cloud endpoint then answers `401` with no other signal.
+For content capture, batching, and the rest of the settings, refer to [Configure the Agent Observability SDK](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/configure/sdk/).
+
+To export generations, follow these steps:
+
+1. Create a client and a handler.
+
+   ```python
+   import litellm
+   from agento11y import Client
+   from agento11y_litellm import Agento11yLiteLLMLogger
+
+   client = Client()
+   litellm.callbacks = [Agento11yLiteLLMLogger(client=client, agent_name="my-agent")]
+   ```
+
+1. Call LiteLLM as you normally do.
+
+   ```python
+   response = litellm.completion(
+       model="openai/gpt-4o-mini",
+       messages=[{"role": "user", "content": "Hello!"}],
+   )
+   print(response.choices[0].message.content)
+   ```
+
+1. Flush buffered telemetry before your process exits.
+
+   ```python
+   client.shutdown()
+   ```
+
+Streaming works the same way.
+A streamed call is exported as one generation in `STREAM` mode, carrying the time of the first token:
 
 ```python
-import litellm
-from agento11y import Client
-from agento11y_litellm import Agento11yLiteLLMLogger
-
-client = Client()
-litellm.callbacks = [Agento11yLiteLLMLogger(client=client)]
-
 response = litellm.completion(
     model="openai/gpt-4o-mini",
     messages=[{"role": "user", "content": "Give me three reliability tips."}],
@@ -49,32 +76,33 @@ for chunk in response:
     content = chunk.choices[0].delta.content
     if content:
         print(content, end="", flush=True)
-print()
-
-client.shutdown()
 ```
 
-## Configuration
+Your generations appear under the agent name you passed.
+To find and read them, refer to [Browse and debug conversations](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/guides/conversations/).
+For every option the handler takes, refer to the [LiteLLM adapter reference](docs/reference.md).
 
-All options are keyword-only on `Agento11yLiteLLMLogger`:
+## Export generations from the LiteLLM proxy
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `client` | `agento11y.Client` | required | agento11y SDK client instance |
-| `capture_inputs` | `bool` | `True` | Record input messages |
-| `capture_outputs` | `bool` | `True` | Record output messages |
-| `agent_name` | `str` | `""` | Fallback agent name, used when the request carries no agent identity (see below for per-request) |
-| `agent_name_metadata_keys` | `Sequence[str]` | `("agent_name", "agent_id")` | Metadata keys consulted, in order, to name the agent |
-| `agent_version` | `str` | `""` | Default agent version (see below for per-request) |
-| `conversation_id` | `str` | `""` | Default conversation ID (see below for per-request) |
-| `extra_tags` | `dict[str, str]` | `None` | Additional tags merged into every generation |
-| `extra_metadata` | `dict[str, Any]` | `None` | Additional metadata merged into every generation |
+The proxy loads callbacks by dotted path from a Python file next to `config.yaml`.
+Put a `Client` and a handler in that file, then name the handler in `config.yaml`:
 
-The `create_agento11y_litellm_logger` factory accepts the same parameters.
+```yaml
+litellm_settings:
+  callbacks:
+    - agento11y_callback.agento11y_handler
+```
 
-## Per-Request Metadata
+For the callback file, the Dockerfile, and the `docker run` command, refer to [Deploy in the LiteLLM proxy](docs/reference.md#deploy-in-the-litellm-proxy).
+For a proxy you can start in one command, refer to the [LiteLLM proxy example](example/README.md).
 
-The handler resolves `agent_name`, `agent_version`, and `conversation_id` from per-request LiteLLM metadata, falling back to the static values from handler init. This is useful when multiple agents share a single LiteLLM proxy.
+## Name the calling agent
+
+One proxy usually serves several agents.
+The handler reads the agent name from each request, so each caller gets its own agent in Agent Observability.
+When a request names no agent, the handler falls back to the `agent_name` you configured.
+
+A client that knows about Agent Observability can pass metadata:
 
 ```python
 response = litellm.completion(
@@ -88,9 +116,7 @@ response = litellm.completion(
 )
 ```
 
-For `conversation_id`, the handler also checks `session_id` and `thread_id` metadata keys as fallbacks.
-
-When no `agent_name` is set, the handler falls back to LiteLLM's own `agent_id`, which the proxy fills in from the `x-litellm-agent-id` header or from an `agent_id` on the calling virtual key. Callers behind a proxy are then attributed to themselves without having to know about agento11y:
+A client that doesn't can send the header LiteLLM already understands:
 
 ```bash
 curl http://localhost:4000/v1/chat/completions \
@@ -99,259 +125,70 @@ curl http://localhost:4000/v1/chat/completions \
   -d '{"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
-Metadata is read from `litellm_params["metadata"]`, from `litellm_metadata` (used by assistant and thread routes), and from metadata nested one level deeper under `metadata.metadata` (where the Router puts SDK-supplied metadata). Keys are matched in priority order across all of those, so an `agent_name` in any of them beats an `agent_id` in another.
+Both work on every recorded route.
+To name callers after their virtual key instead, or to learn which metadata containers the adapter reads, refer to [Agent identity](docs/reference.md#agent-identity).
 
-`agent_name_metadata_keys` controls which keys are consulted. Add your own, or LiteLLM's key alias for deployments where one virtual key means one agent:
+## Enforce guards on proxy requests
 
-```python
-from agento11y_litellm import DEFAULT_AGENT_NAME_METADATA_KEYS, Agento11yLiteLLMLogger
+A guard is a rule that runs on the request path and can fail the request.
+`Agento11yLiteLLMGuardrail` evaluates your Agent Observability guards inside the proxy: preflight before the provider is called, postflight against the provider's response.
 
-handler = Agento11yLiteLLMLogger(
-    client=client,
-    agent_name_metadata_keys=(*DEFAULT_AGENT_NAME_METADATA_KEYS, "user_api_key_alias"),
-    agent_name="litellm-proxy",
-)
-```
+Guards live in Agent Observability, not in `config.yaml`.
+To create one, refer to [Set up guards](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/guides/guards/).
 
-A key alias names a credential rather than an agent, so it is not consulted by default: rotating a key would rename the agent, and a shared key would merge unrelated callers. Conversely, pass `("agent_name",)` to ignore LiteLLM's `agent_id` and keep every generation under the static name.
+To enforce them, follow these steps:
 
-## Guards
+1. Enable hooks on the client and build the guardrail next to the handler.
 
-`Agento11yLiteLLMGuardrail` evaluates Agent Observability guards on a proxy request: preflight guards before the request reaches the provider, postflight guards against the provider response. A deny returns HTTP 400 to the caller, including on a request that asked to stream, which is rejected before the first chunk. The one exception is a postflight deny on a streamed response: the output is already delivered, so the verdict is only recorded. It is a `CustomGuardrail`, so it gets LiteLLM's per-request and per-team opt-in, `default_on`, guardrail results in the standard logging payload, and an OTel guardrail span.
+   ```python
+   from agento11y import Client, ClientConfig, HooksConfig
+   from agento11y_litellm import Agento11yLiteLLMGuardrail, Agento11yLiteLLMLogger
 
-Enforcement only works behind the LiteLLM proxy. Call hooks are a proxy-only LiteLLM feature; a direct `litellm.completion()` SDK call never invokes them and is never guarded.
+   client = Client(
+       ClientConfig(
+           hooks=HooksConfig(
+               enabled=True,
+               timeout_seconds=3.0,
+               # Drop "postflight" to evaluate request rules only.
+               phases=["preflight", "postflight"],
+           )
+       )
+   )
 
-`event_hook` selects the phases: `"pre_call"` (the default) for preflight, `"post_call"` for postflight, `["pre_call", "post_call"]` for both. `"during_call"` raises at proxy startup: LiteLLM runs it in parallel with the provider call, so it cannot save spend, and it is never given the response, so all it could do is repeat the preflight check after the call has started.
+   agento11y_handler = Agento11yLiteLLMLogger(client=client, agent_name="litellm-proxy")
+   agento11y_guards = Agento11yLiteLLMGuardrail(
+       client=client,
+       agent_name="litellm-proxy",
+       default_on=True,
+       event_hook=["pre_call", "post_call"],
+   )
+   ```
 
-Guards are configured in Agent Observability, not in `config.yaml`. Refer to [Set up guards](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/guides/guards/) for guard types, priority, and match filters.
+1. List both objects in `config.yaml`.
 
-Evaluator guards work as documented there: preflight sees messages, system prompt, and tool definitions; postflight adds the response. `deny` returns 400 to the proxy client, except for a postflight deny on a streamed response, which is only recorded (see [Postflight](#postflight)); `warn` allows the request and records the verdict. Three things behave differently through this adapter:
+   ```yaml
+   litellm_settings:
+     callbacks:
+       - agento11y_callback.agento11y_handler
+       - agento11y_callback.agento11y_guards
+   ```
 
-- Redact guards change what the model sees, though not on every route and not in every case. The adapter writes a preflight verdict's `transformed_input` into the outgoing body when it can apply the whole transform, and forwards the request as the client sent it when it cannot. Redaction always applies to evaluators in later guards, which run server-side against the redacted input, whether or not the request itself was rewritten. See [Transformed requests](#transformed-requests) for the routes and the cases that skip.
-- Preflight tool filter guards match tool calls that are already in the request history, which means the client has executed them. They block the next call in an agent loop rather than the tool itself. To block a proposed call before the client runs it, put the tool filter guard in the postflight phase, which sees the tool calls the model just produced.
-- `model.provider` match filters are unreliable, because the provider is not known until LiteLLM's router picks a deployment, which happens after the guard runs. Match on `agent_name`, `model.name`, or tags instead.
+1. Send a request that a rule denies, and confirm the proxy answers `400` with the rule's reason.
 
-### Guarded routes
+LiteLLM runs any `CustomGuardrail` in `litellm.callbacks` on both hook paths, so the guardrail needs no separate `guardrails` block.
 
-The guard reads the request body as the client sent it, before LiteLLM translates it to provider format, and every route puts the input somewhere else:
+Three limits are worth knowing before you rely on guards:
 
-| Route | Messages | System prompt |
-|---|---|---|
-| `/v1/chat/completions` | `messages` | `system` and `developer` messages |
-| `/v1/completions` | `prompt` (string or list of strings; token ids carry no text) | none |
-| `/v1/messages` | `messages`, including Anthropic content blocks | top-level `system` |
-| `/v1/responses` | `input` (string or input items) | `instructions` |
-| `/v1/images/generations` | `prompt` | none |
+- A postflight deny can't stop a streamed response, because the caller already has it. Use preflight to block a streaming request.
+- A redact rule rewrites the request all or nothing. When the guardrail can't apply the whole rewrite, it forwards the original and logs a warning starting with `agento11y: skipping`.
+- A deny answers `400` from LiteLLM 1.87.0 on, and `500` before that.
 
-Every other route LiteLLM runs pre-call hooks on is skipped: embeddings, moderation, rerank, audio, realtime, MCP tool calls, and native pass-through endpoints (`/anthropic/v1/messages`, `/vertex_ai/...`). Their bodies are provider-native or carry no messages, so there is nothing for a content or system-prompt rule to match. They are skipped rather than evaluated against empty input, because an evaluation with no input returns allow and records a verdict that reads like a completed check. A skipped request records no verdict at all, and nothing on those routes is ever blocked, including by rules that only match on `agent_name`, `model.name`, or tags.
+For the routes each phase covers, the deny outcome per delivery, and every guardrail option, refer to the [LiteLLM guard reference](docs/guards.md).
 
-Postflight skips the same routes, by a different test. The post-call hook is not given a call type, so the guard reads the request body: a body it cannot take messages, a prompt, or a system prompt from is skipped, which is what a pass-through body looks like (the provider-native payload sits one level down, under `data`).
+## Learn more
 
-A guarded request whose input maps to no text is skipped the same way: a token-id `prompt`, or content that is entirely images or audio.
-
-### Postflight
-
-Postflight guards run after the provider has answered. They see the same request input as preflight plus the response, and they cannot prevent spend: the call is already made and billed by the time the rule runs. Postflight decides whether the output reaches the caller, not whether it costs money.
-
-What a deny does depends on how the response is delivered. This was verified against a running proxy on LiteLLM 1.89.1:
-
-| Delivery | Deny outcome |
-|---|---|
-| Non-streaming (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`) | The caller gets HTTP 400 naming the guardrail and the rule's reason. The provider output never leaves the proxy. |
-| Streaming (`/v1/chat/completions`) | The caller already has the whole response. The verdict is recorded and logged at WARNING; nothing is blocked. |
-| Streaming (`/v1/responses`, `/v1/messages`) | Nothing runs. No hook request, no verdict, no log line. |
-
-Neither streaming case is a configuration choice. On a streamed chat completion LiteLLM flushes every chunk, then runs post-call guardrails on the assembled response (`_run_deferred_stream_guardrails`) and swallows whatever they raise. It attaches that deferred pass only to a `CustomStreamWrapper`, and `/v1/responses` and `/v1/messages` stream through their own iterators, so postflight never runs on them at all. Treat postflight on streaming traffic as detection that feeds evaluation and alerting, not as enforcement, and do not rely on it for those two routes.
-
-Postflight has two independent gates, and both must be open:
-
-- LiteLLM: the guardrail is constructed with `event_hook="post_call"` (or a list containing it). With the default `"pre_call"`, LiteLLM never calls the post-call hook.
-- SDK: `HooksConfig.phases` must contain `"postflight"`. It defaults to `["preflight"]`, and `evaluate_hook` returns allow without contacting the server for a phase that is not listed.
-
-A guardrail whose mode has no matching `HooksConfig.phases` entry logs a WARNING at startup and evaluates nothing for that phase. The request is skipped rather than evaluated, so it records no verdict either.
-
-The response is mapped per route: `choices[].message` for chat completions and for an assembled stream, `output` items for `/v1/responses`, and Anthropic content blocks for `/v1/messages`. Tool calls in the response keep their `tool_call` kind, so a postflight tool filter guard matches them. A response with no mappable text (an embedding, an image, an empty turn) is skipped and records no verdict.
-
-The guard reads the response the provider produced, not the copy LiteLLM logs, so `turn_off_message_logging` does not apply to it. Enabling postflight sends response content to the hooks API even on a deployment that keeps it out of its logs.
-
-Enable hooks on the agento11y client and list the guardrail next to the logger:
-
-```python
-# agento11y_callback.py, next to config.yaml
-from agento11y import Client, ClientConfig, HooksConfig
-from agento11y_litellm import Agento11yLiteLLMGuardrail, Agento11yLiteLLMLogger
-
-client = Client(
-    ClientConfig(
-        hooks=HooksConfig(
-            enabled=True,
-            timeout_seconds=2.0,
-            # Drop "postflight" to run request rules only.
-            phases=["preflight", "postflight"],
-        )
-    )
-)
-
-agento11y_handler = Agento11yLiteLLMLogger(client=client, agent_name="litellm-proxy")
-agento11y_guards = Agento11yLiteLLMGuardrail(
-    client=client,
-    agent_name="litellm-proxy",
-    default_on=True,
-    event_hook=["pre_call", "post_call"],
-)
-```
-
-```yaml
-# config.yaml
-litellm_settings:
-  callbacks:
-    - agento11y_callback.agento11y_handler
-    - agento11y_callback.agento11y_guards
-```
-
-LiteLLM runs any `CustomGuardrail` in `litellm.callbacks` on both the pre-call and post-call paths, so the guardrail needs no separate `guardrails:` block.
-
-With `default_on=False`, a request opts in with `"guardrails": ["agento11y"]` in its metadata.
-
-Lower `HooksConfig.timeout_seconds` from its 15 second default for proxy use. It bounds how long a worker thread stays occupied after the guardrail has already given up on the evaluation.
-
-Guardrail options are keyword-only, and `create_agento11y_litellm_guardrail` accepts the same ones:
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `client` | `agento11y.Client` | required | agento11y SDK client instance, with `hooks.enabled=True` and the phase to evaluate in `hooks.phases` |
-| `agent_name` | `str` | `""` | Fallback agent name when the request carries no agent identity |
-| `agent_name_metadata_keys` | `Sequence[str]` | `("agent_name", "agent_id")` | Metadata keys consulted, in order, to name the agent |
-| `agent_version` | `str` | `""` | Fallback agent version |
-| `max_concurrent_evaluations` | `int` | `32` | Ceiling on hook evaluations in flight at once |
-| `request_timeout_seconds` | `float` | `2.0` | How long the proxy waits for a free thread plus a verdict |
-| `apply_transforms` | `bool` | `True` | Write `transformed_input` from a preflight allow verdict into the outgoing request (see [Transformed requests](#transformed-requests)) |
-| `extra_tags` | `dict[str, str]` | `None` | Additional tags merged into every hook evaluation context |
-| `guardrail_name` | `str` | `"agento11y"` | Name used for per-request opt-in and in the 400 response |
-| `default_on` | `bool` | `False` | Run on every request instead of only on opted-in ones |
-| `event_hook` | `str \| Sequence[str]` | `"pre_call"` | Phases to run: `"pre_call"`, `"post_call"`, or both |
-
-Runtime behavior:
-
-- Evaluation runs on a pool of `max_concurrent_evaluations` threads, so it does not block the proxy event loop. `request_timeout_seconds` covers waiting for a free thread as well as the evaluation itself, and a thread stays busy until its evaluation actually finishes, so a slow evaluator can keep the pool saturated for longer than that timeout.
-- A transport failure, a timeout, or an unexpected error follows `HooksConfig.fail_open`: allow and log at WARNING when `True` (the default), raise `HookTransportError` when `False`. Either way the verdict is recorded as `guardrail_failed_to_respond`, not `success`, so a dead evaluator shows up in spend logs and logging callbacks. Fail-closed costs more on postflight than on preflight: the provider has already answered and billed, and the caller gets HTTP 500 instead of the response.
-- Hook evaluations correlate to the proxy request span, so a guard verdict lines up with its request in traces.
-- Register both the guardrail and the logger. The guardrail does not export generations, and having both in `litellm.callbacks` still exports exactly one generation per request.
-- A non-streaming postflight deny costs a generation record. LiteLLM defers success logging until after post-call guardrails run and drops it when one of them raises, and the failure path does not reach this package's callback either, so the blocked request exports no generation at all. The provider was still called and billed. The verdict itself is in `standard_logging_guardrail_information`. A streamed deny keeps its generation, because nothing is raised there.
-
-### Transformed requests
-
-A preflight redact guard returns the rewritten request as `transformed_input`. The guardrail writes that into a new request body and gives the new body to the proxy. The proxy forwards it to the provider and to any later callback. The deny check runs before the rewrite, so a denied request never reaches the provider, rewritten or not. `apply_transforms=False` turns off the rewrite and leaves the deny check in place.
-
-Only preflight rewrites anything. A postflight transform is ignored: the provider has already answered, and LiteLLM takes no replacement response from the post-call hook.
-
-A redacted system prompt is written back on every route that has a place for one: `system` on `/v1/messages`, `instructions` on `/v1/responses`, and a `system` message on chat routes. `/v1/completions` and `/v1/images/generations` carry a bare `prompt`, so they get no system prompt rewrite.
-
-Redacted messages are written back on chat and `/v1/messages` requests only. `/v1/responses` keeps its input in `input` and the two `prompt` routes keep theirs in `prompt`, and none of those three takes chat messages.
-
-The rewrite changes text and nothing else. Tool calls, tool call ids, images, and an Anthropic `cache_control` breakpoint are copied through, so a message carrying them can still be redacted instead of failing the rewrite.
-
-Reasoning is copied through as well, and that one is a gap. The adapter leaves reasoning as the client sent it, whether it arrived as `reasoning_content` or as a thinking block: a provider validates a reasoning payload against its own signature and rejects a rewritten one. So a redact rule that rewrites the reasoning of an assistant turn has no effect, and a secret in reasoning text reaches the provider even when the same secret is redacted out of the message text.
-
-A rewrite is all or nothing. When the guardrail cannot apply the whole transform, it forwards the request as the client sent it and logs a WARNING from `agento11y_litellm.guard` naming the reason. Nothing marks the generation, so a redact rule whose transform never reached the provider looks the same as a rule that matched and allowed. When you adopt a redact rule, grep the proxy log for `agento11y: skipping`, the prefix every one of these warnings carries.
-
-The rewrite is also skipped when:
-
-- The transform does not line up with the request one to one. The guardrail matches messages by position, so the number of messages, and the number of text values inside each message, have to agree with what the guard evaluated.
-- A system prompt or an Anthropic `tool_result` is spread over more than one content block and a block carries fields of its own. One block is rewritten in place and keeps its fields. More than one has to collapse into a single string, and there is no way to split that string back into per-block values.
-- Every message in the request is a system or developer message. Writing the prompt into one place would leave the message list empty, and every route rejects that.
-
-A rule that rewrites a message or a system prompt to the empty string changes nothing. An empty value cannot be told apart from "no transform" on the wire.
-
-## LiteLLM Proxy (Docker)
-
-When running LiteLLM as a proxy server in Docker, register the handler via a callback file next to your config.
-
-**1. Extend the Docker image:**
-
-```dockerfile
-FROM ghcr.io/berriai/litellm:v1.82.3-stable.patch.2
-RUN pip install agento11y agento11y-litellm
-```
-
-**2. Create a callback file** (`agento11y_callback.py`, same directory as `config.yaml`):
-
-```python
-import os
-
-from agento11y import Client
-from agento11y.config import AuthConfig, ClientConfig, GenerationExportConfig
-from agento11y_litellm import Agento11yLiteLLMLogger
-
-client = Client(ClientConfig(
-    generation_export=GenerationExportConfig(
-        protocol="http",
-        endpoint=os.environ["AGENTO11Y_ENDPOINT"],
-        auth=AuthConfig(
-            mode="basic",
-            tenant_id=os.environ.get("AGENTO11Y_AUTH_TENANT_ID", ""),
-            basic_password=os.environ.get("AGENTO11Y_AUTH_TOKEN", ""),
-        ),
-    ),
-))
-agento11y_handler = Agento11yLiteLLMLogger(
-    client=client,
-    agent_name="litellm-proxy",
-)
-```
-
-**3. Reference it in `config.yaml`:**
-
-```yaml
-model_list:
-  - model_name: gpt-4o-mini
-    litellm_params:
-      model: openai/gpt-4o-mini
-
-litellm_settings:
-  callbacks: agento11y_callback.agento11y_handler
-```
-
-The proxy resolves `agento11y_callback.agento11y_handler` by importing `agento11y_callback.py` from the config directory and using the `agento11y_handler` instance.
-
-**4. Mount both files and run:**
-
-```bash
-docker run -d \
-  -v $(pwd)/config.yaml:/app/config.yaml \
-  -v $(pwd)/agento11y_callback.py:/app/agento11y_callback.py \
-  -e AGENTO11Y_ENDPOINT=https://your-agento11y-endpoint \
-  -e AGENTO11Y_AUTH_TENANT_ID=your-tenant \
-  -e AGENTO11Y_AUTH_TOKEN=your-key \
-  -p 4000:4000 \
-  your-litellm-image \
-  --config /app/config.yaml
-```
-
-The callback file reads connection details from environment variables. Adjust the `AuthConfig` mode to match your deployment (see `agento11y.config` for `tenant`, `bearer`, and `basic` modes).
-
-## Behavior
-
-- Mode mapping: non-stream calls -> `SYNC`, stream calls -> `STREAM` with first-token timestamp.
-- Provider detection: uses `custom_llm_provider` from LiteLLM's standard logging object. A call that fails before the router picks a deployment, for example a budget or auth rejection, has no provider. It is reported under the provider `litellm` instead of being dropped.
-- Model name: a proxied call is reported with the bare model name (`gpt-4o-mini`), not the router deployment string (`openai/gpt-4o-mini`), so cost and catalog lookups match it. The router names are kept in generation metadata under `agento11y.framework.litellm.model`, `.model_group`, and `.model_id`. Embedding spans carry the model name only. An Azure deployment alias (`azure/my-deployment`) is reported as it is, because there is no catalog model with that name.
-- Failed calls are recorded with the error attached via `set_call_error`.
-- Recorded call types:
-  - chat completions (`completion`, `acompletion`)
-  - text completions (`text_completion`, `atext_completion`). The prompt is recorded as a user message. Pre-tokenized prompts (lists of token ids) carry no text and are skipped.
-  - the Responses API (`responses`, `aresponses`, `/v1/responses`). Text, reasoning, and tool calls in the output are recorded. That route has no `finish_reason`, so the stop reason comes from the response `status`: `completed` becomes `stop`, and an incomplete response reports `incomplete_details.reason`.
-  - the Anthropic Messages API (`anthropic_messages`, `aanthropic_messages`, `/v1/messages`)
-- Only text content is recorded. Images, audio, and other non-text parts are skipped. Tool history is recorded in each request shape that carries it: OpenAI-format `tool_calls` and `tool` messages, Anthropic `tool_use` and `tool_result` blocks on `/v1/messages`, and top-level `function_call` and `function_call_output` items in `/v1/responses` input. The remaining Responses input items (`computer_call`, `mcp_call`, `image_generation_call`) are skipped. Tool calls in `/v1/responses` output are recorded.
-- Tool definitions are read from the request `tools` in the OpenAI chat schema (`{"type": "function", "function": {...}}`). The flat Responses API tool schema is not recognized, so those requests report no tool definitions.
-- Embedding call types (`embedding`, `aembedding`) are recorded as OTel embedding spans (no generation export). The span carries input/token counts and dimensions; the input text is attached only when the handler's `capture_inputs` is set and the SDK's `EmbeddingCaptureConfig.capture_input=True`. Embedding spans require a configured OTel tracer.
-- Image generation, audio, and transcription call types are skipped.
-- Framework tags are always set:
-  - `agento11y.framework.name=litellm`
-  - `agento11y.framework.source=handler` (`guardrail` on hook evaluation contexts)
-  - `agento11y.framework.language=python`
-- LiteLLM `request_tags` are forwarded as `litellm.tag.<value>`.
-- Token usage includes detailed breakdowns (cached tokens, reasoning tokens) when the provider returns them.
-- Tool calls and tool results in messages are mapped to agento11y tool call/result parts.
-- Reasoning/thinking text is captured as `THINKING` parts, ordered before the assistant text. It is read from `thinking_blocks` when present (including redacted blocks), otherwise from the flat `reasoning_content` string.
-
-Call `client.shutdown()` during teardown to flush buffered telemetry.
+- [LiteLLM adapter reference](docs/reference.md): options, recorded calls, exported fields, proxy deployment
+- [LiteLLM guard reference](docs/guards.md): phases, guarded routes, deny outcomes, request rewriting
+- [LiteLLM proxy example](example/README.md): a proxy with both callbacks, runnable with no provider key
+- [Instrument Python agents](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/get-started/python/): the SDK on its own, without LiteLLM
+- [Agent Observability documentation](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/)
