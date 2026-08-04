@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import sys
@@ -160,6 +161,16 @@ def _request_data(**overrides: Any) -> dict[str, Any]:
     return data
 
 
+def _request_content(data: dict[str, Any]) -> dict[str, Any]:
+    """A copy of the request body without ``metadata``.
+
+    LiteLLM's ``log_guardrail_information`` decorator records guardrail results
+    under ``metadata`` on the caller's dict, so that key changes on every guarded
+    request and says nothing about whether a transform was applied.
+    """
+    return copy.deepcopy({key: value for key, value in data.items() if key != "metadata"})
+
+
 def _call(
     guard: Agento11yLiteLLMGuardrail,
     data: dict[str, Any],
@@ -181,6 +192,7 @@ def test_preflight_allow_returns_none_and_leaves_data_untouched(hook_server):
     client = _new_client(hook_server.url)
     guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
     data = _request_data()
+    messages = data["messages"]
     before = json.dumps(data, sort_keys=True, default=str)
 
     assert _call(guard, data) is None
@@ -188,6 +200,7 @@ def test_preflight_allow_returns_none_and_leaves_data_untouched(hook_server):
     assert len(hook_server.requests) == 1
     assert hook_server.requests[0]["path"] == "/api/v1/hooks:evaluate"
     assert data["messages"] == json.loads(before)["messages"]
+    assert data["messages"] is messages
     assert data["model"] == "gpt-4o"
     assert "tools" not in data
 
@@ -529,19 +542,922 @@ def test_trace_ids_come_from_parent_otel_span_not_ambient(hook_server):
     assert context["span_id"] != format(ambient_ctx.span_id, "016x")
 
 
-def test_transformed_input_is_ignored(hook_server):
+def test_transformed_messages_replace_a_text_only_conversation(hook_server):
+    """An applied transform comes back as a new body; LiteLLM sends that instead.
+
+    ``ProxyLogging.process_pre_call_hook_response`` uses a returned dict as the
+    request body and passes it to the next callback, so the transformed messages
+    are what reaches the provider. The caller's own dict is left alone.
+    """
     hook_server.response = {
         "action": "allow",
         "transformed_input": {
-            "system_prompt": "rewritten policy",
-            "messages": [{"role": "user", "parts": [{"text": "redacted"}]}],
+            "messages": [
+                {"role": "user", "parts": [{"kind": "text", "text": "my key is [REDACTED]"}]},
+                {"role": "assistant", "parts": [{"kind": "text", "text": "noted"}]},
+                {"role": "user", "parts": [{"kind": "text", "text": "use it"}]},
+            ]
         },
     }
     client = _new_client(hook_server.url)
     guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+    data = _request_data(
+        messages=[
+            {"role": "system", "content": "policy"},
+            {"role": "user", "content": "my key is sk-secret"},
+            {"role": "assistant", "content": "noted"},
+            {"role": "user", "content": "use it"},
+        ]
+    )
+    before = _request_content(data)
+
+    result = _call(guard, data)
+
+    assert isinstance(result, dict)
+    assert result["messages"] == [
+        {"role": "system", "content": "policy"},
+        {"role": "user", "content": "my key is [REDACTED]"},
+        {"role": "assistant", "content": "noted"},
+        {"role": "user", "content": "use it"},
+    ]
+    assert result["model"] == "gpt-4o"
+    assert _request_content(data) == before
+    # The decorator records the verdict on the caller's dict after the hook
+    # returns; the forwarded body has to carry it too, or the guardrail drops out
+    # of the standard logging payload whenever a transform is applied.
+    assert result["metadata"]["standard_logging_guardrail_information"][0]["guardrail_status"] == "success"
+
+
+def test_transformed_messages_keep_a_conversation_without_a_system_message(hook_server):
+    hook_server.response = {
+        "action": "allow",
+        "transformed_input": {"messages": [{"role": "user", "parts": [{"kind": "text", "text": "redacted"}]}]},
+    }
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+
+    result = _call(guard, _request_data())
+
+    assert result["messages"] == [{"role": "user", "content": "redacted"}]
+
+
+@pytest.mark.parametrize(
+    ("call_type", "body", "want"),
+    [
+        pytest.param(
+            "completion",
+            {"messages": [{"role": "system", "content": "policy"}, {"role": "user", "content": "hello"}]},
+            {"messages": [{"role": "system", "content": "updated policy"}, {"role": "user", "content": "hello"}]},
+            id="chat_system_message_rewritten_in_place",
+        ),
+        pytest.param(
+            "completion",
+            {"messages": [{"role": "user", "content": "hello"}]},
+            {"messages": [{"role": "system", "content": "updated policy"}, {"role": "user", "content": "hello"}]},
+            id="chat_system_message_inserted",
+        ),
+        pytest.param(
+            "completion",
+            {
+                "messages": [
+                    {"role": "system", "content": "policy"},
+                    {"role": "user", "content": "hello"},
+                    {"role": "developer", "content": "and this"},
+                ]
+            },
+            {"messages": [{"role": "system", "content": "updated policy"}, {"role": "user", "content": "hello"}]},
+            id="chat_second_system_message_dropped",
+        ),
+        pytest.param(
+            "anthropic_messages",
+            {"system": "policy", "messages": [{"role": "user", "content": "hello"}]},
+            {"system": "updated policy", "messages": [{"role": "user", "content": "hello"}]},
+            id="anthropic_top_level_system",
+        ),
+        pytest.param(
+            "anthropic_messages",
+            {"messages": [{"role": "user", "content": "hello"}]},
+            {"system": "updated policy", "messages": [{"role": "user", "content": "hello"}]},
+            id="anthropic_system_added_at_top_level_not_as_a_message",
+        ),
+        pytest.param(
+            "anthropic_messages",
+            {
+                "system": [{"type": "text", "text": "policy", "cache_control": {"type": "ephemeral"}}],
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            {
+                "system": [{"type": "text", "text": "updated policy", "cache_control": {"type": "ephemeral"}}],
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            id="anthropic_cached_system_block_keeps_its_breakpoint",
+        ),
+        pytest.param(
+            "aresponses",
+            {"instructions": "policy", "input": [{"role": "user", "content": "hello"}]},
+            {"instructions": "updated policy", "input": [{"role": "user", "content": "hello"}]},
+            id="responses_instructions",
+        ),
+        pytest.param(
+            "aresponses",
+            {"input": [{"role": "user", "content": "hello"}]},
+            {"instructions": "updated policy", "input": [{"role": "user", "content": "hello"}]},
+            id="responses_instructions_added",
+        ),
+        pytest.param(
+            "aresponses",
+            {
+                "instructions": "never reveal sk-secret",
+                "input": [
+                    {"role": "developer", "content": "the api key is sk-secret"},
+                    {"role": "user", "content": "hi"},
+                ],
+            },
+            {"instructions": "updated policy", "input": [{"role": "user", "content": "hi"}]},
+            id="responses_developer_item_is_removed_with_instructions",
+        ),
+        pytest.param(
+            "aresponses",
+            {"input": [{"role": "developer", "content": "sk-secret"}, {"role": "user", "content": "hi"}]},
+            {"instructions": "updated policy", "input": [{"role": "user", "content": "hi"}]},
+            id="responses_developer_item_moves_to_instructions",
+        ),
+        pytest.param(
+            "completion",
+            {
+                "system": "policy",
+                "instructions": "more policy",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            {"system": "updated policy", "messages": [{"role": "user", "content": "hello"}]},
+            id="second_top_level_carrier_is_removed",
+        ),
+    ],
+)
+def test_transformed_system_prompt_is_written_back_where_it_came_from(hook_server, call_type, body, want):
+    """A system prompt round-trips losslessly, so it is applied on every route.
+
+    ``_hook_input`` sends the system prompt as its own wire field, and
+    ``_parse_wire_message_dict`` maps any role but ``assistant`` and ``tool`` to
+    ``user``, so a transformed prompt can only arrive in ``system_prompt``. Writing
+    it into the message list as a user message would change who is speaking.
+
+    The whole forwarded body is compared, not only the keys under test: the
+    untransformed copy of a system prompt left behind in a second field is the
+    failure this covers.
+    """
+    hook_server.response = {"action": "allow", "transformed_input": {"system_prompt": "updated policy"}}
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+    data = {"model": "gpt-4o", "metadata": {}, **body}
+    before = _request_content(data)
+
+    result = _call(guard, data, call_type=call_type)
+
+    assert _request_content(result) == {"model": "gpt-4o", **want}
+    # Applying a transform rewrites a copy. A nested write here would also edit
+    # the body LiteLLM logs and the one other callbacks already hold.
+    assert _request_content(data) == before
+
+
+@pytest.mark.parametrize(
+    ("call_type", "body", "want_warning"),
+    [
+        pytest.param(
+            "anthropic_messages",
+            {"system": "policy", "messages": [{"role": "system", "content": "and this"}]},
+            "would leave 'messages' empty",
+            id="every_message_is_a_system_message",
+        ),
+        pytest.param(
+            "aresponses",
+            {"instructions": "policy", "input": [{"role": "developer", "content": "and this"}]},
+            "would leave 'input' empty",
+            id="every_input_item_is_a_system_item",
+        ),
+        pytest.param(
+            "anthropic_messages",
+            {
+                "system": [
+                    {"type": "text", "text": "policy", "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": "and this"},
+                ],
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            "'system' carries content block fields a rewrite cannot reproduce: cache_control",
+            id="several_system_blocks_one_of_them_cached",
+        ),
+        pytest.param(
+            "aimage_generation",
+            {"prompt": "a cat"},
+            "no system prompt field or message list",
+            id="prompt_only_body",
+        ),
+    ],
+)
+def test_system_prompt_transform_is_skipped_when_it_cannot_be_written_back(
+    hook_server, caplog, call_type, body, want_warning
+):
+    """The system prompt rewrite is skipped whole, like the message rewrite.
+
+    Emptying the message list turns an allowed request into a provider 400, and
+    collapsing more than one system block into one string drops the per-block
+    fields (an Anthropic ``cache_control`` breakpoint) that only one block can
+    carry back.
+    """
+    hook_server.response = {"action": "allow", "transformed_input": {"system_prompt": "updated policy"}}
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+    data = {"model": "gpt-4o", "metadata": {}, **body}
+    before = _request_content(data)
+
+    with caplog.at_level(logging.WARNING):
+        result = _call(guard, data, call_type=call_type)
+
+    assert result is None
+    assert _request_content(data) == before
+    assert any(want_warning in record.getMessage() for record in caplog.records), [
+        record.getMessage() for record in caplog.records
+    ]
+
+
+def test_transformed_system_prompt_applies_without_a_message_transform(hook_server):
+    """A text-only conversation with no ``messages`` transform keeps its messages."""
+    hook_server.response = {"action": "allow", "transformed_input": {"system_prompt": "updated policy"}}
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+    data = _request_data(messages=[{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}])
+
+    result = _call(guard, data)
+
+    assert [m["role"] for m in result["messages"]] == ["system", "user", "assistant"]
+    assert result["messages"][1:] == [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]
+
+
+@pytest.mark.parametrize(
+    ("messages", "transformed_messages", "want"),
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "list the temp dir"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "shell_exec", "arguments": '{"cmd":"ls /tmp"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "the key is sk-secret"},
+            ],
+            [
+                {"role": "user", "parts": [{"kind": "text", "text": "list the temp dir"}]},
+                {"role": "assistant", "parts": [{"kind": "tool_call", "tool_call": {"name": "shell_exec"}}]},
+                {
+                    "role": "tool",
+                    "parts": [{"kind": "tool_result", "tool_result": {"content": "the key is [REDACTED]"}}],
+                },
+            ],
+            [
+                {"role": "user", "content": "list the temp dir"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "shell_exec", "arguments": '{"cmd":"ls /tmp"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "the key is [REDACTED]"},
+            ],
+            id="openai_tool_calls_and_results",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "list the temp dir"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "the key is sk-secret"},
+            ],
+            [
+                {"role": "user", "parts": [{"kind": "text", "text": "list the temp dir"}]},
+                {
+                    "role": "tool",
+                    "parts": [{"kind": "tool_result", "tool_result": {"content": "the key is [REDACTED]"}}],
+                },
+            ],
+            [
+                {"role": "user", "content": "list the temp dir"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "the key is [REDACTED]"},
+            ],
+            id="tool_result_only",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "list the temp dir"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [
+                        {"type": "text", "text": "the key is sk-secret", "cache_control": {"type": "ephemeral"}}
+                    ],
+                },
+            ],
+            [
+                {"role": "user", "parts": [{"kind": "text", "text": "list the temp dir"}]},
+                {
+                    "role": "tool",
+                    "parts": [{"kind": "tool_result", "tool_result": {"content": "the key is [REDACTED]"}}],
+                },
+            ],
+            [
+                {"role": "user", "content": "list the temp dir"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [
+                        {"type": "text", "text": "the key is [REDACTED]", "cache_control": {"type": "ephemeral"}}
+                    ],
+                },
+            ],
+            id="openai_tool_result_holding_a_text_block",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": [{"type": "text", "text": "list the temp dir"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "call_1", "name": "shell_exec", "input": {"cmd": "ls /tmp"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "the key is sk-secret"}],
+                },
+            ],
+            [
+                {"role": "user", "parts": [{"kind": "text", "text": "list the temp dir"}]},
+                {"role": "assistant", "parts": [{"kind": "tool_call", "tool_call": {"name": "shell_exec"}}]},
+                {
+                    "role": "tool",
+                    "parts": [{"kind": "tool_result", "tool_result": {"content": "the key is [REDACTED]"}}],
+                },
+            ],
+            [
+                {"role": "user", "content": [{"type": "text", "text": "list the temp dir"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "call_1", "name": "shell_exec", "input": {"cmd": "ls /tmp"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "the key is [REDACTED]"}],
+                },
+            ],
+            id="anthropic_tool_blocks",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": [{"type": "text", "text": "list the temp dir"}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_1",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "the key is sk-secret",
+                                    "cache_control": {"type": "ephemeral"},
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+            [
+                {"role": "user", "parts": [{"kind": "text", "text": "list the temp dir"}]},
+                {
+                    "role": "tool",
+                    "parts": [{"kind": "tool_result", "tool_result": {"content": "the key is [REDACTED]"}}],
+                },
+            ],
+            [
+                {"role": "user", "content": [{"type": "text", "text": "list the temp dir"}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_1",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "the key is [REDACTED]",
+                                    "cache_control": {"type": "ephemeral"},
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+            id="anthropic_tool_result_holding_a_text_block",
+        ),
+    ],
+)
+def test_tool_using_conversation_keeps_its_tool_history(hook_server, messages, transformed_messages, want):
+    """A rewritten agent turn keeps the calls it made and the ids that pair them.
+
+    Only text is written back, into the structure the caller sent, so a tool call
+    survives whether it arrived as OpenAI ``tool_calls`` or an Anthropic
+    ``tool_use`` block. The rewrite writes a tool result into the message or the
+    block that carried it, and leaves its ``tool_call_id`` alone: the wire shape
+    of a transformed tool call can omit the id, and a rewrite that dropped it
+    would unpair the call from its result.
+    """
+    hook_server.response = {"action": "allow", "transformed_input": {"messages": transformed_messages}}
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+    data = _request_data(messages=messages)
+    before = _request_content(data)
+
+    result = _call(guard, data)
+
+    assert result["messages"] == want
+    assert _request_content(data) == before
+
+
+def test_tool_using_conversation_still_gets_its_system_prompt_transformed(hook_server, caplog):
+    """The adapter applies the system prompt rewrite and the message rewrite independently.
+
+    A skipped message rewrite must not take the system prompt down with it, or a
+    system-prompt rule would never take effect on the conversations where the
+    message positions happen not to line up.
+    """
+    hook_server.response = {
+        "action": "allow",
+        "transformed_input": {
+            "system_prompt": "updated policy",
+            "messages": [{"role": "user", "parts": [{"kind": "text", "text": "redacted"}]}],
+        },
+    }
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+    data = _request_data(
+        messages=[
+            {"role": "system", "content": "policy"},
+            {"role": "user", "content": "list the temp dir"},
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+        ]
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = _call(guard, data)
+
+    assert result["messages"] == [
+        {"role": "system", "content": "updated policy"},
+        {"role": "user", "content": "list the temp dir"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+    ]
+    assert any("the positions no longer line up" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("call_type", "body", "want_warning"),
+    [
+        pytest.param(
+            "aresponses",
+            {"input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}]},
+            "chat message list",
+            id="responses_input",
+        ),
+        pytest.param(
+            "atext_completion",
+            {"prompt": "hello"},
+            "chat message list",
+            id="text_completion_prompt",
+        ),
+    ],
+)
+def test_message_transform_is_skipped_when_the_body_cannot_take_it(hook_server, caplog, call_type, body, want_warning):
+    """Only a chat body has messages to write into.
+
+    ``/v1/responses`` keeps its input under ``input`` and text completion under
+    ``prompt``. Writing chat messages into ``messages`` would leave the
+    untransformed input in place and add a key the route ignores.
+    """
+    hook_server.response = {
+        "action": "allow",
+        "transformed_input": {
+            "messages": [
+                {"role": "user", "parts": [{"kind": "text", "text": "redacted"}]},
+                {"role": "user", "parts": [{"kind": "text", "text": "redacted"}]},
+            ]
+        },
+    }
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+    data = {"model": "gpt-4o", "metadata": {}, **body}
+    before = _request_content(data)
+
+    with caplog.at_level(logging.WARNING):
+        result = _call(guard, data, call_type=call_type)
+
+    assert result is None
+    assert _request_content(data) == before
+    assert any(want_warning in record.getMessage() for record in caplog.records), [
+        record.getMessage() for record in caplog.records
+    ]
+
+
+@pytest.mark.parametrize(
+    ("messages", "transformed_messages", "want"),
+    [
+        pytest.param(
+            [
+                {"role": "system", "content": "policy"},
+                {"role": "developer", "content": "and this"},
+                {"role": "user", "content": "my key is sk-secret"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "and this one is sk-other"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+                    ],
+                },
+            ],
+            [
+                {"role": "user", "parts": [{"kind": "text", "text": "my key is [REDACTED]"}]},
+                {"role": "user", "parts": [{"kind": "text", "text": "and this one is [REDACTED]"}]},
+            ],
+            [
+                {"role": "system", "content": "policy"},
+                {"role": "developer", "content": "and this"},
+                {"role": "user", "content": "my key is [REDACTED]"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "and this one is [REDACTED]"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+                    ],
+                },
+            ],
+            id="image_block_and_system_messages_stay_in_place",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "my key is sk-secret"},
+                {"role": "assistant", "content": "noted sk-secret", "reasoning_content": "the key is sk-secret"},
+            ],
+            [
+                {"role": "user", "parts": [{"kind": "text", "text": "my key is [REDACTED]"}]},
+                {
+                    "role": "assistant",
+                    "parts": [
+                        {"kind": "thinking", "thinking": "the key is [REDACTED]"},
+                        {"kind": "text", "text": "noted [REDACTED]"},
+                    ],
+                },
+            ],
+            [
+                {"role": "user", "content": "my key is [REDACTED]"},
+                {"role": "assistant", "content": "noted [REDACTED]", "reasoning_content": "the key is sk-secret"},
+            ],
+            id="reasoning_is_left_as_sent",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "a long document", "cache_control": {"type": "ephemeral"}}],
+                }
+            ],
+            [{"role": "user", "parts": [{"kind": "text", "text": "a redacted document"}]}],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "a redacted document", "cache_control": {"type": "ephemeral"}}
+                    ],
+                }
+            ],
+            id="cache_control_breakpoint_survives",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "my key is sk-secret", "name": "alice"}],
+            [{"role": "user", "parts": [{"kind": "text", "text": "my key is [REDACTED]"}]}],
+            [{"role": "user", "content": "my key is [REDACTED]", "name": "alice"}],
+            id="message_name_survives",
+        ),
+    ],
+)
+def test_message_rewrite_touches_only_the_text(hook_server, messages, transformed_messages, want):
+    """Everything the transform did not carry is left as the caller sent it.
+
+    The rewrite writes text into the structure that held it, so an image block, a
+    message ``name``, and an Anthropic ``cache_control`` breakpoint come through
+    untouched. ``reasoning_content`` is left as sent even when the transform
+    redacted it: a provider validates a reasoning payload against its own
+    signature and rejects a rewritten one.
+
+    ``system`` and ``developer`` messages keep their positions. They are not part
+    of the transformed list, which is why the two lists are matched after they are
+    filtered out.
+    """
+    hook_server.response = {"action": "allow", "transformed_input": {"messages": transformed_messages}}
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+    data = _request_data(messages=messages)
+    before = _request_content(data)
+
+    result = _call(guard, data)
+
+    assert result["messages"] == want
+    assert _request_content(data) == before
+
+
+@pytest.mark.parametrize(
+    ("messages", "transformed_messages", "want_warning"),
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "list the temp dir"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "shell_exec", "arguments": "{}"}}
+                    ],
+                },
+            ],
+            [
+                {"role": "user", "parts": [{"kind": "text", "text": "list the temp dir"}]},
+                {"role": "assistant", "parts": [{"kind": "text", "text": "invented"}]},
+            ],
+            "message 1 carries no content the transform can be written into",
+            id="text_for_a_turn_that_only_called_a_tool",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "my key is sk-secret"}],
+            [
+                {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "my key is"}, {"kind": "text", "text": "[REDACTED]"}],
+                }
+            ],
+            "message 0 holds one string and the transform carries 2 values for it",
+            id="two_values_for_one_string",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "my key is sk-secret"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+                    ],
+                }
+            ],
+            [
+                {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "my key is"}, {"kind": "text", "text": "[REDACTED]"}],
+                }
+            ],
+            "message 0 holds 1 text block and the transform carries 2 texts",
+            id="more_texts_than_text_blocks",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "here it is"},
+                        {"type": "refusal", "refusal": "I cannot help with that"},
+                    ],
+                }
+            ],
+            [
+                {
+                    "role": "assistant",
+                    "parts": [
+                        {"kind": "text", "text": "here it is"},
+                        {"kind": "text", "text": "I cannot help with that"},
+                    ],
+                }
+            ],
+            "message 0 holds 1 text block and the transform carries 2 texts",
+            id="refusal_block_is_not_a_text_slot",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_1",
+                            "content": [
+                                {"type": "text", "text": "the key is sk-secret"},
+                                {"type": "text", "text": "and so is this"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+            [
+                {
+                    "role": "user",
+                    "parts": [{"kind": "tool_result", "tool_result": {"content": "the key is [REDACTED]"}}],
+                }
+            ],
+            "message 0 holds a tool result block at position 0 a rewrite cannot reproduce",
+            id="tool_result_with_several_nested_blocks",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "list the temp dir"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [
+                        {"type": "text", "text": "the key is sk-secret"},
+                        {"type": "text", "text": "and so is this"},
+                    ],
+                },
+            ],
+            [
+                {"role": "user", "parts": [{"kind": "text", "text": "list the temp dir"}]},
+                {
+                    "role": "tool",
+                    "parts": [{"kind": "tool_result", "tool_result": {"content": "the key is [REDACTED]"}}],
+                },
+            ],
+            "message 1 holds tool result content a rewrite cannot reproduce",
+            id="openai_tool_message_with_several_text_blocks",
+        ),
+    ],
+)
+def test_transform_the_messages_cannot_hold_is_skipped(
+    hook_server, caplog, messages, transformed_messages, want_warning
+):
+    """A transformed value with no place to go stops the whole rewrite.
+
+    A turn that only called a tool has no ``content`` to write into, and a string
+    or a block list holds a fixed number of text slots. Writing what fits and
+    dropping the rest would forward a half-redacted conversation.
+    """
+    hook_server.response = {"action": "allow", "transformed_input": {"messages": transformed_messages}}
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+    data = _request_data(messages=messages)
+    before = _request_content(data)
+
+    with caplog.at_level(logging.WARNING):
+        result = _call(guard, data)
+
+    assert result is None
+    assert _request_content(data) == before
+    warnings = [record.getMessage() for record in caplog.records]
+    assert any(want_warning in message for message in warnings), warnings
+
+
+@pytest.mark.parametrize(
+    ("messages", "transformed_messages"),
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "my key is sk-secret"},
+                {"role": "assistant", "content": ""},
+                {"role": "user", "content": "use it"},
+            ],
+            [
+                {"role": "user", "parts": [{"kind": "text", "text": "my key is [REDACTED]"}]},
+                {"role": "user", "parts": [{"kind": "text", "text": "use it"}]},
+            ],
+            id="forward_mapping_dropped_an_empty_message",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "my key is sk-secret"},
+                {"role": "user", "content": "use it"},
+            ],
+            [{"role": "user", "parts": [{"kind": "text", "text": "my key is [REDACTED]"}]}],
+            id="rule_returned_a_shorter_list",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "list the temp dir"},
+                {"role": "assistant", "function_call": {"name": "shell_exec", "arguments": "{}"}},
+                {"role": "function", "name": "shell_exec", "content": "ok"},
+            ],
+            [
+                {"role": "user", "parts": [{"kind": "text", "text": "list the [REDACTED] dir"}]},
+                {"role": "user", "parts": [{"kind": "text", "text": "[REDACTED]"}]},
+            ],
+            id="legacy_function_call",
+        ),
+    ],
+)
+def test_transform_of_a_different_length_is_skipped(hook_server, caplog, messages, transformed_messages):
+    """Matching by position needs the two lists to be the same length.
+
+    ``_map_messages`` drops a message it cannot turn into text, so the transform
+    comes back one message short and every message after the gap would take the
+    wrong turn's text. A rule is free to return a shorter list for its own
+    reasons, with the same result. A legacy ``function_call`` turn reaches this
+    too: it is not mapped forward, so it is never sent and never comes back.
+    """
+    hook_server.response = {"action": "allow", "transformed_input": {"messages": transformed_messages}}
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+    data = _request_data(messages=messages)
+    before = _request_content(data)
+
+    with caplog.at_level(logging.WARNING):
+        result = _call(guard, data)
+
+    assert result is None
+    assert _request_content(data) == before
+    warnings = [record.getMessage() for record in caplog.records]
+    assert any("the positions no longer line up" in message for message in warnings), warnings
+
+
+def test_anthropic_messages_body_gets_its_message_rewrite(hook_server):
+    """A plain-text ``/v1/messages`` body is rewritten like a chat body.
+
+    ``{role, content}`` is valid on both routes. Anthropic's own rules about
+    alternation and a leading user turn are the server's to enforce; the adapter
+    does not reorder anything.
+    """
+    hook_server.response = {
+        "action": "allow",
+        "transformed_input": {
+            "messages": [{"role": "user", "parts": [{"kind": "text", "text": "my key is [REDACTED]"}]}]
+        },
+    }
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True)
+    data = {
+        "model": "claude-3-5-sonnet-20240620",
+        "metadata": {},
+        "system": "policy",
+        "messages": [{"role": "user", "content": "my key is sk-secret"}],
+    }
+
+    result = _call(guard, data, call_type="anthropic_messages")
+
+    assert _request_content(result) == {
+        "model": "claude-3-5-sonnet-20240620",
+        "system": "policy",
+        "messages": [{"role": "user", "content": "my key is [REDACTED]"}],
+    }
+
+
+def test_apply_transforms_false_leaves_the_request_unchanged(hook_server):
+    hook_server.response = {
+        "action": "allow",
+        "transformed_input": {
+            "system_prompt": "updated policy",
+            "messages": [{"role": "user", "parts": [{"kind": "text", "text": "redacted"}]}],
+        },
+    }
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True, apply_transforms=False)
     data = _request_data()
+    before = _request_content(data)
 
     assert _call(guard, data) is None
+
+    assert len(hook_server.requests) == 1
+    assert _request_content(data) == before
+
+
+@pytest.mark.parametrize("apply_transforms", [True, False])
+def test_deny_wins_over_a_transform(hook_server, apply_transforms):
+    """A denied request is blocked, not rewritten and forwarded.
+
+    Enforcement runs before the transform flag is read, so the flag cannot change
+    the outcome.
+    """
+    hook_server.response = {
+        "action": "deny",
+        "rule_id": "no-secrets",
+        "reason": "contains a credential",
+        "transformed_input": {"messages": [{"role": "user", "parts": [{"kind": "text", "text": "redacted"}]}]},
+    }
+    client = _new_client(hook_server.url)
+    guard = Agento11yLiteLLMGuardrail(client=client, default_on=True, apply_transforms=apply_transforms)
+    data = _request_data()
+
+    with pytest.raises(GuardrailRaisedException):
+        _call(guard, data)
+
     assert data["messages"] == [{"role": "user", "content": "hello"}]
 
 
@@ -1050,6 +1966,23 @@ def test_postflight_allow_returns_none_and_leaves_the_response_untouched(hook_se
     assert response.model_dump() == before
 
 
+def test_postflight_ignores_a_transform(hook_server):
+    hook_server.response = {
+        "action": "allow",
+        "transformed_input": {"messages": [{"role": "user", "parts": [{"kind": "text", "text": "redacted"}]}]},
+    }
+    client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
+    guard = _postflight_guard(client)
+    data = _request_data()
+    response = _chat_response()
+    before = response.model_dump()
+
+    assert _post_call(guard, data, response) is None
+
+    assert response.model_dump() == before
+    assert data["messages"] == _request_data()["messages"]
+
+
 def test_postflight_request_carries_the_phase_the_request_and_the_output(hook_server):
     client = _new_client(hook_server.url, hooks=HooksConfig(enabled=True, phases=["postflight"]))
     guard = _postflight_guard(client, agent_version="1.2.3", extra_tags={"team": "search"})
@@ -1485,6 +2418,17 @@ def test_public_factory_accepts_postflight_mode():
     guard = create_agento11y_litellm_guardrail(client=client, event_hook=["pre_call", "post_call"])
 
     assert guard.event_hook == ["pre_call", "post_call"]
+
+
+def test_public_factory_passes_apply_transforms_through(hook_server):
+    hook_server.response = {
+        "action": "allow",
+        "transformed_input": {"messages": [{"role": "user", "parts": [{"kind": "text", "text": "redacted"}]}]},
+    }
+    client = _new_client(hook_server.url)
+    guard = create_agento11y_litellm_guardrail(client=client, default_on=True, apply_transforms=False)
+
+    assert _call(guard, _request_data()) is None
 
 
 def _only_guardrail_entry(data: dict[str, Any]) -> dict[str, Any]:

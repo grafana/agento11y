@@ -463,6 +463,14 @@ def _parse_wire_tool_dict(item: Any) -> ToolDefinition | None:
 
 
 def _parse_wire_message_dict(item: Any) -> Message | None:
+    """Parses one wire message from a server's ``transformed_input``.
+
+    Any role but ``assistant`` and ``tool`` becomes ``user``, so a ``system``
+    message in a transform is indistinguishable from a user one. Adapters that
+    write a transform back into an outgoing request do not read the role at all.
+    They send the system prompt as its own field, and they match transformed
+    messages to the request by position.
+    """
     if not isinstance(item, dict):
         return None
     role_val = item.get("role", "user")
