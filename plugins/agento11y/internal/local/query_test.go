@@ -845,6 +845,40 @@ func TestDisjointTokenUsage(t *testing.T) {
 			freshInput: 70, cacheRead: 30, cacheWrite: 0, output: 40, reasoning: 10,
 		},
 		{
+			// pi calls its Codex backend "openai-codex", but pi normalizes
+			// usage in its own client: cache_read is disjoint from input, so
+			// subtracting it would hide fresh input the model was charged for.
+			// The shape below is the ordinary one in pi data: cache_read far
+			// above input, which subset semantics cannot produce.
+			name:       "pi openai-codex keeps cache_read additive",
+			provider:   "openai-codex",
+			usage:      agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30_000, ReasoningTokens: 10},
+			freshInput: 100, cacheRead: 30_000, cacheWrite: 0, output: 50, reasoning: 10,
+		},
+		{
+			// The same holds when cache_read happens to sit below input, which
+			// is where a subset rule would look plausible and still be wrong.
+			name:       "pi openai-codex keeps cache_read additive below input",
+			provider:   "openai-codex",
+			usage:      agento11y.TokenUsage{InputTokens: 100, OutputTokens: 50, CacheReadInputTokens: 30, ReasoningTokens: 10},
+			freshInput: 100, cacheRead: 30, cacheWrite: 0, output: 50, reasoning: 10,
+		},
+		{
+			// pi's Gemini CLI backend reports the same disjoint counts.
+			name:       "pi google-antigravity keeps cache_read additive",
+			provider:   "google-antigravity",
+			usage:      agento11y.TokenUsage{InputTokens: 80, OutputTokens: 40, CacheReadInputTokens: 20_000, ReasoningTokens: 10},
+			freshInput: 80, cacheRead: 20_000, cacheWrite: 0, output: 40, reasoning: 10,
+		},
+		{
+			// pi routes some models through a "grafana" provider that speaks the
+			// Anthropic messages API, where both buckets are additive.
+			name:       "pi grafana keeps anthropic additive semantics",
+			provider:   "grafana",
+			usage:      agento11y.TokenUsage{InputTokens: 2, OutputTokens: 311, CacheReadInputTokens: 0, CacheWriteInputTokens: 46226},
+			freshInput: 2, cacheRead: 0, cacheWrite: 46226, output: 311, reasoning: 0,
+		},
+		{
 			// Unknown provider keeps reasoning additive (never hide output).
 			name:       "unknown provider keeps reasoning additive",
 			provider:   "openrouter",

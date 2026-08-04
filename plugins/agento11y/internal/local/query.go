@@ -651,6 +651,16 @@ func disjointTokenUsage(u agento11y.TokenUsage, provider string) TokenBuckets {
 // usage comes from the Responses API). Unknown providers default to
 // "separate" so we never subtract tokens we can't account for and end up
 // hiding real input.
+//
+// pi names its own providers ("openai-codex", "google-antigravity",
+// "kimi-coding", "grafana", …) and normalizes their usage in its client
+// before either the plugin or the importer sees it: cache_read is always
+// disjoint from input, and pi's own total is input + output + cache_read +
+// cache_write. Measured over 66,119 assistant turns on the development
+// machine, that total holds for every turn and cache_read exceeds input on
+// 63,701 of them, which subset semantics cannot produce. So none of pi's
+// provider strings belong here, however much they look like the OpenAI or
+// Gemini names beside them.
 func cacheReadInsideInput(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "openai", "azure", "azure-openai", "azureopenai", "codex",
@@ -667,7 +677,8 @@ func cacheReadInsideInput(provider string) bool {
 // separate additive count and Anthropic doesn't populate reasoning, so
 // both keep it standalone. Unknown providers default to "separate" so we
 // never subtract reasoning we can't account for and end up hiding real
-// output.
+// output. pi's provider strings are absent for the reason given on
+// cacheReadInsideInput.
 func reasoningInsideOutput(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "openai", "azure", "azure-openai", "azureopenai", "codex":
