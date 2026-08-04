@@ -65,11 +65,14 @@ func (s *Storage) SearchConversations(query string, limit int) ([]SearchHit, err
 		return nil, err
 	}
 	out := make([]SearchHit, 0, len(entries))
+	var skipped int
+	defer func() { s.logSkipped("search", skipped) }()
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
 			continue
 		}
-		hit, ok, err := searchConversationFile(filepath.Join(dir, e.Name()), terms)
+		hit, ok, n, err := searchConversationFile(filepath.Join(dir, e.Name()), terms)
+		skipped += n
 		if err != nil {
 			return nil, err
 		}
@@ -118,10 +121,11 @@ func searchTerms(query string) []string {
 // contains a term is captured for the snippet; the first generation
 // containing any term is captured for the matched generation id.
 //
-// Returns (_, false, nil) when the file has no decodable records OR
-// when at least one term does not appear anywhere in the conversation
-// (so the result satisfies the AND semantics across terms).
-func searchConversationFile(path string, terms []string) (SearchHit, bool, error) {
+// ok is false when the file has no decodable records OR when at least one
+// term does not appear anywhere in the conversation (so the result
+// satisfies the AND semantics across terms). The third result counts the
+// lines no projection could decode.
+func searchConversationFile(path string, terms []string) (SearchHit, bool, int, error) {
 	hit := SearchHit{}
 	agents := map[string]struct{}{}
 	models := map[string]struct{}{}
@@ -131,7 +135,7 @@ func searchConversationFile(path string, terms []string) (SearchHit, bool, error
 	var seen, hasError bool
 	var lastActivity time.Time
 
-	err := scanLatestGenerationRecords(path, func(r generationRecord, gen storedGeneration) {
+	skipped, err := scanLatestGenerationRecords(path, func(r generationRecord, gen storedGeneration) {
 		seen = true
 		if hit.ID == "" {
 			hit.ID = r.ConversationID
@@ -208,15 +212,15 @@ func searchConversationFile(path string, terms []string) (SearchHit, bool, error
 		}
 	})
 	if err != nil {
-		return SearchHit{}, false, err
+		return SearchHit{}, false, skipped, err
 	}
 	if !seen {
-		return SearchHit{}, false, nil
+		return SearchHit{}, false, skipped, nil
 	}
 	// AND across terms: every term must have contributed at least once.
 	for _, term := range terms {
 		if termHits[term] == 0 {
-			return SearchHit{}, false, nil
+			return SearchHit{}, false, skipped, nil
 		}
 	}
 	hit.Agents = sortedKeys(agents)
@@ -228,7 +232,7 @@ func searchConversationFile(path string, terms []string) (SearchHit, bool, error
 	}
 	hit.Snippet = snippet
 	hit.GenerationID = snippetGenID
-	return hit, true, nil
+	return hit, true, skipped, nil
 }
 
 // visitMessageParts walks one message's parts and feeds every searchable

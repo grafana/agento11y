@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/metric"
@@ -35,10 +36,10 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
-// DefaultServiceName is written to OTEL_SERVICE_NAME if unset before exporter
-// construction. Agents share this name so traces from any dispatched agent
-// end up under a single service in the backend. Renamed from "sigil";
-// dashboards filtering on the old service name need to update.
+// DefaultServiceName goes on the resource as service.name when
+// OTEL_SERVICE_NAME is unset. Agents share this name so traces from any
+// dispatched agent end up under a single service in the backend. Renamed from
+// "sigil"; dashboards filtering on the old service name need to update.
 const DefaultServiceName = "agento11y"
 
 // Providers holds initialized OTel providers. All methods are nil-safe.
@@ -51,6 +52,11 @@ type exporterConfig struct {
 	endpoint string
 	headers  map[string]string
 	insecure bool
+	// headersExplicit records that the caller supplied the header set, so
+	// an empty set must be passed to the exporter rather than left out.
+	// The SDK reads OTEL_EXPORTER_OTLP_HEADERS itself, and leaving the
+	// option out lets those ambient headers through.
+	headersExplicit bool
 }
 
 func (p *Providers) Tracer(name string) trace.Tracer {
@@ -110,41 +116,55 @@ func (p *Providers) Shutdown(ctx context.Context) error {
 	return first
 }
 
-// Setup creates OTLP HTTP trace + metric providers.
+// Options overrides the exporter configuration Setup otherwise reads from
+// the environment. A zero field keeps the environment value, so a caller
+// that needs one explicit destination does not have to reproduce the rest.
+//
+// Headers replaces the environment set only when non-nil. A caller that must
+// not leak the ambient Authorization header to its own endpoint passes an
+// explicit map, which may be empty.
+type Options struct {
+	// Endpoint replaces the environment OTLP endpoint when non-empty. Its
+	// scheme also decides the transport, so AGENTO11Y_OTEL_EXPORTER_OTLP_INSECURE
+	// cannot downgrade an https endpoint named here to cleartext.
+	Endpoint string
+	// Headers replaces the environment-derived header set when non-nil. An
+	// empty non-nil map sends no headers.
+	Headers map[string]string
+}
+
+// Setup creates OTLP HTTP trace + metric providers from the environment.
 // Returns nil providers (no error) when no OTLP endpoint is configured.
 //
 // instanceID is written to the resource as service.instance.id so concurrent
 // agent sessions on the same host produce distinct OTel resource identities
 // (otherwise cumulative metric series collide). Empty falls back to a UUID.
 func Setup(ctx context.Context, instanceID string) (*Providers, error) {
-	endpoint := EndpointFromEnv()
-	if endpoint == "" {
+	return SetupWithOptions(ctx, instanceID, Options{})
+}
+
+// SetupWithOptions is Setup with an explicit endpoint and header set, and it
+// writes no process environment. A long-running daemon resolves its Cloud
+// forwarding from the same variables, so a caller that needs to export
+// somewhere else passes the destination here instead of changing them under
+// the daemon.
+func SetupWithOptions(ctx context.Context, instanceID string, opts Options) (*Providers, error) {
+	cfg, ok := resolveExporterConfig(opts)
+	if !ok {
 		return nil, nil
-	}
-	cfg := exporterConfigFromEnv(endpoint)
-	// otlphttp has WithInsecure() but no WithSecure(), so any of the
-	// inherited insecure env vars below would let the SDK exporter
-	// override cfg.insecure=false and silently ship cleartext. We're a
-	// subprocess; unsetting locally has no effect on the parent env.
-	for _, k := range []string{
-		"OTEL_EXPORTER_OTLP_INSECURE",
-		"OTEL_EXPORTER_OTLP_TRACES_INSECURE",
-		"OTEL_EXPORTER_OTLP_METRICS_INSECURE",
-	} {
-		_ = os.Unsetenv(k)
-	}
-	if os.Getenv("OTEL_SERVICE_NAME") == "" {
-		_ = os.Setenv("OTEL_SERVICE_NAME", DefaultServiceName)
 	}
 	if instanceID == "" {
 		instanceID = uuid.NewString()
 	}
+	attrs := []attribute.KeyValue{semconv.ServiceInstanceID(instanceID)}
+	if os.Getenv("OTEL_SERVICE_NAME") == "" {
+		// sdkresource.Default() reads OTEL_SERVICE_NAME once per process and
+		// caches the result, so the name goes on the resource directly.
+		attrs = append(attrs, semconv.ServiceName(DefaultServiceName))
+	}
 	res, err := sdkresource.Merge(
 		sdkresource.Default(),
-		sdkresource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceInstanceID(instanceID),
-		),
+		sdkresource.NewWithAttributes(semconv.SchemaURL, attrs...),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build resource: %w", err)
@@ -192,11 +212,10 @@ type ProbeTarget struct {
 // a lightweight request to each signal and report the HTTP status without
 // standing up the full exporter pipeline.
 func ProbeConfig() (metrics, traces ProbeTarget, ok bool) {
-	endpoint := EndpointFromEnv()
-	if endpoint == "" {
+	cfg, ok := resolveExporterConfig(Options{})
+	if !ok {
 		return ProbeTarget{}, ProbeTarget{}, false
 	}
-	cfg := exporterConfigFromEnv(endpoint)
 	return ProbeTarget{URL: probeSignalURL(cfg, "metrics"), Headers: cloneHeaders(cfg.headers)},
 		ProbeTarget{URL: probeSignalURL(cfg, "traces"), Headers: cloneHeaders(cfg.headers)},
 		true
@@ -223,6 +242,32 @@ func cloneHeaders(in map[string]string) map[string]string {
 	return out
 }
 
+// resolveExporterConfig applies opts over the environment-derived
+// configuration. ok is false when no endpoint is configured at all, which
+// is how Setup reports "nothing to export to" without an error.
+func resolveExporterConfig(opts Options) (exporterConfig, bool) {
+	endpoint := firstNonBlank(opts.Endpoint, EndpointFromEnv())
+	if endpoint == "" {
+		return exporterConfig{}, false
+	}
+	cfg := exporterConfigFromEnv(endpoint)
+	if opts.Headers != nil {
+		cfg.headers = cloneHeaders(opts.Headers)
+		cfg.headersExplicit = true
+	}
+	if strings.TrimSpace(opts.Endpoint) != "" {
+		// The caller named the destination, so its scheme decides the
+		// transport. Reading the insecure env var here would let an
+		// ambient value ship an https endpoint's spans in the clear.
+		cfg.insecure = !isHTTPSEndpoint(opts.Endpoint)
+	}
+	return cfg, true
+}
+
+func isHTTPSEndpoint(endpoint string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(endpoint)), "https://")
+}
+
 func exporterConfigFromEnv(endpoint string) exporterConfig {
 	headers := ExporterHeaders(
 		os.Getenv("OTEL_EXPORTER_OTLP_HEADERS"),
@@ -237,9 +282,13 @@ func exporterConfigFromEnv(endpoint string) exporterConfig {
 	}
 }
 
+// traceOptions and metricOptions both start from WithEndpointURL, which the
+// SDK applies after its own environment pass and which sets the transport from
+// the URL scheme. That is why cfg.insecure alone decides cleartext: an ambient
+// OTEL_EXPORTER_OTLP_INSECURE cannot reach past it.
 func traceOptions(cfg exporterConfig) []otlptracehttp.Option {
 	opts := []otlptracehttp.Option{otlptracehttp.WithEndpointURL(SignalEndpointURL(cfg.endpoint, "traces"))}
-	if len(cfg.headers) > 0 {
+	if len(cfg.headers) > 0 || cfg.headersExplicit {
 		opts = append(opts, otlptracehttp.WithHeaders(cfg.headers))
 	}
 	if cfg.insecure {
@@ -250,7 +299,7 @@ func traceOptions(cfg exporterConfig) []otlptracehttp.Option {
 
 func metricOptions(cfg exporterConfig) []otlpmetrichttp.Option {
 	opts := []otlpmetrichttp.Option{otlpmetrichttp.WithEndpointURL(SignalEndpointURL(cfg.endpoint, "metrics"))}
-	if len(cfg.headers) > 0 {
+	if len(cfg.headers) > 0 || cfg.headersExplicit {
 		opts = append(opts, otlpmetrichttp.WithHeaders(cfg.headers))
 	}
 	if cfg.insecure {

@@ -91,6 +91,94 @@ func TestServer_GenerationsExport_AppendsByConversation(t *testing.T) {
 	assert.Equal(t, "gen-b", second.GenerationID)
 }
 
+// TestServer_GenerationsExport_BatchesPerConversation covers the batched
+// ingest path: one request opens each conversation file once, per-record
+// results stay in request order, a mid-batch write failure keeps the
+// records written before it accepted, and a conversations directory removed
+// under the running server (a cleanup script, a synced state directory) is
+// recreated.
+func TestServer_GenerationsExport_BatchesPerConversation(t *testing.T) {
+	cases := []struct {
+		name           string
+		convIDs        []string // one generation per entry, in request order
+		failWriteAfter int
+		removeDir      bool
+		wantAccepted   []bool
+		wantOpens      int
+		wantLines      map[string]int
+	}{
+		{
+			name:         "five generations one conversation",
+			convIDs:      []string{"conv-A", "conv-A", "conv-A", "conv-A", "conv-A"},
+			wantAccepted: []bool{true, true, true, true, true},
+			wantOpens:    1,
+			wantLines:    map[string]int{"conv-A": 5},
+		},
+		{
+			name:         "interleaved conversations open once each",
+			convIDs:      []string{"conv-A", "conv-B", "conv-A", "conv-B", "conv-A"},
+			wantAccepted: []bool{true, true, true, true, true},
+			wantOpens:    2,
+			wantLines:    map[string]int{"conv-A": 3, "conv-B": 2},
+		},
+		{
+			name:           "third append fails",
+			convIDs:        []string{"conv-A", "conv-A", "conv-A", "conv-A", "conv-A"},
+			failWriteAfter: 2,
+			wantAccepted:   []bool{true, true, false, false, false},
+			wantOpens:      1,
+			wantLines:      map[string]int{"conv-A": 2},
+		},
+		{
+			name:         "missing conversations dir is recreated",
+			convIDs:      []string{"conv-A", "conv-A"},
+			removeDir:    true,
+			wantAccepted: []bool{true, true},
+			wantOpens:    1,
+			wantLines:    map[string]int{"conv-A": 2},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, storage, dir := newTestServerStorage(t)
+			opener := &countingOpener{failWriteAfter: tc.failWriteAfter}
+			storage.openAppend = opener.open
+			if tc.removeDir {
+				require.NoError(t, os.RemoveAll(filepath.Join(dir, ConversationsDir)))
+			}
+
+			gens := make([]string, 0, len(tc.convIDs))
+			for i, convID := range tc.convIDs {
+				gens = append(gens, fmt.Sprintf(`{"id":"gen-%d","conversation_id":%q}`, i, convID))
+			}
+			resp := post(t, srv, "/api/v1/generations:export", "application/json",
+				`{"generations":[`+strings.Join(gens, ",")+`]}`)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+
+			var out generationsResponse
+			decodeJSON(t, resp.Body, &out)
+			require.Len(t, out.Results, len(tc.convIDs))
+			for i, want := range tc.wantAccepted {
+				assert.Equal(t, fmt.Sprintf("gen-%d", i), out.Results[i].GenerationID, "result %d out of request order", i)
+				assert.Equal(t, want, out.Results[i].Accepted, "result %d accepted", i)
+				if want {
+					assert.Empty(t, out.Results[i].Error, "result %d error", i)
+				} else {
+					assert.NotEmpty(t, out.Results[i].Error, "result %d error", i)
+				}
+			}
+
+			for convID, wantLines := range tc.wantLines {
+				assert.Len(t, readLines(t, filepath.Join(dir, ConversationsDir, convID+".jsonl")), wantLines, convID)
+			}
+			opens, closes := opener.counts()
+			assert.Equal(t, tc.wantOpens, opens, "file opens")
+			assert.Equal(t, opens, closes, "every open must be closed")
+		})
+	}
+}
+
 func TestServer_OTLPDrainsAndReturns200(t *testing.T) {
 	s, dir := newTestServer(t)
 	for _, tc := range []struct {
@@ -214,13 +302,18 @@ func TestServer_APIConversations(t *testing.T) {
 		CompletedAt: mustParse(t, "2026-05-21T11:00:01Z"),
 		Usage:       agento11y.TokenUsage{InputTokens: 10, OutputTokens: 5},
 	}, "2026-05-21T11:00:01Z")
+	// The list orders and filters on the file modification time, so pin it
+	// to each conversation's last activity the way an append does.
+	setConversationModTime(t, storage, "conv-A", mustParse(t, "2026-05-21T10:00:03Z"))
+	setConversationModTime(t, storage, "conv-B", mustParse(t, "2026-05-21T11:00:01Z"))
 
 	cases := []struct {
-		name        string
-		method      string
-		path        string
-		want        int
-		wantBodyHas []string // all substrings must appear
+		name          string
+		method        string
+		path          string
+		want          int
+		wantBodyHas   []string // all substrings must appear
+		wantBodyLacks []string // none of these may appear
 	}{
 		{
 			name:   "list returns both conversations newest first",
@@ -233,7 +326,42 @@ func TestServer_APIConversations(t *testing.T) {
 			method: http.MethodGet, path: "/api/v1/conversations?limit=1",
 			want: http.StatusOK,
 			// newest-first: only conv-B survives the cap.
-			wantBodyHas: []string{`"id":"conv-B"`},
+			wantBodyHas:   []string{`"id":"conv-B"`},
+			wantBodyLacks: []string{`"id":"conv-A"`},
+		},
+		{
+			name:   "list honours since query param",
+			method: http.MethodGet, path: "/api/v1/conversations?since=2026-05-21T10:30:00Z",
+			want:          http.StatusOK,
+			wantBodyHas:   []string{`"id":"conv-B"`},
+			wantBodyLacks: []string{`"id":"conv-A"`},
+		},
+		{
+			name:   "list rejects a non-RFC3339 since",
+			method: http.MethodGet, path: "/api/v1/conversations?since=yesterday",
+			want: http.StatusBadRequest,
+		},
+		{
+			// The viewer tells an empty store from an empty range by this
+			// count, so a range that holds nothing must still report the
+			// files the store has.
+			name:   "a range holding nothing still counts the store",
+			method: http.MethodGet, path: "/api/v1/conversations?since=2027-01-01T00:00:00Z",
+			want:          http.StatusOK,
+			wantBodyHas:   []string{`"conversations":[]`, `"total_conversations":2`},
+			wantBodyLacks: []string{`"id":"conv-`},
+		},
+		{
+			name:   "list rejects a non-numeric limit",
+			method: http.MethodGet, path: "/api/v1/conversations?limit=abc",
+			want: http.StatusBadRequest,
+		},
+		{
+			// A client that means "everything" passes a large number; zero
+			// and negative values are rejected rather than read as one.
+			name:   "list rejects a non-positive limit",
+			method: http.MethodGet, path: "/api/v1/conversations?limit=0",
+			want: http.StatusBadRequest,
 		},
 		{
 			name:   "detail returns one conversation",
@@ -269,6 +397,11 @@ func TestServer_APIConversations(t *testing.T) {
 			for _, want := range tc.wantBodyHas {
 				if !strings.Contains(rr.Body.String(), want) {
 					t.Errorf("body missing %q\n--- body ---\n%s", want, rr.Body.String())
+				}
+			}
+			for _, unwanted := range tc.wantBodyLacks {
+				if strings.Contains(rr.Body.String(), unwanted) {
+					t.Errorf("body contains %q\n--- body ---\n%s", unwanted, rr.Body.String())
 				}
 			}
 		})
@@ -401,17 +534,26 @@ func TestServer_GenerationsExport_ProtoJSON(t *testing.T) {
 
 // TestServer_APIConversations_EmptyStorage covers the path the user
 // will hit most often — opening the UI with no generations recorded
-// yet. The endpoint must return an array, never null.
+// yet. The endpoint must return an array, never null, and report the
+// empty store so the viewer shows its first-launch notice.
 func TestServer_APIConversations_EmptyStorage(t *testing.T) {
 	srv, _ := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations", nil)
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
-	assert.Equal(t, `{"conversations":[]}`, strings.TrimSpace(rr.Body.String()))
+	assert.Equal(t, `{"conversations":[],"total_conversations":0}`, strings.TrimSpace(rr.Body.String()))
 }
 
 func newTestServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	srv, _, dir := newTestServerStorage(t)
+	return srv, dir
+}
+
+// newTestServerStorage is newTestServer for tests that also instrument the
+// storage the server writes through.
+func newTestServerStorage(t *testing.T) (*Server, *Storage, string) {
 	t.Helper()
 	// The forward loader falls back to the process environment, so a developer
 	// with forwarding and real credentials exported would otherwise have this
@@ -422,7 +564,7 @@ func newTestServer(t *testing.T) (*Server, string) {
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
-	return NewServer(storage, nil, filepath.Join(dir, "config.env")), dir
+	return NewServer(storage, nil, filepath.Join(dir, "config.env")), storage, dir
 }
 
 func post(t *testing.T, s *Server, path, contentType, body string) *http.Response {
@@ -505,6 +647,44 @@ func TestServer_APITokenMetrics(t *testing.T) {
 		srv.ServeHTTP(rr, req)
 		assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
 	})
+
+	t.Run("range and interval bound the response", func(t *testing.T) {
+		writeGen(t, storage, "conv-B", "g2", agento11y.Generation{
+			Model:     agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
+			StartedAt: mustParse(t, "2026-05-21T10:40:00Z"),
+			Usage:     agento11y.TokenUsage{InputTokens: 7},
+		}, "2026-05-21T10:40:00Z")
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/tokens?since=2026-05-21T09:00:00Z&interval=3600", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		var body struct {
+			Points          []TokenUsagePoint `json:"points"`
+			IntervalSeconds int64             `json:"interval_seconds"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+		assert.Equal(t, int64(3600), body.IntervalSeconds, "the response echoes the interval used")
+		// Both generations share the 10:00 bucket and the same model, so
+		// they collapse into one point.
+		require.Len(t, body.Points, 1)
+		assert.Equal(t, mustParse(t, "2026-05-21T10:00:00Z"), body.Points[0].Timestamp)
+		assert.Equal(t, int64(107), body.Points[0].FreshInput)
+	})
+
+	t.Run("invalid parameters rejected", func(t *testing.T) {
+		for _, path := range []string{
+			"/api/v1/metrics/tokens?since=last-tuesday",
+			"/api/v1/metrics/tokens?interval=0",
+			"/api/v1/metrics/tokens?interval=hourly",
+		} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, req)
+			assert.Equal(t, http.StatusBadRequest, rr.Code, path)
+		}
+	})
 }
 
 func TestServer_APITokenMetrics_EmptyStorage(t *testing.T) {
@@ -513,7 +693,7 @@ func TestServer_APITokenMetrics_EmptyStorage(t *testing.T) {
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
-	assert.Equal(t, `{"points":[]}`, strings.TrimSpace(rr.Body.String()))
+	assert.Equal(t, `{"interval_seconds":10,"points":[]}`, strings.TrimSpace(rr.Body.String()))
 }
 
 // configPathFor returns the dotenv path newTestServer wired into the server,
@@ -1232,7 +1412,7 @@ func TestServer_HookEvaluate_RelayShape(t *testing.T) {
 	require.Equal(t, 1, cloud.count())
 	_, sent, headers := cloud.lastCall()
 	assert.Equal(t, body, sent)
-	assert.NotEmpty(t, headers.Get(forwardMarkerHeader))
+	assert.NotEmpty(t, headers.Get(ForwardMarkerHeader))
 	assert.Equal(t, "t", headers.Get(wire.TenantHeaderName))
 	assert.True(t, strings.HasPrefix(headers.Get("Authorization"), "Basic "))
 	// The legacy spelling was propagated under the branded one, minus the
@@ -1248,7 +1428,7 @@ func TestServer_HookEvaluate_DoesNotChainRelayedRequest(t *testing.T) {
 	cloud.respond = `{"action":"deny","rule_id":"r1"}`
 	s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
 
-	status, out := postHook(t, s, hookToolCallBody, map[string]string{forwardMarkerHeader: "1"})
+	status, out := postHook(t, s, hookToolCallBody, map[string]string{ForwardMarkerHeader: "1"})
 	require.Equal(t, http.StatusOK, status)
 	assert.Equal(t, agento11y.HookActionAllow, out.Action)
 	assert.Zero(t, cloud.count())
@@ -1476,8 +1656,8 @@ func TestServer_Forwarding_ToggleOffStopsForwarding(t *testing.T) {
 
 // TestServer_Forwarding_DoesNotRelayForwardedPayload covers the loop guard: a
 // payload that already carries another daemon's forward marker is stored but
-// not forwarded again, so two daemons pointed at each other (or one pointed at
-// itself) exchange one copy instead of looping.
+// not forwarded again, so two daemons pointed at each other (or one pointed
+// at itself) exchange one copy instead of looping.
 func TestServer_Forwarding_DoesNotRelayForwardedPayload(t *testing.T) {
 	hits := make(chan struct{}, 4)
 	cloud := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1496,7 +1676,7 @@ func TestServer_Forwarding_DoesNotRelayForwardedPayload(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, path,
 			strings.NewReader(`{"generations":[{"id":"gen-1","conversation_id":"conv-A","model":{"name":"m"}}]}`))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(forwardMarkerHeader, "1")
+		req.Header.Set(ForwardMarkerHeader, "1")
 		rr := httptest.NewRecorder()
 		s.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)

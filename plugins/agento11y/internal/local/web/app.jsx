@@ -69,6 +69,12 @@
     ];
     const FEED_TIME_RANGES = TIME_RANGES.filter(r => r.value !== "5m" && r.value !== "15m");
 
+    // LIST_PAGE_SIZE is how many conversations one list request asks for.
+    // The rows are not virtualised and the server decodes only what it
+    // returns, so this bounds both ends. It matches the server's own
+    // default (conversationListLimit in server.go).
+    const LIST_PAGE_SIZE = 200;
+
     function timeRangeOption(value) {
       return TIME_RANGES.find(r => r.value === value) || TIME_RANGES.find(r => r.value === "6h");
     }
@@ -313,6 +319,69 @@
       const end = n ? Math.max(now, maxT) : now;
       const start = n ? minT : end - 60 * 60 * 1000;
       return { start, end };
+    }
+
+    // BUCKET_INTERVALS_MS is the ladder the chart and the token endpoint
+    // share. Every step divides the next, so a point the server aggregated
+    // on one step always falls inside a single bar of a coarser step.
+    // This list and tokenUsageIntervals in query.go must stay equal;
+    // TestBucketLaddersAgree checks that.
+    const BUCKET_INTERVALS_MS = [
+      10_000, 30_000, 60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000,
+      60 * 60_000, 2 * 60 * 60_000, 4 * 60 * 60_000, 12 * 60 * 60_000,
+      24 * 60 * 60_000, 7 * 24 * 60 * 60_000,
+    ];
+    // CHART_BUCKET_MAX caps how many bars a chart draws. The finest ladder
+    // step that stays under it is also what the token endpoint aggregates
+    // on, so the response holds one point per bar per model instead of one
+    // per generation. Every fixed range gives 10 to 15 bars.
+    const CHART_BUCKET_MAX = 16;
+
+    // chartBucketMs picks the bar width for a span. Past the top of the
+    // ladder it widens the last step by a whole multiple, so a decade of
+    // imported history draws CHART_BUCKET_MAX bars rather than one per week,
+    // and a server bucket still divides a bar.
+    function chartBucketMs(spanMs, minMs = 0) {
+      const span = Number.isFinite(spanMs) && spanMs > 0 ? spanMs : 60_000;
+      const floor = Number.isFinite(minMs) && minMs > 0 ? minMs : 0;
+      for (const step of BUCKET_INTERVALS_MS) {
+        if (step >= floor && span / step <= CHART_BUCKET_MAX) return step;
+      }
+      // Divide by one bar fewer than the cap, because chartGrid snaps the
+      // window outwards at both ends and that can need an extra bar.
+      const top = Math.max(BUCKET_INTERVALS_MS[BUCKET_INTERVALS_MS.length - 1], floor);
+      return top * Math.max(1, Math.ceil(span / (top * (CHART_BUCKET_MAX - 1))));
+    }
+
+    // chartGrid is the bucket layout both charts share: a window snapped to
+    // the bucket ladder (measured from the epoch, the way the server floors
+    // its buckets) plus the bar count that follows from it. serverIntervalMs
+    // is the width the token endpoint aggregated on; a bar is never finer
+    // than that, or a server bucket would straddle two bars and leave the
+    // neighbour reading empty.
+    function chartGrid(times, rangeValue, now, serverIntervalMs = 0) {
+      const { start, end } = timeWindow(times, rangeValue, now);
+      const bucketMs = chartBucketMs(end - start, serverIntervalMs);
+      const gridStart = Math.floor(start / bucketMs) * bucketMs;
+      const gridEnd = Math.ceil(Math.max(end, gridStart + bucketMs) / bucketMs) * bucketMs;
+      return { start: gridStart, end: gridEnd, bucketMs, count: Math.round((gridEnd - gridStart) / bucketMs) };
+    }
+
+    // requestWindow builds the bounds the viewer sends the server: the page
+    // size and range for the conversation list, and the range and bucket
+    // interval for the token chart. A fixed range sends a `since` snapped
+    // to the same grid the chart draws on; "All" sends neither bound and
+    // lets the server pick an interval it reports back.
+    function requestWindow(rangeValue, pageSize, now = Date.now()) {
+      const range = timeRangeOption(rangeValue);
+      if (range.ms == null) return { limit: pageSize };
+      const bucketMs = chartBucketMs(range.ms);
+      const start = Math.floor((now - range.ms) / bucketMs) * bucketMs;
+      return {
+        limit: pageSize,
+        since: new Date(start).toISOString(),
+        intervalSec: Math.round(bucketMs / 1000),
+      };
     }
 
     // bucketByTime lays out `count` equal buckets across the selected
@@ -1432,7 +1501,7 @@
       );
     }
 
-    function ConversationsView({ conversations, tokenPoints, loading, error, query, setQuery, searchInputRef, timeRange, setTimeRange, tokenModel, setTokenModel, chartMetric, setChartMetric, bucketSel, setBucketSel, listSort, setListSort, onOpen, onRefresh, refreshing, onOpenSettings }) {
+    function ConversationsView({ conversations, storeCount, tokenPoints, tokenIntervalMs, loading, error, query, setQuery, searchInputRef, timeRange, setTimeRange, tokenModel, setTokenModel, chartMetric, setChartMetric, bucketSel, setBucketSel, listSort, setListSort, onOpen, onRefresh, refreshing, onOpenSettings }) {
       const now = Date.now();
       const prices = useModelPrices();
       const range = timeRangeOption(timeRange);
@@ -1596,17 +1665,25 @@
       }), []);
       // Both metrics share one window so switching the chart between
       // them doesn't shift the time axis; with per-metric windows the
-      // "All" range drifts when the datasets' extents differ.
+      // "All" range drifts when the datasets' extents differ. The window
+      // is snapped to the bucket ladder the token endpoint aggregates on,
+      // so each server point falls inside exactly one bar.
+      //
+      // A fixed range asks the server for the width it will draw on. Only
+      // the "All" range needs the reported width as a floor: there the server
+      // derives it from the whole store while the bars follow the visible
+      // window, which a model facet can narrow.
+      const serverIntervalMs = range.ms == null ? tokenIntervalMs : 0;
       const chartWindow = useMemo(() => {
         const times = filtered.map(conversationTime).concat(tokenFiltered.map(tokenPointTime));
-        return timeWindow(times, timeRange, now);
-      }, [filtered, tokenFiltered, timeRange, now]);
+        return chartGrid(times, timeRange, now, serverIntervalMs);
+      }, [filtered, tokenFiltered, timeRange, now, serverIntervalMs]);
       const activity = useMemo(
-        () => bucketActivity(filtered, timeRange, now, { window: chartWindow }),
+        () => bucketActivity(filtered, timeRange, now, { window: chartWindow, count: chartWindow.count }),
         [filtered, timeRange, now, chartWindow]
       );
       const tokenUsage = useMemo(
-        () => bucketTokenUsage(tokenFiltered, timeRange, now, { window: chartWindow }),
+        () => bucketTokenUsage(tokenFiltered, timeRange, now, { window: chartWindow, count: chartWindow.count }),
         [tokenFiltered, timeRange, now, chartWindow]
       );
       // Bucket drill-down from a chart bar click: the list narrows to
@@ -1801,14 +1878,18 @@
             {!error && loading && conversations.length === 0 && (
               <div style={{ padding: "32px 18px", color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 12 }}>Loading…</div>
             )}
-            {!error && !loading && conversations.length === 0 && (
+            {/* The list request is range-scoped, so an empty page does not
+                mean an empty store. storeCount comes from the response and
+                decides which notice applies; null (no response yet, or an
+                older daemon) falls back to reading the page. */}
+            {!error && !loading && rangeFiltered.length === 0 && (storeCount === 0 || (storeCount == null && conversations.length === 0)) && (
               <div style={{ padding: 16 }}>
                 <Notice kind="info" title="No sessions yet">
                   Run an agent against this daemon with <code style={{ color: "var(--fg1)" }}>agento11y pi --local</code> or <code style={{ color: "var(--fg1)" }}>agento11y claude --local</code>. Captured generations appear here as soon as the agent emits its first one.
                 </Notice>
               </div>
             )}
-            {!error && conversations.length > 0 && rangeFiltered.length === 0 && (
+            {!error && !loading && rangeFiltered.length === 0 && (storeCount > 0 || conversations.length > 0) && (
               <div style={{ padding: "16px 18px", color: "var(--fg2)", fontSize: 12 }}>
                 No sessions in <code style={{ color: "var(--fg1)" }}>{range.label}</code>.
               </div>
@@ -4128,7 +4209,12 @@
       const [selectedID, setSelectedID] = useState(conversationIDFromPath);
       const [showSettings, setShowSettings] = useState(settingsRouteActive);
       const [conversations, setConversations] = useState([]);
+      // storeCount is the number of conversations the daemon holds, before
+      // the list's page and range bounds. The list itself is range-scoped,
+      // so only this count distinguishes an empty store from a quiet range.
+      const [storeCount, setStoreCount] = useState(null);
       const [tokenPoints, setTokenPoints] = useState([]);
+      const [tokenIntervalMs, setTokenIntervalMs] = useState(0);
       const [loadingList, setLoadingList] = useState(true);
       const [errList, setErrList] = useState(null);
       const [query, setQuery] = useState("");
@@ -4163,21 +4249,36 @@
         : "agento11y — local";
       useEffect(() => { document.title = pageTitle; }, [pageTitle]);
 
-      // fetchList is driven from three sources (mount, SSE flush, 60s
-      // backstop), so a slower older response could otherwise overwrite
-      // a newer one. Each call captures a monotonically increasing
+      // fetchList is driven from four sources (mount, a range change, an SSE
+      // flush, the 60s backstop), so a slower older response could otherwise
+      // overwrite a newer one. Each call captures a monotonically increasing
       // sequence number and only applies its result if it is still the
       // latest.
+      //
+      // reset drops the current page before the request goes out. The page is
+      // range-scoped, so once the range changes it covers a window the header
+      // no longer names, and a wider range would keep showing the narrower
+      // page as if it were the whole answer. A refresh in place (SSE flush,
+      // backstop, the refresh button) keeps the rows and swaps them when the
+      // response lands.
       const listSeqRef = useRef(0);
-      const fetchList = useCallback(() => {
+      const fetchList = useCallback((reset = false) => {
         const seq = ++listSeqRef.current;
         setLoadingList(true);
         setErrList(null);
-        return fetch("/api/v1/conversations")
+        if (reset) setConversations([]);
+        // Bound the request: the server pages the list by file modification
+        // time and never decodes past the page, so the cost follows the page
+        // size, not the store size.
+        const w = requestWindow(timeRange, LIST_PAGE_SIZE);
+        const params = new URLSearchParams({ limit: String(w.limit) });
+        if (w.since) params.set("since", w.since);
+        return fetch(`/api/v1/conversations?${params}`)
           .then(r => r.ok ? r.json() : r.text().then(t => Promise.reject(new Error(t || `HTTP ${r.status}`))))
           .then(body => {
             if (listSeqRef.current !== seq) return;
             setConversations(body.conversations || []);
+            setStoreCount(Number.isFinite(body.total_conversations) ? body.total_conversations : null);
           })
           .catch(e => {
             if (listSeqRef.current !== seq) return;
@@ -4187,21 +4288,61 @@
             if (listSeqRef.current !== seq) return;
             setLoadingList(false);
           });
-      }, []);
+      }, [timeRange]);
 
-      // Token points back the usage chart. Failures are swallowed: the
-      // chart is supplementary, so a hiccup here shouldn't surface an
-      // error banner over the conversation list.
-      const fetchTokens = useCallback(() => {
-        return fetch("/api/v1/metrics/tokens")
+      // Token points back the usage chart. The server aggregates them per
+      // bucket and model over the requested range, so the payload follows
+      // the number of bars, not the number of generations. A failure here is
+      // swallowed: the chart is supplementary, and a hiccup shouldn't surface
+      // an error banner over the conversation list.
+      //
+      // The response is range-specific, and this runs from mount, an SSE
+      // flush, the 60s backstop and a range change. It therefore carries the
+      // same sequence guard as fetchList: a slow response for the previous
+      // range must not replace a fast one for the current range.
+      const tokenSeqRef = useRef(0);
+      const fetchTokens = useCallback((reset = false) => {
+        const seq = ++tokenSeqRef.current;
+        // As with the list, a range change invalidates the points and the
+        // interval they were aggregated on. Clearing them keeps a narrower
+        // window's chart from reading as the new range's usage, which a
+        // swallowed failure would otherwise leave in place until the next
+        // flush or backstop.
+        if (reset) {
+          setTokenPoints([]);
+          setTokenIntervalMs(0);
+        }
+        const w = requestWindow(timeRange, LIST_PAGE_SIZE);
+        const params = new URLSearchParams();
+        if (w.since) params.set("since", w.since);
+        if (w.intervalSec) params.set("interval", String(w.intervalSec));
+        const query = params.toString();
+        return fetch(`/api/v1/metrics/tokens${query ? `?${query}` : ""}`)
           .then(r => r.ok ? r.json() : null)
-          .then(body => { if (body) setTokenPoints(body.points || []); })
+          .then(body => {
+            if (!body || tokenSeqRef.current !== seq) return;
+            setTokenPoints(body.points || []);
+            // The chart never draws a bar finer than the width the server
+            // aggregated on, so read it back instead of assuming the
+            // requested one ("All" requests none).
+            const seconds = Number(body.interval_seconds);
+            setTokenIntervalMs(Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0);
+          })
           .catch(() => {});
-      }, []);
+      }, [timeRange]);
 
       const refreshAll = useCallback(() => {
         fetchList();
         fetchTokens();
+      }, [fetchList, fetchTokens]);
+
+      // reloadRange refetches when the request window itself changed: mount,
+      // or a range change. Both callbacks close over timeRange, so this
+      // identity moves exactly then, and the effect below is the only caller
+      // that discards what the previous window returned.
+      const reloadRange = useCallback(() => {
+        fetchList(true);
+        fetchTokens(true);
       }, [fetchList, fetchTokens]);
 
       // fetchDetailCore is the shared fetch body for both an explicit
@@ -4244,7 +4385,7 @@
       const fetchDetail = useCallback((id) => fetchDetailCore(id, false), [fetchDetailCore]);
       const quietRefreshDetail = useCallback((id) => fetchDetailCore(id, true), [fetchDetailCore]);
 
-      useEffect(() => { refreshAll(); }, [refreshAll]);
+      useEffect(() => { reloadRange(); }, [reloadRange]);
 
       useEffect(() => {
         const onPopState = () => {
@@ -4397,7 +4538,9 @@
             {view === "conversations" && (
               <ConversationsView
                 conversations={conversations}
+                storeCount={storeCount}
                 tokenPoints={tokenPoints}
+                tokenIntervalMs={tokenIntervalMs}
                 loading={loadingList}
                 error={errList}
                 query={query}

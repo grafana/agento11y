@@ -9,8 +9,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
+
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 
 	colmetricpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -19,6 +22,7 @@ import (
 )
 
 func TestEndpointFromEnvPrefersSigilPrefix(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "https://sigil.example/otlp")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://otel.example/otlp")
 
@@ -28,6 +32,7 @@ func TestEndpointFromEnvPrefersSigilPrefix(t *testing.T) {
 }
 
 func TestEndpointFromEnvFallsBackToStandardOtel(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://otel.example/otlp")
 
@@ -37,6 +42,7 @@ func TestEndpointFromEnvFallsBackToStandardOtel(t *testing.T) {
 }
 
 func TestExporterConfigUsesSigilPrefixedValues(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_INSECURE", "true")
 	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "https://wrong.example/traces")
 	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "Authorization=Bearer wrong")
@@ -59,6 +65,7 @@ func TestExporterConfigUsesSigilPrefixedValues(t *testing.T) {
 }
 
 func TestExporterConfigUsesSigilOtelTokenWhenSet(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "generation-token")
 	t.Setenv("SIGIL_OTEL_AUTH_TOKEN", "otel-token")
@@ -73,6 +80,7 @@ func TestExporterConfigUsesSigilOtelTokenWhenSet(t *testing.T) {
 }
 
 func TestExporterConfigKeepsExplicitAuthorization(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
 	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer explicit")
@@ -85,6 +93,7 @@ func TestExporterConfigKeepsExplicitAuthorization(t *testing.T) {
 }
 
 func TestProbeConfig(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "https://otlp.example/otlp")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
@@ -114,6 +123,7 @@ func TestProbeConfig(t *testing.T) {
 }
 
 func TestProbeConfigInsecureDropsToHTTP(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "https://otlp.example/otlp")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_INSECURE", "true")
@@ -134,6 +144,7 @@ func TestProbeConfigInsecureDropsToHTTP(t *testing.T) {
 }
 
 func TestProbeConfigNoEndpoint(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	if _, _, ok := ProbeConfig(); ok {
@@ -228,7 +239,210 @@ func TestBasicAuthHeaderValue(t *testing.T) {
 	}
 }
 
+// TestResolveExporterConfigOptions covers the explicit endpoint and header
+// overrides. A daemon resolves its Cloud forwarding from the same process
+// environment, so the overrides must not read through to it or change it.
+func TestResolveExporterConfigOptions(t *testing.T) {
+	const envEndpoint = "https://env.example:4318"
+	cases := []struct {
+		name         string
+		envEndpoint  string
+		envInsecure  string
+		opts         Options
+		wantOK       bool
+		wantURL      string
+		wantHeaders  map[string]string
+		wantInsecure bool
+	}{
+		{
+			name:        "zero options keep the environment",
+			envEndpoint: envEndpoint,
+			wantOK:      true,
+			wantURL:     envEndpoint,
+			wantHeaders: map[string]string{"Authorization": "Basic env-credential"},
+		},
+		{
+			name:        "endpoint override keeps the environment headers",
+			envEndpoint: envEndpoint,
+			opts:        Options{Endpoint: "https://import.example:4318"},
+			wantOK:      true,
+			wantURL:     "https://import.example:4318",
+			wantHeaders: map[string]string{"Authorization": "Basic env-credential"},
+		},
+		{
+			name:        "headers replace rather than merge",
+			envEndpoint: envEndpoint,
+			opts: Options{
+				Endpoint: "https://import.example:4318",
+				Headers:  map[string]string{"Authorization": "Bearer test"},
+			},
+			wantOK:      true,
+			wantURL:     "https://import.example:4318",
+			wantHeaders: map[string]string{"Authorization": "Bearer test"},
+		},
+		{
+			name:        "an empty header map sends no headers",
+			envEndpoint: envEndpoint,
+			opts:        Options{Headers: map[string]string{}},
+			wantOK:      true,
+			wantURL:     envEndpoint,
+			wantHeaders: map[string]string{},
+		},
+		{
+			name:         "the environment decides the transport for its own endpoint",
+			envEndpoint:  envEndpoint,
+			envInsecure:  "true",
+			wantOK:       true,
+			wantURL:      envEndpoint,
+			wantHeaders:  map[string]string{"Authorization": "Basic env-credential"},
+			wantInsecure: true,
+		},
+		{
+			name:        "an https override is not downgraded by the environment",
+			envEndpoint: envEndpoint,
+			envInsecure: "true",
+			opts:        Options{Endpoint: "https://import.example:4318"},
+			wantOK:      true,
+			wantURL:     "https://import.example:4318",
+			wantHeaders: map[string]string{"Authorization": "Basic env-credential"},
+		},
+		{
+			name:         "an http override sends cleartext without the environment saying so",
+			envEndpoint:  envEndpoint,
+			opts:         Options{Endpoint: "http://127.0.0.1:4318"},
+			wantOK:       true,
+			wantURL:      "http://127.0.0.1:4318",
+			wantHeaders:  map[string]string{"Authorization": "Basic env-credential"},
+			wantInsecure: true,
+		},
+		{
+			name: "no endpoint anywhere reports nothing to export to",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Basic env-credential")
+			t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", tc.envInsecure)
+			if tc.envEndpoint != "" {
+				t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", tc.envEndpoint)
+			}
+
+			cfg, ok := resolveExporterConfig(tc.opts)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if !tc.wantOK {
+				return
+			}
+			if cfg.endpoint != tc.wantURL {
+				t.Errorf("endpoint = %q, want %q", cfg.endpoint, tc.wantURL)
+			}
+			if cfg.insecure != tc.wantInsecure {
+				t.Errorf("insecure = %v, want %v", cfg.insecure, tc.wantInsecure)
+			}
+			if len(cfg.headers) != len(tc.wantHeaders) {
+				t.Fatalf("headers = %+v, want %+v", cfg.headers, tc.wantHeaders)
+			}
+			for k, v := range tc.wantHeaders {
+				if cfg.headers[k] != v {
+					t.Errorf("header %s = %q, want %q", k, cfg.headers[k], v)
+				}
+			}
+			// The overrides must leave the environment other resolvers read
+			// (the daemon's forwarding config) exactly as it was.
+			if got := os.Getenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT"); got != tc.envEndpoint {
+				t.Errorf("env endpoint = %q, want %q", got, tc.envEndpoint)
+			}
+			if got := os.Getenv("OTEL_EXPORTER_OTLP_HEADERS"); got != "Authorization=Basic env-credential" {
+				t.Errorf("env headers = %q, want them unchanged", got)
+			}
+		})
+	}
+}
+
+// TestSetupWithOptionsExportsToExplicitTarget stands up two collectors and
+// asserts the exporter uses the caller's endpoint and header, not the
+// environment's. It also pins that the call leaves the process environment
+// alone: an in-process caller shares it with the daemon's forwarding config.
+func TestSetupWithOptionsExportsToExplicitTarget(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "")
+	t.Setenv("OTEL_SERVICE_NAME", "")
+	envBefore := map[string]string{
+		"OTEL_EXPORTER_OTLP_INSECURE":         "true",
+		"OTEL_EXPORTER_OTLP_TRACES_INSECURE":  "true",
+		"OTEL_EXPORTER_OTLP_METRICS_INSECURE": "true",
+		"OTEL_SERVICE_NAME":                   "",
+	}
+	for k, v := range envBefore {
+		t.Setenv(k, v)
+	}
+
+	var mu sync.Mutex
+	var envHits int
+	envTarget := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		envHits++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer envTarget.Close()
+
+	auth := make(chan string, 4)
+	importTarget := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/otlp/v1/traces" {
+			auth <- r.Header.Get("Authorization")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer importTarget.Close()
+
+	t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", envTarget.URL+"/otlp")
+	t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "env-tenant")
+	t.Setenv("AGENTO11Y_AUTH_TOKEN", "env-token")
+
+	ctx := context.Background()
+	providers, err := SetupWithOptions(ctx, "import-run", Options{
+		Endpoint: importTarget.URL + "/otlp",
+		Headers:  map[string]string{"Authorization": "Bearer test"},
+	})
+	if err != nil {
+		t.Fatalf("SetupWithOptions: %v", err)
+	}
+	_, span := providers.Tracer("test").Start(ctx, "span")
+	span.End()
+	if err := providers.ForceFlush(); err != nil {
+		t.Fatalf("ForceFlush: %v", err)
+	}
+	if err := providers.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	select {
+	case got := <-auth:
+		if got != "Bearer test" {
+			t.Fatalf("Authorization = %q, want %q", got, "Bearer test")
+		}
+	default:
+		t.Fatal("no trace export reached the explicit endpoint")
+	}
+	for k, want := range envBefore {
+		if got := os.Getenv(k); got != want {
+			t.Errorf("%s = %q after SetupWithOptions, want %q", k, got, want)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if envHits != 0 {
+		t.Fatalf("environment endpoint received %d requests, want 0", envHits)
+	}
+}
+
 func TestSetupExportsToSignalSpecificPaths(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
 	var mu sync.Mutex
 	paths := map[string]int{}
 	authHeaders := map[string]string{}
@@ -295,8 +509,11 @@ func newTestServer(t *testing.T, handler http.Handler) *httptest.Server {
 	return server
 }
 
+// TestSetupAttachesServiceInstanceID also covers the default service name,
+// which goes on the resource because OTEL_SERVICE_NAME is blank here.
 func TestSetupAttachesServiceInstanceID(t *testing.T) {
-	t.Setenv("OTEL_SERVICE_NAME", "agento11y")
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("OTEL_SERVICE_NAME", "")
 
 	captured := newOTLPCapture(t)
 	defer captured.server.Close()
@@ -344,6 +561,7 @@ func TestSetupAttachesServiceInstanceID(t *testing.T) {
 }
 
 func TestSetupGeneratesInstanceIDWhenEmpty(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
 	t.Setenv("SIGIL_AUTH_TOKEN", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "")
