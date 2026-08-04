@@ -96,7 +96,7 @@ A plugin can only export fields the host agent passes through to it, so individu
 
 ## Troubleshooting
 
-Run `agento11y doctor` first. It's a read-only diagnostic that reports both export pipelines, config, and installed host-agent plugins in one place:
+Run `agento11y doctor` first. It's a read-only diagnostic that reports both export pipelines, config, and installed host-agent plugins in one place. It sends a lightweight request to each endpoint and reports the HTTP status, so a wrong endpoint or a token missing a scope shows up as a broken pipeline:
 
 ```sh
 agento11y doctor
@@ -108,12 +108,6 @@ The two pipelines are independent and fail independently:
 - **Analytics** (the Agent Observability metrics and traces) export over `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`). The token needs `metrics:write` and `traces:write`.
 
 The common failure is conversations showing up while the analytics page stays empty: the OTLP endpoint is unset, or the token lacks the metrics/traces scopes. `agento11y doctor` flags that case explicitly and exits non-zero when a pipeline is broken.
-
-Add `--probe` to send a lightweight request to each endpoint and report the HTTP status:
-
-```sh
-agento11y doctor --probe
-```
 
 A 403 means the token is missing a write scope. A 401 means the endpoint refused the credentials without saying why: the token may be invalid or expired, or `AGENTO11Y_AUTH_TENANT_ID` may be wrong.
 

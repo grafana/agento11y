@@ -717,13 +717,91 @@ func TestLaunch_RefreshesInstalledPlugin(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
+	const sha = "d9db82cfb562487b174006aabbd435d155e59278"
 	tests := []struct {
 		name          string
 		installed     string // installed_plugins.json content; empty means not written
+		cwd           string // getwd stub; empty leaves the real cwd
 		wantInstalled bool
+		wantVersion   string
 	}{
 		{name: "installed", installed: `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user"}]}}`, wantInstalled: true},
 		{name: "not installed", wantInstalled: false},
+		{
+			name:          "commit-shaped version",
+			installed:     `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"user","version":"d9db82cfb562","gitCommitSha":"` + sha + `"}]}}`,
+			wantInstalled: true,
+			wantVersion:   "d9db82cfb562",
+		},
+		// A manifest version, once one exists, is reported as-is.
+		{
+			name:          "semver version wins over the sha",
+			installed:     `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"user","version":"1.2.3","gitCommitSha":"` + sha + `"}]}}`,
+			wantInstalled: true,
+			wantVersion:   "1.2.3",
+		},
+		{
+			name:          "sha only",
+			installed:     `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"user","gitCommitSha":"` + sha + `"}]}}`,
+			wantInstalled: true,
+			wantVersion:   sha,
+		},
+		// Claude Code writes the literal "unknown" when a manifest declares no
+		// version, which is not a build, so the sha next to it answers.
+		{
+			name:          "unknown version falls back to the sha",
+			installed:     `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"user","version":"unknown","gitCommitSha":"` + sha + `"}]}}`,
+			wantInstalled: true,
+			wantVersion:   sha,
+		},
+		{
+			name:          "unknown version with no sha",
+			installed:     `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"user","version":"unknown"}]}}`,
+			wantInstalled: true,
+		},
+		// Neither build field present: installed with an unknown version, not an
+		// error.
+		{
+			name:          "no build fields",
+			installed:     `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"user"}]}}`,
+			wantInstalled: true,
+		},
+		{
+			name:          "legacy key carries a version",
+			installed:     `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user","version":"0.9.0"}]}}`,
+			wantInstalled: true,
+			wantVersion:   "0.9.0",
+		},
+		// The current name wins over the legacy one, so its version is reported.
+		{
+			name:          "current name wins over legacy",
+			installed:     `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user","version":"0.9.0"}],"agento11y-claude-code@agento11y":[{"scope":"user","version":"1.2.3"}]}}`,
+			wantInstalled: true,
+			wantVersion:   "1.2.3",
+		},
+		// Two marketplace aliases can register the same plugin. Keys are scanned in
+		// sorted order, so the reported build is the same on every run.
+		{
+			name:          "two aliases report the first key in sorted order",
+			installed:     `{"version":2,"plugins":{"agento11y-claude-code@grafana-sigil":[{"scope":"user","version":"4.5.6"}],"agento11y-claude-code@agento11y":[{"scope":"user","version":"1.2.3"}]}}`,
+			wantInstalled: true,
+			wantVersion:   "1.2.3",
+		},
+		// A project-scope entry bound to another directory is not installed here,
+		// so its version must not leak into the report.
+		{
+			name:          "project scope for another directory",
+			installed:     `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"project","projectPath":"/elsewhere","version":"1.2.3"}]}}`,
+			cwd:           "/here",
+			wantInstalled: false,
+		},
+		{
+			name:          "project scope for this directory",
+			installed:     `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"project","projectPath":"/here","version":"1.2.3"}]}}`,
+			cwd:           "/here",
+			wantInstalled: true,
+			wantVersion:   "1.2.3",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -732,11 +810,14 @@ func TestStatus(t *testing.T) {
 				writeInstalled(t, dir, tc.installed)
 			}
 			t.Setenv("CLAUDE_CONFIG_DIR", dir)
+			if tc.cwd != "" {
+				withGetwd(t, func() (string, error) { return tc.cwd, nil })
+			}
 
 			installed, version, err := Status(context.Background())
 			require.NoError(t, err)
 			require.Equal(t, tc.wantInstalled, installed)
-			require.Empty(t, version) // installed_plugins.json carries no version
+			require.Equal(t, tc.wantVersion, version)
 		})
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,13 +15,23 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 )
 
-// probeTimeout bounds each network probe so `--probe` stays responsive even
+// probeTimeout bounds each network probe so `doctor` stays responsive even
 // against a black-holed endpoint. A var so tests can shrink it.
 var probeTimeout = 3 * time.Second
 
 // probeClient is the shared client for probes. Per-request contexts carry the
 // real deadline; the client timeout is a backstop.
-var probeClient = &http.Client{Timeout: probeTimeout}
+//
+// Redirects are never followed. An ingest endpoint answers the export POST
+// itself, so a 3xx means the URL points somewhere else: a Grafana stack URL
+// bounces the unauthenticated POST to /login. Following it would report the
+// login page's 200 and certify a pipeline that drops every export.
+var probeClient = &http.Client{
+	Timeout: probeTimeout,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 // defaultProbeConversations checks the generation-export endpoint with the
 // same headers a real export sends: HTTP Basic auth (base64(tenant:token))
@@ -34,7 +45,7 @@ var probeClient = &http.Client{Timeout: probeTimeout}
 // resolves to http here just as the SDK exporter does; otherwise the probe
 // would hit https and report a cleartext setup as unreachable.
 func defaultProbeConversations(ctx context.Context, endpoint string, tenant envValue, token string, insecure bool) *ProbeResult {
-	target, err := wire.NormalizeGenerationExportURL(endpoint, insecure)
+	target, err := generationExportProbeURL(endpoint, insecure)
 	if err != nil {
 		return &ProbeResult{Message: "invalid endpoint: " + err.Error()}
 	}
@@ -63,7 +74,7 @@ func defaultProbeConversations(ctx context.Context, endpoint string, tenant envV
 		res.Message = credentialsRejectedMessage(tenant) +
 			". A token without the sigil:write scope is rejected the same way"
 	case res.scopeDenied():
-		res.Message = "endpoint rejected auth — token likely missing sigil:write scope"
+		res.Message = "the token is likely missing the sigil:write scope"
 	}
 	return res
 }
@@ -81,6 +92,37 @@ func credentialsRejectedMessage(tenant envValue) string {
 	}
 	return fmt.Sprintf("%s, or %s (%s) may be wrong",
 		rejected, cmp.Or(tenant.Key, envconfig.PreferredKey("AUTH_TENANT_ID")), tenant.Value)
+}
+
+// generationExportProbeURL builds the URL the plugin exporters really POST to.
+// emit.ExportEndpoint and the claude-code hook both append
+// GenerationExportHTTPPath to AGENTO11Y_ENDPOINT, while
+// wire.NormalizeGenerationExportURL appends it only when the endpoint has no
+// path, because an SDK user may configure a full export URL. Probing the
+// normalized endpoint alone therefore misses the export route for any
+// path-bearing endpoint, which is the shape that breaks export. Normalization
+// still runs first so scheme resolution, including the INSECURE http fallback,
+// stays in one place.
+func generationExportProbeURL(endpoint string, insecure bool) (string, error) {
+	normalized, err := wire.NormalizeGenerationExportURL(endpoint, insecure)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(normalized)
+	if err != nil {
+		return "", err
+	}
+	// Routes are registered exactly, so both branches assign the trimmed path:
+	// an endpoint ending ".../generations:export/" is probed at the canonical
+	// path rather than passed through with its slash. Appending is skipped when
+	// the path already ends with the export path, so an endpoint configured the
+	// long way is not probed at a doubled path.
+	trimmed := strings.TrimRight(parsed.Path, "/")
+	if !strings.HasSuffix(trimmed, wire.GenerationExportHTTPPath) {
+		trimmed += wire.GenerationExportHTTPPath
+	}
+	parsed.Path = trimmed
+	return parsed.String(), nil
 }
 
 // defaultProbeOTLP checks the OTLP metrics and traces endpoints, reusing the
@@ -122,14 +164,15 @@ func probeOTLPSignal(ctx context.Context, target otel.ProbeTarget, tenant envVal
 	case res.credentialsRejected():
 		res.Message = credentialsRejectedMessage(tenant)
 	case res.scopeDenied():
-		res.Message = "missing metrics:write/traces:write scope"
+		res.Message = "the token is likely missing the metrics:write/traces:write scope"
 	}
 	return res
 }
 
-// doProbe sends req and maps the outcome to a ProbeResult. A transport error
-// is reported as no response; any HTTP status below 400 (and 405, since a
-// method-restricted route still proves reach + auth) counts as reachable.
+// doProbe sends req and maps the outcome to a ProbeResult. A transport error is
+// reported as no response. ProbeResult.accepted decides which statuses count,
+// so the reported ok flag and the section verdict cannot disagree. A 3xx never
+// counts; probeClient explains why the probe does not follow one.
 func doProbe(target string, req *http.Request) *ProbeResult {
 	resp, err := probeClient.Do(req)
 	if err != nil {
@@ -137,9 +180,12 @@ func doProbe(target string, req *http.Request) *ProbeResult {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	return &ProbeResult{
-		URL:        target,
-		StatusCode: resp.StatusCode,
-		OK:         resp.StatusCode < 400 || resp.StatusCode == http.StatusMethodNotAllowed,
+	res := &ProbeResult{URL: target, StatusCode: resp.StatusCode}
+	res.OK = res.accepted()
+	// Naming the redirect target is what shows the reader where the export
+	// really went, typically a login page.
+	if location := strings.TrimSpace(resp.Header.Get("Location")); location != "" && res.redirected() {
+		res.Message = "redirected to " + location
 	}
+	return res
 }

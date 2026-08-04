@@ -102,8 +102,10 @@ func probeAgent(ctx context.Context, probe agentProbe, binaryVersion string) Age
 		a.Note = appendNote(a.Note, err.Error())
 		return a
 	}
-	a.Version = version
 	if installed {
+		// A version belongs to an installed plugin, so both the human report and
+		// the JSON one drop a version a probe reports next to "not installed".
+		a.Version = version
 		a.Install = InstallStateInstalled
 		a.Health = HealthOK
 	} else {

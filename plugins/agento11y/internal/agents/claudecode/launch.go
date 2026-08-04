@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -109,13 +111,16 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 }
 
 // Status reports whether the Claude Code plugin is installed for the current
-// working directory. It reuses the read-only pluginInstalled probe and never
-// installs, updates, or writes update-check state — `agento11y doctor` relies on
-// this. installed_plugins.json carries no version, so version is always empty
-// (best-effort).
+// working directory, and which build. It reuses the read-only store read and
+// never installs, updates, or writes update-check state — `agento11y doctor`
+// relies on this. A record with no build field reports an unknown version
+// rather than an error: the store belongs to Claude Code.
 func Status(_ context.Context) (installed bool, version string, err error) {
-	installed, err = pluginInstalled()
-	return installed, "", err
+	key, entry, err := installedPluginRecord()
+	if err != nil || key == "" {
+		return false, "", err
+	}
+	return true, entry.build(), nil
 }
 
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
@@ -183,10 +188,29 @@ type installedPluginsFile struct {
 // installedPluginEntry captures the subset of fields we need from each
 // entry in the per-key install array. Claude Code tracks `scope`
 // (`user`, `project`, or `local`) and, for the per-directory scopes,
-// the absolute `projectPath` the install is bound to.
+// the absolute `projectPath` the install is bound to. It also records the
+// build: `version` from the plugin manifest plus the full `gitCommitSha`.
 type installedPluginEntry struct {
-	Scope       string `json:"scope"`
-	ProjectPath string `json:"projectPath"`
+	Scope        string `json:"scope"`
+	ProjectPath  string `json:"projectPath"`
+	Version      string `json:"version"`
+	GitCommitSha string `json:"gitCommitSha"`
+}
+
+// unknownStoreVersion is what Claude Code writes into `version` for a plugin
+// whose manifest declares none. Other entries get the short commit sha instead,
+// so both spellings of "the manifest declared nothing" appear in one store.
+const unknownStoreVersion = "unknown"
+
+// build returns the entry's build identifier: the manifest version when it has
+// one, otherwise the commit the plugin was installed from. Our plugin manifest
+// declares no version, so this is a sha today, which the renderer labels as a
+// commit rather than printing it as a version.
+func (e installedPluginEntry) build() string {
+	if e.Version == "" || e.Version == unknownStoreVersion {
+		return e.GitCommitSha
+	}
+	return e.Version
 }
 
 // pluginInstalled reports whether the Claude Code plugin is registered in
@@ -196,12 +220,19 @@ func pluginInstalled() (bool, error) {
 	return key != "", err
 }
 
-// installedPluginKey returns the `<plugin>@<marketplace>` key registering
-// the plugin for the current working directory, preferring the current
-// plugin name over the legacy pre-rename one; empty when not installed.
-// Legacy keys count as installed because Claude Code itself migrates them to
-// the current name at session start via the marketplace renames map —
-// reinstalling on top would be redundant.
+// installedPluginKey returns the `<plugin>@<marketplace>` key registering the
+// plugin for the current working directory; empty when not installed.
+func installedPluginKey() (string, error) {
+	key, _, err := installedPluginRecord()
+	return key, err
+}
+
+// installedPluginRecord returns the `<plugin>@<marketplace>` key registering
+// the plugin for the current working directory and the entry it matched,
+// preferring the current plugin name over the legacy pre-rename one; an empty
+// key means not installed. Legacy keys count as installed because Claude Code
+// itself migrates them to the current name at session start via the
+// marketplace renames map — reinstalling on top would be redundant.
 //
 // Claude Code records per-entry `scope` and `projectPath`: `user` scope
 // is active in every session, while `project` and `local` only apply when
@@ -210,29 +241,36 @@ func pluginInstalled() (bool, error) {
 // unrelated project suppress bootstrap here, leaving agento11y hooks inactive.
 // Marketplace alias is intentionally ignored so a foreign alias is not
 // reinstalled on top of.
-func installedPluginKey() (string, error) {
+func installedPluginRecord() (string, installedPluginEntry, error) {
 	path, err := installedPluginsPath()
 	if err != nil {
-		return "", err
+		return "", installedPluginEntry{}, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
+			return "", installedPluginEntry{}, nil
 		}
-		return "", fmt.Errorf("read %s: %w", path, err)
+		return "", installedPluginEntry{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	var f installedPluginsFile
 	if err := json.Unmarshal(data, &f); err != nil {
-		return "", fmt.Errorf("parse %s: %w", path, err)
+		return "", installedPluginEntry{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	cwd, err := getwd()
 	if err != nil {
-		return "", fmt.Errorf("resolve cwd: %w", err)
+		return "", installedPluginEntry{}, fmt.Errorf("resolve cwd: %w", err)
 	}
 	cwdClean := filepath.Clean(cwd)
-	var legacyKey string
-	for key, raw := range f.Plugins {
+	var (
+		legacyKey   string
+		legacyEntry installedPluginEntry
+	)
+	// Keys are scanned in sorted order because the same plugin can be registered
+	// under two marketplace aliases, and both the current-name match and the
+	// legacy one would otherwise report a build that flaps with Go's map order.
+	for _, key := range slices.Sorted(maps.Keys(f.Plugins)) {
+		raw := f.Plugins[key]
 		isCurrent := strings.HasPrefix(key, PluginName+"@")
 		if !isCurrent && !strings.HasPrefix(key, legacyPluginName+"@") {
 			continue
@@ -248,13 +286,13 @@ func installedPluginKey() (string, error) {
 				continue
 			}
 			if isCurrent {
-				return key, nil
+				return key, e, nil
 			}
-			legacyKey = key
+			legacyKey, legacyEntry = key, e
 			break
 		}
 	}
-	return legacyKey, nil
+	return legacyKey, legacyEntry, nil
 }
 
 // installedPluginsPath returns the path to Claude Code's

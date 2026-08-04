@@ -1,9 +1,9 @@
 agento11y doctor dev
 
 ✗ Conversations (generation export)
-  endpoint:           not a url :// (env)
-  tenant id:          12345 (config.env)
-  auth token:         set (glc_…, config.env)
+  endpoint:           not a url :// (AGENTO11Y_ENDPOINT, env)
+  tenant id:          12345 (AGENTO11Y_AUTH_TENANT_ID, config.env)
+  auth token:         set (glc_…, SIGIL_AUTH_TOKEN, config.env)
   ! AGENTO11Y_ENDPOINT is not a usable endpoint: parse generation export endpoint "not a url ://": parse "https://not a url ://": invalid character " " in host name
   ! configured via legacy SIGIL_* names — these keep working, but the preferred names are AGENTO11Y_*
 
@@ -13,19 +13,20 @@ agento11y doctor dev
 
 ! Config
   file:               /home/u/.config/agento11y/config.env (present)
-  content capture:    metadata_only (invalid value, fell back)
-  guards:             disabled (invalid value, fell back)
-  local forwarding:   true (config.env)
+  content capture:    metadata_only (default)
+  guards:             disabled (SIGIL_GUARDS_ENABLED, env)
+  local mode:         off (AGENTO11Y_LOCAL="enabled" is not a boolean, env)
+  local forwarding:   true (AGENTO11Y_LOCAL_FORWARD, config.env)
   local guard checks: not forwarded (AGENTO11Y_GUARDS_ENABLED is off, so there are no guards to enforce)
   ! config.env has keys agento11y ignores: AWS_SECRET
-  ! the CONTENT_CAPTURE_MODE value is invalid; using metadata_only
-  ! a GUARDS_* value is invalid; falling back to defaults
+  ! the AGENTO11Y_CONTENT_CAPTURE_MODE value is invalid; using metadata_only
+  ! the AGENTO11Y_GUARDS_TIMEOUT_MS value is invalid; guards use the default
+  ! the AGENTO11Y_LOCAL value is not a boolean; local mode stays off
 
 Coding agents
   copilot:            install state unknown (hook-based; stat /home/u/.copilot/hooks/agento11y.json: operation not permitted)
   pi:                 on PATH, plugin not installed
-  auto-update:        disabled (SIGIL_AUTO_UPDATE)
+  opencode:           installed next (CLI not on PATH, npm spec pinned)
+  auto-update:        disabled (AGENTO11Y_AUTO_UPDATE, config.env)
 
 ✗ 2 problem(s): conversations, analytics misconfigured
-
-Verdicts above check configuration only. Run `agento11y doctor --probe` to test credentials against the endpoints.
