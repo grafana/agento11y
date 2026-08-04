@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
+from enum import Enum, IntEnum
 from typing import Any
 
 
@@ -93,9 +93,28 @@ class ToolDefinition:
     deferred: bool = False
 
 
+class TokenInputSemantics(IntEnum):
+    """Declares what ``input_tokens`` covers, mirroring
+    ``agento11y.v1.TokenInputSemantics``."""
+
+    #: Provider-raw or legacy telemetry: ``input_tokens`` follows whatever
+    #: convention the provider used; consumers may fall back to provider-name
+    #: heuristics.
+    UNSPECIFIED = 0
+    #: OTel GenAI contract: ``input_tokens`` includes all input token types —
+    #: both cache buckets are subsets of it, never additions. Fresh input is
+    #: derived as ``input - cache_read - cache_write``.
+    INCLUSIVE = 1
+
+
 @dataclass(slots=True)
 class TokenUsage:
-    """Token usage counters for request/response."""
+    """Token usage counters for request/response.
+
+    Under ``TokenInputSemantics.INCLUSIVE``, ``input_tokens`` includes both
+    cache buckets per the OTel GenAI conventions, and ``reasoning_tokens`` is
+    an explanatory sub-bucket of ``output_tokens``.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
@@ -103,6 +122,9 @@ class TokenUsage:
     cache_read_input_tokens: int = 0
     cache_write_input_tokens: int = 0
     reasoning_tokens: int = 0
+    #: Set only by SDK adapters that positively identified the provider
+    #: payload shape. Manual user-supplied usage leaves it UNSPECIFIED.
+    input_semantics: TokenInputSemantics = TokenInputSemantics.UNSPECIFIED
 
     def normalize(self) -> TokenUsage:
         """Returns a copy with `total_tokens` auto-filled when missing."""
@@ -114,6 +136,7 @@ class TokenUsage:
             cache_read_input_tokens=self.cache_read_input_tokens,
             cache_write_input_tokens=self.cache_write_input_tokens,
             reasoning_tokens=self.reasoning_tokens,
+            input_semantics=self.input_semantics,
         )
         if normalized.total_tokens == 0:
             normalized.total_tokens = normalized.input_tokens + normalized.output_tokens

@@ -62,6 +62,7 @@ from .models import (
     MessageRole,
     PartKind,
     SubmitConversationRatingResponse,
+    TokenInputSemantics,
     ToolExecutionEnd,
     ToolExecutionStart,
     ToolResult,
@@ -133,6 +134,11 @@ _metric_tool_calls_per_operation = "gen_ai.client.tool_calls_per_operation"
 _metric_attr_token_type = "gen_ai.token.type"
 _metric_token_type_input = "input"
 _metric_token_type_output = "output"
+# Marks token-usage telemetry (metric series and generation spans) whose input
+# already follows the OTel GenAI contract: input_tokens includes both cache
+# buckets. Absence means provider-raw or legacy telemetry.
+_attr_token_semantics = "gen_ai.token.semantics"
+_token_semantics_inclusive = "inclusive"
 _metric_token_type_cache_read = "cache_read"
 _metric_token_type_cache_write = "cache_write"
 _metric_token_type_reasoning = "reasoning"
@@ -1241,20 +1247,20 @@ class Client:
     def _record_token_usage(self, generation: Generation, token_type: str, value: int) -> None:
         if value == 0:
             return
-        self._token_usage_histogram.record(
-            value,
-            attributes={
-                _span_attr_operation_name: generation.operation_name,
-                **_metric_identity_attributes(
-                    generation.model.provider,
-                    generation.model.name,
-                    generation.agent_name,
-                    generation.agent_version,
-                ),
-                **self._client_tag_attributes(),
-                _metric_attr_token_type: token_type,
-            },
-        )
+        attributes = {
+            _span_attr_operation_name: generation.operation_name,
+            **_metric_identity_attributes(
+                generation.model.provider,
+                generation.model.name,
+                generation.agent_name,
+                generation.agent_version,
+            ),
+            **self._client_tag_attributes(),
+            _metric_attr_token_type: token_type,
+        }
+        if generation.usage.input_semantics == TokenInputSemantics.INCLUSIVE:
+            attributes[_attr_token_semantics] = _token_semantics_inclusive
+        self._token_usage_histogram.record(value, attributes=attributes)
 
     def _record_tool_execution_metrics(
         self,
@@ -2006,6 +2012,8 @@ def _set_generation_span_attributes(span: Span, generation: Generation) -> None:
         span.set_attribute(_span_attr_cache_write_tokens, usage.cache_write_input_tokens)
     if usage.reasoning_tokens:
         span.set_attribute(_span_attr_reasoning_tokens, usage.reasoning_tokens)
+    if usage.input_semantics == TokenInputSemantics.INCLUSIVE:
+        span.set_attribute(_attr_token_semantics, _token_semantics_inclusive)
 
 
 def _set_embedding_start_span_attributes(span: Span, start: EmbeddingStart) -> None:

@@ -1,13 +1,32 @@
 package com.grafana.agento11y.sdk;
 
-/** Token usage counters. */
+/**
+ * Token usage counters.
+ *
+ * <p>Under {@link TokenInputSemantics#INCLUSIVE}, {@code inputTokens} includes
+ * both cache buckets per the OTel GenAI conventions, and
+ * {@code reasoningTokens} is an explanatory sub-bucket of {@code outputTokens}.
+ */
 public final class TokenUsage {
+
+    /**
+     * Declares what {@code inputTokens} covers, mirroring
+     * {@code agento11y.v1.TokenInputSemantics}.
+     */
+    public enum TokenInputSemantics {
+        /** Provider-raw or legacy telemetry. */
+        UNSPECIFIED,
+        /** OTel GenAI contract: input includes both cache buckets. */
+        INCLUSIVE,
+    }
+
     private long inputTokens;
     private long outputTokens;
     private long totalTokens;
     private long cacheReadInputTokens;
     private long cacheWriteInputTokens;
     private long reasoningTokens;
+    private TokenInputSemantics inputSemantics = TokenInputSemantics.UNSPECIFIED;
 
     public long getInputTokens() {
         return inputTokens;
@@ -63,6 +82,20 @@ public final class TokenUsage {
         return this;
     }
 
+    /**
+     * Which contract {@code inputTokens} follows. Set only by SDK adapters that
+     * positively identified the provider payload shape; manual user-supplied
+     * usage leaves it UNSPECIFIED.
+     */
+    public TokenInputSemantics getInputSemantics() {
+        return inputSemantics;
+    }
+
+    public TokenUsage setInputSemantics(TokenInputSemantics inputSemantics) {
+        this.inputSemantics = inputSemantics == null ? TokenInputSemantics.UNSPECIFIED : inputSemantics;
+        return this;
+    }
+
     public TokenUsage normalized() {
         TokenUsage out = copy();
         if (out.totalTokens == 0) {
@@ -78,6 +111,7 @@ public final class TokenUsage {
                 .setTotalTokens(totalTokens)
                 .setCacheReadInputTokens(cacheReadInputTokens)
                 .setCacheWriteInputTokens(cacheWriteInputTokens)
-                .setReasoningTokens(reasoningTokens);
+                .setReasoningTokens(reasoningTokens)
+                .setInputSemantics(inputSemantics);
     }
 }

@@ -294,6 +294,14 @@ export interface ToolDefinition {
   inputSchemaJSON?: string;
 }
 
+/**
+ * Declares what `inputTokens` covers, mirroring
+ * `agento11y.v1.TokenInputSemantics`. `inclusive` is the OTel GenAI contract:
+ * input includes both cache buckets, which are subsets of it. Absence means
+ * provider-raw or legacy telemetry.
+ */
+export type TokenInputSemantics = 'unspecified' | 'inclusive';
+
 /** Token usage counters. */
 export interface TokenUsage {
   inputTokens?: number;
@@ -302,6 +310,11 @@ export interface TokenUsage {
   cacheReadInputTokens?: number;
   cacheWriteInputTokens?: number;
   reasoningTokens?: number;
+  /**
+   * Set only by SDK adapters that positively identified the provider payload
+   * shape. Manual user-supplied usage leaves it undefined.
+   */
+  inputSemantics?: TokenInputSemantics;
 }
 
 /** Provider-specific metadata attached to message parts. */
