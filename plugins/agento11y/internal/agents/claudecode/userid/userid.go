@@ -1,4 +1,12 @@
-package claudecode
+// Package userid resolves the Claude Code user identity attached to every
+// emitted generation.
+//
+// It is a leaf package on purpose. The live hook and the history importer must
+// attribute turns identically, but the importer lives under internal/history,
+// which internal/local imports, and the claudecode package imports
+// internal/local. Keeping the resolver here lets both call it without that
+// cycle.
+package userid
 
 import (
 	"encoding/json"
@@ -9,12 +17,12 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
-// resolveUserID returns the user id to attach to every emitted generation.
+// Resolve returns the user id to attach to every emitted generation.
 // The branded USER_ID family wins when set to a non-whitespace value;
 // otherwise we read ~/.claude.json using the field selected by the
 // USER_ID_SOURCE family (default "email", falling back to "email" on any
 // unrecognized value). Any failure resolves to "" — telemetry is best-effort.
-func resolveUserID() string {
+func Resolve() string {
 	if v := envconfig.Getenv("USER_ID"); v != "" {
 		return v
 	}
@@ -25,15 +33,15 @@ func resolveUserID() string {
 	if err != nil {
 		return ""
 	}
-	return loadUserIDFromClaudeJSON(filepath.Join(home, ".claude.json"), source)
+	return loadFromClaudeJSON(filepath.Join(home, ".claude.json"), source)
 }
 
-// loadUserIDFromClaudeJSON reads ~/.claude.json and returns the selected
+// loadFromClaudeJSON reads ~/.claude.json and returns the selected
 // oauthAccount field. Unknown sources fall back to "email". Returns "" on any
 // error (missing file, malformed JSON, missing field). A malformed file is
 // surfaced to stderr — mirrors state.Load for the same failure class and
 // helps users diagnose why their generations are missing a user id.
-func loadUserIDFromClaudeJSON(path, source string) string {
+func loadFromClaudeJSON(path, source string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""

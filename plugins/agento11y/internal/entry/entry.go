@@ -12,6 +12,7 @@
 //	agento11y vibe     [--local|--no-local] [--tag k=v] [-- args...]  — exec vibe after installing the sigil hook in vibe's hooks.toml
 //	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
 //	agento11y local start|status|stop                                 — manage the local capture daemon
+//	agento11y history import <agent> [flags]                          — backfill an agent's existing local sessions
 //	agento11y --version                                               — print the build version
 //
 // --tag is repeatable and adds key=value pairs to SIGIL_TAGS so they land
@@ -116,7 +117,14 @@ func localPrivacyLines(posture local.ForwardPosture, known bool) []string {
 	}
 }
 
-const usageLine = "usage: agento11y login | agento11y doctor [--json] | agento11y local start|status|stop | agento11y cursor install|uninstall | agento11y <agent> hook | agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
+// usageLine is a function rather than a constant because the history agents
+// come from the importer registry: adding an importer must not need an edit
+// here.
+func usageLine() string {
+	return "usage: agento11y login | agento11y doctor [--json] | agento11y local start|status|stop | " +
+		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
+		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
+}
 
 // version is the build version received from the calling main package via
 // Main. It stays a package var (defaulting to "dev") so tests can override
@@ -188,7 +196,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	}
 
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, usageLine)
+		_, _ = fmt.Fprintln(stderr, usageLine())
 		exit(2)
 		return
 	}
@@ -203,6 +211,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 
 	if args[0] == "local" {
 		runLocalCommand(args[1:], stdout, stderr)
+		return
+	}
+
+	// `agento11y history import <agent>` backfills sessions an agent wrote
+	// before agento11y was installed. It is dispatched here, alongside `local`,
+	// because it is a top-level verb rather than an agent name.
+	if args[0] == "history" {
+		runHistoryCommand(args[1:], stdin, stdout, stderr)
 		return
 	}
 
@@ -295,7 +311,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	}
 
 	if len(args) < 2 {
-		_, _ = fmt.Fprintln(stderr, usageLine)
+		_, _ = fmt.Fprintln(stderr, usageLine())
 		exit(2)
 		return
 	}

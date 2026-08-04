@@ -18,6 +18,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/userid"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -138,7 +139,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	}
 
 	extraTags := envconfig.ParseExtraTags(envconfig.Getenv("TAGS"))
-	userID := resolveUserID()
+	userID := userid.Resolve()
 	contentMode := envconfig.ResolveContentMode(logger)
 
 	hookCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

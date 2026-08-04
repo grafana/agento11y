@@ -29,6 +29,11 @@ type Options struct {
 	SessionID string            // authoritative session ID from the hook input
 	Logger    *log.Logger       // debug logger (nil = silent)
 	ExtraTags map[string]string // user-supplied tags merged into every generation; built-in keys always win
+	// SuppressSyntheticSubagentToolCallIDs skips the summary-only generation
+	// for an Agent tool result whose full subagent transcript is mapped
+	// separately. Live capture leaves it nil, so it keeps recording summaries
+	// when the parent transcript is the only record of the subagent run.
+	SuppressSyntheticSubagentToolCallIDs map[string]bool
 }
 
 func (o Options) logf(format string, args ...any) {
@@ -47,12 +52,34 @@ type userContext struct {
 // It returns only the safe prefix ending at the last complete assistant turn.
 // Trailing prompts, tool results, and incomplete assistant fragments are left
 // out so the next hook invocation re-reads them from the unchanged offset.
+//
+// A group with no terminal stop_reason still counts as complete when one of
+// its tool_use blocks has a matching tool_result later in the same batch: the
+// tool only ran because the assistant message was finished. Claude Code wrote
+// stop_reason null on every assistant line from version 2.0.62 to 2.1.63, and
+// still does so in subagent transcripts, so without this rule those turns are
+// dropped.
 func Coalesce(lines []transcript.Line) ([]transcript.Line, int64) {
+	return coalesce(lines, false)
+}
+
+// CoalesceSession is Coalesce for a session that is no longer being written,
+// which is what the history importer reads. Every group is complete, including
+// a trailing one with no stop_reason and no answered tool call, so the last
+// assistant turn of a session is kept rather than left for a next read that
+// will never happen.
+func CoalesceSession(lines []transcript.Line) []transcript.Line {
+	out, _ := coalesce(lines, true)
+	return out
+}
+
+func coalesce(lines []transcript.Line, wholeSession bool) ([]transcript.Line, int64) {
 	var (
 		result         = make([]transcript.Line, 0, len(lines))
 		pending        []transcript.Line
 		lastSafeLen    int
 		lastSafeOffset int64
+		answered       = toolResultIDs(lines)
 	)
 
 	markSafe := func(offset int64) {
@@ -60,9 +87,13 @@ func Coalesce(lines []transcript.Line) ([]transcript.Line, int64) {
 		lastSafeOffset = offset
 	}
 
-	appendAssistantIfComplete := func(line transcript.Line) {
+	appendAssistant := func(line transcript.Line) {
 		var msg transcript.AssistantMessage
-		if err := json.Unmarshal(line.Message, &msg); err != nil || msg.StopReason == "" {
+		err := json.Unmarshal(line.Message, &msg)
+		if err != nil {
+			return
+		}
+		if msg.StopReason == "" && !wholeSession {
 			return
 		}
 		result = append(result, line)
@@ -75,12 +106,20 @@ func Coalesce(lines []transcript.Line) ([]transcript.Line, int64) {
 		}
 		last := pending[len(pending)-1]
 		var msg transcript.AssistantMessage
-		if err := json.Unmarshal(last.Message, &msg); err == nil && msg.StopReason != "" {
-			result = append(result, mergeAssistantGroup(pending))
+		switch {
+		case json.Unmarshal(last.Message, &msg) == nil && msg.StopReason != "":
+			result = append(result, mergeAssistantGroup(pending, ""))
+			markSafe(last.EndOffset)
+		case groupAnswered(pending, answered):
+			result = append(result, mergeAssistantGroup(pending, "tool_use"))
+			markSafe(last.EndOffset)
+		case wholeSession:
+			result = append(result, mergeAssistantGroup(pending, ""))
 			markSafe(last.EndOffset)
 		}
-		// Incomplete group (no terminal stop_reason): excluded,
-		// offset not advanced; will be re-read next invocation.
+		// Incomplete group in a session still being written (no terminal
+		// stop_reason, and no answered tool_use): excluded, offset not advanced;
+		// will be re-read next invocation.
 		pending = nil
 	}
 
@@ -88,7 +127,7 @@ func Coalesce(lines []transcript.Line) ([]transcript.Line, int64) {
 		if line.Type == "assistant" {
 			if line.RequestID == "" {
 				flush()
-				appendAssistantIfComplete(line)
+				appendAssistant(line)
 				continue
 			}
 			if len(pending) > 0 && pending[0].RequestID != line.RequestID {
@@ -103,12 +142,24 @@ func Coalesce(lines []transcript.Line) ([]transcript.Line, int64) {
 	}
 	flush()
 
+	if wholeSession {
+		// Nothing is held back: there is no next read to pick up a trailing
+		// group, and the trailing user lines carry the tool results the mapper
+		// turns into subagent generations.
+		return result, lastSafeOffset
+	}
 	return result[:lastSafeLen], lastSafeOffset
 }
 
-func mergeAssistantGroup(lines []transcript.Line) transcript.Line {
+// mergeAssistantGroup merges one request's assistant fragments into a single
+// line. inferredStopReason fills a missing stop_reason; an empty value leaves
+// the field as the source wrote it.
+func mergeAssistantGroup(lines []transcript.Line, inferredStopReason string) transcript.Line {
 	if len(lines) == 1 {
-		return lines[0]
+		if inferredStopReason == "" {
+			return lines[0]
+		}
+		return assistantLineWithStopReason(lines[0], inferredStopReason)
 	}
 	final := lines[len(lines)-1]
 
@@ -126,12 +177,78 @@ func mergeAssistantGroup(lines []transcript.Line) transcript.Line {
 		return final
 	}
 	finalMsg.Content = allBlocks
+	if finalMsg.StopReason == "" {
+		finalMsg.StopReason = inferredStopReason
+	}
 	merged, err := json.Marshal(finalMsg)
 	if err != nil {
 		return final
 	}
 	final.Message = merged
 	return final
+}
+
+func assistantLineWithStopReason(line transcript.Line, stopReason string) transcript.Line {
+	var msg transcript.AssistantMessage
+	if err := json.Unmarshal(line.Message, &msg); err != nil || msg.StopReason != "" {
+		return line
+	}
+	msg.StopReason = stopReason
+	merged, err := json.Marshal(msg)
+	if err != nil {
+		return line
+	}
+	line.Message = merged
+	return line
+}
+
+// groupAnswered reports whether an assistant group ended in a tool call the
+// batch already answers. answered holds every tool_use ID a tool_result refers
+// to; a tool_use ID is unique within a session, so a match means this turn's
+// call ran, which it can only do once the assistant message is complete.
+func groupAnswered(group []transcript.Line, answered map[string]bool) bool {
+	if len(answered) == 0 {
+		return false
+	}
+	for _, line := range group {
+		if line.Type != "assistant" {
+			continue
+		}
+		var msg transcript.AssistantMessage
+		if err := json.Unmarshal(line.Message, &msg); err != nil || msg.StopReason != "" {
+			continue
+		}
+		for _, block := range msg.Content {
+			if block.Type == "tool_use" && answered[block.ID] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// toolResultIDs collects every tool_use ID answered by a tool_result in lines.
+func toolResultIDs(lines []transcript.Line) map[string]bool {
+	ids := map[string]bool{}
+	for _, line := range lines {
+		if line.Type != "user" {
+			continue
+		}
+		var msg transcript.UserMessage
+		if err := json.Unmarshal(line.Message, &msg); err != nil {
+			continue
+		}
+		_, blocks, err := transcript.ParseUserContent(msg.Content)
+		if err != nil {
+			continue
+		}
+		for _, block := range blocks {
+			if block.Type == "tool_result" && block.ToolUseID != "" {
+				ids[block.ToolUseID] = true
+			}
+		}
+	}
+	return ids
 }
 
 // agentCall holds the metadata captured from an Agent tool_use block.
@@ -265,6 +382,9 @@ func synthesiseSubagentGens(line transcript.Line, uctx *userContext, calls map[s
 			}
 			ac, ok := calls[part.ToolResult.ToolCallID]
 			if !ok {
+				continue
+			}
+			if opts.SuppressSyntheticSubagentToolCallIDs[part.ToolResult.ToolCallID] {
 				continue
 			}
 
@@ -419,7 +539,7 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 		ID:                generationID(line),
 		ConversationID:    opts.SessionID,
 		ConversationTitle: opts.SessionID,
-		AgentName:         agentName,
+		AgentName:         lineAgentName(line),
 		AgentVersion:      line.Version,
 		EffectiveVersion:  line.Version,
 		Mode:              agento11y.GenerationModeSync,
@@ -484,6 +604,20 @@ func buildTags(line transcript.Line, subagent bool, extras map[string]string) ma
 		tags["subagent"] = "true"
 	}
 	return tags
+}
+
+// lineAgentName names the agent that produced a turn. A sidechain line ran
+// inside a subagent, so its type is appended ("claude-code/general-purpose")
+// and the turn is attributable to that subagent rather than the main thread.
+func lineAgentName(line transcript.Line) string {
+	if !line.IsSidechain {
+		return agentName
+	}
+	suffix := strings.ToLower(strings.TrimSpace(line.AttributionAgent))
+	if suffix == "" {
+		return agentName
+	}
+	return agentName + "/" + suffix
 }
 
 func buildToolDefs(names map[string]bool) []agento11y.ToolDefinition {

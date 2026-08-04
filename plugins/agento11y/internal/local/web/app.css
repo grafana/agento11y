@@ -1,4 +1,21 @@
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap');
+    /* Inter and Roboto Mono are served by this daemon, not by Google Fonts.
+       The viewer holds private session data, so opening it must not tell a
+       third party that you did, and it has to work offline. Both are the
+       variable latin subset, so one file covers every weight the UI uses. */
+    @font-face {
+      font-family: 'Inter';
+      font-style: normal;
+      font-weight: 300 700;
+      font-display: swap;
+      src: url('/assets/fonts/inter-latin.woff2') format('woff2');
+    }
+    @font-face {
+      font-family: 'Roboto Mono';
+      font-style: normal;
+      font-weight: 400 500;
+      font-display: swap;
+      src: url('/assets/fonts/roboto-mono-latin.woff2') format('woff2');
+    }
 
     :root {
       /* Official Grafana brand palette (Primary + Secondary, from the

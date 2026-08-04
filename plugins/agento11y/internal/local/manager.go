@@ -276,6 +276,9 @@ func Serve(ctx context.Context, dir string, port int, logger *log.Logger) error 
 		Endpoint:  fmt.Sprintf("http://127.0.0.1:%d", actualPort),
 		StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
+	// A history import exports through this same address, so the server has to
+	// know it. The port is only settled once the listener exists.
+	srv.SetLocalEndpoint(status.Endpoint)
 	if err := SaveStatus(dir, status); err != nil {
 		_ = listener.Close()
 		return fmt.Errorf("save status: %w", err)

@@ -329,7 +329,7 @@ func tokenSnapshotForStop(p Payload, frag *fragment.Fragment, logger *log.Logger
 	if path == "" || p.TurnID == "" {
 		return nil
 	}
-	snapshot, ok, err := codexlog.ReadTokenUsageForTurn(path, p.TurnID)
+	snapshot, ok, err := codexlog.ReadTokenUsageForTurn(path, p.TurnID, codexlog.LiveScanOptions())
 	if err != nil {
 		logger.Printf("token usage: read %s: %v", path, err)
 		return nil
@@ -345,7 +345,7 @@ func recordSubagentLink(sessionID, transcriptPath string, logger *log.Logger) *f
 	if sessionID == "" || transcriptPath == "" {
 		return nil
 	}
-	meta, ok, err := codexlog.ReadSessionMeta(transcriptPath)
+	meta, ok, err := codexlog.ReadSessionMeta(transcriptPath, codexlog.LiveScanOptions())
 	if err != nil {
 		logger.Printf("subagent: read session meta: %v", err)
 		return nil
@@ -394,7 +394,7 @@ func resolveSubagentLinkForStop(p Payload, frag *fragment.Fragment, logger *log.
 		return link
 	}
 
-	spawn, ok, err := codexlog.ResolveSpawnLink(parentSession.TranscriptPath, p.SessionID, mapper.GenerationID)
+	spawn, ok, err := codexlog.ResolveSpawnLink(parentSession.TranscriptPath, p.SessionID, codexlog.LiveScanOptions(), mapper.GenerationID)
 	if err != nil {
 		logger.Printf("subagent: resolve spawn link: %v", err)
 		return link
