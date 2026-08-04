@@ -59,6 +59,7 @@ import type {
   RecorderCallback,
   RecorderWithError,
   SubmitConversationRatingResponse,
+  TokenInputSemantics,
   ToolExecution,
   ToolExecutionRecorder,
   ToolExecutionResult,
@@ -153,6 +154,11 @@ const metricToolCallsPerOperation = 'gen_ai.client.tool_calls_per_operation';
 const metricAttrTokenType = 'gen_ai.token.type';
 const metricTokenTypeInput = 'input';
 const metricTokenTypeOutput = 'output';
+// Marks token-usage telemetry (metric series and generation spans) whose input
+// already follows the OTel GenAI contract: input_tokens includes both cache
+// buckets. Absence means provider-raw or legacy telemetry.
+const attrTokenSemantics = 'gen_ai.token.semantics';
+const tokenSemanticsInclusive = 'inclusive';
 const metricTokenTypeCacheRead = 'cache_read';
 const metricTokenTypeCacheWrite = 'cache_write';
 const metricTokenTypeReasoning = 'reasoning';
@@ -1108,7 +1114,7 @@ export class Agento11yClient {
     if (value === undefined || value === 0) {
       return;
     }
-    this.tokenUsageHistogram.record(value, {
+    const attributes: Record<string, string | number | boolean> = {
       [spanAttrOperationName]: generation.operationName,
       ...metricIdentityAttributes(
         generation.model.provider,
@@ -1118,7 +1124,11 @@ export class Agento11yClient {
       ),
       ...tagMetricAttributes(this.config.tags),
       [metricAttrTokenType]: tokenType,
-    });
+    };
+    if (generation.usage?.inputSemantics === 'inclusive') {
+      attributes[attrTokenSemantics] = tokenSemanticsInclusive;
+    }
+    this.tokenUsageHistogram.record(value, attributes);
   }
 
   private recordToolExecutionMetrics(toolExecution: ToolExecution, finalError: Error | undefined): void {
@@ -1898,6 +1908,7 @@ function setGenerationSpanAttributes(
       cacheReadInputTokens?: number;
       cacheWriteInputTokens?: number;
       reasoningTokens?: number;
+      inputSemantics?: TokenInputSemantics;
     };
   },
 ): void {
@@ -2007,6 +2018,9 @@ function setGenerationSpanAttributes(
   }
   if ((usage.reasoningTokens ?? 0) !== 0) {
     span.setAttribute(spanAttrReasoningTokens, usage.reasoningTokens ?? 0);
+  }
+  if (usage.inputSemantics === 'inclusive') {
+    span.setAttribute(attrTokenSemantics, tokenSemanticsInclusive);
   }
 }
 

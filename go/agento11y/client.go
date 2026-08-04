@@ -241,11 +241,18 @@ const (
 	metricTimeToFirstToken      = "gen_ai.client.time_to_first_token"
 	metricToolCallsPerOperation = "gen_ai.client.tool_calls_per_operation"
 	metricAttrTokenType         = "gen_ai.token.type"
-	metricTokenTypeInput        = "input"
-	metricTokenTypeOutput       = "output"
-	metricTokenTypeCacheRead    = "cache_read"
-	metricTokenTypeCacheWrite   = "cache_write"
-	metricTokenTypeReasoning    = "reasoning"
+	// attrTokenSemantics marks token-usage telemetry (metric series and
+	// generation spans) whose input already follows the OTel GenAI contract:
+	// input_tokens includes both cache buckets. Absence means provider-raw
+	// or legacy telemetry that consumers may resolve with provider-name
+	// heuristics.
+	attrTokenSemantics        = "gen_ai.token.semantics"
+	tokenSemanticsInclusive   = "inclusive"
+	metricTokenTypeInput      = "input"
+	metricTokenTypeOutput     = "output"
+	metricTokenTypeCacheRead  = "cache_read"
+	metricTokenTypeCacheWrite = "cache_write"
+	metricTokenTypeReasoning  = "reasoning"
 )
 
 // durationBucketsSeconds is the OTel GenAI semantic-convention bucket advice
@@ -1766,6 +1773,9 @@ func generationSpanAttributes(g Generation) []attribute.KeyValue {
 	if g.Usage.ReasoningTokens != 0 {
 		attrs = append(attrs, attribute.Int64(spanAttrReasoningTokens, g.Usage.ReasoningTokens))
 	}
+	if g.Usage.InputSemantics == TokenInputSemanticsInclusive {
+		attrs = append(attrs, attribute.String(attrTokenSemantics, tokenSemanticsInclusive))
+	}
 
 	return attrs
 }
@@ -2072,6 +2082,9 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 		)
 		tokenAttrs = append(tokenAttrs, tagAttrs...)
 		tokenAttrs = append(tokenAttrs, metricStringAttribute(metricAttrTokenType, tokenType))
+		if generation.Usage.InputSemantics == TokenInputSemanticsInclusive {
+			tokenAttrs = append(tokenAttrs, metricStringAttribute(attrTokenSemantics, tokenSemanticsInclusive))
+		}
 		c.instruments.tokenUsage.Record(ctx, value, metric.WithAttributes(tokenAttrs...))
 	}
 

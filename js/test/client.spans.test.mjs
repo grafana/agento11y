@@ -176,6 +176,39 @@ test('generation span reflects metadata fallback title and user id after normali
   }
 });
 
+test('generation span marks inclusive token semantics only for identified usage', async () => {
+  const harness = newHarness();
+
+  try {
+    const markedRecorder = harness.client.startGeneration({
+      model: { provider: 'openai', name: 'gpt-5.6-sol' },
+    });
+    markedRecorder.setResult({
+      usage: { inputTokens: 10, outputTokens: 4, cacheReadInputTokens: 3, inputSemantics: 'inclusive' },
+    });
+    markedRecorder.end();
+    assert.equal(markedRecorder.getError(), undefined);
+
+    const markedSpan = singleGenerationSpan(harness.spanExporter);
+    assert.equal(markedSpan.attributes['gen_ai.token.semantics'], 'inclusive');
+    harness.spanExporter.reset();
+
+    const manualRecorder = harness.client.startGeneration({
+      model: { provider: 'openai', name: 'gpt-5.6-sol' },
+    });
+    manualRecorder.setResult({
+      usage: { inputTokens: 10, outputTokens: 4, cacheReadInputTokens: 3 },
+    });
+    manualRecorder.end();
+    assert.equal(manualRecorder.getError(), undefined);
+
+    const manualSpan = singleGenerationSpan(harness.spanExporter);
+    assert.equal(manualSpan.attributes['gen_ai.token.semantics'], undefined);
+  } finally {
+    await shutdownHarness(harness);
+  }
+});
+
 test('generation callError sets metadata and provider_call_error span status', async () => {
   const harness = newHarness();
 

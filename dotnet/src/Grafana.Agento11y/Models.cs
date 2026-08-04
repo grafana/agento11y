@@ -86,14 +86,40 @@ public sealed class ToolDefinition
     public byte[] InputSchemaJson { get; set; } = [];
 }
 
+/// <summary>
+/// Declares what <see cref="TokenUsage.InputTokens" /> covers, mirroring
+/// agento11y.v1.TokenInputSemantics. Inclusive is the OTel GenAI contract:
+/// input includes both cache buckets, which are subsets of it.
+/// </summary>
+public enum TokenInputSemantics
+{
+    Unspecified = 0,
+    Inclusive = 1,
+}
+
 public sealed class TokenUsage
 {
+    /// <summary>
+    /// Prompt-side token count. Under <see cref="TokenInputSemantics.Inclusive" />
+    /// it includes both cache buckets, per the OTel GenAI conventions.
+    /// </summary>
     public long InputTokens { get; set; }
     public long OutputTokens { get; set; }
     public long TotalTokens { get; set; }
     public long CacheReadInputTokens { get; set; }
     public long CacheWriteInputTokens { get; set; }
+    /// <summary>
+    /// Explanatory sub-bucket of <see cref="OutputTokens" /> when the provider
+    /// reports it, never additive.
+    /// </summary>
     public long ReasoningTokens { get; set; }
+
+    /// <summary>
+    /// Which contract <see cref="InputTokens" /> follows. Set only by SDK
+    /// adapters that positively identified the provider payload shape; manual
+    /// user-supplied usage leaves it Unspecified.
+    /// </summary>
+    public TokenInputSemantics InputSemantics { get; set; } = TokenInputSemantics.Unspecified;
 
     public TokenUsage Normalize()
     {
@@ -117,6 +143,7 @@ public sealed class TokenUsage
             CacheReadInputTokens = CacheReadInputTokens,
             CacheWriteInputTokens = CacheWriteInputTokens,
             ReasoningTokens = ReasoningTokens,
+            InputSemantics = InputSemantics,
         };
     }
 }

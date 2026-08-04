@@ -572,6 +572,33 @@ func TestGenerationRecorderEndSupportsStreamingPattern(t *testing.T) {
 	}
 }
 
+func TestGenerationSpanMarksInclusiveTokenSemantics(t *testing.T) {
+	client, recorder, _ := newTestClient(t, Config{})
+
+	_, generationRecorder := client.StartGeneration(context.Background(), GenerationStart{
+		Model: ModelRef{Provider: "openai", Name: "gpt-5.6-sol"},
+	})
+	generationRecorder.SetResult(Generation{
+		Usage: TokenUsage{
+			InputTokens:          10,
+			OutputTokens:         4,
+			CacheReadInputTokens: 3,
+			InputSemantics:       TokenInputSemanticsInclusive,
+		},
+	}, nil)
+	generationRecorder.End()
+
+	if err := generationRecorder.Err(); err != nil {
+		t.Fatalf("end generation: %v", err)
+	}
+
+	span := onlyGenerationSpan(t, recorder.Ended())
+	attrs := spanAttributeMap(span)
+	if got := attrs[attrTokenSemantics].AsString(); got != tokenSemanticsInclusive {
+		t.Fatalf("expected gen_ai.token.semantics=inclusive on marked usage, got %q", got)
+	}
+}
+
 func TestGenerationRecorderEndSetsGenAIAttributes(t *testing.T) {
 	client, recorder, _ := newTestClient(t, Config{})
 
@@ -663,6 +690,9 @@ func TestGenerationRecorderEndSetsGenAIAttributes(t *testing.T) {
 	}
 	if attrs[spanAttrCacheWriteTokens].AsInt64() != 2 {
 		t.Fatalf("expected gen_ai.usage.cache_write_input_tokens=2")
+	}
+	if _, ok := attrs[attrTokenSemantics]; ok {
+		t.Fatalf("did not expect gen_ai.token.semantics for manual (unmarked) usage")
 	}
 	if attrs[spanAttrRequestMaxTokens].AsInt64() != 256 {
 		t.Fatalf("expected gen_ai.request.max_tokens=256")

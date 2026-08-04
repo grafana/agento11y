@@ -65,6 +65,11 @@ public sealed partial class Agento11yClient : IAsyncDisposable
     internal const string MetricTokenUsage = "gen_ai.client.token.usage";
     internal const string MetricTimeToFirstToken = "gen_ai.client.time_to_first_token";
     internal const string MetricToolCallsPerOperation = "gen_ai.client.tool_calls_per_operation";
+    // Marks token-usage telemetry (metric series and generation spans) whose
+    // input already follows the OTel GenAI contract: input_tokens includes both
+    // cache buckets. Absence means provider-raw or legacy telemetry.
+    internal const string AttrTokenSemantics = "gen_ai.token.semantics";
+    internal const string TokenSemanticsInclusive = "inclusive";
     internal const string MetricAttrTokenType = "gen_ai.token.type";
     internal const string MetricTokenTypeInput = "input";
     internal const string MetricTokenTypeOutput = "output";
@@ -1338,6 +1343,11 @@ public sealed partial class Agento11yClient : IAsyncDisposable
         {
             activity.SetTag(SpanAttrReasoningTokens, generation.Usage.ReasoningTokens);
         }
+
+        if (generation.Usage.InputSemantics == TokenInputSemantics.Inclusive)
+        {
+            activity.SetTag(AttrTokenSemantics, TokenSemanticsInclusive);
+        }
     }
 
     internal static void ApplyEmbeddingStartSpanAttributes(Activity activity, EmbeddingStart start)
@@ -1638,15 +1648,25 @@ public sealed partial class Agento11yClient : IAsyncDisposable
             return;
         }
 
-        _tokenUsageHistogram.Record(
-            value,
-            WithMetricTags(generation.AgentVersion, [
+        KeyValuePair<string, object?>[] tags = generation.Usage.InputSemantics == TokenInputSemantics.Inclusive
+            ?
+            [
                 new(SpanAttrOperationName, OperationName(generation)),
                 new(SpanAttrProviderName, generation.Model.Provider ?? string.Empty),
                 new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
                 new(SpanAttrAgentName, generation.AgentName ?? string.Empty),
                 new(MetricAttrTokenType, tokenType),
-            ]));
+                new(AttrTokenSemantics, TokenSemanticsInclusive),
+            ]
+            :
+            [
+                new(SpanAttrOperationName, OperationName(generation)),
+                new(SpanAttrProviderName, generation.Model.Provider ?? string.Empty),
+                new(SpanAttrRequestModel, generation.Model.Name ?? string.Empty),
+                new(SpanAttrAgentName, generation.AgentName ?? string.Empty),
+                new(MetricAttrTokenType, tokenType),
+            ];
+        _tokenUsageHistogram.Record(value, WithMetricTags(generation.AgentVersion, tags));
     }
 
     internal static KeyValuePair<string, object?>[] TagAttributes(IReadOnlyDictionary<string, string>? tags)
