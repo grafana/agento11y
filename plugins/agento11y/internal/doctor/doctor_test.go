@@ -1263,6 +1263,112 @@ func TestCollectConfig_GuardsFaultsMatchEnvconfig(t *testing.T) {
 	}
 }
 
+// TestCollectConfig_AgentName pins the agent-name row: the effective value, the
+// spelling that supplied it, and whether it came from the shell or config.env.
+// Without the row a user who renamed an agent has no way to see why their guard
+// rule stopped matching.
+func TestCollectConfig_AgentName(t *testing.T) {
+	tests := []struct {
+		name         string
+		osEnv        map[string]string
+		fileEnv      map[string]string
+		wantName     string
+		wantKey      string
+		wantSource   string
+		wantMsg      string
+		wantHealth   Health
+		wantRendered string // "" = assert the row is absent
+	}{
+		{name: "unset reports no override"},
+		{
+			name:     "from the shell",
+			osEnv:    map[string]string{"AGENTO11Y_AGENT_NAME": "claude-code-e2e"},
+			wantName: "claude-code-e2e", wantKey: "AGENTO11Y_AGENT_NAME", wantSource: sourceEnv,
+			wantRendered: "agent name: claude-code-e2e (AGENTO11Y_AGENT_NAME, env)",
+		},
+		{
+			name:     "from config.env",
+			fileEnv:  map[string]string{"AGENTO11Y_AGENT_NAME": "config-name"},
+			wantName: "config-name", wantKey: "AGENTO11Y_AGENT_NAME", wantSource: sourceConfig,
+			wantRendered: "agent name: config-name (AGENTO11Y_AGENT_NAME, config.env)",
+		},
+		{
+			name:     "shell wins over config.env",
+			osEnv:    map[string]string{"AGENTO11Y_AGENT_NAME": "shell-name"},
+			fileEnv:  map[string]string{"AGENTO11Y_AGENT_NAME": "config-name"},
+			wantName: "shell-name", wantKey: "AGENTO11Y_AGENT_NAME", wantSource: sourceEnv,
+		},
+		{
+			name:     "legacy-only name suggests migration",
+			osEnv:    map[string]string{"SIGIL_AGENT_NAME": "legacy-name"},
+			wantName: "legacy-name", wantKey: "SIGIL_AGENT_NAME", wantSource: sourceEnv,
+			wantMsg: "preferred name is AGENTO11Y_AGENT_NAME",
+		},
+		{
+			name: "conflicting spellings flag the disagreement",
+			osEnv: map[string]string{
+				"AGENTO11Y_AGENT_NAME": "preferred-name",
+				"SIGIL_AGENT_NAME":     "legacy-name",
+			},
+			wantName: "preferred-name", wantKey: "AGENTO11Y_AGENT_NAME", wantSource: sourceEnv,
+			wantMsg: "AGENTO11Y_AGENT_NAME and SIGIL_AGENT_NAME are both set in the environment, to different values; using AGENTO11Y_AGENT_NAME",
+		},
+		{
+			name:     "a slash in the name warns that the run reads as a subagent",
+			osEnv:    map[string]string{"AGENTO11Y_AGENT_NAME": "team/e2e"},
+			wantName: "team/e2e", wantKey: "AGENTO11Y_AGENT_NAME", wantSource: sourceEnv,
+			wantMsg:    "contains a slash",
+			wantHealth: HealthWarn,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnv(t)
+			sec := collectConfig(tc.osEnv, tc.fileEnv)
+			if sec.AgentName != tc.wantName {
+				t.Fatalf("agent name = %q, want %q", sec.AgentName, tc.wantName)
+			}
+			if sec.AgentNameKey != tc.wantKey {
+				t.Fatalf("agent name key = %q, want %q", sec.AgentNameKey, tc.wantKey)
+			}
+			if sec.AgentNameSource != tc.wantSource {
+				t.Fatalf("agent name source = %q, want %q", sec.AgentNameSource, tc.wantSource)
+			}
+			if tc.wantMsg != "" && !strings.Contains(strings.Join(sec.Messages, " "), tc.wantMsg) {
+				t.Fatalf("messages %v missing %q", sec.Messages, tc.wantMsg)
+			}
+			if tc.wantHealth != "" && sec.Health != tc.wantHealth {
+				t.Fatalf("health = %q, want %q", sec.Health, tc.wantHealth)
+			}
+			var buf bytes.Buffer
+			renderHuman(&buf, &Report{Config: sec}, false)
+			// The renderer pads keys to the width of the widest one in the
+			// section, so compare with runs of spaces collapsed.
+			rendered := strings.Join(strings.Fields(buf.String()), " ")
+			if tc.wantRendered != "" && !strings.Contains(rendered, tc.wantRendered) {
+				t.Fatalf("rendered report missing %q:\n%s", tc.wantRendered, buf.String())
+			}
+			if tc.wantName == "" && strings.Contains(rendered, "agent name") {
+				t.Fatalf("rendered report names an agent with no override set:\n%s", buf.String())
+			}
+		})
+	}
+}
+
+// TestCollectConfig_AgentNameReadsTheSnapshot pins the same wiring the content
+// mode has: the name is resolved from the snapshot doctor was handed, not from
+// the process env after the dotenv merge, so a config.env value is not
+// attributed to the shell.
+func TestCollectConfig_AgentNameReadsTheSnapshot(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("AGENTO11Y_AGENT_NAME", "shell-name")
+
+	sec := collectConfig(nil, map[string]string{"AGENTO11Y_AGENT_NAME": "config-name"})
+	if sec.AgentName != "config-name" || sec.AgentNameSource != sourceConfig {
+		t.Fatalf("agent name = %q from %q, want config-name from config.env", sec.AgentName, sec.AgentNameSource)
+	}
+}
+
 func TestCollectConfig_Tags(t *testing.T) {
 	tests := []struct {
 		name       string

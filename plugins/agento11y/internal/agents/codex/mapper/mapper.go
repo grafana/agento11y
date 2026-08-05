@@ -17,8 +17,16 @@ import (
 )
 
 const (
-	AgentName         = "codex"
-	SubagentAgentName = AgentName + "/subagent"
+	// AgentName is the default agent identity this adapter reports.
+	// AGENTO11Y_AGENT_NAME overrides it per run through Inputs.AgentName.
+	AgentName = "codex"
+	// SubagentAgentName is what a linked subagent turn reports under the
+	// default name. Map builds the live value from the resolved base name and
+	// subagentSuffix, so this is the value tests compare against rather than a
+	// constant the mapper reads.
+	SubagentAgentName = AgentName + subagentSuffix
+	// subagentSuffix marks a turn that ran as a subagent of another session.
+	subagentSuffix = "/subagent"
 )
 
 type Inputs struct {
@@ -26,6 +34,11 @@ type Inputs struct {
 	SubagentLink   *fragment.SubagentLink
 	TokenSnapshot  *codexlog.TokenSnapshot
 	ContentCapture agento11y.ContentCaptureMode
+	// AgentName overrides the exported agent identity. Blank means "codex".
+	// The history importer leaves it blank on purpose: a backfill cannot
+	// reconstruct the environment a past run had, so an imported generation
+	// carries the product name.
+	AgentName string
 	// RawContent leaves prompt, response, and tool payloads unredacted. The
 	// history importer sets it because the import framework runs one Sanitizer
 	// over every turn before export; redacting here as well would apply the
@@ -75,7 +88,7 @@ func Map(in Inputs) Mapped {
 
 	tools := buildToolDefinitions(frag.Tools)
 	input, output := buildMessages(frag, payloadMode, in.RawContent)
-	conversationID, agentName, parentIDs, metadata := linkFields(frag, in.SubagentLink, tags)
+	conversationID, agentName, parentIDs, metadata := linkFields(frag, in.SubagentLink, tags, in.agent())
 	usage, metadata := usageFields(in.TokenSnapshot, metadata)
 
 	start := agento11y.GenerationStart{
@@ -114,14 +127,26 @@ func Map(in Inputs) Mapped {
 	return Mapped{Start: start, Generation: gen}
 }
 
-func linkFields(frag *fragment.Fragment, link *fragment.SubagentLink, tags map[string]string) (conversationID, agentName string, parentIDs []string, metadata map[string]any) {
+// agent is the base agent name for this generation: the caller's override, or
+// the product name when none was given.
+func (in Inputs) agent() string {
+	if n := strings.TrimSpace(in.AgentName); n != "" {
+		return n
+	}
+	return AgentName
+}
+
+// linkFields names the agent and resolves the conversation edges for one turn.
+// base is the resolved agent name for the run; a subagent turn appends
+// subagentSuffix to it.
+func linkFields(frag *fragment.Fragment, link *fragment.SubagentLink, tags map[string]string, base string) (conversationID, agentName string, parentIDs []string, metadata map[string]any) {
 	conversationID = frag.SessionID
-	agentName = AgentName
+	agentName = base
 	if link == nil || link.ParentSessionID == "" {
 		return conversationID, agentName, nil, nil
 	}
 
-	agentName = SubagentAgentName
+	agentName = base + subagentSuffix
 	tags["subagent"] = "true"
 	tags["codex.thread_source"] = "subagent"
 	tags["codex.link_source"] = "partial"

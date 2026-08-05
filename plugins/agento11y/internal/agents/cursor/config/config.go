@@ -9,9 +9,11 @@ package config
 
 import (
 	"log"
+	"strings"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
@@ -24,6 +26,20 @@ type Config struct {
 	ContentCapture agento11y.ContentCaptureMode
 	UserIDOverride string
 	Debug          bool
+	// AgentName is the identity every generation and guard request reports.
+	// Load resolves it from AGENTO11Y_AGENT_NAME, then SIGIL_AGENT_NAME, and
+	// falls back to "cursor". Read it through Agent.
+	AgentName string
+}
+
+// Agent returns the resolved agent identity, or "cursor" when AgentName is
+// blank because the Config was built without Load. The mapper applies the same
+// fallback, so a guard request and the generation it guards cannot disagree.
+func (c Config) Agent() string {
+	if n := strings.TrimSpace(c.AgentName); n != "" {
+		return n
+	}
+	return mapper.AgentName
 }
 
 // HasCredentials reports whether the canonical SIGIL_* credentials are
@@ -56,5 +72,6 @@ func Load(logger *log.Logger) Config {
 		ContentCapture: envconfig.ResolveContentMode(logger),
 		UserIDOverride: envconfig.Getenv("USER_ID"),
 		Debug:          envconfig.ParseBool(envconfig.Getenv("DEBUG")),
+		AgentName:      envconfig.ResolveAgentName(mapper.AgentName),
 	}
 }

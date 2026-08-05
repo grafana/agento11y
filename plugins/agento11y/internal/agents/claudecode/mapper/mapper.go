@@ -29,11 +29,25 @@ type Options struct {
 	SessionID string            // authoritative session ID from the hook input
 	Logger    *log.Logger       // debug logger (nil = silent)
 	ExtraTags map[string]string // user-supplied tags merged into every generation; built-in keys always win
+	// AgentName overrides the exported agent identity. Blank means
+	// "claude-code". The history importer leaves it blank on purpose: a
+	// backfill cannot reconstruct a past per-run override, and
+	// claudeFinalizeSubagentGens matches generations against the product name.
+	AgentName string
 	// SuppressSyntheticSubagentToolCallIDs skips the summary-only generation
 	// for an Agent tool result whose full subagent transcript is mapped
 	// separately. Live capture leaves it nil, so it keeps recording summaries
 	// when the parent transcript is the only record of the subagent run.
 	SuppressSyntheticSubagentToolCallIDs map[string]bool
+}
+
+// agent is the base agent name for every generation this run produces: the
+// caller's override, or the product name when none was given.
+func (o Options) agent() string {
+	if n := strings.TrimSpace(o.AgentName); n != "" {
+		return n
+	}
+	return agentName
 }
 
 func (o Options) logf(format string, args ...any) {
@@ -404,7 +418,7 @@ func synthesiseSubagentGens(line transcript.Line, uctx *userContext, calls map[s
 				ConversationID:      opts.SessionID,
 				ConversationTitle:   opts.SessionID,
 				ParentGenerationIDs: []string{ac.parentGenID},
-				AgentName:           agentName + "/" + suffix,
+				AgentName:           opts.agent() + "/" + suffix,
 				AgentVersion:        ac.parentGen.AgentVersion,
 				EffectiveVersion:    ac.parentGen.EffectiveVersion,
 				Mode:                agento11y.GenerationModeSync,
@@ -539,7 +553,7 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 		ID:                generationID(line),
 		ConversationID:    opts.SessionID,
 		ConversationTitle: opts.SessionID,
-		AgentName:         lineAgentName(line),
+		AgentName:         lineAgentName(line, opts.agent()),
 		AgentVersion:      line.Version,
 		EffectiveVersion:  line.Version,
 		Mode:              agento11y.GenerationModeSync,
@@ -606,18 +620,19 @@ func buildTags(line transcript.Line, subagent bool, extras map[string]string) ma
 	return tags
 }
 
-// lineAgentName names the agent that produced a turn. A sidechain line ran
-// inside a subagent, so its type is appended ("claude-code/general-purpose")
-// and the turn is attributable to that subagent rather than the main thread.
-func lineAgentName(line transcript.Line) string {
+// lineAgentName names the agent that produced a turn. base is the resolved
+// agent name for the run. A sidechain line ran inside a subagent, so its type
+// is appended ("claude-code/general-purpose") and the turn is attributable to
+// that subagent rather than the main thread.
+func lineAgentName(line transcript.Line, base string) string {
 	if !line.IsSidechain {
-		return agentName
+		return base
 	}
 	suffix := strings.ToLower(strings.TrimSpace(line.AttributionAgent))
 	if suffix == "" {
-		return agentName
+		return base
 	}
-	return agentName + "/" + suffix
+	return base + "/" + suffix
 }
 
 func buildToolDefs(names map[string]bool) []agento11y.ToolDefinition {

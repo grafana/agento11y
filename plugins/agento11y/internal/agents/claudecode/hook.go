@@ -32,8 +32,9 @@ import (
 // it as a package var so tests can override it freely.
 var Version = "dev"
 
-// AgentName is the agent identity attached to every generation this agent
-// emits. Stable across versions so dashboards survive renames.
+// AgentName is the default agent identity this adapter reports. Stable across
+// versions so dashboards survive renames. AGENTO11Y_AGENT_NAME overrides it per
+// run; see envconfig.ResolveAgentName.
 const AgentName = "claude-code"
 
 func exportConfig(endpoint, tenantID, authToken string) agento11y.GenerationExportConfig {
@@ -90,6 +91,13 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 
 	st := state.Load(input.SessionID)
 
+	// One name for both branches below: the guard request and the exported
+	// generations have to agree, otherwise a rule scoped to a per-run name
+	// never matches the generations that run produces. The binary runs once per
+	// hook event, so the name is resolved per invocation and a session that
+	// changes the variable mid-run splits across two names.
+	resolvedAgentName := envconfig.ResolveAgentName(AgentName)
+
 	// Route lightweight events that do not need real agento11y credentials first.
 	// SessionStart only updates local state; PreToolUse calls into the shared
 	// guard helper which manages its own credentials, timeouts, and
@@ -106,7 +114,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	case "PreToolUse":
 		guardCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		handlePreToolUse(guardCtx, stdout, input, st, logger)
+		handlePreToolUse(guardCtx, stdout, input, st, resolvedAgentName, logger)
 		return nil
 	case "", "Stop", "SessionEnd":
 		// Fall through to transcript export below.
@@ -176,6 +184,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		SessionID: input.SessionID,
 		Logger:    logger,
 		ExtraTags: extraTags,
+		AgentName: resolvedAgentName,
 	}, r)
 
 	if len(gens) == 0 {
@@ -235,9 +244,9 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 // credential, fail-open/closed, and local-endpoint placeholder behaviour
 // lives in the shared guard helper so this stays in lockstep with the codex
 // and copilot agents.
-func handlePreToolUse(ctx context.Context, stdout io.Writer, input *hookInput, st state.Session, logger *log.Logger) {
+func handlePreToolUse(ctx context.Context, stdout io.Writer, input *hookInput, st state.Session, agentName string, logger *log.Logger) {
 	res := guard.EvaluateToolCall(ctx, envconfig.ResolveGuards(logger), guard.ToolCallInput{
-		AgentName:     AgentName,
+		AgentName:     agentName,
 		AgentVersion:  Version,
 		ModelProvider: "anthropic",
 		ModelName:     strings.TrimSpace(st.Model),

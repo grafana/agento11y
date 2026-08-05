@@ -21,6 +21,7 @@ import (
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/fragment"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/stretchr/testify/assert"
@@ -796,6 +797,101 @@ func TestShouldPreferTranscriptSnapshot(t *testing.T) {
 			if got != tt.want {
 				t.Fatalf("shouldPreferTranscriptSnapshot() = %t, want %t", got, tt.want)
 			}
+		})
+	}
+}
+
+// TestAgentNameOverrideGuardAndExport pins the guard request and the exported
+// generation to one resolved name. A rule scoped to a per-run name only matches
+// that run when the two paths agree.
+func TestAgentNameOverrideGuardAndExport(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{name: "unset keeps the product name", want: mapper.AgentName},
+		{name: "preferred spelling", env: map[string]string{"AGENTO11Y_AGENT_NAME": "copilot-e2e"}, want: "copilot-e2e"},
+		{name: "legacy spelling", env: map[string]string{"SIGIL_AGENT_NAME": "legacy-name"}, want: "legacy-name"},
+		{
+			name: "preferred wins over legacy",
+			env: map[string]string{
+				"AGENTO11Y_AGENT_NAME": "preferred-name",
+				"SIGIL_AGENT_NAME":     "legacy-name",
+			},
+			want: "preferred-name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			logger := log.New(io.Discard, "", 0)
+
+			var guardAgents, exportAgents []string
+			var exportProviders []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				if strings.Contains(r.URL.Path, "hooks:evaluate") {
+					var req struct {
+						Context struct {
+							AgentName string `json:"agent_name"`
+						} `json:"context"`
+					}
+					_ = json.Unmarshal(body, &req)
+					guardAgents = append(guardAgents, req.Context.AgentName)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"action":"allow"}`))
+					return
+				}
+				var req struct {
+					Generations []struct {
+						ID        string `json:"id"`
+						AgentName string `json:"agent_name"`
+						Model     struct {
+							Provider string `json:"provider"`
+						} `json:"model"`
+					} `json:"generations"`
+				}
+				_ = json.Unmarshal(body, &req)
+				results := make([]map[string]any, 0, len(req.Generations))
+				for _, g := range req.Generations {
+					exportAgents = append(exportAgents, g.AgentName)
+					exportProviders = append(exportProviders, g.Model.Provider)
+					results = append(results, map[string]any{"generation_id": g.ID, "accepted": true})
+				}
+				w.Header().Set("Content-Type", "application/json")
+				require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"results": results}))
+			}))
+			defer server.Close()
+
+			t.Setenv("SIGIL_ENDPOINT", server.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+			t.Setenv("SIGIL_AUTH_TOKEN", "token")
+			t.Setenv("SIGIL_GUARDS_ENABLED", "true")
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			cfg := config.Load(logger)
+			UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "hello"}, cfg, logger)
+			var stdout bytes.Buffer
+			PreToolUse(context.Background(), &stdout, Payload{
+				HookEventNameJSON: "PreToolUse",
+				SessionIDJSON:     "sess",
+				Timestamp:         []byte(`"2026-05-18T12:00:02Z"`),
+				ToolNameJSON:      "bash",
+				ToolInputJSON:     []byte(`{"cmd":"echo hi"}`),
+			}, cfg, logger)
+			Stop(Payload{HookEventNameJSON: "Stop", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:04Z"`), StopReasonJSON: "end_turn"}, cfg, logger)
+
+			assert.Equal(t, []string{tt.want}, guardAgents, "guard agent names")
+			assert.Equal(t, []string{tt.want}, exportAgents, "exported agent names")
+			// Copilot reports no provider on this fragment, so the mapper
+			// falls back to the product name. The override must not move it.
+			assert.Equal(t, []string{mapper.AgentName}, exportProviders, "exported model providers")
 		})
 	}
 }

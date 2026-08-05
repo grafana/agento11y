@@ -642,3 +642,31 @@ func TestMapFragment_EffectiveVersionStableAcrossToolSubsets(t *testing.T) {
 		t.Fatalf("Start.EffectiveVersion %q != Generation.EffectiveVersion %q", gotA.Start.EffectiveVersion, gotA.Generation.EffectiveVersion)
 	}
 }
+
+// TestMapFragmentAgentNameOverride pins the exported identity against
+// Inputs.AgentName on both the start and the generation.
+func TestMapFragmentAgentNameOverride(t *testing.T) {
+	tests := []struct {
+		name      string
+		agentName string
+		want      string
+	}{
+		{name: "blank keeps the product name", want: AgentName},
+		{name: "override", agentName: "cursor-e2e", want: "cursor-e2e"},
+		{name: "override is trimmed", agentName: "  spaced  ", want: "spaced"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MapFragment(Inputs{
+				Fragment:       basicFragment(t),
+				AgentName:      tt.agentName,
+				ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+				Now:            fixedTime,
+			})
+			if got.Generation.AgentName != tt.want || got.Start.AgentName != tt.want {
+				t.Fatalf("AgentName = %q/%q, want %q", got.Start.AgentName, got.Generation.AgentName, tt.want)
+			}
+		})
+	}
+}

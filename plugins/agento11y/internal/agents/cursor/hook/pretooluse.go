@@ -7,7 +7,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
@@ -29,9 +29,9 @@ type preToolUseResponse struct {
 // transport, credential, fail-open/closed, and transform-extraction
 // behaviour lives in the shared guard helper so this stays in lockstep with
 // the other agents.
-func PreToolUse(ctx context.Context, p Payload, stdout io.Writer, logger *log.Logger) {
+func PreToolUse(ctx context.Context, p Payload, cfg config.Config, stdout io.Writer, logger *log.Logger) {
 	res := guard.EvaluateToolCall(ctx, envconfig.ResolveGuards(logger), guard.ToolCallInput{
-		AgentName:     mapper.AgentName,
+		AgentName:     cfg.Agent(),
 		AgentVersion:  strings.TrimSpace(p.CursorVersion),
 		ModelProvider: strings.TrimSpace(p.Provider),
 		ModelName:     strings.TrimSpace(p.Model),

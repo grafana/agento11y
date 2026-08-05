@@ -92,7 +92,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	case "beforeSubmitPrompt":
 		hook.BeforeSubmit(payload, cfg, logger)
 	case "preToolUse":
-		hook.PreToolUse(ctx, payload, stdout, logger)
+		hook.PreToolUse(ctx, payload, cfg, stdout, logger)
 		preToolUseHandled = true
 	case "afterAgentResponse":
 		hook.AfterAgentResponse(payload, cfg, logger)

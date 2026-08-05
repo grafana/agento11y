@@ -61,10 +61,12 @@ const ForwardMarkerHeader = "X-Agento11y-Local-Forwarded"
 // series.
 const otelInstancePrefix = "agento11y-history-import-"
 
-// LiveAgentName returns the AgentName a live adapter emits for an agent. The
-// registered IDs are already the live names, so an imported generation carries
-// the same agent identity as a live one. An importer that produces a more
-// specific name, such as "codex/subagent", keeps it; this is only the default.
+// LiveAgentName returns the product name a live adapter emits for an agent. The
+// registered IDs are already those names, so an imported generation carries the
+// same identity as a live run that did not rename itself. A live run started
+// with AGENTO11Y_AGENT_NAME exports under that name instead, and a backfill
+// cannot reconstruct it. An importer that produces a more specific name, such
+// as "codex/subagent", keeps it; this is only the default.
 func LiveAgentName(id AgentID) string { return string(id) }
 
 // Exporter turns normalized historical generations into backdated generation

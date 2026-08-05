@@ -17,6 +17,10 @@ import (
 
 var errGitHubCopilot = errors.New("copilot_error")
 
+// AgentName is the default agent identity this adapter reports. It is also the
+// last-resort model provider, used when Copilot reports none and none can be
+// inferred from the model name. AGENTO11Y_AGENT_NAME overrides the identity per
+// run through Inputs.AgentName; the provider is a product fact and never moves.
 const AgentName = "copilot"
 
 type Inputs struct {
@@ -24,7 +28,18 @@ type Inputs struct {
 	Session        *fragment.Session
 	ContentCapture agento11y.ContentCaptureMode
 	UserIDOverride string
-	Now            time.Time
+	// AgentName overrides the exported agent identity. Blank means "copilot".
+	AgentName string
+	Now       time.Time
+}
+
+// agent is the agent name for this generation: the caller's override, or the
+// product name when none was given.
+func (in Inputs) agent() string {
+	if n := strings.TrimSpace(in.AgentName); n != "" {
+		return n
+	}
+	return AgentName
 }
 
 type Mapped struct {
@@ -67,6 +82,8 @@ func Map(in Inputs) Mapped {
 		"copilot.transcript_path_present":  strings.TrimSpace(frag.TranscriptPath) != "",
 	}
 	if model.Provider == "" {
+		// The product, not the session: an agent-name override must not rewrite
+		// the provider a dashboard groups models by.
 		model.Provider = AgentName
 	}
 	if model.Name == "" {
@@ -137,7 +154,7 @@ func Map(in Inputs) Mapped {
 		ID:             GenerationID(frag.SessionID, frag.TurnID),
 		ConversationID: frag.SessionID,
 		UserID:         strings.TrimSpace(in.UserIDOverride),
-		AgentName:      AgentName,
+		AgentName:      in.agent(),
 		AgentVersion:   strings.TrimSpace(frag.AgentVersion),
 		Mode:           agento11y.GenerationModeSync,
 		OperationName:  "generateText",
@@ -153,7 +170,7 @@ func Map(in Inputs) Mapped {
 		ID:             GenerationID(frag.SessionID, frag.TurnID),
 		ConversationID: frag.SessionID,
 		UserID:         strings.TrimSpace(in.UserIDOverride),
-		AgentName:      AgentName,
+		AgentName:      in.agent(),
 		AgentVersion:   strings.TrimSpace(frag.AgentVersion),
 		Mode:           agento11y.GenerationModeSync,
 		OperationName:  "generateText",

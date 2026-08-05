@@ -296,6 +296,58 @@ func mapLookup(env map[string]string) Lookup {
 	}
 }
 
+// TestResolveAgentName covers the precedence between the two spellings and the
+// fall-back to the adapter's product name. A blank value must not become the
+// exported agent_name, otherwise a stray empty variable silently unnames every
+// generation.
+func TestResolveAgentName(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{name: "unset keeps the default", want: "claude-code"},
+		{name: "preferred spelling", env: map[string]string{"AGENTO11Y_AGENT_NAME": "claude-code-e2e"}, want: "claude-code-e2e"},
+		{name: "legacy spelling", env: map[string]string{"SIGIL_AGENT_NAME": "legacy-name"}, want: "legacy-name"},
+		{
+			name: "preferred wins over legacy",
+			env: map[string]string{
+				"AGENTO11Y_AGENT_NAME": "preferred-name",
+				"SIGIL_AGENT_NAME":     "legacy-name",
+			},
+			want: "preferred-name",
+		},
+		{
+			name: "blank preferred falls through to legacy",
+			env: map[string]string{
+				"AGENTO11Y_AGENT_NAME": "   ",
+				"SIGIL_AGENT_NAME":     "legacy-name",
+			},
+			want: "legacy-name",
+		},
+		{
+			name: "both blank keeps the default",
+			env: map[string]string{
+				"AGENTO11Y_AGENT_NAME": " ",
+				"SIGIL_AGENT_NAME":     "",
+			},
+			want: "claude-code",
+		},
+		{name: "value is trimmed", env: map[string]string{"AGENTO11Y_AGENT_NAME": "  spaced  "}, want: "spaced"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			PinAliasEnvBlank(t)
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			if got := ResolveAgentName("claude-code"); got != tt.want {
+				t.Errorf("ResolveAgentName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestResolveContentMode covers the process-env wrapper: which spelling supplies
 // the mode, which is the one thing the value-level table below cannot reach.
 func TestResolveContentMode(t *testing.T) {

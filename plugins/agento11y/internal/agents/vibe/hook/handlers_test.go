@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -14,13 +15,20 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/state"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 func TestPostAgentTurn_EndToEnd(t *testing.T) {
 	// Drive the handler through a httptest server playing the role of
 	// the Agent Observability export endpoint, then assert the offset and token
 	// snapshot in state were advanced.
+	//
+	// The exported generation is asserted against the product name, so a
+	// developer shell that exports AGENTO11Y_AGENT_NAME must not reach the
+	// handler.
+	envconfig.PinAliasEnvBlank(t)
 	type captured struct {
 		path string
 		body []byte
@@ -326,4 +334,106 @@ func writeAcceptedGenerationResponse(t *testing.T, w http.ResponseWriter, body [
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+}
+
+// TestAgentNameOverrideGuardAndExport pins the guard request and the exported
+// generation to one resolved name. vibe has no config package, so each handler
+// resolves the name for its own invocation; this checks the two agree.
+func TestAgentNameOverrideGuardAndExport(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{name: "unset keeps the product name", want: mapper.AgentName},
+		{name: "preferred spelling", env: map[string]string{"AGENTO11Y_AGENT_NAME": "vibe-e2e"}, want: "vibe-e2e"},
+		{name: "legacy spelling", env: map[string]string{"SIGIL_AGENT_NAME": "legacy-name"}, want: "legacy-name"},
+		{
+			name: "preferred wins over legacy",
+			env: map[string]string{
+				"AGENTO11Y_AGENT_NAME": "preferred-name",
+				"SIGIL_AGENT_NAME":     "legacy-name",
+			},
+			want: "preferred-name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				mu           sync.Mutex
+				guardAgents  []string
+				exportAgents []string
+			)
+			srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				defer mu.Unlock()
+				if strings.Contains(r.URL.Path, "hooks:evaluate") {
+					var req struct {
+						Context struct {
+							AgentName string `json:"agent_name"`
+						} `json:"context"`
+					}
+					_ = json.Unmarshal(body, &req)
+					guardAgents = append(guardAgents, req.Context.AgentName)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"action":"allow"}`))
+					return
+				}
+				var req struct {
+					Generations []struct {
+						AgentName string `json:"agent_name"`
+					} `json:"generations"`
+				}
+				_ = json.Unmarshal(body, &req)
+				for _, g := range req.Generations {
+					exportAgents = append(exportAgents, g.AgentName)
+				}
+				writeAcceptedGenerationResponse(t, w, body)
+			}))
+			t.Cleanup(srv.Close)
+
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			t.Setenv("SIGIL_ENDPOINT", srv.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+			t.Setenv("SIGIL_AUTH_TOKEN", "token")
+			t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
+			t.Setenv("SIGIL_GUARDS_ENABLED", "true")
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			dir := t.TempDir()
+			must(t, copyFile(filepath.Join("..", "testdata", "messages.jsonl"), filepath.Join(dir, "messages.jsonl")))
+			must(t, copyFile(filepath.Join("..", "testdata", "meta.json"), filepath.Join(dir, "meta.json")))
+			tp := filepath.Join(dir, "messages.jsonl")
+
+			logger := log.New(io.Discard, "", 0)
+			var stdout bytes.Buffer
+			BeforeTool(context.Background(), &stdout, Payload{
+				HookEventName:   "before_tool",
+				SessionID:       "sess-agent-name",
+				ToolNameValue:   "shell",
+				ToolCallIDValue: "call-1",
+				ToolInputValue:  json.RawMessage(`{"command":"echo hi"}`),
+			}, logger)
+			PostAgentTurn(context.Background(), Payload{
+				HookEventName:  "post_agent_turn",
+				SessionID:      "sess-agent-name",
+				TranscriptPath: tp,
+			}, logger)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if len(guardAgents) != 1 || guardAgents[0] != tt.want {
+				t.Fatalf("guard agent names = %v, want [%q]", guardAgents, tt.want)
+			}
+			if len(exportAgents) != 1 || exportAgents[0] != tt.want {
+				t.Fatalf("exported agent names = %v, want [%q]", exportAgents, tt.want)
+			}
+		})
+	}
 }

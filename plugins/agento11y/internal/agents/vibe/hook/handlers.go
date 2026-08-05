@@ -128,6 +128,7 @@ func PostAgentTurn(ctx context.Context, p Payload, logger *log.Logger) {
 		PriorState:         prior,
 		PriorStateFound:    priorFound,
 		ContentCapture:     contentMode,
+		AgentName:          envconfig.ResolveAgentName(mapper.AgentName),
 	}, turnSeq)
 
 	// Persist the advanced offset and session snapshot BEFORE exporting. A

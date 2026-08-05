@@ -94,6 +94,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		Stop:           &mapper.StopInput{Status: p.Status, Error: frag.PendingStop.Error},
 		ContentCapture: cfg.ContentCapture,
 		UserIDOverride: cfg.UserIDOverride,
+		AgentName:      cfg.Agent(),
 		Now:            time.Now(),
 	})
 

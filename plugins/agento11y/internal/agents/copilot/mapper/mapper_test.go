@@ -238,3 +238,40 @@ func TestMapDoesNotSetConversationTitle(t *testing.T) {
 		t.Fatalf("Generation.ConversationTitle = %q", got.Generation.ConversationTitle)
 	}
 }
+
+// TestMapAgentNameOverride pins the exported identity against Inputs.AgentName
+// and holds the model provider fallback still. Copilot reuses the product name
+// for both, so a single literal used to decide them together.
+func TestMapAgentNameOverride(t *testing.T) {
+	tests := []struct {
+		name      string
+		agentName string
+		want      string
+	}{
+		{name: "blank keeps the product name", want: AgentName},
+		{name: "override", agentName: "copilot-e2e", want: "copilot-e2e"},
+		{name: "override is trimmed", agentName: "  spaced  ", want: "spaced"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			frag := basicFragment()
+			// No provider reported, so the mapper falls back to the product
+			// name. That fallback is what must not follow the override.
+			frag.Provider = ""
+			frag.Model = ""
+			got := Map(Inputs{
+				Fragment:       frag,
+				AgentName:      tt.agentName,
+				ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+				Now:            fixedTime,
+			})
+			if got.Generation.AgentName != tt.want || got.Start.AgentName != tt.want {
+				t.Fatalf("AgentName = %q/%q, want %q", got.Start.AgentName, got.Generation.AgentName, tt.want)
+			}
+			if got.Generation.Model.Provider != AgentName {
+				t.Fatalf("Model.Provider = %q, want %q", got.Generation.Model.Provider, AgentName)
+			}
+		})
+	}
+}

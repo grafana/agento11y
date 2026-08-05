@@ -115,6 +115,7 @@ func emitOneStranded(
 		Stop:           stop,
 		ContentCapture: cfg.ContentCapture,
 		UserIDOverride: cfg.UserIDOverride,
+		AgentName:      cfg.Agent(),
 		Now:            time.Now(),
 	})
 

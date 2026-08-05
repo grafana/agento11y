@@ -25,7 +25,9 @@ import (
 
 var errCursorStop = errors.New("cursor_stop_error")
 
-// AgentName is the value reported as `agent_name` on every emitted generation.
+// AgentName is the default value reported as `agent_name` on every emitted
+// generation. AGENTO11Y_AGENT_NAME overrides it per run through
+// Inputs.AgentName.
 const AgentName = "cursor"
 
 // StopStatus is the normalized stop reason ("completed" / "aborted" / "error").
@@ -55,7 +57,18 @@ type Inputs struct {
 	Stop           *StopInput
 	ContentCapture agento11y.ContentCaptureMode
 	UserIDOverride string
-	Now            time.Time
+	// AgentName overrides the exported agent identity. Blank means "cursor".
+	AgentName string
+	Now       time.Time
+}
+
+// agent is the agent name for this generation: the caller's override, or the
+// product name when none was given.
+func (in Inputs) agent() string {
+	if n := strings.TrimSpace(in.AgentName); n != "" {
+		return n
+	}
+	return AgentName
 }
 
 // Mapped is the mapper's output: the start seed, the full Generation for the
@@ -133,7 +146,7 @@ func MapFragment(in Inputs) Mapped {
 		ConversationID:    frag.ConversationID,
 		ConversationTitle: conversationTitle,
 		UserID:            uid,
-		AgentName:         AgentName,
+		AgentName:         in.agent(),
 		AgentVersion:      cursorVersion,
 		EffectiveVersion:  cursorVersion,
 		Mode:              agento11y.GenerationModeSync,
@@ -153,7 +166,7 @@ func MapFragment(in Inputs) Mapped {
 		ConversationID:    frag.ConversationID,
 		ConversationTitle: conversationTitle,
 		UserID:            uid,
-		AgentName:         AgentName,
+		AgentName:         in.agent(),
 		AgentVersion:      cursorVersion,
 		EffectiveVersion:  cursorVersion,
 		Mode:              agento11y.GenerationModeSync,

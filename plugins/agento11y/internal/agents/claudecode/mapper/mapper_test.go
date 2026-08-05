@@ -1501,11 +1501,22 @@ func TestProcess_SidechainAgentName(t *testing.T) {
 		name             string
 		sidechain        bool
 		attributionAgent string
-		want             string
+		// agentName is Options.AgentName: the caller's per-run override, blank
+		// for the default.
+		agentName string
+		want      string
 	}{
 		{name: "main thread", want: "claude-code"},
 		{name: "sidechain with a type", sidechain: true, attributionAgent: "General-Purpose", want: "claude-code/general-purpose"},
 		{name: "sidechain without a type", sidechain: true, want: "claude-code"},
+		{name: "override on the main thread", agentName: "claude-code-e2e", want: "claude-code-e2e"},
+		{
+			name: "override on a sidechain keeps the suffix", sidechain: true,
+			attributionAgent: "General-Purpose", agentName: "claude-code-e2e",
+			want: "claude-code-e2e/general-purpose",
+		},
+		{name: "override is trimmed", agentName: "  spaced  ", want: "spaced"},
+		{name: "blank override keeps the default", agentName: "   ", want: "claude-code"},
 	}
 
 	for _, tt := range tests {
@@ -1516,7 +1527,8 @@ func TestProcess_SidechainAgentName(t *testing.T) {
 			line.IsSidechain = tt.sidechain
 			line.AttributionAgent = tt.attributionAgent
 
-			gens, _ := Process([]transcript.Line{makeUserLine("go"), line}, &state.Session{}, Options{SessionID: "sess-1"}, nil)
+			gens, _ := Process([]transcript.Line{makeUserLine("go"), line}, &state.Session{},
+				Options{SessionID: "sess-1", AgentName: tt.agentName}, nil)
 			if len(gens) != 1 {
 				t.Fatalf("got %d generations, want 1", len(gens))
 			}
@@ -1543,18 +1555,26 @@ func TestProcess_SuppressSyntheticSubagentToolCallIDs(t *testing.T) {
 	tests := []struct {
 		name      string
 		suppress  map[string]bool
+		agentName string
 		wantGens  int
 		wantAgent string
 	}{
 		{name: "live capture keeps the summary", wantGens: 2, wantAgent: "claude-code/explorer"},
 		{name: "import suppresses the summary", suppress: map[string]bool{"tu_agent": true}, wantGens: 1},
 		{name: "an unrelated id suppresses nothing", suppress: map[string]bool{"tu_other": true}, wantGens: 2, wantAgent: "claude-code/explorer"},
+		{
+			// The synthesised subagent generation is a second copy of the name
+			// literal, so it needs its own case.
+			name: "override renames the synthesised subagent", agentName: "claude-code-e2e",
+			wantGens: 2, wantAgent: "claude-code-e2e/explorer",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			gens, _ := Process(lines, &state.Session{}, Options{
 				SessionID:                            "sess-1",
+				AgentName:                            tt.agentName,
 				SuppressSyntheticSubagentToolCallIDs: tt.suppress,
 			}, nil)
 			if len(gens) != tt.wantGens {

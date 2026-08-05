@@ -15,6 +15,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 // claudeLine builds one transcript JSONL line.
@@ -933,4 +934,31 @@ func claudeSpawnTurnID(t *testing.T, turns []HistoricalGeneration, sessionID str
 		t.Fatal("no generation with an Agent tool call")
 	}
 	return id
+}
+
+// TestClaudeImportIgnoresTheAgentNameOverride pins backfill to the product
+// name. A backfill cannot reconstruct the environment a past session ran under.
+// claudeFinalizeSubagentGens also renames a subagent transcript's own
+// generations only when they still carry the product name, so honouring the
+// variable here would leave a subagent run named like a main one.
+func TestClaudeImportIgnoresTheAgentNameOverride(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_AGENT_NAME", "claude-code-e2e")
+
+	root := t.TempDir()
+	path := writeClaudeSession(t, root, "-work-repo", "sess-import")
+	imp := claudeImporterAt(root)
+	preview, ok, err := imp.Preview(context.Background(), path)
+	if err != nil || !ok {
+		t.Fatalf("Preview: ok=%v err=%v", ok, err)
+	}
+	turns := collectTurns(t, imp, preview)
+	if len(turns) == 0 {
+		t.Fatal("no turns imported")
+	}
+	for i, turn := range turns {
+		if turn.Gen.AgentName != string(AgentClaudeCode) {
+			t.Errorf("turn %d AgentName = %q, want %q", i, turn.Gen.AgentName, AgentClaudeCode)
+		}
+	}
 }
