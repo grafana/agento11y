@@ -5,13 +5,34 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .models import TokenUsage
+from .models import TokenInputSemantics, TokenUsage
 
 
 def from_anthropic(raw: Any) -> TokenUsage:
-    """Extract usage from Anthropic's flat field layout."""
+    """Extract usage from Anthropic's flat field layout.
+
+    Anthropic reports ``input_tokens`` exclusive of both cache buckets. The
+    OTel GenAI Anthropic rule requires summing them into the inclusive
+    ``input_tokens`` this SDK emits, so this extractor normalizes up and
+    marks the result. Only call it for payloads positively identified as
+    Anthropic; guessed flat shapes go through ``map_usage``'s raw fallback.
+    """
     if raw is None:
         return TokenUsage()
+    flat = _flat_raw_usage(raw)
+    input_tokens = flat.input_tokens + flat.cache_read_input_tokens + flat.cache_write_input_tokens
+    return TokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=flat.output_tokens,
+        total_tokens=flat.total_tokens,
+        cache_read_input_tokens=flat.cache_read_input_tokens,
+        cache_write_input_tokens=flat.cache_write_input_tokens,
+        input_semantics=TokenInputSemantics.INCLUSIVE,
+    ).normalize()
+
+
+def _flat_raw_usage(raw: Any) -> TokenUsage:
+    """Read Anthropic-named flat keys verbatim: no normalization, no marker."""
     cache_write_raw = _read(raw, "cache_write_input_tokens")
     cache_write = (
         _as_int(cache_write_raw)
@@ -26,7 +47,7 @@ def from_anthropic(raw: Any) -> TokenUsage:
         total_tokens=_as_int(_read(raw, "total_tokens")),
         cache_read_input_tokens=_as_int(_read(raw, "cache_read_input_tokens")),
         cache_write_input_tokens=cache_write,
-    ).normalize()
+    )
 
 
 def from_openai_chat(raw: Any) -> TokenUsage:
@@ -46,6 +67,8 @@ def from_openai_chat(raw: Any) -> TokenUsage:
         reasoning_tokens=_as_int(
             _read(_read(raw, "completion_tokens_details"), "reasoning_tokens"),
         ),
+        # prompt_tokens already includes cached tokens: inclusive as-is.
+        input_semantics=TokenInputSemantics.INCLUSIVE,
     ).normalize()
 
 
@@ -63,6 +86,8 @@ def from_openai_responses(raw: Any) -> TokenUsage:
         reasoning_tokens=_as_int(
             _read(_read(raw, "output_tokens_details"), "reasoning_tokens"),
         ),
+        # input_tokens already includes cached tokens: inclusive as-is.
+        input_semantics=TokenInputSemantics.INCLUSIVE,
     ).normalize()
 
 
@@ -97,6 +122,7 @@ def from_gemini(raw: Any) -> TokenUsage:
         cache_read_input_tokens=_as_int(_read(raw, "cached_content_token_count")),
         cache_write_input_tokens=cache_write,
         reasoning_tokens=reasoning_tokens,
+        input_semantics=TokenInputSemantics.INCLUSIVE,
     )
 
 
@@ -151,7 +177,11 @@ def map_usage(raw: Any) -> TokenUsage:
         return from_openai_responses(raw)
 
     if _read(raw, "input_tokens") is not None:
-        return from_anthropic(raw)
+        # A flat input_tokens key is a guess, not a verified Anthropic payload:
+        # an unknown provider could already report inclusively, so neither the
+        # Anthropic sum-up nor the marker may be applied here. Provider-raw,
+        # UNSPECIFIED semantics; consumers fall back to provider heuristics.
+        return _flat_raw_usage(raw).normalize()
 
     return from_generic(raw)
 

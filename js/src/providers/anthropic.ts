@@ -402,11 +402,18 @@ function mapAnthropicUsage(rawUsage: unknown): TokenUsage | undefined {
     return undefined;
   }
 
-  const inputTokens = readIntFromAny(rawUsage.input_tokens);
+  const rawInputTokens = readIntFromAny(rawUsage.input_tokens);
   const outputTokens = readIntFromAny(rawUsage.output_tokens);
   const totalTokens = readIntFromAny(rawUsage.total_tokens);
   const cacheReadInputTokens = readIntFromAny(rawUsage.cache_read_input_tokens);
   const cacheWriteInputTokens = readIntFromAny(rawUsage.cache_creation_input_tokens);
+  // Anthropic reports input_tokens exclusive of both cache buckets. The OTel
+  // GenAI Anthropic rule requires summing them into the inclusive
+  // input_tokens this SDK emits.
+  const inputTokens =
+    rawInputTokens !== undefined || cacheReadInputTokens !== undefined || cacheWriteInputTokens !== undefined
+      ? (rawInputTokens ?? 0) + (cacheReadInputTokens ?? 0) + (cacheWriteInputTokens ?? 0)
+      : undefined;
 
   const out: TokenUsage = {};
   if (inputTokens !== undefined) {
@@ -426,8 +433,12 @@ function mapAnthropicUsage(rawUsage: unknown): TokenUsage | undefined {
   if (cacheWriteInputTokens !== undefined) {
     out.cacheWriteInputTokens = cacheWriteInputTokens;
   }
+  if (Object.keys(out).length === 0) {
+    return undefined;
+  }
+  out.inputSemantics = 'inclusive';
 
-  return Object.keys(out).length > 0 ? out : undefined;
+  return out;
 }
 
 function anthropicUsageMetadata(rawUsage: unknown): Record<string, unknown> | undefined {

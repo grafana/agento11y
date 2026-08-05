@@ -1001,6 +1001,7 @@ public static class OpenAIGenerationMapper
             return new TokenUsage();
         }
 
+        // OpenAI token totals already include cached tokens: inclusive as-is.
         var mapped = new TokenUsage
         {
             InputTokens = usage.InputTokenCount,
@@ -1008,6 +1009,7 @@ public static class OpenAIGenerationMapper
             TotalTokens = usage.TotalTokenCount,
             CacheReadInputTokens = usage.InputTokenDetails?.CachedTokenCount ?? 0,
             ReasoningTokens = usage.OutputTokenDetails?.ReasoningTokenCount ?? 0,
+            InputSemantics = TokenInputSemantics.Inclusive,
         };
         if (mapped.TotalTokens == 0)
         {
@@ -1406,6 +1408,7 @@ public static class OpenAIGenerationMapper
             return new TokenUsage();
         }
 
+        // OpenAI token totals already include cached tokens: inclusive as-is.
         var mapped = new TokenUsage
         {
             InputTokens = usage.InputTokenCount,
@@ -1413,6 +1416,7 @@ public static class OpenAIGenerationMapper
             TotalTokens = usage.TotalTokenCount,
             CacheReadInputTokens = usage.InputTokenDetails?.CachedTokenCount ?? 0,
             ReasoningTokens = usage.OutputTokenDetails?.ReasoningTokenCount ?? 0,
+            InputSemantics = TokenInputSemantics.Inclusive,
         };
 
         if (mapped.TotalTokens == 0)

@@ -713,6 +713,39 @@ test('provider wrappers surface mapper failures when provider payloads are missi
   }
 });
 
+test('anthropic usage sums cache buckets into inclusive input and marks semantics', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    await anthropic.messages.create(
+      client,
+      {
+        model: 'claude-sonnet-4-5',
+        max_tokens: 64,
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      },
+      async () => ({
+        id: 'msg_inclusive',
+        model: 'claude-sonnet-4-5',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'ok' }],
+        usage: {
+          input_tokens: 100,
+          output_tokens: 20,
+          cache_read_input_tokens: 30,
+          cache_creation_input_tokens: 10,
+        },
+      }),
+    );
+  });
+
+  // OTel GenAI Anthropic rule: input sums the additive buckets up
+  // (100 + 30 + 10); total = input + output.
+  assert.equal(generation.usage.inputTokens, 140);
+  assert.equal(generation.usage.cacheReadInputTokens, 30);
+  assert.equal(generation.usage.cacheWriteInputTokens, 10);
+  assert.equal(generation.usage.totalTokens, 160);
+  assert.equal(generation.usage.inputSemantics, 'inclusive');
+});
+
 test('anthropic provider namespace explicitly has no embeddings surface', () => {
   assert.ok(anthropic.messages);
   assert.equal(anthropic.embeddings, undefined);

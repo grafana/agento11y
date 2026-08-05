@@ -537,12 +537,16 @@ public final class GeminiAdapter {
             total = input + output + toolUsePrompt + reasoning;
         }
 
+        // promptTokenCount already includes cachedContentTokenCount: inclusive
+        // as-is. tool_use_prompt handling stays unchanged pending the open
+        // contract decision (see the rollout plan).
         return new TokenUsage()
                 .setInputTokens(input)
                 .setOutputTokens(output)
                 .setTotalTokens(total)
                 .setCacheReadInputTokens(cacheRead)
-                .setReasoningTokens(reasoning);
+                .setReasoningTokens(reasoning)
+                .setInputSemantics(TokenUsage.TokenInputSemantics.INCLUSIVE);
     }
 
     private static String normalizeStopReason(Map<String, Object> responsePayload) {

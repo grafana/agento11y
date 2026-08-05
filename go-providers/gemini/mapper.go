@@ -327,12 +327,16 @@ func mapUsage(usage *genai.GenerateContentResponseUsageMetadata) agento11y.Token
 		totalTokens = int64(usage.PromptTokenCount) + int64(usage.CandidatesTokenCount) + toolUsePromptTokens + reasoningTokens
 	}
 
+	// Gemini's promptTokenCount already includes cachedContentTokenCount,
+	// which is the inclusive contract as-is. tool_use_prompt tokens stay out
+	// of input pending the open contract decision (see the rollout plan).
 	return agento11y.TokenUsage{
 		InputTokens:          int64(usage.PromptTokenCount),
 		OutputTokens:         int64(usage.CandidatesTokenCount),
 		TotalTokens:          totalTokens,
 		CacheReadInputTokens: int64(usage.CachedContentTokenCount),
 		ReasoningTokens:      reasoningTokens,
+		InputSemantics:       agento11y.TokenInputSemanticsInclusive,
 	}
 }
 
