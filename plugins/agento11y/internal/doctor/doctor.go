@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/grafana/agento11y/go/proto/agento11y/wire"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
@@ -53,6 +54,12 @@ const (
 	sourceConfig = "config.env"
 )
 
+// agentUserPlaceholder stands in for the auto-tag `user` value when USER_ID is
+// unset. Doctor runs outside a session, so it cannot read the account a host
+// agent signs in to, and printing the operating-system account name would name
+// one possible outcome as the value.
+const agentUserPlaceholder = "<depends on the agent>"
+
 // trackedSuffixes are the branded alias families doctor attributes to a
 // source (OS env vs config.env) under both their AGENTO11Y_* and SIGIL_*
 // spellings. SnapshotEnv records their OS-env values before dotenv merge so
@@ -67,6 +74,11 @@ var trackedSuffixes = []string{
 	"CONTENT_CAPTURE_MODE",
 	"AGENT_NAME",
 	"TAGS",
+	envconfig.AutoTagsSuffix,
+	envconfig.AutoTagNamesSuffix,
+	// USER_ID is read for the auto-tag `user` value only, so the report shows
+	// the same identity the hooks resolve.
+	"USER_ID",
 	"AUTO_UPDATE",
 	"LOCAL",
 	"LOCAL_FORWARD",
@@ -183,6 +195,31 @@ type ConfigSection struct {
 	Tags            map[string]string `json:"tags,omitempty"`
 	TagsKey         string            `json:"tags_key,omitempty"`
 	TagsSource      string            `json:"tags_source,omitempty"`
+	// AutoTags are the client tags the AUTO_CODING_AGENT_TAGS family produces in
+	// the directory doctor runs in, keyed by the tag key they are attached under.
+	// Every one becomes a Prometheus label, and the user value is commonly an
+	// email address, so the report prints them before they leave the machine. A
+	// name listed in AutoTagShadowed or AutoTagUnresolved has no entry here.
+	AutoTags map[string]string `json:"auto_tags,omitempty"`
+	// AutoTagNames are the enabled names in AutoTagOrder, so the report can say
+	// the switch is on even when nothing resolved.
+	AutoTagNames []string `json:"auto_tag_names,omitempty"`
+	// AutoTagUnresolved are enabled names that produced no value here (no git
+	// checkout, no account name). Their tag is omitted from the export.
+	AutoTagUnresolved []string `json:"auto_tag_unresolved,omitempty"`
+	// AutoTagShadowed are enabled names whose tag key the TAGS family already
+	// defines. The explicit tag wins, so the resolved value is not exported.
+	AutoTagShadowed []string `json:"auto_tag_shadowed,omitempty"`
+	// AutoTagUnknown are entries in the allowlist that name no supported value.
+	// The hooks log and skip them.
+	AutoTagUnknown []string `json:"auto_tag_unknown,omitempty"`
+	// AutoTagsKey and AutoTagsSource attribute the on/off switch.
+	// AutoTagNamesKey and AutoTagNamesSource attribute the allowlist that
+	// narrowed the switch, and are empty when the session takes every name.
+	AutoTagsKey        string `json:"auto_tags_key,omitempty"`
+	AutoTagsSource     string `json:"auto_tags_source,omitempty"`
+	AutoTagNamesKey    string `json:"auto_tag_names_key,omitempty"`
+	AutoTagNamesSource string `json:"auto_tag_names_source,omitempty"`
 	// Local is the resolved LOCAL family: whether `agento11y <agent>` starts in
 	// local mode without --local, and where the value came from.
 	Local envValue `json:"local"`
@@ -762,6 +799,64 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 		}
 	}
 
+	// AUTO_CODING_AGENT_TAGS resolves the session's user, repository, and branch
+	// and attaches them as client tags, which become metric labels. The values
+	// are resolved here, in the directory doctor runs in, so a user can read the
+	// exact strings — a work email, a private repository name — before enabling
+	// the switch for real sessions.
+	//
+	// The same pre-merge snapshot every other row is attributed with backs the
+	// lookup, so the switch, the allowlist, the reported user, and the explicit
+	// tags all match what the hooks read.
+	snapshotLookup := func(suffix string) (value, key string, ok bool) {
+		r := resolveFamily(suffix, osEnv, fileEnv)
+		return r.value, r.key, r.set
+	}
+	autoTags := resolveFamily(envconfig.AutoTagsSuffix, osEnv, fileEnv)
+	autoTagNames := resolveFamily(envconfig.AutoTagNamesSuffix, osEnv, fileEnv)
+	userID := resolveFamily("USER_ID", osEnv, fileEnv)
+	// A switch value that is not a boolean leaves the mechanism off, so name the
+	// variable to fix rather than reporting silence.
+	_, autoTagsValid := envconfig.ParseBoolValue(autoTags.value)
+	autoSel := autotag.Select(snapshotLookup, nil)
+	sec.AutoTagUnknown = autoSel.Unknown
+	if len(autoSel.Enabled) > 0 {
+		sec.AutoTagsKey = autoTags.key
+		sec.AutoTagsSource = autoTags.source
+		if autoSel.NamesSet {
+			sec.AutoTagNamesKey = autoTagNames.key
+			sec.AutoTagNamesSource = autoTagNames.source
+		}
+		// `user` is the one name doctor cannot resolve the way a session will.
+		// With USER_ID unset, Claude Code and Cursor attach the account they are
+		// signed in to, which doctor has no hook payload to read, and only an
+		// agent that supplies no identity falls back to the operating-system
+		// account name. Feeding a placeholder through the same tier the adapters
+		// fill keeps the row from presenting one of those outcomes as the value;
+		// the message below names both.
+		in := autotag.Inputs{Lookup: snapshotLookup}
+		if !userID.set {
+			in.UserID = agentUserPlaceholder
+		}
+		res := autotag.Describe(autoSel.Enabled, in)
+		// The row reports the tags that reach the client, so a shadowed name
+		// shows no value: the explicit tag supplies it, and the message below
+		// says so.
+		sec.AutoTags = res.Tags
+		for _, name := range envconfig.AutoTagOrder {
+			if !autoSel.Enabled[name] {
+				continue
+			}
+			sec.AutoTagNames = append(sec.AutoTagNames, string(name))
+			if _, ok := res.Values[name]; !ok {
+				sec.AutoTagUnresolved = append(sec.AutoTagUnresolved, string(name))
+			}
+		}
+		for _, name := range res.Shadowed {
+			sec.AutoTagShadowed = append(sec.AutoTagShadowed, string(name))
+		}
+	}
+
 	// LOCAL turns every launcher run into a local session, so report the
 	// effective value and where it came from.
 	localMode := resolveFamily("LOCAL", osEnv, fileEnv)
@@ -830,6 +925,58 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	if tags.legacyWon() {
 		sec.Messages = append(sec.Messages,
 			"tags set via legacy SIGIL_TAGS — this keeps working, but the preferred name is AGENTO11Y_TAGS")
+	}
+	// The auto-tag row lists what resolved. These messages cover what did not,
+	// which the row cannot show: an allowlist entry the parser rejected, an
+	// allowlist that turns nothing on, a list set while the switch is off, a name
+	// that found no value in this directory, and a name an explicit tag
+	// overrides.
+	if len(sec.AutoTagUnknown) > 0 {
+		sec.Health = HealthWarn
+		sec.Messages = append(sec.Messages, fmt.Sprintf(
+			"%s has unsupported names %s; supported: %s",
+			autoTagNames.key, strings.Join(sec.AutoTagUnknown, ", "), autotag.SupportedNames()))
+	}
+	if autoSel.On && len(autoSel.Enabled) == 0 {
+		sec.Health = HealthWarn
+		sec.Messages = append(sec.Messages, fmt.Sprintf(
+			"%s names no supported value, so no automatic tags are attached", autoTagNames.key))
+	}
+	if !autoSel.On && autoSel.NamesSet {
+		sec.Health = HealthWarn
+		sec.Messages = append(sec.Messages, fmt.Sprintf(
+			"%s is set but %s is off, so no automatic tags are attached",
+			autoTagNames.key, envconfig.PreferredKey(envconfig.AutoTagsSuffix)))
+	}
+	if autoTags.set && !autoTagsValid {
+		sec.Health = HealthWarn
+		sec.Messages = append(sec.Messages, fmt.Sprintf(
+			"the %s value is not a boolean; automatic tags stay off, and the names go in %s",
+			autoTags.key, envconfig.PreferredKey(envconfig.AutoTagNamesSuffix)))
+	}
+	if len(sec.AutoTagUnresolved) > 0 {
+		sec.Messages = append(sec.Messages, fmt.Sprintf(
+			"these auto tags resolved no value in this directory and are left off: %s",
+			strings.Join(sec.AutoTagUnresolved, ", ")))
+	}
+	if len(sec.AutoTagShadowed) > 0 {
+		sec.Messages = append(sec.Messages, fmt.Sprintf(
+			"these auto tags are also set in %s, which wins: %s",
+			tags.key, strings.Join(sec.AutoTagShadowed, ", ")))
+	}
+	// The placeholder is only in the row when `user` is enabled, USER_ID is
+	// unset, and no explicit tag shadows the name, which is exactly when the
+	// value the session attaches depends on which agent runs it.
+	if sec.AutoTags[autotag.KeyUser] == agentUserPlaceholder {
+		sec.Messages = append(sec.Messages, fmt.Sprintf(
+			"the auto tag user depends on the coding agent: Claude Code and Cursor attach the account they are signed in to, and the others attach the operating-system account name; set %s to pin one value",
+			envconfig.PreferredKey("USER_ID")))
+	}
+	if autoTags.conflict {
+		sec.Messages = append(sec.Messages, conflictMessage(autoTags))
+	}
+	if autoTagNames.conflict {
+		sec.Messages = append(sec.Messages, conflictMessage(autoTagNames))
 	}
 	if forward.set && forward.source == sourceEnv && strings.TrimSpace(fileEnv[envconfig.PreferredKey("LOCAL_FORWARD")]+fileEnv[envconfig.LegacyKey("LOCAL_FORWARD")]) != "" {
 		sec.Messages = append(sec.Messages, fmt.Sprintf(

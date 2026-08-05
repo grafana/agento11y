@@ -1,8 +1,16 @@
 package emit
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 func TestExportEndpoint(t *testing.T) {
@@ -54,6 +62,77 @@ func TestNewClientUsesSDKEnvResolution(t *testing.T) {
 		t.Fatal("NewClient returned nil")
 	}
 	_ = client.Shutdown(t.Context())
+}
+
+// TestNewClientAppliesClientTags proves the ClientOptions.Tags wiring end to
+// end: the tags an adapter passes reach agento11y.Config.Tags, so the SDK
+// merges them into every generation export (and, with a meter configured,
+// emits them as metric attributes).
+func TestNewClientAppliesClientTags(t *testing.T) {
+	type exported struct {
+		Generations []struct {
+			ID   string            `json:"id"`
+			Tags map[string]string `json:"tags"`
+		} `json:"generations"`
+	}
+	var got exported
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		results := make([]map[string]any, 0, len(got.Generations))
+		for _, g := range got.Generations {
+			results = append(results, map[string]any{"generation_id": g.ID, "accepted": true})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+	}))
+	defer server.Close()
+	// Pin every branded family blank first: the SDK prefers the AGENTO11Y_
+	// spelling, so a machine with AGENTO11Y_ENDPOINT and AGENTO11Y_AUTH_TOKEN
+	// exported would send this generation to that endpoint instead of the test
+	// server.
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+
+	client := NewClient(ClientOptions{
+		InstrumentationName: "agento11y.test",
+		Tags:                map[string]string{"user": "alice@example.com", "repo": "grafana/agento11y"},
+	})
+	if client == nil {
+		t.Fatal("NewClient returned nil")
+	}
+	ctx := context.Background()
+	if err := Record(ctx, client,
+		agento11y.GenerationStart{Model: agento11y.ModelRef{Provider: "openai", Name: "gpt-5"}},
+		agento11y.Generation{
+			ID:             "gen-1",
+			ConversationID: "conv-1",
+			Model:          agento11y.ModelRef{Provider: "openai", Name: "gpt-5"},
+			CompletedAt:    time.Now(),
+		}, nil, nil); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := client.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	_ = client.Shutdown(ctx)
+
+	if len(got.Generations) != 1 {
+		t.Fatalf("exported %d generations; want 1", len(got.Generations))
+	}
+	tags := got.Generations[0].Tags
+	if tags["user"] != "alice@example.com" || tags["repo"] != "grafana/agento11y" {
+		t.Fatalf("exported tags = %v; want user and repo client tags", tags)
+	}
 }
 
 func TestToolSpanWindow(t *testing.T) {

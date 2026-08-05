@@ -150,6 +150,86 @@ func TestParseExtraTags(t *testing.T) {
 	}
 }
 
+func TestParseAutoTags(t *testing.T) {
+	cases := []struct {
+		name        string
+		in          string
+		want        map[AutoTag]bool
+		wantUnknown []string
+	}{
+		{name: "unset", in: ""},
+		{name: "whitespace only", in: "   \t "},
+		{name: "single name", in: "user", want: map[AutoTag]bool{AutoTagUser: true}},
+		{
+			name: "two names",
+			in:   "user,repo",
+			want: map[AutoTag]bool{AutoTagUser: true, AutoTagRepo: true},
+		},
+		{
+			name: "surrounding whitespace and empty entries",
+			in:   " user , , repo ,",
+			want: map[AutoTag]bool{AutoTagUser: true, AutoTagRepo: true},
+		},
+		{
+			name: "all is shorthand for every name",
+			in:   "all",
+			want: map[AutoTag]bool{AutoTagUser: true, AutoTagRepo: true, AutoTagBranch: true},
+		},
+		{
+			name: "mixed case is accepted",
+			in:   "User,REPO,Branch",
+			want: map[AutoTag]bool{AutoTagUser: true, AutoTagRepo: true, AutoTagBranch: true},
+		},
+		{
+			name:        "unknown name is reported and the rest still parse",
+			in:          "user,team",
+			want:        map[AutoTag]bool{AutoTagUser: true},
+			wantUnknown: []string{"team"},
+		},
+		{
+			name:        "only unknown names",
+			in:          "Team, squad",
+			wantUnknown: []string{"team", "squad"},
+		},
+		{
+			name: "duplicate names collapse",
+			in:   "repo,repo,all",
+			want: map[AutoTag]bool{AutoTagUser: true, AutoTagRepo: true, AutoTagBranch: true},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			enabled, unknown := ParseAutoTags(tc.in)
+			if !reflect.DeepEqual(enabled, tc.want) {
+				t.Errorf("enabled = %v, want %v", enabled, tc.want)
+			}
+			if !reflect.DeepEqual(unknown, tc.wantUnknown) {
+				t.Errorf("unknown = %v, want %v", unknown, tc.wantUnknown)
+			}
+		})
+	}
+}
+
+// TestAutoTagsAreAliasFamilies pins both automatic-tag variables to the alias
+// list: without them the SIGIL_ spelling would not resolve and dotenv would not
+// materialize the keys.
+func TestAutoTagsAreAliasFamilies(t *testing.T) {
+	for _, suffix := range []string{AutoTagsSuffix, AutoTagNamesSuffix} {
+		if !slices.Contains(AliasSuffixes, suffix) {
+			t.Errorf("%s missing from AliasSuffixes", suffix)
+		}
+	}
+}
+
+// TestAllAutoTags pins the default set to every supported name: the switch on
+// its own resolves all of them, and the allowlist only narrows that.
+func TestAllAutoTags(t *testing.T) {
+	want := map[AutoTag]bool{AutoTagUser: true, AutoTagRepo: true, AutoTagBranch: true}
+	if got := AllAutoTags(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("AllAutoTags() = %v, want %v", got, want)
+	}
+}
+
 // TestResolveGuards drives both entry points over the same cases: ResolveGuards
 // reads the process env, and ResolveGuardsWith reads the same values through a
 // map-backed Lookup, which is how doctor resolves them from its pre-merge

@@ -1,8 +1,14 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadConfig, normalizeBaseEndpoint, resolveConfig } from "./config.js";
+import {
+  loadConfig,
+  normalizeBaseEndpoint,
+  resolveAutoTagValues,
+  resolveConfig,
+} from "./config.js";
 import { clearAgento11yEnv } from "./testEnv.js";
 
 describe("resolveConfig", () => {
@@ -448,6 +454,127 @@ describe("normalizeBaseEndpoint", () => {
         "http://localhost:8080/api/v1/generations:export-debug",
       ),
     ).toBe("http://localhost:8080/api/v1/generations:export-debug");
+  });
+});
+
+describe("resolveAutoTagValues", () => {
+  beforeEach(clearAgento11yEnv);
+  afterEach(clearAgento11yEnv);
+
+  it("leaves auto-tags unset when the switch is off", () => {
+    expect(resolveAutoTagValues(tmpdir())).toBeUndefined();
+  });
+
+  it("leaves auto-tags unset when the switch is blank", () => {
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "   ";
+    expect(resolveAutoTagValues(tmpdir())).toBeUndefined();
+  });
+
+  it("leaves auto-tags unset when the switch is false", () => {
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "false";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+    expect(resolveAutoTagValues(tmpdir())).toBeUndefined();
+  });
+
+  it("resolves every name when the switch alone is on", () => {
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+    // A temp directory is outside any checkout, so the repository and branch
+    // resolve to nothing and the switch produces the user value alone.
+    expect(resolveAutoTagValues(tmpdir())).toEqual({
+      user: "alice@example.com",
+    });
+  });
+
+  it("narrows the switch to the names in the allowlist", () => {
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+    expect(resolveAutoTagValues(tmpdir())).toEqual({
+      user: "alice@example.com",
+    });
+  });
+
+  it("reads both variables under the legacy spelling too", () => {
+    process.env.SIGIL_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.SIGIL_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.SIGIL_USER_ID = "alice@example.com";
+    expect(resolveAutoTagValues(tmpdir())).toEqual({
+      user: "alice@example.com",
+    });
+  });
+
+  it("lets an explicit tag win over the resolved value", () => {
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+    process.env.AGENTO11Y_TAGS = "user=team-account";
+    // The SDK layers AGENTO11Y_TAGS under the client tags, so leaving the key
+    // out here is what makes the explicit value win.
+    expect(resolveAutoTagValues(tmpdir())).toBeUndefined();
+  });
+
+  it("resolves the repository from the directory it is given", () => {
+    // The reason resolution lives here and not in resolveConfig: the opencode
+    // server can run outside the project root, so the caller passes the project
+    // directory rather than process.cwd().
+    const project = mkdtempSync(join(tmpdir(), "agento11y-opencode-project-"));
+    const git = (args: string[]) =>
+      execFileSync("git", args, {
+        cwd: project,
+        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf-8",
+        timeout: 5000,
+      });
+    git(["init", "-q", "-b", "main"]);
+    git(["config", "user.email", "test@example.com"]);
+    git(["config", "user.name", "test"]);
+    git(["config", "commit.gpgsign", "false"]);
+    // An unborn branch has no resolvable HEAD, so the fixture needs a commit.
+    git(["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(["remote", "add", "origin", "git@github.com:grafana/other-repo.git"]);
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "repo,branch";
+
+    try {
+      expect(resolveAutoTagValues(project)).toEqual({
+        repo: "grafana/other-repo",
+        "git.branch": "main",
+      });
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("warns about an unsupported name and keeps the recognized ones", () => {
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user,team";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(resolveAutoTagValues(tmpdir())).toEqual({
+      user: "alice@example.com",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES has unsupported names team",
+      ),
+    );
+    warn.mockRestore();
+  });
+
+  it("warns when the allowlist is set but the switch is off", () => {
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(resolveAutoTagValues(tmpdir())).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES is set but AGENTO11Y_AUTO_CODING_AGENT_TAGS is off",
+      ),
+    );
+    warn.mockRestore();
   });
 });
 

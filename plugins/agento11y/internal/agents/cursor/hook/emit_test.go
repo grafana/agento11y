@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +22,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 // buildClient passes the cursor User-Agent token to the emit package; this guards the
@@ -63,7 +66,7 @@ func TestEmitGenerationSendsCursorUserAgent(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	client := buildClient(config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, nil)
+	client := buildClient(Payload{}, nil, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, nil, log.New(io.Discard, "", 0))
 	if err := emitGeneration(ctx, client, frag, mapped, nil); err != nil {
 		t.Fatalf("emitGeneration: %v", err)
 	}
@@ -74,6 +77,127 @@ func TestEmitGenerationSendsCursorUserAgent(t *testing.T) {
 
 	if !strings.HasPrefix(gotUA, "agento11y-plugin-cursor/") {
 		t.Fatalf("User-Agent = %q, want agento11y-plugin-cursor/ prefix", gotUA)
+	}
+}
+
+// TestBuildClientAttachesAutoTags covers the opt-in switch on a live client
+// path: with AGENTO11Y_AUTO_CODING_AGENT_TAGS on, the values the launcher resolves reach
+// the export as client tags. Cursor is the one agent that knows a workspace
+// root and a user identity, so this also pins where they come from: cursor
+// sends both on sessionStart, and the stop and sessionEnd payloads that emit
+// carry neither, so those read them back from the saved session.
+func TestBuildClientAttachesAutoTags(t *testing.T) {
+	var gotTags map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		var request struct {
+			Generations []struct {
+				ID   string            `json:"id"`
+				Tags map[string]string `json:"tags"`
+			} `json:"generations"`
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		results := make([]map[string]any, 0, len(request.Generations))
+		for _, g := range request.Generations {
+			gotTags = g.Tags
+			results = append(results, map[string]any{"generation_id": g.ID, "accepted": true})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+	}))
+	defer server.Close()
+
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+	t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
+
+	workspace := t.TempDir()
+	writeGitFixture(t, workspace, "git@github.com:grafana/agento11y.git", "feature/auto-tags")
+
+	tests := []struct {
+		name    string
+		payload Payload
+		session *fragment.Session
+	}{
+		{
+			name:    "payload carries the identity",
+			payload: Payload{WorkspaceRoots: []string{workspace}, UserEmail: "alice@example.com"},
+		},
+		{
+			name:    "stop payload omits it, session supplies it",
+			payload: Payload{ConversationID: "conv"},
+			session: &fragment.Session{
+				ConversationID: "conv",
+				WorkspaceRoots: []string{workspace},
+				UserEmail:      "alice@example.com",
+			},
+		},
+		{
+			name:    "session without identity falls back to the payload",
+			payload: Payload{ConversationID: "conv", WorkspaceRoots: []string{workspace}, UserEmail: "alice@example.com"},
+			session: &fragment.Session{ConversationID: "conv"},
+		},
+	}
+
+	want := map[string]string{
+		"user":       "alice@example.com",
+		"repo":       "grafana/agento11y",
+		"git.branch": "feature/auto-tags",
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotTags = nil
+
+			frag := &fragment.Fragment{ConversationID: "conv", GenerationID: "gen-1", Model: "gpt-5"}
+			mapped := mapper.MapFragment(mapper.Inputs{
+				Fragment:       frag,
+				Stop:           &mapper.StopInput{Status: "completed"},
+				ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+				Now:            time.Now(),
+			})
+
+			ctx := context.Background()
+			client := buildClient(tc.payload, tc.session, config.Config{ContentCapture: agento11y.ContentCaptureModeMetadataOnly}, nil, log.New(io.Discard, "", 0))
+			if err := emitGeneration(ctx, client, frag, mapped, nil); err != nil {
+				t.Fatalf("emitGeneration: %v", err)
+			}
+			if err := client.Flush(ctx); err != nil {
+				t.Fatalf("Flush: %v", err)
+			}
+			_ = client.Shutdown(ctx)
+
+			for key, value := range want {
+				if gotTags[key] != value {
+					t.Errorf("exported tag %s = %q, want %q (all tags: %v)", key, gotTags[key], value, gotTags)
+				}
+			}
+		})
+	}
+}
+
+// writeGitFixture creates the two files gitbranch reads: the origin remote in
+// the config and the checked out branch in HEAD. No `git` binary needed.
+func writeGitFixture(t *testing.T, root, remote, branch string) {
+	t.Helper()
+	gitDir := filepath.Join(root, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("[remote \"origin\"]\n\turl = "+remote+"\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/"+branch+"\n"), 0o644); err != nil {
+		t.Fatalf("write HEAD: %v", err)
 	}
 }
 

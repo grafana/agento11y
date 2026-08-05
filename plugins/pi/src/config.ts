@@ -1,5 +1,6 @@
 import type { ContentCaptureMode } from "@grafana/agento11y";
 import { applyAgento11yDotenv } from "./agento11yDotenv.js";
+import { parseTagPairs, resolveAutoTags, selectAutoTags } from "./autotag.js";
 import { logger } from "./logger.js";
 
 export type Agento11yAuthConfig =
@@ -31,6 +32,12 @@ export interface Agento11yPiConfig {
   redactInputMessages: boolean;
   otlp?: OtlpConfig;
   guards: GuardsFeatureConfig;
+  /**
+   * Client tags resolved for AGENTO11Y_AUTO_CODING_AGENT_TAGS, or undefined
+   * when the switch is off. Undefined and an empty map are the same to the SDK,
+   * but undefined keeps the client config free of an empty `tags` object.
+   */
+  autoTags?: Record<string, string>;
 }
 
 export async function loadConfig(): Promise<Agento11yPiConfig | null> {
@@ -60,7 +67,29 @@ export function resolveConfig(): Agento11yPiConfig | null {
     redactInputMessages,
     otlp: resolveOtlp(),
     guards: resolveGuards(),
+    autoTags: resolveAutoTagValues(),
   };
+}
+
+// resolveAutoTagValues reads AGENTO11Y_AUTO_CODING_AGENT_TAGS and the optional
+// AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES allowlist, then resolves whatever they
+// enable. The switch is off by default, so a session that has not opted in
+// carries exactly the tags it carried before.
+//
+// The plugin builds one client per pi session, so these values freeze at
+// session start: a checkout that changes mid-session keeps the metric label it
+// started with. The per-generation `git.branch` tag (tags.ts) is resolved per
+// turn and does follow the checkout.
+function resolveAutoTagValues(): Record<string, string> | undefined {
+  const { enabled } = selectAutoTags(brandedEnv, (message) =>
+    logger.warn(message),
+  );
+  if (enabled.size === 0) return undefined;
+  return resolveAutoTags(enabled, {
+    cwd: process.cwd(),
+    userId: brandedEnv("USER_ID")?.value,
+    explicitTags: parseTagPairs(brandedEnv("TAGS")?.value),
+  });
 }
 
 function resolveAuth(): Agento11yAuthConfig {

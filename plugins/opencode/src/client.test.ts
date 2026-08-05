@@ -69,6 +69,27 @@ describe("createAgento11yClient", () => {
     });
   });
 
+  it("passes resolved auto-tags as client tags", () => {
+    createAgento11yClient(
+      makeConfig({
+        autoTags: { user: "alice@example.com", repo: "grafana/agento11y" },
+      }),
+    );
+
+    expect(Agento11yClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tags: { user: "alice@example.com", repo: "grafana/agento11y" },
+      }),
+    );
+  });
+
+  it("leaves tags unset when no auto-tag resolved", () => {
+    createAgento11yClient(makeConfig());
+
+    const [arg] = Agento11yClientMock.mock.calls[0];
+    expect("tags" in arg).toBe(false);
+  });
+
   it("sets the plugin User-Agent on the generation export", () => {
     createAgento11yClient(makeConfig());
 

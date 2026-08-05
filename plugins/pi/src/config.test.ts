@@ -494,6 +494,100 @@ describe("resolveConfig guards", () => {
   });
 });
 
+describe("resolveConfig auto-tags", () => {
+  beforeEach(clearEnv);
+  afterEach(clearEnv);
+
+  it("leaves auto-tags unset when the switch is off", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    expect(resolveConfig()?.autoTags).toBeUndefined();
+  });
+
+  it("leaves auto-tags unset when the switch is blank", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "   ";
+    expect(resolveConfig()?.autoTags).toBeUndefined();
+  });
+
+  it("leaves auto-tags unset when the switch is false", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "false";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+    expect(resolveConfig()?.autoTags).toBeUndefined();
+  });
+
+  it("resolves every name when the switch alone is on", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+
+    // The repository and branch come from the directory vitest runs in, which
+    // is this checkout, so only the user value is pinned here; the assertion
+    // that matters is that no key outside the supported three appears.
+    const tags = resolveConfig()?.autoTags ?? {};
+    expect(tags.user).toBe("alice@example.com");
+    expect(Object.keys(tags).sort()).toEqual(
+      Object.keys(tags)
+        .filter((key) => ["user", "repo", "git.branch"].includes(key))
+        .sort(),
+    );
+  });
+
+  it("narrows the switch to the names in the allowlist", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+    expect(resolveConfig()?.autoTags).toEqual({ user: "alice@example.com" });
+  });
+
+  it("reads both variables under the legacy spelling too", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.SIGIL_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.SIGIL_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.SIGIL_USER_ID = "alice@example.com";
+    expect(resolveConfig()?.autoTags).toEqual({ user: "alice@example.com" });
+  });
+
+  it("lets an explicit tag win over the resolved value", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+    process.env.AGENTO11Y_TAGS = "user=team-account";
+    // The SDK layers AGENTO11Y_TAGS under the client tags, so leaving the key
+    // out here is what makes the explicit value win.
+    expect(resolveConfig()?.autoTags).toBeUndefined();
+  });
+
+  it("warns about an unsupported name and keeps the recognized ones", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS = "true";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user,team";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+
+    expect(resolveConfig()?.autoTags).toEqual({ user: "alice@example.com" });
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES has unsupported names team",
+      ),
+    );
+  });
+
+  it("warns when the allowlist is set but the switch is off", () => {
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES = "user";
+    process.env.AGENTO11Y_USER_ID = "alice@example.com";
+
+    expect(resolveConfig()?.autoTags).toBeUndefined();
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES is set but AGENTO11Y_AUTO_CODING_AGENT_TAGS is off",
+      ),
+    );
+  });
+});
+
 describe("loadConfig reads ~/.config/agento11y/config.env", () => {
   let dir: string;
   let homeBackup: string | undefined;

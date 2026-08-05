@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -30,6 +31,10 @@ const (
 	dirMode  os.FileMode = 0o700
 	fileMode os.FileMode = 0o600
 )
+
+// lockTimeout is the effective wait bound for the on-disk half of
+// WithFileLock. Tests shorten it; production always uses DefaultLockTimeout.
+var lockTimeout = DefaultLockTimeout
 
 // WriteJSON marshals v and writes it to target atomically: it writes a temp
 // file in the same directory, fsync-free closes it, chmods it to 0o600, then
@@ -108,17 +113,31 @@ func LogLoadErr(logger *log.Logger, label, path string, corrupt bool, err error)
 	logger.Printf("fragment: read %s%s: %v", label, path, err)
 }
 
-// WithFileLock acquires an exclusive advisory lock for target by creating
-// <target>.lock with O_EXCL, runs fn, then removes the lock. It waits up to
-// DefaultLockTimeout, reclaiming a lock file older than DefaultStaleLockAge so
-// a crashed holder can't wedge the path forever. The lock directory is created
-// with 0o700.
+// WithFileLock runs fn under an exclusive lock on target, taken in two steps.
+//
+// First it takes an in-process mutex keyed by the lock path, so goroutines in
+// this process queue up instead of racing for the file. Without it, every
+// waiter polls the same path and the winner of each round is random, so a
+// waiter can lose repeatedly and hit the timeout while the file is being
+// written by someone else the whole time.
+//
+// Then it takes the cross-process lock: it creates <target>.lock with O_EXCL,
+// waiting up to DefaultLockTimeout and reclaiming a lock file older than
+// DefaultStaleLockAge so a crashed holder can't wedge the path forever. That
+// timeout now bounds waiting on other processes only; goroutines in this
+// process wait on the mutex for as long as the holder needs.
+//
+// fn must not call WithFileLock again for the same target: the in-process
+// mutex is not reentrant and the nested call would deadlock instead of timing
+// out. The lock directory is created with 0o700.
 func WithFileLock(target string, fn func() error) error {
 	lockPath := target + ".lock"
 	if err := os.MkdirAll(filepath.Dir(lockPath), dirMode); err != nil {
 		return fmt.Errorf("fragment: mkdir lock dir: %w", err)
 	}
-	deadline := time.Now().Add(DefaultLockTimeout)
+	release := lockInProcess(lockPath)
+	defer release()
+	deadline := time.Now().Add(lockTimeout)
 	for {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileMode)
 		if err == nil {
@@ -138,6 +157,47 @@ func WithFileLock(target string, fn func() error) error {
 			return fmt.Errorf("fragment: lock timeout: %s", lockPath)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// processLocks holds one mutex per lock path held or awaited by this process.
+// Entries are reference counted and dropped when the last waiter leaves, so a
+// long-lived process that touches many sessions doesn't accumulate them.
+var (
+	processLocksMu sync.Mutex
+	processLocks   = map[string]*processLock{}
+)
+
+type processLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockInProcess blocks until this process holds the mutex for lockPath and
+// returns the function that releases it. Callers that spell the same file
+// differently land on different mutexes; the on-disk lock still separates
+// them, they just fall back to polling.
+func lockInProcess(lockPath string) func() {
+	key := filepath.Clean(lockPath)
+
+	processLocksMu.Lock()
+	l := processLocks[key]
+	if l == nil {
+		l = &processLock{}
+		processLocks[key] = l
+	}
+	l.refs++
+	processLocksMu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		processLocksMu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(processLocks, key)
+		}
+		processLocksMu.Unlock()
 	}
 }
 

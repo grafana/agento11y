@@ -464,6 +464,80 @@ func TestLocalTargetNeedsNoCredentials(t *testing.T) {
 	_ = cleanup(ctx)
 }
 
+// TestNewTargetExporterIgnoresAutoTags pins the one client path that must not
+// take AGENTO11Y_AUTO_CODING_AGENT_TAGS. The importer replays sessions recorded earlier,
+// possibly in another checkout, so the machine running the import does not
+// describe them: stamping the current user, repository, or branch on a
+// replayed turn would be wrong.
+func TestNewTargetExporterIgnoresAutoTags(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_AUTO_CODING_AGENT_TAGS", "true")
+
+	var mu sync.Mutex
+	var gotTags map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			Generations []struct {
+				ID   string            `json:"id"`
+				Tags map[string]string `json:"tags"`
+			} `json:"generations"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		results := make([]map[string]any, len(req.Generations))
+		mu.Lock()
+		for i, g := range req.Generations {
+			gotTags = g.Tags
+			results[i] = map[string]any{"generation_id": g.ID, "accepted": true}
+		}
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+	}))
+	defer srv.Close()
+
+	exp, cleanup, err := NewTargetExporter(context.Background(),
+		Target{Endpoint: srv.URL, ContentMode: "full"}, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("NewTargetExporter: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = cleanup(ctx)
+	}()
+
+	if err := exp.ExportHistoricalGeneration(context.Background(), HistoricalGeneration{
+		Source: SourceRef{Agent: AgentClaudeCode, SessionID: "s1", SourcePath: "/a.jsonl"},
+		Gen: agento11y.Generation{
+			ConversationID: "s1",
+			Model:          agento11y.ModelRef{Provider: "anthropic", Name: "claude"},
+			Input:          []agento11y.Message{agento11y.UserTextMessage("hello")},
+			StartedAt:      time.Now().Add(-time.Minute),
+			CompletedAt:    time.Now(),
+		},
+	}); err != nil {
+		t.Fatalf("ExportHistoricalGeneration: %v", err)
+	}
+	if err := exp.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, key := range []string{"user", "repo", "git.branch"} {
+		if v, ok := gotTags[key]; ok {
+			t.Errorf("imported generation carries auto-tag %s=%q", key, v)
+		}
+	}
+}
+
 // acceptAllGenerations answers an export request the way the local receiver
 // does: one accepted result per generation, keyed by its ID.
 func acceptAllGenerations(r *http.Request) string {

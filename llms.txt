@@ -174,6 +174,8 @@ To attach custom key/values, pick the mechanism by where it must show up. See [`
 - **Per-generation `tags` / `metadata`**: export-only, never on spans/metrics. Use for searchable per-request data.
 - **`user_id`** (`AGENTO11Y_USER_ID` / per-call / context): sets the `user.id` span attribute (all SDKs) plus the export; not a metric label. Use this for end-user identity instead of a tag.
 
+Coding-agent plugins (Path A) add one opt-in switch on top: `AGENTO11Y_AUTO_CODING_AGENT_TAGS=true` resolves the session's user, repository, and branch and attaches them as **client tags**, so they do become metric labels (`agento11y_tag_user`, `agento11y_tag_repo`, `agento11y_tag_git_branch`). `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo` narrows that to some of the names and defaults to all of them; on its own, with the switch off, it does nothing. The switch is off by default, a key already set in `AGENTO11Y_TAGS` wins, and neither variable exists in the SDKs. Two consequences to state before recommending it: the `user` value is commonly a work email address that then lives in Prometheus labels for the metric retention period, and cardinality is the product of users, repositories, and branches, with branch names growing without bound. Suggest `user,repo` before all three.
+
 Capture modes do not strip `tags`/`metadata`/`user_id`; do not put secrets there.
 
 ## Mission

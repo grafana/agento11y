@@ -112,6 +112,53 @@ The coding-agent plugins (claude-code, codex, copilot, cursor, opencode, pi, vib
 
 Launchers also set a few keys specific to one host, so this table is not the full list of what arrives on a generation.
 
+## Opt-in automatic tags (`AGENTO11Y_AUTO_CODING_AGENT_TAGS`)
+
+The built-in tags above are per-generation tags, so they reach the Agent Observability UI but never become metric labels. `AGENTO11Y_AUTO_CODING_AGENT_TAGS` resolves the same kind of session facts and attaches them as **client tags** instead, which is the one mechanism that does reach OTel metrics. That is what lets the Usage and Cost view filter and break down by user, repository, or branch. It is a coding-agent-plugin feature; the SDKs have nothing like it.
+
+The switch is off by default and takes a boolean. With the switch alone, every supported value is tagged:
+
+```sh
+AGENTO11Y_AUTO_CODING_AGENT_TAGS=true
+```
+
+`AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` narrows that to the names you list. It defaults to all of them:
+
+```sh
+AGENTO11Y_AUTO_CODING_AGENT_TAGS=true
+AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo   # `all` is also accepted
+```
+
+| Name | Tag key | Value |
+| --- | --- | --- |
+| `user` | `user` | `AGENTO11Y_USER_ID` if set, then the identity the host agent knows (the signed-in Claude Code or Cursor account), then the operating-system account name. |
+| `repo` | `repo` | `owner/name` from the `origin` remote of the checkout. A nested namespace stays whole (`group/subgroup/name`). Without an origin remote, the name of the checkout directory. |
+| `branch` | `git.branch` | Branch checked out in the session's directory, or a short commit SHA on detached HEAD. |
+
+Rules that apply to every name:
+
+- Names are case-insensitive. An unsupported name is logged and skipped; the recognized names still apply. A list that names nothing supported attaches nothing.
+- The allowlist does nothing on its own. With `AGENTO11Y_AUTO_CODING_AGENT_TAGS` unset or false, no automatic tag is attached and the launcher logs that the list was ignored.
+- A key you set yourself in `AGENTO11Y_TAGS` wins. With `AGENTO11Y_TAGS=repo=monorepo` and the `repo` name enabled, the exported tag stays `repo=monorepo`.
+- A value that does not resolve leaves its key off. Outside a git checkout, `repo` and `branch` are simply absent.
+- Values are trimmed and capped at 128 characters.
+- `branch` uses the same `git.branch` key as the per-generation built-in above. In the generation export the per-generation value wins, so the export still shows the branch of that generation; the client tag is what supplies the metric label.
+
+In Prometheus the tags arrive as `agento11y_tag_user`, `agento11y_tag_repo`, and `agento11y_tag_git_branch`.
+
+`agento11y login` asks about this too: answering Yes to "Automatic tags" opens a checklist of the three values, all ticked, and writes the answers to `config.env`. Keeping all three ticked writes no allowlist, so a name added in a later version is included as well.
+
+Run `agento11y doctor` to see the enabled names, the variables that set them, and the value each one resolves to in the current directory before it leaves the machine. `doctor` runs outside a session, so it cannot read the account a host agent signs in to: with `AGENTO11Y_USER_ID` unset it reports `user` as `<depends on the agent>` rather than guessing. Set `AGENTO11Y_USER_ID` to see the exact value.
+
+### Cardinality and personal data
+
+Enabling these names is a deliberate trade. Read this first:
+
+- The `user` value is commonly a work email address. It becomes a Prometheus label and is kept for the metric retention period, which is longer than most log retention. Enable it only where storing that address in metrics is acceptable.
+- Every distinct combination of values is one more time series. Users multiply by repositories multiply by branches, and branch names are the fastest-growing of the three: a team that creates a branch per ticket adds a series per ticket, forever.
+- `repo` and `user` are usually bounded per organization. `branch` is not. Set `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo` first and add `branch` only if you need per-branch cost.
+- In the pi and opencode plugins the client is built once per session, so their metric labels freeze at session start. A checkout that changes mid-session keeps the label it started with. The hook-based agents (claude-code, codex, copilot, cursor, vibe) build a client per invocation and follow the checkout.
+
 ## Built-in metadata from the agent launchers
 
 Metadata is exported but never turned into a metric label, so launchers use it for numbers and for keys with too many distinct values to be a tag.

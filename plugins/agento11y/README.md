@@ -99,6 +99,31 @@ agento11y claude --tag project=hackathon -- --resume
 
 The same flag works for every launcher (`claude`, `codex`, `copilot`, `opencode`, `pi`, `vibe`) and combines with `--local`.
 
+### Automatic tags
+
+`AGENTO11Y_AUTO_CODING_AGENT_TAGS` resolves the session's user, repository, and branch and attaches them as client tags, which are the tags that also become OTel metric labels. Use it to break usage and cost down by person, repository, or branch. The switch is off by default, and on its own it enables every name:
+
+```dotenv
+# ~/.config/agento11y/config.env
+AGENTO11Y_AUTO_CODING_AGENT_TAGS=true
+# Optional: narrow it to some of the names. Defaults to all of them.
+AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo
+```
+
+| Name | Tag key | Resolved from |
+| --- | --- | --- |
+| `user` | `user` | `AGENTO11Y_USER_ID`, then the identity the host agent knows, then the OS account name |
+| `repo` | `repo` | `owner/name` of the checkout's `origin` remote, or the checkout directory name |
+| `branch` | `git.branch` | Branch checked out in the session's directory |
+
+A key already set in `AGENTO11Y_TAGS` wins, an unresolved value leaves its key off, and an unsupported name is logged and skipped. The allowlist does nothing while the switch is off. Because these are client tags, they arrive in Prometheus as `agento11y_tag_user`, `agento11y_tag_repo`, and `agento11y_tag_git_branch`.
+
+`agento11y login` asks the same question: answer Yes to "Automatic tags" and it opens a checklist of the three values, all ticked, then writes both keys for you.
+
+The setting works whether the session starts through `agento11y <agent>` or through the host agent directly: the installed hooks read it when they build their client.
+
+Before enabling it, read the cardinality and personal-data notes in [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#cardinality-and-personal-data). The `user` value is commonly an email address, and it is kept for the metric retention period. Run `agento11y doctor` to see the exact values first.
+
 ## Content capture
 
 The shared `agento11y` binary defaults to `metadata_only`: only model, tokens, tool names, timing, and cost ship to Grafana Agent Observability. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`. The shared binary parser accepts every mode the SDKs support:

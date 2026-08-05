@@ -5,8 +5,9 @@
 // The flow collects three required values — SIGIL_ENDPOINT,
 // SIGIL_AUTH_TENANT_ID, and SIGIL_AUTH_TOKEN — plus an optional OTLP
 // endpoint, followed by a preferences group (content capture mode, session
-// tags, and guards), asks the endpoint whether it accepts the credentials,
-// and writes everything to the standard dotenv at
+// tags, guards, and automatic tags). Answering yes to automatic tags unfolds a
+// checklist of the values they would attach. The flow then asks the endpoint
+// whether it accepts the credentials and writes everything to the dotenv at
 // $XDG_CONFIG_HOME/agento11y/config.env (or the legacy
 // $XDG_CONFIG_HOME/sigil/config.env when only that file exists; see
 // dotenv.FilePath). Existing allowed keys that no field covers are preserved
@@ -34,6 +35,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -243,6 +245,8 @@ func Run(ctx context.Context, opts RunOpts) error {
 		otelEndpoint: cmp.Or(fixed.otelEndpoint, existing["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"]),
 		contentMode:  normalizeContentMode(existing["SIGIL_CONTENT_CAPTURE_MODE"]),
 		tags:         existing["SIGIL_TAGS"],
+		autoTags:     envconfig.ParseBool(existing[envconfig.LegacyKey(envconfig.AutoTagsSuffix)]),
+		autoTagNames: seedAutoTagNames(existing[envconfig.LegacyKey(envconfig.AutoTagNamesSuffix)]),
 		guards:       seedGuards(existing["SIGIL_GUARDS_ENABLED"], existing["SIGIL_GUARDS_FAIL_OPEN"]),
 		guardTimeout: strings.TrimSpace(existing["SIGIL_GUARDS_TIMEOUT_MS"]),
 	}
@@ -419,7 +423,24 @@ func promptValues(v *formValues, fixed fixedValues, existingToken string, stderr
 					return validateGuardTimeout(s)
 				}).
 				Value(&v.guardTimeout),
+			huh.NewConfirm().
+				Title("Automatic tags").
+				Description("Tag every session with the user, the repository, and the branch, and turn those into metric labels so Usage and Cost can be split by person, repository, or branch.\nThe values are stored with the metrics and kept for the metric retention period; the user value is often an email address.").
+				Affirmative("Yes").
+				Negative("No, keep them off").
+				Value(&v.autoTags),
 		),
+		// The names only matter once the switch is on, so this group is skipped
+		// while the answer above is No: the form asks the yes/no question first
+		// and unfolds the list after it.
+		huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Title("Which values to tag with").
+				Description("Space toggles a value, Enter confirms. Branch names grow without bound, so drop that one if you do not need per-branch cost.").
+				Options(autoTagOptions(v.autoTagNames)...).
+				Validate(validateAutoTagNames).
+				Value(&v.autoTagNames),
+		).WithHideFunc(func() bool { return !v.autoTags }),
 	).WithTheme(grafanaTheme())
 
 	if err := formError(form.Run()); err != nil {
@@ -427,6 +448,54 @@ func promptValues(v *formValues, fixed fixedValues, existingToken string, stderr
 	}
 	v.capturePrompted = true
 	return nil
+}
+
+// autoTagOptions lists the values the automatic-tag switch can attach, with
+// the source of each one, and preselects the ones already configured. Every
+// option is described because these become metric labels: a user reading the
+// list has to be able to tell what leaves the machine.
+func autoTagOptions(selected []string) []huh.Option[string] {
+	labels := map[envconfig.AutoTag]string{
+		envconfig.AutoTagUser:   "user — configured user id, host agent account, or OS user",
+		envconfig.AutoTagRepo:   "repo — owner/name from the origin remote",
+		envconfig.AutoTagBranch: "branch — branch checked out in the session directory",
+	}
+	options := make([]huh.Option[string], 0, len(envconfig.AutoTagOrder))
+	for _, name := range envconfig.AutoTagOrder {
+		opt := huh.NewOption(labels[name], string(name))
+		if slices.Contains(selected, string(name)) {
+			opt = opt.Selected(true)
+		}
+		options = append(options, opt)
+	}
+	return options
+}
+
+// validateAutoTagNames requires at least one name once the switch is on. An
+// empty list would be the same as answering No, and silently treating it as
+// "all" would attach values the user just deselected.
+func validateAutoTagNames(selected []string) error {
+	if len(selected) == 0 {
+		return errors.New("select at least one value, or answer No to automatic tags")
+	}
+	return nil
+}
+
+// seedAutoTagNames turns a saved allowlist into the preselected names. An
+// unset or unparseable list means every supported name, which is what an
+// absent AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES resolves to at runtime.
+func seedAutoTagNames(raw string) []string {
+	enabled, _ := envconfig.ParseAutoTags(raw)
+	if len(enabled) == 0 {
+		enabled = envconfig.AllAutoTags()
+	}
+	names := make([]string, 0, len(enabled))
+	for _, name := range envconfig.AutoTagOrder {
+		if enabled[name] {
+			names = append(names, string(name))
+		}
+	}
+	return names
 }
 
 // contentCaptureOptions lists the capture modes the form offers. Only
@@ -640,6 +709,8 @@ var seededSuffixes = []string{
 	"INSECURE",
 	"CONTENT_CAPTURE_MODE",
 	"TAGS",
+	envconfig.AutoTagsSuffix,
+	envconfig.AutoTagNamesSuffix,
 	"GUARDS_ENABLED",
 	"GUARDS_FAIL_OPEN",
 	"GUARDS_TIMEOUT_MS",
@@ -675,9 +746,14 @@ type formValues struct {
 	tags         string
 	guards       string
 	guardTimeout string
+	// autoTags is the automatic-tag switch, and autoTagNames the names it
+	// applies to. Holding every supported name and holding none of them both
+	// mean "all" to buildUpdates, which then writes no allowlist at all.
+	autoTags     bool
+	autoTagNames []string
 
 	// capturePrompted records that the form ran, which is the only way the
-	// four capture fields hold something the user chose. The keys are written
+	// preference fields hold something the user chose. The keys are written
 	// only when it is set, so a promptless run driven by flags leaves
 	// whatever is on disk alone.
 	capturePrompted bool
@@ -688,15 +764,17 @@ type formValues struct {
 // values delete both) so old binaries that only read SIGIL_* keep working.
 // Keys absent from the returned map keep whatever the file already holds.
 //
-// The four capture settings are written only when capturePrompted says the
-// form ran. A promptless run leaves them out: their values then come from
-// seeds, and a seed can be an AGENTO11Y_* variable exported in the current
-// shell, so writing them would turn a one-off `agento11y claude --tag
-// session=demo` into a permanent config entry the user never saw.
+// The preference settings are written only when capturePrompted says the form
+// ran. A promptless run leaves them out: their values then come from seeds, and
+// a seed can be an AGENTO11Y_* variable exported in the current shell, so
+// writing them would turn a one-off `agento11y claude --tag session=demo` into
+// a permanent config entry the user never saw.
 //
-// Content capture mode and the guard-enabled flag are always written
-// explicitly so a downgrade (e.g. full back to metadata_only, or enabled back
-// to disabled) actually takes effect instead of being silently preserved.
+// Content capture mode, the guard-enabled flag, and the automatic-tag switch
+// are always written explicitly so a downgrade (e.g. full back to
+// metadata_only, or enabled back to disabled) actually takes effect instead of
+// being silently preserved. While automatic tags are off the allowlist is left
+// alone, the same way a disabled guard keeps its timeout: the key is inert.
 // When guards are enabled the timeout and fail mode are always written too,
 // so clearing the timeout field deletes the key (the runtime default then
 // applies) rather than leaving a stale value behind. While guards are off
@@ -712,6 +790,13 @@ func buildUpdates(v formValues) map[string]string {
 	if v.capturePrompted {
 		updates["SIGIL_CONTENT_CAPTURE_MODE"] = normalizeContentMode(v.contentMode)
 		updates["SIGIL_TAGS"] = strings.TrimSpace(v.tags) // "" deletes
+		updates[envconfig.LegacyKey(envconfig.AutoTagsSuffix)] = strconv.FormatBool(v.autoTags)
+		if v.autoTags {
+			// Writing no allowlist means every name, so a user who kept all of
+			// them also picks up a name a later version adds. A narrowed
+			// selection is written out; "" deletes a list from a previous run.
+			updates[envconfig.LegacyKey(envconfig.AutoTagNamesSuffix)] = autoTagNamesValue(v.autoTagNames)
+		}
 		switch v.guards {
 		case guardsOpen, guardsClosed:
 			updates["SIGIL_GUARDS_ENABLED"] = "true"
@@ -729,6 +814,23 @@ func buildUpdates(v formValues) map[string]string {
 		}
 	}
 	return envconfig.ExpandAliases(updates)
+}
+
+// autoTagNamesValue renders the selected names as the allowlist to persist,
+// in AutoTagOrder rather than click order so re-running login does not churn
+// the file. A selection covering every supported name is written as "", which
+// deletes the key: the switch alone already means all of them.
+func autoTagNamesValue(selected []string) string {
+	names := make([]string, 0, len(envconfig.AutoTagOrder))
+	for _, name := range envconfig.AutoTagOrder {
+		if slices.Contains(selected, string(name)) {
+			names = append(names, string(name))
+		}
+	}
+	if len(names) == len(envconfig.AutoTagOrder) {
+		return ""
+	}
+	return strings.Join(names, ",")
 }
 
 // normalizeContentMode maps a raw (possibly stale or empty) value onto one of

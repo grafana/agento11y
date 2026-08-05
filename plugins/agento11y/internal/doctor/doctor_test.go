@@ -1437,6 +1437,224 @@ func TestCollectConfig_Tags(t *testing.T) {
 	}
 }
 
+// TestCollectConfig_AutoTags covers the automatic-tag row: the enabled names,
+// the values they resolve to, how the allowlist narrows the switch, and the
+// cases the row cannot show on its own (unsupported name, no value here,
+// explicit tag wins, allowlist without the switch). The repository and branch
+// resolve from the directory the test runs in, so the cases here use `user`,
+// whose value comes from the same snapshot.
+func TestCollectConfig_AutoTags(t *testing.T) {
+	tests := []struct {
+		name            string
+		osEnv           map[string]string
+		fileEnv         map[string]string
+		wantNames       []string
+		wantTags        map[string]string
+		wantUnresolved  []string
+		wantShadowed    []string
+		wantUnknown     []string
+		wantSource      string
+		wantNamesSource string
+		wantMsg         string
+		wantNoMsg       string
+	}{
+		{name: "switch unset resolves nothing"},
+		{
+			name:  "switch blank resolves nothing",
+			osEnv: map[string]string{"AGENTO11Y_AUTO_CODING_AGENT_TAGS": "   "},
+		},
+		{
+			name:  "switch off resolves nothing",
+			osEnv: map[string]string{"AGENTO11Y_AUTO_CODING_AGENT_TAGS": "false"},
+		},
+		{
+			// Outside a checkout `repo` and `branch` have no value, so the switch on
+			// its own reports three enabled names and one tag.
+			name: "switch on takes every name",
+			osEnv: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS": "true",
+				"AGENTO11Y_USER_ID":                "alice@example.com",
+			},
+			wantNames:      []string{"user", "repo", "branch"},
+			wantTags:       map[string]string{"user": "alice@example.com"},
+			wantUnresolved: []string{"repo", "branch"},
+			wantSource:     sourceEnv,
+			wantMsg:        "these auto tags resolved no value in this directory and are left off: repo, branch",
+		},
+		{
+			name: "the allowlist narrows the switch",
+			osEnv: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "user",
+				"AGENTO11Y_USER_ID":                      "alice@example.com",
+			},
+			wantNames:       []string{"user"},
+			wantTags:        map[string]string{"user": "alice@example.com"},
+			wantSource:      sourceEnv,
+			wantNamesSource: sourceEnv,
+		},
+		{
+			name: "from config.env when the environment is unset",
+			fileEnv: map[string]string{
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "true",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "user",
+				"SIGIL_USER_ID":                      "alice@example.com",
+			},
+			wantNames:       []string{"user"},
+			wantTags:        map[string]string{"user": "alice@example.com"},
+			wantSource:      sourceConfig,
+			wantNamesSource: sourceConfig,
+		},
+		{
+			// Without USER_ID the value depends on which agent runs the session,
+			// so the row shows a placeholder rather than the account name doctor
+			// itself runs under.
+			name: "the user value is left to the agent when USER_ID is unset",
+			osEnv: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "user",
+			},
+			wantNames:       []string{"user"},
+			wantTags:        map[string]string{"user": agentUserPlaceholder},
+			wantSource:      sourceEnv,
+			wantNamesSource: sourceEnv,
+			wantMsg:         "the auto tag user depends on the coding agent",
+		},
+		{
+			// An explicit tag supplies the value, so the agent never gets a say and
+			// the placeholder message stays off.
+			name: "an explicit user tag leaves the agent nothing to decide",
+			osEnv: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "user",
+				"AGENTO11Y_TAGS":                         "user=team-account",
+			},
+			wantNames:       []string{"user"},
+			wantShadowed:    []string{"user"},
+			wantSource:      sourceEnv,
+			wantNamesSource: sourceEnv,
+			wantNoMsg:       "the auto tag user depends on the coding agent",
+		},
+		{
+			name: "an explicit tag wins over the resolved value",
+			osEnv: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "user",
+				"AGENTO11Y_USER_ID":                      "alice@example.com",
+				"AGENTO11Y_TAGS":                         "user=team-account",
+			},
+			wantNames:       []string{"user"},
+			wantShadowed:    []string{"user"},
+			wantSource:      sourceEnv,
+			wantNamesSource: sourceEnv,
+			wantMsg:         "these auto tags are also set in AGENTO11Y_TAGS, which wins: user",
+		},
+		{
+			name: "an unsupported name is reported and the rest still resolve",
+			osEnv: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "user,team",
+				"AGENTO11Y_USER_ID":                      "alice@example.com",
+			},
+			wantNames:       []string{"user"},
+			wantTags:        map[string]string{"user": "alice@example.com"},
+			wantUnknown:     []string{"team"},
+			wantSource:      sourceEnv,
+			wantNamesSource: sourceEnv,
+			wantMsg:         "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES has unsupported names team; supported: user, repo, branch, all",
+		},
+		{
+			name: "only unsupported names leave the row off",
+			osEnv: map[string]string{
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "team",
+			},
+			wantUnknown: []string{"team"},
+			wantMsg:     "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES names no supported value, so no automatic tags are attached",
+		},
+		{
+			name:    "the allowlist alone attaches nothing",
+			osEnv:   map[string]string{"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "user"},
+			wantMsg: "AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES is set but AGENTO11Y_AUTO_CODING_AGENT_TAGS is off, so no automatic tags are attached",
+		},
+		{
+			name:    "a list in the switch is not a boolean",
+			osEnv:   map[string]string{"AGENTO11Y_AUTO_CODING_AGENT_TAGS": "user,repo"},
+			wantMsg: "the AGENTO11Y_AUTO_CODING_AGENT_TAGS value is not a boolean; automatic tags stay off, and the names go in AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnv(t)
+			// The repository and branch would resolve from the working directory,
+			// which is this package's source tree. Running in an empty directory
+			// keeps the cases above independent of the checkout.
+			t.Chdir(t.TempDir())
+			sec := collectConfig(tc.osEnv, tc.fileEnv)
+
+			if !slices.Equal(sec.AutoTagNames, tc.wantNames) {
+				t.Errorf("auto tag names = %v, want %v", sec.AutoTagNames, tc.wantNames)
+			}
+			if !maps.Equal(sec.AutoTags, tc.wantTags) {
+				t.Errorf("auto tags = %v, want %v", sec.AutoTags, tc.wantTags)
+			}
+			if !slices.Equal(sec.AutoTagUnresolved, tc.wantUnresolved) {
+				t.Errorf("unresolved = %v, want %v", sec.AutoTagUnresolved, tc.wantUnresolved)
+			}
+			if !slices.Equal(sec.AutoTagShadowed, tc.wantShadowed) {
+				t.Errorf("shadowed = %v, want %v", sec.AutoTagShadowed, tc.wantShadowed)
+			}
+			if !slices.Equal(sec.AutoTagUnknown, tc.wantUnknown) {
+				t.Errorf("unknown = %v, want %v", sec.AutoTagUnknown, tc.wantUnknown)
+			}
+			if sec.AutoTagsSource != tc.wantSource {
+				t.Errorf("auto tags source = %q, want %q", sec.AutoTagsSource, tc.wantSource)
+			}
+			if sec.AutoTagNamesSource != tc.wantNamesSource {
+				t.Errorf("auto tag names source = %q, want %q", sec.AutoTagNamesSource, tc.wantNamesSource)
+			}
+			if tc.wantMsg != "" && !strings.Contains(strings.Join(sec.Messages, " "), tc.wantMsg) {
+				t.Errorf("messages %v missing %q", sec.Messages, tc.wantMsg)
+			}
+			if tc.wantNoMsg != "" && strings.Contains(strings.Join(sec.Messages, " "), tc.wantNoMsg) {
+				t.Errorf("messages %v should not contain %q", sec.Messages, tc.wantNoMsg)
+			}
+		})
+	}
+}
+
+// TestCollectConfig_AutoTagsResolveFromTheCheckout pins the git side of the
+// row: with `repo` and `branch` enabled, doctor reports what the current
+// checkout resolves to, which is what the hooks would attach.
+func TestCollectConfig_AutoTagsResolveFromTheCheckout(t *testing.T) {
+	isolateEnv(t)
+	root := t.TempDir()
+	gitDir := filepath.Join(root, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The two files gitbranch reads. No `git` binary needed, matching
+	// internal/gitbranch's fixtures.
+	if err := os.WriteFile(filepath.Join(gitDir, "config"),
+		[]byte("[remote \"origin\"]\n\turl = git@github.com:grafana/agento11y.git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "HEAD"),
+		[]byte("ref: refs/heads/feature/auto-tags\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	sec := collectConfig(map[string]string{
+		"AGENTO11Y_AUTO_CODING_AGENT_TAGS":       "true",
+		"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES": "repo,branch",
+	}, nil)
+	want := map[string]string{"repo": "grafana/agento11y", "git.branch": "feature/auto-tags"}
+	if !maps.Equal(sec.AutoTags, want) {
+		t.Fatalf("auto tags = %v, want %v", sec.AutoTags, want)
+	}
+}
+
 // TestCollectConfig_Local covers the LOCAL row: doctor reports the value the
 // launcher acts on (shell before config.env), renders it, warns when the value
 // is not a boolean, and states that local mode stops at the launcher.

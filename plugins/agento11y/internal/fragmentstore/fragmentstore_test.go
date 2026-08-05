@@ -165,6 +165,66 @@ func TestWithFileLockSerializesAccess(t *testing.T) {
 	}
 }
 
+// setLockTimeout shortens the on-disk lock wait so tests can outlast it in
+// milliseconds instead of seconds.
+func setLockTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := lockTimeout
+	lockTimeout = d
+	t.Cleanup(func() { lockTimeout = prev })
+}
+
+func TestWithFileLockQueuesGoroutinesPastTheTimeout(t *testing.T) {
+	setLockTimeout(t, 20*time.Millisecond)
+	target := filepath.Join(t.TempDir(), "queued.json")
+
+	// Eight holders of 20ms each take ~160ms, well past the 20ms wait bound.
+	// Waiters in this process queue on the mutex, so none of them time out.
+	const workers = 8
+	errs := make([]error, workers)
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Go(func() {
+			errs[i] = WithFileLock(target, func() error {
+				time.Sleep(20 * time.Millisecond)
+				return nil
+			})
+		})
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("WithFileLock(%d) = %v; want nil", i, err)
+		}
+	}
+	processLocksMu.Lock()
+	left := len(processLocks)
+	processLocksMu.Unlock()
+	if left != 0 {
+		t.Errorf("process lock registry holds %d entries after release; want 0", left)
+	}
+}
+
+func TestWithFileLockTimesOutOnForeignLock(t *testing.T) {
+	setLockTimeout(t, 20*time.Millisecond)
+	target := filepath.Join(t.TempDir(), "held.json")
+	// A fresh lock file this process didn't create stands in for another
+	// process holding the lock.
+	if err := os.WriteFile(target+".lock", []byte("pid=999999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ran := false
+	err := WithFileLock(target, func() error { ran = true; return nil })
+	if err == nil || !strings.Contains(err.Error(), "lock timeout") {
+		t.Fatalf("WithFileLock = %v; want lock timeout", err)
+	}
+	if ran {
+		t.Error("fn ran while another holder had the lock")
+	}
+}
+
 func TestWithFileLockReclaimsStaleLock(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "stale.json")
 	lockPath := target + ".lock"

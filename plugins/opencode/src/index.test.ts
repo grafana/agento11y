@@ -4,12 +4,19 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { loadConfigMock, createAgento11yClientMock } = vi.hoisted(() => ({
-  loadConfigMock: vi.fn(),
-  createAgento11yClientMock: vi.fn(),
-}));
+const { loadConfigMock, createAgento11yClientMock, resolveAutoTagValuesMock } =
+  vi.hoisted(() => ({
+    loadConfigMock: vi.fn(),
+    createAgento11yClientMock: vi.fn(),
+    // hooks.ts resolves auto-tags for the project directory; this file only
+    // covers the plugin wiring, so the switch stays off.
+    resolveAutoTagValuesMock: vi.fn(() => undefined),
+  }));
 
-vi.mock("./config.js", () => ({ loadConfig: loadConfigMock }));
+vi.mock("./config.js", () => ({
+  loadConfig: loadConfigMock,
+  resolveAutoTagValues: resolveAutoTagValuesMock,
+}));
 vi.mock("./client.js", () => ({
   createAgento11yClient: createAgento11yClientMock,
 }));

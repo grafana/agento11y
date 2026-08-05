@@ -43,8 +43,8 @@ func SessionEnd(p Payload, cfg config.Config, logger *log.Logger) {
 	providers := setupOTelIfConfigured(ctx, p.ConversationID, logger)
 	defer func() { _ = providers.Shutdown(ctx) }()
 
-	client := buildClient(cfg, providers)
 	session := fragment.LoadSession(p.ConversationID, logger)
+	client := buildClient(p, session, cfg, providers, logger)
 
 	allEmitted := true
 	for _, gid := range ids {

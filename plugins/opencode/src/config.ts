@@ -1,5 +1,6 @@
 import type { ContentCaptureMode } from "@grafana/agento11y";
 import { applyAgento11yDotenv } from "./agento11yDotenv.js";
+import { parseTagPairs, resolveAutoTags, selectAutoTags } from "./autotag.js";
 
 export type Agento11yAuthConfig =
   | {
@@ -31,6 +32,12 @@ export interface Agento11yOpencodeConfig {
   debug: boolean;
   guards?: GuardsFeatureConfig;
   otlp?: OtlpConfig;
+  /**
+   * Client tags resolved for AGENTO11Y_AUTO_CODING_AGENT_TAGS, or undefined
+   * when the switch is off. Undefined and an empty map are the same to the SDK,
+   * but undefined keeps the client config free of an empty `tags` object.
+   */
+  autoTags?: Record<string, string>;
 }
 
 export async function loadConfig(): Promise<Agento11yOpencodeConfig | null> {
@@ -62,6 +69,35 @@ export function resolveConfig(): Agento11yOpencodeConfig | null {
     guards: resolveGuards(),
     otlp: resolveOtlp(),
   };
+}
+
+// resolveAutoTagValues reads AGENTO11Y_AUTO_CODING_AGENT_TAGS and the optional
+// AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES allowlist, then resolves whatever they
+// enable, for the project directory the caller passes. The switch is off by
+// default, so a session that has not opted in carries exactly the tags it
+// carried before.
+//
+// The caller resolves this rather than resolveConfig because the opencode
+// server can run from a directory other than the project root; the plugin
+// input names the project directory, and that is the checkout the repository
+// and branch must come from.
+//
+// The plugin builds one client per opencode session, so these values freeze at
+// session start: a checkout that changes mid-session keeps the metric label it
+// started with. The per-generation `git.branch` tag (tags.ts) is resolved per
+// turn and does follow the checkout.
+export function resolveAutoTagValues(
+  cwd: string,
+): Record<string, string> | undefined {
+  const { enabled } = selectAutoTags(lookupBrandedEnv, (message) =>
+    console.warn(`[sigil-opencode] ${message}`),
+  );
+  if (enabled.size === 0) return undefined;
+  return resolveAutoTags(enabled, {
+    cwd,
+    userId: brandedEnv("USER_ID"),
+    explicitTags: parseTagPairs(brandedEnv("TAGS")),
+  });
 }
 
 function resolveAuth(): Agento11yAuthConfig {
