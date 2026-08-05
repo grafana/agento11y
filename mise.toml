@@ -92,7 +92,16 @@ ruff format --check python/ python-providers/ python-frameworks/
 
 [tasks."lint:cs"]
 description = "Verify .NET SDK formatting and analyzer checks"
-run = "dotnet format dotnet/Agento11y.DotNet.slnx --verify-no-changes"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+dotnet format dotnet/Agento11y.DotNet.slnx --verify-no-changes
+# dotnet format skips *.g.cs unless --include-generated is passed, and passing it
+# for the whole solution would also check the protobuf stubs under obj/. Name the
+# one generated file this repository owns instead.
+dotnet format dotnet/Agento11y.DotNet.slnx --verify-no-changes --include-generated \\
+  --include dotnet/src/Grafana.Agento11y/RedactionPatterns.g.cs
+"""
 
 [tasks."lint:ts:sdk-js"]
 description = "Lint TypeScript/JavaScript SDK code"
@@ -109,13 +118,18 @@ description = "Lint OpenCode plugin code"
 depends = ["deps"]
 run = "pnpm --filter @grafana/agento11y-opencode run lint"
 
+[tasks."lint:ts:redaction-generator"]
+description = "Lint the secret-pattern generator"
+dir = "redaction"
+run = "biome check ."
+
 [tasks."lint:js-dependency-pinning"]
 description = "Verify JavaScript dependencies are pinned where required"
 run = "pnpm run check:js-dependency-pinning"
 
 [tasks.lint]
 description = "Run all linting"
-depends = ["lint:go", "lint:py", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi", "lint:ts:plugin-opencode", "lint:js-dependency-pinning"]
+depends = ["lint:go", "lint:py", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi", "lint:ts:plugin-opencode", "lint:ts:redaction-generator", "lint:js-dependency-pinning"]
 
 # --- Type checking ---
 
@@ -538,8 +552,52 @@ mise run test:go:pi-sessions-conformance
 mise run test:ts:pi-sessions-conformance
 """
 
+[tasks."test:go:sdk-redaction-conformance"]
+description = "Run the Go SDK redaction conformance suite"
+dir = "go"
+run = "GOWORK=off go test ./agento11y -run '^TestConformanceRedaction' -count=1"
+
+[tasks."test:go:plugin-redaction-conformance"]
+description = "Run the shared Go plugin redaction conformance suite"
+dir = "plugins/agento11y"
+run = "GOWORK=off go test ./internal/redact -run '^TestConformanceRedaction' -count=1"
+
+[tasks."test:ts:sdk-redaction-conformance"]
+description = "Run the TypeScript/JavaScript SDK redaction conformance suite"
+depends = ["deps"]
+dir = "js"
+run = "pnpm run test:build && node --test test/redaction.conformance.test.mjs"
+
+[tasks."test:ts:plugin-opencode-redaction-conformance"]
+description = "Run the OpenCode plugin redaction conformance suite"
+depends = ["deps", "build:ts:sdk-js"]
+dir = "plugins/opencode"
+run = "pnpm exec vitest run src/redact.conformance.test.ts"
+
+[tasks."test:py:sdk-redaction-conformance"]
+description = "Run the Python SDK redaction conformance suite"
+run = "uv run --python \"$PYTHON_BIN\" --with '.[dev]' --directory python pytest tests/test_redaction_conformance.py"
+
+[tasks."test:cs:sdk-redaction-conformance"]
+description = "Run the .NET SDK redaction conformance suite"
+dir = "dotnet"
+run = "dotnet test tests/Grafana.Agento11y.Tests/Grafana.Agento11y.Tests.csproj -c Release --filter FullyQualifiedName~RedactionConformance"
+
+[tasks."test:sdk:redaction-conformance"]
+description = "Run the shared redaction fixtures through every engine (four SDKs plus both plugins)"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+mise run test:go:sdk-redaction-conformance
+mise run test:py:sdk-redaction-conformance
+mise run test:ts:sdk-redaction-conformance
+mise run test:cs:sdk-redaction-conformance
+mise run test:go:plugin-redaction-conformance
+mise run test:ts:plugin-opencode-redaction-conformance
+"""
+
 [tasks."test:sdk:conformance"]
-description = "Run core, provider-wrapper, and framework-adapter conformance suites across supported SDKs"
+description = "Run the core, hook, experiment, provider-wrapper, framework-adapter, pi-session, and redaction conformance suites across supported SDKs"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -549,6 +607,7 @@ mise run test:sdk:experiments-conformance
 mise run test:sdk:provider-conformance
 mise run test:sdk:framework-conformance
 mise run test:pi-sessions-conformance
+mise run test:sdk:redaction-conformance
 """
 
 [tasks."test:sdk:all"]
@@ -683,6 +742,56 @@ fi
 echo "==> check:proto: stubs in sync"
 """
 
+# --- Redaction pattern generation ---
+
+[tasks."generate:redaction"]
+description = "Regenerate the per-language secret-pattern tables from redaction/patterns.json"
+run = "node redaction/scripts/generate.mjs"
+
+[tasks."test:redaction:generator"]
+description = "Run the redaction pattern generator's invariant tests"
+run = "node --test redaction/scripts/generate.test.mjs"
+
+[tasks."check:redaction"]
+description = "Fail if the generated secret-pattern tables drift from redaction/patterns.json"
+depends = ["test:redaction:generator"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+echo "==> check:redaction regenerate"
+# The generator prints one "generated <path>" line per file it writes, so a new
+# output target is diffed here without anyone maintaining a second list.
+generated="$(node redaction/scripts/generate.mjs "$tmp")"
+if [[ -z "$generated" ]]; then
+  echo >&2 "redaction generator wrote no files"
+  exit 1
+fi
+
+fail=0
+while IFS= read -r line; do
+  target="${line#generated }"
+  if ! diff -uN "$target" "$tmp/$target"; then
+    echo >&2 "::error file=${target}::${target} is out of sync with redaction/patterns.json"
+    fail=1
+  fi
+done <<< "$generated"
+
+if [[ $fail -ne 0 ]]; then
+  cat >&2 <<'EOF'
+
+Generated secret-pattern tables drifted from redaction/patterns.json.
+Run `mise run generate:redaction` and commit the regenerated files.
+EOF
+  exit 1
+fi
+
+echo "==> check:redaction: pattern tables in sync"
+"""
+
 # --- Mock generation (stubs) ---
 
 [tasks."generate:mocks:sdk-go"]
@@ -751,5 +860,5 @@ ls -la "$web/vendor" "$web/fonts"
 
 [tasks.check]
 description = "Run lint + typecheck + tests"
-depends = ["lint", "typecheck", "check:proto"]
+depends = ["lint", "typecheck", "check:proto", "check:redaction"]
 run = "mise run test:sdk:all"

@@ -1,14 +1,16 @@
 """
 Secret redaction engine for agento11y content capture.
 
-~20 high-confidence patterns hand-curated from Gitleaks
-(https://github.com/gitleaks/gitleaks). Two tiers:
+The patterns come from the shared table in ``redaction/patterns.json`` through
+the generated ``_redaction_patterns`` module, so all SDKs and plugins redact the
+same strings. Two tiers:
   - Tier 1: definite secret formats and optional email addresses
     used by both redact() and redact_lightweight()
-  - Tier 2: heuristic env patterns
+  - Tier 2: heuristic key/value patterns
     used only by redact()
 
-Add more patterns when concrete unredacted secrets are observed.
+To add a pattern, edit ``redaction/patterns.json`` and run
+``mise run generate:redaction``.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from ._redaction_patterns import BASE_FLAGS, EMAIL_PATTERN, TIER1_PATTERNS, TIER2_PATTERNS
 from .config import GenerationSanitizer, _env, _warn_legacy_env
 from .models import Generation, Message, MessageRole, Part, PartKind
 
@@ -51,46 +54,28 @@ class SecretRedactionOptions:
     redact_email_addresses: bool = True
 
 
-# --- Tier 1: High-confidence patterns (definite secret formats) ---
-_TIER1_PATTERNS: tuple[_SecretPattern, ...] = (
-    _SecretPattern("grafana-cloud-token", re.compile(r"\bglc_[A-Za-z0-9_-]{20,}")),
-    _SecretPattern("grafana-service-account-token", re.compile(r"\bglsa_[A-Za-z0-9_-]{20,}")),
-    _SecretPattern("aws-access-token", re.compile(r"\b(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16}\b")),
-    _SecretPattern("github-pat", re.compile(r"\bghp_[A-Za-z0-9_]{36,}")),
-    _SecretPattern("github-oauth", re.compile(r"\bgho_[A-Za-z0-9_]{36,}")),
-    _SecretPattern("github-app-token", re.compile(r"\bghs_[A-Za-z0-9_]{36,}")),
-    _SecretPattern("github-fine-grained-pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{82}")),
-    _SecretPattern("anthropic-api-key", re.compile(r"\bsk-ant-api03-[a-zA-Z0-9_-]{93}AA")),
-    _SecretPattern("anthropic-admin-key", re.compile(r"\bsk-ant-admin01-[a-zA-Z0-9_-]{93}AA")),
-    _SecretPattern("openai-api-key", re.compile(r"\bsk-[a-zA-Z0-9]{20}T3BlbkFJ[a-zA-Z0-9]{20}")),
-    _SecretPattern("openai-project-key", re.compile(r"\bsk-proj-[a-zA-Z0-9_-]{40,}")),
-    _SecretPattern("openai-svcacct-key", re.compile(r"\bsk-svcacct-[a-zA-Z0-9_-]{40,}")),
-    _SecretPattern("gcp-api-key", re.compile(r"\bAIza[A-Za-z0-9_-]{35}")),
-    _SecretPattern(
-        "private-key",
-        re.compile(r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----"),
-    ),
-    _SecretPattern("connection-string", re.compile(r"(?:postgres|mysql|mongodb|redis|amqp):\/\/[^\s'\"]+@[^\s'\"]+")),
-    _SecretPattern("bearer-token", re.compile(r"[Bb]earer\s+[A-Za-z0-9_.\-~+/]{20,}={0,3}")),
-    _SecretPattern("slack-token", re.compile(r"\bxox[bporas]-[A-Za-z0-9-]{10,}")),
-    _SecretPattern("stripe-key", re.compile(r"\b[sr]k_(?:live|test)_[A-Za-z0-9]{20,}")),
-    _SecretPattern("sendgrid-api-key", re.compile(r"\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}")),
-    _SecretPattern("twilio-api-key", re.compile(r"\bSK[a-f0-9]{32}")),
-    _SecretPattern("npm-token", re.compile(r"\bnpm_[A-Za-z0-9]{36}")),
-    _SecretPattern("pypi-token", re.compile(r"\bpypi-[A-Za-z0-9_-]{50,}")),
-)
+@dataclass(frozen=True, slots=True)
+class _Tier2Pattern:
+    id: str
+    regex: re.Pattern[str]
+    replacement: str
 
-_EMAIL_PATTERN = _SecretPattern("email", re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE))
 
-# --- Tier 2: Heuristic patterns (env file values) ---
-_TIER2_PATTERNS: tuple[_SecretPattern, ...] = (
-    _SecretPattern(
-        "env-secret-value",
-        re.compile(
-            r"((?:PASSWORD|SECRET|TOKEN|KEY|CREDENTIAL|API_KEY|PRIVATE_KEY|ACCESS_KEY)\s*[=:]\s*)([^\s\"{}\[\],]+)",
-            re.IGNORECASE,
-        ),
-    ),
+_TIER1_IDS: tuple[str, ...] = tuple(pattern_id for pattern_id, _ in TIER1_PATTERNS)
+
+# Alternating every tier 1 pattern into one regex scans each input once instead
+# of once per pattern. Each pattern is wrapped in a capturing group; the matched
+# group index identifies which pattern fired. The generator rejects capturing
+# groups inside a tier 1 pattern, which would shift that mapping. Scanning once
+# is also what keeps this output identical to the other SDKs': with per-pattern
+# passes an earlier pattern can rewrite text a later one would have matched.
+_TIER1_COMBINED = re.compile("|".join(f"({source})" for _, source in TIER1_PATTERNS), BASE_FLAGS)
+
+_EMAIL_PATTERN = _SecretPattern(EMAIL_PATTERN[0], re.compile(EMAIL_PATTERN[1], EMAIL_PATTERN[2]))
+
+_TIER2_PATTERNS: tuple[_Tier2Pattern, ...] = tuple(
+    _Tier2Pattern(pattern_id, re.compile(source, flags), replacement)
+    for pattern_id, source, flags, replacement in TIER2_PATTERNS
 )
 
 
@@ -102,14 +87,11 @@ class _SecretRedactor:
 
     # Full redaction: tier 1 + tier 2. Use for tool call args and tool results.
     def redact(self, text: str) -> str:
-        result = _apply_patterns(text, _TIER1_PATTERNS)
-        if self._include_email_addresses:
-            result = _apply_pattern(result, _EMAIL_PATTERN)
-        return _apply_tier2_patterns(result)
+        return _apply_tier2_patterns(self.redact_lightweight(text))
 
     # Lightweight redaction: tier 1 only. Use for assistant text and reasoning.
     def redact_lightweight(self, text: str) -> str:
-        result = _apply_patterns(text, _TIER1_PATTERNS)
+        result = _apply_tier1(text)
         if self._include_email_addresses:
             result = _apply_pattern(result, _EMAIL_PATTERN)
         return result
@@ -188,32 +170,48 @@ def create_secret_redaction_sanitizer(
         if generation.system_prompt:
             generation.system_prompt = redactor.redact(generation.system_prompt)
 
+        # conversation_title and call_error are short natural-language strings;
+        # lightweight redaction (tier 1 + email) avoids mangling them with the
+        # tier 2 heuristics.
+        if generation.conversation_title:
+            generation.conversation_title = redactor.redact_lightweight(generation.conversation_title)
+        if generation.call_error:
+            generation.call_error = redactor.redact_lightweight(generation.call_error)
+
         for message in generation.input:
-            if redact_inputs:
-                if message.role == MessageRole.USER:
-                    mode = "full"
-                elif message.role == MessageRole.ASSISTANT:
-                    mode = "light"
-                elif message.role == MessageRole.TOOL:
-                    mode = "full"
-                else:
-                    mode = "none"
-            else:
-                mode = "none"
-            _sanitize_message(message, redactor, mode)
+            _sanitize_message(message, redactor, _input_text_mode(message.role, redact_inputs))
 
         for message in generation.output:
-            if message.role == MessageRole.ASSISTANT:
-                mode = "light"
-            elif message.role == MessageRole.TOOL:
-                mode = "full"
-            else:
-                mode = "none"
-            _sanitize_message(message, redactor, mode)
+            _sanitize_message(message, redactor, _output_text_mode(message.role))
 
         return generation
 
     return _sanitize
+
+
+def _input_text_mode(role: MessageRole, redact_user_input: bool) -> str:
+    """Picks the redaction mode for an input message.
+
+    Historic assistant turns and tool results in input replay the same secret
+    surface as the output, so they are redacted whatever the caller chose. Only
+    user text waits for an explicit opt-in.
+    """
+
+    if role == MessageRole.USER:
+        return "full" if redact_user_input else "none"
+    if role == MessageRole.TOOL:
+        return "full"
+    if role == MessageRole.ASSISTANT:
+        return "light"
+    return "none"
+
+
+def _output_text_mode(role: MessageRole) -> str:
+    if role == MessageRole.ASSISTANT:
+        return "light"
+    if role == MessageRole.TOOL:
+        return "full"
+    return "none"
 
 
 def _sanitize_message(message: Message, redactor: _SecretRedactor, default_text_mode: str) -> None:
@@ -250,11 +248,13 @@ def _redact_string(value: str, redactor: _SecretRedactor, mode: str) -> str:
     return value
 
 
-def _apply_patterns(text: str, patterns: tuple[_SecretPattern, ...]) -> str:
-    result = text
-    for pattern in patterns:
-        result = _apply_pattern(result, pattern)
-    return result
+def _apply_tier1(text: str) -> str:
+    def label(match: re.Match[str]) -> str:
+        # Exactly one branch of the alternation participates in a match, so
+        # lastindex is the index of the pattern that fired.
+        return f"[REDACTED:{_TIER1_IDS[(match.lastindex or 1) - 1]}]"
+
+    return _TIER1_COMBINED.sub(label, text)
 
 
 def _apply_pattern(text: str, pattern: _SecretPattern) -> str:
@@ -264,5 +264,5 @@ def _apply_pattern(text: str, pattern: _SecretPattern) -> str:
 def _apply_tier2_patterns(text: str) -> str:
     result = text
     for pattern in _TIER2_PATTERNS:
-        result = pattern.regex.sub(rf"\1[REDACTED:{pattern.id}]", result)
+        result = pattern.regex.sub(pattern.replacement, result)
     return result

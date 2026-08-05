@@ -107,7 +107,7 @@ func TestPostToolUseFailure_RecordsErrorStatusAndMessage(t *testing.T) {
 			"redacts tier 2 env assignment",
 			agento11y.ContentCaptureModeFull,
 			json.RawMessage(`{"message":"env dump: API_KEY=kR7fQ2wLmZ9xTb4vNc1JhY6s"}`),
-			"env dump:[REDACTED:env-secret-value]",
+			"env dump: API_KEY=[REDACTED:env-secret-value]",
 		},
 		{"dropped in no_tool_content", agento11y.ContentCaptureModeNoToolContent, json.RawMessage(`"boom"`), ""},
 		{"dropped in metadata_only", agento11y.ContentCaptureModeMetadataOnly, json.RawMessage(`"boom"`), ""},

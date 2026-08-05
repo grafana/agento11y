@@ -222,8 +222,10 @@ client = Client(
 The built-in sanitizer:
 
 - redacts high-confidence secret formats in assistant text and thinking
-- redacts secret formats plus env-style secret values in tool call inputs and tool results
+- redacts secret formats plus key/value secrets in system prompts, tool call inputs, and tool results
 - redacts email addresses by default
+- redacts the conversation title and call error
+- redacts historic assistant turns and tool messages in input
 - leaves user input unchanged unless input redaction is enabled
 
 To preserve email addresses, opt out explicitly:

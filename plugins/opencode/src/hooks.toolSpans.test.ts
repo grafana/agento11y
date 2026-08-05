@@ -8,6 +8,7 @@ import {
   _resetHookState,
   _resetToolExecutionState,
   createAgento11yHooks,
+  createRedactor,
   drainActiveToolExecutions,
   emitToolSpans,
   mergeToolSpanRecords,
@@ -15,7 +16,6 @@ import {
   toolSpansFromParts,
 } from "./hooks.js";
 import { emitServerInstanceDisposed } from "./hooks.testutil.js";
-import { Redactor } from "./redact.js";
 
 function mockAgento11yClient() {
   const recorders: Array<{
@@ -73,7 +73,7 @@ const defaultOpts = () => ({
   agentVersion: "test-version",
   requestProvider: "anthropic",
   requestModel: "claude-sonnet-4-opencode",
-  redactor: new Redactor(),
+  redactor: createRedactor(),
   debugLog: () => {},
 });
 

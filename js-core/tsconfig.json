@@ -15,6 +15,7 @@
     "../js/src/exporters/http.ts",
     "../js/src/hooks.ts",
     "../js/src/redaction.ts",
+    "../js/src/redaction-patterns.generated.ts",
     "../js/src/types.ts",
     "../js/src/utils.ts"
   ]

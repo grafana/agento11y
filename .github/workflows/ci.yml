@@ -59,6 +59,12 @@ jobs:
       - name: Check protobuf stubs are in sync
         run: mise run check:proto
 
+      - name: Check generated redaction pattern tables are in sync
+        run: mise run check:redaction
+
+      - name: Lint the redaction pattern generator
+        run: mise run lint:ts:redaction-generator
+
   conformance:
     name: Cross-SDK conformance
     runs-on: ubuntu-latest
@@ -301,6 +307,11 @@ jobs:
 
       - name: Format check
         run: dotnet format dotnet/Agento11y.DotNet.slnx --verify-no-changes --no-restore
+
+      - name: Format check (generated pattern table)
+        run: |
+          dotnet format dotnet/Agento11y.DotNet.slnx --verify-no-changes --no-restore \
+            --include-generated --include dotnet/src/Grafana.Agento11y/RedactionPatterns.g.cs
 
       - name: Test
         run: dotnet test dotnet/Agento11y.DotNet.slnx -c Release
