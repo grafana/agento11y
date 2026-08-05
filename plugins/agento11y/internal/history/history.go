@@ -32,12 +32,13 @@ import (
 // live one.
 type AgentID string
 
-// The agents with a registered importer. Both are declared here rather than in
+// The agents with a registered importer. They are declared here rather than in
 // their importer files so callers can name them without importing the agent
 // package and triggering its init.
 const (
 	AgentClaudeCode AgentID = "claude-code"
 	AgentCodex      AgentID = "codex"
+	AgentPi         AgentID = "pi"
 )
 
 // SourceRef locates a single historical turn on disk. It is content-free: it

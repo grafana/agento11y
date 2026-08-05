@@ -1,0 +1,406 @@
+{
+  "cases": {
+    "full-turn": [
+      {
+        "id": "${GENERATION_ID}",
+        "conversation_id": "019ead07-cfbf-78d3-8b03-875769426583",
+        "conversation_title": "summarize the go files",
+        "model": {
+          "provider": "anthropic",
+          "name": "claude-sonnet-4-pi"
+        },
+        "response_id": "resp-pi-1",
+        "response_model": "claude-sonnet-4-pi",
+        "mode": "STREAM",
+        "operation_name": "streamText",
+        "stop_reason": "end_turn",
+        "thinking_enabled": false,
+        "usage": {
+          "input_tokens": 120,
+          "output_tokens": 30,
+          "total_tokens": 160,
+          "cache_read_input_tokens": 10,
+          "cache_write_input_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "started_at": "${STARTED_AT}",
+        "completed_at": "${COMPLETED_AT}",
+        "input": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "summarize the go files"
+              }
+            ]
+          }
+        ],
+        "output": [
+          {
+            "role": "assistant",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "There are two go files: main.go and util.go."
+              }
+            ]
+          }
+        ],
+        "tools": [],
+        "cost_usd": 0.003,
+        "call_error": "",
+        "parent_generation_ids": [],
+        "fork": null
+      }
+    ],
+    "thinking-turn": [
+      {
+        "id": "${GENERATION_ID}",
+        "conversation_id": "019ead20-1111-78d3-8b03-875769426583",
+        "conversation_title": "why does the build fail?",
+        "model": {
+          "provider": "anthropic",
+          "name": "claude-opus-4-8"
+        },
+        "response_id": "resp-pi-2",
+        "response_model": "claude-opus-4-8",
+        "mode": "STREAM",
+        "operation_name": "streamText",
+        "stop_reason": "end_turn",
+        "thinking_enabled": true,
+        "usage": {
+          "input_tokens": 2,
+          "output_tokens": 311,
+          "total_tokens": 46539,
+          "cache_read_input_tokens": 0,
+          "cache_write_input_tokens": 46226,
+          "reasoning_tokens": 0
+        },
+        "started_at": "${STARTED_AT}",
+        "completed_at": "${COMPLETED_AT}",
+        "input": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "why does the build fail?"
+              }
+            ]
+          }
+        ],
+        "output": [
+          {
+            "role": "assistant",
+            "parts": [
+              {
+                "kind": "thinking",
+                "thinking": "The error names a missing import."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "An import is missing."
+              }
+            ]
+          }
+        ],
+        "tools": [],
+        "cost_usd": 0.2966975,
+        "call_error": "",
+        "parent_generation_ids": [],
+        "fork": null
+      }
+    ],
+    "tool-call-turn": [
+      {
+        "id": "${GENERATION_ID}",
+        "conversation_id": "019ead30-2222-78d3-8b03-875769426583",
+        "conversation_title": "review the last commit",
+        "model": {
+          "provider": "anthropic",
+          "name": "claude-opus-4-8"
+        },
+        "response_id": "resp-pi-3",
+        "response_model": "claude-opus-4-8",
+        "mode": "STREAM",
+        "operation_name": "streamText",
+        "stop_reason": "tool_use",
+        "thinking_enabled": false,
+        "usage": {
+          "input_tokens": 12,
+          "output_tokens": 34,
+          "total_tokens": 57,
+          "cache_read_input_tokens": 5,
+          "cache_write_input_tokens": 6,
+          "reasoning_tokens": 0
+        },
+        "started_at": "${STARTED_AT}",
+        "completed_at": "${COMPLETED_AT}",
+        "input": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "review the last commit"
+              }
+            ]
+          }
+        ],
+        "output": [
+          {
+            "role": "assistant",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "Let me gather context."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "parts": [
+              {
+                "kind": "tool_call",
+                "tool_call": {
+                  "id": "toolu_1",
+                  "name": "bash",
+                  "arguments": {
+                    "command": "git log -1"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "parts": [
+              {
+                "kind": "tool_call",
+                "tool_call": {
+                  "id": "toolu_2",
+                  "name": "read",
+                  "arguments": {
+                    "path": "main.go",
+                    "limit": 40
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "parts": [
+              {
+                "kind": "tool_result",
+                "tool_result": {
+                  "tool_call_id": "toolu_1",
+                  "name": "bash",
+                  "content": "commit abc123",
+                  "is_error": false
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "parts": [
+              {
+                "kind": "tool_result",
+                "tool_result": {
+                  "tool_call_id": "toolu_2",
+                  "name": "read",
+                  "content": "package main",
+                  "is_error": true
+                }
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "name": "bash"
+          },
+          {
+            "name": "read"
+          }
+        ],
+        "cost_usd": 0.006,
+        "call_error": "",
+        "parent_generation_ids": [],
+        "fork": null
+      },
+      {
+        "id": "${GENERATION_ID}",
+        "conversation_id": "019ead30-2222-78d3-8b03-875769426583",
+        "conversation_title": "review the last commit",
+        "model": {
+          "provider": "anthropic",
+          "name": "claude-opus-4-8"
+        },
+        "response_id": "resp-pi-4",
+        "response_model": "claude-opus-4-8",
+        "mode": "STREAM",
+        "operation_name": "streamText",
+        "stop_reason": "end_turn",
+        "thinking_enabled": false,
+        "usage": {
+          "input_tokens": 40,
+          "output_tokens": 8,
+          "total_tokens": 48,
+          "cache_read_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "started_at": "${STARTED_AT}",
+        "completed_at": "${COMPLETED_AT}",
+        "input": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "and the tests?"
+              }
+            ]
+          }
+        ],
+        "output": [
+          {
+            "role": "assistant",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "They pass."
+              }
+            ]
+          }
+        ],
+        "tools": [],
+        "cost_usd": 0.0006,
+        "call_error": "",
+        "parent_generation_ids": [
+          "${PARENT_GENERATION_ID}"
+        ],
+        "fork": null
+      }
+    ],
+    "missing-usage": [
+      {
+        "id": "${GENERATION_ID}",
+        "conversation_id": "019ead40-3333-78d3-8b03-875769426583",
+        "conversation_title": "count the files",
+        "model": {
+          "provider": "openai-codex",
+          "name": "gpt-5.5"
+        },
+        "response_id": "resp-pi-5",
+        "response_model": "gpt-5.5",
+        "mode": "STREAM",
+        "operation_name": "streamText",
+        "stop_reason": "end_turn",
+        "thinking_enabled": false,
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "total_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "started_at": "${STARTED_AT}",
+        "completed_at": "${COMPLETED_AT}",
+        "input": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "count the files"
+              }
+            ]
+          }
+        ],
+        "output": [
+          {
+            "role": "assistant",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "Fourteen."
+              }
+            ]
+          }
+        ],
+        "tools": [],
+        "cost_usd": 0.02,
+        "call_error": "",
+        "parent_generation_ids": [],
+        "fork": null
+      }
+    ],
+    "fork": [
+      {
+        "id": "${GENERATION_ID}",
+        "conversation_id": "019ead60-5555-78d3-8b03-875769426583",
+        "conversation_title": "shorter, please",
+        "model": {
+          "provider": "anthropic",
+          "name": "claude-opus-4-8"
+        },
+        "response_id": "resp-pi-7",
+        "response_model": "claude-opus-4-8",
+        "mode": "STREAM",
+        "operation_name": "streamText",
+        "stop_reason": "end_turn",
+        "thinking_enabled": false,
+        "usage": {
+          "input_tokens": 14,
+          "output_tokens": 6,
+          "total_tokens": 20,
+          "cache_read_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "reasoning_tokens": 0
+        },
+        "started_at": "${STARTED_AT}",
+        "completed_at": "${COMPLETED_AT}",
+        "input": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "shorter, please"
+              }
+            ]
+          }
+        ],
+        "output": [
+          {
+            "role": "assistant",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "One line, then."
+              }
+            ]
+          }
+        ],
+        "tools": [],
+        "cost_usd": 0.0005,
+        "call_error": "",
+        "parent_generation_ids": [],
+        "fork": {
+          "parent_session_id": "019ead50-4444-78d3-8b03-875769426583",
+          "parent_generation_id": "${TRUNK_GENERATION_ID}"
+        }
+      }
+    ]
+  }
+}

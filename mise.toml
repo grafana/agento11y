@@ -514,6 +514,30 @@ mise run test:py:sdk-framework-conformance
 mise run test:java:sdk-framework-conformance
 """
 
+[tasks."test:go:pi-sessions-conformance"]
+description = "Run the Go half of the pi session-log conformance tests"
+dir = "plugins/agento11y"
+run = "GOWORK=off go test ./internal/history -run '^TestPiSession' -count=1"
+
+[tasks."test:ts:pi-sessions-conformance"]
+description = "Run the TypeScript half of the pi session-log conformance tests"
+depends = ["deps", "build:ts:sdk-js"]
+run = "pnpm --filter @grafana/agento11y-pi exec vitest run src/piSessionConformance.test.ts"
+
+[tasks."test:pi-sessions-conformance"]
+description = """
+Check the Go pi history importer and the TypeScript pi plugin against the shared
+conformance/pi-sessions fixtures. pi is the one agent whose live capture is
+TypeScript and whose importer is Go, so the fixtures are the only thing holding
+the two mappings together.
+"""
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+mise run test:go:pi-sessions-conformance
+mise run test:ts:pi-sessions-conformance
+"""
+
 [tasks."test:sdk:conformance"]
 description = "Run core, provider-wrapper, and framework-adapter conformance suites across supported SDKs"
 run = """
@@ -524,6 +548,7 @@ mise run test:sdk:hooks-conformance
 mise run test:sdk:experiments-conformance
 mise run test:sdk:provider-conformance
 mise run test:sdk:framework-conformance
+mise run test:pi-sessions-conformance
 """
 
 [tasks."test:sdk:all"]

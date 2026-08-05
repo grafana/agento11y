@@ -129,7 +129,17 @@ agento11y history import claude-code --local
 agento11y history import claude-code
 ```
 
-Supported agents are `claude-code` and `codex`. `agento11y history import` with no agent lists them.
+Supported agents are `claude-code`, `codex`, and `pi`. `agento11y history import` with no agent lists them.
+
+A `pi` import reads pi's session logs under `$PI_CODING_AGENT_DIR/sessions` (by default `~/.pi/agent/sessions`) and produces one generation per assistant turn, with its prompt, thinking, tool calls, matched tool results, model, token usage, cost, both timestamps, and parent turn. Three things live capture records are not in the session log, so an imported pi session is thinner than a captured one:
+
+- No compaction or branch-summary generations. Live exports each summarization call as its own generation. pi's `compaction` entry carries the summary text, the token count it compacted away, and, on recent pi versions, the call's `usage` and cost, but never the model or the provider, so the call cannot be reconstructed as a generation. An imported session therefore holds fewer generations than a captured one, and the missing ones are the expensive calls.
+- No system prompt, request controls (`max_tokens`, `temperature`, `top_p`, tool choice, thinking budget), or time to first token. pi records none of them.
+- Tool definitions are name-only, and only for the tools a turn called: the descriptions, schemas, and the list of tools that were offered but unused live in pi's runtime. Session tags (`cwd`, `git.branch`) are absent for the same reason.
+
+Subagent runs are in neither: the nested `run-N/session.jsonl` logs come from the third-party `pi-subagents` package, which live capture ignores too, so importing them would exceed live fidelity rather than match it.
+
+A forked pi session imports only the turns the fork itself ran. The trunk holds the entries a fork copied from it and exports those turns under its own import, and, when the trunk exported the fork's parent turn, the fork's first turn carries `pi.fork.parent_session_id` and `pi.fork.parent_generation_id` metadata instead of a parent edge. A fork of a fork carries neither key, because no trunk generation exists to name.
 
 `--local` picks the endpoint. Without it, the import exports to the configured Grafana Cloud endpoint, exactly as a live session does. With it, the import exports to the local daemon on this machine.
 
