@@ -28,3 +28,6 @@ Coding agents
   cursor:             detected v0.22.0 (hook-based; configured in Cursor settings)
 
 ✗ 2 problem(s): conversations, analytics misconfigured
+
+Need help? Paste this to your coding agent:
+Run `agento11y skills show setup-coding-agent` and follow it to set up Grafana Agent observability for my coding agent.
