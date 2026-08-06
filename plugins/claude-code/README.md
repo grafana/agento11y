@@ -103,6 +103,7 @@ Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a mi
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
 | `AGENTO11Y_USER_ID` | from `~/.claude.json` | Override the user id. |
+| `AGENTO11Y_AGENT_NAME` | `claude-code` | Override the exported `agent_name`. Subagent turns become `<name>/<subagent type>`, or `<name>/subagent` when Claude Code names no type. Avoid a `/` in the name itself: a slash marks a subagent generation, so every turn of the run is counted as one. Guard rules and dashboards that filter on `claude-code` no longer match the generations this run exports. |
 | `AGENTO11Y_USER_ID_SOURCE` | `email` | Which field to read from `~/.claude.json`: `email` or `accountUuid`. |
 | `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
 | `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `agento11y-claude-code` plugin automatically. Set `false` to pin the installed version. |

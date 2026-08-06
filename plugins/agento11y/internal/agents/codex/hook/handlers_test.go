@@ -948,6 +948,9 @@ func TestPreToolUseGuard(t *testing.T) {
 }
 
 func TestPreToolUseGuardSendsExpectedRequest(t *testing.T) {
+	// The request below is asserted against the product name, so a developer
+	// shell that exports AGENTO11Y_AGENT_NAME must not reach config.Load.
+	envconfig.PinAliasEnvBlank(t)
 	var capturedPath atomic.Value
 	var capturedBody atomic.Value
 	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1106,4 +1109,106 @@ func jsonInt64(t *testing.T, v any) int64 {
 		t.Fatalf("expected numeric JSON value, got %T (%#v)", v, v)
 	}
 	return 0
+}
+
+// TestAgentNameOverrideGuardAndExport pins the guard request and the exported
+// generations to one resolved name, including the retry sweep. A rule scoped to
+// a per-run name only matches that run when the two paths agree.
+func TestAgentNameOverrideGuardAndExport(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{name: "unset keeps the product name", want: mapper.AgentName},
+		{name: "preferred spelling", env: map[string]string{"AGENTO11Y_AGENT_NAME": "codex-e2e"}, want: "codex-e2e"},
+		{name: "legacy spelling", env: map[string]string{"SIGIL_AGENT_NAME": "legacy-name"}, want: "legacy-name"},
+		{
+			name: "preferred wins over legacy",
+			env: map[string]string{
+				"AGENTO11Y_AGENT_NAME": "preferred-name",
+				"SIGIL_AGENT_NAME":     "legacy-name",
+			},
+			want: "preferred-name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			logger := log.New(io.Discard, "", 0)
+
+			var guardAgents, exportAgents []string
+			server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.Path, "hooks:evaluate") {
+					body, _ := io.ReadAll(r.Body)
+					var req struct {
+						Context struct {
+							AgentName string `json:"agent_name"`
+						} `json:"context"`
+					}
+					_ = json.Unmarshal(body, &req)
+					guardAgents = append(guardAgents, req.Context.AgentName)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"action":"allow"}`))
+					return
+				}
+				body, _ := io.ReadAll(r.Body)
+				var req struct {
+					Generations []struct {
+						AgentName string `json:"agent_name"`
+					} `json:"generations"`
+				}
+				_ = json.Unmarshal(body, &req)
+				for _, g := range req.Generations {
+					exportAgents = append(exportAgents, g.AgentName)
+				}
+				writeAcceptedGenerationResponse(t, w, body)
+			}))
+			defer server.Close()
+
+			t.Setenv("SIGIL_ENDPOINT", server.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+			t.Setenv("SIGIL_AUTH_TOKEN", "token")
+			t.Setenv("SIGIL_GUARDS_ENABLED", "true")
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			// A prior turn flagged for retry: the sweep re-maps it with the
+			// name this invocation resolves, not the one its fragment was
+			// written under.
+			require.NoError(t, fragment.Update("sess", "old-turn", logger, func(f *fragment.Fragment) bool {
+				f.Model = "gpt-5.5"
+				f.PendingRetry = true
+				f.CompletedAt = "2026-05-15T09:00:00Z"
+				return true
+			}))
+			require.NoError(t, fragment.Update("sess", "turn", logger, func(f *fragment.Fragment) bool {
+				f.Model = "gpt-5.5"
+				f.Prompt = "hello"
+				return true
+			}))
+
+			cfg := config.Load(logger)
+			var stdout bytes.Buffer
+			PreToolUse(context.Background(), &stdout, Payload{
+				HookEventName: "PreToolUse",
+				SessionID:     "sess",
+				ToolName:      "Bash",
+				ToolUseID:     "tu_1",
+				ToolInput:     json.RawMessage(`{"command":"echo hi"}`),
+				Model:         "gpt-5.5",
+			}, cfg, logger)
+			Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, cfg, logger)
+
+			assert.Equal(t, []string{tt.want}, guardAgents, "guard agent names")
+			assert.Len(t, exportAgents, 2, "one current turn plus one retried turn")
+			for i, got := range exportAgents {
+				assert.Equal(t, tt.want, got, "exported agent name[%d]", i)
+			}
+		})
+	}
 }

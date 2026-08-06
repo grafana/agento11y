@@ -274,6 +274,22 @@ func ParseExtraTags(s string) map[string]string {
 	return out
 }
 
+// ResolveAgentName returns the agent identity to attach to generations and
+// guard requests: AGENTO11Y_AGENT_NAME, then SIGIL_AGENT_NAME, then def. A
+// value that is empty or only whitespace counts as unset, and the returned
+// value is trimmed, so a caller never has to trim it again.
+//
+// def is each adapter's product name, so an unset variable keeps the name
+// dashboards and guard rules already filter on. Setting the variable gives a
+// single run its own agent name, which is how a test harness keeps its
+// generations out of the operator's own data.
+func ResolveAgentName(def string) string {
+	if v, _, ok := LookupEnv("AGENT_NAME"); ok {
+		return v
+	}
+	return def
+}
+
 // ResolveContentMode returns the effective ContentCaptureMode from
 // AGENTO11Y_CONTENT_CAPTURE_MODE (SIGIL_ fallback). Empty values and the
 // Default zero-value enum resolve to metadata_only so the explicit fall-back

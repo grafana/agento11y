@@ -15,6 +15,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/codexlog"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 func codexRecord(ts, typ string, payload map[string]any) string {
@@ -316,12 +317,12 @@ func TestCodexTurnWithoutTokenUsageIsMarkedApproximate(t *testing.T) {
 	}
 }
 
-// TestCodexSubagentTurnsLinkToTheParentTurn covers a spawned agent session. The
-// parent generation ID must be the deterministic import ID of the parent's
-// spawning turn, so the two sessions join up in the viewer.
-func TestCodexSubagentTurnsLinkToTheParentTurn(t *testing.T) {
-	root := t.TempDir()
-	parentID := "019a4a49-979a-7382-abb5-a9a4e8740114"
+// writeCodexSubagentPair writes a parent rollout that spawns one subagent plus
+// the subagent's own rollout, and returns both paths along with the parent
+// session ID.
+func writeCodexSubagentPair(t *testing.T, root string) (parentPath, childPath, parentID string) {
+	t.Helper()
+	parentID = "019a4a49-979a-7382-abb5-a9a4e8740114"
 	childID := "019a4a50-1111-7382-abb5-a9a4e8740115"
 
 	parentBody := codexRecord("2026-01-10T12:00:00Z", "session_meta", map[string]any{"id": parentID, "cwd": "/work/repo"}) +
@@ -335,7 +336,7 @@ func TestCodexSubagentTurnsLinkToTheParentTurn(t *testing.T) {
 			"type": "function_call_output", "call_id": "call-spawn",
 			"output": fmt.Sprintf(`{"agent_id":%q,"nickname":"scout"}`, childID),
 		})
-	parentPath := writeFile(t, filepath.Join(root, "rollout-2026-01-10T12-00-00-"+parentID+".jsonl"), parentBody)
+	parentPath = writeFile(t, filepath.Join(root, "rollout-2026-01-10T12-00-00-"+parentID+".jsonl"), parentBody)
 
 	childBody := codexRecord("2026-01-10T12:00:05Z", "session_meta", map[string]any{
 		"id": childID, "thread_source": "subagent", "parent_session_id": parentID,
@@ -346,7 +347,16 @@ func TestCodexSubagentTurnsLinkToTheParentTurn(t *testing.T) {
 			"type": "message", "role": "assistant",
 			"content": []map[string]any{{"type": "output_text", "text": "explored"}},
 		})
-	childPath := writeFile(t, filepath.Join(root, "rollout-2026-01-10T12-00-05-"+childID+".jsonl"), childBody)
+	childPath = writeFile(t, filepath.Join(root, "rollout-2026-01-10T12-00-05-"+childID+".jsonl"), childBody)
+	return parentPath, childPath, parentID
+}
+
+// TestCodexSubagentTurnsLinkToTheParentTurn covers a spawned agent session. The
+// parent generation ID must be the deterministic import ID of the parent's
+// spawning turn, so the two sessions join up in the viewer.
+func TestCodexSubagentTurnsLinkToTheParentTurn(t *testing.T) {
+	root := t.TempDir()
+	parentPath, childPath, parentID := writeCodexSubagentPair(t, root)
 
 	imp := codexImporterAt(root)
 	parentTurns := collectTurns(t, imp, codexPreview(t, imp, parentPath))
@@ -542,5 +552,42 @@ func TestCodexPreviewMatchesTheImportedTurnCount(t *testing.T) {
 	turns := collectTurns(t, imp, preview)
 	if preview.TurnCount != len(turns) {
 		t.Fatalf("preview said %d turns, the import produced %d", preview.TurnCount, len(turns))
+	}
+}
+
+// TestCodexImportIgnoresTheAgentNameOverride pins backfill to the product name.
+// A backfill cannot reconstruct the environment a past run had, so the name it
+// stamps is the product one whatever the current shell says. Subagent linking
+// is unaffected either way: the codex importer joins a child to its parent
+// through session_meta, not by matching an agent name.
+func TestCodexImportIgnoresTheAgentNameOverride(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_AGENT_NAME", "codex-e2e")
+
+	root := t.TempDir()
+	plainPath := writeCodexRollout(t, root, "019a4a60-2222-7382-abb5-a9a4e8740116")
+	parentPath, childPath, _ := writeCodexSubagentPair(t, root)
+	imp := codexImporterAt(root)
+
+	for _, tc := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "plain turn", path: plainPath, want: mapper.AgentName},
+		{name: "parent turn", path: parentPath, want: mapper.AgentName},
+		{name: "linked subagent turn", path: childPath, want: mapper.SubagentAgentName},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			turns := collectTurns(t, imp, codexPreview(t, imp, tc.path))
+			if len(turns) == 0 {
+				t.Fatal("no turns imported")
+			}
+			for i, turn := range turns {
+				if turn.Gen.AgentName != tc.want {
+					t.Errorf("turn %d AgentName = %q, want %q", i, turn.Gen.AgentName, tc.want)
+				}
+			}
+		})
 	}
 }

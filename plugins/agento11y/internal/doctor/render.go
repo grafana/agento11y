@@ -158,6 +158,12 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 	b.kv("content capture", withTrailer(r.Config.ContentCaptureMode,
 		describeSource(p, provenanceParts(r.Config.ContentModeKey, r.Config.ContentModeSource)...)))
 	b.kv("guards", describeGuards(p, r.Config))
+	// Only printed when an override is set: with the family unset each adapter
+	// reports its own product name, and there is no single value to show.
+	if r.Config.AgentName != "" {
+		b.kv("agent name", withTrailer(r.Config.AgentName,
+			describeSource(p, provenanceParts(r.Config.AgentNameKey, r.Config.AgentNameSource)...)))
+	}
 	if len(r.Config.Tags) > 0 {
 		b.kv("tags", withTrailer(formatTags(r.Config.Tags), describeSource(p, r.Config.TagsKey, r.Config.TagsSource)))
 	}

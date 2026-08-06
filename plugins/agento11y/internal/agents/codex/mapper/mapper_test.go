@@ -445,3 +445,65 @@ func TestMapWithoutTokenSnapshotPreservesExistingBehavior(t *testing.T) {
 		t.Fatalf("Metadata = %+v, want nil", got.Generation.Metadata)
 	}
 }
+
+// TestMapAgentNameOverride pins the exported identity against Inputs.AgentName
+// on both the plain and the linked-subagent path. Every case also asserts the
+// entrypoint tag and the model provider, which name the product rather than the
+// session and so must not move with the name.
+func TestMapAgentNameOverride(t *testing.T) {
+	tests := []struct {
+		name         string
+		agentName    string
+		model        string
+		link         *fragment.SubagentLink
+		want         string
+		wantProvider string
+	}{
+		{name: "blank keeps the product name", want: AgentName, wantProvider: "openai"},
+		{name: "override on a plain turn", agentName: "codex-e2e", want: "codex-e2e", wantProvider: "openai"},
+		{name: "override is trimmed", agentName: "  spaced  ", want: "spaced", wantProvider: "openai"},
+		{
+			name: "blank on a linked turn keeps the suffix",
+			link: &fragment.SubagentLink{ChildSessionID: "child", ParentSessionID: "parent"},
+			want: SubagentAgentName, wantProvider: "openai",
+		},
+		{
+			name: "override on a linked turn keeps the suffix", agentName: "codex-e2e",
+			link: &fragment.SubagentLink{ChildSessionID: "child", ParentSessionID: "parent"},
+			want: "codex-e2e/subagent", wantProvider: "openai",
+		},
+		{
+			// A model with no recognisable vendor falls back to the product
+			// name as its provider, which the override must not replace.
+			name: "override keeps the provider fallback", agentName: "codex-e2e",
+			model: "some-unknown-model",
+			want:  "codex-e2e", wantProvider: "codex",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := tt.model
+			if model == "" {
+				model = "gpt-5.5"
+			}
+			f := &fragment.Fragment{SessionID: "child", TurnID: "turn", Model: model}
+			got := Map(Inputs{
+				Fragment:       f,
+				SubagentLink:   tt.link,
+				AgentName:      tt.agentName,
+				ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+				Now:            time.Unix(1, 0),
+			})
+			if got.Generation.AgentName != tt.want || got.Start.AgentName != tt.want {
+				t.Fatalf("AgentName = %q/%q, want %q", got.Start.AgentName, got.Generation.AgentName, tt.want)
+			}
+			if got.Generation.Tags["entrypoint"] != "codex" {
+				t.Fatalf("entrypoint tag = %q, want codex", got.Generation.Tags["entrypoint"])
+			}
+			if got.Generation.Model.Provider != tt.wantProvider {
+				t.Fatalf("Model.Provider = %q, want %q", got.Generation.Model.Provider, tt.wantProvider)
+			}
+		})
+	}
+}

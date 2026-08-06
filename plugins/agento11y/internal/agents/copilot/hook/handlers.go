@@ -136,7 +136,7 @@ func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Con
 			}
 		}
 		res := guard.EvaluateToolCall(ctx, cfg.Guards, guard.ToolCallInput{
-			AgentName: mapper.AgentName,
+			AgentName: cfg.Agent(),
 			ToolName:  p.ToolName(),
 			// Copilot delivers tool args as a JSON-encoded string; the agento11y
 			// server only transforms tool-call input that is a JSON object, so
@@ -498,6 +498,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		Session:        session,
 		ContentCapture: cfg.ContentCapture,
 		UserIDOverride: envconfig.Getenv("USER_ID"),
+		AgentName:      cfg.Agent(),
 	})
 	logger.Printf(
 		"stop: mapped model=%s provider=%s response_id=%s output_tokens=%d assistant_text=%t tool_count=%d",

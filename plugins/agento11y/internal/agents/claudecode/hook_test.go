@@ -19,6 +19,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -266,9 +267,9 @@ func TestHandlePreToolUse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("SIGIL_GUARDS_ENABLED", "")
-			t.Setenv("SIGIL_GUARDS_FAIL_OPEN", "")
-			t.Setenv("SIGIL_GUARDS_TIMEOUT_MS", "")
+			// Blank every branded variable first: an ambient endpoint would send
+			// this guard call to a real backend.
+			envconfig.PinAliasEnvBlank(t)
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
@@ -291,7 +292,7 @@ func TestHandlePreToolUse(t *testing.T) {
 			}
 			st := state.Session{Model: "claude-sonnet-4"}
 
-			handlePreToolUse(context.Background(), &stdout, input, st, log.New(&logs, "", 0))
+			handlePreToolUse(context.Background(), &stdout, input, st, AgentName, log.New(&logs, "", 0))
 
 			if tt.expectServerCall && calls.Load() == 0 {
 				t.Errorf("expected server call, got 0")
@@ -1290,5 +1291,195 @@ func TestHook_LocalEndpointSkipsCloudAuthCheck(t *testing.T) {
 	})
 	if strings.Contains(logs, "not exporting: missing") {
 		t.Fatalf("local endpoint should bypass cloud auth check; got logs:\n%s", logs)
+	}
+}
+
+// TestHook_AgentNameOverride pins the two paths that stamp the agent identity
+// to one value. The guard request and the exported generations are built by
+// separate code (guard.ToolCallInput and the mapper), so a rule scoped to a
+// per-run name only matches that run's generations when both read the same
+// resolved name.
+//
+// It also pins what must not move with the name: the export User-Agent and the
+// OTel instrumentation scope identify the build, not the session.
+func TestHook_AgentNameOverride(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		// guardEnv, when set, replaces env for the PreToolUse invocation, so a
+		// name changed between two invocations of one session can be checked.
+		guardEnv  map[string]string
+		wantGuard string
+		wantAgent string
+		// wantSubagent is the name on the synthesised subagent generation.
+		wantSubagent string
+	}{
+		{
+			name:      "unset keeps the product name",
+			wantAgent: "claude-code", wantSubagent: "claude-code/subagent",
+		},
+		{
+			name:      "preferred spelling",
+			env:       map[string]string{"AGENTO11Y_AGENT_NAME": "claude-code-e2e"},
+			wantAgent: "claude-code-e2e", wantSubagent: "claude-code-e2e/subagent",
+		},
+		{
+			name:      "legacy spelling",
+			env:       map[string]string{"SIGIL_AGENT_NAME": "legacy-name"},
+			wantAgent: "legacy-name", wantSubagent: "legacy-name/subagent",
+		},
+		{
+			name: "preferred wins over legacy",
+			env: map[string]string{
+				"AGENTO11Y_AGENT_NAME": "preferred-name",
+				"SIGIL_AGENT_NAME":     "legacy-name",
+			},
+			wantAgent: "preferred-name", wantSubagent: "preferred-name/subagent",
+		},
+		{
+			// The name is resolved per hook invocation, not pinned into session
+			// state, so a value changed mid-session splits across two names.
+			name:      "name changed between invocations of one session",
+			guardEnv:  map[string]string{"AGENTO11Y_AGENT_NAME": "run-a"},
+			env:       map[string]string{"AGENTO11Y_AGENT_NAME": "run-b"},
+			wantGuard: "run-a",
+			wantAgent: "run-b", wantSubagent: "run-b/subagent",
+		},
+	}
+
+	// The export User-Agent and the OTel scope name the build, not the session,
+	// so both stay fixed under every override. No OTLP endpoint is configured
+	// here, so Hook passes no tracer and the SDK spans carry the SDK's own scope
+	// rather than the plugin's otelInstrumentationName.
+	wantUserAgent := useragent.For(AgentName)
+	const wantScope = "github.com/grafana/sigil-sdk/go/sigil"
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var guardAgents, exportAgents, exportUserAgents []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				switch {
+				case strings.Contains(r.URL.Path, "hooks:evaluate"):
+					var req struct {
+						Context struct {
+							AgentName string `json:"agent_name"`
+						} `json:"context"`
+					}
+					_ = json.Unmarshal(body, &req)
+					guardAgents = append(guardAgents, req.Context.AgentName)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"action":"allow"}`))
+				default:
+					var req struct {
+						Generations []struct {
+							ID        string `json:"id"`
+							AgentName string `json:"agent_name"`
+						} `json:"generations"`
+					}
+					_ = json.Unmarshal(body, &req)
+					exportUserAgents = append(exportUserAgents, r.Header.Get("User-Agent"))
+					resp := struct {
+						Results []map[string]any `json:"results"`
+					}{Results: make([]map[string]any, 0, len(req.Generations))}
+					for _, g := range req.Generations {
+						exportAgents = append(exportAgents, g.AgentName)
+						resp.Results = append(resp.Results, map[string]any{"generation_id": g.ID, "accepted": true})
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(resp)
+				}
+			}))
+			defer server.Close()
+
+			dir := t.TempDir()
+			sessionID := "agent-name-session"
+			// An Agent tool call plus its result: the synthesised subagent
+			// generation is a second copy of the name literal in the mapper,
+			// so the fixture has to produce one.
+			transcript := strings.Join([]string{
+				buildHookUserJSONL(sessionID, "research this"),
+				buildHookAssistantLineAt(sessionID, "req-1", "tool_use", hookFixtureTimestamp, []any{map[string]any{
+					"type": "tool_use", "id": "agent_1", "name": "Agent",
+					"input": map[string]any{"description": "look around"},
+				}}, 7),
+				buildHookToolResultJSONL(sessionID, "agent_1", "agent result"),
+				buildHookAssistantJSONL(sessionID, "req-2", "end_turn", "done", 5),
+			}, "\n") + "\n"
+			transcriptPath := filepath.Join(dir, "transcript.jsonl")
+			if err := os.WriteFile(transcriptPath, []byte(transcript), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			recorder := installGlobalSpanRecorder(t)
+			t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+			envconfig.PinAliasEnvBlank(t)
+			setHookExportEnv(t, server.URL)
+			t.Setenv("SIGIL_GUARDS_ENABLED", "true")
+
+			guardEnv := tt.env
+			if tt.guardEnv != nil {
+				guardEnv = tt.guardEnv
+			}
+			for k, v := range guardEnv {
+				t.Setenv(k, v)
+			}
+			runHookForTest(t, hookInput{
+				HookEventName:  "PreToolUse",
+				SessionID:      sessionID,
+				TranscriptPath: transcriptPath,
+				ToolName:       "Bash",
+				ToolInput:      json.RawMessage(`{"command":"echo hi"}`),
+				ToolUseID:      "tu_1",
+			})
+
+			// Re-applied so a scenario that changes the name between the two
+			// invocations exports under the second value.
+			envconfig.PinAliasEnvBlank(t)
+			setHookExportEnv(t, server.URL)
+			t.Setenv("SIGIL_GUARDS_ENABLED", "true")
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			logs := runHookForTest(t, hookInput{
+				HookEventName:  "Stop",
+				SessionID:      sessionID,
+				TranscriptPath: transcriptPath,
+			})
+
+			wantGuard := tt.wantGuard
+			if wantGuard == "" {
+				wantGuard = tt.wantAgent
+			}
+			if len(guardAgents) != 1 || guardAgents[0] != wantGuard {
+				t.Fatalf("guard agent names = %v, want [%q]", guardAgents, wantGuard)
+			}
+			wantExport := []string{tt.wantAgent, tt.wantSubagent, tt.wantAgent}
+			if len(exportAgents) != len(wantExport) {
+				t.Fatalf("exported agent names = %v, want %v (logs:\n%s)", exportAgents, wantExport, logs)
+			}
+			for i, want := range wantExport {
+				if exportAgents[i] != want {
+					t.Fatalf("exported agent name[%d] = %q, want %q (all: %v)", i, exportAgents[i], want, exportAgents)
+				}
+			}
+			if len(exportUserAgents) == 0 {
+				t.Fatal("no export request captured")
+			}
+			spans := spansByName(recorder.Ended(), "generateText")
+			if len(spans) == 0 {
+				t.Fatalf("no generateText spans recorded (logs:\n%s)", logs)
+			}
+			for i, got := range exportUserAgents {
+				if got != wantUserAgent {
+					t.Fatalf("export User-Agent[%d] = %q, want %q", i, got, wantUserAgent)
+				}
+			}
+			for i, s := range spans {
+				if got := s.InstrumentationScope().Name; got != wantScope {
+					t.Fatalf("span[%d] scope = %q, want %q", i, got, wantScope)
+				}
+			}
+		})
 	}
 }

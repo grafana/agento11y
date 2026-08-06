@@ -25,8 +25,9 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 )
 
-// AgentName is the agento11y identity attached to every generation emitted
-// by the vibe agent adapter. Stable across versions.
+// AgentName is the default agento11y identity attached to every generation
+// emitted by the vibe agent adapter. Stable across versions.
+// AGENTO11Y_AGENT_NAME overrides it per run through Inputs.AgentName.
 const AgentName = "mistral-vibe"
 
 // Inputs are the parameters Map needs to build one generation.
@@ -51,7 +52,19 @@ type Inputs struct {
 	PriorState         state.Session
 	PriorStateFound    bool
 	ContentCapture     agento11y.ContentCaptureMode
-	Now                time.Time
+	// AgentName overrides the exported agent identity. Blank means
+	// "mistral-vibe".
+	AgentName string
+	Now       time.Time
+}
+
+// agent is the agent name for this generation: the caller's override, or the
+// product name when none was given.
+func (in Inputs) agent() string {
+	if n := strings.TrimSpace(in.AgentName); n != "" {
+		return n
+	}
+	return AgentName
 }
 
 // Mapped bundles the GenerationStart and the corresponding Generation so
@@ -145,7 +158,7 @@ func Map(in Inputs, turnSeq int) Mapped {
 		ID:                  id,
 		ConversationID:      conversationID,
 		ConversationTitle:   in.Meta.Title,
-		AgentName:           AgentName,
+		AgentName:           in.agent(),
 		Mode:                agento11y.GenerationModeSync,
 		OperationName:       "generateText",
 		Model:               model,
@@ -162,7 +175,7 @@ func Map(in Inputs, turnSeq int) Mapped {
 		ID:                  id,
 		ConversationID:      conversationID,
 		ConversationTitle:   in.Meta.Title,
-		AgentName:           AgentName,
+		AgentName:           in.agent(),
 		Mode:                agento11y.GenerationModeSync,
 		OperationName:       "generateText",
 		Model:               model,

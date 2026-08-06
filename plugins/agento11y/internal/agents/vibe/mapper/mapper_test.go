@@ -474,3 +474,32 @@ func messageText(messages []agento11y.Message) string {
 	}
 	return b.String()
 }
+
+// TestMap_AgentNameOverride pins the exported identity against Inputs.AgentName
+// on both the start and the generation.
+func TestMap_AgentNameOverride(t *testing.T) {
+	tests := []struct {
+		name      string
+		agentName string
+		want      string
+	}{
+		{name: "blank keeps the product name", want: AgentName},
+		{name: "override", agentName: "vibe-e2e", want: "vibe-e2e"},
+		{name: "override is trimmed", agentName: "  spaced  ", want: "spaced"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Map(Inputs{
+				SessionID:      "s",
+				Meta:           meta.Meta{},
+				PriorState:     state.Session{},
+				AgentName:      tt.agentName,
+				ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+			}, 1)
+			if got.Generation.AgentName != tt.want || got.Start.AgentName != tt.want {
+				t.Fatalf("AgentName = %q/%q, want %q", got.Start.AgentName, got.Generation.AgentName, tt.want)
+			}
+		})
+	}
+}

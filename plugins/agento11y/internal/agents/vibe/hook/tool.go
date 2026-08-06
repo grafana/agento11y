@@ -45,7 +45,10 @@ func BeforeTool(ctx context.Context, stdout io.Writer, p Payload, logger *log.Lo
 	defer cancel()
 
 	res := guard.EvaluateToolCall(evalCtx, cfg, guard.ToolCallInput{
-		AgentName:     mapper.AgentName,
+		// Same resolution the export path uses, so a rule scoped to a per-run
+		// name matches the generations that run produces. vibe has no config
+		// package, so each handler resolves it for its own invocation.
+		AgentName:     envconfig.ResolveAgentName(mapper.AgentName),
 		ToolName:      toolName,
 		ToolCallID:    p.ToolCallID(),
 		ToolInputJSON: p.ToolInput(),

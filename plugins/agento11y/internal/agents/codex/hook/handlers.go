@@ -86,7 +86,7 @@ func UserPromptSubmit(p Payload, cfg config.Config, logger *log.Logger) {
 // Claude Code and Codex also share both PreToolUse envelope writers.
 func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Config, logger *log.Logger) {
 	res := guard.EvaluateToolCall(ctx, cfg.Guards, guard.ToolCallInput{
-		AgentName:     mapper.AgentName,
+		AgentName:     cfg.Agent(),
 		ToolName:      p.ToolName,
 		ToolCallID:    p.ToolUseID,
 		ToolInputJSON: p.ToolInput,
@@ -223,7 +223,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	client := buildClient(cfg, providers, logger)
 	defer func() { _ = client.Shutdown(ctx) }()
 
-	mapped := mapper.Map(mapper.Inputs{Fragment: frag, SubagentLink: subagentLink, TokenSnapshot: tokenSnapshot, ContentCapture: cfg.ContentCapture})
+	mapped := mapper.Map(mapper.Inputs{Fragment: frag, SubagentLink: subagentLink, TokenSnapshot: tokenSnapshot, ContentCapture: cfg.ContentCapture, AgentName: cfg.Agent()})
 	logger.Printf("stop: export id=%s conversation=%s agent=%s model=%s", mapped.Generation.ID, mapped.Generation.ConversationID, mapped.Generation.AgentName, mapped.Generation.Model.Name)
 	if err := emitGeneration(ctx, client, frag, mapped, cfg.ContentCapture, logger); err != nil {
 		logger.Printf("stop: emit: %v", err)
@@ -313,6 +313,10 @@ func sweepPendingRetries(ctx context.Context, client *agento11y.Client, cfg conf
 			SubagentLink:   subagentLink,
 			TokenSnapshot:  tokenSnapshot,
 			ContentCapture: cfg.ContentCapture,
+			// The name comes from this invocation, not from the turn the
+			// fragment was written in. A name changed between turns
+			// re-stamps a retried turn with the current one.
+			AgentName: cfg.Agent(),
 		})
 		logger.Printf("stop: retry id=%s session=%s turn=%s", mapped.Generation.ID, f.SessionID, f.TurnID)
 		if err := emitGeneration(ctx, client, f, mapped, cfg.ContentCapture, logger); err != nil {

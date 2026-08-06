@@ -805,12 +805,18 @@ func assertGoldenJSON(t *testing.T, path string, got []goldenExport) {
 
 // setHookExportEnv configures the canonical SIGIL_* env vars to point at the
 // fake export server and disables OTel transport so spans/metrics do not try
-// to reach a non-existent collector during the test. The AGENTO11Y_* spellings
-// are pinned blank via t.Setenv so dotenv materialization (which writes both
-// names) is rolled back between scenarios instead of leaking a stale endpoint
-// into the next one.
+// to reach a non-existent collector during the test.
+//
+// Both spellings of every alias family are pinned blank first, so dotenv
+// materialization (which writes both names) is rolled back between scenarios
+// instead of leaking a stale endpoint into the next one, and a variable the
+// developer exported cannot change fixture output. AGENTO11Y_AGENT_NAME and
+// SIGIL_AGENT_NAME both rename the exported agent, so leaving either at the
+// shell value would fail every scenario on that machine alone. The explicit
+// SIGIL_* values below are set after the pin and still win.
 func setHookExportEnv(t *testing.T, endpoint string) {
 	t.Helper()
+	envconfig.PinAliasEnvBlank(t)
 	t.Setenv("SIGIL_ENDPOINT", endpoint)
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "token")
@@ -821,9 +827,6 @@ func setHookExportEnv(t *testing.T, endpoint string) {
 	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	for _, suffix := range envconfig.AliasSuffixes {
-		t.Setenv(envconfig.PreferredKey(suffix), "")
-	}
 	// Enable SIGIL_DEBUG so the dispatcher writes per-event logs into
 	// $XDG_STATE_HOME/agento11y/logs/agento11y.log. When a scenario fails the test
 	// reads that file back so the failure message includes the trail.

@@ -3,12 +3,18 @@ package hook
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 // TestPreToolUse covers the Cursor-specific wiring around the shared guard
@@ -125,9 +131,10 @@ func TestPreToolUse(t *testing.T) {
 				endpoint = closed.URL
 			}
 
-			t.Setenv("SIGIL_GUARDS_ENABLED", "")
-			t.Setenv("SIGIL_GUARDS_FAIL_OPEN", "")
-			t.Setenv("SIGIL_GUARDS_TIMEOUT_MS", "")
+			// Blank every branded variable first: config.Load below reads the
+			// process env, and an ambient endpoint would send this guard call to
+			// a real backend.
+			envconfig.PinAliasEnvBlank(t)
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
@@ -145,7 +152,7 @@ func TestPreToolUse(t *testing.T) {
 				ToolName:       "Shell",
 				ToolUseID:      "tu_1",
 				ToolInput:      []byte(`{"command":"echo hi"}`),
-			}, &stdout, log.New(&bytes.Buffer{}, "", 0))
+			}, config.Load(log.New(&bytes.Buffer{}, "", 0)), &stdout, log.New(&bytes.Buffer{}, "", 0))
 
 			if tt.expectServerCall && calls.Load() == 0 {
 				t.Errorf("expected sigil hook server call, got 0")
@@ -160,6 +167,110 @@ func TestPreToolUse(t *testing.T) {
 				if !strings.Contains(stdout.String(), want) {
 					t.Errorf("stdout missing %q\nfull output: %s", want, stdout.String())
 				}
+			}
+		})
+	}
+}
+
+// TestAgentNameOverrideGuardAndExport pins the guard request and the exported
+// generation to one resolved name. A rule scoped to a per-run name only matches
+// that run when the two paths agree.
+func TestAgentNameOverrideGuardAndExport(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{name: "unset keeps the product name", want: mapper.AgentName},
+		{name: "preferred spelling", env: map[string]string{"AGENTO11Y_AGENT_NAME": "cursor-e2e"}, want: "cursor-e2e"},
+		{name: "legacy spelling", env: map[string]string{"SIGIL_AGENT_NAME": "legacy-name"}, want: "legacy-name"},
+		{
+			name: "preferred wins over legacy",
+			env: map[string]string{
+				"AGENTO11Y_AGENT_NAME": "preferred-name",
+				"SIGIL_AGENT_NAME":     "legacy-name",
+			},
+			want: "preferred-name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			logger := log.New(&bytes.Buffer{}, "", 0)
+
+			var guardAgents, exportAgents []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				if strings.Contains(r.URL.Path, "hooks:evaluate") {
+					var req struct {
+						Context struct {
+							AgentName string `json:"agent_name"`
+						} `json:"context"`
+					}
+					_ = json.Unmarshal(body, &req)
+					guardAgents = append(guardAgents, req.Context.AgentName)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"action":"allow"}`))
+					return
+				}
+				var req struct {
+					Generations []struct {
+						ID        string `json:"id"`
+						AgentName string `json:"agent_name"`
+					} `json:"generations"`
+				}
+				_ = json.Unmarshal(body, &req)
+				results := make([]map[string]any, 0, len(req.Generations))
+				for _, g := range req.Generations {
+					exportAgents = append(exportAgents, g.AgentName)
+					results = append(results, map[string]any{"generation_id": g.ID, "accepted": true})
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+			}))
+			defer server.Close()
+
+			t.Setenv("SIGIL_ENDPOINT", server.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+			t.Setenv("SIGIL_AUTH_TOKEN", "token")
+			t.Setenv("SIGIL_GUARDS_ENABLED", "true")
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			cfg := config.Load(logger)
+			BeforeSubmit(Payload{
+				HookEventName:  "beforeSubmitPrompt",
+				ConversationID: "conv",
+				GenerationID:   "gen",
+				Timestamp:      "2026-04-28T12:00:00Z",
+				Prompt:         "hello",
+			}, cfg, logger)
+			var stdout bytes.Buffer
+			PreToolUse(context.Background(), Payload{
+				HookEventName:  "preToolUse",
+				ConversationID: "conv",
+				GenerationID:   "gen",
+				ToolName:       "Shell",
+				ToolUseID:      "tu_1",
+				ToolInput:      []byte(`{"command":"echo hi"}`),
+			}, cfg, &stdout, logger)
+			Stop(Payload{
+				HookEventName:  "stop",
+				ConversationID: "conv",
+				GenerationID:   "gen",
+				Timestamp:      "2026-04-28T12:00:05Z",
+				Status:         "completed",
+			}, cfg, logger)
+
+			if len(guardAgents) != 1 || guardAgents[0] != tt.want {
+				t.Fatalf("guard agent names = %v, want [%q]", guardAgents, tt.want)
+			}
+			if len(exportAgents) != 1 || exportAgents[0] != tt.want {
+				t.Fatalf("exported agent names = %v, want [%q]", exportAgents, tt.want)
 			}
 		})
 	}

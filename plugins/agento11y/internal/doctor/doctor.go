@@ -65,6 +65,7 @@ var trackedSuffixes = []string{
 	"OTEL_EXPORTER_OTLP_ENDPOINT",
 	"OTEL_AUTH_TOKEN",
 	"CONTENT_CAPTURE_MODE",
+	"AGENT_NAME",
 	"TAGS",
 	"AUTO_UPDATE",
 	"LOCAL",
@@ -170,11 +171,18 @@ type ConfigSection struct {
 	// human row reports one key, so this is the key it reports. Both are empty
 	// when GUARDS_ENABLED supplied no usable value, so the row reports the
 	// built-in default rather than crediting a rejected value.
-	GuardsKey    string            `json:"guards_key,omitempty"`
-	GuardsSource string            `json:"guards_source,omitempty"`
-	Tags         map[string]string `json:"tags,omitempty"`
-	TagsKey      string            `json:"tags_key,omitempty"`
-	TagsSource   string            `json:"tags_source,omitempty"`
+	GuardsKey    string `json:"guards_key,omitempty"`
+	GuardsSource string `json:"guards_source,omitempty"`
+	// AgentName is the AGENT_NAME family: the value every adapter stamps on its
+	// generations and guard requests instead of its own product name. Empty
+	// means no override is set, so each adapter keeps its own name and the row
+	// is left out.
+	AgentName       string            `json:"agent_name,omitempty"`
+	AgentNameKey    string            `json:"agent_name_key,omitempty"`
+	AgentNameSource string            `json:"agent_name_source,omitempty"`
+	Tags            map[string]string `json:"tags,omitempty"`
+	TagsKey         string            `json:"tags_key,omitempty"`
+	TagsSource      string            `json:"tags_source,omitempty"`
 	// Local is the resolved LOCAL family: whether `agento11y <agent>` starts in
 	// local mode without --local, and where the value came from.
 	Local envValue `json:"local"`
@@ -732,6 +740,16 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 		sec.GuardsSource = guardsEnabled.source
 	}
 
+	// The AGENT_NAME family renames the agent every hook reports. A rule or
+	// dashboard filtered on the product name stops matching once it is set, so
+	// the effective value and its source have to be visible here.
+	agentName := resolveFamily("AGENT_NAME", osEnv, fileEnv)
+	if agentName.set {
+		sec.AgentName = agentName.value
+		sec.AgentNameKey = agentName.key
+		sec.AgentNameSource = agentName.source
+	}
+
 	// The TAGS family attaches key=value tags to every generation. They
 	// aren't secret, so surface the resolved set (and where it came from) to
 	// make a mis-set or forgotten tag visible.
@@ -790,6 +808,21 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 		sec.Health = HealthWarn
 		sec.Messages = append(sec.Messages,
 			fmt.Sprintf("the %s value is invalid; guards use the default", key))
+	}
+	if agentName.conflict {
+		sec.Messages = append(sec.Messages, conflictMessage(agentName))
+	}
+	if agentName.legacyWon() {
+		sec.Messages = append(sec.Messages,
+			"agent name set via legacy SIGIL_AGENT_NAME — this keeps working, but the preferred name is AGENTO11Y_AGENT_NAME")
+	}
+	// A slash separates a base name from a subagent suffix, so a name that
+	// contains one makes every generation of the run read as a subagent step.
+	if strings.Contains(agentName.value, "/") {
+		sec.Health = HealthWarn
+		sec.Messages = append(sec.Messages, fmt.Sprintf(
+			"the %s value %q contains a slash; a slash marks a subagent generation, so every generation of this run is counted as a subagent",
+			agentName.key, agentName.value))
 	}
 	if tags.conflict {
 		sec.Messages = append(sec.Messages, conflictMessage(tags))
