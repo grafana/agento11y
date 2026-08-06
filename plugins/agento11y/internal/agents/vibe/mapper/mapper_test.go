@@ -2,6 +2,7 @@ package mapper
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,8 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/transcript"
 )
+
+func ptr[T any](v T) *T { return &v }
 
 func TestMap_GoldenFixture(t *testing.T) {
 	tp := filepath.Join("..", "testdata", "messages.jsonl")
@@ -193,6 +196,97 @@ func TestMap_TurnUsage(t *testing.T) {
 	}
 }
 
+func TestMap_TurnCost(t *testing.T) {
+	tests := []struct {
+		name       string
+		stats      meta.Stats
+		prior      state.Session
+		priorFound bool
+		turnSeq    int
+		want       float64
+		wantAbsent bool
+	}{
+		{
+			name:    "first turn no prior uses full session cost",
+			stats:   meta.Stats{Steps: 1, SessionCost: ptr(0.5)},
+			turnSeq: 1,
+			want:    0.5,
+		},
+		{
+			name:    "free first turn reports zero",
+			stats:   meta.Stats{Steps: 1, SessionCost: ptr(0.0)},
+			turnSeq: 1,
+			want:    0,
+		},
+		{
+			name:       "no session cost reported omits the key",
+			stats:      meta.Stats{Steps: 1},
+			turnSeq:    1,
+			wantAbsent: true,
+		},
+		{
+			name:       "negative session cost omits the key",
+			stats:      meta.Stats{Steps: 1, SessionCost: ptr(-0.5)},
+			turnSeq:    1,
+			wantAbsent: true,
+		},
+		{
+			name:       "state lost mid-session omits the key",
+			stats:      meta.Stats{Steps: 7, SessionCost: ptr(4.2)},
+			turnSeq:    7,
+			wantAbsent: true,
+		},
+		{
+			name:       "normal delta against prior snapshot",
+			stats:      meta.Stats{SessionCost: ptr(0.5)},
+			prior:      state.Session{SessionCost: 0.3},
+			priorFound: true,
+			turnSeq:    3,
+			want:       0.2,
+		},
+		{
+			name:       "zero delta reports zero",
+			stats:      meta.Stats{SessionCost: ptr(0.3)},
+			prior:      state.Session{SessionCost: 0.3},
+			priorFound: true,
+			turnSeq:    3,
+			want:       0,
+		},
+		{
+			name:       "regressed totals omit the key",
+			stats:      meta.Stats{SessionCost: ptr(0.1)},
+			prior:      state.Session{SessionCost: 9.9},
+			priorFound: true,
+			turnSeq:    4,
+			wantAbsent: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			md := Map(Inputs{
+				SessionID:       "s",
+				Meta:            meta.Meta{Stats: tt.stats},
+				PriorState:      tt.prior,
+				PriorStateFound: tt.priorFound,
+				ContentCapture:  agento11y.ContentCaptureModeFull,
+			}, tt.turnSeq).Generation.Metadata
+			got, ok := md["cost_usd"]
+			if tt.wantAbsent {
+				if ok {
+					t.Errorf("cost_usd = %v, want absent", got)
+				}
+				return
+			}
+			if !ok {
+				t.Fatalf("cost_usd absent, want %v", tt.want)
+			}
+			if f, isFloat := got.(float64); !isFloat || math.Abs(f-tt.want) > 1e-9 {
+				t.Errorf("cost_usd = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMap_ContentCaptureModes(t *testing.T) {
 	tp := filepath.Join("..", "testdata", "messages.jsonl")
 	lines, _, err := transcript.Read(tp, 0)
@@ -319,27 +413,22 @@ func TestMap_Reasoning(t *testing.T) {
 	}
 }
 
-func TestMap_CostAndFailureMetadata(t *testing.T) {
+func TestMap_ToolFailureMetadata(t *testing.T) {
 	in := Inputs{
 		SessionID: "s",
 		Meta: meta.Meta{Stats: meta.Stats{
 			SessionPromptTokens: 100, SessionCompletionTokens: 10,
-			SessionCost:       0.5,
 			ToolCallsFailed:   2,
 			ToolCallsRejected: 1,
 		}},
 		PriorState: state.Session{
 			SessionPromptTokens: 80, SessionCompletionTokens: 5,
-			SessionCost:     0.3,
 			ToolCallsFailed: 1,
 		},
 		PriorStateFound: true,
 		ContentCapture:  agento11y.ContentCaptureModeFull,
 	}
 	md := Map(in, 2).Generation.Metadata
-	if got, ok := md["vibe.cost_usd"].(float64); !ok || got <= 0.19 || got >= 0.21 {
-		t.Errorf("vibe.cost_usd = %v, want ~0.2 (0.5-0.3)", md["vibe.cost_usd"])
-	}
 	if md["vibe.tool_calls_failed"] != int64(1) {
 		t.Errorf("vibe.tool_calls_failed = %v, want 1 (2-1)", md["vibe.tool_calls_failed"])
 	}

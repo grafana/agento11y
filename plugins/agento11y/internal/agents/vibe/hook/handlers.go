@@ -132,6 +132,14 @@ func PostAgentTurn(ctx context.Context, p Payload, logger *log.Logger) {
 		AgentName:          envconfig.ResolveAgentName(mapper.AgentName),
 	}, turnSeq)
 
+	// A meta.json without session_cost carries no new baseline, so keep the
+	// prior one. Snapshotting 0 would make a later turn that does report a
+	// cost delta against zero and bill the whole session total to it.
+	sessionCost := prior.SessionCost
+	if m.Stats.SessionCost != nil {
+		sessionCost = *m.Stats.SessionCost
+	}
+
 	// Persist the advanced offset and session snapshot BEFORE exporting. A
 	// save failure aborts the turn (it replays on the next fire); a save here
 	// also means a successful export can never be followed by a lost offset,
@@ -141,7 +149,7 @@ func PostAgentTurn(ctx context.Context, p Payload, logger *log.Logger) {
 		Offset:                  newOffset,
 		SessionPromptTokens:     m.Stats.SessionPromptTokens,
 		SessionCompletionTokens: m.Stats.SessionCompletionTokens,
-		SessionCost:             m.Stats.SessionCost,
+		SessionCost:             sessionCost,
 		ToolCallsRejected:       m.Stats.ToolCallsRejected,
 		ToolCallsHookDenied:     m.Stats.ToolCallsHookDenied,
 		ToolCallsFailed:         m.Stats.ToolCallsFailed,

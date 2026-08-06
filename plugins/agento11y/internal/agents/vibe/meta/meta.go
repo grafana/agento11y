@@ -27,18 +27,22 @@ type Meta struct {
 // Stats mirrors meta.json's `stats` block. Token fields and the
 // tool_calls_* counters are session-wide running totals; per-turn values
 // are the delta against the previous run's snapshot stored in state.
+//
+// SessionCost is a pointer so a meta.json that carries no `session_cost`
+// stays distinguishable from one reporting a cost of 0: the first is a cost
+// vibe never reported, the second a turn that was free.
 type Stats struct {
-	Steps                    int     `json:"steps"`
-	SessionPromptTokens      int64   `json:"session_prompt_tokens"`
-	SessionCompletionTokens  int64   `json:"session_completion_tokens"`
-	LastTurnPromptTokens     int64   `json:"last_turn_prompt_tokens"`
-	LastTurnCompletionTokens int64   `json:"last_turn_completion_tokens"`
-	LastTurnDuration         float64 `json:"last_turn_duration"`
-	ContextTokens            int64   `json:"context_tokens"`
-	InputPricePerMillion     float64 `json:"input_price_per_million"`
-	OutputPricePerMillion    float64 `json:"output_price_per_million"`
-	SessionTotalLLMTokens    int64   `json:"session_total_llm_tokens"`
-	SessionCost              float64 `json:"session_cost"`
+	Steps                    int      `json:"steps"`
+	SessionPromptTokens      int64    `json:"session_prompt_tokens"`
+	SessionCompletionTokens  int64    `json:"session_completion_tokens"`
+	LastTurnPromptTokens     int64    `json:"last_turn_prompt_tokens"`
+	LastTurnCompletionTokens int64    `json:"last_turn_completion_tokens"`
+	LastTurnDuration         float64  `json:"last_turn_duration"`
+	ContextTokens            int64    `json:"context_tokens"`
+	InputPricePerMillion     float64  `json:"input_price_per_million"`
+	OutputPricePerMillion    float64  `json:"output_price_per_million"`
+	SessionTotalLLMTokens    int64    `json:"session_total_llm_tokens"`
+	SessionCost              *float64 `json:"session_cost"`
 
 	// tool_calls_* are session-wide running totals of how the session's
 	// tool calls resolved. The per-turn delta (against the prior state
