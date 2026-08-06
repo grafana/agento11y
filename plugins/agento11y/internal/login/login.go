@@ -482,11 +482,20 @@ func validateAutoTagNames(selected []string) error {
 }
 
 // seedAutoTagNames turns a saved allowlist into the preselected names. An
-// unset or unparseable list means every supported name, which is what an
-// absent AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES resolves to at runtime.
+// unset allowlist means every supported name, which is what an absent
+// AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES resolves to at runtime.
+//
+// A saved allowlist that names nothing supported ("team", or a lone comma)
+// attaches no tags at runtime. This function preselects nothing for it. Ticking
+// all three names instead would tell the user that user, repo and branch are
+// on, and pressing Enter would then write exactly that config. The checklist
+// rejects an empty submission, so the user picks names or answers No.
 func seedAutoTagNames(raw string) []string {
 	enabled, _ := envconfig.ParseAutoTags(raw)
 	if len(enabled) == 0 {
+		if strings.TrimSpace(raw) != "" {
+			return nil
+		}
 		enabled = envconfig.AllAutoTags()
 	}
 	names := make([]string, 0, len(enabled))
@@ -773,8 +782,14 @@ type formValues struct {
 // Content capture mode, the guard-enabled flag, and the automatic-tag switch
 // are always written explicitly so a downgrade (e.g. full back to
 // metadata_only, or enabled back to disabled) actually takes effect instead of
-// being silently preserved. While automatic tags are off the allowlist is left
-// alone, the same way a disabled guard keeps its timeout: the key is inert.
+// being silently preserved.
+//
+// Answering No to automatic tags deletes the allowlist as well as writing the
+// switch. Two things go wrong if login keeps it. Doctor warns about an
+// allowlist the switch cannot use. And a later run that turns the switch on
+// from the shell reads that allowlist, so it is narrowed to the names the user
+// picked before turning the feature off.
+//
 // When guards are enabled the timeout and fail mode are always written too,
 // so clearing the timeout field deletes the key (the runtime default then
 // applies) rather than leaving a stale value behind. While guards are off
@@ -791,12 +806,15 @@ func buildUpdates(v formValues) map[string]string {
 		updates["SIGIL_CONTENT_CAPTURE_MODE"] = normalizeContentMode(v.contentMode)
 		updates["SIGIL_TAGS"] = strings.TrimSpace(v.tags) // "" deletes
 		updates[envconfig.LegacyKey(envconfig.AutoTagsSuffix)] = strconv.FormatBool(v.autoTags)
+		// Writing no allowlist means every name, so a user who kept all of them
+		// also picks up a name a later version adds. A narrowed selection is
+		// written out; "" deletes a list from a previous run. The switch being
+		// off deletes it as well, so no inert key survives.
+		names := ""
 		if v.autoTags {
-			// Writing no allowlist means every name, so a user who kept all of
-			// them also picks up a name a later version adds. A narrowed
-			// selection is written out; "" deletes a list from a previous run.
-			updates[envconfig.LegacyKey(envconfig.AutoTagNamesSuffix)] = autoTagNamesValue(v.autoTagNames)
+			names = autoTagNamesValue(v.autoTagNames)
 		}
+		updates[envconfig.LegacyKey(envconfig.AutoTagNamesSuffix)] = names
 		switch v.guards {
 		case guardsOpen, guardsClosed:
 			updates["SIGIL_GUARDS_ENABLED"] = "true"

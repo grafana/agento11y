@@ -219,8 +219,10 @@ func TestSeedGuards(t *testing.T) {
 	}
 }
 
-// TestSeedAutoTagNames pins what the checklist starts with: the saved
-// allowlist, and every supported name when there is none to read.
+// TestSeedAutoTagNames pins what the checklist starts with. A saved allowlist
+// preselects the names it holds. No saved allowlist preselects every supported
+// name. A saved allowlist that holds no supported name preselects nothing: that
+// config attaches no tags, so the checklist must not show it as all three.
 func TestSeedAutoTagNames(t *testing.T) {
 	cases := []struct {
 		name string
@@ -231,7 +233,9 @@ func TestSeedAutoTagNames(t *testing.T) {
 		{"all preselects every name", "all", []string{"user", "repo", "branch"}},
 		{"saved list is preselected in order", "branch, user", []string{"user", "branch"}},
 		{"unsupported names are dropped", "team,user", []string{"user"}},
-		{"only unsupported names preselects every name", "team", []string{"user", "repo", "branch"}},
+		{"only unsupported names preselects nothing", "team", nil},
+		{"separators alone preselect nothing", ",", nil},
+		{"blank preselects every name", "   ", []string{"user", "repo", "branch"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -403,14 +407,15 @@ func TestBuildUpdates(t *testing.T) {
 				guardTimeout: "1500",
 			},
 			want: map[string]string{
-				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
-				"SIGIL_AUTH_TENANT_ID":              "123",
-				"SIGIL_AUTH_TOKEN":                  "glc_abc",
-				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
-				"SIGIL_CONTENT_CAPTURE_MODE":        "metadata_only",
-				"SIGIL_TAGS":                        "",
-				"SIGIL_AUTO_CODING_AGENT_TAGS":      "false",
-				"SIGIL_GUARDS_ENABLED":              "false",
+				"SIGIL_ENDPOINT":                     "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":               "123",
+				"SIGIL_AUTH_TOKEN":                   "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":  "",
+				"SIGIL_CONTENT_CAPTURE_MODE":         "metadata_only",
+				"SIGIL_TAGS":                         "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "false",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_GUARDS_ENABLED":               "false",
 			},
 		},
 		{
@@ -425,14 +430,15 @@ func TestBuildUpdates(t *testing.T) {
 				capturePrompted: true,
 			},
 			want: map[string]string{
-				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
-				"SIGIL_AUTH_TENANT_ID":              "123",
-				"SIGIL_AUTH_TOKEN":                  "glc_abc",
-				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
-				"SIGIL_CONTENT_CAPTURE_MODE":        "metadata_only",
-				"SIGIL_TAGS":                        "team=ai",
-				"SIGIL_AUTO_CODING_AGENT_TAGS":      "false",
-				"SIGIL_GUARDS_ENABLED":              "false",
+				"SIGIL_ENDPOINT":                     "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":               "123",
+				"SIGIL_AUTH_TOKEN":                   "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":  "",
+				"SIGIL_CONTENT_CAPTURE_MODE":         "metadata_only",
+				"SIGIL_TAGS":                         "team=ai",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "false",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_GUARDS_ENABLED":               "false",
 			},
 		},
 		{
@@ -448,16 +454,17 @@ func TestBuildUpdates(t *testing.T) {
 				capturePrompted: true,
 			},
 			want: map[string]string{
-				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
-				"SIGIL_AUTH_TENANT_ID":              "123",
-				"SIGIL_AUTH_TOKEN":                  "glc_abc",
-				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example.com",
-				"SIGIL_CONTENT_CAPTURE_MODE":        "full",
-				"SIGIL_TAGS":                        "",
-				"SIGIL_AUTO_CODING_AGENT_TAGS":      "false",
-				"SIGIL_GUARDS_ENABLED":              "true",
-				"SIGIL_GUARDS_FAIL_OPEN":            "true",
-				"SIGIL_GUARDS_TIMEOUT_MS":           "2000",
+				"SIGIL_ENDPOINT":                     "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":               "123",
+				"SIGIL_AUTH_TOKEN":                   "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":  "https://otlp.example.com",
+				"SIGIL_CONTENT_CAPTURE_MODE":         "full",
+				"SIGIL_TAGS":                         "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "false",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_GUARDS_ENABLED":               "true",
+				"SIGIL_GUARDS_FAIL_OPEN":             "true",
+				"SIGIL_GUARDS_TIMEOUT_MS":            "2000",
 			},
 		},
 		{
@@ -472,16 +479,17 @@ func TestBuildUpdates(t *testing.T) {
 				capturePrompted: true,
 			},
 			want: map[string]string{
-				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
-				"SIGIL_AUTH_TENANT_ID":              "123",
-				"SIGIL_AUTH_TOKEN":                  "glc_abc",
-				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
-				"SIGIL_CONTENT_CAPTURE_MODE":        "no_tool_content",
-				"SIGIL_TAGS":                        "",
-				"SIGIL_AUTO_CODING_AGENT_TAGS":      "false",
-				"SIGIL_GUARDS_ENABLED":              "true",
-				"SIGIL_GUARDS_FAIL_OPEN":            "false",
-				"SIGIL_GUARDS_TIMEOUT_MS":           "", // empty deletes via WriteDotenv
+				"SIGIL_ENDPOINT":                     "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":               "123",
+				"SIGIL_AUTH_TOKEN":                   "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":  "",
+				"SIGIL_CONTENT_CAPTURE_MODE":         "no_tool_content",
+				"SIGIL_TAGS":                         "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "false",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_GUARDS_ENABLED":               "true",
+				"SIGIL_GUARDS_FAIL_OPEN":             "false",
+				"SIGIL_GUARDS_TIMEOUT_MS":            "", // empty deletes via WriteDotenv
 			},
 		},
 		{
@@ -537,9 +545,11 @@ func TestBuildUpdates(t *testing.T) {
 			},
 		},
 		{
-			// The switch is off, so the allowlist is left alone rather than
-			// deleted: the same way a disabled guard keeps its timeout.
-			name: "automatic tags off leaves the allowlist untouched",
+			// The switch is off, so buildUpdates deletes the allowlist instead of
+			// keeping it. Doctor warns about an allowlist the switch cannot use,
+			// and a later run that turns the switch on from the shell would read
+			// it.
+			name: "automatic tags off deletes the allowlist",
 			in: formValues{
 				endpoint:        "https://sigil.example.com",
 				tenantID:        "123",
@@ -550,14 +560,15 @@ func TestBuildUpdates(t *testing.T) {
 				capturePrompted: true,
 			},
 			want: map[string]string{
-				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
-				"SIGIL_AUTH_TENANT_ID":              "123",
-				"SIGIL_AUTH_TOKEN":                  "glc_abc",
-				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
-				"SIGIL_CONTENT_CAPTURE_MODE":        "metadata_only",
-				"SIGIL_TAGS":                        "",
-				"SIGIL_AUTO_CODING_AGENT_TAGS":      "false",
-				"SIGIL_GUARDS_ENABLED":              "false",
+				"SIGIL_ENDPOINT":                     "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":               "123",
+				"SIGIL_AUTH_TOKEN":                   "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":  "",
+				"SIGIL_CONTENT_CAPTURE_MODE":         "metadata_only",
+				"SIGIL_TAGS":                         "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "false",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_GUARDS_ENABLED":               "false",
 			},
 		},
 	}

@@ -146,7 +146,12 @@ Rules that apply to every name:
 
 In Prometheus the tags arrive as `agento11y_tag_user`, `agento11y_tag_repo`, and `agento11y_tag_git_branch`.
 
-`agento11y login` asks about this too: answering Yes to "Automatic tags" opens a checklist of the three values, all ticked, and writes the answers to `config.env`. Keeping all three ticked writes no allowlist, so a name added in a later version is included as well.
+`agento11y login` asks about this too. Answer Yes to "Automatic tags" and it opens a checklist of the three values, then writes your answers to `config.env`:
+
+- A first run ticks all three. A rerun ticks the names the saved allowlist holds.
+- If the saved allowlist names nothing supported, login ticks nothing, because that config attaches no tags today. The checklist refuses an empty answer, so tick the names you want or go back and answer No.
+- Ticking all three writes no allowlist, so a name added in a later version applies too.
+- Answering No sets the switch to false and deletes the allowlist. No unusable key stays behind.
 
 Run `agento11y doctor` to see the enabled names, the variables that set them, and the value each one resolves to in the current directory before it leaves the machine. `doctor` runs outside a session, so it cannot read the account a host agent signs in to: with `AGENTO11Y_USER_ID` unset it reports `user` as `<depends on the agent>` rather than guessing. Set `AGENTO11Y_USER_ID` to see the exact value.
 
