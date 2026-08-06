@@ -112,6 +112,17 @@ The plugin attaches built-in tags of its own:
 
 Built-in tags win collisions with user tags, matching the claude-code and cursor launchers. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#built-in-tags-from-the-agent-launchers) for the tags the launchers share.
 
+## Subagent sessions
+
+OpenCode runs a subagent (the `task` tool) in a session of its own. The plugin exports those turns into the conversation that spawned them, so the subagent's work shows up in the parent's timeline rather than as an unrelated conversation:
+
+- `conversation_id` on every child turn is the spawning session's id. A subagent that spawns a subagent of its own flattens the same way: every turn in the tree lands in the root session's conversation, so a grandchild's `conversation_id` is the root rather than its immediate parent.
+- The child's first turn carries `parent_generation_ids` naming the parent turn that made the `task` call. Later child turns chain to the child's own previous turn.
+- `opencode.parent_session_id` metadata names the session that spawned this one, so a nested subagent still reports its immediate parent rather than the root. `opencode.child_session_id` names the child's own session id, which nothing else carries: `conversation_id` holds an ancestor's, so looking up the child session id finds no conversation.
+- The child sends no conversation title. Agent Observability keeps the newest title per conversation, and the child's title names the subagent, so a child landing after the parent's last turn would rename the shared conversation.
+
+If the plugin cannot name the spawning turn, the child keeps its own conversation id and exports no parent edge. That happens when the plugin loaded after OpenCode had already started the parent's turn. The `subagent` tag and `opencode.parent_session_id` are still attached, so the relationship is recorded as metadata instead of an edge.
+
 ## All options
 
 `~/.config/agento11y/config.env` is the only configuration file. Every option is set via env var.

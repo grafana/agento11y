@@ -180,6 +180,8 @@ Codex and copilot also add their own `codex.*` and `copilot.*` keys, so this tab
 | `pi.compaction.will_retry` | `true` when pi retries the turn it aborted to run this compaction. Only overflow recovery retries. | pi |
 | `pi.fork.parent_session_id` | Conversation id of the session a fork was taken from. On the fork's first generation only. | pi |
 | `pi.fork.parent_generation_id` | Generation id of the trunk turn the fork continues from. Ships as metadata rather than a parent edge, because the trunk only holds that generation if it ran instrumented. | pi |
+| `opencode.parent_session_id` | Session id of the run that spawned this subagent session. On every subagent generation, including one whose parent turn could not be named. | opencode |
+| `opencode.child_session_id` | Subagent's own session id. Present when its turns were reparented onto the spawning conversation, where `conversation_id` names the root session of the subagent chain instead. | opencode |
 
 ## See also
 
