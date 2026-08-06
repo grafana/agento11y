@@ -81,30 +81,39 @@ const recordedMessages = new Map<string, Set<string>>();
 // dedups.
 const lastGenerationIdBySession = new Map<string, string>();
 
+// The latest assistant message seen per session, completed or still streaming.
+// A subagent is spawned from a tool call inside an assistant turn, so this is
+// the turn the child's first generation links to. `lastGenerationIdBySession`
+// cannot serve: it is written when a turn is recorded, and the child's
+// `session.created` arrives while the spawning turn is still in flight.
+const lastSeenAssistantMessageBySession = new Map<string, string>();
+
 // Maps a child (subagent) session id to the parent generation its first
 // assistant turn should link to. opencode runs a subagent in a fresh session
 // whose `Session.parentID` points at the spawning session, surfaced via the
-// `session.created` event. We resolve the parent generation *at creation time*
-// — the spawning session's latest recorded generation — and freeze it here.
+// `session.created` event. The edge is derived from the latest assistant turn
+// seen for the parent, the turn holding the task call, and frozen here. That
+// turn is normally still streaming, but a parent that spawns the subagent from
+// an already-completed turn resolves the same way.
 //
-// Freezing at creation (rather than at child-record time) is deliberate: a
-// subagent is launched from a tool call inside the parent's assistant turn, so
-// the parent's *current* turn is still in flight and unrecorded when the child
-// runs. The already-recorded prior parent generation is the turn the subagent
-// was spawned from, which is the meaningful link. Resolving lazily at
-// child-record time would usually find no parent generation yet and drop the
-// edge.
+// Freezing at creation (rather than at child-record time) is deliberate: by the
+// time the child records, the parent may have started or finished later turns,
+// and a lazy resolver would name whichever turn is latest instead of the one
+// that spawned the child.
 //
 // `AssistantMessage.parentID` is a message-level pointer within one session and
 // is NOT the same as `Session.parentID`; only the latter crosses the
 // parent/subagent boundary.
 const parentGenerationByChildSession = new Map<string, string>();
 
-// Sessions opencode created as subagents, i.e. `session.created` carried a
-// `Session.parentID` pointing at a different session. Kept separate from
-// `parentGenerationByChildSession`, which only holds children whose parent had
-// an already-recorded generation to freeze.
-const subagentSessions = new Set<string>();
+// Maps a child (subagent) session id to its immediate parent session id, set
+// from `session.created` whether or not the generation edge resolves. Once an
+// edge is frozen for the child, a duplicate event cannot change this, so the
+// two always name the same parent. Three readers: the `subagent` tag, the
+// exported conversation id (a linked child's turns are reparented onto the
+// spawning conversation), and the `opencode.parent_session_id` metadata, which
+// is the only lineage signal left when the edge does not resolve.
+const parentSessionByChildSession = new Map<string, string>();
 
 // First streamed assistant part time per message, keyed by
 // `${sessionID}\x00${messageID}`. Captured from `message.part.updated`
@@ -231,8 +240,9 @@ let liveInstances = 0;
 export function _resetHookState(): void {
   recordedMessages.clear();
   lastGenerationIdBySession.clear();
+  lastSeenAssistantMessageBySession.clear();
   parentGenerationByChildSession.clear();
-  subagentSessions.clear();
+  parentSessionByChildSession.clear();
   firstPartAtByMessage.clear();
   stepTokensByMessage.clear();
   pendingGenerations.clear();
@@ -343,7 +353,7 @@ async function handleEvent(
     recordHostVersion(event.properties);
     recordSessionTitle(event.properties, redactor);
     if (event.type === "session.created") {
-      recordSessionParent(event.properties);
+      recordSessionParent(event.properties, debugLog);
     }
     return;
   }
@@ -382,6 +392,16 @@ async function handleEvent(
     }
   }
   if (!assistantMsg) return;
+
+  // Tracked for every assistant update, completed or not, because a subagent
+  // spawned inside this turn links to it (see
+  // `lastSeenAssistantMessageBySession`).
+  if (assistantMsg.sessionID && assistantMsg.id) {
+    lastSeenAssistantMessageBySession.set(
+      assistantMsg.sessionID,
+      assistantMsg.id,
+    );
+  }
 
   await recordAssistantMessage(
     sigil,
@@ -597,18 +617,28 @@ async function recordAssistantMessage(
   const builtinTags = buildBuiltinTags({
     cwd: projectDir,
     gitBranch: resolveGitBranch(projectDir),
-    isSubagent: subagentSessions.has(assistantMsg.sessionID),
+    isSubagent: parentSessionByChildSession.has(assistantMsg.sessionID),
   });
+  const conversationId = resolveExportedConversationId(assistantMsg.sessionID);
+  const reparented = conversationId !== assistantMsg.sessionID;
+  const lineageMetadata = subagentLineageMetadata(
+    assistantMsg.sessionID,
+    reparented,
+  );
   // Sent regardless of content capture mode: the title is host-provided
   // session metadata that opencode shows in its own UI, and the SDK drops it
   // from a `metadata_only` export itself. Already redacted by
   // `recordSessionTitle`.
-  const conversationTitle = latestSessionTitleBySession.get(
-    assistantMsg.sessionID,
-  );
+  //
+  // A reparented child sends no title at all: the backend keeps the newest
+  // title per conversation, so a subagent finishing after the parent's last
+  // turn would rename the shared conversation to the subagent's title.
+  const conversationTitle = reparented
+    ? undefined
+    : latestSessionTitleBySession.get(assistantMsg.sessionID);
   const seed = {
     id: genId,
-    conversationId: assistantMsg.sessionID,
+    conversationId,
     agentName: buildAgentName(config.agentName, assistantMsg.mode),
     agentVersion,
     effectiveVersion: agentVersion,
@@ -620,6 +650,7 @@ async function recordAssistantMessage(
     ...(tools.length > 0 && { tools }),
     ...(includeMessageBodies && { systemPrompt }),
     ...(builtinTags && { tags: builtinTags }),
+    ...(lineageMetadata && { metadata: lineageMetadata }),
   };
 
   // Without an observed step the export pairs last-step tokens with all-steps
@@ -642,7 +673,7 @@ async function recordAssistantMessage(
   );
 
   const spanOpts = {
-    conversationId: assistantMsg.sessionID,
+    conversationId,
     conversationTitle,
     agentName: buildAgentName(config.agentName, assistantMsg.mode),
     agentVersion,
@@ -723,32 +754,113 @@ function recordSessionTitle(properties: unknown, redactor: Redactor): void {
 /**
  * Record the parent/subagent link from a `session.created` event. opencode
  * sets `Session.parentID` on a subagent's session to the spawning session;
- * root sessions omit it. We resolve the spawning session's latest
- * already-recorded generation now and freeze it as the child's parent (see
- * `parentGenerationByChildSession`).
+ * root sessions omit it. The child's parent generation is the latest assistant
+ * turn seen for the parent session, the turn holding the task call, and it is
+ * frozen here (see `parentGenerationByChildSession`). That turn is usually
+ * still streaming, and its deterministic generation id is known before it is
+ * recorded.
  *
  * `session.created` fires exactly once, at spawn time, so the frozen edge
  * always points at the parent turn the subagent was launched from. We
  * deliberately do NOT listen on `session.updated`: it fires repeatedly over a
- * session's life, and freezing on a late update could capture a parent turn
- * recorded *after* the spawning one. If the parent has no recorded generation
- * yet at creation (rare — the spawning turn's predecessor is normally already
- * recorded), we skip the lineage edge: an unlinked child is better than a wrong
- * link. The `subagent` tag does not depend on that edge, so the session is
- * still classified as a subagent. The `has(id)` guard is defensive against a
- * duplicate `session.created`.
+ * session's life, and freezing on a late update could capture a turn that
+ * started *after* the spawning one.
+ *
+ * When no assistant turn has been seen for the parent session, the edge is
+ * skipped and the child keeps its own conversation with
+ * `opencode.parent_session_id` metadata: an unlinked child is better than a
+ * wrong link. The plugin loading mid-run is how that happens in practice. The
+ * `subagent` tag comes from `Session.parentID` alone and survives either way.
+ *
+ * The `has(id)` guard is defensive against a duplicate `session.created`. It
+ * covers the parent session too, because a second event naming a different
+ * parent would otherwise leave the recorded parent session and the frozen edge
+ * pointing at different conversations.
  */
-function recordSessionParent(properties: unknown): void {
+function recordSessionParent(
+  properties: unknown,
+  debugLog: (msg: string, ...args: unknown[]) => void,
+): void {
   const info = recordField(properties, "info");
   if (!info) return;
   const id = stringField(info, "id");
   const parentID = stringField(info, "parentID");
   if (!id || !parentID || id === parentID) return;
-  subagentSessions.add(id);
   if (parentGenerationByChildSession.has(id)) return;
-  const parentGeneration = lastGenerationIdBySession.get(parentID);
-  if (!parentGeneration) return;
-  parentGenerationByChildSession.set(id, parentGeneration);
+  parentSessionByChildSession.set(id, parentID);
+  const spawningMessage = lastSeenAssistantMessageBySession.get(parentID);
+  if (!spawningMessage) {
+    debugLog(
+      `no assistant turn seen for parent session=${parentID}; subagent session=${id} exports unlinked in its own conversation`,
+    );
+    return;
+  }
+  parentGenerationByChildSession.set(
+    id,
+    stableOpencodeGenerationId(parentID, spawningMessage),
+  );
+}
+
+/**
+ * The conversation id a session's turns are exported under: its own session id,
+ * or the conversation of the run that spawned it.
+ *
+ * A linked subagent's turns belong to the spawning conversation, so the parent's
+ * Dependencies view can draw the DAG and the frozen parent edge names a
+ * generation in the same conversation. codex
+ * (`plugins/agento11y/internal/agents/codex/mapper/mapper.go`) and vibe
+ * (`plugins/agento11y/internal/agents/vibe/mapper/mapper.go`) reparent onto the
+ * immediate parent session and stop there, so a grandchild of theirs lands in
+ * the child's session id while the child went to the root.
+ *
+ * This walk follows `parentSessionByChildSession` while each ancestor is itself
+ * a linked child, so a nested subagent flattens onto the root session and its
+ * edge stays inside one conversation. An ancestor whose own edge did not resolve
+ * stops the walk, because that ancestor's turns stayed in its own conversation.
+ *
+ * The visited set both terminates the walk and keeps it defensive: every hop
+ * that continues adds a session id not seen before, so a contradictory parent
+ * chain from the host stops at the first repeat instead of looping.
+ */
+function resolveExportedConversationId(sessionID: string): string {
+  let current = sessionID;
+  const seen = new Set<string>([current]);
+  while (parentGenerationByChildSession.has(current)) {
+    const parent = parentSessionByChildSession.get(current);
+    if (!parent || seen.has(parent)) return current;
+    seen.add(parent);
+    current = parent;
+  }
+  return current;
+}
+
+/**
+ * Session-level lineage for a subagent turn, following
+ * `codex.parent_session_id` and `codex.child_session_id`.
+ *
+ * `opencode.parent_session_id` names the immediate parent session, not the root
+ * of the chain, so a nested subagent's depth survives the flattening in
+ * `resolveExportedConversationId`. It is emitted whether or not the edge
+ * resolved: it is the only lineage signal an unlinked child carries.
+ *
+ * `opencode.child_session_id` is emitted only for a reparented turn, where
+ * `conversation_id` names an ancestor session and the child's own session id
+ * would otherwise be unrecoverable. codex emits its key unconditionally
+ * (`plugins/agento11y/internal/agents/codex/mapper/mapper.go:161`); the
+ * condition here follows vibe
+ * (`plugins/agento11y/internal/agents/vibe/mapper/mapper.go:256`), where an
+ * unreparented turn already carries its own session id as `conversation_id`.
+ */
+function subagentLineageMetadata(
+  sessionID: string,
+  reparented: boolean,
+): Record<string, string> | undefined {
+  const parentSession = parentSessionByChildSession.get(sessionID);
+  if (!parentSession) return undefined;
+  return {
+    "opencode.parent_session_id": parentSession,
+    ...(reparented && { "opencode.child_session_id": sessionID }),
+  };
 }
 
 /**
@@ -795,8 +907,9 @@ async function handleLifecycle(
     if (sessionId) {
       recordedMessages.delete(sessionId);
       lastGenerationIdBySession.delete(sessionId);
+      lastSeenAssistantMessageBySession.delete(sessionId);
       parentGenerationByChildSession.delete(sessionId);
-      subagentSessions.delete(sessionId);
+      parentSessionByChildSession.delete(sessionId);
       pendingGenerations.delete(sessionId);
       latestSystemPromptBySession.delete(sessionId);
       latestSessionTitleBySession.delete(sessionId);
