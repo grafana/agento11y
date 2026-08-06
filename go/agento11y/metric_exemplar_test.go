@@ -14,7 +14,7 @@ import (
 )
 
 func TestGenerationMetricsCarryTraceExemplar(t *testing.T) {
-	spanRecorder, tp, metricReader, mp := newExemplarTestHarness(t)
+	spanRecorder, tp, metricReader, mp := newExemplarTestHarness(t, exemplar.AlwaysOnFilter)
 
 	client := NewClient(Config{
 		Tracer:                 tp.Tracer("agento11y-test"),
@@ -47,7 +47,7 @@ func TestGenerationMetricsCarryTraceExemplar(t *testing.T) {
 }
 
 func TestEmbeddingMetricsCarryTraceExemplar(t *testing.T) {
-	spanRecorder, tp, metricReader, mp := newExemplarTestHarness(t)
+	spanRecorder, tp, metricReader, mp := newExemplarTestHarness(t, exemplar.AlwaysOnFilter)
 
 	client := NewClient(Config{
 		Tracer:                 tp.Tracer("agento11y-test"),
@@ -77,7 +77,7 @@ func TestEmbeddingMetricsCarryTraceExemplar(t *testing.T) {
 }
 
 func TestToolExecutionMetricsCarryTraceExemplar(t *testing.T) {
-	spanRecorder, tp, metricReader, mp := newExemplarTestHarness(t)
+	spanRecorder, tp, metricReader, mp := newExemplarTestHarness(t, exemplar.AlwaysOnFilter)
 
 	client := NewClient(Config{
 		Tracer:                 tp.Tracer("agento11y-test"),
@@ -108,7 +108,62 @@ func TestToolExecutionMetricsCarryTraceExemplar(t *testing.T) {
 	assertExemplarTraceID(t, metricReader, metricOperationDuration, wantTraceID)
 }
 
-func newExemplarTestHarness(t *testing.T) (*tracetest.SpanRecorder, *sdktrace.TracerProvider, *sdkmetric.ManualReader, *sdkmetric.MeterProvider) {
+func TestGenerationMetricsDoNotRetainRecordingContext(t *testing.T) {
+	type contextKey struct{}
+	type observation struct {
+		spanContext trace.SpanContext
+		recording   bool
+		value       any
+	}
+
+	var observations []observation
+	filter := func(ctx context.Context) bool {
+		observations = append(observations, observation{
+			spanContext: trace.SpanContextFromContext(ctx),
+			recording:   trace.SpanFromContext(ctx).IsRecording(),
+			value:       ctx.Value(contextKey{}),
+		})
+		return true
+	}
+	_, tp, _, mp := newExemplarTestHarness(t, filter)
+
+	client := NewClient(Config{
+		Tracer:                 tp.Tracer("agento11y-test"),
+		Meter:                  mp.Meter("agento11y-test"),
+		Now:                    time.Now,
+		testGenerationExporter: &capturingGenerationExporter{},
+	})
+	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+	callerCtx := context.WithValue(context.Background(), contextKey{}, "caller-owned")
+	callCtx, rec := client.StartGeneration(callerCtx, GenerationStart{
+		Model:     ModelRef{Provider: "openai", Name: "gpt-5"},
+		AgentName: "test-agent",
+	})
+	wantSpanContext := trace.SpanContextFromContext(callCtx)
+	rec.SetResult(Generation{
+		Output: []Message{{Role: "assistant", Parts: []Part{{Kind: PartKindText, Text: "hello"}}}},
+		Usage:  TokenUsage{InputTokens: 10, OutputTokens: 5},
+	}, nil)
+	rec.End()
+
+	if len(observations) == 0 {
+		t.Fatal("expected the exemplar filter to observe metric contexts")
+	}
+	for i, got := range observations {
+		if !got.spanContext.Equal(wantSpanContext) {
+			t.Errorf("observation %d span context = %v, want %v", i, got.spanContext, wantSpanContext)
+		}
+		if got.recording {
+			t.Errorf("observation %d retained a recording span", i)
+		}
+		if got.value != nil {
+			t.Errorf("observation %d retained caller context value %v", i, got.value)
+		}
+	}
+}
+
+func newExemplarTestHarness(t *testing.T, filter exemplar.Filter) (*tracetest.SpanRecorder, *sdktrace.TracerProvider, *sdkmetric.ManualReader, *sdkmetric.MeterProvider) {
 	t.Helper()
 
 	spanRecorder := tracetest.NewSpanRecorder()
@@ -118,7 +173,7 @@ func newExemplarTestHarness(t *testing.T) (*tracetest.SpanRecorder, *sdktrace.Tr
 	metricReader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithReader(metricReader),
-		sdkmetric.WithExemplarFilter(exemplar.AlwaysOnFilter),
+		sdkmetric.WithExemplarFilter(filter),
 	)
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
 
