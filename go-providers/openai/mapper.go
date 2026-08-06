@@ -326,12 +326,15 @@ func marshalFunctionSchema(function shared.FunctionDefinitionParam) []byte {
 }
 
 func mapUsage(usage osdk.CompletionUsage) agento11y.TokenUsage {
+	// OpenAI's prompt_tokens already includes cached tokens, which is the
+	// inclusive contract as-is.
 	return agento11y.TokenUsage{
 		InputTokens:          usage.PromptTokens,
 		OutputTokens:         usage.CompletionTokens,
 		TotalTokens:          usage.TotalTokens,
 		CacheReadInputTokens: usage.PromptTokensDetails.CachedTokens,
 		ReasoningTokens:      usage.CompletionTokensDetails.ReasoningTokens,
+		InputSemantics:       agento11y.TokenInputSemanticsInclusive,
 	}
 }
 

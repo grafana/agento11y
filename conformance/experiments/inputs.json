@@ -1,0 +1,18 @@
+{
+  "experiment_id": "conformance-run",
+  "experiment_name": "conformance run",
+  "suite_id": "conformance-suite",
+  "suite_version": "1.0.0",
+  "test_case_id": "capital-france",
+  "attempt": 1,
+  "conversation_id": "conv-agent-1",
+  "evaluator_id": "helpfulness",
+  "evaluator_version": "2",
+  "evaluation_id": "eval-conformance-1",
+  "score_evaluator_id": "exact",
+  "score_evaluator_version": "1",
+  "score_key": "final",
+  "score_created_at": "2026-01-01T00:00:00Z",
+  "planned_trial_count": 1,
+  "tags": ["conformance"]
+}

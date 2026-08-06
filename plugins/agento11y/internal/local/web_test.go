@@ -1,12 +1,16 @@
 package local
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,4 +56,301 @@ func bucketIntervalsFromJSX(t *testing.T, src string) []time.Duration {
 		out = append(out, time.Duration(ms)*time.Millisecond)
 	}
 	return out
+}
+
+// TestViewerDefaultRangeMatchesImportWindow pins the one number the viewer and
+// the importer have to agree on. A history import defaults to the previous 90
+// days; a viewer that opened on a narrower window would show an empty list
+// right after one, because everything backfilled is older than it. The viewer
+// is served as text/babel with no JS toolchain, so this is the only check.
+func TestViewerDefaultRangeMatchesImportWindow(t *testing.T) {
+	src := string(appJSX)
+
+	defaultRange := regexp.MustCompile(`const DEFAULT_TIME_RANGE = "([^"]+)"`).FindStringSubmatch(src)
+	require.Len(t, defaultRange, 2, "DEFAULT_TIME_RANGE not found in web/app.jsx")
+
+	pattern := fmt.Sprintf(`\{ value: %q, label: "[^"]+", ms: ([0-9 */]+) \}`, defaultRange[1])
+	entry := regexp.MustCompile(pattern).FindStringSubmatch(src)
+	require.Len(t, entry, 2, "no TIME_RANGES entry for %q", defaultRange[1])
+
+	ms := int64(1)
+	for factor := range strings.SplitSeq(entry[1], "*") {
+		n, err := strconv.ParseInt(strings.ReplaceAll(strings.TrimSpace(factor), "_", ""), 10, 64)
+		require.NoErrorf(t, err, "range value %q", entry[1])
+		ms *= n
+	}
+	assert.Equal(t, history.DefaultSinceWindow, time.Duration(ms)*time.Millisecond)
+}
+
+// TestViewerHasNoHardcodedHistoryAgents guards the registry contract: adding an
+// importer must not need a frontend edit. The viewer reads the agent list from
+// the registry endpoint and renders whatever it returns, so no agent id or
+// display name may be written into the import UI, whether as rendered text, a
+// string literal, an object key, or a comparison.
+//
+// The whole region is searched, minus style objects, and a name has to stand on
+// its own to count (see namesAgentAt). Matching the region as a plain substring
+// made any short agent id a false positive: "pi" sits inside
+// "/api/v1/history/agents" and "picking", and "cursor" inside `cursor:
+// "pointer"`. The word boundary kills the first kind; dropping style objects
+// kills the second.
+func TestViewerHasNoHardcodedHistoryAgents(t *testing.T) {
+	src := string(appJSX)
+	require.Contains(t, src, "/api/v1/history/agents", "the viewer must read the agent list from the registry endpoint")
+
+	searchable := searchableImportUI(t, src)
+	require.NotEmpty(t, history.Specs(), "no importers registered; this test proves nothing")
+	for _, spec := range history.Specs() {
+		for _, name := range []string{string(spec.ID), spec.DisplayName} {
+			at := namesAgentAt(searchable, name)
+			assert.Negative(t, at,
+				"the import UI names the %q agent in %q; the agent list comes from GET /api/v1/history/agents",
+				name, snippetAround(searchable, at))
+		}
+	}
+}
+
+// TestViewerHardcodedAgentGuardCatchesHardcoding pins the guard itself. A guard
+// that stopped catching what it guards is worse than the false positives it was
+// narrowed to avoid, and the narrowing (a word boundary, and dropping style
+// objects) is what could quietly cost coverage. Each case below is planted into
+// the real import UI region, in a form a frontend edit would actually take.
+func TestViewerHardcodedAgentGuardCatchesHardcoding(t *testing.T) {
+	caught := []struct {
+		name    string
+		planted string
+	}{
+		{"select option", `<option value="codex">Codex</option>`},
+		{"segmented control entry", `{ value: "codex", label: "Codex" }`},
+		{"jsx text with punctuation", `<div>Import (Codex only)</div>`},
+		{"jsx text beside an interpolation", `<span>codex sessions {run.count}</span>`},
+		{"identifier object key", `const icons = { codex: IconCodex };`},
+		{"quoted object key", `const icons = { "codex": IconCodex };`},
+		{"comparison", `if (offer.agent === "codex") return null;`},
+		{"style object value", `<div style={{ backgroundImage: "url(/codex.svg)" }}/>`},
+	}
+	for _, tt := range caught {
+		t.Run(tt.name, func(t *testing.T) {
+			searchable := searchableImportUI(t, plantInImportUI(t, string(appJSX), tt.planted))
+			assert.GreaterOrEqual(t, namesAgentAt(searchable, "codex"), 0,
+				"the guard missed hardcoding written as %s", tt.planted)
+		})
+	}
+
+	// The one construct deliberately out of scope, and the reason style objects
+	// are dropped: a CSS property name is not an agent name, and "cursor" is
+	// both a CSS property and an agent this repo ships a plugin for.
+	searchable := searchableImportUI(t, string(appJSX))
+	assert.Negative(t, namesAgentAt(searchable, "cursor"),
+		`cursor: "pointer" in a style object must not read as a hardcoded agent`)
+	planted := searchableImportUI(t, plantInImportUI(t, string(appJSX), `<div>Import from Cursor</div>`))
+	assert.GreaterOrEqual(t, namesAgentAt(planted, "cursor"), 0,
+		"dropping style objects must not hide an agent named in rendered text")
+}
+
+// searchableImportUI returns the part of the viewer this guard reads: the import
+// UI region with style objects removed.
+//
+// The region runs from useHistoryImport to the end of the Settings history tab.
+// Agent names elsewhere in the file are explanatory prose about how one agent
+// records its transcripts, not a list to keep in sync, so prose that has to name
+// an agent belongs outside these bounds.
+func searchableImportUI(t *testing.T, src string) string {
+	t.Helper()
+	start := strings.Index(src, "function useHistoryImport(")
+	require.Positive(t, start, "useHistoryImport not found in web/app.jsx")
+	end := strings.Index(src, "function SettingsTabPanels(")
+	require.Greater(t, end, start, "SettingsTabPanels not found after useHistoryImport")
+
+	searchable := withoutStylePropertyNames(src[start:end])
+	// Sentences the tab renders. They pin the strip: a style object whose braces
+	// do not balance would swallow the rest of the region, and a swallowed region
+	// makes every assertion below pass while checking nothing.
+	for _, sentinel := range []string{"Import past sessions", "Cancel import", "Scanning…"} {
+		require.Contains(t, searchable, sentinel,
+			"the import UI renders %q but it is not in the searched text", sentinel)
+	}
+	return searchable
+}
+
+// plantInImportUI returns src with snippet inserted into the import UI region,
+// just before the Settings history tab, so a guard case runs against the real
+// file rather than a hand-written stand-in.
+func plantInImportUI(t *testing.T, src, snippet string) string {
+	t.Helper()
+	at := strings.Index(src, "function SettingsHistoryTab(")
+	require.Positive(t, at, "SettingsHistoryTab not found in web/app.jsx")
+	return src[:at] + snippet + "\n" + src[at:]
+}
+
+// namesAgentAt returns the offset in text where the agent is named, or -1 when
+// it is not. The name has to stand on its own: bounded by something other than a
+// letter or a digit on both sides, so "pi" matches in `value: "pi"` and in
+// "Import from Pi" but not in "picking" or "/api/v1/history/agents". The
+// comparison ignores case, so a hardcoded "Pi" label is caught by an agent
+// registered as "pi".
+func namesAgentAt(text, name string) int {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return -1
+	}
+	hay, needle := strings.ToLower(text), strings.ToLower(name)
+	for off := 0; off < len(hay); {
+		i := strings.Index(hay[off:], needle)
+		if i < 0 {
+			return -1
+		}
+		i += off
+		if !alnumAt(hay, i-1) && !alnumAt(hay, i+len(needle)) {
+			return i
+		}
+		off = i + 1
+	}
+	return -1
+}
+
+func alnumAt(s string, i int) bool {
+	if i < 0 || i >= len(s) {
+		return false
+	}
+	c := s[i]
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+}
+
+// snippetAround returns the line at off with its neighbours trimmed, so a
+// failure names the offending code instead of dumping 37 KB of JSX.
+func snippetAround(text string, off int) string {
+	if off < 0 || off >= len(text) {
+		return ""
+	}
+	start := strings.LastIndexByte(text[:off], '\n') + 1
+	end := strings.IndexByte(text[off:], '\n')
+	if end < 0 {
+		end = len(text)
+	} else {
+		end += off
+	}
+	return strings.TrimSpace(text[start:end])
+}
+
+// withoutStylePropertyNames returns src with the property names inside every
+// style={{ … }} attribute blanked out. It is the one exception the guard makes,
+// and it exists for one word: the import UI writes cursor: "pointer" twelve
+// times, "cursor" is a plausible agent id (this repo ships plugins/cursor), and
+// a CSS property name puts no agent name in front of a user.
+//
+// Only the names go. Values stay, so an agent named in a URL or a class name
+// inside a style object is still caught, and so is everything outside the
+// attribute: a style attribute ends at }} before the element's children.
+//
+// The viewer is served as text/babel and no JS toolchain covers it, so this
+// counts braces rather than parsing. A style object holding an unbalanced brace
+// inside a string would swallow the rest of the region, which is what the
+// sentinels in searchableImportUI catch.
+func withoutStylePropertyNames(src string) string {
+	const open = "style={{"
+	var out strings.Builder
+	for {
+		i := strings.Index(src, open)
+		if i < 0 {
+			out.WriteString(src)
+			return out.String()
+		}
+		styleStart := i + len(open)
+		out.WriteString(src[:styleStart])
+		depth, j := 2, styleStart
+		for ; j < len(src) && depth > 0; j++ {
+			switch src[j] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+			}
+		}
+		out.WriteString(blankPropertyNames(src[styleStart:j]))
+		src = src[j:]
+	}
+}
+
+// blankPropertyNames replaces every word followed by a colon with spaces,
+// keeping the rest of the text at the same offsets.
+func blankPropertyNames(span string) string {
+	b := []byte(span)
+	for i := 0; i < len(b); {
+		if !identByte(b[i]) {
+			i++
+			continue
+		}
+		word := i
+		for i < len(b) && identByte(b[i]) {
+			i++
+		}
+		after := i
+		for after < len(b) && (b[after] == ' ' || b[after] == '\t' || b[after] == '\n' || b[after] == '\r') {
+			after++
+		}
+		if after < len(b) && b[after] == ':' {
+			for x := word; x < i; x++ {
+				b[x] = ' '
+			}
+		}
+	}
+	return string(b)
+}
+
+func identByte(c byte) bool {
+	return alnumAt(string(c), 0) || c == '_' || c == '$' || c == '-'
+}
+
+// TestViewerServesItsOwnAssets pins the offline and privacy contract: the
+// viewer renders private session data, so opening it must not reach a CDN, and
+// it must work with no network. Every third-party asset ships in the binary.
+func TestViewerServesItsOwnAssets(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	for _, host := range []string{"unpkg.com", "fonts.googleapis.com", "fonts.gstatic.com", "cdn.jsdelivr.net"} {
+		assert.NotContains(t, string(indexHTML), host, "index.html must not load anything from %s", host)
+		assert.NotContains(t, string(appCSS), host, "app.css must not load anything from %s", host)
+	}
+
+	assets := map[string]string{
+		"/assets/vendor/react.production.min.js":     "application/javascript; charset=utf-8",
+		"/assets/vendor/react-dom.production.min.js": "application/javascript; charset=utf-8",
+		"/assets/vendor/babel.min.js":                "application/javascript; charset=utf-8",
+		"/assets/fonts/inter-latin.woff2":            "font/woff2",
+		"/assets/fonts/roboto-mono-latin.woff2":      "font/woff2",
+	}
+	for path, wantType := range assets {
+		t.Run(path, func(t *testing.T) {
+			// Every asset the shell references must actually be served.
+			require.Contains(t, string(indexHTML)+string(appCSS), path, "nothing references %s", path)
+
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+			require.Equal(t, http.StatusOK, rr.Code)
+			assert.Equal(t, wantType, rr.Header().Get("Content-Type"))
+			assert.NotEmpty(t, rr.Body.Bytes())
+		})
+	}
+}
+
+// TestViewerAssetRoutesRejectTraversal covers the one attack surface the
+// vendored assets add: the file name comes from the URL.
+func TestViewerAssetRoutesRejectTraversal(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	for _, path := range []string{
+		"/assets/vendor/../app.jsx",
+		"/assets/vendor/..%2Fapp.jsx",
+		"/assets/fonts/../vendor/babel.min.js",
+		"/assets/vendor/nope.js",
+		"/assets/fonts/inter-latin.woff2.js",
+		"/assets/vendor/babel.min.js.woff2",
+	} {
+		t.Run(path, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+			assert.NotEqual(t, http.StatusOK, rr.Code, "%s must not be served", path)
+		})
+	}
 }

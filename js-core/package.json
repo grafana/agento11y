@@ -1,6 +1,6 @@
 {
   "name": "@grafana/agento11y-core",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -28,7 +28,7 @@
     "sync-proto": "node ../js/scripts/sync-proto.mjs proto",
     "build": "pnpm run sync-proto && pnpm run clean && tsc --project tsconfig.build.json && node ../js/scripts/stamp-version.mjs dist",
     "typecheck": "tsc --project tsconfig.json --noEmit",
-    "lint": "cd ../js && biome check src/core.ts src/cache-diagnostics.ts src/client.ts src/config.ts src/content_capture.ts src/context.ts src/exporters/default.ts src/exporters/grpc.ts src/exporters/http.ts src/hooks.ts src/redaction.ts src/types.ts src/utils.ts"
+    "lint": "cd ../js && biome check src/core.ts src/cache-diagnostics.ts src/client.ts src/config.ts src/content_capture.ts src/context.ts src/exporters/default.ts src/exporters/grpc.ts src/exporters/http.ts src/hooks.ts src/redaction.ts src/redaction-patterns.generated.ts src/types.ts src/utils.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0"

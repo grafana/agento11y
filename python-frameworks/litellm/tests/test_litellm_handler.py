@@ -714,6 +714,104 @@ def test_identity_resolved_from_nested_router_metadata() -> None:
         client.shutdown()
 
 
+def test_identity_resolved_from_requester_metadata() -> None:
+    """/v1/messages and /v1/responses keep client metadata in requester_metadata.
+
+    Both routes hand the callback a ``litellm_metadata`` holding proxy state and
+    no client-supplied key, so this child dict is the only copy of what the
+    caller sent.
+    """
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client, agent_name="litellm-proxy")
+        kwargs: dict[str, Any] = {
+            "standard_logging_object": _base_slo(call_type="anthropic_messages"),
+            "litellm_params": {
+                "litellm_metadata": {
+                    "user_api_key_request_route": "/v1/messages",
+                    "requester_metadata": {
+                        "agent_name": "search-agent",
+                        "agent_version": "v3",
+                        "conversation_id": "conv-requester-1",
+                    },
+                },
+            },
+        }
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.agent_name == "search-agent"
+        assert gen.agent_version == "v3"
+        assert gen.conversation_id == "conv-requester-1"
+        # Request tags are not read from metadata here: LiteLLM copies
+        # metadata.tags into the payload's request_tags itself.
+    finally:
+        client.shutdown()
+
+
+def test_requester_metadata_read_under_plain_metadata_too() -> None:
+    """Chat routes keep the same copy under metadata.requester_metadata."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client, agent_name="litellm-proxy")
+        kwargs: dict[str, Any] = {
+            "standard_logging_object": _base_slo(),
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_alias": None,
+                    "requester_metadata": {"agent_name": "chat-agent"},
+                },
+            },
+        }
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert exporter.requests[0].generations[0].agent_name == "chat-agent"
+    finally:
+        client.shutdown()
+
+
+def test_top_level_metadata_beats_requester_metadata() -> None:
+    """The outer dict is checked first, so an explicit agent_name there wins."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        kwargs: dict[str, Any] = {
+            "standard_logging_object": _base_slo(),
+            "litellm_params": {
+                "metadata": {
+                    "agent_name": "outer-agent",
+                    "requester_metadata": {"agent_name": "inner-agent"},
+                },
+            },
+        }
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert exporter.requests[0].generations[0].agent_name == "outer-agent"
+    finally:
+        client.shutdown()
+
+
 def test_key_alias_is_not_used_as_agent_name_by_default() -> None:
     """A virtual key alias names a credential, not an agent, so it is ignored."""
     exporter = _CapturingExporter()
@@ -960,6 +1058,99 @@ def test_litellm_trace_id_used_as_conversation_id() -> None:
 
         gen = exporter.requests[0].generations[0]
         assert gen.conversation_id == "trace-abc"
+    finally:
+        client.shutdown()
+
+
+def test_payload_trace_id_used_as_conversation_id() -> None:
+    """/v1/messages carries its trace id only in the logged payload.
+
+    That route leaves ``litellm_params`` without a trace id, so before this
+    fallback its generations exported with an empty conversation id and never
+    appeared in a conversation.
+    """
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(call_type="anthropic_messages", trace_id="payload-trace-1")
+        handler.log_success_event(
+            kwargs={"standard_logging_object": slo, "litellm_params": {"metadata": {}}},
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert exporter.requests[0].generations[0].conversation_id == "payload-trace-1"
+    finally:
+        client.shutdown()
+
+
+def test_litellm_params_trace_id_beats_payload_trace_id() -> None:
+    """The payload trace id is the last resort, so it never regroups a route."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(trace_id="payload-trace-2")
+        kwargs: dict[str, Any] = {
+            "standard_logging_object": slo,
+            "litellm_params": {"metadata": {}, "litellm_trace_id": "params-trace-2"},
+        }
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert exporter.requests[0].generations[0].conversation_id == "params-trace-2"
+    finally:
+        client.shutdown()
+
+
+def test_payload_trace_id_beats_the_static_conversation_id() -> None:
+    """The payload trace id ranks with the other resolved ids, above the static one.
+
+    ``litellm_params``' trace id already outranks the handler's ``conversation_id``,
+    so a route that only publishes its trace id in the payload has to behave the
+    same way, or the same proxy would group two routes differently.
+    """
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client, conversation_id="static-conv")
+        slo = _base_slo(call_type="anthropic_messages", trace_id="payload-trace-3")
+        handler.log_success_event(
+            kwargs={"standard_logging_object": slo},
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert exporter.requests[0].generations[0].conversation_id == "payload-trace-3"
+    finally:
+        client.shutdown()
+
+
+def test_static_conversation_id_used_when_no_trace_id_is_published() -> None:
+    """With no trace id anywhere, the handler's own value still groups the turn."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client, conversation_id="static-conv")
+        handler.log_success_event(
+            kwargs={"standard_logging_object": _base_slo()},
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert exporter.requests[0].generations[0].conversation_id == "static-conv"
     finally:
         client.shutdown()
 
@@ -2577,6 +2768,197 @@ def test_responses_api_bridged_reasoning_content_mapped() -> None:
         assert [m.parts[0].kind for m in gen.output] == [PartKind.THINKING, PartKind.TEXT]
         assert gen.output[0].parts[0].thinking == "Counting the letters."
         assert gen.output[1].parts[0].text == "three"
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_bridged_chat_payload_output_mapped() -> None:
+    """A bridged /v1/responses call logs a chat completion, and it must be read as one.
+
+    LiteLLM serves the route on a provider without a native Responses API by
+    bridging to chat completions and logging the chat ``ModelResponse`` under call
+    type ``aresponses``. Reading that with the Responses mappers found no
+    ``output`` list and no ``status``, so output and stop reason were dropped for
+    every non-OpenAI provider.
+    """
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="aresponses",
+            custom_llm_provider="anthropic",
+            model="anthropic/claude-haiku-4-5",
+            messages=[{"role": "user", "content": "say ok"}],
+            response=_make_slo_response(content="OK", finish_reason="stop"),
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert [p.text for m in gen.output for p in m.parts] == ["OK"]
+        assert gen.stop_reason == "stop"
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_native_payload_still_uses_responses_mappers() -> None:
+    """A payload with output items and no choices keeps the Responses reading."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="aresponses",
+            custom_llm_provider="openai",
+            model="openai/gpt-5",
+            messages="say ok",
+            response={
+                "id": "resp_native",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "OK"}],
+                    }
+                ],
+            },
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert [p.text for m in gen.output for p in m.parts] == ["OK"]
+        # "completed" only becomes "stop" through the Responses stop reason.
+        assert gen.stop_reason == "stop"
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_instructions_recorded_as_system_prompt() -> None:
+    """instructions is the route's system prompt and is missing from the messages.
+
+    An agent version hashes system prompt plus tools, so dropping it collapses
+    all Responses traffic into one version.
+    """
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="aresponses",
+            messages=[{"role": "user", "content": "say ok"}],
+            response=_make_slo_response(content="OK"),
+        )
+        kwargs: dict[str, Any] = {
+            "standard_logging_object": slo,
+            "litellm_params": {
+                "proxy_server_request": {
+                    "body": {"model": "gpt-5", "input": "say ok", "instructions": "You are terse."}
+                }
+            },
+        }
+        handler.log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert exporter.requests[0].generations[0].system_prompt == "You are terse."
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_instructions_read_from_model_parameters() -> None:
+    """A direct litellm.responses() call has no proxy request to read."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="responses",
+            messages=[{"role": "user", "content": "say ok"}],
+            model_parameters={"instructions": "Answer in one word."},
+            response=_make_slo_response(content="OK"),
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert exporter.requests[0].generations[0].system_prompt == "Answer in one word."
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_logged_system_message_beats_instructions() -> None:
+    """A system message in the logged payload is what the provider saw."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client)
+        slo = _base_slo(
+            call_type="aresponses",
+            messages=[
+                {"role": "system", "content": "From the messages."},
+                {"role": "user", "content": "say ok"},
+            ],
+            model_parameters={"instructions": "From instructions."},
+            response=_make_slo_response(content="OK"),
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        assert exporter.requests[0].generations[0].system_prompt == "From the messages."
+    finally:
+        client.shutdown()
+
+
+def test_responses_api_instructions_suppressed_when_inputs_disabled() -> None:
+    """capture_inputs=False keeps the system prompt out, instructions included."""
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    try:
+        handler = Agento11yLiteLLMLogger(client=client, capture_inputs=False)
+        slo = _base_slo(
+            call_type="aresponses",
+            messages=[{"role": "user", "content": "say ok"}],
+            model_parameters={"instructions": "You are terse."},
+            response=_make_slo_response(content="OK"),
+        )
+        handler.log_success_event(
+            kwargs=_make_kwargs(slo),
+            response_obj=None,
+            start_time=_START,
+            end_time=_END,
+        )
+        client.flush()
+
+        gen = exporter.requests[0].generations[0]
+        assert gen.system_prompt == ""
+        assert gen.input == []
     finally:
         client.shutdown()
 

@@ -221,7 +221,7 @@ func scopeLegacyStatus(path string) (hasLegacy, hasNew bool, err error) {
 			if !filepath.IsAbs(p) {
 				p = filepath.Join(settingsDir, p)
 			}
-			if name, ok := localPackageName(p); ok && name == pluginName {
+			if name, _, ok := localPackage(p); ok && name == pluginName {
 				hasNew = true
 			}
 		}
@@ -248,38 +248,62 @@ type piSettings struct {
 // A missing settings file means that scope is unused — treat as not
 // installed in that scope and move on.
 func pluginInstalled() (bool, error) {
-	_, found, err := installedPluginSource()
+	_, found, err := installedPluginRecord()
 	return found, err
 }
 
 // Status reports whether the @grafana/agento11y-pi extension is registered in
-// pi's settings. It reuses the read-only settings probe and never installs —
-// `agento11y doctor` relies on this. When the registered source is a pinned npm
-// spec (`npm:@grafana/agento11y-pi@0.1.1`) that version is reported; bare specs and
-// local-path installs yield an empty (unknown) version.
+// pi's settings, and which version is installed. It reuses the read-only
+// settings probe and never installs — `agento11y doctor` relies on this. An npm
+// entry reports the version pi installed, because the entry is usually a bare
+// spec (`npm:@grafana/agento11y-pi`) that pins nothing and a pinned spec is only
+// the fallback; a local-path entry reports the version its checkout's
+// package.json declares. Version metadata belongs to pi, so an absent or
+// unreadable tree means the version is unknown, not an error.
 func Status(_ context.Context) (installed bool, version string, err error) {
-	source, found, err := installedPluginSource()
-	if err != nil {
+	plugin, found, err := installedPluginRecord()
+	if err != nil || !found {
 		return false, "", err
 	}
-	if !found {
-		return false, "", nil
-	}
-	return true, versionFromPiSource(source), nil
+	return true, plugin.version(), nil
 }
 
-// installedPluginSource returns the settings source string registering the
+// installedPlugin locates the extension within one pi settings scope: the
+// source string that registers it, the version a local-path source declares,
+// and the directory npm installed the package into. npmDir is empty for a
+// local-path source, since pi loads the checkout and not the npm tree.
+type installedPlugin struct {
+	source       string
+	localVersion string
+	npmDir       string
+}
+
+// version resolves the installed version, exact source first: the package npm
+// installed, then a local checkout's own package.json, then the tail of a
+// pinned npm spec. A local-path entry has no npmDir, which localPackage reports
+// as unreadable.
+func (p installedPlugin) version() string {
+	if _, version, ok := localPackage(p.npmDir); ok && version != "" {
+		return version
+	}
+	if p.localVersion != "" {
+		return p.localVersion
+	}
+	return versionFromPiSource(p.source)
+}
+
+// installedPluginRecord returns the settings entry registering the
 // @grafana/agento11y-pi extension, checking the global settings first and then the
 // project-scoped settings (<cwd>/.pi/settings.json, written by `pi install -l`).
-func installedPluginSource() (source string, found bool, err error) {
+func installedPluginRecord() (installedPlugin, bool, error) {
 	globalPath, err := settingsPath()
 	if err != nil {
-		return "", false, err
+		return installedPlugin{}, false, err
 	}
-	if src, found, err := readSettingsAndCheck(globalPath); err != nil {
-		return "", false, err
+	if p, found, err := scopePlugin(globalPath); err != nil {
+		return installedPlugin{}, false, err
 	} else if found {
-		return src, true, nil
+		return p, true, nil
 	}
 
 	// Pi only consults the literal cwd, no parent walking, so we mirror that.
@@ -287,26 +311,26 @@ func installedPluginSource() (source string, found bool, err error) {
 	// settings available" rather than blocking the launch.
 	projectPath, err := projectSettingsPath()
 	if err != nil {
-		return "", false, nil
+		return installedPlugin{}, false, nil
 	}
-	return readSettingsAndCheck(projectPath)
+	return scopePlugin(projectPath)
 }
 
-// readSettingsAndCheck loads one pi settings file and returns the source
-// string registering the @grafana/agento11y-pi extension, if any. A missing file
-// is not an error — that scope is just unused.
-func readSettingsAndCheck(path string) (source string, found bool, err error) {
+// scopePlugin loads one pi settings file and returns the entry registering the
+// @grafana/agento11y-pi extension, if any. A missing file is not an error —
+// that scope is just unused.
+func scopePlugin(path string) (installedPlugin, bool, error) {
 	sources, err := settingsSources(path)
 	if err != nil {
-		return "", false, err
+		return installedPlugin{}, false, err
 	}
 	settingsDir := filepath.Dir(path)
 	for _, src := range sources {
-		if sourceMatchesPlugin(src, settingsDir) {
-			return src, true, nil
+		if plugin, ok := matchPluginSource(src, settingsDir); ok {
+			return plugin, true, nil
 		}
 	}
-	return "", false, nil
+	return installedPlugin{}, false, nil
 }
 
 // settingsSources loads one pi settings file and returns the source string of
@@ -356,30 +380,46 @@ func versionFromPiSource(source string) string {
 	return after[at+1:]
 }
 
-// sourceMatchesPlugin returns true when a pi settings source identifies the
-// @grafana/agento11y-pi extension (or its legacy @grafana/sigil-pi name). It
-// handles three shapes:
+// matchPluginSource reports whether a pi settings source identifies the
+// @grafana/agento11y-pi extension (or its legacy @grafana/sigil-pi name), and
+// returns the record describing where its version can be read. It handles three
+// shapes:
 //   - bare npm specs: `npm:@grafana/agento11y-pi`
 //   - versioned npm specs: `npm:@grafana/agento11y-pi@<version-or-tag>`
 //   - local paths (absolute or relative to settingsDir) that point at a
 //     directory whose package.json declares `name: "@grafana/agento11y-pi"`
 //
 // git: / https: / ssh: sources are never matched — we don't publish there.
-func sourceMatchesPlugin(source, settingsDir string) bool {
+func matchPluginSource(source, settingsDir string) (installedPlugin, bool) {
 	if source == "" {
-		return false
+		return installedPlugin{}, false
 	}
 	if after, ok := strings.CutPrefix(source, npmPrefix); ok {
-		return matchesPluginName(stripNpmVersion(after))
+		name := stripNpmVersion(after)
+		if !matchesPluginName(name) {
+			return installedPlugin{}, false
+		}
+		// Pi installs npm packages next to the settings file that asked for them:
+		// ~/.pi/agent/npm for the global scope, <cwd>/.pi/npm for a project one.
+		// A scoped name carries a `/`, so convert it to the OS separator to get
+		// npm's two-segment layout on Windows too.
+		npmDir := filepath.Join(settingsDir, "npm", "node_modules", filepath.FromSlash(name))
+		return installedPlugin{source: source, npmDir: npmDir}, true
 	}
 	if filepath.IsAbs(source) || strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../") {
 		path := source
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(settingsDir, path)
 		}
-		return localPathIsPlugin(path)
+		name, version, ok := localPackage(path)
+		if !ok || !matchesPluginName(name) {
+			return installedPlugin{}, false
+		}
+		// A local checkout is what pi loads, so the npm tree is not consulted even
+		// when an earlier npm install left one behind.
+		return installedPlugin{source: source, localVersion: version}, true
 	}
-	return false
+	return installedPlugin{}, false
 }
 
 // stripNpmVersion returns the package name portion of an npm spec, stripping
@@ -401,34 +441,28 @@ func matchesPluginName(name string) bool {
 	return name == pluginName || name == legacyPluginName
 }
 
-// localPathIsPlugin returns true when path is a directory containing a
-// package.json whose name matches the plugin (current or legacy pre-rename
-// name).
-func localPathIsPlugin(path string) bool {
-	name, ok := localPackageName(path)
-	return ok && matchesPluginName(name)
-}
-
-// localPackageName returns the package.json name of a local package
-// directory. Any IO/parse failure means we can't confirm the name — treat as
-// unknown rather than an error, since the settings file may legitimately
-// reference other local packages we don't own.
-func localPackageName(path string) (string, bool) {
+// localPackage returns the name and version a package directory's package.json
+// declares, for both a local source and the tree npm installed. Any IO/parse
+// failure means we can't confirm them — treat as unknown rather than an error,
+// since these files belong to pi or to a checkout we don't own. A package.json
+// with no `version` reports an empty version.
+func localPackage(path string) (name, version string, ok bool) {
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
-		return "", false
+		return "", "", false
 	}
 	data, err := os.ReadFile(filepath.Join(path, "package.json"))
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	var pkg struct {
-		Name string `json:"name"`
+		Name    string `json:"name"`
+		Version string `json:"version"`
 	}
 	if err := json.Unmarshal(data, &pkg); err != nil {
-		return "", false
+		return "", "", false
 	}
-	return pkg.Name, true
+	return pkg.Name, pkg.Version, true
 }
 
 // settingsPath returns the path to pi's global settings.json, honouring

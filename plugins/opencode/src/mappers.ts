@@ -5,9 +5,18 @@ import type {
   ToolDefinition,
 } from "@grafana/agento11y";
 import type { AssistantMessage, Part } from "@opencode-ai/sdk";
-import type { Redactor } from "./redact.js";
 
 export type { GenerationResult };
+
+/**
+ * String-level redaction contract the mappers and hooks share. The
+ * implementation comes from `@grafana/agento11y-core`; see `createRedactor` in
+ * hooks.ts.
+ */
+export interface Redactor {
+  redact(text: string): string;
+  redactLightweight(text: string): string;
+}
 
 function includesMessageBodies(contentCapture: ContentCaptureMode): boolean {
   return contentCapture !== "metadata_only";

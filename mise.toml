@@ -92,7 +92,16 @@ ruff format --check python/ python-providers/ python-frameworks/
 
 [tasks."lint:cs"]
 description = "Verify .NET SDK formatting and analyzer checks"
-run = "dotnet format dotnet/Agento11y.DotNet.slnx --verify-no-changes"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+dotnet format dotnet/Agento11y.DotNet.slnx --verify-no-changes
+# dotnet format skips *.g.cs unless --include-generated is passed, and passing it
+# for the whole solution would also check the protobuf stubs under obj/. Name the
+# one generated file this repository owns instead.
+dotnet format dotnet/Agento11y.DotNet.slnx --verify-no-changes --include-generated \\
+  --include dotnet/src/Grafana.Agento11y/RedactionPatterns.g.cs
+"""
 
 [tasks."lint:ts:sdk-js"]
 description = "Lint TypeScript/JavaScript SDK code"
@@ -109,13 +118,18 @@ description = "Lint OpenCode plugin code"
 depends = ["deps"]
 run = "pnpm --filter @grafana/agento11y-opencode run lint"
 
+[tasks."lint:ts:redaction-generator"]
+description = "Lint the secret-pattern generator"
+dir = "redaction"
+run = "biome check ."
+
 [tasks."lint:js-dependency-pinning"]
 description = "Verify JavaScript dependencies are pinned where required"
 run = "pnpm run check:js-dependency-pinning"
 
 [tasks.lint]
 description = "Run all linting"
-depends = ["lint:go", "lint:py", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi", "lint:ts:plugin-opencode", "lint:js-dependency-pinning"]
+depends = ["lint:go", "lint:py", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi", "lint:ts:plugin-opencode", "lint:ts:redaction-generator", "lint:js-dependency-pinning"]
 
 # --- Type checking ---
 
@@ -220,6 +234,11 @@ description = "Run the Go SDK hook tests: wire fixtures and guard behavior"
 dir = "go"
 run = "GOWORK=off go test ./agento11y -run '^TestHook' -count=1"
 
+[tasks."test:go:sdk-experiments-conformance"]
+description = "Run the Go experiments wire-fixture conformance tests"
+dir = "go"
+run = "GOWORK=off go test ./agento11y/experiments -run '^TestExperimentsConformance' -count=1"
+
 # --- TypeScript/JavaScript SDK tests ---
 
 [tasks."test:ts:sdk-js"]
@@ -232,6 +251,18 @@ description = "Run TypeScript/JavaScript SDK core conformance tests"
 depends = ["deps"]
 dir = "js"
 run = "pnpm run test:build && node --test test/conformance.test.mjs"
+
+[tasks."test:ts:sdk-experiments"]
+description = "Run TypeScript/JavaScript SDK experiments tests"
+depends = ["deps"]
+dir = "js"
+run = "pnpm run test:build && node --import ./test/_setup.mjs --test test/experiments.*.test.mjs"
+
+[tasks."test:ts:sdk-experiments-conformance"]
+description = "Run TypeScript/JavaScript experiments wire-fixture conformance tests"
+depends = ["deps"]
+dir = "js"
+run = "pnpm run test:build && node --import ./test/_setup.mjs --test test/experiments.conformance.test.mjs"
 
 [tasks."test:ts:sdk-hooks-conformance"]
 description = "Run the TypeScript/JavaScript SDK hook tests: wire fixtures and guard behavior"
@@ -269,6 +300,10 @@ run = "uv run --python \"$PYTHON_BIN\" --with '.[dev]' --directory python pytest
 [tasks."test:py:sdk-hooks-conformance"]
 description = "Run the Python SDK hook tests: wire fixtures and guard behavior"
 run = "uv run --python \"$PYTHON_BIN\" --with '.[dev]' --directory python pytest tests/test_hooks_conformance.py tests/test_hooks_integration.py"
+
+[tasks."test:py:sdk-experiments-conformance"]
+description = "Run the Python experiments wire-fixture conformance tests"
+run = "uv run --python \"$PYTHON_BIN\" --with '.[dev]' --directory python pytest tests/test_experiments_conformance.py"
 
 [tasks."test:py:sdk-openai"]
 description = "Run Python OpenAI provider helper tests"
@@ -455,6 +490,19 @@ mise run test:ts:sdk-hooks-conformance
 mise run test:py:sdk-hooks-conformance
 """
 
+[tasks."test:sdk:experiments-conformance"]
+description = """
+Run the experiment wire-fixture tests in Go, Python, and TypeScript/JavaScript.
+Java and .NET have no experiments surface, so they are excluded.
+"""
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+mise run test:go:sdk-experiments-conformance
+mise run test:ts:sdk-experiments-conformance
+mise run test:py:sdk-experiments-conformance
+"""
+
 [tasks."test:sdk:provider-conformance"]
 description = "Run provider-wrapper conformance suites across all shipped SDKs"
 run = """
@@ -480,15 +528,86 @@ mise run test:py:sdk-framework-conformance
 mise run test:java:sdk-framework-conformance
 """
 
+[tasks."test:go:pi-sessions-conformance"]
+description = "Run the Go half of the pi session-log conformance tests"
+dir = "plugins/agento11y"
+run = "GOWORK=off go test ./internal/history -run '^TestPiSession' -count=1"
+
+[tasks."test:ts:pi-sessions-conformance"]
+description = "Run the TypeScript half of the pi session-log conformance tests"
+depends = ["deps", "build:ts:sdk-js"]
+run = "pnpm --filter @grafana/agento11y-pi exec vitest run src/piSessionConformance.test.ts"
+
+[tasks."test:pi-sessions-conformance"]
+description = """
+Check the Go pi history importer and the TypeScript pi plugin against the shared
+conformance/pi-sessions fixtures. pi is the one agent whose live capture is
+TypeScript and whose importer is Go, so the fixtures are the only thing holding
+the two mappings together.
+"""
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+mise run test:go:pi-sessions-conformance
+mise run test:ts:pi-sessions-conformance
+"""
+
+[tasks."test:go:sdk-redaction-conformance"]
+description = "Run the Go SDK redaction conformance suite"
+dir = "go"
+run = "GOWORK=off go test ./agento11y -run '^TestConformanceRedaction' -count=1"
+
+[tasks."test:go:plugin-redaction-conformance"]
+description = "Run the shared Go plugin redaction conformance suite"
+dir = "plugins/agento11y"
+run = "GOWORK=off go test ./internal/redact -run '^TestConformanceRedaction' -count=1"
+
+[tasks."test:ts:sdk-redaction-conformance"]
+description = "Run the TypeScript/JavaScript SDK redaction conformance suite"
+depends = ["deps"]
+dir = "js"
+run = "pnpm run test:build && node --test test/redaction.conformance.test.mjs"
+
+[tasks."test:ts:plugin-opencode-redaction-conformance"]
+description = "Run the OpenCode plugin redaction conformance suite"
+depends = ["deps", "build:ts:sdk-js"]
+dir = "plugins/opencode"
+run = "pnpm exec vitest run src/redact.conformance.test.ts"
+
+[tasks."test:py:sdk-redaction-conformance"]
+description = "Run the Python SDK redaction conformance suite"
+run = "uv run --python \"$PYTHON_BIN\" --with '.[dev]' --directory python pytest tests/test_redaction_conformance.py"
+
+[tasks."test:cs:sdk-redaction-conformance"]
+description = "Run the .NET SDK redaction conformance suite"
+dir = "dotnet"
+run = "dotnet test tests/Grafana.Agento11y.Tests/Grafana.Agento11y.Tests.csproj -c Release --filter FullyQualifiedName~RedactionConformance"
+
+[tasks."test:sdk:redaction-conformance"]
+description = "Run the shared redaction fixtures through every engine (four SDKs plus both plugins)"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+mise run test:go:sdk-redaction-conformance
+mise run test:py:sdk-redaction-conformance
+mise run test:ts:sdk-redaction-conformance
+mise run test:cs:sdk-redaction-conformance
+mise run test:go:plugin-redaction-conformance
+mise run test:ts:plugin-opencode-redaction-conformance
+"""
+
 [tasks."test:sdk:conformance"]
-description = "Run core, provider-wrapper, and framework-adapter conformance suites across supported SDKs"
+description = "Run the core, hook, experiment, provider-wrapper, framework-adapter, pi-session, and redaction conformance suites across supported SDKs"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
 mise run test:sdk:core-conformance
 mise run test:sdk:hooks-conformance
+mise run test:sdk:experiments-conformance
 mise run test:sdk:provider-conformance
 mise run test:sdk:framework-conformance
+mise run test:pi-sessions-conformance
+mise run test:sdk:redaction-conformance
 """
 
 [tasks."test:sdk:all"]
@@ -623,6 +742,56 @@ fi
 echo "==> check:proto: stubs in sync"
 """
 
+# --- Redaction pattern generation ---
+
+[tasks."generate:redaction"]
+description = "Regenerate the per-language secret-pattern tables from redaction/patterns.json"
+run = "node redaction/scripts/generate.mjs"
+
+[tasks."test:redaction:generator"]
+description = "Run the redaction pattern generator's invariant tests"
+run = "node --test redaction/scripts/generate.test.mjs"
+
+[tasks."check:redaction"]
+description = "Fail if the generated secret-pattern tables drift from redaction/patterns.json"
+depends = ["test:redaction:generator"]
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+echo "==> check:redaction regenerate"
+# The generator prints one "generated <path>" line per file it writes, so a new
+# output target is diffed here without anyone maintaining a second list.
+generated="$(node redaction/scripts/generate.mjs "$tmp")"
+if [[ -z "$generated" ]]; then
+  echo >&2 "redaction generator wrote no files"
+  exit 1
+fi
+
+fail=0
+while IFS= read -r line; do
+  target="${line#generated }"
+  if ! diff -uN "$target" "$tmp/$target"; then
+    echo >&2 "::error file=${target}::${target} is out of sync with redaction/patterns.json"
+    fail=1
+  fi
+done <<< "$generated"
+
+if [[ $fail -ne 0 ]]; then
+  cat >&2 <<'EOF'
+
+Generated secret-pattern tables drifted from redaction/patterns.json.
+Run `mise run generate:redaction` and commit the regenerated files.
+EOF
+  exit 1
+fi
+
+echo "==> check:redaction: pattern tables in sync"
+"""
+
 # --- Mock generation (stubs) ---
 
 [tasks."generate:mocks:sdk-go"]
@@ -656,7 +825,40 @@ echo "No Go SDK framework mocks to generate yet."
 description = "Generate all mock implementations"
 depends = ["generate:mocks:sdk-go", "generate:mocks:sdk-go-providers", "generate:mocks:sdk-go-frameworks"]
 
+[tasks."local:vendor-assets"]
+description = "Re-download the third-party assets the local viewer serves"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The local viewer ships React, Babel, and its two fonts in the binary rather
+# than pulling them from a CDN: it renders private session data, so opening it
+# must not tell a third party that you did, and it has to work offline.
+# Versions are pinned here. Bumping one means editing this task, not the files.
+REACT=18.3.1
+BABEL=7.29.0
+# Google serves a content-hashed URL per font revision. Re-fetch these from
+# https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=Roboto+Mono:wght@400..500&display=swap
+# with a browser User-Agent when bumping, and take the latin subset (U+0000-00FF).
+INTER_URL="https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7W0Q5nw.woff2"
+ROBOTO_MONO_URL="https://fonts.gstatic.com/s/robotomono/v31/L0x5DF4xlVMF-BfR8bXMIjhLq3-cXbKD.woff2"
+
+web=plugins/agento11y/internal/local/web
+mkdir -p "$web/vendor" "$web/fonts"
+
+fetch() { echo "==> $2"; curl -fsSL -o "$2" "$1"; }
+
+fetch "https://unpkg.com/react@$REACT/umd/react.production.min.js"         "$web/vendor/react.production.min.js"
+fetch "https://unpkg.com/react-dom@$REACT/umd/react-dom.production.min.js" "$web/vendor/react-dom.production.min.js"
+fetch "https://unpkg.com/@babel/standalone@$BABEL/babel.min.js"            "$web/vendor/babel.min.js"
+fetch "$INTER_URL"       "$web/fonts/inter-latin.woff2"
+fetch "$ROBOTO_MONO_URL" "$web/fonts/roboto-mono-latin.woff2"
+
+echo "==> vendored:"
+ls -la "$web/vendor" "$web/fonts"
+"""
+
 [tasks.check]
 description = "Run lint + typecheck + tests"
-depends = ["lint", "typecheck", "check:proto"]
+depends = ["lint", "typecheck", "check:proto", "check:redaction"]
 run = "mise run test:sdk:all"

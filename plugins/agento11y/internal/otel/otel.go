@@ -30,7 +30,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -208,7 +208,7 @@ type ProbeTarget struct {
 // ProbeConfig resolves the OTLP endpoint and returns the per-signal probe
 // targets for metrics and traces, reusing the same endpoint resolution,
 // signal-URL construction, and auth-header synthesis as Setup. ok is false
-// when no OTLP endpoint is configured. Used by `agento11y doctor --probe` to send
+// when no OTLP endpoint is configured. Used by `agento11y doctor` to send
 // a lightweight request to each signal and report the HTTP status without
 // standing up the full exporter pipeline.
 func ProbeConfig() (metrics, traces ProbeTarget, ok bool) {

@@ -42,6 +42,30 @@ Verify the install with `agento11y --version`.
 
 All hosts read the same config file at `~/.config/agento11y/config.env`. If you only have the old `~/.config/sigil/config.env`, that file is read and updated instead. The first run of `agento11y claude`, `agento11y opencode`, or `agento11y pi` prompts for your endpoint, tenant ID, token, and OTLP endpoint and writes them there; run `agento11y login` to re-enter them later. After the connection details, `agento11y login` shows an optional preferences step for content capture mode, session tags, and guards — leave it at the defaults to keep the current behaviour. Cursor has no launcher, so wire it once with `agento11y cursor install` (which also prompts on first run) and remove it with `agento11y cursor uninstall`.
 
+Before anything is written, login sends one request to the configured endpoint with the credentials you gave it. If the endpoint rejects them, login prints why and asks whether to save anyway.
+
+The connection values can also come from flags, which is what a script or a devcontainer wants. The preferences have no flags; set them in the config file or answer the prompt.
+
+```sh
+agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token glc_...
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--endpoint url` | conversations API URL |
+| `--tenant id` | instance ID |
+| `--token value` | access-policy token with the `sigil:write` scope |
+| `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant` |
+| `--otlp-endpoint url` | OTLP endpoint for SDK traces and metrics |
+| `--no-verify` | write the file without checking the credentials |
+| `--yes` | save even when the check fails |
+
+Passing `--endpoint`, `--tenant`, and a token together skips the value prompts, so login works over SSH, in a devcontainer, and from a script. One prompt can still appear: if the credential check fails and stdin is a terminal, login asks whether to save anyway. Pass `--yes` (or `--no-verify`) so a script never stops there. Keeping a token out of your shell history:
+
+```sh
+printf %s "$TOKEN" | agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token-stdin
+```
+
 To preconfigure without the prompt, create the file:
 
 ```dotenv
@@ -88,13 +112,68 @@ Unknown values fall back to `metadata_only` with a warning. `default` is accepte
 
 A plugin can only export fields the host agent passes through to it, so individual plugins may capture less than the SDK matrix shows. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the SDK-level behavior matrix and plugin defaults.
 
+## Local mode and history import
+
+`agento11y <agent> --local` records the session to a JSONL store on this machine and opens a viewer at `http://127.0.0.1:8765`. Start and stop the daemon by hand with `agento11y local start|status|stop`.
+
+The viewer starts empty: it holds only the sessions captured after you installed agento11y. `agento11y history import` backfills the ones an agent already wrote to disk.
+
+```sh
+# See what would be imported. Nothing is decoded, exported, or stored.
+agento11y history import claude-code --dry-run
+
+# Import into the local store on this machine.
+agento11y history import claude-code --local
+
+# Import into Grafana Cloud, the default without --local.
+agento11y history import claude-code
+```
+
+Supported agents are `claude-code`, `codex`, and `pi`. `agento11y history import` with no agent lists them.
+
+A `pi` import reads pi's session logs under `$PI_CODING_AGENT_DIR/sessions` (by default `~/.pi/agent/sessions`) and produces one generation per assistant turn, with its prompt, thinking, tool calls, matched tool results, model, token usage, cost, both timestamps, and parent turn. Three things live capture records are not in the session log, so an imported pi session is thinner than a captured one:
+
+- No compaction or branch-summary generations. Live exports each summarization call as its own generation. pi's `compaction` entry carries the summary text, the token count it compacted away, and, on recent pi versions, the call's `usage` and cost, but never the model or the provider, so the call cannot be reconstructed as a generation. An imported session therefore holds fewer generations than a captured one, and the missing ones are the expensive calls.
+- No system prompt, request controls (`max_tokens`, `temperature`, `top_p`, tool choice, thinking budget), or time to first token. pi records none of them.
+- Tool definitions are name-only, and only for the tools a turn called: the descriptions, schemas, and the list of tools that were offered but unused live in pi's runtime. Session tags (`cwd`, `git.branch`) are absent for the same reason.
+
+Subagent runs are in neither: the nested `run-N/session.jsonl` logs come from the third-party `pi-subagents` package, which live capture ignores too, so importing them would exceed live fidelity rather than match it.
+
+A forked pi session imports only the turns the fork itself ran. The trunk holds the entries a fork copied from it and exports those turns under its own import, and, when the trunk exported the fork's parent turn, the fork's first turn carries `pi.fork.parent_session_id` and `pi.fork.parent_generation_id` metadata instead of a parent edge. A fork of a fork carries neither key, because no trunk generation exists to name.
+
+`--local` picks the endpoint. Without it, the import exports to the configured Grafana Cloud endpoint, exactly as a live session does. With it, the import exports to the local daemon on this machine.
+
+A dry run reads up to 1 MiB of each session file (a head and a tail window) to count turns and read session metadata. Nothing from those bytes is decoded into prompt or response text, shown, exported, or stored.
+
+Without `--since`, an import covers the last 90 days. The local store is a linear scan over JSONL files, so an unbounded first import makes the viewer slow before you have used it. Pass `--since 365d`, `--since 2026-01-01T00:00:00Z`, or any duration to widen the window, and `--until` to bound the other end.
+
+The rest of the flags:
+
+- `--source` restricts the import to one discovered path (repeatable). It filters the paths discovery already found; it cannot add a path outside the agent's roots.
+- `--workspace` keeps only sessions whose workspace path contains the given text.
+- `--max-sessions` and `--max-turns` cap how many sessions the run imports and how many turns it takes from each.
+- `--all` skips the picker, `--yes` skips the confirmation.
+- `--dry-run` prints the plan and imports nothing.
+- `--force` re-exports turns the ledger already records.
+- `--local` targets the local daemon instead of Grafana Cloud.
+
+Without a terminal there is no picker and no confirmation, so the command prints the plan and imports nothing. Pass `--all --yes` to import from a script.
+
+The viewer offers the same import in two places: a banner on the Sessions page, and Settings, then History, for the full form. An import there runs in the background and reports progress live; you can cancel it, and a cancelled run keeps what it already imported.
+
+A local import never leaves this machine. Whether an import stays local follows from the endpoint, not from the flag. An import that exports to a loopback endpoint sets the daemon's forwarding marker on every request, and captures full content, matching live local capture. The daemon stores a marked backfill without relaying it to Grafana Cloud, whatever `AGENTO11Y_LOCAL_FORWARD` and `AGENTO11Y_CONTENT_CAPTURE_MODE` are set to. An import that reaches `127.0.0.1` is therefore marked even when it was started without `--local`. An import without `--local` and with a Cloud endpoint configured does leave the machine, which is the point of it.
+
+Each imported turn is recorded in a per-agent ledger under `~/.local/state/agento11y/history/ledger/`. The ledger holds hashes, statuses, and counts, never paths or content. Re-running an import skips the turns the ledger already records, so an import is safe to repeat and a cancelled or failed run resumes where it stopped. `--force` re-exports those turns under the same generation IDs, so the export replaces the stored copy rather than adding a second one.
+
 ## Auto-update
 
-`agento11y claude`, `agento11y codex`, `agento11y copilot`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out.
+`agento11y claude`, `agento11y codex`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out.
+
+`AGENTO11Y_AUTO_UPDATE` does not apply to the other launchers. `agento11y copilot` rewrites its own `agento11y.json` hooks file, and `agento11y vibe` re-upserts its three entries into vibe's `hooks.toml`, so both always point at the installed binary. `agento11y pi` leaves upgrades to pi's own installer.
 
 ## Troubleshooting
 
-Run `agento11y doctor` first. It's a read-only diagnostic that reports both export pipelines, config, and installed host-agent plugins in one place:
+Run `agento11y doctor` first. It's a read-only diagnostic that reports both export pipelines, config, and installed host-agent plugins in one place. It sends a lightweight request to each endpoint and reports the HTTP status, so a wrong endpoint or a token missing a scope shows up as a broken pipeline:
 
 ```sh
 agento11y doctor
@@ -107,11 +186,7 @@ The two pipelines are independent and fail independently:
 
 The common failure is conversations showing up while the analytics page stays empty: the OTLP endpoint is unset, or the token lacks the metrics/traces scopes. `agento11y doctor` flags that case explicitly and exits non-zero when a pipeline is broken.
 
-Add `--probe` to send a lightweight request to each endpoint and report the HTTP status (a 401/403 on the OTLP path means the token is missing `metrics:write`/`traces:write`):
-
-```sh
-agento11y doctor --probe
-```
+A 403 means the token is missing a write scope. A 401 means the endpoint refused the credentials without saying why: the token may be invalid or expired, or `AGENTO11Y_AUTH_TENANT_ID` may be wrong.
 
 For support, capture the machine-readable report — it never includes the auth token value:
 

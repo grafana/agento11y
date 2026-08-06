@@ -6,15 +6,20 @@
     // labels without re-fetching.
     // ============================================================
 
+    // NO_VALUE is what every formatter returns for a value the source did not
+    // record. One constant so a missing token count, duration, date, and cost
+    // all read the same in a table.
+    const NO_VALUE = "-";
+
     function formatTokens(n) {
-      if (n == null || isNaN(n)) return "—";
+      if (n == null || isNaN(n)) return NO_VALUE;
       if (n < 1000) return String(n);
       if (n < 1_000_000) return (n / 1_000).toFixed(n < 10_000 ? 1 : 1).replace(/\.0$/, "") + "k";
       return (n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 1).replace(/\.0$/, "") + "M";
     }
 
     function formatDuration(seconds) {
-      if (seconds == null || isNaN(seconds)) return "—";
+      if (seconds == null || isNaN(seconds)) return NO_VALUE;
       if (seconds < 1) return "<1s";
       if (seconds < 60) return seconds.toFixed(seconds < 10 ? 2 : 1).replace(/\.0+$/, "") + "s";
       const m = Math.floor(seconds / 60);
@@ -29,9 +34,9 @@
     // "ago" suffix where appropriate, so call sites can use it bare
     // without adding their own "ago" and producing "just now ago".
     function formatAgo(iso, now) {
-      if (!iso) return "—";
+      if (!iso) return NO_VALUE;
       const t = new Date(iso).getTime();
-      if (!Number.isFinite(t)) return "—";
+      if (!Number.isFinite(t)) return NO_VALUE;
       const secs = Math.max(0, Math.round((now - t) / 1000));
       if (secs < 5)   return "just now";
       if (secs < 60)  return `${secs}s ago`;
@@ -44,9 +49,9 @@
     }
 
     function formatTime(iso) {
-      if (!iso) return "—";
+      if (!iso) return NO_VALUE;
       const d = new Date(iso);
-      if (isNaN(d)) return "—";
+      if (isNaN(d)) return NO_VALUE;
       return d.toLocaleTimeString([], { hour12: false });
     }
 
@@ -65,8 +70,14 @@
       { value: "6h", label: "Last 6 hours", ms: 6 * 60 * 60 * 1000 },
       { value: "24h", label: "Last 24 hours", ms: 24 * 60 * 60 * 1000 },
       { value: "7d", label: "Last 7 days", ms: 7 * 24 * 60 * 60 * 1000 },
+      { value: "90d", label: "Last 90 days", ms: 90 * 24 * 60 * 60 * 1000 },
       { value: "all", label: "All", ms: null },
     ];
+
+    // DEFAULT_TIME_RANGE matches the 90-day window a history import defaults
+    // to. A narrower default would open on an empty list right after an
+    // import, because everything backfilled is older than it.
+    const DEFAULT_TIME_RANGE = "90d";
     const FEED_TIME_RANGES = TIME_RANGES.filter(r => r.value !== "5m" && r.value !== "15m");
 
     // LIST_PAGE_SIZE is how many conversations one list request asks for.
@@ -76,7 +87,7 @@
     const LIST_PAGE_SIZE = 200;
 
     function timeRangeOption(value) {
-      return TIME_RANGES.find(r => r.value === value) || TIME_RANGES.find(r => r.value === "6h");
+      return TIME_RANGES.find(r => r.value === value) || TIME_RANGES.find(r => r.value === DEFAULT_TIME_RANGE);
     }
 
     function conversationTime(c) {
@@ -182,7 +193,7 @@
     // Anthropic only — agento11y also captures OpenAI / Gemini / etc. sessions,
     // and we don't carry authoritative prices for those (they drift). An
     // unrecognised model returns null rather than a fabricated dollar figure:
-    // better to show "—" than to price a GPT/Gemini run at Claude rates.
+    // better to show NO_VALUE than to price a GPT/Gemini run at Claude rates.
     // ponytail: add a row here when a provider's prices are known and stable;
     // don't guess them.
     const MODEL_PRICES = [
@@ -227,11 +238,11 @@
         try {
           const cached = JSON.parse(localStorage.getItem(PRICE_CACHE_KEY) || "null");
           if (cached && cached.map && Date.now() - cached.at < PRICE_TTL_MS) return cached.map;
-        } catch { /* corrupt cache — refetch */ }
+        } catch { /* corrupt cache, refetch */ }
         const resp = await fetch(MODELS_DEV_URL);
         if (!resp.ok) throw new Error(`models.dev ${resp.status}`);
         const map = flattenModelsDev(await resp.json());
-        try { localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify({ at: Date.now(), map })); } catch { /* quota — skip cache */ }
+        try { localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify({ at: Date.now(), map })); } catch { /* quota, skip cache */ }
         return map;
       })();
       return modelPricesPromise;
@@ -256,7 +267,7 @@
     // brand-new Claude ids or when offline. Exact for the single-model common
     // case; a mixed-model conversation is priced at models[0] (the
     // orchestrator), a close approximation. Returns null when the model can't
-    // be priced (unknown provider, or no model recorded) so callers show "—"
+    // be priced (unknown provider, or no model recorded) so callers show NO_VALUE
     // instead of a fabricated number.
     // ponytail: per-model attribution would need per-generation buckets — not
     // worth it until mixed-model conversations are common.
@@ -286,7 +297,7 @@
     }
 
     function formatCost(usd) {
-      if (usd == null) return "—";       // unpriced model — distinct from $0
+      if (usd == null) return NO_VALUE;   // unpriced model, distinct from $0
       if (usd === 0) return "$0";
       if (usd < 0.01) return "<$0.01";
       if (usd < 1000) return "$" + usd.toFixed(2).replace(/\.00$/, "");
@@ -535,7 +546,7 @@
           background: "rgba(204,204,220,0.02)",
           color: "var(--fg1)", fontSize: 12, fontFamily: "var(--fontFamilyMonospace)", whiteSpace: "nowrap",
         }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, boxShadow: `0 0 6px ${color}66` }}/>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: color }}/>
           {shortModel(name)}
         </span>
       );
@@ -1043,11 +1054,10 @@
                 );
               })}
               {models.length > 0 && (
-                <select value={model} onChange={e => onModelChange(e.target.value)} title="Filter by model"
-                  style={{ height: 24, padding: "0 6px", border: "1px solid var(--border-medium)", borderRadius: 2, background: "var(--bg-primary)", color: "var(--fg1)", fontSize: 11, fontFamily: "var(--fontFamilyMonospace)" }}>
-                  <option value="all">All models</option>
-                  {models.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
+                <Select value={model} onChange={onModelChange} title="Filter by model"
+                  options={[{ value: "all", label: "All models" }, ...models.map(m => ({ value: m, label: m }))]}
+                  trigger={{ height: 24, minWidth: 108, padding: "0 6px", borderRadius: 2, background: "var(--bg-primary)", fontSize: 11, fontFamily: "var(--fontFamilyMonospace)" }}
+                  menu={{ fontFamily: "var(--fontFamilyMonospace)" }}/>
               )}
               <span>{bucketLabel}</span>
             </div>
@@ -1122,6 +1132,99 @@
             <ChartXLabels data={data}/>
           </div>
         </SurfaceCard>
+      );
+    }
+
+    // Select is the viewer's dropdown. A native <select> draws its popup in OS
+    // chrome, which on macOS punches a light widget through the dark theme, so
+    // every picker here uses this listbox instead. Options are
+    // [{ value, label }]. trigger and menu take style overrides, because the
+    // chart filter is a 24px mono control and the rest are 34px.
+    //
+    // Keyboard: Enter, Space, or ArrowDown opens. Arrow keys and Home/End move.
+    // Enter picks, Escape closes and returns focus to the button.
+    function Select({ value, options, onChange, title, trigger, menu, id, disabled }) {
+      const [open, setOpen] = useState(false);
+      const [cursor, setCursor] = useState(0);
+      const rootRef = useRef(null);
+      const buttonRef = useRef(null);
+      const index = Math.max(0, options.findIndex(o => o.value === value));
+      const selected = options[index] || options[0];
+
+      // Opening starts the cursor on the current value rather than the top, so
+      // ArrowDown steps away from where the user already is.
+      const openMenu = () => { setCursor(index); setOpen(true); };
+      const close = (refocus) => {
+        setOpen(false);
+        if (refocus && buttonRef.current) buttonRef.current.focus();
+      };
+      const pick = (option) => { onChange(option.value); close(true); };
+
+      const onKeyDown = (e) => {
+        if (!open) {
+          if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") { e.preventDefault(); openMenu(); }
+          return;
+        }
+        if (e.key === "Escape") { e.preventDefault(); close(true); return; }
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (options[cursor]) pick(options[cursor]); return; }
+        if (e.key === "ArrowDown") { e.preventDefault(); setCursor(c => Math.min(options.length - 1, c + 1)); return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); setCursor(c => Math.max(0, c - 1)); return; }
+        if (e.key === "Home") { e.preventDefault(); setCursor(0); return; }
+        if (e.key === "End") { e.preventDefault(); setCursor(options.length - 1); }
+      };
+
+      return (
+        <div ref={rootRef} style={{ position: "relative", flex: "0 0 auto" }}
+          onBlur={e => { if (!rootRef.current?.contains(e.relatedTarget)) setOpen(false); }}>
+          <button ref={buttonRef} type="button" id={id} title={title} disabled={disabled}
+            aria-haspopup="listbox" aria-expanded={open}
+            onClick={() => (open ? close(false) : openMenu())}
+            onKeyDown={onKeyDown}
+            style={{
+              height: 34, minWidth: 132, padding: "0 10px",
+              border: "1px solid var(--border-medium)", borderRadius: 8,
+              background: "rgba(24,27,31,0.78)", color: disabled ? "var(--fg3)" : "var(--fg1)",
+              fontSize: 13, fontFamily: "var(--fontFamily)",
+              display: "inline-flex", alignItems: "center", justifyContent: "space-between",
+              gap: 8, cursor: disabled ? "not-allowed" : "pointer", textAlign: "left",
+              opacity: disabled ? 0.6 : 1,
+              ...trigger,
+            }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected ? selected.label : ""}</span>
+            <Icon name="chevron" size={13} style={{ color: "var(--fg3)", flex: "none" }}/>
+          </button>
+          {open && !disabled && (
+            <div role="listbox" tabIndex={-1} style={{
+              position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 30,
+              minWidth: "100%", maxHeight: 280, overflowY: "auto", padding: 4,
+              border: "1px solid var(--border-strong)", borderRadius: 8,
+              background: "var(--bg-secondary)", boxShadow: "0 12px 34px rgba(0,0,0,0.48)",
+              ...menu,
+            }}>
+              {options.map((o, i) => {
+                const isSelected = o.value === selected?.value;
+                return (
+                  <button key={o.value} type="button" role="option" aria-selected={isSelected}
+                    onMouseDown={e => e.preventDefault()}
+                    onMouseEnter={() => setCursor(i)}
+                    onClick={() => pick(o)}
+                    style={{
+                      width: "100%", minHeight: 30, display: "flex", alignItems: "center",
+                      justifyContent: "space-between", gap: 10, padding: "0 9px",
+                      border: "none", borderRadius: 5,
+                      background: i === cursor ? ACTIVE_PILL_BG : "transparent",
+                      color: isSelected ? "var(--primary-text)" : "var(--fg1)",
+                      fontSize: 12, fontFamily: "var(--fontFamily)",
+                      cursor: "pointer", textAlign: "left", whiteSpace: "nowrap",
+                    }}>
+                    <span>{o.label}</span>
+                    {isSelected && <Icon name="check" size={12}/>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       );
     }
 
@@ -1261,23 +1364,20 @@
           </Stack>
           {showTimeRange && <TimeRangePicker value={timeRange} onChange={onTimeRangeChange}/>}
           {showAgentFilter && (
-            <select value={agentFilter} onChange={e => onAgentFilterChange(e.target.value)} title="Filter by agent" style={selectStyle}>
-              <option value="all">All agents</option>
-              {agentOptions.map(a => <option key={a} value={a}>{a}</option>)}
-            </select>
+            <Select value={agentFilter} onChange={onAgentFilterChange} title="Filter by agent" trigger={selectStyle}
+              options={[{ value: "all", label: "All agents" }, ...agentOptions.map(a => ({ value: a, label: a }))]}/>
           )}
           {showModelFilter && (
-            <select value={modelFilter} onChange={e => onModelFilterChange(e.target.value)} title="Filter by model" style={{ ...selectStyle, minWidth: 150 }}>
-              <option value="all">All models</option>
-              {modelOptions.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
+            <Select value={modelFilter} onChange={onModelFilterChange} title="Filter by model" trigger={{ ...selectStyle, minWidth: 150 }}
+              options={[{ value: "all", label: "All models" }, ...modelOptions.map(m => ({ value: m, label: m }))]}/>
           )}
           {showStatusFilter && (
-            <select value={statusFilter} onChange={e => onStatusFilterChange(e.target.value)} title="Filter by status" style={selectStyle}>
-              <option value="all">All status</option>
-              <option value="errors">Errors</option>
-              <option value="subagents">Has subagents</option>
-            </select>
+            <Select value={statusFilter} onChange={onStatusFilterChange} title="Filter by status" trigger={selectStyle}
+              options={[
+                { value: "all", label: "All status" },
+                { value: "errors", label: "Errors" },
+                { value: "subagents", label: "Has subagents" },
+              ]}/>
           )}
           {activeFilterCount > 0 && onClearFilters && (
             <button onClick={onClearFilters}
@@ -1501,7 +1601,7 @@
       );
     }
 
-    function ConversationsView({ conversations, storeCount, tokenPoints, tokenIntervalMs, loading, error, query, setQuery, searchInputRef, timeRange, setTimeRange, tokenModel, setTokenModel, chartMetric, setChartMetric, bucketSel, setBucketSel, listSort, setListSort, onOpen, onRefresh, refreshing, onOpenSettings }) {
+    function ConversationsView({ conversations, storeCount, tokenPoints, tokenIntervalMs, loading, error, query, setQuery, searchInputRef, timeRange, setTimeRange, tokenModel, setTokenModel, chartMetric, setChartMetric, bucketSel, setBucketSel, listSort, setListSort, onOpen, onRefresh, refreshing, onOpenSettings, history }) {
       const now = Date.now();
       const prices = useModelPrices();
       const range = timeRangeOption(timeRange);
@@ -1750,7 +1850,7 @@
           conversations: filtered.length,
           conversationsSub: activeWorkspace ? "in workspace" : "active in range",
           tokens,
-          cost: priced ? cost : null,  // nothing priced → "—", not a misleading $0
+          cost: priced ? cost : null,  // nothing priced, so NO_VALUE rather than a misleading $0
           costSub,
           models: models.size,
           cachePct: cacheInputHitPercent(tot.fresh_input, tot.cache_read, tot.cache_write),
@@ -1789,6 +1889,7 @@
             </Box>
           </PageHero>
           <ForwardBanner onOpenSettings={onOpenSettings}/>
+          {history && <HistoryImportBanner history={history} onOpenSettings={onOpenSettings}/>}
           <FilterBar
             query={query}
             onQueryChange={setQuery}
@@ -1839,7 +1940,7 @@
           {bucketSel && (
             <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, fontSize: 11, fontFamily: "var(--fontFamilyMonospace)", color: "var(--fg2)" }}>
               <span>
-                Showing {formatBucketLabel(bucketSel.start, bucketSel.end - bucketSel.start)} – {formatBucketLabel(bucketSel.end, bucketSel.end - bucketSel.start)}
+                Showing {formatBucketLabel(bucketSel.start, bucketSel.end - bucketSel.start)} to {formatBucketLabel(bucketSel.end, bucketSel.end - bucketSel.start)}
               </span>
               <button onClick={() => setBucketSel(null)}
                 style={{ background: "transparent", border: "1px solid var(--border-medium)", borderRadius: 2, color: "var(--fg2)", cursor: "pointer", fontSize: 11, fontFamily: "var(--fontFamilyMonospace)", padding: "1px 8px" }}>
@@ -2107,7 +2208,7 @@
             style={{ display: "flex", alignItems: "center", gap: 7, width: "100%", minWidth: 0, background: "transparent", border: "none", padding: 0, cursor: hasBody ? "pointer" : "default", textAlign: "left", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: isErr ? "var(--error-text)" : "var(--fg2)" }}>
             {hasBody && <Icon name={show ? "chevron" : "cright"} size={10} style={{ color: "var(--fg3)", flex: "none" }}/>}
             <span style={{ color: "var(--viz-green)", fontSize: 9.5, letterSpacing: "0.08em", flex: "none" }}>IN</span>
-            <span style={{ flex: "none" }}>result{lineCount > 0 ? <span style={{ color: "var(--fg3)" }}> · {lineCount} {lineCount === 1 ? "line" : "lines"}</span> : null}{isErr ? <span style={{ color: "var(--error-text)" }}> · error</span> : null}</span>
+            <span style={{ flex: "none" }}>result{lineCount > 0 ? <span style={{ color: "var(--fg3)" }}> · {lineCount} {lineCount === 1 ? "line" : "lines"}</span> : null}{isErr ? <span style={{ color: "var(--error-text)", marginLeft: 8 }}>error</span> : null}</span>
             {!show && firstLine && <span style={{ color: "var(--fg3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{firstLine}</span>}
           </button>
           {show && body && <CappedBlock lineCount={lineCount} preStyle={{ fontSize: 11 }}>{body}</CappedBlock>}
@@ -2291,8 +2392,12 @@
           <span style={{ flexShrink: 0, marginTop: 1, fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, letterSpacing: "0.06em", color: "var(--viz-green)", background: "rgba(115,191,105,0.1)", border: "1px solid rgba(115,191,105,0.25)", borderRadius: 2, padding: "1px 6px", lineHeight: "16px" }}>USER</span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ color: "var(--fg-max)", fontSize: 13, lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{turn.userText}</div>
-            <div style={{ marginTop: 5, fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>
-              turn {turn.index} · {turn.gens.length} {turn.gens.length === 1 ? "step" : "steps"} · <span style={{ color: "var(--fg2)" }}>{formatTokens(turn.billed)}</span> billed · <span style={{ color: "var(--fg2)" }}>{formatTokens(turn.generated)}</span> generated · ctx <span style={{ color: "var(--fg2)" }}>{formatTokens(turn.ctxIn)}</span>
+            <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: "2px 14px", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>
+              <span>turn {turn.index}</span>
+              <span>{turn.gens.length} {turn.gens.length === 1 ? "step" : "steps"}</span>
+              <span><span style={{ color: "var(--fg2)" }}>{formatTokens(turn.billed)}</span> billed</span>
+              <span><span style={{ color: "var(--fg2)" }}>{formatTokens(turn.generated)}</span> generated</span>
+              <span>ctx <span style={{ color: "var(--fg2)" }}>{formatTokens(turn.ctxIn)}</span></span>
             </div>
           </div>
         </div>
@@ -2663,9 +2768,11 @@
             {turnMarks.length > 0 && stat(String(turnMarks.length), turnMarks.length === 1 ? "turn" : "turns")}
             {stat(String(subs.length), subs.length === 1 ? "subagent" : "subagents")}
             <span style={{ flex: 1 }}/>
-            <span style={{ fontSize: 11, color: "var(--fg3)" }}>idle collapsed · height = work · width = duration</span>
+            <span style={{ display: "flex", gap: 12, fontSize: 11, color: "var(--fg3)" }}>
+              <span>idle collapsed</span><span>height = work</span><span>width = duration</span>
+            </span>
           </div>
-          {/* turn ribbon — numbered markers; prompt text is in the hover */}
+          {/* turn ribbon: numbered markers; prompt text is in the hover */}
           {turnMarks.length > 0 && (
             <div style={{ display: "flex", borderBottom: "1px solid var(--border-weak)", background: "rgba(204,204,220,0.03)" }}>
               <div style={{ width: LANE_W, flex: "none", borderRight: "1px solid var(--border-weak)", padding: "0 12px", display: "flex", alignItems: "center", fontSize: 11, color: "var(--fg3)", height: 20 }}>Turns</div>
@@ -2859,8 +2966,11 @@
       const header = (
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 13, color: "var(--fg1)", fontWeight: 500 }}>Thread</span>
-          <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>
-            {steps.length} {steps.length === 1 ? "call" : "calls"}{nSub > 0 ? ` · ${nSub} subagent${nSub === 1 ? "" : "s"}` : ""} · {formatTokens(totalTok)} tok · {formatDuration(totalSec)}
+          <span style={{ display: "flex", gap: 12, fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>
+            <span>{steps.length} {steps.length === 1 ? "call" : "calls"}</span>
+            {nSub > 0 && <span>{nSub} subagent{nSub === 1 ? "" : "s"}</span>}
+            <span>{formatTokens(totalTok)} tok</span>
+            <span>{formatDuration(totalSec)}</span>
           </span>
           <span style={{ flex: 1 }}/>
           {view === "tree" && <button onClick={toggleAll} style={linkBtn} onMouseEnter={e => e.currentTarget.style.color = "var(--fg1)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fg3)"}>{allOpen ? "Collapse all" : "Expand all"}</button>}
@@ -2924,8 +3034,10 @@
                       <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 12, color: "var(--fg1)" }}>{agentShort(run.agent)}</span>
                       {run.hasError && <span style={{ display: "inline-flex", alignItems: "center", height: 15, padding: "0 5px", borderRadius: 2, background: "var(--error-transparent)", color: "var(--error-text)", fontSize: 10, fontFamily: "var(--fontFamilyMonospace)" }}>error</span>}
                       <span style={{ flex: 1 }}/>
-                      <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>
-                        {run.gens.length} {run.gens.length === 1 ? "step" : "steps"} · {formatDuration((run.end - run.start) / 1000)} · {formatTokens(run.totalTokens)}
+                      <span style={{ display: "flex", gap: 10, fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>
+                        <span>{run.gens.length} {run.gens.length === 1 ? "step" : "steps"}</span>
+                        <span>{formatDuration((run.end - run.start) / 1000)}</span>
+                        <span>{formatTokens(run.totalTokens)}</span>
                       </span>
                     </div>
                   );
@@ -3088,7 +3200,7 @@
         if (st.reason) return { accent: "warning", pill: "Paused", line: `Forwarding is on but paused: ${st.reason}` };
         // The hook leg is one of the legs st.enabled sums, so nothing is
         // relayed here.
-        return { accent: "success", pill: "Off", line: "Cloud forwarding is off — nothing from local sessions leaves this device." };
+        return { accent: "success", pill: "Off", line: "Cloud forwarding is off. Nothing from local sessions leaves this device." };
       }
       // Guard disclosures hold whatever else the status says, so every branch
       // below that reports forwarding as on appends them. Failures are kept per
@@ -3109,7 +3221,7 @@
         return {
           accent: "error",
           pill: "Failing",
-          line: [`Forwarding is on but the last attempts failed — ${failure.label}: ${failure.detail}${also}`, ...disclosures].join(" "),
+          line: [`Forwarding is on but the last attempts failed. ${failure.label}: ${failure.detail}${also}`, ...disclosures].join(" "),
         };
       }
       // An unrecognised mode must not read as the narrower one: a future mode
@@ -3121,8 +3233,8 @@
       // the guard request carries tool calls, and for a preflight check the
       // prompts and responses too, so those cannot be listed as local here.
       const metadataLine = st.hooks
-        ? "Session capture forwards usage and session metadata only — reasoning text and attached media stay local."
-        : "Only usage and session metadata is forwarded — prompts, responses, reasoning text, tool inputs/results, and attached media stay local.";
+        ? "Session capture forwards usage and session metadata only. Reasoning text and attached media stay local."
+        : "Only usage and session metadata is forwarded. Prompts, responses, reasoning text, tool inputs and results, and attached media stay local.";
       const parts = [st.mode === "full"
         ? "Full session content is forwarded to your organization's Grafana Cloud."
         : metadataLine];
@@ -3178,6 +3290,189 @@
             flex: "none", background: "transparent", border: "1px solid var(--border-medium)", borderRadius: 2,
             color: "var(--fg2)", fontSize: 11.5, fontFamily: "var(--fontFamily)", padding: "3px 9px", cursor: "pointer",
           }}>Change</button>
+        </div>
+      );
+    }
+
+    // ============================================================
+    // History import — backfill sessions an agent recorded before
+    // agento11y was installed.
+    //
+    // Every agent name, label, and alias comes from
+    // GET /api/v1/history/agents, so registering an importer in Go makes it
+    // appear here with no change to this file.
+    // ============================================================
+
+    function importRunIsActive(run) {
+      return !!run && (run.status === "pending" || run.status === "running");
+    }
+
+    // useHistoryImport owns the import state the banner and the Settings card
+    // both read: the registered agents, the per-agent offer, and the run in
+    // flight. Progress arrives on the shared SSE stream, so `run` here is
+    // updated by the App and passed back in.
+    function useHistoryImport(liveRun) {
+      const [agents, setAgents] = useState([]);
+      const [offers, setOffers] = useState([]);
+      const [run, setRun] = useState(null);
+      const [error, setError] = useState(null);
+
+      const loadAgents = useCallback(() => {
+        return fetch("/api/v1/history/agents")
+          .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+          .then(b => setAgents((b && b.agents) || []))
+          .catch(() => setAgents([]));
+      }, []);
+
+      const loadOffers = useCallback(() => {
+        return fetch("/api/v1/history/offer")
+          .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+          .then(b => setOffers((b && b.offers) || []))
+          .catch(() => setOffers([]));
+      }, []);
+
+      useEffect(() => { loadAgents(); loadOffers(); }, [loadAgents, loadOffers]);
+
+      // A run event for the run this hook started replaces its state. An event
+      // for another run (a second viewer tab, the CLI) is adopted too: there
+      // is one import at a time, so it is the one to show.
+      useEffect(() => {
+        if (!liveRun) return;
+        setRun(liveRun);
+        if (liveRun.status === "completed") loadOffers();
+      }, [liveRun, loadOffers]);
+
+      const start = useCallback((agent, body = {}) => {
+        setError(null);
+        return fetch("/api/v1/history:import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agent, ...body }),
+        })
+          .then(r => r.ok
+            ? r.json()
+            : r.text().then(t => Promise.reject(new Error(t.trim() || `HTTP ${r.status}`))))
+          .then(b => {
+            // The server starts the run before it answers, so an SSE frame for
+            // this run can arrive first. Keep it: overwriting it with "pending"
+            // strands the viewer on a run that already finished.
+            setRun(prev => (prev && prev.run_id === b.run_id)
+              ? prev
+              : { run_id: b.run_id, agent, status: b.status || "pending" });
+            return b;
+          })
+          .catch(e => { setError(String(e.message || e)); return null; });
+      }, []);
+
+      const cancel = useCallback(() => {
+        if (!run || !run.run_id) return Promise.resolve();
+        return fetch(`/api/v1/history/runs/${encodeURIComponent(run.run_id)}:cancel`, { method: "POST" })
+          .catch(() => {});
+      }, [run]);
+
+      const dismiss = useCallback((agent) => {
+        setError(null);
+        return fetch("/api/v1/history/offer:dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(agent ? { agent } : {}),
+        })
+          .then(r => r.ok
+            ? r.json().catch(() => ({}))
+            : r.text().then(t => Promise.reject(new Error(t.trim() || `HTTP ${r.status}`))))
+          .then(() => loadOffers())
+          // The dismissal is written to a file, so it can fail. Saying so beats
+          // a banner that comes back with no explanation.
+          .catch(e => { setError(`Could not dismiss the import offer: ${String(e.message || e)}`); });
+      }, [loadOffers]);
+
+      return { agents, offers, run, error, start, cancel, dismiss, reloadOffers: loadOffers };
+    }
+
+    function formatImportTurns(offer) {
+      const turns = offer.turns || 0;
+      const count = `${turns.toLocaleString()} turn${turns === 1 ? "" : "s"}`;
+      return offer.approx_turns ? `about ${count}` : count;
+    }
+
+    // HistoryImportBanner offers a backfill when discovery found sessions the
+    // store does not have yet. Its text is metadata only: session counts and
+    // turn counts, never a prompt or a title.
+    function HistoryImportBanner({ history, onOpenSettings }) {
+      const offer = (history.offers || []).find(o => o.show);
+      const run = history.run;
+      if (importRunIsActive(run)) {
+        return <HistoryImportProgress run={run} onCancel={history.cancel}/>;
+      }
+      if (!offer) return null;
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", marginBottom: 14, borderRadius: 2, border: "1px solid var(--border-weak)", borderLeft: "3px solid var(--info-border)", background: "var(--info-transparent)" }}>
+          <Icon name="clock" size={15} style={{ color: "var(--info-text)", flex: "none" }}/>
+          <span style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--fg3)", flex: "none" }}>Existing history</span>
+          <span style={{ fontSize: 12.5, color: "var(--fg2)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {offer.display_name} wrote {offer.sessions} session{offer.sessions === 1 ? "" : "s"} ({formatImportTurns(offer)}) to this machine in the last 90 days. Importing adds the ones this viewer does not have yet, and sends nothing to Grafana Cloud.
+          </span>
+          {history.error && (
+            <span style={{ fontSize: 12, color: "var(--error-text)", flex: "none" }}>{history.error}</span>
+          )}
+          <span style={{ flex: 1 }}/>
+          <button type="button" onClick={() => history.start(offer.agent)} style={{
+            flex: "none", background: "var(--primary-main)", border: "1px solid var(--primary-main)", borderRadius: 2,
+            color: "#fff", fontSize: 11.5, fontFamily: "var(--fontFamily)", padding: "3px 9px", cursor: "pointer",
+          }}>Import</button>
+          <button type="button" onClick={() => onOpenSettings && onOpenSettings("history")} style={{
+            flex: "none", background: "transparent", border: "1px solid var(--border-medium)", borderRadius: 2,
+            color: "var(--fg2)", fontSize: 11.5, fontFamily: "var(--fontFamily)", padding: "3px 9px", cursor: "pointer",
+          }}>Options</button>
+          <button type="button" onClick={() => history.dismiss("")} style={{
+            flex: "none", background: "transparent", border: "1px solid transparent", borderRadius: 2,
+            color: "var(--fg3)", fontSize: 11.5, fontFamily: "var(--fontFamily)", padding: "3px 9px", cursor: "pointer",
+          }}>Not now</button>
+        </div>
+      );
+    }
+
+    // importSessionLabel says how far a run has got, in sessions. A run that has
+    // not finished discovery has no total to count against, so it says what it
+    // is doing rather than reporting "0 of 0".
+    function importSessionLabel(run) {
+      const done = run.sessions || 0;
+      const total = run.selected || 0;
+      if (total > 0) return `${done} of ${total} sessions`;
+      return importRunIsActive(run) ? "Scanning sessions…" : `${done} sessions`;
+    }
+
+    // ImportProgressBar shows the share of selected sessions a run has finished.
+    // The banner and the Settings card both draw it, so the two cannot disagree
+    // about what the bar measures. It moves when a session finishes, so a run
+    // over a few large sessions advances in visible steps rather than smoothly.
+    function ImportProgressBar({ done, total, style }) {
+      const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+      return (
+        <div style={{ height: 4, borderRadius: 999, background: "var(--border-weak)", overflow: "hidden", ...style }}>
+          <div style={{ width: `${pct}%`, height: "100%", background: "var(--primary-main)" }}/>
+        </div>
+      );
+    }
+
+    // HistoryImportProgress renders a run's progress as it arrives over SSE.
+    // Progress is counted in sessions: turn counts belong in the summary, where
+    // they cannot be mistaken for the number of sessions the run was given.
+    function HistoryImportProgress({ run, onCancel }) {
+      const done = run.sessions || 0;
+      const total = run.selected || 0;
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", marginBottom: 14, borderRadius: 2, border: "1px solid var(--border-weak)", borderLeft: "3px solid var(--info-border)", background: "var(--info-transparent)" }}>
+          <Icon name="clock" size={15} style={{ color: "var(--info-text)", flex: "none" }}/>
+          <span style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--fg3)", flex: "none" }}>Importing {run.agent}</span>
+          <span style={{ fontSize: 12.5, color: "var(--fg2)", flex: "none" }}>
+            {importSessionLabel(run)}{run.failed ? ` · ${run.failed} failed turns` : ""}
+          </span>
+          <ImportProgressBar done={done} total={total} style={{ flex: 1 }}/>
+          <button type="button" onClick={onCancel} style={{
+            flex: "none", background: "transparent", border: "1px solid var(--border-medium)", borderRadius: 2,
+            color: "var(--fg2)", fontSize: 11.5, fontFamily: "var(--fontFamily)", padding: "3px 9px", cursor: "pointer",
+          }}>Cancel</button>
         </div>
       );
     }
@@ -3283,7 +3578,7 @@
     function SectionLabel({ children }) {
       return (
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "16px 0 2px" }}>
-          <span style={{ width: 18, height: 2, borderRadius: 999, background: "var(--brandVertical)" }}/>
+          <span style={{ width: 18, height: 2, borderRadius: 999, background: "var(--brand-orange)" }}/>
           <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--fg3)" }}>{children}</span>
         </div>
       );
@@ -3452,6 +3747,7 @@
     const SETTINGS_TABS = [
       { id: "cloud", label: "Cloud", icon: "cloud", desc: "Ingest, auth, forwarding" },
       { id: "local", label: "Local", icon: "box", desc: "Tags and runtime" },
+      { id: "history", label: "History", icon: "clock", desc: "Import past sessions" },
     ];
     const SETTINGS_TAB_IDS = new Set(SETTINGS_TABS.map(t => t.id));
 
@@ -3510,7 +3806,7 @@
             help={<>
               Also send <Mono>--local</Mono> sessions to Grafana Cloud. Needs the credentials above, and applies to every local session on this machine until you turn it off. The local viewer always keeps full content; <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Metadata only</b> forwards usage and session metadata, and <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Full</b> forwards prompts, responses, and tool I/O too. Metadata only and Full write <Mono>CONTENT_CAPTURE_MODE</Mono>, which also decides how much content your non-local Cloud sessions capture.
               {advanced && <div style={{ color: "var(--warning-text)", marginTop: 6 }}>Advanced capture mode <Mono>{form.capture}</Mono> is set in config.env. Forwarding reduces it to metadata only and <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Metadata only</b> leaves it in place; picking <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Full</b> replaces it for Cloud sessions too.</div>}
-              {daemonStillOn && <div style={{ color: "var(--warning-text)", marginTop: 6 }}>The running daemon is still forwarding — <Mono>LOCAL_FORWARD</Mono> is set in its environment. Saving writes an explicit <Mono>false</Mono> to config.env, which the daemon prefers.</div>}
+              {daemonStillOn && <div style={{ color: "var(--warning-text)", marginTop: 6 }}>The running daemon is still forwarding: <Mono>LOCAL_FORWARD</Mono> is set in its environment. Saving writes an explicit <Mono>false</Mono> to config.env, which the daemon prefers.</div>}
               {guardsChained && <div style={{ color: "var(--warning-text)", marginTop: 6 }}>{GUARD_CONTENT_NOTE} The daemon relays <Mono>--local</Mono> guard checks to Cloud so your Cloud rules still apply; turn off <Mono>GUARDS_ENABLED</Mono> or forwarding to stop it.</div>}
             </>}
           >
@@ -3570,7 +3866,7 @@
             </SettingRow>
           </SettingsCard>
           <SettingsCard>
-            <SectionLabel>Identity · Optional</SectionLabel>
+            <SectionLabel>Identity (optional)</SectionLabel>
             <SettingRow label="User ID" help={<>Override the resolved user id used to attribute generations. Leave blank to auto-resolve.</>}>
               <MonoInput value={form.userId} onChange={v => set({ userId: v })} placeholder="auto" width={260}/>
             </SettingRow>
@@ -3579,18 +3875,129 @@
       );
     }
 
-    function SettingsTabPanels({ activeSettingsTab, form, set, setTag, addTag, removeTag, forwardStatus }) {
+    // SettingsHistoryTab is the import surface: pick a registered agent, see
+    // what a 90-day import would cover, and run it. The plan request reads
+    // metadata only, so opening this tab never reads session content.
+    function SettingsHistoryTab({ history }) {
+      const agents = history.agents || [];
+      const [agent, setAgent] = useState("");
+      const [plan, setPlan] = useState(null);
+      const [planError, setPlanError] = useState(null);
+      const [loadingPlan, setLoadingPlan] = useState(false);
+
+      const selected = agent || (agents[0] && agents[0].id) || "";
+      const run = history.run;
+      const active = importRunIsActive(run);
+
+      const loadPlan = useCallback((id) => {
+        if (!id) return;
+        setLoadingPlan(true);
+        setPlanError(null);
+        fetch(`/api/v1/history/plan?agent=${encodeURIComponent(id)}`)
+          .then(r => r.ok ? r.json() : r.text().then(t => Promise.reject(new Error(t.trim() || `HTTP ${r.status}`))))
+          .then(b => setPlan(b))
+          .catch(e => { setPlan(null); setPlanError(String(e.message || e)); })
+          .finally(() => setLoadingPlan(false));
+      }, []);
+
+      useEffect(() => { loadPlan(selected); }, [selected, loadPlan]);
+      // A finished run changes what is left to import, so the plan is stale.
+      useEffect(() => {
+        if (run && !active) loadPlan(selected);
+      }, [run, active, selected, loadPlan]);
+
+      const sessions = (plan && plan.sessions) || [];
+      const turns = sessions.reduce((n, s) => n + (s.turn_count || 0), 0);
+      const approx = sessions.some(s => s.approx_turns);
+
+      return (
+        <SettingsCard>
+          <SectionLabel>Import past sessions</SectionLabel>
+          <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--fg3)", padding: "0 0 10px" }}>
+            Backfill sessions an agent recorded before agento11y was installed. The import writes to the local
+            store on this machine. The daemon never relays it to Grafana Cloud, whatever <b style={{ fontWeight: 500, color: "var(--fg2)" }}>Forward local sessions to Cloud</b> is set to.
+          </div>
+          <SettingRow label="Agent" help={<>Only agents with an importer are listed.</>}>
+            <Select value={selected} onChange={setAgent} disabled={active}
+              trigger={{ ...fieldInput, width: 220, display: "inline-flex" }}
+              options={agents.map(a => ({ value: a.id, label: a.display_name || a.id }))}/>
+          </SettingRow>
+          <SettingRow
+            label="Available"
+            help={<>Sessions active in the last 90 days. Sessions an agent may still be writing are left out.</>}>
+            <div style={{ fontSize: 13, color: "var(--fg1)", textAlign: "right" }}>
+              {loadingPlan ? "Scanning…"
+                : planError ? <span style={{ color: "var(--error-text)" }}>{planError}</span>
+                : `${sessions.length} sessions · ${approx ? "about " : ""}${turns.toLocaleString()} turns`}
+              {plan && plan.since && (
+                <div style={{ fontSize: 11, color: "var(--fg3)", marginTop: 2 }}>since {plan.since}</div>
+              )}
+            </div>
+          </SettingRow>
+          <SettingRow label="Import" help={<>Re-running an import skips turns already recorded, so it is safe to repeat.</>}>
+            {active
+              ? <GhostButton onClick={history.cancel}>Cancel import</GhostButton>
+              : <PrimaryButton onClick={() => history.start(selected)}>Import {sessions.length} sessions</PrimaryButton>}
+          </SettingRow>
+          {history.error && (
+            <div style={{ padding: "0 0 12px" }}>
+              <Notice kind="error" title="Could not start the import">{history.error}</Notice>
+            </div>
+          )}
+          {run && <HistoryImportStatus run={run}/>}
+        </SettingsCard>
+      );
+    }
+
+    // HistoryImportStatus reports a run in sessions while it runs, and adds the
+    // turn totals once it stops. A session holds many model turns, so showing
+    // both at once invites reading the turn count as a session count.
+    function HistoryImportStatus({ run }) {
+      const tone = {
+        completed: { kind: "info", title: "Import finished" },
+        failed: { kind: "error", title: "Import failed" },
+        cancelled: { kind: "warning", title: "Import cancelled" },
+      }[run.status] || { kind: "info", title: "Import running" };
+      const done = run.sessions || 0;
+      const total = run.selected || 0;
+      const detail = { fontSize: 12, color: "var(--fg3)" };
+      return (
+        <div style={{ padding: "0 0 12px" }}>
+          <Notice kind={tone.kind} title={tone.title}>
+            <div>
+              {importSessionLabel(run)}
+              {run.missing ? ` · ${run.missing} no longer on disk` : ""}
+            </div>
+            {importRunIsActive(run)
+              ? <ImportProgressBar done={done} total={total} style={{ marginTop: 6, marginBottom: 2 }}/>
+              : (
+                <div style={detail}>
+                  <span style={{ display: "flex", flexWrap: "wrap", gap: "2px 12px" }}>
+                    <span>{(run.imported || 0).toLocaleString()} turns imported</span>
+                    <span>{(run.skipped || 0).toLocaleString()} already imported</span>
+                    <span>{(run.failed || 0).toLocaleString()} failed</span>
+                  </span>
+                </div>
+              )}
+            {run.error && <div style={{ fontSize: 12 }}>{run.error}</div>}
+          </Notice>
+        </div>
+      );
+    }
+
+    function SettingsTabPanels({ activeSettingsTab, form, set, setTag, addTag, removeTag, forwardStatus, history }) {
       return (
         <>
           {activeSettingsTab === "cloud" && <SettingsCloudTab form={form} set={set} forwardStatus={forwardStatus}/>}
           {activeSettingsTab === "local" && (
             <SettingsLocalTab form={form} set={set} setTag={setTag} addTag={addTag} removeTag={removeTag}/>
           )}
+          {activeSettingsTab === "history" && <SettingsHistoryTab history={history}/>}
         </>
       );
     }
 
-    function SettingsView() {
+    function SettingsView({ history }) {
       const [form, setForm] = useState(null);
       const [saved, setSaved] = useState(null);
       const [preview, setPreview] = useState("");
@@ -3703,7 +4110,7 @@
         <div style={page}>
           <SettingsHero dirty={dirty} path={path} forwardStatus={forwardStatus}/>
 
-          {error && <div style={{ marginBottom: 16 }}><Notice kind="error" title="Couldn’t save settings">{error}</Notice></div>}
+          {error && <div style={{ marginBottom: 16 }}><Notice kind="error" title="Couldn't save settings">{error}</Notice></div>}
 
           <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
             <div style={{ flex: "999 1 560px", minWidth: 0 }}>
@@ -3716,6 +4123,7 @@
                 addTag={addTag}
                 removeTag={removeTag}
                 forwardStatus={forwardStatus}
+                history={history}
               />
             </div>
 
@@ -4219,7 +4627,7 @@
       const [errList, setErrList] = useState(null);
       const [query, setQuery] = useState("");
       const conversationSearchRef = useRef(null);
-      const [timeRange, setTimeRange] = usePersistedState("sigil.local.timeRange", "6h",
+      const [timeRange, setTimeRange] = usePersistedState("sigil.local.timeRange", DEFAULT_TIME_RANGE,
         v => TIME_RANGES.some(r => r.value === v));
       const [tokenModel, setTokenModel] = useState("all");
       const [chartMetric, setChartMetric] = usePersistedState("sigil.local.chartMetric", "tokens",
@@ -4230,6 +4638,11 @@
       const [detail, setDetail] = useState(null);
       const [loadingDetail, setLoadingDetail] = useState(false);
       const [errDetail, setErrDetail] = useState(null);
+      // Import-run state arrives on the SSE stream as its own event kind, not
+      // as a refetch hint: an import writes thousands of generations, and the
+      // counters are what the user watches while it runs.
+      const [importEvent, setImportEvent] = useState(null);
+      const history = useHistoryImport(importEvent);
 
       const view = showSettings ? "settings"
         : (selectedID ? "conversation" : "conversations");
@@ -4244,9 +4657,9 @@
         setTimeRange(v);
       }, [setTimeRange]);
 
-      const pageTitle = view === "settings" ? "Settings — agento11y local"
-        : view === "conversation" && selected ? `${selected.title || selected.id} — agento11y local`
-        : "agento11y — local";
+      const pageTitle = view === "settings" ? "Settings · agento11y local"
+        : view === "conversation" && selected ? `${selected.title || selected.id} · agento11y local`
+        : "agento11y · local";
       useEffect(() => { document.title = pageTitle; }, [pageTitle]);
 
       // fetchList is driven from four sources (mount, a range change, an SSE
@@ -4452,6 +4865,12 @@
         es.onmessage = (e) => {
           let ev = {};
           try { ev = JSON.parse(e.data || "{}"); } catch (_) { /* ignore */ }
+          if (ev && ev.import) {
+            // Import events carry state rather than naming a conversation, so
+            // they are applied directly and skip the refetch debounce.
+            setImportEvent(ev.import);
+            return;
+          }
           const openID = selectedIDRef.current;
           if (openID && ev && ev.conversation_id === openID) {
             burstHasOpenConv = true;
@@ -4534,7 +4953,7 @@
         <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
           <TopBar tabs={tabs} activeTab={activeTab} trail={trail}/>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-            {view === "settings" && <SettingsView/>}
+            {view === "settings" && <SettingsView history={history}/>}
             {view === "conversations" && (
               <ConversationsView
                 conversations={conversations}
@@ -4560,6 +4979,7 @@
                 onRefresh={refreshAll}
                 refreshing={loadingList}
                 onOpenSettings={goSettings}
+                history={history}
               />
             )}
             {view === "conversation" && selected && (

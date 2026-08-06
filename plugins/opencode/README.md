@@ -130,6 +130,7 @@ Built-in tags win collisions with user tags, matching the claude-code and cursor
 | `AGENTO11Y_AGENT_NAME` | `opencode` | Agent name reported to Agent Observability. The plugin appends `:<mode>` for OpenCode's UI mode, such as `build` or `plan`. |
 | `AGENTO11Y_AGENT_VERSION` | OpenCode version | Version string reported with the agent. |
 | `AGENTO11Y_DEBUG` | `false` | Log lifecycle events to stderr. |
+| `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `@grafana/agento11y-opencode` plugin automatically. Set `false` to pin the installed version. |
 
 File format: one `KEY=value` per line, `#` line comments, optional `export ` prefix, optional matching single or double quotes around the value. Only `AGENTO11Y_*` and `SIGIL_*` keys plus `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_INSECURE`, and `OTEL_SERVICE_NAME` are honored — anything else (including stray `PATH=…` lines) is ignored.
 

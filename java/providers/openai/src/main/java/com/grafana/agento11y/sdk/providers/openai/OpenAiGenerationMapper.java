@@ -752,7 +752,9 @@ final class OpenAiGenerationMapper {
                 .setOutputTokens(defaultLong(asLong(getFirst(usage, "completion_tokens", "completionTokens"))))
                 .setTotalTokens(defaultLong(asLong(getFirst(usage, "total_tokens", "totalTokens"))))
                 .setCacheReadInputTokens(defaultLong(asLong(getFirst(promptDetails, "cached_tokens", "cachedTokens"))))
-                .setReasoningTokens(defaultLong(asLong(getFirst(completionDetails, "reasoning_tokens", "reasoningTokens"))));
+                .setReasoningTokens(defaultLong(asLong(getFirst(completionDetails, "reasoning_tokens", "reasoningTokens"))))
+                // OpenAI's prompt_tokens already includes cached tokens: inclusive as-is.
+                .setInputSemantics(TokenUsage.TokenInputSemantics.INCLUSIVE);
     }
 
     private static TokenUsage mapResponsesUsage(Map<String, Object> usage) {
@@ -766,7 +768,9 @@ final class OpenAiGenerationMapper {
                 .setOutputTokens(defaultLong(asLong(getFirst(usage, "output_tokens", "outputTokens"))))
                 .setTotalTokens(defaultLong(asLong(getFirst(usage, "total_tokens", "totalTokens"))))
                 .setCacheReadInputTokens(defaultLong(asLong(getFirst(inputDetails, "cached_tokens", "cachedTokens"))))
-                .setReasoningTokens(defaultLong(asLong(getFirst(outputDetails, "reasoning_tokens", "reasoningTokens"))));
+                .setReasoningTokens(defaultLong(asLong(getFirst(outputDetails, "reasoning_tokens", "reasoningTokens"))))
+                // The Responses API input_tokens already includes cached tokens: inclusive as-is.
+                .setInputSemantics(TokenUsage.TokenInputSemantics.INCLUSIVE);
     }
 
     private static String firstChoiceFinishReason(Map<String, Object> responsePayload) {

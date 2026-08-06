@@ -91,6 +91,11 @@ public final class Agento11yClient implements AutoCloseable {
     static final String METRIC_TOKEN_USAGE = "gen_ai.client.token.usage";
     static final String METRIC_TTFT = "gen_ai.client.time_to_first_token";
     static final String METRIC_TOOL_CALLS_PER_OPERATION = "gen_ai.client.tool_calls_per_operation";
+    // Marks token-usage telemetry (metric series and generation spans) whose
+    // input already follows the OTel GenAI contract: input_tokens includes both
+    // cache buckets. Absence means provider-raw or legacy telemetry.
+    static final String ATTR_TOKEN_SEMANTICS = "gen_ai.token.semantics";
+    static final String TOKEN_SEMANTICS_INCLUSIVE = "inclusive";
     static final String METRIC_ATTR_TOKEN_TYPE = "gen_ai.token.type";
     static final String METRIC_TOKEN_TYPE_INPUT = "input";
     static final String METRIC_TOKEN_TYPE_OUTPUT = "output";
@@ -1204,6 +1209,9 @@ public final class Agento11yClient implements AutoCloseable {
             span.setAttribute(SPAN_ATTR_CACHE_READ_TOKENS, usage.getCacheReadInputTokens());
             span.setAttribute(SPAN_ATTR_CACHE_WRITE_TOKENS, usage.getCacheWriteInputTokens());
             span.setAttribute(SPAN_ATTR_REASONING_TOKENS, usage.getReasoningTokens());
+            if (usage.getInputSemantics() == TokenUsage.TokenInputSemantics.INCLUSIVE) {
+                span.setAttribute(ATTR_TOKEN_SEMANTICS, TOKEN_SEMANTICS_INCLUSIVE);
+            }
         }
     }
 
@@ -1372,9 +1380,7 @@ public final class Agento11yClient implements AutoCloseable {
         if (value == 0L) {
             return;
         }
-        tokenUsageHistogram.record(
-                (double) value,
-                metricIdentityAttributes(
+        AttributesBuilder attrs = metricIdentityAttributes(
                         generation.getModel() == null ? "" : generation.getModel().getProvider(),
                         generation.getModel() == null ? "" : generation.getModel().getName(),
                         generation.getAgentName(),
@@ -1382,9 +1388,12 @@ public final class Agento11yClient implements AutoCloseable {
                 )
                         .put(SPAN_ATTR_OPERATION_NAME, operationName(generation))
                         .putAll(clientTagAttributes())
-                        .put(METRIC_ATTR_TOKEN_TYPE, tokenType)
-                        .build()
-        );
+                        .put(METRIC_ATTR_TOKEN_TYPE, tokenType);
+        TokenUsage usage = generation.getUsage();
+        if (usage != null && usage.getInputSemantics() == TokenUsage.TokenInputSemantics.INCLUSIVE) {
+            attrs.put(ATTR_TOKEN_SEMANTICS, TOKEN_SEMANTICS_INCLUSIVE);
+        }
+        tokenUsageHistogram.record((double) value, attrs.build());
     }
 
     void recordToolExecutionMetrics(ToolExecutionStart seed, Instant startedAt, Instant completedAt, Throwable finalError) {

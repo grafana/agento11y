@@ -326,7 +326,7 @@ func TestMapFragment_RedactionTiers(t *testing.T) {
 			title:      "run the deploy",
 			text:       "run with PASSWORD=hunter2",
 			wantTitle:  "run the deploy",
-			wantPrompt: "run with[REDACTED:env-secret-value]",
+			wantPrompt: "run with PASSWORD=[REDACTED:env-secret-value]",
 		},
 	}
 

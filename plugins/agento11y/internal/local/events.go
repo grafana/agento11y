@@ -19,6 +19,10 @@ import (
 type changeEvent struct {
 	ConversationID string `json:"conversation_id,omitempty"`
 	GenerationID   string `json:"generation_id,omitempty"`
+	// Import carries history-import progress. It is the one event that is a
+	// state update rather than a refetch hint: an import writes thousands of
+	// generations, and the counters are what the user watches while it runs.
+	Import *ImportRun `json:"import,omitempty"`
 }
 
 // eventSubBuffer caps each subscriber's pending queue. The broadcaster

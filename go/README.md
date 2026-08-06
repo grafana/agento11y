@@ -520,8 +520,9 @@ client := agento11y.NewClient(cfg)
 The built-in sanitizer:
 
 - redacts high-confidence secret formats in assistant text and thinking
-- redacts secret formats plus env-style secret values in tool call inputs and tool results
+- redacts secret formats plus key/value secrets in system prompts, tool call inputs, and tool results
 - redacts email addresses by default
+- redacts `Generation.ConversationTitle` and `Generation.CallError`
 - redacts historic assistant turns and tool messages in `Generation.Input`
 - leaves user messages in `Generation.Input` unchanged unless input redaction is enabled
 

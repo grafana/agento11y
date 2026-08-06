@@ -59,6 +59,7 @@ import type {
   RecorderCallback,
   RecorderWithError,
   SubmitConversationRatingResponse,
+  TokenInputSemantics,
   ToolExecution,
   ToolExecutionRecorder,
   ToolExecutionResult,
@@ -67,6 +68,7 @@ import type {
 } from './types.js';
 import {
   asError,
+  baseURLFromAPIEndpoint,
   cloneArtifact,
   cloneEmbeddingResult,
   cloneEmbeddingStart,
@@ -152,6 +154,11 @@ const metricToolCallsPerOperation = 'gen_ai.client.tool_calls_per_operation';
 const metricAttrTokenType = 'gen_ai.token.type';
 const metricTokenTypeInput = 'input';
 const metricTokenTypeOutput = 'output';
+// Marks token-usage telemetry (metric series and generation spans) whose input
+// already follows the OTel GenAI contract: input_tokens includes both cache
+// buckets. Absence means provider-raw or legacy telemetry.
+const attrTokenSemantics = 'gen_ai.token.semantics';
+const tokenSemanticsInclusive = 'inclusive';
 const metricTokenTypeCacheRead = 'cache_read';
 const metricTokenTypeCacheWrite = 'cache_write';
 const metricTokenTypeReasoning = 'reasoning';
@@ -1107,7 +1114,7 @@ export class Agento11yClient {
     if (value === undefined || value === 0) {
       return;
     }
-    this.tokenUsageHistogram.record(value, {
+    const attributes: Record<string, string | number | boolean> = {
       [spanAttrOperationName]: generation.operationName,
       ...metricIdentityAttributes(
         generation.model.provider,
@@ -1117,7 +1124,11 @@ export class Agento11yClient {
       ),
       ...tagMetricAttributes(this.config.tags),
       [metricAttrTokenType]: tokenType,
-    });
+    };
+    if (generation.usage?.inputSemantics === 'inclusive') {
+      attributes[attrTokenSemantics] = tokenSemanticsInclusive;
+    }
+    this.tokenUsageHistogram.record(value, attributes);
   }
 
   private recordToolExecutionMetrics(toolExecution: ToolExecution, finalError: Error | undefined): void {
@@ -1897,6 +1908,7 @@ function setGenerationSpanAttributes(
       cacheReadInputTokens?: number;
       cacheWriteInputTokens?: number;
       reasoningTokens?: number;
+      inputSemantics?: TokenInputSemantics;
     };
   },
 ): void {
@@ -2006,6 +2018,9 @@ function setGenerationSpanAttributes(
   }
   if ((usage.reasoningTokens ?? 0) !== 0) {
     span.setAttribute(spanAttrReasoningTokens, usage.reasoningTokens ?? 0);
+  }
+  if (usage.inputSemantics === 'inclusive') {
+    span.setAttribute(attrTokenSemantics, tokenSemanticsInclusive);
   }
 }
 
@@ -2189,30 +2204,8 @@ function normalizeConversationRatingInput(input: ConversationRatingInput): Conve
 }
 
 function buildConversationRatingEndpoint(endpoint: string, insecure: boolean, conversationId: string): string {
-  const baseURL = baseURLFromAPIEndpoint(endpoint, insecure);
+  const baseURL = baseURLFromAPIEndpoint(endpoint, insecure, 'agento11y conversation rating transport failed');
   return `${baseURL}/api/v1/conversations/${encodeURIComponent(conversationId)}/ratings`;
-}
-
-function baseURLFromAPIEndpoint(endpoint: string, insecure: boolean): string {
-  const trimmed = endpoint.trim();
-  if (trimmed.length === 0) {
-    throw new Error('agento11y conversation rating transport failed: api endpoint is required');
-  }
-
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    const parsed = new URL(trimmed);
-    // Preserve a path prefix so prefix-mounted Agent Observability deployments
-    // (https://host/sigil) route /api/v1/conversations/... under the prefix.
-    const path = parsed.pathname.replace(/\/+$/, '');
-    return `${parsed.protocol}//${parsed.host}${path}`;
-  }
-
-  const withoutScheme = trimmed.startsWith('grpc://') ? trimmed.slice('grpc://'.length) : trimmed;
-  const host = withoutScheme.split('/')[0]?.trim();
-  if (host === undefined || host.length === 0) {
-    throw new Error('agento11y conversation rating transport failed: api endpoint host is required');
-  }
-  return `${insecure ? 'http' : 'https'}://${host}`;
 }
 
 function parseSubmitConversationRatingResponse(payload: unknown): SubmitConversationRatingResponse {

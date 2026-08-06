@@ -1,0 +1,11 @@
+# The build context is the repo root, which is ~2 GB. Send only the two
+# directories the Dockerfile copies. BuildKit reads this file because it is
+# named after the Dockerfile.
+*
+!python
+!python-frameworks/litellm
+**/__pycache__
+**/*.egg-info
+**/.pytest_cache
+**/.venv
+**/build

@@ -1,6 +1,7 @@
 package mapper
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -25,7 +26,13 @@ type Inputs struct {
 	SubagentLink   *fragment.SubagentLink
 	TokenSnapshot  *codexlog.TokenSnapshot
 	ContentCapture agento11y.ContentCaptureMode
-	Now            time.Time
+	// RawContent leaves prompt, response, and tool payloads unredacted. The
+	// history importer sets it because the import framework runs one Sanitizer
+	// over every turn before export; redacting here as well would apply the
+	// same patterns twice. Live capture leaves it false, so the mapper stays
+	// the redaction point for the live path.
+	RawContent bool
+	Now        time.Time
 }
 
 type Mapped struct {
@@ -67,7 +74,7 @@ func Map(in Inputs) Mapped {
 	tags["codex.stop_hook_active"] = strconv.FormatBool(frag.StopHookActive)
 
 	tools := buildToolDefinitions(frag.Tools)
-	input, output := buildMessages(frag, payloadMode)
+	input, output := buildMessages(frag, payloadMode, in.RawContent)
 	conversationID, agentName, parentIDs, metadata := linkFields(frag, in.SubagentLink, tags)
 	usage, metadata := usageFields(in.TokenSnapshot, metadata)
 
@@ -191,14 +198,23 @@ func hasPositiveCodexUsage(u codexlog.TokenUsage) bool {
 		u.TotalTokens > 0
 }
 
-func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (input, output []agento11y.Message) {
+func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, rawContent bool) (input, output []agento11y.Message) {
 	mode = mapperutil.NormalizePayloadContentMode(mode)
 	red := redact.New()
 	cleanText := func(s string) string {
+		if rawContent {
+			return s
+		}
 		if mode == agento11y.ContentCaptureModeFull || mode == agento11y.ContentCaptureModeNoToolContent {
 			return red.Redact(s)
 		}
 		return ""
+	}
+	cleanJSON := func(raw json.RawMessage) json.RawMessage {
+		if rawContent {
+			return raw
+		}
+		return red.RedactJSON(raw)
 	}
 
 	if mode != agento11y.ContentCaptureModeMetadataOnly && strings.TrimSpace(frag.Prompt) != "" {
@@ -211,7 +227,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (
 		}
 		call := agento11y.ToolCall{ID: t.ToolUseID, Name: t.ToolName}
 		if mode == agento11y.ContentCaptureModeFull && len(t.ToolInput) > 0 {
-			call.InputJSON = red.RedactJSON(t.ToolInput)
+			call.InputJSON = cleanJSON(t.ToolInput)
 		}
 		output = append(output, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{agento11y.ToolCallPart(call)}})
 		if mode == agento11y.ContentCaptureModeMetadataOnly {
@@ -219,7 +235,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (
 		}
 		result := agento11y.ToolResult{ToolCallID: t.ToolUseID, Name: t.ToolName, IsError: t.Status == "error"}
 		if mode == agento11y.ContentCaptureModeFull && len(t.ToolResponse) > 0 {
-			result.ContentJSON = red.RedactJSON(t.ToolResponse)
+			result.ContentJSON = cleanJSON(t.ToolResponse)
 		}
 		input = append(input, agento11y.Message{Role: agento11y.RoleTool, Parts: []agento11y.Part{agento11y.ToolResultPart(result)}})
 	}

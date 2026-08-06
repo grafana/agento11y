@@ -131,6 +131,8 @@ var generationFieldClasses = map[string]contentClass{
 	"agento11y.v1.TokenUsage.cache_read_input_tokens":  classRetained,
 	"agento11y.v1.TokenUsage.cache_write_input_tokens": classRetained,
 	"agento11y.v1.TokenUsage.reasoning_tokens":         classRetained,
+	// Semantics marker for the token counters above; carries no content.
+	"agento11y.v1.TokenUsage.input_semantics": classRetained,
 
 	// The whole raw_artifacts list is dropped, so no Artifact field survives.
 	"agento11y.v1.Artifact.kind":         classContent,

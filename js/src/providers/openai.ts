@@ -698,8 +698,14 @@ function mapChatUsage(usage: unknown): TokenUsage | undefined {
   if (reasoningTokens !== undefined) {
     out.reasoningTokens = reasoningTokens;
   }
+  if (Object.keys(out).length === 0) {
+    return undefined;
+  }
+  // OpenAI's prompt/input token totals already include cached tokens, which
+  // is the inclusive contract as-is.
+  out.inputSemantics = 'inclusive';
 
-  return Object.keys(out).length > 0 ? out : undefined;
+  return out;
 }
 
 function firstFinishReason(response: ChatResponse): string | undefined {
@@ -966,8 +972,14 @@ function mapResponsesUsage(value: unknown): TokenUsage | undefined {
   if (reasoningTokens !== undefined) {
     out.reasoningTokens = reasoningTokens;
   }
+  if (Object.keys(out).length === 0) {
+    return undefined;
+  }
+  // OpenAI's prompt/input token totals already include cached tokens, which
+  // is the inclusive contract as-is.
+  out.inputSemantics = 'inclusive';
 
-  return Object.keys(out).length > 0 ? out : undefined;
+  return out;
 }
 
 function normalizeResponsesStopReason(response: ResponsesResponse): string | undefined {

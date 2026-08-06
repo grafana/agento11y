@@ -91,6 +91,15 @@ var client = new Agento11yClient(new Agento11yClientConfig
 });
 ```
 
+The built-in sanitizer:
+
+- redacts high-confidence secret formats in assistant text and thinking
+- redacts secret formats plus key/value secrets in system prompts, tool call inputs, and tool results
+- redacts email addresses by default
+- redacts the conversation title and call error
+- redacts historic assistant turns and tool messages in input
+- leaves user input unchanged unless input redaction is enabled
+
 User input messages are not redacted by default. To opt in:
 
 ```csharp

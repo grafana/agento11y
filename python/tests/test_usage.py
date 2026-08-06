@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from agento11y.models import TokenUsage
+from agento11y.models import TokenInputSemantics, TokenUsage
 from agento11y.usage import (
     from_anthropic,
     from_gemini,
@@ -27,13 +27,16 @@ class TestFromAnthropic:
             "cache_creation_input_tokens": 3,
         }
         usage = from_anthropic(raw)
-        assert usage.input_tokens == 100
+        # Inclusive contract: input sums Anthropic's additive buckets up
+        # (100 + 10 read + 5 write = 115); total = input + output.
+        assert usage.input_tokens == 115
         assert usage.output_tokens == 50
-        assert usage.total_tokens == 150  # normalized
+        assert usage.total_tokens == 165  # normalized
         assert usage.cache_read_input_tokens == 10
         # When both upstream fields are present, prefer cache_write_input_tokens.
         assert usage.cache_write_input_tokens == 5
         assert usage.reasoning_tokens == 0
+        assert usage.input_semantics == TokenInputSemantics.INCLUSIVE
 
     def test_cache_creation_only_maps_to_cache_write(self):
         raw = {
@@ -84,9 +87,10 @@ class TestFromAnthropic:
             cache_creation_input_tokens=7,
         )
         usage = from_anthropic(raw)
-        assert usage.input_tokens == 80
+        # 80 + 15 read + 7 creation summed up into inclusive input.
+        assert usage.input_tokens == 102
         assert usage.output_tokens == 40
-        assert usage.total_tokens == 120
+        assert usage.total_tokens == 142
         assert usage.cache_read_input_tokens == 15
         assert usage.cache_write_input_tokens == 7
 

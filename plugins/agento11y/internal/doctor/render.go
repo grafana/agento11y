@@ -114,10 +114,8 @@ func (b *reportBody) flush(p palette) string {
 	return out.String()
 }
 
-// renderHuman writes the colored (or plain) report. probed reports whether
-// live probes ran; when they didn't, a hint nudges the user toward --probe
-// since the section verdicts are config-only and don't test credentials.
-func renderHuman(w io.Writer, r *Report, color, probed bool) {
+// renderHuman writes the colored (or plain) report.
+func renderHuman(w io.Writer, r *Report, color bool) {
 	p := palette{color: color}
 	var b reportBody
 
@@ -127,28 +125,24 @@ func renderHuman(w io.Writer, r *Report, color, probed bool) {
 
 	// Conversations pipeline.
 	writeSection(&b, p, "Conversations (generation export)", r.Conversations.Health)
-	b.kv("endpoint", describeEnv(r.Conversations.Endpoint))
-	b.kv("tenant id", describeEnv(r.Conversations.TenantID))
-	b.kv("auth token", describeToken(r.Conversations.Token))
+	b.kv("endpoint", describeEnv(p, r.Conversations.Endpoint))
+	b.kv("tenant id", describeEnv(p, r.Conversations.TenantID))
+	b.kv("auth token", describeToken(p, r.Conversations.Token))
 	if r.Conversations.Probe != nil {
-		b.kv("probe", describeProbe(r.Conversations.Probe))
+		b.kv("probe", describeProbeRow(p, r.Conversations.Probe))
 	}
 	writeMessages(&b, p, r.Conversations.Messages)
 	b.textf("\n")
 
 	// Analytics pipeline.
 	writeSection(&b, p, "Analytics (OTLP metrics & traces)", r.Analytics.Health)
-	if r.Analytics.Endpoint.Set {
-		b.kv("endpoint", fmt.Sprintf("%s %s", r.Analytics.Endpoint.Value, p.faint("("+r.Analytics.EndpointVar+", "+r.Analytics.Endpoint.Source+")")))
-	} else {
-		b.kv("endpoint", p.faint("not set"))
-	}
+	b.kv("endpoint", describeEnv(p, r.Analytics.Endpoint))
 	if r.Analytics.Probe != nil {
 		if r.Analytics.Probe.Metrics != nil {
-			b.kv("metrics probe", describeProbe(r.Analytics.Probe.Metrics))
+			b.kv("metrics probe", describeProbeRow(p, r.Analytics.Probe.Metrics))
 		}
 		if r.Analytics.Probe.Traces != nil {
-			b.kv("traces probe", describeProbe(r.Analytics.Probe.Traces))
+			b.kv("traces probe", describeProbeRow(p, r.Analytics.Probe.Traces))
 		}
 	}
 	writeMessages(&b, p, r.Analytics.Messages)
@@ -161,24 +155,17 @@ func renderHuman(w io.Writer, r *Report, color, probed bool) {
 		exists = "present"
 	}
 	b.kv("file", fmt.Sprintf("%s %s", r.Config.Path, p.faint("("+exists+")")))
-	mode := r.Config.ContentCaptureMode
-	if r.Config.ContentModeFellBack {
-		mode += " " + p.faint("(invalid value, fell back)")
-	}
-	b.kv("content capture", mode)
+	b.kv("content capture", withTrailer(r.Config.ContentCaptureMode,
+		describeSource(p, provenanceParts(r.Config.ContentModeKey, r.Config.ContentModeSource)...)))
 	b.kv("guards", describeGuards(p, r.Config))
 	if len(r.Config.Tags) > 0 {
-		b.kv("tags", fmt.Sprintf("%s %s", formatTags(r.Config.Tags), p.faint("("+r.Config.TagsSource+")")))
+		b.kv("tags", withTrailer(formatTags(r.Config.Tags), describeSource(p, r.Config.TagsKey, r.Config.TagsSource)))
 	}
 	if r.Config.Local.Set {
-		localMode := describeEnv(r.Config.Local)
-		if r.Config.LocalInvalid {
-			localMode += " " + p.faint("(invalid value, local mode is off)")
-		}
-		b.kv("local mode", localMode)
+		b.kv("local mode", describeLocal(p, r.Config.Local, r.Config.LocalInvalid))
 	}
 	if r.Config.LocalForward.Set {
-		b.kv("local forwarding", describeEnv(r.Config.LocalForward))
+		b.kv("local forwarding", describeEnv(p, r.Config.LocalForward))
 	}
 	// Only worth a line once the user has opted into forwarding: with
 	// LOCAL_FORWARD unset chaining is always off, and that is already what the
@@ -195,27 +182,14 @@ func renderHuman(w io.Writer, r *Report, color, probed bool) {
 		b.kv(a.Name, describeAgent(p, a))
 	}
 	if r.AutoUpdateDisabled {
-		b.kv("auto-update", p.faint("disabled (SIGIL_AUTO_UPDATE)"))
+		b.kv("auto-update", withTrailer(p.faint("disabled"), describeSource(p, r.AutoUpdate.Key, r.AutoUpdate.Source)))
 	}
 	b.textf("\n")
 
 	// Summary.
 	writeSummary(&b, p, r)
-	if !probed {
-		writeProbeHint(&b, p, r)
-	}
 
 	_, _ = io.WriteString(w, b.flush(p))
-}
-
-// writeProbeHint nudges toward --probe when the report is config-only and
-// there is something to probe. Without it, the section verdicts reflect only
-// that credentials are present, not that they work.
-func writeProbeHint(b *reportBody, p palette, r *Report) {
-	if !r.Conversations.configured() && !r.Analytics.Endpoint.Set {
-		return
-	}
-	b.textf("\n%s\n", p.faint("Verdicts above check configuration only. Run `agento11y doctor --probe` to test credentials against the endpoints."))
 }
 
 func writeSection(b *reportBody, p palette, title string, h Health) {
@@ -246,41 +220,92 @@ func writeSummary(b *reportBody, p palette, r *Report) {
 	b.textf("%s %d problem(s): %s misconfigured\n", p.glyph(HealthError), len(broken), strings.Join(broken, ", "))
 }
 
-func describeEnv(v envValue) string {
-	if !v.Set {
-		return "not set"
+// describeSource renders the faint "(detail, KEY, source)" trailer every row
+// shares. KEY is the env spelling that won, which is the one thing a row label
+// cannot say (AGENTO11Y_* vs SIGIL_*, and the vendor-neutral
+// OTEL_EXPORTER_OTLP_ENDPOINT). Empty parts are dropped, so a value assembled
+// without a key still renders its source alone.
+func describeSource(p palette, parts ...string) string {
+	kept := make([]string, 0, len(parts))
+	for _, s := range parts {
+		if s != "" {
+			kept = append(kept, s)
+		}
 	}
-	return fmt.Sprintf("%s (%s)", v.Value, v.Source)
+	if len(kept) == 0 {
+		return ""
+	}
+	return p.faint("(" + strings.Join(kept, ", ") + ")")
 }
 
-func describeToken(t tokenValue) string {
+// withTrailer joins a value and its trailer, and returns the value alone when
+// there is nothing to qualify.
+func withTrailer(value, trailer string) string {
+	if trailer == "" {
+		return value
+	}
+	return value + " " + trailer
+}
+
+// provenanceParts are the trailing "KEY, source" slots of a trailer. A row whose
+// value came from a built-in default names no variable, so it reports `default`
+// rather than leaving the reader unsure whether the user chose the value.
+func provenanceParts(key, source string) []string {
+	if key == "" {
+		return []string{"default"}
+	}
+	return []string{key, source}
+}
+
+func describeEnv(p palette, v envValue) string {
+	if !v.Set {
+		return p.faint("not set")
+	}
+	return withTrailer(v.Value, describeSource(p, v.Key, v.Source))
+}
+
+// describeLocal renders the LOCAL row. The launcher ignores a value outside the
+// boolean whitelist, so an invalid value renders the state in force and keeps
+// the rejected value in the trailer. Printing the raw value as the state would
+// make the row read as "local mode: enabled" while sessions export to Cloud.
+func describeLocal(p palette, v envValue, invalid bool) string {
+	if !invalid {
+		return describeEnv(p, v)
+	}
+	rejected := fmt.Sprintf("%q is not a boolean", v.Value)
+	if v.Key != "" {
+		rejected = fmt.Sprintf("%s=%q is not a boolean", v.Key, v.Value)
+	}
+	return withTrailer("off", describeSource(p, rejected, v.Source))
+}
+
+func describeToken(p palette, t tokenValue) string {
 	if !t.Set {
-		return "not set"
+		return p.faint("not set")
 	}
+	var prefix string
 	if t.Prefix != "" {
-		return fmt.Sprintf("set (%s…, %s)", t.Prefix, t.Source)
+		prefix = t.Prefix + "…"
 	}
-	return fmt.Sprintf("set (%s)", t.Source)
+	return withTrailer("set", describeSource(p, prefix, t.Key, t.Source))
 }
 
 // describeGuards renders the resolved guard feature flags. Guards default off,
 // so a plain "disabled" is the common line; when on, the timeout and fail mode
 // matter (fail-closed blocks the tool call when a guard errors or times out).
+// The trailer names the GUARDS_ENABLED spelling alone. GUARDS_TIMEOUT_MS and
+// GUARDS_FAIL_OPEN are separate families, and this row does not attribute them;
+// an invalid value in either is named by a section message.
 func describeGuards(p palette, c ConfigSection) string {
-	var out string
-	if c.GuardsEnabled {
-		failMode := "fail-open"
-		if !c.GuardsFailOpen {
-			failMode = "fail-closed"
-		}
-		out = "enabled " + p.faint(fmt.Sprintf("(timeout %dms, %s)", c.GuardsTimeoutMs, failMode))
-	} else {
-		out = p.faint("disabled")
+	trailer := describeSource(p, provenanceParts(c.GuardsKey, c.GuardsSource)...)
+	if !c.GuardsEnabled {
+		return withTrailer(p.faint("disabled"), trailer)
 	}
-	if c.GuardsFellBack {
-		out += " " + p.faint("(invalid value, fell back)")
+	failMode := "fail-open"
+	if !c.GuardsFailOpen {
+		failMode = "fail-closed"
 	}
-	return out
+	return withTrailer(fmt.Sprintf("enabled, timeout %dms, %s", c.GuardsTimeoutMs, failMode), trailer)
 }
 
 // describeLocalHookForward renders whether a --local session's guard checks
@@ -288,23 +313,42 @@ func describeGuards(p palette, c ConfigSection) string {
 // even under a reduced content capture mode.
 func describeLocalHookForward(p palette, h HookForwardSection) string {
 	if h.Enabled {
-		return "local hook evaluation reaches Cloud " + p.faint("(tool calls, and the conversation an agent runs a preflight check on, are sent for evaluation whatever the capture mode)")
+		return withTrailer("forwarded to Cloud", p.faint("(tool calls, and the conversation an agent runs a preflight check on, are sent for evaluation whatever the capture mode)"))
 	}
-	return p.faint("not forwarded (" + h.Reason + ")")
+	return withTrailer(p.faint("not forwarded"), describeSource(p, h.Reason))
 }
 
-func describeProbe(p *ProbeResult) string {
-	if p == nil {
+// describeProbeRow renders a probe as a row: the status plus the URL it probed,
+// which is otherwise absent from the human report. A transport error has no
+// status, and nothing answered, so the row reports "no response" against the
+// same URL. The diagnosis is left to the section message line so it is printed
+// once.
+func describeProbeRow(p palette, res *ProbeResult) string {
+	if res == nil {
+		return p.faint("skipped")
+	}
+	return withTrailer(probeStatus(res), describeSource(p, res.URL))
+}
+
+// describeProbe renders a probe for message text, where the diagnosis is the
+// point and no URL column exists to carry it.
+func describeProbe(res *ProbeResult) string {
+	if res == nil {
 		return "skipped"
 	}
-	status := "no response"
-	if p.StatusCode != 0 {
-		status = fmt.Sprintf("HTTP %d", p.StatusCode)
+	if res.Message != "" {
+		return probeStatus(res) + ": " + res.Message
 	}
-	if p.Message != "" {
-		return fmt.Sprintf("%s — %s", status, p.Message)
+	return probeStatus(res)
+}
+
+// probeStatus is the HTTP status, or "no response" for a transport error that
+// never produced one.
+func probeStatus(res *ProbeResult) string {
+	if res.StatusCode == 0 {
+		return "no response"
 	}
-	return status
+	return fmt.Sprintf("HTTP %d", res.StatusCode)
 }
 
 func describeAgent(p palette, a AgentStatus) string {
@@ -312,21 +356,27 @@ func describeAgent(p palette, a AgentStatus) string {
 	// version is the agento11y binary's, so it is rendered exactly as the
 	// report heading renders it.
 	if a.HookBased {
-		return agentNote(p, joinVersion("detected", a.Version), a.Note)
+		return agentNote(p, joinVersion("detected", a.Version), "", a.Note)
 	}
 	// The install probe never ran: a CLI-dependent agent whose binary is
 	// absent, or a hook-only agent off PATH.
 	if a.Health == HealthSkipped {
-		return agentNote(p, p.faint("not found on PATH"), a.Note)
+		return agentNote(p, p.faint("not found on PATH"), "", a.Note)
 	}
 	// The probe ran and errored, or the state was never set. Say the state is
 	// unknown instead of picking one of the two known states; the note carries
 	// the reason.
 	install := a.Install.orUnknown()
 	if install == InstallStateUnknown {
-		return agentNote(p, "install state unknown", a.Note)
+		return agentNote(p, "install state unknown", "", a.Note)
 	}
 	installed := install == InstallStateInstalled
+	// A version belongs to an installed plugin. Suppress it otherwise so one
+	// line can't report `plugin not installed` and a version at the same time.
+	version := ""
+	if installed {
+		version = a.Version
+	}
 	// Hook-file based agent (copilot, vibe): capture doesn't depend on the CLI being
 	// on PATH, so report install state with its own wording and no PATH
 	// qualifiers.
@@ -335,33 +385,61 @@ func describeAgent(p palette, a AgentStatus) string {
 		if installed {
 			state = "installed"
 		}
-		return agentNote(p, joinAgent(state, a.Version), a.Note)
+		body, commit := joinAgent(state, version)
+		return agentNote(p, body, commit, a.Note)
 	}
 	// Report install state, only claiming "on PATH" when true so config-based
-	// agents installed without the CLI present aren't mislabeled.
-	var state string
+	// agents installed without the CLI present aren't mislabeled. The missing-CLI
+	// qualifier is a trailer part, so the version stays next to the state it
+	// belongs to.
+	var state, qualifier string
 	switch {
 	case installed && a.OnPath:
 		state = "installed"
 	case installed:
-		state = "installed " + p.faint("(CLI not on PATH)")
+		state, qualifier = "installed", "CLI not on PATH"
 	case a.OnPath:
 		state = "on PATH, plugin not installed"
 	default:
 		state = "plugin not installed"
 	}
-	return agentNote(p, joinAgent(state, a.Version), a.Note)
+	body, commit := joinAgent(state, version)
+	return agentNote(p, body, commit, qualifier, a.Note)
 }
 
-// joinAgent appends a host agent's own version to its state, prefixed with
-// `v` when it is a bare number. Some agents report a dist-tag instead of a
-// number (opencode and pi return the tail of an npm spec, so a `@next`
-// install reports `next`), and `vnext` would be wrong.
-func joinAgent(state, version string) string {
-	if version != "" && version[0] >= '0' && version[0] <= '9' {
-		version = "v" + version
+// joinAgent appends a host agent plugin's own version to its state. A dotted
+// number takes a `v` prefix, and a dist tag (`next`) is printed bare. A
+// commit-shaped string is returned as a separate `commit <sha>` trailer part so
+// it doesn't read as a version; the caller merges it with the row's other
+// trailer parts, keeping one parenthesized group per row.
+func joinAgent(state, version string) (body, commit string) {
+	switch {
+	case version == "":
+		return state, ""
+	case isCommitSHA(version):
+		return state, "commit " + shortSHA(version)
+	case version[0] >= '0' && version[0] <= '9' && strings.Contains(version, "."):
+		return joinVersion(state, "v"+version), ""
 	}
-	return joinVersion(state, version)
+	return joinVersion(state, version), ""
+}
+
+// shaCutLength is git's default short-sha length: the shortest string doctor
+// accepts as a sha, and how much of one it prints.
+const shaCutLength = 7
+
+// isCommitSHA reports whether a version string is a git commit sha rather than
+// a version or a dist tag. Claude Code stores a short sha in the `version`
+// field of its plugin store when the plugin manifest declares no version. A dot
+// is not a hex digit, so a dotted version never matches.
+func isCommitSHA(version string) bool {
+	const hexDigits = "0123456789abcdefABCDEF"
+	return len(version) >= shaCutLength && strings.TrimLeft(version, hexDigits) == ""
+}
+
+// shortSHA truncates a commit sha to the length git prints by default.
+func shortSHA(sha string) string {
+	return sha[:min(len(sha), shaCutLength)]
 }
 
 // joinVersion appends a version to a state as-is. The agento11y binary version
@@ -374,11 +452,10 @@ func joinVersion(state, version string) string {
 	return state + " " + version
 }
 
-func agentNote(p palette, body, note string) string {
-	if note == "" {
-		return body
-	}
-	return body + " " + p.faint("("+note+")")
+// agentNote appends an agent row's qualifier and note as one trailer, so a row
+// that has both does not render two parenthesized groups.
+func agentNote(p palette, body string, parts ...string) string {
+	return withTrailer(body, describeSource(p, parts...))
 }
 
 // formatTags renders a tag map as "k=v, k=v" with keys sorted so the line is

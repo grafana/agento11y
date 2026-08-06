@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
@@ -38,6 +40,19 @@ type Server struct {
 	// eventPingInterval overrides defaultEventPingInterval for tests; zero
 	// uses the default.
 	eventPingInterval time.Duration
+
+	// importMu guards the history-import fields below. One import runs at a
+	// time: two would write the same per-agent ledger and race on it.
+	importMu sync.Mutex
+	// localEndpoint is this daemon's own address, which an import exports to.
+	// Serve sets it once the listener has a port.
+	localEndpoint string
+	// activeImport is the run ID of the import in flight, empty when none is.
+	activeImport string
+	// importRuns holds the most recent runs, newest last. It is in-memory
+	// only: the ledger is the durable record of what was imported, so a run
+	// list that does not survive a restart costs nothing.
+	importRuns []*importRun
 }
 
 // NewServer builds a Server backed by the given storage. logger may be
@@ -81,6 +96,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /settings/{$}", s.handleIndex)
 	mux.HandleFunc("GET /assets/app.css", s.handleAppCSS)
 	mux.HandleFunc("GET /assets/app.jsx", s.handleAppJSX)
+	mux.HandleFunc("GET /assets/vendor/{file}", s.handleVendorAsset)
+	mux.HandleFunc("GET /assets/fonts/{file}", s.handleFontAsset)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/v1/conversations", s.handleListConversations)
 	mux.HandleFunc("GET /api/v1/search", s.handleSearch)
@@ -93,6 +110,16 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/conversations/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s.handleConversationDetail(w, r, r.PathValue("id"))
 	})
+	mux.HandleFunc("GET /api/v1/history/agents", s.handleHistoryAgents)
+	mux.HandleFunc("GET /api/v1/history/offer", s.handleHistoryOffer)
+	mux.HandleFunc("POST /api/v1/history/offer:dismiss", s.handleHistoryDismiss)
+	mux.HandleFunc("GET /api/v1/history/plan", s.handleHistoryPlan)
+	mux.HandleFunc("POST /api/v1/history:import", s.handleHistoryImport)
+	mux.HandleFunc("GET /api/v1/history/runs/{runID}", s.handleHistoryRunStatus)
+	// The path is /api/v1/history/runs/{runID}:cancel. A ServeMux wildcard has
+	// to be a whole segment, so the segment is matched as one value and the
+	// handler splits the action off it.
+	mux.HandleFunc("POST /api/v1/history/runs/{runAction}", s.handleHistoryRunCancel)
 	mux.HandleFunc("POST /api/v1/generations:export", s.handleGenerations)
 	mux.HandleFunc("POST /otlp/v1/traces", s.handleOTLP)
 	mux.HandleFunc("POST /otlp/v1/metrics", s.handleOTLP)
@@ -141,6 +168,39 @@ func (s *Server) handleAppJSX(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/babel; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(devAsset("app.jsx", appJSX))
+}
+
+func (s *Server) handleVendorAsset(w http.ResponseWriter, r *http.Request) {
+	s.serveStatic(w, r, "vendor", ".js", "application/javascript; charset=utf-8")
+}
+
+func (s *Server) handleFontAsset(w http.ResponseWriter, r *http.Request) {
+	s.serveStatic(w, r, "fonts", ".woff2", "font/woff2")
+}
+
+// serveStatic returns one vendored asset from [webStatic]. The file name comes
+// from the URL, so it is checked against the expected extension and rejected if
+// it carries any path at all: only a bare name inside the named directory is
+// servable.
+//
+// These assets are versioned by their content and never change for a given
+// binary, so they are cached for a year. app.css and app.jsx stay no-cache,
+// because LOCAL_WEB_DIR reloads them from disk during development.
+func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, dir, ext, contentType string) {
+	name := r.PathValue("file")
+	if name == "" || strings.Contains(name, "/") || strings.Contains(name, `\`) ||
+		strings.Contains(name, "..") || !strings.HasSuffix(name, ext) {
+		http.NotFound(w, r)
+		return
+	}
+	body, err := webStatic.ReadFile("web/" + dir + "/" + name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	_, _ = w.Write(body)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {

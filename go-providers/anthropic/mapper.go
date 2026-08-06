@@ -509,22 +509,29 @@ func mapSystemPrompt(system []asdk.BetaTextBlockParam) string {
 }
 
 func mapUsage(usage asdk.BetaUsage) agento11y.TokenUsage {
+	// Anthropic reports input_tokens exclusive of both cache buckets. The OTel
+	// GenAI Anthropic page requires summing them into gen_ai.usage.input_tokens,
+	// which is the inclusive contract this SDK emits.
+	inputTokens := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 	return agento11y.TokenUsage{
-		InputTokens:           usage.InputTokens,
+		InputTokens:           inputTokens,
 		OutputTokens:          usage.OutputTokens,
-		TotalTokens:           usage.InputTokens + usage.OutputTokens,
+		TotalTokens:           inputTokens + usage.OutputTokens,
 		CacheReadInputTokens:  usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheCreationInputTokens,
+		InputSemantics:        agento11y.TokenInputSemanticsInclusive,
 	}
 }
 
 func mapDeltaUsage(usage asdk.BetaMessageDeltaUsage) agento11y.TokenUsage {
+	inputTokens := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 	return agento11y.TokenUsage{
-		InputTokens:           usage.InputTokens,
+		InputTokens:           inputTokens,
 		OutputTokens:          usage.OutputTokens,
-		TotalTokens:           usage.InputTokens + usage.OutputTokens,
+		TotalTokens:           inputTokens + usage.OutputTokens,
 		CacheReadInputTokens:  usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheCreationInputTokens,
+		InputSemantics:        agento11y.TokenInputSemanticsInclusive,
 	}
 }
 

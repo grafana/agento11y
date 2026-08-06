@@ -23,6 +23,18 @@ mise run generate:proto
 
 CI runs `mise run check:proto` and fails the build if the committed stubs drift from the proto. Tool versions are pinned in `mise.toml` so output is byte-identical across machines. See `docs/development.md` for the full table.
 
+## Secret patterns are the second source of truth
+
+`redaction/patterns.json` is the only editable secret-pattern table. Each engine gets its list generated from it, next to hand-written code: `go/agento11y/redaction_patterns_gen.go`, `python/agento11y/_redaction_patterns.py`, `js/src/redaction-patterns.generated.ts`, `dotnet/src/Grafana.Agento11y/RedactionPatterns.g.cs`, `plugins/agento11y/internal/redact/patterns_gen.go`.
+
+Never edit those five files. Edit `patterns.json`, then:
+
+```sh
+mise run generate:redaction
+```
+
+CI runs `mise run check:redaction` in the same job as the proto drift check. `redaction/README.md` covers the pattern fields and the shared fixtures.
+
 ## Workspace gotchas
 
 - The Go workspace (`go.work`) covers `go/`, `go-providers/*`, `go-frameworks/google-adk`, and `plugins/agento11y`. Adding a new Go module means updating `go.work` *and* `go.work.sum`. Lint tasks use `GOWORK=off` and iterate per-module via `find . -name go.mod`, so each module must also lint and build on its own.
@@ -37,17 +49,18 @@ CI runs `mise run check:proto` and fails the build if the committed stubs drift 
 
 | Plugin dir | What it actually is |
 |------------|---------------------|
-| `plugins/agento11y/` | The shared Go binary, installed as `agento11y` (`brew install grafana/grafana/agento11y`; the old `sigil` name still works but will be removed). Has subcommands `claude`, `codex`, `copilot`, `cursor`, `opencode`, `pi`, `login`. This is also what consumers use. |
+| `plugins/agento11y/` | The shared Go binary, installed as `agento11y` (`brew install grafana/grafana/agento11y`; the old `sigil` name still works but will be removed). Has subcommands `claude`, `codex`, `copilot`, `cursor`, `opencode`, `pi`, `vibe`, `login`, `doctor`, `local`. This is also what consumers use. |
 | `plugins/claude-code/`, `plugins/codex/`, `plugins/copilot/`, `plugins/cursor/` | Thin glue: hook scripts and READMEs that wire the host agent to the shared `agento11y` binary. No independent code paths. |
 | `plugins/opencode/` | Independent npm package `@grafana/agento11y-opencode`. Runs in-process inside opencode through its TypeScript plugin API; `agento11y opencode` installs and launches it. |
 | `plugins/pi/` | Independent npm package `@grafana/agento11y-pi`. Runs in-process inside pi; `agento11y pi` installs and launches it. |
+| `plugins/vibe/` | README only. `agento11y vibe` upserts three `[[hooks]]` entries into `hooks.toml` under `$VIBE_HOME` (default `~/.vibe`) and sets `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` on the child so vibe loads them. |
 
-If you change shared-binary behavior, the four glue plugins all see it. The OpenCode and pi plugins evolve independently, but the shared binary owns their install/launch flow.
+If you change shared-binary behavior, the four glue plugins and vibe all see it. The OpenCode and pi plugins evolve independently, but the shared binary owns their install/launch flow.
 
 ## Cross-language conventions
 
 - Use `cache_write_input_tokens`, not `cache_creation_input_tokens`. This was renamed in cbe0363; pretrained models tend to suggest the old name, so don't follow them.
-- Conformance suites cross-check the SDKs. `mise run test:sdk:conformance` runs core, provider-wrapper, and framework-adapter conformance across Go/Python/JS/Java/.NET. If you change behavior in one SDK, expect to update fixtures or matching code in the others.
+- Conformance suites cross-check the SDKs. `mise run test:sdk:conformance` runs seven of them. Core, provider-wrapper, framework-adapter, hook, and experiment cover Go/Python/JS/Java/.NET. Pi-session covers Go and JS. Redaction covers the four SDKs that have a redaction engine plus both plugins, and no Java. If you change behavior in one SDK, expect to update fixtures or matching code in the others.
 - Python has one package per framework (`agento11y-langgraph`, `agento11y-openai`, …). JS has one package with subpath exports (`@grafana/agento11y/langgraph`). Don't reflexively assume one layout for the other.
 - Python version bumps go through `mise run sdk:py:bump <VERSION>`. It updates all 13 `pyproject.toml` files and their internal `agento11y>=…` pins atomically. Hand-editing one file leaves the other twelve inconsistent.
 
@@ -55,10 +68,10 @@ If you change shared-binary behavior, the four glue plugins all see it. The Open
 
 [`llms.txt`](llms.txt) is what this repo ships. There is a second copy of the same prompt rendered by the Agent Observability onboarding wizard (a separate Grafana product). When you change user-facing semantics here (new SDK field, renamed env var, new framework adapter), the wizard copy needs the same change. If you're only fixing this repo's internals, the wizard copy doesn't move.
 
-## Hook wire fixtures are checked by hand
+## Hook and experiment wire fixtures are checked by hand
 
-`conformance/hooks/` pins the `POST /api/v1/hooks:evaluate` body and responses. That endpoint has no generated stubs, so the fixtures are the contract, and the SDK suites check themselves against the fixtures rather than against the server. If you change a fixture, run the new shape through the server's hook decoder yourself first. `conformance/hooks/README.md` documents the encodings, which the proto does not describe.
+`conformance/hooks/` pins the `POST /api/v1/hooks:evaluate` body and responses, and `conformance/experiments/` pins the experiment ingest bodies and responses. Neither endpoint group has generated stubs, so the fixtures are the contract, and the SDK suites check themselves against the fixtures rather than against the server. If you change a fixture, run the new shape through the server's decoder yourself first. Each directory's `README.md` documents the encodings, which the proto does not describe.
 
 ## Running checks
 
-`mise run check` is the full local CI gate: lint + typecheck + proto-drift + every SDK suite. For a focused change, run the matching narrow task (e.g. `mise run test:py:sdk-langgraph`); the full gate is slow.
+`mise run check` is the full local CI gate: lint + typecheck + proto-drift + redaction-drift + every SDK suite. For a focused change, run the matching narrow task (e.g. `mise run test:py:sdk-langgraph`); the full gate is slow.

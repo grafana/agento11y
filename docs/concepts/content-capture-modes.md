@@ -76,7 +76,7 @@ Per-language READMEs include code examples:
 - Java: [`java/README.md`](../../java/README.md)
 - .NET: [`dotnet/README.md`](../../dotnet/README.md)
 
-For coding-agent plugins, the relevant env var is `AGENTO11Y_CONTENT_CAPTURE_MODE`. All plugins (the shared `agento11y` binary used by Claude Code, Codex, Copilot, and Cursor; Pi via `@grafana/agento11y-pi`; OpenCode via `@grafana/agento11y-opencode`) accept `full`, `no_tool_content`, `metadata_only`, and `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only` so plugins match the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`.
+For coding-agent plugins, the relevant env var is `AGENTO11Y_CONTENT_CAPTURE_MODE`. All plugins (the shared `agento11y` binary used by Claude Code, Codex, Copilot, Cursor, and Vibe; Pi via `@grafana/agento11y-pi`; OpenCode via `@grafana/agento11y-opencode`) accept `full`, `no_tool_content`, `metadata_only`, and `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only` so plugins match the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`.
 
 Unknown values fall back to `metadata_only` with a warning in the plugin log. A plugin can still export less than the SDK allows. For example, an adapter may drop a field if the host agent does not pass it through.
 

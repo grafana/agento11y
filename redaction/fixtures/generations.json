@@ -1,0 +1,102 @@
+{
+  "comment": [
+    "Shared generation-level redaction cases for the four SDKs that expose a",
+    "generation sanitizer (Go, Python, JS, .NET). The plugins redact in their own",
+    "mappers and are covered by strings.json instead.",
+    "",
+    "The matrix records, per generation slot, which redaction mode the sanitizer",
+    "must apply. Three probes make the mode observable in one string: a tier 1",
+    "token, a tier 2 key/value pair, and an email address.",
+    "  skip           no probe is redacted",
+    "  light          the tier 1 token and the email address are redacted",
+    "  full           every probe is redacted",
+    "  light-no-email the tier 1 token only",
+    "  full-no-email  the tier 1 token and the key/value pair",
+    "",
+    "A case that sets redactEmailAddresses to false uses the two -no-email modes.",
+    "",
+    "Each harness builds its own native generation from the slot names, so no SDK",
+    "needs a Generation serializer, and each one asserts that the slots it builds",
+    "are exactly the slots listed here. Only Go has a media part; its harness",
+    "asserts on its own that media survives the sanitizer untouched."
+  ],
+  "probe": {
+    "input": "glc_conformanceprobetoken00001 SECRET_TOKEN=conformanceprobevalue probe@example.com",
+    "skip": "glc_conformanceprobetoken00001 SECRET_TOKEN=conformanceprobevalue probe@example.com",
+    "light": "[REDACTED:grafana-cloud-token] SECRET_TOKEN=conformanceprobevalue [REDACTED:email]",
+    "full": "[REDACTED:grafana-cloud-token] SECRET_TOKEN=[REDACTED:env-secret-value] [REDACTED:email]",
+    "light-no-email": "[REDACTED:grafana-cloud-token] SECRET_TOKEN=conformanceprobevalue probe@example.com",
+    "full-no-email": "[REDACTED:grafana-cloud-token] SECRET_TOKEN=[REDACTED:env-secret-value] probe@example.com"
+  },
+  "cases": [
+    {
+      "id": "input-redaction-disabled",
+      "redactInputMessages": false,
+      "redactEmailAddresses": true,
+      "slots": {
+        "systemPrompt": "full",
+        "conversationTitle": "light",
+        "callError": "light",
+        "input.user.text": "skip",
+        "input.assistant.text": "light",
+        "input.assistant.thinking": "light",
+        "input.assistant.toolCallInputJson": "full",
+        "input.tool.text": "full",
+        "input.tool.toolResultContent": "full",
+        "input.tool.toolResultContentJson": "full",
+        "output.assistant.text": "light",
+        "output.assistant.thinking": "light",
+        "output.assistant.toolCallInputJson": "full",
+        "output.tool.text": "full",
+        "output.tool.toolResultContent": "full",
+        "output.tool.toolResultContentJson": "full"
+      }
+    },
+    {
+      "id": "input-redaction-enabled",
+      "redactInputMessages": true,
+      "redactEmailAddresses": true,
+      "slots": {
+        "systemPrompt": "full",
+        "conversationTitle": "light",
+        "callError": "light",
+        "input.user.text": "full",
+        "input.assistant.text": "light",
+        "input.assistant.thinking": "light",
+        "input.assistant.toolCallInputJson": "full",
+        "input.tool.text": "full",
+        "input.tool.toolResultContent": "full",
+        "input.tool.toolResultContentJson": "full",
+        "output.assistant.text": "light",
+        "output.assistant.thinking": "light",
+        "output.assistant.toolCallInputJson": "full",
+        "output.tool.text": "full",
+        "output.tool.toolResultContent": "full",
+        "output.tool.toolResultContentJson": "full"
+      }
+    },
+    {
+      "id": "email-redaction-disabled",
+      "redactInputMessages": true,
+      "redactEmailAddresses": false,
+      "slots": {
+        "systemPrompt": "full-no-email",
+        "conversationTitle": "light-no-email",
+        "callError": "light-no-email",
+        "input.user.text": "full-no-email",
+        "input.assistant.text": "light-no-email",
+        "input.assistant.thinking": "light-no-email",
+        "input.assistant.toolCallInputJson": "full-no-email",
+        "input.tool.text": "full-no-email",
+        "input.tool.toolResultContent": "full-no-email",
+        "input.tool.toolResultContentJson": "full-no-email",
+        "output.assistant.text": "light-no-email",
+        "output.assistant.thinking": "light-no-email",
+        "output.assistant.toolCallInputJson": "full-no-email",
+        "output.tool.text": "full-no-email",
+        "output.tool.toolResultContent": "full-no-email",
+        "output.tool.toolResultContentJson": "full-no-email"
+      }
+    }
+  ]
+}

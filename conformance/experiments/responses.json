@@ -1,0 +1,132 @@
+{
+  "evaluation_queued": {
+    "evaluation_id": "eval-conformance-1",
+    "experiment_id": "conformance-run",
+    "trial_id": "trial-e82b5e46a40a37e5",
+    "test_case_id": "capital-france",
+    "conversation_id": "conv-agent-1",
+    "evaluator_id": "helpfulness",
+    "evaluator_version": "2",
+    "status": "queued",
+    "attempts": 0,
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z"
+  },
+  "evaluation_claimed": {
+    "evaluation_id": "eval-conformance-1",
+    "experiment_id": "conformance-run",
+    "trial_id": "trial-e82b5e46a40a37e5",
+    "conversation_id": "conv-agent-1",
+    "evaluator_id": "helpfulness",
+    "evaluator_version": "2",
+    "status": "claimed",
+    "attempts": 1
+  },
+  "evaluation_success": {
+    "evaluation_id": "eval-conformance-1",
+    "experiment_id": "conformance-run",
+    "trial_id": "trial-e82b5e46a40a37e5",
+    "test_case_id": "capital-france",
+    "conversation_id": "conv-agent-1",
+    "evaluator_id": "helpfulness",
+    "evaluator_version": "2",
+    "status": "success",
+    "attempts": 1,
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:05Z"
+  },
+  "evaluation_failed": {
+    "evaluation_id": "eval-conformance-1",
+    "experiment_id": "conformance-run",
+    "trial_id": "trial-e82b5e46a40a37e5",
+    "conversation_id": "conv-agent-1",
+    "evaluator_id": "helpfulness",
+    "evaluator_version": "2",
+    "status": "failed",
+    "attempts": 3,
+    "error": "grader crashed"
+  },
+  "evaluation_unsupported_status": {
+    "comment": "An unrecognized status must fail the call, not poll again.",
+    "evaluation_id": "eval-conformance-1",
+    "status": "paused"
+  },
+  "evaluation_missing_id": {
+    "comment": "A response with no evaluation_id must fail the call.",
+    "status": "queued"
+  },
+  "run_upsert_response": {
+    "run": {
+      "experiment_id": "conformance-run",
+      "name": "conformance run",
+      "status": "running",
+      "suite_id": "conformance-suite",
+      "suite_version": "1.0.0",
+      "tags": ["conformance"]
+    }
+  },
+  "run_finalize_response": {
+    "run": {
+      "experiment_id": "conformance-run",
+      "name": "conformance run",
+      "status": "completed"
+    }
+  },
+  "report_experiment_envelope": {
+    "experiment": {
+      "experiment_id": "conformance-run",
+      "name": "conformance run",
+      "status": "completed"
+    },
+    "summary": {
+      "test_case_count": 1,
+      "trial_count": 1,
+      "completed_count": 1,
+      "failed_count": 0,
+      "canceled_count": 0
+    },
+    "rows": [
+      {
+        "test_case_id": "capital-france",
+        "trials": [
+          {
+            "trial": { "trial_id": "trial-e82b5e46a40a37e5", "status": "completed" },
+            "scores": [{ "score_key": "helpfulness", "evaluator_id": "helpfulness" }]
+          }
+        ]
+      }
+    ]
+  },
+  "report_run_envelope": {
+    "comment": "Older drafts key the run under 'run'; both envelopes must parse alike.",
+    "run": {
+      "experiment_id": "conformance-run",
+      "name": "conformance run",
+      "status": "completed"
+    },
+    "summary": {
+      "test_case_count": 1,
+      "trial_count": 1,
+      "completed_count": 1,
+      "failed_count": 0,
+      "canceled_count": 0
+    },
+    "rows": [
+      {
+        "test_case_id": "capital-france",
+        "trials": [
+          {
+            "trial": { "trial_id": "trial-e82b5e46a40a37e5", "status": "completed" },
+            "scores": [{ "score_key": "helpfulness", "evaluator_id": "helpfulness" }]
+          }
+        ]
+      }
+    ]
+  },
+  "scores_export_response": {
+    "results": [{ "score_id": "score-06b71bce427d6b90", "accepted": true }],
+    "accepted": 1,
+    "duplicates": 0,
+    "rejected": 0
+  }
+}

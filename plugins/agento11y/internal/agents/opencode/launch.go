@@ -54,6 +54,7 @@ var (
 	runInstall  = defaultRunInstall
 	runUpdate   = defaultRunUpdate
 	configDirFn = defaultConfigDir
+	cacheDirFn  = defaultCacheDir
 )
 
 // configFileNames lists the basenames opencode recognises for its
@@ -304,10 +305,13 @@ func pluginInstalled() (bool, error) {
 }
 
 // Status reports whether the @grafana/agento11y-opencode plugin is registered
-// in opencode's global config. It reuses the read-only config probe and never
-// installs or updates — `agento11y doctor` relies on this. When the registered
-// spec pins a version (`@grafana/agento11y-opencode@1.2.3`) that version is
-// reported; an unpinned spec yields an empty (unknown) version.
+// in opencode's global config, and which version is installed. It reuses the
+// read-only config probe and never installs or updates — `agento11y doctor`
+// relies on this. The version comes from the package opencode installed into
+// its cache, because the config entry is usually unpinned; a pinned spec
+// (`@grafana/agento11y-opencode@1.2.3`) is the fallback. The cache belongs to
+// opencode, so an absent or unreadable tree means the version is unknown, not
+// an error.
 func Status(_ context.Context) (installed bool, version string, err error) {
 	source, found, err := installedPluginSource()
 	if err != nil {
@@ -316,7 +320,65 @@ func Status(_ context.Context) (installed bool, version string, err error) {
 	if !found {
 		return false, "", nil
 	}
+	if version := cachedVersion(source); version != "" {
+		return true, version, nil
+	}
 	return true, versionFromNpmSpec(source), nil
+}
+
+// cachedVersion returns the version of the plugin opencode installed for a
+// config entry, or "" when it can't be read. opencode installs each plugin
+// spec into its own cache directory named after the spec:
+// <cache>/packages/<spec>/node_modules/<name>. Builds before opencode's cache
+// migration installed straight under <cache>/node_modules/<name>, so that
+// layout is probed second.
+func cachedVersion(source string) string {
+	cache, err := cacheDirFn()
+	if err != nil {
+		return ""
+	}
+	name := stripNpmVersion(source)
+	// A scoped name and a spec both contain a `/`; convert it to the OS
+	// separator so `@scope/pkg` is two directories on Windows too.
+	pkg := filepath.FromSlash(name)
+	candidates := []string{
+		filepath.Join(cache, "packages", filepath.FromSlash(cachedPackageSpec(source)), "node_modules", pkg),
+		filepath.Join(cache, "node_modules", pkg),
+	}
+	for _, dir := range candidates {
+		if version := packageVersion(dir); version != "" {
+			return version
+		}
+	}
+	return ""
+}
+
+// cachedPackageSpec returns the spec opencode installs a config entry as, which
+// is also the name of the cache directory it installs into. opencode rewrites a
+// bare package name to `<name>@latest` and passes anything else through, so a
+// pinned spec and a dist tag keep their own directories.
+func cachedPackageSpec(source string) string {
+	if versionFromNpmSpec(source) == "" {
+		return source + "@latest"
+	}
+	return source
+}
+
+// packageVersion reads the `version` a package directory's package.json
+// declares. A missing, unreadable, or malformed file means unknown — the file
+// belongs to opencode, so doctor never turns it into an error.
+func packageVersion(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return ""
+	}
+	var pkg struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return ""
+	}
+	return pkg.Version
 }
 
 // installedPluginSource reads opencode's global config and returns the plugin
@@ -444,4 +506,19 @@ func defaultConfigDir() (string, error) {
 		return "", fmt.Errorf("resolve home dir for opencode config: %w", err)
 	}
 	return filepath.Join(home, ".config", "opencode"), nil
+}
+
+// defaultCacheDir returns the directory opencode installs plugin packages
+// into, honouring $XDG_CACHE_HOME (default $HOME/.cache). This is the cache
+// directory, not the config one: opencode keeps its config in
+// $XDG_CONFIG_HOME/opencode and the installed packages here.
+func defaultCacheDir() (string, error) {
+	if dir := os.Getenv("XDG_CACHE_HOME"); filepath.IsAbs(dir) {
+		return filepath.Join(dir, "opencode"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for opencode cache: %w", err)
+	}
+	return filepath.Join(home, ".cache", "opencode"), nil
 }

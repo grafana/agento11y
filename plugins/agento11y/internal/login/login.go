@@ -2,22 +2,31 @@
 // the explicit `agento11y login` subcommand and the auto-prompt that runs
 // before `agento11y claude` / `agento11y pi` when no credentials are configured.
 //
-// The flow prompts for the connection details (SIGIL_ENDPOINT,
-// SIGIL_AUTH_TENANT_ID, SIGIL_AUTH_TOKEN and an optional OTel OTLP endpoint)
-// followed by an optional preferences group (content capture mode, session
-// tags, and guards), then writes them to the standard dotenv at
+// The flow collects three required values — SIGIL_ENDPOINT,
+// SIGIL_AUTH_TENANT_ID, and SIGIL_AUTH_TOKEN — plus an optional OTLP
+// endpoint, followed by a preferences group (content capture mode, session
+// tags, and guards), asks the endpoint whether it accepts the credentials,
+// and writes everything to the standard dotenv at
 // $XDG_CONFIG_HOME/agento11y/config.env (or the legacy
 // $XDG_CONFIG_HOME/sigil/config.env when only that file exists; see
-// dotenv.FilePath). Existing allowed keys not covered by
-// prompts are preserved by the underlying writer.
+// dotenv.FilePath). Existing allowed keys that no field covers are preserved
+// by the underlying writer.
 //
-// Prompts use github.com/charmbracelet/huh, the same library gcx uses. The
-// flow is interactive-only: callers without a TTY receive ErrNotInteractive
-// and should either run from a terminal or set SIGIL_* env vars / write
-// $XDG_CONFIG_HOME/agento11y/config.env directly.
+// A value can arrive three ways: as a RunOpts field the `agento11y login`
+// flags fill in, from the saved configuration (config.env plus any
+// AGENTO11Y_* / SIGIL_* var already exported in the shell), or typed into the
+// form. That list is also the precedence order: flags win over everything
+// else, and only what is still missing is prompted for.
+//
+// Prompts use github.com/charmbracelet/huh, the same library gcx uses. A run
+// that still has to prompt needs a terminal: without one it returns
+// ErrNotInteractive, and the caller should suggest a terminal, the flags, or
+// SIGIL_* env vars. A run whose credentials the endpoint rejects returns
+// ErrNotVerified unless the user (or --yes) chooses to save them anyway.
 package login
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -30,6 +39,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"golang.org/x/term"
@@ -104,11 +114,39 @@ func grafanaTheme() *huh.Theme {
 	return t
 }
 
+// ProbeFunc verifies credentials against the generation-export endpoint. It
+// matches doctor.ProbeConversations, which is what production uses; tests
+// substitute a stub so login never touches the network. An implementation
+// reports a failure as a ProbeResult, never as a nil pointer; a nil result is
+// still handled, as a check that produced no verdict.
+type ProbeFunc func(ctx context.Context, endpoint, tenant, token string, insecure bool) *doctor.ProbeResult
+
 // RunOpts controls the login flow.
 type RunOpts struct {
 	// ConfigPath overrides the dotenv path; empty resolves to
 	// dotenv.FilePath().
 	ConfigPath string
+
+	// SkipVerify saves the credentials without asking the endpoint whether
+	// it accepts them. Set by `agento11y login --no-verify`.
+	SkipVerify bool
+
+	// AssumeYes answers the "save anyway?" question that follows a failed
+	// verification. Set by `agento11y login --yes`. It answers nothing else.
+	AssumeYes bool
+
+	// Probe verifies the credentials before they are written. nil resolves
+	// to doctor.ProbeConversations.
+	Probe ProbeFunc
+
+	// Endpoint, TenantID, Token, and OTLPEndpoint are values the command
+	// line supplied. They are not prompted for, and they outrank the process
+	// environment and the existing dotenv file. Supplying Endpoint, TenantID,
+	// and Token together runs login without a terminal.
+	Endpoint     string
+	TenantID     string
+	Token        string
+	OTLPEndpoint string
 
 	// ShowNextStep prints a `Try sigil claude or sigil pi.` hint after a
 	// successful save so users know what to run next. Set by the explicit
@@ -134,27 +172,54 @@ var (
 	ErrAborted = errors.New("login: user aborted")
 
 	// ErrNotInteractive indicates stdin is not a terminal so we cannot
-	// prompt. Callers should suggest running from an interactive shell or
-	// configuring SIGIL_* env vars / the dotenv file directly.
+	// prompt. Callers should suggest running from an interactive shell,
+	// passing the values as flags, or configuring SIGIL_* env vars / the
+	// dotenv file directly.
 	ErrNotInteractive = errors.New("login: cannot prompt; stdin is not a terminal")
+
+	// ErrNotVerified indicates the endpoint did not accept the credentials
+	// and the save was not overridden, so nothing was written.
+	ErrNotVerified = errors.New("login: endpoint did not accept the credentials; nothing was saved")
 )
 
 // Run executes the login flow. On success the dotenv file is rewritten and
 // the resolved values are also exported into the current process env so a
 // subsequent in-process launcher dispatch sees them without re-loading.
-func Run(_ context.Context, opts RunOpts) error {
+func Run(ctx context.Context, opts RunOpts) error {
 	if opts.Stdin == nil {
 		opts.Stdin = os.Stdin
 	}
 	if opts.Stderr == nil {
 		opts.Stderr = io.Discard
 	}
+	if opts.Probe == nil {
+		opts.Probe = doctor.ProbeConversations
+	}
 	configPath := opts.ConfigPath
 	if configPath == "" {
 		configPath = dotenv.FilePath()
 	}
 
-	if !term.IsTerminal(int(opts.Stdin.Fd())) {
+	// Command-line values are authoritative: they beat the process env and
+	// the existing dotenv. Validate them before the prompt so a malformed
+	// --endpoint fails right away instead of after the whole form is filled
+	// in.
+	fixed := fixedValues{
+		endpoint:     strings.TrimSpace(opts.Endpoint),
+		tenantID:     strings.TrimSpace(opts.TenantID),
+		token:        strings.TrimSpace(opts.Token),
+		otelEndpoint: strings.TrimSpace(opts.OTLPEndpoint),
+	}
+	if err := fixed.validate(); err != nil {
+		return err
+	}
+
+	// The form runs only while a required credential is still missing after
+	// the flags, so `--endpoint --tenant --token` configures a devcontainer,
+	// an SSH session, or a script with no terminal at all.
+	askUser := !fixed.completeCredentials()
+	isTTY := term.IsTerminal(int(opts.Stdin.Fd()))
+	if askUser && !isTTY {
 		return ErrNotInteractive
 	}
 
@@ -167,87 +232,172 @@ func Run(_ context.Context, opts RunOpts) error {
 	// to keep existing" semantics via the validator and a post-form restore
 	// instead.
 	existing := loadSeeds(configPath, opts.Logger)
-	endpoint := existing["SIGIL_ENDPOINT"]
-	tenantID := existing["SIGIL_AUTH_TENANT_ID"]
+
+	// existingToken is what a submitted-empty password field falls back to.
 	existingToken := existing["SIGIL_AUTH_TOKEN"]
-	var token string
-	otelEndpoint := existing["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"]
 
-	tokenDesc := "API token → Create a token in Cloud Access Policies on the page above"
-	tokenValidate := requireNonEmpty("auth token")
-	if existingToken != "" {
-		tokenDesc = "Press Enter to keep existing token"
-		tokenValidate = func(string) error { return nil }
+	v := formValues{
+		endpoint:     cmp.Or(fixed.endpoint, existing["SIGIL_ENDPOINT"]),
+		tenantID:     cmp.Or(fixed.tenantID, existing["SIGIL_AUTH_TENANT_ID"]),
+		token:        fixed.token,
+		otelEndpoint: cmp.Or(fixed.otelEndpoint, existing["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"]),
+		contentMode:  normalizeContentMode(existing["SIGIL_CONTENT_CAPTURE_MODE"]),
+		tags:         existing["SIGIL_TAGS"],
+		guards:       seedGuards(existing["SIGIL_GUARDS_ENABLED"], existing["SIGIL_GUARDS_FAIL_OPEN"]),
+		guardTimeout: strings.TrimSpace(existing["SIGIL_GUARDS_TIMEOUT_MS"]),
 	}
 
-	// Optional preferences. These default to the same values the plugin
-	// resolves when the keys are absent, so leaving the second group at its
-	// defaults is a no-op rather than a behaviour change.
-	contentMode := normalizeContentMode(existing["SIGIL_CONTENT_CAPTURE_MODE"])
-	tags := existing["SIGIL_TAGS"]
-	guards := seedGuards(existing["SIGIL_GUARDS_ENABLED"], existing["SIGIL_GUARDS_FAIL_OPEN"])
-	guardTimeout := strings.TrimSpace(existing["SIGIL_GUARDS_TIMEOUT_MS"])
-	if guardTimeout == "" {
-		guardTimeout = strconv.Itoa(envconfig.DefaultGuardsTimeoutMs)
+	if askUser {
+		if err := promptValues(&v, fixed, existingToken, opts.Stderr); err != nil {
+			return err
+		}
 	}
 
-	// Only metadata_only and full are offered. The advanced no_tool_content
-	// and full_with_metadata_spans modes are still honoured if already set —
-	// append the current one so re-running login preserves it instead of
-	// silently downgrading to the first option.
-	contentOptions := []huh.Option[string]{
-		huh.NewOption("Metadata only — no prompts, responses, or tool I/O (default)", contentModeMetadataOnly),
-		huh.NewOption("Full — capture everything", contentModeFull),
-	}
-	switch contentMode {
-	case contentModeNoToolContent:
-		contentOptions = append(contentOptions, huh.NewOption("No tool content — capture generations, drop tool args and results", contentModeNoToolContent))
-	case contentModeFullWithMetadataSpans:
-		contentOptions = append(contentOptions, huh.NewOption("Full to ingest, metadata-only spans — keep content off OTel traces", contentModeFullWithMetadataSpans))
+	if strings.TrimSpace(v.token) == "" {
+		v.token = existingToken
 	}
 
+	// Trim before persisting. Validators only trim locally, and
+	// paste-from-terminal inputs can carry trailing newlines or spaces that
+	// would otherwise corrupt SIGIL_ENDPOINT and break export requests.
+	v.endpoint = strings.TrimSpace(v.endpoint)
+	v.tenantID = strings.TrimSpace(v.tenantID)
+	v.token = strings.TrimSpace(v.token)
+	v.otelEndpoint = strings.TrimSpace(v.otelEndpoint)
+
+	// Ask the endpoint whether it accepts these credentials before the file
+	// is written, so a wrong instance ID or a token without sigil:write is
+	// reported here instead of showing up as an empty Conversations page.
+	verdict, err := verifyCredentials(ctx, opts, v, envconfig.ParseBool(existing["SIGIL_INSECURE"]), isTTY)
+	if err != nil {
+		return err
+	}
+
+	updates := buildUpdates(v)
+	if err := dotenv.WriteDotenv(configPath, updates, opts.Logger); err != nil {
+		return err
+	}
+
+	// Mirror into process env so a following in-process launcher dispatch
+	// inherits the new credentials without re-loading the file.
+	for key, value := range updates {
+		if strings.TrimSpace(value) == "" {
+			_ = os.Unsetenv(key)
+			continue
+		}
+		_ = os.Setenv(key, value)
+	}
+
+	if opts.ShowNextStep {
+		printNextStep(opts.Stderr, verdict)
+	}
+	return nil
+}
+
+// fixedValues are the values the command line supplied. An empty field means
+// the flag was absent, so the seed or the prompt decides that value instead.
+type fixedValues struct {
+	endpoint     string
+	tenantID     string
+	token        string
+	otelEndpoint string
+}
+
+// completeCredentials reports whether the three required credentials all
+// arrived as flags, which is what lets login run with no terminal.
+func (f fixedValues) completeCredentials() bool {
+	return f.endpoint != "" && f.tenantID != "" && f.token != ""
+}
+
+func (f fixedValues) validate() error {
+	if f.endpoint != "" {
+		if err := requireURL(f.endpoint); err != nil {
+			return fmt.Errorf("--endpoint: %w", err)
+		}
+	}
+	if f.otelEndpoint != "" {
+		if err := requireURL(f.otelEndpoint); err != nil {
+			return fmt.Errorf("--otlp-endpoint: %w", err)
+		}
+	}
+	return nil
+}
+
+// promptValues drives the interactive part of login: the credential fields
+// that no flag already fixed, then the capture settings. Fields a flag fixed
+// are left out instead of being asked again. It updates v in place.
+func promptValues(v *formValues, fixed fixedValues, existingToken string, stderr io.Writer) error {
 	// Banner is printed once, on stderr, BEFORE huh takes over rendering.
 	// huh stays in inline mode so this text remains static terminal
 	// scrollback above the form (the URL stays selectable, redraws inside
 	// huh's render area don't clobber the selection above it).
 	banner, bannerLines := welcomeBanner()
-	fmt.Fprintln(opts.Stderr, banner)
+	fmt.Fprintln(stderr, banner)
+
+	// Erase the banner regardless of outcome. The banner is one-shot
+	// onboarding guidance; leaving it in the terminal after the form
+	// exits is clutter. huh clears its own render area on exit, so the
+	// cursor is then back at the row right below the banner: cursor-up by
+	// bannerLines plus erase-to-end-of-screen scrubs exactly the banner.
+	defer fmt.Fprintf(stderr, "\033[%dA\033[J", bannerLines)
+
+	tokenDesc := "API token → Create a token in Cloud Access Policies on the page above"
+	tokenValidate := requireNonEmpty("auth token")
+	if existingToken != "" {
+		tokenDesc = "Press Enter to keep the existing token"
+		tokenValidate = func(string) error { return nil }
+	}
+
+	// The guard timeout field shows the runtime default when no value is
+	// saved, so an empty seed becomes an explicit number the user can edit.
+	if strings.TrimSpace(v.guardTimeout) == "" {
+		v.guardTimeout = strconv.Itoa(envconfig.DefaultGuardsTimeoutMs)
+	}
+
+	var required []huh.Field
+	if fixed.endpoint == "" {
+		required = append(required, huh.NewInput().
+			Title("Endpoint").
+			Description("Copy 'API URL' from the page above").
+			Validate(requireURL).
+			Value(&v.endpoint))
+	}
+	if fixed.tenantID == "" {
+		required = append(required, huh.NewInput().
+			Title("Tenant ID").
+			Description("Copy 'Instance ID' from the page above").
+			Validate(requireNonEmpty("tenant id")).
+			Value(&v.tenantID))
+	}
+	if fixed.token == "" {
+		required = append(required, huh.NewInput().
+			Title("Auth token").
+			Description(tokenDesc).
+			EchoMode(huh.EchoModePassword).
+			Validate(tokenValidate).
+			Value(&v.token))
+	}
+	if fixed.otelEndpoint == "" {
+		required = append(required, huh.NewInput().
+			Title("OTLP endpoint").
+			Description("For SDK traces and metrics. Press Enter to skip.").
+			Validate(allowEmptyURL).
+			Value(&v.otelEndpoint))
+	}
 
 	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Endpoint").
-				Description("Copy 'API URL' from the page above").
-				Validate(requireURL).
-				Value(&endpoint),
-			huh.NewInput().
-				Title("Tenant ID").
-				Description("Copy 'Instance ID' from the page above").
-				Validate(requireNonEmpty("tenant id")).
-				Value(&tenantID),
-			huh.NewInput().
-				Title("Auth token").
-				Description(tokenDesc).
-				EchoMode(huh.EchoModePassword).
-				Validate(tokenValidate).
-				Value(&token),
-			huh.NewInput().
-				Title("OTLP endpoint").
-				Description("For SDK traces and metrics. Press Enter to skip.").
-				Validate(allowEmptyURL).
-				Value(&otelEndpoint),
-		),
+		huh.NewGroup(required...),
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Content capture").
 				Description("What leaves this machine for each generation").
-				Options(contentOptions...).
-				Value(&contentMode),
+				Options(contentCaptureOptions(v.contentMode)...).
+				Value(&v.contentMode),
 			huh.NewInput().
 				Title("Session tags").
 				Description("Applied to every generation, e.g. team=ai,project=demo. Press Enter to skip.").
 				Validate(validateTags).
-				Value(&tags),
+				Value(&v.tags),
 			huh.NewSelect[string]().
 				Title("Guards").
 				Description("Pre-tool-use safety checks").
@@ -256,83 +406,199 @@ func Run(_ context.Context, opts RunOpts) error {
 					huh.NewOption("Enabled, fail-open — allow the action when a guard errors or times out", guardsOpen),
 					huh.NewOption("Enabled, fail-closed — block the action when a guard errors or times out", guardsClosed),
 				).
-				Value(&guards),
+				Value(&v.guards),
 			huh.NewInput().
 				Title("Guard timeout (ms)").
 				Description("How long to wait for guards before applying the fail mode. Only used when guards are enabled.").
 				Validate(func(s string) error {
 					// The timeout is ignored while guards are disabled, so don't
 					// let a stale or invalid value block submission then.
-					if guards == guardsOff {
+					if v.guards == guardsOff {
 						return nil
 					}
 					return validateGuardTimeout(s)
 				}).
-				Value(&guardTimeout),
+				Value(&v.guardTimeout),
 		),
 	).WithTheme(grafanaTheme())
-	formErr := form.Run()
 
-	// Erase the banner regardless of outcome. The banner is one-shot
-	// onboarding guidance; leaving it in the terminal after the form
-	// exits is clutter. After huh's inline-mode exit the cursor is back
-	// at the row right below the banner, so cursor-up by bannerLines +
-	// erase-to-end-of-screen scrubs exactly the banner.
-	fmt.Fprintf(opts.Stderr, "\033[%dA\033[J", bannerLines)
-
-	if formErr != nil {
-		if errors.Is(formErr, huh.ErrUserAborted) {
-			return ErrAborted
-		}
-		return fmt.Errorf("login form: %w", formErr)
-	}
-	if strings.TrimSpace(token) == "" {
-		token = existingToken
-	}
-
-	// Trim before persisting. Validators only trim locally, and
-	// paste-from-terminal inputs can carry trailing newlines or spaces that
-	// would otherwise corrupt SIGIL_ENDPOINT and break export requests.
-	endpoint = strings.TrimSpace(endpoint)
-	tenantID = strings.TrimSpace(tenantID)
-	token = strings.TrimSpace(token)
-	otelEndpoint = strings.TrimSpace(otelEndpoint)
-
-	updates := buildUpdates(formValues{
-		endpoint:     endpoint,
-		tenantID:     tenantID,
-		token:        token,
-		otelEndpoint: otelEndpoint,
-		contentMode:  normalizeContentMode(contentMode),
-		tags:         strings.TrimSpace(tags),
-		guards:       guards,
-		guardTimeout: guardTimeout,
-	})
-	if err := dotenv.WriteDotenv(configPath, updates, opts.Logger); err != nil {
+	if err := formError(form.Run()); err != nil {
 		return err
 	}
-
-	// Mirror into process env so a following in-process launcher dispatch
-	// inherits the new credentials without re-loading the file.
-	for k, v := range updates {
-		if strings.TrimSpace(v) == "" {
-			_ = os.Unsetenv(k)
-			continue
-		}
-		_ = os.Setenv(k, v)
-	}
-
-	if opts.ShowNextStep {
-		printNextStep(opts.Stderr)
-	}
+	v.capturePrompted = true
 	return nil
 }
 
-// printNextStep emits the post-login hint: what to run, where the data
-// shows up, and where to read more. Commands are bold orange so the eye
-// lands on what to type; surrounding copy and URLs are faint so the lines
-// read as secondary suggestions rather than another banner.
-func printNextStep(w io.Writer) {
+// contentCaptureOptions lists the capture modes the form offers. Only
+// metadata_only and full are offered. The advanced no_tool_content and
+// full_with_metadata_spans modes are still honoured if already set — append
+// the current one so re-running login preserves it instead of silently
+// downgrading to the first option.
+func contentCaptureOptions(current string) []huh.Option[string] {
+	options := []huh.Option[string]{
+		huh.NewOption("Metadata only — no prompts, responses, or tool I/O (default)", contentModeMetadataOnly),
+		huh.NewOption("Full — capture everything", contentModeFull),
+	}
+	switch current {
+	case contentModeNoToolContent:
+		options = append(options, huh.NewOption("No tool content — capture generations, drop tool args and results", contentModeNoToolContent))
+	case contentModeFullWithMetadataSpans:
+		options = append(options, huh.NewOption("Full to ingest, metadata-only spans — keep content off OTel traces", contentModeFullWithMetadataSpans))
+	}
+	return options
+}
+
+// formError maps a huh outcome onto the package sentinels.
+func formError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, huh.ErrUserAborted):
+		return ErrAborted
+	default:
+		return fmt.Errorf("login form: %w", err)
+	}
+}
+
+// verifyOutcome is how the saved configuration was checked, which decides
+// what the closing hint tells the user to do next.
+type verifyOutcome int
+
+const (
+	// verifyFailed means the endpoint did not accept the credentials and the
+	// save was not overridden, so nothing is written. It is the zero value so
+	// an outcome that was never set cannot read as success.
+	verifyFailed verifyOutcome = iota
+	// verifyPassed means the endpoint accepted the credentials.
+	verifyPassed
+	// verifySkipped means --no-verify suppressed the check.
+	verifySkipped
+	// verifyOverridden means the check failed and the user saved anyway.
+	verifyOverridden
+)
+
+// verifyCredentials asks the generation-export endpoint whether it accepts
+// the collected credentials, using the same request the exporter sends. It
+// returns verifyPassed, verifySkipped, or verifyOverridden when the caller
+// may write the file, and verifyFailed with ErrNotVerified when it may not.
+// A failure is reported and then offered as a choice: an interactive user can
+// save anyway, and --yes makes that choice up front for scripts. Without
+// either, nothing is written.
+//
+// Only an OK result passes. That is stricter than `agento11y doctor`, which
+// leaves a 4xx other than 401/403 healthy because the minimal probe body
+// ({}) can draw a benign 400 or 415 from an endpoint that validates the body
+// before auth. Login is about to persist these values, so it reports every
+// non-success status and lets the user decide.
+func verifyCredentials(ctx context.Context, opts RunOpts, v formValues, insecure, canPrompt bool) (verifyOutcome, error) {
+	if opts.SkipVerify {
+		return verifySkipped, nil
+	}
+
+	res := opts.Probe(ctx, v.endpoint, v.tenantID, v.token, insecure)
+	logVerdict(opts.Logger, v.endpoint, v.tenantID, res)
+	if res != nil && res.OK {
+		fmt.Fprintln(opts.Stderr, lipgloss.NewStyle().Faint(true).Render("The endpoint accepted these credentials."))
+		return verifyPassed, nil
+	}
+
+	fmt.Fprintln(opts.Stderr, describeProbeFailure(res, v.endpoint, v.tenantID))
+	if opts.AssumeYes {
+		return verifyOverridden, nil
+	}
+	if !canPrompt {
+		return verifyFailed, ErrNotVerified
+	}
+
+	save := false
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Save anyway?").
+				Description("Yes writes these values to the config file even though the check failed. No writes nothing.").
+				Affirmative("Yes").
+				Negative("No").
+				Value(&save),
+		),
+	).WithTheme(grafanaTheme())
+	if err := formError(form.Run()); err != nil {
+		return verifyFailed, err
+	}
+	if !save {
+		return verifyFailed, ErrNotVerified
+	}
+	return verifyOverridden, nil
+}
+
+// logVerdict records the credential check in the debug log. The diagnostics
+// go to opts.Stderr, which the launcher auto-login points at a terminal the
+// user may have already scrolled past and which defaults to io.Discard, so
+// the log is the only durable account of why a run saved nothing. The token
+// is never logged.
+func logVerdict(logger *log.Logger, endpoint, tenantID string, res *doctor.ProbeResult) {
+	if logger == nil {
+		return
+	}
+	if res == nil {
+		logger.Printf("login: credential check returned no result: endpoint=%s tenant=%s", endpoint, tenantID)
+		return
+	}
+	logger.Printf("login: credential check: endpoint=%s tenant=%s status=%d ok=%v message=%q",
+		endpoint, tenantID, res.StatusCode, res.OK, res.Message)
+}
+
+// describeProbeFailure turns a failed probe into a diagnostic that names the
+// value to look at. A 401 or 403 cannot be pinned on one value: Grafana
+// Cloud checks the tenant ID and the token together as one Basic credential,
+// so both are named and the most common cause — a token without the
+// sigil:write scope — is called out. The classification uses doctor's own
+// predicates so login's wording cannot drift from what `agento11y doctor`
+// calls the same result.
+func describeProbeFailure(res *doctor.ProbeResult, endpoint, tenantID string) string {
+	warn := lipgloss.NewStyle().Bold(true).Foreground(grafanaOrange)
+	faint := lipgloss.NewStyle().Faint(true)
+
+	var lines []string
+	switch {
+	case res == nil:
+		lines = []string{
+			warn.Render("Could not check the credentials: the check returned no result."),
+		}
+	case res.AuthFailure():
+		lines = []string{
+			warn.Render(fmt.Sprintf("The endpoint rejected these credentials (HTTP %d).", res.StatusCode)),
+			faint.Render(fmt.Sprintf("Tenant ID %q and the auth token are checked as one pair, so either can cause this.", tenantID)),
+			faint.Render("The likeliest cause is a token without the sigil:write scope."),
+		}
+	case res.NoResponse():
+		lines = []string{warn.Render("Could not reach " + endpoint + ".")}
+		if msg := strings.TrimSpace(res.Message); msg != "" {
+			lines = append(lines, faint.Render(msg))
+		}
+		lines = append(lines, faint.Render("Check the endpoint URL and this machine's network access."))
+	default:
+		lines = []string{
+			warn.Render(fmt.Sprintf("The endpoint answered HTTP %d.", res.StatusCode)),
+			faint.Render("Request URL: " + res.URL),
+		}
+		if strings.TrimSpace(res.Message) != "" {
+			lines = append(lines, faint.Render(strings.TrimSpace(res.Message)))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// printNextStep emits the post-login hint: what to run, how to diagnose the
+// configuration that was just written, where the data shows up, and where to
+// read more. Commands are bold orange so the eye lands on what to type;
+// surrounding copy and URLs are faint so the lines read as secondary
+// suggestions rather than another banner.
+//
+// The diagnostic line depends on how the save ended. Every outcome names
+// `agento11y doctor`, which probes both endpoints with the file that was just
+// written, but a save that skipped or overrode verification says why to run
+// it now rather than only if the data does not appear.
+func printNextStep(w io.Writer, outcome verifyOutcome) {
 	faint := lipgloss.NewStyle().Faint(true)
 	cmd := lipgloss.NewStyle().Bold(true).Foreground(grafanaOrange)
 	link := lipgloss.NewStyle().Faint(true).Underline(true)
@@ -343,6 +609,17 @@ func printNextStep(w io.Writer) {
 			cmd.Render("agento11y pi")+
 			faint.Render(" to launch a coding agent."),
 	)
+	switch outcome {
+	case verifyPassed:
+		fmt.Fprintln(w, faint.Render("Run ")+cmd.Render("agento11y doctor")+faint.Render(" if the data does not appear."))
+	case verifySkipped:
+		fmt.Fprintln(w, faint.Render("Verification was skipped. Run ")+cmd.Render("agento11y doctor")+faint.Render(" if the configuration does not work."))
+	case verifyOverridden:
+		fmt.Fprintln(w, faint.Render("The endpoint did not accept these credentials. Run ")+cmd.Render("agento11y doctor")+faint.Render(" to check them again."))
+	case verifyFailed:
+		// Unreachable: a failed check that was not overridden writes
+		// nothing, so there is no saved configuration to hint about.
+	}
 	fmt.Fprintln(w, faint.Render("View observability data at ")+link.Render(observabilityURL))
 	fmt.Fprintln(w, faint.Render("Read documentation at ")+link.Render(docsURL))
 }
@@ -355,6 +632,12 @@ var seededSuffixes = []string{
 	"AUTH_TENANT_ID",
 	"AUTH_TOKEN",
 	"OTEL_EXPORTER_OTLP_ENDPOINT",
+	// INSECURE is never prompted for. It is resolved here so the credential
+	// check receives the same arguments the exporter and `agento11y doctor`
+	// resolve for themselves. It cannot change login's own request:
+	// the value only picks a scheme for an endpoint that has none, and every
+	// endpoint login probes already passed requireURL.
+	"INSECURE",
 	"CONTENT_CAPTURE_MODE",
 	"TAGS",
 	"GUARDS_ENABLED",
@@ -392,11 +675,25 @@ type formValues struct {
 	tags         string
 	guards       string
 	guardTimeout string
+
+	// capturePrompted records that the form ran, which is the only way the
+	// four capture fields hold something the user chose. The keys are written
+	// only when it is set, so a promptless run driven by flags leaves
+	// whatever is on disk alone.
+	capturePrompted bool
 }
 
 // buildUpdates maps the form values onto the dotenv keys WriteDotenv expects.
 // Every managed value is written under both branded spellings (and empty
 // values delete both) so old binaries that only read SIGIL_* keep working.
+// Keys absent from the returned map keep whatever the file already holds.
+//
+// The four capture settings are written only when capturePrompted says the
+// form ran. A promptless run leaves them out: their values then come from
+// seeds, and a seed can be an AGENTO11Y_* variable exported in the current
+// shell, so writing them would turn a one-off `agento11y claude --tag
+// session=demo` into a permanent config entry the user never saw.
+//
 // Content capture mode and the guard-enabled flag are always written
 // explicitly so a downgrade (e.g. full back to metadata_only, or enabled back
 // to disabled) actually takes effect instead of being silently preserved.
@@ -411,22 +708,25 @@ func buildUpdates(v formValues) map[string]string {
 		"SIGIL_AUTH_TENANT_ID":              v.tenantID,
 		"SIGIL_AUTH_TOKEN":                  v.token,
 		"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": v.otelEndpoint, // "" deletes
-		"SIGIL_CONTENT_CAPTURE_MODE":        normalizeContentMode(v.contentMode),
-		"SIGIL_TAGS":                        strings.TrimSpace(v.tags), // "" deletes
 	}
-	switch v.guards {
-	case guardsOpen, guardsClosed:
-		updates["SIGIL_GUARDS_ENABLED"] = "true"
-		if v.guards == guardsOpen {
-			updates["SIGIL_GUARDS_FAIL_OPEN"] = "true"
-		} else {
-			updates["SIGIL_GUARDS_FAIL_OPEN"] = "false"
+	if v.capturePrompted {
+		updates["SIGIL_CONTENT_CAPTURE_MODE"] = normalizeContentMode(v.contentMode)
+		updates["SIGIL_TAGS"] = strings.TrimSpace(v.tags) // "" deletes
+		switch v.guards {
+		case guardsOpen, guardsClosed:
+			updates["SIGIL_GUARDS_ENABLED"] = "true"
+			if v.guards == guardsOpen {
+				updates["SIGIL_GUARDS_FAIL_OPEN"] = "true"
+			} else {
+				updates["SIGIL_GUARDS_FAIL_OPEN"] = "false"
+			}
+			// Empty deletes, so a cleared field falls back to the runtime
+			// default instead of keeping a stale timeout from a previous
+			// config.
+			updates["SIGIL_GUARDS_TIMEOUT_MS"] = strings.TrimSpace(v.guardTimeout)
+		default:
+			updates["SIGIL_GUARDS_ENABLED"] = "false"
 		}
-		// Empty deletes, so a cleared field falls back to the runtime default
-		// instead of keeping a stale timeout from a previous config.
-		updates["SIGIL_GUARDS_TIMEOUT_MS"] = strings.TrimSpace(v.guardTimeout)
-	default:
-		updates["SIGIL_GUARDS_ENABLED"] = "false"
 	}
 	return envconfig.ExpandAliases(updates)
 }

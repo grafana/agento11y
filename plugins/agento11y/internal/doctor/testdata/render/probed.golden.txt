@@ -1,28 +1,29 @@
 agento11y doctor v0.22.0
 
-✓ Conversations (generation export)
-  endpoint:           https://sigil.example (env)
-  tenant id:          12345 (env)
-  auth token:         set (glc_…, env)
-  probe:              HTTP 200
+✗ Conversations (generation export)
+  endpoint:           https://sigil.example (AGENTO11Y_ENDPOINT, env)
+  tenant id:          12345 (AGENTO11Y_AUTH_TENANT_ID, env)
+  auth token:         set (glc_…, AGENTO11Y_AUTH_TOKEN, env)
+  probe:              no response (https://sigil.example/api/v1/generations:export)
+  ! could not reach the conversations endpoint: no response: Post "https://sigil.example/api/v1/generations:export": dial tcp 10.0.0.1:443: connect: connection refused
 
 ✗ Analytics (OTLP metrics & traces)
   endpoint:           https://otlp.example/otlp (AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT, env)
-  metrics probe:      HTTP 200
-  traces probe:       HTTP 403 — missing metrics:write/traces:write scope
-  ! OTLP endpoint rejected auth (401/403) — the token is likely missing metrics:write/traces:write scope
+  metrics probe:      HTTP 200 (https://otlp.example/otlp/v1/metrics)
+  traces probe:       HTTP 403 (https://otlp.example/otlp/v1/traces)
+  ! the OTLP endpoint rejected the traces export: HTTP 403: the token is likely missing the metrics:write/traces:write scope
 
 ✓ Config
   file:               /home/u/.config/agento11y/config.env (present)
-  content capture:    full
-  guards:             enabled (timeout 1500ms, fail-open)
-  tags:               env=prod, team=assistant (config.env)
-  local forwarding:   true (env)
-  local guard checks: local hook evaluation reaches Cloud (tool calls, and the conversation an agent runs a preflight check on, are sent for evaluation whatever the capture mode)
+  content capture:    full (AGENTO11Y_CONTENT_CAPTURE_MODE, config.env)
+  guards:             enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, config.env)
+  tags:               env=prod, team=assistant (AGENTO11Y_TAGS, config.env)
+  local forwarding:   true (AGENTO11Y_LOCAL_FORWARD, env)
+  local guard checks: forwarded to Cloud (tool calls, and the conversation an agent runs a preflight check on, are sent for evaluation whatever the capture mode)
 
 Coding agents
   claude:             installed v0.3.0
   codex:              not found on PATH
   cursor:             detected v0.22.0 (hook-based; configured in Cursor settings)
 
-✗ 1 problem(s): analytics misconfigured
+✗ 2 problem(s): conversations, analytics misconfigured

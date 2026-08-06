@@ -42,45 +42,18 @@ public static class SecretRedactionSanitizer
         "0", "false", "no", "off",
     };
 
-    private sealed record SecretPattern(string Id, Regex Regex);
-
-    private static readonly SecretPattern[] Tier1Patterns =
-    [
-        new("grafana-cloud-token", new Regex(@"\bglc_[A-Za-z0-9_-]{20,}", RegexOptions.Compiled)),
-        new("grafana-service-account-token", new Regex(@"\bglsa_[A-Za-z0-9_-]{20,}", RegexOptions.Compiled)),
-        new("aws-access-token", new Regex(@"\b(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16}\b", RegexOptions.Compiled)),
-        new("github-pat", new Regex(@"\bghp_[A-Za-z0-9_]{36,}", RegexOptions.Compiled)),
-        new("github-oauth", new Regex(@"\bgho_[A-Za-z0-9_]{36,}", RegexOptions.Compiled)),
-        new("github-app-token", new Regex(@"\bghs_[A-Za-z0-9_]{36,}", RegexOptions.Compiled)),
-        new("github-fine-grained-pat", new Regex(@"\bgithub_pat_[A-Za-z0-9_]{82}", RegexOptions.Compiled)),
-        new("anthropic-api-key", new Regex(@"\bsk-ant-api03-[a-zA-Z0-9_-]{93}AA", RegexOptions.Compiled)),
-        new("anthropic-admin-key", new Regex(@"\bsk-ant-admin01-[a-zA-Z0-9_-]{93}AA", RegexOptions.Compiled)),
-        new("openai-api-key", new Regex(@"\bsk-[a-zA-Z0-9]{20}T3BlbkFJ[a-zA-Z0-9]{20}", RegexOptions.Compiled)),
-        new("openai-project-key", new Regex(@"\bsk-proj-[a-zA-Z0-9_-]{40,}", RegexOptions.Compiled)),
-        new("openai-svcacct-key", new Regex(@"\bsk-svcacct-[a-zA-Z0-9_-]{40,}", RegexOptions.Compiled)),
-        new("gcp-api-key", new Regex(@"\bAIza[A-Za-z0-9_-]{35}", RegexOptions.Compiled)),
-        new("private-key", new Regex(@"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----", RegexOptions.Compiled)),
-        new("connection-string", new Regex(@"(?:postgres|mysql|mongodb|redis|amqp)://[^\s'""]+@[^\s'""]+", RegexOptions.Compiled)),
-        new("bearer-token", new Regex(@"[Bb]earer\s+[A-Za-z0-9_.\-~+/]{20,}={0,3}", RegexOptions.Compiled)),
-        new("slack-token", new Regex(@"\bxox[bporas]-[A-Za-z0-9-]{10,}", RegexOptions.Compiled)),
-        new("stripe-key", new Regex(@"\b[sr]k_(?:live|test)_[A-Za-z0-9]{20,}", RegexOptions.Compiled)),
-        new("sendgrid-api-key", new Regex(@"\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}", RegexOptions.Compiled)),
-        new("twilio-api-key", new Regex(@"\bSK[a-f0-9]{32}", RegexOptions.Compiled)),
-        new("npm-token", new Regex(@"\bnpm_[A-Za-z0-9]{36}", RegexOptions.Compiled)),
-        new("pypi-token", new Regex(@"\bpypi-[A-Za-z0-9_-]{50,}", RegexOptions.Compiled)),
-    ];
-
-    private static readonly SecretPattern EmailPattern = new(
-        "email",
-        new Regex(@"\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b", RegexOptions.Compiled | RegexOptions.IgnoreCase)
-    );
-
-    private static readonly SecretPattern EnvSecretPattern = new(
-        "env-secret-value",
-        new Regex(
-            @"((?:PASSWORD|SECRET|TOKEN|KEY|CREDENTIAL|API_KEY|PRIVATE_KEY|ACCESS_KEY)\s*[=:]\s*)([^\s""{}\[\],]+)",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase
-        )
+    /// <summary>
+    /// Alternating every tier 1 pattern into one regex scans each input once
+    /// instead of once per pattern. Each pattern is wrapped in a capturing group;
+    /// the matched group index identifies which pattern fired. The generator
+    /// rejects capturing groups inside a tier 1 pattern, which would shift that
+    /// mapping. Scanning once is also what keeps this output identical to the
+    /// other SDKs': with per-pattern passes an earlier pattern can rewrite text a
+    /// later one would have matched.
+    /// </summary>
+    private static readonly Regex Tier1Combined = new(
+        string.Join("|", RedactionPatterns.Tier1.Select((p) => $"({p.Source})")),
+        RedactionPatterns.BaseOptions
     );
 
     /// <summary>
@@ -134,13 +107,13 @@ public static class SecretRedactionSanitizer
 
     internal static string RedactFull(string value, bool includeEmail)
     {
-        var result = RedactTier1(value);
-        if (includeEmail)
+        var result = RedactLight(value, includeEmail);
+        foreach (var pattern in RedactionPatterns.Tier2)
         {
-            result = ApplyPattern(result, EmailPattern);
+            result = pattern.Regex.Replace(result, pattern.Replacement);
         }
 
-        return EnvSecretPattern.Regex.Replace(result, $"$1[REDACTED:{EnvSecretPattern.Id}]");
+        return result;
     }
 
     internal static string RedactLight(string value, bool includeEmail)
@@ -148,7 +121,7 @@ public static class SecretRedactionSanitizer
         var result = RedactTier1(value);
         if (includeEmail)
         {
-            result = ApplyPattern(result, EmailPattern);
+            result = RedactionPatterns.Email.Replace(result, $"[REDACTED:{RedactionPatterns.EmailId}]");
         }
 
         return result;
@@ -166,18 +139,21 @@ public static class SecretRedactionSanitizer
 
     private static string RedactTier1(string value)
     {
-        var result = value;
-        foreach (var pattern in Tier1Patterns)
-        {
-            result = ApplyPattern(result, pattern);
-        }
+        return Tier1Combined.Replace(
+            value,
+            (match) =>
+            {
+                for (var group = 1; group <= RedactionPatterns.Tier1.Length; group++)
+                {
+                    if (match.Groups[group].Success)
+                    {
+                        return $"[REDACTED:{RedactionPatterns.Tier1[group - 1].Id}]";
+                    }
+                }
 
-        return result;
-    }
-
-    private static string ApplyPattern(string value, SecretPattern pattern)
-    {
-        return pattern.Regex.Replace(value, $"[REDACTED:{pattern.Id}]");
+                return match.Value;
+            }
+        );
     }
 
     private static void SanitizeMessage(Message message, TextMode mode, bool includeEmail)

@@ -12,8 +12,8 @@ agento11y doctor v0.22.0
 
 ✓ Config
   file:            /home/u/.config/agento11y/config.env (missing)
-  content capture: full
-  guards:          disabled
+  content capture: metadata_only (default)
+  guards:          disabled (default)
 
 Coding agents
   claude:          plugin not installed

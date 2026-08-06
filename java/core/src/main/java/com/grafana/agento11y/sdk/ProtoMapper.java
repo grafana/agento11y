@@ -91,6 +91,8 @@ final class ProtoMapper {
                     .setCacheReadInputTokens(usage.getCacheReadInputTokens())
                     .setCacheWriteInputTokens(usage.getCacheWriteInputTokens())
                     .setReasoningTokens(usage.getReasoningTokens())
+                    .setInputSemanticsValue(
+                            usage.getInputSemantics() == TokenUsage.TokenInputSemantics.INCLUSIVE ? 1 : 0)
                     .build());
         }
 

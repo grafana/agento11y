@@ -4,7 +4,7 @@ You are a coding agent. The user wants help with [Grafana Agent observability](h
 
 There are two distinct things this file covers. Pick the path that matches the request before doing anything else.
 
-- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, or Pi sent to Grafana Agent observability. They are not changing application code.
+- Path A, [Monitor a coding agent](#path-a-monitor-a-coding-agent): the user wants telemetry from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, Pi, or Vibe sent to Grafana Agent observability. They are not changing application code.
 - Path B, [Instrument an LLM app or agent](#path-b-instrument-an-llm-app-or-agent): the user wants their own code (an app, agent, framework pipeline) to send generations to Grafana Agent observability.
 
 If you cannot tell, ask one clarifying question and stop.
@@ -78,7 +78,8 @@ The user wants Grafana Agent observability to capture sessions from their coding
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`plugins/copilot/`](https://github.com/grafana/agento11y/tree/main/plugins/copilot) | Shared `agento11y` Go binary via hooks |
 | [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) | Shared `agento11y` Go binary via hooks |
 | [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/agento11y/tree/main/plugins/opencode) | Shared `agento11y` Go binary, installs `@grafana/agento11y-opencode` |
-| [Pi](https://github.com/badlogic/pi) | [`plugins/pi/`](https://github.com/grafana/agento11y/tree/main/plugins/pi) | Independent npm package `@grafana/agento11y-pi` |
+| [Pi](https://github.com/earendil-works/pi) | [`plugins/pi/`](https://github.com/grafana/agento11y/tree/main/plugins/pi) | Independent npm package `@grafana/agento11y-pi` |
+| [Vibe](https://github.com/mistralai/vibe) | [`plugins/vibe/`](https://github.com/grafana/agento11y/tree/main/plugins/vibe) | Shared `agento11y` Go binary via `hooks.toml` |
 
 ## Fast path
 
@@ -90,11 +91,19 @@ Install the `agento11y` binary (renamed from `sigil`; the old name still works b
 
 The script installs to `~/.local/bin`; `go install` puts the binary in `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`.
 
-Then launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, or `pi`. On first run it installs the plugin, prompts for credentials, writes `~/.config/agento11y/config.env`, and launches the agent.
+Then launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, or `vibe`. On first run it wires the agent up, prompts for credentials, writes `~/.config/agento11y/config.env`, and launches the agent.
 
 Cursor has no launcher (it is a GUI app). After installing the binary, wire its hooks once with `agento11y cursor install` (it merges into `~/.cursor/hooks.json` and prompts for credentials on first run); `agento11y cursor uninstall` removes them. See [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) for details.
 
-To skip the prompt, write the config file by hand:
+To skip the prompt, pass the values as flags:
+
+```sh
+agento11y login --endpoint <your-agento11y-api-url> --tenant <your-instance-id> --token glc_...
+```
+
+`--endpoint`, `--tenant`, and a token together need no terminal, so this works over SSH, in a devcontainer, and from a script. `--token-stdin` reads the token from stdin instead of the command line and requires the other two flags. `--otlp-endpoint` sets the OTLP endpoint, `--no-verify` skips the credential check, and `--yes` saves even when that check fails. If the check fails and stdin is a terminal, login still asks whether to save anyway, so pass `--yes` or `--no-verify` in a script that runs under a pty.
+
+Or write the config file by hand:
 
 ```dotenv
 AGENTO11Y_ENDPOINT=<your-agento11y-api-url>
@@ -103,7 +112,7 @@ AGENTO11Y_AUTH_TOKEN=glc_...
 AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=<otlp-gateway-url>
 ```
 
-To re-enter credentials later, run `agento11y login`.
+To re-enter credentials later, run `agento11y login`. It asks for the endpoint, the tenant ID, the token, and an optional OTLP endpoint, then for content capture mode, session tags, and guards. Before writing the file, login sends one request to the endpoint with the credentials and reports what came back; run `agento11y doctor` to repeat that check later.
 
 ## Content capture
 
@@ -111,9 +120,9 @@ Coding-agent plugins default to `metadata_only`: only model, tokens, tool names,
 
 Accepted values depend on the plugin surface:
 
-- Claude Code, Codex, Copilot, Cursor (shared `agento11y` binary), OpenCode (`@grafana/agento11y-opencode`), and Pi (`@grafana/agento11y-pi`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
+- Claude Code, Codex, Copilot, Cursor, Vibe (shared `agento11y` binary), OpenCode (`@grafana/agento11y-opencode`), and Pi (`@grafana/agento11y-pi`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
 
-Unknown values fall back to `metadata_only` with a warning. Secret redaction is plugin-specific. Capture modes choose which fields ship, not whether the shipped fields are scrubbed. Treat content capture as opt-in for shared/production machines.
+Unknown values fall back to `metadata_only` with a warning. Every plugin redacts known secret formats from captured content, using the same pattern table the SDKs use. Capture modes choose which fields ship, not whether the shipped fields are scrubbed. Treat content capture as opt-in for shared/production machines.
 
 ## Verifying the install
 
@@ -452,7 +461,12 @@ Example: an orchestrator spawns agents A, B, C where C depends on A and B:
 - B: `parent_generation_ids = []` (no parents)
 - C: `parent_generation_ids = [A.generation_id, B.generation_id]`
 
-## Python and Go offline experiments
+## Offline experiments
+
+The experiments SDK exists in Python, Go, and JavaScript/TypeScript. The bullets
+below use the Python snake_case names. Go and JavaScript each get their own
+paragraph further down in this section; JavaScript is camelCase, so never copy a
+snake_case name into it.
 
 Use `agento11y.experiments` to track work run by an existing benchmark, CI job,
 notebook, or agent harness. The SDK records runs, trials, scores, usage,
@@ -472,9 +486,11 @@ a stored test suite.
 - Local `LLMJudge` and `RegexJudge` helpers do not require an evaluator created
   in Grafana. Frameworks can submit their native grader result and transcript
   through `trial.record_evaluation(...)`.
-- Python only: `trial.evaluate(evaluator_id)` grades the trial's bound
+- `trial.evaluate(evaluator_id)` grades the trial's bound
   conversation with an evaluator that already exists in the tenant, instead of a
-  locally computed score. Experimental: it requires
+  locally computed score. Go spells it `trial.Evaluate(ctx, evaluatorID)` and
+  JavaScript `trial.evaluate(evaluatorId)`, and the rest of this bullet holds for
+  all three. Experimental: it requires
   `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` and otherwise raises
   `ExperimentalFeatureDisabledError` without sending a request. It blocks until the worker finishes, and the trial then
   closes as `completed` with no local `final_score`. Requires
@@ -494,8 +510,7 @@ a stored test suite.
 - Catch evaluator exceptions around each trial when one failed judge should not
   abort the whole run.
 
-See the [Python experiments guide](https://github.com/grafana/agento11y/blob/main/python/README.md#experiments)
-and [v2 migration guide](https://github.com/grafana/agento11y/blob/main/docs/experiments-python-v2-migration.md).
+See the [Python experiments guide](https://github.com/grafana/agento11y/blob/main/python/README.md#experiments).
 
 Go has the tracking-first parity surface at
 `github.com/grafana/agento11y/go/agento11y/experiments`. Construct
@@ -530,6 +545,32 @@ Portable Go suites use `LoadSuite`/`MarshalSuite`/`WriteSuite` and accept both
 stored version before running. Run/trial/generation/score/artifact writes always
 use the ingest credential. Secret redaction is on by default, and experiment
 OTel spans/events are opt-in via `AGENTO11Y_USE_EXPERIMENTAL_OTEL=true`.
+
+JavaScript and TypeScript use the `@grafana/agento11y/experiments` subpath, which
+is published from the same package but stays out of `@grafana/agento11y-core`
+because it needs crypto and environment access. Build an `ExperimentsClient` from
+`AGENTO11Y_*` ingest settings, then use `withExperiment` and
+`experiment.withTrial`, or the explicit trio `Experiment.start`, `trial.start()`,
+and `trial.close()`. Use these method names exactly, and do not derive others from
+the Python spelling: `bindConversation`, `bindGeneration`, `bindTrace`,
+`recordIO`, `finalScore`, `checkScore`, `rubricScore`, `score`,
+`recordEvaluation`, `evaluateOutput`, `setUsage`, `artifact`, and `flush`.
+Portable suites load and save through `parseSuiteYAML` and `stringifySuiteYAML`,
+and stored suites use `TestSuitesClient`.
+
+`trial.evaluate(evaluatorId, options)` is the JavaScript cloud-evaluation entry
+point. It requires `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` and otherwise
+rejects with `ExperimentalFeatureDisabledError` without sending a request. Bind the
+agent's conversation first; such a trial then closes as `completed` with no local
+`finalScore`. `options` takes `evaluatorVersion`, `timeoutMs` (default 300000 ms),
+`pollIntervalMs` (default 500 ms, doubling to a 5000 ms ceiling), and `signal`, an
+`AbortSignal` whose own abort reason is rethrown unchanged. Worker failure rejects
+with `TrialEvaluationFailedError`, an exceeded deadline rejects with
+`TrialEvaluationTimeoutError`, and both carry `evaluationId`. `experiment.finalize`
+drops a caller-supplied `scoreCount` once any trial queued an evaluation, so the
+server's score-count check cannot fail on a score this process never saw. For
+concurrent evaluations, use `client.triggerTrialEvaluation(...)` and
+`client.getTrialEvaluation(...)` inside the experiment block.
 
 ## Useful examples to copy patterns from
 

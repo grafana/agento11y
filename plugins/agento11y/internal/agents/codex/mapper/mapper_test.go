@@ -67,6 +67,59 @@ func TestMapFullRedactsContent(t *testing.T) {
 	}
 }
 
+// TestMapRawContentSkipsRedaction covers the history importer, which runs one
+// framework Sanitizer over every turn. Redacting here as well would run the
+// same patterns twice over the same text.
+func TestMapRawContentSkipsRedaction(t *testing.T) {
+	secret := "glc_abcdefghijklmnopqrstuvwxyz"
+	raw, _ := json.Marshal(map[string]string{"token": secret})
+	newFragment := func() *fragment.Fragment {
+		return &fragment.Fragment{
+			SessionID:            "sess",
+			TurnID:               "turn",
+			Model:                "gpt-5.5",
+			Prompt:               "token " + secret,
+			LastAssistantMessage: "saw " + secret,
+			Tools: []fragment.ToolRecord{{
+				ToolName:     "Bash",
+				ToolUseID:    "tool-1",
+				ToolInput:    raw,
+				ToolResponse: raw,
+			}},
+		}
+	}
+
+	tests := []struct {
+		name       string
+		rawContent bool
+		wantSecret bool
+	}{
+		{name: "live capture redacts", rawContent: false, wantSecret: false},
+		{name: "import keeps raw content", rawContent: true, wantSecret: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Map(Inputs{
+				Fragment:       newFragment(),
+				ContentCapture: agento11y.ContentCaptureModeFull,
+				RawContent:     tt.rawContent,
+				Now:            time.Unix(1, 0),
+			})
+			combined := got.Generation.Input[0].Parts[0].Text +
+				got.Generation.Output[len(got.Generation.Output)-1].Parts[0].Text +
+				string(got.Generation.Output[0].Parts[0].ToolCall.InputJSON) +
+				string(got.Generation.Input[1].Parts[0].ToolResult.ContentJSON)
+			if strings.Contains(combined, secret) != tt.wantSecret {
+				t.Fatalf("secret present = %v, want %v: %s", !tt.wantSecret, tt.wantSecret, combined)
+			}
+			if tt.wantSecret && strings.Contains(combined, "[REDACTED:") {
+				t.Fatalf("raw content still went through the redactor: %s", combined)
+			}
+		})
+	}
+}
+
 func TestMapFullWithMetadataSpansPreservesStartModeAndFullPayload(t *testing.T) {
 	f := &fragment.Fragment{
 		SessionID:            "sess",

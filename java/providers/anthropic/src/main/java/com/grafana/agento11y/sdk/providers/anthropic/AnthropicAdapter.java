@@ -425,18 +425,21 @@ public final class AnthropicAdapter {
 
     private static TokenUsage mapUsage(Message response) {
         var usage = response.usage();
-        long input = usage.inputTokens();
         long output = usage.outputTokens();
-        long total = input + output;
         long cacheRead = usage.cacheReadInputTokens().orElse(0L);
         long cacheWrite = usage.cacheCreationInputTokens().orElse(0L);
+        // Anthropic reports input_tokens exclusive of both cache buckets. The
+        // OTel GenAI Anthropic rule requires summing them into the inclusive
+        // input_tokens this SDK emits.
+        long input = usage.inputTokens() + cacheRead + cacheWrite;
 
         return new TokenUsage()
                 .setInputTokens(input)
                 .setOutputTokens(output)
-                .setTotalTokens(total == 0 ? input + output : total)
+                .setTotalTokens(input + output)
                 .setCacheReadInputTokens(cacheRead)
-                .setCacheWriteInputTokens(cacheWrite);
+                .setCacheWriteInputTokens(cacheWrite)
+                .setInputSemantics(TokenUsage.TokenInputSemantics.INCLUSIVE);
     }
 
     private static String extractDeltaText(RawMessageStreamEvent event) {

@@ -1,6 +1,6 @@
 ---
 name: agento11y-eval-starter
-description: Use early in an AI-agent project — before ship, before real traffic — to decide which evaluations to set up and to scaffold a starter experiment. Reads the agent's own code (system prompt, tools, task), recommends specific evaluators with reasons that cite real lines, and writes a labeled draft test suite as an Agent Observability suite YAML. It also assesses how runnable the agent is: for an easily-invoked agent it generates a runner stub (run_experiment.py) with one hole to fill and can optionally run it (only with permission, only against the endpoint the developer configured); for agents that need a harness or a full runtime it points to the existing eval infra instead of emitting a runner that can't call the agent. It never creates tenant-level evaluators, rules, or guards.
+description: Use early in an AI-agent project — before ship, before real traffic — to decide which evaluations to set up and to scaffold a starter experiment. Reads the agent's own code (system prompt, tools, task), recommends specific evaluators with reasons that cite real lines, and writes a labeled draft test suite as an Agent Observability suite YAML. It also assesses how runnable the agent is: for an easily-invoked agent it generates a runner stub (run_experiment.py, or run-experiment.ts for a TypeScript agent) with one hole to fill and can optionally run it (only with permission, only against the endpoint the developer configured); for agents that need a harness or a full runtime it points to the existing eval infra instead of emitting a runner that can't call the agent. It never creates tenant-level evaluators, rules, or guards.
 ---
 
 # Agent Observability eval starter
@@ -16,8 +16,9 @@ Always produce:
 
 Then, depending on how runnable the agent is (Step 1):
 
-3. For an easily-invoked agent, a **runner stub** (`run_experiment.py`) that wires the suite
-   to the SDK with one hole to fill — and optionally run it (Step 6), only with permission.
+3. For an easily-invoked agent, a **runner stub** (`run_experiment.py`, or
+   `run-experiment.ts` for a TypeScript agent) that wires the suite to the SDK
+   with one hole to fill — and optionally run it (Step 6), only with permission.
    For an agent that needs a harness or full runtime, point to the existing eval infra instead
    of a runner that can't actually call it.
 
@@ -75,13 +76,13 @@ scenario/ground-truth files in the repo. If a repo already has eval scenarios wi
 outputs, note them — they are better test cases than anything generated, and later steps
 should point to or reuse them.
 
-Separately, note the **agent's language**, because the agento11y experiments SDK exists only in
-**Python and Go** (not JS/TS, Java, or .NET yet). This is independent of runnability — a TS
-agent can be trivially runnable yet have no experiments SDK in its language. If the agent is
-Python or Go, the runner is native. If it is any other language, say so plainly: the runner
-must be Python or Go (calling the agent across a process boundary), or the developer waits for
-experiments support in their language. Do not imply a native JS/Java/.NET experiments API
-exists.
+Separately, note the **agent's language**, because the agento11y experiments SDK exists in
+**Python, Go, and JavaScript/TypeScript** (not Java or .NET yet). This is independent of
+runnability — a Java agent can be trivially runnable yet have no experiments SDK in its
+language. If the agent is Python, Go, or TypeScript, the runner is native. If it is Java or
+.NET, say so plainly: the runner must be Python, Go, or TypeScript (calling the agent across a
+process boundary), or the developer waits for experiments support in their language. Do not
+imply a native Java or .NET experiments API exists.
 
 ## Step 2 — Choose evaluators
 
@@ -193,8 +194,9 @@ and point to `agento11y-experiments` for depth.
 
 What you generate depends on the runnability you assessed in Step 1:
 
-- **easy** → generate the full `evals/run_experiment.py` below. One hole to fill
-  (`run_agent`).
+- **easy** → generate the full runner below: `evals/run_experiment.py` for a Python or Go
+  agent, `evals/run-experiment.ts` for a TypeScript agent. One hole to fill (`run_agent`).
+  A Go agent gets the Python runner, because this skill ships no Go template.
 - **in-process** → do NOT emit a Python `run_agent` that can't actually call the agent (e.g.
   a Go agent). Generate the same experiment wiring, but make `run_agent` shell out to a small
   harness in the agent's language (or write that harness), and say plainly the seam is the
@@ -206,17 +208,19 @@ What you generate depends on the runnability you assessed in Step 1:
   scenario/ground-truth files as the real test cases. Be explicit that isolated runs aren't
   the path here.
 
-Also branch on **language** (the experiments SDK is Python/Go only):
+Also branch on **language** (the experiments SDK covers Python, Go, and JavaScript/TypeScript):
 
-- **Python or Go agent** → native runner (`run_experiment.py`, or the Go `agento11y` package).
-- **TS / Java / .NET agent** → there is no experiments SDK in that language. Deliver
+- **Python, Go, or TypeScript agent** → native runner (`run_experiment.py`, the Go
+  `agento11y` package, or the `@grafana/agento11y/experiments` subpath).
+- **Java / .NET agent** → there is no experiments SDK in that language. Deliver
   recommendations + YAML (they are language-neutral), and be honest about the run path: the
-  runner must be Python or Go calling the agent across a process boundary (e.g. a Python
-  runner that shells out to `node your-agent.js` and reads its output), or the developer waits
-  for experiments support in their language. Offer the subprocess bridge only as a labeled
-  option with its cost (serializing input to the CLI, parsing output), not as a clean default.
+  runner must be Python, Go, or TypeScript calling the agent across a process boundary (e.g. a
+  Python runner that shells out to `java -jar your-agent.jar` and reads its output), or the
+  developer waits for experiments support in their language. Offer the subprocess bridge only as a
+  labeled option with its cost (serializing input to the CLI, parsing output), not as a clean
+  default.
 
-For an **easy Python/Go** agent, write `evals/run_experiment.py`. It must:
+For an **easy Python or Go** agent, write `evals/run_experiment.py`. It must:
 
 - Load the suite with `TestSuite.from_yaml(...)`.
 - Open an experiment (`experiments.experiment(...)`) and one `trial` per case.
@@ -303,6 +307,82 @@ if __name__ == "__main__":
     main()
 ```
 
+For an **easy TypeScript** agent, write `evals/run-experiment.ts` against the
+`@grafana/agento11y/experiments` subpath. Same shape and same one hole, in JS spellings:
+`parseSuiteYAML(...)` loads the suite, `withExperiment(client, {...}, ...)` and
+`experiment.withTrial(case, ...)` own the lifecycle, `trial.recordIO({input, output})` records
+I/O, and `trial.finalScore(score, {passed, explanation, evaluator})` publishes the verdict:
+
+```ts
+/**
+ * STARTER RUNNER - generated by agento11y-eval-starter, review before use.
+ *
+ * Runs <agent> over evals/<agent>-starter.yaml as an Agent Observability experiment and
+ * publishes scores.
+ *
+ * You still need to: (1) fill runAgent(case) to call YOUR agent; (2) tune the sketched judge;
+ * (3) set real credentials - AGENTO11Y_ENDPOINT + AGENTO11Y_AUTH_TOKEN for your Grafana Cloud
+ * stack. The SDK stores scores; it does not run the agent or the judge.
+ *
+ * Set AGENTO11Y_INGEST_ACTOR to a stable value: the run and its trials must share one actor,
+ * or trial creation fails with "401: experiment is owned by another actor".
+ *
+ *     AGENTO11Y_ENDPOINT=... AGENTO11Y_AUTH_TOKEN=... AGENTO11Y_INGEST_ACTOR=ingest:sdk/js \
+ *         npx tsx evals/run-experiment.ts
+ */
+import { readFileSync } from 'node:fs';
+import { ExperimentsClient, parseSuiteYAML, type TestCase, withExperiment } from '@grafana/agento11y/experiments';
+
+const suite = parseSuiteYAML(readFileSync(new URL('./<agent>-starter.yaml', import.meta.url), 'utf8'));
+const verifier = { evaluatorId: '<evaluator>', version: 'draft-0', kind: 'llm_judge' } as const;
+
+/** THE ONE HOLE YOU FILL - call your agent for this case and return its output text. */
+async function runAgent(testCase: TestCase): Promise<string> {
+  throw new Error('wire this to your agent entrypoint (see Step 1 refs)');
+}
+
+/** Sketched llm_judge - one model call returning a 0-1 score, a verdict, and an explanation. */
+async function judge(input: unknown, output: string): Promise<{ score: number; passed: boolean; why: string }> {
+  // Replace with your model call, reading the model id from GRADER_MODEL or MODEL_NAME.
+  // Use a live model id; there is no default, and a dead id 404s.
+  throw new Error('tune this judge');
+}
+
+// endpoint, tenantId, and ingestToken fall back to AGENTO11Y_ENDPOINT,
+// AGENTO11Y_AUTH_TENANT_ID, and AGENTO11Y_AUTH_TOKEN.
+const client = new ExperimentsClient({ actor: process.env.AGENTO11Y_INGEST_ACTOR ?? 'ingest:sdk/js' });
+
+await withExperiment(
+  client,
+  {
+    // A fresh id per run: reusing one created by another actor fails with 401.
+    experimentId: `<agent>-starter-${Math.floor(Date.now() / 1000)}`,
+    name: '<agent> starter',
+    suite,
+    tags: ['starter'],
+    candidate: {
+      agentName: '<agent>',
+      // Always declare a version. Without it Agent Observability derives one from the
+      // system-prompt hash, and scores cannot be attributed to a version.
+      agentVersion: process.env.AGENT_VERSION ?? 'v1',
+      modelName: process.env.MODEL_NAME ?? '',
+    },
+  },
+  async (experiment) => {
+    for (const testCase of suite.testCases) {
+      await experiment.withTrial(testCase, async (trial) => {
+        const output = await runAgent(testCase);
+        trial.recordIO({ input: JSON.stringify(testCase.input), output });
+        const { score, passed, why } = await judge(testCase.input, output);
+        trial.finalScore(score, { passed, explanation: why, evaluator: verifier });
+        console.log(`  ${testCase.testCaseId}: score=${score} passed=${passed}`);
+      });
+    }
+    console.log(`Experiment: ${experiment.url}`);
+  },
+);
+```
+
 Use a **fresh `experiment_id`** per run (a timestamp works) — reusing an id created by a
 different auth actor fails with `401: experiment is owned by another actor`.
 
@@ -313,10 +393,11 @@ Output, in this order:
 1. The picked evaluators, each with its kind and its `why` (with file:line).
    Add a one-line "once you have traffic, these criteria can also run online (Agent Observability rules or
    guard hooks) — separate surfaces, not set up here."
-2. The paths to the two written files (`evals/<agent>-starter.yaml` and
-   `evals/run_experiment.py`), and a one-line reminder to review the edge/adversarial cases
-   and add real ones.
-3. The three things they still do to run it: fill `run_agent(case)`, tune the sketched judge
+2. The paths to the two written files (`evals/<agent>-starter.yaml` and the runner:
+   `evals/run_experiment.py`, or `evals/run-experiment.ts` for TypeScript), and a one-line
+   reminder to review the edge/adversarial cases and add real ones.
+3. The three things they still do to run it: fill `run_agent(case)` (`runAgent` in TypeScript),
+   tune the sketched judge
    (and add the other recommended evaluators the same way), and set credentials
    (`AGENTO11Y_ENDPOINT` + `AGENTO11Y_AUTH_TOKEN`). State the boundary explicitly: this skill only
    bootstraps the first run; for anything past that — binding an already-instrumented agent's
@@ -326,10 +407,11 @@ Output, in this order:
 
 ## Step 6 — Offer to run it (optional, only with permission)
 
-Only offer this for an **easy** agent (clean function seam) **in Python or Go** (the languages
-with an experiments SDK). For `in-process`/`full-stack` agents, or agents in a language with no
-experiments SDK (TS/Java/.NET), don't offer to run — point to the existing harness/infra (or
-the subprocess-bridge option) and stop; a real run there is out of scope for this skill.
+Only offer this for an **easy** agent (clean function seam) **in Python, Go, or TypeScript**
+(the languages with an experiments SDK). For `in-process`/`full-stack` agents, or agents in a
+language with no experiments SDK (Java/.NET), don't offer to run — point to the existing
+harness/infra (or the subprocess-bridge option) and stop; a real run there is out of scope for
+this skill.
 
 After the summary, offer to run the starter experiment for them — do not run automatically.
 Ask: "Want me to try running this now?" Only proceed if they say yes.

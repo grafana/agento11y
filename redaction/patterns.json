@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "comment": [
+    "Single editable secret-pattern table. Every runtime pattern list is generated",
+    "from this file by redaction/scripts/generate.mjs. See redaction/README.md.",
+    "",
+    "Patterns are hand-curated from Gitleaks (https://github.com/gitleaks/gitleaks, MIT).",
+    "",
+    "tier 1  high-confidence secret formats, applied by both full and lightweight redaction",
+    "email   applied by both modes, gated by the caller's email option",
+    "tier 2  heuristic key/value patterns, applied by full redaction only",
+    "",
+    "keepGroups lists the capturing groups preserved in the replacement. The",
+    "unlisted groups form one contiguous run and are replaced by the redaction",
+    "marker. Tier 1 and email patterns must have no capturing groups at all.",
+    "",
+    "Write character classes out. The generator rejects \\s, \\w and \\d because",
+    "they mean ASCII in Go and JavaScript and Unicode in Python and .NET, which",
+    "would make the engines disagree. [\\s\\S] is the exception: it means any",
+    "character in every engine. \\b is allowed because the generator pins it to",
+    "ASCII in Python and .NET.",
+    "",
+    "The whitespace class is [ \\t\\n\\f\\r\\xa0]: ASCII whitespace plus the",
+    "non-breaking space, which arrives with text pasted from a browser. Wider",
+    "Unicode spaces need a \\u escape Go RE2 spells differently, so they are out."
+  ],
+  "patterns": [
+    {
+      "id": "grafana-cloud-token",
+      "tier": 1,
+      "regex": "\\bglc_[A-Za-z0-9_-]{20,}"
+    },
+    {
+      "id": "grafana-service-account-token",
+      "tier": 1,
+      "regex": "\\bglsa_[A-Za-z0-9_-]{20,}"
+    },
+    {
+      "id": "aws-access-token",
+      "tier": 1,
+      "regex": "\\b(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16}\\b"
+    },
+    {
+      "id": "github-pat",
+      "tier": 1,
+      "regex": "\\bghp_[A-Za-z0-9_]{36,}"
+    },
+    {
+      "id": "github-oauth",
+      "tier": 1,
+      "regex": "\\bgho_[A-Za-z0-9_]{36,}"
+    },
+    {
+      "id": "github-app-token",
+      "tier": 1,
+      "regex": "\\bghs_[A-Za-z0-9_]{36,}"
+    },
+    {
+      "id": "github-fine-grained-pat",
+      "tier": 1,
+      "regex": "\\bgithub_pat_[A-Za-z0-9_]{82}"
+    },
+    {
+      "id": "anthropic-api-key",
+      "tier": 1,
+      "regex": "\\bsk-ant-api03-[a-zA-Z0-9_-]{93}AA"
+    },
+    {
+      "id": "anthropic-admin-key",
+      "tier": 1,
+      "regex": "\\bsk-ant-admin01-[a-zA-Z0-9_-]{93}AA"
+    },
+    {
+      "id": "openai-api-key",
+      "tier": 1,
+      "regex": "\\bsk-[a-zA-Z0-9]{20}T3BlbkFJ[a-zA-Z0-9]{20}"
+    },
+    {
+      "id": "openai-project-key",
+      "tier": 1,
+      "regex": "\\bsk-proj-[a-zA-Z0-9_-]{40,}"
+    },
+    {
+      "id": "openai-svcacct-key",
+      "tier": 1,
+      "regex": "\\bsk-svcacct-[a-zA-Z0-9_-]{40,}"
+    },
+    {
+      "id": "gcp-api-key",
+      "tier": 1,
+      "regex": "\\bAIza[A-Za-z0-9_-]{35}"
+    },
+    {
+      "id": "private-key",
+      "tier": 1,
+      "regex": "-----BEGIN[A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END[A-Z ]*PRIVATE KEY-----"
+    },
+    {
+      "id": "connection-string",
+      "tier": 1,
+      "regex": "(?:postgres|mysql|mongodb|redis|amqp)://[^ \\t\\n\\f\\r\\xa0'\"]+@[^ \\t\\n\\f\\r\\xa0'\"]+"
+    },
+    {
+      "id": "bearer-token",
+      "tier": 1,
+      "regex": "[Bb]earer[ \\t\\n\\f\\r\\xa0]+[A-Za-z0-9_.\\-~+/]{20,}={0,3}"
+    },
+    {
+      "id": "slack-token",
+      "tier": 1,
+      "regex": "\\bxox[bporas]-[A-Za-z0-9-]{10,}"
+    },
+    {
+      "id": "stripe-key",
+      "tier": 1,
+      "regex": "\\b[sr]k_(?:live|test)_[A-Za-z0-9]{20,}"
+    },
+    {
+      "id": "sendgrid-api-key",
+      "tier": 1,
+      "regex": "\\bSG\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43}"
+    },
+    {
+      "id": "twilio-api-key",
+      "tier": 1,
+      "regex": "\\bSK[a-f0-9]{32}"
+    },
+    {
+      "id": "npm-token",
+      "tier": 1,
+      "regex": "\\bnpm_[A-Za-z0-9]{36}"
+    },
+    {
+      "id": "pypi-token",
+      "tier": 1,
+      "regex": "\\bpypi-[A-Za-z0-9_-]{50,}"
+    },
+    {
+      "id": "email",
+      "tier": "email",
+      "regex": "\\b[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}\\b"
+    },
+    {
+      "id": "json-secret-field",
+      "tier": 2,
+      "flags": ["i"],
+      "regex": "(\"(?:password|secret|token|credential|api_?key|private_?key|access_?key|client_?secret|auth_?token|secret_?key)\"[ \\t\\n\\f\\r\\xa0]*:[ \\t\\n\\f\\r\\xa0]*\")([^\"]+)(\")",
+      "keepGroups": [1, 3]
+    },
+    {
+      "id": "env-secret-quoted-value",
+      "tier": 2,
+      "flags": ["i"],
+      "regex": "(^|[^A-Za-z0-9])((?:PASSWORD|SECRET|TOKEN|KEY|CREDENTIAL|API_KEY|PRIVATE_KEY|ACCESS_KEY)[ \\t\\n\\f\\r\\xa0]*[=:][ \\t\\n\\f\\r\\xa0]*\")([^\"]+)(\")",
+      "keepGroups": [1, 2, 4]
+    },
+    {
+      "id": "env-secret-value",
+      "tier": 2,
+      "flags": ["i"],
+      "regex": "(^|[^A-Za-z0-9])((?:PASSWORD|SECRET|TOKEN|KEY|CREDENTIAL|API_KEY|PRIVATE_KEY|ACCESS_KEY)[ \\t\\n\\f\\r\\xa0]*[=:][ \\t\\n\\f\\r\\xa0]*)([^ \\t\\n\\f\\r\\xa0\"{}\\[\\],]+)",
+      "keepGroups": [1, 2]
+    }
+  ]
+}

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { Agento11yClient, ContentCaptureMode } from "@grafana/agento11y";
+import {
+  redactSecretText,
+  redactSecretTextLightweight,
+} from "@grafana/agento11y-core";
 import type { PluginInput } from "@opencode-ai/plugin";
 import type {
   AssistantMessage,
@@ -19,8 +23,8 @@ import {
   mapGeneration,
   mapToolDefinitions,
   type OpencodeTokens,
+  type Redactor,
 } from "./mappers.js";
-import { Redactor } from "./redact.js";
 import { buildBuiltinTags } from "./tags.js";
 import {
   createTelemetryProviders,
@@ -41,6 +45,27 @@ export type OpencodeEvent = {
   type: OpencodeEventType;
   properties: unknown;
 };
+
+/**
+ * Builds the redactor the mappers and hooks share.
+ *
+ * opencode redacts inside its own mappers rather than through the SDK's
+ * generation sanitizer, so it calls the shared string helpers from
+ * `@grafana/agento11y-core`, which carry the patterns generated from
+ * `redaction/patterns.json`.
+ *
+ * Email redaction is off: agent transcripts routinely carry commit authors and
+ * reviewer addresses, and redacting them costs more context than it protects.
+ * See `redaction/README.md`.
+ */
+export function createRedactor(): Redactor {
+  return {
+    redact: (text: string) =>
+      redactSecretText(text, { redactEmailAddresses: false }),
+    redactLightweight: (text: string) =>
+      redactSecretTextLightweight(text, { redactEmailAddresses: false }),
+  };
+}
 
 // Track recorded messages per session for dedup and cleanup
 const recordedMessages = new Map<string, Set<string>>();
@@ -1223,7 +1248,7 @@ export async function createAgento11yHooks(
     return null;
   }
 
-  const redactor = new Redactor();
+  const redactor = createRedactor();
 
   liveInstances += 1;
 

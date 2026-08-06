@@ -155,6 +155,7 @@ The experiments are offline evals: run an agent over a dataset, grade it, and pu
 | Python | [`examples/experiments/python/`](examples/experiments/python/) |
 | Go | [`examples/experiments/go/`](examples/experiments/go/) |
 | Go (evaluator stored in your tenant) | [`examples/experiments/go/cloud-evaluator/`](examples/experiments/go/cloud-evaluator/) |
+| TypeScript (evaluator stored in your tenant) | [`examples/experiments/typescript/`](examples/experiments/typescript/) |
 
 The reference app is a fuller FastAPI service with framework callbacks and manual instrumentation side by side.
 
@@ -187,7 +188,7 @@ See the [Grafana Cloud Agent observability getting started docs](https://grafana
 
 ## Plugins for coding agents
 
-Plugins can record sessions from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, and Pi without changing application code. See [`plugins/README.md`](plugins/README.md) for install and config per agent.
+Plugins can record sessions from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, Pi, and Vibe without changing application code. See [`plugins/README.md`](plugins/README.md) for install and config per agent.
 
 ## Why Grafana Agent observability
 

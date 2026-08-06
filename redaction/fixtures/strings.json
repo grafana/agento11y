@@ -1,0 +1,513 @@
+{
+  "comment": [
+    "Shared string-level redaction cases. Every engine loads this file and must",
+    "produce `expected` byte for byte: the four SDKs, the shared Go plugin binary,",
+    "and the opencode plugin.",
+    "",
+    "mode: 'full' applies tier 1 + email + tier 2; 'light' applies tier 1 + email.",
+    "emails: whether the caller enabled the email pattern.",
+    "",
+    "Adding a pattern to redaction/patterns.json means adding a positive case here.",
+    "",
+    "The nonascii- cases pin the two class semantics the engines used to disagree",
+    "on: a word boundary next to a CJK character, and the non-breaking space,",
+    "which every engine now treats as whitespace.",
+    "",
+    "A few inputs hide one character behind a \\u escape, for example the T in the",
+    "OpenAI marker. Every JSON parser decodes the escape, so the engines still see",
+    "the full key shape, but the raw file never spells it out and GitHub push",
+    "protection does not block the push. Keep new fake keys escaped the same way."
+  ],
+  "cases": [
+    {
+      "id": "tier1-grafana-cloud-token-full",
+      "mode": "full",
+      "emails": false,
+      "input": "glc_abcdefghijklmnopqrstuvwxyz1234",
+      "expected": "[REDACTED:grafana-cloud-token]"
+    },
+    {
+      "id": "tier1-grafana-cloud-token-light",
+      "mode": "light",
+      "emails": false,
+      "input": "glc_abcdefghijklmnopqrstuvwxyz1234",
+      "expected": "[REDACTED:grafana-cloud-token]"
+    },
+    {
+      "id": "tier1-grafana-service-account-token-full",
+      "mode": "full",
+      "emails": false,
+      "input": "glsa_abcdefghijklmnopqrstuvwxyz1234",
+      "expected": "[REDACTED:grafana-service-account-token]"
+    },
+    {
+      "id": "tier1-grafana-service-account-token-light",
+      "mode": "light",
+      "emails": false,
+      "input": "glsa_abcdefghijklmnopqrstuvwxyz1234",
+      "expected": "[REDACTED:grafana-service-account-token]"
+    },
+    {
+      "id": "tier1-aws-access-token-full",
+      "mode": "full",
+      "emails": false,
+      "input": "AKIAIOSFODNN7EXAMPLE",
+      "expected": "[REDACTED:aws-access-token]"
+    },
+    {
+      "id": "tier1-aws-access-token-light",
+      "mode": "light",
+      "emails": false,
+      "input": "AKIAIOSFODNN7EXAMPLE",
+      "expected": "[REDACTED:aws-access-token]"
+    },
+    {
+      "id": "tier1-github-pat-full",
+      "mode": "full",
+      "emails": false,
+      "input": "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+      "expected": "[REDACTED:github-pat]"
+    },
+    {
+      "id": "tier1-github-pat-light",
+      "mode": "light",
+      "emails": false,
+      "input": "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+      "expected": "[REDACTED:github-pat]"
+    },
+    {
+      "id": "tier1-github-oauth-full",
+      "mode": "full",
+      "emails": false,
+      "input": "gho_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+      "expected": "[REDACTED:github-oauth]"
+    },
+    {
+      "id": "tier1-github-oauth-light",
+      "mode": "light",
+      "emails": false,
+      "input": "gho_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+      "expected": "[REDACTED:github-oauth]"
+    },
+    {
+      "id": "tier1-github-app-token-full",
+      "mode": "full",
+      "emails": false,
+      "input": "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+      "expected": "[REDACTED:github-app-token]"
+    },
+    {
+      "id": "tier1-github-app-token-light",
+      "mode": "light",
+      "emails": false,
+      "input": "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+      "expected": "[REDACTED:github-app-token]"
+    },
+    {
+      "id": "tier1-github-fine-grained-pat-full",
+      "mode": "full",
+      "emails": false,
+      "input": "github_pat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[REDACTED:github-fine-grained-pat]"
+    },
+    {
+      "id": "tier1-github-fine-grained-pat-light",
+      "mode": "light",
+      "emails": false,
+      "input": "github_pat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[REDACTED:github-fine-grained-pat]"
+    },
+    {
+      "id": "tier1-anthropic-api-key-full",
+      "mode": "full",
+      "emails": false,
+      "input": "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaAA",
+      "expected": "[REDACTED:anthropic-api-key]"
+    },
+    {
+      "id": "tier1-anthropic-api-key-light",
+      "mode": "light",
+      "emails": false,
+      "input": "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaAA",
+      "expected": "[REDACTED:anthropic-api-key]"
+    },
+    {
+      "id": "tier1-anthropic-admin-key-full",
+      "mode": "full",
+      "emails": false,
+      "input": "sk-ant-admin01-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaAA",
+      "expected": "[REDACTED:anthropic-admin-key]"
+    },
+    {
+      "id": "tier1-anthropic-admin-key-light",
+      "mode": "light",
+      "emails": false,
+      "input": "sk-ant-admin01-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaAA",
+      "expected": "[REDACTED:anthropic-admin-key]"
+    },
+    {
+      "id": "tier1-openai-api-key-full",
+      "mode": "full",
+      "emails": false,
+      "input": "sk-aaaaaaaaaaaaaaaaaaaa\u00543BlbkFJbbbbbbbbbbbbbbbbbbbb",
+      "expected": "[REDACTED:openai-api-key]"
+    },
+    {
+      "id": "tier1-openai-api-key-light",
+      "mode": "light",
+      "emails": false,
+      "input": "sk-aaaaaaaaaaaaaaaaaaaa\u00543BlbkFJbbbbbbbbbbbbbbbbbbbb",
+      "expected": "[REDACTED:openai-api-key]"
+    },
+    {
+      "id": "tier1-openai-project-key-full",
+      "mode": "full",
+      "emails": false,
+      "input": "sk-proj-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[REDACTED:openai-project-key]"
+    },
+    {
+      "id": "tier1-openai-project-key-light",
+      "mode": "light",
+      "emails": false,
+      "input": "sk-proj-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[REDACTED:openai-project-key]"
+    },
+    {
+      "id": "tier1-openai-svcacct-key-full",
+      "mode": "full",
+      "emails": false,
+      "input": "sk-svcacct-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected": "[REDACTED:openai-svcacct-key]"
+    },
+    {
+      "id": "tier1-openai-svcacct-key-light",
+      "mode": "light",
+      "emails": false,
+      "input": "sk-svcacct-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected": "[REDACTED:openai-svcacct-key]"
+    },
+    {
+      "id": "tier1-gcp-api-key-full",
+      "mode": "full",
+      "emails": false,
+      "input": "AIzaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[REDACTED:gcp-api-key]"
+    },
+    {
+      "id": "tier1-gcp-api-key-light",
+      "mode": "light",
+      "emails": false,
+      "input": "AIzaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[REDACTED:gcp-api-key]"
+    },
+    {
+      "id": "tier1-private-key-full",
+      "mode": "full",
+      "emails": false,
+      "input": "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy5AhEiS0C5\n-----END RSA PRIVATE KEY-----",
+      "expected": "[REDACTED:private-key]"
+    },
+    {
+      "id": "tier1-private-key-light",
+      "mode": "light",
+      "emails": false,
+      "input": "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy5AhEiS0C5\n-----END RSA PRIVATE KEY-----",
+      "expected": "[REDACTED:private-key]"
+    },
+    {
+      "id": "tier1-connection-string-full",
+      "mode": "full",
+      "emails": false,
+      "input": "postgres://admin:s3cretP4ss@db.example.com:5432/mydb",
+      "expected": "[REDACTED:connection-string]"
+    },
+    {
+      "id": "tier1-connection-string-light",
+      "mode": "light",
+      "emails": false,
+      "input": "postgres://admin:s3cretP4ss@db.example.com:5432/mydb",
+      "expected": "[REDACTED:connection-string]"
+    },
+    {
+      "id": "tier1-bearer-token-full",
+      "mode": "full",
+      "emails": false,
+      "input": "Bearer abcdefghijklmnopqrstuvwxyz",
+      "expected": "[REDACTED:bearer-token]"
+    },
+    {
+      "id": "tier1-bearer-token-light",
+      "mode": "light",
+      "emails": false,
+      "input": "Bearer abcdefghijklmnopqrstuvwxyz",
+      "expected": "[REDACTED:bearer-token]"
+    },
+    {
+      "id": "tier1-slack-token-full",
+      "mode": "full",
+      "emails": false,
+      "input": "xoxb-1234567890-abcdefghij",
+      "expected": "[REDACTED:slack-token]"
+    },
+    {
+      "id": "tier1-slack-token-light",
+      "mode": "light",
+      "emails": false,
+      "input": "xoxb-1234567890-abcdefghij",
+      "expected": "[REDACTED:slack-token]"
+    },
+    {
+      "id": "tier1-stripe-key-full",
+      "mode": "full",
+      "emails": false,
+      "input": "\u0073k_live_abcdefghijklmnopqrstuvwxyz",
+      "expected": "[REDACTED:stripe-key]"
+    },
+    {
+      "id": "tier1-stripe-key-light",
+      "mode": "light",
+      "emails": false,
+      "input": "\u0073k_live_abcdefghijklmnopqrstuvwxyz",
+      "expected": "[REDACTED:stripe-key]"
+    },
+    {
+      "id": "tier1-sendgrid-api-key-full",
+      "mode": "full",
+      "emails": false,
+      "input": "SG.aaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected": "[REDACTED:sendgrid-api-key]"
+    },
+    {
+      "id": "tier1-sendgrid-api-key-light",
+      "mode": "light",
+      "emails": false,
+      "input": "SG.aaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected": "[REDACTED:sendgrid-api-key]"
+    },
+    {
+      "id": "tier1-twilio-api-key-full",
+      "mode": "full",
+      "emails": false,
+      "input": "\u0053Ka1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "expected": "[REDACTED:twilio-api-key]"
+    },
+    {
+      "id": "tier1-twilio-api-key-light",
+      "mode": "light",
+      "emails": false,
+      "input": "\u0053Ka1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "expected": "[REDACTED:twilio-api-key]"
+    },
+    {
+      "id": "tier1-npm-token-full",
+      "mode": "full",
+      "emails": false,
+      "input": "npm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[REDACTED:npm-token]"
+    },
+    {
+      "id": "tier1-npm-token-light",
+      "mode": "light",
+      "emails": false,
+      "input": "npm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[REDACTED:npm-token]"
+    },
+    {
+      "id": "tier1-pypi-token-full",
+      "mode": "full",
+      "emails": false,
+      "input": "pypi-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[REDACTED:pypi-token]"
+    },
+    {
+      "id": "tier1-pypi-token-light",
+      "mode": "light",
+      "emails": false,
+      "input": "pypi-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[REDACTED:pypi-token]"
+    },
+    {
+      "id": "tier1-three-adjacent-tokens-full",
+      "mode": "full",
+      "emails": false,
+      "input": "glc_abcdefghijklmnopqrstuvwxyz1234 glsa_abcdefghijklmnopqrstuvwxyz1234 AKIAIOSFODNN7EXAMPLE",
+      "expected": "[REDACTED:grafana-cloud-token] [REDACTED:grafana-service-account-token] [REDACTED:aws-access-token]"
+    },
+    {
+      "id": "tier1-three-adjacent-tokens-light",
+      "mode": "light",
+      "emails": false,
+      "input": "glc_abcdefghijklmnopqrstuvwxyz1234 glsa_abcdefghijklmnopqrstuvwxyz1234 AKIAIOSFODNN7EXAMPLE",
+      "expected": "[REDACTED:grafana-cloud-token] [REDACTED:grafana-service-account-token] [REDACTED:aws-access-token]"
+    },
+    {
+      "id": "tier1-overlapping-bearer-and-token-full",
+      "mode": "full",
+      "emails": false,
+      "input": "Authorization: Bearer glc_abcdefghijklmnopqrstuvwxyz1234",
+      "expected": "Authorization: [REDACTED:bearer-token]"
+    },
+    {
+      "id": "nonascii-token-after-cjk-full",
+      "mode": "full",
+      "emails": false,
+      "input": "密钥glc_abcdefghijklmnopqrstuvwxyz1234",
+      "expected": "密钥[REDACTED:grafana-cloud-token]"
+    },
+    {
+      "id": "nonascii-token-after-cjk-light",
+      "mode": "light",
+      "emails": false,
+      "input": "密钥glc_abcdefghijklmnopqrstuvwxyz1234",
+      "expected": "密钥[REDACTED:grafana-cloud-token]"
+    },
+    {
+      "id": "nonascii-email-before-cjk-light",
+      "mode": "light",
+      "emails": true,
+      "input": "contact bob@example.comの",
+      "expected": "contact [REDACTED:email]の"
+    },
+    {
+      "id": "nonascii-env-secret-after-cjk-full",
+      "mode": "full",
+      "emails": false,
+      "input": "密码TOKEN=conformancevalue",
+      "expected": "密码TOKEN=[REDACTED:env-secret-value]"
+    },
+    {
+      "id": "nonascii-nbsp-separates-bearer-full",
+      "mode": "full",
+      "emails": false,
+      "input": "Bearer\u00a0abcdefghijklmnopqrstuvwxyz",
+      "expected": "[REDACTED:bearer-token]"
+    },
+    {
+      "id": "nonascii-nbsp-ends-an-env-secret-value-full",
+      "mode": "full",
+      "emails": false,
+      "input": "TOKEN=conformancevalue\u00a0tail",
+      "expected": "TOKEN=[REDACTED:env-secret-value]\u00a0tail"
+    },
+    {
+      "id": "email-enabled-light",
+      "mode": "light",
+      "emails": true,
+      "input": "contact person@example.com for help",
+      "expected": "contact [REDACTED:email] for help"
+    },
+    {
+      "id": "email-enabled-full",
+      "mode": "full",
+      "emails": true,
+      "input": "contact person@example.com for help",
+      "expected": "contact [REDACTED:email] for help"
+    },
+    {
+      "id": "email-disabled-light",
+      "mode": "light",
+      "emails": false,
+      "input": "contact person@example.com for help",
+      "expected": "contact person@example.com for help"
+    },
+    {
+      "id": "email-disabled-full",
+      "mode": "full",
+      "emails": false,
+      "input": "contact person@example.com for help",
+      "expected": "contact person@example.com for help"
+    },
+    {
+      "id": "tier2-env-secret-value-full",
+      "mode": "full",
+      "emails": false,
+      "input": "DB_PASSWORD=hunter2secretvalue",
+      "expected": "DB_PASSWORD=[REDACTED:env-secret-value]"
+    },
+    {
+      "id": "tier2-env-secret-value-light",
+      "mode": "light",
+      "emails": false,
+      "input": "DB_PASSWORD=hunter2secretvalue",
+      "expected": "DB_PASSWORD=hunter2secretvalue"
+    },
+    {
+      "id": "tier2-env-secret-value-at-start-full",
+      "mode": "full",
+      "emails": false,
+      "input": "API_KEY=abc123",
+      "expected": "API_KEY=[REDACTED:env-secret-value]"
+    },
+    {
+      "id": "tier2-boundary-monkey-full",
+      "mode": "full",
+      "emails": false,
+      "input": "MONKEY: banana",
+      "expected": "MONKEY: banana"
+    },
+    {
+      "id": "tier2-known-false-positive-sort-key-full",
+      "mode": "full",
+      "emails": false,
+      "input": "sort key: name",
+      "expected": "sort key: [REDACTED:env-secret-value]"
+    },
+    {
+      "id": "json-tool-call-arguments-stay-parseable-full",
+      "mode": "full",
+      "emails": false,
+      "input": "{\"command\":\"export API_KEY=abc123\",\"cwd\":\"/tmp\",\"timeout\":30}",
+      "expected": "{\"command\":\"export API_KEY=[REDACTED:env-secret-value]\",\"cwd\":\"/tmp\",\"timeout\":30}"
+    },
+    {
+      "id": "json-quoted-env-value-keeps-quotes-full",
+      "mode": "full",
+      "emails": false,
+      "input": "API_KEY=\"quoted-secret-value\"",
+      "expected": "API_KEY=\"[REDACTED:env-secret-quoted-value]\""
+    },
+    {
+      "id": "json-secret-field-keeps-key-full",
+      "mode": "full",
+      "emails": false,
+      "input": "{\"api_key\": \"s3cret\"}",
+      "expected": "{\"api_key\": \"[REDACTED:json-secret-field]\"}"
+    },
+    {
+      "id": "json-secret-field-light-leaves-value",
+      "mode": "light",
+      "emails": false,
+      "input": "{\"api_key\": \"s3cret\"}",
+      "expected": "{\"api_key\": \"s3cret\"}"
+    },
+    {
+      "id": "noop-plain-text-full",
+      "mode": "full",
+      "emails": false,
+      "input": "The function returns a list of users from the database.",
+      "expected": "The function returns a list of users from the database."
+    },
+    {
+      "id": "noop-uuid-full",
+      "mode": "full",
+      "emails": false,
+      "input": "session-id: 550e8400-e29b-41d4-a716-446655440000",
+      "expected": "session-id: 550e8400-e29b-41d4-a716-446655440000"
+    },
+    {
+      "id": "noop-empty-full",
+      "mode": "full",
+      "emails": false,
+      "input": "",
+      "expected": ""
+    },
+    {
+      "id": "noop-empty-light",
+      "mode": "light",
+      "emails": false,
+      "input": "",
+      "expected": ""
+    }
+  ]
+}
