@@ -19,3 +19,6 @@ Coding agents
   claude:          plugin not installed
 
 ✓ no problems detected
+
+Need help? Paste this to your coding agent:
+Run `agento11y skills show setup-coding-agent` and follow it to set up Grafana Agent observability for my coding agent.

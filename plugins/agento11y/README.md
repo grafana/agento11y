@@ -91,6 +91,27 @@ Then follow your agent's quickstart:
 - [pi](../pi/README.md)
 - [Vibe](../vibe/README.md)
 
+## Skills
+
+The binary carries agent skills: markdown workflows a coding agent reads and follows. They ship inside the binary, so there is nothing to fetch and no second CLI to install. Upgrading `agento11y` upgrades them.
+
+```sh
+agento11y skills list                          # name and one-line description
+agento11y skills show setup-coding-agent       # the raw SKILL.md on stdout
+```
+
+`get` is accepted as an alias for `show`, matching `gcx agent skills get`.
+
+`setup-coding-agent` walks a coding agent through the whole setup: reading `agento11y doctor --json`, installing the binary, saving credentials, wiring the host agent, verifying one session, and diagnosing a broken pipeline. To hand setup to the agent already open in your terminal, paste this:
+
+```text
+Run `agento11y skills show setup-coding-agent` and follow it to set up Grafana Agent observability for my coding agent.
+```
+
+`agento11y doctor` and `agento11y login` both name that command when they finish.
+
+The skills for instrumenting your own application code are separate and ship with [`gcx`](https://github.com/grafana/gcx) instead: `gcx agent skills install agento11y-instrument`.
+
 ## Tagging sessions
 
 Add `--tag key=value` (repeatable) before any `--` to attach tags to every generation the launched session produces. This is shorthand for setting `AGENTO11Y_TAGS`; flag tags merge onto (and override) any `AGENTO11Y_TAGS` already in the environment.
@@ -201,6 +222,8 @@ Each imported turn is recorded in a per-agent ledger under `~/.local/state/agent
 `AGENTO11Y_AUTO_UPDATE` does not apply to the other launchers. `agento11y copilot` rewrites its own `agento11y.json` hooks file, and `agento11y vibe` re-upserts its three entries into vibe's `hooks.toml`, so both always point at the installed binary. `agento11y pi` leaves upgrades to pi's own installer.
 
 ## Troubleshooting
+
+`agento11y help` (or `--help`, or `-h`) prints the full command list on stdout and exits 0. An unknown subcommand, or a command given the wrong number of arguments, prints a one-line usage form on stderr and exits 2.
 
 Run `agento11y doctor` first. It's a read-only diagnostic that reports both export pipelines, config, and installed host-agent plugins in one place. It sends a lightweight request to each endpoint and reports the HTTP status, so a wrong endpoint or a token missing a scope shows up as a broken pipeline:
 

@@ -69,6 +69,10 @@ printf '%s' '<otlp-instance-id>:<glc_token>' | base64 | tr -d '\n'
 
 The user wants Grafana Agent observability to capture sessions from their coding agent. They do not write app code for this; they install a plugin and configure credentials.
 
+If the `agento11y` binary is already installed on this machine, run `agento11y skills show setup-coding-agent`. It prints a fuller version of everything below: doctor-based triage, troubleshooting, and the config reference.
+
+A binary older than that command prints `agento11y: unknown agent "skills"` and exits 2. If that happens, or the binary is not installed yet, continue here.
+
 ## Supported agents
 
 | Agent | Plugin | Mechanism |

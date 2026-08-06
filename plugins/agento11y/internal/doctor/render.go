@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 )
 
 // renderJSON writes the stable machine-readable report. encoding/json never
@@ -201,6 +202,7 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 
 	// Summary.
 	writeSummary(&b, p, r)
+	writeSetupHint(&b, p, r)
 
 	_, _ = io.WriteString(w, b.flush(p))
 }
@@ -216,6 +218,17 @@ func writeMessages(b *reportBody, p palette, messages []string) {
 }
 
 func writeSummary(b *reportBody, p palette, r *Report) {
+	broken := brokenSections(r)
+	if len(broken) == 0 {
+		b.textf("%s %s\n", p.glyph(HealthOK), "no problems detected")
+		return
+	}
+	b.textf("%s %d problem(s): %s misconfigured\n", p.glyph(HealthError), len(broken), strings.Join(broken, ", "))
+}
+
+// brokenSections names the sections in error. The agent list is advisory and
+// never counts, matching Report.exitCode.
+func brokenSections(r *Report) []string {
 	var broken []string
 	if r.Conversations.Health == HealthError {
 		broken = append(broken, "conversations")
@@ -226,11 +239,34 @@ func writeSummary(b *reportBody, p palette, r *Report) {
 	if r.Config.Health == HealthError {
 		broken = append(broken, "config")
 	}
-	if len(broken) == 0 {
-		b.textf("%s %s\n", p.glyph(HealthOK), "no problems detected")
+	return broken
+}
+
+// needsSetup reports whether this machine has setup left to do: a section in
+// error, or a conversations pipeline that was never configured at all.
+//
+// The second case is the reason this is not just brokenSections. A machine
+// with no endpoint, no tenant and no token reports every pipeline as a
+// warning, never an error, so the summary above says "no problems detected".
+// That reader has wired nothing and needs the paste block most.
+func needsSetup(r *Report) bool {
+	return len(brokenSections(r)) > 0 || !r.Conversations.configured()
+}
+
+// writeSetupHint points the reader at the bundled setup skill. A machine with
+// setup left to do gets the two-line block, because pasting it hands the work
+// to the coding agent already in the terminal. A configured, healthy machine
+// gets one faint line, because a paste block after every healthy check is
+// noise.
+func writeSetupHint(b *reportBody, p palette, r *Report) {
+	b.textf("\n")
+	if !needsSetup(r) {
+		b.textf("%s\n", p.faint(skills.SetupCodingAgentOneLiner))
 		return
 	}
-	b.textf("%s %d problem(s): %s misconfigured\n", p.glyph(HealthError), len(broken), strings.Join(broken, ", "))
+	// The paste line stays at full contrast, so only the introduction is faint.
+	b.textf("%s\n", p.faint(skills.SetupCodingAgentHintIntro))
+	b.textf("%s\n", skills.SetupCodingAgentPasteLine)
 }
 
 // describeSource renders the faint "(detail, KEY, source)" trailer every row

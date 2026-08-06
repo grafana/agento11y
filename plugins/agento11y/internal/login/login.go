@@ -59,6 +59,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 	"golang.org/x/term"
 )
 
@@ -1328,6 +1329,9 @@ func printNextStep(w io.Writer, outcome verifyOutcome, origin string) {
 		// Unreachable: a failed check that was not overridden writes
 		// nothing, so there is no saved configuration to hint about.
 	}
+	// Credentials are saved, but a coding agent still has to be wired up. The
+	// skill walks that part. Doctor prints the same command.
+	fmt.Fprintln(w, faint.Render("Setting up a coding agent? Run ")+cmd.Render(skills.SetupCodingAgentCommand)+faint.Render("."))
 	fmt.Fprintln(w, faint.Render("View observability data at ")+link.Render(observabilityPageURL(origin)))
 	fmt.Fprintln(w, faint.Render("Read documentation at ")+link.Render(docsURL))
 }
