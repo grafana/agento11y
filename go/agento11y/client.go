@@ -2061,6 +2061,7 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 	// alongside the static client tags. Callers are responsible for keeping
 	// context-tag values low-cardinality since they become metric labels.
 	tagAttrs := metricTagAttributes(mergeTags(c.config.Tags, TagsFromContext(ctx)))
+	metricCtx := metricExemplarContext(ctx)
 	durationAttrs := append(
 		[]attribute.KeyValue{metricStringAttribute(spanAttrOperationName, operationName(generation))},
 		identityAttrs...,
@@ -2070,7 +2071,7 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 		metricStringAttribute(spanAttrErrorType, errorType),
 		metricStringAttribute(spanAttrErrorCategory, errorCategory),
 	)
-	c.instruments.operationDuration.Record(ctx, duration, metric.WithAttributes(durationAttrs...))
+	c.instruments.operationDuration.Record(metricCtx, duration, metric.WithAttributes(durationAttrs...))
 
 	recordToken := func(tokenType string, value int64) {
 		if value == 0 {
@@ -2085,7 +2086,7 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 		if generation.Usage.InputSemantics == TokenInputSemanticsInclusive {
 			tokenAttrs = append(tokenAttrs, metricStringAttribute(attrTokenSemantics, tokenSemanticsInclusive))
 		}
-		c.instruments.tokenUsage.Record(ctx, value, metric.WithAttributes(tokenAttrs...))
+		c.instruments.tokenUsage.Record(metricCtx, value, metric.WithAttributes(tokenAttrs...))
 	}
 
 	recordToken(metricTokenTypeInput, generation.Usage.InputTokens)
@@ -2097,7 +2098,7 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 	toolCalls := countToolCalls(generation.Output)
 	toolCallAttrs := append(append([]attribute.KeyValue(nil), identityAttrs...), tagAttrs...)
 	c.instruments.toolCallsPerOperation.Record(
-		ctx,
+		metricCtx,
 		int64(toolCalls),
 		metric.WithAttributes(toolCallAttrs...),
 	)
@@ -2107,7 +2108,7 @@ func (c *Client) recordGenerationMetrics(ctx context.Context, generation Generat
 		if ttft >= 0 {
 			ttftAttrs := append(append([]attribute.KeyValue(nil), identityAttrs...), tagAttrs...)
 			c.instruments.timeToFirstToken.Record(
-				ctx,
+				metricCtx,
 				ttft,
 				metric.WithAttributes(ttftAttrs...),
 			)
@@ -2144,6 +2145,7 @@ func (c *Client) recordEmbeddingMetrics(
 	agentName := strings.TrimSpace(seed.AgentName)
 	identityAttrs := metricIdentityAttributes(provider, model, agentName, seed.AgentVersion)
 	tagAttrs := c.clientTagMetricAttributes()
+	metricCtx := metricExemplarContext(ctx)
 	durationAttrs := append(
 		[]attribute.KeyValue{metricStringAttribute(spanAttrOperationName, defaultEmbeddingOperationName)},
 		identityAttrs...,
@@ -2154,7 +2156,7 @@ func (c *Client) recordEmbeddingMetrics(
 		metricStringAttribute(spanAttrErrorCategory, errorCategory),
 	)
 	c.instruments.operationDuration.Record(
-		ctx,
+		metricCtx,
 		duration,
 		metric.WithAttributes(durationAttrs...),
 	)
@@ -2167,7 +2169,7 @@ func (c *Client) recordEmbeddingMetrics(
 		tokenAttrs = append(tokenAttrs, tagAttrs...)
 		tokenAttrs = append(tokenAttrs, metricStringAttribute(metricAttrTokenType, metricTokenTypeInput))
 		c.instruments.tokenUsage.Record(
-			ctx,
+			metricCtx,
 			result.InputTokens,
 			metric.WithAttributes(tokenAttrs...),
 		)
@@ -2205,10 +2207,21 @@ func (c *Client) recordToolExecutionMetrics(ctx context.Context, seed ToolExecut
 		metricStringAttribute(spanAttrErrorCategory, errorCategory),
 	)
 	c.instruments.operationDuration.Record(
-		ctx,
+		metricExemplarContext(ctx),
 		duration,
 		metric.WithAttributes(attrs...),
 	)
+}
+
+// metricExemplarContext keeps the immutable span identity used for exemplar
+// correlation without retaining the recording span or other request values.
+// Exemplar reservoirs may retain this context after Record returns.
+func metricExemplarContext(ctx context.Context) context.Context {
+	spanContext := trace.SpanContextFromContext(ctx)
+	if !spanContext.IsValid() {
+		return context.Background()
+	}
+	return trace.ContextWithSpanContext(context.Background(), spanContext)
 }
 
 func tagAttributes(tags map[string]string) []attribute.KeyValue {
