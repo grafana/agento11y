@@ -20,6 +20,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode/userid"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
@@ -71,6 +72,7 @@ type hookInput struct {
 	HookEventName  string          `json:"hook_event_name"`
 	SessionID      string          `json:"session_id"`
 	TranscriptPath string          `json:"transcript_path"`
+	Cwd            string          `json:"cwd,omitempty"`
 	Model          string          `json:"model,omitempty"`
 	ToolName       string          `json:"tool_name,omitempty"`
 	ToolInput      json.RawMessage `json:"tool_input,omitempty"`
@@ -195,6 +197,10 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 
 	cfg := agento11y.Config{
 		GenerationExport: exportConfig(endpoint, tenantID, authToken),
+		// Client tags, so AGENTO11Y_AUTO_CODING_AGENT_TAGS values reach OTel
+		// metrics as well as the export. Resolved here rather than at launch so a
+		// session the user starts with plain `claude` gets them too.
+		Tags: autotag.FromEnv(autotag.Inputs{Cwd: input.Cwd, UserID: userID}, logger),
 	}
 
 	if otelProviders != nil {

@@ -176,6 +176,8 @@ Limits:
 | `AGENTO11Y_AUTH_TOKEN` | — | Cloud access policy token (`glc_…`). |
 | `AGENTO11Y_AGENT_NAME` | `pi` | Agent name reported to Agent Observability. |
 | `AGENTO11Y_AGENT_VERSION` | — | Optional version string reported with the agent. |
+| `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. These reach OTel metrics as `agento11y_tag_*` labels, unlike the per-generation built-ins. The plugin builds one client per session, so the values freeze at session start. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |
+| `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | One of `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`. |
 | `AGENTO11Y_DEBUG` | `false` | Write lifecycle events to `~/.local/state/agento11y/logs/agento11y.log` (honors `XDG_STATE_HOME`). Never written to the terminal, to avoid corrupting pi's TUI. |
 | `AGENTO11Y_REDACT_INPUT_MESSAGES` | `true` | Redact known secret patterns in user input messages before export. |

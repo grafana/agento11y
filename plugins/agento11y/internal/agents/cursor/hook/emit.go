@@ -9,6 +9,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/mapper"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
@@ -37,13 +38,49 @@ func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.L
 // pieces the SDK can't infer: HTTP protocol, the `/api/v1/generations:export`
 // path suffix, basic-auth mode, and the OTel tracer/meter wiring. cursor does
 // not pass a logger, so the SDK client stays silent.
-func buildClient(cfg config.Config, providers *otel.Providers) *agento11y.Client {
+//
+// The auto-tag inputs are the first workspace root and the signed-in user's
+// email, the same values mapper.MapFragment reads for git.branch and the
+// generation user id. Cursor sends both on sessionStart, and the stop and
+// sessionEnd payloads that emit telemetry carry neither, so the session
+// sessionStart saved is the primary source and the live payload is the
+// fallback for a conversation whose session file was never written.
+func buildClient(p Payload, session *fragment.Session, cfg config.Config, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
 	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
 		Providers:           providers,
 		UserAgent:           useragent.For("cursor"),
+		Tags: autotag.FromEnv(autotag.Inputs{
+			Cwd:    autoTagWorkspaceRoot(p, session),
+			UserID: autoTagUserEmail(p, session),
+		}, logger),
 	})
+}
+
+func autoTagWorkspaceRoot(p Payload, session *fragment.Session) string {
+	if session != nil {
+		if root := firstWorkspaceRoot(session.WorkspaceRoots); root != "" {
+			return root
+		}
+	}
+	return firstWorkspaceRoot(p.WorkspaceRoots)
+}
+
+func autoTagUserEmail(p Payload, session *fragment.Session) string {
+	if session != nil && session.UserEmail != "" {
+		return session.UserEmail
+	}
+	return p.UserEmail
+}
+
+func firstWorkspaceRoot(roots []string) string {
+	for _, root := range roots {
+		if root != "" {
+			return root
+		}
+	}
+	return ""
 }
 
 // emitGeneration pushes one mapped Generation through the SDK: starts the

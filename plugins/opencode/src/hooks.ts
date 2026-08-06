@@ -14,6 +14,7 @@ import type {
 } from "@opencode-ai/sdk";
 import { createAgento11yClient } from "./client.js";
 import type { Agento11yOpencodeConfig } from "./config.js";
+import { resolveAutoTagValues } from "./config.js";
 import { resolveGitBranch } from "./git.js";
 import { runToolCallGuard } from "./guard.js";
 import { stableOpencodeGenerationId } from "./lineage.js";
@@ -1233,10 +1234,16 @@ export async function createAgento11yHooks(
     }
   }
 
-  const sigil = createAgento11yClient(config, {
-    tracer: telemetry?.tracer,
-    meter: telemetry?.meter,
-  });
+  const sigil = createAgento11yClient(
+    // Auto-tags are resolved here rather than in resolveConfig because this is
+    // where the project directory is known: the repository and branch must come
+    // from the checkout opencode is working in.
+    { ...config, autoTags: resolveAutoTagValues(projectDir) },
+    {
+      tracer: telemetry?.tracer,
+      meter: telemetry?.meter,
+    },
+  );
   if (!sigil) {
     if (telemetry) {
       try {

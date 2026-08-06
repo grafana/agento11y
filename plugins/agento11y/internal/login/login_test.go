@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/huh"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -218,6 +219,96 @@ func TestSeedGuards(t *testing.T) {
 	}
 }
 
+// TestSeedAutoTagNames pins what the checklist starts with. A saved allowlist
+// preselects the names it holds. No saved allowlist preselects every supported
+// name. A saved allowlist that holds no supported name preselects nothing: that
+// config attaches no tags, so the checklist must not show it as all three.
+func TestSeedAutoTagNames(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{"unset preselects every name", "", []string{"user", "repo", "branch"}},
+		{"all preselects every name", "all", []string{"user", "repo", "branch"}},
+		{"saved list is preselected in order", "branch, user", []string{"user", "branch"}},
+		{"unsupported names are dropped", "team,user", []string{"user"}},
+		{"only unsupported names preselects nothing", "team", nil},
+		{"separators alone preselect nothing", ",", nil},
+		{"blank preselects every name", "   ", []string{"user", "repo", "branch"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := seedAutoTagNames(c.raw); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("seedAutoTagNames(%q) = %v, want %v", c.raw, got, c.want)
+			}
+		})
+	}
+}
+
+// TestAutoTagNamesValue pins the persisted allowlist: normalized to
+// AutoTagOrder, and empty when the selection covers every supported name.
+func TestAutoTagNamesValue(t *testing.T) {
+	cases := []struct {
+		name     string
+		selected []string
+		want     string
+	}{
+		{"every name writes no list", []string{"branch", "user", "repo"}, ""},
+		{"click order is normalized", []string{"branch", "user"}, "user,branch"},
+		{"one name", []string{"repo"}, "repo"},
+		{"nothing selected writes no list", nil, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := autoTagNamesValue(c.selected); got != c.want {
+				t.Errorf("autoTagNamesValue(%v) = %q, want %q", c.selected, got, c.want)
+			}
+		})
+	}
+}
+
+// TestValidateAutoTagNames pins that the checklist cannot be submitted empty:
+// with the switch on and no name selected, nothing would be attached, which is
+// what answering No already means.
+func TestValidateAutoTagNames(t *testing.T) {
+	if err := validateAutoTagNames(nil); err == nil {
+		t.Error("validateAutoTagNames(nil) = nil, want an error")
+	}
+	if err := validateAutoTagNames([]string{"user"}); err != nil {
+		t.Errorf("validateAutoTagNames([user]) = %v, want nil", err)
+	}
+}
+
+// TestAutoTagOptions pins that the checklist offers every supported name, in
+// AutoTagOrder, that each one carries a label describing where its value comes
+// from, and that the saved names are ticked.
+func TestAutoTagOptions(t *testing.T) {
+	options := autoTagOptions([]string{"user", "branch"})
+
+	var values []string
+	for _, opt := range options {
+		values = append(values, opt.Value)
+		if !strings.Contains(opt.Key, opt.Value+" — ") {
+			t.Errorf("option %q label %q does not describe the value", opt.Value, opt.Key)
+		}
+	}
+	if want := []string{"user", "repo", "branch"}; !reflect.DeepEqual(values, want) {
+		t.Fatalf("option values = %v, want %v", values, want)
+	}
+
+	// huh keeps the ticked state in an unexported field, so compare against
+	// options built the way a ticked one is built.
+	want := []huh.Option[string]{
+		huh.NewOption(options[0].Key, "user").Selected(true),
+		huh.NewOption(options[1].Key, "repo"),
+		huh.NewOption(options[2].Key, "branch").Selected(true),
+	}
+	if !reflect.DeepEqual(options, want) {
+		t.Errorf("options = %+v, want %+v", options, want)
+	}
+}
+
 func TestValidateTags(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -316,13 +407,15 @@ func TestBuildUpdates(t *testing.T) {
 				guardTimeout: "1500",
 			},
 			want: map[string]string{
-				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
-				"SIGIL_AUTH_TENANT_ID":              "123",
-				"SIGIL_AUTH_TOKEN":                  "glc_abc",
-				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
-				"SIGIL_CONTENT_CAPTURE_MODE":        "metadata_only",
-				"SIGIL_TAGS":                        "",
-				"SIGIL_GUARDS_ENABLED":              "false",
+				"SIGIL_ENDPOINT":                     "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":               "123",
+				"SIGIL_AUTH_TOKEN":                   "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":  "",
+				"SIGIL_CONTENT_CAPTURE_MODE":         "metadata_only",
+				"SIGIL_TAGS":                         "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "false",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_GUARDS_ENABLED":               "false",
 			},
 		},
 		{
@@ -337,13 +430,15 @@ func TestBuildUpdates(t *testing.T) {
 				capturePrompted: true,
 			},
 			want: map[string]string{
-				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
-				"SIGIL_AUTH_TENANT_ID":              "123",
-				"SIGIL_AUTH_TOKEN":                  "glc_abc",
-				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
-				"SIGIL_CONTENT_CAPTURE_MODE":        "metadata_only",
-				"SIGIL_TAGS":                        "team=ai",
-				"SIGIL_GUARDS_ENABLED":              "false",
+				"SIGIL_ENDPOINT":                     "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":               "123",
+				"SIGIL_AUTH_TOKEN":                   "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":  "",
+				"SIGIL_CONTENT_CAPTURE_MODE":         "metadata_only",
+				"SIGIL_TAGS":                         "team=ai",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "false",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_GUARDS_ENABLED":               "false",
 			},
 		},
 		{
@@ -359,15 +454,17 @@ func TestBuildUpdates(t *testing.T) {
 				capturePrompted: true,
 			},
 			want: map[string]string{
-				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
-				"SIGIL_AUTH_TENANT_ID":              "123",
-				"SIGIL_AUTH_TOKEN":                  "glc_abc",
-				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example.com",
-				"SIGIL_CONTENT_CAPTURE_MODE":        "full",
-				"SIGIL_TAGS":                        "",
-				"SIGIL_GUARDS_ENABLED":              "true",
-				"SIGIL_GUARDS_FAIL_OPEN":            "true",
-				"SIGIL_GUARDS_TIMEOUT_MS":           "2000",
+				"SIGIL_ENDPOINT":                     "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":               "123",
+				"SIGIL_AUTH_TOKEN":                   "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":  "https://otlp.example.com",
+				"SIGIL_CONTENT_CAPTURE_MODE":         "full",
+				"SIGIL_TAGS":                         "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "false",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_GUARDS_ENABLED":               "true",
+				"SIGIL_GUARDS_FAIL_OPEN":             "true",
+				"SIGIL_GUARDS_TIMEOUT_MS":            "2000",
 			},
 		},
 		{
@@ -382,15 +479,96 @@ func TestBuildUpdates(t *testing.T) {
 				capturePrompted: true,
 			},
 			want: map[string]string{
-				"SIGIL_ENDPOINT":                    "https://sigil.example.com",
-				"SIGIL_AUTH_TENANT_ID":              "123",
-				"SIGIL_AUTH_TOKEN":                  "glc_abc",
-				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": "",
-				"SIGIL_CONTENT_CAPTURE_MODE":        "no_tool_content",
-				"SIGIL_TAGS":                        "",
-				"SIGIL_GUARDS_ENABLED":              "true",
-				"SIGIL_GUARDS_FAIL_OPEN":            "false",
-				"SIGIL_GUARDS_TIMEOUT_MS":           "", // empty deletes via WriteDotenv
+				"SIGIL_ENDPOINT":                     "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":               "123",
+				"SIGIL_AUTH_TOKEN":                   "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":  "",
+				"SIGIL_CONTENT_CAPTURE_MODE":         "no_tool_content",
+				"SIGIL_TAGS":                         "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "false",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_GUARDS_ENABLED":               "true",
+				"SIGIL_GUARDS_FAIL_OPEN":             "false",
+				"SIGIL_GUARDS_TIMEOUT_MS":            "", // empty deletes via WriteDotenv
+			},
+		},
+		{
+			// Every supported name selected, so no allowlist is persisted: the
+			// switch alone already means all of them, and an empty value deletes
+			// a narrower list from a previous run.
+			name: "automatic tags on with every name",
+			in: formValues{
+				endpoint:        "https://sigil.example.com",
+				tenantID:        "123",
+				token:           "glc_abc",
+				contentMode:     "metadata_only",
+				guards:          guardsOff,
+				autoTags:        true,
+				autoTagNames:    []string{"user", "repo", "branch"},
+				capturePrompted: true,
+			},
+			want: map[string]string{
+				"SIGIL_ENDPOINT":                     "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":               "123",
+				"SIGIL_AUTH_TOKEN":                   "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":  "",
+				"SIGIL_CONTENT_CAPTURE_MODE":         "metadata_only",
+				"SIGIL_TAGS":                         "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "true",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_GUARDS_ENABLED":               "false",
+			},
+		},
+		{
+			name: "automatic tags narrowed to two names",
+			in: formValues{
+				endpoint:    "https://sigil.example.com",
+				tenantID:    "123",
+				token:       "glc_abc",
+				contentMode: "metadata_only",
+				guards:      guardsOff,
+				autoTags:    true,
+				// Click order, which the persisted value normalises.
+				autoTagNames:    []string{"branch", "user"},
+				capturePrompted: true,
+			},
+			want: map[string]string{
+				"SIGIL_ENDPOINT":                     "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":               "123",
+				"SIGIL_AUTH_TOKEN":                   "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":  "",
+				"SIGIL_CONTENT_CAPTURE_MODE":         "metadata_only",
+				"SIGIL_TAGS":                         "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "true",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "user,branch",
+				"SIGIL_GUARDS_ENABLED":               "false",
+			},
+		},
+		{
+			// The switch is off, so buildUpdates deletes the allowlist instead of
+			// keeping it. Doctor warns about an allowlist the switch cannot use,
+			// and a later run that turns the switch on from the shell would read
+			// it.
+			name: "automatic tags off deletes the allowlist",
+			in: formValues{
+				endpoint:        "https://sigil.example.com",
+				tenantID:        "123",
+				token:           "glc_abc",
+				contentMode:     "metadata_only",
+				guards:          guardsOff,
+				autoTagNames:    []string{"user"},
+				capturePrompted: true,
+			},
+			want: map[string]string{
+				"SIGIL_ENDPOINT":                     "https://sigil.example.com",
+				"SIGIL_AUTH_TENANT_ID":               "123",
+				"SIGIL_AUTH_TOKEN":                   "glc_abc",
+				"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":  "",
+				"SIGIL_CONTENT_CAPTURE_MODE":         "metadata_only",
+				"SIGIL_TAGS":                         "",
+				"SIGIL_AUTO_CODING_AGENT_TAGS":       "false",
+				"SIGIL_AUTO_CODING_AGENT_TAGS_NAMES": "",
+				"SIGIL_GUARDS_ENABLED":               "false",
 			},
 		},
 	}

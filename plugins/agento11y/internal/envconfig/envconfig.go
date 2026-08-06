@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -33,6 +34,8 @@ var AliasSuffixes = []string{
 	"AGENT_VERSION",
 	"USER_ID",
 	"TAGS",
+	AutoTagsSuffix,
+	AutoTagNamesSuffix,
 	"CONTENT_CAPTURE_MODE",
 	"DEBUG",
 	"REDACT_INPUT_MESSAGES",
@@ -288,6 +291,80 @@ func ResolveAgentName(def string) string {
 		return v
 	}
 	return def
+}
+
+// AutoTag names one value the launcher can resolve for the session and attach
+// as a client tag. Two variables drive it, both off by default:
+// AGENTO11Y_AUTO_CODING_AGENT_TAGS turns the mechanism on, and
+// AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES narrows it to some of the supported
+// names. With the switch on and no list, every supported name applies.
+type AutoTag string
+
+// Suffixes of the two alias families that drive the automatic client tags.
+// AutoTagsSuffix is the on/off switch; AutoTagNamesSuffix is the optional
+// allowlist. Declared as constants because doctor, the resolver, and the alias
+// list all name them.
+const (
+	AutoTagsSuffix     = "AUTO_CODING_AGENT_TAGS"
+	AutoTagNamesSuffix = "AUTO_CODING_AGENT_TAGS_NAMES"
+)
+
+const (
+	AutoTagUser   AutoTag = "user"
+	AutoTagRepo   AutoTag = "repo"
+	AutoTagBranch AutoTag = "branch"
+)
+
+// AutoTagAll is the shorthand that enables every supported name.
+const AutoTagAll = "all"
+
+// AutoTagOrder lists the supported names in the order diagnostics print them.
+var AutoTagOrder = []AutoTag{AutoTagUser, AutoTagRepo, AutoTagBranch}
+
+// AllAutoTags returns the set with every supported name enabled. That is what
+// the switch means on its own: AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES only
+// narrows the set, so leaving it unset resolves all of them.
+func AllAutoTags() map[AutoTag]bool {
+	out := make(map[AutoTag]bool, len(AutoTagOrder))
+	for _, t := range AutoTagOrder {
+		out[t] = true
+	}
+	return out
+}
+
+// ParseAutoTags parses AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES ("user,repo")
+// into the set of enabled names. Matching is case-insensitive and surrounding
+// whitespace is trimmed. "all" enables every supported name, which is also
+// what an unset list means. Empty entries are skipped; unrecognized names are
+// returned separately, lowercased, so a caller can log them and keep going
+// with the names it did recognize. Both return values are nil when nothing is
+// enabled and nothing was rejected.
+func ParseAutoTags(s string) (enabled map[AutoTag]bool, unknown []string) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	for field := range strings.SplitSeq(s, ",") {
+		name := strings.ToLower(strings.TrimSpace(field))
+		if name == "" {
+			continue
+		}
+		if name == AutoTagAll {
+			if enabled == nil {
+				enabled = make(map[AutoTag]bool, len(AutoTagOrder))
+			}
+			maps.Copy(enabled, AllAutoTags())
+			continue
+		}
+		if !slices.Contains(AutoTagOrder, AutoTag(name)) {
+			unknown = append(unknown, name)
+			continue
+		}
+		if enabled == nil {
+			enabled = make(map[AutoTag]bool, len(AutoTagOrder))
+		}
+		enabled[AutoTag(name)] = true
+	}
+	return enabled, unknown
 }
 
 // ResolveContentMode returns the effective ContentCaptureMode from

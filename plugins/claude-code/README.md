@@ -102,6 +102,8 @@ Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a mi
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTel password. |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
+| `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. Unlike the built-ins, these reach OTel metrics as `agento11y_tag_*` labels. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |
+| `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
 | `AGENTO11Y_USER_ID` | from `~/.claude.json` | Override the user id. |
 | `AGENTO11Y_AGENT_NAME` | `claude-code` | Override the exported `agent_name`. Subagent turns become `<name>/<subagent type>`, or `<name>/subagent` when Claude Code names no type. Avoid a `/` in the name itself: a slash marks a subagent generation, so every turn of the run is counted as one. Guard rules and dashboards that filter on `claude-code` no longer match the generations this run exports. |
 | `AGENTO11Y_USER_ID_SOURCE` | `email` | Which field to read from `~/.claude.json`: `email` or `accountUuid`. |

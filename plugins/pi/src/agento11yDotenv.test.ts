@@ -453,6 +453,22 @@ describe("applyAgento11yDotenv", () => {
     expect(process.env.AGENTO11Y_AUTH_TOKEN).toBe("tok");
   });
 
+  it("materializes both automatic-tag variables under both spellings", () => {
+    // config.ts reads them as alias families, so both suffixes have to be in
+    // ALIAS_SUFFIXES: without them a config.env `SIGIL_AUTO_CODING_AGENT_TAGS`
+    // would never reach the preferred spelling.
+    writeConfig(
+      "SIGIL_AUTO_CODING_AGENT_TAGS=true\nSIGIL_AUTO_CODING_AGENT_TAGS_NAMES=user,repo\n",
+    );
+    applyAgento11yDotenv();
+    expect(process.env.SIGIL_AUTO_CODING_AGENT_TAGS).toBe("true");
+    expect(process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS).toBe("true");
+    expect(process.env.SIGIL_AUTO_CODING_AGENT_TAGS_NAMES).toBe("user,repo");
+    expect(process.env.AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES).toBe(
+      "user,repo",
+    );
+  });
+
   it("file AGENTO11Y_ENDPOINT beats file SIGIL_ENDPOINT", () => {
     writeConfig(
       "AGENTO11Y_ENDPOINT=https://preferred\nSIGIL_ENDPOINT=https://legacy\n",

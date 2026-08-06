@@ -167,6 +167,13 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 	if len(r.Config.Tags) > 0 {
 		b.kv("tags", withTrailer(formatTags(r.Config.Tags), describeSource(p, r.Config.TagsKey, r.Config.TagsSource)))
 	}
+	// The enabled names print even when nothing resolved, so a user who set the
+	// switch can tell it was read. The values are the ones that would leave the
+	// machine as metric labels; section messages name what did not resolve.
+	if len(r.Config.AutoTagNames) > 0 {
+		b.kv("auto tags", withTrailer(formatAutoTags(r.Config.AutoTagNames, r.Config.AutoTags),
+			describeSource(p, r.Config.AutoTagsKey, r.Config.AutoTagsSource)))
+	}
 	if r.Config.Local.Set {
 		b.kv("local mode", describeLocal(p, r.Config.Local, r.Config.LocalInvalid))
 	}
@@ -477,6 +484,18 @@ func formatTags(tags map[string]string) string {
 		parts = append(parts, k+"="+tags[k])
 	}
 	return strings.Join(parts, ", ")
+}
+
+// formatAutoTags renders the enabled auto-tag names and what they resolved to:
+// "user,repo resolved user=alice@example.com, repo=grafana/agento11y". A name
+// that resolved nothing appears on the left only, and the section message says
+// its tag is omitted.
+func formatAutoTags(names []string, tags map[string]string) string {
+	enabled := strings.Join(names, ",")
+	if len(tags) == 0 {
+		return enabled + " (nothing resolved)"
+	}
+	return enabled + " resolved " + formatTags(tags)
 }
 
 func padRight(s string, n int) string {

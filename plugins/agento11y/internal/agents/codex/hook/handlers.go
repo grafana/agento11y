@@ -15,6 +15,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex/mapper"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
@@ -220,7 +221,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 			}
 		}()
 	}
-	client := buildClient(cfg, providers, logger)
+	client := buildClient(cfg, frag.Cwd, providers, logger)
 	defer func() { _ = client.Shutdown(ctx) }()
 
 	mapped := mapper.Map(mapper.Inputs{Fragment: frag, SubagentLink: subagentLink, TokenSnapshot: tokenSnapshot, ContentCapture: cfg.ContentCapture, AgentName: cfg.Agent()})
@@ -471,14 +472,18 @@ func applySessionDefaults(f *fragment.Fragment, s *fragment.Session) {
 
 // buildClient constructs the agento11y client with the shared HTTP/basic-auth
 // export defaults. Endpoint, tenant ID, and token come from the SDK's automatic
-// SIGIL_* env resolution, matching copilot and cursor.
-func buildClient(cfg config.Config, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
+// SIGIL_* env resolution, matching copilot and cursor. cwd is the turn's
+// working directory, which auto-tags resolve the repository and branch from;
+// codex payloads carry no user identity, so that falls back to the configured
+// AGENTO11Y_USER_ID or the OS account name.
+func buildClient(cfg config.Config, cwd string, providers *otel.Providers, logger *log.Logger) *agento11y.Client {
 	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
 		Logger:              logger,
 		Providers:           providers,
 		UserAgent:           useragent.For("codex"),
+		Tags:                autotag.FromEnv(autotag.Inputs{Cwd: cwd}, logger),
 	})
 }
 

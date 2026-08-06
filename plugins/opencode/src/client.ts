@@ -33,6 +33,10 @@ export function createAgento11yClient(
         failOpen: guards.failOpen,
       },
       contentCapture: config.contentCapture,
+      // Client tags, so AGENTO11Y_AUTO_CODING_AGENT_TAGS values reach OTel
+      // metrics as well as the export. config.ts already dropped any key AGENTO11Y_TAGS sets,
+      // because the SDK lets these caller tags win over the env ones.
+      ...(config.autoTags ? { tags: config.autoTags } : {}),
       ...(options?.tracer ? { tracer: options.tracer } : {}),
       ...(options?.meter ? { meter: options.meter } : {}),
     });

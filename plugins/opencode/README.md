@@ -129,6 +129,8 @@ Built-in tags win collisions with user tags, matching the claude-code and cursor
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | Allow tool calls if guard evaluation fails. Set to `false` to fail closed. |
 | `AGENTO11Y_AGENT_NAME` | `opencode` | Agent name reported to Agent Observability. The plugin appends `:<mode>` for OpenCode's UI mode, such as `build` or `plan`. |
 | `AGENTO11Y_AGENT_VERSION` | OpenCode version | Version string reported with the agent. |
+| `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. These reach OTel metrics as `agento11y_tag_*` labels, unlike the per-generation built-ins. The plugin builds one client per session, so the values freeze at session start. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |
+| `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
 | `AGENTO11Y_DEBUG` | `false` | Log lifecycle events to stderr. |
 | `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `@grafana/agento11y-opencode` plugin automatically. Set `false` to pin the installed version. |
 

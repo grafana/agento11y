@@ -14,6 +14,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/state"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/toolevents"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/transcript"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
@@ -167,7 +168,7 @@ func PostAgentTurn(ctx context.Context, p Payload, logger *log.Logger) {
 			}
 		}()
 	}
-	client := buildClient(contentMode, providers, endpoint, tenantID, authToken, logger)
+	client := buildClient(contentMode, providers, endpoint, tenantID, authToken, p.CWD, logger)
 
 	// Per-tool timing/status recorded by after_tool fires this turn. Empty
 	// when the user has not enabled the after_tool hook, in which case the
@@ -316,11 +317,16 @@ func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.L
 	return providers
 }
 
-func buildClient(mode agento11y.ContentCaptureMode, providers *otel.Providers, endpoint, tenantID, authToken string, logger *log.Logger) *agento11y.Client {
+// buildClient constructs the agento11y client for one exported turn. cwd is
+// the turn's working directory, which auto-tags resolve the repository and
+// branch from; vibe payloads carry no user identity, so that falls back to the
+// configured AGENTO11Y_USER_ID or the OS account name.
+func buildClient(mode agento11y.ContentCaptureMode, providers *otel.Providers, endpoint, tenantID, authToken, cwd string, logger *log.Logger) *agento11y.Client {
 	cfg := agento11y.Config{
 		ContentCapture:   mode,
 		Logger:           logger,
 		GenerationExport: exportConfig(endpoint, tenantID, authToken),
+		Tags:             autotag.FromEnv(autotag.Inputs{Cwd: cwd}, logger),
 	}
 	if providers != nil {
 		cfg.Tracer = providers.Tracer(otelInstrumentationName)

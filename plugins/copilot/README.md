@@ -164,6 +164,8 @@ Limits:
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTel password. |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. |
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
+| `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. Unlike the built-ins, these reach OTel metrics as `agento11y_tag_*` labels. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |
+| `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
 | `AGENTO11Y_USER_ID` | — | Override the user id. |
 | `AGENTO11Y_AGENT_NAME` | `copilot` | Override the exported `agent_name`. The model-provider fallback stays `copilot`, so a turn whose provider Copilot neither reports nor implies through the model name is still exported as `copilot`. Avoid a `/` in the name: a slash marks a subagent generation, so every turn of the run is counted as one. Guard rules and dashboards that filter on `copilot` no longer match the generations this run exports. |
 | `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |

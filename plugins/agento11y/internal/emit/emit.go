@@ -51,6 +51,12 @@ type ClientOptions struct {
 	// non-empty. Each agent passes its own token via useragent.For; empty
 	// leaves the SDK default in place.
 	UserAgent string
+	// Tags are client tags: merged into every generation and emitted as
+	// `agento11y.tag.<key>` on spans and metrics. Adapters pass the values
+	// autotag.FromEnv resolved for AGENTO11Y_AUTO_CODING_AGENT_TAGS. Keys set in
+	// AGENTO11Y_TAGS must not appear here: the SDK lets caller tags win over
+	// env tags, and the explicit tag is the one the user asked for.
+	Tags map[string]string
 }
 
 // exportConfig builds the shared HTTP/basic-auth generation export config.
@@ -75,6 +81,7 @@ func NewClient(opts ClientOptions) *agento11y.Client {
 		ContentCapture:   opts.ContentCapture,
 		Logger:           opts.Logger,
 		GenerationExport: exportConfig(opts.UserAgent),
+		Tags:             opts.Tags,
 	}
 	if opts.Providers != nil {
 		c.Tracer = opts.Providers.Tracer(opts.InstrumentationName)
