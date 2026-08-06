@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.25.0] - 2026-08-06
+
+### Features
+
+- **plugins**: add opt-in AGENTO11Y_AUTO_TAGS for user, repo, and branch (#543)
+- **plugins/agento11y**: honour AGENTO11Y_AGENT_NAME in coding agent plugins (#544)
+- **redaction**: generate secret patterns from one table and pin cross-SDK parity (#539)
+- **plugins/agento11y**: import pi session history (#535)
+
 ## [0.24.0] - 2026-08-04
 
 ### Features
