@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0] - 2026-08-06
+
+### Features
+
+- **plugins**: add opt-in AGENTO11Y_AUTO_TAGS for user, repo, and branch (#543)
+- **plugins/agento11y**: import pi session history (#535)
+
 ## [0.21.0] - 2026-08-04
 
 _No user-facing changes._
