@@ -1,8 +1,7 @@
 package agento11y
 
 import (
-	"slices"
-	"strings"
+	"maps"
 	"time"
 
 	"github.com/grafana/agento11y/go/agento11y/model"
@@ -68,20 +67,20 @@ func defaultOperationNameForMode(mode GenerationMode) string {
 
 func cloneGeneration(in Generation) Generation {
 	return Generation{
-		ID:                  strings.Clone(in.ID),
-		ConversationID:      strings.Clone(in.ConversationID),
-		ConversationTitle:   strings.Clone(in.ConversationTitle),
-		UserID:              strings.Clone(in.UserID),
-		AgentName:           strings.Clone(in.AgentName),
-		AgentVersion:        strings.Clone(in.AgentVersion),
-		Mode:                GenerationMode(strings.Clone(string(in.Mode))),
-		OperationName:       strings.Clone(in.OperationName),
-		TraceID:             strings.Clone(in.TraceID),
-		SpanID:              strings.Clone(in.SpanID),
-		Model:               cloneModelRef(in.Model),
-		ResponseID:          strings.Clone(in.ResponseID),
-		ResponseModel:       strings.Clone(in.ResponseModel),
-		SystemPrompt:        strings.Clone(in.SystemPrompt),
+		ID:                  in.ID,
+		ConversationID:      in.ConversationID,
+		ConversationTitle:   in.ConversationTitle,
+		UserID:              in.UserID,
+		AgentName:           in.AgentName,
+		AgentVersion:        in.AgentVersion,
+		Mode:                in.Mode,
+		OperationName:       in.OperationName,
+		TraceID:             in.TraceID,
+		SpanID:              in.SpanID,
+		Model:               in.Model,
+		ResponseID:          in.ResponseID,
+		ResponseModel:       in.ResponseModel,
+		SystemPrompt:        in.SystemPrompt,
 		Input:               cloneMessages(in.Input),
 		Output:              cloneMessages(in.Output),
 		Tools:               cloneTools(in.Tools),
@@ -91,30 +90,30 @@ func cloneGeneration(in Generation) Generation {
 		ToolChoice:          cloneStringPtr(in.ToolChoice),
 		ThinkingEnabled:     cloneBoolPtr(in.ThinkingEnabled),
 		ParentGenerationIDs: cloneStringSlice(in.ParentGenerationIDs),
-		EffectiveVersion:    strings.Clone(in.EffectiveVersion),
+		EffectiveVersion:    in.EffectiveVersion,
 		Usage:               in.Usage,
-		StopReason:          strings.Clone(in.StopReason),
+		StopReason:          in.StopReason,
 		StartedAt:           in.StartedAt,
 		CompletedAt:         in.CompletedAt,
 		Tags:                cloneTags(in.Tags),
 		Metadata:            cloneMetadata(in.Metadata),
 		Artifacts:           cloneArtifacts(in.Artifacts),
-		CallError:           strings.Clone(in.CallError),
+		CallError:           in.CallError,
 	}
 }
 
 func cloneGenerationStart(in GenerationStart) GenerationStart {
 	return GenerationStart{
-		ID:                  strings.Clone(in.ID),
-		ConversationID:      strings.Clone(in.ConversationID),
-		ConversationTitle:   strings.Clone(in.ConversationTitle),
-		UserID:              strings.Clone(in.UserID),
-		AgentName:           strings.Clone(in.AgentName),
-		AgentVersion:        strings.Clone(in.AgentVersion),
-		Mode:                GenerationMode(strings.Clone(string(in.Mode))),
-		OperationName:       strings.Clone(in.OperationName),
-		Model:               cloneModelRef(in.Model),
-		SystemPrompt:        strings.Clone(in.SystemPrompt),
+		ID:                  in.ID,
+		ConversationID:      in.ConversationID,
+		ConversationTitle:   in.ConversationTitle,
+		UserID:              in.UserID,
+		AgentName:           in.AgentName,
+		AgentVersion:        in.AgentVersion,
+		Mode:                in.Mode,
+		OperationName:       in.OperationName,
+		Model:               in.Model,
+		SystemPrompt:        in.SystemPrompt,
 		Tools:               cloneTools(in.Tools),
 		MaxTokens:           cloneInt64Ptr(in.MaxTokens),
 		Temperature:         cloneFloat64Ptr(in.Temperature),
@@ -122,18 +121,11 @@ func cloneGenerationStart(in GenerationStart) GenerationStart {
 		ToolChoice:          cloneStringPtr(in.ToolChoice),
 		ThinkingEnabled:     cloneBoolPtr(in.ThinkingEnabled),
 		ParentGenerationIDs: cloneStringSlice(in.ParentGenerationIDs),
-		EffectiveVersion:    strings.Clone(in.EffectiveVersion),
+		EffectiveVersion:    in.EffectiveVersion,
 		Tags:                cloneTags(in.Tags),
 		Metadata:            cloneMetadata(in.Metadata),
 		StartedAt:           in.StartedAt,
 		ContentCapture:      in.ContentCapture,
-	}
-}
-
-func cloneModelRef(in ModelRef) ModelRef {
-	return ModelRef{
-		Provider: strings.Clone(in.Provider),
-		Name:     strings.Clone(in.Name),
 	}
 }
 
@@ -157,7 +149,7 @@ func cloneStringPtr(in *string) *string {
 	if in == nil {
 		return nil
 	}
-	out := strings.Clone(*in)
+	out := *in
 	return &out
 }
 
@@ -177,8 +169,8 @@ func cloneMessages(in []Message) []Message {
 	out := make([]Message, len(in))
 	for i := range in {
 		out[i] = Message{
-			Role:  Role(strings.Clone(string(in[i].Role))),
-			Name:  strings.Clone(in[i].Name),
+			Role:  in[i].Role,
+			Name:  in[i].Name,
 			Parts: cloneParts(in[i].Parts),
 		}
 	}
@@ -194,36 +186,26 @@ func cloneParts(in []Part) []Part {
 	out := make([]Part, len(in))
 	for i := range in {
 		out[i] = Part{
-			Kind:     PartKind(strings.Clone(string(in[i].Kind))),
-			Text:     strings.Clone(in[i].Text),
-			Thinking: strings.Clone(in[i].Thinking),
-			Metadata: PartMetadata{ProviderType: strings.Clone(in[i].Metadata.ProviderType)},
+			Kind:     in[i].Kind,
+			Text:     in[i].Text,
+			Thinking: in[i].Thinking,
+			Metadata: in[i].Metadata,
 		}
 
 		if in[i].ToolCall != nil {
 			call := *in[i].ToolCall
-			call.ID = strings.Clone(call.ID)
-			call.Name = strings.Clone(call.Name)
-			call.InputJSON = slices.Clone(call.InputJSON)
+			call.InputJSON = append([]byte(nil), call.InputJSON...)
 			out[i].ToolCall = &call
 		}
 
 		if in[i].ToolResult != nil {
 			result := *in[i].ToolResult
-			result.ToolCallID = strings.Clone(result.ToolCallID)
-			result.Name = strings.Clone(result.Name)
-			result.Content = strings.Clone(result.Content)
-			result.ContentJSON = slices.Clone(result.ContentJSON)
+			result.ContentJSON = append([]byte(nil), result.ContentJSON...)
 			out[i].ToolResult = &result
 		}
 
 		if in[i].Media != nil {
-			media := Media{
-				Kind:     strings.Clone(in[i].Media.Kind),
-				URL:      strings.Clone(in[i].Media.URL),
-				MIMEType: strings.Clone(in[i].Media.MIMEType),
-				Name:     strings.Clone(in[i].Media.Name),
-			}
+			media := *in[i].Media
 			out[i].Media = &media
 		}
 	}
@@ -236,13 +218,11 @@ func cloneTools(in []ToolDefinition) []ToolDefinition {
 		return nil
 	}
 
-	out := slices.Clone(in)
+	out := make([]ToolDefinition, len(in))
+	copy(out, in)
 
 	for i := range out {
-		out[i].Name = strings.Clone(out[i].Name)
-		out[i].Description = strings.Clone(out[i].Description)
-		out[i].Type = strings.Clone(out[i].Type)
-		out[i].InputSchema = slices.Clone(out[i].InputSchema)
+		out[i].InputSchema = append([]byte(nil), out[i].InputSchema...)
 	}
 
 	return out
@@ -253,15 +233,11 @@ func cloneArtifacts(in []Artifact) []Artifact {
 		return nil
 	}
 
-	out := slices.Clone(in)
+	out := make([]Artifact, len(in))
+	copy(out, in)
 
 	for i := range out {
-		out[i].Kind = ArtifactKind(strings.Clone(string(out[i].Kind)))
-		out[i].Name = strings.Clone(out[i].Name)
-		out[i].ContentType = strings.Clone(out[i].ContentType)
-		out[i].Payload = slices.Clone(out[i].Payload)
-		out[i].RecordID = strings.Clone(out[i].RecordID)
-		out[i].URI = strings.Clone(out[i].URI)
+		out[i].Payload = append([]byte(nil), out[i].Payload...)
 	}
 
 	return out
@@ -273,9 +249,7 @@ func cloneTags(in map[string]string) map[string]string {
 	}
 
 	out := make(map[string]string, len(in))
-	for key, value := range in {
-		out[strings.Clone(key)] = strings.Clone(value)
-	}
+	maps.Copy(out, in)
 
 	return out
 }
@@ -286,12 +260,7 @@ func cloneMetadata(in map[string]any) map[string]any {
 	}
 
 	out := make(map[string]any, len(in))
-	for key, value := range in {
-		if text, ok := value.(string); ok {
-			value = strings.Clone(text)
-		}
-		out[strings.Clone(key)] = value
-	}
+	maps.Copy(out, in)
 
 	return out
 }

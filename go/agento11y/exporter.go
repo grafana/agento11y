@@ -330,17 +330,17 @@ func insecureValue(p *bool) bool {
 func mergeGenerationExportConfig(base, override GenerationExportConfig) GenerationExportConfig {
 	out := base
 	if override.Protocol != "" {
-		out.Protocol = GenerationExportProtocol(strings.Clone(string(override.Protocol)))
+		out.Protocol = override.Protocol
 	}
 	if override.Endpoint != "" {
-		out.Endpoint = strings.Clone(override.Endpoint)
+		out.Endpoint = override.Endpoint
 	}
 	if override.Headers != nil {
 		out.Headers = cloneTags(override.Headers)
 	}
 	out.Auth = mergeAuthConfig(out.Auth, override.Auth)
 	if override.Insecure != nil {
-		out.Insecure = BoolPtr(*override.Insecure)
+		out.Insecure = override.Insecure
 	}
 	if override.GRPCMaxSendMessageBytes > 0 {
 		out.GRPCMaxSendMessageBytes = override.GRPCMaxSendMessageBytes
@@ -378,7 +378,7 @@ func mergeGenerationExportConfig(base, override GenerationExportConfig) Generati
 func mergeAPIConfig(base, override APIConfig) APIConfig {
 	out := base
 	if override.Endpoint != "" {
-		out.Endpoint = strings.Clone(override.Endpoint)
+		out.Endpoint = override.Endpoint
 	}
 	return out
 }
@@ -398,19 +398,19 @@ func mergeEmbeddingCaptureConfig(base, override EmbeddingCaptureConfig) Embeddin
 func mergeAuthConfig(base, override AuthConfig) AuthConfig {
 	out := base
 	if override.Mode != "" {
-		out.Mode = ExportAuthMode(strings.Clone(string(override.Mode)))
+		out.Mode = override.Mode
 	}
 	if override.TenantID != "" {
-		out.TenantID = strings.Clone(override.TenantID)
+		out.TenantID = override.TenantID
 	}
 	if override.BearerToken != "" {
-		out.BearerToken = strings.Clone(override.BearerToken)
+		out.BearerToken = override.BearerToken
 	}
 	if override.BasicUser != "" {
-		out.BasicUser = strings.Clone(override.BasicUser)
+		out.BasicUser = override.BasicUser
 	}
 	if override.BasicPassword != "" {
-		out.BasicPassword = strings.Clone(override.BasicPassword)
+		out.BasicPassword = override.BasicPassword
 	}
 	return out
 }

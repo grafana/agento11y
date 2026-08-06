@@ -404,14 +404,6 @@ func TestMergeHooksConfigOverridesFields(t *testing.T) {
 	}
 }
 
-func TestMergeHooksConfigDetachesPhaseStorage(t *testing.T) {
-	backing := "prefix " + strings.Repeat("phase", 32) + " suffix"
-	phase := backing[len("prefix ") : len(backing)-len(" suffix")]
-	merged := mergeHooksConfig(defaultHooksConfig(), HooksConfig{Phases: []HookPhase{HookPhase(phase)}})
-
-	assertStringDetached(t, string(merged.Phases[0]), phase)
-}
-
 type hookTestClientOptions struct {
 	apiEndpoint  string
 	hooksEnabled bool

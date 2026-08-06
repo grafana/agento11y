@@ -2,7 +2,6 @@ package agento11y
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
@@ -68,21 +67,6 @@ func TestSetCacheDiagnostics_OverridesPreviousCall(t *testing.T) {
 	if got, _ := md[CacheDiagnosticsMissedInputTokensKey].(string); got != "99" {
 		t.Fatalf("missed tokens: want 99, got %v", md[CacheDiagnosticsMissedInputTokensKey])
 	}
-}
-
-func TestSetCacheDiagnosticsDetachesStorage(t *testing.T) {
-	reasonBacking := "prefix " + strings.Repeat("reason", 32) + " suffix"
-	reason := reasonBacking[len("prefix ") : len(reasonBacking)-len(" suffix")]
-	idBacking := "prefix " + strings.Repeat("message", 32) + " suffix"
-	previousID := idBacking[len("prefix ") : len(idBacking)-len(" suffix")]
-	client, _, _ := newTestClient(t, Config{})
-	_, rec := client.StartGeneration(context.Background(), GenerationStart{})
-
-	SetCacheDiagnostics(rec, reason, WithPreviousMessageID(previousID))
-	storedReason := rec.extraMetadata[CacheDiagnosticsMissReasonKey].(string)
-	storedID := rec.extraMetadata[CacheDiagnosticsPreviousMessageIDKey].(string)
-	assertStringDetached(t, storedReason, reason)
-	assertStringDetached(t, storedID, previousID)
 }
 
 func TestSetCacheDiagnostics_AfterEndNoop(t *testing.T) {

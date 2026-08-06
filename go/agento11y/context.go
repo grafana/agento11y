@@ -2,7 +2,7 @@ package agento11y
 
 import (
 	"context"
-	"strings"
+	"maps"
 )
 
 type conversationIDContextKey struct{}
@@ -19,7 +19,7 @@ type experimentRunIDContextKey struct{}
 // StartGeneration, StartStreamingGeneration, and StartToolExecution read it when
 // the explicit field is empty.
 func WithConversationID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, conversationIDContextKey{}, strings.Clone(id))
+	return context.WithValue(ctx, conversationIDContextKey{}, id)
 }
 
 // ConversationIDFromContext retrieves the conversation ID stored by WithConversationID.
@@ -32,7 +32,7 @@ func ConversationIDFromContext(ctx context.Context) (string, bool) {
 // StartGeneration, StartStreamingGeneration, and StartToolExecution read it when
 // the explicit field is empty.
 func WithConversationTitle(ctx context.Context, title string) context.Context {
-	return context.WithValue(ctx, conversationTitleContextKey{}, strings.Clone(title))
+	return context.WithValue(ctx, conversationTitleContextKey{}, title)
 }
 
 // ConversationTitleFromContext retrieves the conversation title stored by WithConversationTitle.
@@ -45,7 +45,7 @@ func ConversationTitleFromContext(ctx context.Context) (string, bool) {
 // StartGeneration and StartStreamingGeneration read it when the explicit field
 // is empty.
 func WithUserID(ctx context.Context, userID string) context.Context {
-	return context.WithValue(ctx, userIDContextKey{}, strings.Clone(userID))
+	return context.WithValue(ctx, userIDContextKey{}, userID)
 }
 
 // UserIDFromContext retrieves the user ID stored by WithUserID.
@@ -58,7 +58,7 @@ func UserIDFromContext(ctx context.Context) (string, bool) {
 // StartGeneration, StartStreamingGeneration, and StartToolExecution read it when
 // the explicit field is empty.
 func WithAgentName(ctx context.Context, name string) context.Context {
-	return context.WithValue(ctx, agentNameContextKey{}, strings.Clone(name))
+	return context.WithValue(ctx, agentNameContextKey{}, name)
 }
 
 // AgentNameFromContext retrieves the agent name stored by WithAgentName.
@@ -71,7 +71,7 @@ func AgentNameFromContext(ctx context.Context) (string, bool) {
 // StartGeneration, StartStreamingGeneration, and StartToolExecution read it when
 // the explicit field is empty.
 func WithAgentVersion(ctx context.Context, version string) context.Context {
-	return context.WithValue(ctx, agentVersionContextKey{}, strings.Clone(version))
+	return context.WithValue(ctx, agentVersionContextKey{}, version)
 }
 
 // AgentVersionFromContext retrieves the agent version stored by WithAgentVersion.
@@ -93,7 +93,7 @@ func WithTag(ctx context.Context, key, value string) context.Context {
 		return ctx
 	}
 	merged := cloneContextTags(ctx)
-	merged[strings.Clone(key)] = strings.Clone(value)
+	merged[key] = value
 	return context.WithValue(ctx, tagsContextKey{}, merged)
 }
 
@@ -109,7 +109,7 @@ func WithTags(ctx context.Context, tags map[string]string) context.Context {
 		if key == "" {
 			continue
 		}
-		merged[strings.Clone(key)] = strings.Clone(value)
+		merged[key] = value
 	}
 	return context.WithValue(ctx, tagsContextKey{}, merged)
 }
@@ -121,12 +121,12 @@ func TagsFromContext(ctx context.Context) map[string]string {
 	if !ok || len(existing) == 0 {
 		return nil
 	}
-	return cloneTags(existing)
+	return maps.Clone(existing)
 }
 
 func cloneContextTags(ctx context.Context) map[string]string {
 	if existing, ok := ctx.Value(tagsContextKey{}).(map[string]string); ok && len(existing) > 0 {
-		return cloneTags(existing)
+		return maps.Clone(existing)
 	}
 	return map[string]string{}
 }
@@ -162,7 +162,7 @@ func experimentRunFromContext(ctx context.Context) (*ExperimentRun, bool) {
 // Use WithExperimentRunID when only the run ID crosses a process boundary, such
 // as an HTTP request into an already-instrumented service.
 func WithExperimentRunID(ctx context.Context, runID string) context.Context {
-	return context.WithValue(ctx, experimentRunIDContextKey{}, strings.Clone(runID))
+	return context.WithValue(ctx, experimentRunIDContextKey{}, runID)
 }
 
 // ExperimentRunIDFromContext retrieves the experiment run ID stored by
