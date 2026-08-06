@@ -30,6 +30,7 @@ class PartKind(str, Enum):
     THINKING = "thinking"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    MEDIA = "media"
 
 
 class ContentCaptureMode(str, Enum):
@@ -171,6 +172,22 @@ class ToolResult:
 
 
 @dataclass(slots=True)
+class Media:
+    """Reference to a non-text payload in a message part.
+
+    `url` is required: export validation rejects a media part whose URL is empty
+    or blank. It can point at the payload or hold the bytes inline as a `data:`
+    URI. metadata_only capture clears `url` in either form and keeps `kind`,
+    `mime_type`, and `name`.
+    """
+
+    kind: str = ""
+    url: str = ""
+    mime_type: str = ""
+    name: str = ""
+
+
+@dataclass(slots=True)
 class Part:
     """Typed message part."""
 
@@ -179,6 +196,7 @@ class Part:
     thinking: str = ""
     tool_call: ToolCall | None = None
     tool_result: ToolResult | None = None
+    media: Media | None = None
     metadata: PartMetadata = field(default_factory=PartMetadata)
 
 
@@ -483,6 +501,12 @@ def tool_result_part(tool_result: ToolResult) -> Part:
     """Creates a tool-result part."""
 
     return Part(kind=PartKind.TOOL_RESULT, tool_result=tool_result)
+
+
+def media_part(media: Media) -> Part:
+    """Creates a media part."""
+
+    return Part(kind=PartKind.MEDIA, media=media)
 
 
 def user_text_message(text: str) -> Message:
