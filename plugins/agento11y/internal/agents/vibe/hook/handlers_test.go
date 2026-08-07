@@ -278,6 +278,73 @@ func TestPostAgentTurn_MissingCredsSkipsExport(t *testing.T) {
 	}
 }
 
+func TestPostAgentTurn_SessionCostSnapshot(t *testing.T) {
+	// The snapshot is the baseline the next turn subtracts from. A
+	// meta.json reporting no session_cost must leave the prior baseline
+	// standing, otherwise a later turn that does report a cost deltas
+	// against zero and is billed the whole session total.
+	//
+	// Each case replaces the tail of the fixture's stats block, so the
+	// difference between the cases is only how session_cost is reported.
+	const fixtureCost = `"session_total_llm_tokens": 4608,
+    "session_cost": 0.05`
+	tests := []struct {
+		name  string
+		stats string
+		want  float64
+	}{
+		{
+			name:  "reported cost replaces the baseline",
+			stats: fixtureCost,
+			want:  0.05,
+		},
+		{
+			name:  "absent cost keeps the prior baseline",
+			stats: `"session_total_llm_tokens": 4608`,
+			want:  5,
+		},
+		{
+			name: "null cost keeps the prior baseline",
+			stats: `"session_total_llm_tokens": 4608,
+    "session_cost": null`,
+			want: 5,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b, _ := io.ReadAll(r.Body)
+				writeAcceptedGenerationResponse(t, w, b)
+			}))
+			t.Cleanup(srv.Close)
+
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			t.Setenv("SIGIL_ENDPOINT", srv.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+			t.Setenv("SIGIL_AUTH_TOKEN", "token")
+
+			dir := t.TempDir()
+			must(t, copyFile(filepath.Join("..", "testdata", "messages.jsonl"), filepath.Join(dir, "messages.jsonl")))
+			metaPath := filepath.Join(dir, "meta.json")
+			must(t, copyFile(filepath.Join("..", "testdata", "meta.json"), metaPath))
+			must(t, replaceInFile(metaPath, fixtureCost, tt.stats))
+			tp := filepath.Join(dir, "messages.jsonl")
+
+			must(t, state.Save("sess-cost", state.Session{SessionCost: 5}))
+			logger := log.New(io.Discard, "", 0)
+			PostAgentTurn(context.Background(), Payload{HookEventName: "post_agent_turn", SessionID: "sess-cost", TranscriptPath: tp}, logger)
+
+			st, found := state.Load("sess-cost")
+			if !found {
+				t.Fatalf("state missing after export")
+			}
+			if st.SessionCost != tt.want {
+				t.Errorf("SessionCost = %v, want %v", st.SessionCost, tt.want)
+			}
+		})
+	}
+}
+
 func TestPostAgentTurn_MissingPayloadFields(t *testing.T) {
 	logger := log.New(io.Discard, "", 0)
 	PostAgentTurn(context.Background(), Payload{HookEventName: "post_agent_turn"}, logger)

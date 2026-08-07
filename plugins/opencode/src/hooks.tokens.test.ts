@@ -53,7 +53,8 @@ function usageOf(generation: CapturedGeneration): Record<string, number> {
 }
 
 function costOf(generation: CapturedGeneration): number {
-  return (generation.result as { metadata: { cost: number } }).metadata.cost;
+  return (generation.result as { metadata: { cost_usd: number } }).metadata
+    .cost_usd;
 }
 
 const completedTime = {

@@ -90,7 +90,7 @@
           "cwd": "<NORMALIZED>"
         },
         "metadata": {
-          "cost": 0.005,
+          "cost_usd": 0.005,
           "agento11y.conversation.title": "List the Go files in the repo",
           "agento11y.sdk.name": "sdk-js",
           "agento11y.sdk.content_capture_mode": "full"

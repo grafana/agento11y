@@ -256,8 +256,8 @@ func buildMetadata(in Inputs) map[string]any {
 	if in.ParentGenerationID != "" && in.ParentSessionID != "" {
 		metadata["vibe.child_session_id"] = in.SessionID
 	}
-	if cost := turnCost(in.Meta.Stats, in.PriorState, in.PriorStateFound); cost > 0 {
-		metadata["vibe.cost_usd"] = cost
+	if cost, ok := turnCost(in.Meta.Stats, in.PriorState, in.PriorStateFound); ok {
+		metadata["cost_usd"] = cost
 	}
 	addToolFailureCounts(metadata, in.Meta.Stats, in.PriorState, in.PriorStateFound)
 	if len(metadata) == 0 {
@@ -267,20 +267,30 @@ func buildMetadata(in Inputs) map[string]any {
 }
 
 // turnCost is the per-turn USD cost: the delta of vibe's session_cost
-// against the prior snapshot. Mirrors turnUsage's state-loss handling so a
-// lost snapshot mid-session reports nothing rather than billing the whole
-// session to one turn; on the first turn the full session_cost applies.
-func turnCost(stats meta.Stats, prior state.Session, priorFound bool) float64 {
-	if !priorFound {
-		if stats.Steps > 1 {
-			return 0
-		}
-		return stats.SessionCost
+// against the prior snapshot, or the full session_cost on the first turn. A
+// cost of 0 is reported as 0, not dropped.
+//
+// The bool is false when meta.json reports no session_cost, and in the two
+// cases turnUsage falls back for: no prior snapshot on turn >1, where
+// subtracting from zero would bill the whole session to this turn, and a
+// cost below zero, from a session reset or a stale snapshot. turnCost has
+// no fallback of its own, because vibe reports a session total but no
+// last-turn cost.
+func turnCost(stats meta.Stats, prior state.Session, priorFound bool) (float64, bool) {
+	if stats.SessionCost == nil {
+		return 0, false
 	}
-	if delta := stats.SessionCost - prior.SessionCost; delta > 0 {
-		return delta
+	if !priorFound && stats.Steps > 1 {
+		return 0, false
 	}
-	return 0
+	cost := *stats.SessionCost
+	if priorFound {
+		cost -= prior.SessionCost
+	}
+	if cost < 0 {
+		return 0, false
+	}
+	return cost, true
 }
 
 // addToolFailureCounts records the per-turn count of rejected, hook-denied,
