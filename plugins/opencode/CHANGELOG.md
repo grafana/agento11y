@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.18.0] - 2026-08-06
+
+### Features
+
+- **plugins**: add opt-in AGENTO11Y_AUTO_TAGS for user, repo, and branch (#543)
+- **redaction**: generate secret patterns from one table and pin cross-SDK parity (#539)
+
+### Documentation
+
+- add Vibe to agent list and fix auto-update docs (#507)
+
 ## [0.17.0] - 2026-08-03
 
 ### Features
