@@ -112,6 +112,22 @@ The plugin attaches built-in tags of its own:
 
 Built-in tags win collisions with user tags, matching the claude-code and cursor launchers. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#built-in-tags-from-the-agent-launchers) for the tags the launchers share.
 
+## Guards
+
+Guards check a request against rules you configure in Grafana and can stop or rewrite it before the model sees it. Refer to [Set up guards](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/guards/) to write the rules. This section covers what they do in OpenCode.
+
+They are off by default:
+
+```sh
+AGENTO11Y_GUARDS_ENABLED=true agento11y opencode
+```
+
+With guards on, a rule can:
+
+- **Refuse a turn.** A `preflight` deny stops the turn before it reaches the model, so nothing is sent and no tokens are spent. The reason appears in the session and in OpenCode's log.
+- **Redact what the model sees.** A `preflight` redact rule replaces matching text in the conversation on its way to the provider. Your own message is not rewritten.
+- **Block or rewrite a tool call.** A `postflight` deny stops the call and tells the model why. A redact rule rewrites the arguments the tool receives. OpenCode's permission prompts count as tool calls, and its permission API has no field for a reason, so a denied prompt reports none.
+
 ## All options
 
 `~/.config/agento11y/config.env` is the only configuration file. Every option is set via env var.
@@ -124,9 +140,9 @@ Built-in tags win collisions with user tags, matching the claude-code and cursor
 | `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the Agent Observability latency and tool-call panels stay empty. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTLP password. |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | One of `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`. |
-| `AGENTO11Y_GUARDS_ENABLED` | `false` | Evaluate OpenCode tool calls against Agent Observability guards before execution. |
+| `AGENTO11Y_GUARDS_ENABLED` | `false` | Check your prompts, the conversation sent to the model, and OpenCode tool calls against Agent Observability guards. See [Guards](#guards). |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-evaluation guard timeout in milliseconds. |
-| `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | Allow tool calls if guard evaluation fails. Set to `false` to fail closed. |
+| `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | Send the turn and allow tool calls when a guard evaluation fails. Set to `false` to refuse them instead. This covers evaluation failures at all three checks. A tool call is blocked under either setting when a guard returns redacted arguments that the plugin cannot write into the arguments OpenCode runs the tool with. |
 | `AGENTO11Y_AGENT_NAME` | `opencode` | Agent name reported to Agent Observability. The plugin appends `:<mode>` for OpenCode's UI mode, such as `build` or `plan`. |
 | `AGENTO11Y_AGENT_VERSION` | OpenCode version | Version string reported with the agent. |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. These reach OTel metrics as `agento11y_tag_*` labels, unlike the per-generation built-ins. The plugin builds one client per session, so the values freeze at session start. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |

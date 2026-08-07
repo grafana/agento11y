@@ -16,14 +16,23 @@ import { createAgento11yClient } from "./client.js";
 import type { Agento11yOpencodeConfig } from "./config.js";
 import { resolveAutoTagValues } from "./config.js";
 import { resolveGitBranch } from "./git.js";
-import { runToolCallGuard } from "./guard.js";
+import {
+  formatTransformFailure,
+  runPreflightTransform,
+  runPromptGuard,
+  runToolCallGuard,
+} from "./guard.js";
 import { stableOpencodeGenerationId } from "./lineage.js";
 import {
+  applyRedactedText,
   legacyToolOverrideNames,
   mapError,
   mapGeneration,
+  mapOutgoingMessagesForHook,
   mapToolDefinitions,
   type OpencodeTokens,
+  type OutgoingMessage,
+  partTextKey,
   type Redactor,
 } from "./mappers.js";
 import { buildBuiltinTags } from "./tags.js";
@@ -146,6 +155,19 @@ type PendingGeneration = {
 };
 const pendingGenerations = new Map<string, PendingGeneration>();
 
+// New text for every part a preflight redact rule rewrote, keyed by
+// `partTextKey(sessionID, partID)`. The export replays it so a generation
+// reports the conversation the provider received. opencode's own message store
+// keeps the original: a redact rule governs what leaves the machine, not what
+// the user typed.
+//
+// Entries survive the turn that produced them. The transform runs on the whole
+// conversation at every step, so an earlier turn's part is rewritten again on
+// each later one, and a per-turn purge would only make the map churn. It holds
+// one entry per part a rule actually matched, and `session.deleted` clears the
+// session's keys by prefix.
+const redactedTextByPart = new Map<string, string>();
+
 // Effective system prompt per session, captured from OpenCode's
 // `experimental.chat.system.transform` hook. The hook fires during request
 // preparation, after OpenCode composes the agent, runtime, and override
@@ -236,11 +258,17 @@ export function _resetHookState(): void {
   firstPartAtByMessage.clear();
   stepTokensByMessage.clear();
   pendingGenerations.clear();
+  redactedTextByPart.clear();
   latestSystemPromptBySession.clear();
   latestSessionTitleBySession.clear();
   hostVersion = undefined;
   sessionContexts.clear();
   _resetToolExecutionState();
+}
+
+/** @internal Exported for testing. Session ids with user-side data pending. */
+export function _peekPendingGenerations(): string[] {
+  return Array.from(pendingGenerations.keys());
 }
 
 /** @internal Exported for testing. */
@@ -272,26 +300,159 @@ function buildAgentName(
 }
 
 /**
- * Called from the chat.message hook. Stores user-side data for later use
- * when the assistant message completes.
+ * Thrown from the `chat.message` hook to refuse a turn a guard denied. Named so
+ * a stack trace says which decision stopped the prompt, rather than reading as
+ * an internal failure.
  */
-function handleChatMessage(
+class GuardBlockedError extends Error {}
+
+/**
+ * Delay before the guard toast, in milliseconds.
+ *
+ * Refusing a turn fails the prompt request, and opencode's TUI answers every
+ * failed prompt with its own "Failed to send prompt" toast, which carries no
+ * reason because the route reports a refused turn as an opaque 500. Its toast
+ * store holds one toast at a time (`ui/toast.tsx`), so it replaces anything
+ * already on screen: a notice shown before the throw is guaranteed to be lost,
+ * and one shown after it wins. The host's toast follows the throw over a local
+ * HTTP round trip, measured at 3ms, so this is a wide margin.
+ */
+export const _DEFAULT_GUARD_TOAST_DELAY_MS = 750;
+
+let guardToastDelayMs: number = _DEFAULT_GUARD_TOAST_DELAY_MS;
+
+/** @internal Exported for testing, so a case need not wait out the delay. */
+export function _setGuardToastDelayMs(ms: number): void {
+  guardToastDelayMs = ms;
+}
+
+/**
+ * Reports a guard decision to the user, through opencode rather than through
+ * this plugin's own stderr, which the TUI hides.
+ *
+ * Two surfaces, and both are best-effort: a decision must not depend on its
+ * notice arriving.
+ *
+ * `app.log` is the durable one and is written now. It goes through opencode's
+ * own logger into `~/.local/share/opencode/log/`, so the reason survives and can
+ * be read after the fact. This is the copy to rely on.
+ *
+ * The toast is scheduled rather than awaited, for the ordering reason on
+ * `guardToastDelayMs`. Returning before it fires is deliberate: the caller
+ * throws next, and the throw is what the host has to answer before this toast
+ * can be the last one standing.
+ */
+async function announceGuardDecision(
+  client: OpencodeClient,
+  debugLog: (msg: string, ...args: unknown[]) => void,
+  message: string,
+): Promise<void> {
+  try {
+    await client.app.log({
+      body: { service: "agento11y", level: "error", message },
+    });
+  } catch (err) {
+    debugLog("guard log failed", err);
+  }
+
+  const timer = setTimeout(() => {
+    void (async () => {
+      try {
+        await client.tui.showToast({
+          body: {
+            title: "Agent Observability",
+            message,
+            variant: "error",
+          },
+        });
+      } catch (err) {
+        debugLog("guard toast failed", err);
+      }
+    })();
+  }, guardToastDelayMs);
+  // The notice is not worth holding the process open for, and opencode may be
+  // shutting down by the time it fires.
+  timer.unref?.();
+}
+
+/**
+ * Called from the `chat.message` hook. Stores user-side data for later use when
+ * the assistant message completes, then evaluates the submitted prompt against
+ * the Agent Observability preflight hook and refuses the turn on a deny.
+ *
+ * Throws `GuardBlockedError` to refuse. opencode dispatches this hook from
+ * `createUserMessage` before it persists the user message and its parts, and
+ * before the step loop starts, so a throw costs no provider call and leaves no
+ * partial message behind. `runPromptGuard` explains why this is the only hook
+ * where refusing is clean.
+ *
+ * An internal failure here fails open. Only the guard's own verdict blocks, and
+ * only `runPromptGuard` decides what an unreachable endpoint means, according to
+ * `AGENTO11Y_GUARDS_FAIL_OPEN`.
+ */
+async function handleChatMessage(
+  sigil: Agento11yClient,
+  config: Agento11yOpencodeConfig,
+  client: OpencodeClient,
+  debugLog: (msg: string, ...args: unknown[]) => void,
   input: {
     sessionID: string;
     agent?: string;
     model?: { providerID: string; modelID: string };
   },
   output: { message: UserMessage; parts: Part[] },
-): void {
+): Promise<void> {
   pendingGenerations.set(input.sessionID, {
     systemPrompt: output.message.system,
     userParts: output.parts,
     tools: output.message.tools,
   });
+  // Written before the evaluation: the agent name and model on the guard
+  // request are read back out of this map.
   sessionContexts.set(input.sessionID, {
     agent: input.agent ?? stringField(output.message, "agent"),
     model: resolveModel(input.model, output.message),
   });
+
+  const guards = config.guards;
+  if (guards?.enabled !== true) return;
+
+  let reason: string | undefined;
+  try {
+    // Same forward mapping as the messages transform, so one rule sees the same
+    // text at both points.
+    const forward = mapOutgoingMessagesForHook([
+      { info: output.message, parts: output.parts },
+    ]);
+    if (!forward.some((msg) => (msg.parts?.length ?? 0) > 0)) {
+      debugLog("prompt guard skipped: no redactable text in the new message");
+      return;
+    }
+    const result = await runPromptGuard({
+      client: sigil,
+      agentName: agentNameForSession(config, input.sessionID),
+      agentVersion: config.agentVersion || hostVersion,
+      model: modelForSession(input.sessionID),
+      messages: forward,
+      failOpen: guards.failOpen,
+      logger: { warn: (msg: string) => debugLog(msg) },
+    });
+    reason = result?.reason;
+  } catch (err) {
+    debugLog("prompt guard failed", err);
+    return;
+  }
+  if (reason === undefined) return;
+
+  // No assistant message will ever consume this turn's user-side data, and
+  // opencode creates assistant messages without a `chat.message` of their own
+  // (a compaction summary, for one), which would otherwise be exported carrying
+  // the parts of the prompt that was refused.
+  pendingGenerations.delete(input.sessionID);
+
+  debugLog(`prompt guard blocked the turn: ${reason}`);
+  await announceGuardDecision(client, debugLog, reason);
+  throw new GuardBlockedError(reason);
 }
 
 /**
@@ -328,6 +489,179 @@ function handleSystemTransform(
   );
   if (prompt === undefined) return;
   latestSystemPromptBySession.set(sessionID, prompt);
+}
+
+/**
+ * Called from the `experimental.chat.messages.transform` hook, the last point
+ * before `MessageV2.toModelMessagesEffect` converts the conversation for the
+ * provider. Evaluates the outgoing messages through the Agent Observability
+ * preflight hook and writes any returned redaction back into the shared
+ * `output.messages` array.
+ *
+ * Throws `GuardBlockedError` to refuse the turn when the guard denies, or when
+ * the evaluation fails and `AGENTO11Y_GUARDS_FAIL_OPEN` is false. An internal
+ * failure fails open. Refusing here costs an unfinished assistant message unless
+ * the abort request in `refuseStartedTurn` arrives first, because opencode has already
+ * written that row by the time it dispatches this hook. Most denies never reach
+ * this point: `handleChatMessage` evaluates the same rules before the row
+ * exists. What reaches it is a deny on conversation history, on text the
+ * assistant produced during the turn, or on a compaction dispatch.
+ *
+ * opencode dispatches the hook inside its step loop (`session/prompt.ts`), so
+ * a prompt with N tool rounds evaluates N+1 times. Results are not cached: a
+ * key looser than the content would apply a transform produced for older text.
+ *
+ * Compaction (`session/compaction.ts`) dispatches the same hook with the same
+ * empty input, so it is evaluated too and reported under the session's chat
+ * agent and model rather than opencode's `compaction` agent.
+ */
+async function handleMessagesTransform(
+  sigil: Agento11yClient,
+  config: Agento11yOpencodeConfig,
+  client: OpencodeClient,
+  debugLog: (msg: string, ...args: unknown[]) => void,
+  output: { messages: OutgoingMessage[] },
+): Promise<void> {
+  const guards = config.guards;
+  if (guards?.enabled !== true) return;
+  // Returned from the evaluation, acted on after the try, so the refusal is not
+  // swallowed by the catch that keeps an internal failure from stopping a turn.
+  const blockReason = await evaluateOutgoingMessages(
+    sigil,
+    config,
+    guards,
+    debugLog,
+    output,
+  );
+  if (blockReason === undefined) return;
+  await refuseStartedTurn(
+    client,
+    debugLog,
+    sessionIdFromOutgoing(output.messages) ?? "",
+    blockReason,
+  );
+}
+
+/**
+ * Evaluates the outgoing conversation and applies any redaction to
+ * `output.messages` in place. Returns a reason to refuse the turn, or undefined
+ * to let it continue. Never throws: refusing is the caller's job, so an internal
+ * failure here cannot stop a turn.
+ */
+async function evaluateOutgoingMessages(
+  sigil: Agento11yClient,
+  config: Agento11yOpencodeConfig,
+  guards: NonNullable<Agento11yOpencodeConfig["guards"]>,
+  debugLog: (msg: string, ...args: unknown[]) => void,
+  output: { messages: OutgoingMessage[] },
+): Promise<string | undefined> {
+  try {
+    const messages = output.messages;
+    if (!Array.isArray(messages) || messages.length === 0) return undefined;
+
+    const forward = mapOutgoingMessagesForHook(messages);
+    // Every slot is a placeholder, so a text transform has nothing to rewrite.
+    // Logged because a shape change in opencode's payload looks the same.
+    if (!forward.some((msg) => (msg.parts?.length ?? 0) > 0)) {
+      debugLog(
+        `preflight transform skipped: no redactable text in ${messages.length} outgoing messages`,
+      );
+      return undefined;
+    }
+
+    // The hook input carries no session id, so it comes from the messages.
+    const sessionID = sessionIdFromOutgoing(messages) ?? "";
+    const result = await runPreflightTransform({
+      client: sigil,
+      agentName: agentNameForSession(config, sessionID),
+      agentVersion: config.agentVersion || hostVersion,
+      model: modelForSession(sessionID),
+      messages: forward,
+      failOpen: guards.failOpen,
+      logger: { warn: (msg: string) => debugLog(msg) },
+    });
+    if (!result) return undefined;
+    if (result.block !== undefined) return result.block;
+
+    const redacted = result.messages;
+    if (!redacted || redacted.length === 0) return undefined;
+
+    // The redaction is aligned by index, so a different message count means it
+    // cannot be placed. Discard the transform and forward the originals.
+    if (redacted.length !== forward.length) {
+      debugLog(
+        `preflight transform dropped: got ${redacted.length} messages, expected ${forward.length}`,
+      );
+      return undefined;
+    }
+
+    // The count is of rewritten messages, not evaluated ones. The server
+    // returns the whole conversation with only matched substrings replaced, so
+    // a count of the conversation would read the same when nothing was
+    // redacted.
+    const applied = applyRedactedText(messages, redacted);
+    if (applied === null) {
+      debugLog(
+        "preflight transform dropped: redacted messages could not be aligned",
+      );
+      return undefined;
+    }
+    for (const [key, text] of applied.textByPart) {
+      redactedTextByPart.set(key, text);
+    }
+    debugLog(
+      `preflight transform applied: rewrote ${applied.messageCount} of ${messages.length} messages`,
+    );
+    return undefined;
+  } catch (err) {
+    debugLog("preflight transform failed", err);
+    return undefined;
+  }
+}
+
+/**
+ * Refuses a turn opencode has already started, from the messages transform.
+ *
+ * Throws, which is what stops the turn: opencode's plugin dispatcher wraps a
+ * hook in `Effect.promise` and catches nothing, so the rejection becomes a
+ * defect that propagates out of the step loop. The session runner completes its
+ * deferred with that exit and returns to idle, so nothing stays wedged.
+ *
+ * The abort request is cleanup, not enforcement. opencode finalizes the
+ * in-flight assistant message from an `Effect.onInterrupt` finalizer, and a
+ * defect is not an interrupt, so without an abort that row keeps
+ * `time.completed` unset and the TUI marks later messages as queued behind it.
+ * Asking opencode to abort the session gets the designed interrupt to run that
+ * finalizer. Whether it arrives before the defect is a race, so it is only ever
+ * cosmetic: the throw below stops the turn either way.
+ */
+async function refuseStartedTurn(
+  client: OpencodeClient,
+  debugLog: (msg: string, ...args: unknown[]) => void,
+  sessionID: string,
+  reason: string,
+): Promise<void> {
+  debugLog(`preflight guard refused the started turn: ${reason}`);
+  await announceGuardDecision(client, debugLog, reason);
+  if (sessionID) {
+    try {
+      await client.session.abort({ path: { id: sessionID } });
+    } catch (err) {
+      debugLog("guard abort request failed", err);
+    }
+  }
+  throw new GuardBlockedError(reason);
+}
+
+/** Newest session id carried by the outgoing messages, if any. */
+function sessionIdFromOutgoing(
+  messages: OutgoingMessage[],
+): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const sessionID = messages[i]?.info?.sessionID;
+    if (sessionID) return sessionID;
+  }
+  return undefined;
 }
 
 async function handleEvent(
@@ -634,8 +968,8 @@ async function recordAssistantMessage(
 
   const result = mapGeneration(
     assistantMsg,
-    includeMessageBodies ? (pending?.userParts ?? []) : [],
-    assistantParts,
+    includeMessageBodies ? redactedForExport(pending?.userParts ?? []) : [],
+    redactedForExport(assistantParts),
     redactor,
     config.contentCapture,
     stepTokens,
@@ -686,6 +1020,34 @@ async function recordAssistantMessage(
   completedToolExecutions.delete(assistantMsg.sessionID);
   firstPartAtByMessage.delete(msgKey);
   stepTokensByMessage.delete(msgKey);
+}
+
+/**
+ * Copy `parts` with the text a preflight redact rule rewrote, so a generation
+ * reports what the provider received. A part no rule matched keeps its
+ * identity, so an unredacted turn allocates nothing.
+ *
+ * Copies rather than writes: these are opencode's own part objects, and
+ * rewriting them would edit the message the user sees in their own transcript.
+ * `runPromptGuard` documents the same rule for the prompt hook.
+ *
+ * Only text is substituted. Tool arguments reach the export through the tool
+ * spans, which report the arguments a postflight rule left the tool to run
+ * with. Nothing covers the assistant text of this turn, which no transform has
+ * seen yet, a tool's result, or the system prompt, which the plugin never sends
+ * to the hook.
+ */
+function redactedForExport(parts: Part[]): Part[] {
+  if (redactedTextByPart.size === 0) return parts;
+  let changed = false;
+  const next = parts.map((part) => {
+    if (part.type !== "text") return part;
+    const text = redactedTextByPart.get(partTextKey(part.sessionID, part.id));
+    if (text === undefined || text === part.text) return part;
+    changed = true;
+    return { ...part, text };
+  });
+  return changed ? next : parts;
 }
 
 function isTerminalMessageUpdate(msg: MessageUpdatedInfo): boolean {
@@ -802,6 +1164,7 @@ async function handleLifecycle(
       latestSessionTitleBySession.delete(sessionId);
       sessionContexts.delete(sessionId);
       completedToolExecutions.delete(sessionId);
+      deleteSessionEntries(redactedTextByPart, sessionId);
       deleteSessionEntries(activeToolExecutions, sessionId);
       deleteSessionEntries(firstPartAtByMessage, sessionId);
       deleteSessionEntries(stepTokensByMessage, sessionId);
@@ -856,34 +1219,78 @@ async function handleToolExecuteBefore(
     throw new Error(res.reason);
   }
   // Postflight transform: the server returned the complete redacted argument
-  // set. Replace `output.args` with a fresh object rather than mutating the
-  // existing one in place: opencode freezes `output.args` on newer versions
-  // (>=1.14), so an in-place `delete`/`Object.assign` would throw and, caught
-  // below, silently run the ORIGINAL unredacted arguments. Reassigning the
-  // property on the (unfrozen) `output` container sidesteps that and still
-  // gives opencode the redacted set at execution time. A fresh object also
-  // enforces wholesale replacement — keys the server dropped do not survive.
+  // set, which has to replace the arguments the tool runs with.
   //
-  // Redaction fails open: if the args aren't a plain object or reassignment
-  // throws, log and let the original arguments through rather than throwing,
-  // which opencode would treat as a tool failure. Because a silently-skipped
-  // redaction is indistinguishable from a leak, only log success once the
-  // replacement has actually happened (not when the transform was parsed).
+  // opencode runs the tool with the same `args` object it handed this hook and
+  // ignores what the hook returns, so `output.args = redacted` reaches nothing
+  // and the tool runs the originals. The redacted set has to be written into
+  // `args` itself. Checked in opencode 1.18.10 at four of its seven call
+  // sites: native tools, MCP server tools, code mode, and the `task` subtask
+  // path that carries arguments into a subagent. Its plugin docs say the same,
+  // to mutate `output` in place and return void.
+  //
+  // The other three sites are the built-in `list_mcp_resources`,
+  // `list_mcp_resource_templates` and `read_mcp_resource`. Each copies
+  // `server` and `uri` out of the args before firing this hook and executes
+  // from the copy, so no write reaches them. The write below still succeeds
+  // and the debug line below still says `applied`, so a transform for those
+  // three is a silent no-op. The gap predates this handler and cannot be
+  // closed from inside the plugin.
+  //
+  // No copy of the redacted set is kept: `record.input` aliases `args`, so a
+  // hook-derived span cannot disagree with what ran. That record reaches an
+  // export only when no terminal part covers the call, because `full` is the
+  // only mode that exports arguments, it fetches the message parts, and
+  // `mergeToolSpanRecords` prefers the part-derived record.
+  //
+  // If the write fails, block the call the way a deny does rather than run the
+  // tool with the unredacted originals, and drop the record so no span reports
+  // a call that never ran. The case to expect is an `args` object the
+  // handler cannot write to. A frozen one throws on the first `delete` when
+  // the server dropped a key, and on `Object.assign` when it dropped none. No
+  // opencode version we know of freezes it, but the hook contract does not
+  // promise a mutable object. Reassigning `output.args` is not a fallback:
+  // opencode ignores it and runs the originals, which is the bug this handler
+  // replaced.
   const args = output.args;
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    debugLog(
-      `tool-call transform for ${input.callID} dropped: args are not a plain object`,
-    );
-    return;
+  const failure =
+    !args || typeof args !== "object" || Array.isArray(args)
+      ? "args are not a plain object"
+      : writeToolArgs(args as Record<string, unknown>, res.transform);
+  if (failure) {
+    activeToolExecutions.delete(key);
+    debugLog(`tool-call transform for ${input.callID} failed: ${failure}`);
+    throw new Error(formatTransformFailure(input.tool, failure));
   }
+  debugLog(`tool-call transform for ${input.callID} applied`);
+}
+
+/**
+ * Overwrites `args` in place with the server's redacted argument set. Keys the
+ * server dropped go first, because `Object.assign` alone merges and would
+ * leave an unredacted original behind.
+ *
+ * Returns undefined once the arguments hold the redacted set, or the reason
+ * they could not be written.
+ *
+ * The same replacement runs in pi's `tool_call` handler
+ * (`plugins/pi/src/index.ts`), which lets the original arguments through when
+ * the write fails instead of blocking the call.
+ */
+function writeToolArgs(
+  args: Record<string, unknown>,
+  transform: Record<string, unknown>,
+): string | undefined {
   try {
-    const redacted = { ...res.transform };
-    output.args = redacted;
-    // Keep the recorded span consistent with what actually runs.
-    record.input = redacted;
-    debugLog(`tool-call transform for ${input.callID} applied`);
+    for (const key of Object.keys(args)) {
+      if (!Object.hasOwn(transform, key)) {
+        delete args[key];
+      }
+    }
+    Object.assign(args, transform);
+    return undefined;
   } catch (err) {
-    debugLog(`tool-call transform apply failed for ${input.callID}`, err);
+    return `${err}`;
   }
 }
 
@@ -1186,6 +1593,11 @@ export type Agento11yHooks = {
    * shutdown instead of starting another.
    */
   dispose: () => Promise<void>;
+  /**
+   * Rejects with `GuardBlockedError` when a guard denies the submitted prompt.
+   * The caller must await it and let the rejection through, or opencode sends
+   * the turn anyway and the rejection surfaces as an unhandled promise.
+   */
   chatMessage: (
     input: {
       sessionID: string;
@@ -1193,11 +1605,17 @@ export type Agento11yHooks = {
       model?: { providerID: string; modelID: string };
     },
     output: { message: UserMessage; parts: Part[] },
-  ) => void;
+  ) => Promise<void>;
   systemTransform: (
     input: { sessionID?: string; model?: { id?: string } },
     output: { system: string[] },
   ) => void;
+  /**
+   * Rejects with `GuardBlockedError` when a guard denies the outgoing
+   * conversation. Like `chatMessage`, the caller must await it and let the
+   * rejection through, or the turn continues.
+   */
+  messagesTransform: (output: { messages: OutgoingMessage[] }) => Promise<void>;
   toolExecuteBefore: (
     input: { tool: string; sessionID: string; callID: string },
     output: { args: unknown },
@@ -1318,11 +1736,14 @@ export async function createAgento11yHooks(
     dispose: async () => {
       await shutdownOnce();
     },
-    chatMessage: (input, output) => {
-      handleChatMessage(input, output);
+    chatMessage: async (input, output) => {
+      await handleChatMessage(sigil, config, client, debugLog, input, output);
     },
     systemTransform: (input, output) => {
       handleSystemTransform(input, output, debugLog);
+    },
+    messagesTransform: async (output) => {
+      await handleMessagesTransform(sigil, config, client, debugLog, output);
     },
     toolExecuteBefore: async (input, output) => {
       await handleToolExecuteBefore(sigil, config, debugLog, input, output);

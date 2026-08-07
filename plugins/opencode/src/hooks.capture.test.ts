@@ -605,3 +605,112 @@ describe("opencode conversation title", () => {
     );
   });
 });
+
+describe("opencode preflight redaction in the export", () => {
+  const guards = { enabled: true, timeoutMs: 1500, failOpen: true };
+
+  /** A stored text part, the shape opencode hands `chat.message`. */
+  function storedPart(id: string, text: string): any {
+    return {
+      id,
+      sessionID: "sess-1",
+      messageID: "user-1",
+      type: "text",
+      text,
+    };
+  }
+
+  /**
+   * The outgoing entry for the same message. opencode reads it back from its
+   * message store, so the parts carry the ids of the stored ones in new
+   * objects, which is what the export substitution matches on.
+   */
+  function outgoingCopy(parts: any[]) {
+    return {
+      info: { id: "user-1", role: "user", sessionID: "sess-1" },
+      parts: parts.map((part) => ({ ...part })),
+    };
+  }
+
+  function transformOf(...texts: string[]) {
+    return {
+      action: "allow",
+      transformedInput: {
+        messages: texts.map((text) => ({
+          role: "user",
+          parts: [{ type: "text", text }],
+        })),
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetHookState();
+  });
+
+  it("exports the text the provider received, not what the user typed", async () => {
+    const { sigil, generations } = makeAgento11yMock();
+    sigil.evaluateHook.mockResolvedValue(transformOf("token=[REDACTED]"));
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await makeHooks(baseConfig({ guards }));
+
+    const stored = storedPart("prt-1", "token=alpha");
+    hooks.chatMessage(
+      { sessionID: "sess-1" },
+      { message: userMessage("sess-1"), parts: [stored] },
+    );
+    await hooks.messagesTransform({ messages: [outgoingCopy([stored])] });
+    await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+
+    expect((generations[0]!.result as any).input).toEqual([
+      { role: "user", parts: [{ type: "text", text: "token=[REDACTED]" }] },
+    ]);
+    // opencode's own part is untouched: a redact rule governs what leaves the
+    // machine, not the user's transcript.
+    expect(stored.text).toBe("token=alpha");
+  });
+
+  it("exports a collapsed message once", async () => {
+    const { sigil, generations } = makeAgento11yMock();
+    sigil.evaluateHook.mockResolvedValue(transformOf("keep\ntoken=[R]"));
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await makeHooks(baseConfig({ guards }));
+
+    // A transform returns one string per message, so two text parts come back
+    // joined. Replaying it into both parts would export the text twice.
+    const first = storedPart("prt-1", "keep");
+    const second = storedPart("prt-2", "token=alpha");
+    hooks.chatMessage(
+      { sessionID: "sess-1" },
+      { message: userMessage("sess-1"), parts: [first, second] },
+    );
+    await hooks.messagesTransform({
+      messages: [outgoingCopy([first, second])],
+    });
+    await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+
+    expect((generations[0]!.result as any).input).toEqual([
+      { role: "user", parts: [{ type: "text", text: "keep\ntoken=[R]" }] },
+    ]);
+  });
+
+  it("exports the original when no rule rewrote anything", async () => {
+    const { sigil, generations } = makeAgento11yMock();
+    sigil.evaluateHook.mockResolvedValue({ action: "allow" });
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await makeHooks(baseConfig({ guards }));
+
+    const stored = storedPart("prt-1", "token=alpha");
+    hooks.chatMessage(
+      { sessionID: "sess-1" },
+      { message: userMessage("sess-1"), parts: [stored] },
+    );
+    await hooks.messagesTransform({ messages: [outgoingCopy([stored])] });
+    await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+
+    expect((generations[0]!.result as any).input).toEqual([
+      { role: "user", parts: [{ type: "text", text: "token=alpha" }] },
+    ]);
+  });
+});

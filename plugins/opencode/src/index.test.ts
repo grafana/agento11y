@@ -21,7 +21,7 @@ vi.mock("./client.js", () => ({
   createAgento11yClient: createAgento11yClientMock,
 }));
 
-import { _resetHookState } from "./hooks.js";
+import { _resetHookState, _setGuardToastDelayMs } from "./hooks.js";
 import {
   baseConfig,
   makeAgento11yMock,
@@ -43,6 +43,7 @@ describe("Agento11yPlugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetHookState();
+    _setGuardToastDelayMs(0);
   });
 
   it("wires opencode's dispose hook to the plugin shutdown path", async () => {
@@ -65,5 +66,47 @@ describe("Agento11yPlugin", () => {
 
     expect(Object.keys(hooks)).toEqual([]);
     expect(createAgento11yClientMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a guard deny reject out of the chat.message hook", async () => {
+    // The throw is the whole enforcement mechanism: opencode's plugin
+    // dispatcher has no error handling, so a rejection here stops the turn.
+    // Dropping the `await` in the wrapper would leave the rejection floating
+    // and opencode would send the prompt anyway, which no other test catches.
+    const { sigil } = makeAgento11yMock();
+    sigil.evaluateHook = vi.fn(async () => ({
+      action: "deny",
+      reason: "policy says no",
+      evaluations: [],
+    }));
+    createAgento11yClientMock.mockReturnValue(sigil);
+    loadConfigMock.mockResolvedValue(
+      baseConfig({
+        guards: { enabled: true, timeoutMs: 1500, failOpen: true },
+      }),
+    );
+
+    const input = pluginInput();
+    const hooks = (await Agento11yPlugin(input)) as PluginHooks;
+
+    await expect(
+      hooks["chat.message"]?.({ sessionID: "sess-1", agent: "build" } as any, {
+        message: { id: "m1", sessionID: "sess-1", role: "user" } as any,
+        parts: [
+          {
+            id: "p1",
+            sessionID: "sess-1",
+            messageID: "m1",
+            type: "text",
+            text: "key=abc",
+          } as any,
+        ],
+      }),
+    ).rejects.toThrow("policy says no");
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(input.client.tui.showToast).toHaveBeenCalledTimes(1);
+
+    await hooks.dispose?.();
   });
 });

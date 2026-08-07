@@ -23,11 +23,20 @@ export const Agento11yPlugin: Plugin = async ({ client, directory }) => {
   if (!hooks) return {};
 
   const pluginHooks: HooksWithDispose = {
+    // Awaited, and the rejection is not caught: a guard deny refuses the turn
+    // by throwing, and opencode's plugin dispatcher has no error handling of
+    // its own, so the throw is what stops the prompt.
     "chat.message": async (input, output) => {
-      hooks.chatMessage(input, output);
+      await hooks.chatMessage(input, output);
     },
     "experimental.chat.system.transform": async (input, output) => {
       hooks.systemTransform(input, output);
+    },
+    // The hook input is `{}`, so only the output is forwarded. Awaited, and the
+    // rejection is not caught, for the same reason as `chat.message`: throwing
+    // is what refuses a denied turn.
+    "experimental.chat.messages.transform": async (_input, output) => {
+      await hooks.messagesTransform(output);
     },
     event: async ({ event }) => {
       await hooks.event({ event });
