@@ -53,9 +53,9 @@ Do not use both. `/add-plugin` and `agento11y cursor install` write to the same 
 
 ## 3. Add your credentials
 
-`agento11y cursor install` already prompts for these on first run; run `agento11y login` from a terminal to enter or change them later. The prompt asks for values from `https://<your-grafana>.grafana.net/plugins/grafana-agento11y-app`. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
+`agento11y cursor install` already prompts for these on first run; run `agento11y login` from a terminal to enter or change them later. The prompt asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
 
-You need values from three Grafana Cloud pages:
+To type the values instead, press Enter on the empty paste box. They come from three Grafana Cloud pages:
 
 1. **Agent Observability → Configuration**
    - **API URL** → `AGENTO11Y_ENDPOINT`

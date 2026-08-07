@@ -8,6 +8,7 @@ package dotenv
 
 import (
 	"bufio"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -120,26 +121,40 @@ func LoadDotenv(path string, logger *log.Logger) map[string]string {
 // AllowedDotenvKey are honoured — defense-in-depth so a stray entry can't
 // override unrelated process state.
 //
+// See ParseDotenv for the accepted format.
+func ReadDotenv(path string, logger *log.Logger) (map[string]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
+		}
+		if logger != nil {
+			logger.Printf("dotenv: read %s: %v", path, err)
+		}
+		return map[string]string{}, err
+	}
+	defer func() { _ = f.Close() }()
+
+	out, err := ParseDotenv(f)
+	if err != nil && logger != nil {
+		logger.Printf("dotenv: scan %s: %v", path, err)
+	}
+	return out, err
+}
+
+// ParseDotenv parses dotenv content from r under the same rules ReadDotenv
+// applies to a file: only keys matching AllowedDotenvKey are returned, and a
+// read failure returns the pairs parsed so far together with the error.
+// `agento11y login` uses it for a pasted credentials block.
+//
 // Format:
 //   - `KEY=value` one pair per line
 //   - `# comment` lines and trailing ` # comment` on unquoted values
 //   - optional single- or double-quoted values
 //   - optional leading `export ` prefix
-func ReadDotenv(path string, logger *log.Logger) (map[string]string, error) {
+func ParseDotenv(r io.Reader) (map[string]string, error) {
 	out := map[string]string{}
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return out, nil
-		}
-		if logger != nil {
-			logger.Printf("dotenv: read %s: %v", path, err)
-		}
-		return out, err
-	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -159,9 +174,6 @@ func ReadDotenv(path string, logger *log.Logger) (map[string]string, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		if logger != nil {
-			logger.Printf("dotenv: scan %s: %v", path, err)
-		}
 		return out, err
 	}
 	return out, nil
@@ -169,7 +181,8 @@ func ReadDotenv(path string, logger *log.Logger) (map[string]string, error) {
 
 // AllowedDotenvKey limits which keys the dotenv loader will copy into the
 // process environment. AGENTO11Y_*, SIGIL_*, and a small set of OTEL_* vars
-// are recognised.
+// are recognised. OTEL_EXPORTER_OTLP_PROTOCOL is left out because the launcher
+// only speaks HTTP (see internal/emit).
 func AllowedDotenvKey(key string) bool {
 	if strings.HasPrefix(key, "AGENTO11Y_") || strings.HasPrefix(key, "SIGIL_") {
 		return true
