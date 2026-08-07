@@ -15,7 +15,7 @@ overrides:
   '@tootallnate/once': 2.0.1
   undici: 7.29.0
   fast-xml-builder: 1.1.7
-  '@hono/node-server': 2.0.10
+  '@hono/node-server': 2.1.0
   ip-address: 10.3.1
   qs: 6.15.2
   'form-data@<2.5.6': 2.5.6
