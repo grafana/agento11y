@@ -1,0 +1,82 @@
+name: Publish SDK release notes
+
+# Creates a notes-only GitHub Release for each SDK and plugin tag that
+# tag-releases-on-merge.yml pushes. The body is the matching top section of
+# that release line's CHANGELOG.md, so the file stays the source of truth.
+#
+# Only tags pushed after this workflow lands get a release page. The 60 tags
+# that predate it keep none, and the backfilled changelog sections are where
+# their history lives.
+
+on:
+  push:
+    tags:
+      # Go releases five modules per version. Only the core tag is listed, so
+      # one release page appears per version instead of five.
+      - 'go/v*'
+      - 'sdk-python/v*'
+      - 'sdk-js/v*'
+      - 'sdk-java/v*'
+      - 'sdk-dotnet/v*'
+      - 'plugins/pi/v*'
+      - 'plugins/opencode/v*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.repository == 'grafana/agento11y'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # to create the GitHub Release
+
+    steps:
+      # The default ref for a tag push is the tagged commit, whose CHANGELOG.md
+      # carries this version at the top.
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${TAG##*/v}"
+          PREFIX="${TAG%"/v${VERSION}"}"
+
+          CHANGELOG=$(jq -r --arg prefix "$PREFIX" \
+            '.[] | select(.tag_prefix == $prefix) | .changelog' .github/sdk-releases.json)
+          if [[ -z "$CHANGELOG" ]]; then
+            echo "::error::No .github/sdk-releases.json row has tag_prefix '${PREFIX}'."
+            exit 1
+          fi
+
+          # The tag is created from the changelog, so a mismatch means the two
+          # have drifted and the notes would describe a different release.
+          TOP=$(./.github/scripts/changelog-top-version.sh "$CHANGELOG")
+          if [[ "$TOP" != "$VERSION" ]]; then
+            echo "::error::${CHANGELOG} top version is ${TOP:+v}${TOP:-(none)}, but the pushed tag ${TAG} is v${VERSION}."
+            exit 1
+          fi
+
+          ./.github/scripts/changelog-latest-section.sh "$CHANGELOG" > /tmp/notes.md
+
+          # --latest=false keeps the "Latest" badge on the plugins/agento11y
+          # binary release, which plugins/agento11y/README.md and
+          # plugins/agento11y/scripts/install.sh send users to.
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file /tmp/notes.md \
+            --verify-tag \
+            --latest=false
+
+          {
+            echo "## Released \`${TAG}\`"
+            echo ''
+            cat /tmp/notes.md
+          } >> "$GITHUB_STEP_SUMMARY"

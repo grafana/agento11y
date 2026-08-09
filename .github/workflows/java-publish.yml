@@ -29,7 +29,7 @@ jobs:
       contents: read
     outputs:
       new-version: ${{ steps.bump.outputs.new-version }}
-      tag: ${{ steps.bump.outputs.tag }}
+      changelog-section: ${{ steps.bump.outputs.section }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -46,10 +46,31 @@ jobs:
         run: |
           CURRENT=$(git tag -l 'sdk-java/v*' | sed 's|sdk-java/v||' | sort -V | tail -1)
           CURRENT=${CURRENT:-0.0.0}
+
+          # A tag appears only when the release PR merges, so a changelog top
+          # version ahead of the newest tag means the last release merged
+          # untagged. Stop, rather than emit a second section for it.
+          TOP=$(./.github/scripts/changelog-top-version.sh java/CHANGELOG.md)
+          if [[ -n "$TOP" && "$TOP" != "$CURRENT" \
+                && "$(printf '%s\n%s\n' "$TOP" "$CURRENT" | sort -V | tail -1)" == "$TOP" ]]; then
+            echo "::error::java/CHANGELOG.md top v${TOP} is ahead of the latest sdk-java/v* tag v${CURRENT}; create the missing tag and retry."
+            exit 1
+          fi
+
           NEW=$(./.github/scripts/bump-version.sh "$BUMP" "$CURRENT")
 
           echo "new-version=${NEW}" >> "$GITHUB_OUTPUT"
-          echo "tag=sdk-java/v${NEW}" >> "$GITHUB_OUTPUT"
+
+          # The release-pr job checks out without full history, so generate the
+          # section here and hand it over as a job output.
+          ROW=$(jq -r '.[] | select(.id == "java")' .github/sdk-releases.json)
+          mapfile -t PATHS < <(jq -r '.paths[]' <<<"$ROW")
+          SECTION=$(./.github/scripts/changelog-for-release.sh "$NEW" sdk-java "${PATHS[@]}")
+          {
+            echo 'section<<SECTION_EOF'
+            printf '%s\n' "$SECTION"
+            echo 'SECTION_EOF'
+          } >> "$GITHUB_OUTPUT"
 
           {
             echo "## Java SDK release plan"
@@ -59,6 +80,10 @@ jobs:
             echo "- new: \`${NEW}\`"
             echo "- tag: \`sdk-java/v${NEW}\`"
             echo "- dry-run: \`${DRY_RUN}\`"
+            echo ""
+            echo "### Changelog section"
+            echo ""
+            printf '%s\n' "$SECTION"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
@@ -113,12 +138,13 @@ jobs:
           ./gradlew --no-daemon publishAllPublicationsToMavenCentralRepository \
             -Pversion="${PKG_VERSION}"
 
-  tag:
+  release-pr:
     if: ${{ !inputs.dry-run }}
     needs: [build, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
       id-token: write
 
     steps:
@@ -132,18 +158,47 @@ jobs:
         with:
           token: ${{ steps.generate-github-token.outputs.token }}
           persist-credentials: true
-          fetch-depth: 0
 
       - name: Setup Git
         run: |
           git config user.name 'grafana-plugins-platform-bot[bot]'
           git config user.email '144369747+grafana-plugins-platform-bot[bot]@users.noreply.github.com'
 
-      - name: Push tag
+      - name: Update CHANGELOG.md
+        shell: bash
         env:
-          TAG: ${{ needs.build.outputs.tag }}
-          VERSION: ${{ needs.build.outputs.new-version }}
+          NEW_VERSION: ${{ needs.build.outputs.new-version }}
+          SECTION: ${{ needs.build.outputs.changelog-section }}
         run: |
-          git push origin ":refs/tags/${TAG}" 2>/dev/null || true
-          git tag -f -a "${TAG}" -m "Java SDK ${VERSION}"
-          git push origin "${TAG}"
+          printf '%s\n' "$SECTION" > /tmp/section.md
+          ./.github/scripts/prepend-changelog.sh java/CHANGELOG.md < /tmp/section.md
+
+          {
+            echo "The Java SDK \`${NEW_VERSION}\` is already published to Maven Central. This PR records its changelog entry."
+            echo ""
+            cat /tmp/section.md
+            echo ""
+            echo "---"
+            echo ""
+            echo "Merging this PR creates \`sdk-java/v${NEW_VERSION}\` via \`tag-releases-on-merge.yml\`."
+          } > /tmp/pr-body.md
+
+      - name: Open release PR
+        id: cpr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.generate-github-token.outputs.token }}
+          branch: release/sdk-java-${{ needs.build.outputs.new-version }}
+          base: main
+          sign-commits: true
+          add-paths: java/CHANGELOG.md
+          commit-message: "chore(sdk-java): release v${{ needs.build.outputs.new-version }}"
+          title: "chore(sdk-java): release v${{ needs.build.outputs.new-version }}"
+          body-path: /tmp/pr-body.md
+
+      - name: Enable auto-merge
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.generate-github-token.outputs.token }}
+          BRANCH: ${{ steps.cpr.outputs.pull-request-branch }}
+        run: gh pr merge "${BRANCH}" --auto --squash --delete-branch

@@ -1,0 +1,79 @@
+[
+  {
+    "id": "go",
+    "changelog": "go/CHANGELOG.md",
+    "tag_prefix": "go",
+    "extra_tag_prefixes": [
+      "go-providers/anthropic",
+      "go-providers/openai",
+      "go-providers/gemini",
+      "go-frameworks/google-adk"
+    ],
+    "paths": [
+      "go",
+      "go-providers",
+      "go-frameworks",
+      ":(exclude)**/*_test.go",
+      ":(exclude)**/README.md"
+    ]
+  },
+  {
+    "id": "python",
+    "changelog": "python/CHANGELOG.md",
+    "tag_prefix": "sdk-python",
+    "paths": [
+      "python",
+      "python-providers",
+      "python-frameworks",
+      ":(exclude)**/tests/**",
+      ":(exclude)**/README.md"
+    ]
+  },
+  {
+    "id": "js",
+    "changelog": "js/CHANGELOG.md",
+    "tag_prefix": "sdk-js",
+    "paths": [
+      "js",
+      "js-core",
+      ":(exclude)**/test/**",
+      ":(exclude)**/README.md"
+    ]
+  },
+  {
+    "id": "java",
+    "changelog": "java/CHANGELOG.md",
+    "tag_prefix": "sdk-java",
+    "paths": [
+      "java",
+      ":(exclude)**/src/test/**",
+      ":(exclude)**/README.md"
+    ]
+  },
+  {
+    "id": "dotnet",
+    "changelog": "dotnet/CHANGELOG.md",
+    "tag_prefix": "sdk-dotnet",
+    "paths": [
+      "dotnet",
+      ":(exclude)**/tests/**",
+      ":(exclude)**/README.md"
+    ]
+  },
+  {
+    "id": "pi",
+    "changelog": "plugins/pi/CHANGELOG.md",
+    "tag_prefix": "plugins/pi",
+    "paths": [
+      "plugins/pi"
+    ]
+  },
+  {
+    "id": "opencode",
+    "changelog": "plugins/opencode/CHANGELOG.md",
+    "tag_prefix": "plugins/opencode",
+    "paths": [
+      "plugins/opencode"
+    ]
+  }
+]

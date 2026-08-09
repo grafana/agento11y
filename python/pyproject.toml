@@ -22,6 +22,11 @@ dev = [
   "pytest>=8.2.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/grafana/agento11y"
+Repository = "https://github.com/grafana/agento11y"
+Changelog = "https://github.com/grafana/agento11y/blob/main/python/CHANGELOG.md"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

@@ -1,0 +1,136 @@
+name: Tag SDK and plugin releases on merge
+
+# Pairs with every release line in .github/sdk-releases.json. When a release PR
+# merges, that line's CHANGELOG.md changes on main; this workflow reads the top
+# version heading and creates the tags at the merge commit. A tag must point at
+# a commit that stays on main: a squash merge orphans the release PR's head
+# commit, and `go install` cannot resolve a tag on an orphaned commit.
+#
+# Idempotent: an existing tag is neither recreated nor moved, so a changelog
+# edit that introduces no new version tags nothing. Every row is read on every
+# run rather than working out which changelog the push touched; rows whose tag
+# already exists are skipped below.
+#
+# plugins/agento11y is not in the table. It keeps its own pair of workflows
+# (release-agento11y.yml and tag-agento11y-on-merge.yml) because it also drives
+# GoReleaser and Homebrew.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # `**` is required: a single `*` does not cross `/`, so `*/CHANGELOG.md`
+      # would match go/CHANGELOG.md and miss plugins/pi/CHANGELOG.md.
+      - '**/CHANGELOG.md'
+
+permissions:
+  contents: read
+
+# Two merges seconds apart both read the table before either pushes. Serialising
+# the runs keeps the loser from racing the winner over the same tag.
+concurrency:
+  group: tag-releases-on-merge
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: github.repository == 'grafana/agento11y'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Generate GitHub token
+        id: generate-github-token
+        uses: grafana/shared-workflows/actions/create-github-app-token@259ba21cb3ff07724f331e26d926d655d24b317b # create-github-app-token/v0.2.3
+        with:
+          github_app: grafana-plugins-platform-bot
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ steps.generate-github-token.outputs.token }}
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Setup Git
+        run: |
+          git config user.name 'grafana-plugins-platform-bot[bot]'
+          git config user.email '144369747+grafana-plugins-platform-bot[bot]@users.noreply.github.com'
+
+      - name: Create missing tags
+        env:
+          GITHUB_TOKEN: ${{ steps.generate-github-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git"
+
+          CREATED=()
+          FAILED=()
+
+          while read -r id; do
+            CHANGELOG=$(jq -r --arg id "$id" '.[] | select(.id == $id) | .changelog' .github/sdk-releases.json)
+
+            # Skip rather than fail, so a line that has never released does not
+            # block the six that have.
+            if [[ ! -f "$CHANGELOG" ]]; then
+              echo "${id}: ${CHANGELOG} does not exist; nothing to tag."
+              continue
+            fi
+            VERSION=$(./.github/scripts/changelog-top-version.sh "$CHANGELOG")
+            if [[ -z "$VERSION" ]]; then
+              echo "${id}: no \`## [X.Y.Z]\` heading found; nothing to tag."
+              continue
+            fi
+
+            mapfile -t PREFIXES < <(
+              jq -r --arg id "$id" \
+                '.[] | select(.id == $id) | [.tag_prefix] + (.extra_tag_prefixes // []) | .[]' \
+                .github/sdk-releases.json
+            )
+
+            for prefix in "${PREFIXES[@]}"; do
+              TAG="${prefix}/v${VERSION}"
+              # Ask the remote as well as the local clone. A tag pushed onto a
+              # since-orphaned commit is not always reachable locally, but
+              # pushing it again would still be rejected.
+              if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null \
+                || [[ -n "$(git ls-remote --tags origin "refs/tags/${TAG}")" ]]; then
+                echo "${id}: tag ${TAG} already exists; nothing to do."
+                continue
+              fi
+              git tag -a "$TAG" -m "${prefix} ${VERSION}"
+              # A failed push must not abort the loop: rows run in table order,
+              # so errexit here would always leave pi and opencode untagged.
+              if git push origin "refs/tags/${TAG}"; then
+                CREATED+=("$TAG")
+              elif [[ -n "$(git ls-remote --tags origin "refs/tags/${TAG}")" ]]; then
+                echo "${id}: tag ${TAG} was created by a concurrent run."
+              else
+                echo "::error::${id}: could not push tag ${TAG}."
+                FAILED+=("$TAG")
+              fi
+            done
+          done < <(jq -r '.[].id' .github/sdk-releases.json)
+
+          if [[ ${#CREATED[@]} -gt 0 ]]; then
+            {
+              echo '## Tags created'
+              echo ''
+              for tag in "${CREATED[@]}"; do echo "- \`${tag}\`"; done
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No tags created; every changelog top version is already tagged.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [[ ${#FAILED[@]} -gt 0 ]]; then
+            {
+              echo ''
+              echo '## Tags that could not be pushed'
+              echo ''
+              for tag in "${FAILED[@]}"; do echo "- \`${tag}\`"; done
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi

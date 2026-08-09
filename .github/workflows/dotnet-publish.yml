@@ -29,7 +29,7 @@ jobs:
       contents: read
     outputs:
       new-version: ${{ steps.bump.outputs.new-version }}
-      tag: ${{ steps.bump.outputs.tag }}
+      changelog-section: ${{ steps.bump.outputs.section }}
 
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: true
@@ -54,10 +54,31 @@ jobs:
         run: |
           CURRENT=$(git tag -l 'sdk-dotnet/v*' | sed 's|sdk-dotnet/v||' | sort -V | tail -1)
           CURRENT=${CURRENT:-0.0.0}
+
+          # A tag appears only when the release PR merges, so a changelog top
+          # version ahead of the newest tag means the last release merged
+          # untagged. Stop, rather than emit a second section for it.
+          TOP=$(./.github/scripts/changelog-top-version.sh dotnet/CHANGELOG.md)
+          if [[ -n "$TOP" && "$TOP" != "$CURRENT" \
+                && "$(printf '%s\n%s\n' "$TOP" "$CURRENT" | sort -V | tail -1)" == "$TOP" ]]; then
+            echo "::error::dotnet/CHANGELOG.md top v${TOP} is ahead of the latest sdk-dotnet/v* tag v${CURRENT}; create the missing tag and retry."
+            exit 1
+          fi
+
           NEW=$(./.github/scripts/bump-version.sh "$BUMP" "$CURRENT")
 
           echo "new-version=${NEW}" >> "$GITHUB_OUTPUT"
-          echo "tag=sdk-dotnet/v${NEW}" >> "$GITHUB_OUTPUT"
+
+          # The release-pr job checks out without full history, so generate the
+          # section here and hand it over as a job output.
+          ROW=$(jq -r '.[] | select(.id == "dotnet")' .github/sdk-releases.json)
+          mapfile -t PATHS < <(jq -r '.paths[]' <<<"$ROW")
+          SECTION=$(./.github/scripts/changelog-for-release.sh "$NEW" sdk-dotnet "${PATHS[@]}")
+          {
+            echo 'section<<SECTION_EOF'
+            printf '%s\n' "$SECTION"
+            echo 'SECTION_EOF'
+          } >> "$GITHUB_OUTPUT"
 
           {
             echo "## .NET SDK release plan"
@@ -67,6 +88,10 @@ jobs:
             echo "- new: \`${NEW}\`"
             echo "- tag: \`sdk-dotnet/v${NEW}\`"
             echo "- dry-run: \`${DRY_RUN}\`"
+            echo ""
+            echo "### Changelog section"
+            echo ""
+            printf '%s\n' "$SECTION"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
@@ -123,18 +148,23 @@ jobs:
       - name: Publish
         env:
           NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        # No --skip-duplicate. The next version is derived from the latest
+        # sdk-dotnet/v* tag, and that tag now appears only when the release PR
+        # merges, so a re-dispatch while the PR is open recomputes the same
+        # version. Failing on the duplicate stops the run before release-pr
+        # opens a second PR claiming a version NuGet already holds.
         run: |
           dotnet nuget push "packages/*.nupkg" \
             --api-key "${NUGET_API_KEY}" \
-            --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
+            --source https://api.nuget.org/v3/index.json
 
-  tag:
+  release-pr:
     if: ${{ !inputs.dry-run }}
     needs: [build, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
       id-token: write
 
     steps:
@@ -148,18 +178,47 @@ jobs:
         with:
           token: ${{ steps.generate-github-token.outputs.token }}
           persist-credentials: true
-          fetch-depth: 0
 
       - name: Setup Git
         run: |
           git config user.name 'grafana-plugins-platform-bot[bot]'
           git config user.email '144369747+grafana-plugins-platform-bot[bot]@users.noreply.github.com'
 
-      - name: Push tag
+      - name: Update CHANGELOG.md
+        shell: bash
         env:
-          TAG: ${{ needs.build.outputs.tag }}
-          VERSION: ${{ needs.build.outputs.new-version }}
+          NEW_VERSION: ${{ needs.build.outputs.new-version }}
+          SECTION: ${{ needs.build.outputs.changelog-section }}
         run: |
-          git push origin ":refs/tags/${TAG}" 2>/dev/null || true
-          git tag -f -a "${TAG}" -m ".NET SDK ${VERSION}"
-          git push origin "${TAG}"
+          printf '%s\n' "$SECTION" > /tmp/section.md
+          ./.github/scripts/prepend-changelog.sh dotnet/CHANGELOG.md < /tmp/section.md
+
+          {
+            echo "The .NET SDK \`${NEW_VERSION}\` is already published to NuGet. This PR records its changelog entry."
+            echo ""
+            cat /tmp/section.md
+            echo ""
+            echo "---"
+            echo ""
+            echo "Merging this PR creates \`sdk-dotnet/v${NEW_VERSION}\` via \`tag-releases-on-merge.yml\`."
+          } > /tmp/pr-body.md
+
+      - name: Open release PR
+        id: cpr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.generate-github-token.outputs.token }}
+          branch: release/sdk-dotnet-${{ needs.build.outputs.new-version }}
+          base: main
+          sign-commits: true
+          add-paths: dotnet/CHANGELOG.md
+          commit-message: "chore(sdk-dotnet): release v${{ needs.build.outputs.new-version }}"
+          title: "chore(sdk-dotnet): release v${{ needs.build.outputs.new-version }}"
+          body-path: /tmp/pr-body.md
+
+      - name: Enable auto-merge
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.generate-github-token.outputs.token }}
+          BRANCH: ${{ steps.cpr.outputs.pull-request-branch }}
+        run: gh pr merge "${BRANCH}" --auto --squash --delete-branch
