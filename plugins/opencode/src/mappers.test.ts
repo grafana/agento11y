@@ -429,7 +429,7 @@ describe("mapGeneration", () => {
     expect(result.input).toHaveLength(1);
     expect(result.output).toHaveLength(1);
     expect(result.usage?.inputTokens).toBe(100);
-    expect(result.metadata?.cost).toBe(0.01);
+    expect(result.metadata?.cost_usd).toBe(0.01);
   });
 
   it("maps response model, stop reason, and completion timestamp from assistant message", () => {
@@ -456,7 +456,7 @@ describe("mapGeneration", () => {
       cacheReadInputTokens: 70,
       cacheWriteInputTokens: 14,
     });
-    expect(result.metadata?.cost).toBe(0.06);
+    expect(result.metadata?.cost_usd).toBe(0.06);
   });
 
   it("keeps input cache-adjusted and reasoning out of output", () => {

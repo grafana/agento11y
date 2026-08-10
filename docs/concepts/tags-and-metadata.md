@@ -172,9 +172,7 @@ Codex and copilot also add their own `codex.*` and `copilot.*` keys, so this tab
 
 | Key | Value | Emitted by |
 | --- | --- | --- |
-| `cost_usd` | Cost the host itself reported for the call, in US dollars. Present whenever pi priced the call, including a cost of `0`. | pi |
-| `vibe.cost_usd` | Cost vibe reported for the turn, in US dollars. Omitted when the cost is `0`. | vibe |
-| `cost` | Cost opencode reported for the turn, in US dollars. | opencode |
+| `cost_usd` | Cost the coding agent itself reported, in US dollars. | pi, opencode, vibe |
 | `pi.tokens_before` | Pi's estimate of the context size before a compaction, in tokens. Compaction generations only. The estimate covers the whole conversation, not this call's input tokens. | pi |
 | `pi.compaction.reason` | What triggered the compaction: `manual` (`/compact` or `ctx.compact()`), `threshold` (context limit), or `overflow` (context-overflow recovery). | pi |
 | `pi.compaction.will_retry` | `true` when pi retries the turn it aborted to run this compaction. Only overflow recovery retries. | pi |

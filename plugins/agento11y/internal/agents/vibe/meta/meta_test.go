@@ -35,6 +35,11 @@ func TestLoad(t *testing.T) {
 	if m.Stats.Steps == 0 {
 		t.Errorf("Steps = 0, want > 0")
 	}
+	if m.Stats.SessionCost == nil {
+		t.Error("SessionCost is nil, want 0.05")
+	} else if *m.Stats.SessionCost != 0.05 {
+		t.Errorf("SessionCost = %v, want 0.05", *m.Stats.SessionCost)
+	}
 
 	if len(m.ToolsAvailable) == 0 {
 		t.Errorf("ToolsAvailable is empty")

@@ -223,7 +223,7 @@ export function mapGeneration(
     stopReason: msg.finish,
     completedAt: msg.time.completed ? new Date(msg.time.completed) : undefined,
     metadata: {
-      cost: msg.cost,
+      cost_usd: msg.cost,
     },
   };
 }

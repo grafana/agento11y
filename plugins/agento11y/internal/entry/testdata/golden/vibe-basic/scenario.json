@@ -50,7 +50,7 @@
       "\"input_tokens\":\"100\"",
       "\"output_tokens\":\"25\"",
       "\"thinking_enabled\":true",
-      "\"vibe.cost_usd\":0.0625"
+      "\"cost_usd\":0.0625"
     ]
   }
 }
