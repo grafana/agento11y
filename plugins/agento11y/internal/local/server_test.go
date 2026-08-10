@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -54,6 +55,54 @@ func TestServer_GenerationsExport_RecordsAndAccepts(t *testing.T) {
 	assert.Equal(t, "conv-A", rec.ConversationID)
 	assert.NotEmpty(t, rec.ReceivedAt)
 	assert.JSONEq(t, `{"id":"gen-1","conversation_id":"conv-A","model":{"name":"m1"}}`, string(rec.Generation))
+}
+
+// TestServer_GenerationsExport_StampsLastActivity covers the ordering key
+// ingest writes: a conversation file's modification time is the newest
+// activity the batch carried for it, and a later import of older turns
+// leaves it where it was, so the conversation keeps its place among
+// today's.
+func TestServer_GenerationsExport_StampsLastActivity(t *testing.T) {
+	s, dir := newTestServer(t)
+	live := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	earlier := live.Add(-30 * time.Minute)
+	backfill := live.Add(-90 * 24 * time.Hour)
+	stamp := func() time.Time {
+		t.Helper()
+		info, err := os.Stat(filepath.Join(dir, ConversationsDir, "conv-A.jsonl"))
+		require.NoError(t, err)
+		return info.ModTime()
+	}
+	export := func(body string) {
+		t.Helper()
+		resp := post(t, s, "/api/v1/generations:export", "application/json", body)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+	}
+
+	// One request, two turns of the same conversation, out of order.
+	export(fmt.Sprintf(`{"generations":[
+		{"id":"gen-2","conversation_id":"conv-A","started_at":%q,"completed_at":%q},
+		{"id":"gen-1","conversation_id":"conv-A","started_at":%q,"completed_at":%q}
+	]}`,
+		live.Add(-time.Minute).Format(time.RFC3339Nano), live.Format(time.RFC3339Nano),
+		earlier.Add(-time.Minute).Format(time.RFC3339Nano), earlier.Format(time.RFC3339Nano)))
+	assert.WithinDuration(t, live, stamp(), time.Second, "the newest activity in the batch")
+
+	// A history import appending months-old turns to the same conversation.
+	export(fmt.Sprintf(`{"generations":[
+		{"id":"gen-0","conversation_id":"conv-A","started_at":%q,"completed_at":%q}
+	]}`, backfill.Add(-time.Minute).Format(time.RFC3339Nano), backfill.Format(time.RFC3339Nano)))
+	assert.WithinDuration(t, live, stamp(), time.Second, "a backfill must not sink a live conversation")
+
+	// The list bounds on that stamp, so the conversation stays in a range
+	// that covers its live turn.
+	since := live.Add(-time.Minute).Format(time.RFC3339Nano)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations?since="+url.QueryEscape(since), nil)
+	rr := httptest.NewRecorder()
+	s.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), `"id":"conv-A"`)
 }
 
 func TestServer_GenerationsExport_RejectsMissingAndUnsafeConversationID(t *testing.T) {
@@ -302,10 +351,6 @@ func TestServer_APIConversations(t *testing.T) {
 		CompletedAt: mustParse(t, "2026-05-21T11:00:01Z"),
 		Usage:       agento11y.TokenUsage{InputTokens: 10, OutputTokens: 5},
 	}, "2026-05-21T11:00:01Z")
-	// The list orders and filters on the file modification time, so pin it
-	// to each conversation's last activity the way an append does.
-	setConversationModTime(t, storage, "conv-A", mustParse(t, "2026-05-21T10:00:03Z"))
-	setConversationModTime(t, storage, "conv-B", mustParse(t, "2026-05-21T11:00:01Z"))
 
 	cases := []struct {
 		name          string
@@ -671,6 +716,31 @@ func TestServer_APITokenMetrics(t *testing.T) {
 		require.Len(t, body.Points, 1)
 		assert.Equal(t, mustParse(t, "2026-05-21T10:00:00Z"), body.Points[0].Timestamp)
 		assert.Equal(t, int64(107), body.Points[0].FreshInput)
+	})
+
+	t.Run("since skips older files without decoding them", func(t *testing.T) {
+		requireUnreadableFilesSupported(t)
+		writeGen(t, storage, "conv-old", "g3", agento11y.Generation{
+			Model:       agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
+			StartedAt:   mustParse(t, "2026-05-01T10:00:00Z"),
+			CompletedAt: mustParse(t, "2026-05-01T10:00:01Z"),
+			Usage:       agento11y.TokenUsage{InputTokens: 999},
+		}, "2026-05-01T10:00:01Z")
+		// Unreadable, so a request that opens it fails instead of quietly
+		// paying for the decode the modification-time break exists to avoid.
+		blockConversationFile(t, storage, "conv-old")
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/tokens?since=2026-05-21T09:00:00Z&interval=3600", nil)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		var body struct {
+			Points []TokenUsagePoint `json:"points"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+		require.Len(t, body.Points, 1)
+		assert.Equal(t, int64(107), body.Points[0].FreshInput, "the older file contributes nothing")
 	})
 
 	t.Run("invalid parameters rejected", func(t *testing.T) {

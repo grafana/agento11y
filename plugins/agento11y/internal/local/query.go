@@ -119,8 +119,9 @@ type ConversationListOptions struct {
 	Limit int
 	// Since drops conversations whose last activity predates it. The bound
 	// is inclusive, so a conversation whose last activity is exactly Since
-	// is kept. It applies to the file modification time, which for these
-	// append-only files is the last activity. Zero means no lower bound.
+	// is kept. It applies to the file modification time, which every append
+	// stamps with the newest activity the file holds. Zero means no lower
+	// bound.
 	Since time.Time
 }
 
@@ -132,9 +133,11 @@ type ConversationListOptions struct {
 // returns an empty slice and a zero total (first-launch case).
 //
 // The limit can apply before the decode only because the order comes from
-// the file modification time rather than the decoded last_activity. For an
-// append-only JSONL file the two agree. A copy or restore that rewrites
-// modification times can reorder the list until the next append.
+// the file modification time rather than the decoded last_activity. The two
+// agree because an append stamps the file with the newest activity it holds
+// (recordActivity), and the modification-time pass at startup sets the same
+// stamp on every file whose records disagree with it. A copy or restore
+// that rewrites modification times reorders the list until the next append.
 func (s *Storage) ListConversations(opts ConversationListOptions) (page []ConversationSummary, total int, err error) {
 	files, err := s.conversationFiles()
 	if err != nil {
@@ -386,12 +389,12 @@ func (s *Storage) TokenUsagePoints(opts TokenUsageOptions) ([]TokenUsagePoint, t
 			return nil, 0, err
 		}
 		skipped += entry.skipped
-		// The break above is loose. A file's modification time is only an
-		// upper bound on the data time of the generations in it, and an import
-		// stamps every file it writes with the current time, so during an
-		// import the break cuts nothing. bounds then cuts on the decoded
-		// timestamps instead. Files are ordered by modification time, not by
-		// data time, so a file below the bound is skipped and the walk goes on.
+		// The break above cuts whole files, because a file's modification time
+		// is the newest activity it holds. The older points inside a file it
+		// keeps can still fall below the bound, which is what bounds cuts on. A
+		// file left with no point is skipped rather than ending the walk: a copy
+		// or restore that rewrote modification times orders the files by
+		// something other than their activity.
 		entryFirst, entryLast, ok := entry.bounds(opts.Since)
 		if !ok {
 			continue
@@ -542,6 +545,29 @@ func tokenUsagePoint(rec summaryRecord) (TokenUsagePoint, bool) {
 		Provider:     gen.Model.Provider,
 		TokenBuckets: buckets,
 	}, true
+}
+
+// recordActivity is the moment a stored record represents: the later of
+// completed_at and started_at, or the receiver's arrival time when the
+// record carries neither. The conversation summary and every
+// modification-time stamp read it, so the list order and the Since bound
+// cannot disagree.
+//
+// It takes the later of the pair rather than completed_at alone because an
+// exporter can report a completed_at that precedes started_at, and because
+// generationTime places a token-chart point at started_at. Activity is
+// therefore never below the point in the same record, so the chart can skip
+// a file by its modification time.
+func recordActivity(gen summaryGeneration, receivedAt string) time.Time {
+	when := gen.CompletedAt
+	if gen.StartedAt.After(when) {
+		when = gen.StartedAt
+	}
+	if !when.IsZero() {
+		return when
+	}
+	when, _ = time.Parse(time.RFC3339Nano, receivedAt)
+	return when
 }
 
 // generationTime is the wall-clock moment a generation ran, preferring

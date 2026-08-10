@@ -267,6 +267,10 @@ type generationRecord struct {
 type pendingGeneration struct {
 	index  int
 	record generationRecord
+	// activity is the moment this record represents. The newest activity
+	// among the records a write accepts becomes the conversation file's
+	// modification time, which is the key the list orders and bounds by.
+	activity time.Time
 }
 
 func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
@@ -314,6 +318,9 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 				ConversationID: gen.ConversationID,
 				Generation:     stored[i],
 			},
+			// gen already carries the timestamps recordActivity reads, so
+			// the stamp costs no extra decode.
+			activity: recordActivity(gen.summaryGeneration, receivedAt),
 		})
 	}
 
@@ -324,10 +331,12 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 	for _, convID := range order {
 		pending := groups[convID]
 		recs := make([]generationRecord, len(pending))
+		activities := make([]time.Time, len(pending))
 		for i, p := range pending {
 			recs[i] = p.record
+			activities[i] = p.activity
 		}
-		written, err := s.storage.AppendGenerations(convID, recs)
+		written, err := s.storage.AppendGenerations(convID, recs, activities)
 		if err != nil {
 			s.logger.Printf("local: append generations: %v", err)
 		}

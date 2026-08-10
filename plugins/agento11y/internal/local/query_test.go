@@ -111,14 +111,8 @@ func TestListConversations_Aggregates(t *testing.T) {
 	// list should still surface it via the received_at fallback.
 	writeGen(t, s, "conv-C", "g5", agento11y.Generation{AgentName: "vistra"}, "2026-05-21T11:10:00Z")
 
-	// The order comes from the file modification time, and on Linux the three
-	// writes above land in one filesystem timestamp tick, which leaves them
-	// tied. Pin each file to its last received_at so the expected order is the
-	// one the records describe.
-	setConversationModTime(t, s, "conv-A", mustParse(t, "2026-05-21T10:00:13Z"))
-	setConversationModTime(t, s, "conv-B", mustParse(t, "2026-05-21T11:00:01Z"))
-	setConversationModTime(t, s, "conv-C", mustParse(t, "2026-05-21T11:10:00Z"))
-
+	// The order comes from the file modification time, which each append
+	// above stamped with the newest activity it carried.
 	got, _, err := s.ListConversations(ConversationListOptions{})
 	if err != nil {
 		t.Fatalf("ListConversations: %v", err)
@@ -214,7 +208,9 @@ func TestConversationQueriesUseLatestGenerationRecord(t *testing.T) {
 }
 
 // TestListConversations_LimitAndEmpty covers the limit knob and the
-// empty-store case in one table.
+// empty-store case in one table. The five fixtures share one received_at
+// and stagger completed_at a minute apart, so the returned order comes
+// from the activity each append stamped and not from the arrival time.
 func TestListConversations_LimitAndEmpty(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -238,10 +234,6 @@ func TestListConversations_LimitAndEmpty(t *testing.T) {
 					StartedAt:   mustParse(t, "2026-05-21T10:00:00Z").Add(time.Duration(i) * time.Minute),
 					CompletedAt: mustParse(t, "2026-05-21T10:00:01Z").Add(time.Duration(i) * time.Minute),
 				}, "2026-05-21T10:00:01Z")
-				// One tick holds every write on Linux, so the modification
-				// times tie and the newest-first order falls back to the id.
-				// Pin them a minute apart, matching the seeded activity.
-				setConversationModTime(t, s, id, mustParse(t, "2026-05-21T10:00:01Z").Add(time.Duration(i)*time.Minute))
 			}
 			got, _, err := s.ListConversations(ConversationListOptions{Limit: tc.limit})
 			if err != nil {
@@ -265,7 +257,7 @@ func TestListConversations_LimitAndEmpty(t *testing.T) {
 // page are made unreadable, so a request that would open one fails and a
 // bounded request cannot pass by accident.
 func TestListConversations_BoundedPage(t *testing.T) {
-	modTimes := map[string]string{
+	activity := map[string]string{
 		"conv-a": "2026-08-03T12:00:00Z",
 		"conv-b": "2026-08-03T11:00:00Z",
 		"conv-c": "2026-08-03T10:00:00Z",
@@ -293,17 +285,16 @@ func TestListConversations_BoundedPage(t *testing.T) {
 				requireUnreadableFilesSupported(t)
 			}
 			s := newStorage(t)
-			// Write oldest-first so the modification times below are the
-			// only thing the order can come from.
+			// Write oldest-first, so an order that follows the seeded
+			// activity can only come from the stamp each append writes.
 			for _, id := range oldestFirst {
 				writeGen(t, s, id, "g-"+id, agento11y.Generation{
 					AgentName:   "pi",
 					Model:       agento11y.ModelRef{Name: "m"},
-					StartedAt:   mustParse(t, modTimes[id]),
-					CompletedAt: mustParse(t, modTimes[id]),
+					StartedAt:   mustParse(t, activity[id]),
+					CompletedAt: mustParse(t, activity[id]),
 					Usage:       agento11y.TokenUsage{InputTokens: 1, OutputTokens: 1},
-				}, modTimes[id])
-				setConversationModTime(t, s, id, mustParse(t, modTimes[id]))
+				}, activity[id])
 			}
 			if tc.blockFrom >= 0 {
 				for _, id := range []string{"conv-a", "conv-b", "conv-c"}[tc.blockFrom:] {
@@ -1004,6 +995,39 @@ func TestTokenUsagePoints(t *testing.T) {
 	assert.Equal(t, mustParse(t, "2026-05-21T12:00:00Z"), points[2].Timestamp)
 }
 
+// TestTokenUsagePoints_InvertedTimestampsStayInRange covers a generation
+// whose completed_at precedes its started_at, which a clock adjustment on
+// the exporting machine produces. Activity takes the later of the two, so a
+// file's modification time never sits below the point the chart places at
+// started_at, and the Since bound that skips whole files cannot drop a
+// point inside the range.
+func TestTokenUsagePoints_InvertedTimestampsStayInRange(t *testing.T) {
+	s := newStorage(t)
+	started := mustParse(t, "2026-05-21T10:00:00Z")
+	writeGen(t, s, "conv-inverted", "g1", agento11y.Generation{
+		Model:       agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
+		StartedAt:   started,
+		CompletedAt: started.Add(-30 * time.Minute),
+		Usage:       agento11y.TokenUsage{InputTokens: 5, OutputTokens: 3},
+	}, started.Format(time.RFC3339Nano))
+
+	info, err := os.Stat(filepath.Join(s.Dir(), ConversationsDir, "conv-inverted.jsonl"))
+	require.NoError(t, err)
+	assert.WithinDuration(t, started, info.ModTime(), time.Second, "the stamp follows started_at")
+
+	points, _, err := s.TokenUsagePoints(TokenUsageOptions{
+		Since:    started.Add(-time.Minute),
+		Interval: time.Hour,
+	})
+	require.NoError(t, err)
+	require.Len(t, points, 1)
+	assert.Equal(t, int64(5), points[0].FreshInput)
+
+	summaries, _, err := s.ListConversations(ConversationListOptions{Since: started.Add(-time.Minute)})
+	require.NoError(t, err)
+	require.Len(t, summaries, 1, "the list keeps the conversation its own bound covers")
+}
+
 // TestTokenUsagePoints_Buckets covers the aggregation the chart reads: one
 // point per bucket and model, ordered by timestamp then model, plus the
 // range bound and the derived interval.
@@ -1135,7 +1159,11 @@ func TestTokenUsagePoints_ScaleFollowsBucketsNotGenerations(t *testing.T) {
 				Generation:     raw,
 			})
 		}
-		written, err := s.AppendGenerations(convID, recs)
+		activities := make([]time.Time, len(recs))
+		for i := range activities {
+			activities[i] = start
+		}
+		written, err := s.AppendGenerations(convID, recs, activities)
 		require.NoError(t, err)
 		require.Equal(t, perConv, written)
 	}

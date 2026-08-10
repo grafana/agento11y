@@ -241,16 +241,7 @@ func decodeFileSummary(f conversationFile) (*fileSummary, error) {
 		if !gen.StartedAt.IsZero() && (sum.StartedAt.IsZero() || gen.StartedAt.Before(sum.StartedAt)) {
 			sum.StartedAt = gen.StartedAt
 		}
-		// last_activity tracks the latest known timestamp on any
-		// generation, falling back to received_at when started/completed
-		// aren't populated so freshly-arrived records still bubble up.
-		when := gen.CompletedAt
-		if when.IsZero() {
-			when = gen.StartedAt
-		}
-		if when.IsZero() {
-			when, _ = time.Parse(time.RFC3339Nano, r.ReceivedAt)
-		}
+		when := recordActivity(gen, r.ReceivedAt)
 		if when.After(sum.LastActivity) {
 			sum.LastActivity = when
 		}

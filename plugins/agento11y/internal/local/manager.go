@@ -91,34 +91,11 @@ func LoadStatus(dir string) (*Status, error) {
 // the daemon lock, and `local status` reads it at any time, so those readers
 // would fail on an empty file while a daemon records itself.
 func SaveStatus(dir string, s Status) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, StatusFile+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	// A no-op once the rename below succeeds; on any earlier return it keeps
-	// a failed write from leaving the temp file behind.
-	defer func() { _ = os.Remove(tmp) }()
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	// CreateTemp opens at 0o600 already; set it explicitly so the file mode
-	// does not depend on the caller's umask.
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(dir, StatusFile))
+	return writeFileAtomic(dir, StatusFile, data)
 }
 
 // RemoveStatus deletes the status file. Missing-file errors are ignored.
@@ -291,6 +268,21 @@ func Serve(ctx context.Context, dir string, port int, logger *log.Logger) error 
 	if logger != nil {
 		logger.Printf("local: serving on %s (dir=%s)", status.Endpoint, dir)
 	}
+
+	// The pass starts only after the status file exists: the process that
+	// spawned this daemon waits 5 seconds for that file, and stamping a large
+	// store takes longer. On the way out the pass stops at the next file, so
+	// waiting for it costs one file scan.
+	repairCtx, cancelRepair := context.WithCancel(ctx)
+	repairDone := make(chan struct{})
+	go func() {
+		defer close(repairDone)
+		repairStoreOnStartup(repairCtx, storage, srv.hub)
+	}()
+	defer func() {
+		cancelRepair()
+		<-repairDone
+	}()
 
 	serveErr := make(chan error, 1)
 	go func() {

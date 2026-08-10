@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,6 +130,10 @@ func assertConversationDirEmpty(t *testing.T, s *Storage) {
 // uses: every record for one conversation goes through a single file open
 // and close cycle, a mid-batch write failure keeps the records written
 // before it, and a record from another conversation is refused.
+//
+// Each record carries one more minute of activity than the one before it,
+// so the modification time the append leaves names the last record that
+// reached the file.
 func TestAppendGenerations(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -142,6 +149,7 @@ func TestAppendGenerations(t *testing.T) {
 		{name: "third write fails", records: 5, failWriteAfter: 2, wantWritten: 2, wantLines: 2, wantErr: true, wantOpens: 1},
 		{name: "foreign conversation id refused", records: 2, mixConvID: true, wantErr: true, wantOpens: 0},
 	}
+	base := time.Now().Add(-24 * time.Hour).Truncate(time.Second)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStorage(t)
@@ -149,6 +157,7 @@ func TestAppendGenerations(t *testing.T) {
 			s.openAppend = opener.open
 
 			recs := make([]generationRecord, 0, tc.records)
+			activities := make([]time.Time, 0, tc.records)
 			for i := range tc.records {
 				rec := generationRecord{
 					ConversationID: "conv-batch",
@@ -159,9 +168,10 @@ func TestAppendGenerations(t *testing.T) {
 					rec.ConversationID = "conv-other"
 				}
 				recs = append(recs, rec)
+				activities = append(activities, base.Add(time.Duration(i)*time.Minute))
 			}
 
-			written, err := s.AppendGenerations("conv-batch", recs)
+			written, err := s.AppendGenerations("conv-batch", recs, activities)
 			if tc.wantErr {
 				require.Error(t, err)
 			} else {
@@ -175,12 +185,181 @@ func TestAppendGenerations(t *testing.T) {
 				assert.True(t, os.IsNotExist(statErr), "no file expected, stat err = %v", statErr)
 			} else {
 				assert.Len(t, readLines(t, path), tc.wantLines)
+				info, statErr := os.Stat(path)
+				require.NoError(t, statErr)
+				assert.WithinDuration(t, base.Add(time.Duration(tc.wantWritten-1)*time.Minute), info.ModTime(), time.Second,
+					"the stamp names the last record that reached the file")
 			}
 			opens, closes := opener.counts()
 			assert.Equal(t, tc.wantOpens, opens, "file opens")
 			assert.Equal(t, opens, closes, "every open must be closed")
 		})
 	}
+}
+
+// TestAppendGenerations_StampsActivity covers the modification time an
+// append leaves on a conversation file, which is what the list orders and
+// bounds on. Offsets are relative to now so the rows read as "an hour of
+// activity ago" rather than as fixed dates.
+func TestAppendGenerations_StampsActivity(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	cases := []struct {
+		name string
+		// pin rewrites the file's modification time after the first append,
+		// the way a history import into an existing file leaves it.
+		pin           time.Duration
+		pinAfterFirst bool
+		// batches are the activity stamps to append with, in order.
+		batches []time.Duration
+		// want is the modification time the file must end up with. When
+		// wantWriteTime is set the file must instead keep the time the
+		// append itself ran.
+		want          time.Duration
+		wantWriteTime bool
+	}{
+		{
+			name:    "the batch activity becomes the modification time",
+			batches: []time.Duration{-2 * time.Hour},
+			want:    -2 * time.Hour,
+		},
+		{
+			name:    "a backfilled append does not sink the file",
+			batches: []time.Duration{-time.Hour, -72 * time.Hour},
+			want:    -time.Hour,
+		},
+		{
+			name:          "an import-time modification time survives an older append",
+			pin:           0,
+			pinAfterFirst: true,
+			batches:       []time.Duration{-72 * time.Hour, -73 * time.Hour},
+			want:          0,
+		},
+		{
+			name:          "a future activity leaves the write time",
+			batches:       []time.Duration{48 * time.Hour},
+			wantWriteTime: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStorage(t)
+			path := filepath.Join(s.Dir(), ConversationsDir, "conv-A.jsonl")
+			for i, offset := range tc.batches {
+				genID := "gen-" + strconv.Itoa(i)
+				rec := generationRecord{
+					ConversationID: "conv-A",
+					GenerationID:   genID,
+					Generation:     json.RawMessage(`{"id":"` + genID + `"}`),
+				}
+				written, err := s.AppendGenerations("conv-A", []generationRecord{rec}, []time.Time{now.Add(offset)})
+				require.NoError(t, err)
+				require.Equal(t, 1, written)
+				if i == 0 && tc.pinAfterFirst {
+					setConversationModTime(t, s, "conv-A", now.Add(tc.pin))
+				}
+			}
+
+			assert.Len(t, readLines(t, path), len(tc.batches), "every record reached the file")
+			info, err := os.Stat(path)
+			require.NoError(t, err)
+			if tc.wantWriteTime {
+				assert.WithinDuration(t, time.Now(), info.ModTime(), time.Minute)
+				return
+			}
+			assert.WithinDuration(t, now.Add(tc.want), info.ModTime(), time.Second)
+		})
+	}
+}
+
+// TestAppendGenerations_StampFailureKeepsRecords covers a filesystem that
+// refuses the stamp: the records are already written, so the append still
+// reports them and only the ordering degrades.
+func TestAppendGenerations_StampFailureKeepsRecords(t *testing.T) {
+	s := newStorage(t)
+	var logs strings.Builder
+	s.SetLogger(log.New(&logs, "", 0))
+	var stamps int
+	s.chtimes = func(string, time.Time, time.Time) error {
+		stamps++
+		return errors.New("read-only file system")
+	}
+
+	written, err := s.AppendGenerations("conv-A", []generationRecord{{
+		ConversationID: "conv-A",
+		GenerationID:   "gen-1",
+		Generation:     json.RawMessage(`{"id":"gen-1"}`),
+	}}, []time.Time{time.Now().Add(-time.Hour)})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, written)
+	assert.Len(t, readLines(t, filepath.Join(s.Dir(), ConversationsDir, "conv-A.jsonl")), 1)
+	assert.Equal(t, 1, stamps, "one append attempts one stamp")
+	assert.Contains(t, logs.String(), "read-only file system")
+}
+
+// TestAppendGenerations_FutureModTimeIsNotCarriedForward covers a file
+// whose modification time already runs ahead of the clock, which a restore
+// or a copy from a machine with a fast clock leaves behind. The append
+// folds that time in as now instead of skipping the stamp, so the file
+// stops claiming activity that has not happened yet.
+func TestAppendGenerations_FutureModTimeIsNotCarriedForward(t *testing.T) {
+	s := newStorage(t)
+	activity := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	appendGen := func(genID string, when time.Time) {
+		t.Helper()
+		_, err := s.AppendGenerations("conv-A", []generationRecord{{
+			ConversationID: "conv-A",
+			GenerationID:   genID,
+			Generation:     json.RawMessage(`{"id":"` + genID + `"}`),
+		}}, []time.Time{when})
+		require.NoError(t, err)
+	}
+
+	appendGen("gen-1", activity)
+	setConversationModTime(t, s, "conv-A", time.Now().Add(72*time.Hour))
+
+	var stamps []time.Time
+	s.chtimes = func(path string, atime, mtime time.Time) error {
+		stamps = append(stamps, mtime)
+		return os.Chtimes(path, atime, mtime)
+	}
+	appendGen("gen-2", activity.Add(time.Hour))
+
+	require.Len(t, stamps, 1, "the append stamps the file rather than leaving it")
+	assert.False(t, stamps[0].After(time.Now()), "the stamp is not in the future")
+	info, err := os.Stat(filepath.Join(s.Dir(), ConversationsDir, "conv-A.jsonl"))
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now(), info.ModTime(), time.Minute)
+}
+
+// TestAppendGenerations_ConcurrentStampKeepsNewest drives appends at one
+// conversation file from several goroutines. Whatever order they run in,
+// the file must end up stamped with the newest activity any of them
+// carried, or a later backfill could sink a live conversation.
+func TestAppendGenerations_ConcurrentStampKeepsNewest(t *testing.T) {
+	s := newStorage(t)
+	const writers = 8
+	base := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+
+	var wg sync.WaitGroup
+	for w := range writers {
+		wg.Go(func() {
+			genID := "gen-" + strconv.Itoa(w)
+			_, err := s.AppendGenerations("conv-race", []generationRecord{{
+				ConversationID: "conv-race",
+				GenerationID:   genID,
+				Generation:     json.RawMessage(`{"id":"` + genID + `"}`),
+			}}, []time.Time{base.Add(time.Duration(w) * time.Minute)})
+			if err != nil {
+				t.Errorf("writer %d append: %v", w, err)
+			}
+		})
+	}
+	wg.Wait()
+
+	info, err := os.Stat(filepath.Join(s.Dir(), ConversationsDir, "conv-race.jsonl"))
+	require.NoError(t, err)
+	assert.WithinDuration(t, base.Add((writers-1)*time.Minute), info.ModTime(), time.Second)
 }
 
 // countingOpener wraps the real appender, counting open and close cycles

@@ -4,6 +4,7 @@ package local
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -20,13 +21,26 @@ type daemonLock struct {
 }
 
 func acquireDaemonLock(dir string) (*daemonLock, error) {
-	path := filepath.Join(dir, LockFile)
+	return acquireFileLock(filepath.Join(dir, LockFile), true)
+}
+
+// acquireFileLock takes an exclusive flock on path, creating the file when
+// it is missing. wait blocks until the lock is free; without it a lock
+// another process holds returns errLockBusy straight away.
+func acquireFileLock(path string, wait bool) (*daemonLock, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open lockfile: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	how := syscall.LOCK_EX
+	if !wait {
+		how |= syscall.LOCK_NB
+	}
+	if err := syscall.Flock(int(f.Fd()), how); err != nil {
 		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errLockBusy
+		}
 		return nil, fmt.Errorf("flock: %w", err)
 	}
 	return &daemonLock{f: f}, nil
