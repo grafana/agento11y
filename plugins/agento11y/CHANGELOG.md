@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.26.0] - 2026-08-10
+
+### Features
+
+- **plugins/agento11y**: export agent reported cost as cost_usd everywhere (#550)
+
+### Bug Fixes
+
+- **plugins/agento11y**: stamp local conversation files with their last activity (#556)
+
+### Performance
+
+- **plugins/agento11y**: cache per-file summaries for the local viewer (#555)
+
 ## [0.25.0] - 2026-08-06
 
 ### Features
