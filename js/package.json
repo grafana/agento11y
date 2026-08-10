@@ -52,6 +52,7 @@
     "dist",
     "proto",
     "docs",
+    "CHANGELOG.md",
     "LICENSE",
     "README.md"
   ],

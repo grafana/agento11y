@@ -73,13 +73,9 @@ jobs:
       - name: Extract release notes from CHANGELOG.md
         run: |
           set -euo pipefail
-          # Grab the top `## [x.y.z]` section. The awk program prints every
-          # line while inside the first section and exits at the next one.
-          notes=$(awk '/^## \[/{n++} n==1{print} n==2{exit}' plugins/agento11y/CHANGELOG.md)
-          if [[ -z "$notes" ]]; then
-            echo "::error::No '## [x.y.z]' section found in plugins/agento11y/CHANGELOG.md"
-            exit 1
-          fi
+          # The script prints its own reason for each failure mode and errexit
+          # fails the step, so there is nothing to add here.
+          notes=$(./.github/scripts/changelog-latest-section.sh plugins/agento11y/CHANGELOG.md)
           delim="$(openssl rand -hex 16)"
           {
             echo "RELEASE_NOTES<<${delim}"

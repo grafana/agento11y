@@ -26,6 +26,12 @@ jobs:
       - name: Test prepend-changelog.sh
         run: ./.github/scripts/prepend-changelog.test.sh
 
+      - name: Test changelog-top-version.sh
+        run: ./.github/scripts/changelog-top-version.test.sh
+
+      - name: Test changelog-latest-section.sh
+        run: ./.github/scripts/changelog-latest-section.test.sh
+
   proto:
     name: Protobuf drift
     runs-on: ubuntu-latest

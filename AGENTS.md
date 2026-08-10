@@ -35,6 +35,22 @@ mise run generate:redaction
 
 CI runs `mise run check:redaction` in the same job as the proto drift check. `redaction/README.md` covers the pattern fields and the shared fixtures.
 
+## Releases run off `.github/sdk-releases.json`
+
+That table holds each release line's id, tag prefix, changelog path, and the commit paths its changelog section is generated from. Seven lines are listed: the five SDKs plus `plugins/pi` and `plugins/opencode`.
+
+The commit paths live only there, and every release workflow reads them with `jq`. Tag prefixes and changelog paths are duplicated: the five SDK workflows still spell out their own `sdk-python/v*`-style prefix and `python/CHANGELOG.md`-style path inline, and `sdk-github-releases.yml` hand-copies all seven prefixes into `on.push.tags`, which GitHub cannot template from a file. So a new release line needs a row *and* a pass over those workflows; a row on its own gets the line tagged with no release page.
+
+Each SDK row carries `:(exclude)` pathspecs for tests and READMEs, because a conformance test under `go/` would otherwise put a JS-only commit in the Go changelog. The two plugin rows own their whole directory and need no excludes.
+
+Three steps run per release, and none of them creates a tag on the release PR:
+
+1. The release workflow generates a section with `changelog-for-release.sh` and opens a PR that changes `CHANGELOG.md`.
+2. `tag-releases-on-merge.yml` fires on the merge, reads the top version with `changelog-top-version.sh`, and tags the merge commit, so every tag stays reachable from `main`.
+3. `sdk-github-releases.yml` fires on the tag and publishes the section from `changelog-latest-section.sh` as the release body.
+
+`plugins/agento11y` sits outside the table. It keeps its own pair of workflows (`release-agento11y.yml`, `tag-agento11y-on-merge.yml`) because it also drives GoReleaser and Homebrew.
+
 ## Workspace gotchas
 
 - The Go workspace (`go.work`) covers `go/`, `go-providers/*`, `go-frameworks/google-adk`, and `plugins/agento11y`. Adding a new Go module means updating `go.work` *and* `go.work.sum`. Lint tasks use `GOWORK=off` and iterate per-module via `find . -name go.mod`, so each module must also lint and build on its own.

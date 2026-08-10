@@ -1,0 +1,134 @@
+name: Release Go SDK
+
+# Opens a release PR that adds a section to go/CHANGELOG.md. The five module
+# tags are created by tag-releases-on-merge.yml when that PR merges, so every
+# tag points at a commit on main, which `go install` requires.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Semver bump type (major / minor / patch)'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: minor
+      dry-run:
+        description: 'Preview only, do not open the release PR'
+        required: false
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  release:
+    if: github.repository == 'grafana/agento11y' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - name: Generate GitHub token
+        id: generate-github-token
+        uses: grafana/shared-workflows/actions/create-github-app-token@259ba21cb3ff07724f331e26d926d655d24b317b # create-github-app-token/v0.2.3
+        with:
+          github_app: grafana-plugins-platform-bot
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ steps.generate-github-token.outputs.token }}
+          persist-credentials: true
+          fetch-depth: 0  # changelog script needs full git history
+
+      - name: Setup Git
+        run: |
+          git config user.name 'grafana-plugins-platform-bot[bot]'
+          git config user.email '144369747+grafana-plugins-platform-bot[bot]@users.noreply.github.com'
+
+      - name: Compute next version
+        id: ver
+        shell: bash
+        env:
+          BUMP: ${{ inputs.version }}
+        run: |
+          # Source of truth for "current" = latest tag on the core `go` module.
+          # All five modules are released in lockstep, so this drives the bump.
+          CURRENT=$(git tag -l 'go/v*' | sed 's|go/v||' | sort -V | tail -1)
+          CURRENT=${CURRENT:-0.0.0}
+
+          # A tag appears only when the release PR merges, so a changelog top
+          # version ahead of the newest tag means the last release merged
+          # untagged. Stop, rather than emit a second section for it.
+          TOP=$(./.github/scripts/changelog-top-version.sh go/CHANGELOG.md)
+          if [[ -n "$TOP" && "$TOP" != "$CURRENT" \
+                && "$(printf '%s\n%s\n' "$TOP" "$CURRENT" | sort -V | tail -1)" == "$TOP" ]]; then
+            echo "::error::go/CHANGELOG.md top v${TOP} is ahead of the latest go/v* tag v${CURRENT}; create the five missing module tags and retry."
+            exit 1
+          fi
+
+          NEW=$(./.github/scripts/bump-version.sh "$BUMP" "$CURRENT")
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "new=${NEW}" >> "$GITHUB_OUTPUT"
+
+      - name: Update CHANGELOG.md
+        id: cl
+        shell: bash
+        env:
+          BUMP: ${{ inputs.version }}
+          CURRENT: ${{ steps.ver.outputs.current }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          NEW: ${{ steps.ver.outputs.new }}
+        run: |
+          ROW=$(jq -r '.[] | select(.id == "go")' .github/sdk-releases.json)
+          mapfile -t PATHS < <(jq -r '.paths[]' <<<"$ROW")
+
+          SECTION=$(./.github/scripts/changelog-for-release.sh "$NEW" go "${PATHS[@]}")
+          printf '%s\n' "$SECTION" > /tmp/section.md
+          printf '%s\n' "$SECTION" | ./.github/scripts/prepend-changelog.sh go/CHANGELOG.md
+
+          {
+            echo '## Go SDK release plan'
+            echo ''
+            echo "- bump type: \`${BUMP}\`"
+            echo "- current: \`v${CURRENT}\`"
+            echo "- new: \`v${NEW}\`"
+            echo "- dry-run: \`${DRY_RUN}\`"
+            echo ''
+            echo '### Changelog section'
+            echo ''
+            printf '%s\n' "$SECTION"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build release PR body
+        if: ${{ !inputs.dry-run }}
+        env:
+          NEW: ${{ steps.ver.outputs.new }}
+        run: |
+          {
+            echo "Releases the Go SDK modules at \`v${NEW}\`."
+            echo ""
+            cat /tmp/section.md
+            echo ""
+            echo "---"
+            echo ""
+            echo "Merging this PR creates \`go/v${NEW}\` and the four module tags via \`tag-releases-on-merge.yml\`."
+          } > /tmp/pr-body.md
+
+      - name: Open release PR
+        if: ${{ !inputs.dry-run }}
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.generate-github-token.outputs.token }}
+          branch: release/sdk-go-${{ steps.ver.outputs.new }}
+          base: main
+          sign-commits: true
+          add-paths: go/CHANGELOG.md
+          commit-message: "chore(sdk-go): release v${{ steps.ver.outputs.new }}"
+          title: "chore(sdk-go): release v${{ steps.ver.outputs.new }}"
+          body-path: /tmp/pr-body.md
