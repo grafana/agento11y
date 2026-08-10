@@ -160,7 +160,7 @@ func searchConversationFile(path string, terms []string) (SearchHit, bool, int, 
 
 		// last_activity tracks the latest known timestamp on any
 		// generation, falling back to received_at when started/completed
-		// aren't populated — same rule as summariseConversationFile.
+		// aren't populated — same rule as decodeFileSummary.
 		when := gen.CompletedAt
 		if when.IsZero() {
 			when = gen.StartedAt

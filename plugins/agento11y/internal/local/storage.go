@@ -50,6 +50,12 @@ type Storage struct {
 	// count open/close cycles; a nil value uses openAppendFile.
 	openAppend func(path string) (io.WriteCloser, error)
 
+	// summaries holds the decoded projection of every conversation file the
+	// list and the token chart have read, so an unchanged file is not
+	// decoded again. It carries its own mutex; the read paths take no other
+	// lock.
+	summaries summaryCache
+
 	// One mutex per file path. We don't expect contention high enough to
 	// need finer locking; this just stops interleaved JSON lines.
 	mu    sync.Mutex
@@ -208,7 +214,14 @@ func (s *Storage) AppendGenerations(convID string, recs []generationRecord) (int
 			return 0, fmt.Errorf("local storage: record conversation_id %q does not match batch %q", rec.ConversationID, convID)
 		}
 	}
-	return appendJSONL(s, filepath.Join(ConversationsDir, convID+".jsonl"), recs)
+	name := filepath.Join(ConversationsDir, convID+".jsonl")
+	written, err := appendJSONL(s, name, recs)
+	if written > 0 || err != nil {
+		// A partial write moved the file too, so the cached projection goes
+		// on the error path as well.
+		s.summaries.invalidate(s.Path(name))
+	}
+	return written, err
 }
 
 func validConversationID(id string) bool {

@@ -153,27 +153,30 @@ func (s *Storage) ListConversations(opts ConversationListOptions) (page []Conver
 		if !opts.Since.IsZero() && f.modTime.Before(opts.Since) {
 			break
 		}
-		sum, ok, n, err := summariseConversationFile(f.path)
-		skipped += n
+		entry, err := s.summaries.get(f)
 		if err != nil {
 			return nil, 0, err
 		}
-		if !ok {
+		skipped += entry.skipped
+		if !entry.ok {
 			continue // empty or all-invalid file
 		}
-		out = append(out, sum)
+		out = append(out, entry.summary)
 		if opts.Limit > 0 && len(out) == opts.Limit {
 			break
 		}
 	}
+	s.summaries.prune(files)
 	return out, len(files), nil
 }
 
 // conversationFile is one conversation JSONL file with the modification
-// time the list and metrics endpoints order and filter on.
+// time the list and metrics endpoints order and filter on, and the size
+// that validates a cached summary alongside it.
 type conversationFile struct {
 	id      string
 	path    string
+	size    int64
 	modTime time.Time
 }
 
@@ -204,6 +207,7 @@ func (s *Storage) conversationFiles() ([]conversationFile, error) {
 		out = append(out, conversationFile{
 			id:      strings.TrimSuffix(e.Name(), ".jsonl"),
 			path:    filepath.Join(dir, e.Name()),
+			size:    info.Size(),
 			modTime: info.ModTime(),
 		})
 	}
@@ -214,88 +218,6 @@ func (s *Storage) conversationFiles() ([]conversationFile, error) {
 		return out[i].id < out[j].id
 	})
 	return out, nil
-}
-
-// summariseConversationFile reads one per-conversation JSONL file and
-// returns its aggregated summary plus the number of lines it could not
-// decode. It decodes the summary projection only, so a conversation holding
-// megabytes of messages costs the line scan and nothing more. ok is false
-// when the file has no decodable records.
-func summariseConversationFile(path string) (ConversationSummary, bool, int, error) {
-	agents := map[string]struct{}{}
-	models := map[string]struct{}{}
-	var sum ConversationSummary
-	var hasError, seen bool
-
-	skipped, err := scanLatestSummaryRecords(path, func(rec summaryRecord) {
-		r, gen := rec, rec.Generation
-		seen = true
-		if sum.ID == "" {
-			sum.ID = r.ConversationID
-		}
-		sum.Calls++
-		usage := gen.Usage.toSDK()
-		sum.InputTokens += usage.InputTokens
-		sum.OutputTokens += usage.OutputTokens
-		sum.TotalTokens += totalTokensForView(usage, gen.Model.Provider)
-		sum.TokenBuckets = sum.TokenBuckets.plus(disjointTokenUsage(usage, gen.Model.Provider))
-
-		if !gen.StartedAt.IsZero() && (sum.StartedAt.IsZero() || gen.StartedAt.Before(sum.StartedAt)) {
-			sum.StartedAt = gen.StartedAt
-		}
-		// last_activity tracks the latest known timestamp on any
-		// generation, falling back to received_at when started/completed
-		// aren't populated so freshly-arrived records still bubble up.
-		when := gen.CompletedAt
-		if when.IsZero() {
-			when = gen.StartedAt
-		}
-		if when.IsZero() {
-			when, _ = time.Parse(time.RFC3339Nano, r.ReceivedAt)
-		}
-		if when.After(sum.LastActivity) {
-			sum.LastActivity = when
-		}
-
-		if gen.AgentName != "" {
-			agents[gen.AgentName] = struct{}{}
-		}
-		if name := gen.modelName(); name != "" {
-			models[name] = struct{}{}
-		}
-		if sum.Title == "" && gen.title() != "" {
-			sum.Title = gen.title()
-		}
-		if gen.CallError != "" {
-			hasError = true
-		}
-		// cwd/branch are per-session and identical across a conversation's
-		// generations; take the first non-empty. A generation whose
-		// agent_name carries a subagent suffix ("claude-code/general-purpose")
-		// is one step of a spawned subagent.
-		if sum.Workspace == "" {
-			sum.Workspace = gen.Tags["cwd"]
-		}
-		if sum.Branch == "" {
-			sum.Branch = gen.Tags["git.branch"]
-		}
-		if strings.Contains(gen.AgentName, "/") {
-			sum.Subagents++
-		}
-	})
-	if err != nil {
-		return ConversationSummary{}, false, skipped, err
-	}
-	if !seen {
-		return ConversationSummary{}, false, skipped, nil
-	}
-	sum.Agents = sortedKeys(agents)
-	sum.Models = sortedKeys(models)
-	sum.Status = "ok"
-	if hasError {
-		sum.Status = "err"
-	}
-	return sum, true, skipped, nil
 }
 
 // ConversationDetail returns the chronological generation list for one
@@ -437,58 +359,73 @@ var tokenUsageIntervals = []time.Duration{
 // non-empty bucket.
 //
 // A missing conversations dir yields no points (first-launch case).
+//
+// Points are read through the per-file summary cache and folded straight
+// into their buckets, rather than concatenated first. Concatenating would
+// allocate the whole store's usage on every request, to produce a response
+// that newTokenUsageBuckets bounds by the bucket count.
 func (s *Storage) TokenUsagePoints(opts TokenUsageOptions) ([]TokenUsagePoint, time.Duration, error) {
 	files, err := s.conversationFiles()
 	if err != nil {
 		return nil, 0, err
 	}
-	var raw []TokenUsagePoint
 	var skipped int
 	defer func() { s.logSkipped("token metrics", skipped) }()
+
+	eligible := make([]*fileSummary, 0, len(files))
+	var first, last time.Time
+	var pointCount int
 	for _, f := range files {
 		// Files are newest-first, so the first one below the bound ends
 		// the walk without opening it.
 		if !opts.Since.IsZero() && f.modTime.Before(opts.Since) {
 			break
 		}
-		n, err := scanLatestSummaryRecords(f.path, func(rec summaryRecord) {
-			p, ok := tokenUsagePoint(rec)
-			if !ok {
-				return
-			}
-			if !opts.Since.IsZero() && p.Timestamp.Before(opts.Since) {
-				return
-			}
-			raw = append(raw, p)
-		})
-		skipped += n
+		entry, err := s.summaries.get(f)
 		if err != nil {
 			return nil, 0, err
 		}
+		skipped += entry.skipped
+		// The break above is loose. A file's modification time is only an
+		// upper bound on the data time of the generations in it, and an import
+		// stamps every file it writes with the current time, so during an
+		// import the break cuts nothing. bounds then cuts on the decoded
+		// timestamps instead. Files are ordered by modification time, not by
+		// data time, so a file below the bound is skipped and the walk goes on.
+		entryFirst, entryLast, ok := entry.bounds(opts.Since)
+		if !ok {
+			continue
+		}
+		if first.IsZero() || entryFirst.Before(first) {
+			first = entryFirst
+		}
+		if entryLast.After(last) {
+			last = entryLast
+		}
+		pointCount += len(entry.points)
+		eligible = append(eligible, entry)
 	}
+	s.summaries.prune(files)
+
 	interval := opts.Interval
 	if interval <= 0 {
-		interval = deriveTokenUsageInterval(raw, opts.Since)
+		interval = tokenUsageIntervalFor(last.Sub(first))
 	}
-	return bucketTokenUsagePoints(raw, interval), interval, nil
+	buckets := newTokenUsageBuckets(interval, pointCount)
+	for _, entry := range eligible {
+		for _, p := range entry.points {
+			if !opts.Since.IsZero() && p.Timestamp.Before(opts.Since) {
+				continue
+			}
+			buckets.add(p)
+		}
+	}
+	return buckets.points(), interval, nil
 }
 
-// deriveTokenUsageInterval picks the smallest ladder step that keeps the
-// requested range under maxTokenUsageBuckets buckets.
-func deriveTokenUsageInterval(points []TokenUsagePoint, since time.Time) time.Duration {
-	var first, last time.Time
-	for _, p := range points {
-		if first.IsZero() || p.Timestamp.Before(first) {
-			first = p.Timestamp
-		}
-		if p.Timestamp.After(last) {
-			last = p.Timestamp
-		}
-	}
-	if !since.IsZero() && since.After(first) {
-		first = since
-	}
-	span := last.Sub(first)
+// tokenUsageIntervalFor picks the smallest ladder step that keeps a range
+// of the given span under maxTokenUsageBuckets buckets.
+func tokenUsageIntervalFor(span time.Duration) time.Duration {
 	for _, step := range tokenUsageIntervals {
 		if span/step <= maxTokenUsageBuckets {
 			return step
@@ -497,34 +434,53 @@ func deriveTokenUsageInterval(points []TokenUsagePoint, since time.Time) time.Du
 	return tokenUsageIntervals[len(tokenUsageIntervals)-1]
 }
 
-// bucketTokenUsagePoints sums points into (bucket start, model, provider)
-// groups, ordered by timestamp then model then provider so the chart reads
-// them in one pass.
-func bucketTokenUsagePoints(points []TokenUsagePoint, interval time.Duration) []TokenUsagePoint {
-	type bucketKey struct {
-		start    int64
-		model    string
-		provider string
+// tokenUsageBuckets sums points into (bucket start, model, provider)
+// groups as they arrive, so a caller can fold a whole store's points in
+// without holding them all.
+type tokenUsageBuckets struct {
+	interval   time.Duration
+	indexByKey map[tokenBucketKey]int
+	out        []TokenUsagePoint
+}
+
+type tokenBucketKey struct {
+	start    int64
+	model    string
+	provider string
+}
+
+// newTokenUsageBuckets prepares the fold. points is how many will be added;
+// it only sizes the first allocation, so an estimate is fine.
+func newTokenUsageBuckets(interval time.Duration, points int) *tokenUsageBuckets {
+	return &tokenUsageBuckets{
+		interval:   interval,
+		indexByKey: map[tokenBucketKey]int{},
+		// A bucket holds one point per model and provider, so the output is
+		// bounded by the bucket count however many generations came in.
+		out: make([]TokenUsagePoint, 0, min(points, 4*maxTokenUsageBuckets)),
 	}
-	indexByKey := map[bucketKey]int{}
-	// A bucket holds one point per model and provider, so the output is
-	// bounded by the bucket count however many generations came in.
-	out := make([]TokenUsagePoint, 0, min(len(points), 4*maxTokenUsageBuckets))
-	for _, p := range points {
-		start := intervalStart(p.Timestamp, interval)
-		key := bucketKey{start: start.UnixNano(), model: p.Model, provider: p.Provider}
-		if idx, ok := indexByKey[key]; ok {
-			out[idx].TokenBuckets = out[idx].TokenBuckets.plus(p.TokenBuckets)
-			continue
-		}
-		indexByKey[key] = len(out)
-		out = append(out, TokenUsagePoint{
-			Timestamp:    start,
-			Model:        p.Model,
-			Provider:     p.Provider,
-			TokenBuckets: p.TokenBuckets,
-		})
+}
+
+func (b *tokenUsageBuckets) add(p TokenUsagePoint) {
+	start := intervalStart(p.Timestamp, b.interval)
+	key := tokenBucketKey{start: start.UnixNano(), model: p.Model, provider: p.Provider}
+	if idx, ok := b.indexByKey[key]; ok {
+		b.out[idx].TokenBuckets = b.out[idx].TokenBuckets.plus(p.TokenBuckets)
+		return
 	}
+	b.indexByKey[key] = len(b.out)
+	b.out = append(b.out, TokenUsagePoint{
+		Timestamp:    start,
+		Model:        p.Model,
+		Provider:     p.Provider,
+		TokenBuckets: p.TokenBuckets,
+	})
+}
+
+// points returns the buckets ordered by timestamp then model then provider,
+// so the chart reads them in one pass.
+func (b *tokenUsageBuckets) points() []TokenUsagePoint {
+	out := b.out
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].Timestamp.Equal(out[j].Timestamp) {
 			return out[i].Timestamp.Before(out[j].Timestamp)

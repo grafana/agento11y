@@ -41,6 +41,12 @@ type Server struct {
 	// uses the default.
 	eventPingInterval time.Duration
 
+	// warmStore fills the summary cache in the background. Serve sets it;
+	// a nil hook means no warming. warmOnce keeps the first viewer read the
+	// only trigger.
+	warmStore func()
+	warmOnce  sync.Once
+
 	// importMu guards the history-import fields below. One import runs at a
 	// time: two would write the same per-agent ledger and race on it.
 	importMu sync.Mutex
@@ -85,6 +91,26 @@ func NewServer(storage *Storage, logger *log.Logger, configPath string) *Server 
 // deadline. Safe to call more than once.
 func (s *Server) Close() {
 	s.hub.closeAll()
+}
+
+// WarmSummariesOnFirstRead arms the background summary-cache warm. The warm
+// starts once the first viewer read has answered, and stops when ctx is
+// done. Nothing warms before that read. Several commands start a daemon
+// without opening the viewer: an agent session in local mode, `local start`,
+// `local restart`, `history import`. Warming at startup would make each of
+// them decode the whole store and hold it resident until the daemon exits.
+func (s *Server) WarmSummariesOnFirstRead(ctx context.Context) {
+	s.warmStore = func() { s.storage.warmSummaries(ctx) }
+}
+
+// warmSummariesInBackground starts the warm the first time a viewer read
+// finishes. It runs after the response so the request the user is waiting
+// on does not queue behind the rest of the store.
+func (s *Server) warmSummariesInBackground() {
+	if s.warmStore == nil {
+		return
+	}
+	s.warmOnce.Do(func() { go s.warmStore() })
 }
 
 func (s *Server) routes() *http.ServeMux {
@@ -603,6 +629,7 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 		"conversations":       convs,
 		"total_conversations": total,
 	})
+	s.warmSummariesInBackground()
 }
 
 // limitParam reads a ?limit= page size, falling back to def when the
@@ -714,6 +741,7 @@ func (s *Server) handleTokenMetrics(w http.ResponseWriter, r *http.Request) {
 		"points":           points,
 		"interval_seconds": int64(used.Seconds()),
 	})
+	s.warmSummariesInBackground()
 }
 
 // sinceParam reads the shared ?since= lower bound. RFC 3339 is the only

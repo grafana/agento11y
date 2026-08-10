@@ -279,6 +279,9 @@ func Serve(ctx context.Context, dir string, port int, logger *log.Logger) error 
 	// A history import exports through this same address, so the server has to
 	// know it. The port is only settled once the listener exists.
 	srv.SetLocalEndpoint(status.Endpoint)
+	// The summary cache starts empty, so without this the viewer decodes the
+	// whole store one request at a time after a restart.
+	srv.WarmSummariesOnFirstRead(ctx)
 	if err := SaveStatus(dir, status); err != nil {
 		_ = listener.Close()
 		return fmt.Errorf("save status: %w", err)
