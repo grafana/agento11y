@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -88,6 +89,70 @@ func TestSaveStatus_ConcurrentReadersSeeWholeFile(t *testing.T) {
 	}
 	require.NoError(t, readErr, "LoadStatus read a status file mid-write")
 	assert.Zero(t, partial, "LoadStatus returned a status that was never written")
+}
+
+// TestServe_StampsStoreAfterPublishingStatus covers the order the daemon
+// starts things in: the status file the spawning process waits 5 seconds
+// for appears while the modification-time pass is still reading the store,
+// and the store repairs itself once the pass gets through it.
+//
+// A named pipe among the conversation files holds the pass: opening one
+// for reading returns only once this test opens the write end, so the pass
+// cannot reach the marker until the test lets it.
+func TestServe_StampsStoreAfterPublishingStatus(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "local")
+	storage, err := NewStorage(dir)
+	require.NoError(t, err)
+	activity := time.Now().Add(-90 * 24 * time.Hour).Truncate(time.Second)
+	seedConversation(t, storage, "conv-A", activity)
+	blocker := filepath.Join(dir, ConversationsDir, "conv-blocker.jsonl")
+	require.NoError(t, syscall.Mkfifo(blocker, 0o600))
+
+	// The pass reports what it stamped and what it could not, and this test
+	// can only fail by the pass not finishing, so keep its log.
+	logger := testLogger(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- Serve(ctx, dir, 0, logger) }()
+	t.Cleanup(func() {
+		cancel()
+		require.NoError(t, <-served)
+	})
+	// Serve waits for the pass on the way out, so a failed assertion below
+	// must not leave it parked on the pipe. Opening the write end without
+	// blocking fails with ENXIO when the pass is not reading, which is the
+	// case where nothing needs freeing.
+	t.Cleanup(func() {
+		if w, err := os.OpenFile(blocker, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+			_ = w.Close()
+		}
+	})
+
+	// IsRunning is what the spawning process polls: the status file plus an
+	// endpoint that answers.
+	require.Eventually(t, func() bool {
+		s, err := IsRunning(dir)
+		return err == nil && s != nil
+	}, 5*time.Second, 20*time.Millisecond, "daemon published its status and serves")
+
+	meta, err := readStoreMeta(dir)
+	require.NoError(t, err)
+	require.False(t, meta.MtimeStamped, "the daemon serves while the pass is still reading")
+
+	// Let the pass through the pipe: an empty file carries no activity, so
+	// it is scanned and left alone.
+	w, err := os.OpenFile(blocker, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	require.Eventually(t, func() bool {
+		meta, err := readStoreMeta(dir)
+		return err == nil && meta.MtimeStamped
+	}, 5*time.Second, 20*time.Millisecond, "store marked as stamped")
+
+	info, err := os.Stat(filepath.Join(dir, ConversationsDir, "conv-A.jsonl"))
+	require.NoError(t, err)
+	assert.WithinDuration(t, activity, info.ModTime(), stampTolerance)
 }
 
 func TestStop_EndpointDeadButProcessAlive(t *testing.T) {
@@ -281,4 +346,39 @@ func TestEnsureRunning_ConcurrentCallersSpawnOnce(t *testing.T) {
 	if got := spawns.Load(); got != 1 {
 		t.Errorf("spawns = %d, want 1 (flock should serialise EnsureRunning)", got)
 	}
+}
+
+// testLogger routes a daemon's diagnostics into the test's output, so a
+// failing test reports what the daemon was doing. Call it from the test
+// goroutine: it registers the cleanup that stops the writer, and t.Log
+// panics once the test and its cleanups are done.
+func testLogger(t *testing.T) *log.Logger {
+	w := &testLogWriter{t: t}
+	t.Cleanup(w.stop)
+	return log.New(w, "", 0)
+}
+
+type testLogWriter struct {
+	t *testing.T
+
+	mu      sync.Mutex
+	stopped bool
+}
+
+func (w *testLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.stopped {
+		w.t.Log(strings.TrimRight(string(p), "\n"))
+	}
+	return len(p), nil
+}
+
+// stop drops later lines. A goroutine the test did not join can still hold
+// the logger, and writing from one after the test ends takes the whole run
+// down.
+func (w *testLogWriter) stop() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.stopped = true
 }
