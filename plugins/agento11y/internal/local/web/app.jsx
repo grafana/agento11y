@@ -4347,6 +4347,24 @@
     // feel live, slow enough to coalesce typing into one network call.
     const SEARCH_DEBOUNCE_MS = 320;
 
+    // REFRESH_DEBOUNCE_MS is how long a burst of change events is collected
+    // before the conversation list and the token chart refetch.
+    const REFRESH_DEBOUNCE_MS = 250;
+    // IMPORT_REFRESH_DEBOUNCE_MS replaces it for the list and the chart while a
+    // history import runs. An import appends to thousands of conversations, so
+    // a refresh at the normal cadence shows a list that is stale again before
+    // it renders. The progress banner carries the detail; the list only has to
+    // stay roughly current. An open conversation keeps the normal cadence: it
+    // is what the user is reading.
+    const IMPORT_REFRESH_DEBOUNCE_MS = 2000;
+    // IMPORT_ACTIVE_TTL_MS is how long one import frame holds the slower
+    // cadence. The event stream is lossy: the daemon drops frames for a
+    // subscriber that falls behind, and a reconnect replays nothing. So a run
+    // has to expire rather than latch, or one lost terminal frame leaves the
+    // tab slow until a reload. A running import publishes progress every
+    // 250ms, so this much slack cannot expire it mid-run.
+    const IMPORT_ACTIVE_TTL_MS = 10_000;
+
     // escapeRegExp escapes the special-meaning characters in a query token
     // before splicing into the alternation regex that drives highlighting.
     // Keeps a literal "a+b" highlighting "a+b" rather than "aab".
@@ -4744,9 +4762,31 @@
           .catch(() => {});
       }, [timeRange]);
 
+      // refreshAll keeps one refresh cycle in flight. An event arriving while
+      // a cycle runs marks at most one follow-up refresh as due instead of
+      // starting a second cycle. Without that, a slow response lets one
+      // request per debounce window pile up until the browser's
+      // six-connection limit stops them, and each one is a full-store read.
+      const refreshInFlightRef = useRef(false);
+      const refreshDirtyRef = useRef(false);
+      // The follow-up runs through refreshAllRef rather than through the
+      // captured refreshAll: a range change during the cycle replaces the
+      // callback, and the follow-up has to request the range the header now
+      // names. The effect below fills the ref on the first render, before any
+      // response can land.
+      const refreshAllRef = useRef(null);
       const refreshAll = useCallback(() => {
-        fetchList();
-        fetchTokens();
+        if (refreshInFlightRef.current) {
+          refreshDirtyRef.current = true;
+          return;
+        }
+        refreshInFlightRef.current = true;
+        Promise.all([fetchList(), fetchTokens()]).finally(() => {
+          refreshInFlightRef.current = false;
+          if (!refreshDirtyRef.current) return;
+          refreshDirtyRef.current = false;
+          refreshAllRef.current();
+        });
       }, [fetchList, fetchTokens]);
 
       // reloadRange refetches when the request window itself changed: mount,
@@ -4825,10 +4865,14 @@
       // conversation) refresh within ~1s without polling. Refs hold the
       // latest callbacks so the effect mounts once and doesn't drop the
       // connection on every render.
-      const refreshAllRef = useRef(refreshAll);
       const quietRefreshDetailRef = useRef(quietRefreshDetail);
       const selectedIDRef = useRef(selectedID);
       const viewRef = useRef(view);
+      // importActiveUntilRef holds the instant the import cadence lapses. The
+      // SSE handler is mounted once and cannot read the state the banner
+      // renders from, so it tracks the run itself. It is a deadline rather
+      // than a flag, see IMPORT_ACTIVE_TTL_MS.
+      const importActiveUntilRef = useRef(0);
       useEffect(() => { refreshAllRef.current = refreshAll; }, [refreshAll]);
       useEffect(() => { quietRefreshDetailRef.current = quietRefreshDetail; }, [quietRefreshDetail]);
       useEffect(() => { selectedIDRef.current = selectedID; }, [selectedID]);
@@ -4840,26 +4884,32 @@
         // fall back to the 60s backstop refresh below instead of
         // throwing on the constructor.
         if (typeof EventSource === "undefined") return;
-        let timer = null;
         // Debounce so a burst export (one frame per generation) does
         // not trigger one refresh per frame. We only need one list
         // refresh per burst, plus one detail refresh if any event in
-        // the burst targets the open conversation.
-        let burstHasOpenConv = false;
-        const flush = () => {
-          timer = null;
-          const refreshOpen = burstHasOpenConv;
-          const openID = selectedIDRef.current;
-          burstHasOpenConv = false;
-          // Skip refetches when the user is on a non-conversation tab;
-          // the conversation list isn't rendered there, and the SSE
-          // connection itself is cheap to leave running.
+        // the burst targets the open conversation. The two are armed
+        // separately because an import slows the list down and the open
+        // conversation keeps the normal cadence.
+        let listTimer = null;
+        let detailTimer = null;
+        // onConversations reports whether the list or a conversation is
+        // rendered. Elsewhere neither is, and the SSE connection itself is
+        // cheap to leave running.
+        const onConversations = () => {
           const v = viewRef.current;
-          if (v !== "conversations" && v !== "conversation") return;
+          return v === "conversations" || v === "conversation";
+        };
+        const importActive = () => importActiveUntilRef.current > Date.now();
+        const flushList = () => {
+          listTimer = null;
+          if (!onConversations()) return;
           refreshAllRef.current();
-          if (refreshOpen && openID) {
-            quietRefreshDetailRef.current(openID);
-          }
+        };
+        const flushDetail = () => {
+          detailTimer = null;
+          const openID = selectedIDRef.current;
+          if (!openID || !onConversations()) return;
+          quietRefreshDetailRef.current(openID);
         };
         const es = new EventSource("/api/v1/events");
         es.onmessage = (e) => {
@@ -4868,20 +4918,32 @@
           if (ev && ev.import) {
             // Import events carry state rather than naming a conversation, so
             // they are applied directly and skip the refetch debounce.
+            const active = importRunIsActive(ev.import);
+            importActiveUntilRef.current = active ? Date.now() + IMPORT_ACTIVE_TTL_MS : 0;
             setImportEvent(ev.import);
+            // A finished run may be followed by no further change event, and
+            // the list is then as stale as the import left it. Arm one refresh
+            // on any frame reporting a terminal status; the timer guard folds
+            // the several a run's last updates produce into one.
+            if (!active && listTimer === null) {
+              listTimer = setTimeout(flushList, REFRESH_DEBOUNCE_MS);
+            }
             return;
           }
           const openID = selectedIDRef.current;
-          if (openID && ev && ev.conversation_id === openID) {
-            burstHasOpenConv = true;
+          if (openID && ev && ev.conversation_id === openID && detailTimer === null) {
+            detailTimer = setTimeout(flushDetail, REFRESH_DEBOUNCE_MS);
           }
-          if (timer === null) timer = setTimeout(flush, 250);
+          if (listTimer === null) {
+            listTimer = setTimeout(flushList, importActive() ? IMPORT_REFRESH_DEBOUNCE_MS : REFRESH_DEBOUNCE_MS);
+          }
         };
         // EventSource auto-reconnects on transport errors, so a daemon
         // restart or proxy blip heals without an explicit handler.
         // Cleanup closes the stream.
         return () => {
-          if (timer !== null) clearTimeout(timer);
+          if (listTimer !== null) clearTimeout(listTimer);
+          if (detailTimer !== null) clearTimeout(detailTimer);
           es.close();
         };
       }, []);

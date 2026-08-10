@@ -1051,6 +1051,22 @@ func TestTokenUsagePoints_Buckets(t *testing.T) {
 			},
 		},
 		{
+			// A conversation an import wrote carries a modification time of
+			// now and generations that are months old, so the range bound has
+			// to cut inside the file. The interval follows the points that
+			// survive it, not the whole file's span.
+			name: "a file straddling the bound is read from the bound",
+			seeds: []seed{
+				{conv: "conv-1", gen: "g1", model: "model-a", when: "2026-05-05T00:00:00Z", in: 3},
+				{conv: "conv-1", gen: "g2", model: "model-a", when: "2026-08-03T10:00:00Z", in: 5},
+			},
+			opts:         TokenUsageOptions{Since: mustParse(t, "2026-08-03T09:00:00Z")},
+			wantInterval: 10 * time.Second,
+			wantPoints: []TokenUsagePoint{
+				{Timestamp: mustParse(t, "2026-08-03T10:00:00Z"), Model: "model-a", TokenBuckets: TokenBuckets{FreshInput: 5}},
+			},
+		},
+		{
 			name: "derived interval keeps the bucket count bounded",
 			seeds: []seed{
 				{conv: "conv-1", gen: "g1", model: "model-a", when: "2026-07-04T00:00:00Z", in: 1},
@@ -1319,11 +1335,98 @@ func TestReadsReportSkippedLines(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, points, 1)
 
+	// The list and the token chart answer the second round from the cached
+	// summaries. The count describes the store, so a cache hit reports it
+	// again instead of reporting zero. The detail read has no cache, so it
+	// scans the file again and reports its own count twice.
+	again, _, err := s.ListConversations(ConversationListOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, convs, again)
+	againDetail, err := s.ConversationDetail("conv-A")
+	require.NoError(t, err)
+	assert.Equal(t, detail, againDetail)
+	againPoints, _, err := s.TokenUsagePoints(TokenUsageOptions{Interval: time.Minute})
+	require.NoError(t, err)
+	assert.Equal(t, points, againPoints)
+
 	for _, want := range []string{
 		"local: list conversations: skipped 1 unparseable lines",
 		"local: conversation conv-A: skipped 1 unparseable lines",
 		"local: token metrics: skipped 1 unparseable lines",
 	} {
-		assert.Contains(t, logs.String(), want)
+		assert.Equal(t, 2, strings.Count(logs.String(), want), "%q reported once per request", want)
 	}
+}
+
+// TestReadsShareOneDecodePerFile pins the cache's reach across the two
+// endpoints: they read the same per-file summary, so whichever runs first
+// pays the decode and the other one does not.
+func TestReadsShareOneDecodePerFile(t *testing.T) {
+	list := func(t *testing.T, s *Storage) {
+		t.Helper()
+		convs, _, err := s.ListConversations(ConversationListOptions{})
+		require.NoError(t, err)
+		require.Len(t, convs, 1)
+		assert.Equal(t, int64(10), convs[0].InputTokens)
+	}
+	tokens := func(t *testing.T, s *Storage) {
+		t.Helper()
+		points, _, err := s.TokenUsagePoints(TokenUsageOptions{Interval: time.Hour})
+		require.NoError(t, err)
+		require.Len(t, points, 1)
+		assert.Equal(t, TokenBuckets{FreshInput: 10, Output: 3}, points[0].TokenBuckets)
+	}
+	cases := []struct {
+		name         string
+		first, other func(*testing.T, *Storage)
+	}{
+		{name: "the list warms the token chart", first: list, other: tokens},
+		{name: "the token chart warms the list", first: tokens, other: list},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStorage(t)
+			writeGen(t, s, "conv-A", "g1", agento11y.Generation{
+				Model:     agento11y.ModelRef{Name: "m"},
+				StartedAt: mustParse(t, "2026-08-03T10:00:00Z"),
+				Usage:     agento11y.TokenUsage{InputTokens: 10, OutputTokens: 3},
+			}, "2026-08-03T10:00:01Z")
+			decoded := recordDecodes(&s.summaries)
+
+			tc.first(t, s)
+			tc.other(t, s)
+			assert.Equal(t, []string{"conv-A"}, *decoded)
+		})
+	}
+}
+
+// TestTokenUsagePointsFollowAppends checks that a conversation written
+// between two requests is the only one decoded again, and that its new
+// usage lands in the totals.
+func TestTokenUsagePointsFollowAppends(t *testing.T) {
+	s := newStorage(t)
+	for _, id := range []string{"conv-A", "conv-B"} {
+		writeGen(t, s, id, "g-"+id, agento11y.Generation{
+			Model:     agento11y.ModelRef{Name: "m"},
+			StartedAt: mustParse(t, "2026-08-03T10:00:00Z"),
+			Usage:     agento11y.TokenUsage{InputTokens: 4, OutputTokens: 1},
+		}, "2026-08-03T10:00:01Z")
+	}
+	before, _, err := s.TokenUsagePoints(TokenUsageOptions{Interval: time.Hour})
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	assert.Equal(t, TokenBuckets{FreshInput: 8, Output: 2}, before[0].TokenBuckets)
+
+	decoded := recordDecodes(&s.summaries)
+	writeGen(t, s, "conv-A", "g-extra", agento11y.Generation{
+		Model:     agento11y.ModelRef{Name: "m"},
+		StartedAt: mustParse(t, "2026-08-03T10:30:00Z"),
+		Usage:     agento11y.TokenUsage{InputTokens: 13, OutputTokens: 2},
+	}, "2026-08-03T10:30:01Z")
+
+	after, _, err := s.TokenUsagePoints(TokenUsageOptions{Interval: time.Hour})
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	assert.Equal(t, TokenBuckets{FreshInput: 21, Output: 4}, after[0].TokenBuckets)
+	assert.Equal(t, []string{"conv-A"}, *decoded, "the untouched conversation stays cached")
 }
