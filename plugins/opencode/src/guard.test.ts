@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
-import type { GuardResult } from "./guard.js";
-import { runToolCallGuard } from "./guard.js";
+import type { HookEvaluateResponse, Message } from "@grafana/agento11y";
+import { describe, expect, it, vi } from "vitest";
+import type {
+  GuardResult,
+  PreflightTransformArgs,
+  PreflightTransformResult,
+} from "./guard.js";
+import { runPreflightTransform, runToolCallGuard } from "./guard.js";
 
 /** Narrow a GuardResult to a block result, failing the test otherwise. */
 function asBlock(res: GuardResult): { block: true; reason: string } {
@@ -353,5 +358,191 @@ describe("runToolCallGuard", () => {
     });
 
     expect(res).toBeUndefined();
+  });
+});
+
+/**
+ * Records the request and the hooks-config override of each call, so a test can
+ * check the phase override that stops the SDK short-circuiting the call (see
+ * `createAgento11yClient`).
+ */
+function makePreflightClient(respond: () => Promise<HookEvaluateResponse>): {
+  client: PreflightTransformArgs["client"];
+  calls: Array<{ req: any; override: unknown }>;
+} {
+  const calls: Array<{ req: any; override: unknown }> = [];
+  const client = {
+    evaluateHook: vi.fn(async (req: any, override?: unknown) => {
+      calls.push({ req, override });
+      return respond();
+    }),
+  } as unknown as PreflightTransformArgs["client"];
+  return { client, calls };
+}
+
+function makePreflightArgs(
+  overrides?: Partial<PreflightTransformArgs>,
+): PreflightTransformArgs {
+  return {
+    client: {} as PreflightTransformArgs["client"],
+    agentName: "opencode:build",
+    agentVersion: "1.2.3",
+    model: { provider: "anthropic", name: "claude-sonnet-4" },
+    messages: [{ role: "user", parts: [{ type: "text", text: "hi" }] }],
+    failOpen: true,
+    ...overrides,
+  };
+}
+
+describe("runPreflightTransform", () => {
+  const ALLOW: HookEvaluateResponse = { action: "allow", evaluations: [] };
+  const REDACTED: Message[] = [
+    {
+      role: "user",
+      parts: [{ type: "text", text: "authorization=[REDACTED]" }],
+    },
+  ];
+
+  type PreflightCase = {
+    name: string;
+    /** Server response. Throwing stands in for a transport error. */
+    respond?: () => Promise<HookEvaluateResponse>;
+    args?: Partial<PreflightTransformArgs>;
+    want?: PreflightTransformResult;
+    /** Substrings that must each appear in a logged warning. */
+    wantWarn?: string[];
+    assert?: (calls: Array<{ req: any; override: unknown }>) => void;
+  };
+
+  const cases: PreflightCase[] = [
+    {
+      name: "sends the conversation and the execution context",
+      assert: (calls) => {
+        const { req, override } = calls[0]!;
+        expect(req.phase).toBe("preflight");
+        expect(req.context).toEqual({
+          agentName: "opencode:build",
+          agentVersion: "1.2.3",
+          model: { provider: "anthropic", name: "claude-sonnet-4" },
+        });
+        expect(req.input.messages).toEqual([
+          { role: "user", parts: [{ type: "text", text: "hi" }] },
+        ]);
+        // The opencode client pins `hooks.phases` to `["postflight"]`, so
+        // without the override the SDK would answer allow without calling the
+        // server. `failOpen: false` keeps it from turning a failed evaluation
+        // into a synthetic allow, which would make a timeout unloggable here.
+        expect(override).toEqual({
+          enabled: true,
+          phases: ["preflight"],
+          failOpen: false,
+        });
+      },
+    },
+    {
+      name: "substitutes unknown for an unresolved provider and model name",
+      args: { model: { provider: "", name: "" } },
+      assert: (calls) => {
+        expect(calls[0]!.req.context.model).toEqual({
+          provider: "unknown",
+          name: "unknown",
+        });
+      },
+    },
+    {
+      name: "returns the redacted messages from transformedInput",
+      respond: async () => ({
+        ...ALLOW,
+        transformedInput: { messages: REDACTED },
+      }),
+      want: { messages: REDACTED },
+    },
+    {
+      name: "returns undefined when the server sends no transformedInput",
+    },
+    {
+      name: "returns undefined when the server sends an empty message list",
+      respond: async () => ({ ...ALLOW, transformedInput: { messages: [] } }),
+    },
+    {
+      name: "fails open on a transport error, logging a warning",
+      respond: async () => {
+        throw new Error("network down");
+      },
+      wantWarn: ["preflight transform eval failed"],
+    },
+    {
+      // The SDK aborts on its own timeout and, configured fail-closed, raises
+      // it. Preflight cannot block, so the rejection still has to resolve to
+      // "no transform".
+      name: "fails open when the evaluation times out",
+      respond: async () => {
+        throw new Error("The operation was aborted due to timeout");
+      },
+      wantWarn: ["preflight transform eval failed"],
+    },
+    {
+      name: "reports a deny as a reason to refuse the turn",
+      respond: async () => ({
+        action: "deny",
+        reason: "preflight deny",
+        evaluations: [],
+      }),
+      want: { block: expect.stringContaining("preflight deny") as any },
+    },
+    {
+      // A deny stops the turn, so the transform it carries has nothing left to
+      // rewrite: the conversation never reaches the provider.
+      name: "refuses without the transform a deny response carries",
+      respond: async () => ({
+        action: "deny",
+        reason: "preflight deny",
+        evaluations: [],
+        transformedInput: { messages: REDACTED },
+      }),
+      want: { block: expect.stringContaining("preflight deny") as any },
+    },
+    {
+      // The daemon's fail-closed deny explains itself, so it is passed through
+      // rather than wrapped as a policy decision.
+      name: "passes a guard-evaluation-failure deny through unwrapped",
+      respond: async () => ({
+        action: "deny",
+        ruleId: "__agento11y_guard_evaluation_failure",
+        reason: "local daemon could not reach the cloud hook",
+        evaluations: [],
+      }),
+      want: { block: "local daemon could not reach the cloud hook" },
+    },
+    {
+      name: "refuses the turn when the evaluation fails and fail-open is off",
+      args: { failOpen: false },
+      respond: async () => {
+        throw new Error("guard backend unavailable");
+      },
+      want: {
+        block: expect.stringContaining("stopped as a safety measure") as any,
+      },
+      wantWarn: ["preflight transform eval failed"],
+    },
+  ];
+
+  it.each(cases)("$name", async ({ respond, args, want, wantWarn, assert }) => {
+    const { client, calls } = makePreflightClient(
+      respond ?? (async () => ALLOW),
+    );
+    const warn = vi.fn();
+
+    const res = await runPreflightTransform(
+      makePreflightArgs({ client, logger: { warn }, ...args }),
+    );
+
+    expect(res).toEqual(want);
+    expect(calls).toHaveLength(1);
+    for (const substring of wantWarn ?? []) {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(substring));
+    }
+    if (!wantWarn) expect(warn).not.toHaveBeenCalled();
+    assert?.(calls);
   });
 });

@@ -4,6 +4,7 @@ import type {
   Message,
   ToolDefinition,
 } from "@grafana/agento11y";
+import type { Hooks } from "@opencode-ai/plugin";
 import type { AssistantMessage, Part } from "@opencode-ai/sdk";
 
 export type { GenerationResult };
@@ -29,8 +30,10 @@ function includesToolBodies(contentCapture: ContentCaptureMode): boolean {
 }
 
 /**
- * Map user-side parts to agento11y input messages. No redaction applied — user text is the
- * user's own data and Agent Observability needs it for prompt analysis when content capture allows it.
+ * Map user-side parts to agento11y input messages. Nothing is redacted here:
+ * user text is the user's own data and Agent Observability needs it for prompt
+ * analysis when content capture allows it. A caller that ran a preflight redact
+ * rule substitutes the rewritten text before calling this.
  */
 export function mapInputMessages(
   parts: Part[],
@@ -223,6 +226,240 @@ export function mapGeneration(
       cost: msg.cost,
     },
   };
+}
+
+/**
+ * One entry of opencode's `experimental.chat.messages.transform` output. The
+ * host requires both fields. They are optional here because opencode hands the
+ * same array to every plugin in turn, so an earlier plugin can have replaced or
+ * emptied an entry. An unrecognized shape becomes a placeholder, not a throw.
+ */
+export type OutgoingMessage = {
+  info?: { id?: string; role?: string; sessionID?: string };
+  parts?: Part[];
+};
+
+type HostOutgoingMessage = Parameters<
+  NonNullable<Hooks["experimental.chat.messages.transform"]>
+>[1]["messages"][number];
+
+/**
+ * Build-time pin on the host payload, never called. Every field of
+ * `OutgoingMessage` is optional, so a host rename of `info` would still compile
+ * and preflight would silently map every message to a placeholder. Reading both
+ * fields off the host type turns that rename into a compile error.
+ */
+function _pinHostOutgoingShape(entry: HostOutgoingMessage): OutgoingMessage {
+  return { info: entry.info, parts: entry.parts };
+}
+
+/** A text part of an outgoing message that preflight may rewrite. */
+type TextSlot = { part: Extract<Part, { type: "text" }> };
+
+/**
+ * Map opencode's outgoing conversation (the messages it is about to convert
+ * for the provider) to agento11y `Message[]` for a preflight hook evaluation.
+ *
+ * Emits one message per input entry, in order, so the redacted round-trip can
+ * be aligned by index. A slot with nothing to evaluate becomes an empty
+ * placeholder, because a shorter array discards the transform on write-back.
+ *
+ * Only text is forwarded, matching what `applyRedactedText` can write back:
+ * - `reasoning` parts carry an opaque provider signature (`part.metadata`)
+ *   that `MessageV2.toModelMessages` replays unchanged, so a rewrite would
+ *   invalidate it. pi drops `thinking` for the same reason.
+ * - Tool arguments are already evaluated postflight by `runToolCallGuard`, and
+ *   tool result text cannot be written back without breaking slot alignment.
+ * - `contentCapture` is not applied: the hook server holds this payload in
+ *   memory and never stores it, so redacting it would defeat the transform.
+ *
+ * The opencode counterpart of `mapAgentMessagesForHook` in
+ * `plugins/pi/src/mappers.ts`. The placeholder-slot contract is shared, the
+ * covered part types are not.
+ */
+export function mapOutgoingMessagesForHook(
+  messages: OutgoingMessage[],
+): Message[] {
+  return messages.map((msg) => {
+    if (!msg) return { role: "unknown", parts: [] };
+    const text = redactableTextSlots(msg)
+      .map((slot) => slot.part.text)
+      .join("\n");
+    return {
+      role: msg.info?.role || "unknown",
+      parts: text.length > 0 ? [{ type: "text", text }] : [],
+    };
+  });
+}
+
+/**
+ * The text parts of an outgoing message that preflight may rewrite, in `parts`
+ * order.
+ *
+ * `ignored` user text is excluded because `MessageV2.toModelMessages` never
+ * sends it. Empty text parts are excluded too: the same conversion drops an
+ * empty user part, and an empty assistant part is the separator opencode keeps
+ * between signed reasoning blocks. Writing into either would add text the
+ * provider does not see today, and redact nothing.
+ */
+function redactableTextSlots(msg: OutgoingMessage): TextSlot[] {
+  const role = msg.info?.role;
+  if (role !== "user" && role !== "assistant") return [];
+  const parts = msg.parts;
+  if (!Array.isArray(parts)) return [];
+
+  const slots: TextSlot[] = [];
+  parts.forEach((part) => {
+    if (!part || part.type !== "text") return;
+    if (part.text.length === 0) return;
+    if (role === "user" && part.ignored === true) return;
+    slots.push({ part });
+  });
+  return slots;
+}
+
+/**
+ * What a preflight transform rewrote: how many messages it touched, and the
+ * new text of every part it wrote, keyed by `partTextKey`. The map includes
+ * the parts a rewrite emptied, so a caller that replays it reproduces the
+ * conversation the provider received rather than a longer one.
+ */
+export type AppliedRedaction = {
+  messageCount: number;
+  textByPart: Map<string, string>;
+};
+
+/**
+ * Key for one part's rewritten text. Scoped by session so a stale entry cannot
+ * outlive `session.deleted`, which clears a session's keys by prefix.
+ */
+export function partTextKey(sessionID: string, partID: string): string {
+  return `${sessionID}\x00${partID}`;
+}
+
+/** One entry's planned rewrite: the new text for each targeted text slot. */
+type MessagePlan = {
+  index: number;
+  entry: OutgoingMessage;
+  parts: Part[];
+  updates: Array<{ slot: TextSlot; text: string }>;
+  needsClone: boolean;
+};
+
+/**
+ * Write redacted text from a server-side preflight transform back into
+ * opencode's outgoing messages, aligned by index. Returns the messages it
+ * rewrote and the new text of each part, or `null` when the transform was
+ * discarded whole. A server that changed nothing yields a count of `0` and an
+ * empty map.
+ *
+ * Message count and order never change, and only text parts are touched. Every
+ * entry is planned before anything is written, so a transform is never applied
+ * halfway.
+ *
+ * `outgoing` is the live array opencode passes to the hook, so writes go
+ * through it. Text parts are mutated in place to keep object identity. A frozen
+ * part is cloned into a new array slot instead, because opencode freezes
+ * `output.args` on newer versions and this payload could follow.
+ *
+ * Shares a name with `applyRedactedText` in `plugins/pi/src/mappers.ts` but not
+ * the behavior: this one is all-or-nothing, handles frozen parts, and returns a
+ * count. Both parse the same `transformed_input` encoding, so a wire change has
+ * to reach both.
+ */
+export function applyRedactedText(
+  outgoing: OutgoingMessage[],
+  redacted: Message[],
+): AppliedRedaction | null {
+  if (outgoing.length !== redacted.length) return null;
+
+  const plans: MessagePlan[] = [];
+  for (let i = 0; i < outgoing.length; i++) {
+    const entry = outgoing[i];
+    const sig = redacted[i];
+    if (!sig) return null;
+    // A placeholder slot the forward mapper kept for alignment. Skipping it
+    // keeps the redaction for the rest of the conversation.
+    if (!entry) continue;
+
+    const slots = redactableTextSlots(entry);
+    const parts = entry.parts;
+    if (slots.length === 0 || !Array.isArray(parts)) continue;
+
+    const text = textFromAgento11yMessage(sig);
+    // Writing an empty string back would delete content rather than redact it:
+    // opencode drops an empty user text part, then drops the message once no
+    // part survives, changing the message count this function preserves.
+    if (text === null || text.length === 0) continue;
+    if (text === slots.map((slot) => slot.part.text).join("\n")) continue;
+
+    // The redacted text goes into the first slot and the rest are emptied. A
+    // transform can add or remove newlines, so splitting it back across the
+    // slots risks misrepresenting the message.
+    plans.push({
+      index: i,
+      entry,
+      parts,
+      updates: slots.map((slot, position) => ({
+        slot,
+        text: position === 0 ? text : "",
+      })),
+      needsClone: slots.some((slot) => Object.isFrozen(slot.part)),
+    });
+  }
+
+  if (plans.some((plan) => plan.needsClone) && Object.isFrozen(outgoing)) {
+    // A frozen part needs its array slot reassigned, and the array is frozen
+    // too. Discard rather than apply the transform to part of the turn.
+    return null;
+  }
+
+  const textByPart = new Map<string, string>();
+  for (const plan of plans) {
+    for (const update of plan.updates) {
+      const { id, sessionID } = update.slot.part;
+      // A part without both ids cannot be matched at export time. It reaches
+      // the provider redacted either way; only the export keeps the original.
+      if (id && sessionID) {
+        textByPart.set(partTextKey(sessionID, id), update.text);
+      }
+    }
+    if (plan.needsClone) {
+      // Keyed by part identity, not position, so a reorder between planning
+      // and writing cannot put a replacement on the wrong part.
+      const replacements = new Map<Part, string>(
+        plan.updates.map((update) => [update.slot.part, update.text]),
+      );
+      const nextParts = plan.parts.map((part) => {
+        const text = replacements.get(part);
+        return text === undefined ? part : { ...part, text };
+      });
+      outgoing[plan.index] = { ...plan.entry, parts: nextParts };
+      continue;
+    }
+    for (const update of plan.updates) {
+      update.slot.part.text = update.text;
+    }
+  }
+  return { messageCount: plans.length, textByPart };
+}
+
+/**
+ * Join the text parts of a server-returned message, or null when it carries no
+ * text. The `content` shorthand is accepted as well as typed parts: the Agent
+ * Observability API emits typed parts, but both encodings round-trip.
+ *
+ * A renamed copy of `extractTextFromAgento11yMessage` in
+ * `plugins/pi/src/mappers.ts`, parsing the same encoding; keep the two aligned.
+ */
+function textFromAgento11yMessage(msg: Message): string | null {
+  if (typeof msg.content === "string") return msg.content;
+  if (!msg.parts) return null;
+  const texts: string[] = [];
+  for (const part of msg.parts) {
+    if (part.type === "text") texts.push(part.text);
+  }
+  return texts.length > 0 ? texts.join("\n") : null;
 }
 
 export function mapError(error: NonNullable<AssistantMessage["error"]>): Error {

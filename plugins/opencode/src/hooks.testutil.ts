@@ -65,6 +65,10 @@ export function makeAgento11yMock(): {
   const sigil = {
     startStreamingGeneration,
     startGeneration,
+    // Allows by default, so a test that enables guards only states the verdict
+    // it cares about. Guard paths that need a real HTTP round trip live in
+    // hooks.guard.test.ts, which builds a client instead of mocking one.
+    evaluateHook: vi.fn(async () => ({ action: "allow" })),
     startToolExecution: vi.fn(() => ({
       setResult: vi.fn(),
       setCallError: vi.fn(),
@@ -80,6 +84,8 @@ export function makeAgento11yMock(): {
 export function makeOpencodeClient(parts: any[] = []) {
   return {
     session: { message: vi.fn(async () => ({ data: { parts } })) },
+    app: { log: vi.fn(async () => ({ data: true })) },
+    tui: { showToast: vi.fn(async () => ({ data: true })) },
   } as any;
 }
 
