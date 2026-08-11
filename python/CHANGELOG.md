@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.14.0] - 2026-08-11
+
+### Features
+
+- **frameworks**: add conversation_id option and document OTel provider setup (#559)
+
+### Bug Fixes
+
+- **frameworks**: record system prompts from LangChain/LangGraph chat messages (#558)
+
 ## [0.13.0] - 2026-08-05
 
 ### Features
