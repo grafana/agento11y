@@ -170,7 +170,9 @@ export class Agento11yFrameworkHandler {
     const modelName = resolveModelName(serialized, invocationParams);
     const provider = resolveProvider(this.provider, this.providerResolver, modelName, serialized, invocationParams);
     const stream = isStreaming(invocationParams);
-    const input = this.captureInputs ? mapChatInputs(messages) : [];
+    const { input, systemPrompt: messageSystemPrompt } = this.captureInputs
+      ? mapChatInputs(messages)
+      : { input: [] as Message[], systemPrompt: '' };
     const context = this.buildFrameworkContext({
       runId: runKey,
       parentRunId,
@@ -183,7 +185,8 @@ export class Agento11yFrameworkHandler {
       callbackMetadata,
     });
 
-    const payload = this.startPayload(runKey, provider, modelName, context);
+    const systemPrompt = asString(read(invocationParams, 'system_prompt')) || messageSystemPrompt;
+    const payload = this.startPayload(runKey, provider, modelName, context, systemPrompt);
     const recorder = stream ? this.client.startStreamingGeneration(payload) : this.client.startGeneration(payload);
 
     this.runs.set(runKey, {
@@ -490,7 +493,13 @@ export class Agento11yFrameworkHandler {
     this.endFrameworkSpan(this.retrieverSpans, runId, error);
   }
 
-  private startPayload(_runId: string, provider: string, modelName: string, context: FrameworkContext) {
+  private startPayload(
+    _runId: string,
+    provider: string,
+    modelName: string,
+    context: FrameworkContext,
+    systemPrompt?: string,
+  ) {
     return {
       conversationId: context.conversationId,
       agentName: this.agentName,
@@ -501,6 +510,7 @@ export class Agento11yFrameworkHandler {
       },
       tags: context.tags,
       metadata: context.metadata,
+      ...(notEmpty(systemPrompt ?? '') ? { systemPrompt } : {}),
     };
   }
 
@@ -1103,12 +1113,16 @@ function mapPromptInputs(prompts: unknown): Message[] {
   return input;
 }
 
-function mapChatInputs(messages: unknown): Message[] {
+// The wire format has no SYSTEM role, so system/developer messages are pulled out
+// of the message list and joined into the dedicated `systemPrompt` field rather
+// than being mapped as USER messages.
+function mapChatInputs(messages: unknown): { input: Message[]; systemPrompt: string } {
   if (!Array.isArray(messages)) {
-    return [];
+    return { input: [], systemPrompt: '' };
   }
 
   const output: Message[] = [];
+  const systemChunks: string[] = [];
   for (const batch of messages) {
     if (!Array.isArray(batch)) {
       continue;
@@ -1120,6 +1134,11 @@ function mapChatInputs(messages: unknown): Message[] {
         continue;
       }
 
+      if (isSystemRole(extractMessageRole(message))) {
+        systemChunks.push(text);
+        continue;
+      }
+
       output.push({
         role: normalizeRole(extractMessageRole(message)),
         content: text,
@@ -1127,7 +1146,7 @@ function mapChatInputs(messages: unknown): Message[] {
     }
   }
 
-  return output;
+  return { input: output, systemPrompt: systemChunks.join('\n\n') };
 }
 
 function mapOutputMessages(output: unknown): Message[] {
@@ -1226,6 +1245,11 @@ function extractMessageRole(message: unknown): string {
     return role;
   }
   return asString(read(message, 'type'));
+}
+
+function isSystemRole(role: string): boolean {
+  const normalized = role.trim().toLowerCase();
+  return normalized === 'system' || normalized === 'developer';
 }
 
 function normalizeRole(role: string): Message['role'] {
