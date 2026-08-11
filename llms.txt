@@ -112,7 +112,7 @@ AGENTO11Y_AUTH_TOKEN=glc_...
 AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=<otlp-gateway-url>
 ```
 
-To re-enter credentials later, run `agento11y login`. It asks for the endpoint, the tenant ID, the token, and an optional OTLP endpoint, then for content capture mode, session tags, and guards. Before writing the file, login sends one request to the endpoint with the credentials and reports what came back; run `agento11y doctor` to repeat that check later.
+To re-enter credentials later, run `agento11y login`. It first asks for your Grafana stack and prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`), trying to open it in a browser. Paste the environment block from that page into the next field, which is masked because the block carries a token, and login fills the endpoint, tenant ID, token, OTLP endpoint, and OTLP headers from it; anything the block does not carry is asked for field by field, followed by content capture mode, session tags, and guards. The stack is saved as `AGENTO11Y_STACK_URL` so a later run offers it back, it only builds the printed links, and it is never saved as `AGENTO11Y_ENDPOINT`, which points at a different host. Before writing the file, login sends one request to the endpoint with the credentials and reports what came back; run `agento11y doctor` to repeat that check later.
 
 ## Content capture
 

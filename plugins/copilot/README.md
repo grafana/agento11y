@@ -52,9 +52,9 @@ For VS Code, no launch wrapper is needed — once `~/.copilot/hooks/agento11y.js
 
 ## 2. Credentials
 
-When `agento11y copilot` prompts, copy values from `https://<your-grafana>.grafana.net/plugins/grafana-agento11y-app`. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
+When `agento11y copilot` prompts, it asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
 
-You need values from three Grafana Cloud pages:
+To type the values instead, press Enter on the empty paste box. They come from three Grafana Cloud pages:
 
 1. **Agent Observability → Configuration**
    - **API URL** → `AGENTO11Y_ENDPOINT`

@@ -2,16 +2,27 @@
 // the explicit `agento11y login` subcommand and the auto-prompt that runs
 // before `agento11y claude` / `agento11y pi` when no credentials are configured.
 //
-// The flow collects three required values — SIGIL_ENDPOINT,
-// SIGIL_AUTH_TENANT_ID, and SIGIL_AUTH_TOKEN — plus an optional OTLP
-// endpoint, followed by a preferences group (content capture mode, session
-// tags, guards, and automatic tags). Answering yes to automatic tags unfolds a
-// checklist of the values they would attach. The flow then asks the endpoint
-// whether it accepts the credentials and writes everything to the dotenv at
-// $XDG_CONFIG_HOME/agento11y/config.env (or the legacy
-// $XDG_CONFIG_HOME/sigil/config.env when only that file exists; see
-// dotenv.FilePath). Existing allowed keys that no field covers are preserved
-// by the underlying writer.
+// The flow asks which Grafana stack the user is on. A stack the machine already
+// knows about — saved by an earlier run, or configured in gcx — comes back as
+// the answer rather than as a question: pre-filled into the input when there is
+// one, offered as a list whose last entry is still that input when there are
+// several.
+//
+// It prints that stack's coding-agent setup page and tries to open it in a
+// browser. The environment block from that page goes into one paste field,
+// which fills SIGIL_ENDPOINT, SIGIL_AUTH_TENANT_ID,
+// SIGIL_AUTH_TOKEN, the OTLP endpoint, and OTEL_EXPORTER_OTLP_HEADERS.
+// Pasting is optional: whatever the block does not carry is asked for field by
+// field. The three credentials are required, the OTLP endpoint is not. A
+// preferences group follows: content capture mode, session tags, guards, and
+// automatic tags. The stack answer only builds the printed links and is never
+// saved.
+//
+// The flow then asks the endpoint whether it accepts the credentials and
+// writes everything to the dotenv at $XDG_CONFIG_HOME/agento11y/config.env
+// (or the legacy $XDG_CONFIG_HOME/sigil/config.env when only that file
+// exists; see dotenv.FilePath). Existing allowed keys that no field covers
+// are preserved by the underlying writer.
 //
 // A value can arrive three ways: as a RunOpts field the `agento11y login`
 // flags fill in, from the saved configuration (config.env plus any
@@ -33,8 +44,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/url"
 	"os"
+	"os/exec"
+	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -50,12 +65,128 @@ import (
 // Grafana brand orange, applied throughout the prompt theme.
 const grafanaOrange = lipgloss.Color("#FF671D")
 
-const pluginURL = "https://<your-stack>.grafana.net/plugins/grafana-agento11y-app"
+// setupPagePath is the Agent Observability page that shows a coding agent's
+// credentials as one environment block. A path rather than a URL, because it
+// lives on the user's own Grafana stack.
+const setupPagePath = "/a/grafana-agento11y-app/setup-coding-agent"
 
-// observabilityURL points at the Agent Observability plugin route on the
-// user’s Grafana stack — the page where captured generations, traces, and
-// scores show up after a `agento11y claude` / `agento11y pi` session.
-const observabilityURL = "https://<your-stack>.grafana.net/a/grafana-agento11y-app"
+// observabilityPath is the Agent Observability app route on the user's stack,
+// where captured generations, traces, and scores show up.
+const observabilityPath = "/a/grafana-agento11y-app"
+
+// placeholderStackOrigin stands in for a stack login never learned, so a
+// printed link still shows which URL to open. The prompt requires a stack, so
+// only a promptless run with no saved stack reaches it.
+const placeholderStackOrigin = "https://<your-stack>.grafana.net"
+
+// stackURLKey holds the stack the user named, so a re-run pre-fills the
+// question and a promptless run still prints its own links. Written under the
+// preferred spelling alone: no SDK reads it, only login does.
+const stackURLKey = "AGENTO11Y_STACK_URL"
+
+// setupPageURL and observabilityPageURL build the two links login prints for
+// the stack origin the user gave. An empty origin falls back to the
+// placeholder host.
+func setupPageURL(origin string) string { return stackBase(origin) + setupPagePath }
+
+func observabilityPageURL(origin string) string { return stackBase(origin) + observabilityPath }
+
+func stackBase(origin string) string {
+	if origin = strings.TrimSpace(origin); origin != "" {
+		return strings.TrimRight(origin, "/")
+	}
+	return placeholderStackOrigin
+}
+
+// stackOrigin turns what the user gives for their Grafana stack (a bare host,
+// an origin, or a deep link inside the stack) into the scheme and host the app
+// paths are appended to. The result never becomes AGENTO11Y_ENDPOINT: the
+// ingest API answers on a different regional host.
+func stackOrigin(raw string) (string, error) {
+	bad := errors.New("enter your Grafana Cloud URL, e.g. mystack.grafana.net")
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", bad
+	}
+	if !strings.Contains(s, "://") {
+		s = defaultStackScheme(s) + "://" + s
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", bad
+	}
+	// A host is case-insensitive, so lowercase it rather than print a link
+	// that carries whatever case the user typed.
+	return u.Scheme + "://" + strings.ToLower(u.Host), nil
+}
+
+// defaultStackScheme picks the scheme for an answer that carries none.
+// Grafana Cloud stacks are HTTPS. A loopback host is a Grafana running on
+// this machine, which serves plain HTTP, so `localhost:3000` and
+// `http://localhost:3000` resolve to the same origin.
+func defaultStackScheme(hostport string) string {
+	host, _, _ := strings.Cut(hostport, "/")
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if isLoopbackHostname(strings.Trim(host, "[]")) {
+		return "http"
+	}
+	return "https"
+}
+
+// isLoopbackHostname reports whether a bare hostname is this machine.
+func isLoopbackHostname(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// isLoopbackOrigin reports whether an origin points at a Grafana on this machine.
+// Such an origin is a fine answer to type, and login keeps working with one, but
+// it is not something to suggest: the question asks for a Grafana Cloud URL, and
+// a gcx set up for local development carries a context for a local Grafana that
+// would otherwise sit in the list under that title.
+func isLoopbackOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return isLoopbackHostname(u.Hostname())
+}
+
+// validateStack requires an answer stackOrigin can read. The stack is what
+// builds the link to the credentials page, and the page is where the rest of
+// the form comes from, so there is nothing useful to show without it.
+func validateStack(s string) error {
+	_, err := stackOrigin(s)
+	return err
+}
+
+// openURL opens a URL in the user's browser. It is a package var so tests can
+// record the call instead of launching anything.
+var openURL = openBrowser
+
+func openBrowser(target string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", target)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", target)
+	default:
+		cmd = exec.Command("xdg-open", target)
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// The browser outlives this call and login then waits on the user, so reap
+	// the child in the background instead of leaving a zombie behind.
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
 
 // docsURL points at the plugins directory so users can discover every
 // agent adapter we ship (claude-code, codex, cursor, pi, …). Linked as a
@@ -68,6 +199,9 @@ var (
 			BorderForeground(grafanaOrange).
 			Padding(0, 1).
 			MarginBottom(1)
+	// bannerPlain carries the same trailing gap as bannerBox with no frame,
+	// so the setup link does not compete with the welcome box above it.
+	bannerPlain    = lipgloss.NewStyle().MarginBottom(1)
 	bannerTitle    = lipgloss.NewStyle().Bold(true)
 	bannerSubtitle = lipgloss.NewStyle().Faint(true)
 	bannerLabel    = lipgloss.NewStyle().Faint(true)
@@ -249,10 +383,12 @@ func Run(ctx context.Context, opts RunOpts) error {
 		autoTagNames: seedAutoTagNames(existing[envconfig.LegacyKey(envconfig.AutoTagNamesSuffix)]),
 		guards:       seedGuards(existing["SIGIL_GUARDS_ENABLED"], existing["SIGIL_GUARDS_FAIL_OPEN"]),
 		guardTimeout: strings.TrimSpace(existing["SIGIL_GUARDS_TIMEOUT_MS"]),
+		otlpHeaders:  existing["OTEL_EXPORTER_OTLP_HEADERS"],
+		stackURL:     existing[stackURLKey],
 	}
 
 	if askUser {
-		if err := promptValues(&v, fixed, existingToken, opts.Stderr); err != nil {
+		if err := promptValues(ctx, &v, fixed, existingToken, opts.Stderr); err != nil {
 			return err
 		}
 	}
@@ -268,6 +404,19 @@ func Run(ctx context.Context, opts RunOpts) error {
 	v.tenantID = strings.TrimSpace(v.tenantID)
 	v.token = strings.TrimSpace(v.token)
 	v.otelEndpoint = strings.TrimSpace(v.otelEndpoint)
+
+	// A saved OTEL_EXPORTER_OTLP_HEADERS carries its own copy of the OTLP
+	// credential and no field asks for it, so a new token would leave OTLP
+	// authenticating with the old one and login would still report success:
+	// otel.ExporterHeaders prefers explicit headers that carry an Authorization
+	// entry, and the credential check only probes the export endpoint. Drop it,
+	// so the exporter builds Basic auth from the tenant ID and the new token.
+	if !v.otlpHeadersPasted && v.otlpHeaders != "" && v.token != existingToken {
+		v.otlpHeaders = ""
+		fmt.Fprintln(opts.Stderr, lipgloss.NewStyle().Faint(true).Render(
+			"Removed the saved OTEL_EXPORTER_OTLP_HEADERS: it carried the previous token. "+
+				"Paste the block from the setup page if OTLP needs a credential of its own."))
+	}
 
 	// Ask the endpoint whether it accepts these credentials before the file
 	// is written, so a wrong instance ID or a token without sigil:write is
@@ -293,7 +442,7 @@ func Run(ctx context.Context, opts RunOpts) error {
 	}
 
 	if opts.ShowNextStep {
-		printNextStep(opts.Stderr, verdict)
+		printNextStep(opts.Stderr, verdict, v.stackURL)
 	}
 	return nil
 }
@@ -327,23 +476,58 @@ func (f fixedValues) validate() error {
 	return nil
 }
 
-// promptValues drives the interactive part of login: the credential fields
-// that no flag already fixed, then the capture settings. Fields a flag fixed
-// are left out instead of being asked again. It updates v in place.
-func promptValues(v *formValues, fixed fixedValues, existingToken string, stderr io.Writer) error {
-	// Banner is printed once, on stderr, BEFORE huh takes over rendering.
-	// huh stays in inline mode so this text remains static terminal
-	// scrollback above the form (the URL stays selectable, redraws inside
-	// huh's render area don't clobber the selection above it).
-	banner, bannerLines := welcomeBanner()
-	fmt.Fprintln(stderr, banner)
+// promptValues drives the interactive part of login, updating v in place.
+// Fields a flag fixed or the paste supplied are not asked again.
+//
+// Three forms run one after another, for two reasons. The stack question is
+// its own form because login prints the setup-page box and opens a browser
+// between it and the paste, which it cannot do while a form owns the terminal.
+// The paste is its own form because huh binds a field to its value when the
+// field is built, so a value pasted into one form cannot reach another field
+// of the same form.
+func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existingToken string, stderr io.Writer) error {
+	// Guidance goes to stderr before huh takes over rendering. huh stays in
+	// inline mode, so this text remains static scrollback above the form and
+	// the URL stays selectable. The deferred escape erases it on any outcome:
+	// huh clears its own render area on exit, leaving the cursor right below
+	// what we printed, so cursor-up plus erase-to-end-of-screen removes exactly
+	// these rows.
+	printed := 0
+	width := terminalWidth(stderr)
+	say := func(s string) {
+		fmt.Fprintln(stderr, s)
+		printed += rows(s, width)
+	}
+	defer func() { fmt.Fprintf(stderr, "\033[%dA\033[J", printed) }()
 
-	// Erase the banner regardless of outcome. The banner is one-shot
-	// onboarding guidance; leaving it in the terminal after the form
-	// exits is clutter. huh clears its own render area on exit, so the
-	// cursor is then back at the row right below the banner: cursor-up by
-	// bannerLines plus erase-to-end-of-screen scrubs exactly the banner.
-	defer fmt.Fprintf(stderr, "\033[%dA\033[J", bannerLines)
+	say(welcomeBanner())
+
+	// The stack is what the setup-page link is built from, so it is asked for on
+	// every run. A saved answer is the answer already filled in, which makes a
+	// re-run one Enter.
+	stack, err := promptStack(ctx, v.stackURL)
+	if err != nil {
+		return err
+	}
+	v.stackURL = stack
+	say(setupPageLink(v.stackURL))
+
+	// One masked input rather than a text area: the block is a credential, and
+	// a terminal paste into a single-line input turns its newlines into spaces,
+	// which applyPaste reads through normalizePastedBlock.
+	var pasted string
+	pasteForm := huh.NewForm(huh.NewGroup(
+		huh.NewInput().
+			Title("Paste from Grafana").
+			Description("Paste the environment block from that page, then press Enter.").
+			EchoMode(huh.EchoModePassword).
+			Validate(pastedBlockValidator(fixed)).
+			Value(&pasted),
+	)).WithTheme(grafanaTheme())
+	if err := formError(pasteForm.Run()); err != nil {
+		return err
+	}
+	filled := applyPaste(v, fixed, pasted)
 
 	tokenDesc := "API token → Create a token in Cloud Access Policies on the page above"
 	tokenValidate := requireNonEmpty("auth token")
@@ -359,21 +543,21 @@ func promptValues(v *formValues, fixed fixedValues, existingToken string, stderr
 	}
 
 	var required []huh.Field
-	if fixed.endpoint == "" {
+	if fixed.endpoint == "" && !filled.endpoint {
 		required = append(required, huh.NewInput().
 			Title("Endpoint").
 			Description("Copy 'API URL' from the page above").
 			Validate(requireURL).
 			Value(&v.endpoint))
 	}
-	if fixed.tenantID == "" {
+	if fixed.tenantID == "" && !filled.tenantID {
 		required = append(required, huh.NewInput().
 			Title("Tenant ID").
 			Description("Copy 'Instance ID' from the page above").
 			Validate(requireNonEmpty("tenant id")).
 			Value(&v.tenantID))
 	}
-	if fixed.token == "" {
+	if fixed.token == "" && !filled.token {
 		required = append(required, huh.NewInput().
 			Title("Auth token").
 			Description(tokenDesc).
@@ -381,7 +565,7 @@ func promptValues(v *formValues, fixed fixedValues, existingToken string, stderr
 			Validate(tokenValidate).
 			Value(&v.token))
 	}
-	if fixed.otelEndpoint == "" {
+	if fixed.otelEndpoint == "" && !filled.otelEndpoint {
 		required = append(required, huh.NewInput().
 			Title("OTLP endpoint").
 			Description("For SDK traces and metrics. Press Enter to skip.").
@@ -389,8 +573,13 @@ func promptValues(v *formValues, fixed fixedValues, existingToken string, stderr
 			Value(&v.otelEndpoint))
 	}
 
-	form := huh.NewForm(
-		huh.NewGroup(required...),
+	var groups []*huh.Group
+	// A paste can fill every credential, and an empty group would render as a
+	// blank step.
+	if len(required) > 0 {
+		groups = append(groups, huh.NewGroup(required...))
+	}
+	groups = append(groups,
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Content capture").
@@ -441,13 +630,454 @@ func promptValues(v *formValues, fixed fixedValues, existingToken string, stderr
 				Validate(validateAutoTagNames).
 				Value(&v.autoTagNames),
 		).WithHideFunc(func() bool { return !v.autoTags }),
-	).WithTheme(grafanaTheme())
+	)
 
-	if err := formError(form.Run()); err != nil {
+	if err := formError(huh.NewForm(groups...).WithTheme(grafanaTheme()).Run()); err != nil {
 		return err
 	}
 	v.capturePrompted = true
 	return nil
+}
+
+// manualStackChoice is the list value that opens the free-form field. Not the
+// empty string: huh moves the cursor to the option whose value equals the bound
+// one, so an empty sentinel would take the cursor off the URLs whenever nothing
+// is bound. Not a possible origin either, since those all carry a scheme.
+const manualStackChoice = "<type it in>"
+
+// stackListRows caps how many rows the stack list shows at once. Past it the list
+// scrolls, which cuts it at the bottom, so the last row goes out of sight and
+// reaching it takes an arrow key or / to filter. The cap is therefore set above
+// any plausible number of gcx contexts, and still low enough to leave the terminal
+// the rows promptValues printed above the form.
+const stackListRows = 14
+
+// promptStack asks which Grafana stack the user is on and returns its origin.
+//
+// What it asks depends on how many URLs the machine already knows, from an
+// earlier run and from gcx. Several are a list with a field under it. One is that
+// field alone, pre-filled: a list of one says no more than the pre-filled field
+// does, in three rows instead of one. None is the empty field this flow started
+// with.
+func promptStack(ctx context.Context, saved string) (string, error) {
+	stacks := stackList(gcxStacks(ctx), saved)
+	options := stackOptions(stacks)
+	if len(options) == 0 {
+		value, from := stackPrefill(stacks, saved)
+		return promptStackInput(value, from)
+	}
+	return promptStackList(stacks, options)
+}
+
+// stackTitle names what this step asks for. It is the Grafana a user opens in a
+// browser, and deliberately not the ingest host the setup page calls "API URL":
+// the two are different hosts and login never saves this one as the endpoint.
+const stackTitle = "Your Grafana Cloud URL"
+
+// stackActionColor writes the last row of the list, the one that opens the field.
+//
+// #6E9FFF is the design system's link colour, and a link is what that row is: the
+// only one that goes somewhere instead of answering. The colours this screen
+// already spends rule the alternatives out. Orange is taken twice over, by the
+// title and by the selected row, so an orange row would read as selected wherever
+// the cursor really is. Plain text is what the URL rows are. Yellow is the warning
+// colour and nothing here is wrong, and green is the success colour.
+const stackActionColor = lipgloss.Color("#6E9FFF")
+
+// manualStackLabel is the last row of the list, the one that opens the field. It
+// opens with the same orange "> " the field's own prompt uses, so the row shows
+// where it leads, and the ellipsis says it leads somewhere rather than answering.
+//
+// The cost of that prompt glyph: huh draws its cursor on the selected row, so this
+// row reads "› > or another URL…" when the cursor is on it.
+//
+// Rendered per call rather than held in a package var, so it picks up the same
+// colour profile as every other string this flow prints. lipgloss decides that
+// from the process output, which a package var would freeze at init.
+func manualStackLabel() string {
+	return lipgloss.NewStyle().Foreground(grafanaOrange).Render("> ") +
+		lipgloss.NewStyle().Foreground(stackActionColor).Render("or another URL…")
+}
+
+// stackListSeparator closes the column of URLs and holds the last row away from
+// it. A rule the width of the longest URL, then a blank line: the rule reads as
+// the bottom of the list rather than as a stub, and it can never be wider than a
+// row already on screen, so it cannot wrap one.
+//
+// Its colour is explicit rather than faint because huh renders a label inside the
+// style of its row, and faint adds no colour of its own: a faint rule would turn
+// orange whenever the URL it hangs under is selected, which reads as part of the
+// highlight. Adaptive, so it is not invisible on a light terminal.
+func stackListSeparator(stacks []string) string {
+	width := 0
+	for _, stack := range stacks {
+		width = max(width, lipgloss.Width(stack))
+	}
+	rule := lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "250", Dark: "240"}).
+		Render(strings.Repeat("─", width))
+	return "\n" + rule + "\n"
+}
+
+// promptStackList asks the stack question as one block — the URLs this machine
+// knows, and a last row for one it does not — and returns the origin of whichever
+// the user settled on.
+//
+// One block, so Enter on a URL answers the step: huh enables Submit on the last
+// field of a group and turns Enter into "go to the next field" everywhere else, so
+// a field sitting under the list could only be walked into. The field the last row
+// opens is a second group instead, which huh shows on its own once that row is
+// chosen. Its way back is Esc, from stackKeyMap; submitting it empty comes back
+// here and asks again, which is the same way back for a user who reaches for
+// Enter.
+func promptStackList(stacks []string, options []huh.Option[string]) (string, error) {
+	for {
+		choice, typed := stacks[0], ""
+
+		list := huh.NewSelect[string]().
+			Title(stackTitle).
+			Options(options...).
+			Value(&choice)
+		// Height pads a list shorter than itself with blank rows, so it is only set
+		// once the list has to scroll. Its rows are the options plus the two the
+		// separator adds, and the title takes one more out of the height.
+		if len(options)+2 > stackListRows {
+			list = list.Height(stackListRows + 1)
+		}
+
+		typing := huh.NewInput().
+			Title("Another URL").
+			Description("e.g. mystack.grafana.net").
+			// Empty has to pass. huh validates a field as it loses focus and then
+			// refuses to leave a group holding an error, so a required-value
+			// validator here is what would keep Esc from going anywhere.
+			Validate(allowEmptyStack).
+			Value(&typed)
+
+		form := huh.NewForm(
+			huh.NewGroup(list),
+			huh.NewGroup(typing).WithHideFunc(func() bool { return choice != manualStackChoice }),
+		).WithTheme(grafanaTheme()).WithKeyMap(stackKeyMap())
+		if err := formError(form.Run()); err != nil {
+			return "", err
+		}
+		if answer, ok := stackAnswer(choice, typed); ok {
+			return answer, nil
+		}
+	}
+}
+
+// stackAnswer resolves what the form collected into one origin. It reports false
+// when the user asked to type a URL and then submitted nothing, which is a request
+// for the list back rather than an answer.
+func stackAnswer(choice, typed string) (string, bool) {
+	if choice != manualStackChoice {
+		// Every listed value came from stackOrigin already.
+		return choice, true
+	}
+	if s := strings.TrimSpace(typed); s != "" {
+		// allowEmptyStack accepted it.
+		origin, _ := stackOrigin(s)
+		return origin, true
+	}
+	return "", false
+}
+
+// stackKeyMap adds Esc to the back binding of the typed-answer field, and says
+// where back goes. Ctrl-C is left as the only key that abandons login.
+func stackKeyMap() *huh.KeyMap {
+	km := huh.NewDefaultKeyMap()
+	km.Input.Prev.SetKeys("shift+tab", "esc")
+	km.Input.Prev.SetHelp("esc", "back to the list")
+	return km
+}
+
+// allowEmptyStack validates the field the last row opens. Empty passes, because
+// promptStackList reads it as a request for the list back; anything else has to be
+// a URL.
+func allowEmptyStack(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return validateStack(s)
+}
+
+// stackPrefill picks the value the free-form input opens with, and where it came
+// from. The answer an earlier run saved wins: the user gave it, and stackList
+// already put it first, so a gcx stack that is not it would have made a second
+// entry and a select rather than reach this.
+func stackPrefill(stacks []string, saved string) (string, stackSource) {
+	switch {
+	case saved != "":
+		return saved, stackSourceSaved
+	case len(stacks) > 0:
+		return stacks[0], stackSourceGcx
+	default:
+		return "", stackSourceNone
+	}
+}
+
+// stackSource says where the value pre-filled into the stack input came from.
+// The description tells the user, because a field that answers itself has to say
+// on whose authority.
+type stackSource int
+
+const (
+	// stackSourceNone is an empty field: nothing to pre-fill, or a user who
+	// asked to type a stack the list did not hold.
+	stackSourceNone stackSource = iota
+	// stackSourceSaved is the answer an earlier run wrote to the config file.
+	stackSourceSaved
+	// stackSourceGcx is the one stack gcx is configured for.
+	stackSourceGcx
+)
+
+func stackDescription(from stackSource) string {
+	switch from {
+	case stackSourceGcx:
+		return "Found in your gcx config. Press Enter to use it."
+	case stackSourceSaved:
+		return "Press Enter to keep it, or type another stack."
+	default:
+		return "e.g. mystack.grafana.net"
+	}
+}
+
+// promptStackInput asks for a stack in a free-form field and returns its origin.
+func promptStackInput(value string, from stackSource) (string, error) {
+	answer := value
+	form := huh.NewForm(huh.NewGroup(
+		huh.NewInput().
+			Title(stackTitle).
+			Description(stackDescription(from)).
+			Validate(validateStack).
+			Value(&answer),
+	)).WithTheme(grafanaTheme())
+	if err := formError(form.Run()); err != nil {
+		return "", err
+	}
+	// validateStack already accepted it.
+	origin, _ := stackOrigin(answer)
+	return origin, nil
+}
+
+// stackList orders the stacks the question can answer itself with: the one an
+// earlier run saved, then the ones gcx is configured for, each host once.
+// origins arrive deduplicated from parseGcxStacks.
+//
+// The saved stack leads because it is the likeliest answer, and because huh
+// scrolls its list to the selected option while its viewport is no taller than
+// the list: a cursor further down hides every row above it, so a re-run would
+// show the stacks after the saved one and none of the stacks before it.
+func stackList(origins []string, saved string) []string {
+	stacks := make([]string, 0, len(origins)+1)
+	if saved != "" {
+		stacks = append(stacks, saved)
+	}
+	for _, origin := range origins {
+		if origin != saved {
+			stacks = append(stacks, origin)
+		}
+	}
+	return stacks
+}
+
+// stackOptions builds the list of URLs to offer, with a last row that opens the
+// free-form field. Fewer than two URLs gets no list at all, which is what sends
+// promptStack to the pre-filled field instead.
+//
+// The separator belongs to the label above it rather than to a row of its own:
+// huh has no unselectable row, and a label that opened with the separator instead
+// would leave the cursor pointing at a rule.
+func stackOptions(stacks []string) []huh.Option[string] {
+	if len(stacks) < 2 {
+		return nil
+	}
+	options := make([]huh.Option[string], 0, len(stacks)+1)
+	for i, stack := range stacks {
+		label := stack
+		if i == len(stacks)-1 {
+			label += stackListSeparator(stacks)
+		}
+		options = append(options, huh.NewOption(label, stack))
+	}
+	return append(options, huh.NewOption(manualStackLabel(), manualStackChoice))
+}
+
+// setupPageLink renders the link naming the coding-agent setup page for origin,
+// and opens that page in a browser on the way. Opening is best effort and
+// unreported: a machine with no browser still gets a URL to open by hand.
+func setupPageLink(origin string) string {
+	target := setupPageURL(origin)
+	// The placeholder host resolves to nothing, so only a real origin is opened.
+	if origin != "" {
+		_ = openURL(target)
+	}
+	return bannerPlain.Render(strings.Join([]string{
+		bannerLabel.Render("Get your credentials at:"),
+		bannerURL.Render(target),
+	}, "\n"))
+}
+
+// pasteFilled records which values a pasted block supplied, so the form skips
+// the fields that already hold an answer.
+type pasteFilled struct {
+	endpoint     bool
+	tenantID     bool
+	token        bool
+	otelEndpoint bool
+	otlpHeaders  bool
+}
+
+// applyPaste fills the credential fields from a pasted environment block and
+// reports which ones it supplied. A value fixed on the command line is never
+// overwritten. Both spellings are read, and AGENTO11Y_* beats SIGIL_* inside
+// one block.
+//
+// OTLP headers are kept as pasted rather than rebuilt from the tenant ID and
+// token: the OTLP Basic-auth user is the stack ID, which can differ from the
+// ingest tenant ID. They follow --otlp-endpoint rather than a fixed value of
+// their own, because a user who points login at their own collector must not
+// get a Grafana Cloud token written next to it.
+//
+// AGENTO11Y_PROTOCOL and AGENTO11Y_AUTH_MODE are dropped: the launcher
+// hardcodes HTTP and Basic (see internal/emit).
+func applyPaste(v *formValues, fixed fixedValues, block string) pasteFilled {
+	env, _ := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(block)))
+	var filled pasteFilled
+	filled.endpoint = setPasted(&v.endpoint, fixed.endpoint, brandedPaste(env, "ENDPOINT"))
+	filled.tenantID = setPasted(&v.tenantID, fixed.tenantID, brandedPaste(env, "AUTH_TENANT_ID"))
+	filled.token = setPasted(&v.token, fixed.token, brandedPaste(env, "AUTH_TOKEN"))
+	filled.otelEndpoint = setPasted(&v.otelEndpoint, fixed.otelEndpoint,
+		cmp.Or(brandedPaste(env, "OTEL_EXPORTER_OTLP_ENDPOINT"), env["OTEL_EXPORTER_OTLP_ENDPOINT"]))
+	// OTEL_EXPORTER_OTLP_HEADERS has no branded spelling: it is the raw
+	// OpenTelemetry variable, and the block ships it as such.
+	filled.otlpHeaders = setPasted(&v.otlpHeaders, fixed.otelEndpoint, env["OTEL_EXPORTER_OTLP_HEADERS"])
+	v.otlpHeadersPasted = filled.otlpHeaders
+	return filled
+}
+
+// setPasted writes value into field unless a flag fixed that value or the
+// block carried none, and reports whether the field now holds the pasted one.
+func setPasted(field *string, fixed, value string) bool {
+	if fixed != "" || strings.TrimSpace(value) == "" {
+		return false
+	}
+	*field = strings.TrimSpace(value)
+	return true
+}
+
+// brandedPaste resolves one alias family from a pasted block, preferring the
+// AGENTO11Y_ spelling over the legacy SIGIL_ one.
+func brandedPaste(env map[string]string, suffix string) string {
+	return cmp.Or(env[envconfig.PreferredKey(suffix)], env[envconfig.LegacyKey(suffix)])
+}
+
+// pastedBlockValidator binds validatePastedBlock to the values the flags
+// fixed, which is the shape huh's Validate takes.
+func pastedBlockValidator(fixed fixedValues) func(string) error {
+	return func(s string) error { return validatePastedBlock(fixed, s) }
+}
+
+// validatePastedBlock checks a block before the form accepts it. An empty box
+// is fine: the user can type the values instead. A block that fills nothing is
+// rejected. Every value it does fill runs the validator the matching field
+// applies to typed input, because the paste replaces those fields and nothing
+// else would check them.
+//
+// Values a flag fixed are skipped: `login --endpoint …` has to accept a block
+// whose endpoint slot is still a placeholder, because that slot is not what
+// the user came for.
+func validatePastedBlock(fixed fixedValues, s string) error {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	if _, err := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(s))); err != nil {
+		return fmt.Errorf("could not read the block: %w", err)
+	}
+	var probe formValues
+	filled := applyPaste(&probe, fixed, s)
+	if filled == (pasteFilled{}) {
+		return errors.New("no credentials in this block. Expected lines like AGENTO11Y_ENDPOINT=…, AGENTO11Y_AUTH_TENANT_ID=…, AGENTO11Y_AUTH_TOKEN=…")
+	}
+	for _, c := range []struct {
+		supplied bool
+		name     string
+		value    string
+		validate func(string) error
+	}{
+		{filled.endpoint, "endpoint", probe.endpoint, requireURL},
+		{filled.tenantID, "tenant ID", probe.tenantID, requireNonEmpty("tenant id")},
+		{filled.token, "token", probe.token, requireNonEmpty("auth token")},
+		{filled.otelEndpoint, "OTLP endpoint", probe.otelEndpoint, requireURL},
+		{filled.otlpHeaders, "OTLP headers", probe.otlpHeaders, nil},
+	} {
+		if !c.supplied {
+			continue
+		}
+		if looksLikePlaceholder(c.value) {
+			return fmt.Errorf("the %s is still a placeholder (%s). Fill it in on the page, then copy the block again", c.name, c.value)
+		}
+		if c.validate != nil {
+			if err := c.validate(c.value); err != nil {
+				return fmt.Errorf("the pasted %s is not usable: %w", c.name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// looksLikePlaceholder reports whether a pasted value still carries a <…>
+// slot. The setup page renders every value it does not have yet that way, so a
+// block copied before the token was created arrives with one.
+func looksLikePlaceholder(value string) bool {
+	open := strings.Index(value, "<")
+	return open >= 0 && strings.Contains(value[open:], ">")
+}
+
+// pastedAssignmentRe matches a `KEY=` at the start of the text or after
+// whitespace, with the optional `export ` prefix the block may carry.
+var pastedAssignmentRe = regexp.MustCompile(`(?:^|\s)(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=`)
+
+// normalizePastedBlock puts every assignment on a line of its own. The paste
+// field is a single-line input, and a terminal paste into one of those arrives
+// with each newline replaced by a space, which the loader would read as one
+// unusable key. Cutting before every key the loader accepts restores the
+// lines. A block that kept its newlines passes through unchanged.
+//
+// Only accepted keys cut, so a value keeps its spaces:
+// OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic …" holds no such key and
+// stays whole. Text before the first assignment becomes its own line, which is
+// what keeps a leading `# copied from Grafana` from commenting out the block
+// once the newline after it is gone.
+func normalizePastedBlock(block string) string {
+	var cuts []int
+	for _, m := range pastedAssignmentRe.FindAllStringSubmatchIndex(block, -1) {
+		if !dotenv.AllowedDotenvKey(block[m[2]:m[3]]) {
+			continue
+		}
+		start := m[0]
+		// The regex opens with (?:^|\s); drop the whitespace byte it consumed.
+		if strings.IndexByte(" \t\n\f\r", block[start]) >= 0 {
+			start++
+		}
+		cuts = append(cuts, start)
+	}
+	if len(cuts) == 0 {
+		return block
+	}
+	lines := make([]string, 0, len(cuts)+1)
+	if head := strings.TrimSpace(block[:cuts[0]]); head != "" {
+		lines = append(lines, head)
+	}
+	for i, start := range cuts {
+		end := len(block)
+		if i+1 < len(cuts) {
+			end = cuts[i+1]
+		}
+		lines = append(lines, strings.TrimSpace(block[start:end]))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // autoTagOptions lists the values the automatic-tag switch can attach, with
@@ -676,7 +1306,7 @@ func describeProbeFailure(res *doctor.ProbeResult, endpoint, tenantID string) st
 // `agento11y doctor`, which probes both endpoints with the file that was just
 // written, but a save that skipped or overrode verification says why to run
 // it now rather than only if the data does not appear.
-func printNextStep(w io.Writer, outcome verifyOutcome) {
+func printNextStep(w io.Writer, outcome verifyOutcome, origin string) {
 	faint := lipgloss.NewStyle().Faint(true)
 	cmd := lipgloss.NewStyle().Bold(true).Foreground(grafanaOrange)
 	link := lipgloss.NewStyle().Faint(true).Underline(true)
@@ -698,7 +1328,7 @@ func printNextStep(w io.Writer, outcome verifyOutcome) {
 		// Unreachable: a failed check that was not overridden writes
 		// nothing, so there is no saved configuration to hint about.
 	}
-	fmt.Fprintln(w, faint.Render("View observability data at ")+link.Render(observabilityURL))
+	fmt.Fprintln(w, faint.Render("View observability data at ")+link.Render(observabilityPageURL(origin)))
 	fmt.Fprintln(w, faint.Render("Read documentation at ")+link.Render(docsURL))
 }
 
@@ -751,6 +1381,16 @@ type formValues struct {
 	tenantID     string
 	token        string
 	otelEndpoint string
+	// otlpHeaders is the OTEL_EXPORTER_OTLP_HEADERS value to persist: the one on
+	// file, or the one a pasted block replaced it with. otlpHeadersPasted marks
+	// the second case, the only one where the header is known to carry the token
+	// being saved.
+	otlpHeaders       string
+	otlpHeadersPasted bool
+	// stackURL is the Grafana stack the user named. It builds the printed links
+	// and is saved so a re-run pre-fills the question, but it is never the
+	// ingest endpoint: that host is different.
+	stackURL     string
 	contentMode  string
 	tags         string
 	guards       string
@@ -795,12 +1435,21 @@ type formValues struct {
 // applies) rather than leaving a stale value behind. While guards are off
 // only the disabled flag is written, leaving any prior timeout/fail-mode
 // untouched and inert.
+//
+// OTEL_EXPORTER_OTLP_HEADERS is written like the rest, empty deleting the key.
+// No field asks for it, so Run resolves it from the file and the paste before
+// calling this.
+//
+// AGENTO11Y_STACK_URL is added after the aliases are expanded, so it gets one
+// spelling rather than two, and only when it holds something: a promptless run
+// seeds it from the file and must not delete a stack it never asked about.
 func buildUpdates(v formValues) map[string]string {
 	updates := map[string]string{
 		"SIGIL_ENDPOINT":                    v.endpoint,
 		"SIGIL_AUTH_TENANT_ID":              v.tenantID,
 		"SIGIL_AUTH_TOKEN":                  v.token,
-		"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": v.otelEndpoint, // "" deletes
+		"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT": v.otelEndpoint,                   // "" deletes
+		"OTEL_EXPORTER_OTLP_HEADERS":        strings.TrimSpace(v.otlpHeaders), // "" deletes
 	}
 	if v.capturePrompted {
 		updates["SIGIL_CONTENT_CAPTURE_MODE"] = normalizeContentMode(v.contentMode)
@@ -831,7 +1480,11 @@ func buildUpdates(v formValues) map[string]string {
 			updates["SIGIL_GUARDS_ENABLED"] = "false"
 		}
 	}
-	return envconfig.ExpandAliases(updates)
+	out := envconfig.ExpandAliases(updates)
+	if v.stackURL != "" {
+		out[stackURLKey] = v.stackURL
+	}
+	return out
 }
 
 // autoTagNamesValue renders the selected names as the allowlist to persist,
@@ -941,6 +1594,11 @@ func loadSeeds(configPath string, logger *log.Logger) map[string]string {
 			}
 		}
 	}
+	// Neither of these has an alias family, and both are read from the file
+	// alone. login writes back every key it resolves here, so overlaying the
+	// process env would turn a one-off shell export into a saved value.
+	seeds["OTEL_EXPORTER_OTLP_HEADERS"] = strings.TrimSpace(fileEnv["OTEL_EXPORTER_OTLP_HEADERS"])
+	seeds[stackURLKey] = strings.TrimSpace(fileEnv[stackURLKey])
 	return seeds
 }
 
@@ -978,21 +1636,50 @@ func requireNonEmpty(field string) func(string) error {
 	}
 }
 
-// welcomeBanner returns the rendered banner box plus the cursor advance
-// (in terminal lines) that Fprintln(banner) would produce. The line count
-// is used by login.Run to issue ANSI escapes that erase the banner once
-// the huh form exits.
-func welcomeBanner() (string, int) {
+// welcomeBanner returns the rendered banner box promptValues prints first.
+func welcomeBanner() string {
 	lines := []string{
 		bannerTitle.Render("Welcome to Grafana Agent Observability"),
 		bannerSubtitle.Render("Let's connect your Grafana stack."),
-		"",
-		bannerLabel.Render("Get credentials at:"),
-		bannerURL.Render(pluginURL),
 	}
-	rendered := bannerBox.Render(strings.Join(lines, "\n"))
-	// Fprintln(rendered) appends one extra \n past whatever the rendered
-	// string already ends with, so the cursor advances one more line than
-	// the embedded newline count.
-	return rendered, strings.Count(rendered, "\n") + 1
+	return bannerBox.Render(strings.Join(lines, "\n"))
+}
+
+// rows reports how far Fprintln(w, s) advances the cursor, which is what
+// promptValues has to erase afterwards. Every embedded newline counts, plus
+// the one Fprintln adds, plus one row for each time a line is longer than the
+// terminal and soft-wraps. A width of 0 means the width is unknown and no
+// wrapping is assumed.
+//
+// Counting newlines alone is not enough: the setup link is 75 columns with the
+// placeholder host and passes 80 with a long stack name, so a wrapped row would
+// survive the erase on a standard terminal.
+func rows(s string, width int) int {
+	n := 0
+	for line := range strings.SplitSeq(s, "\n") {
+		n++
+		if width <= 0 {
+			continue
+		}
+		// A line filling the last column does not wrap on its own, hence
+		// width-1: the terminal defers the wrap until one more rune arrives.
+		if printable := lipgloss.Width(line); printable > width {
+			n += (printable - 1) / width
+		}
+	}
+	return n
+}
+
+// terminalWidth reports the column count of the terminal behind w, or 0 when
+// w is not a terminal.
+func terminalWidth(w io.Writer) int {
+	f, ok := w.(*os.File)
+	if !ok {
+		return 0
+	}
+	width, _, err := term.GetSize(int(f.Fd()))
+	if err != nil || width <= 0 {
+		return 0
+	}
+	return width
 }

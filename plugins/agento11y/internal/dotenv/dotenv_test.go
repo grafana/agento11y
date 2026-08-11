@@ -2,9 +2,12 @@ package dotenv
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -152,6 +155,73 @@ func TestReadDotenvReportsReadFailures(t *testing.T) {
 		}
 	})
 }
+
+// TestParseDotenv holds the syntax cases; the file wrapper shares this code.
+func TestParseDotenv(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want map[string]string
+	}{
+		{
+			name: "export prefix, quotes, comments and blank lines",
+			in: "# copied from Grafana\n" +
+				"\n" +
+				`export AGENTO11Y_ENDPOINT="https://example.invalid" # copied from Grafana` + "\n" +
+				"AGENTO11Y_AUTH_TOKEN='glc_test'\n",
+			want: map[string]string{
+				"AGENTO11Y_ENDPOINT":   "https://example.invalid",
+				"AGENTO11Y_AUTH_TOKEN": "glc_test",
+			},
+		},
+		{
+			name: "disallowed keys are filtered",
+			in:   "AGENTO11Y_AUTH_TOKEN=glc_test\nUNRELATED_SECRET=do-not-load\n",
+			want: map[string]string{"AGENTO11Y_AUTH_TOKEN": "glc_test"},
+		},
+		{
+			// The launcher only speaks HTTP, so the protocol key is not allowed.
+			name: "OTLP headers kept, OTLP protocol dropped",
+			in: "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\n" +
+				`OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic dGVzdA=="` + "\n",
+			want: map[string]string{"OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Basic dGVzdA=="},
+		},
+		{
+			name: "empty input",
+			in:   "",
+			want: map[string]string{},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := ParseDotenv(strings.NewReader(c.in))
+			if err != nil {
+				t.Fatalf("ParseDotenv err = %v", err)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("ParseDotenv() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestParseDotenvReaderFailure(t *testing.T) {
+	r := io.MultiReader(
+		strings.NewReader("AGENTO11Y_AUTH_TOKEN=glc_test\n"),
+		&failingReader{err: io.ErrUnexpectedEOF},
+	)
+	got, err := ParseDotenv(r)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("ParseDotenv err = %v, want %v", err, io.ErrUnexpectedEOF)
+	}
+	if got["AGENTO11Y_AUTH_TOKEN"] != "glc_test" {
+		t.Errorf("pairs parsed before the failure should be returned, got %v", got)
+	}
+}
+
+type failingReader struct{ err error }
+
+func (f *failingReader) Read([]byte) (int, error) { return 0, f.err }
 
 func TestApplyEnv(t *testing.T) {
 	cases := []struct {
