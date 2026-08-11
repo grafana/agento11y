@@ -19,6 +19,82 @@ class CapturingExporter {
   }
 }
 
+test('langchain chat start records sampling params, tools, and thinking metadata', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangChainHandler(client, { agentName: 'agent-langchain' });
+
+    await handler.handleChatModelStart(
+      { name: 'ChatGoogleGenerativeAI' },
+      [[{ type: 'human', content: 'Use the weather tool.' }]],
+      'run-params',
+      undefined,
+      {
+        invocation_params: {
+          model: 'gemini-2.5-flash',
+          temperature: 0.25,
+          max_tokens: 512,
+          top_p: 0.9,
+          tool_choice: 'get_weather',
+          thinking_enabled: true,
+          thinking_budget: 2048,
+          thinking_level: 'high',
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'get_weather',
+                description: 'Get current weather for a city.',
+                parameters: {
+                  type: 'object',
+                  properties: { city: { type: 'string' } },
+                  required: ['city'],
+                },
+              },
+            },
+          ],
+        },
+      },
+    );
+    await handler.handleLLMEnd({ generations: [[{ text: 'sunny' }]] }, 'run-params');
+  });
+
+  assert.equal(generation.temperature, 0.25);
+  assert.equal(generation.maxTokens, 512);
+  assert.equal(generation.topP, 0.9);
+  assert.equal(generation.toolChoice, 'get_weather');
+  assert.equal(generation.thinkingEnabled, true);
+  assert.deepEqual(
+    generation.tools.map((tool) => [tool.name, tool.type]),
+    [['get_weather', 'function']],
+  );
+  assert.equal(generation.tools[0].description, 'Get current weather for a city.');
+  assert.match(generation.tools[0].inputSchemaJSON, /"city"/);
+  assert.equal(generation.metadata['agento11y.gen_ai.request.thinking.budget_tokens'], 2048);
+  assert.equal(generation.metadata['agento11y.gen_ai.request.thinking.level'], 'high');
+});
+
+test('langchain chat start omits sampling params that are absent', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangChainHandler(client, {});
+
+    await handler.handleChatModelStart(
+      { name: 'ChatOpenAI' },
+      [[{ type: 'human', content: 'hello' }]],
+      'run-bare',
+      undefined,
+      { invocation_params: { model: 'gpt-5' } },
+    );
+    await handler.handleLLMEnd({ generations: [[{ text: 'world' }]] }, 'run-bare');
+  });
+
+  assert.equal(generation.temperature, undefined);
+  assert.equal(generation.maxTokens, undefined);
+  assert.equal(generation.topP, undefined);
+  assert.equal(generation.toolChoice, undefined);
+  assert.equal(generation.thinkingEnabled, undefined);
+  assert.equal(generation.tools, undefined);
+});
+
 test('langchain handler conversationId replaces the synthetic fallback', async () => {
   const generation = await captureSingleGeneration(async (client) => {
     const handler = new Agento11yLangChainHandler(client, { conversationId: 'checkout-session-7' });

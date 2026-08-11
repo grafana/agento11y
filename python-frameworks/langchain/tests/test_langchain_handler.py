@@ -101,6 +101,61 @@ def test_langchain_prefers_explicit_invocation_params_system_prompt() -> None:
         client.shutdown()
 
 
+def test_langchain_chat_start_records_sampling_params_and_thinking_metadata() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        run_id = uuid4()
+        handler = Agento11yLangChainHandler(client=client, agent_name="agent-langchain")
+
+        handler.on_chat_model_start(
+            {"name": "ChatGoogleGenerativeAI"},
+            [[{"type": "human", "content": "Use the weather tool."}]],
+            run_id=run_id,
+            invocation_params={
+                "model": "gemini-2.5-flash",
+                "temperature": 0.25,
+                "max_tokens": 512,
+                "top_p": 0.9,
+                "tool_choice": "get_weather",
+                "thinking_enabled": True,
+                "thinking_budget": 2048,
+                "thinking_level": "high",
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get current weather for a city.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"city": {"type": "string"}},
+                                "required": ["city"],
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+        handler.on_llm_end({"generations": [[{"text": "sunny"}]]}, run_id=run_id)
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert generation.temperature == 0.25
+        assert generation.max_tokens == 512
+        assert generation.top_p == 0.9
+        assert generation.tool_choice == "get_weather"
+        assert generation.thinking_enabled is True
+        assert [(tool.name, tool.type) for tool in generation.tools] == [("get_weather", "function")]
+        assert generation.tools[0].description == "Get current weather for a city."
+        assert b'"city"' in generation.tools[0].input_schema_json
+        assert generation.metadata["agento11y.gen_ai.request.thinking.budget_tokens"] == 2048
+        assert generation.metadata["agento11y.gen_ai.request.thinking.level"] == "high"
+    finally:
+        client.shutdown()
+
+
 def test_langchain_handler_conversation_id_replaces_synthetic_fallback() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)

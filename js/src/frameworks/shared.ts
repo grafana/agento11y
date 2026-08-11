@@ -6,6 +6,7 @@ import type {
   Message,
   ModelRef,
   TokenUsage,
+  ToolDefinition,
   ToolExecutionRecorder,
 } from '../types.js';
 
@@ -32,6 +33,8 @@ const spanAttrFrameworkLangGraphNode = 'agento11y.framework.langgraph.node';
 const spanAttrFrameworkEventID = 'agento11y.framework.event_id';
 const spanAttrErrorType = 'error.type';
 const spanAttrErrorCategory = 'error.category';
+const metadataThinkingBudgetTokens = 'agento11y.gen_ai.request.thinking.budget_tokens';
+const metadataThinkingLevel = 'agento11y.gen_ai.request.thinking.level';
 const frameworkSource = 'handler';
 const maxFrameworkMetadataDepth = 5;
 
@@ -67,6 +70,16 @@ interface ToolRunState {
   recorder: ToolExecutionRecorder;
   arguments?: unknown;
   captureOutputs: boolean;
+}
+
+/** Chat-start request parameters lifted out of `invocation_params`. */
+interface ChatRequestParams {
+  tools: ToolDefinition[];
+  temperature: number | undefined;
+  maxTokens: number | undefined;
+  topP: number | undefined;
+  toolChoice: string;
+  thinkingEnabled: boolean | undefined;
 }
 
 interface FrameworkContext {
@@ -141,6 +154,7 @@ export class Agento11yFrameworkHandler {
       runName,
       serialized,
       invocationParams,
+      invocationControls: true,
       extraParams,
       callbackTags,
       callbackMetadata,
@@ -192,10 +206,19 @@ export class Agento11yFrameworkHandler {
       extraParams,
       callbackTags,
       callbackMetadata,
+      invocationControls: true,
     });
 
     const systemPrompt = asString(read(invocationParams, 'system_prompt')) || messageSystemPrompt;
-    const payload = this.startPayload(runKey, provider, modelName, context, systemPrompt);
+    const requestParams: ChatRequestParams = {
+      tools: resolveToolDefinitions(invocationParams),
+      temperature: asMaybeFloat(read(invocationParams, 'temperature')),
+      maxTokens: asMaybeInt(read(invocationParams, 'max_tokens')),
+      topP: asMaybeFloat(read(invocationParams, 'top_p')),
+      toolChoice: asString(read(invocationParams, 'tool_choice')),
+      thinkingEnabled: asMaybeBoolean(read(invocationParams, 'thinking_enabled')),
+    };
+    const payload = this.startPayload(runKey, provider, modelName, context, systemPrompt, requestParams);
     const recorder = stream ? this.client.startStreamingGeneration(payload) : this.client.startGeneration(payload);
 
     this.runs.set(runKey, {
@@ -508,6 +531,7 @@ export class Agento11yFrameworkHandler {
     modelName: string,
     context: FrameworkContext,
     systemPrompt?: string,
+    requestParams?: ChatRequestParams,
   ) {
     return {
       conversationId: context.conversationId,
@@ -520,6 +544,12 @@ export class Agento11yFrameworkHandler {
       tags: context.tags,
       metadata: context.metadata,
       ...(notEmpty(systemPrompt ?? '') ? { systemPrompt } : {}),
+      ...(requestParams !== undefined && requestParams.tools.length > 0 ? { tools: requestParams.tools } : {}),
+      ...(requestParams?.temperature !== undefined ? { temperature: requestParams.temperature } : {}),
+      ...(requestParams?.maxTokens !== undefined ? { maxTokens: requestParams.maxTokens } : {}),
+      ...(requestParams?.topP !== undefined ? { topP: requestParams.topP } : {}),
+      ...(notEmpty(requestParams?.toolChoice) ? { toolChoice: requestParams?.toolChoice } : {}),
+      ...(requestParams?.thinkingEnabled !== undefined ? { thinkingEnabled: requestParams.thinkingEnabled } : {}),
     };
   }
 
@@ -590,6 +620,8 @@ export class Agento11yFrameworkHandler {
     extraParams?: AnyRecord;
     callbackTags?: string[];
     callbackMetadata?: AnyRecord;
+    /** Only the LLM and chat-model paths carry sampling controls. */
+    invocationControls?: boolean;
   }): FrameworkContext {
     const conversation = resolveFrameworkConversationContext(
       this.frameworkName,
@@ -653,6 +685,9 @@ export class Agento11yFrameworkHandler {
     }
     if (eventId.length > 0) {
       rawMetadata[spanAttrFrameworkEventID] = eventId;
+    }
+    if (params.invocationControls === true) {
+      addInvocationControlMetadata(rawMetadata, params.invocationParams);
     }
     const metadata = normalizeFrameworkMetadata(rawMetadata);
 
@@ -1443,6 +1478,104 @@ function asMaybeInt(value: unknown): number | undefined {
       return undefined;
     }
     return parsed;
+  }
+  return undefined;
+}
+
+function addInvocationControlMetadata(metadata: AnyRecord, invocationParams: AnyRecord | undefined): void {
+  const thinkingBudget = asMaybeInt(read(invocationParams, 'thinking_budget'));
+  if (thinkingBudget !== undefined && !(metadataThinkingBudgetTokens in metadata)) {
+    metadata[metadataThinkingBudgetTokens] = thinkingBudget;
+  }
+
+  const thinkingLevel = asString(read(invocationParams, 'thinking_level'));
+  if (thinkingLevel.length > 0 && !(metadataThinkingLevel in metadata)) {
+    metadata[metadataThinkingLevel] = thinkingLevel;
+  }
+}
+
+function resolveToolDefinitions(invocationParams: AnyRecord | undefined): ToolDefinition[] {
+  const raw = read(invocationParams, 'tools');
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const out: ToolDefinition[] = [];
+  for (const item of raw) {
+    const toolType = asString(read(item, 'type'));
+    // OpenAI-style tools nest the definition under `function`. Anything else, and
+    // already-shaped definitions that only carry `type`, describe themselves.
+    const nested = toolType === 'function' ? read(item, 'function') : undefined;
+    const definition = isRecord(nested) ? nested : item;
+
+    const name = asString(read(definition, 'name'));
+    if (name.length === 0) {
+      continue;
+    }
+
+    const schema = read(definition, 'parameters') ?? read(definition, 'parameters_json_schema');
+    const description = asString(read(definition, 'description'));
+    out.push({
+      name,
+      ...(description.length > 0 ? { description } : {}),
+      type: toolType.length > 0 ? toolType : 'function',
+      ...(schema === undefined || schema === null ? {} : { inputSchemaJSON: stableJSONString(schema) }),
+    });
+  }
+  return out;
+}
+
+/** Key order is sorted so a given schema encodes identically here and in the Python handler. */
+function stableJSONString(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value, (_key, entry: unknown) => {
+      if (isRecord(entry) && !Array.isArray(entry)) {
+        return Object.fromEntries(Object.entries(entry).sort(([left], [right]) => (left < right ? -1 : 1)));
+      }
+      return entry;
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function asMaybeFloat(value: unknown): number | undefined {
+  if (value === undefined || value === null || typeof value === 'boolean') {
+    return undefined;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return undefined;
+    }
+    const parsed = Number.parseFloat(trimmed);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function asMaybeBoolean(value: unknown): boolean | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') {
+      return true;
+    }
+    if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+      return false;
+    }
+    return undefined;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
   }
   return undefined;
 }
