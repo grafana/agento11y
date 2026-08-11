@@ -340,6 +340,10 @@ trace.set_tracer_provider(TracerProvider())
 metrics.set_meter_provider(MeterProvider())
 ```
 
+The providers above have no exporters attached, so nothing leaves the process. See
+[OpenTelemetry Setup](../docs/concepts/otel-setup.md) for the full wiring, including the OTLP
+exporters, and why analytics stays empty when this step is skipped.
+
 ## Streaming Generation
 
 Use `start_streaming_generation(...)` when the upstream provider call is streaming.

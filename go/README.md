@@ -151,6 +151,10 @@ mp := sdkmetric.NewMeterProvider()
 otel.SetMeterProvider(mp)
 ```
 
+The providers above have no exporters attached, so nothing leaves the process. See
+[OpenTelemetry Setup](../docs/concepts/otel-setup.md) for the full wiring, including the OTLP
+exporters, and why analytics stays empty when this step is skipped.
+
 ### Instrumentation-only mode (no generation send)
 
 Use `GenerationExportProtocolNone` to keep generation and tool instrumentation active while disabling generation transport:

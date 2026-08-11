@@ -172,6 +172,8 @@ Application SDK hooks evaluate Agent Observability guard rules on your request p
 
 The SDKs default to `no_tool_content`: full generation messages ship to Agent Observability, but tool-execution arguments and results stay out of spans. The coding-agent plugins default to `metadata_only`. See [Content Capture Modes](docs/concepts/content-capture-modes.md) for the mode matrix, defaults per surface, and the generation, tool-execution, and embedding resolution rules.
 
+The SDKs emit spans and metrics through OpenTelemetry providers your application registers, and do not create those providers themselves. If you skip that step, conversations still arrive but analytics stays empty. See [OpenTelemetry Setup](docs/concepts/otel-setup.md) for the wiring and the failure modes.
+
 To attach custom key/values (team, project, env, request id, end-user id), see [Tags and Metadata](docs/concepts/tags-and-metadata.md). It covers which of client tags, per-generation tags, metadata, and `user_id` reach the generation export vs OTel spans vs metrics, and the cardinality rules for metric labels.
 
 ## Grafana Cloud credentials

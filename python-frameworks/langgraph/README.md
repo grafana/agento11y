@@ -116,6 +116,39 @@ The handler automatically:
 - Links LLM generation IDs to their parent step via `linked_generation_ids`
 - Tracks sequential `parent_step_ids` so the DAG edges are correct
 
+Two things silently break the linkage:
+
+- **The node's `config` parameter must be annotated `RunnableConfig`.** LangGraph inspects the
+  annotation to decide whether to inject the config. Annotate it `dict[str, Any]` and LangGraph
+  will not pass it, so the node's generations land outside the workflow step.
+- **A custom generation exporter must implement `export_workflow_steps`.** With
+  `capture_workflow_steps=True` the client calls it on every flush; an exporter without the method
+  logs a warning per batch and drops the steps.
+
+## Conversation grouping
+
+The handler resolves the conversation id per invocation, in this order:
+
+1. `conversation_id` / `session_id` / `group_id` in the callback metadata, invocation params, or `configurable`
+2. The LangGraph `thread_id`
+3. The handler's `conversation_id` constructor argument
+4. A synthetic per-run id
+
+Pass `conversation_id` on the constructor when your application owns the conversation identity and
+does not use a LangGraph checkpointer. Per-invocation identity still wins, so a handler built once
+per process cannot override a checkpointed `thread_id`.
+
+```python
+handler = Agento11yLangGraphHandler(
+    client=client,
+    agent_name="my-pipeline",
+    conversation_id=request.conversation_id,
+    conversation_title="My Pipeline Run",
+)
+```
+
+Without any of these, each run becomes its own conversation.
+
 ## Persistent thread example (LangGraph checkpointer)
 
 ```python

@@ -214,7 +214,7 @@ Return:
 
 The agento11y SDK internally emits OTel spans and metrics (`gen_ai.client.operation.duration`, `gen_ai.client.token.usage`, `gen_ai.client.time_to_first_token`, `gen_ai.client.tool_calls_per_operation`). **Without a configured TracerProvider and MeterProvider these go to the default no-op and are silently lost.**
 
-The SDK does not create OTel providers; that is the application's responsibility. Always configure providers before creating the agento11y client, and shut them down after `agento11y.shutdown()`.
+The SDK does not create OTel providers; that is the application's responsibility. Always configure providers before creating the agento11y client, and shut them down after `agento11y.shutdown()`. Full reference, including verification and troubleshooting: [`docs/concepts/otel-setup.md`](https://github.com/grafana/agento11y/blob/main/docs/concepts/otel-setup.md).
 
 Two delivery options. The OTel SDK exporters read `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS` automatically.
 

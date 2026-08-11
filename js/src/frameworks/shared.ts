@@ -42,6 +42,13 @@ export interface FrameworkHandlerOptions {
   provider?: string;
   captureInputs?: boolean;
   captureOutputs?: boolean;
+  /**
+   * Fallback conversation id for frameworks that expose no session key.
+   * Per-invocation identity (a `conversation_id` in callback metadata, or a
+   * LangGraph `thread_id`) still wins, so a handler built once per process
+   * cannot override a checkpointed thread.
+   */
+  conversationId?: string;
   extraTags?: Record<string, string>;
   extraMetadata?: Record<string, unknown>;
 }
@@ -86,6 +93,7 @@ export class Agento11yFrameworkHandler {
   private readonly provider?: string;
   private readonly captureInputs: boolean;
   private readonly captureOutputs: boolean;
+  private readonly conversationId: string;
   private readonly extraTags: Record<string, string>;
   private readonly extraMetadata: Record<string, unknown>;
 
@@ -101,6 +109,7 @@ export class Agento11yFrameworkHandler {
     this.provider = options.provider;
     this.captureInputs = options.captureInputs ?? true;
     this.captureOutputs = options.captureOutputs ?? true;
+    this.conversationId = (options.conversationId ?? '').trim();
     this.extraTags = { ...(options.extraTags ?? {}) };
     this.extraMetadata = { ...(options.extraMetadata ?? {}) };
   }
@@ -589,6 +598,7 @@ export class Agento11yFrameworkHandler {
       params.invocationParams,
       params.extraParams,
       params.callbackMetadata,
+      this.conversationId,
     );
     const componentName = resolveComponentName(
       params.serialized,
@@ -768,6 +778,7 @@ function resolveFrameworkConversationContext(
   invocationParams: AnyRecord | undefined,
   extraParams: AnyRecord | undefined,
   callbackMetadata: AnyRecord | undefined,
+  handlerConversationId: string,
 ): { conversationId: string; threadId: string } {
   for (const payload of [callbackMetadata, extraParams, invocationParams, serialized]) {
     const conversationId = conversationIdFromPayload(payload);
@@ -786,6 +797,10 @@ function resolveFrameworkConversationContext(
   const threadId = resolveFrameworkThreadId(serialized, invocationParams, extraParams, callbackMetadata);
   if (threadId.length > 0) {
     return { conversationId: threadId, threadId };
+  }
+
+  if (handlerConversationId.length > 0) {
+    return { conversationId: handlerConversationId, threadId: '' };
   }
 
   // Deterministic fallback when frameworks do not expose session/conversation identity.
