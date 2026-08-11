@@ -63,7 +63,7 @@ func main() {
 		BasicPassword: os.Getenv("AGENTO11Y_AUTH_TOKEN"),
 	}
 	cfg.API.Endpoint = agento11yAPIEndpoint()
-	cfg.Hooks.Enabled = true
+	cfg.Hooks.Enabled = agento11y.BoolPtr(true)
 	cfg.Hooks.Phases = []agento11y.HookPhase{agento11y.HookPhasePreflight}
 
 	agento11yClient := agento11y.NewClient(cfg)

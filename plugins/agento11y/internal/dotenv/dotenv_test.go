@@ -266,6 +266,65 @@ func TestApplyEnvAliasFamilies(t *testing.T) {
 	}
 }
 
+// TestApplyEnvPreferredOnlyFamilies pins the SDK hook variables to exact-key
+// semantics: a config.env entry reaches the child, and no SIGIL_ twin is
+// written or read, because the SDKs ignore that spelling for these names.
+func TestApplyEnvPreferredOnlyFamilies(t *testing.T) {
+	cases := []struct {
+		name       string
+		os         map[string]string
+		file       string
+		want       string
+		wantLegacy string
+	}{
+		{
+			name:       "file value applies and writes no legacy twin",
+			file:       "AGENTO11Y_HOOKS_ENABLED=true\n",
+			want:       "true",
+			wantLegacy: "",
+		},
+		{
+			name: "shell value beats the file value",
+			os:   map[string]string{"AGENTO11Y_HOOKS_ENABLED": "false"},
+			file: "AGENTO11Y_HOOKS_ENABLED=true\n",
+			want: "false",
+		},
+		{
+			name:       "legacy spelling is neither read nor written",
+			os:         map[string]string{"SIGIL_HOOKS_ENABLED": "true"},
+			want:       "",
+			wantLegacy: "true",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			t.Setenv("AGENTO11Y_HOOKS_ENABLED", "")
+			t.Setenv("SIGIL_HOOKS_ENABLED", "")
+			for k, v := range tc.os {
+				t.Setenv(k, v)
+			}
+			cfgDir := filepath.Join(dir, "sigil")
+			if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if tc.file != "" {
+				if err := os.WriteFile(filepath.Join(cfgDir, "config.env"), []byte(tc.file), 0o600); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+			}
+			ApplyEnv(log.New(&bytes.Buffer{}, "", 0))
+			if got := os.Getenv("AGENTO11Y_HOOKS_ENABLED"); got != tc.want {
+				t.Fatalf("AGENTO11Y_HOOKS_ENABLED = %q, want %q", got, tc.want)
+			}
+			if got := os.Getenv("SIGIL_HOOKS_ENABLED"); got != tc.wantLegacy {
+				t.Fatalf("SIGIL_HOOKS_ENABLED = %q, want %q", got, tc.wantLegacy)
+			}
+		})
+	}
+}
+
 func TestFilePath(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)

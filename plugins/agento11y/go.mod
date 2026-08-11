@@ -65,3 +65,12 @@ require (
 	google.golang.org/grpc v1.82.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// Temporary: HooksConfig.Enabled is *bool from the commit that added
+// AGENTO11Y_HOOKS_*, and no go/v* tag carries it yet. Drop this replace and
+// repin the require above once that tag exists.
+//
+// This blocks a release: `go install <pkg>@version` refuses a module with a
+// replace directive, and README.md documents that command.
+
+replace github.com/grafana/agento11y/go => ../../go

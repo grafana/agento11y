@@ -376,21 +376,63 @@ func TestMergeHooksConfigPreservesDefaults(t *testing.T) {
 	if len(merged.Phases) != 1 || merged.Phases[0] != HookPhasePreflight {
 		t.Fatalf("expected default phases, got %#v", merged.Phases)
 	}
-	if merged.Enabled {
+	if merged.EnabledValue() {
 		t.Fatalf("expected hooks disabled by default")
+	}
+}
+
+func TestMergeHooksConfigEnabledTriState(t *testing.T) {
+	enabledBase := HooksConfig{Enabled: BoolPtr(true)}
+	cases := []struct {
+		name     string
+		base     HooksConfig
+		override HooksConfig
+		want     bool
+	}{
+		{
+			name:     "unset override keeps the base value",
+			base:     enabledBase,
+			override: HooksConfig{Phases: []HookPhase{HookPhasePostflight}},
+			want:     true,
+		},
+		{
+			name:     "explicit false overrides an enabled base",
+			base:     enabledBase,
+			override: HooksConfig{Enabled: BoolPtr(false)},
+			want:     false,
+		},
+		{
+			name:     "explicit true overrides a disabled base",
+			base:     HooksConfig{Enabled: BoolPtr(false)},
+			override: HooksConfig{Enabled: BoolPtr(true)},
+			want:     true,
+		},
+		{
+			name:     "unset on both sides reads as off",
+			base:     HooksConfig{},
+			override: HooksConfig{},
+			want:     false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mergeHooksConfig(tc.base, tc.override).EnabledValue(); got != tc.want {
+				t.Fatalf("EnabledValue()=%v want %v", got, tc.want)
+			}
+		})
 	}
 }
 
 func TestMergeHooksConfigOverridesFields(t *testing.T) {
 	failClosed := false
 	custom := HooksConfig{
-		Enabled:  true,
+		Enabled:  BoolPtr(true),
 		Phases:   []HookPhase{HookPhasePostflight},
 		Timeout:  3 * time.Second,
 		FailOpen: &failClosed,
 	}
 	merged := mergeHooksConfig(defaultHooksConfig(), custom)
-	if !merged.Enabled {
+	if !merged.EnabledValue() {
 		t.Fatalf("expected Enabled=true after merge")
 	}
 	if len(merged.Phases) != 1 || merged.Phases[0] != HookPhasePostflight {
@@ -431,7 +473,7 @@ func newHookTestClient(t *testing.T, options hookTestClientOptions) *Client {
 		},
 		API: APIConfig{Endpoint: options.apiEndpoint},
 		Hooks: HooksConfig{
-			Enabled:  options.hooksEnabled,
+			Enabled:  BoolPtr(options.hooksEnabled),
 			Phases:   options.phases,
 			FailOpen: options.failOpen,
 		},

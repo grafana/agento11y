@@ -106,6 +106,9 @@ describe("createAgento11yClient", () => {
       }),
     );
 
+    // All four fields, on purpose: the SDK reads AGENTO11Y_HOOKS_* one layer
+    // below caller config, so a field missing here would hand that guard
+    // setting to the environment instead of to AGENTO11Y_GUARDS_*.
     expect(Agento11yClientMock).toHaveBeenCalledWith(
       expect.objectContaining({
         hooks: {

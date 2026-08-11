@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 
 import pytest
-from agento11y import ApiConfig, Client, ClientConfig
+from agento11y import ApiConfig, Client, ClientConfig, HooksConfig
 from agento11y.config import default_config, resolve_config
 from agento11y.models import ContentCaptureMode, GenerationStart, ModelRef
 
@@ -66,6 +66,82 @@ def _check_invalid_auth_mode_preserves_valid(cfg: ClientConfig) -> None:
 
 def _check_stray_tenant_does_not_error(cfg: ClientConfig) -> None:
     assert cfg.generation_export.auth.mode == "none"
+
+
+def _check_hooks_defaults(cfg: ClientConfig) -> None:
+    assert cfg.hooks.enabled is False
+    assert cfg.hooks.phases == ["preflight"]
+    assert cfg.hooks.timeout_seconds == 15.0
+    assert cfg.hooks.fail_open is True
+
+
+def _check_hooks_all_from_env(cfg: ClientConfig) -> None:
+    assert cfg.hooks.enabled is True
+    assert cfg.hooks.phases == ["preflight", "postflight"]
+    assert cfg.hooks.timeout_seconds == 3.0
+    assert cfg.hooks.fail_open is False
+
+
+def _check_hooks_enabled_only(cfg: ClientConfig) -> None:
+    assert cfg.hooks.enabled is True
+    assert cfg.hooks.phases == ["preflight"]
+    assert cfg.hooks.timeout_seconds == 15.0
+    assert cfg.hooks.fail_open is True
+
+
+def _check_hooks_phases_only(cfg: ClientConfig) -> None:
+    assert cfg.hooks.enabled is False
+    assert cfg.hooks.phases == ["postflight"]
+
+
+def _check_hooks_timeout_only(cfg: ClientConfig) -> None:
+    assert cfg.hooks.timeout_seconds == 2.5
+    assert cfg.hooks.enabled is False
+
+
+def _check_hooks_fail_open_only(cfg: ClientConfig) -> None:
+    assert cfg.hooks.fail_open is False
+    assert cfg.hooks.enabled is False
+
+
+def _check_hooks_phase_normalization(cfg: ClientConfig) -> None:
+    assert cfg.hooks.phases == ["postflight", "preflight"]
+
+
+def _check_hooks_invalid_bools_keep_defaults(cfg: ClientConfig) -> None:
+    # A typo must not read as false: fail_open stays at its true default.
+    assert cfg.hooks.enabled is False
+    assert cfg.hooks.fail_open is True
+
+
+def _check_hooks_invalid_phase_keeps_default(cfg: ClientConfig) -> None:
+    assert cfg.hooks.phases == ["preflight"]
+
+
+def _check_hooks_unknown_phase_keeps_postflight(cfg: ClientConfig) -> None:
+    assert cfg.hooks.phases == ["postflight"]
+
+
+def _check_hooks_max_timeout(cfg: ClientConfig) -> None:
+    assert cfg.hooks.timeout_seconds == 119.999
+
+
+def _check_hooks_invalid_timeout_keeps_default(cfg: ClientConfig) -> None:
+    assert cfg.hooks.timeout_seconds == 15.0
+
+
+def _check_hooks_invalid_sibling_keeps_valid(cfg: ClientConfig) -> None:
+    assert cfg.hooks.enabled is True
+    assert cfg.hooks.phases == ["preflight", "postflight"]
+    assert cfg.hooks.timeout_seconds == 15.0
+    assert cfg.hooks.fail_open is True
+
+
+def _check_legacy_hooks_env_ignored(cfg: ClientConfig) -> None:
+    assert cfg.hooks.enabled is False
+    assert cfg.hooks.phases == ["preflight"]
+    assert cfg.hooks.timeout_seconds == 15.0
+    assert cfg.hooks.fail_open is True
 
 
 @pytest.mark.parametrize(
@@ -130,6 +206,134 @@ def _check_stray_tenant_does_not_error(cfg: ClientConfig) -> None:
             _check_stray_tenant_does_not_error,
             id="stray AGENTO11Y_AUTH_TENANT_ID does not error",
         ),
+        pytest.param({}, _check_hooks_defaults, id="hooks default to off with concrete values"),
+        pytest.param(
+            {
+                "AGENTO11Y_HOOKS_ENABLED": "true",
+                "AGENTO11Y_HOOKS_PHASES": "preflight,postflight",
+                "AGENTO11Y_HOOKS_TIMEOUT_MS": "3000",
+                "AGENTO11Y_HOOKS_FAIL_OPEN": "false",
+            },
+            _check_hooks_all_from_env,
+            id="all four hooks variables from env",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_ENABLED": "true"},
+            _check_hooks_enabled_only,
+            id="hooks enabled alone keeps other defaults",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_PHASES": "postflight"},
+            _check_hooks_phases_only,
+            id="hooks phases alone",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_TIMEOUT_MS": "2500"},
+            _check_hooks_timeout_only,
+            id="hooks timeout milliseconds convert to seconds",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_FAIL_OPEN": "off"},
+            _check_hooks_fail_open_only,
+            id="hooks fail open alone",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_PHASES": " POSTFLIGHT , ,preflight, postflight "},
+            _check_hooks_phase_normalization,
+            id="hooks phases trim lowercase dedupe and keep order",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_ENABLED": "maybe", "AGENTO11Y_HOOKS_FAIL_OPEN": "ture"},
+            _check_hooks_invalid_bools_keep_defaults,
+            id="invalid hooks booleans keep defaults",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_PHASES": "preflight,bogus"},
+            _check_hooks_invalid_phase_keeps_default,
+            id="unknown hook phase is dropped and the rest applies",
+        ),
+        pytest.param(
+            # Rejecting the whole list would fall back to the ["preflight"]
+            # default, starting enforcement on a phase the operator did not ask
+            # for and skipping the one they did.
+            {"AGENTO11Y_HOOKS_PHASES": "postflight,bogus"},
+            _check_hooks_unknown_phase_keeps_postflight,
+            id="a typo beside postflight does not switch the phase to preflight",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_PHASES": "bogus"},
+            _check_hooks_invalid_phase_keeps_default,
+            id="a phase list with no usable entry keeps the default",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_TIMEOUT_MS": "0"},
+            _check_hooks_invalid_timeout_keeps_default,
+            id="zero hook timeout is rejected",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_TIMEOUT_MS": "-1"},
+            _check_hooks_invalid_timeout_keeps_default,
+            id="negative hook timeout is rejected",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_TIMEOUT_MS": "1.5"},
+            _check_hooks_invalid_timeout_keeps_default,
+            id="non-integer hook timeout is rejected",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_TIMEOUT_MS": "not-a-number"},
+            _check_hooks_invalid_timeout_keeps_default,
+            id="unparsable hook timeout is rejected",
+        ),
+        pytest.param(
+            # int() reads PEP 515 underscores; Go and JS do not, so the SDKs
+            # would otherwise disagree on what this value means.
+            {"AGENTO11Y_HOOKS_TIMEOUT_MS": "3_000"},
+            _check_hooks_invalid_timeout_keeps_default,
+            id="underscore digit grouping in the hook timeout is rejected",
+        ),
+        pytest.param(
+            # int() also reads non-ASCII digits. These are Arabic-Indic 3000.
+            {"AGENTO11Y_HOOKS_TIMEOUT_MS": "\u0663\u0660\u0660\u0660"},
+            _check_hooks_invalid_timeout_keeps_default,
+            id="non-ascii digits in the hook timeout are rejected",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_TIMEOUT_MS": "120000"},
+            _check_hooks_invalid_timeout_keeps_default,
+            id="a hook timeout above the server ceiling is rejected",
+        ),
+        pytest.param(
+            # Unbounded, this reads as 1e17 seconds: no effective timeout, so a
+            # hung evaluator would block the agent.
+            {"AGENTO11Y_HOOKS_TIMEOUT_MS": "99999999999999999999"},
+            _check_hooks_invalid_timeout_keeps_default,
+            id="an absurd hook timeout is rejected",
+        ),
+        pytest.param(
+            {"AGENTO11Y_HOOKS_TIMEOUT_MS": "119999"},
+            _check_hooks_max_timeout,
+            id="the largest honoured hook timeout is accepted",
+        ),
+        pytest.param(
+            {
+                "AGENTO11Y_HOOKS_ENABLED": "true",
+                "AGENTO11Y_HOOKS_PHASES": "preflight,postflight",
+                "AGENTO11Y_HOOKS_TIMEOUT_MS": "nope",
+            },
+            _check_hooks_invalid_sibling_keeps_valid,
+            id="invalid hook timeout preserves the other hooks variables",
+        ),
+        pytest.param(
+            {
+                "SIGIL_HOOKS_ENABLED": "true",
+                "SIGIL_HOOKS_PHASES": "postflight",
+                "SIGIL_HOOKS_TIMEOUT_MS": "3000",
+                "SIGIL_HOOKS_FAIL_OPEN": "false",
+            },
+            _check_legacy_hooks_env_ignored,
+            id="SIGIL_HOOKS_ vars are ignored",
+        ),
     ],
 )
 def test_resolve_config_env(env: dict[str, str], check: Callable[[ClientConfig], None]) -> None:
@@ -146,6 +350,53 @@ def test_explicit_overrides_env() -> None:
     )
     assert cfg.generation_export.endpoint == "https://explicit:4318"
     assert cfg.agent_name == "planner"
+
+
+@pytest.mark.parametrize(
+    "env,key",
+    [
+        pytest.param({"AGENTO11Y_HOOKS_ENABLED": "maybe"}, "AGENTO11Y_HOOKS_ENABLED", id="enabled"),
+        pytest.param({"AGENTO11Y_HOOKS_PHASES": "preflight,bogus"}, "AGENTO11Y_HOOKS_PHASES", id="phases"),
+        pytest.param({"AGENTO11Y_HOOKS_PHASES": ","}, "AGENTO11Y_HOOKS_PHASES", id="phases with no entry"),
+        pytest.param({"AGENTO11Y_HOOKS_TIMEOUT_MS": "0"}, "AGENTO11Y_HOOKS_TIMEOUT_MS", id="timeout"),
+        pytest.param({"AGENTO11Y_HOOKS_FAIL_OPEN": "ture"}, "AGENTO11Y_HOOKS_FAIL_OPEN", id="fail open"),
+    ],
+)
+def test_invalid_hooks_value_warning_names_selected_key(
+    env: dict[str, str], key: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
+        resolve_config(None, env=env)
+    assert any(key in record.getMessage() for record in caplog.records)
+
+
+def test_caller_hooks_config_wins_over_env() -> None:
+    explicit = ClientConfig(
+        hooks=HooksConfig(enabled=False, phases=["postflight"], timeout_seconds=2.5, fail_open=False)
+    )
+    cfg = resolve_config(
+        explicit,
+        env={
+            "AGENTO11Y_HOOKS_ENABLED": "true",
+            "AGENTO11Y_HOOKS_PHASES": "preflight,postflight",
+            "AGENTO11Y_HOOKS_TIMEOUT_MS": "9000",
+            "AGENTO11Y_HOOKS_FAIL_OPEN": "true",
+        },
+    )
+    assert cfg.hooks.enabled is False
+    assert cfg.hooks.phases == ["postflight"]
+    assert cfg.hooks.timeout_seconds == 2.5
+    assert cfg.hooks.fail_open is False
+
+
+def test_env_fills_hooks_fields_the_caller_left_unset() -> None:
+    explicit = ClientConfig(hooks=HooksConfig(timeout_seconds=2.5))
+    cfg = resolve_config(
+        explicit,
+        env={"AGENTO11Y_HOOKS_ENABLED": "true", "AGENTO11Y_HOOKS_TIMEOUT_MS": "9000"},
+    )
+    assert cfg.hooks.enabled is True
+    assert cfg.hooks.timeout_seconds == 2.5
 
 
 def test_invalid_capture_mode_warning_names_selected_key(caplog: pytest.LogCaptureFixture) -> None:

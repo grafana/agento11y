@@ -377,7 +377,11 @@ func mergeGenerationExportConfig(base, override GenerationExportConfig) Generati
 
 func mergeAPIConfig(base, override APIConfig) APIConfig {
 	out := base
-	if override.Endpoint != "" {
+	// defaultAPIEndpoint reads as unset, not as a choice: DefaultConfig pre-fills
+	// the field with it, so treating it as an override would let
+	// NewClient(DefaultConfig()) shadow AGENTO11Y_ENDPOINT and post hooks,
+	// experiments and ratings to localhost. Matches the Python SDK.
+	if override.Endpoint != "" && override.Endpoint != defaultAPIEndpoint {
 		out.Endpoint = override.Endpoint
 	}
 	return out

@@ -25,6 +25,20 @@ const configFromEnvCases = [
     },
   },
   {
+    name: 'endpoint env fills the api endpoint hooks post to',
+    env: { AGENTO11Y_ENDPOINT: 'https://collector.example.com' },
+    check: (cfg) => {
+      assert.equal(cfg.api.endpoint, 'https://collector.example.com');
+    },
+  },
+  {
+    name: 'api endpoint keeps its default without an endpoint env',
+    env: {},
+    check: (cfg) => {
+      assert.equal(cfg.api.endpoint, 'http://localhost:8080');
+    },
+  },
+  {
     name: 'basic auth from env',
     env: {
       SIGIL_AUTH_MODE: 'basic',
@@ -192,6 +206,118 @@ const configFromEnvCases = [
       assert.deepEqual(cfg.tags, { team: 'ai' });
     },
   },
+  {
+    name: 'hooks default to off with concrete values',
+    env: {},
+    check: (cfg) => {
+      assert.deepEqual(cfg.hooks, { enabled: false, phases: ['preflight'], timeoutMs: 15_000, failOpen: true });
+    },
+  },
+  {
+    name: 'all four hooks variables from env',
+    env: {
+      AGENTO11Y_HOOKS_ENABLED: 'true',
+      AGENTO11Y_HOOKS_PHASES: 'preflight,postflight',
+      AGENTO11Y_HOOKS_TIMEOUT_MS: '3000',
+      AGENTO11Y_HOOKS_FAIL_OPEN: 'false',
+    },
+    check: (cfg) => {
+      assert.deepEqual(cfg.hooks, {
+        enabled: true,
+        phases: ['preflight', 'postflight'],
+        timeoutMs: 3000,
+        failOpen: false,
+      });
+    },
+  },
+  {
+    name: 'hooks enabled alone keeps other defaults',
+    env: { AGENTO11Y_HOOKS_ENABLED: 'true' },
+    check: (cfg) => {
+      assert.deepEqual(cfg.hooks, { enabled: true, phases: ['preflight'], timeoutMs: 15_000, failOpen: true });
+    },
+  },
+  {
+    name: 'hooks phases trim lowercase dedupe and keep order',
+    env: { AGENTO11Y_HOOKS_PHASES: ' POSTFLIGHT , ,preflight, postflight ' },
+    check: (cfg) => {
+      assert.deepEqual(cfg.hooks.phases, ['postflight', 'preflight']);
+    },
+  },
+  {
+    name: 'invalid hooks booleans keep defaults',
+    env: { AGENTO11Y_HOOKS_ENABLED: 'maybe', AGENTO11Y_HOOKS_FAIL_OPEN: 'ture' },
+    check: (cfg) => {
+      assert.equal(cfg.hooks.enabled, false);
+      assert.equal(cfg.hooks.failOpen, true);
+    },
+  },
+  {
+    name: 'unknown hook phase is dropped and the rest applies',
+    env: { AGENTO11Y_HOOKS_PHASES: 'preflight,bogus' },
+    check: (cfg) => {
+      assert.deepEqual(cfg.hooks.phases, ['preflight']);
+    },
+  },
+  {
+    // Rejecting the whole list would fall back to the ['preflight'] default,
+    // starting enforcement on a phase the operator did not ask for and
+    // skipping the one they did.
+    name: 'a typo beside postflight does not switch the phase to preflight',
+    env: { AGENTO11Y_HOOKS_PHASES: 'postflight,bogus' },
+    check: (cfg) => {
+      assert.deepEqual(cfg.hooks.phases, ['postflight']);
+    },
+  },
+  {
+    name: 'a phase list with no usable entry keeps the default',
+    env: { AGENTO11Y_HOOKS_PHASES: 'bogus' },
+    check: (cfg) => {
+      assert.deepEqual(cfg.hooks.phases, ['preflight']);
+    },
+  },
+  // evaluateHook reads a non-positive timeout as "use 15000", so a value it
+  // cannot honour is rejected during parsing instead. 3_000 is PEP 515 digit
+  // grouping, which Python's int() accepts and the SDKs must not.
+  ...['0', '-1', '1.5', 'not-a-number', '3_000', '120000', '99999999999999999999'].map((raw) => ({
+    name: `unusable hook timeout ${raw} keeps the default`,
+    env: { AGENTO11Y_HOOKS_TIMEOUT_MS: raw },
+    check: (cfg) => {
+      assert.equal(cfg.hooks.timeoutMs, 15_000);
+    },
+  })),
+  {
+    name: 'the largest honoured hook timeout is accepted',
+    env: { AGENTO11Y_HOOKS_TIMEOUT_MS: '119999' },
+    check: (cfg) => {
+      assert.equal(cfg.hooks.timeoutMs, 119_999);
+    },
+  },
+  {
+    name: 'invalid hook timeout preserves the other hooks variables',
+    env: {
+      AGENTO11Y_HOOKS_ENABLED: 'true',
+      AGENTO11Y_HOOKS_PHASES: 'preflight,postflight',
+      AGENTO11Y_HOOKS_TIMEOUT_MS: 'nope',
+    },
+    check: (cfg) => {
+      assert.equal(cfg.hooks.enabled, true);
+      assert.deepEqual(cfg.hooks.phases, ['preflight', 'postflight']);
+      assert.equal(cfg.hooks.timeoutMs, 15_000);
+    },
+  },
+  {
+    name: 'SIGIL_HOOKS_ variables are ignored',
+    env: {
+      SIGIL_HOOKS_ENABLED: 'true',
+      SIGIL_HOOKS_PHASES: 'postflight',
+      SIGIL_HOOKS_TIMEOUT_MS: '3000',
+      SIGIL_HOOKS_FAIL_OPEN: 'false',
+    },
+    check: (cfg) => {
+      assert.deepEqual(cfg.hooks, { enabled: false, phases: ['preflight'], timeoutMs: 15_000, failOpen: true });
+    },
+  },
 ];
 
 for (const tc of configFromEnvCases) {
@@ -221,6 +347,15 @@ const mergeConfigCases = [
       assert.equal(cfg.generationExport.endpoint, 'https://explicit:4318');
       // Unset fields still come from env.
       assert.equal(cfg.agentName, 'planner');
+    },
+  },
+  {
+    name: 'explicit api endpoint wins over env endpoint',
+    config: { api: { endpoint: 'https://caller.example.com' } },
+    env: { AGENTO11Y_ENDPOINT: 'https://environment.example.com' },
+    check: (cfg) => {
+      assert.equal(cfg.api.endpoint, 'https://caller.example.com');
+      assert.equal(cfg.generationExport.endpoint, 'https://environment.example.com');
     },
   },
   {
@@ -283,12 +418,76 @@ const mergeConfigCases = [
       assert.deepEqual(cfg.tags, { service: 'orch', team: 'ai', env: 'staging' });
     },
   },
+  {
+    name: 'caller hooks config wins over env for every field',
+    config: { hooks: { enabled: false, phases: ['postflight'], timeoutMs: 2500, failOpen: false } },
+    env: {
+      AGENTO11Y_HOOKS_ENABLED: 'true',
+      AGENTO11Y_HOOKS_PHASES: 'preflight,postflight',
+      AGENTO11Y_HOOKS_TIMEOUT_MS: '9000',
+      AGENTO11Y_HOOKS_FAIL_OPEN: 'true',
+    },
+    check: (cfg) => {
+      assert.deepEqual(cfg.hooks, {
+        enabled: false,
+        phases: ['postflight'],
+        timeoutMs: 2500,
+        failOpen: false,
+      });
+    },
+  },
+  {
+    name: 'env fills hooks fields the caller left unset',
+    config: { hooks: { timeoutMs: 2500 } },
+    env: { AGENTO11Y_HOOKS_ENABLED: 'true', AGENTO11Y_HOOKS_TIMEOUT_MS: '9000' },
+    check: (cfg) => {
+      assert.equal(cfg.hooks.enabled, true);
+      assert.equal(cfg.hooks.timeoutMs, 2500);
+    },
+  },
+  {
+    // `hooks: { enabled: opts.enableHooks }` with an unset option is the
+    // idiomatic TS shape; it must read as "not set", not as "clear the env
+    // value". Go and Python read the same shape the same way.
+    name: 'explicitly undefined hooks fields leave the env layer alone',
+    config: { hooks: { enabled: undefined, timeoutMs: undefined } },
+    env: { AGENTO11Y_HOOKS_ENABLED: 'true', AGENTO11Y_HOOKS_TIMEOUT_MS: '3000' },
+    check: (cfg) => {
+      assert.equal(cfg.hooks.enabled, true);
+      assert.equal(cfg.hooks.timeoutMs, 3000);
+    },
+  },
+  {
+    name: 'an explicitly undefined endpoint leaves the env layer alone',
+    config: { generationExport: { endpoint: undefined }, api: { endpoint: undefined } },
+    env: { AGENTO11Y_ENDPOINT: 'https://environment.example.com' },
+    check: (cfg) => {
+      assert.equal(cfg.generationExport.endpoint, 'https://environment.example.com');
+      assert.equal(cfg.api.endpoint, 'https://environment.example.com');
+    },
+  },
 ];
 
 for (const tc of mergeConfigCases) {
   test(`mergeConfig: ${tc.name}`, () => {
     const cfg = mergeConfig(tc.config, tc.env);
     tc.check(cfg);
+  });
+}
+
+for (const { envKey, value, want } of [
+  { envKey: 'AGENTO11Y_HOOKS_ENABLED', value: 'maybe', want: /AGENTO11Y_HOOKS_ENABLED.*maybe/ },
+  { envKey: 'AGENTO11Y_HOOKS_PHASES', value: 'preflight,bogus', want: /unknown AGENTO11Y_HOOKS_PHASES entries: bogus/ },
+  { envKey: 'AGENTO11Y_HOOKS_PHASES', value: 'bogus', want: /unknown AGENTO11Y_HOOKS_PHASES entries: bogus/ },
+  { envKey: 'AGENTO11Y_HOOKS_PHASES', value: ',', want: /invalid AGENTO11Y_HOOKS_PHASES: ,/ },
+  { envKey: 'AGENTO11Y_HOOKS_TIMEOUT_MS', value: '0', want: /AGENTO11Y_HOOKS_TIMEOUT_MS.*0/ },
+  { envKey: 'AGENTO11Y_HOOKS_FAIL_OPEN', value: 'ture', want: /AGENTO11Y_HOOKS_FAIL_OPEN.*ture/ },
+]) {
+  test(`mergeConfig: ${envKey}=${value} warns under its own key`, () => {
+    const warnings = [];
+    mergeConfig({ logger: { warn: (message) => warnings.push(message) } }, { [envKey]: value });
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], want);
   });
 }
 

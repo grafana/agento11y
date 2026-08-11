@@ -178,6 +178,19 @@ Coding-agent plugins (Path A) add one opt-in switch on top: `AGENTO11Y_AUTO_CODI
 
 Capture modes do not strip `tags`/`metadata`/`user_id`; do not put secrets there.
 
+### Guards (hooks)
+
+Guards run Agent Observability rules on the request path and can deny or rewrite it. The Go, Python, and JS SDKs resolve the whole hook configuration from env, so an operator can turn guards on without touching app code. Java and .NET have no hooks implementation.
+
+```
+AGENTO11Y_HOOKS_ENABLED=true              # off by default; accepts 1/true/yes/on and 0/false/no/off
+AGENTO11Y_HOOKS_PHASES=preflight,postflight  # default preflight
+AGENTO11Y_HOOKS_TIMEOUT_MS=3000           # default 15000; milliseconds, 1 to 119999
+AGENTO11Y_HOOKS_FAIL_OPEN=true            # default true: an unreachable evaluator allows the call
+```
+
+Hook evaluation posts to the API endpoint, which resolves from `AGENTO11Y_ENDPOINT`, so no separate variable is needed. The same endpoint serves experiments and conversation ratings; set the API endpoint in code if those run somewhere else. A field set in code wins over its variable, and a value the SDK cannot parse is warned about, naming the variable, and skipped. In a phase list, an entry the SDK does not recognise is dropped and the recognised entries still apply. These four names have no `SIGIL_HOOKS_*` spelling. The app still has to call `EvaluateHook` / `evaluate_hook` / `evaluateHook`, or use an adapter that does, such as `agento11y_litellm.proxy.guards`.
+
 ## Mission
 
 1. Find AI generation and tool/agent execution paths in the user's code.

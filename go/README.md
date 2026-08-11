@@ -218,7 +218,7 @@ Hooks are disabled by default. Enable them on the client and call `EvaluateHook(
 
 ```go
 cfg := agento11y.DefaultConfig()
-cfg.Hooks.Enabled = true
+cfg.Hooks.Enabled = agento11y.BoolPtr(true)
 cfg.Hooks.Phases = []agento11y.HookPhase{agento11y.HookPhasePreflight}
 
 client := agento11y.NewClient(cfg)
@@ -252,6 +252,25 @@ if response.TransformedInput != nil && len(response.TransformedInput.Messages) >
 ```
 
 `HooksConfig` defaults to `Phases: []HookPhase{HookPhasePreflight}`, `Timeout: 15s`, and fail-open behavior. With fail-open enabled, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `FailOpen` to `agento11y.BoolPtr(false)` for strict paths that should fail closed.
+
+`Enabled` and `FailOpen` are `*bool` so the SDK can tell an explicit `false` from an unset field. `DefaultConfig()` leaves `Hooks` at its zero value for the same reason: the environment fills what the caller does not set, and `NewClient` applies the defaults last.
+
+### Configure hooks from the environment
+
+Four variables configure the same fields, so an operator can turn guards on without changing code:
+
+| Variable | Format | Default |
+| --- | --- | --- |
+| `AGENTO11Y_HOOKS_ENABLED` | `1`, `true`, `yes`, `on`, `0`, `false`, `no`, `off` | `false` |
+| `AGENTO11Y_HOOKS_PHASES` | comma-separated `preflight` and `postflight` | `preflight` |
+| `AGENTO11Y_HOOKS_TIMEOUT_MS` | integer milliseconds, `1` to `119999` | `15000` |
+| `AGENTO11Y_HOOKS_FAIL_OPEN` | the boolean spellings above | `true` |
+
+An explicit field on the `Config` you pass to `NewClient` wins; the environment fills the fields you leave unset; the defaults fill the rest.
+
+Hooks post to `API.Endpoint`, which resolves from `AGENTO11Y_ENDPOINT` when you leave it empty or at `http://localhost:8080`. `DefaultConfig()` pre-fills that value, so it reads as "not chosen" rather than as a caller choice; to keep the API on localhost while generations export elsewhere, run it on another port. The same field is the base URL for experiments and conversation ratings.
+
+These four names have no `SIGIL_HOOKS_*` spelling. A value the SDK cannot parse is logged, naming the variable that supplied it, and skipped: the field keeps the value it would have had, and the other three variables still apply. In a phase list, an entry the SDK does not recognise is dropped and the recognised entries still apply, so `postflight,bogus` runs postflight only.
 
 Set `HookContext.ConversationID` to the same ID used by `StartGeneration(...)`. The SDK also reads `WithConversationID(...)` and the active OpenTelemetry span when explicit correlation fields are omitted. This lets Agent Observability retain denied preflight attempts even though no LLM generation is created.
 

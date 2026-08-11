@@ -149,7 +149,7 @@ func newHookIntegrationClient(t *testing.T, endpoint string, options hookIntegra
 		},
 		API: APIConfig{Endpoint: endpoint},
 		Hooks: HooksConfig{
-			Enabled:  options.enabled,
+			Enabled:  BoolPtr(options.enabled),
 			Phases:   phases,
 			Timeout:  timeout,
 			FailOpen: &failOpen,

@@ -76,7 +76,7 @@ If you change shared-binary behavior, the four glue plugins and vibe all see it.
 ## Cross-language conventions
 
 - Use `cache_write_input_tokens`, not `cache_creation_input_tokens`. This was renamed in cbe0363; pretrained models tend to suggest the old name, so don't follow them.
-- Conformance suites cross-check the SDKs. `mise run test:sdk:conformance` runs seven of them. Core, provider-wrapper, framework-adapter, hook, and experiment cover Go/Python/JS/Java/.NET. Pi-session covers Go and JS. Redaction covers the four SDKs that have a redaction engine plus both plugins, and no Java. If you change behavior in one SDK, expect to update fixtures or matching code in the others.
+- Conformance suites cross-check the SDKs. `mise run test:sdk:conformance` runs seven of them. Core, provider-wrapper, framework-adapter, and experiment cover Go/Python/JS/Java/.NET. Hook covers Go, Python, and JS; Java and .NET have no hooks implementation, so `mise.toml` excludes them. Pi-session covers Go and JS. Redaction covers the four SDKs that have a redaction engine plus both plugins, and no Java. If you change behavior in one SDK, expect to update fixtures or matching code in the others.
 - Python has one package per framework (`agento11y-langgraph`, `agento11y-openai`, …). JS has one package with subpath exports (`@grafana/agento11y/langgraph`). Don't reflexively assume one layout for the other.
 - Python version bumps go through `mise run sdk:py:bump <VERSION>`. It updates all 13 `pyproject.toml` files and their internal `agento11y>=…` pins atomically. Hand-editing one file leaves the other twelve inconsistent.
 

@@ -633,20 +633,23 @@ class Client:
         ``HookAction.DENY`` to block; callers typically translate that into a
         :class:`agento11y.errors.HookDeniedError`.
 
-        When ``hooks.enabled`` is ``False`` (the default) this short-circuits
-        to ``allow``. When ``hooks.fail_open`` is ``True`` (the default),
-        transport/decode failures also resolve to ``allow`` so the LLM call
-        proceeds; set ``hooks.fail_open=False`` to surface
+        When ``hooks.enabled`` is not ``True`` this short-circuits to ``allow``;
+        the resolved client configuration has it ``False`` unless the caller or
+        ``AGENTO11Y_HOOKS_ENABLED`` turned hooks on. When ``hooks.fail_open`` is
+        ``True``, transport/decode failures also resolve to ``allow`` so the LLM
+        call proceeds; set ``hooks.fail_open=False`` to surface
         :class:`agento11y.errors.HookTransportError` instead.
 
         ``hooks`` replaces the resolved client configuration for this call only,
         field for field. It is not a partial override: the JS SDK's
         ``evaluateHook(request, hooksConfigOverride)`` merges the fields it is
         given over the client configuration, while this parameter substitutes
-        the whole dataclass, so an omitted field falls back to the
-        ``HooksConfig`` default rather than the client's value. Build the
-        override from :attr:`hooks_config` with :func:`dataclasses.replace` to
-        keep every field the caller does not mean to change.
+        the whole dataclass. ``HooksConfig`` fields are ``None`` until
+        ``resolve_config`` fills them, so an omitted field falls back to the
+        schema default (disabled, ``["preflight"]``, 15 seconds, fail-open)
+        rather than to the client's value. Build the override from
+        :attr:`hooks_config` with :func:`dataclasses.replace` to keep every
+        field the caller does not mean to change.
 
         An adapter that reports the verdict to an external system passes
         ``fail_open=False`` here: an allow the SDK synthesized for a dead

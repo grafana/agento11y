@@ -39,8 +39,9 @@ type Config struct {
 	API              APIConfig
 	EmbeddingCapture EmbeddingCaptureConfig
 	// Hooks controls synchronous hook evaluation against the Agent Observability API
-	// (preflight/postflight guardrails). Disabled by default; callers must
-	// explicitly opt in by setting Hooks.Enabled = true.
+	// (preflight/postflight guardrails). Disabled by default; callers opt in by
+	// setting Hooks.Enabled = agento11y.BoolPtr(true) or by exporting
+	// AGENTO11Y_HOOKS_ENABLED=true.
 	Hooks HooksConfig
 	// ContentCapture controls the default content capture mode for all
 	// generations and tool executions. Per-recording overrides take precedence.
@@ -175,8 +176,18 @@ type GenerationExportConfig struct {
 }
 
 type APIConfig struct {
+	// Endpoint is the base URL for the hook, experiment and conversation-rating
+	// APIs. Empty or defaultAPIEndpoint means unset, and AGENTO11Y_ENDPOINT
+	// fills it. Point it somewhere else to keep those calls off the endpoint
+	// generations export to.
 	Endpoint string
 }
+
+// defaultAPIEndpoint is the schema default for APIConfig.Endpoint. DefaultConfig
+// pre-fills the field with it, so it also reads as "caller did not choose an
+// endpoint" and must stay comparable rather than inlined. Matches the Python
+// SDK, whose ApiConfig dataclass pre-fills the same way.
+const defaultAPIEndpoint = "http://localhost:8080"
 
 // instrumentationName is the OTel instrumentation scope name. It is a
 // telemetry-visible data contract consumed outside this repository, so it
@@ -300,14 +311,17 @@ func DefaultConfig() Config {
 			PayloadMaxBytes:            defaultGenerationPayloadMaxBytes,
 		},
 		API: APIConfig{
-			Endpoint: "http://localhost:8080",
+			Endpoint: defaultAPIEndpoint,
 		},
 		EmbeddingCapture: EmbeddingCaptureConfig{
 			CaptureInput:  false,
 			MaxInputItems: 20,
 			MaxTextLength: 1024,
 		},
-		Hooks:  defaultHooksConfig(),
+		// Hooks stays at its zero value. NewClient applies the hook defaults
+		// after the env-and-caller merge, so passing DefaultConfig() does not
+		// shadow AGENTO11Y_HOOKS_*.
+		Hooks:  HooksConfig{},
 		Tracer: nil,
 		Logger: log.Default(),
 		Now:    time.Now,
@@ -439,7 +453,11 @@ func NewClient(config Config) *Client {
 	cfg.GenerationExport = mergeGenerationExportConfig(defaults.GenerationExport, cfg.GenerationExport)
 	cfg.API = mergeAPIConfig(defaults.API, cfg.API)
 	cfg.EmbeddingCapture = mergeEmbeddingCaptureConfig(defaults.EmbeddingCapture, cfg.EmbeddingCapture)
+	// Caller over env, then the schema defaults under both. Hook defaults are
+	// applied here rather than in DefaultConfig so a caller who passes
+	// DefaultConfig() still gets the env layer.
 	cfg.Hooks = mergeHooksConfig(defaults.Hooks, cfg.Hooks)
+	cfg.Hooks = mergeHooksConfig(defaultHooksConfig(), cfg.Hooks)
 
 	if cfg.AgentName == "" {
 		cfg.AgentName = defaults.AgentName

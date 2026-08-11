@@ -7,6 +7,7 @@ import type {
   EmbeddingCaptureConfig,
   ExportAuthConfig,
   GenerationExportConfig,
+  HookPhase,
   HooksConfig,
 } from './types.js';
 
@@ -19,13 +20,19 @@ const validAuthModes: ExportAuthConfig['mode'][] = ['none', 'tenant', 'bearer', 
 // AGENTO11Y_* name with a SIGIL_* legacy fallback. Selection happens before
 // parsing: a nonblank preferred value always wins, even when it later fails
 // validation, so stale legacy config cannot silently resurface.
-export interface EnvPair {
+interface EnvPair {
   preferred: string;
   legacy: string;
 }
 
 function brandedPair(suffix: string): EnvPair {
   return { preferred: `AGENTO11Y_${suffix}`, legacy: `SIGIL_${suffix}` };
+}
+
+// preferredOnlyPair is a variable with no legacy spelling. envTrimmed skips a
+// lookup miss, so the empty legacy name never resolves.
+function preferredOnlyPair(suffix: string): EnvPair {
+  return { preferred: `AGENTO11Y_${suffix}`, legacy: '' };
 }
 
 // canonical env-var names: preferred AGENTO11Y_* with SIGIL_* fallback.
@@ -44,6 +51,12 @@ const envTags = brandedPair('TAGS');
 const envContentCaptureMode = brandedPair('CONTENT_CAPTURE_MODE');
 const envDebug = brandedPair('DEBUG');
 export const envRedactInputMessages = brandedPair('REDACT_INPUT_MESSAGES');
+// Hooks configuration is preferred-only: these names have no installed base
+// under SIGIL_*, and the Python SDK already ignores that prefix everywhere.
+const envHooksEnabled = preferredOnlyPair('HOOKS_ENABLED');
+const envHooksPhases = preferredOnlyPair('HOOKS_PHASES');
+const envHooksTimeoutMs = preferredOnlyPair('HOOKS_TIMEOUT_MS');
+const envHooksFailOpen = preferredOnlyPair('HOOKS_FAIL_OPEN');
 
 const defaultExportAuthConfig: ExportAuthConfig = {
   mode: 'none',
@@ -164,7 +177,14 @@ function envOverrides(env: Record<string, string | undefined>, logger: Agento11y
   const auth: Partial<ExportAuthConfig> = {};
 
   const endpoint = envTrimmed(env, envEndpoint);
-  if (endpoint !== undefined) generationExport.endpoint = endpoint.value;
+  if (endpoint !== undefined) {
+    generationExport.endpoint = endpoint.value;
+    // Hook evaluation posts to api.endpoint. One endpoint variable feeds both,
+    // so env-enabled hooks reach the configured server instead of localhost. A
+    // caller-supplied api.endpoint still wins through layerInputs. Matches the
+    // Go and Python SDKs.
+    out.api = { endpoint: endpoint.value };
+  }
   const protocol = envTrimmed(env, envProtocol);
   if (protocol !== undefined)
     generationExport.protocol = protocol.value.toLowerCase() as GenerationExportConfig['protocol'];
@@ -221,31 +241,59 @@ function envOverrides(env: Record<string, string | undefined>, logger: Agento11y
   const debug = envTrimmed(env, envDebug);
   if (debug !== undefined) out.debug = parseTruthy(debug.value);
 
+  // Hooks. One variable per field; layerInputs keeps caller values on top. The
+  // timeout is in milliseconds because that is the unit of the wire header.
+  const hooks: Partial<HooksConfig> = {};
+  const hooksEnabled = parseEnvBool(env, envHooksEnabled, logger);
+  if (hooksEnabled !== undefined) hooks.enabled = hooksEnabled;
+  const hooksPhases = hookPhasesFromEnv(env, logger);
+  if (hooksPhases !== undefined) hooks.phases = hooksPhases;
+  const hooksTimeoutMs = envParsed(env, envHooksTimeoutMs, parseHookTimeoutMs, logger);
+  if (hooksTimeoutMs !== undefined) hooks.timeoutMs = hooksTimeoutMs;
+  const hooksFailOpen = parseEnvBool(env, envHooksFailOpen, logger);
+  if (hooksFailOpen !== undefined) hooks.failOpen = hooksFailOpen;
+  if (Object.keys(hooks).length > 0) out.hooks = hooks;
+
   return out;
 }
 
+/**
+ * Drops keys whose value is `undefined`.
+ *
+ * `{ ...base, ...override }` keeps an own key that holds `undefined`, so
+ * `hooks: { enabled: opts.enableHooks }` with an unset option would erase the
+ * env layer instead of leaving it alone. Go and Python read the same shape as
+ * "not set", so this keeps the three SDKs on one precedence rule.
+ */
+function definedOnly<T extends object>(obj: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out as T;
+}
+
 function layerInputs(base: Agento11ySdkConfigInput, override: Agento11ySdkConfigInput): Agento11ySdkConfigInput {
-  const out: Agento11ySdkConfigInput = { ...base, ...override };
+  const out: Agento11ySdkConfigInput = { ...base, ...definedOnly(override) };
   if (base.generationExport || override.generationExport) {
     const baseGE = base.generationExport ?? {};
-    const overGE = override.generationExport ?? {};
+    const overGE = definedOnly(override.generationExport ?? {});
     // Field-by-field so a partial auth from one layer doesn't clobber the other.
     const auth = mergeAuthInput(baseGE.auth, overGE.auth);
     out.generationExport = {
       ...baseGE,
       ...overGE,
       ...(auth !== undefined ? { auth } : {}),
-      headers: overGE.headers !== undefined ? overGE.headers : baseGE.headers,
     };
   }
   if (base.api || override.api) {
-    out.api = { ...(base.api ?? {}), ...(override.api ?? {}) };
+    out.api = { ...(base.api ?? {}), ...definedOnly(override.api ?? {}) };
   }
   if (base.embeddingCapture || override.embeddingCapture) {
-    out.embeddingCapture = { ...(base.embeddingCapture ?? {}), ...(override.embeddingCapture ?? {}) };
+    out.embeddingCapture = { ...(base.embeddingCapture ?? {}), ...definedOnly(override.embeddingCapture ?? {}) };
   }
   if (base.hooks || override.hooks) {
-    out.hooks = { ...(base.hooks ?? {}), ...(override.hooks ?? {}) };
+    out.hooks = { ...(base.hooks ?? {}), ...definedOnly(override.hooks ?? {}) };
   }
   if (base.tags || override.tags) {
     out.tags = { ...(base.tags ?? {}), ...(override.tags ?? {}) };
@@ -270,7 +318,7 @@ function mergeAuthInput(
 // envTrimmed selects the pair's first nonblank value (preferred, then legacy)
 // and returns it with the env-var name it came from, so warnings can name the
 // key the user actually set.
-export function envTrimmed(
+function envTrimmed(
   env: Record<string, string | undefined>,
   pair: EnvPair,
 ): { value: string; key: string } | undefined {
@@ -296,6 +344,111 @@ export function envTrimmed(
 export function parseTruthy(raw: string): boolean {
   const v = raw.trim().toLowerCase();
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+const trueValues = new Set(['1', 'true', 'yes', 'on']);
+const falseValues = new Set(['0', 'false', 'no', 'off']);
+const validHookPhases: HookPhase[] = ['preflight', 'postflight'];
+// Bounds AGENTO11Y_HOOKS_TIMEOUT_MS. It is the largest value the server
+// honours; above it the server falls back to its own budget, so a larger client
+// deadline would not be respected anyway. Go and Python use the same ceiling.
+const maxHookTimeoutMs = 119_999;
+
+/**
+ * Parses a boolean, returning `undefined` for anything it does not recognise.
+ *
+ * Used where a typo must not read as false: `AGENTO11Y_HOOKS_FAIL_OPEN`
+ * defaults to true, so a lenient parse would quietly switch a deployment to
+ * fail-closed.
+ */
+function parseStrictBool(raw: string): boolean | undefined {
+  const normalized = raw.trim().toLowerCase();
+  if (trueValues.has(normalized)) return true;
+  if (falseValues.has(normalized)) return false;
+  return undefined;
+}
+
+/**
+ * Parses `AGENTO11Y_HOOKS_TIMEOUT_MS`.
+ *
+ * Rejects non-integers, zero and negatives because hook evaluation reads a
+ * non-positive timeout as "use the default", and anything above
+ * `maxHookTimeoutMs` because the server would not honour it. The digit test also
+ * rejects the underscore grouping Python's `int()` would accept, so the same
+ * value means the same thing in every SDK.
+ */
+function parseHookTimeoutMs(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!/^[+-]?\d+$/.test(trimmed)) return undefined;
+  const value = Number(trimmed);
+  if (!Number.isSafeInteger(value) || value <= 0 || value > maxHookTimeoutMs) return undefined;
+  return value;
+}
+
+/**
+ * Parses a comma-separated hook phase list. Entries are trimmed, lowercased and
+ * deduplicated in first-seen order.
+ *
+ * An unknown entry is dropped and reported while the recognised entries still
+ * apply. Rejecting the whole list instead would fall back to the default
+ * `['preflight']`, so a typo in `'postflight,bogus'` would start preflight
+ * enforcement the operator never asked for and skip the phase they did.
+ */
+function parsePhases(raw: string): { phases: HookPhase[]; unknown: string[] } {
+  const phases: HookPhase[] = [];
+  const unknown: string[] = [];
+  for (const part of raw.split(',')) {
+    const phase = part.trim().toLowerCase() as HookPhase;
+    if (phase.length === 0) continue;
+    if (!validHookPhases.includes(phase)) {
+      unknown.push(phase);
+      continue;
+    }
+    if (!phases.includes(phase)) phases.push(phase);
+  }
+  return { phases, unknown };
+}
+
+/** Reads `AGENTO11Y_HOOKS_PHASES`, warning about entries it drops. */
+function hookPhasesFromEnv(env: Record<string, string | undefined>, logger: Agento11yLogger): HookPhase[] | undefined {
+  const selected = envTrimmed(env, envHooksPhases);
+  if (selected === undefined) return undefined;
+  const { phases, unknown } = parsePhases(selected.value);
+  if (unknown.length > 0) {
+    logger.warn?.(`agento11y: ignoring unknown ${selected.key} entries: ${unknown.join(',')}`);
+  } else if (phases.length === 0) {
+    logger.warn?.(`agento11y: ignoring invalid ${selected.key}: ${selected.value}`);
+  }
+  return phases.length > 0 ? phases : undefined;
+}
+
+/**
+ * Reads a variable and parses it, warning under the key that supplied the value
+ * when the parse fails. A rejected value leaves the field unset, so one typo
+ * cannot discard the rest of the env layer.
+ */
+function envParsed<T>(
+  env: Record<string, string | undefined>,
+  pair: EnvPair,
+  parse: (raw: string) => T | undefined,
+  logger: Agento11yLogger,
+): T | undefined {
+  const selected = envTrimmed(env, pair);
+  if (selected === undefined) return undefined;
+  const value = parse(selected.value);
+  if (value === undefined) {
+    logger.warn?.(`agento11y: ignoring invalid ${selected.key}: ${selected.value}`);
+  }
+  return value;
+}
+
+/** Reads a strict boolean variable, warning and returning `undefined` on a typo. */
+export function parseEnvBool(
+  env: Record<string, string | undefined>,
+  pair: EnvPair,
+  logger: Agento11yLogger,
+): boolean | undefined {
+  return envParsed(env, pair, parseStrictBool, logger);
 }
 
 function parseCsvKv(raw: string): Record<string, string> {

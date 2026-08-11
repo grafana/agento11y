@@ -607,6 +607,22 @@ func TestAliasSuffixesCoversLocalFamilies(t *testing.T) {
 	}
 }
 
+// TestPreferredOnlySuffixesHaveNoAlias pins the SDK hook families out of the
+// alias registry. In AliasSuffixes, dotenv would materialize SIGIL_HOOKS_* and
+// let a stale legacy value win, which the SDKs then ignore.
+func TestPreferredOnlySuffixesHaveNoAlias(t *testing.T) {
+	for _, suffix := range PreferredOnlySuffixes {
+		if slices.Contains(AliasSuffixes, suffix) {
+			t.Errorf("%s must not be an alias family: it has no SIGIL_ spelling", suffix)
+		}
+	}
+	for _, suffix := range []string{"HOOKS_ENABLED", "HOOKS_PHASES", "HOOKS_TIMEOUT_MS", "HOOKS_FAIL_OPEN"} {
+		if !slices.Contains(PreferredOnlySuffixes, suffix) {
+			t.Errorf("%s missing from PreferredOnlySuffixes", suffix)
+		}
+	}
+}
+
 func TestExpandAliases(t *testing.T) {
 	got := ExpandAliases(map[string]string{
 		"SIGIL_ENDPOINT":       "https://x",

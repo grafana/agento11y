@@ -53,6 +53,22 @@ var AliasSuffixes = []string{
 	"LOCAL_FORWARD", // opt a --local daemon into forwarding to Cloud
 }
 
+// PreferredOnlySuffixes are AGENTO11Y_-only variables: they have no SIGIL_
+// spelling and must never gain one. They are deliberately absent from
+// AliasSuffixes, so dotenv neither materializes a legacy twin nor lets a stale
+// SIGIL_ value win. They still reach a child through config.env, which applies
+// any AGENTO11Y_ key the OS env leaves empty.
+//
+// The four hook families configure the SDKs, not this launcher: the agent hooks
+// build their own HooksConfig from AGENTO11Y_GUARDS_*, which keeps winning
+// because a caller-supplied field beats the SDK env layer.
+var PreferredOnlySuffixes = []string{
+	"HOOKS_ENABLED",
+	"HOOKS_PHASES",
+	"HOOKS_TIMEOUT_MS",
+	"HOOKS_FAIL_OPEN",
+}
+
 // LookupEnv resolves a branded variable from the process env: the first
 // nonblank of AGENTO11Y_<suffix>, SIGIL_<suffix>. Blank or whitespace-only
 // values are treated as unset. The returned key names the spelling the value
@@ -105,14 +121,19 @@ type EnvSetter interface {
 	Setenv(key, value string)
 }
 
-// PinAliasEnvBlank pins both spellings of every alias family to "" for the
-// duration of a test. Materialization helpers (dotenv.ApplyEnv, SetBothEnv)
-// write through os.Setenv with no cleanup, so without pinning a value from an
-// earlier test in the same process would leak into later ones.
+// PinAliasEnvBlank pins both spellings of every alias family, and the preferred
+// spelling of every preferred-only variable, to "" for the duration of a test.
+// Materialization helpers (dotenv.ApplyEnv, SetBothEnv) write through os.Setenv
+// with no cleanup, so without pinning a value from an earlier test in the same
+// process would leak into later ones. A developer shell that exports one of
+// these leaks the same way.
 func PinAliasEnvBlank(t EnvSetter) {
 	for _, suffix := range AliasSuffixes {
 		t.Setenv(PreferredKey(suffix), "")
 		t.Setenv(LegacyKey(suffix), "")
+	}
+	for _, suffix := range PreferredOnlySuffixes {
+		t.Setenv(PreferredKey(suffix), "")
 	}
 }
 

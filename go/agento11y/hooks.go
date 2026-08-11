@@ -40,13 +40,21 @@ const (
 	hookTimeoutHeader      = "X-Agento11y-Hook-Timeout-Ms"
 	defaultHookTimeout     = 15 * time.Second
 	maxHookEvaluateRespLen = 4 << 20
+	// maxHookTimeoutMS bounds AGENTO11Y_HOOKS_TIMEOUT_MS. It is the largest
+	// value the server honours; above it the server falls back to its own
+	// budget, so a larger client deadline would not be respected anyway. The
+	// Python and JS SDKs use the same ceiling.
+	maxHookTimeoutMS = 119_999
 )
 
 // HooksConfig controls synchronous hook evaluation.
 type HooksConfig struct {
-	// Enabled gates hook evaluation. When false, EvaluateHook returns
-	// HookActionAllow without contacting the server.
-	Enabled bool
+	// Enabled gates hook evaluation. When nil or *Enabled == false,
+	// EvaluateHook returns HookActionAllow without contacting the server.
+	// nil means "unset", so AGENTO11Y_HOOKS_ENABLED can turn hooks on for a
+	// caller that supplies a Config without a hooks block, while an explicit
+	// pointer to false still wins over the env layer.
+	Enabled *bool
 	// Phases the SDK is allowed to evaluate. Defaults to {HookPhasePreflight}.
 	// Requests whose phase isn't listed short-circuit to allow.
 	Phases []HookPhase
@@ -72,10 +80,20 @@ func (c HooksConfig) FailOpenEnabled() bool {
 	return *c.FailOpen
 }
 
+// EnabledValue reports the effective Enabled value, honouring the
+// pointer-style tri-state. Unset means off.
+func (c HooksConfig) EnabledValue() bool {
+	if c.Enabled == nil {
+		return false
+	}
+	return *c.Enabled
+}
+
 func defaultHooksConfig() HooksConfig {
+	enabled := false
 	failOpen := true
 	return HooksConfig{
-		Enabled:  false,
+		Enabled:  &enabled,
 		Phases:   []HookPhase{HookPhasePreflight},
 		Timeout:  defaultHookTimeout,
 		FailOpen: &failOpen,
@@ -83,13 +101,16 @@ func defaultHooksConfig() HooksConfig {
 }
 
 func mergeHooksConfig(base, override HooksConfig) HooksConfig {
-	// Override.Enabled wins because zero value is the safe default ("hooks
-	// off"). Callers explicitly constructing HooksConfig know whether they
-	// want hooks on.
 	out := HooksConfig{
-		Enabled: override.Enabled,
 		Phases:  append([]HookPhase(nil), base.Phases...),
 		Timeout: base.Timeout,
+	}
+	if override.Enabled != nil {
+		v := *override.Enabled
+		out.Enabled = &v
+	} else if base.Enabled != nil {
+		v := *base.Enabled
+		out.Enabled = &v
 	}
 	if len(override.Phases) > 0 {
 		out.Phases = append([]HookPhase(nil), override.Phases...)
@@ -591,8 +612,8 @@ func hookJSONString(text string) json.RawMessage {
 // HookDeniedError by callers).
 //
 // Behavior:
-//   - When Hooks.Enabled is false, returns {Action: HookActionAllow} without
-//     contacting the server.
+//   - When Hooks.Enabled is unset or false, returns {Action: HookActionAllow}
+//     without contacting the server.
 //   - When the request phase is not in Hooks.Phases, returns
 //     {Action: HookActionAllow} without contacting the server.
 //   - When Hooks.FailOpen is true (default), transport/decode errors return
@@ -610,7 +631,7 @@ func (c *Client) EvaluateHook(ctx context.Context, req HookEvaluateRequest) (*Ho
 
 	hooksCfg := c.config.Hooks
 	failOpen := hooksCfg.FailOpenEnabled()
-	if !hooksCfg.Enabled {
+	if !hooksCfg.EnabledValue() {
 		return allowResponse(), nil
 	}
 	if !phaseEnabled(hooksCfg.Phases, req.Phase) {

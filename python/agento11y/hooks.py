@@ -153,10 +153,13 @@ def evaluate_hook(
     if request.phase not in phases:
         return _allow_response()
 
-    timeout = hooks.timeout_seconds if hooks.timeout_seconds > 0 else DEFAULT_HOOK_TIMEOUT
+    # A caller-built override may leave fields unset; apply the same schema
+    # defaults resolve_config applies rather than reading None as "fail closed".
+    fail_open = True if hooks.fail_open is None else hooks.fail_open
+    timeout = hooks.timeout_seconds if hooks.timeout_seconds and hooks.timeout_seconds > 0 else DEFAULT_HOOK_TIMEOUT
     base_url = _base_url_from_api_endpoint(api_endpoint, insecure)
     if base_url is None:
-        return _fail_open_or_raise(hooks.fail_open, "api endpoint is required")
+        return _fail_open_or_raise(fail_open, "api endpoint is required")
     endpoint = base_url.rstrip("/") + HOOKS_EVALUATE_PATH
 
     timeout_ms = max(1, int(timeout * 1000))
@@ -184,24 +187,24 @@ def evaluate_hook(
         except Exception:  # noqa: BLE001
             body = ""
         message = body if body else f"HTTP {exc.code}"
-        return _fail_open_or_raise(hooks.fail_open, f"status {exc.code}: {message}")
+        return _fail_open_or_raise(fail_open, f"status {exc.code}: {message}")
     except Exception as exc:  # noqa: BLE001
-        return _fail_open_or_raise(hooks.fail_open, str(exc))
+        return _fail_open_or_raise(fail_open, str(exc))
 
     if status < 200 or status >= 300:
         decoded = raw.decode("utf-8", errors="replace").strip()
-        return _fail_open_or_raise(hooks.fail_open, f"status {status}: {decoded or 'unexpected status'}")
+        return _fail_open_or_raise(fail_open, f"status {status}: {decoded or 'unexpected status'}")
     if len(raw) > _MAX_HOOK_RESPONSE_BYTES:
-        return _fail_open_or_raise(hooks.fail_open, "hook response too large")
+        return _fail_open_or_raise(fail_open, "hook response too large")
 
     text = raw.decode("utf-8", errors="replace").strip()
     if text == "":
-        return _fail_open_or_raise(hooks.fail_open, "empty hook response payload")
+        return _fail_open_or_raise(fail_open, "empty hook response payload")
 
     try:
         parsed = json.loads(text)
     except Exception as exc:  # noqa: BLE001
-        return _fail_open_or_raise(hooks.fail_open, f"invalid JSON response: {exc}")
+        return _fail_open_or_raise(fail_open, f"invalid JSON response: {exc}")
 
     return _parse_response(parsed)
 

@@ -313,6 +313,25 @@ if response.transformed_input is not None:
 
 `HooksConfig` defaults to `phases=["preflight"]`, `timeout_seconds=15.0`, and `fail_open=True`. With fail-open enabled, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `fail_open=False` for strict paths that should fail closed.
 
+Every `HooksConfig` field is `None` until it is set, so the resolver can tell an explicit `False` from an unset field. `resolve_config` fills all four, so `client.hooks_config` always reads concrete values.
+
+### Configure hooks from the environment
+
+Four variables configure the same fields, so an operator can turn guards on without changing code:
+
+| Variable | Format | Default |
+| --- | --- | --- |
+| `AGENTO11Y_HOOKS_ENABLED` | `1`, `true`, `yes`, `on`, `0`, `false`, `no`, `off` | `false` |
+| `AGENTO11Y_HOOKS_PHASES` | comma-separated `preflight` and `postflight` | `preflight` |
+| `AGENTO11Y_HOOKS_TIMEOUT_MS` | integer milliseconds, `1` to `119999` | `15000` |
+| `AGENTO11Y_HOOKS_FAIL_OPEN` | the boolean spellings above | `true` |
+
+The timeout is in milliseconds to match the wire header; the SDK converts it to `timeout_seconds`. A field you set on `ClientConfig` wins; the environment fills the fields you leave unset; the defaults fill the rest.
+
+Hooks post to `api.endpoint`, which resolves from `AGENTO11Y_ENDPOINT` when you leave it empty or at `http://localhost:8080`. The same field is the base URL for experiments and conversation ratings, so if you export generations over gRPC to one host and run the API on another, set `api.endpoint` explicitly.
+
+These four names have no `SIGIL_HOOKS_*` spelling. A value the SDK cannot parse produces a warning naming the variable and is skipped: the field keeps the value it would have had, and the other three variables still apply. In a phase list, an entry the SDK does not recognise is dropped and the recognised entries still apply, so `postflight,bogus` runs postflight only.
+
 `evaluate_hook` also takes a keyword-only `hooks` override that replaces the client's resolved hook configuration for that one call. It does not mutate the client, so later calls use the client configuration again:
 
 ```python

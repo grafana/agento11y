@@ -6,11 +6,12 @@ import base64
 import dataclasses
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, TypeVar
 
 from opentelemetry.metrics import Meter
 from opentelemetry.trace import Tracer
@@ -21,6 +22,7 @@ from .models import ContentCaptureMode, Generation, utc_now
 TENANT_HEADER = "X-Scope-OrgID"
 AUTHORIZATION_HEADER = "Authorization"
 GenerationSanitizer = Callable[[Generation], Generation]
+_T = TypeVar("_T")
 
 # Schema-level defaults applied when neither user config nor env provides a value.
 _DEFAULT_ENDPOINT = "localhost:4317"
@@ -29,6 +31,15 @@ _DEFAULT_INSECURE = False
 _DEFAULT_AUTH_MODE = "none"
 _VALID_AUTH_MODES = ("none", "tenant", "bearer", "basic")
 _VALID_CONTENT_CAPTURE = ("full", "no_tool_content", "metadata_only", "full_with_metadata_spans")
+_VALID_HOOK_PHASES = ("preflight", "postflight")
+_DEFAULT_HOOK_TIMEOUT_SECONDS = 15.0
+# Bounds AGENTO11Y_HOOKS_TIMEOUT_MS. It is the largest value the server honours;
+# above it the server falls back to its own budget, so a larger client deadline
+# would not be respected anyway. The Go and JS SDKs use the same ceiling.
+_MAX_HOOK_TIMEOUT_MS = 119_999
+_TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
+_FALSE_TOKENS = frozenset({"0", "false", "no", "off"})
+_ASCII_INT = re.compile(r"[+-]?[0-9]+")
 _LEGACY_ENV_RENAMES = {
     "SIGIL_AGENT_NAME": "AGENTO11Y_AGENT_NAME",
     "SIGIL_AGENT_VERSION": "AGENTO11Y_AGENT_VERSION",
@@ -117,15 +128,17 @@ class EmbeddingCaptureConfig:
 class HooksConfig:
     """Synchronous hook evaluation configuration.
 
-    Hooks are disabled by default; callers must opt in by setting
-    ``enabled=True``. ``fail_open`` defaults to ``True`` so transport failures
-    never block the LLM call unless the caller explicitly chooses fail-closed.
+    Every field is ``None`` when unset so the resolver can distinguish "user did
+    not set this" from an explicit value, the same reason ``AuthConfig.mode``
+    carries the sentinel. ``resolve_config`` fills all four: hooks off, phases
+    ``["preflight"]``, a 15 second timeout, and ``fail_open=True`` so transport
+    failures never block the LLM call unless the caller chooses fail-closed.
     """
 
-    enabled: bool = False
-    phases: list[str] = field(default_factory=lambda: ["preflight"])
-    timeout_seconds: float = 15.0
-    fail_open: bool = True
+    enabled: bool | None = None
+    phases: list[str] | None = None
+    timeout_seconds: float | None = None
+    fail_open: bool | None = None
 
 
 @dataclass(slots=True)
@@ -226,6 +239,104 @@ def _warn_legacy_env(env: dict[str, str] | None = None) -> None:
 
 def _parse_bool(raw: str) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _parse_strict_bool(raw: str) -> bool | None:
+    """Parses a boolean, returning ``None`` for anything it does not recognise.
+
+    Used where a typo must not read as ``False``: ``AGENTO11Y_HOOKS_FAIL_OPEN``
+    defaults to true, so a lenient parse would quietly switch a deployment to
+    fail-closed.
+    """
+
+    token = raw.strip().lower()
+    if token in _TRUE_TOKENS:
+        return True
+    if token in _FALSE_TOKENS:
+        return False
+    return None
+
+
+def _parse_hook_timeout_ms(raw: str) -> int | None:
+    """Parses ``AGENTO11Y_HOOKS_TIMEOUT_MS``, returning ``None`` when unusable.
+
+    Rejects non-integers, zero and negatives because hook evaluation reads a
+    non-positive timeout as "use the default", and anything above
+    ``_MAX_HOOK_TIMEOUT_MS`` because the server would not honour it. The digit
+    pattern also rejects what ``int()`` accepts and Go and JS do not, PEP 515
+    underscore grouping and non-ASCII digits, so the same value means the same
+    thing in every SDK.
+    """
+
+    token = raw.strip()
+    if not _ASCII_INT.fullmatch(token):
+        return None
+    value = int(token)
+    if value <= 0 or value > _MAX_HOOK_TIMEOUT_MS:
+        return None
+    return value
+
+
+def _parse_phases(raw: str) -> tuple[list[str], list[str]]:
+    """Parses a comma-separated hook phase list.
+
+    Returns the recognised phases, trimmed, lowercased and deduplicated in
+    first-seen order, and the entries it did not recognise.
+
+    An unknown entry is dropped and reported while the recognised entries still
+    apply. Rejecting the whole list instead would fall back to the default
+    ``["preflight"]``, so a typo in ``"postflight,bogus"`` would start preflight
+    enforcement the operator never asked for and skip the phase they did.
+    """
+
+    out: list[str] = []
+    unknown: list[str] = []
+    for part in raw.split(","):
+        phase = part.strip().lower()
+        if not phase:
+            continue
+        if phase not in _VALID_HOOK_PHASES:
+            unknown.append(phase)
+            continue
+        if phase not in out:
+            out.append(phase)
+    return out, unknown
+
+
+def _hook_phases_from_env(env: dict[str, str] | None, log: logging.Logger) -> list[str] | None:
+    """Reads ``AGENTO11Y_HOOKS_PHASES``, warning about entries it drops."""
+
+    raw, key = _env(env, "HOOKS_PHASES")
+    if raw is None:
+        return None
+    phases, unknown = _parse_phases(raw)
+    if unknown:
+        log.warning("agento11y: ignoring unknown %s entries %r", key, ",".join(unknown))
+    elif not phases:
+        log.warning("agento11y: ignoring invalid %s %r", key, raw)
+    return phases or None
+
+
+def _env_parsed(
+    env: dict[str, str] | None,
+    suffix: str,
+    parse: Callable[[str], _T | None],
+    log: logging.Logger,
+) -> _T | None:
+    """Reads ``AGENTO11Y_<suffix>`` and parses it.
+
+    Returns ``None`` when the variable is unset or its value is unusable. An
+    unusable value is warned about under the key that supplied it and then
+    skipped, so one typo cannot discard the other variables.
+    """
+
+    raw, key = _env(env, suffix)
+    if raw is None:
+        return None
+    value = parse(raw)
+    if value is None:
+        log.warning("agento11y: ignoring invalid %s %r", key, raw)
+    return value
 
 
 def _parse_csv_kv(raw: str) -> dict[str, str]:
@@ -348,6 +459,25 @@ def resolve_config(
         ev, _ = _env(env, "USE_EXPERIMENTAL_OTEL")
         out.use_experimental_otel = _parse_bool(ev) if ev is not None else False
 
+    # Hooks. One env var per field, layered under caller values. The timeout is
+    # expressed in milliseconds because that is what the wire header carries.
+    hooks = out.hooks
+    if hooks.enabled is None:
+        hooks.enabled = _env_parsed(env, "HOOKS_ENABLED", _parse_strict_bool, log)
+    if hooks.phases is None:
+        hooks.phases = _hook_phases_from_env(env, log)
+    if hooks.timeout_seconds is None:
+        timeout_ms = _env_parsed(env, "HOOKS_TIMEOUT_MS", _parse_hook_timeout_ms, log)
+        hooks.timeout_seconds = timeout_ms / 1000 if timeout_ms is not None else None
+    if hooks.fail_open is None:
+        hooks.fail_open = _env_parsed(env, "HOOKS_FAIL_OPEN", _parse_strict_bool, log)
+    if hooks.enabled is None:
+        hooks.enabled = False
+    if hooks.fail_open is None:
+        hooks.fail_open = True
+    # phases and timeout_seconds get their defaults from the clamp below, which
+    # also has to catch a caller-supplied [] or a non-positive timeout.
+
     if out.generation_export_endpoint:
         out.generation_export.endpoint = out.generation_export_endpoint
     if out.api.endpoint.strip() == "":
@@ -396,8 +526,8 @@ def resolve_config(
     if out.embedding_capture.max_text_length <= 0:
         out.embedding_capture.max_text_length = 1024
 
-    if out.hooks.timeout_seconds <= 0:
-        out.hooks.timeout_seconds = 15.0
+    if out.hooks.timeout_seconds is None or out.hooks.timeout_seconds <= 0:
+        out.hooks.timeout_seconds = _DEFAULT_HOOK_TIMEOUT_SECONDS
     if not out.hooks.phases:
         out.hooks.phases = ["preflight"]
 
@@ -419,7 +549,7 @@ def _clone_config(cfg: ClientConfig) -> ClientConfig:
         out.generation_export.headers = dict(cfg.generation_export.headers)
     out.api = dataclasses.replace(cfg.api)
     out.embedding_capture = dataclasses.replace(cfg.embedding_capture)
-    out.hooks = dataclasses.replace(cfg.hooks, phases=list(cfg.hooks.phases))
+    out.hooks = dataclasses.replace(cfg.hooks, phases=list(cfg.hooks.phases) if cfg.hooks.phases is not None else None)
     if cfg.tags is not None:
         out.tags = dict(cfg.tags)
     return out

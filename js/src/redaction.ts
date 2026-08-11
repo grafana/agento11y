@@ -1,4 +1,4 @@
-import { type EnvPair, envRedactInputMessages, envTrimmed } from './config.js';
+import { envRedactInputMessages, parseEnvBool } from './config.js';
 import { emailPattern as generatedEmailPattern, tier1Patterns, tier2Patterns } from './redaction-patterns.generated.js';
 import type { Agento11yLogger, GenerationSanitizer, Message, MessagePart } from './types.js';
 import { cloneGeneration } from './utils.js';
@@ -292,23 +292,6 @@ function applyTier2Patterns(text: string): string {
     result = result.replace(pattern.regex, pattern.replacement);
   }
   return result;
-}
-
-const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on']);
-const FALSE_VALUES = new Set(['0', 'false', 'no', 'off']);
-
-function parseEnvBool(
-  env: Record<string, string | undefined>,
-  pair: EnvPair,
-  logger: Agento11yLogger,
-): boolean | undefined {
-  const selected = envTrimmed(env, pair);
-  if (selected === undefined) return undefined;
-  const normalized = selected.value.toLowerCase();
-  if (TRUE_VALUES.has(normalized)) return true;
-  if (FALSE_VALUES.has(normalized)) return false;
-  logger.warn?.(`agento11y: ignoring invalid ${selected.key}: ${selected.value}`);
-  return undefined;
 }
 
 function readProcessEnv(): Record<string, string | undefined> {

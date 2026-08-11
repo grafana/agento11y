@@ -160,7 +160,7 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 			Endpoint: endpoint,
 		},
 		Hooks: agento11y.HooksConfig{
-			Enabled:  true,
+			Enabled:  agento11y.BoolPtr(true),
 			Phases:   []agento11y.HookPhase{agento11y.HookPhasePostflight},
 			Timeout:  time.Duration(cfg.TimeoutMs) * time.Millisecond,
 			FailOpen: &failOpen,

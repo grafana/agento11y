@@ -2,8 +2,10 @@ package agento11y
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func mapLookup(env map[string]string) envLookup {
@@ -21,10 +23,40 @@ func TestResolveFromEnv(t *testing.T) {
 	cases := []struct {
 		name            string
 		env             map[string]string
+		base            *Config
 		wantErr         bool
 		wantErrContains string
 		check           func(t *testing.T, cfg Config)
 	}{
+		{
+			name: "endpoint env fills the default API endpoint",
+			env:  map[string]string{"AGENTO11Y_ENDPOINT": "https://collector.example.com"},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.API.Endpoint != "https://collector.example.com" {
+					t.Errorf("API.Endpoint=%q want the env endpoint", cfg.API.Endpoint)
+				}
+			},
+		},
+		{
+			name: "endpoint env fills an empty API endpoint",
+			env:  map[string]string{"AGENTO11Y_ENDPOINT": "https://collector.example.com"},
+			base: &Config{},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.API.Endpoint != "https://collector.example.com" {
+					t.Errorf("API.Endpoint=%q want the env endpoint", cfg.API.Endpoint)
+				}
+			},
+		},
+		{
+			name: "explicit API endpoint wins over env",
+			env:  map[string]string{"AGENTO11Y_ENDPOINT": "https://environment.example.com"},
+			base: &Config{API: APIConfig{Endpoint: "https://caller.example.com"}},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.API.Endpoint != "https://caller.example.com" {
+					t.Errorf("API.Endpoint=%q want the caller endpoint", cfg.API.Endpoint)
+				}
+			},
+		},
 		{
 			name: "no env uses defaults",
 			env:  map[string]string{},
@@ -345,6 +377,205 @@ func TestResolveFromEnv(t *testing.T) {
 			},
 		},
 		{
+			name: "all four hooks variables from env",
+			env: map[string]string{
+				"AGENTO11Y_HOOKS_ENABLED":    "true",
+				"AGENTO11Y_HOOKS_PHASES":     "preflight,postflight",
+				"AGENTO11Y_HOOKS_TIMEOUT_MS": "3000",
+				"AGENTO11Y_HOOKS_FAIL_OPEN":  "false",
+			},
+			check: func(t *testing.T, cfg Config) {
+				if !cfg.Hooks.EnabledValue() {
+					t.Errorf("Enabled=%v want true", cfg.Hooks.Enabled)
+				}
+				if !slices.Equal(cfg.Hooks.Phases, []HookPhase{HookPhasePreflight, HookPhasePostflight}) {
+					t.Errorf("Phases=%v", cfg.Hooks.Phases)
+				}
+				if cfg.Hooks.Timeout != 3*time.Second {
+					t.Errorf("Timeout=%s want 3s", cfg.Hooks.Timeout)
+				}
+				if cfg.Hooks.FailOpenEnabled() {
+					t.Errorf("FailOpen=%v want false", cfg.Hooks.FailOpen)
+				}
+			},
+		},
+		{
+			name: "hooks enabled alone leaves the other fields unset",
+			env:  map[string]string{"AGENTO11Y_HOOKS_ENABLED": "true"},
+			check: func(t *testing.T, cfg Config) {
+				if !cfg.Hooks.EnabledValue() {
+					t.Errorf("Enabled=%v want true", cfg.Hooks.Enabled)
+				}
+				if cfg.Hooks.Phases != nil || cfg.Hooks.Timeout != 0 || cfg.Hooks.FailOpen != nil {
+					t.Errorf("Hooks=%+v want only Enabled set (NewClient applies the defaults)", cfg.Hooks)
+				}
+			},
+		},
+		{
+			name: "hook phases are trimmed, lowercased and deduplicated in order",
+			env:  map[string]string{"AGENTO11Y_HOOKS_PHASES": " POSTFLIGHT , ,preflight, postflight "},
+			check: func(t *testing.T, cfg Config) {
+				if !slices.Equal(cfg.Hooks.Phases, []HookPhase{HookPhasePostflight, HookPhasePreflight}) {
+					t.Errorf("Phases=%v", cfg.Hooks.Phases)
+				}
+			},
+		},
+		{
+			name:            "invalid hooks enabled is reported and skipped",
+			env:             map[string]string{"AGENTO11Y_HOOKS_ENABLED": "maybe"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_HOOKS_ENABLED",
+			check: func(t *testing.T, cfg Config) {
+				if cfg.Hooks.Enabled != nil {
+					t.Errorf("Enabled=%v want unset", *cfg.Hooks.Enabled)
+				}
+			},
+		},
+		{
+			// FailOpen defaults to true, so a typo must not read as false.
+			name:            "invalid hooks fail-open is reported and skipped",
+			env:             map[string]string{"AGENTO11Y_HOOKS_FAIL_OPEN": "ture"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_HOOKS_FAIL_OPEN",
+			check: func(t *testing.T, cfg Config) {
+				if !cfg.Hooks.FailOpenEnabled() {
+					t.Errorf("FailOpen=%v want the true default", cfg.Hooks.FailOpen)
+				}
+			},
+		},
+		{
+			name:            "unknown hook phase is dropped and the rest applies",
+			env:             map[string]string{"AGENTO11Y_HOOKS_PHASES": "preflight,bogus"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_HOOKS_PHASES",
+			check: func(t *testing.T, cfg Config) {
+				if !slices.Equal(cfg.Hooks.Phases, []HookPhase{HookPhasePreflight}) {
+					t.Errorf("Phases=%v want [preflight]", cfg.Hooks.Phases)
+				}
+			},
+		},
+		{
+			// Rejecting the whole list would fall back to the {preflight}
+			// default, starting enforcement on a phase the operator did not ask
+			// for and skipping the one they did.
+			name:            "a typo beside postflight does not switch the phase to preflight",
+			env:             map[string]string{"AGENTO11Y_HOOKS_PHASES": "postflight,bogus"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_HOOKS_PHASES",
+			check: func(t *testing.T, cfg Config) {
+				if !slices.Equal(cfg.Hooks.Phases, []HookPhase{HookPhasePostflight}) {
+					t.Errorf("Phases=%v want [postflight]", cfg.Hooks.Phases)
+				}
+			},
+		},
+		{
+			name:            "a phase list with no usable entry is rejected",
+			env:             map[string]string{"AGENTO11Y_HOOKS_PHASES": "bogus"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_HOOKS_PHASES",
+			check: func(t *testing.T, cfg Config) {
+				if cfg.Hooks.Phases != nil {
+					t.Errorf("Phases=%v want unset", cfg.Hooks.Phases)
+				}
+			},
+		},
+		{
+			name:            "zero hook timeout is rejected",
+			env:             map[string]string{"AGENTO11Y_HOOKS_TIMEOUT_MS": "0"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_HOOKS_TIMEOUT_MS",
+			check: func(t *testing.T, cfg Config) {
+				if cfg.Hooks.Timeout != 0 {
+					t.Errorf("Timeout=%s want unset", cfg.Hooks.Timeout)
+				}
+			},
+		},
+		{
+			name:            "negative hook timeout is rejected",
+			env:             map[string]string{"AGENTO11Y_HOOKS_TIMEOUT_MS": "-1"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_HOOKS_TIMEOUT_MS",
+		},
+		{
+			name:            "non-integer hook timeout is rejected",
+			env:             map[string]string{"AGENTO11Y_HOOKS_TIMEOUT_MS": "1.5"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_HOOKS_TIMEOUT_MS",
+		},
+		{
+			name:            "unparsable hook timeout is rejected",
+			env:             map[string]string{"AGENTO11Y_HOOKS_TIMEOUT_MS": "not-a-number"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_HOOKS_TIMEOUT_MS",
+		},
+		{
+			// Python's int() reads PEP 515 underscores; Go and JS must not, or
+			// the same value would mean different things per language.
+			name:            "underscore digit grouping in the hook timeout is rejected",
+			env:             map[string]string{"AGENTO11Y_HOOKS_TIMEOUT_MS": "3_000"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_HOOKS_TIMEOUT_MS",
+		},
+		{
+			name:            "a hook timeout above the server ceiling is rejected",
+			env:             map[string]string{"AGENTO11Y_HOOKS_TIMEOUT_MS": "120000"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_HOOKS_TIMEOUT_MS",
+			check: func(t *testing.T, cfg Config) {
+				if cfg.Hooks.Timeout != 0 {
+					t.Errorf("Timeout=%s want unset", cfg.Hooks.Timeout)
+				}
+			},
+		},
+		{
+			name: "the largest honoured hook timeout is accepted",
+			env:  map[string]string{"AGENTO11Y_HOOKS_TIMEOUT_MS": "119999"},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.Hooks.Timeout != 119999*time.Millisecond {
+					t.Errorf("Timeout=%s want 119999ms", cfg.Hooks.Timeout)
+				}
+			},
+		},
+		{
+			name: "invalid hook timeout preserves the other hooks variables",
+			env: map[string]string{
+				"AGENTO11Y_HOOKS_ENABLED":    "true",
+				"AGENTO11Y_HOOKS_PHASES":     "preflight,postflight",
+				"AGENTO11Y_HOOKS_TIMEOUT_MS": "nope",
+				"AGENTO11Y_HOOKS_FAIL_OPEN":  "false",
+			},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_HOOKS_TIMEOUT_MS",
+			check: func(t *testing.T, cfg Config) {
+				if !cfg.Hooks.EnabledValue() {
+					t.Errorf("Enabled=%v want true (preserved despite the timeout typo)", cfg.Hooks.Enabled)
+				}
+				if len(cfg.Hooks.Phases) != 2 {
+					t.Errorf("Phases=%v (preserved despite the timeout typo)", cfg.Hooks.Phases)
+				}
+				if cfg.Hooks.FailOpenEnabled() {
+					t.Errorf("FailOpen=%v want false (preserved despite the timeout typo)", cfg.Hooks.FailOpen)
+				}
+				if cfg.Hooks.Timeout != 0 {
+					t.Errorf("Timeout=%s want unset", cfg.Hooks.Timeout)
+				}
+			},
+		},
+		{
+			name: "SIGIL_HOOKS_ variables are ignored",
+			env: map[string]string{
+				"SIGIL_HOOKS_ENABLED":    "true",
+				"SIGIL_HOOKS_PHASES":     "postflight",
+				"SIGIL_HOOKS_TIMEOUT_MS": "3000",
+				"SIGIL_HOOKS_FAIL_OPEN":  "false",
+			},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.Hooks.Enabled != nil || cfg.Hooks.Phases != nil || cfg.Hooks.Timeout != 0 || cfg.Hooks.FailOpen != nil {
+					t.Errorf("Hooks=%+v want untouched by the legacy prefix", cfg.Hooks)
+				}
+			},
+		},
+		{
 			name: "preferred tags replace legacy tags without merging",
 			env: map[string]string{
 				"AGENTO11Y_TAGS": "team=ai",
@@ -365,7 +596,11 @@ func TestResolveFromEnv(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := resolveFromEnv(mapLookup(tc.env), DefaultConfig())
+			base := DefaultConfig()
+			if tc.base != nil {
+				base = *tc.base
+			}
+			cfg, err := resolveFromEnv(mapLookup(tc.env), base)
 			if tc.wantErr && err == nil {
 				t.Fatalf("expected error")
 			}
@@ -444,6 +679,71 @@ func TestNewClient_EnvHandling(t *testing.T) {
 				}
 				if c.config.GenerationExport.Protocol != GenerationExportProtocolNone {
 					t.Errorf("Protocol=%v", c.config.GenerationExport.Protocol)
+				}
+			},
+		},
+		{
+			name: "env endpoint reaches the hooks API endpoint",
+			env: map[string]string{
+				"AGENTO11Y_ENDPOINT": "https://collector.example.com",
+				"AGENTO11Y_PROTOCOL": "none",
+			},
+			check: func(t *testing.T, c *Client) {
+				if c.config.API.Endpoint != "https://collector.example.com" {
+					t.Errorf("API.Endpoint=%q want the env endpoint", c.config.API.Endpoint)
+				}
+			},
+		},
+		{
+			// The Go README teaches NewClient(DefaultConfig()); it must not
+			// shadow the env endpoint either.
+			name: "env endpoint survives an unmodified DefaultConfig",
+			env: map[string]string{
+				"AGENTO11Y_ENDPOINT": "https://collector.example.com",
+				"AGENTO11Y_PROTOCOL": "none",
+			},
+			cfg: DefaultConfig(),
+			check: func(t *testing.T, c *Client) {
+				if c.config.API.Endpoint != "https://collector.example.com" {
+					t.Errorf("API.Endpoint=%q want the env endpoint", c.config.API.Endpoint)
+				}
+			},
+		},
+		{
+			name: "unset API endpoint falls back to localhost",
+			env:  map[string]string{"AGENTO11Y_PROTOCOL": "none"},
+			check: func(t *testing.T, c *Client) {
+				if c.config.API.Endpoint != defaultAPIEndpoint {
+					t.Errorf("API.Endpoint=%q want %q", c.config.API.Endpoint, defaultAPIEndpoint)
+				}
+			},
+		},
+		{
+			// The whole point of comparing against the schema default:
+			// DefaultConfig pre-fills the field, so a localhost value in the
+			// caller's Config is not a caller choice.
+			name: "a caller-supplied schema-default API endpoint does not shadow env",
+			env: map[string]string{
+				"AGENTO11Y_ENDPOINT": "https://collector.example.com",
+				"AGENTO11Y_PROTOCOL": "none",
+			},
+			cfg: Config{API: APIConfig{Endpoint: defaultAPIEndpoint}},
+			check: func(t *testing.T, c *Client) {
+				if c.config.API.Endpoint != "https://collector.example.com" {
+					t.Errorf("API.Endpoint=%q want the env endpoint", c.config.API.Endpoint)
+				}
+			},
+		},
+		{
+			name: "explicit API endpoint wins over env endpoint",
+			env: map[string]string{
+				"AGENTO11Y_ENDPOINT": "https://environment.example.com",
+				"AGENTO11Y_PROTOCOL": "none",
+			},
+			cfg: Config{API: APIConfig{Endpoint: "https://caller.example.com"}},
+			check: func(t *testing.T, c *Client) {
+				if c.config.API.Endpoint != "https://caller.example.com" {
+					t.Errorf("API.Endpoint=%q want the caller endpoint", c.config.API.Endpoint)
 				}
 			},
 		},
@@ -662,6 +962,100 @@ func TestNewClient_EnvHandling(t *testing.T) {
 			check: func(t *testing.T, c *Client) {
 				if c.config.GenerationExport.Endpoint != "explicit-endpoint:4318" {
 					t.Errorf("Endpoint=%q want explicit-endpoint:4318", c.config.GenerationExport.Endpoint)
+				}
+			},
+		},
+		{
+			name: "hooks resolve from env into a sparse config",
+			env: map[string]string{
+				"AGENTO11Y_HOOKS_ENABLED":    "true",
+				"AGENTO11Y_HOOKS_PHASES":     "preflight,postflight",
+				"AGENTO11Y_HOOKS_TIMEOUT_MS": "3000",
+				"AGENTO11Y_HOOKS_FAIL_OPEN":  "false",
+				"AGENTO11Y_PROTOCOL":         "none",
+			},
+			check: func(t *testing.T, c *Client) {
+				hooks := c.config.Hooks
+				if !hooks.EnabledValue() {
+					t.Errorf("Enabled=%v want true", hooks.Enabled)
+				}
+				if !slices.Equal(hooks.Phases, []HookPhase{HookPhasePreflight, HookPhasePostflight}) {
+					t.Errorf("Phases=%v", hooks.Phases)
+				}
+				if hooks.Timeout != 3*time.Second {
+					t.Errorf("Timeout=%s want 3s", hooks.Timeout)
+				}
+				if hooks.FailOpenEnabled() {
+					t.Errorf("FailOpen=%v want false", hooks.FailOpen)
+				}
+			},
+		},
+		{
+			// The Go README teaches NewClient(DefaultConfig()); it must not
+			// shadow the env layer.
+			name: "env hooks survive an unmodified DefaultConfig",
+			env: map[string]string{
+				"AGENTO11Y_HOOKS_ENABLED":    "true",
+				"AGENTO11Y_HOOKS_TIMEOUT_MS": "3000",
+				"AGENTO11Y_PROTOCOL":         "none",
+			},
+			cfg: DefaultConfig(),
+			check: func(t *testing.T, c *Client) {
+				if !c.config.Hooks.EnabledValue() {
+					t.Errorf("Enabled=%v want true", c.config.Hooks.Enabled)
+				}
+				if c.config.Hooks.Timeout != 3*time.Second {
+					t.Errorf("Timeout=%s want 3s", c.config.Hooks.Timeout)
+				}
+			},
+		},
+		{
+			name: "caller hooks config wins over env for every field",
+			env: map[string]string{
+				"AGENTO11Y_HOOKS_ENABLED":    "true",
+				"AGENTO11Y_HOOKS_PHASES":     "preflight,postflight",
+				"AGENTO11Y_HOOKS_TIMEOUT_MS": "9000",
+				"AGENTO11Y_HOOKS_FAIL_OPEN":  "true",
+				"AGENTO11Y_PROTOCOL":         "none",
+			},
+			cfg: Config{Hooks: HooksConfig{
+				Enabled:  BoolPtr(false),
+				Phases:   []HookPhase{HookPhasePostflight},
+				Timeout:  2500 * time.Millisecond,
+				FailOpen: BoolPtr(false),
+			}},
+			check: func(t *testing.T, c *Client) {
+				hooks := c.config.Hooks
+				if hooks.EnabledValue() {
+					t.Errorf("Enabled=%v want the explicit false", hooks.Enabled)
+				}
+				if !slices.Equal(hooks.Phases, []HookPhase{HookPhasePostflight}) {
+					t.Errorf("Phases=%v want the caller list", hooks.Phases)
+				}
+				if hooks.Timeout != 2500*time.Millisecond {
+					t.Errorf("Timeout=%s want 2.5s", hooks.Timeout)
+				}
+				if hooks.FailOpenEnabled() {
+					t.Errorf("FailOpen=%v want the explicit false", hooks.FailOpen)
+				}
+			},
+		},
+		{
+			name: "unset hooks resolve to the schema defaults",
+			env:  map[string]string{"AGENTO11Y_PROTOCOL": "none"},
+			check: func(t *testing.T, c *Client) {
+				hooks := c.config.Hooks
+				if hooks.EnabledValue() {
+					t.Errorf("Enabled=%v want false", hooks.Enabled)
+				}
+				if !slices.Equal(hooks.Phases, []HookPhase{HookPhasePreflight}) {
+					t.Errorf("Phases=%v want [preflight]", hooks.Phases)
+				}
+				if hooks.Timeout != defaultHookTimeout {
+					t.Errorf("Timeout=%s want %s", hooks.Timeout, defaultHookTimeout)
+				}
+				if !hooks.FailOpenEnabled() {
+					t.Errorf("FailOpen=%v want true", hooks.FailOpen)
 				}
 			},
 		},

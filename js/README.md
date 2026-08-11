@@ -230,6 +230,23 @@ messages = response.transformedInput?.messages ?? messages;
 
 With `failOpen: true`, hook transport errors resolve to allow so an unavailable evaluator does not block production traffic. Set `failOpen: false` for strict paths that should fail closed.
 
+### Configure hooks from the environment
+
+Four variables configure the same fields, so an operator can turn guards on without changing code:
+
+| Variable | Format | Default |
+| --- | --- | --- |
+| `AGENTO11Y_HOOKS_ENABLED` | `1`, `true`, `yes`, `on`, `0`, `false`, `no`, `off` | `false` |
+| `AGENTO11Y_HOOKS_PHASES` | comma-separated `preflight` and `postflight` | `preflight` |
+| `AGENTO11Y_HOOKS_TIMEOUT_MS` | integer milliseconds, `1` to `119999` | `15000` |
+| `AGENTO11Y_HOOKS_FAIL_OPEN` | the boolean spellings above | `true` |
+
+A field you pass to `Agento11yClient` wins; the environment fills the fields you leave unset; the defaults fill the rest. A field set to `undefined` counts as unset, so `hooks: { enabled: opts.enableHooks }` with an unset option leaves the environment layer alone.
+
+Hooks post to `api.endpoint`, which resolves from `AGENTO11Y_ENDPOINT` when you leave it unset. The same field is the base URL for experiments and conversation ratings, so if you export generations over gRPC to one host and run the API on another, set `api.endpoint` explicitly.
+
+These four names have no `SIGIL_HOOKS_*` spelling. A value the SDK cannot parse produces a `logger.warn` naming the variable and is skipped: the field keeps the value it would have had, and the other three variables still apply. In a phase list, an entry the SDK does not recognise is dropped and the recognised entries still apply, so `postflight,bogus` runs postflight only.
+
 Set `context.conversationId` to the same ID used by `startGeneration(...)`. The SDK also reads `withConversationId(...)` and the active OpenTelemetry span when explicit correlation fields are omitted. This lets Agent Observability retain denied preflight attempts even though no LLM generation is created.
 
 If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `startGeneration(...)`. If you use the Vercel AI SDK adapter, see `docs/frameworks/vercel-ai-sdk.md` for automatic preflight hook wiring.

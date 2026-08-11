@@ -223,6 +223,11 @@ func TestEvaluateToolCall(t *testing.T) {
 			closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 			closed.Close()
 
+			// The shared binary reads both spellings of every branded
+			// variable, so a developer shell exporting AGENTO11Y_ENDPOINT
+			// would send these requests somewhere else.
+			envconfig.PinAliasEnvBlank(t)
+
 			endpoint := server.URL
 			if tt.useClosedServer {
 				endpoint = closed.URL
@@ -281,6 +286,45 @@ func TestEvaluateToolCall(t *testing.T) {
 				t.Errorf("did not expect sigil hook server call, got %d", calls.Load())
 			}
 		})
+	}
+}
+
+// TestEvaluateToolCallKeepsGuardsEnvOverSDKHooksEnv pins the guard to its own
+// AGENTO11Y_GUARDS_* values. The SDK reads AGENTO11Y_HOOKS_* one layer below
+// caller config, so a hooks field this package stopped passing would hand the
+// launcher's guard settings to the environment instead.
+func TestEvaluateToolCallKeepsGuardsEnvOverSDKHooksEnv(t *testing.T) {
+	var gotTimeoutHeader atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTimeoutHeader.Store(r.Header.Get("X-Agento11y-Hook-Timeout-Ms"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"action":"allow"}`))
+	}))
+	defer server.Close()
+
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+	t.Setenv("AGENTO11Y_HOOKS_ENABLED", "false")
+	t.Setenv("AGENTO11Y_HOOKS_TIMEOUT_MS", "9000")
+
+	var logBuf bytes.Buffer
+	res := EvaluateToolCall(context.Background(), envconfig.GuardsConfig{Enabled: true, TimeoutMs: 1500, FailOpen: true}, ToolCallInput{
+		AgentName:     "copilot",
+		AgentVersion:  "dev",
+		ModelProvider: "openai",
+		ModelName:     "gpt-4",
+		ToolName:      "bash",
+		ToolCallID:    "tu_1",
+		ToolInputJSON: json.RawMessage(`{"cmd":"echo hi"}`),
+	}, log.New(&logBuf, "", 0))
+
+	if res.Action != agento11y.HookActionAllow {
+		t.Fatalf("Action = %q, want %q", res.Action, agento11y.HookActionAllow)
+	}
+	if got := gotTimeoutHeader.Load(); got != "1500" {
+		t.Errorf("hook timeout header = %v, want 1500 from AGENTO11Y_GUARDS_TIMEOUT_MS", got)
 	}
 }
 

@@ -21,13 +21,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from ._redaction_patterns import BASE_FLAGS, EMAIL_PATTERN, TIER1_PATTERNS, TIER2_PATTERNS
-from .config import GenerationSanitizer, _env, _warn_legacy_env
+from .config import GenerationSanitizer, _env, _parse_strict_bool, _warn_legacy_env
 from .models import Generation, Message, MessageRole, Part, PartKind
 
 _logger = logging.getLogger("agento11y")
-
-_TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
-_FALSE_TOKENS = frozenset({"0", "false", "no", "off"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,15 +143,6 @@ def _resolve_redact_input_messages(
         _logger.warning("agento11y: ignoring invalid %s: %s", key, raw)
         return False
     return parsed
-
-
-def _parse_strict_bool(raw: str) -> bool | None:
-    token = raw.strip().lower()
-    if token in _TRUE_TOKENS:
-        return True
-    if token in _FALSE_TOKENS:
-        return False
-    return None
 
 
 def create_secret_redaction_sanitizer(
