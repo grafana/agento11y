@@ -81,6 +81,54 @@ test('langchain handler records sync lifecycle with framework tags', async () =>
   assert.equal(generation.output[0].content, 'world');
 });
 
+test('langchain handler lifts system messages into the system prompt', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangChainHandler(client);
+
+    await handler.handleChatModelStart(
+      { name: 'ChatOpenAI' },
+      [
+        [
+          { type: 'system', content: 'You are terse.' },
+          { role: 'developer', content: 'Always answer in English.' },
+          { type: 'human', content: 'hello' },
+        ],
+      ],
+      'run-system',
+      undefined,
+      { invocation_params: { model: 'gpt-5' } },
+    );
+    await handler.handleLLMEnd({ generations: [[{ text: 'world' }]] }, 'run-system');
+  });
+
+  assert.equal(generation.systemPrompt, 'You are terse.\n\nAlways answer in English.');
+  assert.equal(generation.input.length, 1);
+  assert.equal(generation.input[0].role, 'user');
+  assert.equal(generation.input[0].content, 'hello');
+});
+
+test('langchain handler prefers an explicit invocation_params system prompt', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangChainHandler(client);
+
+    await handler.handleChatModelStart(
+      { name: 'ChatOpenAI' },
+      [
+        [
+          { type: 'system', content: 'from message' },
+          { type: 'human', content: 'hello' },
+        ],
+      ],
+      'run-system-explicit',
+      undefined,
+      { invocation_params: { model: 'gpt-5', system_prompt: 'from invocation params' } },
+    );
+    await handler.handleLLMEnd({ generations: [[{ text: 'world' }]] }, 'run-system-explicit');
+  });
+
+  assert.equal(generation.systemPrompt, 'from invocation params');
+});
+
 test('langchain handler records stream mode and token fallback output', async () => {
   const generation = await captureSingleGeneration(async (client) => {
     const handler = new Agento11yLangChainHandler(client);

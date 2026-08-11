@@ -416,7 +416,7 @@ class Agento11yFrameworkHandlerBase:
         )
 
         mode = GenerationMode.STREAM if _is_streaming(invocation_params) else GenerationMode.SYNC
-        input_messages = _map_chat_inputs(messages) if self._capture_inputs else []
+        input_messages, message_system_prompt = _map_chat_inputs(messages) if self._capture_inputs else ([], "")
 
         tags = dict(self._extra_tags)
         tags["agento11y.framework.name"] = self._framework_name
@@ -477,7 +477,7 @@ class Agento11yFrameworkHandlerBase:
             model=ModelRef(provider=provider_name, name=model_name),
             tags=tags,
             metadata=metadata,
-            system_prompt=_as_str(_read(invocation_params, "system_prompt")),
+            system_prompt=_as_str(_read(invocation_params, "system_prompt")) or message_system_prompt,
             tools=_resolve_tool_definitions(invocation_params),
             temperature=_as_optional_float(_read(invocation_params, "temperature")),
             max_tokens=_as_optional_int(_read(invocation_params, "max_tokens")),
@@ -1454,14 +1454,26 @@ def _resolve_tool_arguments(input_str: str, callback_kwargs: dict[str, Any] | No
     return input_str.strip()
 
 
-def _map_chat_inputs(messages: list[list[Any]]) -> list[Message]:
+def _map_chat_inputs(messages: list[list[Any]]) -> tuple[list[Message], str]:
+    """Map LangChain chat messages to input messages plus the system prompt.
+
+    The wire format has no SYSTEM role, so system/developer messages are pulled
+    out of the message list and joined into the dedicated ``system_prompt``
+    field rather than being mapped as USER messages.
+    """
     output: list[Message] = []
+    system_chunks: list[str] = []
     for batch in messages:
         for message in batch:
+            if _is_system_role(_extract_message_role(message)):
+                text = _extract_message_text(message)
+                if text != "":
+                    system_chunks.append(text)
+                continue
             mapped = _map_chat_input_message(message)
             if mapped is not None:
                 output.append(mapped)
-    return output
+    return output, "\n\n".join(system_chunks)
 
 
 def _map_chat_input_message(message: Any) -> Message | None:
@@ -1655,6 +1667,10 @@ def _map_framework_usage(raw_usage: Any):
         usage.reasoning_tokens = reasoning
 
     return usage
+
+
+def _is_system_role(role: str) -> bool:
+    return role.strip().lower() in {"system", "developer"}
 
 
 def _normalize_role(role: str) -> MessageRole:

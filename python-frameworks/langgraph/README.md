@@ -150,6 +150,9 @@ When `thread_id` is present, the handler records:
 
 - Lifecycle mapping:
   - `on_llm_start` / `on_chat_model_start` -> generation recorder
+  - System and developer messages passed to `on_chat_model_start` are lifted out of the input
+    message list into `system_prompt` (joined with a blank line when there are several), since the
+    wire format has no system role. An explicit `invocation_params["system_prompt"]` wins.
   - `on_tool_start` / `on_tool_end` / `on_tool_error` -> `start_tool_execution`
   - `on_chain_start` / `on_chain_end` / `on_chain_error` -> framework chain spans
   - `on_retriever_start` / `on_retriever_end` / `on_retriever_error` -> framework retriever spans

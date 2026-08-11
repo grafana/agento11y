@@ -67,6 +67,9 @@ await client.shutdown();
 ## Contract
 
 - `handleLLMStart` / `handleChatModelStart` starts recorder lifecycle.
+- System and developer messages passed to `handleChatModelStart` are lifted out of the input message
+  list into `systemPrompt` (joined with a blank line when there are several), since the wire format
+  has no system role. An explicit `invocation_params.system_prompt` wins.
 - `handleLLMNewToken` sets first-token timestamp and accumulates streamed output.
 - `handleLLMEnd` maps output + usage and ends recorder.
 - `handleLLMError` sets call error and ends recorder.

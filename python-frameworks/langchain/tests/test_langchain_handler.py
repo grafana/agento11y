@@ -46,6 +46,61 @@ def _new_client(exporter: _CapturingExporter, tracer=None) -> Client:
     )
 
 
+def test_langchain_lifts_system_messages_into_system_prompt() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        run_id = uuid4()
+        handler = Agento11yLangChainHandler(client=client)
+
+        handler.on_chat_model_start(
+            {"name": "ChatOpenAI"},
+            [
+                [
+                    {"type": "system", "content": "You are terse."},
+                    {"role": "developer", "content": "Always answer in English."},
+                    {"type": "human", "content": "hello"},
+                ]
+            ],
+            run_id=run_id,
+            invocation_params={"model": "gpt-5"},
+        )
+        handler.on_llm_end({"generations": [[{"text": "world"}]]}, run_id=run_id)
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert generation.system_prompt == "You are terse.\n\nAlways answer in English."
+        assert len(generation.input) == 1
+        assert generation.input[0].role.value == "user"
+        assert generation.input[0].parts[0].text == "hello"
+    finally:
+        client.shutdown()
+
+
+def test_langchain_prefers_explicit_invocation_params_system_prompt() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        run_id = uuid4()
+        handler = Agento11yLangChainHandler(client=client)
+
+        handler.on_chat_model_start(
+            {"name": "ChatOpenAI"},
+            [[{"type": "system", "content": "from message"}, {"type": "human", "content": "hello"}]],
+            run_id=run_id,
+            invocation_params={"model": "gpt-5", "system_prompt": "from invocation params"},
+        )
+        handler.on_llm_end({"generations": [[{"text": "world"}]]}, run_id=run_id)
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert generation.system_prompt == "from invocation params"
+    finally:
+        client.shutdown()
+
+
 def test_langchain_sync_lifecycle_sets_framework_tags_and_metadata() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)
