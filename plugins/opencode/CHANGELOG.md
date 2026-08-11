@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.19.0] - 2026-08-11
+
+### Features
+
+- **plugins/agento11y**: export agent reported cost as cost_usd everywhere (#550)
+- **plugins/opencode**: add preflight and transform guards (#547)
+
+### Bug Fixes
+
+- **plugins/opencode**: export subagent turns (#549)
+
 ## [0.18.0] - 2026-08-06
 
 ### Features
