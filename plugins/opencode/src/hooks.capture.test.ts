@@ -225,6 +225,48 @@ describe("opencode system prompt capture", () => {
     expect(generations[1]!.seed.systemPrompt).toBe("prompt two");
   });
 
+  // A system prompt is assembled content: AGENTS.md files, tool descriptions,
+  // the `<env>` block. Both tiers run, and the flag that turns user prompt
+  // redaction off does not reach it.
+  const systemPromptCases = [
+    { name: "redacts the transform prompt with both tiers", flag: true },
+    { name: "redacts it with prompt redaction off too", flag: false },
+  ];
+
+  it.each(systemPromptCases)("$name", async ({ flag }) => {
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await makeHooks(baseConfig({ redactInputMessages: flag }));
+
+    emitTransform(hooks, "sess-1", [
+      "deploy with glc_abcdefghijklmnopqrstuvwxyz1234",
+      "DB_PASSWORD=hunter2",
+    ]);
+    await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+
+    expect(generations).toHaveLength(1);
+    expect(generations[0]!.seed.systemPrompt).toBe(
+      "deploy with [REDACTED:grafana-cloud-token]\n" +
+        "DB_PASSWORD=[REDACTED:env-secret-value]",
+    );
+  });
+
+  it("redacts the legacy chat.message prompt override", async () => {
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await makeHooks();
+
+    const message = userMessage("sess-1");
+    message.system = "legacy glc_abcdefghijklmnopqrstuvwxyz1234";
+    hooks.chatMessage({ sessionID: "sess-1" }, { message, parts: [] });
+    await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+
+    expect(generations).toHaveLength(1);
+    expect(generations[0]!.seed.systemPrompt).toBe(
+      "legacy [REDACTED:grafana-cloud-token]",
+    );
+  });
+
   it("clears the prompt when the session is deleted", async () => {
     const { sigil, generations } = makeAgento11yMock();
     createAgento11yClientMock.mockReturnValue(sigil);
@@ -695,7 +737,9 @@ describe("opencode preflight redaction in the export", () => {
     ]);
   });
 
-  it("exports the original when no rule rewrote anything", async () => {
+  // With no server rule to replay, the export still carries the local
+  // redaction, which is tier 1 + tier 2 on a prompt.
+  it("falls back to local redaction when no rule rewrote anything", async () => {
     const { sigil, generations } = makeAgento11yMock();
     sigil.evaluateHook.mockResolvedValue({ action: "allow" });
     createAgento11yClientMock.mockReturnValue(sigil);
@@ -710,7 +754,70 @@ describe("opencode preflight redaction in the export", () => {
     await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
 
     expect((generations[0]!.result as any).input).toEqual([
-      { role: "user", parts: [{ type: "text", text: "token=alpha" }] },
+      {
+        role: "user",
+        parts: [{ type: "text", text: "token=[REDACTED:env-secret-value]" }],
+      },
     ]);
+    expect(stored.text).toBe("token=alpha");
+  });
+});
+
+describe("opencode user prompt redaction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetHookState();
+  });
+
+  const secret = "glc_abcdefghijklmnopqrstuvwxyz1234";
+
+  // Pins config.redactInputMessages through recordAssistantMessage into the
+  // exported input. mappers.test.ts covers mapGeneration itself; this covers
+  // the wire, so hardcoding the argument at the call site fails here.
+  const cases: {
+    name: string;
+    redactInputMessages: boolean;
+    wantPrompt: string;
+  }[] = [
+    {
+      name: "redacts the prompt when the flag is on",
+      redactInputMessages: true,
+      wantPrompt: "rotate [REDACTED:grafana-cloud-token]",
+    },
+    {
+      name: "sends the prompt unredacted when the flag is off",
+      redactInputMessages: false,
+      wantPrompt: `rotate ${secret}`,
+    },
+  ];
+
+  it.each(cases)("$name", async ({ redactInputMessages, wantPrompt }) => {
+    const { sigil, generations } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    const hooks = await makeHooks(baseConfig({ redactInputMessages }));
+
+    hooks.chatMessage(
+      { sessionID: "sess-1" },
+      {
+        message: userMessage("sess-1"),
+        parts: [
+          {
+            id: "user-text-1",
+            sessionID: "sess-1",
+            messageID: "user-1",
+            type: "text",
+            text: `rotate ${secret}`,
+          },
+        ] as any,
+      },
+    );
+    await emitMessageUpdated(hooks, assistantMessage("sess-1", "msg-1"));
+
+    expect(generations).toHaveLength(1);
+    const result = generations[0]!.result as any;
+    expect(result.input[0].parts[0]).toEqual({
+      type: "text",
+      text: wantPrompt,
+    });
   });
 });

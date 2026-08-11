@@ -36,34 +36,79 @@ func TestMapMetadataOnlyStripsTextButKeepsToolStructure(t *testing.T) {
 }
 
 func TestMapFullRedactsContent(t *testing.T) {
-	secret := "glc_abcdefghijklmnopqrstuvwxyz"
-	raw, _ := json.Marshal(map[string]string{"token": secret})
-	f := &fragment.Fragment{
-		SessionID:            "sess",
-		TurnID:               "turn",
-		Model:                "gpt-5.5",
-		Prompt:               "token " + secret,
-		LastAssistantMessage: "saw " + secret,
-		Tools: []fragment.ToolRecord{{
-			ToolName:     "Bash",
-			ToolUseID:    "tool-1",
-			ToolInput:    raw,
-			ToolResponse: raw,
-		}},
+	const secret = "glc_abcdefghijklmnopqrstuvwxyz"
+
+	tests := []struct {
+		name                string
+		skipPromptRedaction bool
+		wantPromptRedacted  bool
+	}{
+		{name: "redacts every field by default", wantPromptRedacted: true},
+		{name: "opt-out exports the prompt unredacted", skipPromptRedaction: true, wantPromptRedacted: false},
 	}
-	got := Map(Inputs{Fragment: f, ContentCapture: agento11y.ContentCaptureModeFull, Now: time.Unix(1, 0)})
-	combined := got.Generation.Input[0].Parts[0].Text + got.Generation.Output[len(got.Generation.Output)-1].Parts[0].Text
-	toolInput := string(got.Generation.Output[0].Parts[0].ToolCall.InputJSON)
-	toolResult := string(got.Generation.Input[1].Parts[0].ToolResult.ContentJSON)
-	if !json.Valid([]byte(toolInput)) || !json.Valid([]byte(toolResult)) {
-		t.Fatalf("redacted tool JSON must remain valid: input=%s result=%s", toolInput, toolResult)
-	}
-	combined += toolInput + toolResult
-	if strings.Contains(combined, secret) {
-		t.Fatalf("unredacted secret in generation: %s", combined)
-	}
-	if !strings.Contains(combined, "[REDACTED:grafana-cloud-token]") {
-		t.Fatalf("expected redaction marker in generation: %s", combined)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, _ := json.Marshal(map[string]string{"token": secret})
+			f := &fragment.Fragment{
+				SessionID:            "sess",
+				TurnID:               "turn",
+				Model:                "gpt-5.5",
+				Prompt:               "token " + secret + " PASSWORD=hunter2",
+				LastAssistantMessage: "saw " + secret + " PASSWORD=hunter2",
+				Tools: []fragment.ToolRecord{{
+					ToolName:     "Bash",
+					ToolUseID:    "tool-1",
+					ToolInput:    raw,
+					ToolResponse: raw,
+				}},
+			}
+			got := Map(Inputs{
+				Fragment:            f,
+				ContentCapture:      agento11y.ContentCaptureModeFull,
+				SkipPromptRedaction: tt.skipPromptRedaction,
+				Now:                 time.Unix(1, 0),
+			})
+
+			prompt := got.Generation.Input[0].Parts[0].Text
+			if gotRedacted := !strings.Contains(prompt, secret); gotRedacted != tt.wantPromptRedacted {
+				t.Fatalf("prompt redacted = %v, want %v: %s", gotRedacted, tt.wantPromptRedacted, prompt)
+			}
+
+			// The opt-out covers the prompt only.
+			assistant := got.Generation.Output[len(got.Generation.Output)-1].Parts[0].Text
+			toolInput := string(got.Generation.Output[0].Parts[0].ToolCall.InputJSON)
+			toolResult := string(got.Generation.Input[1].Parts[0].ToolResult.ContentJSON)
+			if !json.Valid([]byte(toolInput)) || !json.Valid([]byte(toolResult)) {
+				t.Fatalf("redacted tool JSON must remain valid: input=%s result=%s", toolInput, toolResult)
+			}
+			combined := assistant + toolInput + toolResult
+			if strings.Contains(combined, secret) {
+				t.Fatalf("unredacted secret outside the prompt: %s", combined)
+			}
+			if !strings.Contains(combined, "[REDACTED:grafana-cloud-token]") {
+				t.Fatalf("expected redaction marker in generation: %s", combined)
+			}
+
+			// The tier split: a prompt is where a config file gets pasted, so
+			// it takes tier 2 as well. Assistant prose keeps tier 1 only,
+			// because tier 2 replaces the word after any `key:` in a sentence.
+			wantTier2Prompt := tt.wantPromptRedacted
+			if got := strings.Contains(prompt, "PASSWORD=[REDACTED:env-secret-value]"); got != wantTier2Prompt {
+				t.Errorf("prompt got tier 2 = %v, want %v: %s", got, wantTier2Prompt, prompt)
+			}
+			if !strings.Contains(assistant, "PASSWORD=hunter2") {
+				t.Errorf("assistant text got tier 2: %s", assistant)
+			}
+
+			// Structure, usage, and IDs do not depend on the flag.
+			if got.Generation.ID != GenerationID("sess", "turn") {
+				t.Errorf("generation ID = %q, want the deterministic session/turn ID", got.Generation.ID)
+			}
+			if got.Generation.Output[0].Parts[0].ToolCall.Name != "Bash" {
+				t.Errorf("tool name = %q, want Bash", got.Generation.Output[0].Parts[0].ToolCall.Name)
+			}
+		})
 	}
 }
 

@@ -34,6 +34,9 @@ type Options struct {
 	// backfill cannot reconstruct a past per-run override, and
 	// claudeFinalizeSubagentGens matches generations against the product name.
 	AgentName string
+	// SkipPromptRedaction exports the user prompt without redaction. The zero
+	// value redacts; envconfig.ResolveRedactInput owns the policy.
+	SkipPromptRedaction bool
 	// SuppressSyntheticSubagentToolCallIDs skips the summary-only generation
 	// for an Agent tool result whose full subagent transcript is mapped
 	// separately. Live capture leaves it nil, so it keeps recording summaries
@@ -369,7 +372,7 @@ func conversationTitle(st *state.Session, sessionID string, r *redact.Redactor) 
 	}
 	t := strings.TrimSpace(st.Title)
 	if r != nil {
-		t = r.RedactLightweight(t)
+		t = r.Title(t)
 	}
 	if t == "" {
 		return sessionID
@@ -495,7 +498,7 @@ func processUserLine(line transcript.Line, uctx *userContext, st *state.Session,
 			}
 			content := b.Content()
 			if r != nil {
-				content = r.Redact(content)
+				content = r.ToolPayload(content)
 			}
 			toolParts = append(toolParts, agento11y.Part{
 				Kind: agento11y.PartKindToolResult,
@@ -591,7 +594,7 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 		gen.ThinkingEnabled = ptrBool(true)
 	}
 
-	gen.Input = buildInput(uctx, r)
+	gen.Input = buildInput(uctx, r, opts.SkipPromptRedaction)
 	gen.Output = buildOutput(msg.Content, r)
 
 	return gen, true
@@ -643,7 +646,7 @@ func buildToolDefs(names map[string]bool) []agento11y.ToolDefinition {
 	return mapperutil.SortedToolDefinitions(keys)
 }
 
-func buildInput(uctx *userContext, r *redact.Redactor) []agento11y.Message {
+func buildInput(uctx *userContext, r *redact.Redactor, skipPromptRedaction bool) []agento11y.Message {
 	if len(uctx.toolResults) > 0 {
 		return uctx.toolResults
 	}
@@ -651,8 +654,8 @@ func buildInput(uctx *userContext, r *redact.Redactor) []agento11y.Message {
 		return nil
 	}
 	text := uctx.prompt
-	if r != nil {
-		text = r.RedactLightweight(text)
+	if r != nil && !skipPromptRedaction {
+		text = r.Prompt(text)
 	}
 	return []agento11y.Message{{
 		Role: agento11y.RoleUser,
@@ -671,7 +674,7 @@ func buildOutput(blocks []transcript.ContentBlock, r *redact.Redactor) []agento1
 		case "text":
 			text := block.Text
 			if r != nil {
-				text = r.RedactLightweight(text)
+				text = r.AssistantText(text)
 			}
 			parts = append(parts, agento11y.Part{
 				Kind: agento11y.PartKindText,
@@ -708,10 +711,14 @@ func buildOutput(blocks []transcript.ContentBlock, r *redact.Redactor) []agento1
 	}}
 }
 
-// truncateJSON redacts and truncates tool input JSON.
-// Uses Tier 1 only (RedactLightweight) to avoid Tier 2 patterns mangling
-// JSON structure. When truncation occurs, the result is wrapped as a JSON
-// string (type changes from the original object/array to string).
+// truncateJSON redacts and truncates tool input JSON. When truncation occurs,
+// the result is wrapped as a JSON string (type changes from the original
+// object/array to string).
+//
+// Redaction is full strength, like every other plugin's tool arguments. It used
+// to be tier 1 only, on the grounds that tier 2 would mangle the JSON; it does
+// not, because the tier 2 key/value patterns keep the key and the quotes and
+// rewrite only the value.
 func truncateJSON(raw json.RawMessage, maxLen int, r *redact.Redactor) json.RawMessage {
 	if len(raw) == 0 {
 		return raw
@@ -719,7 +726,7 @@ func truncateJSON(raw json.RawMessage, maxLen int, r *redact.Redactor) json.RawM
 
 	s := string(raw)
 	if r != nil {
-		s = r.RedactLightweight(s)
+		s = string(r.ToolPayloadJSON(raw))
 	}
 
 	if len(s) <= maxLen {

@@ -4,6 +4,7 @@ import type {
   ContentCaptureMode,
   Message,
 } from "@grafana/agento11y";
+import { redactSecretText } from "@grafana/agento11y";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { createAgento11yClient } from "./client.js";
 import type { Agento11yPiConfig } from "./config.js";
@@ -1070,7 +1071,17 @@ function toPiUsage(value: unknown): PiUsageLike | undefined {
   return seen ? out : undefined;
 }
 
-/** @internal Exported for testing. */
+/**
+ * Emit one `execute_tool` span per tool call in the turn.
+ *
+ * Arguments and results are redacted here. This is a second boundary: the SDK's
+ * generation sanitizer scrubs the copy of the same bytes that rides in the
+ * generation payload, but it does not see a tool-execution span, so the span
+ * needs its own pass. Full strength (tier 1 + tier 2), which is what the
+ * sanitizer applies to a tool payload.
+ *
+ * @internal Exported for testing.
+ */
 export function emitToolSpans(
   client: Agento11yClient,
   msg: PiAssistantMessage,
@@ -1088,16 +1099,20 @@ export function emitToolSpans(
 
   const includeContent = opts.contentCapture === "full";
 
-  const argsMap = new Map<string, Record<string, unknown>>();
+  const argsMap = new Map<string, string>();
   const resultMap = new Map<string, string>();
   if (includeContent) {
     for (const block of msg.content) {
-      if (block.type === "toolCall") {
-        argsMap.set(block.id, block.arguments);
-      }
+      if (block.type !== "toolCall") continue;
+      const encoded = JSON.stringify(block.arguments);
+      if (encoded === undefined) continue;
+      argsMap.set(block.id, redactSecretText(encoded));
     }
     for (const tr of toolResults) {
-      resultMap.set(tr.toolCallId, toolResultText(tr.content));
+      resultMap.set(
+        tr.toolCallId,
+        redactSecretText(toolResultText(tr.content)),
+      );
     }
   }
 
@@ -1127,8 +1142,8 @@ export function emitToolSpans(
 
       if (includeContent) {
         const args = argsMap.get(timing.toolCallId);
-        if (args) {
-          end.arguments = JSON.stringify(args);
+        if (args !== undefined) {
+          end.arguments = args;
         }
         const trContent = resultMap.get(timing.toolCallId);
         if (trContent !== undefined) {

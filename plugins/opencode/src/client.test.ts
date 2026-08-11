@@ -20,6 +20,7 @@ function makeConfig(
     auth: { mode: "none" },
     agentName: "opencode",
     contentCapture: "metadata_only",
+    redactInputMessages: true,
     debug: false,
     ...overrides,
   };

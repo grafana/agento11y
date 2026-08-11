@@ -408,6 +408,25 @@ func ResolveContentModeValue(logger *log.Logger, key, raw string) agento11y.Cont
 	return mode
 }
 
+// ResolveRedactInput reports whether user prompt text should be redacted
+// before export. Reads AGENTO11Y_REDACT_INPUT_MESSAGES (SIGIL_ fallback) and
+// defaults to true, so prompts are scrubbed without configuration. An
+// unrecognised value is reported via logger when non-nil and keeps redaction
+// on, so a typo cannot silently disable it. The flag covers the user prompt and
+// nothing else. Mirrors plugins/pi/src/config.ts and the OpenCode plugin so one
+// ~/.config/agento11y/config.env drives every launcher.
+func ResolveRedactInput(logger *log.Logger) bool {
+	return ResolveRedactInputWith(logger, LookupEnv)
+}
+
+// ResolveRedactInputWith resolves the prompt-redaction flag from an arbitrary
+// lookup, applying the same default and diagnostics as ResolveRedactInput.
+// Doctor passes a lookup backed by its env snapshot so it reports the value the
+// hooks resolve and can name the variable it came from.
+func ResolveRedactInputWith(logger *log.Logger, look Lookup) bool {
+	return resolveBool(logger, look, "REDACT_INPUT_MESSAGES", true)
+}
+
 // GuardsConfig is the resolved guard feature flags for a hook handler.
 // Mirrors plugins/pi/src/config.ts::GuardsFeatureConfig so a single
 // ~/.config/agento11y/config.env drives both plugins.
@@ -446,9 +465,9 @@ func ResolveGuards(logger *log.Logger) GuardsConfig {
 // and can name the variable each one came from.
 func ResolveGuardsWith(logger *log.Logger, look Lookup) GuardsConfig {
 	cfg := GuardsConfig{
-		Enabled:   resolveGuardsBool(logger, look, "GUARDS_ENABLED", defaultGuardsEnabled),
+		Enabled:   resolveBool(logger, look, "GUARDS_ENABLED", defaultGuardsEnabled),
 		TimeoutMs: DefaultGuardsTimeoutMs,
-		FailOpen:  resolveGuardsBool(logger, look, "GUARDS_FAIL_OPEN", defaultGuardsFailOpen),
+		FailOpen:  resolveBool(logger, look, "GUARDS_FAIL_OPEN", defaultGuardsFailOpen),
 	}
 	if v, key, ok := look("GUARDS_TIMEOUT_MS"); ok {
 		cfg.TimeoutMs = IntValue(logger, key, v, DefaultGuardsTimeoutMs)
@@ -456,7 +475,10 @@ func ResolveGuardsWith(logger *log.Logger, look Lookup) GuardsConfig {
 	return cfg
 }
 
-func resolveGuardsBool(logger *log.Logger, look Lookup, suffix string, def bool) bool {
+// resolveBool reads a boolean config key from a branded alias family through
+// look. Unset returns def; an unrecognised value is reported via logger when
+// non-nil and also returns def.
+func resolveBool(logger *log.Logger, look Lookup, suffix string, def bool) bool {
 	raw, key, ok := look(suffix)
 	if !ok {
 		return def

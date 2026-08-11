@@ -907,14 +907,25 @@ async function recordAssistantMessage(
 
   // Prefer the composed prompt from the system transform hook; fall back to
   // the optional legacy override from chat.message.
-  const systemPrompt =
+  const capturedSystemPrompt =
     latestSystemPromptBySession.get(assistantMsg.sessionID) ??
     pending?.systemPrompt;
-  if (systemPrompt === undefined) {
+  if (capturedSystemPrompt === undefined) {
     debugLog(
       `no system prompt captured for session=${assistantMsg.sessionID} message=${assistantMsg.id}`,
     );
   }
+  // Tier 1 + tier 2, like the SDK sanitizer and the vibe mapper: a composed
+  // system prompt is assembled content, not prose. It carries AGENTS.md files,
+  // tool descriptions and opencode's `<env>` block, so a token pasted into a
+  // project instruction file would otherwise ship in clear text. Redacted here
+  // rather than at capture time so the legacy `chat.message` override goes
+  // through the same call. AGENTO11Y_REDACT_INPUT_MESSAGES covers the user
+  // prompt only and does not reach this. Skipped when the mode drops the field.
+  const systemPrompt =
+    includeMessageBodies && capturedSystemPrompt !== undefined
+      ? redactor.redact(capturedSystemPrompt)
+      : undefined;
 
   // Tool spans double as the tool catalog source. Prefer terminal
   // `ToolPart.state.time` when assistant parts are available; hook records
@@ -1004,6 +1015,7 @@ async function recordAssistantMessage(
     redactor,
     config.contentCapture,
     stepTokens,
+    config.redactInputMessages,
   );
 
   const spanOpts = {

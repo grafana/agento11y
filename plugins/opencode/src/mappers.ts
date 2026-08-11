@@ -30,23 +30,32 @@ function includesToolBodies(contentCapture: ContentCaptureMode): boolean {
 }
 
 /**
- * Map user-side parts to agento11y input messages. Nothing is redacted here:
- * user text is the user's own data and Agent Observability needs it for prompt
- * analysis when content capture allows it. A caller that ran a preflight redact
- * rule substitutes the rewritten text before calling this.
+ * Map user-side parts to agento11y input messages. A caller that ran a
+ * preflight redact rule substitutes the rewritten text before calling this.
+ *
+ * Separately, user text gets tier 1 + tier 2 redaction when
+ * `redactInputMessages` is on, which is the default. A prompt is where a
+ * human pastes a config file or a command line, so the tier 2 `KEY = value`
+ * heuristic is worth its false positives here; the SDK's generation sanitizer
+ * makes the same call. It does cost prose: `sort key: name` comes back with
+ * the word after the colon replaced.
+ * `AGENTO11Y_REDACT_INPUT_MESSAGES=false` sends prompts without redaction.
  */
 export function mapInputMessages(
   parts: Part[],
+  redactor: Redactor,
   contentCapture: ContentCaptureMode = "full",
+  redactInputMessages = true,
 ): Message[] {
   if (!includesMessageBodies(contentCapture)) return [];
 
   const messages: Message[] = [];
   for (const part of parts) {
     if (part.type === "text" && part.text.trim().length > 0) {
+      const text = redactInputMessages ? redactor.redact(part.text) : part.text;
       messages.push({
         role: "user",
-        parts: [{ type: "text", text: part.text }],
+        parts: [{ type: "text", text }],
       });
     }
   }
@@ -207,10 +216,16 @@ export function mapGeneration(
   redactor: Redactor,
   contentCapture: ContentCaptureMode = "full",
   tokens?: OpencodeTokens,
+  redactInputMessages = true,
 ): GenerationResult {
   const usage = tokens ?? msg.tokens;
   return {
-    input: mapInputMessages(userParts, contentCapture),
+    input: mapInputMessages(
+      userParts,
+      redactor,
+      contentCapture,
+      redactInputMessages,
+    ),
     output: mapOutputMessages(assistantParts, redactor, contentCapture),
     usage: {
       inputTokens: usage.input,

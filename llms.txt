@@ -122,7 +122,9 @@ Accepted values depend on the plugin surface:
 
 - Claude Code, Codex, Copilot, Cursor, Vibe (shared `agento11y` binary), OpenCode (`@grafana/agento11y-opencode`), and Pi (`@grafana/agento11y-pi`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
 
-Unknown values fall back to `metadata_only` with a warning. Every plugin redacts known secret formats from captured content, using the same pattern table the SDKs use. Capture modes choose which fields ship, not whether the shipped fields are scrubbed. Treat content capture as opt-in for shared/production machines.
+Unknown values fall back to `metadata_only` with a warning. Capture modes choose which fields ship, not whether the shipped fields are scrubbed.
+
+When a plugin ships content, it redacts known secret formats first, using the same pattern table the SDKs use. This covers user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results, on the generation and on the tool-execution span. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send prompts without redaction; everything else stays redacted. Prompts, system prompts and tool payloads also get the key/value heuristics (`PASSWORD=…`), which prose fields do not, so a prompt containing `sort key: name` comes out with the word after the colon replaced. Treat content capture as opt-in for shared/production machines.
 
 ## Verifying the install
 

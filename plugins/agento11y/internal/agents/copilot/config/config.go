@@ -17,7 +17,10 @@ import (
 // before this struct is built, so it does not appear here.
 type Config struct {
 	ContentCapture agento11y.ContentCaptureMode
-	Guards         envconfig.GuardsConfig
+	// SkipPromptRedaction exports the user prompt without redaction. Set from
+	// AGENTO11Y_REDACT_INPUT_MESSAGES=false, so the zero value redacts.
+	SkipPromptRedaction bool
+	Guards              envconfig.GuardsConfig
 	// AgentName is the identity every generation and guard request reports.
 	// Load resolves it from AGENTO11Y_AGENT_NAME, then SIGIL_AGENT_NAME, and
 	// falls back to "copilot". Read it through Agent.
@@ -45,8 +48,9 @@ func HasCredentials() bool {
 // reflected in the OS env.
 func Load(logger *log.Logger) Config {
 	return Config{
-		ContentCapture: envconfig.ResolveContentMode(logger),
-		Guards:         envconfig.ResolveGuards(logger),
-		AgentName:      envconfig.ResolveAgentName(mapper.AgentName),
+		ContentCapture:      envconfig.ResolveContentMode(logger),
+		SkipPromptRedaction: !envconfig.ResolveRedactInput(logger),
+		Guards:              envconfig.ResolveGuards(logger),
+		AgentName:           envconfig.ResolveAgentName(mapper.AgentName),
 	}
 }

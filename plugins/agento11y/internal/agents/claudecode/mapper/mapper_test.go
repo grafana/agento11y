@@ -489,6 +489,43 @@ func TestProcess_ContentCaptureRedaction(t *testing.T) {
 	}
 }
 
+// TestProcess_RedactionTiers pins the per-field tier split. The prompt and the
+// tool arguments used to get tier 1 only, which left an env-style pair and a
+// secret-looking JSON key in clear text.
+func TestProcess_RedactionTiers(t *testing.T) {
+	lines := []transcript.Line{
+		makeUserLine("deploy with PASSWORD=hunter2"),
+		makeAssistantLine("claude-sonnet-4-20250514", 30, []transcript.ContentBlock{
+			{Type: "text", Text: "running with PASSWORD=hunter2"},
+			{Type: "tool_use", ID: "tu_1", Name: "Bash", Input: json.RawMessage(`{"cmd":"deploy.sh","api_key":"kR7fQ2wLmZ9xTb4vNc1JhY6s"}`)},
+		}, "tool_use"),
+	}
+
+	st := &state.Session{}
+	gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, redact.New())
+
+	prompt := gens[0].Input[0].Parts[0].Text
+	if want := "deploy with PASSWORD=[REDACTED:env-secret-value]"; prompt != want {
+		t.Errorf("prompt = %q, want %q", prompt, want)
+	}
+
+	// Assistant text is prose and keeps tier 1 only.
+	if want := "running with PASSWORD=hunter2"; gens[0].Output[0].Parts[0].Text != want {
+		t.Errorf("assistant text = %q, want %q", gens[0].Output[0].Parts[0].Text, want)
+	}
+
+	args := string(gens[0].Output[0].Parts[1].ToolCall.InputJSON)
+	if strings.Contains(args, "kR7fQ2wLmZ9xTb4vNc1JhY6s") {
+		t.Errorf("tool arguments leak the api key: %s", args)
+	}
+	if !strings.Contains(args, "[REDACTED:json-secret-field]") {
+		t.Errorf("tool arguments are missing the marker: %s", args)
+	}
+	if !strings.Contains(args, "deploy.sh") {
+		t.Errorf("tool arguments dropped a non-secret value: %s", args)
+	}
+}
+
 func TestProcess_Tags(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1301,12 +1338,14 @@ func TestProcess_EffectiveVersionStableAcrossToolSubsets(t *testing.T) {
 
 func TestProcess_UserPromptRedaction(t *testing.T) {
 	tests := []struct {
-		name       string
-		redactor   *redact.Redactor
-		wantRedact bool
+		name                string
+		redactor            *redact.Redactor
+		skipPromptRedaction bool
+		wantRedact          bool
 	}{
-		{"with redactor", redact.New(), true},
-		{"without redactor", nil, false},
+		{name: "with redactor", redactor: redact.New(), wantRedact: true},
+		{name: "without redactor", redactor: nil, wantRedact: false},
+		{name: "opt-out exports the prompt unredacted", redactor: redact.New(), skipPromptRedaction: true, wantRedact: false},
 	}
 
 	for _, tt := range tests {
@@ -1314,12 +1353,15 @@ func TestProcess_UserPromptRedaction(t *testing.T) {
 			lines := []transcript.Line{
 				makeUserLine("my token is glc_abcdefghijklmnopqrstuvwx"),
 				makeAssistantLine("claude-sonnet-4-20250514", 30, []transcript.ContentBlock{
-					{Type: "text", Text: "ok"},
+					{Type: "text", Text: "assistant saw glc_abcdefghijklmnopqrstuvwx"},
 				}, "end_turn"),
 			}
 
 			st := &state.Session{}
-			gens, _ := Process(lines, st, Options{SessionID: "sess-1"}, tt.redactor)
+			gens, _ := Process(lines, st, Options{
+				SessionID:           "sess-1",
+				SkipPromptRedaction: tt.skipPromptRedaction,
+			}, tt.redactor)
 
 			if gens[0].Input == nil {
 				t.Fatal("expected Input to be present")
@@ -1337,6 +1379,14 @@ func TestProcess_UserPromptRedaction(t *testing.T) {
 				if !strings.Contains(input, "glc_abcdefghijklmnopqrstuvwx") {
 					t.Errorf("expected raw token in prompt: %q", input)
 				}
+			}
+
+			// The opt-out covers the prompt only. Assistant text keeps its
+			// redaction whenever a redactor is configured.
+			output := gens[0].Output[0].Parts[0].Text
+			wantOutputRedacted := tt.redactor != nil
+			if got := strings.Contains(output, "[REDACTED:grafana-cloud-token]"); got != wantOutputRedacted {
+				t.Errorf("assistant text redacted = %v, want %v: %q", got, wantOutputRedacted, output)
 			}
 		})
 	}

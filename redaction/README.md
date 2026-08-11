@@ -76,6 +76,17 @@ a CJK character stays in clear text in Python and .NET while Go and JavaScript
 redact it. The C# table also carries `RegexOptions.CultureInvariant`, so
 case-insensitive matching does not follow the host culture.
 
+## Which tier runs on which field
+
+The table says what a pattern matches; the caller decides which tier runs. Both
+the SDKs' generation sanitizer and every coding-agent plugin split it the same
+way: tier 1 + tier 2 on a user prompt, a system prompt and a tool payload,
+tier 1 only on assistant text, reasoning, a conversation title and an error
+message. Prose is left on tier 1 because the tier 2 heuristics rewrite the word
+after any `key:` in a sentence. `docs/concepts/content-capture-modes.md` has the
+per-field table and the plugin-side details; the Go plugins spell the policy out
+in `plugins/agento11y/internal/redact/fields.go`.
+
 ## Email redaction is gated per call site
 
 The email pattern is in the shared table, but whether it runs is the caller's
@@ -83,6 +94,10 @@ choice. The SDKs redact addresses by default (`RedactEmailAddresses`). The
 `agento11y` binary and the opencode plugin pass `false`: agent transcripts
 routinely carry commit authors and reviewer addresses, and redacting them costs
 more context than it protects.
+
+The pi plugin is the exception among the plugins. It redacts through the SDK's
+generation sanitizer instead of its own mapper, so it takes the SDK default and
+does redact addresses. Unlike the tiering, this has not been unified.
 
 ## Known limitations
 
@@ -97,6 +112,17 @@ more context than it protects.
   `[REDACTED:grafana-cloud-token]`: `json-secret-field` replaces the whole
   quoted value, including a marker a tier 1 pattern already wrote there. Nothing
   leaks; only the label is coarser.
+- Tier 2 over JSON text can eat an escape. The value class in
+  `env-secret-value` stops at `"` but not at `\`, so a key/value pair inside an
+  encoded JSON string takes the backslash with it:
+  `{"cmd":"curl -H \"token: hunter2\" host"}` comes out with `hunter2\`
+  replaced, and the surviving `"` ends the string early. The secret is redacted
+  and the JSON no longer parses. This applies wherever an engine redacts encoded
+  JSON as text, which is what the SDKs' sanitizers do to `input_json`, and what
+  the OpenCode and Pi plugins do to tool payloads. The shared `agento11y` binary
+  decodes first (`RedactJSON`), so it is unaffected. Adding `\` to the class
+  would fix the escape and truncate a secret that really does contain a
+  backslash, which is why it has not been changed.
 - Whitespace stops at U+00A0. The wider Unicode spaces (U+2000 to U+200A,
   U+3000, and the rest) do not count as separators, because Go RE2 spells their
   escapes differently from the other three engines and the table holds one

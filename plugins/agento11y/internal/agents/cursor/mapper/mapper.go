@@ -57,6 +57,9 @@ type Inputs struct {
 	Stop           *StopInput
 	ContentCapture agento11y.ContentCaptureMode
 	UserIDOverride string
+	// SkipPromptRedaction exports the user prompt without redaction. The zero
+	// value redacts; envconfig.ResolveRedactInput owns the policy.
+	SkipPromptRedaction bool
 	// AgentName overrides the exported agent identity. Blank means "cursor".
 	AgentName string
 	Now       time.Time
@@ -119,9 +122,7 @@ func MapFragment(in Inputs) Mapped {
 		cursorVersion = in.Session.CursorVersion
 		userEmail = in.Session.UserEmail
 		isBackgroundAgent = in.Session.IsBackgroundAgent
-		// Tier 1 only. The title is a truncated first prompt, so tier 2's
-		// `KEY: value` heuristic would over-redact ordinary human text.
-		conversationTitle = red.RedactLightweight(in.Session.ConversationTitle)
+		conversationTitle = red.Title(in.Session.ConversationTitle)
 	}
 
 	tagMap := tags.Build(tags.BuiltinInputs{
@@ -159,7 +160,7 @@ func MapFragment(in Inputs) Mapped {
 		ContentCapture:    in.ContentCapture,
 	}
 
-	input, output := buildMessages(frag, in.ContentCapture, red)
+	input, output := buildMessages(frag, in.ContentCapture, red, in.SkipPromptRedaction)
 
 	gen := agento11y.Generation{
 		ID:                frag.GenerationID,
@@ -226,13 +227,13 @@ func extractCallError(stop *StopInput, red *redact.Redactor) error {
 	}
 	var asString string
 	if err := json.Unmarshal(stop.Error, &asString); err == nil && asString != "" {
-		return errors.New(red.RedactLightweight(asString))
+		return errors.New(red.ErrorText(asString))
 	}
 	var asObj struct {
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(stop.Error, &asObj); err == nil && asObj.Message != "" {
-		return errors.New(red.RedactLightweight(asObj.Message))
+		return errors.New(red.ErrorText(asObj.Message))
 	}
 	return errCursorStop
 }
@@ -267,7 +268,7 @@ func buildToolDefinitions(tools []fragment.ToolRecord) []agento11y.ToolDefinitio
 	return mapperutil.SortedToolDefinitions(names)
 }
 
-func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, red *redact.Redactor) (input, output []agento11y.Message) {
+func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, red *redact.Redactor, skipPromptRedaction bool) (input, output []agento11y.Message) {
 	// Normalize so the rest of this function only deals with the three real
 	// content-gating modes. envconfig.ResolveContentMode does this at the
 	// config layer too, but mappers re-apply it for callers (including tests)
@@ -276,12 +277,15 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, r
 	// span exposure; the gRPC payload buildMessages produces is identical.
 	mode = mapperutil.NormalizePayloadContentMode(mode)
 
-	// User prompt → user input message. Dropped in metadata-only mode.
 	if mode != agento11y.ContentCaptureModeMetadataOnly && strings.TrimSpace(frag.UserPrompt) != "" {
+		prompt := frag.UserPrompt
+		if !skipPromptRedaction {
+			prompt = red.Prompt(prompt)
+		}
 		input = append(input, agento11y.Message{
 			Role: agento11y.RoleUser,
 			Parts: []agento11y.Part{
-				agento11y.TextPart(red.Redact(frag.UserPrompt)),
+				agento11y.TextPart(prompt),
 			},
 		})
 	}
@@ -301,7 +305,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, r
 					Name: t.ToolName,
 					InputJSON: func() []byte {
 						if mode == agento11y.ContentCaptureModeFull {
-							return red.RedactJSON(t.ToolInput)
+							return red.ToolPayloadJSON(t.ToolInput)
 						}
 						return nil
 					}(),
@@ -326,7 +330,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, r
 						ToolResult: &agento11y.ToolResult{
 							ToolCallID:  t.ToolUseID,
 							Name:        t.ToolName,
-							ContentJSON: red.RedactJSON(t.ToolOutput),
+							ContentJSON: red.ToolPayloadJSON(t.ToolOutput),
 							IsError:     t.Status == "error",
 						},
 					},
@@ -364,7 +368,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, r
 		if strings.TrimSpace(text) != "" {
 			output = append(output, agento11y.Message{
 				Role:  agento11y.RoleAssistant,
-				Parts: []agento11y.Part{agento11y.TextPart(red.Redact(text))},
+				Parts: []agento11y.Part{agento11y.TextPart(red.AssistantText(text))},
 			})
 		}
 	}

@@ -6,6 +6,8 @@
 
 By default only metadata is sent (token counts, model, tool names). Set `AGENTO11Y_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
 
+Exported content is redacted for known secret formats first. That includes the user prompt; set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to export prompt text without redaction. Assistant text, reasoning, and tool results stay redacted either way. Tool-call arguments and the conversation title are not redacted yet.
+
 ## 1. Install and launch
 
 **Quick install (Linux/macOS):**

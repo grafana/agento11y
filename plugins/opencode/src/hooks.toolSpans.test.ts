@@ -362,6 +362,7 @@ function metadataOnlyConfig(): Agento11yOpencodeConfig {
     agentName: "opencode",
     agentVersion: "test-version",
     contentCapture: "metadata_only",
+    redactInputMessages: true,
     debug: false,
   };
 }
@@ -509,6 +510,7 @@ describe("hook lifecycle records and guard denial", () => {
       agentName: "opencode",
       agentVersion: "test-version",
       contentCapture: "full",
+      redactInputMessages: true,
       debug: false,
       // guards disabled, so the before hook just records timing.
     };
@@ -562,6 +564,7 @@ describe("hook lifecycle records and guard denial", () => {
       agentName: "opencode",
       agentVersion: "test-version",
       contentCapture: "full",
+      redactInputMessages: true,
       debug: false,
       guards: { enabled: true, timeoutMs: 1500, failOpen: false },
     };
@@ -606,6 +609,7 @@ describe("hook lifecycle records and guard denial", () => {
       agentName: "opencode",
       agentVersion: "test-version",
       contentCapture: "metadata_only",
+      redactInputMessages: true,
       debug: false,
     };
 
@@ -697,6 +701,7 @@ describe("hook lifecycle records and guard denial", () => {
       agentName: "opencode",
       agentVersion: "test-version",
       contentCapture: "full",
+      redactInputMessages: true,
       debug: false,
     };
 
@@ -770,6 +775,7 @@ describe("hook lifecycle records and guard denial", () => {
       agentName: "opencode",
       agentVersion: "test-version",
       contentCapture: "full",
+      redactInputMessages: true,
       debug: false,
     };
 

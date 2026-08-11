@@ -10,6 +10,7 @@ package mapper
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"maps"
 	"slices"
 	"strconv"
@@ -52,6 +53,9 @@ type Inputs struct {
 	PriorState         state.Session
 	PriorStateFound    bool
 	ContentCapture     agento11y.ContentCaptureMode
+	// SkipPromptRedaction exports the user prompt without redaction. The zero
+	// value redacts; envconfig.ResolveRedactInput owns the policy.
+	SkipPromptRedaction bool
 	// AgentName overrides the exported agent identity. Blank means
 	// "mistral-vibe".
 	AgentName string
@@ -88,6 +92,7 @@ func Map(in Inputs, turnSeq int) Mapped {
 	if mode == agento11y.ContentCaptureModeDefault {
 		mode = agento11y.ContentCaptureModeMetadataOnly
 	}
+	red := redact.New()
 
 	provider, apiName := in.Meta.ActiveModelRef()
 	displayName := strings.TrimSpace(in.Meta.Config.ActiveModel)
@@ -144,20 +149,24 @@ func Map(in Inputs, turnSeq int) Mapped {
 	tools := buildToolDefinitions(in.Meta.ToolsAvailable)
 	systemPrompt := ""
 	if mode != agento11y.ContentCaptureModeMetadataOnly {
-		systemPrompt = strings.TrimSpace(in.Meta.SystemPrompt.Content)
+		systemPrompt = red.SystemPrompt(strings.TrimSpace(in.Meta.SystemPrompt.Content))
 	}
+	// vibe derives the title from the first prompt, so it is prose and gets
+	// tier 1 only. The generation carries it whatever the capture mode says;
+	// the SDK drops it in metadata_only.
+	title := red.Title(in.Meta.Title)
 
 	// On a mid-session state loss the handler reads the whole transcript
 	// from offset zero and usage falls back to the last turn (see
 	// turnUsage). Map only the latest turn's messages so the single emitted
 	// generation does not bundle the entire history under last-turn usage.
 	lines := linesForMapping(in.Lines, in.Meta.Stats, in.PriorStateFound)
-	input, output, thinkingEnabled := buildMessages(lines, mode)
+	input, output, thinkingEnabled := buildMessages(lines, mode, red, in.SkipPromptRedaction)
 
 	start := agento11y.GenerationStart{
 		ID:                  id,
 		ConversationID:      conversationID,
-		ConversationTitle:   in.Meta.Title,
+		ConversationTitle:   title,
 		AgentName:           in.agent(),
 		Mode:                agento11y.GenerationModeSync,
 		OperationName:       "generateText",
@@ -174,7 +183,7 @@ func Map(in Inputs, turnSeq int) Mapped {
 	gen := agento11y.Generation{
 		ID:                  id,
 		ConversationID:      conversationID,
-		ConversationTitle:   in.Meta.Title,
+		ConversationTitle:   title,
 		AgentName:           in.agent(),
 		Mode:                agento11y.GenerationModeSync,
 		OperationName:       "generateText",
@@ -348,14 +357,23 @@ func latestTurnLines(lines []transcript.Line) []transcript.Line {
 // In MetadataOnly mode all message text, reasoning, and tool
 // arguments/results are dropped but the structural shape (assistant called
 // tool X, tool returned, assistant replied) is preserved.
-func buildMessages(lines []transcript.Line, mode agento11y.ContentCaptureMode) (input, output []agento11y.Message, thinkingEnabled *bool) {
-	red := redact.New()
+func buildMessages(lines []transcript.Line, mode agento11y.ContentCaptureMode, red *redact.Redactor, skipPromptRedaction bool) (input, output []agento11y.Message, thinkingEnabled *bool) {
 	contentMode := mode == agento11y.ContentCaptureModeFull || mode == agento11y.ContentCaptureModeNoToolContent
-	cleanText := func(s string) string {
+	cleanProse := func(s string) string {
 		if contentMode {
-			return red.Redact(s)
+			return red.AssistantText(s)
 		}
 		return ""
+	}
+	// The redaction opt-out does not export a prompt the capture mode drops.
+	cleanPrompt := func(s string) string {
+		if !contentMode {
+			return ""
+		}
+		if skipPromptRedaction {
+			return s
+		}
+		return red.Prompt(s)
 	}
 	anyReasoning := false
 	for _, l := range lines {
@@ -370,7 +388,7 @@ func buildMessages(lines []transcript.Line, mode agento11y.ContentCaptureMode) (
 			if mode == agento11y.ContentCaptureModeMetadataOnly {
 				continue
 			}
-			input = append(input, agento11y.UserTextMessage(cleanText(l.Content)))
+			input = append(input, agento11y.UserTextMessage(cleanPrompt(l.Content)))
 		case "assistant":
 			// Assistant turns come in two shapes: a tool-call message
 			// (no Content, ToolCalls populated) or a final text message
@@ -382,17 +400,16 @@ func buildMessages(lines []transcript.Line, mode agento11y.ContentCaptureMode) (
 			var parts []agento11y.Part
 			if contentMode {
 				if r := strings.TrimSpace(l.ReasoningContent); r != "" {
-					parts = append(parts, agento11y.ThinkingPart(red.Redact(l.ReasoningContent)))
+					parts = append(parts, agento11y.ThinkingPart(red.Thinking(l.ReasoningContent)))
 				}
 			}
 			if len(l.ToolCalls) > 0 {
 				for _, tc := range l.ToolCalls {
 					call := agento11y.ToolCall{ID: tc.ID, Name: tc.Function.Name}
 					if mode == agento11y.ContentCaptureModeFull && tc.Function.Arguments != "" {
-						// vibe encodes function.arguments as a JSON-encoded
-						// string already, so the raw bytes are valid JSON and
-						// go straight into InputJSON without re-encoding.
-						call.InputJSON = []byte(tc.Function.Arguments)
+						// vibe encodes function.arguments as JSON already, so
+						// the raw bytes go to the redactor as-is.
+						call.InputJSON = red.ToolPayloadJSON(json.RawMessage(tc.Function.Arguments))
 					}
 					parts = append(parts, agento11y.ToolCallPart(call))
 				}
@@ -410,7 +427,7 @@ func buildMessages(lines []transcript.Line, mode agento11y.ContentCaptureMode) (
 			if mode == agento11y.ContentCaptureModeMetadataOnly {
 				continue
 			}
-			parts = append(parts, agento11y.TextPart(cleanText(l.Content)))
+			parts = append(parts, agento11y.TextPart(cleanProse(l.Content)))
 			output = append(output, agento11y.Message{Role: agento11y.RoleAssistant, Parts: parts})
 		case "tool":
 			if mode == agento11y.ContentCaptureModeMetadataOnly {
@@ -430,7 +447,7 @@ func buildMessages(lines []transcript.Line, mode agento11y.ContentCaptureMode) (
 				Name:       l.Name,
 			}
 			if mode == agento11y.ContentCaptureModeFull {
-				result.Content = red.Redact(l.Content)
+				result.Content = red.ToolPayload(l.Content)
 			}
 			input = append(input, agento11y.Message{
 				Role:  agento11y.RoleTool,

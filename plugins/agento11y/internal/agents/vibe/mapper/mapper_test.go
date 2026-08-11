@@ -304,22 +304,26 @@ func TestMap_ContentCaptureModes(t *testing.T) {
 		// In MetadataOnly we still expect the structural assistant
 		// tool-call message (Agent Observability needs the call sequence to render
 		// the conversation), but no text content.
-		wantUserText      bool
-		wantAssistantText bool
-		wantToolArgs      bool
-		wantSystemPrompt  bool
+		skipPromptRedaction bool
+		wantUserText        bool
+		wantAssistantText   bool
+		wantToolArgs        bool
+		wantSystemPrompt    bool
 	}{
 		{name: "full", mode: agento11y.ContentCaptureModeFull, wantUserText: true, wantAssistantText: true, wantToolArgs: true, wantSystemPrompt: true},
 		{name: "no_tool_content", mode: agento11y.ContentCaptureModeNoToolContent, wantUserText: true, wantAssistantText: true, wantToolArgs: false, wantSystemPrompt: true},
 		{name: "metadata_only", mode: agento11y.ContentCaptureModeMetadataOnly, wantUserText: false, wantAssistantText: false, wantToolArgs: false, wantSystemPrompt: false},
+		// The redaction opt-out does not export a prompt the capture mode drops.
+		{name: "metadata_only with the redaction opt-out", mode: agento11y.ContentCaptureModeMetadataOnly, skipPromptRedaction: true, wantUserText: false, wantAssistantText: false, wantToolArgs: false, wantSystemPrompt: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := Map(Inputs{
-				SessionID:      "s",
-				Lines:          lines,
-				Meta:           m,
-				ContentCapture: tt.mode,
+				SessionID:           "s",
+				Lines:               lines,
+				Meta:                m,
+				ContentCapture:      tt.mode,
+				SkipPromptRedaction: tt.skipPromptRedaction,
 			}, m.Stats.Steps).Generation
 
 			var hasUserText, hasAssistantText, hasToolArgs bool
@@ -356,6 +360,148 @@ func TestMap_ContentCaptureModes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMap_UserPromptRedaction(t *testing.T) {
+	const secret = "glc_abcdefghijklmnopqrstuvwxyz"
+
+	tests := []struct {
+		name                string
+		skipPromptRedaction bool
+		wantPrompt          string
+	}{
+		{name: "redacts the prompt by default", wantPrompt: "my token is [REDACTED:grafana-cloud-token]"},
+		{name: "opt-out exports the prompt unredacted", skipPromptRedaction: true, wantPrompt: "my token is " + secret},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := []transcript.Line{
+				{Role: "user", Content: "my token is " + secret},
+				{Role: "assistant", Content: "assistant saw " + secret, MessageID: "m1"},
+			}
+
+			g := Map(Inputs{
+				SessionID:           "s",
+				Lines:               lines,
+				ContentCapture:      agento11y.ContentCaptureModeFull,
+				SkipPromptRedaction: tt.skipPromptRedaction,
+			}, 1).Generation
+
+			if len(g.Input) == 0 || len(g.Input[0].Parts) == 0 {
+				t.Fatalf("expected a user message: %+v", g.Input)
+			}
+			if got := g.Input[0].Parts[0].Text; got != tt.wantPrompt {
+				t.Errorf("prompt = %q, want %q", got, tt.wantPrompt)
+			}
+
+			// The opt-out covers the prompt only: assistant text stays redacted.
+			if len(g.Output) == 0 || len(g.Output[0].Parts) == 0 {
+				t.Fatalf("expected an assistant message: %+v", g.Output)
+			}
+			if got := g.Output[0].Parts[0].Text; got != "assistant saw [REDACTED:grafana-cloud-token]" {
+				t.Errorf("assistant text = %q, want it redacted", got)
+			}
+		})
+	}
+}
+
+// TestMap_RedactsEveryContentField walks the fields a generation carries and
+// pins the tier each one gets. The title, the system prompt and the tool-call
+// arguments used to ship unredacted.
+func TestMap_RedactsEveryContentField(t *testing.T) {
+	const token = "glc_abcdefghijklmnopqrstuvwxyz"
+
+	in := Inputs{
+		SessionID: "s",
+		Meta: meta.Meta{
+			Title:        "rotate " + token,
+			SystemPrompt: meta.SystemPrompt{Content: "you are a bot. DB_PASSWORD=hunter2"},
+		},
+		Lines: []transcript.Line{
+			{Role: "user", Content: "deploy with PASSWORD=hunter2"},
+			{
+				Role:             "assistant",
+				ReasoningContent: "the user set PASSWORD=hunter2 and " + token,
+				MessageID:        "m1",
+			},
+			{
+				Role:      "assistant",
+				MessageID: "m2",
+				ToolCalls: []transcript.ToolCall{toolCall("c1", "bash", `{"cmd":"deploy","password":"hunter2"}`)},
+			},
+			{Role: "tool", ToolCallID: "c1", Name: "bash", Content: "wrote PASSWORD=hunter2"},
+			{Role: "assistant", Content: "done, PASSWORD=hunter2 is set, " + token, MessageID: "m3"},
+		},
+		ContentCapture: agento11y.ContentCaptureModeFull,
+	}
+
+	mapped := Map(in, 1)
+	g := mapped.Generation
+
+	// Prose keeps tier 1 only, so the env-style pair survives in the title,
+	// the reasoning and the assistant text. Everything else takes tier 2 too.
+	const wantTitle = "rotate [REDACTED:grafana-cloud-token]"
+	if g.ConversationTitle != wantTitle {
+		t.Errorf("title = %q, want %q", g.ConversationTitle, wantTitle)
+	}
+	if mapped.Start.ConversationTitle != wantTitle {
+		t.Errorf("start title = %q, want %q", mapped.Start.ConversationTitle, wantTitle)
+	}
+	if want := "you are a bot. DB_PASSWORD=[REDACTED:env-secret-value]"; g.SystemPrompt != want {
+		t.Errorf("system prompt = %q, want %q", g.SystemPrompt, want)
+	}
+
+	prompt := firstPart(t, g.Input, agento11y.RoleUser, agento11y.PartKindText).Text
+	if want := "deploy with PASSWORD=[REDACTED:env-secret-value]"; prompt != want {
+		t.Errorf("prompt = %q, want %q", prompt, want)
+	}
+
+	thinking := firstPart(t, g.Output, agento11y.RoleAssistant, agento11y.PartKindThinking).Thinking
+	if want := "the user set PASSWORD=hunter2 and [REDACTED:grafana-cloud-token]"; thinking != want {
+		t.Errorf("thinking = %q, want %q", thinking, want)
+	}
+
+	text := firstPart(t, g.Output, agento11y.RoleAssistant, agento11y.PartKindText).Text
+	if want := "done, PASSWORD=hunter2 is set, [REDACTED:grafana-cloud-token]"; text != want {
+		t.Errorf("assistant text = %q, want %q", text, want)
+	}
+
+	args := string(firstPart(t, g.Output, agento11y.RoleAssistant, agento11y.PartKindToolCall).ToolCall.InputJSON)
+	if want := `{"cmd":"deploy","password":"[REDACTED:json-secret-field]"}`; args != want {
+		t.Errorf("tool args = %s, want %s", args, want)
+	}
+
+	result := firstPart(t, g.Input, agento11y.RoleTool, agento11y.PartKindToolResult).ToolResult.Content
+	if want := "wrote PASSWORD=[REDACTED:env-secret-value]"; result != want {
+		t.Errorf("tool result = %q, want %q", result, want)
+	}
+}
+
+func toolCall(id, name, args string) transcript.ToolCall {
+	var tc transcript.ToolCall
+	tc.ID = id
+	tc.Function.Name = name
+	tc.Function.Arguments = args
+	return tc
+}
+
+// firstPart returns the first part of the given kind on a message with the
+// given role, failing the test when there is none.
+func firstPart(t *testing.T, msgs []agento11y.Message, role agento11y.Role, kind agento11y.PartKind) agento11y.Part {
+	t.Helper()
+	for _, msg := range msgs {
+		if msg.Role != role {
+			continue
+		}
+		for _, p := range msg.Parts {
+			if p.Kind == kind {
+				return p
+			}
+		}
+	}
+	t.Fatalf("no %s part on a %s message: %+v", kind, role, msgs)
+	return agento11y.Part{}
 }
 
 func TestGenerationID_Deterministic(t *testing.T) {

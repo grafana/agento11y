@@ -123,6 +123,47 @@ describe("resolveConfig", () => {
     expect(cfg?.debug).toBe(false);
   });
 
+  it.each([
+    { name: "defaults to on", raw: undefined, want: true, wantWarn: false },
+    {
+      name: "honours an explicit false",
+      raw: "false",
+      want: false,
+      wantWarn: false,
+    },
+    { name: "honours an explicit 0", raw: "0", want: false, wantWarn: false },
+    {
+      name: "honours an explicit true",
+      raw: "true",
+      want: true,
+      wantWarn: false,
+    },
+    {
+      name: "keeps redaction on for an unrecognised value and warns",
+      raw: "maybe",
+      want: true,
+      wantWarn: true,
+    },
+  ])("redactInputMessages $name", ({ raw, want, wantWarn }) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    process.env.SIGIL_ENDPOINT = "http://localhost:8080";
+    if (raw !== undefined) {
+      process.env.AGENTO11Y_REDACT_INPUT_MESSAGES = raw;
+    }
+    const cfg = resolveConfig();
+    expect(cfg?.redactInputMessages).toBe(want);
+    if (wantWarn) {
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'invalid boolean value for AGENTO11Y_REDACT_INPUT_MESSAGES: "maybe"',
+        ),
+      );
+    } else {
+      expect(warn).not.toHaveBeenCalled();
+    }
+    warn.mockRestore();
+  });
+
   it("defaults guards off, fail-open, with 1500ms timeout", () => {
     process.env.SIGIL_ENDPOINT = "http://localhost:8080";
     const cfg = resolveConfig();

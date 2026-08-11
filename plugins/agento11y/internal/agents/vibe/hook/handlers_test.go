@@ -345,6 +345,72 @@ func TestPostAgentTurn_SessionCostSnapshot(t *testing.T) {
 	}
 }
 
+// TestPostAgentTurn_PromptRedactionWiring pins AGENTO11Y_REDACT_INPUT_MESSAGES
+// from the environment through to the exported body. The mapper tests cover
+// the flag itself; this one covers the wire between them.
+func TestPostAgentTurn_PromptRedactionWiring(t *testing.T) {
+	const secret = "glc_abcdefghijklmnopqrstuvwxyz"
+
+	tests := []struct {
+		name            string
+		raw             string
+		wantPromptInRaw bool
+	}{
+		{name: "redacts by default", raw: "", wantPromptInRaw: false},
+		{name: "opt-out exports the prompt unredacted", raw: "false", wantPromptInRaw: true},
+		{name: "typo keeps redaction on", raw: "flase", wantPromptInRaw: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				mu   sync.Mutex
+				body []byte
+			)
+			srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				body = b
+				mu.Unlock()
+				writeAcceptedGenerationResponse(t, w, b)
+			}))
+			t.Cleanup(srv.Close)
+
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			t.Setenv("SIGIL_ENDPOINT", srv.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+			t.Setenv("SIGIL_AUTH_TOKEN", "token")
+			t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
+			t.Setenv("SIGIL_REDACT_INPUT_MESSAGES", "")
+			t.Setenv("AGENTO11Y_REDACT_INPUT_MESSAGES", tt.raw)
+
+			dir := t.TempDir()
+			must(t, copyFile(filepath.Join("..", "testdata", "meta.json"), filepath.Join(dir, "meta.json")))
+			tp := filepath.Join(dir, "messages.jsonl")
+			lines := `{"role":"user","content":"my token is ` + secret + `","message_id":"m1"}` + "\n" +
+				`{"role":"assistant","content":"assistant saw ` + secret + `","message_id":"m2"}` + "\n"
+			must(t, os.WriteFile(tp, []byte(lines), 0o644))
+
+			logger := log.New(io.Discard, "", 0)
+			PostAgentTurn(context.Background(), Payload{HookEventName: "post_agent_turn", SessionID: "sess-redaction", TranscriptPath: tp}, logger)
+
+			mu.Lock()
+			got := string(body)
+			mu.Unlock()
+			if got == "" {
+				t.Fatal("expected an export request")
+			}
+			if has := strings.Contains(got, "my token is "+secret); has != tt.wantPromptInRaw {
+				t.Errorf("prompt unredacted in export = %v, want %v: %s", has, tt.wantPromptInRaw, got)
+			}
+			// The flag covers the prompt only.
+			if strings.Contains(got, "assistant saw "+secret) {
+				t.Errorf("assistant text lost its redaction: %s", got)
+			}
+		})
+	}
+}
+
 func TestPostAgentTurn_MissingPayloadFields(t *testing.T) {
 	logger := log.New(io.Discard, "", 0)
 	PostAgentTurn(context.Background(), Payload{HookEventName: "post_agent_turn"}, logger)

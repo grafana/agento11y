@@ -24,10 +24,13 @@ var errGitHubCopilot = errors.New("copilot_error")
 const AgentName = "copilot"
 
 type Inputs struct {
-	Fragment       *fragment.Fragment
-	Session        *fragment.Session
-	ContentCapture agento11y.ContentCaptureMode
-	UserIDOverride string
+	Fragment *fragment.Fragment
+	Session  *fragment.Session
+	// SkipPromptRedaction exports the user prompt without redaction. The zero
+	// value redacts; envconfig.ResolveRedactInput owns the policy.
+	SkipPromptRedaction bool
+	ContentCapture      agento11y.ContentCaptureMode
+	UserIDOverride      string
 	// AgentName overrides the exported agent identity. Blank means "copilot".
 	AgentName string
 	Now       time.Time
@@ -141,7 +144,7 @@ func Map(in Inputs) Mapped {
 
 	tools := buildToolDefinitions(frag.Tools)
 	tags := buildTags(frag, in.Session)
-	input, output := buildMessages(frag, payloadMode)
+	input, output := buildMessages(frag, payloadMode, in.SkipPromptRedaction)
 	stopReason := strings.TrimSpace(frag.StopReason)
 	if stopReason == "" {
 		stopReason = "completed"
@@ -281,7 +284,7 @@ func derefInt64(v *int64) int64 {
 	return *v
 }
 
-func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (input, output []agento11y.Message) {
+func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, skipPromptRedaction bool) (input, output []agento11y.Message) {
 	mode = mapperutil.NormalizePayloadContentMode(mode)
 	red := redact.New()
 	if mode != agento11y.ContentCaptureModeMetadataOnly {
@@ -290,7 +293,10 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (
 			prompt = strings.TrimSpace(frag.InitialPrompt)
 		}
 		if prompt != "" {
-			input = append(input, agento11y.UserTextMessage(red.Redact(prompt)))
+			if !skipPromptRedaction {
+				prompt = red.Prompt(prompt)
+			}
+			input = append(input, agento11y.UserTextMessage(prompt))
 		}
 	}
 
@@ -301,7 +307,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (
 		}
 		call := agento11y.ToolCall{ID: t.ToolUseID, Name: t.ToolName}
 		if mode == agento11y.ContentCaptureModeFull && len(t.ToolInput) > 0 {
-			call.InputJSON = red.RedactJSON(t.ToolInput)
+			call.InputJSON = red.ToolPayloadJSON(t.ToolInput)
 		}
 		output = append(output, agento11y.Message{Role: agento11y.RoleAssistant, Parts: []agento11y.Part{agento11y.ToolCallPart(call)}})
 		if mode == agento11y.ContentCaptureModeMetadataOnly {
@@ -310,16 +316,16 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode) (
 		result := agento11y.ToolResult{ToolCallID: t.ToolUseID, Name: t.ToolName, IsError: t.Status == "error"}
 		if mode == agento11y.ContentCaptureModeFull {
 			if len(t.ToolResponse) > 0 {
-				result.ContentJSON = red.RedactJSON(t.ToolResponse)
+				result.ContentJSON = red.ToolPayloadJSON(t.ToolResponse)
 			} else if t.ErrorMessage != "" {
-				result.Content = red.Redact(t.ErrorMessage)
+				result.Content = red.ToolPayload(t.ErrorMessage)
 			}
 		}
 		input = append(input, agento11y.Message{Role: agento11y.RoleTool, Parts: []agento11y.Part{agento11y.ToolResultPart(result)}})
 	}
 	if mode != agento11y.ContentCaptureModeMetadataOnly {
 		if assistantText := strings.TrimSpace(frag.AssistantText); assistantText != "" {
-			output = append(output, agento11y.AssistantTextMessage(red.Redact(assistantText)))
+			output = append(output, agento11y.AssistantTextMessage(red.AssistantText(assistantText)))
 		}
 	}
 	return input, output

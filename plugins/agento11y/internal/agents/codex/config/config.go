@@ -15,8 +15,11 @@ import (
 // been applied. Endpoint, auth, and SIGIL_TAGS are read by the SDK directly.
 type Config struct {
 	ContentCapture agento11y.ContentCaptureMode
-	Debug          bool
-	Guards         envconfig.GuardsConfig
+	// SkipPromptRedaction exports the user prompt without redaction. Set from
+	// AGENTO11Y_REDACT_INPUT_MESSAGES=false, so the zero value redacts.
+	SkipPromptRedaction bool
+	Debug               bool
+	Guards              envconfig.GuardsConfig
 	// AgentName is the identity every generation and guard request reports.
 	// Load resolves it from AGENTO11Y_AGENT_NAME, then SIGIL_AGENT_NAME, and
 	// falls back to "codex". Read it through Agent.
@@ -65,9 +68,10 @@ func AllowedDotenvKey(key string) bool {
 // first so dotenv-only values are reflected in the OS env.
 func Load(logger *log.Logger) Config {
 	return Config{
-		ContentCapture: envconfig.ResolveContentMode(logger),
-		Debug:          envconfig.ParseBool(envconfig.Getenv("DEBUG")),
-		Guards:         envconfig.ResolveGuards(logger),
-		AgentName:      envconfig.ResolveAgentName(mapper.AgentName),
+		ContentCapture:      envconfig.ResolveContentMode(logger),
+		SkipPromptRedaction: !envconfig.ResolveRedactInput(logger),
+		Debug:               envconfig.ParseBool(envconfig.Getenv("DEBUG")),
+		Guards:              envconfig.ResolveGuards(logger),
+		AgentName:           envconfig.ResolveAgentName(mapper.AgentName),
 	}
 }

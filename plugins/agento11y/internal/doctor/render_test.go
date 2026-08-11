@@ -63,8 +63,8 @@ func TestRenderHuman_NoColorIsPlain(t *testing.T) {
 		"https://sigil.example (AGENTO11Y_ENDPOINT, env)",
 		"set (glc_…, AGENTO11Y_AUTH_TOKEN, env)",
 		// No variable is configured, so the row says the value is the built-in one.
-		"content capture: metadata_only (default)",
-		"guards:          disabled (default)",
+		"content capture:  metadata_only (default)",
+		"guards:           disabled (default)",
 		"1 problem(s)",
 	} {
 		if !strings.Contains(out, want) {
@@ -194,7 +194,7 @@ func TestRenderHuman_ProbeDiagnosisAppearsOnce(t *testing.T) {
 	renderHuman(&buf, r, false)
 	out := buf.String()
 
-	if want := "traces probe:    HTTP 403 (https://otlp.example/otlp/v1/traces)"; !strings.Contains(out, want) {
+	if want := "traces probe:     HTTP 403 (https://otlp.example/otlp/v1/traces)"; !strings.Contains(out, want) {
 		t.Fatalf("probe row missing %q:\n%s", want, out)
 	}
 	if got := strings.Count(out, diagnosis); got != 1 {
@@ -223,7 +223,7 @@ func TestRenderHuman_FaultsStayOnTheMessageLine(t *testing.T) {
 				c.ContentModeFellBack = true
 			},
 			message:   "the AGENTO11Y_CONTENT_CAPTURE_MODE value is invalid; using metadata_only",
-			wantRow:   "content capture: metadata_only (default)",
+			wantRow:   "content capture:  metadata_only (default)",
 			wantNoRow: "invalid value, fell back",
 		},
 		{
@@ -236,7 +236,7 @@ func TestRenderHuman_FaultsStayOnTheMessageLine(t *testing.T) {
 				c.GuardsFellBack = true
 			},
 			message:   "the AGENTO11Y_GUARDS_TIMEOUT_MS value is invalid; guards use the default",
-			wantRow:   "guards:          enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
+			wantRow:   "guards:           enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
 			wantNoRow: "invalid value, fell back",
 		},
 		{
@@ -248,7 +248,7 @@ func TestRenderHuman_FaultsStayOnTheMessageLine(t *testing.T) {
 				c.LocalInvalid = true
 			},
 			message:   "the AGENTO11Y_LOCAL value is not a boolean; local mode stays off",
-			wantRow:   `local mode:      off (AGENTO11Y_LOCAL="enabled" is not a boolean, env)`,
+			wantRow:   `local mode:       off (AGENTO11Y_LOCAL="enabled" is not a boolean, env)`,
 			wantNoRow: "invalid value, local mode is off",
 		},
 	}
@@ -414,6 +414,26 @@ func TestRenderHuman_TagsLine(t *testing.T) {
 			}
 			if !strings.Contains(out, "tags:") || !strings.Contains(out, tc.wantLine) {
 				t.Fatalf("expected tags line %q:\n%s", tc.wantLine, out)
+			}
+		})
+	}
+}
+
+func TestDescribeRedactInput(t *testing.T) {
+	p := palette{color: false}
+	tests := []struct {
+		name   string
+		config ConfigSection
+		want   string
+	}{
+		{name: "enabled", config: ConfigSection{RedactInput: true}, want: "enabled"},
+		{name: "disabled", config: ConfigSection{RedactInput: false}, want: "disabled (prompts export unredacted)"},
+		{name: "enabled after fallback", config: ConfigSection{RedactInput: true, RedactInputFellBack: true}, want: "enabled (invalid value, fell back)"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := describeRedactInput(p, tc.config); got != tc.want {
+				t.Fatalf("describeRedactInput = %q, want %q", got, tc.want)
 			}
 		})
 	}

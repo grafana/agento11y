@@ -16,6 +16,9 @@ import {
 
 const redactor = createRedactor();
 
+// A syntactically valid Grafana Cloud token that matches the tier-1 pattern.
+const GRAFANA_CLOUD_TOKEN = "glc_abcdefghijklmnopqrstuvwxyz0123456789";
+
 function makeAssistantMsg(
   overrides?: Partial<AssistantMessage>,
 ): AssistantMessage {
@@ -52,10 +55,67 @@ describe("mapInputMessages", () => {
         text: "hello world",
       },
     ] as Part[];
-    const result = mapInputMessages(parts);
+    const result = mapInputMessages(parts, redactor);
     expect(result).toHaveLength(1);
     expect(result[0].role).toBe("user");
     expect(result[0].parts?.[0]).toEqual({ type: "text", text: "hello world" });
+  });
+
+  it("redacts secrets in user text by default", () => {
+    const parts = [
+      {
+        id: "p1",
+        sessionID: "s1",
+        messageID: "m1",
+        type: "text" as const,
+        text: `deploy with ${GRAFANA_CLOUD_TOKEN} please`,
+      },
+    ] as Part[];
+
+    const result = mapInputMessages(parts, redactor);
+    expect(result[0].parts?.[0]).toEqual({
+      type: "text",
+      text: "deploy with [REDACTED:grafana-cloud-token] please",
+    });
+  });
+
+  it("sends user text unredacted when input redaction is off", () => {
+    const parts = [
+      {
+        id: "p1",
+        sessionID: "s1",
+        messageID: "m1",
+        type: "text" as const,
+        text: `deploy with ${GRAFANA_CLOUD_TOKEN} please`,
+      },
+    ] as Part[];
+
+    const result = mapInputMessages(parts, redactor, "full", false);
+    expect(result[0].parts?.[0]).toEqual({
+      type: "text",
+      text: `deploy with ${GRAFANA_CLOUD_TOKEN} please`,
+    });
+  });
+
+  // A prompt gets tier 2 as well, so an env-style pair in it is rewritten
+  // even when the pair is part of a sentence. That is the cost of catching a
+  // pasted config file; the opt-out above is the way around it.
+  it("applies tier 2 to env-style text in a prompt", () => {
+    const parts = [
+      {
+        id: "p1",
+        sessionID: "s1",
+        messageID: "m1",
+        type: "text" as const,
+        text: "rename the API_KEY = placeholder constant",
+      },
+    ] as Part[];
+
+    const result = mapInputMessages(parts, redactor);
+    expect(result[0].parts?.[0]).toEqual({
+      type: "text",
+      text: "rename the API_KEY = [REDACTED:env-secret-value] constant",
+    });
   });
 
   it("skips non-text parts", () => {
@@ -69,7 +129,7 @@ describe("mapInputMessages", () => {
         url: "...",
       },
     ] as Part[];
-    expect(mapInputMessages(parts)).toHaveLength(0);
+    expect(mapInputMessages(parts, redactor)).toHaveLength(0);
   });
 
   it("skips text parts with empty or whitespace-only text", () => {
@@ -103,7 +163,7 @@ describe("mapInputMessages", () => {
         text: "hello",
       },
     ] as Part[];
-    const result = mapInputMessages(parts);
+    const result = mapInputMessages(parts, redactor);
     expect(result).toHaveLength(1);
     expect(result[0].parts?.[0]).toEqual({ type: "text", text: "hello" });
   });
@@ -119,7 +179,7 @@ describe("mapInputMessages", () => {
       },
     ] as Part[];
 
-    expect(mapInputMessages(parts, "metadata_only")).toEqual([]);
+    expect(mapInputMessages(parts, redactor, "metadata_only")).toEqual([]);
   });
 });
 
@@ -476,6 +536,73 @@ describe("mapGeneration", () => {
       cacheReadInputTokens: 20,
       cacheWriteInputTokens: 10,
     });
+  });
+
+  it.each([
+    {
+      name: "redacts the prompt by default",
+      redactInputMessages: undefined,
+      wantPrompt: "use [REDACTED:grafana-cloud-token]",
+    },
+    {
+      name: "redacts the prompt when the flag is on",
+      redactInputMessages: true,
+      wantPrompt: "use [REDACTED:grafana-cloud-token]",
+    },
+    {
+      name: "sends the prompt unredacted when the flag is off",
+      redactInputMessages: false,
+      wantPrompt: `use ${GRAFANA_CLOUD_TOKEN}`,
+    },
+  ])("$name", ({ redactInputMessages, wantPrompt }) => {
+    const msg = makeAssistantMsg();
+    const userParts = [
+      {
+        id: "p1",
+        sessionID: "s1",
+        messageID: "m1",
+        type: "text" as const,
+        text: `use ${GRAFANA_CLOUD_TOKEN}`,
+      },
+    ] as Part[];
+    const assistantParts = [
+      {
+        id: "p2",
+        sessionID: "s1",
+        messageID: "m2",
+        type: "tool" as const,
+        callID: "call-1",
+        tool: "bash",
+        state: {
+          status: "completed",
+          input: { command: `curl -H "Authorization: ${GRAFANA_CLOUD_TOKEN}"` },
+          output: "ok",
+        },
+      },
+    ] as unknown as Part[];
+
+    const result = mapGeneration(
+      msg,
+      userParts,
+      assistantParts,
+      redactor,
+      "full",
+      undefined,
+      redactInputMessages,
+    );
+
+    expect(result.input?.[0].parts?.[0]).toEqual({
+      type: "text",
+      text: wantPrompt,
+    });
+    // The flag covers the prompt only: tool arguments stay redacted, and the
+    // usage/model fields do not depend on it.
+    const toolCall = result.output?.[0].parts?.[0];
+    expect(
+      toolCall?.type === "tool_call" ? toolCall.toolCall.inputJSON : "",
+    ).toContain("[REDACTED:grafana-cloud-token]");
+    expect(result.usage?.inputTokens).toBe(100);
+    expect(result.responseModel).toBe("claude-opus-4-20250514");
   });
 });
 
