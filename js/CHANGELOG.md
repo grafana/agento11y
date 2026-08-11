@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.0] - 2026-08-11
+
+### Features
+
+- **frameworks**: add conversation_id option and document OTel provider setup (#559)
+
+### Bug Fixes
+
+- **frameworks**: record chat-start request params in the JS handler (#560)
+- **frameworks**: record system prompts from LangChain/LangGraph chat messages (#558)
+
 ## [0.10.0] - 2026-08-05
 
 ### Features
