@@ -102,6 +102,28 @@ When `thread_id` is present, the handler records:
 
 When `conversation_id` / `session_id` / `group_id` is present, that value is used as primary `conversationId`.
 
+## Conversation grouping
+
+The handler resolves the conversation id per invocation, in this order:
+
+1. `conversation_id` / `session_id` / `group_id` in the callback metadata, invocation params, or `configurable`
+2. The LangGraph `thread_id`
+3. The handler's `conversationId` option
+4. A synthetic per-run id
+
+Pass `conversationId` when your application owns the conversation identity and does not use a
+LangGraph checkpointer. Per-invocation identity still wins, so a handler built once per process
+cannot override a checkpointed `thread_id`.
+
+```typescript
+const handler = new Agento11yLangGraphHandler(client, {
+  agentName: 'my-pipeline',
+  conversationId: request.conversationId,
+});
+```
+
+Without any of these, each run becomes its own conversation.
+
 ## Contract
 
 - `handleLLMStart` / `handleChatModelStart` starts recorder lifecycle.

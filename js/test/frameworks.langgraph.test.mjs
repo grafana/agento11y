@@ -19,6 +19,42 @@ class CapturingExporter {
   }
 }
 
+test('langgraph handler conversationId replaces the synthetic fallback', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangGraphHandler(client, { conversationId: 'checkout-session-7' });
+
+    await handler.handleChatModelStart(
+      { name: 'ChatOpenAI' },
+      [[{ type: 'human', content: 'hello' }]],
+      'run-conv',
+      undefined,
+      { invocation_params: { model: 'gpt-5' } },
+    );
+    await handler.handleLLMEnd({ generations: [[{ text: 'world' }]] }, 'run-conv');
+  });
+
+  assert.equal(generation.conversationId, 'checkout-session-7');
+});
+
+test('langgraph thread_id wins over handler conversationId', async () => {
+  const generation = await captureSingleGeneration(async (client) => {
+    const handler = new Agento11yLangGraphHandler(client, { conversationId: 'checkout-session-7' });
+
+    await handler.handleChatModelStart(
+      { name: 'ChatOpenAI' },
+      [[{ type: 'human', content: 'hello' }]],
+      'run-conv-thread',
+      undefined,
+      { invocation_params: { model: 'gpt-5' } },
+      undefined,
+      { thread_id: 'graph-thread-42' },
+    );
+    await handler.handleLLMEnd({ generations: [[{ text: 'world' }]] }, 'run-conv-thread');
+  });
+
+  assert.equal(generation.conversationId, 'graph-thread-42');
+});
+
 test('langgraph handler records sync lifecycle with framework tags', async () => {
   const generation = await captureSingleGeneration(async (client) => {
     const handler = new Agento11yLangGraphHandler(client, {

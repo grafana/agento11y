@@ -245,6 +245,9 @@ const otel = new NodeSDK();
 await otel.start();
 ```
 
+See [OpenTelemetry Setup](../docs/concepts/otel-setup.md) for the full wiring, including the OTLP
+metric exporter, and why analytics stays empty when this step is skipped.
+
 ## Core API
 
 - `startGeneration(...)` and `startStreamingGeneration(...)`

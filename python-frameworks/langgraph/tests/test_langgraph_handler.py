@@ -100,6 +100,53 @@ def test_langgraph_prefers_explicit_invocation_params_system_prompt() -> None:
         client.shutdown()
 
 
+def test_langgraph_handler_conversation_id_replaces_synthetic_fallback() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        run_id = uuid4()
+        handler = Agento11yLangGraphHandler(client=client, conversation_id="checkout-session-7")
+
+        handler.on_chat_model_start(
+            {"name": "ChatOpenAI"},
+            [[{"type": "human", "content": "hello"}]],
+            run_id=run_id,
+            invocation_params={"model": "gpt-5"},
+        )
+        handler.on_llm_end({"generations": [[{"text": "world"}]]}, run_id=run_id)
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert generation.conversation_id == "checkout-session-7"
+    finally:
+        client.shutdown()
+
+
+def test_langgraph_thread_id_wins_over_handler_conversation_id() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        run_id = uuid4()
+        handler = Agento11yLangGraphHandler(client=client, conversation_id="checkout-session-7")
+
+        handler.on_chat_model_start(
+            {"name": "ChatOpenAI"},
+            [[{"type": "human", "content": "hello"}]],
+            run_id=run_id,
+            invocation_params={"model": "gpt-5"},
+            metadata={"thread_id": "graph-thread-42"},
+        )
+        handler.on_llm_end({"generations": [[{"text": "world"}]]}, run_id=run_id)
+
+        client.flush()
+        generation = exporter.requests[0].generations[0]
+        assert generation.conversation_id == "graph-thread-42"
+    finally:
+        client.shutdown()
+
+
 def test_langgraph_sync_lifecycle_sets_framework_tags_and_metadata() -> None:
     exporter = _CapturingExporter()
     client = _new_client(exporter)

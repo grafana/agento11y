@@ -147,6 +147,7 @@ class Agento11yFrameworkHandlerBase:
         capture_inputs: bool = True,
         capture_outputs: bool = True,
         capture_workflow_steps: bool = False,
+        conversation_id: str = "",
         conversation_title: str = "",
         extra_tags: dict[str, str] | None = None,
         extra_metadata: dict[str, Any] | None = None,
@@ -154,6 +155,7 @@ class Agento11yFrameworkHandlerBase:
         self._client = client
         self._agent_name = agent_name
         self._agent_version = agent_version
+        self._conversation_id = conversation_id.strip()
         self._conversation_title = conversation_title.strip()
         self._framework_name = framework_name.strip()
         self._framework_source = framework_source.strip() or _default_framework_source
@@ -323,6 +325,7 @@ class Agento11yFrameworkHandlerBase:
             serialized=serialized,
             invocation_params=invocation_params,
             callback_kwargs=callback_kwargs,
+            handler_conversation_id=self._conversation_id,
         )
         conversation_id = self._resolve_graph_conversation_id(conversation_id, parent_run_id)
         parent_run_key = _normalize_run_key(parent_run_id)
@@ -429,6 +432,7 @@ class Agento11yFrameworkHandlerBase:
             serialized=serialized,
             invocation_params=invocation_params,
             callback_kwargs=callback_kwargs,
+            handler_conversation_id=self._conversation_id,
         )
         conversation_id = self._resolve_graph_conversation_id(conversation_id, parent_run_id)
         parent_run_key = _normalize_run_key(parent_run_id)
@@ -634,6 +638,7 @@ class Agento11yFrameworkHandlerBase:
             serialized=serialized,
             invocation_params=None,
             callback_kwargs=callback_kwargs,
+            handler_conversation_id=self._conversation_id,
         )
         tool_name = _resolve_tool_name(serialized, callback_kwargs)
         include_content = self._capture_inputs or self._capture_outputs
@@ -791,6 +796,7 @@ class Agento11yFrameworkHandlerBase:
             serialized=serialized,
             invocation_params=None,
             callback_kwargs=callback_kwargs,
+            handler_conversation_id=self._conversation_id,
         )
         conversation_id = self._resolve_graph_conversation_id(conversation_id, parent_run_id)
         component_name = _resolve_component_name(serialized, callback_kwargs)
@@ -935,6 +941,7 @@ class Agento11yFrameworkHandlerBase:
             serialized=serialized,
             invocation_params=invocation_params,
             callback_kwargs=callback_kwargs,
+            handler_conversation_id=self._conversation_id,
         )
         parent_run_key = _normalize_run_key(parent_run_id)
         component_name = _resolve_component_name(serialized, callback_kwargs)
@@ -1166,7 +1173,16 @@ def _resolve_framework_conversation_id(
     serialized: dict[str, Any] | None,
     invocation_params: dict[str, Any] | None,
     callback_kwargs: dict[str, Any] | None,
+    handler_conversation_id: str = "",
 ) -> tuple[str, str]:
+    """Resolve the conversation id for one callback.
+
+    Per-invocation identity wins over the handler-level default: a LangGraph
+    ``thread_id`` is the checkpointed conversation, and a handler constructed
+    once per process must not override it. ``handler_conversation_id`` is the
+    fallback for callers whose framework exposes no session key at all, which
+    otherwise land on the synthetic per-run id and never group.
+    """
     for payload in (callback_kwargs, invocation_params, serialized):
         conversation_id = _conversation_id_from_payload(payload)
         if conversation_id != "":
@@ -1186,6 +1202,9 @@ def _resolve_framework_conversation_id(
     )
     if thread_id != "":
         return thread_id, thread_id
+
+    if handler_conversation_id != "":
+        return handler_conversation_id, ""
 
     # Deterministic fallback when framework context does not expose a stable conversation key.
     return f"agento11y:framework:{framework_name}:{run_key}", ""

@@ -58,6 +58,28 @@ _ = llm.invoke("manual handler wiring", config={"callbacks": [handler]})
 client.shutdown()
 ```
 
+## Conversation grouping
+
+The handler resolves the conversation id per invocation, in this order:
+
+1. `conversation_id` / `session_id` / `group_id` in the callback metadata, invocation params, or `configurable`
+2. A `thread_id` in the same places
+3. The handler's `conversation_id` constructor argument
+4. A synthetic per-run id
+
+Pass `conversation_id` on the constructor when your application owns the conversation identity.
+Per-invocation identity still wins, so a handler built once per process cannot override it.
+
+```python
+handler = Agento11yLangChainHandler(
+    client=client,
+    agent_name="my-chain",
+    conversation_id=request.conversation_id,
+)
+```
+
+Without any of these, each run becomes its own conversation.
+
 ## Behavior
 
 - Lifecycle mapping:
