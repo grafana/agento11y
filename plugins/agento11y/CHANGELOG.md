@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.27.0] - 2026-08-11
+
+### Features
+
+- **plugins/agento11y**: accept credentials block in login (#554)
+
 ## [0.26.0] - 2026-08-10
 
 ### Features
