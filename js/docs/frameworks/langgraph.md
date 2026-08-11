@@ -130,6 +130,13 @@ Without any of these, each run becomes its own conversation.
 - System and developer messages passed to `handleChatModelStart` are lifted out of the input message
   list into `systemPrompt` (joined with a blank line when there are several), since the wire format
   has no system role. An explicit `invocation_params.system_prompt` wins.
+- `handleChatModelStart` also lifts `temperature`, `max_tokens`, `top_p`, `tool_choice`,
+  `thinking_enabled`, and `tools` out of `invocation_params` onto the generation. Tool definitions
+  accept the OpenAI shape (`{ type: 'function', function: { name, description, parameters } }`) and
+  self-describing entries; `parameters` (or `parameters_json_schema`) becomes `inputSchemaJSON`.
+- `thinking_budget` and `thinking_level` are recorded as the
+  `agento11y.gen_ai.request.thinking.budget_tokens` and `agento11y.gen_ai.request.thinking.level`
+  metadata keys, on both `handleLLMStart` and `handleChatModelStart`.
 - `handleLLMNewToken` sets first-token timestamp and accumulates streamed output.
 - `handleLLMEnd` maps output + usage and ends recorder.
 - `handleLLMError` sets call error and ends recorder.
