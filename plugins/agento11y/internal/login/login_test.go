@@ -19,6 +19,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 )
 
 // nonTTYStdin returns a file that is guaranteed not to be a terminal.
@@ -1991,6 +1992,15 @@ func TestPrintNextStep(t *testing.T) {
 			if !strings.Contains(got, "agento11y claude") {
 				t.Errorf("next step must still name the launchers:\n%s", got)
 			}
+			// The skill line comes after the doctor line: a user who ran login
+			// reads the diagnostic first and the setup handoff second.
+			doctorAt := strings.Index(got, "agento11y doctor")
+			skillAt := strings.Index(got, skills.SetupCodingAgentCommand)
+			if skillAt < 0 {
+				t.Errorf("next step does not name %q:\n%s", skills.SetupCodingAgentCommand, got)
+			} else if doctorAt < 0 || skillAt < doctorAt {
+				t.Errorf("the skill line must follow the doctor line:\n%s", got)
+			}
 			for _, want := range c.want {
 				if !strings.Contains(got, want) {
 					t.Errorf("output missing %q:\n%s", want, got)
@@ -2032,6 +2042,12 @@ func TestRun_NextStepOnlyWhenAsked(t *testing.T) {
 			}
 			if got := strings.Contains(stderr, "agento11y doctor"); got != show {
 				t.Errorf("next-step hint printed = %v, want %v:\n%s", got, show, stderr)
+			}
+			// The launcher's automatic login leaves ShowNextStep false and is
+			// about to start the agent, so it must not print the setup handoff
+			// either.
+			if got := strings.Contains(stderr, skills.SetupCodingAgentCommand); got != show {
+				t.Errorf("skill hint printed = %v, want %v:\n%s", got, show, stderr)
 			}
 		})
 	}

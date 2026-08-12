@@ -8,21 +8,22 @@ agento11y doctor v0.22.0
 ✓ Analytics (OTLP metrics & traces)
   endpoint:           https://otlp.example/otlp (AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT, env)
 
-✓ Config
+✗ Config
   file:               /home/u/.config/agento11y/config.env (present)
   content capture:    full (AGENTO11Y_CONTENT_CAPTURE_MODE, config.env)
-  prompt redaction:   enabled
   guards:             enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, config.env)
   tags:               env=prod, team=assistant (AGENTO11Y_TAGS, config.env)
   auto tags:          user,repo resolved repo=grafana/agento11y, user=alice@example.com (AGENTO11Y_AUTO_CODING_AGENT_TAGS, config.env)
   local forwarding:   true (AGENTO11Y_LOCAL_FORWARD, env)
   local guard checks: forwarded to Cloud (tool calls, and the conversation an agent runs a preflight check on, are sent for evaluation whatever the capture mode)
+  ! config.env is not readable
 
 Coding agents
   claude:             installed v0.3.0
   codex:              not found on PATH
   cursor:             detected v0.22.0 (hook-based; configured in Cursor settings)
 
-✓ no problems detected
+✗ 1 problem(s): config misconfigured
 
-Setting up another coding agent? Run agento11y skills show setup-coding-agent.
+Need help? Paste this to your coding agent:
+Run `agento11y skills show setup-coding-agent` and follow it to set up Grafana Agent observability for my coding agent.

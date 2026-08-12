@@ -65,7 +65,7 @@ Three steps run per release, and none of them creates a tag on the release PR:
 
 | Plugin dir | What it actually is |
 |------------|---------------------|
-| `plugins/agento11y/` | The shared Go binary, installed as `agento11y` (`brew install grafana/grafana/agento11y`; the old `sigil` name still works but will be removed). Has subcommands `claude`, `codex`, `copilot`, `cursor`, `opencode`, `pi`, `vibe`, `login`, `doctor`, `local`. This is also what consumers use. |
+| `plugins/agento11y/` | The shared Go binary, installed as `agento11y` (`brew install grafana/grafana/agento11y`; the old `sigil` name still works but will be removed). Has subcommands `claude`, `codex`, `copilot`, `cursor`, `opencode`, `pi`, `vibe`, `login`, `doctor`, `local`, `history`, `skills`, `help`. This is also what consumers use. |
 | `plugins/claude-code/`, `plugins/codex/`, `plugins/copilot/`, `plugins/cursor/` | Thin glue: hook scripts and READMEs that wire the host agent to the shared `agento11y` binary. No independent code paths. |
 | `plugins/opencode/` | Independent npm package `@grafana/agento11y-opencode`. Runs in-process inside opencode through its TypeScript plugin API; `agento11y opencode` installs and launches it. |
 | `plugins/pi/` | Independent npm package `@grafana/agento11y-pi`. Runs in-process inside pi; `agento11y pi` installs and launches it. |
@@ -80,9 +80,25 @@ If you change shared-binary behavior, the four glue plugins and vibe all see it.
 - Python has one package per framework (`agento11y-langgraph`, `agento11y-openai`, …). JS has one package with subpath exports (`@grafana/agento11y/langgraph`). Don't reflexively assume one layout for the other.
 - Python version bumps go through `mise run sdk:py:bump <VERSION>`. It updates all 13 `pyproject.toml` files and their internal `agento11y>=…` pins atomically. Hand-editing one file leaves the other twelve inconsistent.
 
+## A skill served by the binary lives inside the binary's tree
+
+Skill markdown sits in four directories, and where a new skill goes follows from who serves it.
+
+| Directory | Served by |
+|-----------|-----------|
+| `plugins/agento11y/internal/skills/content/` | The `agento11y` binary, through `agento11y skills list` and `agento11y skills show <name>` |
+| `skills/`, `python/skills/` | `gcx`, which bundles them into its own binary |
+| `plugins/opencode/skills/` | The opencode plugin package |
+
+A skill the `agento11y` binary serves must live under `plugins/agento11y/internal/skills/content/<name>/SKILL.md`. It cannot live in the repo-root `skills/` directory: `go doc embed` says a `//go:embed` pattern may not contain `.` or `..` path elements, so the directive cannot reach upward past its own package.
+
+`cd plugins/agento11y && go test ./internal/skills/` checks every bundled `SKILL.md`: frontmatter delimiters, valid YAML, a `name` matching the directory, a non-empty `description`, and fewer than 500 lines. `mise run test:go:plugin` runs it from the repo root. Nothing checks the three other directories yet, which is how the broken frontmatter at `skills/agento11y-eval-starter/SKILL.md:3` merged.
+
 ## Consumer prompt lives in two places
 
 [`llms.txt`](llms.txt) is what this repo ships. There is a second copy of the same prompt rendered by the Agent Observability onboarding wizard (a separate Grafana product). When you change user-facing semantics here (new SDK field, renamed env var, new framework adapter), the wizard copy needs the same change. If you're only fixing this repo's internals, the wizard copy doesn't move.
+
+The `## Reference` section of `plugins/agento11y/internal/skills/content/setup-coding-agent/SKILL.md` restates the same consumer semantics a third time (config keys, tagging, capture modes, local mode, history import, auto-update), alongside `plugins/agento11y/README.md`. Renaming a config key means editing all of them, and nothing checks that they agree.
 
 ## Hook and experiment wire fixtures are checked by hand
 

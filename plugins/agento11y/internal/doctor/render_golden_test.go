@@ -36,6 +36,7 @@ func TestRenderHumanGolden(t *testing.T) {
 		{name: "broken", report: goldenBrokenReport()},
 		{name: "probed", report: goldenProbedReport()},
 		{name: "redirected", report: goldenRedirectedReport()},
+		{name: "broken-config", report: brokenConfigReport()},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

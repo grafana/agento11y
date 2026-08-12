@@ -13,6 +13,8 @@
 //	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
 //	agento11y local start|status|stop                                 — manage the local capture daemon
 //	agento11y history import <agent> [flags]                          — backfill an agent's existing local sessions
+//	agento11y skills list|show <name>                                 — print an agent skill bundled into this binary
+//	agento11y help                                                    — print the expanded command list
 //	agento11y --version                                               — print the build version
 //
 // --tag is repeatable and adds key=value pairs to SIGIL_TAGS so they land
@@ -58,6 +60,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
 )
 
@@ -123,7 +126,7 @@ func localPrivacyLines(posture local.ForwardPosture, known bool) []string {
 func usageLine() string {
 	return "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] " +
 		"[--otlp-endpoint url] [--no-verify] [--yes] | agento11y doctor [--json] | " +
-		"agento11y local start|status|stop | " +
+		"agento11y skills list|show <name> | agento11y local start|status|stop | " +
 		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
 		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
 }
@@ -203,6 +206,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		return
 	}
 
+	// `agento11y help` answers on stdout and exits 0, unlike the arity guard
+	// below, which is misuse and writes the one-line usage form to stderr.
+	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+		runHelpCommand(stdout)
+		return
+	}
+
 	// `agento11y login` is a top-level subcommand handled before launcher and
 	// hook dispatch so it can run without a verb argument and without an
 	// agent name. It owns its own flag parsing.
@@ -228,6 +238,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// dispatch like `local`. It owns its own flag parsing.
 	if args[0] == "doctor" {
 		runDoctorCommand(args[1:], stdout, stderr)
+		return
+	}
+
+	// `agento11y skills` sits next to `doctor`, above launcher and hook
+	// dispatch, so an agent named `skills` cannot shadow it.
+	if args[0] == skills.Command {
+		runSkillsCommand(args[1:], stdout, stderr)
 		return
 	}
 
