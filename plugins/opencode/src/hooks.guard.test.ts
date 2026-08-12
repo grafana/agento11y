@@ -89,6 +89,7 @@ function config(endpoint: string): Agento11yOpencodeConfig {
     agentName: "opencode",
     agentVersion: "test-version",
     contentCapture: "full",
+    redactInputMessages: true,
     debug: false,
     guards: { enabled: true, timeoutMs: 1500, failOpen: true },
   };

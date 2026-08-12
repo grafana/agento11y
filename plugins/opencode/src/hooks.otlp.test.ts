@@ -223,6 +223,7 @@ describe("createAgento11yHooks OTLP wiring", () => {
       agentName: "opencode",
       agentVersion: "test-version",
       contentCapture: "metadata_only",
+      redactInputMessages: true,
       debug: false,
       ...(otlpEnabled && {
         otlp: {
@@ -415,6 +416,7 @@ describe("createAgento11yHooks OTLP wiring", () => {
       agentName: "opencode",
       agentVersion: "test-version",
       contentCapture: "metadata_only",
+      redactInputMessages: true,
       debug: false,
       otlp: {
         endpoint: otlp.endpoint,

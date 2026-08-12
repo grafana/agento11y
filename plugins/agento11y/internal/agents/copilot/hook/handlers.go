@@ -495,11 +495,12 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 		_ = client.Shutdown(ctx)
 	}()
 	mapped := mapper.Map(mapper.Inputs{
-		Fragment:       frag,
-		Session:        session,
-		ContentCapture: cfg.ContentCapture,
-		UserIDOverride: envconfig.Getenv("USER_ID"),
-		AgentName:      cfg.Agent(),
+		Fragment:            frag,
+		Session:             session,
+		ContentCapture:      cfg.ContentCapture,
+		SkipPromptRedaction: cfg.SkipPromptRedaction,
+		UserIDOverride:      envconfig.Getenv("USER_ID"),
+		AgentName:           cfg.Agent(),
 	})
 	logger.Printf(
 		"stop: mapped model=%s provider=%s response_id=%s output_tokens=%d assistant_text=%t tool_count=%d",
@@ -730,7 +731,16 @@ func emitGeneration(ctx context.Context, client *agento11y.Client, frag *fragmen
 	})
 }
 
+// Tool argument/result content goes through the redactor on its way to the
+// span, the same second boundary cursor and codex use: the mapper redacts the
+// generation export, and the span carries its own copy of the same fragment
+// bytes. t.ErrorMessage needs no pass here, because postToolUse redacted it
+// before it reached the fragment. Capture-mode clamping also happens at that
+// write boundary (preToolUse and postToolUse drop the bytes for any mode other
+// than `full`), so in metadata_only and no_tool_content there is nothing left
+// to redact.
 func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment.Fragment, gen agento11y.Generation, logger *log.Logger) {
+	red := redact.New()
 	for i := range frag.Tools {
 		t := &frag.Tools[i]
 		if t.ToolName == "" {
@@ -752,10 +762,10 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment
 
 		end := agento11y.ToolExecutionEnd{CompletedAt: completedAt}
 		if len(t.ToolInput) > 0 {
-			end.Arguments = string(t.ToolInput)
+			end.Arguments = red.ToolPayloadText(t.ToolInput)
 		}
 		if len(t.ToolResponse) > 0 {
-			end.Result = string(t.ToolResponse)
+			end.Result = red.ToolPayloadText(t.ToolResponse)
 		} else if t.ErrorMessage != "" {
 			end.Result = t.ErrorMessage
 		}

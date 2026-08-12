@@ -17,6 +17,9 @@ import (
 	"testing"
 	"time"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot/config"
@@ -244,6 +247,54 @@ func TestStopEnrichesExportFromTranscript(t *testing.T) {
 		if !strings.Contains(gotBody, want) {
 			t.Fatalf("export body missing %q: %s", want, gotBody)
 		}
+	}
+}
+
+// TestStopPromptRedactionWiring pins config.Config.SkipPromptRedaction
+// through to the exported body. The mapper tests cover the flag itself and
+// the config test covers Load; this one covers the wire between them.
+func TestStopPromptRedactionWiring(t *testing.T) {
+	const secret = "glc_abcdefghijklmnopqrstuvwxyz"
+
+	tests := []struct {
+		name                string
+		skipPromptRedaction bool
+		wantPromptInRaw     bool
+	}{
+		{name: "redacts the prompt by default", wantPromptInRaw: false},
+		{name: "opt-out exports the prompt unredacted", skipPromptRedaction: true, wantPromptInRaw: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
+			logger := log.New(io.Discard, "", 0)
+
+			var gotBody string
+			server := newAcceptedGenerationServer(t, func(body string) {
+				gotBody = body
+			})
+			defer server.Close()
+
+			t.Setenv("SIGIL_ENDPOINT", server.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+			t.Setenv("SIGIL_AUTH_TOKEN", "token")
+			cfg := config.Config{
+				ContentCapture:      agento11y.ContentCaptureModeFull,
+				SkipPromptRedaction: tt.skipPromptRedaction,
+			}
+
+			UserPromptSubmit(Payload{HookEventNameJSON: "UserPromptSubmit", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:01Z"`), Prompt: "my token is " + secret}, cfg, logger)
+			PostToolUse(Payload{HookEventNameJSON: "PostToolUse", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:03Z"`), ToolNameJSON: "bash", ToolInputJSON: []byte(`{"cmd":"echo ` + secret + `"}`), ToolResultJSON: []byte(`{"text_result_for_llm":"ok"}`)}, cfg, logger, false)
+			Stop(Payload{HookEventNameJSON: "Stop", SessionIDJSON: "sess", Timestamp: []byte(`"2026-05-18T12:00:04Z"`), StopReasonJSON: "end_turn"}, cfg, logger)
+
+			require.NotEmpty(t, gotBody, "expected an export request")
+			assert.Equal(t, tt.wantPromptInRaw, strings.Contains(gotBody, "my token is "+secret), "prompt unredacted in export: %s", gotBody)
+			// The flag covers the prompt only.
+			assert.NotContains(t, gotBody, "echo "+secret, "tool arguments lost their redaction")
+		})
 	}
 }
 
@@ -894,4 +945,86 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 			assert.Equal(t, []string{mapper.AgentName}, exportProviders, "exported model providers")
 		})
 	}
+}
+
+// Tool arguments and results reach the OTel span on a path the generation
+// export never touches, so the mapper's redaction does not cover them. The
+// span carries the same fragment bytes and needs its own pass.
+func TestEmitToolSpans_RedactsContent(t *testing.T) {
+	const token = "glc_abcdefghijklmnopqrstuvwxyz"
+	const apiKey = "kR7fQ2wLmZ9xTb4vNc1JhY6s"
+
+	recorder := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	logger := log.New(io.Discard, "", 0)
+	client := agento11y.NewClient(agento11y.Config{
+		ContentCapture: agento11y.ContentCaptureModeFull,
+		Tracer:         tp.Tracer("test"),
+		Logger:         logger,
+	})
+	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+	frag := &fragment.Fragment{
+		Tools: []fragment.ToolRecord{{
+			ToolName:     "bash",
+			ToolUseID:    "tu-1",
+			ToolInput:    json.RawMessage(`{"command":"deploy.sh","api_key":"` + apiKey + `"}`),
+			ToolResponse: json.RawMessage(`{"stdout":"authenticated with ` + token + `"}`),
+			Status:       "completed",
+			CompletedAt:  "2026-05-18T12:00:05Z",
+		}},
+	}
+	gen := agento11y.Generation{
+		ID:             "gen-1",
+		ConversationID: "conv",
+		AgentName:      mapper.AgentName,
+		Model:          agento11y.ModelRef{Provider: "openai", Name: "gpt-5-copilot"},
+		CompletedAt:    time.Date(2026, 5, 18, 12, 0, 30, 0, time.UTC),
+		// Tool-call content in the output is what makes the SDK resolve the
+		// span's capture mode to full; mappedContentCapture reads it.
+		Output: []agento11y.Message{{
+			Role: agento11y.RoleAssistant,
+			Parts: []agento11y.Part{agento11y.ToolCallPart(agento11y.ToolCall{
+				ID:        "tu-1",
+				Name:      "bash",
+				InputJSON: json.RawMessage(`{"command":"deploy.sh"}`),
+			})},
+		}},
+	}
+
+	emitToolSpans(context.Background(), client, frag, gen, logger)
+	_ = client.Shutdown(context.Background())
+	_ = tp.Shutdown(context.Background())
+
+	var attrs map[string]string
+	for _, s := range recorder.Ended() {
+		if !strings.HasPrefix(s.Name(), "execute_tool ") {
+			continue
+		}
+		attrs = map[string]string{}
+		for _, kv := range s.Attributes() {
+			attrs[string(kv.Key)] = kv.Value.AsString()
+		}
+	}
+	require.NotNil(t, attrs, "no execute_tool span recorded")
+
+	cases := []struct {
+		attr     string
+		wantMark string
+	}{
+		{"gen_ai.tool.call.arguments", "[REDACTED:json-secret-field]"},
+		{"gen_ai.tool.call.result", "[REDACTED:grafana-cloud-token]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.attr, func(t *testing.T) {
+			got, ok := attrs[tc.attr]
+			require.True(t, ok, "span is missing %s; recorded attributes: %v", tc.attr, attrs)
+			assert.NotContains(t, got, token, "%s leaks the token", tc.attr)
+			assert.NotContains(t, got, apiKey, "%s leaks the api key", tc.attr)
+			assert.Contains(t, got, tc.wantMark, "%s is missing the marker", tc.attr)
+		})
+	}
+	assert.Contains(t, attrs["gen_ai.tool.call.arguments"], "deploy.sh", "non-secret argument dropped")
 }

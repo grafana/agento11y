@@ -87,6 +87,7 @@ func PostAgentTurn(ctx context.Context, p Payload, logger *log.Logger) {
 	}
 
 	contentMode := envconfig.ResolveContentMode(logger)
+	skipPromptRedaction := !envconfig.ResolveRedactInput(logger)
 
 	// vibe persists the post_agent_turn count as stats.steps. Using it
 	// (rather than a counter in state) keeps the generation ID stable
@@ -120,16 +121,17 @@ func PostAgentTurn(ctx context.Context, p Payload, logger *log.Logger) {
 	}
 
 	mapped := mapper.Map(mapper.Inputs{
-		SessionID:          p.SessionID,
-		CWD:                p.CWD,
-		ParentSessionID:    parentSessionID,
-		ParentGenerationID: parentGenID,
-		Lines:              lines,
-		Meta:               m,
-		PriorState:         prior,
-		PriorStateFound:    priorFound,
-		ContentCapture:     contentMode,
-		AgentName:          envconfig.ResolveAgentName(mapper.AgentName),
+		SessionID:           p.SessionID,
+		CWD:                 p.CWD,
+		ParentSessionID:     parentSessionID,
+		ParentGenerationID:  parentGenID,
+		Lines:               lines,
+		Meta:                m,
+		PriorState:          prior,
+		PriorStateFound:     priorFound,
+		ContentCapture:      contentMode,
+		SkipPromptRedaction: skipPromptRedaction,
+		AgentName:           envconfig.ResolveAgentName(mapper.AgentName),
 	}, turnSeq)
 
 	// A meta.json without session_cost carries no new baseline, so keep the

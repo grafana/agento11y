@@ -45,7 +45,10 @@ type Inputs struct {
 	// same patterns twice. Live capture leaves it false, so the mapper stays
 	// the redaction point for the live path.
 	RawContent bool
-	Now        time.Time
+	// SkipPromptRedaction exports the user prompt without redaction. The zero
+	// value redacts; envconfig.ResolveRedactInput owns the policy.
+	SkipPromptRedaction bool
+	Now                 time.Time
 }
 
 type Mapped struct {
@@ -87,7 +90,7 @@ func Map(in Inputs) Mapped {
 	tags["codex.stop_hook_active"] = strconv.FormatBool(frag.StopHookActive)
 
 	tools := buildToolDefinitions(frag.Tools)
-	input, output := buildMessages(frag, payloadMode, in.RawContent)
+	input, output := buildMessages(frag, payloadMode, in.RawContent, in.SkipPromptRedaction)
 	conversationID, agentName, parentIDs, metadata := linkFields(frag, in.SubagentLink, tags, in.agent())
 	usage, metadata := usageFields(in.TokenSnapshot, metadata)
 
@@ -223,15 +226,16 @@ func hasPositiveCodexUsage(u codexlog.TokenUsage) bool {
 		u.TotalTokens > 0
 }
 
-func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, rawContent bool) (input, output []agento11y.Message) {
+func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, rawContent, skipPromptRedaction bool) (input, output []agento11y.Message) {
 	mode = mapperutil.NormalizePayloadContentMode(mode)
 	red := redact.New()
-	cleanText := func(s string) string {
+	contentMode := mode == agento11y.ContentCaptureModeFull || mode == agento11y.ContentCaptureModeNoToolContent
+	cleanProse := func(s string) string {
 		if rawContent {
 			return s
 		}
-		if mode == agento11y.ContentCaptureModeFull || mode == agento11y.ContentCaptureModeNoToolContent {
-			return red.Redact(s)
+		if contentMode {
+			return red.AssistantText(s)
 		}
 		return ""
 	}
@@ -239,11 +243,21 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, r
 		if rawContent {
 			return raw
 		}
-		return red.RedactJSON(raw)
+		return red.ToolPayloadJSON(raw)
+	}
+	// The redaction opt-out does not export a prompt the capture mode drops.
+	cleanPrompt := func(s string) string {
+		if rawContent || (skipPromptRedaction && contentMode) {
+			return s
+		}
+		if contentMode {
+			return red.Prompt(s)
+		}
+		return ""
 	}
 
 	if mode != agento11y.ContentCaptureModeMetadataOnly && strings.TrimSpace(frag.Prompt) != "" {
-		input = append(input, agento11y.UserTextMessage(cleanText(frag.Prompt)))
+		input = append(input, agento11y.UserTextMessage(cleanPrompt(frag.Prompt)))
 	}
 	for i := range frag.Tools {
 		t := &frag.Tools[i]
@@ -265,7 +279,7 @@ func buildMessages(frag *fragment.Fragment, mode agento11y.ContentCaptureMode, r
 		input = append(input, agento11y.Message{Role: agento11y.RoleTool, Parts: []agento11y.Part{agento11y.ToolResultPart(result)}})
 	}
 	if mode != agento11y.ContentCaptureModeMetadataOnly && strings.TrimSpace(frag.LastAssistantMessage) != "" {
-		output = append(output, agento11y.AssistantTextMessage(cleanText(frag.LastAssistantMessage)))
+		output = append(output, agento11y.AssistantTextMessage(cleanProse(frag.LastAssistantMessage)))
 	}
 	return input, output
 }

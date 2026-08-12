@@ -1483,3 +1483,86 @@ func TestHook_AgentNameOverride(t *testing.T) {
 		})
 	}
 }
+
+// TestHook_PromptRedactionWiring pins AGENTO11Y_REDACT_INPUT_MESSAGES from the
+// environment through to the exported body. The mapper tests cover the flag
+// itself; this one covers the wire between them.
+func TestHook_PromptRedactionWiring(t *testing.T) {
+	const secret = "glc_abcdefghijklmnopqrstuvwxyz"
+
+	tests := []struct {
+		name            string
+		raw             string
+		wantPromptInRaw bool
+	}{
+		{name: "redacts by default", raw: "", wantPromptInRaw: false},
+		{name: "opt-out exports the prompt unredacted", raw: "false", wantPromptInRaw: true},
+		{name: "typo keeps redaction on", raw: "flase", wantPromptInRaw: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+			envconfig.PinAliasEnvBlank(t)
+
+			var gotBody atomic.Value
+			gotBody.Store("")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					http.Error(w, "read body", http.StatusBadRequest)
+					return
+				}
+				gotBody.Store(string(body))
+				var request map[string]any
+				if err := json.Unmarshal(body, &request); err != nil {
+					http.Error(w, "invalid json", http.StatusBadRequest)
+					return
+				}
+				generations, _ := request["generations"].([]any)
+				results := make([]map[string]any, 0, len(generations))
+				for _, entry := range generations {
+					generation, _ := entry.(map[string]any)
+					id, _ := generation["id"].(string)
+					results = append(results, map[string]any{"generation_id": id, "accepted": true})
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(map[string]any{"results": results}); err != nil {
+					http.Error(w, "encode response", http.StatusInternalServerError)
+				}
+			}))
+			defer server.Close()
+
+			setHookExportEnv(t, server.URL)
+			t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "full")
+			t.Setenv("AGENTO11Y_REDACT_INPUT_MESSAGES", tt.raw)
+
+			sessionID := "redaction-wiring-session"
+			transcriptPath := filepath.Join(dir, "transcript.jsonl")
+			content := buildHookUserJSONL(sessionID, "my token is "+secret) + "\n" +
+				buildHookAssistantJSONL(sessionID, "req-1", "end_turn", "assistant saw "+secret, 5) + "\n"
+			if err := os.WriteFile(transcriptPath, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			runHookForTest(t, hookInput{
+				HookEventName:  "Stop",
+				SessionID:      sessionID,
+				TranscriptPath: transcriptPath,
+			})
+
+			body, _ := gotBody.Load().(string)
+			if body == "" {
+				t.Fatal("expected an export request")
+			}
+			if got := strings.Contains(body, "my token is "+secret); got != tt.wantPromptInRaw {
+				t.Errorf("prompt unredacted in export = %v, want %v: %s", got, tt.wantPromptInRaw, body)
+			}
+			// The flag covers the prompt only.
+			if strings.Contains(body, "assistant saw "+secret) {
+				t.Errorf("assistant text lost its redaction: %s", body)
+			}
+		})
+	}
+}

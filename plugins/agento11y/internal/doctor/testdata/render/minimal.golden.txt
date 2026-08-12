@@ -1,21 +1,22 @@
 agento11y doctor v0.22.0
 
 ! Conversations (generation export)
-  endpoint:        not set
-  tenant id:       not set
-  auth token:      not set
+  endpoint:         not set
+  tenant id:        not set
+  auth token:       not set
   ! not configured — run `agento11y login` or set AGENTO11Y_ENDPOINT, AGENTO11Y_AUTH_TENANT_ID and AGENTO11Y_AUTH_TOKEN
 
 ! Analytics (OTLP metrics & traces)
-  endpoint:        not set
+  endpoint:         not set
   ! no OTLP endpoint set; analytics export is disabled
 
 ✓ Config
-  file:            /home/u/.config/agento11y/config.env (missing)
-  content capture: metadata_only (default)
-  guards:          disabled (default)
+  file:             /home/u/.config/agento11y/config.env (missing)
+  content capture:  metadata_only (default)
+  prompt redaction: enabled
+  guards:           disabled (default)
 
 Coding agents
-  claude:          plugin not installed
+  claude:           plugin not installed
 
 ✓ no problems detected

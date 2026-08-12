@@ -1000,7 +1000,7 @@ func TestCollectConfig_ContentMode(t *testing.T) {
 			// Nothing is configured, so the row has to say the value is the
 			// built-in one rather than a choice the user made.
 			name: "unset uses the built-in default", wantMode: "metadata_only",
-			wantRendered: "content capture: metadata_only (default)",
+			wantRendered: "content capture:  metadata_only (default)",
 		},
 		{
 			// The rejected value did not supply the mode in force, so the row credits
@@ -1009,17 +1009,17 @@ func TestCollectConfig_ContentMode(t *testing.T) {
 			name: "invalid mode falls back", osEnv: map[string]string{"SIGIL_CONTENT_CAPTURE_MODE": "bogus"},
 			wantMode: "metadata_only", wantFellBack: true, wantHealth: HealthWarn,
 			wantMsg:      "the SIGIL_CONTENT_CAPTURE_MODE value is invalid; using metadata_only",
-			wantRendered: "content capture: metadata_only (default)",
+			wantRendered: "content capture:  metadata_only (default)",
 		},
 		{
 			name: "from the shell", osEnv: map[string]string{"AGENTO11Y_CONTENT_CAPTURE_MODE": "full"},
 			wantMode: "full", wantKey: "AGENTO11Y_CONTENT_CAPTURE_MODE", wantSource: sourceEnv,
-			wantRendered: "content capture: full (AGENTO11Y_CONTENT_CAPTURE_MODE, env)",
+			wantRendered: "content capture:  full (AGENTO11Y_CONTENT_CAPTURE_MODE, env)",
 		},
 		{
 			name: "from config.env", fileEnv: map[string]string{"AGENTO11Y_CONTENT_CAPTURE_MODE": "no_tool_content"},
 			wantMode: "no_tool_content", wantKey: "AGENTO11Y_CONTENT_CAPTURE_MODE", wantSource: sourceConfig,
-			wantRendered: "content capture: no_tool_content (AGENTO11Y_CONTENT_CAPTURE_MODE, config.env)",
+			wantRendered: "content capture:  no_tool_content (AGENTO11Y_CONTENT_CAPTURE_MODE, config.env)",
 		},
 		{
 			// The shell wins, so the row must not name the config.env value the
@@ -1079,6 +1079,47 @@ func TestCollectConfig_ContentModeReadsTheSnapshot(t *testing.T) {
 	}
 }
 
+func TestCollectConfig_RedactInput(t *testing.T) {
+	// The family has to be in the snapshot the binary passes in, or a
+	// shell-exported opt-out reads as unset here while the hooks act on it.
+	if !slices.Contains(trackedSuffixes, "REDACT_INPUT_MESSAGES") {
+		t.Fatalf("trackedSuffixes is missing REDACT_INPUT_MESSAGES, so SnapshotEnv would not record it")
+	}
+
+	tests := []struct {
+		name         string
+		raw          string
+		wantRedact   bool
+		wantFellBack bool
+		wantHealth   Health // "" = don't assert
+	}{
+		{name: "unset redacts", wantRedact: true},
+		{name: "explicit true", raw: "true", wantRedact: true},
+		{name: "opt-out", raw: "false", wantRedact: false},
+		{name: "typo keeps redaction on and warns", raw: "flase", wantRedact: true, wantFellBack: true, wantHealth: HealthWarn},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnv(t)
+			osEnv := map[string]string{}
+			if tc.raw != "" {
+				osEnv["SIGIL_REDACT_INPUT_MESSAGES"] = tc.raw
+			}
+
+			sec := collectConfig(osEnv, nil)
+			if sec.RedactInput != tc.wantRedact {
+				t.Fatalf("RedactInput = %v, want %v", sec.RedactInput, tc.wantRedact)
+			}
+			if sec.RedactInputFellBack != tc.wantFellBack {
+				t.Fatalf("RedactInputFellBack = %v, want %v", sec.RedactInputFellBack, tc.wantFellBack)
+			}
+			if tc.wantHealth != "" && sec.Health != tc.wantHealth {
+				t.Fatalf("health = %q, want %q", sec.Health, tc.wantHealth)
+			}
+		})
+	}
+}
+
 func TestCollectConfig_Guards(t *testing.T) {
 	// The guard families have to be in the snapshot the binary passes in, or a
 	// shell-exported timeout reads as unset here while the hooks act on it.
@@ -1103,13 +1144,13 @@ func TestCollectConfig_Guards(t *testing.T) {
 	}{
 		{
 			name: "unset uses defaults", wantEnabled: false, wantTimeoutMs: 1500, wantFailOpen: true,
-			wantRendered: "guards:          disabled (default)",
+			wantRendered: "guards:           disabled (default)",
 		},
 		{
 			name: "enabled fail-open", osEnv: map[string]string{"AGENTO11Y_GUARDS_ENABLED": "true"},
 			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true,
 			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceEnv,
-			wantRendered: "guards:          enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
+			wantRendered: "guards:           enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
 		},
 		{
 			name: "enabled fail-closed with timeout from config.env",
@@ -1120,13 +1161,13 @@ func TestCollectConfig_Guards(t *testing.T) {
 			},
 			wantEnabled: true, wantTimeoutMs: 500, wantFailOpen: false,
 			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceConfig,
-			wantRendered: "guards:          enabled, timeout 500ms, fail-closed (AGENTO11Y_GUARDS_ENABLED, config.env)",
+			wantRendered: "guards:           enabled, timeout 500ms, fail-closed (AGENTO11Y_GUARDS_ENABLED, config.env)",
 		},
 		{
 			name: "legacy spelling", osEnv: map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
 			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true,
 			wantKey: "SIGIL_GUARDS_ENABLED", wantSource: sourceEnv,
-			wantRendered: "guards:          enabled, timeout 1500ms, fail-open (SIGIL_GUARDS_ENABLED, env)",
+			wantRendered: "guards:           enabled, timeout 1500ms, fail-open (SIGIL_GUARDS_ENABLED, env)",
 		},
 		{
 			// The rejected value did not decide whether guards run, so the row credits
@@ -1135,7 +1176,7 @@ func TestCollectConfig_Guards(t *testing.T) {
 			wantEnabled: false, wantTimeoutMs: 1500, wantFailOpen: true, wantFellBack: true,
 			wantHealth:   HealthWarn,
 			wantMsg:      "the AGENTO11Y_GUARDS_ENABLED value is invalid; guards use the default",
-			wantRendered: "guards:          disabled (default)",
+			wantRendered: "guards:           disabled (default)",
 		},
 		{
 			// GUARDS_ENABLED is fine, so the row keeps naming it. Only the message can
@@ -1148,7 +1189,7 @@ func TestCollectConfig_Guards(t *testing.T) {
 			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true, wantFellBack: true,
 			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceEnv, wantHealth: HealthWarn,
 			wantMsg:      "the AGENTO11Y_GUARDS_TIMEOUT_MS value is invalid; guards use the default",
-			wantRendered: "guards:          enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
+			wantRendered: "guards:           enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, env)",
 		},
 		{
 			// The fail mode is the third family, and it is the one the row never names.
@@ -1160,7 +1201,7 @@ func TestCollectConfig_Guards(t *testing.T) {
 			wantEnabled: true, wantTimeoutMs: 1500, wantFailOpen: true, wantFellBack: true,
 			wantKey: "AGENTO11Y_GUARDS_ENABLED", wantSource: sourceConfig, wantHealth: HealthWarn,
 			wantMsg:      "the AGENTO11Y_GUARDS_FAIL_OPEN value is invalid; guards use the default",
-			wantRendered: "guards:          enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, config.env)",
+			wantRendered: "guards:           enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, config.env)",
 		},
 		{
 			// Only GUARDS_ENABLED names the row, and it is unset, so the row
@@ -1169,7 +1210,7 @@ func TestCollectConfig_Guards(t *testing.T) {
 			fileEnv: map[string]string{"AGENTO11Y_GUARDS_TIMEOUT_MS": "800"},
 			// TimeoutMs is still resolved; the row just cannot claim a key for it.
 			wantEnabled: false, wantTimeoutMs: 800, wantFailOpen: true,
-			wantRendered: "guards:          disabled (default)",
+			wantRendered: "guards:           disabled (default)",
 		},
 	}
 	for _, tc := range tests {
@@ -1736,7 +1777,7 @@ func TestCollectConfig_Local(t *testing.T) {
 			wantInvalid:     true,
 			wantHealth:      HealthWarn,
 			wantMsg:         "the AGENTO11Y_LOCAL value is not a boolean; local mode stays off",
-			wantRendered:    []string{`local mode:      off (AGENTO11Y_LOCAL="enabled" is not a boolean, env)`},
+			wantRendered:    []string{`local mode:       off (AGENTO11Y_LOCAL="enabled" is not a boolean, env)`},
 			wantNotRendered: []string{"enabled (AGENTO11Y_LOCAL, env)", "invalid value, local mode is off"},
 		},
 	}

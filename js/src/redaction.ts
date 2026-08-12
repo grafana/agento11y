@@ -33,7 +33,7 @@ export interface SecretTextRedactionOptions {
 export interface SecretRedactionOptions {
   /**
    * Redact user input messages in addition to assistant/tool content.
-   * Defaults to `false` to match the current opencode plugin behavior.
+   * Defaults to `false`; assistant and tool content is redacted either way.
    */
   redactInputMessages?: boolean;
   /**

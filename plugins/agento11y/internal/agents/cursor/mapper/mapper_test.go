@@ -291,42 +291,97 @@ func TestMapFragment_RedactsSecrets(t *testing.T) {
 	})
 }
 
-// TestMapFragment_RedactionTiers pins the per-field tier split. The title
-// gets tier 1 only; the prompt and assistant text get tier 2 as well.
-// Without these cases either half can be swapped for the other with no test
-// turning red, because every other secret in the package is a tier-1 token
-// or a sensitive JSON key.
+func TestMapFragment_UserPromptRedactionOptOut(t *testing.T) {
+	const token = testToken
+
+	tests := []struct {
+		name                string
+		skipPromptRedaction bool
+		wantPrompt          string
+	}{
+		{name: "redacts the prompt by default", wantPrompt: "deploy using [REDACTED:grafana-cloud-token]"},
+		{name: "opt-out exports the prompt unredacted", skipPromptRedaction: true, wantPrompt: "deploy using " + token},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MapFragment(Inputs{
+				Fragment: &fragment.Fragment{
+					ConversationID: "conv-1",
+					GenerationID:   "gen-1",
+					UserPrompt:     "deploy using " + token,
+					Assistant:      []fragment.AssistantSegment{{Text: "I used " + token}},
+				},
+				Session:             &fragment.Session{ConversationTitle: "deploy using " + token},
+				ContentCapture:      agento11y.ContentCaptureModeFull,
+				SkipPromptRedaction: tt.skipPromptRedaction,
+				Now:                 fixedTime,
+			})
+
+			if len(got.Generation.Input) == 0 || len(got.Generation.Input[0].Parts) == 0 {
+				t.Fatalf("expected a user message: %+v", got.Generation.Input)
+			}
+			if prompt := got.Generation.Input[0].Parts[0].Text; prompt != tt.wantPrompt {
+				t.Errorf("prompt = %q, want %q", prompt, tt.wantPrompt)
+			}
+
+			// The opt-out covers the prompt only.
+			if len(got.Generation.Output) == 0 || len(got.Generation.Output[0].Parts) == 0 {
+				t.Fatalf("expected an assistant message: %+v", got.Generation.Output)
+			}
+			if text := got.Generation.Output[0].Parts[0].Text; strings.Contains(text, token) {
+				t.Errorf("assistant text leaks the raw token: %s", text)
+			}
+			if title := got.Generation.ConversationTitle; strings.Contains(title, token) {
+				t.Errorf("conversation title leaks the raw token: %s", title)
+			}
+		})
+	}
+}
+
+// TestMapFragment_RedactionTiers pins the per-field tier split: the prompt
+// gets tier 1 + tier 2, the title and assistant text get tier 1 only.
+// Without these cases one field can be swapped for the other's tier with no
+// test turning red, because every other secret in the package is a tier-1
+// token or a sensitive JSON key.
 func TestMapFragment_RedactionTiers(t *testing.T) {
 	cases := []struct {
-		name       string
-		title      string
-		text       string
-		wantTitle  string
-		wantPrompt string
+		name          string
+		title         string
+		text          string
+		wantTitle     string
+		wantPrompt    string
+		wantAssistant string
 	}{
 		{
 			// Tier 2's `KEY: value` heuristic would swallow the rest of the
 			// line. Cursor titles are truncated first prompts, so ordinary
 			// text like this is the common case.
-			name:       "title survives the tier 2 heuristic",
-			title:      "fix the API key: rotation script",
-			text:       "hello",
-			wantTitle:  "fix the API key: rotation script",
-			wantPrompt: "hello",
+			name:          "title survives the tier 2 heuristic",
+			title:         "fix the API key: rotation script",
+			text:          "hello",
+			wantTitle:     "fix the API key: rotation script",
+			wantPrompt:    "hello",
+			wantAssistant: "hello",
 		},
 		{
-			name:       "tier 1 token is redacted everywhere",
-			title:      "deploy using " + testToken,
-			text:       "deploy using " + testToken,
-			wantTitle:  "deploy using [REDACTED:grafana-cloud-token]",
-			wantPrompt: "deploy using [REDACTED:grafana-cloud-token]",
+			name:          "tier 1 token is redacted everywhere",
+			title:         "deploy using " + testToken,
+			text:          "deploy using " + testToken,
+			wantTitle:     "deploy using [REDACTED:grafana-cloud-token]",
+			wantPrompt:    "deploy using [REDACTED:grafana-cloud-token]",
+			wantAssistant: "deploy using [REDACTED:grafana-cloud-token]",
 		},
 		{
-			name:       "prompt and assistant text get tier 2",
-			title:      "run the deploy",
-			text:       "run with PASSWORD=hunter2",
-			wantTitle:  "run the deploy",
-			wantPrompt: "run with PASSWORD=[REDACTED:env-secret-value]",
+			// The prompt is where a human pastes a config file, so it takes
+			// tier 2. Assistant text is model prose and keeps tier 1, like
+			// the title.
+			name:          "only the prompt gets tier 2",
+			title:         "run with PASSWORD=hunter2",
+			text:          "run with PASSWORD=hunter2",
+			wantTitle:     "run with PASSWORD=hunter2",
+			wantPrompt:    "run with PASSWORD=[REDACTED:env-secret-value]",
+			wantAssistant: "run with PASSWORD=hunter2",
 		},
 	}
 
@@ -364,8 +419,8 @@ func TestMapFragment_RedactionTiers(t *testing.T) {
 			if prompt != tc.wantPrompt {
 				t.Errorf("prompt = %q; want %q", prompt, tc.wantPrompt)
 			}
-			if assistant != tc.wantPrompt {
-				t.Errorf("assistant text = %q; want %q", assistant, tc.wantPrompt)
+			if assistant != tc.wantAssistant {
+				t.Errorf("assistant text = %q; want %q", assistant, tc.wantAssistant)
 			}
 		})
 	}

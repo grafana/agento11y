@@ -29,6 +29,13 @@ export interface Agento11yOpencodeConfig {
   agentName: string;
   agentVersion?: string;
   contentCapture: ContentCaptureMode;
+  /**
+   * Redact known secret formats from user prompt text before export. On by
+   * default; `AGENTO11Y_REDACT_INPUT_MESSAGES=false` opts out. Assistant
+   * text, thinking, tool arguments, and tool results are redacted under
+   * either setting.
+   */
+  redactInputMessages: boolean;
   debug: boolean;
   guards?: GuardsFeatureConfig;
   otlp?: OtlpConfig;
@@ -57,6 +64,10 @@ export function resolveConfig(): Agento11yOpencodeConfig | null {
   const agentVersion = brandedEnv("AGENT_VERSION");
 
   const contentCapture = resolveContentCapture();
+  // Defaults to true so prompts are scrubbed without configuration, matching
+  // the pi plugin. An unrecognised value keeps redaction on, so a typo cannot
+  // silently disable it.
+  const redactInputMessages = brandedBool("REDACT_INPUT_MESSAGES") ?? true;
   const debug = brandedBool("DEBUG") ?? false;
 
   return {
@@ -65,6 +76,7 @@ export function resolveConfig(): Agento11yOpencodeConfig | null {
     agentName,
     agentVersion,
     contentCapture,
+    redactInputMessages,
     debug,
     guards: resolveGuards(),
     otlp: resolveOtlp(),
@@ -226,9 +238,19 @@ function brandedEnv(suffix: string): string | undefined {
   return lookupBrandedEnv(suffix)?.value;
 }
 
+// brandedBool parses a boolean config key and warns when the value is outside
+// the accepted set, so a typo is visible instead of silently falling back to
+// the default. Matches brandedPositiveInt, the pi plugin, and envconfig.BoolValue.
 function brandedBool(suffix: string): boolean | undefined {
-  const v = brandedEnv(suffix);
-  return v !== undefined ? toBool(v) : undefined;
+  const found = lookupBrandedEnv(suffix);
+  if (found === undefined) return undefined;
+  const parsed = toBool(found.value);
+  if (parsed === undefined) {
+    console.warn(
+      `[sigil-opencode] invalid boolean value for ${found.key}: "${found.value}" - using default`,
+    );
+  }
+  return parsed;
 }
 
 export function resolveGuards(): GuardsFeatureConfig {

@@ -130,8 +130,8 @@ func emitToolSpans(ctx context.Context, client *agento11y.Client, frag *fragment
 		})
 
 		end := agento11y.ToolExecutionEnd{CompletedAt: completedAt}
-		end.Arguments = red.RedactJSONForText(t.ToolInput)
-		end.Result = red.RedactJSONForText(t.ToolOutput)
+		end.Arguments = red.ToolPayloadText(t.ToolInput)
+		end.Result = red.ToolPayloadText(t.ToolOutput)
 		if t.Status == "error" {
 			toolRec.SetExecError(emit.ToolError(t.ErrorMessage))
 		}

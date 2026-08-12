@@ -224,7 +224,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	client := buildClient(cfg, frag.Cwd, providers, logger)
 	defer func() { _ = client.Shutdown(ctx) }()
 
-	mapped := mapper.Map(mapper.Inputs{Fragment: frag, SubagentLink: subagentLink, TokenSnapshot: tokenSnapshot, ContentCapture: cfg.ContentCapture, AgentName: cfg.Agent()})
+	mapped := mapper.Map(mapper.Inputs{Fragment: frag, SubagentLink: subagentLink, TokenSnapshot: tokenSnapshot, ContentCapture: cfg.ContentCapture, AgentName: cfg.Agent(), SkipPromptRedaction: cfg.SkipPromptRedaction})
 	logger.Printf("stop: export id=%s conversation=%s agent=%s model=%s", mapped.Generation.ID, mapped.Generation.ConversationID, mapped.Generation.AgentName, mapped.Generation.Model.Name)
 	if err := emitGeneration(ctx, client, frag, mapped, cfg.ContentCapture, logger); err != nil {
 		logger.Printf("stop: emit: %v", err)
@@ -310,10 +310,11 @@ func sweepPendingRetries(ctx context.Context, client *agento11y.Client, cfg conf
 		subagentLink := resolveSubagentLinkForStop(retryPayload, f, logger)
 		tokenSnapshot := tokenSnapshotForStop(retryPayload, f, logger)
 		mapped := mapper.Map(mapper.Inputs{
-			Fragment:       f,
-			SubagentLink:   subagentLink,
-			TokenSnapshot:  tokenSnapshot,
-			ContentCapture: cfg.ContentCapture,
+			Fragment:            f,
+			SubagentLink:        subagentLink,
+			TokenSnapshot:       tokenSnapshot,
+			ContentCapture:      cfg.ContentCapture,
+			SkipPromptRedaction: cfg.SkipPromptRedaction,
 			// The name comes from this invocation, not from the turn the
 			// fragment was written in. A name changed between turns
 			// re-stamps a retried turn with the current one.
@@ -538,7 +539,7 @@ func redactSpanContent(red *redact.Redactor, raw json.RawMessage) string {
 	if red == nil || len(raw) == 0 {
 		return ""
 	}
-	return red.RedactJSONForText(raw)
+	return red.ToolPayloadText(raw)
 }
 
 func normalizeStatus(p Payload, response json.RawMessage) string {

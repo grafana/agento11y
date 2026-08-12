@@ -267,6 +267,7 @@ describe("opencode plugin: real-SDK golden export", () => {
       agentName: "opencode",
       agentVersion: "test-version",
       contentCapture: "full",
+      redactInputMessages: true,
       debug: false,
       ...configOverrides,
     };

@@ -102,6 +102,7 @@ func goldenHealthyReport() *Report {
 			Path: "/home/u/.config/agento11y/config.env", Exists: true,
 			ContentCaptureMode: "full",
 			ContentModeKey:     "AGENTO11Y_CONTENT_CAPTURE_MODE", ContentModeSource: sourceConfig,
+			RedactInput:   true,
 			GuardsEnabled: true, GuardsTimeoutMs: 1500, GuardsFailOpen: true,
 			GuardsKey: "AGENTO11Y_GUARDS_ENABLED", GuardsSource: sourceConfig,
 			Tags:       map[string]string{"team": "assistant", "env": "prod"},
@@ -144,6 +145,7 @@ func goldenMinimalReport() *Report {
 			// Nothing is configured, so both shared settings report the built-in
 			// value rather than a choice the user made.
 			ContentCaptureMode: "metadata_only",
+			RedactInput:        true,
 			GuardsTimeoutMs:    1500, GuardsFailOpen: true,
 			Health: HealthOK,
 		},
@@ -170,6 +172,9 @@ func goldenBrokenReport() *Report {
 			// The mode came from a value envconfig rejected, so the row credits the
 			// built-in default and the message names the variable to fix.
 			ContentCaptureMode: "metadata_only", ContentModeFellBack: true,
+			// A rejected opt-out: redaction stays on, and the message names the
+			// variable to fix.
+			RedactInput: true, RedactInputFellBack: true,
 			// GUARDS_ENABLED is valid and off, under the legacy spelling the row has to
 			// name. The timeout is the value that fell back.
 			GuardsEnabled: false, GuardsTimeoutMs: 1500, GuardsFailOpen: true, GuardsFellBack: true,
@@ -200,6 +205,7 @@ func goldenBrokenReport() *Report {
 			Messages: []string{
 				"config.env has keys agento11y ignores: AWS_SECRET",
 				"the AGENTO11Y_CONTENT_CAPTURE_MODE value is invalid; using metadata_only",
+				"the REDACT_INPUT_MESSAGES value is invalid; prompt redaction stays on",
 				"the AGENTO11Y_GUARDS_TIMEOUT_MS value is invalid; guards use the default",
 				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES has unsupported names team; supported: user, repo, branch, all",
 				"these auto tags resolved no value in this directory and are left off: branch",

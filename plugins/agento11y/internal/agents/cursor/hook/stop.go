@@ -89,13 +89,14 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	client := buildClient(p, session, cfg, providers, logger)
 
 	mapped := mapper.MapFragment(mapper.Inputs{
-		Fragment:       frag,
-		Session:        session,
-		Stop:           &mapper.StopInput{Status: p.Status, Error: frag.PendingStop.Error},
-		ContentCapture: cfg.ContentCapture,
-		UserIDOverride: cfg.UserIDOverride,
-		AgentName:      cfg.Agent(),
-		Now:            time.Now(),
+		Fragment:            frag,
+		Session:             session,
+		Stop:                &mapper.StopInput{Status: p.Status, Error: frag.PendingStop.Error},
+		ContentCapture:      cfg.ContentCapture,
+		UserIDOverride:      cfg.UserIDOverride,
+		SkipPromptRedaction: cfg.SkipPromptRedaction,
+		AgentName:           cfg.Agent(),
+		Now:                 time.Now(),
 	})
 
 	if err := emitGeneration(ctx, client, frag, mapped, logger); err != nil {

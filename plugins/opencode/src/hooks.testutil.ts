@@ -98,6 +98,7 @@ export function baseConfig(
     agentName: "opencode",
     agentVersion: "test-version",
     contentCapture: "full",
+    redactInputMessages: true,
     debug: false,
     ...overrides,
   };

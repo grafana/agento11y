@@ -151,6 +151,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	extraTags := envconfig.ParseExtraTags(envconfig.Getenv("TAGS"))
 	userID := userid.Resolve()
 	contentMode := envconfig.ResolveContentMode(logger)
+	skipPromptRedaction := !envconfig.ResolveRedactInput(logger)
 
 	hookCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -183,10 +184,11 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	}
 
 	gens, toolResultAt := mapper.Process(lines, &st, mapper.Options{
-		SessionID: input.SessionID,
-		Logger:    logger,
-		ExtraTags: extraTags,
-		AgentName: resolvedAgentName,
+		SessionID:           input.SessionID,
+		Logger:              logger,
+		ExtraTags:           extraTags,
+		AgentName:           resolvedAgentName,
+		SkipPromptRedaction: skipPromptRedaction,
 	}, r)
 
 	if len(gens) == 0 {

@@ -25,7 +25,10 @@ import (
 type Config struct {
 	ContentCapture agento11y.ContentCaptureMode
 	UserIDOverride string
-	Debug          bool
+	// SkipPromptRedaction exports the user prompt without redaction. Set from
+	// AGENTO11Y_REDACT_INPUT_MESSAGES=false, so the zero value redacts.
+	SkipPromptRedaction bool
+	Debug               bool
 	// AgentName is the identity every generation and guard request reports.
 	// Load resolves it from AGENTO11Y_AGENT_NAME, then SIGIL_AGENT_NAME, and
 	// falls back to "cursor". Read it through Agent.
@@ -69,9 +72,10 @@ func LoadDotenv(path string, logger *log.Logger) map[string]string {
 // ApplyEnv first so dotenv-only values are reflected in the OS env.
 func Load(logger *log.Logger) Config {
 	return Config{
-		ContentCapture: envconfig.ResolveContentMode(logger),
-		UserIDOverride: envconfig.Getenv("USER_ID"),
-		Debug:          envconfig.ParseBool(envconfig.Getenv("DEBUG")),
-		AgentName:      envconfig.ResolveAgentName(mapper.AgentName),
+		ContentCapture:      envconfig.ResolveContentMode(logger),
+		UserIDOverride:      envconfig.Getenv("USER_ID"),
+		SkipPromptRedaction: !envconfig.ResolveRedactInput(logger),
+		Debug:               envconfig.ParseBool(envconfig.Getenv("DEBUG")),
+		AgentName:           envconfig.ResolveAgentName(mapper.AgentName),
 	}
 }

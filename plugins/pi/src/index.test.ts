@@ -4641,4 +4641,45 @@ describe("emitToolSpans", () => {
     expect(recorders[0]!.start).toMatchObject({ startedAt: new Date(1000) });
     expect(recorders[0]!.result?.completedAt).toEqual(new Date(5000));
   });
+
+  // The SDK's generation sanitizer never sees a tool-execution span, so the
+  // span needs its own redaction pass over the same bytes.
+  it("redacts arguments and results", () => {
+    const token = "glc_abcdefghijklmnopqrstuvwxyz";
+    const { client, recorders } = mockAgento11yClient();
+    const msg = makePiMsg({
+      content: [
+        {
+          type: "toolCall",
+          id: "c1",
+          name: "bash",
+          arguments: { cmd: "deploy.sh", env: "API_TOKEN=hunter2" },
+        },
+      ],
+    });
+    const toolResults = [
+      makePiToolResult({
+        toolCallId: "c1",
+        content: [{ type: "text", text: `authenticated with ${token}` }],
+      }),
+    ];
+
+    emitToolSpans(
+      client,
+      msg,
+      toolResults,
+      [makePiTiming({ toolCallId: "c1" })],
+      { agentName: "pi", contentCapture: "full" },
+    );
+
+    const args = recorders[0]!.result?.arguments as string;
+    const result = recorders[0]!.result?.result as string;
+    // Arguments get both tiers, so the env-style pair goes too, and the
+    // argument that is not a secret survives.
+    expect(args).not.toContain("hunter2");
+    expect(args).toContain("[REDACTED:env-secret-value]");
+    expect(args).toContain("deploy.sh");
+    expect(result).not.toContain(token);
+    expect(result).toBe("authenticated with [REDACTED:grafana-cloud-token]");
+  });
 });

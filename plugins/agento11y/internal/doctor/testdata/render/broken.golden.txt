@@ -14,6 +14,7 @@ agento11y doctor dev
 ! Config
   file:               /home/u/.config/agento11y/config.env (present)
   content capture:    metadata_only (default)
+  prompt redaction:   enabled (invalid value, fell back)
   guards:             disabled (SIGIL_GUARDS_ENABLED, env)
   tags:               repo=monorepo (AGENTO11Y_TAGS, config.env)
   auto tags:          user,repo,branch resolved user=alex (AGENTO11Y_AUTO_CODING_AGENT_TAGS, config.env)
@@ -22,6 +23,7 @@ agento11y doctor dev
   local guard checks: not forwarded (AGENTO11Y_GUARDS_ENABLED is off, so there are no guards to enforce)
   ! config.env has keys agento11y ignores: AWS_SECRET
   ! the AGENTO11Y_CONTENT_CAPTURE_MODE value is invalid; using metadata_only
+  ! the REDACT_INPUT_MESSAGES value is invalid; prompt redaction stays on
   ! the AGENTO11Y_GUARDS_TIMEOUT_MS value is invalid; guards use the default
   ! AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES has unsupported names team; supported: user, repo, branch, all
   ! these auto tags resolved no value in this directory and are left off: branch

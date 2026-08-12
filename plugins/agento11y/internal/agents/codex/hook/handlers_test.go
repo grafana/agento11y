@@ -289,6 +289,63 @@ func TestStopSuccessfulExportDeletesFragmentAndUsesAuth(t *testing.T) {
 	}
 }
 
+// TestStopPromptRedactionWiring pins config.Config.SkipPromptRedaction
+// through to the exported body. The mapper tests cover the flag itself and
+// the config test covers Load; this one covers the wire between them.
+func TestStopPromptRedactionWiring(t *testing.T) {
+	const secret = "glc_abcdefghijklmnopqrstuvwxyz"
+
+	tests := []struct {
+		name                string
+		skipPromptRedaction bool
+		wantPromptInRaw     bool
+	}{
+		{name: "redacts the prompt by default", wantPromptInRaw: false},
+		{name: "opt-out exports the prompt unredacted", skipPromptRedaction: true, wantPromptInRaw: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			logger := log.New(io.Discard, "", 0)
+			var gotBody atomic.Value
+			gotBody.Store("")
+			server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					http.Error(w, "read body", http.StatusBadRequest)
+					return
+				}
+				gotBody.Store(string(body))
+				writeAcceptedGenerationResponse(t, w, body)
+			}))
+			defer server.Close()
+			t.Setenv("SIGIL_ENDPOINT", server.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+			t.Setenv("SIGIL_AUTH_TOKEN", "token")
+
+			require.NoError(t, fragment.Update("sess", "turn", logger, func(f *fragment.Fragment) bool {
+				f.Model = "gpt-5.5"
+				f.Prompt = "my token is " + secret
+				f.LastAssistantMessage = "assistant saw " + secret
+				return true
+			}))
+
+			Stop(Payload{HookEventName: "Stop", SessionID: "sess", TurnID: "turn"}, config.Config{
+				ContentCapture:      agento11y.ContentCaptureModeFull,
+				SkipPromptRedaction: tt.skipPromptRedaction,
+			}, logger)
+
+			body, _ := gotBody.Load().(string)
+			require.NotEmpty(t, body, "expected an export request")
+			assert.Equal(t, tt.wantPromptInRaw, strings.Contains(body, "my token is "+secret), "prompt unredacted in export: %s", body)
+			// The flag covers the prompt only.
+			assert.NotContains(t, body, "assistant saw "+secret, "assistant text lost its redaction")
+		})
+	}
+}
+
 func TestStopLocalEndpointAllowsMissingCredentials(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

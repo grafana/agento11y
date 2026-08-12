@@ -80,6 +80,33 @@ For coding-agent plugins, the relevant env var is `AGENTO11Y_CONTENT_CAPTURE_MOD
 
 Unknown values fall back to `metadata_only` with a warning in the plugin log. A plugin can still export less than the SDK allows. For example, an adapter may drop a field if the host agent does not pass it through.
 
+## Secret redaction in the plugins
+
+Capture modes choose which fields ship. Redaction scrubs the fields that do ship.
+
+A plugin redacts known secret formats out of every content field it exports: user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results. This covers both copies of the tool payload, the one in the generation and the one on the tool-execution span. Only the prompt has a flag.
+
+Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` in `~/.config/agento11y/config.env` or the environment to export prompt text without redaction. The flag covers the prompt only: every other field stays redacted, and message structure, roles, token counts, tags, and IDs do not change. An unrecognised value keeps redaction on, so a typo cannot disable it.
+
+### Strength per field
+
+There are two pattern tiers. Tier 1 is high-confidence secret formats (`glc_…`, `AKIA…`, a PEM block, a connection string). Tier 2 is the key/value heuristics (`PASSWORD=…`, `"token": "…"`), which catch a secret with no recognisable format but also fire on ordinary text.
+
+Every plugin applies the same tier per field, and it is the tier the SDKs' generation sanitizer applies:
+
+| Field | Tier | Why |
+| --- | --- | --- |
+| User prompt | 1 + 2 | Where a human pastes a `.env` file, a config block or a command line. |
+| System prompt | 1 + 2 | Assembled content: tool definitions, environment dumps, pasted config. |
+| Tool arguments, tool results | 1 + 2 | Structured data, on the generation and on the span. |
+| Assistant text, thinking | 1 | Model prose. |
+| Conversation title | 1 | Usually the first prompt, truncated. |
+| Error messages | 1 | Sentences. |
+
+Tier 2 on a prompt has a real cost: `sort key: name` is exported as `sort key: [REDACTED:env-secret-value]`, because the heuristic cannot tell that `key:` is part of a sentence. Turn prompt redaction off with `AGENTO11Y_REDACT_INPUT_MESSAGES=false` if the prompt text matters more than the coverage. Tier 2 is kept off prose for that reason, and a secret a model repeats in prose is still caught by tier 1 as long as it has a known format.
+
+On a tool payload that decodes as JSON, the shared `agento11y` binary also redacts a value under a secret-looking key (`authorization`, `cookie`, `client_secret`), which the tier 2 key list does not cover. The OpenCode and Pi plugins do not: they redact the encoded JSON as text, so they catch only the key names in the tier 2 patterns.
+
 ## Related
 
 - [Tool Calls vs Tool Executions](./tool-call-vs-tool-execution.md): explains why tool-execution spans have their own content-capture story.

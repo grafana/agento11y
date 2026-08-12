@@ -110,13 +110,14 @@ func emitOneStranded(
 	}
 
 	mapped := mapper.MapFragment(mapper.Inputs{
-		Fragment:       frag,
-		Session:        session,
-		Stop:           stop,
-		ContentCapture: cfg.ContentCapture,
-		UserIDOverride: cfg.UserIDOverride,
-		AgentName:      cfg.Agent(),
-		Now:            time.Now(),
+		Fragment:            frag,
+		Session:             session,
+		Stop:                stop,
+		ContentCapture:      cfg.ContentCapture,
+		UserIDOverride:      cfg.UserIDOverride,
+		SkipPromptRedaction: cfg.SkipPromptRedaction,
+		AgentName:           cfg.Agent(),
+		Now:                 time.Now(),
 	})
 
 	if err := emitGeneration(ctx, client, frag, mapped, logger); err != nil {

@@ -157,6 +157,7 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 	b.kv("file", fmt.Sprintf("%s %s", r.Config.Path, p.faint("("+exists+")")))
 	b.kv("content capture", withTrailer(r.Config.ContentCaptureMode,
 		describeSource(p, provenanceParts(r.Config.ContentModeKey, r.Config.ContentModeSource)...)))
+	b.kv("prompt redaction", describeRedactInput(p, r.Config))
 	b.kv("guards", describeGuards(p, r.Config))
 	// Only printed when an override is set: with the family unset each adapter
 	// reports its own product name, and there is no single value to show.
@@ -301,6 +302,18 @@ func describeToken(p palette, t tokenValue) string {
 		prefix = t.Prefix + "…"
 	}
 	return withTrailer("set", describeSource(p, prefix, t.Key, t.Source))
+}
+
+// describeRedactInput renders whether user prompts are scrubbed before export.
+func describeRedactInput(p palette, c ConfigSection) string {
+	out := p.faint("enabled")
+	if !c.RedactInput {
+		out = "disabled " + p.faint("(prompts export unredacted)")
+	}
+	if c.RedactInputFellBack {
+		out += " " + p.faint("(invalid value, fell back)")
+	}
+	return out
 }
 
 // describeGuards renders the resolved guard feature flags. Guards default off,

@@ -461,6 +461,52 @@ func TestResolveContentMode(t *testing.T) {
 	}
 }
 
+func TestResolveRedactInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		want    bool
+		wantLog string
+	}{
+		{name: "defaults_on_with_no_env", want: true},
+		{name: "blank_value_defaults_on", env: map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "   "}, want: true},
+		{name: "explicit_false_opts_out", env: map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "false"}, want: false},
+		{name: "explicit_0_opts_out", env: map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "0"}, want: false},
+		{name: "explicit_off_opts_out", env: map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "off"}, want: false},
+		{name: "explicit_true_stays_on", env: map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "true"}, want: true},
+		{name: "legacy_spelling_opts_out", env: map[string]string{"SIGIL_REDACT_INPUT_MESSAGES": "false"}, want: false},
+		{name: "preferred_wins_over_legacy", env: map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "true", "SIGIL_REDACT_INPUT_MESSAGES": "false"}, want: true},
+		{
+			name:    "typo_logs_and_stays_on",
+			env:     map[string]string{"AGENTO11Y_REDACT_INPUT_MESSAGES": "flase"},
+			want:    true,
+			wantLog: `invalid AGENTO11Y_REDACT_INPUT_MESSAGES="flase"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(PreferredKey("REDACT_INPUT_MESSAGES"), "")
+			t.Setenv(LegacyKey("REDACT_INPUT_MESSAGES"), "")
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			var buf bytes.Buffer
+			logger := log.New(&buf, "", 0)
+			if got := ResolveRedactInput(logger); got != tt.want {
+				t.Errorf("ResolveRedactInput() = %v, want %v", got, tt.want)
+			}
+			if tt.wantLog != "" && !strings.Contains(buf.String(), tt.wantLog) {
+				t.Errorf("log output = %q, want substring %q", buf.String(), tt.wantLog)
+			}
+			if tt.wantLog == "" && buf.Len() != 0 {
+				t.Errorf("unexpected log output: %q", buf.String())
+			}
+		})
+	}
+}
+
 func TestLookupEnv(t *testing.T) {
 	cases := []struct {
 		name      string

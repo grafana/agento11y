@@ -72,6 +72,7 @@ var trackedSuffixes = []string{
 	"OTEL_EXPORTER_OTLP_ENDPOINT",
 	"OTEL_AUTH_TOKEN",
 	"CONTENT_CAPTURE_MODE",
+	"REDACT_INPUT_MESSAGES",
 	"AGENT_NAME",
 	"TAGS",
 	envconfig.AutoTagsSuffix,
@@ -174,10 +175,15 @@ type ConfigSection struct {
 	ContentModeKey      string `json:"content_capture_key,omitempty"`
 	ContentModeSource   string `json:"content_capture_source,omitempty"`
 	ContentModeFellBack bool   `json:"content_mode_fell_back"`
-	GuardsEnabled       bool   `json:"guards_enabled"`
-	GuardsTimeoutMs     int    `json:"guards_timeout_ms"`
-	GuardsFailOpen      bool   `json:"guards_fail_open"`
-	GuardsFellBack      bool   `json:"guards_fell_back,omitempty"`
+	// RedactInput is the REDACT_INPUT_MESSAGES family: whether the user prompt is
+	// scrubbed before export. RedactInputFellBack reports a rejected value, so
+	// the reported state is the built-in default rather than what was set.
+	RedactInput         bool `json:"redact_input_messages"`
+	RedactInputFellBack bool `json:"redact_input_fell_back,omitempty"`
+	GuardsEnabled       bool `json:"guards_enabled"`
+	GuardsTimeoutMs     int  `json:"guards_timeout_ms"`
+	GuardsFailOpen      bool `json:"guards_fail_open"`
+	GuardsFellBack      bool `json:"guards_fell_back,omitempty"`
 	// GuardsKey and GuardsSource name the GUARDS_ENABLED spelling that decided
 	// whether guards run. The timeout and fail mode have their own families; the
 	// human row reports one key, so this is the key it reports. Both are empty
@@ -751,6 +757,21 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 		sec.ContentModeSource = contentMode.source
 	}
 
+	// snapshotLookup resolves an alias family from the pre-merge snapshot every
+	// row is attributed with, so the values reported here are the ones the hooks
+	// read rather than whatever the dotenv merge left in this process.
+	snapshotLookup := func(suffix string) (value, key string, ok bool) {
+		r := resolveFamily(suffix, osEnv, fileEnv)
+		return r.value, r.key, r.set
+	}
+
+	// The hooks resolve this flag against a discarded logger unless
+	// AGENTO11Y_DEBUG is set, so doctor is where a rejected value becomes
+	// visible. Same capturing-logger trick as content mode.
+	var redactBuf bytes.Buffer
+	sec.RedactInput = envconfig.ResolveRedactInputWith(log.New(&redactBuf, "", 0), snapshotLookup)
+	sec.RedactInputFellBack = redactBuf.Len() > 0
+
 	// Guards are the shared pre-tool-call enforcement flags every agent hook
 	// reads via envconfig.ResolveGuards. They default off, so surface the
 	// effective values to confirm whether guards actually run and with what
@@ -761,10 +782,7 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	guardsEnabled := resolveFamily("GUARDS_ENABLED", osEnv, fileEnv)
 	guardsTimeout := resolveFamily("GUARDS_TIMEOUT_MS", osEnv, fileEnv)
 	guardsFailOpen := resolveFamily("GUARDS_FAIL_OPEN", osEnv, fileEnv)
-	guards := envconfig.ResolveGuardsWith(nil, func(suffix string) (value, key string, ok bool) {
-		r := resolveFamily(suffix, osEnv, fileEnv)
-		return r.value, r.key, r.set
-	})
+	guards := envconfig.ResolveGuardsWith(nil, snapshotLookup)
 	sec.GuardsEnabled = guards.Enabled
 	sec.GuardsTimeoutMs = guards.TimeoutMs
 	sec.GuardsFailOpen = guards.FailOpen
@@ -808,10 +826,6 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	// The same pre-merge snapshot every other row is attributed with backs the
 	// lookup, so the switch, the allowlist, the reported user, and the explicit
 	// tags all match what the hooks read.
-	snapshotLookup := func(suffix string) (value, key string, ok bool) {
-		r := resolveFamily(suffix, osEnv, fileEnv)
-		return r.value, r.key, r.set
-	}
 	autoTags := resolveFamily(envconfig.AutoTagsSuffix, osEnv, fileEnv)
 	autoTagNames := resolveFamily(envconfig.AutoTagNamesSuffix, osEnv, fileEnv)
 	userID := resolveFamily("USER_ID", osEnv, fileEnv)
@@ -895,6 +909,11 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 		sec.Health = HealthWarn
 		sec.Messages = append(sec.Messages,
 			fmt.Sprintf("the %s value is invalid; using %s", contentMode.key, mode))
+	}
+	if sec.RedactInputFellBack {
+		sec.Health = HealthWarn
+		sec.Messages = append(sec.Messages,
+			"the REDACT_INPUT_MESSAGES value is invalid; prompt redaction stays on")
 	}
 	// One message per rejected variable: the row names the GUARDS_ENABLED
 	// spelling alone, so this is the only place a reader learns which guard value
