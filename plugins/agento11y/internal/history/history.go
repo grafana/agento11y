@@ -38,6 +38,7 @@ type AgentID string
 const (
 	AgentClaudeCode AgentID = "claude-code"
 	AgentCodex      AgentID = "codex"
+	AgentCursor     AgentID = "cursor"
 	AgentPi         AgentID = "pi"
 )
 

@@ -150,7 +150,16 @@ func previewAll(ctx context.Context, agent AgentID, imp Importer, paths []string
 					if preview.LastActivityAt.IsZero() {
 						preview.LastActivityAt = info.ModTime()
 					}
-					preview.Active = isActiveMod(info.ModTime(), at, window)
+					// A preview may know a more recent write than the session file
+					// itself: a Cursor session's bytes go to a sidecar log, and its
+					// store.db can be hours stale while the agent is still writing.
+					// Take the later of the two, so SkipActive still holds back a
+					// session in progress.
+					written := info.ModTime()
+					if preview.LastActivityAt.After(written) {
+						written = preview.LastActivityAt
+					}
+					preview.Active = isActiveMod(written, at, window)
 				}
 				slots[i] = slot{preview: preview, ok: true}
 			}
