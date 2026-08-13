@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
 import { trace } from '@opentelemetry/api';
+import { HTTPGenerationExporter } from '../.test-dist/exporters/http.js';
 import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
+import { defaultSleep } from '../.test-dist/utils.js';
 
 class MockGenerationExporter {
   requests = [];
@@ -322,6 +324,210 @@ test('shutdown flushes pending workflow step batch', async () => {
   assert.equal(exporter.workflowStepRequests.length, 1);
   assert.equal(exporter.workflowStepRequests[0].workflowSteps.length, 1);
   assert.equal(exporter.shutdownCalls, 1);
+});
+
+test('shutdown stops waiting for a collector after 10 seconds and closes the exporter', async (t) => {
+  let acceptRequest;
+  const requestAccepted = new Promise((resolve) => {
+    acceptRequest = resolve;
+  });
+  const server = createServer(async (request) => {
+    for await (const _chunk of request) {
+      // Drain the request body without ending the response.
+    }
+    acceptRequest();
+  });
+
+  await listen(server);
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('failed to resolve test server address');
+  }
+
+  const order = [];
+  let attempts = 0;
+  const httpExporter = new HTTPGenerationExporter(`http://127.0.0.1:${address.port}`, undefined, 60_000);
+  const exporter = {
+    exportGenerations: (request) => {
+      attempts++;
+      return httpExporter.exportGenerations(request);
+    },
+    exportWorkflowSteps: (request) => httpExporter.exportWorkflowSteps(request),
+    shutdown: () => {
+      order.push('exporter shutdown');
+      httpExporter.shutdown();
+    },
+  };
+  const client = newClient(
+    exporter,
+    { batchSize: 10, flushIntervalMs: 60_000, maxRetries: 5 },
+    {
+      logger: {
+        warn: (message) => {
+          if (message.includes('exceeded 10000ms shutdown deadline')) {
+            order.push('flush deadline');
+          }
+        },
+      },
+    },
+  );
+
+  endWithSuccess(client.startGeneration(seedGeneration(12)), 12);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+
+  try {
+    const shutdownPromise = client.shutdown();
+    await requestAccepted;
+    t.mock.timers.tick(10_000);
+    await shutdownPromise;
+    order.push('shutdown resolved');
+
+    assert.deepEqual(order, ['flush deadline', 'exporter shutdown', 'shutdown resolved']);
+    assert.equal(attempts, 1);
+  } finally {
+    httpExporter.shutdown();
+    t.mock.timers.reset();
+    await close(server);
+  }
+});
+
+test('shutdown joins an active flush without retrying after exporter shutdown', async (t) => {
+  let acceptRequest;
+  const requestAccepted = new Promise((resolve) => {
+    acceptRequest = resolve;
+  });
+  const server = createServer(async (request) => {
+    for await (const _chunk of request) {
+      // Drain the request body without ending the response.
+    }
+    acceptRequest();
+  });
+
+  await listen(server);
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('failed to resolve test server address');
+  }
+
+  let attempts = 0;
+  const httpExporter = new HTTPGenerationExporter(`http://127.0.0.1:${address.port}`, undefined, 60_000);
+  const exporter = {
+    exportGenerations: (request) => {
+      attempts++;
+      return httpExporter.exportGenerations(request);
+    },
+    exportWorkflowSteps: (request) => httpExporter.exportWorkflowSteps(request),
+    shutdown: () => httpExporter.shutdown(),
+  };
+  const client = newClient(
+    exporter,
+    {
+      batchSize: 10,
+      flushIntervalMs: 60_000,
+      maxRetries: 5,
+      initialBackoffMs: 1,
+      maxBackoffMs: 1,
+    },
+    { logger: { warn: () => {} } },
+  );
+
+  endWithSuccess(client.startGeneration(seedGeneration(13)), 13);
+  const flushPromise = client.flush();
+  await requestAccepted;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+
+  try {
+    const shutdownPromise = client.shutdown();
+    t.mock.timers.tick(10_000);
+    await shutdownPromise;
+    await assert.rejects(flushPromise, /http generation exporter shutdown/);
+    assert.equal(attempts, 1);
+  } finally {
+    httpExporter.shutdown();
+    t.mock.timers.reset();
+    await close(server);
+  }
+});
+
+test('shutdown cancels a retry backoff it stopped waiting for', async (t) => {
+  const exporter = new MockGenerationExporter(5);
+  let backoffSignal;
+  let backoffTimerCleared = false;
+  let enterBackoff;
+  const backoffEntered = new Promise((resolve) => {
+    enterBackoff = resolve;
+  });
+  const client = newClient(
+    exporter,
+    {
+      batchSize: 10,
+      flushIntervalMs: 60_000,
+      maxRetries: 5,
+      initialBackoffMs: 60_000,
+      maxBackoffMs: 60_000,
+    },
+    {
+      logger: { warn: () => {} },
+      sleep: (durationMs, signal) =>
+        new Promise((resolve) => {
+          backoffSignal = signal;
+          const timer = setTimeout(resolve, durationMs);
+          signal?.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(timer);
+              backoffTimerCleared = true;
+              resolve();
+            },
+            { once: true },
+          );
+          enterBackoff();
+        }),
+    },
+  );
+
+  endWithSuccess(client.startGeneration(seedGeneration(14)), 14);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+
+  try {
+    const flushPromise = client.flush();
+    await backoffEntered;
+
+    const shutdownPromise = client.shutdown();
+    t.mock.timers.tick(10_000);
+    await shutdownPromise;
+
+    // The backoff timer never fires here: only the shutdown deadline was
+    // ticked. Both promises settle because shutdown aborted the sleep.
+    assert.ok(backoffSignal?.aborted, 'shutdown must abort the backoff signal');
+    assert.ok(backoffTimerCleared, 'the backoff timer must be cleared on abort');
+    await assert.rejects(flushPromise, /forced export failure/);
+    assert.equal(exporter.attempts, 1);
+  } finally {
+    t.mock.timers.reset();
+  }
+});
+
+test('defaultSleep clears its timer when the signal aborts', async () => {
+  const timerCount = () => process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
+  const controller = new AbortController();
+  const before = timerCount();
+
+  let resolved = false;
+  const sleeping = defaultSleep(1_000, controller.signal).then(() => {
+    resolved = true;
+  });
+  assert.equal(timerCount(), before + 1);
+
+  controller.abort();
+  await sleep(50);
+  assert.ok(resolved, 'an aborted sleep must resolve without waiting out its duration');
+  assert.equal(timerCount(), before, 'an aborted sleep must not leave a timer holding the event loop');
+  await sleeping;
+
+  const alreadyAborted = defaultSleep(1_000, controller.signal);
+  assert.equal(timerCount(), before, 'an already-aborted signal must not start a timer');
+  await alreadyAborted;
 });
 
 test('queue-full recorder local error is exposed and callback style throws', async () => {

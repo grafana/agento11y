@@ -159,9 +159,26 @@ export function maybeUnref(timer: ReturnType<typeof setInterval>): void {
   }
 }
 
-export function defaultSleep(durationMs: number): Promise<void> {
+/**
+ * Resolves after `durationMs`, or as soon as `signal` aborts.
+ *
+ * The timer is cleared on abort, so a sleep the caller no longer waits for
+ * cannot hold the event loop open and delay process exit.
+ */
+export function defaultSleep(durationMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) {
+    return Promise.resolve();
+  }
   return new Promise((resolve) => {
-    setTimeout(resolve, durationMs);
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, durationMs);
+    function onAbort(): void {
+      clearTimeout(timer);
+      resolve();
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 

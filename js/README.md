@@ -427,8 +427,8 @@ await graph.invoke({ prompt: 'What timezone did I give you?', answer: '' }, thre
 - Generation modes are explicit: `SYNC` and `STREAM`.
 - Generation export supports HTTP, gRPC, and `none` (instrumentation-only).
 - Traces/metrics use `config.tracer`/`config.meter` when provided, otherwise OTEL globals.
-- Exports are asynchronous with bounded queueing and retry/backoff.
-- `flush()` drains queued generations; `shutdown()` flushes and closes generation exporters.
+- Exports are asynchronous with bounded queueing and retry/backoff. Each export request times out after 10 seconds.
+- `flush()` drains queued generations. `shutdown()` gives the final flush 10 seconds, then discards queued exports without another retry and closes the exporter.
 - Empty tool names produce a no-op tool recorder.
 - Generation/tool spans always include SDK identity attributes:
   - `agento11y.sdk.name=sdk-js`

@@ -229,7 +229,11 @@ export interface Agento11ySdkConfig {
   meter?: Meter;
   logger?: Agento11yLogger;
   now?: () => Date;
-  sleep?: (durationMs: number) => Promise<void>;
+  /**
+   * Waits between export retries. The SDK aborts `signal` when it stops
+   * exporting, and a sleep must then resolve and clear its timer.
+   */
+  sleep?: (durationMs: number, signal?: AbortSignal) => Promise<void>;
   /**
    * Default agent name applied to GenerationStart / EmbeddingStart /
    * ToolExecutionStart when the per-call value is empty. Read from
@@ -271,7 +275,8 @@ export interface Agento11ySdkConfigInput {
   meter?: Meter;
   logger?: Agento11yLogger;
   now?: () => Date;
-  sleep?: (durationMs: number) => Promise<void>;
+  /** See {@link Agento11ySdkConfig.sleep}. */
+  sleep?: (durationMs: number, signal?: AbortSignal) => Promise<void>;
   agentName?: string;
   agentVersion?: string;
   userId?: string;

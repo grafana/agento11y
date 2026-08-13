@@ -138,6 +138,7 @@ const spanAttrToolType = 'gen_ai.tool.type';
 const spanAttrToolDescription = 'gen_ai.tool.description';
 const spanAttrToolCallArguments = 'gen_ai.tool.call.arguments';
 const spanAttrToolCallResult = 'gen_ai.tool.call.result';
+const shutdownFlushTimeoutMs = 10_000;
 const spanAttrTagPrefix = 'agento11y.tag.';
 const maxRatingConversationIdLen = 255;
 const maxRatingIdLen = 128;
@@ -228,7 +229,8 @@ function buildToolResultMessage(
 export class Agento11yClient {
   private readonly config: Agento11ySdkConfig;
   private readonly nowFn: () => Date;
-  private readonly sleepFn: (durationMs: number) => Promise<void>;
+  private readonly sleepFn: (durationMs: number, signal?: AbortSignal) => Promise<void>;
+  private readonly exportAbort = new AbortController();
   private readonly logger: Agento11yLogger;
   private readonly generationExporter: GenerationExporter;
   private readonly tracer: Tracer;
@@ -248,6 +250,7 @@ export class Agento11yClient {
   private flushTimer: ReturnType<typeof setInterval> | undefined;
   private shutdownPromise: Promise<void> | undefined;
   private shuttingDown = false;
+  private generationExporterClosed = false;
   private closed = false;
 
   /**
@@ -605,11 +608,12 @@ export class Agento11yClient {
     this.shutdownPromise = (async () => {
       this.stopFlushTimer();
       try {
-        await this.flushInternal();
+        await this.flushOnShutdown();
       } catch (error) {
         this.logWarn('agento11y generation export flush on shutdown failed', error);
       }
 
+      this.stopGenerationExports();
       try {
         await this.generationExporter.shutdown?.();
       } catch (error) {
@@ -1177,6 +1181,28 @@ export class Agento11yClient {
     });
   }
 
+  private async flushOnShutdown(): Promise<void> {
+    let flushTimeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeoutPromise = new Promise<never>((_resolve, reject) => {
+        flushTimeout = setTimeout(() => {
+          this.stopGenerationExports();
+          reject(
+            new Error(
+              `generation export flush exceeded ${shutdownFlushTimeoutMs}ms shutdown deadline; remaining exports were discarded without retry`,
+            ),
+          );
+        }, shutdownFlushTimeoutMs);
+        maybeUnref(flushTimeout);
+      });
+      await Promise.race([this.flushInternal(), timeoutPromise]);
+    } finally {
+      if (flushTimeout !== undefined) {
+        clearTimeout(flushTimeout);
+      }
+    }
+  }
+
   private flushInternal(): Promise<void> {
     if (this.flushPromise !== undefined) {
       this.flushRequested = true;
@@ -1195,7 +1221,7 @@ export class Agento11yClient {
     do {
       this.flushRequested = false;
 
-      while (this.pendingGenerations.length > 0) {
+      while (!this.generationExporterClosed && this.pendingGenerations.length > 0) {
         const batchSize = Math.max(1, this.config.generationExport.batchSize);
         const batch = this.pendingGenerations.splice(0, batchSize).map(cloneGeneration);
         try {
@@ -1205,7 +1231,7 @@ export class Agento11yClient {
         }
       }
 
-      while (this.pendingWorkflowSteps.length > 0) {
+      while (!this.generationExporterClosed && this.pendingWorkflowSteps.length > 0) {
         const batchSize = Math.max(1, this.config.generationExport.batchSize);
         const batch = this.pendingWorkflowSteps.splice(0, batchSize).map(cloneWorkflowStep);
         try {
@@ -1214,7 +1240,10 @@ export class Agento11yClient {
           errors.push(asError(error));
         }
       }
-    } while (this.flushRequested || this.pendingGenerations.length > 0 || this.pendingWorkflowSteps.length > 0);
+    } while (
+      !this.generationExporterClosed &&
+      (this.flushRequested || this.pendingGenerations.length > 0 || this.pendingWorkflowSteps.length > 0)
+    );
 
     if (errors.length === 1) {
       throw errors[0];
@@ -1236,6 +1265,11 @@ export class Agento11yClient {
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt < attempts; attempt++) {
+      if (this.generationExporterClosed) {
+        lastError ??= new Error('agento11y generation exporter is shutdown');
+        break;
+      }
+
       try {
         const response = await this.generationExporter.exportGenerations({
           generations: generations.map(cloneGeneration),
@@ -1244,11 +1278,14 @@ export class Agento11yClient {
         return;
       } catch (error) {
         lastError = asError(error);
-        if (attempt === attempts - 1) {
+        if (attempt === attempts - 1 || this.generationExporterClosed) {
           break;
         }
 
-        await this.sleepFn(backoffMs);
+        await this.backoffSleep(backoffMs);
+        if (this.generationExporterClosed) {
+          break;
+        }
         backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
       }
     }
@@ -1268,6 +1305,11 @@ export class Agento11yClient {
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt < attempts; attempt++) {
+      if (this.generationExporterClosed) {
+        lastError ??= new Error('agento11y generation exporter is shutdown');
+        break;
+      }
+
       try {
         const response = await this.generationExporter.exportWorkflowSteps({
           workflowSteps: workflowSteps.map(cloneWorkflowStep),
@@ -1276,11 +1318,14 @@ export class Agento11yClient {
         return;
       } catch (error) {
         lastError = asError(error);
-        if (attempt === attempts - 1) {
+        if (attempt === attempts - 1 || this.generationExporterClosed) {
           break;
         }
 
-        await this.sleepFn(backoffMs);
+        await this.backoffSleep(backoffMs);
+        if (this.generationExporterClosed) {
+          break;
+        }
         backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
       }
     }
@@ -1302,6 +1347,37 @@ export class Agento11yClient {
         this.logWarn(`agento11y workflow step rejected id=${result.stepId}`, result.error);
       }
     }
+  }
+
+  /**
+   * Waits out the retry backoff, returning as soon as exports stop.
+   *
+   * `defaultSleep` clears its timer when the signal aborts, so a backoff in
+   * progress when `shutdown` gives up cannot keep the process alive. The race
+   * covers an injected `sleep` that ignores the signal.
+   */
+  private async backoffSleep(durationMs: number): Promise<void> {
+    if (this.generationExporterClosed) {
+      return;
+    }
+    const signal = this.exportAbort.signal;
+    let onAbort: () => void = () => {};
+    const aborted = new Promise<void>((resolve) => {
+      onAbort = resolve;
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+      await Promise.race([this.sleepFn(durationMs, signal), aborted]);
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  private stopGenerationExports(): void {
+    this.generationExporterClosed = true;
+    this.exportAbort.abort();
+    this.pendingGenerations.length = 0;
+    this.pendingWorkflowSteps.length = 0;
   }
 
   private stopFlushTimer(): void {

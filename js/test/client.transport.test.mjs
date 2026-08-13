@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { trace } from '@opentelemetry/api';
+import { GRPCGenerationExporter } from '../.test-dist/exporters/grpc.js';
+import { HTTPGenerationExporter } from '../.test-dist/exporters/http.js';
 import { Agento11yClient, defaultConfig } from '../.test-dist/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -18,6 +20,269 @@ const protoLoadOptions = {
   defaults: false,
   oneofs: true,
 };
+
+test('HTTP generation and workflow-step exports time out when the collector never responds', async (t) => {
+  for (const testCase of [
+    {
+      name: 'generation',
+      path: '/api/v1/generations:export',
+      export: (exporter) => exporter.exportGenerations({ generations: [transportGeneration('gen-timeout')] }),
+    },
+    {
+      name: 'workflow step',
+      path: '/api/v1/workflow-steps:export',
+      export: (exporter) => exporter.exportWorkflowSteps({ workflowSteps: [transportWorkflowStep('step-timeout')] }),
+    },
+  ]) {
+    await t.test(testCase.name, async () => {
+      let acceptRequest;
+      const requestAccepted = new Promise((resolve) => {
+        acceptRequest = resolve;
+      });
+      const server = createServer(async (request) => {
+        for await (const _chunk of request) {
+          // Drain the request body without ending the response.
+        }
+        assert.equal(request.url, testCase.path);
+        acceptRequest();
+      });
+
+      await listen(server);
+      const address = server.address();
+      if (address === null || typeof address === 'string') {
+        throw new Error('failed to resolve transport test server address');
+      }
+
+      const timeoutMs = 50;
+      const exporter = new HTTPGenerationExporter(`http://127.0.0.1:${address.port}`, undefined, timeoutMs);
+      const startedAt = Date.now();
+      try {
+        const exportPromise = testCase.export(exporter);
+        await requestAccepted;
+        await assert.rejects(exportPromise, (error) => error?.name === 'TimeoutError');
+        assert.ok(Date.now() - startedAt <= timeoutMs + 1_000);
+      } finally {
+        exporter.shutdown();
+        await close(server);
+      }
+    });
+  }
+});
+
+test('HTTP generation and workflow-step exports parse healthy collector responses', async () => {
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) {
+      chunks.push(chunk);
+    }
+    const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const results =
+      request.url === '/api/v1/generations:export'
+        ? payload.generations.map((generation) => ({ generation_id: generation.id, accepted: true }))
+        : payload.workflow_steps.map((step) => ({ step_id: step.id, accepted: true }));
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ results }));
+  });
+
+  await listen(server);
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('failed to resolve transport test server address');
+  }
+
+  const exporter = new HTTPGenerationExporter(`http://127.0.0.1:${address.port}`, undefined, 2_500);
+  try {
+    assert.deepEqual(await exporter.exportGenerations({ generations: [transportGeneration('gen-healthy')] }), {
+      results: [{ generationId: 'gen-healthy', accepted: true, error: undefined }],
+    });
+    assert.deepEqual(await exporter.exportWorkflowSteps({ workflowSteps: [transportWorkflowStep('step-healthy')] }), {
+      results: [{ stepId: 'step-healthy', accepted: true, error: undefined }],
+    });
+  } finally {
+    exporter.shutdown();
+    await close(server);
+  }
+});
+
+test('HTTP generation timeout is retried by the client', async () => {
+  let requests = 0;
+  const server = createServer(async (request) => {
+    for await (const _chunk of request) {
+      // Drain the request body without ending the response.
+    }
+    requests++;
+  });
+
+  await listen(server);
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('failed to resolve transport test server address');
+  }
+
+  const defaults = defaultConfig();
+  // The export timeout is fixed, so the exporter is injected to shorten it.
+  const client = new Agento11yClient({
+    tracer: trace.getTracer('agento11y-sdk-js-test'),
+    generationExporter: new HTTPGenerationExporter(`http://127.0.0.1:${address.port}`, undefined, 50),
+    generationExport: {
+      ...defaults.generationExport,
+      batchSize: 10,
+      flushIntervalMs: 60_000,
+      maxRetries: 1,
+      initialBackoffMs: 1,
+      maxBackoffMs: 1,
+    },
+  });
+
+  try {
+    const recorder = client.startGeneration({
+      id: 'gen-retry-timeout',
+      model: { provider: 'openai', name: 'gpt-5' },
+    });
+    recorder.setResult({ output: [{ role: 'assistant', content: 'ok' }] });
+    recorder.end();
+
+    await assert.rejects(client.flush(), (error) => error?.name === 'TimeoutError');
+    assert.equal(requests, 2);
+  } finally {
+    await client.shutdown();
+    await close(server);
+  }
+});
+
+test('gRPC generation and workflow-step exports stop at the export deadline', async (t) => {
+  const grpcServer = await startGRPCServer(
+    () => {},
+    () => {},
+    { hangGeneration: true, hangWorkflowStep: true },
+  );
+  const exporter = new GRPCGenerationExporter(`127.0.0.1:${grpcServer.port}`, undefined, true, 50);
+
+  try {
+    for (const testCase of [
+      {
+        name: 'generation',
+        export: () => exporter.exportGenerations({ generations: [transportGeneration('gen-grpc-timeout')] }),
+      },
+      {
+        name: 'workflow step',
+        export: () => exporter.exportWorkflowSteps({ workflowSteps: [transportWorkflowStep('step-grpc-timeout')] }),
+      },
+    ]) {
+      await t.test(testCase.name, async () => {
+        await assert.rejects(testCase.export(), (error) => error?.code === grpc.status.DEADLINE_EXCEEDED);
+      });
+    }
+  } finally {
+    await exporter.shutdown();
+    await stopGRPCServer(grpcServer.server);
+  }
+});
+
+test('gRPC exporter shutdown cancels active calls and prevents new clients', async () => {
+  let acceptRequest;
+  const requestAccepted = new Promise((resolve) => {
+    acceptRequest = resolve;
+  });
+  let requests = 0;
+  const grpcServer = await startGRPCServer(
+    () => {
+      requests++;
+      acceptRequest();
+    },
+    () => {},
+    { hangGeneration: true },
+  );
+  const exporter = new GRPCGenerationExporter(`127.0.0.1:${grpcServer.port}`, undefined, true, 60_000);
+
+  try {
+    const exportPromise = exporter.exportGenerations({
+      generations: [transportGeneration('gen-grpc-shutdown')],
+    });
+    await requestAccepted;
+    await exporter.shutdown();
+
+    await assert.rejects(exportPromise, (error) => error?.code === grpc.status.CANCELLED);
+    await assert.rejects(
+      exporter.exportGenerations({ generations: [transportGeneration('gen-grpc-after-shutdown')] }),
+      /grpc generation exporter shutdown/,
+    );
+    assert.equal(requests, 1);
+  } finally {
+    await exporter.shutdown();
+    await stopGRPCServer(grpcServer.server);
+  }
+});
+
+test('client shutdown stops a gRPC drain during backoff before the next batch', async (t) => {
+  let requests = 0;
+  const grpcServer = await startGRPCServer(
+    () => {
+      requests++;
+    },
+    () => {},
+    {
+      generationError: {
+        code: grpc.status.UNAVAILABLE,
+        details: 'collector unavailable',
+      },
+    },
+  );
+
+  let enterBackoff;
+  const backoffEntered = new Promise((resolve) => {
+    enterBackoff = resolve;
+  });
+  let resumeBackoff;
+  const defaults = defaultConfig();
+  const client = new Agento11yClient({
+    tracer: trace.getTracer('agento11y-sdk-js-test'),
+    sleep: () =>
+      new Promise((resolve) => {
+        resumeBackoff = resolve;
+        enterBackoff();
+      }),
+    logger: { warn: () => {} },
+    generationExport: {
+      ...defaults.generationExport,
+      protocol: 'grpc',
+      endpoint: `127.0.0.1:${grpcServer.port}`,
+      insecure: true,
+      batchSize: 1,
+      flushIntervalMs: 60_000,
+      maxRetries: 5,
+    },
+  });
+
+  for (let index = 0; index < 3; index++) {
+    const recorder = client.startGeneration({
+      id: `gen-grpc-shutdown-${index}`,
+      model: { provider: 'openai', name: 'gpt-5' },
+    });
+    recorder.setResult({ output: [{ role: 'assistant', content: 'ok' }] });
+    recorder.end();
+  }
+
+  const flushPromise = client.flush();
+  await backoffEntered;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+
+  try {
+    const shutdownPromise = client.shutdown();
+    t.mock.timers.tick(10_000);
+    await shutdownPromise;
+    resumeBackoff();
+    await assert.rejects(flushPromise, (error) => error?.code === grpc.status.UNAVAILABLE);
+
+    assert.equal(requests, 1);
+    assert.equal(client.debugSnapshot().queueSize, 0);
+  } finally {
+    resumeBackoff?.();
+    t.mock.timers.reset();
+    await client.shutdown();
+    await stopGRPCServer(grpcServer.server);
+  }
+});
 
 test('HTTP transport roundtrip preserves full generation payload shape', async () => {
   const receivedGenerations = [];
@@ -483,6 +748,26 @@ test('gRPC transport applies generation bearer auth metadata with explicit heade
     await stopGRPCServer(grpcServer.server);
   }
 });
+
+function transportGeneration(id) {
+  const timestamp = new Date(Date.UTC(2026, 7, 13, 0, 0, 0));
+  return {
+    id,
+    operationName: 'chat',
+    mode: 'SYNC',
+    model: { provider: 'openai', name: 'gpt-5' },
+    startedAt: timestamp,
+    completedAt: timestamp,
+  };
+}
+
+function transportWorkflowStep(id) {
+  return {
+    id,
+    conversationId: 'conv-transport',
+    stepName: 'answer',
+  };
+}
 
 function payloadFromSeed(seed) {
   const startedAt = new Date(Date.UTC(2026, 1, 12, 10, seed, 0));
@@ -1151,7 +1436,11 @@ function close(server) {
   });
 }
 
-async function startGRPCServer(onRequest, onWorkflowStepRequest = () => {}) {
+async function startGRPCServer(
+  onRequest,
+  onWorkflowStepRequest = () => {},
+  { hangGeneration = false, hangWorkflowStep = false, generationError } = {},
+) {
   const packageDefinition = await protoLoader.load(protoPath, protoLoadOptions);
   const loaded = grpc.loadPackageDefinition(packageDefinition);
   const generationService = loaded.agento11y.v1.GenerationIngestService;
@@ -1161,23 +1450,29 @@ async function startGRPCServer(onRequest, onWorkflowStepRequest = () => {}) {
   server.addService(generationService.service, {
     ExportGenerations(call, callback) {
       onRequest(call.request, call.metadata.getMap());
-      callback(null, {
-        results: (call.request.generations ?? []).map((generation) => ({
-          generationId: generation.id,
-          accepted: true,
-        })),
-      });
+      if (generationError !== undefined) {
+        callback(generationError);
+      } else if (!hangGeneration) {
+        callback(null, {
+          results: (call.request.generations ?? []).map((generation) => ({
+            generationId: generation.id,
+            accepted: true,
+          })),
+        });
+      }
     },
   });
   server.addService(workflowStepService.service, {
     ExportWorkflowSteps(call, callback) {
       onWorkflowStepRequest(call.request, call.metadata.getMap());
-      callback(null, {
-        results: (call.request.workflowSteps ?? []).map((step) => ({
-          stepId: step.id,
-          accepted: true,
-        })),
-      });
+      if (!hangWorkflowStep) {
+        callback(null, {
+          results: (call.request.workflowSteps ?? []).map((step) => ({
+            stepId: step.id,
+            accepted: true,
+          })),
+        });
+      }
     },
   });
 

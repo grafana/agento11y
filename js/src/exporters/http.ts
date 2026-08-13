@@ -17,14 +17,19 @@ import type {
 import { canonicalEffectiveVersion, isRecord } from '../utils.js';
 import { userAgent } from '../version.js';
 
+const exportTimeoutMs = 10_000;
+
 export class HTTPGenerationExporter implements GenerationExporter {
   private readonly generationEndpoint: string;
   private readonly workflowStepEndpoint: string;
   private readonly headers: Record<string, string>;
+  private readonly timeoutMs: number;
+  private readonly shutdownController = new AbortController();
 
-  constructor(endpoint: string, headers?: Record<string, string>) {
+  constructor(endpoint: string, headers?: Record<string, string>, timeoutMs = exportTimeoutMs) {
     this.generationEndpoint = normalizeHTTPGenerationEndpoint(endpoint);
     this.workflowStepEndpoint = normalizeHTTPWorkflowStepEndpoint(endpoint);
+    this.timeoutMs = timeoutMs;
     // Resolve the User-Agent like the gRPC exporter: a non-blank caller override
     // (case-insensitive) wins, otherwise the SDK default. A blank/whitespace
     // override is dropped so it can't blank out the default.
@@ -43,46 +48,83 @@ export class HTTPGenerationExporter implements GenerationExporter {
   }
 
   async exportGenerations(request: ExportGenerationsRequest): Promise<ExportGenerationsResponse> {
-    const response = await fetch(this.generationEndpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...this.headers,
-      },
-      body: JSON.stringify({
-        generations: request.generations.map(mapGenerationToProtoJSON),
-      }),
-    });
+    const requestAbort = combineAbortSignals(AbortSignal.timeout(this.timeoutMs), this.shutdownController.signal);
+    try {
+      const response = await fetch(this.generationEndpoint, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...this.headers,
+        },
+        body: JSON.stringify({
+          generations: request.generations.map(mapGenerationToProtoJSON),
+        }),
+        signal: requestAbort.signal,
+      });
 
-    if (!response.ok) {
-      const responseText = (await response.text()).trim();
-      throw new Error(`http generation export status ${response.status}: ${responseText}`);
+      if (!response.ok) {
+        const responseText = (await response.text()).trim();
+        throw new Error(`http generation export status ${response.status}: ${responseText}`);
+      }
+
+      const payload = (await response.json()) as unknown;
+      return parseExportGenerationsResponse(payload, request);
+    } finally {
+      requestAbort.dispose();
     }
-
-    const payload = (await response.json()) as unknown;
-    return parseExportGenerationsResponse(payload, request);
   }
 
   async exportWorkflowSteps(request: ExportWorkflowStepsRequest): Promise<ExportWorkflowStepsResponse> {
-    const response = await fetch(this.workflowStepEndpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...this.headers,
-      },
-      body: JSON.stringify({
-        workflow_steps: request.workflowSteps.map(mapWorkflowStepToProtoJSON),
-      }),
-    });
+    const requestAbort = combineAbortSignals(AbortSignal.timeout(this.timeoutMs), this.shutdownController.signal);
+    try {
+      const response = await fetch(this.workflowStepEndpoint, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...this.headers,
+        },
+        body: JSON.stringify({
+          workflow_steps: request.workflowSteps.map(mapWorkflowStepToProtoJSON),
+        }),
+        signal: requestAbort.signal,
+      });
 
-    if (!response.ok) {
-      const responseText = (await response.text()).trim();
-      throw new Error(`http workflow step export status ${response.status}: ${responseText}`);
+      if (!response.ok) {
+        const responseText = (await response.text()).trim();
+        throw new Error(`http workflow step export status ${response.status}: ${responseText}`);
+      }
+
+      const payload = (await response.json()) as unknown;
+      return parseExportWorkflowStepsResponse(payload, request);
+    } finally {
+      requestAbort.dispose();
     }
-
-    const payload = (await response.json()) as unknown;
-    return parseExportWorkflowStepsResponse(payload, request);
   }
+
+  shutdown(): void {
+    this.shutdownController.abort(new Error('http generation exporter shutdown'));
+  }
+}
+
+function combineAbortSignals(...signals: AbortSignal[]): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  const listeners = signals.map((signal) => {
+    const abort = () => controller.abort(signal.reason);
+    if (signal.aborted) {
+      abort();
+    } else {
+      signal.addEventListener('abort', abort, { once: true });
+    }
+    return { signal, abort };
+  });
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      for (const listener of listeners) {
+        listener.signal.removeEventListener('abort', listener.abort);
+      }
+    },
+  };
 }
 
 function parseExportGenerationsResponse(
