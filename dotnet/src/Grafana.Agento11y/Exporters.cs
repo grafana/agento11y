@@ -42,8 +42,13 @@ internal sealed class HttpGenerationExporter : IGenerationExporter
     private readonly Uri _endpoint;
     private readonly string _userAgent;
     private readonly IReadOnlyDictionary<string, string> _headers;
+    private readonly TimeSpan _exportTimeout;
 
-    public HttpGenerationExporter(string endpoint, IReadOnlyDictionary<string, string> headers)
+    public HttpGenerationExporter(
+        string endpoint,
+        IReadOnlyDictionary<string, string> headers,
+        TimeSpan exportTimeout
+    )
     {
         if (string.IsNullOrWhiteSpace(endpoint))
         {
@@ -86,12 +91,16 @@ internal sealed class HttpGenerationExporter : IGenerationExporter
         }
         _userAgent = userAgent;
         _headers = normalizedHeaders;
+        // Clamp defensively: the exporter is also constructible without going
+        // through ConfigResolver, and HttpClient.Timeout throws on <= 0 or on
+        // anything above int.MaxValue milliseconds.
+        _exportTimeout = ConfigResolver.NormalizeExportTimeout(exportTimeout);
         _httpClient = new HttpClient(new HttpClientHandler
         {
             UseCookies = false,
         })
         {
-            Timeout = TimeSpan.FromSeconds(10),
+            Timeout = _exportTimeout,
         };
     }
 
@@ -115,10 +124,18 @@ internal sealed class HttpGenerationExporter : IGenerationExporter
             httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
         }
 
-        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
+        // One bound for the whole request: send plus response-body read share the
+        // configured budget instead of each getting a fresh one. The timeout is
+        // started here rather than derived from the caller token because the
+        // background flush path exports with CancellationToken.None.
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(_exportTimeout);
+        var requestToken = timeoutCts.Token;
+
+        using var response = await _httpClient.SendAsync(httpRequest, requestToken).ConfigureAwait(false);
 
 #if NET
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        var body = await response.Content.ReadAsStringAsync(requestToken).ConfigureAwait(false);
 #else
         var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 #endif
@@ -168,8 +185,14 @@ internal sealed class GrpcGenerationExporter : IGenerationExporter, IDisposable
     private readonly GrpcChannel _channel;
     private readonly Proto.GenerationIngestService.GenerationIngestServiceClient _client;
     private readonly IReadOnlyDictionary<string, string> _headers;
+    private readonly TimeSpan _exportTimeout;
 
-    public GrpcGenerationExporter(string endpoint, bool insecure, IReadOnlyDictionary<string, string> headers)
+    public GrpcGenerationExporter(
+        string endpoint,
+        bool insecure,
+        IReadOnlyDictionary<string, string> headers,
+        TimeSpan exportTimeout
+    )
     {
         if (string.IsNullOrWhiteSpace(endpoint))
         {
@@ -209,6 +232,7 @@ internal sealed class GrpcGenerationExporter : IGenerationExporter, IDisposable
             normalizedHeaders[pair.Key] = pair.Value;
         }
         _headers = normalizedHeaders;
+        _exportTimeout = ConfigResolver.NormalizeExportTimeout(exportTimeout);
 
         _channel = GrpcChannel.ForAddress(uri, new GrpcChannelOptions
         {
@@ -260,7 +284,18 @@ internal sealed class GrpcGenerationExporter : IGenerationExporter, IDisposable
             metadata.Add(header.Key, header.Value);
         }
 
-        var response = await _client.ExportGenerationsAsync(protoRequest, metadata, cancellationToken: cancellationToken)
+        // The deadline is computed per call inside the exporter, not from
+        // cancellationToken: the background flush path exports with
+        // CancellationToken.None, so a caller-token-based timeout would leave
+        // those calls unbounded. gRPC deadlines are absolute, hence the per-call
+        // DateTime.UtcNow read.
+        var callOptions = new CallOptions(
+            headers: metadata,
+            deadline: DateTime.UtcNow.Add(_exportTimeout),
+            cancellationToken: cancellationToken
+        );
+
+        var response = await _client.ExportGenerationsAsync(protoRequest, callOptions)
             .ResponseAsync
             .ConfigureAwait(false);
 

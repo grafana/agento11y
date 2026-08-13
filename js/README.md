@@ -427,8 +427,8 @@ await graph.invoke({ prompt: 'What timezone did I give you?', answer: '' }, thre
 - Generation modes are explicit: `SYNC` and `STREAM`.
 - Generation export supports HTTP, gRPC, and `none` (instrumentation-only).
 - Traces/metrics use `config.tracer`/`config.meter` when provided, otherwise OTEL globals.
-- Exports are asynchronous with bounded queueing and retry/backoff. Each export request times out after 10 seconds.
-- `flush()` drains queued generations. `shutdown()` gives the final flush 10 seconds, then discards queued exports without another retry and closes the exporter.
+- Exports are asynchronous with bounded queueing and retry/backoff. Each export request defaults to a 30-second timeout.
+- `flush()` drains queued generations. `shutdown()` runs a final flush with a deadline equal to the configured request timeout. When that deadline passes, it discards the queued exports without a retry and closes the exporter.
 - Empty tool names produce a no-op tool recorder.
 - Generation/tool spans always include SDK identity attributes:
   - `agento11y.sdk.name=sdk-js`
@@ -514,6 +514,12 @@ auth: {
   basicPassword: process.env.AGENTO11Y_AUTH_TOKEN,
 },
 ```
+
+## Export timeout
+
+`AGENTO11Y_EXPORT_TIMEOUT_MS` sets the timeout for each generation or workflow-step export request. It accepts base-10 integers from `1` through `2147483647` and defaults to `30000` milliseconds. An explicit `generationExport.timeoutMs` value wins over the environment variable.
+
+`shutdown()` uses the same resolved timeout as the deadline for its final flush, so a request that is already in flight gets one complete attempt.
 
 ## Wiring custom env vars
 

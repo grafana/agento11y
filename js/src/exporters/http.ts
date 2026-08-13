@@ -17,7 +17,7 @@ import type {
 import { canonicalEffectiveVersion, isRecord } from '../utils.js';
 import { userAgent } from '../version.js';
 
-const exportTimeoutMs = 10_000;
+const defaultExportTimeoutMs = 30_000;
 
 export class HTTPGenerationExporter implements GenerationExporter {
   private readonly generationEndpoint: string;
@@ -26,7 +26,7 @@ export class HTTPGenerationExporter implements GenerationExporter {
   private readonly timeoutMs: number;
   private readonly shutdownController = new AbortController();
 
-  constructor(endpoint: string, headers?: Record<string, string>, timeoutMs = exportTimeoutMs) {
+  constructor(endpoint: string, headers?: Record<string, string>, timeoutMs = defaultExportTimeoutMs) {
     this.generationEndpoint = normalizeHTTPGenerationEndpoint(endpoint);
     this.workflowStepEndpoint = normalizeHTTPWorkflowStepEndpoint(endpoint);
     this.timeoutMs = timeoutMs;

@@ -34,6 +34,7 @@ public static class EnvConfig
     public const string EnvProtocol = "SIGIL_PROTOCOL";
     public const string EnvInsecure = "SIGIL_INSECURE";
     public const string EnvHeaders = "SIGIL_HEADERS";
+    public const string EnvExportTimeoutMs = "SIGIL_EXPORT_TIMEOUT_MS";
     public const string EnvAuthMode = "SIGIL_AUTH_MODE";
     public const string EnvAuthTenantId = "SIGIL_AUTH_TENANT_ID";
     public const string EnvAuthToken = "SIGIL_AUTH_TOKEN";
@@ -49,6 +50,7 @@ public static class EnvConfig
     public const string PreferredEnvProtocol = "AGENTO11Y_PROTOCOL";
     public const string PreferredEnvInsecure = "AGENTO11Y_INSECURE";
     public const string PreferredEnvHeaders = "AGENTO11Y_HEADERS";
+    public const string PreferredEnvExportTimeoutMs = "AGENTO11Y_EXPORT_TIMEOUT_MS";
     public const string PreferredEnvAuthMode = "AGENTO11Y_AUTH_MODE";
     public const string PreferredEnvAuthTenantId = "AGENTO11Y_AUTH_TENANT_ID";
     public const string PreferredEnvAuthToken = "AGENTO11Y_AUTH_TOKEN";
@@ -63,6 +65,7 @@ public static class EnvConfig
     private static readonly EnvPair ProtocolPair = new(PreferredEnvProtocol, EnvProtocol);
     private static readonly EnvPair InsecurePair = new(PreferredEnvInsecure, EnvInsecure);
     private static readonly EnvPair HeadersPair = new(PreferredEnvHeaders, EnvHeaders);
+    private static readonly EnvPair ExportTimeoutMsPair = new(PreferredEnvExportTimeoutMs, EnvExportTimeoutMs);
     private static readonly EnvPair AuthModePair = new(PreferredEnvAuthMode, EnvAuthMode);
     private static readonly EnvPair AuthTenantIdPair = new(PreferredEnvAuthTenantId, EnvAuthTenantId);
     private static readonly EnvPair AuthTokenPair = new(PreferredEnvAuthToken, EnvAuthToken);
@@ -74,6 +77,16 @@ public static class EnvConfig
     private static readonly EnvPair DebugPair = new(PreferredEnvDebug, EnvDebug);
 
     internal const string DefaultEndpoint = "localhost:4317";
+
+    /// <summary>Smallest accepted <c>AGENTO11Y_EXPORT_TIMEOUT_MS</c> value.</summary>
+    internal const int MinExportTimeoutMs = 1;
+
+    /// <summary>
+    /// Largest accepted <c>AGENTO11Y_EXPORT_TIMEOUT_MS</c> value. Matches the
+    /// millisecond ceiling <c>HttpClient.Timeout</c> accepts, so any value that
+    /// parses is directly usable by both exporters.
+    /// </summary>
+    internal const int MaxExportTimeoutMs = int.MaxValue;
 
     /// <summary>
     /// Returns a config built from process env vars layered onto a fresh
@@ -137,6 +150,22 @@ public static class EnvConfig
         if (insecureRaw != null && export.Insecure == null)
         {
             export.Insecure = ParseBool(insecureRaw);
+        }
+
+        var exportTimeoutRaw = EnvTrimmed(src, ExportTimeoutMsPair, out var exportTimeoutKey);
+        if (exportTimeoutRaw != null && !export.HasExplicitExportTimeout)
+        {
+            var parsedTimeoutMs = ParseExportTimeoutMs(exportTimeoutRaw);
+            if (parsedTimeoutMs.HasValue)
+            {
+                export.ExportTimeout = TimeSpan.FromMilliseconds(parsedTimeoutMs.Value);
+            }
+            else
+            {
+                warnings.Add(
+                    $"agento11y: ignoring invalid {exportTimeoutKey} {exportTimeoutRaw}; expected an integer from {MinExportTimeoutMs} through {MaxExportTimeoutMs}"
+                );
+            }
         }
 
         var headersRaw = EnvTrimmed(src, HeadersPair);
@@ -321,6 +350,48 @@ public static class EnvConfig
             "1" or "true" or "yes" or "on" => true,
             _ => false,
         };
+    }
+
+    /// <summary>
+    /// Parses <c>AGENTO11Y_EXPORT_TIMEOUT_MS</c> (legacy
+    /// <c>SIGIL_EXPORT_TIMEOUT_MS</c>) as base-10 integer milliseconds in the
+    /// inclusive range <c>1..2147483647</c>. Non-numeric text, fractions, and
+    /// values outside that range return <c>null</c>, so the caller can warn and
+    /// keep the schema default without discarding the rest of the env layer.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="System.Globalization.NumberStyles.None"/> keeps parsing strict:
+    /// no sign, no decimal point, no thousands separators, no exponent, no
+    /// hex. A value above <c>int.MaxValue</c> overflows and fails the same way.
+    /// </remarks>
+    internal static int? ParseExportTimeoutMs(string? raw)
+    {
+        if (raw == null)
+        {
+            return null;
+        }
+
+        var text = raw.Trim();
+        if (text.Length == 0)
+        {
+            return null;
+        }
+
+        if (!int.TryParse(
+                text,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var milliseconds))
+        {
+            return null;
+        }
+
+        if (milliseconds < MinExportTimeoutMs || milliseconds > MaxExportTimeoutMs)
+        {
+            return null;
+        }
+
+        return milliseconds;
     }
 
     internal static Dictionary<string, string> ParseCsvKv(string? raw)

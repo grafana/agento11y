@@ -172,6 +172,106 @@ public sealed class EnvIntegrationTests
         Assert.NotNull(resolved.GenerationExport.Insecure);
         Assert.False(resolved.GenerationExport.Insecure!.Value);
     }
+
+    [Fact]
+    public void NoEnvNoCallerExportTimeoutResolvesToThirtySeconds()
+    {
+        var resolved = ConfigResolverTestHook.Resolve(new Agento11yClientConfig(), _ => null);
+        Assert.Equal(TimeSpan.FromSeconds(30), resolved.GenerationExport.ExportTimeout);
+    }
+
+    /// <summary>
+    /// Caller values <c>ConfigResolver</c> must reject, following the same
+    /// "non-positive falls back to the schema default" policy as the
+    /// neighboring <c>InitialBackoff</c> clamp.
+    /// </summary>
+    public static TheoryData<TimeSpan> InvalidCallerExportTimeouts() => new()
+    {
+        TimeSpan.Zero,
+        TimeSpan.FromTicks(-1),
+        TimeSpan.FromSeconds(-30),
+        Timeout.InfiniteTimeSpan, // -1 ms, the sentinel HttpClient reads as "no timeout"
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidCallerExportTimeouts))]
+    public void ConfigResolverClampsInvalidCallerExportTimeoutToDefault(TimeSpan callerValue)
+    {
+        var caller = new Agento11yClientConfig();
+        caller.GenerationExport.ExportTimeout = callerValue;
+
+        var resolved = ConfigResolverTestHook.Resolve(caller, _ => null);
+
+        Assert.Equal(TimeSpan.FromSeconds(30), resolved.GenerationExport.ExportTimeout);
+    }
+
+    [Fact]
+    public void ConfigResolverCapsOversizedCallerExportTimeout()
+    {
+        // Above int.MaxValue ms neither HttpClient.Timeout nor a gRPC deadline
+        // can represent the value, so it is capped at the env-parse ceiling.
+        var caller = new Agento11yClientConfig();
+        caller.GenerationExport.ExportTimeout = TimeSpan.FromDays(365);
+
+        var resolved = ConfigResolverTestHook.Resolve(caller, _ => null);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(int.MaxValue), resolved.GenerationExport.ExportTimeout);
+    }
+
+    [Fact]
+    public void ConfigResolverKeepsValidCallerExportTimeout()
+    {
+        var caller = new Agento11yClientConfig();
+        caller.GenerationExport.ExportTimeout = TimeSpan.FromSeconds(5);
+
+        var resolved = ConfigResolverTestHook.Resolve(caller, _ => null);
+
+        Assert.Equal(TimeSpan.FromSeconds(5), resolved.GenerationExport.ExportTimeout);
+    }
+
+    [Fact]
+    public void ConfigResolverAppliesEnvExportTimeoutWhenCallerUnset()
+    {
+        var env = new Dictionary<string, string?> { ["AGENTO11Y_EXPORT_TIMEOUT_MS"] = "2500" };
+
+        var resolved = ConfigResolverTestHook.Resolve(
+            new Agento11yClientConfig(),
+            k => env.TryGetValue(k, out var v) ? v : null
+        );
+
+        Assert.Equal(TimeSpan.FromMilliseconds(2500), resolved.GenerationExport.ExportTimeout);
+    }
+
+    [Fact]
+    public void ConfigResolverPrefersCallerExportTimeoutOverEnv()
+    {
+        var caller = new Agento11yClientConfig();
+        caller.GenerationExport.ExportTimeout = TimeSpan.FromSeconds(2);
+        var env = new Dictionary<string, string?> { ["AGENTO11Y_EXPORT_TIMEOUT_MS"] = "2500" };
+
+        var resolved = ConfigResolverTestHook.Resolve(caller, k => env.TryGetValue(k, out var v) ? v : null);
+
+        Assert.Equal(TimeSpan.FromSeconds(2), resolved.GenerationExport.ExportTimeout);
+    }
+
+    [Theory]
+    [MemberData(nameof(EnvConfigTests.InvalidExportTimeoutValues), MemberType = typeof(EnvConfigTests))]
+    public void ConfigResolverLogsWarningAndKeepsDefaultForInvalidEnvExportTimeout(string raw)
+    {
+        var logged = new List<string>();
+        var caller = new Agento11yClientConfig { Logger = logged.Add };
+        var env = new Dictionary<string, string?>
+        {
+            ["AGENTO11Y_EXPORT_TIMEOUT_MS"] = raw,
+            ["AGENTO11Y_ENDPOINT"] = "valid.example:4318",
+        };
+
+        var resolved = ConfigResolverTestHook.Resolve(caller, k => env.TryGetValue(k, out var v) ? v : null);
+
+        Assert.Equal(TimeSpan.FromSeconds(30), resolved.GenerationExport.ExportTimeout);
+        Assert.Equal("valid.example:4318", resolved.GenerationExport.Endpoint);
+        Assert.Contains(logged, w => w.Contains("AGENTO11Y_EXPORT_TIMEOUT_MS"));
+    }
 }
 
 internal static class ConfigResolverTestHook

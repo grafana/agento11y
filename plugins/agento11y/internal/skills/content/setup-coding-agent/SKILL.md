@@ -369,6 +369,7 @@ All hosts read the resolved config path. The default is
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | Which content fields ship (see below) |
 | `AGENTO11Y_TAGS` | `key=value,key=value` attached to every generation |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | Opt-in automatic user, repo, and branch tags |
+| `AGENTO11Y_EXPORT_TIMEOUT_MS` | Generation export timeout in milliseconds; defaults to 30000 |
 | `AGENTO11Y_GUARDS_ENABLED` | Send supported preflight and tool calls for guard evaluation |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | Guard evaluation timeout in milliseconds |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | Allow the operation when guard evaluation fails |

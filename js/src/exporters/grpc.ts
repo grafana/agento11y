@@ -62,7 +62,7 @@ const protoLoadOptions: protoLoader.Options = {
   oneofs: true,
 };
 
-const exportTimeoutMs = 10_000;
+const defaultExportTimeoutMs = 30_000;
 
 export class GRPCGenerationExporter implements GenerationExporter {
   private readonly endpoint: string;
@@ -77,7 +77,12 @@ export class GRPCGenerationExporter implements GenerationExporter {
   private readonly activeCalls = new Set<grpc.ClientUnaryCall>();
   private closed = false;
 
-  constructor(endpoint: string, headers?: Record<string, string>, insecure = false, timeoutMs = exportTimeoutMs) {
+  constructor(
+    endpoint: string,
+    headers?: Record<string, string>,
+    insecure = false,
+    timeoutMs = defaultExportTimeoutMs,
+  ) {
     const parsed = parseGRPCEndpoint(endpoint);
     this.endpoint = parsed.host;
     this.insecure = insecure || parsed.insecure;

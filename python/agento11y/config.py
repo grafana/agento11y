@@ -6,6 +6,7 @@ import base64
 import dataclasses
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -15,7 +16,7 @@ from typing import Any
 from opentelemetry.metrics import Meter
 from opentelemetry.trace import Tracer
 
-from .exporters.base import GenerationExporter
+from .exporters.base import DEFAULT_EXPORT_TIMEOUT_SECONDS, GenerationExporter
 from .models import ContentCaptureMode, Generation, utc_now
 
 TENANT_HEADER = "X-Scope-OrgID"
@@ -29,6 +30,16 @@ _DEFAULT_INSECURE = False
 _DEFAULT_AUTH_MODE = "none"
 _VALID_AUTH_MODES = ("none", "tenant", "bearer", "basic")
 _VALID_CONTENT_CAPTURE = ("full", "no_tool_content", "metadata_only", "full_with_metadata_spans")
+# Per-request export deadline. This exact object doubles as the "caller did not
+# set export_timeout" sentinel: resolve_config applies AGENTO11Y_EXPORT_TIMEOUT_MS
+# only while GenerationExportConfig.export_timeout still holds it, so any value
+# the caller assigns (even one equal to 30s) wins over the environment.
+_DEFAULT_EXPORT_TIMEOUT = timedelta(seconds=DEFAULT_EXPORT_TIMEOUT_SECONDS)
+# AGENTO11Y_EXPORT_TIMEOUT_MS accepts base-10 integer milliseconds in the
+# inclusive int32 range; anything else is warned about and ignored.
+_MIN_EXPORT_TIMEOUT_MS = 1
+_MAX_EXPORT_TIMEOUT_MS = 2147483647
+_INT_PATTERN = re.compile(r"[+-]?[0-9]+")
 _LEGACY_ENV_RENAMES = {
     "SIGIL_AGENT_NAME": "AGENTO11Y_AGENT_NAME",
     "SIGIL_AGENT_VERSION": "AGENTO11Y_AGENT_VERSION",
@@ -42,6 +53,7 @@ _LEGACY_ENV_RENAMES = {
     "SIGIL_CONTROL_PLANE_ENDPOINT": "AGENTO11Y_CONTROL_ENDPOINT",
     "SIGIL_CONTROL_PLANE_TOKEN": "AGENTO11Y_SERVICE_ACCOUNT_TOKEN",
     "SIGIL_ENDPOINT": "AGENTO11Y_ENDPOINT",
+    "SIGIL_EXPORT_TIMEOUT_MS": "AGENTO11Y_EXPORT_TIMEOUT_MS",
     "SIGIL_EXPERIMENT_ID": "AGENTO11Y_EXPERIMENT_ID",
     "SIGIL_GRAFANA_URL": "AGENTO11Y_GRAFANA_URL",
     "SIGIL_INGEST_ACTOR": "AGENTO11Y_INGEST_ACTOR",
@@ -90,6 +102,11 @@ class GenerationExportConfig:
     insecure: bool | None = None
     batch_size: int = 100
     flush_interval: timedelta = timedelta(seconds=1)
+    # Deadline for a single export request (generations and workflow steps, HTTP
+    # and gRPC). Left at the default, ``AGENTO11Y_EXPORT_TIMEOUT_MS`` applies;
+    # any caller-set value wins over env. Non-positive values are clamped back
+    # to the 30s default by ``resolve_config``.
+    export_timeout: timedelta = _DEFAULT_EXPORT_TIMEOUT
     queue_size: int = 2000
     max_retries: int = 5
     initial_backoff: timedelta = timedelta(milliseconds=100)
@@ -228,6 +245,23 @@ def _parse_bool(raw: str) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _parse_int_ms(raw: str, *, minimum: int, maximum: int) -> int | None:
+    """Parses base-10 integer milliseconds inside ``[minimum, maximum]``.
+
+    Floats, other bases, digit separators, non-numeric text, and out-of-range
+    values return ``None``, so the caller can warn and keep its current value
+    instead of applying a bad deadline.
+    """
+
+    text = raw.strip()
+    if not _INT_PATTERN.fullmatch(text):
+        return None
+    value = int(text, 10)
+    if value < minimum or value > maximum:
+        return None
+    return value
+
+
 def _parse_csv_kv(raw: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for part in raw.split(","):
@@ -276,6 +310,23 @@ def resolve_config(
     if out.generation_export.headers is None:
         ev, _ = _env(env, "HEADERS")
         out.generation_export.headers = _parse_csv_kv(ev) if ev is not None else {}
+    # Export request deadline. Only the canonical AGENTO11Y_EXPORT_TIMEOUT_MS is
+    # read; an invalid value is warned about and the 30s default is retained so
+    # valid sibling env vars still apply.
+    if out.generation_export.export_timeout is _DEFAULT_EXPORT_TIMEOUT:
+        ev, timeout_key = _env(env, "EXPORT_TIMEOUT_MS")
+        if ev is not None:
+            timeout_ms = _parse_int_ms(ev, minimum=_MIN_EXPORT_TIMEOUT_MS, maximum=_MAX_EXPORT_TIMEOUT_MS)
+            if timeout_ms is None:
+                log.warning(
+                    "agento11y: ignoring invalid %s %r; expected an integer from %d through %d",
+                    timeout_key,
+                    ev,
+                    _MIN_EXPORT_TIMEOUT_MS,
+                    _MAX_EXPORT_TIMEOUT_MS,
+                )
+            else:
+                out.generation_export.export_timeout = timedelta(milliseconds=timeout_ms)
 
     # Auth. Invalid mode strings are warned and skipped so other valid env
     # vars still apply.
@@ -384,6 +435,8 @@ def resolve_config(
         out.generation_export.queue_size = 1
     if out.generation_export.flush_interval.total_seconds() <= 0:
         out.generation_export.flush_interval = timedelta(milliseconds=1)
+    if out.generation_export.export_timeout.total_seconds() <= 0:
+        out.generation_export.export_timeout = _DEFAULT_EXPORT_TIMEOUT
     if out.generation_export.max_retries < 0:
         out.generation_export.max_retries = 0
     if out.generation_export.initial_backoff.total_seconds() <= 0:

@@ -11,9 +11,9 @@ import { HTTPGenerationExporter } from './http.js';
 export function createDefaultGenerationExporter(config: GenerationExportConfig): GenerationExporter {
   switch (config.protocol) {
     case 'http':
-      return new HTTPGenerationExporter(config.endpoint, config.headers);
+      return new HTTPGenerationExporter(config.endpoint, config.headers, config.timeoutMs);
     case 'grpc':
-      return new LazyGRPCGenerationExporter(config.endpoint, config.headers, config.insecure);
+      return new LazyGRPCGenerationExporter(config.endpoint, config.headers, config.insecure, config.timeoutMs);
     case 'none':
       return new NoopGenerationExporter();
     default:
@@ -70,6 +70,7 @@ class LazyGRPCGenerationExporter implements GenerationExporter {
     private readonly endpoint: string,
     private readonly headers: Record<string, string> | undefined,
     private readonly insecure: boolean,
+    private readonly timeoutMs: number,
   ) {}
 
   async exportGenerations(request: ExportGenerationsRequest): Promise<ExportGenerationsResponse> {
@@ -130,6 +131,6 @@ class LazyGRPCGenerationExporter implements GenerationExporter {
 
   private async initializeExporter(): Promise<GenerationExporter> {
     const grpc = await import('./grpc.js');
-    return new grpc.GRPCGenerationExporter(this.endpoint, this.headers, this.insecure);
+    return new grpc.GRPCGenerationExporter(this.endpoint, this.headers, this.insecure, this.timeoutMs);
   }
 }

@@ -4,7 +4,17 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
+
+// checkDefaultExportTimeout asserts a rejected AGENTO11Y_EXPORT_TIMEOUT_MS /
+// SIGIL_EXPORT_TIMEOUT_MS left the baseline default in place.
+func checkDefaultExportTimeout(t *testing.T, cfg Config) {
+	t.Helper()
+	if cfg.GenerationExport.ExportTimeout != defaultExportTimeout {
+		t.Errorf("ExportTimeout=%v want default %v", cfg.GenerationExport.ExportTimeout, defaultExportTimeout)
+	}
+}
 
 func mapLookup(env map[string]string) envLookup {
 	return func(k string) (string, bool) {
@@ -187,6 +197,125 @@ func TestResolveFromEnv(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "export timeout from env",
+			env:  map[string]string{"AGENTO11Y_EXPORT_TIMEOUT_MS": "1500"},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.GenerationExport.ExportTimeout != 1500*time.Millisecond {
+					t.Errorf("ExportTimeout=%v want 1.5s", cfg.GenerationExport.ExportTimeout)
+				}
+			},
+		},
+		{
+			name: "legacy export timeout from env",
+			env:  map[string]string{"SIGIL_EXPORT_TIMEOUT_MS": "2000"},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.GenerationExport.ExportTimeout != 2*time.Second {
+					t.Errorf("ExportTimeout=%v want 2s", cfg.GenerationExport.ExportTimeout)
+				}
+			},
+		},
+		{
+			name: "preferred export timeout wins over legacy",
+			env: map[string]string{
+				"AGENTO11Y_EXPORT_TIMEOUT_MS": "1000",
+				"SIGIL_EXPORT_TIMEOUT_MS":     "2000",
+			},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.GenerationExport.ExportTimeout != time.Second {
+					t.Errorf("ExportTimeout=%v want 1s", cfg.GenerationExport.ExportTimeout)
+				}
+			},
+		},
+		{
+			name: "minimum export timeout accepted",
+			env:  map[string]string{"AGENTO11Y_EXPORT_TIMEOUT_MS": "1"},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.GenerationExport.ExportTimeout != time.Millisecond {
+					t.Errorf("ExportTimeout=%v want 1ms", cfg.GenerationExport.ExportTimeout)
+				}
+			},
+		},
+		{
+			name: "maximum export timeout accepted",
+			env:  map[string]string{"AGENTO11Y_EXPORT_TIMEOUT_MS": "2147483647"},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.GenerationExport.ExportTimeout != 2147483647*time.Millisecond {
+					t.Errorf("ExportTimeout=%v want 2147483647ms", cfg.GenerationExport.ExportTimeout)
+				}
+			},
+		},
+		{
+			name:            "zero export timeout returns error and keeps default",
+			env:             map[string]string{"AGENTO11Y_EXPORT_TIMEOUT_MS": "0"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_EXPORT_TIMEOUT_MS",
+			check:           checkDefaultExportTimeout,
+		},
+		{
+			name:            "negative export timeout returns error and keeps default",
+			env:             map[string]string{"AGENTO11Y_EXPORT_TIMEOUT_MS": "-1"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_EXPORT_TIMEOUT_MS",
+			check:           checkDefaultExportTimeout,
+		},
+		{
+			name:            "fractional export timeout returns error and keeps default",
+			env:             map[string]string{"AGENTO11Y_EXPORT_TIMEOUT_MS": "1.5"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_EXPORT_TIMEOUT_MS",
+			check:           checkDefaultExportTimeout,
+		},
+		{
+			name:            "non-numeric export timeout returns error and keeps default",
+			env:             map[string]string{"AGENTO11Y_EXPORT_TIMEOUT_MS": "abc"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_EXPORT_TIMEOUT_MS",
+			check:           checkDefaultExportTimeout,
+		},
+		{
+			name:            "out-of-range export timeout returns error and keeps default",
+			env:             map[string]string{"AGENTO11Y_EXPORT_TIMEOUT_MS": "2147483648"},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_EXPORT_TIMEOUT_MS",
+			check:           checkDefaultExportTimeout,
+		},
+		{
+			name: "invalid export timeout preserves other valid env",
+			env: map[string]string{
+				"AGENTO11Y_EXPORT_TIMEOUT_MS": "abc",
+				"AGENTO11Y_ENDPOINT":          "valid.example:4318",
+				"AGENTO11Y_AGENT_NAME":        "valid-agent",
+			},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_EXPORT_TIMEOUT_MS",
+			check: func(t *testing.T, cfg Config) {
+				checkDefaultExportTimeout(t, cfg)
+				if cfg.GenerationExport.Endpoint != "valid.example:4318" {
+					t.Errorf("Endpoint=%q (preserved despite export-timeout typo)", cfg.GenerationExport.Endpoint)
+				}
+				if cfg.AgentName != "valid-agent" {
+					t.Errorf("AgentName=%q (preserved despite export-timeout typo)", cfg.AgentName)
+				}
+			},
+		},
+		{
+			name: "invalid preferred export timeout blocks valid legacy fallback",
+			env: map[string]string{
+				"AGENTO11Y_EXPORT_TIMEOUT_MS": "0",
+				"SIGIL_EXPORT_TIMEOUT_MS":     "2000",
+			},
+			wantErr:         true,
+			wantErrContains: "AGENTO11Y_EXPORT_TIMEOUT_MS",
+			check:           checkDefaultExportTimeout,
+		},
+		{
+			name:            "invalid legacy export timeout error names legacy key",
+			env:             map[string]string{"SIGIL_EXPORT_TIMEOUT_MS": "abc"},
+			wantErr:         true,
+			wantErrContains: "SIGIL_EXPORT_TIMEOUT_MS",
+			check:           checkDefaultExportTimeout,
+		},
+		{
 			name: "invalid content capture mode preserves other valid env",
 			env: map[string]string{
 				"SIGIL_CONTENT_CAPTURE_MODE": "bogus",
@@ -219,6 +348,7 @@ func TestResolveFromEnv(t *testing.T) {
 				"AGENTO11Y_TAGS":                 "service=orchestrator,env=prod",
 				"AGENTO11Y_CONTENT_CAPTURE_MODE": "metadata_only",
 				"AGENTO11Y_DEBUG":                "true",
+				"AGENTO11Y_EXPORT_TIMEOUT_MS":    "1500",
 			},
 			check: func(t *testing.T, cfg Config) {
 				legacy := map[string]string{
@@ -235,6 +365,7 @@ func TestResolveFromEnv(t *testing.T) {
 					"SIGIL_TAGS":                 "service=orchestrator,env=prod",
 					"SIGIL_CONTENT_CAPTURE_MODE": "metadata_only",
 					"SIGIL_DEBUG":                "true",
+					"SIGIL_EXPORT_TIMEOUT_MS":    "1500",
 				}
 				legacyCfg, err := resolveFromEnv(mapLookup(legacy), DefaultConfig())
 				if err != nil {
@@ -263,6 +394,9 @@ func TestResolveFromEnv(t *testing.T) {
 				}
 				if *cfg.Debug != *legacyCfg.Debug {
 					t.Errorf("Debug mismatch")
+				}
+				if cfg.GenerationExport.ExportTimeout != legacyCfg.GenerationExport.ExportTimeout {
+					t.Errorf("ExportTimeout=%v want %v", cfg.GenerationExport.ExportTimeout, legacyCfg.GenerationExport.ExportTimeout)
 				}
 			},
 		},
@@ -517,6 +651,47 @@ func TestNewClient_EnvHandling(t *testing.T) {
 			env: map[string]string{
 				"SIGIL_AUTH_MODE": "Bearrer",
 				"SIGIL_PROTOCOL":  "none",
+			},
+		},
+		{
+			name: "env export timeout survives empty caller config",
+			env: map[string]string{
+				"AGENTO11Y_EXPORT_TIMEOUT_MS": "1500",
+				"AGENTO11Y_PROTOCOL":          "none",
+			},
+			check: func(t *testing.T, c *Client) {
+				if got := c.config.GenerationExport.ExportTimeout; got != 1500*time.Millisecond {
+					t.Errorf("ExportTimeout=%v want 1.5s (env-resolved)", got)
+				}
+			},
+		},
+		{
+			name: "caller export timeout wins over env",
+			env: map[string]string{
+				"AGENTO11Y_EXPORT_TIMEOUT_MS": "1500",
+				"AGENTO11Y_PROTOCOL":          "none",
+			},
+			cfg: Config{GenerationExport: GenerationExportConfig{ExportTimeout: 3 * time.Second}},
+			check: func(t *testing.T, c *Client) {
+				if got := c.config.GenerationExport.ExportTimeout; got != 3*time.Second {
+					t.Errorf("ExportTimeout=%v want 3s (caller wins)", got)
+				}
+			},
+		},
+		{
+			name: "malformed export timeout keeps default and valid siblings",
+			env: map[string]string{
+				"AGENTO11Y_EXPORT_TIMEOUT_MS": "2147483648",
+				"AGENTO11Y_AGENT_NAME":        "valid-agent",
+				"AGENTO11Y_PROTOCOL":          "none",
+			},
+			check: func(t *testing.T, c *Client) {
+				if got := c.config.GenerationExport.ExportTimeout; got != defaultExportTimeout {
+					t.Errorf("ExportTimeout=%v want default %v", got, defaultExportTimeout)
+				}
+				if c.config.AgentName != "valid-agent" {
+					t.Errorf("AgentName=%q (preserved despite export-timeout typo)", c.config.AgentName)
+				}
 			},
 		},
 		{

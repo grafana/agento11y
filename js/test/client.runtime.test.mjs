@@ -326,7 +326,7 @@ test('shutdown flushes pending workflow step batch', async () => {
   assert.equal(exporter.shutdownCalls, 1);
 });
 
-test('shutdown stops waiting for a collector after 10 seconds and closes the exporter', async (t) => {
+test('shutdown gives a collector the configured export timeout before closing the exporter', async (t) => {
   let acceptRequest;
   const requestAccepted = new Promise((resolve) => {
     acceptRequest = resolve;
@@ -360,11 +360,11 @@ test('shutdown stops waiting for a collector after 10 seconds and closes the exp
   };
   const client = newClient(
     exporter,
-    { batchSize: 10, flushIntervalMs: 60_000, maxRetries: 5 },
+    { batchSize: 10, flushIntervalMs: 60_000, timeoutMs: 45_000, maxRetries: 5 },
     {
       logger: {
         warn: (message) => {
-          if (message.includes('exceeded 10000ms shutdown deadline')) {
+          if (message.includes('exceeded 45000ms shutdown deadline')) {
             order.push('flush deadline');
           }
         },
@@ -378,7 +378,9 @@ test('shutdown stops waiting for a collector after 10 seconds and closes the exp
   try {
     const shutdownPromise = client.shutdown();
     await requestAccepted;
-    t.mock.timers.tick(10_000);
+    t.mock.timers.tick(44_999);
+    assert.deepEqual(order, []);
+    t.mock.timers.tick(1);
     await shutdownPromise;
     order.push('shutdown resolved');
 
@@ -424,6 +426,7 @@ test('shutdown joins an active flush without retrying after exporter shutdown', 
     {
       batchSize: 10,
       flushIntervalMs: 60_000,
+      timeoutMs: 45_000,
       maxRetries: 5,
       initialBackoffMs: 1,
       maxBackoffMs: 1,
@@ -438,7 +441,7 @@ test('shutdown joins an active flush without retrying after exporter shutdown', 
 
   try {
     const shutdownPromise = client.shutdown();
-    t.mock.timers.tick(10_000);
+    t.mock.timers.tick(45_000);
     await shutdownPromise;
     await assert.rejects(flushPromise, /http generation exporter shutdown/);
     assert.equal(attempts, 1);
@@ -462,6 +465,7 @@ test('shutdown cancels a retry backoff it stopped waiting for', async (t) => {
     {
       batchSize: 10,
       flushIntervalMs: 60_000,
+      timeoutMs: 45_000,
       maxRetries: 5,
       initialBackoffMs: 60_000,
       maxBackoffMs: 60_000,
@@ -494,7 +498,7 @@ test('shutdown cancels a retry backoff it stopped waiting for', async (t) => {
     await backoffEntered;
 
     const shutdownPromise = client.shutdown();
-    t.mock.timers.tick(10_000);
+    t.mock.timers.tick(45_000);
     await shutdownPromise;
 
     // The backoff timer never fires here: only the shutdown deadline was

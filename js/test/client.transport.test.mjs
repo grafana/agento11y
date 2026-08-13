@@ -120,12 +120,12 @@ test('HTTP generation timeout is retried by the client', async () => {
   }
 
   const defaults = defaultConfig();
-  // The export timeout is fixed, so the exporter is injected to shorten it.
   const client = new Agento11yClient({
     tracer: trace.getTracer('agento11y-sdk-js-test'),
-    generationExporter: new HTTPGenerationExporter(`http://127.0.0.1:${address.port}`, undefined, 50),
     generationExport: {
       ...defaults.generationExport,
+      endpoint: `http://127.0.0.1:${address.port}`,
+      timeoutMs: 50,
       batchSize: 10,
       flushIntervalMs: 60_000,
       maxRetries: 1,
@@ -248,6 +248,7 @@ test('client shutdown stops a gRPC drain during backoff before the next batch', 
       protocol: 'grpc',
       endpoint: `127.0.0.1:${grpcServer.port}`,
       insecure: true,
+      timeoutMs: 60_000,
       batchSize: 1,
       flushIntervalMs: 60_000,
       maxRetries: 5,
@@ -269,7 +270,7 @@ test('client shutdown stops a gRPC drain during backoff before the next batch', 
 
   try {
     const shutdownPromise = client.shutdown();
-    t.mock.timers.tick(10_000);
+    t.mock.timers.tick(60_000);
     await shutdownPromise;
     resumeBackoff();
     await assert.rejects(flushPromise, (error) => error?.code === grpc.status.UNAVAILABLE);

@@ -281,6 +281,13 @@ describe("applyAgento11yDotenv", () => {
     expect(process.env.AGENTO11Y_ENDPOINT).toBe("https://from-file");
   });
 
+  it("materializes export timeout under both spellings", () => {
+    writeConfig("SIGIL_EXPORT_TIMEOUT_MS=2500\n");
+    applyAgento11yDotenv();
+    expect(process.env.SIGIL_EXPORT_TIMEOUT_MS).toBe("2500");
+    expect(process.env.AGENTO11Y_EXPORT_TIMEOUT_MS).toBe("2500");
+  });
+
   it("shell SIGIL_ENDPOINT beats file AGENTO11Y_ENDPOINT", () => {
     process.env.SIGIL_ENDPOINT = "https://shell-legacy";
     writeConfig("AGENTO11Y_ENDPOINT=https://file-preferred\n");

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from urllib import request as urllib_request
 from urllib.parse import urlparse, urlunparse
 
@@ -16,12 +17,20 @@ from ..models import (
 )
 from ..proto_mapping import generation_to_proto_json, workflow_step_to_proto_json
 from ..version import user_agent
+from .base import DEFAULT_EXPORT_TIMEOUT_SECONDS, resolve_timeout_seconds
 
 
 class HTTPGenerationExporter:
     """Sends generation batches over HTTP JSON parity endpoint."""
 
-    def __init__(self, endpoint: str, headers: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        headers: dict[str, str] | None = None,
+        timeout: float | timedelta = DEFAULT_EXPORT_TIMEOUT_SECONDS,
+    ) -> None:
+        # urllib wants seconds, ClientConfig holds a timedelta.
+        self._timeout = resolve_timeout_seconds(timeout)
         self._endpoint = _normalize_endpoint(endpoint, _EXPORT_PATH)
         self._wf_endpoint = _normalize_endpoint(endpoint, _WF_EXPORT_PATH)
         # Resolve the User-Agent like the gRPC exporter: a non-blank caller
@@ -54,7 +63,7 @@ class HTTPGenerationExporter:
             },
         )
         try:
-            with urllib_request.urlopen(req, timeout=10) as response:
+            with urllib_request.urlopen(req, timeout=self._timeout) as response:
                 status = response.getcode()
                 raw = response.read()
         except Exception as exc:  # noqa: BLE001
@@ -94,7 +103,7 @@ class HTTPGenerationExporter:
             },
         )
         try:
-            with urllib_request.urlopen(req, timeout=10) as response:
+            with urllib_request.urlopen(req, timeout=self._timeout) as response:
                 status = response.getcode()
                 raw = response.read()
         except Exception as exc:  # noqa: BLE001

@@ -71,6 +71,8 @@ export interface GenerationExportConfig {
   batchSize: number;
   /** Periodic drain interval for queued generations. */
   flushIntervalMs: number;
+  /** Maximum duration of each generation or workflow-step export request. */
+  timeoutMs: number;
   /** Max queued generations before enqueue errors. */
   queueSize: number;
   /** Max retry attempts after first failed export. */
@@ -231,7 +233,8 @@ export interface Agento11ySdkConfig {
   now?: () => Date;
   /**
    * Waits between export retries. The SDK aborts `signal` when it stops
-   * exporting, and a sleep must then resolve and clear its timer.
+   * exporting. Your function must then resolve and clear its timer, or it
+   * keeps the event loop open.
    */
   sleep?: (durationMs: number, signal?: AbortSignal) => Promise<void>;
   /**

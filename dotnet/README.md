@@ -55,6 +55,7 @@ var agento11y = new Agento11yClient(new Agento11yClientConfig
         BatchSize = 100,
         FlushInterval = TimeSpan.FromSeconds(1),
         QueueSize = 2000,
+        ExportTimeout = TimeSpan.FromSeconds(30),
     },
     Api = new ApiConfig
     {
@@ -127,6 +128,35 @@ Generation export transport protocols:
 - `GenerationExportProtocol.Grpc`
 - `GenerationExportProtocol.Http`
 - `GenerationExportProtocol.None` (instrumentation-only; no generation transport)
+
+## Generation export timeout
+
+`GenerationExportConfig.ExportTimeout` defaults to 30 seconds. It bounds one
+HTTP or gRPC export attempt, so each retry gets a new timeout. A non-positive
+value assigned in code falls back to 30 seconds, and a value above
+`int.MaxValue` milliseconds is capped at that limit.
+
+On HTTP the request and its response-body read share one budget. On gRPC the
+bound is a per-call deadline. Background flushes are bounded the same way.
+
+Set it from code or from the environment:
+
+```csharp
+var agento11y = new Agento11yClient(new Agento11yClientConfig
+{
+    GenerationExport = new GenerationExportConfig
+    {
+        ExportTimeout = TimeSpan.FromSeconds(5),
+    },
+});
+```
+
+```bash
+AGENTO11Y_EXPORT_TIMEOUT_MS=5000
+```
+
+An explicit `ExportTimeout` assignment always wins over the environment variable,
+even when it happens to equal the 30s default.
 
 ## Secrets redaction
 
@@ -372,6 +402,7 @@ SDK schema defaults fill the rest.
 | `AGENTO11Y_PROTOCOL` | `GenerationExportConfig.Protocol` (`http`/`grpc`/`none`) |
 | `AGENTO11Y_INSECURE` | `GenerationExportConfig.Insecure` (tri-state `bool?`) |
 | `AGENTO11Y_HEADERS` | `GenerationExportConfig.Headers` (CSV: `K=V,...`) |
+| `AGENTO11Y_EXPORT_TIMEOUT_MS` | `GenerationExportConfig.ExportTimeout` (base-10 integer milliseconds, inclusive `1`..`2147483647`; default `30000`) |
 | `AGENTO11Y_AUTH_MODE` | `AuthConfig.Mode` (`none`/`tenant`/`bearer`/`basic`) |
 | `AGENTO11Y_AUTH_TENANT_ID` | `AuthConfig.TenantId` |
 | `AGENTO11Y_AUTH_TOKEN` | `AuthConfig.BearerToken` and/or `BasicPassword` (filled when empty) |
@@ -382,9 +413,16 @@ SDK schema defaults fill the rest.
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `Agento11yClientConfig.ContentCapture` |
 | `AGENTO11Y_DEBUG` | `Agento11yClientConfig.Debug` (tri-state `bool?`) |
 
+Every variable also has a legacy `SIGIL_*` spelling (`SIGIL_ENDPOINT`,
+`SIGIL_EXPORT_TIMEOUT_MS`, ...). The preferred `AGENTO11Y_*` name is selected
+first; the `SIGIL_*` fallback is only read when the preferred one is unset or
+blank. Selection happens before validation, so an invalid `AGENTO11Y_*` value is
+reported and ignored rather than silently falling back to a stale `SIGIL_*` one.
+
 Use `EnvConfig.FromEnv()` to inspect the resolved config without constructing a
-client. Invalid values (bad auth mode, etc.) are skipped with a warning so a
-single typo does not discard the rest of the env layer.
+client. Invalid values (bad auth mode, out-of-range
+`AGENTO11Y_EXPORT_TIMEOUT_MS`, etc.) are skipped with a warning and the field
+keeps its default, so a single typo does not discard the rest of the env layer.
 
 ## Breaking changes (unreleased)
 

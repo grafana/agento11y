@@ -31,8 +31,11 @@ from agento11y import (
     ToolDefinition,
     ToolResult,
 )
+from agento11y.exporters.grpc import GRPCGenerationExporter
+from agento11y.exporters.http import HTTPGenerationExporter
 from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2 as agento11y_pb2
 from agento11y.internal.gen.agento11y.v1 import generation_ingest_pb2_grpc as agento11y_pb2_grpc
+from agento11y.models import ExportGenerationsRequest, ExportWorkflowStepsRequest, WorkflowStep
 from opentelemetry.sdk.trace import TracerProvider
 
 
@@ -446,6 +449,132 @@ def test_sdk_generation_auth_bearer_over_grpc_with_header_override() -> None:
         assert len(servicer.metadata) == 1
         assert servicer.metadata[0].get("authorization") == "Bearer override-token"
     finally:
+        grpc_server.stop(grace=0)
+
+
+# ---------------------------------------------------------------------------
+# Export request timeout
+# ---------------------------------------------------------------------------
+
+# Well under any real network latency, so the deadline is what ends the call.
+_TIMEOUT_SECONDS = 0.05
+# Upper bound for a stalled server handler; the test releases it as soon as the
+# client has given up, so this is only a safety net against a hung test.
+_STALL_SECONDS = 10.0
+
+
+def _free_port() -> int:
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+@pytest.mark.parametrize(
+    ("protocol", "export_timeout", "expected_seconds"),
+    [
+        pytest.param("http", None, 30.0, id="http default"),
+        pytest.param("http", timedelta(milliseconds=2500), 2.5, id="http configured"),
+        pytest.param("grpc", None, 30.0, id="grpc default"),
+        pytest.param("grpc", timedelta(milliseconds=2500), 2.5, id="grpc configured"),
+    ],
+)
+def test_client_threads_export_timeout_into_exporter(
+    protocol: str, export_timeout: timedelta | None, expected_seconds: float
+) -> None:
+    """The resolved export_timeout reaches both transports, in seconds."""
+    export = GenerationExportConfig(protocol=protocol, endpoint="127.0.0.1:4317", insecure=True)
+    if export_timeout is not None:
+        export.export_timeout = export_timeout
+
+    client = _new_client(export)
+    try:
+        assert client._generation_exporter._timeout == expected_seconds
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.parametrize("request_type", ["generations", "workflow_steps"])
+def test_http_exporter_times_out_slow_export(request_type: str) -> None:
+    """A stalled HTTP ingest endpoint fails fast at the configured timeout."""
+    release = threading.Event()
+
+    class _StallingHandler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            release.wait(timeout=_STALL_SECONDS)
+            self.send_response(202)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"results":[]}')
+
+        def log_message(self, _format, *_args):  # noqa: A003
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), _StallingHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    exporter = HTTPGenerationExporter(
+        endpoint=f"http://127.0.0.1:{server.server_address[1]}",
+        timeout=_TIMEOUT_SECONDS,
+    )
+    try:
+        assert exporter._timeout == _TIMEOUT_SECONDS
+        with pytest.raises(RuntimeError) as excinfo:
+            if request_type == "generations":
+                exporter.export_generations(ExportGenerationsRequest(generations=[Generation(id="gen-timeout")]))
+            else:
+                exporter.export_workflow_steps(
+                    ExportWorkflowStepsRequest(workflow_steps=[WorkflowStep(id="wfs-timeout")])
+                )
+        assert "timed out" in str(excinfo.value)
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("request_type", ["generations", "workflow_steps"])
+def test_grpc_exporter_times_out_slow_export(request_type: str) -> None:
+    """A stalled gRPC ingest service fails fast at the configured deadline."""
+    release = threading.Event()
+
+    class _StallingGenerationServicer(agento11y_pb2_grpc.GenerationIngestServiceServicer):
+        def ExportGenerations(self, request, context):  # noqa: N802
+            release.wait(timeout=_STALL_SECONDS)
+            return agento11y_pb2.ExportGenerationsResponse(results=[])
+
+    class _StallingWorkflowStepServicer(agento11y_pb2_grpc.WorkflowStepIngestServiceServicer):
+        def ExportWorkflowSteps(self, request, context):  # noqa: N802
+            release.wait(timeout=_STALL_SECONDS)
+            return agento11y_pb2.ExportWorkflowStepsResponse(results=[])
+
+    grpc_server = grpc.server(thread_pool=__import__("concurrent.futures").futures.ThreadPoolExecutor(max_workers=2))
+    agento11y_pb2_grpc.add_GenerationIngestServiceServicer_to_server(_StallingGenerationServicer(), grpc_server)
+    agento11y_pb2_grpc.add_WorkflowStepIngestServiceServicer_to_server(_StallingWorkflowStepServicer(), grpc_server)
+
+    port = _free_port()
+    grpc_server.add_insecure_port(f"127.0.0.1:{port}")
+    grpc_server.start()
+
+    exporter = GRPCGenerationExporter(endpoint=f"127.0.0.1:{port}", insecure=True, timeout=_TIMEOUT_SECONDS)
+    try:
+        assert exporter._timeout == _TIMEOUT_SECONDS
+        with pytest.raises(grpc.RpcError) as excinfo:
+            if request_type == "generations":
+                exporter.export_generations(ExportGenerationsRequest(generations=[Generation(id="gen-timeout")]))
+            else:
+                exporter.export_workflow_steps(
+                    ExportWorkflowStepsRequest(workflow_steps=[WorkflowStep(id="wfs-timeout")])
+                )
+        assert excinfo.value.code() == grpc.StatusCode.DEADLINE_EXCEEDED
+    finally:
+        release.set()
+        exporter.shutdown()
         grpc_server.stop(grace=0)
 
 

@@ -68,6 +68,47 @@ public sealed class GenerationExportConfig
     public TimeSpan InitialBackoff { get; set; } = TimeSpan.FromMilliseconds(100);
     public TimeSpan MaxBackoff { get; set; } = TimeSpan.FromSeconds(5);
     public int PayloadMaxBytes { get; set; } = 4 << 20;
+
+    /// <summary>
+    /// Timeout applied to a single export attempt when neither the caller nor
+    /// <c>AGENTO11Y_EXPORT_TIMEOUT_MS</c> (legacy <c>SIGIL_EXPORT_TIMEOUT_MS</c>)
+    /// supplies one.
+    /// </summary>
+    internal static readonly TimeSpan DefaultExportTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Upper bound for <see cref="ExportTimeout"/>. Matches the
+    /// <c>AGENTO11Y_EXPORT_TIMEOUT_MS</c> ceiling (<c>int.MaxValue</c>
+    /// milliseconds) and the largest value <c>HttpClient.Timeout</c> accepts.
+    /// </summary>
+    internal static readonly TimeSpan MaxExportTimeout = TimeSpan.FromMilliseconds(int.MaxValue);
+
+    private TimeSpan? _exportTimeout;
+
+    /// <summary>
+    /// Per-attempt export timeout (default 30s). Bounds one HTTP request or one
+    /// gRPC call; retries from <see cref="MaxRetries"/> each get a fresh budget.
+    /// </summary>
+    /// <remarks>
+    /// <para>The backing field is tri-state so that any assignment, including one
+    /// equal to the 30s default, wins over <c>AGENTO11Y_EXPORT_TIMEOUT_MS</c>
+    /// (legacy <c>SIGIL_EXPORT_TIMEOUT_MS</c>). The other env-backed fields
+    /// follow the same caller-wins rule.</para>
+    /// <para><c>ConfigResolver</c> clamps a non-positive value back to the 30s
+    /// default, and a value above <see cref="MaxExportTimeout"/> down to that
+    /// bound.</para>
+    /// </remarks>
+    public TimeSpan ExportTimeout
+    {
+        get => _exportTimeout ?? DefaultExportTimeout;
+        set => _exportTimeout = value;
+    }
+
+    /// <summary>
+    /// True once <see cref="ExportTimeout"/> has been assigned. Lets the env
+    /// layer distinguish "caller asked for 30s" from "caller said nothing".
+    /// </summary>
+    internal bool HasExplicitExportTimeout => _exportTimeout.HasValue;
 }
 
 public sealed class ApiConfig
@@ -220,6 +261,13 @@ internal static class ConfigResolver
             resolved.GenerationExport.MaxBackoff = TimeSpan.FromMilliseconds(100);
         }
 
+        // Same policy as InitialBackoff above: a nonsensical caller value falls
+        // back to the schema default instead of failing construction. The upper
+        // clamp keeps the value inside the range HttpClient.Timeout and a gRPC
+        // deadline accept, and matches the AGENTO11Y_EXPORT_TIMEOUT_MS ceiling.
+        resolved.GenerationExport.ExportTimeout =
+            NormalizeExportTimeout(resolved.GenerationExport.ExportTimeout);
+
         resolved.EmbeddingCapture ??= new EmbeddingCaptureConfig();
 
         if (resolved.EmbeddingCapture.MaxInputItems <= 0)
@@ -232,6 +280,26 @@ internal static class ConfigResolver
         }
 
         return resolved;
+    }
+
+    /// <summary>
+    /// Clamps an export timeout into the supported range: non-positive values
+    /// (including <c>Timeout.InfiniteTimeSpan</c>) fall back to
+    /// <see cref="GenerationExportConfig.DefaultExportTimeout"/> and anything
+    /// above <see cref="GenerationExportConfig.MaxExportTimeout"/> is capped.
+    /// Shared with the exporters so a directly constructed exporter cannot see
+    /// an out-of-range timeout.
+    /// </summary>
+    internal static TimeSpan NormalizeExportTimeout(TimeSpan value)
+    {
+        if (value <= TimeSpan.Zero)
+        {
+            return GenerationExportConfig.DefaultExportTimeout;
+        }
+
+        return value > GenerationExportConfig.MaxExportTimeout
+            ? GenerationExportConfig.MaxExportTimeout
+            : value;
     }
 
     /// <summary>

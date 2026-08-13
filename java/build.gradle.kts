@@ -31,7 +31,7 @@ subprojects {
             // they construct a Agento11yClient. Tests that exercise env layering
             // should pass an explicit lookup to Agento11yEnvConfig.resolveFromEnv.
             listOf(
-                "ENDPOINT", "PROTOCOL", "INSECURE", "HEADERS",
+                "ENDPOINT", "PROTOCOL", "INSECURE", "HEADERS", "EXPORT_TIMEOUT_MS",
                 "AUTH_MODE", "AUTH_TENANT_ID", "AUTH_TOKEN",
                 "AGENT_NAME", "AGENT_VERSION", "USER_ID", "TAGS",
                 "CONTENT_CAPTURE_MODE", "DEBUG",

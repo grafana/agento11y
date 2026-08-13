@@ -18,6 +18,7 @@ internal static class TestEnvCleanup
             "PROTOCOL",
             "INSECURE",
             "HEADERS",
+            "EXPORT_TIMEOUT_MS",
             "AUTH_MODE",
             "AUTH_TENANT_ID",
             "AUTH_TOKEN",

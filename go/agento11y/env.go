@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // envPair is one logical config field readable under the preferred
@@ -35,10 +37,23 @@ var (
 	// envTags: comma-separated key=value pairs merged into generation export tags
 	// and emitted on OTel spans/metrics as agento11y.tag.<key>. The two spellings are
 	// never merged; the selected value is used whole.
-	envTags                = brandedPair("TAGS")
-	envContentCaptureMode  = brandedPair("CONTENT_CAPTURE_MODE")
-	envDebug               = brandedPair("DEBUG")
+	envTags               = brandedPair("TAGS")
+	envContentCaptureMode = brandedPair("CONTENT_CAPTURE_MODE")
+	envDebug              = brandedPair("DEBUG")
+	// envExportTimeoutMS: base-10 integer milliseconds bounding one generation /
+	// workflow-step export attempt on both HTTP and gRPC.
+	envExportTimeoutMS     = brandedPair("EXPORT_TIMEOUT_MS")
 	envRedactInputMessages = brandedPair("REDACT_INPUT_MESSAGES")
+)
+
+// Accepted range for AGENTO11Y_EXPORT_TIMEOUT_MS / SIGIL_EXPORT_TIMEOUT_MS,
+// inclusive on both ends. The upper bound is math.MaxInt32 milliseconds
+// (~24.8 days), the largest value every SDK can represent in a 32-bit
+// millisecond timer. Zero and negatives are rejected rather than silently
+// meaning "no timeout".
+const (
+	minExportTimeoutMS int64 = 1
+	maxExportTimeoutMS int64 = 2147483647
 )
 
 // envLookup resolves canonical env vars from os.Environ unless a
@@ -135,6 +150,15 @@ func resolveFromEnv(lookup envLookup, base Config) (Config, error) {
 		cfg.Debug = &b
 	}
 
+	if v, key, ok := envTrimmed(lookup, envExportTimeoutMS); ok {
+		timeout, err := parseExportTimeoutMS(key, v)
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			cfg.GenerationExport.ExportTimeout = timeout
+		}
+	}
+
 	return cfg, errors.Join(errs...)
 }
 
@@ -195,6 +219,26 @@ func parseCSVKV(raw string) map[string]string {
 		}
 	}
 	return out
+}
+
+// parseExportTimeoutMS parses base-10 integer milliseconds within
+// [minExportTimeoutMS, maxExportTimeoutMS]. Anything else (0, negatives,
+// fractions, non-numeric text, out-of-range values) is an error so the caller
+// keeps the existing value and reports the typo instead of exporting with a
+// surprise deadline.
+func parseExportTimeoutMS(key, v string) (time.Duration, error) {
+	invalid := fmt.Errorf(
+		"agento11y: invalid %s %q (want integer milliseconds from %d through %d)",
+		key, v, minExportTimeoutMS, maxExportTimeoutMS,
+	)
+	ms, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil {
+		return 0, invalid
+	}
+	if ms < minExportTimeoutMS || ms > maxExportTimeoutMS {
+		return 0, invalid
+	}
+	return time.Duration(ms) * time.Millisecond, nil
 }
 
 func parseContentCaptureMode(key, v string) (ContentCaptureMode, error) {

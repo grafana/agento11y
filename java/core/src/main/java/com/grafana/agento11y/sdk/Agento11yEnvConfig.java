@@ -1,5 +1,6 @@
 package com.grafana.agento11y.sdk;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,6 +41,7 @@ public final class Agento11yEnvConfig {
     public static final String ENV_PROTOCOL_PREFERRED = "AGENTO11Y_PROTOCOL";
     public static final String ENV_INSECURE_PREFERRED = "AGENTO11Y_INSECURE";
     public static final String ENV_HEADERS_PREFERRED = "AGENTO11Y_HEADERS";
+    public static final String ENV_EXPORT_TIMEOUT_MS_PREFERRED = "AGENTO11Y_EXPORT_TIMEOUT_MS";
     public static final String ENV_AUTH_MODE_PREFERRED = "AGENTO11Y_AUTH_MODE";
     public static final String ENV_AUTH_TENANT_ID_PREFERRED = "AGENTO11Y_AUTH_TENANT_ID";
     public static final String ENV_AUTH_TOKEN_PREFERRED = "AGENTO11Y_AUTH_TOKEN";
@@ -55,6 +57,7 @@ public final class Agento11yEnvConfig {
     public static final String ENV_PROTOCOL = "SIGIL_PROTOCOL";
     public static final String ENV_INSECURE = "SIGIL_INSECURE";
     public static final String ENV_HEADERS = "SIGIL_HEADERS";
+    public static final String ENV_EXPORT_TIMEOUT_MS = "SIGIL_EXPORT_TIMEOUT_MS";
     public static final String ENV_AUTH_MODE = "SIGIL_AUTH_MODE";
     public static final String ENV_AUTH_TENANT_ID = "SIGIL_AUTH_TENANT_ID";
     public static final String ENV_AUTH_TOKEN = "SIGIL_AUTH_TOKEN";
@@ -127,6 +130,17 @@ public final class Agento11yEnvConfig {
         EnvValue headersRaw = envTrimmed(source, ENV_HEADERS_PREFERRED, ENV_HEADERS);
         if (headersRaw != null && export.getHeaders().isEmpty()) {
             export.setHeaders(parseCsvKv(headersRaw.value()));
+        }
+
+        EnvValue exportTimeoutRaw = envTrimmed(source, ENV_EXPORT_TIMEOUT_MS_PREFERRED, ENV_EXPORT_TIMEOUT_MS);
+        if (exportTimeoutRaw != null && !export.isExportTimeoutExplicit()) {
+            Duration parsed = parseTimeoutMillis(exportTimeoutRaw.value());
+            if (parsed != null) {
+                export.setExportTimeout(parsed);
+            } else {
+                warnings.add("agento11y: ignoring invalid " + exportTimeoutRaw.key() + " " + exportTimeoutRaw.value()
+                        + "; expected an integer from 1 through " + Integer.MAX_VALUE);
+            }
         }
 
         AuthConfig auth = export.getAuth();
@@ -324,6 +338,33 @@ public final class Agento11yEnvConfig {
             default:
                 return null;
         }
+    }
+
+    /**
+     * Parses a positive base-10 integer count of milliseconds into a
+     * {@link Duration}. Accepted range is 1..{@link Integer#MAX_VALUE}
+     * inclusive; {@code 0}, negatives, decimals ({@code 1.5}), non-numeric
+     * text, and out-of-range values return {@code null} so the caller can warn
+     * and keep the rest of the env layer.
+     */
+    static Duration parseTimeoutMillis(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        long millis;
+        try {
+            millis = Long.parseLong(trimmed, 10);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+        if (millis < 1 || millis > Integer.MAX_VALUE) {
+            return null;
+        }
+        return Duration.ofMillis(millis);
     }
 
     static GenerationExportProtocol parseProtocol(String raw) {

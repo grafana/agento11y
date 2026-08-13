@@ -138,7 +138,6 @@ const spanAttrToolType = 'gen_ai.tool.type';
 const spanAttrToolDescription = 'gen_ai.tool.description';
 const spanAttrToolCallArguments = 'gen_ai.tool.call.arguments';
 const spanAttrToolCallResult = 'gen_ai.tool.call.result';
-const shutdownFlushTimeoutMs = 10_000;
 const spanAttrTagPrefix = 'agento11y.tag.';
 const maxRatingConversationIdLen = 255;
 const maxRatingIdLen = 128;
@@ -1184,18 +1183,20 @@ export class Agento11yClient {
   private async flushOnShutdown(): Promise<void> {
     let flushTimeout: ReturnType<typeof setTimeout> | undefined;
     try {
+      const flushPromise = this.flushInternal();
+      const shutdownFlushTimeoutMs = this.config.generationExport.timeoutMs;
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
         flushTimeout = setTimeout(() => {
           this.stopGenerationExports();
           reject(
             new Error(
-              `generation export flush exceeded ${shutdownFlushTimeoutMs}ms shutdown deadline; remaining exports were discarded without retry`,
+              `generation export flush exceeded ${shutdownFlushTimeoutMs}ms shutdown deadline; agento11y discarded the remaining exports without a retry`,
             ),
           );
         }, shutdownFlushTimeoutMs);
         maybeUnref(flushTimeout);
       });
-      await Promise.race([this.flushInternal(), timeoutPromise]);
+      await Promise.race([flushPromise, timeoutPromise]);
     } finally {
       if (flushTimeout !== undefined) {
         clearTimeout(flushTimeout);

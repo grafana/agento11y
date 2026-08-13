@@ -10,6 +10,7 @@ const configFromEnvCases = [
     env: {},
     check: (cfg) => {
       assert.equal(cfg.generationExport.protocol, 'http');
+      assert.equal(cfg.generationExport.timeoutMs, 30_000);
       assert.equal(cfg.contentCapture, 'default');
       assert.equal(cfg.agentName, undefined);
       assert.equal(cfg.userId, undefined);
@@ -22,6 +23,20 @@ const configFromEnvCases = [
     check: (cfg) => {
       assert.equal(cfg.generationExport.endpoint, 'https://env:4318');
       assert.equal(cfg.generationExport.protocol, 'grpc');
+    },
+  },
+  {
+    name: 'export timeout from env',
+    env: { AGENTO11Y_EXPORT_TIMEOUT_MS: '2500' },
+    check: (cfg) => {
+      assert.equal(cfg.generationExport.timeoutMs, 2500);
+    },
+  },
+  {
+    name: 'legacy export timeout from env',
+    env: { SIGIL_EXPORT_TIMEOUT_MS: '3000' },
+    check: (cfg) => {
+      assert.equal(cfg.generationExport.timeoutMs, 3000);
     },
   },
   {
@@ -276,6 +291,14 @@ const mergeConfigCases = [
     },
   },
   {
+    name: 'caller export timeout wins over env',
+    config: { generationExport: { timeoutMs: 5000 } },
+    env: { AGENTO11Y_EXPORT_TIMEOUT_MS: '2500' },
+    check: (cfg) => {
+      assert.equal(cfg.generationExport.timeoutMs, 5000);
+    },
+  },
+  {
     name: 'caller tags merge with preferred env tags',
     config: { tags: { team: 'ai', env: 'staging' } },
     env: { AGENTO11Y_TAGS: 'service=orch,env=prod' },
@@ -289,6 +312,40 @@ for (const tc of mergeConfigCases) {
   test(`mergeConfig: ${tc.name}`, () => {
     const cfg = mergeConfig(tc.config, tc.env);
     tc.check(cfg);
+  });
+}
+
+for (const value of ['abc', '0', '-1', '1.5', '2147483648', '0x10', '0b101', '0o17', '1e3', '5.0']) {
+  test(`configFromEnv: invalid export timeout ${value} falls back and preserves valid siblings`, () => {
+    const warnings = [];
+    const cfg = mergeConfig(
+      { logger: { warn: (message) => warnings.push(message) } },
+      { AGENTO11Y_EXPORT_TIMEOUT_MS: value, AGENTO11Y_AGENT_NAME: 'valid-agent' },
+    );
+
+    assert.equal(cfg.generationExport.timeoutMs, 30_000);
+    assert.equal(cfg.agentName, 'valid-agent');
+    assert.deepEqual(warnings, [
+      `agento11y: ignoring invalid AGENTO11Y_EXPORT_TIMEOUT_MS: ${value}; expected a whole number from 1 through 2147483647`,
+    ]);
+  });
+}
+
+for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {
+  test(`mergeConfig: invalid programmatic export timeout ${value} falls back to default`, () => {
+    const warnings = [];
+    const cfg = mergeConfig(
+      {
+        generationExport: { timeoutMs: value },
+        logger: { warn: (message) => warnings.push(message) },
+      },
+      {},
+    );
+
+    assert.equal(cfg.generationExport.timeoutMs, 30_000);
+    assert.deepEqual(warnings, [
+      `agento11y: ignoring invalid generationExport.timeoutMs: ${String(value)}; expected a whole number from 1 through 2147483647`,
+    ]);
   });
 }
 

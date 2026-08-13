@@ -13,16 +13,31 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 /** HTTP exporter for generation ingest parity endpoint. */
 public final class HttpGenerationExporter implements GenerationExporter {
+    /** Connect timeout is fixed; only the request timeout is configurable. */
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
+
     private final URI endpoint;
     private final String userAgent;
     private final Map<String, String> headers;
     private final HttpClient client;
+    private final Duration requestTimeout;
 
     public HttpGenerationExporter(String endpoint, Map<String, String> headers) {
+        this(endpoint, headers, GenerationExportConfig.DEFAULT_EXPORT_TIMEOUT);
+    }
+
+    /**
+     * @param requestTimeout per-request timeout from
+     *     {@link GenerationExportConfig#getExportTimeout()}. {@code null} uses
+     *     the 30-second default.
+     */
+    public HttpGenerationExporter(String endpoint, Map<String, String> headers, Duration requestTimeout) {
         this.endpoint = URI.create(normalizeEndpoint(endpoint));
+        this.requestTimeout = requestTimeout == null ? GenerationExportConfig.DEFAULT_EXPORT_TIMEOUT : requestTimeout;
         // Resolve the User-Agent like the gRPC exporter: a non-blank caller
         // override wins, otherwise the SDK default (HttpClient would otherwise
         // send "Java-http-client/<ver>"). Any User-Agent entry is stripped so a
@@ -43,7 +58,7 @@ public final class HttpGenerationExporter implements GenerationExporter {
         }
         this.userAgent = resolvedUserAgent;
         this.headers = remaining;
-        this.client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        this.client = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build();
     }
 
     @Override
@@ -54,7 +69,7 @@ public final class HttpGenerationExporter implements GenerationExporter {
 
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                 .uri(endpoint)
-                .timeout(Duration.ofSeconds(10))
+                .timeout(requestTimeout)
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body));
         requestBuilder.header("User-Agent", userAgent);
@@ -87,6 +102,16 @@ public final class HttpGenerationExporter implements GenerationExporter {
         }
 
         return new ExportGenerationsResponse().setResults(results);
+    }
+
+    /** Visible for tests: per-request timeout applied to each export attempt. */
+    Duration requestTimeout() {
+        return requestTimeout;
+    }
+
+    /** Visible for tests: fixed connect timeout of the underlying client. */
+    Optional<Duration> connectTimeout() {
+        return client.connectTimeout();
     }
 
     private static final String HTTP_GENERATION_EXPORT_PATH = "/api/v1/generations:export";

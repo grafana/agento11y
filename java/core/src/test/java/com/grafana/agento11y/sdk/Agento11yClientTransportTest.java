@@ -2,11 +2,14 @@ package com.grafana.agento11y.sdk;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.protobuf.util.JsonFormat;
 import io.grpc.Metadata;
 import io.grpc.Server;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import io.grpc.ServerBuilder;
 import io.grpc.ServerCall;
 import io.grpc.ServerCallHandler;
@@ -24,6 +27,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -232,6 +237,75 @@ class Agento11yClientTransportTest {
         assertThat(metadata.get().get("authorization")).isEqualTo("Bearer override-token");
         // grpc-java appends its own token after ours.
         assertThat(metadata.get().get("user-agent")).startsWith(SdkVersion.userAgent());
+    }
+
+    @Test
+    void httpExportStopsAtConfiguredTimeout() throws Exception {
+        CountDownLatch requestAccepted = new CountDownLatch(1);
+        CountDownLatch releaseResponse = new CountDownLatch(1);
+        com.sun.net.httpserver.HttpServer server =
+                com.sun.net.httpserver.HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/v1/generations:export", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            requestAccepted.countDown();
+            try {
+                releaseResponse.await();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            }
+            exchange.close();
+        });
+        server.start();
+        HttpGenerationExporter exporter = new HttpGenerationExporter(
+                "http://127.0.0.1:" + server.getAddress().getPort(),
+                Map.of(),
+                Duration.ofMillis(100));
+
+        try {
+            long startedAt = System.nanoTime();
+            Throwable failure = catchThrowable(() -> exporter.exportGenerations(
+                    new ExportGenerationsRequest().setGenerations(List.of(new Generation().setId("gen-timeout")))));
+            Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+
+            assertThat(requestAccepted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(failure).isInstanceOf(java.net.http.HttpTimeoutException.class);
+            assertThat(elapsed).isLessThan(Duration.ofSeconds(1));
+        } finally {
+            releaseResponse.countDown();
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void grpcExportStopsAtConfiguredDeadline() throws Exception {
+        GenerationIngestServiceGrpc.GenerationIngestServiceImplBase service = new GenerationIngestServiceGrpc.GenerationIngestServiceImplBase() {
+            @Override
+            public void exportGenerations(
+                    GenerationIngest.ExportGenerationsRequest request,
+                    StreamObserver<GenerationIngest.ExportGenerationsResponse> responseObserver) {
+                // Leave the call open until the client deadline expires.
+            }
+        };
+        Server server = ServerBuilder.forPort(0).addService(service).build().start();
+        GrpcGenerationExporter exporter = new GrpcGenerationExporter(
+                "127.0.0.1:" + server.getPort(),
+                Map.of(),
+                true,
+                Duration.ofMillis(100));
+
+        try {
+            long startedAt = System.nanoTime();
+            Throwable failure = catchThrowable(() -> exporter.exportGenerations(
+                    new ExportGenerationsRequest().setGenerations(List.of(new Generation().setId("gen-timeout")))));
+            Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+
+            assertThat(failure).isInstanceOf(StatusRuntimeException.class);
+            assertThat(Status.fromThrowable(failure).getCode()).isEqualTo(Status.Code.DEADLINE_EXCEEDED);
+            assertThat(elapsed).isLessThan(Duration.ofSeconds(1));
+        } finally {
+            exporter.shutdown();
+            server.shutdownNow();
+        }
     }
 
     @Test

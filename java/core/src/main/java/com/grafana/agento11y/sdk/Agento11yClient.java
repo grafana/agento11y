@@ -820,8 +820,15 @@ public final class Agento11yClient implements AutoCloseable {
 
     private GenerationExporter createGenerationExporter(GenerationExportConfig exportConfig) {
         return switch (exportConfig.getProtocol()) {
-            case GRPC -> new GrpcGenerationExporter(exportConfig.getEndpoint(), exportConfig.getHeaders(), exportConfig.isInsecureResolved());
-            case HTTP -> new HttpGenerationExporter(exportConfig.getEndpoint(), exportConfig.getHeaders());
+            case GRPC -> new GrpcGenerationExporter(
+                    exportConfig.getEndpoint(),
+                    exportConfig.getHeaders(),
+                    exportConfig.isInsecureResolved(),
+                    exportConfig.getExportTimeout());
+            case HTTP -> new HttpGenerationExporter(
+                    exportConfig.getEndpoint(),
+                    exportConfig.getHeaders(),
+                    exportConfig.getExportTimeout());
             case NONE -> new NoopGenerationExporter();
         };
     }

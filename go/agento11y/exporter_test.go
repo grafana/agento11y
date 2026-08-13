@@ -3,12 +3,14 @@ package agento11y
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -427,6 +429,307 @@ func TestMergeGenerationExportConfigGRPCMessageLimits(t *testing.T) {
 	}
 	if got.GRPCMaxReceiveMessageBytes != 9<<20 {
 		t.Fatalf("expected grpc max receive 9MiB, got %d", got.GRPCMaxReceiveMessageBytes)
+	}
+}
+
+// TestMergeGenerationExportConfigTimeouts pins the caller-wins-over-env layering
+// for both export timeouts: base is the env/default layer, override the caller.
+func TestMergeGenerationExportConfigTimeouts(t *testing.T) {
+	testCases := []struct {
+		name              string
+		base              GenerationExportConfig
+		override          GenerationExportConfig
+		wantExportTimeout time.Duration
+		wantHTTPTimeout   time.Duration
+	}{
+		{
+			name:              "caller export timeout wins over env value",
+			base:              GenerationExportConfig{ExportTimeout: 30 * time.Second},
+			override:          GenerationExportConfig{ExportTimeout: 2 * time.Second},
+			wantExportTimeout: 2 * time.Second,
+		},
+		{
+			name:              "zero caller export timeout keeps env value",
+			base:              GenerationExportConfig{ExportTimeout: 7 * time.Second},
+			override:          GenerationExportConfig{},
+			wantExportTimeout: 7 * time.Second,
+		},
+		{
+			name:              "negative caller export timeout keeps env value",
+			base:              GenerationExportConfig{ExportTimeout: 7 * time.Second},
+			override:          GenerationExportConfig{ExportTimeout: -time.Second},
+			wantExportTimeout: 7 * time.Second,
+		},
+		{
+			name:              "http timeout and export timeout merge independently",
+			base:              GenerationExportConfig{ExportTimeout: 30 * time.Second, HTTPTimeout: time.Second},
+			override:          GenerationExportConfig{HTTPTimeout: 5 * time.Second},
+			wantExportTimeout: 30 * time.Second,
+			wantHTTPTimeout:   5 * time.Second,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := mergeGenerationExportConfig(testCase.base, testCase.override)
+			if got.ExportTimeout != testCase.wantExportTimeout {
+				t.Fatalf("ExportTimeout=%v, want %v", got.ExportTimeout, testCase.wantExportTimeout)
+			}
+			if got.HTTPTimeout != testCase.wantHTTPTimeout {
+				t.Fatalf("HTTPTimeout=%v, want %v", got.HTTPTimeout, testCase.wantHTTPTimeout)
+			}
+		})
+	}
+}
+
+// TestResolveExportTimeout covers the single resolution point used by the HTTP
+// client timeout and by every per-attempt export context.
+func TestResolveExportTimeout(t *testing.T) {
+	testCases := []struct {
+		name     string
+		protocol GenerationExportProtocol
+		cfg      GenerationExportConfig
+		want     time.Duration
+	}{
+		{
+			name:     "http unset uses default",
+			protocol: GenerationExportProtocolHTTP,
+			want:     defaultExportTimeout,
+		},
+		{
+			name:     "grpc unset uses default",
+			protocol: GenerationExportProtocolGRPC,
+			want:     defaultExportTimeout,
+		},
+		{
+			name:     "http uses export timeout when no http timeout",
+			protocol: GenerationExportProtocolHTTP,
+			cfg:      GenerationExportConfig{ExportTimeout: 2 * time.Second},
+			want:     2 * time.Second,
+		},
+		{
+			name:     "grpc uses export timeout",
+			protocol: GenerationExportProtocolGRPC,
+			cfg:      GenerationExportConfig{ExportTimeout: 2 * time.Second},
+			want:     2 * time.Second,
+		},
+		{
+			// experiments.NewClient maps ClientOptions.RetryTimeout onto
+			// HTTPTimeout, so a positive RetryTimeout keeps its exact bound.
+			name:     "http timeout overrides export timeout",
+			protocol: GenerationExportProtocolHTTP,
+			cfg:      GenerationExportConfig{ExportTimeout: 2 * time.Second, HTTPTimeout: 5 * time.Second},
+			want:     5 * time.Second,
+		},
+		{
+			name:     "http timeout overrides default",
+			protocol: GenerationExportProtocolHTTP,
+			cfg:      GenerationExportConfig{HTTPTimeout: 5 * time.Second},
+			want:     5 * time.Second,
+		},
+		{
+			name:     "grpc ignores http timeout",
+			protocol: GenerationExportProtocolGRPC,
+			cfg:      GenerationExportConfig{ExportTimeout: 2 * time.Second, HTTPTimeout: 5 * time.Second},
+			want:     2 * time.Second,
+		},
+		{
+			name:     "grpc ignores http timeout and falls back to default",
+			protocol: GenerationExportProtocolGRPC,
+			cfg:      GenerationExportConfig{HTTPTimeout: 5 * time.Second},
+			want:     defaultExportTimeout,
+		},
+		{
+			name:     "non-positive export timeout uses default",
+			protocol: GenerationExportProtocolHTTP,
+			cfg:      GenerationExportConfig{ExportTimeout: -time.Second},
+			want:     defaultExportTimeout,
+		},
+		{
+			name:     "non-positive http timeout defers to export timeout",
+			protocol: GenerationExportProtocolHTTP,
+			cfg:      GenerationExportConfig{ExportTimeout: 2 * time.Second, HTTPTimeout: -time.Second},
+			want:     2 * time.Second,
+		},
+		{
+			name:     "none protocol uses export timeout",
+			protocol: GenerationExportProtocolNone,
+			cfg:      GenerationExportConfig{ExportTimeout: 3 * time.Second, HTTPTimeout: 5 * time.Second},
+			want:     3 * time.Second,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := testCase.cfg
+			cfg.Protocol = testCase.protocol
+			if got := resolveExportTimeout(cfg); got != testCase.want {
+				t.Fatalf("resolveExportTimeout=%v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestNewHTTPGenerationExporterTimeout pins http.Client.Timeout to the same
+// resolved value the per-attempt context uses, so neither can silently outlive
+// the other.
+func TestNewHTTPGenerationExporterTimeout(t *testing.T) {
+	testCases := []struct {
+		name string
+		cfg  GenerationExportConfig
+		want time.Duration
+	}{
+		{
+			name: "unset uses default",
+			want: defaultExportTimeout,
+		},
+		{
+			name: "export timeout applies to http",
+			cfg:  GenerationExportConfig{ExportTimeout: 2 * time.Second},
+			want: 2 * time.Second,
+		},
+		{
+			name: "experiments retry timeout still wins",
+			cfg:  GenerationExportConfig{ExportTimeout: 30 * time.Second, HTTPTimeout: 5 * time.Second},
+			want: 5 * time.Second,
+		},
+		{
+			name: "non-positive export timeout uses default",
+			cfg:  GenerationExportConfig{ExportTimeout: -time.Second},
+			want: defaultExportTimeout,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := testCase.cfg
+			cfg.Protocol = GenerationExportProtocolHTTP
+			cfg.Endpoint = "http://localhost:8080"
+			cfg.Insecure = BoolPtr(true)
+
+			exporter, err := newGenerationExporter(cfg)
+			if err != nil {
+				t.Fatalf("newGenerationExporter failed: %v", err)
+			}
+			httpExporter, ok := exporter.(*httpGenerationExporter)
+			if !ok {
+				t.Fatalf("unexpected exporter type %T", exporter)
+			}
+			if httpExporter.client.Timeout != testCase.want {
+				t.Fatalf("http client timeout=%v, want %v", httpExporter.client.Timeout, testCase.want)
+			}
+			if got := resolveExportTimeout(cfg); got != httpExporter.client.Timeout {
+				t.Fatalf("attempt timeout=%v, want http client timeout %v", got, httpExporter.client.Timeout)
+			}
+		})
+	}
+}
+
+// TestExportAttemptDeadlines asserts every generation and workflow-step export
+// attempt is bounded by the resolved timeout, including retries.
+func TestExportAttemptDeadlines(t *testing.T) {
+	if defaultExportTimeout != 30*time.Second {
+		t.Fatalf("defaultExportTimeout=%v, want 30s", defaultExportTimeout)
+	}
+
+	testCases := []struct {
+		name     string
+		protocol GenerationExportProtocol
+		cfg      GenerationExportConfig
+		want     time.Duration
+	}{
+		{
+			name:     "grpc default",
+			protocol: GenerationExportProtocolGRPC,
+			want:     defaultExportTimeout,
+		},
+		{
+			name:     "grpc configured export timeout",
+			protocol: GenerationExportProtocolGRPC,
+			cfg:      GenerationExportConfig{ExportTimeout: 90 * time.Second},
+			want:     90 * time.Second,
+		},
+		{
+			name:     "grpc ignores http timeout",
+			protocol: GenerationExportProtocolGRPC,
+			cfg:      GenerationExportConfig{ExportTimeout: 90 * time.Second, HTTPTimeout: 5 * time.Second},
+			want:     90 * time.Second,
+		},
+		{
+			name:     "http timeout bounds http attempts",
+			protocol: GenerationExportProtocolHTTP,
+			cfg:      GenerationExportConfig{ExportTimeout: 90 * time.Second, HTTPTimeout: 5 * time.Second},
+			want:     5 * time.Second,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var (
+				mu        sync.Mutex
+				deadlines []time.Duration
+			)
+			recordDeadline := func(ctx context.Context) {
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					t.Errorf("export attempt context has no deadline")
+					return
+				}
+				mu.Lock()
+				deadlines = append(deadlines, time.Until(deadline))
+				mu.Unlock()
+			}
+			exporter := &capturingGenerationExporter{
+				export: func(ctx context.Context, _ *agento11yv1.ExportGenerationsRequest) (*agento11yv1.ExportGenerationsResponse, error) {
+					recordDeadline(ctx)
+					return nil, errors.New("boom")
+				},
+				exportWorkflowSteps: func(ctx context.Context, _ *agento11yv1.ExportWorkflowStepsRequest) (*agento11yv1.ExportWorkflowStepsResponse, error) {
+					recordDeadline(ctx)
+					return nil, errors.New("boom")
+				},
+			}
+
+			generationExport := testCase.cfg
+			generationExport.Protocol = testCase.protocol
+			generationExport.Endpoint = "localhost:4317"
+			generationExport.QueueSize = 1
+			generationExport.MaxRetries = 1
+			generationExport.InitialBackoff = time.Millisecond
+			generationExport.MaxBackoff = time.Millisecond
+
+			client := NewClient(Config{
+				GenerationExport:       generationExport,
+				Tracer:                 noop.NewTracerProvider().Tracer("test"),
+				Logger:                 log.New(io.Discard, "", 0),
+				testDisableWorker:      true,
+				testGenerationExporter: exporter,
+			})
+			t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
+
+			if err := client.exportWithRetry(&agento11yv1.ExportGenerationsRequest{
+				Generations: []*agento11yv1.Generation{{Id: "gen-1"}},
+			}); err == nil {
+				t.Fatal("expected generation export error")
+			}
+			if err := client.exportWorkflowStepsWithRetry(&agento11yv1.ExportWorkflowStepsRequest{
+				WorkflowSteps: []*agento11yv1.WorkflowStep{{Id: "step-1"}},
+			}); err == nil {
+				t.Fatal("expected workflow step export error")
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			// MaxRetries=1 means two attempts per export path.
+			if len(deadlines) != 4 {
+				t.Fatalf("recorded %d attempt deadlines, want 4", len(deadlines))
+			}
+			for i, remaining := range deadlines {
+				if remaining > testCase.want || remaining < testCase.want-time.Second {
+					t.Fatalf("attempt %d deadline in %v, want ~%v", i, remaining, testCase.want)
+				}
+			}
+		})
 	}
 }
 

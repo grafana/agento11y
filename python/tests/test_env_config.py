@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import timedelta
 
 import pytest
-from agento11y import ApiConfig, Client, ClientConfig
+from agento11y import ApiConfig, Client, ClientConfig, GenerationExportConfig
 from agento11y.config import default_config, resolve_config
 from agento11y.models import ContentCaptureMode, GenerationStart, ModelRef
+
+_DEFAULT_EXPORT_TIMEOUT = timedelta(seconds=30)
 
 
 def _check_no_env(cfg: ClientConfig) -> None:
@@ -16,6 +19,7 @@ def _check_no_env(cfg: ClientConfig) -> None:
     assert cfg.generation_export.protocol == "grpc"
     assert cfg.generation_export.insecure is False
     assert cfg.generation_export.auth.mode == "none"
+    assert cfg.generation_export.export_timeout == _DEFAULT_EXPORT_TIMEOUT
     assert cfg.agent_name == ""
     assert cfg.debug is False
     assert cfg.use_experimental_otel is False
@@ -66,6 +70,28 @@ def _check_invalid_auth_mode_preserves_valid(cfg: ClientConfig) -> None:
 
 def _check_stray_tenant_does_not_error(cfg: ClientConfig) -> None:
     assert cfg.generation_export.auth.mode == "none"
+
+
+def _check_export_timeout(cfg: ClientConfig) -> None:
+    assert cfg.generation_export.export_timeout == timedelta(milliseconds=1500)
+
+
+def _check_export_timeout_min(cfg: ClientConfig) -> None:
+    assert cfg.generation_export.export_timeout == timedelta(milliseconds=1)
+
+
+def _check_export_timeout_max(cfg: ClientConfig) -> None:
+    assert cfg.generation_export.export_timeout == timedelta(milliseconds=2147483647)
+
+
+def _check_invalid_export_timeout_preserves_valid(cfg: ClientConfig) -> None:
+    # The bad timeout is dropped, the sibling env var in the same batch still applies.
+    assert cfg.generation_export.export_timeout == _DEFAULT_EXPORT_TIMEOUT
+    assert cfg.generation_export.endpoint == "valid.example:4318"
+
+
+def _check_legacy_export_timeout_ignored(cfg: ClientConfig) -> None:
+    assert cfg.generation_export.export_timeout == _DEFAULT_EXPORT_TIMEOUT
 
 
 @pytest.mark.parametrize(
@@ -130,11 +156,98 @@ def _check_stray_tenant_does_not_error(cfg: ClientConfig) -> None:
             _check_stray_tenant_does_not_error,
             id="stray AGENTO11Y_AUTH_TENANT_ID does not error",
         ),
+        pytest.param(
+            {"AGENTO11Y_EXPORT_TIMEOUT_MS": "1500"},
+            _check_export_timeout,
+            id="export timeout from env",
+        ),
+        pytest.param(
+            {"AGENTO11Y_EXPORT_TIMEOUT_MS": "1"},
+            _check_export_timeout_min,
+            id="export timeout accepts inclusive minimum",
+        ),
+        pytest.param(
+            {"AGENTO11Y_EXPORT_TIMEOUT_MS": "2147483647"},
+            _check_export_timeout_max,
+            id="export timeout accepts inclusive maximum",
+        ),
+        pytest.param(
+            {
+                "AGENTO11Y_EXPORT_TIMEOUT_MS": "abc",
+                "AGENTO11Y_ENDPOINT": "valid.example:4318",
+            },
+            _check_invalid_export_timeout_preserves_valid,
+            id="invalid export timeout preserves other valid env",
+        ),
+        pytest.param(
+            {"SIGIL_EXPORT_TIMEOUT_MS": "1500"},
+            _check_legacy_export_timeout_ignored,
+            id="legacy SIGIL export timeout is never read",
+        ),
     ],
 )
 def test_resolve_config_env(env: dict[str, str], check: Callable[[ClientConfig], None]) -> None:
     cfg = resolve_config(None, env=env)
     check(cfg)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param("0", id="zero is below the inclusive minimum"),
+        pytest.param("-1", id="negative"),
+        pytest.param("1.5", id="fractional"),
+        pytest.param("abc", id="non-numeric"),
+        pytest.param("2147483648", id="above the inclusive maximum"),
+    ],
+)
+def test_invalid_export_timeout_warns_and_keeps_default(raw: str, caplog: pytest.LogCaptureFixture) -> None:
+    """Bad AGENTO11Y_EXPORT_TIMEOUT_MS warns, keeps 30s, and lets siblings apply."""
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
+        cfg = resolve_config(
+            None,
+            env={"AGENTO11Y_EXPORT_TIMEOUT_MS": raw, "AGENTO11Y_AGENT_NAME": "planner"},
+        )
+    assert cfg.generation_export.export_timeout == _DEFAULT_EXPORT_TIMEOUT
+    assert cfg.agent_name == "planner"
+    assert any("AGENTO11Y_EXPORT_TIMEOUT_MS" in record.getMessage() for record in caplog.records)
+
+
+def test_legacy_export_timeout_warns_and_is_ignored(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
+        cfg = resolve_config(None, env={"SIGIL_EXPORT_TIMEOUT_MS": "1500"})
+
+    assert cfg.generation_export.export_timeout == _DEFAULT_EXPORT_TIMEOUT
+    assert any(
+        "SIGIL_EXPORT_TIMEOUT_MS is ignored; rename it to AGENTO11Y_EXPORT_TIMEOUT_MS" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_export_timeout_default_is_thirty_seconds() -> None:
+    """Both the raw dataclass and the resolved config expose the 30s default."""
+    assert GenerationExportConfig().export_timeout == _DEFAULT_EXPORT_TIMEOUT
+    assert default_config().generation_export.export_timeout == _DEFAULT_EXPORT_TIMEOUT
+
+
+def test_explicit_export_timeout_beats_env() -> None:
+    explicit = ClientConfig(generation_export=GenerationExportConfig(export_timeout=timedelta(seconds=5)))
+    cfg = resolve_config(explicit, env={"AGENTO11Y_EXPORT_TIMEOUT_MS": "1500"})
+    assert cfg.generation_export.export_timeout == timedelta(seconds=5)
+
+
+@pytest.mark.parametrize(
+    "caller_timeout",
+    [
+        pytest.param(timedelta(0), id="zero"),
+        pytest.param(timedelta(seconds=-3), id="negative"),
+    ],
+)
+def test_invalid_caller_export_timeout_is_clamped(caller_timeout: timedelta) -> None:
+    """Non-positive caller values are clamped like the neighbouring interval fields."""
+    explicit = ClientConfig(generation_export=GenerationExportConfig(export_timeout=caller_timeout))
+    cfg = resolve_config(explicit, env={})
+    assert cfg.generation_export.export_timeout == _DEFAULT_EXPORT_TIMEOUT
 
 
 def test_explicit_overrides_env() -> None:
