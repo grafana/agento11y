@@ -11,6 +11,7 @@ agento11y doctor v0.22.0
 ✗ Config
   file:               /home/u/.config/agento11y/config.env (present)
   content capture:    full (AGENTO11Y_CONTENT_CAPTURE_MODE, config.env)
+  prompt redaction:   enabled
   guards:             enabled, timeout 1500ms, fail-open (AGENTO11Y_GUARDS_ENABLED, config.env)
   tags:               env=prod, team=assistant (AGENTO11Y_TAGS, config.env)
   auto tags:          user,repo resolved repo=grafana/agento11y, user=alice@example.com (AGENTO11Y_AUTO_CODING_AGENT_TAGS, config.env)
