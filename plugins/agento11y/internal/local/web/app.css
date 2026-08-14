@@ -113,19 +113,103 @@
       border-radius: var(--radius-default);
     }
 
-    /* Transient glow when a step is jumped to from the step rail: a bright
-       brand-orange ring that blooms and fades so the eye lands on the
-       freshly-scrolled card without a persistent highlight. */
-    @keyframes sigil-step-flash {
-      0%   { box-shadow: 0 0 0 1px rgba(255,103,29,0.95), 0 0 24px 3px rgba(255,103,29,0.55); }
-      55%  { box-shadow: 0 0 0 1px rgba(255,103,29,0.45), 0 0 16px 2px rgba(255,103,29,0.26); }
-      100% { box-shadow: 0 0 0 1px rgba(255,103,29,0), 0 0 0 0 rgba(255,103,29,0); }
+    /* Agent prose is rendered from markdown into a React tree by
+       markdown-to-jsx, so the elements below are generated rather than written
+       in app.jsx, and their styling cannot be inline. Code and tables sit on
+       the canvas colour so they read as inset against the agent card. */
+    .sigil-md {
+      color: var(--fg1);
+      font-size: 14.5px;
+      line-height: 1.68;
+      overflow-wrap: anywhere;
     }
-    .sigil-step-flash {
-      animation: sigil-step-flash 1.25s ease-out;
+    .sigil-md > :first-child { margin-top: 0; }
+    .sigil-md > :last-child { margin-bottom: 0; }
+    .sigil-md h1, .sigil-md h2, .sigil-md h3,
+    .sigil-md h4, .sigil-md h5, .sigil-md h6 {
+      margin: 16px 0 6px;
+      font-weight: 500;
+      line-height: 1.3;
+      color: var(--fg-max);
+    }
+    .sigil-md h1 { font-size: 1.25em; }
+    .sigil-md h2 { font-size: 1.15em; }
+    .sigil-md h3 { font-size: 1.05em; }
+    .sigil-md h4, .sigil-md h5, .sigil-md h6 { font-size: 1em; }
+    .sigil-md p { margin: 8px 0; }
+    .sigil-md ul, .sigil-md ol { margin: 8px 0; padding-left: 22px; }
+    .sigil-md li { margin: 3px 0; }
+    .sigil-md li > p { margin: 0; }
+    .sigil-md code {
+      font-family: var(--fontFamilyMonospace);
+      font-size: 13px;
+    }
+    .sigil-md :not(pre) > code {
+      padding: 0 4px;
+      border: 1px solid var(--border-weak);
+      border-radius: 4px;
+      background: rgba(204, 204, 220, 0.06);
+      color: var(--fg-max);
+    }
+    .sigil-md pre {
+      margin: 10px 0;
+      padding: 10px 12px;
+      border: 1px solid var(--border-weak);
+      border-radius: 8px;
+      background: var(--bg-canvas);
+      overflow-x: auto;
+      font-size: 12.5px;
+      line-height: 1.55;
+    }
+    .sigil-md a { color: var(--fg-link); text-decoration: underline; }
+    /* A link whose target failed the scheme check keeps its text but loses the
+       href, so it must not keep looking clickable either. */
+    .sigil-md a:not([href]) { color: inherit; text-decoration: none; cursor: default; }
+    .sigil-md table { margin: 10px 0; border-collapse: collapse; font-size: 12.5px; }
+    .sigil-md th, .sigil-md td {
+      padding: 6px 12px;
+      text-align: left;
+      border: 1px solid var(--border-weak);
+    }
+    .sigil-md th {
+      font-weight: 500;
+      color: var(--fg2);
+      background: rgba(204, 204, 220, 0.04);
+    }
+    .sigil-md blockquote {
+      margin: 8px 0;
+      padding-left: 12px;
+      border-left: 2px solid var(--border-medium);
+      color: var(--fg2);
+    }
+    .sigil-md hr {
+      margin: 12px 0;
+      border: none;
+      border-top: 1px solid var(--border-weak);
+    }
+
+    /* Transient ring when a turn is jumped to from the rail or the metrics
+       panel. It is drawn by a pseudo-element inset outside the turn's box, so
+       the halo stands clear of the text rather than tracing its outline. */
+    @keyframes sigil-step-flash {
+      0%   { opacity: 1; }
+      55%  { opacity: 0.55; }
+      100% { opacity: 0; }
+    }
+    .sigil-step-flash { position: relative; }
+    .sigil-step-flash::before {
+      content: "";
+      position: absolute;
+      inset: -14px -20px;
+      border: 1px solid rgba(255,103,29,0.8);
+      border-radius: 10px;
+      box-shadow: 0 0 26px 4px rgba(255,103,29,0.25);
+      pointer-events: none;
+      animation: sigil-step-flash 1.25s ease-out forwards;
     }
     @media (prefers-reduced-motion: reduce) {
-      .sigil-step-flash { animation: none; }
+      /* No bloom, but keep the ring for the 1.4s the class is applied. */
+      .sigil-step-flash::before { animation: none; }
     }
 
     /* Settings: unsaved-changes bar slides up, toast fades down. Restrained,

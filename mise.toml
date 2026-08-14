@@ -837,6 +837,7 @@ set -euo pipefail
 # Versions are pinned here. Bumping one means editing this task, not the files.
 REACT=18.3.1
 BABEL=7.29.0
+MARKDOWN_TO_JSX=9.9.0
 # Google serves a content-hashed URL per font revision. Re-fetch these from
 # https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=Roboto+Mono:wght@400..500&display=swap
 # with a browser User-Agent when bumping, and take the latin subset (U+0000-00FF).
@@ -853,6 +854,45 @@ fetch "https://unpkg.com/react-dom@$REACT/umd/react-dom.production.min.js" "$web
 fetch "https://unpkg.com/@babel/standalone@$BABEL/babel.min.js"            "$web/vendor/babel.min.js"
 fetch "$INTER_URL"       "$web/fonts/inter-latin.woff2"
 fetch "$ROBOTO_MONO_URL" "$web/fonts/roboto-mono-latin.woff2"
+
+# markdown-to-jsx ships CommonJS and ESM only, and the viewer loads plain
+# scripts with no bundler. Wrap the two CJS files in module scopes whose
+# require() resolves "react" to the global React and the entities import to
+# the browser build, which decodes named entities through a detached textarea
+# instead of shipping the full 100KB table.
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+fetch "https://unpkg.com/markdown-to-jsx@$MARKDOWN_TO_JSX/dist/index.cjs"            "$tmp/index.cjs"
+fetch "https://unpkg.com/markdown-to-jsx@$MARKDOWN_TO_JSX/dist/entities.browser.cjs" "$tmp/entities.cjs"
+{
+  printf '/* markdown-to-jsx %s (MIT), wrapped for the local viewer.\n' "$MARKDOWN_TO_JSX"
+  cat <<'EOF'
+
+   Regenerate with "mise run local:vendor-assets"; do not edit by hand. */
+(function (global) {
+  var modules = {};
+  function req(name) {
+    if (name === "react") return global.React;
+    if (name === "markdown-to-jsx/entities") return modules.entities;
+    throw new Error("markdown-to-jsx: unexpected require(" + name + ")");
+  }
+  modules.entities = (function () {
+    var module = { exports: {} }, exports = module.exports, require = req;
+EOF
+  cat "$tmp/entities.cjs"
+  cat <<'EOF'
+    return module.exports;
+  })();
+  global.MarkdownToJSX = (function () {
+    var module = { exports: {} }, exports = module.exports, require = req;
+EOF
+  cat "$tmp/index.cjs"
+  cat <<'EOF'
+    return module.exports;
+  })();
+})(window);
+EOF
+} > "$web/vendor/markdown-to-jsx.js"
 
 echo "==> vendored:"
 ls -la "$web/vendor" "$web/fonts"
