@@ -1,9 +1,13 @@
 package local
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,6 +18,252 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAppJSXParsesWithBabel(t *testing.T) {
+	transcriptJS(t, "")
+}
+
+func TestTranscriptDerivationScenarios(t *testing.T) {
+	script := `
+const assert = require("assert").strict;
+const message = (role, parts) => ({ role, parts });
+const callPart = (id, name, input = {}) => ({ kind: "tool_call", tool_call: { id, name, input_json: input } });
+const resultPart = (id, name, content, isError = false) => ({ kind: "tool_result", tool_result: { tool_call_id: id, name, content_json: content, is_error: isError } });
+const generation = (id, input, output) => ({
+  generation_id: id,
+  agent_name: "cursor",
+  started_at: "2026-01-01T00:00:0" + (id === "g1" ? "0" : "2") + "Z",
+  completed_at: "2026-01-01T00:00:0" + (id === "g1" ? "1" : "3") + "Z",
+  input,
+  output,
+  total_tokens: 0,
+  token_buckets: {},
+  parent_generation_ids: [],
+});
+
+const same = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [
+  message("assistant", [callPart("", "Read"), resultPart("", "Read", "line 1\nline 2")]),
+]);
+let turns = buildTranscript([same]);
+let row = turns[0].blocks.find(block => block.kind === "work").calls[0];
+assert.equal(resultBody(row.result), "line 1\nline 2");
+assert.equal(resultBody(row.result).split("\n").length, 2);
+assert.equal(row.failed, false);
+
+const first = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [callPart("call-1", "Read")])]);
+const second = generation("g2", [message("tool", [resultPart("call-1", "Read", "done")])], [message("assistant", [{ kind: "text", text: "answer" }])]);
+turns = buildTranscript([first, second]);
+row = turns[0].blocks.find(block => block.kind === "work").calls[0];
+assert.equal(resultBody(row.result), "done");
+
+const final = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [callPart("call-final", "Read")])]);
+turns = buildTranscript([final]);
+row = turns[0].blocks.find(block => block.kind === "work").calls[0];
+assert.equal(row.result, null);
+assert.equal(row.failed, false);
+
+assert.deepEqual(
+  splitPreamble("<user_info>A</user_info>\n<rules>B</rules>\nCompare <old> and <new>."),
+  { preamble: "<user_info>A</user_info>\n<rules>B</rules>\n", prompt: "Compare <old> and <new>." },
+);
+const only = "<user_info>A</user_info>\n<rules>B</rules>";
+assert.deepEqual(splitPreamble(only), { preamble: "", prompt: only });
+
+// Harness blocks carry attributes, and pi's skill block is the common one.
+const skill = '<skill name="plan" location="/x/y/SKILL.md">body</skill>';
+assert.deepEqual(splitPreamble(skill + "\nfix rebase issues"), { preamble: skill + "\n", prompt: "fix rebase issues" });
+assert.deepEqual(splitPreamble(skill), { preamble: "", prompt: skill });
+
+// Markdown link targets: relative forms pass through, and a scheme that can
+// run script or carry a payload renders the link with no href at all.
+for (const relative of ["/panel", "./notes.md", "../up", "#anchor", "?q=1"]) {
+  assert.equal(markdownURL(relative), relative);
+}
+assert.equal(markdownURL("https://grafana.com/"), "https://grafana.com/");
+assert.equal(markdownURL("mailto:a@b.c"), "mailto:a@b.c");
+for (const blocked of [
+  "javascript:alert(1)",
+  "JaVaScRiPt:alert(1)",
+  "java\tscript:alert(1)",
+  "java\nscript:alert(1)",
+  "data:text/html;base64,PHNjcmlwdD4=",
+  "vbscript:msgbox(1)",
+  "file:///etc/passwd",
+  "//evil.example.com",
+  "\\\\evil.example.com",
+  "",
+  "   ",
+]) {
+  assert.equal(markdownURL(blocked), undefined, "must not render href " + JSON.stringify(blocked));
+}
+
+// Raw HTML never becomes an element, and every remote-loading tag is dropped.
+assert.equal(MARKDOWN_OPTIONS.disableParsingRawHTML, true);
+for (const tag of ["script", "iframe", "img", "style", "object", "embed", "form", "svg"]) {
+  assert.equal(MARKDOWN_OPTIONS.overrides[tag].component, BlockedElement, tag + " must be blocked");
+}
+assert.equal(MARKDOWN_OPTIONS.overrides.a.component, SafeAnchor);
+
+const metrics = buildTranscriptMetrics([same], turns);
+assert.equal(metrics.usageAvailable, false);
+assert.equal(metrics.totalTokens, 0);
+const used = buildTranscriptMetrics([{ ...same, total_tokens: 120 }, { ...second, total_tokens: 30 }], turns);
+assert.equal(used.usageAvailable, true);
+assert.equal(used.totalTokens, 150);
+
+const mixed = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [
+  { kind: "text", text: "before" },
+  { kind: "thinking", thinking: "reason" },
+  callPart("a", "Read"),
+  callPart("b", "Grep"),
+  { kind: "text", text: "after" },
+])]);
+turns = buildTranscript([mixed]);
+assert.deepEqual(turns[0].blocks.map(block => block.kind), ["prose", "reasoning", "work", "prose"]);
+
+// A generation that interleaves prose and tool calls splits into several work
+// blocks. Only the first one carries the generation's duration, so a merge with
+// the next generation's work adds that generation's time and nothing more.
+const split = { ...generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [
+  callPart("a", "Read"),
+  { kind: "text", text: "middle" },
+  callPart("b", "Grep"),
+  { kind: "text", text: "" },
+  callPart("c", "Glob"),
+])]), duration_seconds: 4 };
+turns = buildTranscript([split]);
+assert.deepEqual(turns[0].blocks.map(block => block.kind), ["work", "prose", "work"]);
+assert.deepEqual(turns[0].blocks.filter(block => block.kind === "work").map(block => block.durationSec), [4, 0]);
+
+const splitNext = { ...generation("g2", [message("tool", [resultPart("c", "Glob", "done")])], [message("assistant", [callPart("d", "Read")])]), duration_seconds: 3 };
+turns = buildTranscript([split, splitNext]);
+assert.deepEqual(turns[0].blocks.filter(block => block.kind === "work").map(block => block.durationSec), [4, 3]);
+
+const sameName = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [
+  callPart("", "Read"),
+  callPart("", "Read"),
+  resultPart("", "Read", "first"),
+  resultPart("", "Read", "second"),
+])]);
+turns = buildTranscript([sameName]);
+assert.deepEqual(
+  turns[0].blocks.find(block => block.kind === "work").calls.map(call => resultBody(call.result)),
+  ["first", "second"],
+);
+
+const repeatFirst = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [callPart("", "weather")])]);
+const repeatSecond = generation("g2", [message("tool", [resultPart("", "weather", "first result")])], [message("assistant", [callPart("", "weather")])]);
+const repeatThird = { ...generation("g3", [message("tool", [resultPart("", "weather", "second result")])], [message("assistant", [{ kind: "text", text: "answer" }])]), started_at: "2026-01-01T00:00:04Z", completed_at: "2026-01-01T00:00:05Z" };
+turns = buildTranscript([repeatFirst, repeatSecond, repeatThird]);
+assert.deepEqual(
+  turns[0].blocks.flatMap(block => block.kind === "work" ? block.calls : []).map(call => resultBody(call.result)),
+  ["first result", "second result"],
+);
+
+const failed = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [
+  callPart("failed-call", "Shell"),
+  resultPart("failed-call", "Shell", "bad", true),
+])]);
+turns = buildTranscript([failed]);
+assert.equal(turns[0].failedCount, 1);
+assert.equal(turns[0].blocks.find(block => block.kind === "work").calls[0].failed, true);
+
+const callErrorOnly = { ...generation("g1", [message("user", [{ kind: "text", text: "question" }])], []), call_error: "provider unavailable" };
+turns = buildTranscript([callErrorOnly]);
+assert.equal(turns[0].failedCount, 1);
+assert.deepEqual(turns[0].blocks.map(block => block.kind), ["error"]);
+assert.equal(turns[0].blocks[0].text, "provider unavailable");
+
+const callErrorAfterResult = {
+  ...generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [
+    callPart("successful-call", "Read"),
+    resultPart("successful-call", "Read", "ok"),
+  ])]),
+  call_error: "model call failed",
+};
+turns = buildTranscript([callErrorAfterResult]);
+const successfulRow = turns[0].blocks.find(block => block.kind === "work").calls[0];
+assert.equal(successfulRow.failed, false);
+assert.equal(resultBody(successfulRow.result), "ok");
+assert.equal(turns[0].blocks.find(block => block.kind === "error").text, "model call failed");
+assert.equal(turns[0].failedCount, 1);
+
+const parent = generation("g1", [message("user", [{ kind: "text", text: "question" }])], []);
+const child = {
+  ...generation("child", [], []),
+  agent_name: "cursor/subagent",
+  parent_generation_ids: ["g1"],
+  started_at: "2026-01-01T00:00:02Z",
+  completed_at: "2026-01-01T00:00:03Z",
+};
+const nestedFailure = {
+  ...generation("nested", [], []),
+  agent_name: "cursor/nested",
+  parent_generation_ids: ["child"],
+  call_error: "nested model call failed",
+  started_at: "2026-01-01T00:00:04Z",
+  completed_at: "2026-01-01T00:00:05Z",
+};
+turns = buildTranscript([parent, child, nestedFailure]);
+assert.equal(turns[0].failedCount, 1);
+assert.equal(turns[0].blocks.find(block => block.kind === "work").subruns[0].failedCount, 1);
+
+assert.equal(missingUsageNotice("cursor"), "No token usage was recorded for this cursor session, so token counts and cost are unavailable.");
+assert.equal(missingUsageNotice(""), "No token usage was recorded for this session, so token counts and cost are unavailable.");
+
+const large = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", Array.from({ length: 41 }, (_, index) => callPart("call-" + index, "Read")))]);
+turns = buildTranscript([large]);
+assert.equal(turns[0].blocks.find(block => block.kind === "work").calls.length, 41);
+console.log("TRANSCRIPT_ASSERTIONS_OK");
+`
+	transcriptJS(t, script)
+}
+
+func transcriptJS(t *testing.T, script string) {
+	t.Helper()
+	babel, err := webStatic.ReadFile("web/vendor/babel.min.js")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	babelPath := filepath.Join(dir, "babel.cjs")
+	require.NoError(t, os.WriteFile(babelPath, babel, 0o600))
+
+	scriptPath := filepath.Join(dir, "test.cjs")
+	runner := `
+const fs = require("fs");
+const vm = require("vm");
+const Babel = require(process.argv[2]);
+const source = fs.readFileSync(process.argv[3], "utf8");
+const compiled = Babel.transform(source, { filename: "app.jsx", presets: ["react"] }).code;
+if (process.env.RUN_TRANSCRIPT_TESTS === "1") {
+  const start = compiled.indexOf("function partKind(");
+  const end = compiled.indexOf("// ============================================================\n// Settings", start);
+  if (start < 0 || end < 0) throw new Error("transcript function region not found");
+  // URL is a browser global the markdown link check relies on.
+  const context = { console, require, URL, React: { createElement() {} } };
+  vm.createContext(context);
+  vm.runInContext(compiled.slice(start, end), context);
+  vm.runInContext(fs.readFileSync(process.argv[4], "utf8"), context);
+}
+`
+	require.NoError(t, os.WriteFile(scriptPath, []byte(runner), 0o600))
+
+	appPath := filepath.Join(dir, "app.jsx")
+	require.NoError(t, os.WriteFile(appPath, appJSX, 0o600))
+	assertPath := filepath.Join(dir, "assert.cjs")
+	require.NoError(t, os.WriteFile(assertPath, []byte(script), 0o600))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "node", scriptPath, babelPath, appPath, assertPath)
+	if script != "" {
+		cmd.Env = append(os.Environ(), "RUN_TRANSCRIPT_TESTS=1")
+	}
+	output, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "Babel/transcript checks failed for embedded web/app.jsx:\n%s", output)
+	if script != "" {
+		require.Contains(t, string(output), "TRANSCRIPT_ASSERTIONS_OK", "transcript assertions did not run")
+	}
+}
 
 // TestBucketLaddersAgree pins the one contract between the token endpoint
 // and the chart: both bucket on the same ladder, and every step divides the
@@ -317,6 +567,7 @@ func TestViewerServesItsOwnAssets(t *testing.T) {
 		"/assets/vendor/react.production.min.js":     "application/javascript; charset=utf-8",
 		"/assets/vendor/react-dom.production.min.js": "application/javascript; charset=utf-8",
 		"/assets/vendor/babel.min.js":                "application/javascript; charset=utf-8",
+		"/assets/vendor/markdown-to-jsx.js":          "application/javascript; charset=utf-8",
 		"/assets/fonts/inter-latin.woff2":            "font/woff2",
 		"/assets/fonts/roboto-mono-latin.woff2":      "font/woff2",
 	}

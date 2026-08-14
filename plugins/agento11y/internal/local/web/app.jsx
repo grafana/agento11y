@@ -651,8 +651,7 @@
     // flush under the header.
     const HEADER_H = 68;
 
-    function TopBar({ tabs = [], activeTab, trail = [] }) {
-      const active = tabs.find(t => t.key === activeTab);
+    function TopBar({ tabs = [], activeTab }) {
       return (
         <>
           <header style={{
@@ -686,33 +685,6 @@
               <Icon name="extlink" size={11}/>
             </a>
           </header>
-          {trail.length > 0 && (
-            // The breadcrumb lives on its own line under the menu so a long
-            // conversation title can't push the other tabs out of view.
-            <div style={{
-              display: "flex", alignItems: "center", gap: 8, height: 34, padding: "0 16px",
-              borderBottom: "1px solid var(--border-weak)", background: "var(--bg-primary)",
-              position: "sticky", top: HEADER_H, zIndex: 4, minWidth: 0, overflow: "hidden",
-            }}>
-              {active && (
-                <a href={active.href}
-                  onClick={active.onClick ? (e => { if (!isPlainLeftClick(e)) return; e.preventDefault(); active.onClick(); }) : undefined}
-                  style={{ fontSize: 13, color: "var(--fg2)", textDecoration: "none", whiteSpace: "nowrap", flexShrink: 0, cursor: "pointer" }}
-                  onMouseEnter={e => e.currentTarget.style.color = "var(--fg-max)"}
-                  onMouseLeave={e => e.currentTarget.style.color = "var(--fg2)"}>{active.label}</a>
-              )}
-              {trail.map((b, i) => (
-                <React.Fragment key={i}>
-                  <Icon name="cright" size={11} style={{ color: "var(--fg3)", flexShrink: 0 }}/>
-                  <span style={{
-                    fontFamily: b.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)",
-                    fontSize: 13, color: "var(--fg-max)",
-                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0,
-                  }}>{b.label}</span>
-                </React.Fragment>
-              ))}
-            </div>
-          )}
         </>
       );
     }
@@ -2027,919 +1999,988 @@
     // Screen 2 — Conversation detail
     // ============================================================
 
-    function agentBadge(name) {
-      if (!name) return "?";
-      const cleaned = name.replace(/[^a-zA-Z]/g, "");
-      return cleaned.slice(0, 2).toUpperCase() || "?";
+    function partKind(part) {
+      return part.kind || (part.text ? "text" : part.thinking ? "thinking" : part.tool_call ? "tool_call" : part.tool_result ? "tool_result" : "unknown");
     }
 
-    // MessageBubble renders one captured message (user / assistant / tool)
-    // with its visible parts. The label and accent colour come from the role;
-    // unknown roles fall back to a neutral grey label.
-    // partKind normalises a part to its kind, tolerating the shorthand shape
-    // where the kind is implied by which field is set.
-    function partKind(p) {
-      return p.kind || (p.text ? "text" : p.thinking ? "thinking" : p.tool_call ? "tool_call" : p.tool_result ? "tool_result" : "unknown");
-    }
-
-    // segMeta maps a (role, kind) to its block accent and label. Each part of
-    // a message renders as its own block, so the assistant's prose, its
-    // reasoning, and each tool call are visually distinct instead of sharing
-    // one "TOOL CALL" header. Tool call/result blocks carry their own inline
-    // header (→ name / ← result), so they need no separate label.
-    function segMeta(role, kind) {
-      if (kind === "thinking")    return { label: "",           color: "var(--viz-blue)" };
-      if (kind === "tool_call")   return { label: "",           color: "var(--warning-text)" };
-      if (kind === "tool_result") return { label: "",           color: "var(--viz-purple)" };
-      if (role === "user")        return { label: "USER",       color: "var(--viz-green)" };
-      if (role === "tool")        return { label: "",           color: "var(--viz-purple)" };
-      return { label: "ASSISTANT", color: "var(--brand-orange)" };
-    }
-
-    // partHasContent skips empties so we never draw a labelled block around
-    // nothing (e.g. an empty text part, or imported thinking whose content
-    // Claude Code didn't persist).
-    function partHasContent(p, kind) {
-      if (kind === "text") return !!(p.text || "").trim();
-      if (kind === "thinking") return !!(p.thinking || "").trim();
-      if (kind === "tool_call") return !!p.tool_call;
-      if (kind === "tool_result") return !!p.tool_result;
-      return false;
-    }
-
-    function MessageBubble({ msg }) {
-      const role = msg.role || "";
-      const parts = (msg.parts || []).map(p => ({ p, kind: partKind(p) })).filter(({ p, kind }) => partHasContent(p, kind));
-      if (parts.length === 0) return null;
-      return parts.map(({ p, kind }, i) => {
-        const meta = segMeta(role, kind);
-        return (
-          <div key={i} style={{ borderLeft: `2px solid ${meta.color}`, padding: "6px 12px", background: "var(--bg-canvas)", borderRadius: 2, marginBottom: 6 }}>
-            {meta.label && (
-              <div style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, color: meta.color, letterSpacing: "0.08em", marginBottom: 4 }}>{meta.label}</div>
-            )}
-            <MessagePart part={p}/>
-          </div>
-        );
-      });
-    }
-
-    // ThinkingPart collapses a thinking block to a single toggle line so
-    // an empty or long chain-of-thought doesn't take over the turn. The
-    // SDK doesn't record a per-part token count, so the line is just the
-    // label; expanding reveals the captured text.
-    function ThinkingPart({ text }) {
-      const [open, setOpen] = useState(false);
-      return (
-        <div>
-          <div onClick={() => setOpen(o => !o)} style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", color: "var(--viz-blue)", fontSize: 10, letterSpacing: "0.08em", fontFamily: "var(--fontFamilyMonospace)" }}>
-            <Icon name={open ? "chevron" : "cright"} size={10} style={{ color: "var(--viz-blue)" }}/>
-            REASONING
-          </div>
-          {open && <div style={{ fontSize: 12.5, color: "var(--fg2)", whiteSpace: "pre-wrap", marginTop: 6, fontStyle: "italic" }}>{text}</div>}
-        </div>
-      );
-    }
-
-    // CappedBlock renders a <pre> capped to ~208px with a bottom fade and
-    // a "Show all N lines" toggle once the content runs past the cap, so a
-    // single huge tool result (an ls/tree dump) can't stretch the page to
-    // thousands of pixels.
-    function CappedBlock({ children, lineCount, preStyle }) {
-      const [open, setOpen] = useState(false);
-      const base = { background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "8px 10px", margin: "4px 0 0", fontFamily: "var(--fontFamilyMonospace)", fontSize: 12, lineHeight: 1.6, color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-all", ...(preStyle || {}) };
-      if (lineCount <= 14 || open) {
-        return <pre style={base}>{children}</pre>;
+    function messageParts(messages) {
+      const out = [];
+      for (const message of (messages || [])) {
+        for (const part of (message.parts || [])) out.push(part);
       }
+      return out;
+    }
+
+    function resultParts(messages) {
+      return messageParts(messages)
+        .filter(part => partKind(part) === "tool_result" && part.tool_result)
+        .map(part => part.tool_result);
+    }
+
+    function outputCalls(gen) {
+      return messageParts((gen && gen.output) || [])
+        .filter(part => partKind(part) === "tool_call" && part.tool_call)
+        .map(part => part.tool_call);
+    }
+
+    function resolveResult(gen, next, call, used = new Set()) {
+      const sameGeneration = resultParts([].concat((gen && gen.output) || [], (gen && gen.input) || []));
+      const following = resultParts((next && next.input) || []);
+      const available = result => !used.has(result);
+      let result = null;
+      if (call.id) {
+        result = sameGeneration.find(item => available(item) && item.tool_call_id === call.id)
+          || following.find(item => available(item) && item.tool_call_id === call.id)
+          || null;
+      } else {
+        result = sameGeneration.find(item => available(item) && item.name && item.name === call.name)
+          || following.find(item => available(item) && item.name && item.name === call.name)
+          || null;
+      }
+      if (result) used.add(result);
+      return result;
+    }
+
+    function resultBody(result) {
+      if (!result) return "";
+      if (result.content) return result.content;
+      if (result.content_json == null) return "";
+      if (typeof result.content_json === "string") return result.content_json;
+      try { return JSON.stringify(result.content_json, null, 2); } catch (_) { return String(result.content_json); }
+    }
+
+    // IDE integrations and agent harnesses prepend one or more complete
+    // XML-ish blocks, with or without attributes: <user_info>, <rules>, and
+    // pi's <skill name="..." location="...">. Scan only from the start so
+    // markup inside the prompt does not move the split point.
+    // scanPreambleBlocks walks the complete blocks at the head of the text and
+    // reports where they end and what they were called. Names come from this
+    // walk rather than from a search for tags, because a skill body is full of
+    // angle-bracket words that are not blocks.
+    function scanPreambleBlocks(source) {
+      const tags = [];
+      let cursor = 0;
+      let end = 0;
+      while (cursor < source.length) {
+        while (cursor < source.length && /\s/.test(source[cursor])) cursor++;
+        const open = /^<([a-z_][a-z0-9_-]*)(?:\s[^>]*)?>/.exec(source.slice(cursor));
+        if (!open) break;
+        const close = `</${open[1]}>`;
+        const closeAt = source.indexOf(close, cursor + open[0].length);
+        if (closeAt < 0) break;
+        if (!tags.includes(open[1])) tags.push(open[1]);
+        cursor = closeAt + close.length;
+        end = cursor;
+      }
+      return { end, tags };
+    }
+
+    function splitPreamble(text) {
+      const source = String(text || "");
+      const scan = scanPreambleBlocks(source);
+      let end = scan.end;
+      if (scan.tags.length === 0) return { preamble: "", prompt: source };
+      while (end < source.length && /\s/.test(source[end])) end++;
+      const prompt = source.slice(end);
+      if (!prompt.trim()) return { preamble: "", prompt: source };
+      return { preamble: source.slice(0, end), prompt };
+    }
+
+    // Agent prose is markdown, and it is model output, so it is rendered the
+    // way the Agent Observability app plugin renders its own: markdown-to-jsx
+    // into a React tree, never innerHTML, with raw HTML parsing off so markup
+    // in the text shows up as text. The overrides below are ported from that
+    // plugin's MarkdownPreview, and web_test.go covers each of them.
+
+    // BlockedElement drops an element instead of rendering it. Every tag that
+    // can load a remote resource or run script is mapped to it, so the viewer
+    // cannot be made to phone home by a session it displays.
+    function BlockedElement() {
+      return null;
+    }
+
+    const MARKDOWN_BLOCKED_TAGS = [
+      "iframe", "video", "audio", "embed", "object", "source", "track", "base",
+      "script", "svg", "math", "style", "link", "form", "textarea", "select",
+      "button", "details", "dialog", "img",
+    ];
+
+    // markdownURL returns the href to render, or undefined to render the link
+    // with none. Relative forms pass through; everything else has to parse as
+    // a URL in one of four schemes, which is what rejects javascript:, data:,
+    // and vbscript:. Tabs, newlines and backslashes go first, because browsers
+    // strip them before resolving a URL and they can otherwise hide a scheme.
+    function markdownURL(input) {
+      if (!input) return undefined;
+      const raw = String(input).trim().replace(/[\t\r\n\\]/g, "");
+      if (!raw || raw.startsWith("//")) return undefined;
+      if (/^[/#?]/.test(raw) || raw.startsWith("./") || raw.startsWith("../")) return raw;
+      try {
+        const parsed = new URL(raw);
+        const allowed = ["http:", "https:", "mailto:", "tel:"];
+        return allowed.includes(parsed.protocol) ? parsed.toString() : undefined;
+      } catch (_) {
+        return undefined;
+      }
+    }
+
+    function SafeAnchor({ children, href, title }) {
+      return <a href={markdownURL(href)} title={title} target="_blank" rel="noopener noreferrer">{children}</a>;
+    }
+
+    function ScrollableTable({ children, ...props }) {
+      return <div style={{ overflowX: "auto" }}><table {...props}>{children}</table></div>;
+    }
+
+    function TaskListCheckbox({ type, checked }) {
+      if (type !== "checkbox") return null;
+      return <input type="checkbox" checked={Boolean(checked)} readOnly disabled/>;
+    }
+
+    const MARKDOWN_OPTIONS = {
+      overrides: {
+        ...Object.fromEntries(MARKDOWN_BLOCKED_TAGS.map(tag => [tag, { component: BlockedElement }])),
+        a: { component: SafeAnchor },
+        table: { component: ScrollableTable },
+        input: { component: TaskListCheckbox },
+      },
+      forceBlock: true,
+      disableParsingRawHTML: true,
+    };
+
+    // CappedBlock keeps large argument and result payloads inside the row that
+    // owns them. The complete text remains available through the scroll area.
+    function CappedBlock({ children, maxHeight = 180, preStyle }) {
       return (
-        <div style={{ position: "relative" }}>
-          <pre style={{ ...base, maxHeight: 208, overflow: "hidden" }}>{children}</pre>
-          <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 96, background: "linear-gradient(to bottom, transparent, var(--bg-primary))", display: "flex", alignItems: "flex-end", justifyContent: "center", paddingBottom: 8, pointerEvents: "none" }}>
-            <span onClick={() => setOpen(true)} style={{ pointerEvents: "auto", display: "inline-flex", alignItems: "center", gap: 6, height: 26, padding: "0 12px", background: "var(--bg-secondary)", border: "1px solid var(--border-medium)", borderRadius: 2, fontSize: 11, color: "var(--fg1)", cursor: "pointer" }}>
-              <Icon name="chevron" size={11} style={{ color: "var(--fg3)" }}/>Show all {lineCount} lines
-            </span>
-          </div>
-        </div>
+        <pre style={{
+          maxHeight, overflow: "auto", background: "var(--bg-primary)",
+          border: "1px solid var(--border-weak)", borderRadius: 8,
+          padding: "8px 10px", margin: 0,
+          fontFamily: "var(--fontFamilyMonospace)", fontSize: 11.5, lineHeight: 1.6,
+          color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-word",
+          ...(preStyle || {}),
+        }}>{children}</pre>
       );
     }
 
-    // toolCallArgPreview is the one-line essence of a tool call's input, shown
-    // on the collapsed chip: the command for Bash, else the first meaningful
-    // field (path/pattern/query/url), else the raw JSON — truncated.
     function toolCallArgPreview(input) {
       if (!input) return "";
       if (typeof input === "string") return input.length > 140 ? input.slice(0, 140) + "…" : input;
-      for (const k of ["command", "file_path", "path", "pattern", "query", "url", "cmd", "name"]) {
-        if (input[k] != null && input[k] !== "") return String(input[k]).replace(/\s+/g, " ");
+      for (const key of ["command", "file_path", "path", "pattern", "query", "url", "cmd", "name"]) {
+        if (input[key] != null && input[key] !== "") return String(input[key]).replace(/\s+/g, " ");
       }
-      try { const s = JSON.stringify(input); return s.length > 140 ? s.slice(0, 140) + "…" : s; } catch (_) { return ""; }
+      try {
+        const value = JSON.stringify(input);
+        return value.length > 140 ? value.slice(0, 140) + "…" : value;
+      } catch (_) {
+        return "";
+      }
     }
 
-    // ToolCallPart renders one tool call as a compact, collapse-first chip — an
-    // arrow, the tool name, and a one-line preview of its input — that expands
-    // on click to the full command/args.
-    function ToolCallPart({ tc }) {
-      const [show, setShow] = useState(false);
-      const input = tc.input_json || null;
-      const command = tc.name === "Bash" && input && typeof input === "object" && input.command ? input.command : "";
-      const description = tc.name === "Bash" && input && typeof input === "object" && input.description ? input.description : "";
-      const args = input ? (typeof input === "string" ? input : JSON.stringify(input, null, 2)) : "";
-      const preview = command || toolCallArgPreview(input);
-      const hasBody = !!(command || args);
+    function firstUserText(step) {
+      for (const message of (step.input || [])) {
+        if (message.role !== "user") continue;
+        for (const part of (message.parts || [])) {
+          if (partKind(part) === "text" && (part.text || "").trim()) return part.text;
+        }
+      }
+      return "";
+    }
 
+    function leadingAssistantText(step) {
+      for (const message of (step.output || [])) {
+        for (const part of (message.parts || [])) {
+          if (partKind(part) === "text") {
+            const text = (part.text || "").trim();
+            if (text) return text;
+          }
+        }
+      }
+      return "";
+    }
+
+    const tsMs = value => {
+      const time = value ? new Date(value).getTime() : 0;
+      return Number.isFinite(time) ? time : 0;
+    };
+
+    function agentShort(name) {
+      if (!name) return "main";
+      const slash = name.indexOf("/");
+      return slash === -1 ? name : name.slice(slash + 1);
+    }
+
+    function isSubagent(name) { return !!name && name.indexOf("/") !== -1; }
+
+    function agentColor(name) {
+      const short = agentShort(name);
+      if (!isSubagent(name)) return "var(--brand-orange)";
+      if (short.includes("explore")) return "var(--viz-blue)";
+      if (short.includes("general")) return "var(--viz-purple)";
+      if (short.includes("fork")) return "var(--viz-green)";
+      return "var(--viz-yellow)";
+    }
+
+    function buildSubagentForest(gens) {
+      const byId = new Map((gens || []).map(gen => [gen.generation_id, gen]));
+      const inConvParent = gen => {
+        const parentID = (gen.parent_generation_ids || [])[0];
+        return parentID && byId.has(parentID) ? byId.get(parentID) : null;
+      };
+      const runRootId = gen => {
+        let current = gen;
+        const seen = new Set();
+        for (;;) {
+          if (seen.has(current.generation_id)) return current.generation_id;
+          seen.add(current.generation_id);
+          const parent = inConvParent(current);
+          if (parent && (parent.agent_name || "") === (current.agent_name || "")) {
+            current = parent;
+            continue;
+          }
+          return current.generation_id;
+        }
+      };
+      const runs = new Map();
+      for (const gen of (gens || [])) {
+        const rootID = runRootId(gen);
+        let run = runs.get(rootID);
+        if (!run) {
+          run = { id: rootID, agent: (byId.get(rootID) || gen).agent_name, gens: [] };
+          runs.set(rootID, run);
+        }
+        run.gens.push(gen);
+      }
+      const spawnedBy = new Map();
+      const topRuns = [];
+      for (const run of runs.values()) {
+        run.gens.sort((a, b) => tsMs(a.started_at) - tsMs(b.started_at));
+        run.start = Math.min(...run.gens.map(gen => tsMs(gen.started_at) || Infinity));
+        run.end = Math.max(...run.gens.map(gen => tsMs(gen.completed_at) || tsMs(gen.started_at) || 0));
+        run.totalTokens = run.gens.reduce((sum, gen) => sum + (gen.total_tokens || 0), 0);
+        run.hasError = run.gens.some(gen => gen.call_error);
+        const parent = inConvParent(byId.get(run.id));
+        if (parent && (parent.agent_name || "") !== (run.agent || "")) {
+          if (!spawnedBy.has(parent.generation_id)) spawnedBy.set(parent.generation_id, []);
+          spawnedBy.get(parent.generation_id).push(run);
+        } else {
+          topRuns.push(run);
+        }
+      }
+      for (const children of spawnedBy.values()) children.sort((a, b) => a.start - b.start);
+      topRuns.sort((a, b) => a.start - b.start);
+      const depthSeen = new Set();
+      const setDepth = (run, depth) => {
+        if (depthSeen.has(run.id)) return;
+        depthSeen.add(run.id);
+        run.depth = depth;
+        run.gens.forEach(gen => (spawnedBy.get(gen.generation_id) || []).forEach(child => setDepth(child, depth + 1)));
+      };
+      topRuns.forEach(run => setDepth(run, 0));
+      return { runs, spawnedBy, topRuns, byId };
+    }
+
+    function flattenForest(forest) {
+      const out = [];
+      const seen = new Set();
+      const visit = (run, depth, path) => {
+        if (seen.has(run.id)) return;
+        seen.add(run.id);
+        const runPath = path.concat(run.id);
+        run.gens.forEach((gen, index) => {
+          out.push({ gen, depth, run, runPath, isRunStart: index === 0 && depth > 0 });
+          (forest.spawnedBy.get(gen.generation_id) || []).forEach(child => visit(child, depth + 1, runPath));
+        });
+      };
+      forest.topRuns.forEach(run => visit(run, 0, []));
+      forest.runs.forEach(run => { if (!seen.has(run.id)) visit(run, 0, []); });
+      out.forEach((row, index) => { row.n = index + 1; });
+      return out;
+    }
+
+    function stepTokenWork(gen) {
+      const buckets = (gen && gen.token_buckets) || {};
+      const generated = (buckets.output || 0) + (buckets.reasoning || 0);
+      const ingested = (buckets.fresh_input || 0) + (buckets.cache_write || 0);
+      return { generated, ingested, work: generated + ingested };
+    }
+
+    function mergedSpan(intervals) {
+      const sorted = intervals.filter(interval => interval[1] > interval[0]).sort((a, b) => a[0] - b[0]);
+      let total = 0;
+      let currentStart = -1;
+      let currentEnd = -1;
+      for (const [start, end] of sorted) {
+        if (start > currentEnd) {
+          if (currentEnd > currentStart) total += currentEnd - currentStart;
+          currentStart = start;
+          currentEnd = end;
+        } else {
+          currentEnd = Math.max(currentEnd, end);
+        }
+      }
+      if (currentEnd > currentStart) total += currentEnd - currentStart;
+      return total;
+    }
+
+    function argumentBody(input) {
+      if (input == null) return "";
+      if (typeof input === "string") return input;
+      try { return JSON.stringify(input, null, 2); } catch (_) { return String(input); }
+    }
+
+    function summarizeSubagentRun(run, forest, nextByID, consumedResults) {
+      const calls = [];
+      const errors = [];
+      let returned = "";
+      for (const gen of run.gens) {
+        const blocks = generationTranscriptBlocks(gen, nextByID.get(gen.generation_id), [], consumedResults);
+        for (const block of blocks) {
+          if (block.kind === "work") calls.push(...block.calls);
+          if (block.kind === "error") errors.push(block);
+          if (block.kind === "prose" && block.text.trim()) returned = block.text.trim();
+        }
+      }
+      const children = run.gens.flatMap(gen => forest.spawnedBy.get(gen.generation_id) || []);
+      return {
+        id: run.id,
+        agent: run.agent,
+        gens: run.gens,
+        calls,
+        errors,
+        task: firstUserText(run.gens[0]) || leadingAssistantText(run.gens[0]) || "Subagent run",
+        returned,
+        durationSec: Math.max(0, (run.end - run.start) / 1000),
+        failedCount: calls.filter(call => call.failed).length + errors.length,
+        childCount: children.length,
+      };
+    }
+
+    function generationTranscriptBlocks(gen, next, subruns, consumedResults = new Set()) {
+      const blocks = [];
+      let work = null;
+      let sawReasoning = false;
+      let reasoningIndex = 0;
+      let callIndex = 0;
+      // A generation times one model call, not each batch of tool calls it
+      // emitted, so only its first work block takes the duration.
+      let durationTaken = false;
+      const closeWork = () => { work = null; };
+      const ensureWork = () => {
+        if (!work) {
+          work = {
+            kind: "work",
+            id: `work-${gen.generation_id}-${blocks.length}`,
+            genIds: [gen.generation_id],
+            calls: [],
+            subruns: [],
+            durationSec: durationTaken ? 0 : Math.max(0, Number(gen.duration_seconds) || 0),
+          };
+          durationTaken = true;
+          blocks.push(work);
+        }
+        return work;
+      };
+
+      for (const message of (gen.output || [])) {
+        for (const part of (message.parts || [])) {
+          const kind = partKind(part);
+          if (kind === "tool_call" && part.tool_call) {
+            const call = part.tool_call;
+            const result = resolveResult(gen, next, call, consumedResults);
+            const row = {
+              key: `${gen.generation_id}:${callIndex++}`,
+              genId: gen.generation_id,
+              id: call.id || "",
+              name: call.name || "tool",
+              input: call.input_json == null ? null : call.input_json,
+              result,
+              failed: !!(result && result.is_error),
+            };
+            ensureWork().calls.push(row);
+            continue;
+          }
+          if (kind === "tool_result") continue;
+          closeWork();
+          if (kind === "text" && (part.text || "").trim()) {
+            blocks.push({ kind: "prose", text: part.text, genId: gen.generation_id });
+          } else if (kind === "thinking" && (part.thinking || "").trim()) {
+            sawReasoning = true;
+            blocks.push({ kind: "reasoning", id: `${gen.generation_id}:reasoning:${reasoningIndex++}`, text: part.thinking, genId: gen.generation_id, notRecorded: false });
+          }
+        }
+      }
+
+      if (gen.call_error) {
+        closeWork();
+        blocks.push({ kind: "error", id: `${gen.generation_id}:error`, text: gen.call_error, genId: gen.generation_id });
+      }
+      if (gen.thinking_enabled && !sawReasoning) {
+        blocks.unshift({ kind: "reasoning", id: `${gen.generation_id}:reasoning:0`, text: "", genId: gen.generation_id, notRecorded: true });
+      }
+      if (subruns.length > 0) {
+        let owner = null;
+        for (let index = blocks.length - 1; index >= 0; index--) {
+          if (blocks[index].kind === "work") { owner = blocks[index]; break; }
+        }
+        if (!owner) owner = ensureWork();
+        owner.subruns.push(...subruns);
+      }
+      return blocks;
+    }
+
+    function appendTranscriptBlocks(target, incoming) {
+      for (const block of incoming) {
+        const previous = target[target.length - 1];
+        if (previous && previous.kind === "work" && block.kind === "work") {
+          previous.calls.push(...block.calls);
+          previous.subruns.push(...block.subruns);
+          previous.genIds.push(...block.genIds);
+          previous.durationSec += block.durationSec;
+          continue;
+        }
+        target.push(block);
+      }
+    }
+
+    function buildTranscript(steps) {
+      const ordered = (steps || []).slice().sort((a, b) => tsMs(a.started_at) - tsMs(b.started_at));
+      const forest = buildSubagentForest(ordered);
+      const rows = flattenForest(forest);
+      const nextByID = new Map();
+      for (const run of forest.runs.values()) {
+        run.gens.forEach((gen, index) => nextByID.set(gen.generation_id, run.gens[index + 1] || null));
+      }
+      const previousTopLevelByAgent = new Map();
+      for (const gen of ordered) {
+        if (isSubagent(gen.agent_name)) continue;
+        const agent = gen.agent_name || "";
+        const previous = previousTopLevelByAgent.get(agent);
+        if (previous) nextByID.set(previous.generation_id, gen);
+        previousTopLevelByAgent.set(agent, gen);
+      }
+      const consumedResults = new Set();
+      const subrunSummary = new Map();
+      const summarizeRun = run => {
+        if (subrunSummary.has(run.id)) return subrunSummary.get(run.id);
+        const summary = summarizeSubagentRun(run, forest, nextByID, consumedResults);
+        subrunSummary.set(run.id, summary);
+        const children = run.gens.flatMap(gen => forest.spawnedBy.get(gen.generation_id) || []);
+        summary.failedCount += children.reduce((sum, child) => sum + summarizeRun(child).failedCount, 0);
+        return summary;
+      };
+      for (const run of forest.runs.values()) {
+        if (run.depth > 0) summarizeRun(run);
+      }
+
+      const turns = [];
+      let current = null;
+      const startTurn = (gen, userText) => ({
+        index: turns.length + 1,
+        startGenId: gen.generation_id,
+        userText,
+        userStartedAt: gen.started_at,
+        gens: [],
+        genIds: [],
+        blocks: [],
+      });
+      const finishTurn = turn => {
+        if (!turn || turn.gens.length === 0) return;
+        const starts = turn.gens.map(gen => tsMs(gen.started_at)).filter(Boolean);
+        const ends = turn.gens.map(gen => tsMs(gen.completed_at) || tsMs(gen.started_at)).filter(Boolean);
+        turn.start = starts.length ? Math.min(...starts) : 0;
+        turn.end = ends.length ? Math.max(...ends) : turn.start;
+        turn.durationSec = Math.max(0, (turn.end - turn.start) / 1000);
+        turn.toolCount = turn.gens.reduce((sum, gen) => sum + outputCalls(gen).length, 0);
+        turn.failedCount = turn.blocks.reduce((sum, block) => {
+          if (block.kind === "error") return sum + 1;
+          if (block.kind !== "work") return sum;
+          const failedCalls = block.calls.filter(call => call.failed).length;
+          const failedSubruns = block.subruns.reduce((subrunSum, run) => subrunSum + run.failedCount, 0);
+          return sum + failedCalls + failedSubruns;
+        }, 0);
+        turn.subrunCount = new Set(turn.gens.filter(gen => isSubagent(gen.agent_name)).map(gen => {
+          const row = rows.find(candidate => candidate.gen.generation_id === gen.generation_id);
+          return row ? row.run.id : gen.generation_id;
+        })).size;
+        turns.push(turn);
+      };
+
+      for (const row of rows) {
+        const userText = row.depth === 0 ? firstUserText(row.gen) : "";
+        if (row.depth === 0 && userText) {
+          finishTurn(current);
+          current = startTurn(row.gen, userText);
+        } else if (!current) {
+          current = startTurn(row.gen, userText);
+        }
+        current.gens.push(row.gen);
+        current.genIds.push(row.gen.generation_id);
+        if (row.depth === 0) {
+          const subruns = (forest.spawnedBy.get(row.gen.generation_id) || [])
+            .map(run => subrunSummary.get(run.id))
+            .filter(Boolean);
+          appendTranscriptBlocks(current.blocks, generationTranscriptBlocks(row.gen, nextByID.get(row.gen.generation_id), subruns, consumedResults));
+        }
+      }
+      finishTurn(current);
+      return turns;
+    }
+
+    function buildTranscriptMetrics(steps, turns) {
+      const intervals = [];
+      let startMs = Infinity;
+      let endMs = -Infinity;
+      const histogram = new Map();
+      let totalTokens = 0;
+      let usageAvailable = false;
+      for (const gen of (steps || [])) {
+        const start = tsMs(gen.started_at);
+        const end = tsMs(gen.completed_at) || start;
+        if (start) startMs = Math.min(startMs, start);
+        if (end) endMs = Math.max(endMs, end);
+        if (start > 0 && end > start) intervals.push([start, end]);
+        const tokens = Number(gen.total_tokens) || 0;
+        totalTokens += tokens;
+        if (tokens > 0) usageAvailable = true;
+        for (const call of outputCalls(gen)) histogram.set(call.name || "tool", (histogram.get(call.name || "tool") || 0) + 1);
+      }
+      if (!Number.isFinite(startMs)) startMs = 0;
+      if (!Number.isFinite(endMs)) endMs = startMs;
+      const wallMs = Math.max(0, endMs - startMs);
+      const workingMs = mergedSpan(intervals);
+      let longestIdle = null;
+      const chronological = (turns || []).filter(turn => turn.start > 0 && turn.end >= turn.start).sort((a, b) => a.start - b.start);
+      for (let index = 1; index < chronological.length; index++) {
+        const durationMs = Math.max(0, chronological[index].start - chronological[index - 1].end);
+        if (durationMs > 0 && (!longestIdle || durationMs > longestIdle.durationMs)) {
+          longestIdle = { durationMs, turn: chronological[index] };
+        }
+      }
+      return {
+        startMs,
+        endMs,
+        wallMs,
+        workingMs,
+        idleMs: Math.max(0, wallMs - workingMs),
+        longestIdle,
+        usageAvailable,
+        totalTokens,
+        toolHistogram: [...histogram.entries()]
+          .map(([name, count]) => ({ name, count }))
+          .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+      };
+    }
+
+    // promptLine is the first line of what was asked, for the sticky header.
+    // The agent's answer is far longer than the prompt, so by the time you are
+    // reading it the question has scrolled away; the header carries it along.
+    function promptLine(turn) {
+      const prompt = splitPreamble(turn.userText).prompt || "";
+      const line = prompt.split("\n").map(part => part.trim()).find(Boolean) || "";
+      return line.length > 120 ? line.slice(0, 120) + "…" : line;
+    }
+
+    // The turn rule and the speaker labels stack into two sticky lines under
+    // the session bar, so which turn you are in, what you asked, and which
+    // block you are reading stay on screen however long the answer runs. Both
+    // rows are fixed-height, because the second one's offset is the first
+    // one's height.
+    const TURN_RULE_H = 32;
+    const SPEAKER_H = 26;
+
+    function TurnRule({ turn, slowest, first }) {
+      const asked = promptLine(turn);
       return (
-        <div style={{ marginTop: 4, position: "relative" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button onClick={() => hasBody && setShow(s => !s)}
-              style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 7, background: "transparent", border: "none", padding: 0, cursor: hasBody ? "pointer" : "default", textAlign: "left", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11 }}>
-              {hasBody && <Icon name={show ? "chevron" : "cright"} size={10} style={{ color: "var(--fg3)", flex: "none" }}/>}
-              <span style={{ color: "var(--warning-text)", fontSize: 9.5, letterSpacing: "0.08em", flex: "none" }}>OUT</span>
-              <span style={{ color: "var(--fg1)", fontWeight: 600, flex: "none" }}>{tc.name}</span>
-              {preview && <span style={{ color: "var(--fg3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{preview}</span>}
+        // A sticky box can only stick inside its own parent, so this row is a
+        // direct child of the turn section rather than a wrapper's child, and
+        // the gap above it is its own margin.
+        <div style={{
+          position: "sticky", top: HEADER_H + 46, zIndex: 3, height: TURN_RULE_H,
+          marginTop: first ? 0 : 20,
+          display: "flex", alignItems: "center", gap: 10,
+          background: "var(--bg-canvas)",
+        }}>
+          <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, letterSpacing: "0.1em", color: "var(--fg3)", whiteSpace: "nowrap" }}>TURN {turn.index}</span>
+          {asked && (
+            <span title={asked} style={{ minWidth: 0, flex: "0 1 auto", color: "var(--fg2)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{asked}</span>
+          )}
+          <span style={{ flex: 1, height: 1, background: "var(--border-weak)" }}/>
+          <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: slowest ? "var(--warning-text)" : "var(--fg3)", whiteSpace: "nowrap" }}>
+            {formatDuration(turn.durationSec)}{slowest ? " · slowest turn" : ` · ${turn.toolCount} ${turn.toolCount === 1 ? "tool" : "tools"}`}
+          </span>
+          {turn.failedCount > 0 && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--error-text)", whiteSpace: "nowrap" }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--error-text)" }}/>
+              {turn.failedCount} failed
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    // Who is speaking is carried by one device: a labelled rule in that
+    // speaker's colour, pinned under the turn rule for as long as the block is
+    // on screen. The two colours are the brand orange and the timeline's blue,
+    // so neither collides with green for a passing call, red for a failure, or
+    // amber for the slowest turn.
+    const SPEAKERS = {
+      you:   { label: "YOU",   colour: "var(--brand-orange-text)", rule: "rgba(255,138,77," },
+      agent: { label: "AGENT", colour: "var(--viz-blue)",          rule: "rgba(87,148,242," },
+    };
+
+    function SpeakerLabel({ speaker, suffix }) {
+      const { label, colour, rule } = SPEAKERS[speaker];
+      return (
+        <div style={{
+          position: "sticky", top: HEADER_H + 46 + TURN_RULE_H, zIndex: 2, height: SPEAKER_H,
+          display: "flex", alignItems: "center", gap: 10, background: "var(--bg-canvas)",
+        }}>
+          <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, letterSpacing: "0.1em", color: colour, whiteSpace: "nowrap" }}>{label}</span>
+          {suffix && <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)", whiteSpace: "nowrap" }}>{suffix}</span>}
+          <span style={{ flex: 1, height: 1, background: `linear-gradient(to right, ${rule}0.45), ${rule}0.06) 55%, transparent)` }}/>
+        </div>
+      );
+    }
+
+    function PreambleChip({ text }) {
+      const [open, setOpen] = useState(false);
+      const tags = scanPreambleBlocks(String(text || "")).tags;
+      const lineCount = text ? text.replace(/\s+$/, "").split("\n").length : 0;
+      return (
+        <div style={{ marginBottom: 10 }}>
+          <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} style={{
+            maxWidth: "100%", display: "flex", alignItems: "center", gap: 6,
+            padding: "3px 9px", background: "rgba(204,204,220,0.04)",
+            border: "1px solid var(--border-weak)", borderRadius: 6,
+            color: "var(--fg3)", cursor: "pointer", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11,
+          }}>
+            <Icon name={open ? "chevron" : "cright"} size={10}/>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              preamble{tags.length > 0 ? ` · ${tags.join(", ")}` : ""} · {lineCount} {lineCount === 1 ? "line" : "lines"}
+            </span>
+          </button>
+          {open && (
+            <pre style={{
+              maxHeight: 220, overflow: "auto", margin: "6px 0 0", padding: "8px 10px",
+              background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 8,
+              color: "var(--fg2)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11.5,
+              lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+            }}>{text}</pre>
+          )}
+        </div>
+      );
+    }
+
+    function UserMessage({ turn }) {
+      const split = splitPreamble(turn.userText);
+      const lineCount = split.prompt ? split.prompt.split("\n").length : 0;
+      const clamp = lineCount > 6;
+      const [full, setFull] = useState(false);
+      return (
+        <div style={{ paddingBottom: 4 }}>
+          <SpeakerLabel speaker="you" suffix={formatTime(turn.userStartedAt)}/>
+          <div style={{ height: 4 }}/>
+          {split.preamble && <PreambleChip text={split.preamble}/>}
+          {split.prompt ? (
+            <div style={{
+              fontSize: 16, lineHeight: 1.55, color: "var(--fg-max)", whiteSpace: "pre-wrap", wordBreak: "break-word",
+              ...(clamp && !full ? { display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden" } : {}),
+            }}>{split.prompt}</div>
+          ) : (
+            <div style={{ color: "var(--fg3)", fontSize: 12, fontFamily: "var(--fontFamilyMonospace)" }}>
+              No user message content captured.
+            </div>
+          )}
+          {clamp && (
+            <button type="button" onClick={() => setFull(value => !value)} style={{ marginTop: 7, padding: 0, background: "transparent", border: "none", color: "var(--fg3)", cursor: "pointer", fontSize: 11.5 }}
+              onMouseEnter={event => event.currentTarget.style.color = "var(--fg1)"}
+              onMouseLeave={event => event.currentTarget.style.color = "var(--fg3)"}>
+              {full ? "Show less" : `Show full message · ${lineCount} lines`}
             </button>
+          )}
+        </div>
+      );
+    }
+
+    function ProseBlock({ text }) {
+      // The vendored script sets the global. If it failed to load, show the
+      // text rather than nothing: reading the transcript is the whole point.
+      const Markdown = typeof window !== "undefined" && window.MarkdownToJSX ? window.MarkdownToJSX.Markdown : null;
+      if (!Markdown) {
+        return <div style={{ fontSize: 14.5, lineHeight: 1.68, color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-word", marginBottom: 12 }}>{text}</div>;
+      }
+      return (
+        <div className="sigil-md" style={{ marginBottom: 12 }}>
+          <Markdown options={MARKDOWN_OPTIONS}>{String(text || "")}</Markdown>
+        </div>
+      );
+    }
+
+    function ReasoningBlock({ block, open, onToggle }) {
+      if (block.notRecorded) {
+        return (
+          <div title="The model reasoned on this call, but the host did not persist the reasoning text." style={{ display: "inline-flex", alignItems: "center", gap: 6, paddingBottom: 10, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11 }}>
+            <Icon name="info" size={10}/>
+            reasoning, not recorded
           </div>
-          {show && description && <div style={{ marginTop: 4, color: "var(--fg2)", fontSize: 12 }}>{description}</div>}
-          {show && (command ? (
-            <CappedBlock lineCount={command.split("\n").length}><span style={{ color: "var(--warning-text)" }}>$</span> {command}</CappedBlock>
-          ) : args && (
-            <CappedBlock lineCount={args.split("\n").length} preStyle={{ fontSize: 11 }}>{args}</CappedBlock>
+        );
+      }
+      return (
+        <div>
+          <button type="button" onClick={onToggle} aria-expanded={open} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "0 0 10px", background: "transparent", border: "none", color: "var(--viz-blue)", cursor: "pointer", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11 }}>
+            <Icon name={open ? "chevron" : "cright"} size={10}/>
+            Reasoning
+          </button>
+          {open && (
+            <div style={{ borderLeft: "2px solid var(--viz-blue)", padding: "2px 0 2px 12px", marginBottom: 12, color: "var(--fg2)", fontSize: 13, lineHeight: 1.6, fontStyle: "italic", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {block.text}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function CallErrorBlock({ block, compact = false }) {
+      return (
+        <div role="alert" style={{ marginBottom: compact ? 0 : 12, padding: compact ? "9px 10px" : "10px 12px", borderLeft: "2px solid var(--error-main)", borderRadius: compact ? 0 : "0 8px 8px 0", background: "rgba(209,14,92,0.05)", color: "var(--error-text)" }}>
+          <div style={{ marginBottom: 5, fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, letterSpacing: "0.08em" }}>MODEL CALL FAILED</div>
+          <div style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: compact ? 10.5 : 11.5, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{block.text}</div>
+        </div>
+      );
+    }
+
+    function SuccessGlyph() {
+      return <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--viz-green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m5 13 4 4L19 7"/></svg>;
+    }
+
+    function FailureGlyph() {
+      return <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--error-text)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>;
+    }
+
+    function ToolRow({ call, compact = false }) {
+      const body = resultBody(call.result);
+      const resolved = !!call.result;
+      const lineCount = resolved ? (body ? body.split("\n").length : 0) : 0;
+      const [open, setOpen] = useState(call.failed);
+      useEffect(() => { if (call.failed) setOpen(true); }, [call.failed]);
+      const args = argumentBody(call.input);
+      const statusLabel = !resolved ? "" : call.failed ? `error · ${lineCount} ${lineCount === 1 ? "line" : "lines"}` : `${lineCount} ${lineCount === 1 ? "line" : "lines"}`;
+      const rowHeight = compact ? 28 : 30;
+      return (
+        <React.Fragment>
+          <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} style={{
+            width: "100%", display: "grid", gridTemplateColumns: compact ? "14px 84px 1fr auto" : "14px 92px 1fr auto",
+            alignItems: "center", gap: compact ? 8 : 10, padding: compact ? "0 10px" : "0 12px", height: rowHeight,
+            cursor: "pointer", border: "none", borderBottom: "1px solid var(--border-weak)",
+            borderLeft: call.failed ? "2px solid var(--error-main)" : "2px solid transparent",
+            background: call.failed ? "rgba(209,14,92,0.05)" : "transparent", textAlign: "left",
+            fontFamily: "var(--fontFamilyMonospace)",
+          }}
+          onMouseEnter={event => event.currentTarget.style.background = call.failed ? "rgba(209,14,92,0.09)" : "rgba(204,204,220,0.03)"}
+          onMouseLeave={event => event.currentTarget.style.background = call.failed ? "rgba(209,14,92,0.05)" : "transparent"}>
+            <span style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>{resolved ? (call.failed ? <FailureGlyph/> : <SuccessGlyph/>) : null}</span>
+            <span style={{ color: "var(--fg1)", fontSize: compact ? 11 : 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{call.name}</span>
+            <span style={{ color: call.failed ? "var(--error-text)" : "var(--fg2)", fontSize: compact ? 11 : 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{toolCallArgPreview(call.input)}</span>
+            <span style={{ color: call.failed ? "var(--error-text)" : "var(--fg3)", fontSize: compact ? 10.5 : 11, whiteSpace: "nowrap" }}>{statusLabel}</span>
+          </button>
+          {open && (
+            <div style={{ background: "var(--bg-canvas)", padding: compact ? "8px 10px 10px 32px" : "10px 12px 12px 36px", borderBottom: "1px solid var(--border-weak)" }}>
+              {args && (
+                <div style={{ marginBottom: resolved ? 10 : 0 }}>
+                  <div style={{ marginBottom: 6, fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, letterSpacing: "0.08em", color: "var(--fg3)" }}>ARGUMENTS</div>
+                  <CappedBlock>{args}</CappedBlock>
+                </div>
+              )}
+              {resolved && (
+                <div>
+                  <div style={{ marginBottom: 6, fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, letterSpacing: "0.08em", color: call.failed ? "var(--error-text)" : "var(--fg3)" }}>
+                    RESULT · {lineCount} {lineCount === 1 ? "line" : "lines"}
+                  </div>
+                  <CappedBlock preStyle={call.failed ? { color: "var(--error-text)" } : undefined}>{body}</CappedBlock>
+                </div>
+              )}
+            </div>
+          )}
+        </React.Fragment>
+      );
+    }
+
+    function SubagentRun({ run }) {
+      const [open, setOpen] = useState(false);
+      const color = agentColor(run.agent);
+      const summary = String(run.task || "").replace(/\s+/g, " ");
+      return (
+        <div style={{ borderBottom: "1px solid var(--border-weak)" }}>
+          <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} style={{ width: "100%", height: 30, padding: "0 12px", display: "flex", alignItems: "center", gap: 8, border: "none", borderLeft: `2px solid ${color}`, background: "rgba(87,148,242,0.04)", cursor: "pointer", textAlign: "left" }}>
+            <Icon name={open ? "chevron" : "cright"} size={11} style={{ color: "var(--fg3)" }}/>
+            <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11.5, color: "var(--fg1)", whiteSpace: "nowrap" }}>{agentShort(run.agent)}</span>
+            <span style={{ minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg3)", fontSize: 11.5 }}>subagent · {summary}</span>
+            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: run.failedCount ? "var(--error-text)" : "var(--fg3)", whiteSpace: "nowrap" }}>{run.calls.length} tools · {formatDuration(run.durationSec)}</span>
+          </button>
+          {open && (
+            <div style={{ borderLeft: `2px solid ${color}`, paddingLeft: 18, background: "var(--bg-canvas)" }}>
+              {run.calls.map(call => <ToolRow key={call.key} call={call} compact/>)}
+              {run.errors.map(error => <CallErrorBlock key={error.id} block={error} compact/>)}
+              {run.childCount > 0 && <div style={{ padding: "8px 10px", color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 10.5 }}>{run.childCount} nested {run.childCount === 1 ? "run" : "runs"}</div>}
+              {run.returned && <div style={{ padding: "9px 10px 11px", color: "var(--fg2)", fontSize: 12.5, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{run.returned}</div>}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function WorkGroup({ block, open, onToggle }) {
+      const failedCount = block.calls.filter(call => call.failed).length;
+      const large = block.calls.length > 40;
+      const subCount = block.subruns.length;
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 14 }}>
+          <button type="button" onClick={onToggle} aria-expanded={open} style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "0 0 4px", border: "none", background: "transparent", cursor: "pointer", textAlign: "left" }}>
+            <Icon name={open ? "chevron" : "cright"} size={11} style={{ color: "var(--fg3)" }}/>
+            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg2)", whiteSpace: "nowrap" }}>
+              {block.calls.length} {block.calls.length === 1 ? "tool" : "tools"}{large && !open ? " - collapsed" : ""}
+            </span>
+            {block.durationSec > 0 && <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)", whiteSpace: "nowrap" }}>· {formatDuration(block.durationSec)}</span>}
+            {failedCount > 0 && <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--error-text)", whiteSpace: "nowrap" }}>· {failedCount} failed</span>}
+            {subCount > 0 && <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)", whiteSpace: "nowrap" }}>· {subCount} {subCount === 1 ? "subagent" : "subagents"}</span>}
+            <span style={{ flex: 1, height: 1, background: "var(--border-weak)" }}/>
+          </button>
+          {open && (
+            <div style={{ border: "1px solid var(--border-weak)", borderRadius: 8, background: "var(--bg-canvas)", overflow: "hidden" }}>
+              {block.calls.map(call => <ToolRow key={call.key} call={call}/>)}
+              {block.subruns.map(run => <SubagentRun key={run.id} run={run}/>)}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function AgentBlock({ turn, openGroups, toggleGroup, openReasoning, toggleReasoning }) {
+      return (
+        <div style={{ marginTop: 10, paddingBottom: 2 }}>
+          <SpeakerLabel speaker="agent"/>
+          <div style={{ height: 6 }}/>
+          {turn.blocks.length === 0 && (
+            <div style={{ color: "var(--fg3)", fontSize: 12, fontFamily: "var(--fontFamilyMonospace)", paddingBottom: 10 }}>
+              No message content captured. Re-run with <code style={{ color: "var(--fg1)" }}>SIGIL_CONTENT_CAPTURE_MODE=full</code> to record prompts and responses.
+            </div>
+          )}
+          {turn.blocks.map((block, index) => {
+            if (block.kind === "prose") return <ProseBlock key={`p${block.genId}-${index}`} text={block.text}/>;
+            if (block.kind === "reasoning") {
+              return <ReasoningBlock key={block.id} block={block} open={openReasoning.has(block.id)} onToggle={() => toggleReasoning(block.id)}/>;
+            }
+            if (block.kind === "error") return <CallErrorBlock key={block.id} block={block}/>;
+            return <WorkGroup key={block.id} block={block} open={openGroups.has(block.id)} onToggle={() => toggleGroup(block.id)}/>;
+          })}
+        </div>
+      );
+    }
+
+    // TurnPager is the thread's left rail: two dimmed controls that step to
+    // the turn before or after the one on screen. It sticks under the session
+    // bar so it stays reachable in a session with many turns.
+    function TurnPager({ turns, activeTurn, onJump }) {
+      const index = Math.max(0, turns.findIndex(turn => turn.index === activeTurn));
+      const steps = [
+        { label: "previous", rotate: 180, turn: index > 0 ? turns[index - 1] : null },
+        { label: "next", rotate: 0, turn: index < turns.length - 1 ? turns[index + 1] : null },
+      ];
+      return (
+        <div style={{ position: "sticky", top: HEADER_H + 46 + 28, display: "flex", flexDirection: "column", gap: 8 }}>
+          {steps.map(step => (
+            <button type="button" key={step.label} disabled={!step.turn}
+              onClick={() => step.turn && onJump(step.turn.startGenId)}
+              title={step.turn ? `Go to turn ${step.turn.index}` : `No ${step.label} turn`}
+              style={{
+                display: "flex", alignItems: "center", gap: 4, padding: "3px 0",
+                background: "transparent", border: "none", textAlign: "left",
+                color: "var(--fg3)", opacity: step.turn ? 1 : 0.35,
+                cursor: step.turn ? "pointer" : "default",
+                fontFamily: "var(--fontFamilyMonospace)", fontSize: 10.5,
+              }}
+              onMouseEnter={event => { if (step.turn) event.currentTarget.style.color = "var(--fg1)"; }}
+              onMouseLeave={event => { event.currentTarget.style.color = "var(--fg3)"; }}>
+              <Icon name="chevron" size={12} style={{ transform: `rotate(${step.rotate}deg)`, flex: "none" }}/>
+              {step.label}
+            </button>
           ))}
         </div>
       );
     }
 
-    // MessagePart picks a renderer per part kind. Text and thinking are
-    // wrapped pre-line so newlines from the model render naturally;
-    // tool calls and tool results show a compact label + payload so the
-    // viewer reads a complete turn at a glance.
-    function MessagePart({ part }) {
-      const kind = part.kind || (part.text ? "text" : part.thinking ? "thinking" : part.tool_call ? "tool_call" : part.tool_result ? "tool_result" : "unknown");
-      if (kind === "text" && part.text) {
-        return (
-          <div style={{ fontSize: 13, color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{part.text}</div>
-        );
-      }
-      if (kind === "thinking" && part.thinking) {
-        return <ThinkingPart text={part.thinking}/>;
-      }
-      if (kind === "tool_call" && part.tool_call) {
-        return <ToolCallPart tc={part.tool_call}/>;
-      }
-      if (kind === "tool_result" && part.tool_result) {
-        return <ToolResultPart tr={part.tool_result}/>;
-      }
-      return null;
-    }
-
-    // ToolResultPart renders a tool result as a collapse-first chip matching the
-    // tool call: a left arrow, line count / error flag, and a one-line preview
-    // of the output, expanding on click to the full body. Errors open expanded
-    // since they're the thing you came to read.
-    function ToolResultPart({ tr }) {
-      const body = tr.content || (tr.content_json ? (typeof tr.content_json === "string" ? tr.content_json : JSON.stringify(tr.content_json)) : "");
-      const isErr = !!tr.is_error;
-      const [show, setShow] = useState(isErr);
-      const lineCount = body ? body.split("\n").length : 0;
-      const hasBody = !!body;
-      const firstLine = body ? body.split("\n").find(l => l.trim()) || "" : "";
-      return (
-        <div style={{ marginTop: 4 }}>
-          <button onClick={() => hasBody && setShow(s => !s)}
-            style={{ display: "flex", alignItems: "center", gap: 7, width: "100%", minWidth: 0, background: "transparent", border: "none", padding: 0, cursor: hasBody ? "pointer" : "default", textAlign: "left", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: isErr ? "var(--error-text)" : "var(--fg2)" }}>
-            {hasBody && <Icon name={show ? "chevron" : "cright"} size={10} style={{ color: "var(--fg3)", flex: "none" }}/>}
-            <span style={{ color: "var(--viz-green)", fontSize: 9.5, letterSpacing: "0.08em", flex: "none" }}>IN</span>
-            <span style={{ flex: "none" }}>result{lineCount > 0 ? <span style={{ color: "var(--fg3)" }}> · {lineCount} {lineCount === 1 ? "line" : "lines"}</span> : null}{isErr ? <span style={{ color: "var(--error-text)", marginLeft: 8 }}>error</span> : null}</span>
-            {!show && firstLine && <span style={{ color: "var(--fg3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{firstLine}</span>}
-          </button>
-          {show && body && <CappedBlock lineCount={lineCount} preStyle={{ fontSize: 11 }}>{body}</CappedBlock>}
-        </div>
-      );
-    }
-
-    // MessageThread renders the captured messages for one step. The API's
-    // messages field is already ordered for display, so tool calls appear
-    // before their matching results even though the raw SDK input/output split
-    // stores tool results on the input side. When no content is present
-    // (metadata-only capture), it shows a hint pointing at
-    // SIGIL_CONTENT_CAPTURE_MODE so the empty state is self-explanatory.
-    function MessageThread({ step }) {
-      const input = step.input || [];
-      const output = step.output || [];
-      const messages = (step.messages && step.messages.length > 0) ? step.messages : input.concat(output);
-      if (messages.length === 0) {
-        return (
-          <div style={{
-            color: "var(--fg3)", fontSize: 12,
-            fontFamily: "var(--fontFamilyMonospace)", marginBottom: 10,
-            padding: "8px 12px",
-            border: "1px dashed var(--border-weak)", borderRadius: 2,
-          }}>
-            No message content captured. Re-run with <code style={{ color: "var(--fg1)" }}>SIGIL_CONTENT_CAPTURE_MODE=full</code> to record prompts and responses.
-          </div>
-        );
-      }
-      return (
-        <div style={{ marginBottom: 10 }}>
-          {messages.map((m, i) => <MessageBubble key={`m${i}`} msg={m}/>)}
-        </div>
-      );
-    }
-
-    // StepTokenBar shows one step's disjoint token buckets: a thin
-    // proportional stacked bar plus labeled counts in the chart's series
-    // colors. Answers "did this step hit the prompt cache?" at a glance.
-    function StepTokenBar({ buckets }) {
-      if (!buckets) return null;
-      const parts = TOKEN_SERIES.map(s => ({ ...s, v: buckets[s.key] || 0 })).filter(p => p.v > 0);
-      const total = parts.reduce((acc, p) => acc + p.v, 0);
-      if (total === 0) return null;
-      return (
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ display: "flex", height: 4, borderRadius: 1, overflow: "hidden", marginBottom: 6 }}>
-            {parts.map(p => <span key={p.key} style={{ width: `${(p.v / total) * 100}%`, background: p.color }}/>)}
-          </div>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, fontFamily: "var(--fontFamilyMonospace)", color: "var(--fg2)" }}>
-            {parts.map(p => (
-              <span key={p.key} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                <span style={{ width: 8, height: 8, background: p.color, borderRadius: 1 }}/>
-                {p.label} <span style={{ color: "var(--fg1)" }}>{formatTokens(p.v)}</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
-    // firstUserText returns the fresh user prompt in a step's input — a
-    // user-role message with text — distinguishing a human turn from tool
-    // results (role "tool"). A generation is the assistant's response to its
-    // input, so the input carries the question that triggered the step.
-    function firstUserText(step) {
-      for (const m of (step.input || [])) {
-        if (m.role !== "user") continue;
-        for (const p of (m.parts || [])) {
-          if (p.kind === "text" && (p.text || "").trim()) return p.text.trim();
-        }
-      }
-      return "";
-    }
-
-    // stepGlance reduces a step to the one-line essence shown in a collapsed
-    // row, role-aware: a step triggered by a human prompt leads with that
-    // question (role "user"); otherwise it shows the assistant's work — the
-    // tool it ran as a chip plus its leading prose, or its final answer. This
-    // makes the thread scan as a real conversation: user asks → agent works →
-    // agent answers.
-    function stepGlance(step, i, total, skipUser) {
-      const userText = skipUser ? "" : firstUserText(step);
-      if (userText) return { role: "user", tool: "", text: userText, mono: false };
-      const tool = (step.tools && step.tools[0]) || "";
-      const prose = assistantSummaryText(step);
-      let text = prose || step.tool_preview || "";
-      if (!text) text = i === 0 ? "Initial prompt" : (i === total - 1 ? "Final response" : "Response");
-      return { role: "assistant", tool, text, mono: !prose && !!step.tool_preview };
-    }
-
-    // StepDetailBody is the expanded content of a step: a light meta line,
-    // the token split, any call error, the message thread, and a bare tool
-    // preview when no rendered tool calls carry it. Shared by the thread row
-    // and any other place that needs to show a step in full.
-    function StepDetailBody({ step }) {
-      const hasError = !!step.call_error;
-      const hasReasoning = (step.messages || step.output || []).some(m => (m.parts || []).some(p => (p.kind === "thinking" || p.thinking) && (p.thinking || "").trim()));
-      const reasonedNoText = step.thinking_enabled && !hasReasoning;
-      return (
-        <div style={{ padding: "12px 16px 16px", background: "var(--bg-canvas)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12, color: "var(--fg3)", fontSize: 11, fontFamily: "var(--fontFamilyMonospace)", flexWrap: "wrap" }}>
-            {step.model && <span style={{ color: "var(--fg2)" }}>{step.model}</span>}
-            <span>{formatTime(step.completed_at || step.started_at)}</span>
-            <span>{(step.tools || []).length} {(step.tools || []).length === 1 ? "tool" : "tools"}</span>
-            {step.provider && <span>{step.provider}</span>}
-            {step.stop_reason && <span>{step.stop_reason}</span>}
-            {hasReasoning && <span style={{ color: "var(--viz-blue)" }}>reasoning</span>}
-            {reasonedNoText && <span title="The model reasoned on this step, but Claude Code does not persist reasoning text to its transcript.">reasoning · not recorded</span>}
-          </div>
-          <StepTokenBar buckets={step.token_buckets}/>
-          {hasError && <div style={{ marginBottom: 10 }}><Notice kind="error" title="Call error">{step.call_error}</Notice></div>}
-          <MessageThread step={step}/>
-          {step.tool_preview && !(step.output || []).some(m => (m.parts || []).some(p => p.kind === "tool_call" || p.tool_call)) && (
-            <div style={{ background: "var(--bg-primary)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "8px 12px", marginTop: 10, fontFamily: "var(--fontFamilyMonospace)", fontSize: 12, color: "var(--fg2)", display: "flex", alignItems: "flex-start", gap: 8 }}>
-              <span style={{ color: "var(--warning-text)" }}>$</span>
-              <code style={{ color: "var(--fg1)", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{step.tool_preview}</code>
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    // StepCard is one row in the collapse-first thread list: a compact,
-    // scannable line (status dot, number, tool chip, summary, duration ·
-    // tokens) that expands inline to the full StepDetailBody. It lives inside
-    // a shared list container, so it draws only a bottom separator — no card
-    // chrome of its own. accent colours the status dot/active edge by agent.
-    function StepCard({ step, n, total, accent, expanded, onToggle, active, last, innerRef, flash, turnStart }) {
-      const hasError = !!step.call_error;
-      const glance = stepGlance(step, n - 1, total, turnStart);
-      const isUser = glance.role === "user";
-      const dot = hasError ? "var(--error-text)" : (accent || "var(--viz-green)");
-      const leftAccent = active ? "var(--brand-orange)" : (hasError ? "var(--error-main)" : (isUser ? "var(--viz-green)" : "transparent"));
-      return (
-        <div ref={innerRef} className={flash ? "sigil-step-flash" : undefined} style={{ borderBottom: last && !expanded ? "none" : "1px solid var(--border-weak)" }}>
-          <div onClick={onToggle} style={{
-            display: "grid", gridTemplateColumns: "auto auto 1fr auto auto", alignItems: "center", gap: 10,
-            padding: "0 12px", height: 34, cursor: "pointer",
-            borderLeft: `2px solid ${leftAccent}`,
-            background: active ? "var(--action-selected)" : (isUser ? "rgba(115,191,105,0.04)" : "transparent"),
-          }}
-          onMouseEnter={e => { if (!active) e.currentTarget.style.background = isUser ? "rgba(115,191,105,0.07)" : "rgba(204,204,220,0.03)"; }}
-          onMouseLeave={e => { if (!active) e.currentTarget.style.background = isUser ? "rgba(115,191,105,0.04)" : "transparent"; }}>
-            {isUser
-              ? <span style={{ width: 7, height: 7, borderRadius: "50%", border: "1.5px solid var(--viz-green)", boxSizing: "border-box", flexShrink: 0 }}/>
-              : <span style={{ width: 7, height: 7, borderRadius: "50%", background: dot, flexShrink: 0 }}/>}
-            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, color: "var(--fg3)", minWidth: 16, textAlign: "right" }}>{n}</span>
-            <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-              {isUser && (
-                <span style={{ flexShrink: 0, fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, letterSpacing: "0.06em", color: "var(--viz-green)", background: "rgba(115,191,105,0.1)", border: "1px solid rgba(115,191,105,0.25)", borderRadius: 2, padding: "0 6px", lineHeight: "16px" }}>USER</span>
-              )}
-              {!isUser && glance.tool && (
-                <span style={{ flexShrink: 0, fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg2)", background: "rgba(204,204,220,0.06)", border: "1px solid var(--border-weak)", borderRadius: 2, padding: "0 6px", lineHeight: "16px" }}>{glance.tool}</span>
-              )}
-              <span style={{ minWidth: 0, fontFamily: glance.mono ? "var(--fontFamilyMonospace)" : "var(--fontFamily)", fontSize: glance.mono ? 11.5 : 12.5, color: isUser ? "var(--fg-max)" : (glance.tool && glance.mono ? "var(--fg2)" : "var(--fg1)"), overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{glance.text}</span>
-            </span>
-            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)", display: "flex", gap: 10, whiteSpace: "nowrap", justifyContent: "flex-end" }}>
-              <span>{formatDuration(step.duration_seconds)}</span>
-              <span style={{ minWidth: 42, textAlign: "right" }}>{formatTokens(step.total_tokens)}</span>
-            </span>
-            <Icon name={expanded ? "chevron" : "cright"} size={12} style={{ color: "var(--fg3)" }}/>
-          </div>
-          {expanded && <StepDetailBody step={step}/>}
-        </div>
-      );
-    }
-
-    // TurnHeader is the banner that opens a user turn: the prompt lifted out
-    // of the step it rode in on, so the loop reads user → steps → user instead
-    // of a "USER" row that hid the assistant's work. The rollup is honest about
-    // the two numbers that differ in an agentic loop — billed (cumulative spend
-    // across the turn) vs ctx (the live context size, which only climbs).
-    function TurnHeader({ turn, last }) {
-      return (
-        <div style={{
-          display: "flex", alignItems: "flex-start", gap: 10,
-          padding: "10px 12px", borderBottom: last ? "none" : "1px solid var(--border-weak)",
-          borderLeft: "2px solid var(--viz-green)", background: "rgba(115,191,105,0.06)",
-        }}>
-          <span style={{ flexShrink: 0, marginTop: 1, fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, letterSpacing: "0.06em", color: "var(--viz-green)", background: "rgba(115,191,105,0.1)", border: "1px solid rgba(115,191,105,0.25)", borderRadius: 2, padding: "1px 6px", lineHeight: "16px" }}>USER</span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ color: "var(--fg-max)", fontSize: 13, lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{turn.userText}</div>
-            <div style={{ marginTop: 5, display: "flex", flexWrap: "wrap", gap: "2px 14px", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>
-              <span>turn {turn.index}</span>
-              <span>{turn.gens.length} {turn.gens.length === 1 ? "step" : "steps"}</span>
-              <span><span style={{ color: "var(--fg2)" }}>{formatTokens(turn.billed)}</span> billed</span>
-              <span><span style={{ color: "var(--fg2)" }}>{formatTokens(turn.generated)}</span> generated</span>
-              <span>ctx <span style={{ color: "var(--fg2)" }}>{formatTokens(turn.ctxIn)}</span></span>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // leadingAssistantText returns the step's first prose line — the assistant's
-    // narration that precedes any tool call (e.g. "Now let me explore the
-    // existing code structure."). It makes a far more legible rail label than
-    // the tool form, so it wins when present.
-    function leadingAssistantText(step) {
-      for (const m of (step.output || [])) {
-        for (const p of (m.parts || [])) {
-          if (p.kind === "text") {
-            const t = (p.text || "").trim();
-            if (t) return t;
-          }
-        }
-      }
-      return "";
-    }
-
-    // assistantSummaryText is the prose to label a step with: the narration that
-    // opens it, or the answer it ends on when it opens with a tool call.
-    // Cursor records a whole agentic run as one step, live and imported alike,
-    // so its answer sits under every tool call the run made. Half of those
-    // steps would otherwise read "Final response" or a shell command.
-    function assistantSummaryText(step) {
-      const leading = leadingAssistantText(step);
-      if (leading) return leading;
-      const out = step.output || [];
-      for (let i = out.length - 1; i >= 0; i--) {
-        const parts = out[i].parts || [];
-        for (let j = parts.length - 1; j >= 0; j--) {
-          if (parts[j].kind === "text") {
-            const t = (parts[j].text || "").trim();
-            if (t) return t;
-          }
-        }
-      }
-      return "";
-    }
-
-    // stepRailSummary picks a one-line label for a rail row: the assistant's
-    // leading prose when the step has any, else the first tool call's name +
-    // preview, else a position heuristic ("Initial prompt" / "Final response").
-    // mono renders the tool form in Roboto Mono; prose labels stay in Inter.
-    function stepRailSummary(step, i, total) {
-      const prose = assistantSummaryText(step);
-      if (prose) return { label: prose, mono: false };
-      const tool = (step.tools && step.tools[0]) || "";
-      if (tool) {
-        const preview = step.tool_preview ? ` · ${step.tool_preview}` : "";
-        return { label: `${tool}${preview}`, mono: true };
-      }
-      if (i === 0) return { label: "Initial prompt", mono: false };
-      if (i === total - 1) return { label: "Final response", mono: false };
-      return { label: "Response", mono: false };
-    }
-
-    // StepRail is the sticky left navigator for long traces. Each row
-    // mirrors a StepCard: number, a tool/prose summary, duration · tokens
-    // (warning on the slowest step, error on a failed one), and a status
-    // dot. Clicking a row expands and scrolls to that step.
-    // ── Subagent forest ────────────────────────────────────────────────
-    // Generations arrive as a flat chronological list. parent_generation_ids
-    // links each step to the one that caused it: a same-agent edge chains one
-    // agent's calls; a cross-agent edge (parent has a different agent_name) is
-    // a subagent launch. We fold same-agent chains into "runs" (so a 100-call
-    // subagent is one nesting level, not 100), then nest each run under the
-    // generation that spawned it. Main-agent calls have no parent, so each is
-    // its own top-level run — together they are the primary thread.
-
-    const tsMs = s => { const t = s ? new Date(s).getTime() : 0; return Number.isFinite(t) ? t : 0; };
-
-    // agentShort drops the "claude-code/" prefix; agentColor tints a subagent
-    // by kind so lanes/badges are scannable. The main agent keeps the brand.
-    function agentShort(name) {
-      if (!name) return "main";
-      const i = name.indexOf("/");
-      return i === -1 ? name : name.slice(i + 1);
-    }
-    function isSubagent(name) { return !!name && name.indexOf("/") !== -1; }
-    function agentColor(name) {
-      const s = agentShort(name);
-      if (!isSubagent(name)) return "var(--brand-orange)";
-      if (s.includes("explore")) return "var(--viz-blue)";
-      if (s.includes("general")) return "var(--viz-purple)";
-      if (s.includes("fork")) return "var(--viz-green)";
-      return "var(--viz-yellow)";
-    }
-
-    function buildSubagentForest(gens) {
-      const byId = new Map((gens || []).map(g => [g.generation_id, g]));
-      const inConvParent = g => {
-        const p = (g.parent_generation_ids || [])[0];
-        return p && byId.has(p) ? byId.get(p) : null;
-      };
-      // Run root: walk up while the parent shares this agent_name.
-      const runRootId = g => {
-        let cur = g; const seen = new Set();
-        for (;;) {
-          if (seen.has(cur.generation_id)) return cur.generation_id; // cycle guard
-          seen.add(cur.generation_id);
-          const p = inConvParent(cur);
-          if (p && (p.agent_name || "") === (cur.agent_name || "")) { cur = p; continue; }
-          return cur.generation_id;
-        }
-      };
-      const runs = new Map();
-      for (const g of (gens || [])) {
-        const rid = runRootId(g);
-        let run = runs.get(rid);
-        if (!run) { run = { id: rid, agent: (byId.get(rid) || g).agent_name, gens: [] }; runs.set(rid, run); }
-        run.gens.push(g);
-      }
-      const spawnedBy = new Map(); // parentGenId -> [run]
-      const topRuns = [];
-      for (const run of runs.values()) {
-        run.gens.sort((a, b) => tsMs(a.started_at) - tsMs(b.started_at));
-        run.start = Math.min(...run.gens.map(g => tsMs(g.started_at) || Infinity));
-        run.end = Math.max(...run.gens.map(g => tsMs(g.completed_at) || tsMs(g.started_at) || 0));
-        run.totalTokens = run.gens.reduce((a, g) => a + (g.total_tokens || 0), 0);
-        run.hasError = run.gens.some(g => g.call_error);
-        // Only a cross-agent parent is a real spawn. A same-agent parent on a
-        // run root only happens when parent_generation_ids has a cycle (the
-        // run-root walk bailed on the guard); treat those as top-level so no
-        // run is orphaned.
-        const sp = inConvParent(byId.get(run.id));
-        if (sp && (sp.agent_name || "") !== (run.agent || "")) {
-          if (!spawnedBy.has(sp.generation_id)) spawnedBy.set(sp.generation_id, []);
-          spawnedBy.get(sp.generation_id).push(run);
-        } else {
-          topRuns.push(run);
-        }
-      }
-      for (const arr of spawnedBy.values()) arr.sort((a, b) => a.start - b.start);
-      topRuns.sort((a, b) => a.start - b.start);
-      const setDepth = (run, d) => {
-        run.depth = d;
-        run.gens.forEach(g => (spawnedBy.get(g.generation_id) || []).forEach(c => setDepth(c, d + 1)));
-      };
-      topRuns.forEach(r => setDepth(r, 0));
-      return { runs, spawnedBy, topRuns, byId };
-    }
-
-    // flattenForest walks the forest depth-first into render rows. Each row
-    // carries its nesting depth, owning run, the run-id path to it (for
-    // collapse), and isRunStart (true on a subagent run's first step, where
-    // the group header is drawn). Number = 1-based DFS order, stable across
-    // collapse, shared by the rail and the cards.
-    function flattenForest(forest) {
-      const out = [];
-      const seen = new Set(); // guards against cross-agent parent cycles
-      const visit = (run, depth, path) => {
-        if (seen.has(run.id)) return;
-        seen.add(run.id);
-        const rp = path.concat(run.id);
-        run.gens.forEach((gen, i) => {
-          out.push({ gen, depth, run, runPath: rp, isRunStart: i === 0 && depth > 0 });
-          (forest.spawnedBy.get(gen.generation_id) || []).forEach(child => visit(child, depth + 1, rp));
-        });
-      };
-      forest.topRuns.forEach(r => visit(r, 0, []));
-      // Belt-and-suspenders: any run not reached above (cycle-orphaned) is
-      // emitted at top level, so no generation is ever dropped from the view.
-      forest.runs.forEach(r => { if (!seen.has(r.id)) visit(r, 0, []); });
-      out.forEach((row, i) => { row.n = i + 1; });
-      return out;
-    }
-
-    // subagentRuns returns every spawned run (depth > 0) ordered by start —
-    // the timeline's non-main lanes.
-    function subagentRuns(forest) {
-      return [...forest.runs.values()].filter(r => r.depth > 0).sort((a, b) => a.start - b.start);
-    }
-
-    // stepTokenWork splits a step's tokens into what it actually did,
-    // excluding cache_read. cache_read is just the reused context size — it
-    // climbs monotonically through a run, so total_tokens is a misleading
-    // "biggest step" signal (it's almost always a late step). generated is
-    // what the model produced; ingested is new content the step pulled into
-    // context (a big file read, fresh prompt); work is the sum.
-    function stepTokenWork(gen) {
-      const tb = (gen && gen.token_buckets) || {};
-      const generated = (tb.output || 0) + (tb.reasoning || 0);
-      const ingested = (tb.fresh_input || 0) + (tb.cache_write || 0);
-      return { generated, ingested, work: generated + ingested };
-    }
-
-
-    // Hotspots is the "what's worth looking at" strip above the thread: a
-    // clickable chip for any errors, the slowest step, and the most
-    // token-hungry step. Each jumps to that step. This surfaces the outliers
-    // that a per-step minimap encoding can't on a long trace.
-    function Hotspots({ hot, onJump }) {
-      const chip = (color, head, sub, onClick) => (
-        <button onClick={onClick} title="Jump to this step" style={{
-          display: "inline-flex", alignItems: "center", gap: 6, height: 24, padding: "0 9px",
-          borderRadius: 12, cursor: "pointer", background: "transparent",
-          border: `1px solid ${color}`, color: "var(--fg1)", fontFamily: "var(--fontFamily)", fontSize: 11.5,
-        }}
-        onMouseEnter={e => e.currentTarget.style.background = "rgba(204,204,220,0.05)"}
-        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: color, flexShrink: 0 }}/>
-          <span style={{ color: "var(--fg2)" }}>{head}</span>
-          <span style={{ fontFamily: "var(--fontFamilyMonospace)", color: "var(--fg1)" }}>{sub}</span>
-        </button>
-      );
-      const r = (row, extra) => `#${row.n} · ${extra}`;
-      return (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 11, color: "var(--fg3)" }}>Hotspots</span>
-          {hot.errors.length > 0 && chip("var(--error-text)", hot.errors.length === 1 ? "error" : `${hot.errors.length} errors`, `#${hot.errors[0].n}`, () => onJump(hot.errors[0].gen.generation_id))}
-          {chip("var(--warning-text)", "slowest", r(hot.slowest, formatDuration(hot.slowest.gen.duration_seconds)), () => onJump(hot.slowest.gen.generation_id))}
-          {chip("var(--viz-orange)", "most generated", r(hot.mostGenerated, formatTokens(stepTokenWork(hot.mostGenerated.gen).generated)), () => onJump(hot.mostGenerated.gen.generation_id))}
-          {chip("var(--viz-blue)", "most read", r(hot.mostRead, formatTokens(stepTokenWork(hot.mostRead.gen).ingested)), () => onJump(hot.mostRead.gen.generation_id))}
-        </div>
-      );
-    }
-
-    // TimelineView is the trace waterfall: a shared time axis with one lane
-    // for the main agent and one per subagent run, each bar a generation
-    // positioned by its real start/end. Concurrent subagents show as bars
-    // overlapping in time — the one thing the vertical thread can't express.
-    // Clicking a bar jumps to that step in the tree.
-    // mergedSpan returns the total wall time covered by at least one call
-    // (intervals unioned), so idle gaps between calls can be reported.
-    function mergedSpan(intervals) {
-      const iv = intervals.filter(x => x[1] > x[0]).sort((a, b) => a[0] - b[0]);
-      let total = 0, curS = -1, curE = -1;
-      for (const [s, e] of iv) {
-        if (s > curE) { if (curE > curS) total += curE - curS; curS = s; curE = e; }
-        else curE = Math.max(curE, e);
-      }
-      if (curE > curS) total += curE - curS;
-      return total;
-    }
-    // peakConcurrency is the most calls in flight at once — the timeline's
-    // headline number for parallelism.
-    function peakConcurrency(intervals) {
-      const ev = [];
-      intervals.forEach(([s, e]) => { if (e > s) { ev.push([s, 1]); ev.push([e, -1]); } });
-      ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-      let cur = 0, peak = 0;
-      for (const [, d] of ev) { cur += d; peak = Math.max(peak, cur); }
-      return peak;
-    }
-
-    // TimelineTooltip is the floating card shown while hovering a step bar or
-    // a turn marker. It follows the cursor (fixed-positioned, clamped to the
-    // viewport) and never intercepts pointer events.
-    function TimelineTooltip({ tip }) {
-      const W = tip.kind === "turn" ? 300 : 268;
-      const left = Math.min(tip.x + 14, window.innerWidth - W - 8);
-      const top = Math.min(tip.y + 14, window.innerHeight - 180);
-      const box = { position: "fixed", left, top, width: W, zIndex: 60, background: "var(--bg-canvas)", border: "1px solid var(--border-medium)", borderRadius: 4, padding: "9px 11px", boxShadow: "0 6px 22px rgba(0,0,0,0.5)", pointerEvents: "none" };
-      const row = (k, v, c) => (
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 18 }}>
-          <span style={{ color: "var(--fg3)", fontSize: 11.5 }}>{k}</span>
-          <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 12, color: c || "var(--fg1)" }}>{v}</span>
-        </div>
-      );
-      if (tip.kind === "turn") {
-        const t = tip.turn;
-        return (
-          <div style={box}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-              <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontWeight: 600, fontSize: 12, color: "var(--fg-max)" }}>Turn {t.index}</span>
-              <span style={{ marginLeft: "auto", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>{t.gens.length} steps · {formatTokens(t.billed)} billed</span>
-            </div>
-            <div style={{ fontSize: 11.5, color: "var(--fg2)", display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{t.userText}</div>
-          </div>
-        );
-      }
-      const g = tip.gen, work = stepTokenWork(g), model = (g.model || "").replace(/-(20)?\d{6,8}.*$/, "").replace(/^claude-/, "");
-      return (
-        <div style={box}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: agentColor(g.agent_name) }}/>
-            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontWeight: 600, fontSize: 12, color: "var(--fg-max)" }}>{agentShort(g.agent_name)}</span>
-            <span style={{ marginLeft: "auto", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>step #{tip.n}</span>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-            {model && row("model", model)}
-            {row("started", formatTime(g.started_at))}
-            {row("duration", formatDuration(g.duration_seconds))}
-            {row("generated", `↑ ${formatTokens(work.generated)}`, "var(--viz-orange)")}
-            {row("ingested", `↓ ${formatTokens(work.ingested)}`, "var(--viz-blue)")}
-            {row("billed", formatTokens(g.total_tokens))}
-            {g.tools && g.tools.length > 0 && row("tools", g.tools.slice(0, 4).join(", "))}
-            {tip.turnIndex && row("turn", `T${tip.turnIndex}`)}
-            {g.call_error && row("status", "error", "var(--error-text)")}
-          </div>
-        </div>
-      );
-    }
-
-    // TimelineView is the trace waterfall: one lane for the main agent and one
-    // per subagent run, each step a bar positioned along a *compressed* clock —
-    // long idle gaps between calls collapse to a thin dashed break so the bars
-    // fill the width instead of clumping. Concurrent subagents overlap in time,
-    // the one thing the vertical thread can't show. A turn ribbon on top marks
-    // each user-prompt boundary (number only; the prompt text is in the hover).
-    // Bar height encodes real work (gen + fresh context, excluding cache_read,
-    // log-scaled); width encodes duration. Clicking a bar jumps to that step.
-    function TimelineView({ forest, onSelectGen, activeGenId, turns }) {
-      const [tip, setTip] = useState(null);
-      const allGens = [...forest.byId.values()].sort((a, b) => tsMs(a.started_at) - tsMs(b.started_at));
-      if (allGens.length === 0) return null;
-      const stepNo = new Map(allGens.map((g, i) => [g.generation_id, i + 1]));
-      const mainAgent = (forest.topRuns[0] && forest.topRuns[0].agent) || "main";
-      const mainGens = forest.topRuns.flatMap(r => r.gens).sort((a, b) => tsMs(a.started_at) - tsMs(b.started_at));
-      const subs = subagentRuns(forest);
-      const lanes = [{ key: "main", label: agentShort(mainAgent), agent: mainAgent, depth: 0, gens: mainGens }]
-        .concat(subs.map(r => ({ key: r.id, label: agentShort(r.agent), agent: r.agent, depth: r.depth, gens: r.gens })));
-
-      let tmin = Infinity, tmax = -Infinity, maxTok = 1;
-      const intervals = [];
-      for (const g of allGens) {
-        const s = tsMs(g.started_at), e = tsMs(g.completed_at) || s;
-        if (s) tmin = Math.min(tmin, s);
-        if (e) tmax = Math.max(tmax, e);
-        if (e > s) intervals.push([s, e]);
-        maxTok = Math.max(maxTok, stepTokenWork(g).work);
-      }
-      if (!Number.isFinite(tmin) || tmax <= tmin) { tmin = 0; tmax = 1; }
-
-      // Compressed clock: union the active windows (merging gaps under 8s),
-      // lay them end-to-end, and give each idle break a fixed sliver. mapPct
-      // turns a timestamp into a percentage along this compressed axis.
-      const sorted = intervals.slice().sort((a, b) => a[0] - b[0]);
-      const merged = [];
-      for (const [s, e] of sorted) {
-        const last = merged[merged.length - 1];
-        if (last && s <= last[1] + 8000) last[1] = Math.max(last[1], e);
-        else merged.push([s, e]);
-      }
-      if (merged.length === 0) merged.push([tmin, tmax]);
-      const GAP_PCT = 1.4;
-      const activeMs = merged.reduce((a, m) => a + (m[1] - m[0]), 0) || 1;
-      const gapsPct = (merged.length - 1) * GAP_PCT;
-      const segs = []; let cum = 0;
-      for (const m of merged) { segs.push({ s: m[0], e: m[1], start: cum }); cum += (m[1] - m[0]); }
-      const scale = (100 - gapsPct) / activeMs;
-      const mapPct = t => {
-        for (let i = 0; i < segs.length; i++) {
-          const m = segs[i];
-          if (t <= m.e + 1) { const within = Math.max(0, Math.min(m.e - m.s, t - m.s)); return m.start * scale + i * GAP_PCT + within * scale; }
-        }
-        return 100;
-      };
-
-      const H_MIN = 5, H_MAX = 30;
-      const barH = tok => H_MIN + (H_MAX - H_MIN) * (Math.log((tok || 0) + 1) / Math.log(maxTok + 1));
-
-      const wall = tmax - tmin;
-      const active = mergedSpan(intervals);
-      const idlePct = wall > 0 ? Math.max(0, Math.round((1 - active / wall) * 100)) : 0;
-      const peak = peakConcurrency(intervals);
-
-      // Turn markers: each user-prompt boundary, positioned on the compressed
-      // axis. A turn runs until the next prompt; we only need its start to draw
-      // the boundary, and its index to label it.
-      const turnMarks = (turns || [])
-        .map(t => { const g = forest.byId.get(t.startGenId); return g ? { turn: t, ms: tsMs(g.started_at) } : null; })
-        .filter(Boolean).sort((a, b) => a.ms - b.ms);
-      turnMarks.forEach((m, i) => { m.left = mapPct(m.ms); m.endLeft = i + 1 < turnMarks.length ? mapPct(turnMarks[i + 1].ms) : 100; });
-      const turnOf = ms => { let r = null; for (const m of turnMarks) { if (m.ms <= ms) r = m.turn; else break; } return r; };
-      // dashed idle breaks sit at the seam between adjacent active windows
-      const breaks = segs.slice(1).map((m, i) => m.start * scale + (i + 1) * GAP_PCT - GAP_PCT / 2);
-
-      const LANE_W = 184, LANE_H = 46;
-      const stat = (v, label, color) => (
-        <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}>
-          <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 13, color: color || "var(--fg-max)" }}>{v}</span>
-          <span style={{ fontSize: 11, color: "var(--fg3)" }}>{label}</span>
-        </span>
-      );
-
-      return (
-        <div style={{ border: "1px solid var(--border-weak)", borderRadius: 2, background: "var(--bg-primary)", overflow: "hidden" }} onMouseLeave={() => setTip(null)}>
-          {/* summary strip */}
-          <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "10px 14px", borderBottom: "1px solid var(--border-weak)", flexWrap: "wrap" }}>
-            {stat(formatDuration(wall / 1000), "wall")}
-            {stat(formatDuration(active / 1000), "active")}
-            {stat(`${idlePct}%`, "idle", idlePct > 50 ? "var(--warning-text)" : undefined)}
-            {stat(peak === 1 ? "sequential" : `${peak}×`, peak === 1 ? "" : "peak parallel", peak > 1 ? "var(--viz-purple)" : undefined)}
-            {turnMarks.length > 0 && stat(String(turnMarks.length), turnMarks.length === 1 ? "turn" : "turns")}
-            {stat(String(subs.length), subs.length === 1 ? "subagent" : "subagents")}
-            <span style={{ flex: 1 }}/>
-            <span style={{ display: "flex", gap: 12, fontSize: 11, color: "var(--fg3)" }}>
-              <span>idle collapsed</span><span>height = work</span><span>width = duration</span>
-            </span>
-          </div>
-          {/* turn ribbon: numbered markers; prompt text is in the hover */}
-          {turnMarks.length > 0 && (
-            <div style={{ display: "flex", borderBottom: "1px solid var(--border-weak)", background: "rgba(204,204,220,0.03)" }}>
-              <div style={{ width: LANE_W, flex: "none", borderRight: "1px solid var(--border-weak)", padding: "0 12px", display: "flex", alignItems: "center", fontSize: 11, color: "var(--fg3)", height: 20 }}>Turns</div>
-              <div style={{ flex: 1, position: "relative", height: 20 }}>
-                {turnMarks.map((m, i) => (
-                  <div key={i} title={`T${m.turn.index}: ${m.turn.userText}`}
-                    onMouseMove={ev => setTip({ kind: "turn", turn: m.turn, x: ev.clientX, y: ev.clientY })}
-                    onMouseLeave={() => setTip(null)}
-                    onClick={() => onSelectGen(m.turn.startGenId)}
-                    style={{ position: "absolute", left: `${m.left}%`, width: `${Math.max(0, m.endLeft - m.left)}%`, top: 0, bottom: 0, borderLeft: "1px solid var(--border-weak)", display: "flex", alignItems: "center", paddingLeft: 4, overflow: "hidden", cursor: "pointer", background: i % 2 ? "rgba(204,204,220,0.03)" : "transparent" }}>
-                    <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, color: "var(--fg3)" }}>{m.turn.index}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {/* lanes */}
-          {lanes.map((lane, li) => {
-            const c = agentColor(lane.agent);
-            const laneTok = lane.gens.reduce((a, g) => a + (g.total_tokens || 0), 0);
-            return (
-              <div key={lane.key} style={{ display: "flex", borderBottom: li === lanes.length - 1 ? "none" : "1px solid var(--border-weak)", background: li % 2 ? "rgba(204,204,220,0.015)" : "transparent" }}>
-                <div style={{ width: LANE_W, flex: "none", borderRight: "1px solid var(--border-weak)", padding: "0 12px", paddingLeft: 12 + lane.depth * 14, display: "flex", flexDirection: "column", justifyContent: "center", gap: 2, minWidth: 0, height: LANE_H }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                    {lane.depth > 0 && <span style={{ color: "var(--fg3)", fontSize: 11 }}>↳</span>}
-                    <span style={{ width: 7, height: 7, borderRadius: 2, background: c, flex: "none" }}/>
-                    <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 12, color: "var(--fg1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{lane.label}</span>
-                  </span>
-                  <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, color: "var(--fg3)", paddingLeft: lane.depth > 0 ? 17 : 0 }}>{lane.gens.length} · {formatTokens(laneTok)} tok</span>
-                </div>
-                <div style={{ flex: 1, position: "relative", height: LANE_H }}>
-                  {turnMarks.slice(1).map((m, i) => <span key={`tn${i}`} style={{ position: "absolute", left: `${m.left}%`, top: 0, bottom: 0, width: 1, background: "var(--border-weak)" }}/>)}
-                  {breaks.map((x, i) => <span key={`br${i}`} style={{ position: "absolute", left: `${x}%`, top: 0, bottom: 0, width: 0, borderLeft: "1px dashed var(--viz-purple)", opacity: 0.35 }}/>)}
-                  {lane.gens.map((g, gi) => {
-                    const s = tsMs(g.started_at), e = tsMs(g.completed_at) || s;
-                    const left = mapPct(s);
-                    const w = Math.max(0.4, mapPct(e) - left);
-                    const work = stepTokenWork(g);
-                    const h = barH(work.work);
-                    const isActive = g.generation_id === activeGenId;
-                    return (
-                      <div key={g.generation_id || gi}
-                        onClick={() => onSelectGen(g.generation_id)}
-                        onMouseMove={ev => { const t = turnOf(s); setTip({ kind: "step", gen: g, n: stepNo.get(g.generation_id), turnIndex: t ? t.index : null, x: ev.clientX, y: ev.clientY }); }}
-                        onMouseLeave={() => setTip(null)}
-                        style={{
-                          position: "absolute", bottom: 8, height: h,
-                          left: `${left}%`, width: `${w}%`, minWidth: 3,
-                          background: g.call_error ? "var(--error-main)" : c,
-                          opacity: isActive || (tip && tip.gen === g) ? 1 : 0.8, borderRadius: 2, cursor: "pointer",
-                          outline: isActive ? "1.5px solid var(--fg-max)" : "none", outlineOffset: 1,
-                          boxShadow: isActive ? "0 0 8px rgba(255,255,255,0.25)" : "none",
-                        }}/>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-          {tip && <TimelineTooltip tip={tip}/>}
-        </div>
-      );
-    }
-
-    function ConversationThread({ steps }) {
-      const forest = useMemo(() => buildSubagentForest(steps), [steps]);
-      const rows = useMemo(() => flattenForest(forest), [forest]);
-      const hasSubagents = useMemo(() => rows.some(r => r.depth > 0), [rows]);
-
-      const [view, setView] = useState("tree"); // tree | timeline
-      // Collapse-first: every step starts collapsed to one line and every
-      // subagent run starts folded, so the thread opens as a clean scannable
-      // list. The reader expands only what they want to read.
-      const [collapsed, setCollapsed] = useState(() => new Set([...forest.runs.values()].filter(r => r.depth > 0).map(r => r.id)));
-      const [expanded, setExpanded] = useState(() => new Set());
-      const [activeN, setActiveN] = useState(1);
-      const [flashId, setFlashId] = useState(null);
+    function ConversationThread({ turns, jumpRef }) {
+      const groups = useMemo(() => turns.flatMap(turn => turn.blocks.filter(block => block.kind === "work")), [turns]);
+      const [openGroups, setOpenGroups] = useState(() => new Set(groups.filter(group => group.calls.length <= 40).map(group => group.id)));
+      const [openReasoning, setOpenReasoning] = useState(() => new Set());
+      const [activeTurn, setActiveTurn] = useState(1);
+      const [flashID, setFlashID] = useState(null);
       const [hashGenID, setHashGenID] = useState(generationIDFromHash);
-      const cardRefs = useRef({});
+      const turnRefs = useRef({});
       const flashTimer = useRef(null);
+      const knownGroups = useRef(new Set(groups.map(group => group.id)));
+      const handledHash = useRef("");
+      const pendingHash = useRef("");
+
+      useEffect(() => {
+        const valid = new Set(groups.map(group => group.id));
+        const previousKnown = knownGroups.current;
+        setOpenGroups(previous => {
+          const next = new Set([...previous].filter(id => valid.has(id)));
+          groups.forEach(group => {
+            if (group.calls.length <= 40 && !previousKnown.has(group.id)) next.add(group.id);
+          });
+          return next;
+        });
+        knownGroups.current = valid;
+      }, [groups]);
       useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
 
-      const rowByGen = useMemo(() => new Map(rows.map(r => [r.gen.generation_id, r])), [rows]);
-
-      // Turns: the human-readable loop boundary. A turn opens at a top-level
-      // (depth 0) generation whose input carries a fresh user prompt, and runs
-      // — through every step it triggers, including spawned subagents — until
-      // the next prompt. The prompt is lifted into a turn header so it stops
-      // masquerading as a step; the generation it lived on renders as the
-      // turn's first assistant step. Rollups: billed sums what the turn spent;
-      // ctxIn is the live context size at the turn's last top-level call (it
-      // climbs as the transcript is re-sent, so it's a "window fill", not a
-      // sum). See the steps-prototype for the model this implements.
-      const turns = useMemo(() => {
-        const out = [];
-        let cur = null;
-        rows.forEach(r => {
-          const ut = r.depth === 0 ? firstUserText(r.gen) : "";
-          if (ut) { cur = { startGenId: r.gen.generation_id, userText: ut, gens: [], lastTop: r.gen }; out.push(cur); }
-          if (cur) { cur.gens.push(r.gen); if (r.depth === 0) cur.lastTop = r.gen; }
+      const turnByGen = useMemo(() => {
+        const map = new Map();
+        turns.forEach(turn => turn.genIds.forEach(id => map.set(id, turn)));
+        return map;
+      }, [turns]);
+      const groupByGen = useMemo(() => {
+        const map = new Map();
+        groups.forEach(group => {
+          group.genIds.forEach(id => map.set(id, group.id));
+          group.subruns.forEach(run => run.gens.forEach(gen => map.set(gen.generation_id, group.id)));
         });
-        out.forEach((t, i) => {
-          t.index = i + 1;
-          t.billed = t.gens.reduce((a, g) => a + (g.total_tokens || 0), 0);
-          t.generated = t.gens.reduce((a, g) => a + (((g.token_buckets || {}).output || 0) + ((g.token_buckets || {}).reasoning || 0)), 0);
-          const b = t.lastTop.token_buckets || {};
-          t.ctxIn = (b.fresh_input || 0) + (b.cache_read || 0) + (b.cache_write || 0);
-        });
-        return out;
-      }, [rows]);
-      const turnByStartId = useMemo(() => new Map(turns.map(t => [t.startGenId, t])), [turns]);
+        return map;
+      }, [groups]);
 
-      const toggleStep = id => {
-        setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-      };
-      const toggleRun = id => setCollapsed(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-
-      // Jump to a step: switch to tree, open its ancestor runs and the card,
-      // mark it active, then scroll + flash once layout settles.
-      const jumpTo = id => {
-        const row = rowByGen.get(id);
-        if (!row) return;
-        setView("tree");
-        setCollapsed(prev => { const n = new Set(prev); row.runPath.forEach(r => n.delete(r)); return n; });
-        setExpanded(prev => prev.has(id) ? prev : new Set(prev).add(id));
-        setActiveN(row.n);
-        setFlashId(null);
+      const jumpTo = useCallback(id => {
+        const turn = turnByGen.get(id);
+        if (!turn) return;
+        const groupID = groupByGen.get(id);
+        if (groupID) setOpenGroups(previous => previous.has(groupID) ? previous : new Set(previous).add(groupID));
+        setActiveTurn(turn.index);
+        setFlashID(null);
         requestAnimationFrame(() => requestAnimationFrame(() => {
-          const card = cardRefs.current[id];
-          if (card) {
-            // Offset by the sticky chrome (header + breadcrumb sub-bar) so the
-            // card lands just under it rather than behind it. Tracks HEADER_H
-            // so a header resize keeps the same tuck.
-            const top = window.scrollY + card.getBoundingClientRect().top - (HEADER_H + 24);
+          const node = turnRefs.current[turn.startGenId];
+          if (node) {
+            const top = window.scrollY + node.getBoundingClientRect().top - (HEADER_H + 46 + 24);
             window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
           }
-          setFlashId(id);
+          setFlashID(turn.startGenId);
         }));
         if (flashTimer.current) clearTimeout(flashTimer.current);
-        flashTimer.current = setTimeout(() => setFlashId(null), 1400);
-      };
-
-      // Deep links of the form /conversations/:id#generation_id open and flash
-      // the matching step once the detail payload is loaded.
+        flashTimer.current = setTimeout(() => setFlashID(null), 1400);
+      }, [groupByGen, turnByGen]);
       useEffect(() => {
-        const syncHash = () => setHashGenID(generationIDFromHash());
+        jumpRef.current = jumpTo;
+        return () => { if (jumpRef.current === jumpTo) jumpRef.current = () => {}; };
+      }, [jumpRef, jumpTo]);
+
+      useEffect(() => {
+        const syncHash = () => {
+          handledHash.current = "";
+          pendingHash.current = "";
+          setHashGenID(generationIDFromHash());
+        };
         window.addEventListener("hashchange", syncHash);
         window.addEventListener("popstate", syncHash);
         return () => {
@@ -2948,222 +2989,271 @@
         };
       }, []);
       useEffect(() => {
-        if (hashGenID && rowByGen.has(hashGenID)) jumpTo(hashGenID);
-      }, [hashGenID, rowByGen]);
+        if (!hashGenID) {
+          handledHash.current = "";
+          return;
+        }
+        if (handledHash.current === hashGenID || pendingHash.current === hashGenID || !turnByGen.has(hashGenID)) return;
+        pendingHash.current = hashGenID;
+        setTimeout(() => {
+          pendingHash.current = "";
+          handledHash.current = hashGenID;
+          jumpTo(hashGenID);
+        }, 0);
+      }, [hashGenID, turnByGen, jumpTo]);
 
-      const totalSec = steps.reduce((acc, s) => acc + (s.duration_seconds || 0), 0);
-      const totalTok = steps.reduce((acc, s) => acc + (s.total_tokens || 0), 0);
-      const nSub = subagentRuns(forest).length;
-      const allOpen = expanded.size >= rows.length;
-      const toggleAll = () => setExpanded(allOpen ? new Set() : new Set(rows.map(r => r.gen.generation_id)));
+      // Track the turn under the session bar so the rail's previous/next
+      // move relative to what the reader is looking at, not to the last jump.
+      useEffect(() => {
+        if (turns.length === 0) return undefined;
+        let frame = 0;
+        const measure = () => {
+          frame = 0;
+          let current = turns[0].index;
+          for (const turn of turns) {
+            const node = turnRefs.current[turn.startGenId];
+            if (!node) continue;
+            if (node.getBoundingClientRect().top - (HEADER_H + 46 + 28) > 0) break;
+            current = turn.index;
+          }
+          setActiveTurn(current);
+        };
+        const onScroll = () => { if (!frame) frame = requestAnimationFrame(measure); };
+        measure();
+        window.addEventListener("scroll", onScroll, { passive: true });
+        window.addEventListener("resize", onScroll);
+        return () => {
+          if (frame) cancelAnimationFrame(frame);
+          window.removeEventListener("scroll", onScroll);
+          window.removeEventListener("resize", onScroll);
+        };
+      }, [turns]);
 
-      // Hotspots: the few steps actually worth looking at — the slowest, the
-      // most token-hungry, and any errors. Encoding every step is illegible
-      // on a long trace; flagging the outliers is what surfaces "what should
-      // I look at here". maxBy returns the row, not the value.
-      const hot = useMemo(() => {
-        if (rows.length === 0) return null;
-        const pick = val => rows.reduce((a, r) => (val(r) > val(a) ? r : a), rows[0]);
-        const errors = rows.filter(r => r.gen.call_error);
-        const slowest = pick(r => r.gen.duration_seconds || 0);
-        const mostGenerated = pick(r => stepTokenWork(r.gen).generated);
-        const mostRead = pick(r => stepTokenWork(r.gen).ingested);
-        // hotById matches each minimap nub / tooltip badge to its Hotspots
-        // chip. Assigned weakest-first so the strongest signal wins when a
-        // step is several hotspots at once: error > slowest > generated > read.
-        const hotById = new Map();
-        hotById.set(mostRead.gen.generation_id, { color: "var(--viz-blue)", label: "most read" });
-        hotById.set(mostGenerated.gen.generation_id, { color: "var(--viz-orange)", label: "most generated" });
-        hotById.set(slowest.gen.generation_id, { color: "var(--warning-text)", label: "slowest" });
-        errors.forEach(r => hotById.set(r.gen.generation_id, { color: "var(--error-text)", label: "error" }));
-        return { errors, slowest, mostGenerated, mostRead, hotById };
-      }, [rows]);
-
-      const hidden = row => row.runPath.some(id => collapsed.has(id));
-      const headerHidden = row => row.runPath.slice(0, -1).some(id => collapsed.has(id));
-
-      const linkBtn = { background: "transparent", border: "none", color: "var(--fg3)", cursor: "pointer", fontSize: 11, fontFamily: "var(--fontFamily)", padding: 0 };
-
-      const header = (
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 13, color: "var(--fg1)", fontWeight: 500 }}>Thread</span>
-          <span style={{ display: "flex", gap: 12, fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>
-            <span>{steps.length} {steps.length === 1 ? "call" : "calls"}</span>
-            {nSub > 0 && <span>{nSub} subagent{nSub === 1 ? "" : "s"}</span>}
-            <span>{formatTokens(totalTok)} tok</span>
-            <span>{formatDuration(totalSec)}</span>
-          </span>
-          <span style={{ flex: 1 }}/>
-          {view === "tree" && <button onClick={toggleAll} style={linkBtn} onMouseEnter={e => e.currentTarget.style.color = "var(--fg1)"} onMouseLeave={e => e.currentTarget.style.color = "var(--fg3)"}>{allOpen ? "Collapse all" : "Expand all"}</button>}
-          {hasSubagents && (
-            <Segmented size="sm" value={view} onChange={setView} options={[{ value: "tree", label: "Steps" }, { value: "timeline", label: "Timeline" }]}/>
-          )}
-        </div>
-      );
-
-      if (view === "timeline") {
-        return (
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {header}
-            <TimelineView forest={forest} turns={turns} onSelectGen={jumpTo} activeGenId={(rows[activeN - 1] || {}).gen ? rows[activeN - 1].gen.generation_id : null}/>
-            <div style={{ fontSize: 11, color: "var(--fg3)" }}>Click a bar to open that step.</div>
-          </div>
-        );
-      }
-
-      // Build the visible render list (interleaving subagent chips), so each
-      // item knows whether it is the last — for clean separator handling.
-      const items = [];
-      rows.forEach(row => {
-        const turn = turnByStartId.get(row.gen.generation_id);
-        if (turn && !hidden(row)) items.push({ kind: "turn", turn });
-        if (row.isRunStart && !headerHidden(row)) items.push({ kind: "head", row });
-        if (!hidden(row)) items.push({ kind: "step", row, turnStart: !!turn });
+      const slowest = turns.reduce((current, turn) => !current || turn.durationSec > current.durationSec ? turn : current, null);
+      const toggleGroup = id => setOpenGroups(previous => {
+        const next = new Set(previous);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
+      });
+      const toggleReasoning = id => setOpenReasoning(previous => {
+        const next = new Set(previous);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
       });
 
+      if (turns.length === 0) {
+        return <div style={{ color: "var(--fg2)", fontSize: 12, fontFamily: "var(--fontFamilyMonospace)" }}>No turns recorded.</div>;
+      }
       return (
-        <div style={{ display: "flex", justifyContent: "center" }}>
-          <div style={{ flex: 1, minWidth: 0, maxWidth: 940, display: "flex", flexDirection: "column", gap: 14 }}>
-            {header}
-            {hot && rows.length > 2 && <Hotspots hot={hot} onJump={jumpTo}/>}
-            <div style={{ border: "1px solid var(--border-weak)", borderRadius: 3, overflow: "hidden", background: "var(--bg-primary)" }}>
-              {items.length === 0 ? (
-                <div style={{ color: "var(--fg2)", fontSize: 12, fontFamily: "var(--fontFamilyMonospace)", padding: "14px 16px" }}>
-                  No turns match this filter. Clear it to see all {rows.length} steps.
-                </div>
-              ) : items.map((item, idx) => {
-                const last = idx === items.length - 1;
-                if (item.kind === "turn") {
-                  const t = item.turn;
-                  return <TurnHeader key={`t${t.startGenId}`} turn={t} last={last}/>;
-                }
-                const { row } = item;
-                const id = row.gen.generation_id;
-                const c = agentColor(row.run.agent);
-                if (item.kind === "head") {
-                  const run = row.run;
-                  const isCol = collapsed.has(run.id);
-                  return (
-                    <div key={`h${id}`} onClick={() => toggleRun(run.id)} style={{
-                      display: "flex", alignItems: "center", gap: 8,
-                      height: 32, paddingRight: 12, paddingLeft: 12 + (row.depth - 1) * 16,
-                      cursor: "pointer", borderBottom: last ? "none" : "1px solid var(--border-weak)",
-                      borderLeft: `2px solid ${c}`, background: "rgba(204,204,220,0.025)",
-                    }}>
-                      <Icon name={isCol ? "cright" : "chevron"} size={12} style={{ color: "var(--fg3)" }}/>
-                      <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
-                      <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 12, color: "var(--fg1)" }}>{agentShort(run.agent)}</span>
-                      {run.hasError && <span style={{ display: "inline-flex", alignItems: "center", height: 15, padding: "0 5px", borderRadius: 2, background: "var(--error-transparent)", color: "var(--error-text)", fontSize: 10, fontFamily: "var(--fontFamilyMonospace)" }}>error</span>}
-                      <span style={{ flex: 1 }}/>
-                      <span style={{ display: "flex", gap: 10, fontFamily: "var(--fontFamilyMonospace)", fontSize: 11, color: "var(--fg3)" }}>
-                        <span>{run.gens.length} {run.gens.length === 1 ? "step" : "steps"}</span>
-                        <span>{formatDuration((run.end - run.start) / 1000)}</span>
-                        <span>{formatTokens(run.totalTokens)}</span>
-                      </span>
-                    </div>
-                  );
-                }
-                return (
-                  <div key={`s${id}`} style={{ position: "relative", paddingLeft: row.depth * 16 }}>
-                    {row.depth > 0 && <span style={{ position: "absolute", left: row.depth * 16 - 1, top: 0, bottom: 0, width: 2, background: c, opacity: 0.35 }}/>}
-                    <StepCard step={row.gen} n={row.n} total={rows.length} accent={c}
-                      expanded={expanded.has(id)} onToggle={() => toggleStep(id)} active={row.n === activeN} last={last}
-                      innerRef={el => { cardRefs.current[id] = el; }} flash={flashId === id} turnStart={item.turnStart}/>
-                  </div>
-                );
-              })}
-            </div>
+        <div style={{ display: "flex", gap: 16, maxWidth: 968, margin: "0 auto" }}>
+          <div style={{ width: 72, flex: "none" }}>
+            <TurnPager turns={turns} activeTurn={activeTurn} onJump={jumpTo}/>
+          </div>
+          <div style={{ flex: 1, minWidth: 0, maxWidth: 880, display: "flex", flexDirection: "column", gap: 8 }}>
+          {turns.map((turn, index) => (
+            <section key={turn.startGenId} ref={node => { turnRefs.current[turn.startGenId] = node; }} className={flashID === turn.startGenId ? "sigil-step-flash" : undefined} style={{ borderRadius: 8, outline: activeTurn === turn.index ? "1px solid transparent" : "none" }}>
+              <TurnRule turn={turn} slowest={!!slowest && slowest.startGenId === turn.startGenId} first={index === 0}/>
+              <UserMessage turn={turn}/>
+              <AgentBlock turn={turn} openGroups={openGroups} toggleGroup={toggleGroup} openReasoning={openReasoning} toggleReasoning={toggleReasoning}/>
+            </section>
+          ))}
           </div>
         </div>
       );
     }
 
-    function DetailStats({ conv, steps }) {
-      const wallSec = durationBetweenSeconds(conv.started_at, conv.last_activity);
-      const errStatus = conv.status === "err";
+    function PanelSection({ title, children, aside }) {
+      return (
+        <section>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 10, letterSpacing: "0.1em", color: "var(--fg3)" }}>{title}</span>
+            {aside && <span style={{ marginLeft: "auto", fontFamily: "var(--fontFamilyMonospace)", fontSize: 10.5, color: "var(--fg3)" }}>{aside}</span>}
+          </div>
+          {children}
+        </section>
+      );
+    }
 
-      // Cache rate from the per-step buckets: the conversation summary is
-      // synthesised from the detail on a deep link and omits the aggregate
-      // buckets, so the steps are the reliable source. Mirror the list KPI:
-      // cache reads over cache reads + cache writes + fresh input.
-      const cache = (steps || []).reduce((a, s) => {
-        const b = s.token_buckets || {};
-        a.read += b.cache_read || 0;
-        a.write += b.cache_write || 0;
-        a.fresh += b.fresh_input || 0;
-        return a;
-      }, { read: 0, write: 0, fresh: 0 });
-      const cachePct = cacheInputHitPercent(cache.fresh, cache.read, cache.write);
+    function TimelinePanel({ turns, metrics, onJump }) {
+      const span = Math.max(1, metrics.endMs - metrics.startMs);
+      const slowest = turns.reduce((current, turn) => !current || turn.durationSec > current.durationSec ? turn : current, null);
+      return (
+        <PanelSection title="TIMELINE" aside={`${formatDuration(metrics.idleMs / 1000)} idle`}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {turns.map(turn => {
+              const left = Math.max(0, ((turn.start - metrics.startMs) / span) * 100);
+              const width = Math.max(1.5, ((turn.end - turn.start) / span) * 100);
+              const isSlow = slowest && slowest.startGenId === turn.startGenId;
+              return (
+                <button type="button" key={turn.startGenId} onClick={() => onJump(turn.startGenId)} title={`Jump to turn ${turn.index}`} style={{ display: "grid", gridTemplateColumns: "40px 1fr 52px", alignItems: "center", gap: 8, width: "100%", padding: 0, border: "none", background: "transparent", cursor: "pointer", textAlign: "left" }}>
+                  <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 10.5, color: "var(--fg3)" }}>T{turn.index}</span>
+                  <span style={{ position: "relative", height: 8, background: "rgba(204,204,220,0.05)", overflow: "hidden" }}>
+                    <span style={{ position: "absolute", left: `${left}%`, width: `${Math.min(100 - left, width)}%`, top: 0, bottom: 0, minWidth: 2, background: isSlow ? "var(--warning-main)" : "var(--viz-blue)" }}/>
+                    {turn.failedCount > 0 && <span style={{ position: "absolute", left: `${Math.min(98, left + Math.max(0, width - Math.min(width, 18)))}%`, width: `${Math.min(width, 18)}%`, top: 0, bottom: 0, minWidth: 2, background: "var(--error-main)" }}/>}
+                  </span>
+                  <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 10.5, color: "var(--fg2)", textAlign: "right" }}>{formatDuration(turn.durationSec)}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ margin: "10px 60px 0 48px", height: 13, borderTop: "1px solid var(--border-weak)", display: "flex", justifyContent: "space-between", paddingTop: 3 }}>
+            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 9.5, color: "var(--fg3)" }}>{metrics.startMs ? formatTime(new Date(metrics.startMs).toISOString()) : NO_VALUE}</span>
+            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 9.5, color: "var(--fg3)" }}>{metrics.endMs ? formatTime(new Date(metrics.endMs).toISOString()) : NO_VALUE}</span>
+          </div>
+          <div style={{ display: "flex", gap: 11, marginTop: 7, color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 10 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><span style={{ width: 6, height: 6, background: "var(--viz-blue)" }}/>turn</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><span style={{ width: 6, height: 6, background: "var(--warning-main)" }}/>slowest</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><span style={{ width: 6, height: 6, background: "var(--error-main)" }}/>failed</span>
+          </div>
+        </PanelSection>
+      );
+    }
 
+    function WorthALook({ steps, turns, metrics, onJump }) {
+      if (turns.length === 0) return null;
+      const slowest = turns.reduce((current, turn) => !current || turn.durationSec > current.durationSec ? turn : current, null);
+      const failed = turns.filter(turn => turn.failedCount > 0);
+      const turnByGen = new Map();
+      turns.forEach(turn => turn.genIds.forEach(id => turnByGen.set(id, turn)));
+      const pickStep = value => (steps || []).reduce((current, gen) => !current || value(gen) > value(current) ? gen : current, null);
+      const generated = metrics.usageAvailable ? pickStep(gen => stepTokenWork(gen).generated) : null;
+      const read = metrics.usageAvailable ? pickStep(gen => stepTokenWork(gen).ingested) : null;
+      const entries = [];
+      if (failed.length > 0) entries.push({ label: failed.reduce((sum, turn) => sum + turn.failedCount, 0) === 1 ? "failure" : "failures", turn: failed[0], tone: "error" });
+      if (slowest) entries.push({ label: "slowest turn", turn: slowest, tone: "warning" });
+      if (metrics.longestIdle && metrics.longestIdle.durationMs > 0) entries.push({ label: `longest idle ${formatDuration(metrics.longestIdle.durationMs / 1000)}`, turn: metrics.longestIdle.turn, tone: "neutral" });
+      if (generated && turnByGen.has(generated.generation_id)) entries.push({ label: `most generated ${formatTokens(stepTokenWork(generated).generated)}`, turn: turnByGen.get(generated.generation_id), tone: "neutral" });
+      if (read && turnByGen.has(read.generation_id)) entries.push({ label: `most read ${formatTokens(stepTokenWork(read).ingested)}`, turn: turnByGen.get(read.generation_id), tone: "neutral" });
+      return (
+        <PanelSection title="WORTH A LOOK">
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {entries.map((entry, index) => {
+              const border = entry.tone === "error" ? "var(--error-border)" : entry.tone === "warning" ? "var(--warning-border)" : "var(--border-medium)";
+              const dot = entry.tone === "error" ? "var(--error-main)" : entry.tone === "warning" ? "var(--warning-main)" : "var(--fg3)";
+              const hover = entry.tone === "error" ? "rgba(209,14,92,0.08)" : entry.tone === "warning" ? "rgba(245,183,61,0.08)" : "var(--action-hover)";
+              return (
+                <button type="button" key={`${entry.label}-${index}`} onClick={() => onJump(entry.turn.startGenId)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "transparent", border: `1px solid ${border}`, borderRadius: 6, cursor: "pointer", textAlign: "left" }}
+                  onMouseEnter={event => event.currentTarget.style.background = hover}
+                  onMouseLeave={event => event.currentTarget.style.background = "transparent"}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: dot, flexShrink: 0 }}/>
+                  <span style={{ color: "var(--fg1)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.label}</span>
+                  <span style={{ marginLeft: "auto", color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11 }}>T{entry.turn.index}</span>
+                </button>
+              );
+            })}
+          </div>
+        </PanelSection>
+      );
+    }
+
+    function missingUsageNotice(host) {
+      return host
+        ? `No token usage was recorded for this ${host} session, so token counts and cost are unavailable.`
+        : "No token usage was recorded for this session, so token counts and cost are unavailable.";
+    }
+
+    function MetricsPanel({ conv, steps, turns, metrics, onJump }) {
+      const maxToolCount = metrics.toolHistogram.reduce((max, item) => Math.max(max, item.count), 0) || 1;
+      const host = agentHosts(conv.agents)[0] || "";
       const stats = [
-        { value: formatDuration(wallSec),         unit: "elapsed" },
-        { value: String(conv.calls),              unit: conv.calls === 1 ? "call" : "calls" },
-        { value: formatTokens(conv.total_tokens), unit: "tokens" },
-        ...(cachePct != null ? [{ value: `${cachePct}%`, unit: "input cached", color: "var(--viz-green)" }] : []),
+        { value: formatDuration(metrics.wallMs / 1000), label: "elapsed" },
+        { value: formatDuration(metrics.workingMs / 1000), label: "agent working" },
+        { value: String(steps.length), label: steps.length === 1 ? "call" : "calls" },
+        { value: metrics.usageAvailable ? formatTokens(metrics.totalTokens) : "—", label: "tokens", muted: !metrics.usageAvailable },
       ];
+      return (
+        <aside style={{
+          width: 320, flex: "none", position: "sticky", top: HEADER_H + 46,
+          alignSelf: "flex-start", maxHeight: `calc(100vh - ${HEADER_H + 46}px)`, overflow: "auto",
+          borderLeft: "1px solid var(--border-weak)", background: "var(--bg-primary)",
+          padding: "20px 18px 40px", display: "flex", flexDirection: "column", gap: 22,
+        }}>
+          <PanelSection title="SESSION">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              {stats.map(stat => (
+                <div key={stat.label}>
+                  <div style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 18, color: stat.muted ? "var(--fg3)" : "var(--fg-max)" }}>{stat.value}</div>
+                  <div style={{ marginTop: 2, color: "var(--fg3)", fontSize: 11 }}>{stat.label}</div>
+                </div>
+              ))}
+            </div>
+          </PanelSection>
+          {!metrics.usageAvailable && (
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 9, padding: "10px 12px", border: "1px solid var(--border-weak)", borderRadius: 8, background: "rgba(204,204,220,0.03)", color: "var(--fg2)", fontSize: 12, lineHeight: 1.5 }}>
+              <Icon name="info" size={14} style={{ color: "var(--fg3)", marginTop: 2 }}/>
+              <span>{missingUsageNotice(host)}</span>
+            </div>
+          )}
+          <TimelinePanel turns={turns} metrics={metrics} onJump={onJump}/>
+          <WorthALook steps={steps} turns={turns} metrics={metrics} onJump={onJump}/>
+          <PanelSection title="TOOLS USED">
+            {metrics.toolHistogram.length === 0 ? (
+              <div style={{ color: "var(--fg3)", fontSize: 11.5 }}>No tools recorded.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {metrics.toolHistogram.map(tool => (
+                  <div key={tool.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span title={tool.name} style={{ width: 88, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg1)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11.5 }}>{tool.name}</span>
+                    <span style={{ position: "relative", flex: 1, height: 6, background: "rgba(204,204,220,0.06)" }}><span style={{ position: "absolute", inset: 0, right: "auto", width: `${(tool.count / maxToolCount) * 100}%`, background: "rgba(204,204,220,0.30)" }}/></span>
+                    <span style={{ width: 18, textAlign: "right", color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 11.5 }}>{tool.count}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </PanelSection>
+        </aside>
+      );
+    }
+
+    function TraceDetailView({ conv, detail, loading, error, onBack }) {
+      const steps = detail ? detail.generations : [];
+      const turns = useMemo(() => buildTranscript(steps), [detail]);
+      const metrics = useMemo(() => buildTranscriptMetrics(steps, turns), [detail, turns]);
+      const jumpRef = useRef(() => {});
+      const wallSec = metrics.wallMs > 0 ? metrics.wallMs / 1000 : durationBetweenSeconds(conv.started_at, conv.last_activity);
+      const buttonStyle = {
+        display: "inline-flex", alignItems: "center", gap: 6,
+        padding: "0 11px", height: 28, background: "transparent", color: "var(--fg1)",
+        border: "1px solid var(--border-medium)", borderRadius: 6, fontSize: 12,
+        cursor: "pointer", fontFamily: "var(--fontFamily)", fontWeight: 500, whiteSpace: "nowrap",
+      };
       const onExport = () => {
         const blob = new Blob([JSON.stringify({ ...conv, generations: steps }, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url; a.download = `${conv.id}.json`;
-        document.body.appendChild(a); a.click(); a.remove();
+        const anchor = document.createElement("a");
+        anchor.href = url; anchor.download = `${conv.id}.json`;
+        document.body.appendChild(anchor); anchor.click(); anchor.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       };
-
-      return (
-        <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "11px 24px", borderBottom: "1px solid var(--border-weak)", background: "var(--bg-primary)", flexWrap: "wrap" }}>
-          {stats.map((s, i) => (
-            <div key={i} style={{
-              display: "inline-flex", alignItems: "baseline", gap: 6,
-              paddingRight: 14,
-              borderRight: i === stats.length - 1 ? "none" : "1px solid var(--border-weak)",
-              whiteSpace: "nowrap",
-            }}>
-              <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 14, color: s.color || "var(--fg-max)" }}>{s.value}</span>
-              <span style={{ fontSize: 11, color: "var(--fg3)" }}>{s.unit}</span>
-            </div>
-          ))}
-          {errStatus && (
-            <span style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              padding: "3px 10px",
-              background: "var(--error-transparent)",
-              color: "var(--error-text)",
-              border: "1px solid var(--error-border)",
-              fontSize: 12, fontFamily: "var(--fontFamilyMonospace)", borderRadius: 2,
-            }}>
-              <Icon name="dot" size={8}/> ERR
-            </span>
-          )}
-          {(conv.models || []).map(m => <ModelPill key={m} name={m}/>)}
-          <span style={{ flex: 1 }}/>
-          <button title="Download trace as JSON" onClick={onExport} style={{
-            display: "inline-flex", alignItems: "center", gap: 6,
-            padding: "0 11px", height: 28,
-            background: "transparent", color: "var(--fg1)",
-            border: "1px solid var(--border-medium)",
-            borderRadius: 2, fontSize: 12, cursor: "pointer", fontFamily: "var(--fontFamily)", fontWeight: 500,
-            whiteSpace: "nowrap",
-          }}
-          onMouseEnter={e => e.currentTarget.style.background = "var(--action-hover)"}
-          onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-            <Icon name="download" size={12}/> Export JSON
-          </button>
-        </div>
-      );
-    }
-
-    function TraceDetailView({ conv, detail, loading, error }) {
       return (
         <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, background: "var(--bg-canvas)" }}>
-          <DetailStats conv={conv} steps={detail ? detail.generations : []}/>
-          <main style={{ padding: 24 }}>
-            <div style={{ maxWidth: 1392, margin: "0 auto" }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 10, height: 46, padding: "0 16px",
+            borderBottom: "1px solid var(--border-weak)", background: "var(--bg-primary)",
+            position: "sticky", top: HEADER_H, zIndex: 4, minWidth: 0,
+          }}>
+            <a href="/" onClick={event => { if (!isPlainLeftClick(event)) return; event.preventDefault(); onBack(); }} style={{ fontSize: 13, color: "var(--fg2)", textDecoration: "none", whiteSpace: "nowrap", flexShrink: 0, cursor: "pointer" }}
+              onMouseEnter={event => event.currentTarget.style.color = "var(--fg-max)"}
+              onMouseLeave={event => event.currentTarget.style.color = "var(--fg2)"}>Sessions</a>
+            <Icon name="cright" size={11} style={{ color: "var(--fg3)", flexShrink: 0 }}/>
+            <span style={{ fontFamily: "var(--fontFamilyMonospace)", fontSize: 13, color: "var(--fg-max)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{conv.title || conv.id}</span>
+            {(conv.models || []).map(model => <ModelPill key={model} name={model}/>)}
+            <span style={{ fontSize: 12, color: "var(--fg3)", whiteSpace: "nowrap" }}>{turns.length} {turns.length === 1 ? "turn" : "turns"} · {formatDuration(wallSec)}</span>
+            <span style={{ flex: 1 }}/>
+            <button type="button" title="Download trace as JSON" onClick={onExport} style={buttonStyle}
+              onMouseEnter={event => event.currentTarget.style.background = "var(--action-hover)"}
+              onMouseLeave={event => event.currentTarget.style.background = "transparent"}>
+              <Icon name="download" size={12}/>Export JSON
+            </button>
+          </div>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 0 }}>
+            <main style={{ flex: 1, minWidth: 0, padding: "28px 32px 96px" }}>
               {error && <Notice kind="error" title="Failed to load session">{error}</Notice>}
               {!error && loading && <div style={{ color: "var(--fg3)", fontFamily: "var(--fontFamilyMonospace)", fontSize: 12 }}>Loading…</div>}
-              {!error && !loading && detail && <ConversationThread steps={detail.generations}/>}
-            </div>
-          </main>
+              {!error && !loading && detail && <ConversationThread turns={turns} jumpRef={jumpRef}/>}
+            </main>
+            {!error && !loading && detail && <MetricsPanel conv={conv} steps={steps} turns={turns} metrics={metrics} onJump={id => jumpRef.current(id)}/>}
+          </div>
         </div>
       );
     }
@@ -4279,26 +4369,6 @@
       );
     }
 
-    function Segmented({ value, onChange, options, size = "md" }) {
-      return (
-        <div style={{ display: "inline-flex", border: "1px solid var(--border-medium)", borderRadius: 2, overflow: "hidden" }}>
-          {options.map((o, i) => {
-            const active = o.value === value;
-            return (
-              <button key={o.value} type="button" onClick={() => onChange(o.value)} style={{
-                padding: size === "sm" ? "3px 10px" : "5px 12px",
-                background: active ? "var(--action-selected)" : "transparent",
-                color: active ? "var(--fg-max)" : "var(--fg2)",
-                border: "none", borderLeft: i > 0 ? "1px solid var(--border-medium)" : "none",
-                cursor: active ? "default" : "pointer", fontSize: 12, fontWeight: active ? 500 : 400,
-                fontFamily: "var(--fontFamily)", whiteSpace: "nowrap",
-              }}>{o.label}</button>
-            );
-          })}
-        </div>
-      );
-    }
-
     const BADGE_TONES = {
       block:     { bg: "var(--error-transparent)",   fg: "var(--error-text)",   bd: "var(--error-border)" },
       redact:    { bg: "var(--warning-transparent)", fg: "var(--warning-text)", bd: "var(--warning-border)" },
@@ -5030,11 +5100,10 @@
         { key: "settings", label: "Settings", href: "/settings", onClick: goSettings },
       ];
       const activeTab = view === "settings" ? "settings" : "conversations";
-      const trail = view === "conversation" && selected ? [{ label: selected.title || selected.id, mono: true }] : [];
 
       return (
         <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-          <TopBar tabs={tabs} activeTab={activeTab} trail={trail}/>
+          <TopBar tabs={tabs} activeTab={activeTab}/>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
             {view === "settings" && <SettingsView history={history}/>}
             {view === "conversations" && (
@@ -5066,7 +5135,7 @@
               />
             )}
             {view === "conversation" && selected && (
-              <TraceDetailView conv={selected} detail={detail} loading={loadingDetail} error={errDetail}/>
+              <TraceDetailView conv={selected} detail={detail} loading={loadingDetail} error={errDetail} onBack={goConversations}/>
             )}
           </div>
         </div>
