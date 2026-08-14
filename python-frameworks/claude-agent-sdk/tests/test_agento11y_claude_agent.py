@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from datetime import timedelta
 
 import pytest
-from agento11y import Client, ClientConfig, GenerationExportConfig, HookEvaluateResponse
+from agento11y import Client, ClientConfig, ContentCaptureMode, GenerationExportConfig, HookEvaluateResponse
 from agento11y.models import ExportGenerationResult, ExportGenerationsResponse, PartKind
 from agento11y_claude_agent import (
     Agento11yClaudeAgentHandler,
@@ -15,7 +15,15 @@ from agento11y_claude_agent import (
     create_agento11y_claude_agent_handler,
     with_agento11y_claude_agent_options,
 )
-from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, ToolUseBlock, UserMessage
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ResultMessage,
+    TextBlock,
+    ThinkingBlock,
+    ToolUseBlock,
+    UserMessage,
+)
 
 
 class _CapturingExporter:
@@ -39,6 +47,7 @@ def _new_client(exporter: _CapturingExporter) -> Client:
         ClientConfig(
             generation_export=GenerationExportConfig(batch_size=10, flush_interval=timedelta(seconds=60)),
             generation_exporter=exporter,
+            content_capture=ContentCaptureMode.DEFAULT,
         )
     )
 
@@ -99,6 +108,17 @@ def _success_result(session_id: str = "session-42") -> ResultMessage:
         stop_reason="end_turn",
         total_cost_usd=0.01,
     )
+
+
+_READ_TOOL = ToolUseBlock(id="toolu_1", name="Read", input={"file_path": "README.md"})
+
+
+def _part_payload(part) -> str:
+    if part.kind == PartKind.THINKING:
+        return part.thinking
+    if part.kind == PartKind.TOOL_CALL:
+        return part.tool_call.name
+    return part.text
 
 
 @pytest.mark.asyncio
@@ -169,6 +189,86 @@ async def test_agento11y_query_records_claude_agent_stream() -> None:
         assert generation.usage.cache_read_input_tokens == 20
         assert generation.usage.cache_write_input_tokens == 10
         assert generation.stop_reason == "end_turn"
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("blocks", "expected_parts"),
+    [
+        pytest.param([TextBlock(""), _READ_TOOL], [(PartKind.TOOL_CALL, "Read")], id="empty-text"),
+        pytest.param([TextBlock("   \n "), _READ_TOOL], [(PartKind.TOOL_CALL, "Read")], id="whitespace-text"),
+        pytest.param(
+            [ThinkingBlock(thinking="", signature="s"), _READ_TOOL],
+            [(PartKind.TOOL_CALL, "Read")],
+            id="empty-thinking",
+        ),
+        pytest.param(
+            [ThinkingBlock(thinking="   \n ", signature="s"), _READ_TOOL],
+            [(PartKind.TOOL_CALL, "Read")],
+            id="whitespace-thinking",
+        ),
+        pytest.param(
+            [TextBlock("  I'll use a tool.  "), _READ_TOOL],
+            [(PartKind.TEXT, "  I'll use a tool.  "), (PartKind.TOOL_CALL, "Read")],
+            id="text",
+        ),
+        pytest.param(
+            [ThinkingBlock(thinking="  I need a tool.  ", signature="s"), _READ_TOOL],
+            [(PartKind.THINKING, "  I need a tool.  "), (PartKind.TOOL_CALL, "Read")],
+            id="thinking",
+        ),
+        pytest.param(
+            [TextBlock("Reading the README."), ToolUseBlock(id="toolu_1", name="", input={})],
+            [(PartKind.TEXT, "Reading the README.")],
+            id="empty-tool-name",
+        ),
+        pytest.param(
+            [TextBlock("Reading the README."), ToolUseBlock(id="toolu_1", name="  ", input={})],
+            [(PartKind.TEXT, "Reading the README.")],
+            id="whitespace-tool-name",
+        ),
+        pytest.param(
+            [TextBlock(""), ToolUseBlock(id="toolu_1", name="", input={})],
+            [],
+            id="every-block-blank",
+        ),
+    ],
+)
+async def test_agento11y_query_skips_blank_blocks(blocks, expected_parts) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    async def fake_query(**_kwargs) -> AsyncIterator[object]:
+        yield AssistantMessage(
+            content=blocks,
+            model="claude-sonnet-4-5",
+            stop_reason="tool_use",
+            session_id="session-42",
+        )
+        yield _success_result()
+
+    try:
+        seen = [
+            message
+            async for message in agento11y_query(
+                prompt="Inspect the README.",
+                client=client,
+                options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
+                conversation_id="conv-42",
+                agent_name="claude-agent",
+                _query_fn=fake_query,
+            )
+        ]
+        assert len(seen) == 2
+
+        client.flush()
+        generations = exporter.requests[0].generations
+        assert len(generations) == 1
+        output = generations[0].output
+        parts = output[0].parts if output else []
+        assert [(part.kind, _part_payload(part)) for part in parts] == expected_parts
     finally:
         client.shutdown()
 

@@ -652,15 +652,22 @@ def _messages_contain_text(messages: list[Message], text: str) -> bool:
 
 def _part_from_block(block: Any) -> Part | None:
     if isinstance(block, TextBlock):
+        if block.text.strip() == "":
+            return None
         return Part(kind=PartKind.TEXT, text=block.text)
     if isinstance(block, ThinkingBlock):
+        if block.thinking.strip() == "":
+            return None
         return Part(kind=PartKind.THINKING, thinking=block.thinking)
     if isinstance(block, ToolUseBlock) or _has_attrs(block, "id", "name", "input"):
+        name = _as_string(_read(block, "name"))
+        if name == "":
+            return None
         return Part(
             kind=PartKind.TOOL_CALL,
             tool_call=ToolCall(
                 id=_as_string(_read(block, "id")),
-                name=_as_string(_read(block, "name")),
+                name=name,
                 input_json=_json_bytes(_read(block, "input")),
             ),
         )
