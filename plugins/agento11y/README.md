@@ -179,7 +179,7 @@ agento11y history import claude-code --local
 agento11y history import claude-code
 ```
 
-Supported agents are `claude-code`, `codex`, and `pi`. `agento11y history import` with no agent lists them.
+Supported agents are `claude-code`, `codex`, `cursor`, and `pi`. `agento11y history import` with no agent lists them.
 
 A `pi` import reads pi's session logs under `$PI_CODING_AGENT_DIR/sessions` (by default `~/.pi/agent/sessions`) and produces one generation per assistant turn, with its prompt, thinking, tool calls, matched tool results, model, token usage, cost, both timestamps, and parent turn. Three things live capture records are not in the session log, so an imported pi session is thinner than a captured one:
 
@@ -189,11 +189,23 @@ A `pi` import reads pi's session logs under `$PI_CODING_AGENT_DIR/sessions` (by 
 
 Subagent runs are in neither: the nested `run-N/session.jsonl` logs come from the third-party `pi-subagents` package, which live capture ignores too, so importing them would exceed live fidelity rather than match it.
 
+A `cursor` import reads Cursor's session databases under `~/.cursor/chats` and produces one generation per prompt, with that prompt, the assistant's reply, its tool calls and matched results, the workspace, and the session's model. Cursor records less about a turn than the other three sources do, so an imported Cursor session is the thinnest of them:
+
+- No token usage. Cursor keeps no per-turn counts, so every turn reports no usage and is marked approximate. A dashboard shows no cost for an imported Cursor turn.
+- Approximate times. Cursor stamps no message with a time. Some sessions can be dated to the second, and in the rest the turns are spread across the session's span, which orders them and measures nothing. Every turn is marked approximate either way.
+- A session the import cannot date is exported as ending where it started, rather than at a later time nothing in the session supports.
+- One model name per session, and only when the session recorded one. A turn from a session that names none is marked as having no model.
+- No system prompt and no turn IDs. Cursor's own system prompt is dropped, because a live capture exports none either. An imported turn is numbered by its position. The workspace and git-status block Cursor puts in front of a prompt stays there, because the model saw it.
+
+Reading a Cursor session can add a `store.db-shm` file next to the session database. SQLite needs that file to read the newest part of a session. The import writes nothing else in `~/.cursor`, and a dry run is no different, because it opens the same databases.
+
+Cursor publishes no schema for this format and stamps no version into it, so a Cursor release can change it.
+
 A forked pi session imports only the turns the fork itself ran. The trunk holds the entries a fork copied from it and exports those turns under its own import, and, when the trunk exported the fork's parent turn, the fork's first turn carries `pi.fork.parent_session_id` and `pi.fork.parent_generation_id` metadata instead of a parent edge. A fork of a fork carries neither key, because no trunk generation exists to name.
 
 `--local` picks the endpoint. Without it, the import exports to the configured Grafana Cloud endpoint, exactly as a live session does. With it, the import exports to the local daemon on this machine.
 
-A dry run reads up to 1 MiB of each session file (a head and a tail window) to count turns and read session metadata. Nothing from those bytes is decoded into prompt or response text, shown, exported, or stored.
+A dry run reads up to 1 MiB of each session file (a head and a tail window) to count turns and read session metadata. A `cursor` session is a SQLite database rather than a log file, so the dry run queries it for the same counts instead, and no message body leaves the database. Nothing from those bytes is decoded into prompt or response text, shown, exported, or stored.
 
 Without `--since`, an import covers the last 90 days. The local store is a linear scan over JSONL files, so an unbounded first import makes the viewer slow before you have used it. Pass `--since 365d`, `--since 2026-01-01T00:00:00Z`, or any duration to widen the window, and `--until` to bound the other end.
 

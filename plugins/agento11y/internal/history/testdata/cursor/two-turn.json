@@ -1,0 +1,26 @@
+{
+  "comment": "A plain two-turn session: no tool calls. Shape observed in real stores: system prompt, one environment preamble with string content, then a user prompt with array content per turn. Content is synthetic.",
+  "sessionId": "7506c5c9-d47c-4b6f-bf36-86908e41f536",
+  "name": "Rename the flag",
+  "createdAtMs": 1754636018789,
+  "lastUsedModel": "claude-4-opus",
+  "workspaceUri": "file:///work/repo",
+  "messages": [
+    {
+      "kind": "system",
+      "text": "You are Cursor Agent, an AI coding assistant. Assist with defensive security tasks only."
+    },
+    {
+      "kind": "preamble",
+      "text": "<user_info>\nOS Version: darwin 25.1.0\nShell: /bin/zsh\nWorkspace Path: /work/repo\nIs directory a git repo: Yes\n</user_info>"
+    },
+    { "kind": "prompt", "text": "Rename the retry flag to --max-attempts." },
+    { "kind": "reasoning", "text": "**Locating the flag definition**" },
+    {
+      "kind": "assistant",
+      "text": "The flag is declared once, in cmd/root.go. Renaming it there is enough."
+    },
+    { "kind": "prompt", "text": "Does anything else read the old name?" },
+    { "kind": "assistant", "text": "No. Nothing else reads it." }
+  ]
+}

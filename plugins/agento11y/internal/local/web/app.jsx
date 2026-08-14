@@ -2294,7 +2294,7 @@
       const userText = skipUser ? "" : firstUserText(step);
       if (userText) return { role: "user", tool: "", text: userText, mono: false };
       const tool = (step.tools && step.tools[0]) || "";
-      const prose = leadingAssistantText(step);
+      const prose = assistantSummaryText(step);
       let text = prose || step.tool_preview || "";
       if (!text) text = i === 0 ? "Initial prompt" : (i === total - 1 ? "Final response" : "Response");
       return { role: "assistant", tool, text, mono: !prose && !!step.tool_preview };
@@ -2420,12 +2420,33 @@
       return "";
     }
 
+    // assistantSummaryText is the prose to label a step with: the narration that
+    // opens it, or the answer it ends on when it opens with a tool call.
+    // Cursor records a whole agentic run as one step, live and imported alike,
+    // so its answer sits under every tool call the run made. Half of those
+    // steps would otherwise read "Final response" or a shell command.
+    function assistantSummaryText(step) {
+      const leading = leadingAssistantText(step);
+      if (leading) return leading;
+      const out = step.output || [];
+      for (let i = out.length - 1; i >= 0; i--) {
+        const parts = out[i].parts || [];
+        for (let j = parts.length - 1; j >= 0; j--) {
+          if (parts[j].kind === "text") {
+            const t = (parts[j].text || "").trim();
+            if (t) return t;
+          }
+        }
+      }
+      return "";
+    }
+
     // stepRailSummary picks a one-line label for a rail row: the assistant's
     // leading prose when the step has any, else the first tool call's name +
     // preview, else a position heuristic ("Initial prompt" / "Final response").
     // mono renders the tool form in Roboto Mono; prose labels stay in Inter.
     function stepRailSummary(step, i, total) {
-      const prose = leadingAssistantText(step);
+      const prose = assistantSummaryText(step);
       if (prose) return { label: prose, mono: false };
       const tool = (step.tools && step.tools[0]) || "";
       if (tool) {

@@ -495,9 +495,9 @@ func (r *codexReplay) applyResponseItem(rec codexlog.Record) {
 		switch item.Role {
 		case "user":
 			r.noteTitle(text)
-			r.current.frag.Prompt = codexAppendText(r.current.frag.Prompt, text)
+			r.current.frag.Prompt = appendText(r.current.frag.Prompt, text)
 		case "assistant":
-			r.current.frag.LastAssistantMessage = codexAppendText(r.current.frag.LastAssistantMessage, text)
+			r.current.frag.LastAssistantMessage = appendText(r.current.frag.LastAssistantMessage, text)
 		}
 	case codexIsToolCall(item):
 		r.current.addToolCall(item)
@@ -524,10 +524,10 @@ func (r *codexReplay) addPrompt(text string) {
 	}
 	r.noteTitle(text)
 	if r.current == nil {
-		r.pendingPrompt = codexAppendText(r.pendingPrompt, text)
+		r.pendingPrompt = appendText(r.pendingPrompt, text)
 		return
 	}
-	r.current.frag.Prompt = codexAppendText(r.current.frag.Prompt, text)
+	r.current.frag.Prompt = appendText(r.current.frag.Prompt, text)
 }
 
 func (r *codexReplay) noteTitle(text string) {
@@ -1030,7 +1030,10 @@ func codexToolStatus(raw json.RawMessage) string {
 	return ""
 }
 
-func codexAppendText(existing, next string) string {
+// appendText joins two blocks of text with a blank line, ignoring an empty one.
+// The codex and cursor importers both rebuild a prompt or a reply from several
+// source records.
+func appendText(existing, next string) string {
 	existing = strings.TrimSpace(existing)
 	next = strings.TrimSpace(next)
 	switch {

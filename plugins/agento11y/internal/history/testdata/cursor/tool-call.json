@@ -1,0 +1,64 @@
+{
+  "comment": "A two-turn session where the first turn calls two tools and the second calls one. Tool calls arrive as assistant tool-call parts and their results as separate tool-role messages, paired by toolCallId. The double-ID toolCallId is the real shape Cursor writes. Content is synthetic.",
+  "timeComment": "The fc_ and rs_ IDs are OpenAI's 50-hex shape: a version byte, an eight-byte group ID, four bytes of Unix seconds, then randomness. issuedAt states what those four bytes say, so the fixture commits the time in readable form beside the ID that encodes it. The Shell call carries only the call_ half, which holds no time, so it dates nothing. See README.md.",
+  "sessionId": "5a944593-4422-4a9a-a62c-be1733f0a131",
+  "name": "Check the test suite",
+  "createdAtMs": 1763760047255,
+  "lastUsedModel": "gpt-5.1-codex-high",
+  "workspaceUri": "file:///work/repo",
+  "messages": [
+    { "kind": "system", "text": "You are GPT-5.1 Codex running as an interactive CLI coding agent in Cursor." },
+    {
+      "kind": "preamble",
+      "text": "<user_info>\nOS Version: darwin 25.1.0\nShell: /bin/zsh\nWorkspace Path: /work/repo\n</user_info>"
+    },
+    { "kind": "prompt", "text": "Run the tests and tell me what fails." },
+    {
+      "kind": "reasoning",
+      "text": "**Choosing the test command**",
+      "reasoningId": "rs_01101c93959630f1016920d7bb3f6c5d1e40a27b8c9d0e1f20",
+      "issuedAt": "2025-11-21T21:20:59Z"
+    },
+    {
+      "kind": "toolCall",
+      "toolName": "Read",
+      "toolCallId": "call_quk1E4T6bsSwIEOeoUeuavFk\nfc_01101c93959630f1016920d7bf7a1b2c3d4e5f60718293a4b5",
+      "issuedAt": "2025-11-21T21:21:03Z",
+      "args": { "path": "/work/repo/Makefile" }
+    },
+    {
+      "kind": "toolResult",
+      "toolName": "Read",
+      "toolCallId": "call_quk1E4T6bsSwIEOeoUeuavFk\nfc_01101c93959630f1016920d7bf7a1b2c3d4e5f60718293a4b5",
+      "result": "test:\n\tgo test ./...\n"
+    },
+    {
+      "kind": "toolCall",
+      "toolName": "Shell",
+      "toolCallId": "call_H2vXo9pQmR4kLn8sTdUwYbZc",
+      "args": { "command": "go test ./...", "description": "Runs the test suite" }
+    },
+    {
+      "kind": "toolResult",
+      "toolName": "Shell",
+      "toolCallId": "call_H2vXo9pQmR4kLn8sTdUwYbZc",
+      "result": "Exit code: 1\n\nCommand output:\n\n--- FAIL: TestParseFlag (0.00s)\n"
+    },
+    { "kind": "assistant", "text": "One test fails: TestParseFlag." },
+    { "kind": "prompt", "text": "Show me that test." },
+    {
+      "kind": "toolCall",
+      "toolName": "Read",
+      "toolCallId": "call_Kj3mNp7QrStUvWxYzAbCdEfG\nfc_01101c93959630f1016920d87ab5a4938271605f4e3d2c1b7a",
+      "issuedAt": "2025-11-21T21:24:10Z",
+      "args": { "path": "/work/repo/flag_test.go" }
+    },
+    {
+      "kind": "toolResult",
+      "toolName": "Read",
+      "toolCallId": "call_Kj3mNp7QrStUvWxYzAbCdEfG\nfc_01101c93959630f1016920d87ab5a4938271605f4e3d2c1b7a",
+      "result": "func TestParseFlag(t *testing.T) { ... }\n"
+    },
+    { "kind": "assistant", "text": "It asserts the old flag name." }
+  ]
+}

@@ -457,7 +457,14 @@ set.
 
 The viewer and Grafana Cloud both start empty: they hold only sessions captured
 after the install. `agento11y history import` backfills sessions an agent
-already wrote to disk. Supported agents are `claude-code`, `codex`, and `pi`.
+already wrote to disk. Supported agents are `claude-code`, `codex`, `cursor`, and
+`pi`.
+
+A `cursor` import reads Cursor's session databases under `~/.cursor/chats`. That
+format records no token usage and stamps no message with a time, so an imported
+turn carries no usage and its times are marked approximate. Reading a session can
+add a `store.db-shm` file next to the session database, which SQLite needs to
+read the newest part of a session.
 
 ```sh
 agento11y history import claude-code --dry-run   # plan only, nothing exported
