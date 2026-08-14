@@ -25,7 +25,42 @@ import (
 const (
 	tenantHeaderName        = wire.TenantHeaderName
 	authorizationHeaderName = wire.AuthorizationHeaderName
+
+	// defaultExportTimeout bounds one generation / workflow-step export attempt
+	// when neither ExportTimeout nor (for HTTP) HTTPTimeout is configured.
+	defaultExportTimeout = 30 * time.Second
 )
+
+// resolveExportTimeout returns the deadline applied to a single export attempt
+// for the configured protocol.
+//
+// HTTPTimeout is an HTTP-only override kept for backward compatibility (the
+// experiments client maps its RetryTimeout onto it), so it wins only when the
+// protocol is HTTP. gRPC, and HTTP without an HTTPTimeout, use ExportTimeout.
+// A zero or negative ExportTimeout falls back to defaultExportTimeout.
+func resolveExportTimeout(cfg GenerationExportConfig) time.Duration {
+	if cfg.Protocol == GenerationExportProtocolHTTP {
+		return resolveHTTPExportTimeout(cfg)
+	}
+	return resolveBaseExportTimeout(cfg)
+}
+
+// resolveHTTPExportTimeout resolves the timeout used by the HTTP exporter for
+// both http.Client.Timeout and the per-attempt context, so the two can never
+// disagree.
+func resolveHTTPExportTimeout(cfg GenerationExportConfig) time.Duration {
+	if cfg.HTTPTimeout > 0 {
+		return cfg.HTTPTimeout
+	}
+	return resolveBaseExportTimeout(cfg)
+}
+
+func resolveBaseExportTimeout(cfg GenerationExportConfig) time.Duration {
+	if cfg.ExportTimeout > 0 {
+		return cfg.ExportTimeout
+	}
+	return defaultExportTimeout
+}
 
 type queuedGeneration struct {
 	generation *agento11yv1.Generation
@@ -206,17 +241,15 @@ func newHTTPGenerationExporter(cfg GenerationExportConfig) (generationExporter, 
 	// caller override wins, otherwise the SDK default. headers has any
 	// User-Agent entry removed so it can't blank out the resolved value below.
 	userAgent, headers := splitUserAgent(cfg.Headers)
-	timeout := cfg.HTTPTimeout
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
 	return &httpGenerationExporter{
 		endpoint:             urlString,
 		workflowStepEndpoint: workflowStepURLString,
 		userAgent:            userAgent,
 		headers:              headers,
 		client: &http.Client{
-			Timeout: timeout,
+			// Same resolved value as the per-attempt context in
+			// exportWithRetryContext / exportWorkflowStepsWithRetry.
+			Timeout: resolveHTTPExportTimeout(cfg),
 		},
 	}, nil
 }
@@ -371,6 +404,9 @@ func mergeGenerationExportConfig(base, override GenerationExportConfig) Generati
 	}
 	if override.HTTPTimeout > 0 {
 		out.HTTPTimeout = override.HTTPTimeout
+	}
+	if override.ExportTimeout > 0 {
+		out.ExportTimeout = override.ExportTimeout
 	}
 	return out
 }
@@ -726,9 +762,11 @@ func (c *Client) exportWithRetryContext(ctx context.Context, request *agento11yv
 		backoff = 100 * time.Millisecond
 	}
 
+	timeout := resolveExportTimeout(c.config.GenerationExport)
+
 	var lastErr error
 	for attempt := range attempts {
-		timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 		response, err := c.exporter.Export(timeoutCtx, request)
 		cancel()
 		if err == nil {
@@ -808,9 +846,11 @@ func (c *Client) exportWorkflowStepsWithRetry(request *agento11yv1.ExportWorkflo
 		backoff = 100 * time.Millisecond
 	}
 
+	timeout := resolveExportTimeout(c.config.GenerationExport)
+
 	var lastErr error
 	for attempt := range attempts {
-		timeoutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		response, err := c.exporter.ExportWorkflowSteps(timeoutCtx, request)
 		cancel()
 		if err == nil {

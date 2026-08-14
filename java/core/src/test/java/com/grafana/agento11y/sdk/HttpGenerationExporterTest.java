@@ -8,6 +8,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+import java.util.Map;
 import java.util.stream.Stream;
 
 class HttpGenerationExporterTest {
@@ -68,6 +70,30 @@ class HttpGenerationExporterTest {
     @MethodSource("normalizeCases")
     void normalizeEndpoint(String name, String input, String want) {
         assertThat(HttpGenerationExporter.normalizeEndpoint(input)).isEqualTo(want);
+    }
+
+    static Stream<Arguments> requestTimeoutCases() {
+        return Stream.of(
+                Arguments.of("default when unset", null, GenerationExportConfig.DEFAULT_EXPORT_TIMEOUT),
+                Arguments.of("explicit shorter value", Duration.ofMillis(250), Duration.ofMillis(250)),
+                Arguments.of("explicit longer value", Duration.ofMinutes(2), Duration.ofMinutes(2)));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("requestTimeoutCases")
+    void requestTimeoutIsConfigurableAndConnectTimeoutStaysFixed(String name, Duration configured, Duration want) {
+        HttpGenerationExporter exporter = configured == null
+                ? new HttpGenerationExporter("http://localhost:8080", Map.of())
+                : new HttpGenerationExporter("http://localhost:8080", Map.of(), configured);
+        assertThat(exporter.requestTimeout()).isEqualTo(want);
+        assertThat(exporter.connectTimeout()).contains(Duration.ofSeconds(10));
+    }
+
+    @Test
+    void nullRequestTimeoutUsesDefault() {
+        HttpGenerationExporter exporter = new HttpGenerationExporter("http://localhost:8080", Map.of(), null);
+        assertThat(exporter.requestTimeout()).isEqualTo(GenerationExportConfig.DEFAULT_EXPORT_TIMEOUT);
+        assertThat(exporter.connectTimeout()).contains(Duration.ofSeconds(10));
     }
 
     @Test

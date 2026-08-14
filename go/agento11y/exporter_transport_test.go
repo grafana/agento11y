@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net"
 	"net/http"
@@ -214,6 +215,170 @@ func TestSDKExportsGenerationOverNone_NoSend(t *testing.T) {
 	defer shutdownCancel()
 	if err := client.Shutdown(shutdownCtx); err != nil {
 		t.Fatalf("shutdown: %v", err)
+	}
+}
+
+// TestExportAttemptTimesOutOnHungIngest exercises the resolved export timeout
+// against a real transport: the ingest server accepts the request and never
+// answers, so only the per-attempt deadline (and, for HTTP, the matching
+// http.Client timeout) can end the attempt.
+func TestExportAttemptTimesOutOnHungIngest(t *testing.T) {
+	testCases := []struct {
+		name      string
+		transport exportTransport
+	}{
+		{name: "http", transport: exportTransportHTTP},
+		{name: "grpc", transport: exportTransportGRPC},
+	}
+
+	// Each attempt is bounded by exportTimeout; mergeGenerationExportConfig
+	// keeps the default MaxRetries (a zero override never wins), so the export
+	// call spans a handful of equally bounded attempts.
+	const exportTimeout = 100 * time.Millisecond
+	// Generous upper bound: the assertion is "the export ends on its own",
+	// not a latency measurement.
+	const maxElapsed = 20 * time.Second
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			client := newHangingTransportTestClient(t, testCase.transport, exportTimeout)
+
+			exports := []struct {
+				name string
+				run  func() error
+			}{
+				{
+					name: "generation",
+					run: func() error {
+						return client.exportWithRetry(&agento11yv1.ExportGenerationsRequest{
+							Generations: []*agento11yv1.Generation{{Id: "gen-1"}},
+						})
+					},
+				},
+				{
+					name: "workflow step",
+					run: func() error {
+						return client.exportWorkflowStepsWithRetry(&agento11yv1.ExportWorkflowStepsRequest{
+							WorkflowSteps: []*agento11yv1.WorkflowStep{{Id: "step-1"}},
+						})
+					},
+				},
+			}
+
+			for _, export := range exports {
+				started := time.Now()
+				err := export.run()
+				elapsed := time.Since(started)
+
+				if err == nil {
+					t.Fatalf("%s export against hung ingest returned nil error", export.name)
+				}
+				if !strings.Contains(strings.ToLower(err.Error()), "deadline exceeded") {
+					t.Fatalf("%s export error = %v, want a deadline-exceeded failure", export.name, err)
+				}
+				if elapsed >= maxElapsed {
+					t.Fatalf("%s export took %v, want the attempt bounded by %v", export.name, elapsed, exportTimeout)
+				}
+			}
+		})
+	}
+}
+
+// newHangingTransportTestClient points a client at an ingest server that never
+// responds, so an export attempt can only end via the configured ExportTimeout.
+func newHangingTransportTestClient(t *testing.T, transport exportTransport, exportTimeout time.Duration) *Client {
+	t.Helper()
+
+	release := make(chan struct{})
+
+	cfg := Config{
+		Tracer: noop.NewTracerProvider().Tracer("test"),
+		Logger: log.New(io.Discard, "", 0),
+		GenerationExport: GenerationExportConfig{
+			BatchSize:      1,
+			QueueSize:      1,
+			FlushInterval:  time.Hour,
+			MaxRetries:     0,
+			InitialBackoff: time.Millisecond,
+			MaxBackoff:     time.Millisecond,
+			ExportTimeout:  exportTimeout,
+		},
+		testDisableWorker: true,
+	}
+
+	switch transport {
+	case exportTransportHTTP:
+		httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+		}))
+		t.Cleanup(httpServer.Close)
+
+		cfg.GenerationExport.Protocol = GenerationExportProtocolHTTP
+		cfg.GenerationExport.Endpoint = httpServer.URL
+		cfg.GenerationExport.Insecure = BoolPtr(true)
+	case exportTransportGRPC:
+		grpcServer := grpc.NewServer()
+		hanging := &hangingIngestServer{release: release}
+		agento11yv1.RegisterGenerationIngestServiceServer(grpcServer, hanging)
+		agento11yv1.RegisterWorkflowStepIngestServiceServer(grpcServer, hanging)
+
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen grpc: %v", err)
+		}
+		go func() {
+			_ = grpcServer.Serve(listener)
+		}()
+		t.Cleanup(func() {
+			grpcServer.Stop()
+			_ = listener.Close()
+		})
+
+		cfg.GenerationExport.Protocol = GenerationExportProtocolGRPC
+		cfg.GenerationExport.Endpoint = listener.Addr().String()
+		cfg.GenerationExport.Insecure = BoolPtr(true)
+	default:
+		t.Fatalf("unsupported transport: %v", transport)
+	}
+
+	// Registered after the server cleanup so it runs first (cleanups are LIFO)
+	// and blocked handlers can return before the server waits on them.
+	t.Cleanup(func() { close(release) })
+
+	client := NewClient(cfg)
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = client.Shutdown(shutdownCtx)
+	})
+	return client
+}
+
+type hangingIngestServer struct {
+	agento11yv1.UnimplementedGenerationIngestServiceServer
+	agento11yv1.UnimplementedWorkflowStepIngestServiceServer
+
+	release chan struct{}
+}
+
+func (s *hangingIngestServer) ExportGenerations(ctx context.Context, _ *agento11yv1.ExportGenerationsRequest) (*agento11yv1.ExportGenerationsResponse, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.release:
+		return &agento11yv1.ExportGenerationsResponse{}, nil
+	}
+}
+
+func (s *hangingIngestServer) ExportWorkflowSteps(ctx context.Context, _ *agento11yv1.ExportWorkflowStepsRequest) (*agento11yv1.ExportWorkflowStepsResponse, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.release:
+		return &agento11yv1.ExportWorkflowStepsResponse{}, nil
 	}
 }
 

@@ -31,6 +31,7 @@ var client = new Agento11yClient(new Agento11yClientConfig
         MaxRetries = 5,
         InitialBackoff = TimeSpan.FromMilliseconds(100),
         MaxBackoff = TimeSpan.FromSeconds(5),
+        ExportTimeout = TimeSpan.FromSeconds(30),
     },
     Api = new ApiConfig
     {
@@ -60,6 +61,15 @@ using var meterProvider = Sdk.CreateMeterProviderBuilder()
 
 Generation export auth is configured in `GenerationExport.Auth`.
 `Api.Endpoint` configures helper API calls such as `SubmitConversationRatingAsync(...)`.
+
+`GenerationExport.ExportTimeout` (default `30s`) bounds a single export attempt
+on both transports, so each retry gets a fresh budget. Non-positive values fall
+back to `30s`, and values above `int.MaxValue` milliseconds are capped there.
+
+Set it from the environment with `AGENTO11Y_EXPORT_TIMEOUT_MS` (legacy
+`SIGIL_EXPORT_TIMEOUT_MS`), which takes base-10 integer milliseconds in the
+inclusive range `1`..`2147483647`. An explicit `ExportTimeout` in code wins over
+the environment variable.
 
 Generation export transport protocols:
 

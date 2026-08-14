@@ -3,11 +3,16 @@ package com.grafana.agento11y.sdk;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.grafana.agento11y.sdk.Agento11yEnvConfig.EnvResolveResult;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 class Agento11yEnvConfigTest {
 
@@ -94,6 +99,143 @@ class Agento11yEnvConfigTest {
         assertThat(cfg.getUserId()).isEqualTo("alice");
         assertThat(cfg.getGenerationExport().getAuth().getMode()).isEqualTo(AuthMode.NONE);
         assertThat(result.warnings()).anySatisfy(w -> assertThat(w).contains("SIGIL_AUTH_MODE"));
+    }
+
+    @Test
+    void exportTimeoutDefaultsToThirtySecondsWhenUnset() {
+        GenerationExportConfig export = resolve(Map.of()).config().getGenerationExport();
+        assertThat(GenerationExportConfig.DEFAULT_EXPORT_TIMEOUT).isEqualTo(Duration.ofSeconds(30));
+        assertThat(export.getExportTimeout()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(new GenerationExportConfig().getExportTimeout()).isEqualTo(Duration.ofSeconds(30));
+    }
+
+    static Stream<Arguments> validExportTimeoutCases() {
+        return Stream.of(
+                Arguments.of("plain millis", "5000", Duration.ofMillis(5000)),
+                Arguments.of("lower bound", "1", Duration.ofMillis(1)),
+                Arguments.of("upper bound", "2147483647", Duration.ofMillis(2147483647L)));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("validExportTimeoutCases")
+    void exportTimeoutFromEnv(String name, String raw, Duration want) {
+        for (String key : new String[] {"AGENTO11Y_EXPORT_TIMEOUT_MS", "SIGIL_EXPORT_TIMEOUT_MS"}) {
+            EnvResolveResult result = resolve(Map.of(key, raw));
+            assertThat(result.config().getGenerationExport().getExportTimeout()).isEqualTo(want);
+            assertThat(result.warnings()).isEmpty();
+        }
+    }
+
+    static Stream<Arguments> invalidExportTimeoutCases() {
+        // Base-10 integer milliseconds only, inclusive 1..2147483647.
+        return Stream.of(
+                Arguments.of("zero", "0"),
+                Arguments.of("negative", "-1"),
+                Arguments.of("fractional", "1.5"),
+                Arguments.of("non numeric", "abc"),
+                Arguments.of("above int max", "2147483648"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("invalidExportTimeoutCases")
+    void invalidExportTimeoutWarnsAndPreservesOtherEnv(String name, String raw) {
+        Map<String, String> env = new HashMap<>();
+        env.put("AGENTO11Y_EXPORT_TIMEOUT_MS", raw);
+        env.put("AGENTO11Y_ENDPOINT", "valid.example:4318");
+        env.put("AGENTO11Y_AGENT_NAME", "valid-agent");
+        env.put("AGENTO11Y_PROTOCOL", "grpc");
+        EnvResolveResult result = Agento11yEnvConfig.resolveFromEnv(env::get, new Agento11yClientConfig());
+
+        GenerationExportConfig export = result.config().getGenerationExport();
+        assertThat(export.getExportTimeout()).isEqualTo(GenerationExportConfig.DEFAULT_EXPORT_TIMEOUT);
+        assertThat(export.getEndpoint()).isEqualTo("valid.example:4318");
+        assertThat(export.getProtocol()).isEqualTo(GenerationExportProtocol.GRPC);
+        assertThat(result.config().getAgentName()).isEqualTo("valid-agent");
+        assertThat(result.warnings()).anySatisfy(w -> assertThat(w)
+                .contains("AGENTO11Y_EXPORT_TIMEOUT_MS")
+                .contains(raw));
+    }
+
+    @Test
+    void invalidPreferredExportTimeoutBlocksValidLegacy() {
+        Map<String, String> env = Map.of(
+                "AGENTO11Y_EXPORT_TIMEOUT_MS", "nope",
+                "SIGIL_EXPORT_TIMEOUT_MS", "2500");
+        EnvResolveResult result = resolve(env);
+        assertThat(result.config().getGenerationExport().getExportTimeout())
+                .isEqualTo(GenerationExportConfig.DEFAULT_EXPORT_TIMEOUT);
+        assertThat(result.warnings()).anySatisfy(w -> assertThat(w).contains("AGENTO11Y_EXPORT_TIMEOUT_MS"));
+    }
+
+    @Test
+    void callerExportTimeoutWinsOverEnv() {
+        Agento11yClientConfig base = new Agento11yClientConfig();
+        base.getGenerationExport().setExportTimeout(Duration.ofSeconds(3));
+        Agento11yClientConfig cfg = Agento11yEnvConfig.resolveFromEnv(
+                Map.of("AGENTO11Y_EXPORT_TIMEOUT_MS", "5000")::get, base).config();
+        assertThat(cfg.getGenerationExport().getExportTimeout()).isEqualTo(Duration.ofSeconds(3));
+        // resolveFromEnv works on a copy, so the caller's explicit marker must survive it.
+        assertThat(base.getGenerationExport().getExportTimeout()).isEqualTo(Duration.ofSeconds(3));
+    }
+
+    @Test
+    void callerExportTimeoutEqualToDefaultStillWinsOverEnv() {
+        Agento11yClientConfig base = new Agento11yClientConfig();
+        base.getGenerationExport().setExportTimeout(GenerationExportConfig.DEFAULT_EXPORT_TIMEOUT);
+        Agento11yClientConfig cfg = Agento11yEnvConfig.resolveFromEnv(
+                Map.of("AGENTO11Y_EXPORT_TIMEOUT_MS", "5000")::get, base).config();
+        assertThat(cfg.getGenerationExport().getExportTimeout()).isEqualTo(Duration.ofSeconds(30));
+    }
+
+    @Test
+    void nullExportTimeoutResetsToDefaultAndReopensEnvLayering() {
+        GenerationExportConfig export = new GenerationExportConfig().setExportTimeout(Duration.ofSeconds(3));
+        export.setExportTimeout(null);
+        assertThat(export.getExportTimeout()).isEqualTo(GenerationExportConfig.DEFAULT_EXPORT_TIMEOUT);
+
+        Agento11yClientConfig base = new Agento11yClientConfig().setGenerationExport(export);
+        Agento11yClientConfig cfg = Agento11yEnvConfig.resolveFromEnv(
+                Map.of("AGENTO11Y_EXPORT_TIMEOUT_MS", "5000")::get, base).config();
+        assertThat(cfg.getGenerationExport().getExportTimeout()).isEqualTo(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void exportTimeoutSetterDoesNotClampCallerValues() {
+        // Java clamps none of the neighboring duration fields; keep that policy here.
+        assertThat(new GenerationExportConfig().setExportTimeout(Duration.ofMillis(1)).getExportTimeout())
+                .isEqualTo(Duration.ofMillis(1));
+        assertThat(new GenerationExportConfig().setExportTimeout(Duration.ofHours(2)).getExportTimeout())
+                .isEqualTo(Duration.ofHours(2));
+        assertThat(new GenerationExportConfig().setExportTimeout(Duration.ZERO).getExportTimeout())
+                .isEqualTo(Duration.ZERO);
+        assertThat(new GenerationExportConfig().setExportTimeout(Duration.ofSeconds(-1)).getExportTimeout())
+                .isEqualTo(Duration.ofSeconds(-1));
+    }
+
+    @Test
+    void exportTimeoutSurvivesCopy() {
+        GenerationExportConfig copy = new GenerationExportConfig()
+                .setExportTimeout(Duration.ofSeconds(7))
+                .copy();
+        assertThat(copy.getExportTimeout()).isEqualTo(Duration.ofSeconds(7));
+        assertThat(new GenerationExportConfig().copy().getExportTimeout())
+                .isEqualTo(GenerationExportConfig.DEFAULT_EXPORT_TIMEOUT);
+    }
+
+    @Test
+    void parseTimeoutMillisAcceptsBaseTenIntegerRange() {
+        assertThat(Agento11yEnvConfig.parseTimeoutMillis("1")).isEqualTo(Duration.ofMillis(1));
+        assertThat(Agento11yEnvConfig.parseTimeoutMillis(" 250 ")).isEqualTo(Duration.ofMillis(250));
+        assertThat(Agento11yEnvConfig.parseTimeoutMillis("2147483647")).isEqualTo(Duration.ofMillis(2147483647L));
+        assertThat(Agento11yEnvConfig.parseTimeoutMillis("0")).isNull();
+        assertThat(Agento11yEnvConfig.parseTimeoutMillis("-1")).isNull();
+        assertThat(Agento11yEnvConfig.parseTimeoutMillis("1.5")).isNull();
+        assertThat(Agento11yEnvConfig.parseTimeoutMillis("abc")).isNull();
+        assertThat(Agento11yEnvConfig.parseTimeoutMillis("2147483648")).isNull();
+        assertThat(Agento11yEnvConfig.parseTimeoutMillis("0x10")).isNull();
+        assertThat(Agento11yEnvConfig.parseTimeoutMillis("99999999999999999999")).isNull();
+        assertThat(Agento11yEnvConfig.parseTimeoutMillis("")).isNull();
+        assertThat(Agento11yEnvConfig.parseTimeoutMillis(null)).isNull();
     }
 
     @Test
@@ -306,6 +448,7 @@ class Agento11yEnvConfigTest {
         env.put(prefix + "PROTOCOL", "http");
         env.put(prefix + "INSECURE", "true");
         env.put(prefix + "HEADERS", "X-A=1,X-B=two");
+        env.put(prefix + "EXPORT_TIMEOUT_MS", "7500");
         env.put(prefix + "AUTH_MODE", "basic");
         env.put(prefix + "AUTH_TENANT_ID", "42");
         env.put(prefix + "AUTH_TOKEN", "glc_xxx");
@@ -329,6 +472,7 @@ class Agento11yEnvConfigTest {
         assertThat(pe.getProtocol()).isEqualTo(le.getProtocol()).isEqualTo(GenerationExportProtocol.HTTP);
         assertThat(pe.getInsecure()).isEqualTo(le.getInsecure()).isTrue();
         assertThat(pe.getHeaders()).isEqualTo(le.getHeaders()).containsEntry("X-A", "1");
+        assertThat(pe.getExportTimeout()).isEqualTo(le.getExportTimeout()).isEqualTo(Duration.ofMillis(7500));
 
         AuthConfig pa = pe.getAuth();
         AuthConfig la = le.getAuth();
@@ -423,6 +567,7 @@ class Agento11yEnvConfigTest {
         assertThat(Agento11yEnvConfig.ENV_PROTOCOL).isEqualTo("SIGIL_PROTOCOL");
         assertThat(Agento11yEnvConfig.ENV_INSECURE).isEqualTo("SIGIL_INSECURE");
         assertThat(Agento11yEnvConfig.ENV_HEADERS).isEqualTo("SIGIL_HEADERS");
+        assertThat(Agento11yEnvConfig.ENV_EXPORT_TIMEOUT_MS).isEqualTo("SIGIL_EXPORT_TIMEOUT_MS");
         assertThat(Agento11yEnvConfig.ENV_AUTH_MODE).isEqualTo("SIGIL_AUTH_MODE");
         assertThat(Agento11yEnvConfig.ENV_AUTH_TENANT_ID).isEqualTo("SIGIL_AUTH_TENANT_ID");
         assertThat(Agento11yEnvConfig.ENV_AUTH_TOKEN).isEqualTo("SIGIL_AUTH_TOKEN");
@@ -440,6 +585,7 @@ class Agento11yEnvConfigTest {
         assertThat(Agento11yEnvConfig.ENV_PROTOCOL_PREFERRED).isEqualTo("AGENTO11Y_PROTOCOL");
         assertThat(Agento11yEnvConfig.ENV_INSECURE_PREFERRED).isEqualTo("AGENTO11Y_INSECURE");
         assertThat(Agento11yEnvConfig.ENV_HEADERS_PREFERRED).isEqualTo("AGENTO11Y_HEADERS");
+        assertThat(Agento11yEnvConfig.ENV_EXPORT_TIMEOUT_MS_PREFERRED).isEqualTo("AGENTO11Y_EXPORT_TIMEOUT_MS");
         assertThat(Agento11yEnvConfig.ENV_AUTH_MODE_PREFERRED).isEqualTo("AGENTO11Y_AUTH_MODE");
         assertThat(Agento11yEnvConfig.ENV_AUTH_TENANT_ID_PREFERRED).isEqualTo("AGENTO11Y_AUTH_TENANT_ID");
         assertThat(Agento11yEnvConfig.ENV_AUTH_TOKEN_PREFERRED).isEqualTo("AGENTO11Y_AUTH_TOKEN");

@@ -59,6 +59,7 @@ Agento11yClient client = new Agento11yClient(new Agento11yClientConfig()
     .setGenerationExport(new GenerationExportConfig()
         .setProtocol(GenerationExportProtocol.HTTP)
         .setEndpoint("https://agento11y-prod-<region>.grafana.net")
+        .setExportTimeout(Duration.ofSeconds(30))
         .setAuth(new AuthConfig()
             .setMode(AuthMode.BASIC)
             .setTenantId(System.getenv("AGENTO11Y_AUTH_TENANT_ID"))
@@ -81,6 +82,8 @@ try {
     client.shutdown();
 }
 ```
+
+`GenerationExportConfig.exportTimeout` bounds each HTTP or gRPC generation export request. It defaults to 30 seconds. Set `AGENTO11Y_EXPORT_TIMEOUT_MS` to a base-10 integer from `1` through `2147483647` to override the default. An explicit caller value wins over the environment variable. The HTTP request uses this timeout, while HTTP connection setup keeps its separate 10-second timeout.
 
 Configure OTEL exporters (traces/metrics) in your application OTEL SDK setup. You can optionally inject `Tracer` and `Meter` via `Agento11yClientConfig`.
 
@@ -364,6 +367,7 @@ SDK schema defaults fill the rest.
 | `AGENTO11Y_PROTOCOL` | `GenerationExportConfig.protocol` (`http`/`grpc`/`none`) |
 | `AGENTO11Y_INSECURE` | `GenerationExportConfig.insecure` (tri-state) |
 | `AGENTO11Y_HEADERS` | `GenerationExportConfig.headers` (CSV: `K=V,...`) |
+| `AGENTO11Y_EXPORT_TIMEOUT_MS` | `GenerationExportConfig.exportTimeout` (base-10 integer milliseconds, inclusive `1` through `2147483647`; default `30000`) |
 | `AGENTO11Y_AUTH_MODE` | `AuthConfig.mode` (`none`/`tenant`/`bearer`/`basic`) |
 | `AGENTO11Y_AUTH_TENANT_ID` | `AuthConfig.tenantId` |
 | `AGENTO11Y_AUTH_TOKEN` | `AuthConfig.bearerToken` and/or `basicPassword` (filled when empty) |
@@ -375,8 +379,7 @@ SDK schema defaults fill the rest.
 | `AGENTO11Y_DEBUG` | `Agento11yClientConfig.debug` (tri-state) |
 
 Use `Agento11yEnvConfig.fromEnv()` to inspect the resolved config without
-constructing a client. Invalid values (bad auth mode, etc.) are skipped with a
-warning so a single typo does not discard the rest of the env layer.
+constructing a client. Invalid values are skipped with a warning. One invalid value does not discard other environment settings.
 
 ## Breaking changes (unreleased)
 

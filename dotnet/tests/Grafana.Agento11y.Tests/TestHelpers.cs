@@ -263,7 +263,14 @@ internal sealed class HttpCaptureServer : IDisposable
 
     public ConcurrentQueue<(Dictionary<string, string> Headers, byte[] Body)> Requests { get; } = new();
 
-    public HttpCaptureServer(Func<Dictionary<string, string>, byte[], byte[]> responseFactory)
+    /// <param name="responseDelay">
+    /// Artificial think-time before the response is written. Used by export
+    /// timeout tests to hold a request open past the configured budget.
+    /// </param>
+    public HttpCaptureServer(
+        Func<Dictionary<string, string>, byte[], byte[]> responseFactory,
+        TimeSpan responseDelay = default
+    )
     {
         Port = ReservePort();
         _listener = new HttpListener();
@@ -306,14 +313,31 @@ internal sealed class HttpCaptureServer : IDisposable
 
                     Requests.Enqueue((headers, body));
 
+                    if (responseDelay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(responseDelay).ConfigureAwait(false);
+                    }
+
                     var responsePayload = responseFactory(headers, body);
                     context.Response.StatusCode = 202;
                     context.Response.ContentType = "application/json";
                     await context.Response.OutputStream.WriteAsync(responsePayload).ConfigureAwait(false);
                 }
+                catch (Exception)
+                {
+                    // A client that hit its export timeout aborts mid-response;
+                    // swallow so the loop stays alive for later requests.
+                }
                 finally
                 {
-                    context.Response.Close();
+                    try
+                    {
+                        context.Response.Close();
+                    }
+                    catch (Exception)
+                    {
+                        // Ignore aborted-connection teardown errors.
+                    }
                 }
             }
         });
@@ -363,8 +387,14 @@ internal sealed class GrpcIngestServer : IDisposable
 
     public IReadOnlyList<string> UserAgents => _store.UserAgentSnapshot();
 
-    public GrpcIngestServer()
+    /// <param name="responseDelay">
+    /// Artificial server-side think-time before the export response is
+    /// returned. Used by the gRPC deadline test to outlast the exporter's
+    /// per-call deadline.
+    /// </param>
+    public GrpcIngestServer(TimeSpan responseDelay = default)
     {
+        _store.ResponseDelay = responseDelay;
         Port = ReservePort();
         _host = Host.CreateDefaultBuilder()
             .ConfigureWebHostDefaults(webBuilder =>
@@ -417,6 +447,8 @@ internal sealed class GrpcIngestServer : IDisposable
         private readonly List<(IngestProto.ExportGenerationsRequest Request, Metadata Headers)> _requests = [];
         private readonly List<string> _userAgents = [];
 
+        public TimeSpan ResponseDelay { get; set; }
+
         public void Add(IngestProto.ExportGenerationsRequest request, Metadata headers, string userAgent)
         {
             lock (_gate)
@@ -449,13 +481,26 @@ internal sealed class GrpcIngestServer : IDisposable
 
         public IngestService(RequestStore store) => _store = store;
 
-        public override Task<IngestProto.ExportGenerationsResponse> ExportGenerations(
+        public override async Task<IngestProto.ExportGenerationsResponse> ExportGenerations(
             IngestProto.ExportGenerationsRequest request,
             ServerCallContext context
         )
         {
             var userAgent = context.GetHttpContext().Request.Headers.UserAgent.ToString();
             _store.Add(request, context.RequestHeaders, userAgent);
+
+            if (_store.ResponseDelay > TimeSpan.Zero)
+            {
+                try
+                {
+                    await Task.Delay(_store.ResponseDelay, context.CancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The client's deadline fired first; there is nothing to send.
+                    throw new RpcException(new Status(StatusCode.Cancelled, "client deadline exceeded"));
+                }
+            }
 
             var response = new IngestProto.ExportGenerationsResponse();
             foreach (var generation in request.Generations)
@@ -467,7 +512,7 @@ internal sealed class GrpcIngestServer : IDisposable
                 });
             }
 
-            return Task.FromResult(response);
+            return response;
         }
     }
 

@@ -221,6 +221,12 @@ func TestAutoTagsAreAliasFamilies(t *testing.T) {
 	}
 }
 
+func TestExportTimeoutIsAliasFamily(t *testing.T) {
+	if !slices.Contains(AliasSuffixes, "EXPORT_TIMEOUT_MS") {
+		t.Fatal("EXPORT_TIMEOUT_MS missing from AliasSuffixes")
+	}
+}
+
 // TestAllAutoTags pins the default set to every supported name: the switch on
 // its own resolves all of them, and the allowlist only narrows that.
 func TestAllAutoTags(t *testing.T) {

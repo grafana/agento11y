@@ -79,6 +79,8 @@ AGENTO11Y_AUTH_TOKEN=glc_...
 AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
 
+`AGENTO11Y_EXPORT_TIMEOUT_MS` bounds each generation export request. It defaults to `30000` milliseconds and accepts base-10 integers from `1` through `2147483647`.
+
 Find these values in Grafana Cloud at `https://<your-grafana>.grafana.net/plugins/grafana-agento11y-app`.
 
 Then follow your agent's quickstart:

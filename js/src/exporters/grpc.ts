@@ -22,14 +22,16 @@ import { userAgent } from '../version.js';
 type ExportGenerationsMethod = (
   request: unknown,
   metadata: grpc.Metadata,
+  options: grpc.CallOptions,
   callback: (error: grpc.ServiceError | null, response: unknown) => void,
-) => void;
+) => grpc.ClientUnaryCall;
 
 type ExportWorkflowStepsMethod = (
   request: unknown,
   metadata: grpc.Metadata,
+  options: grpc.CallOptions,
   callback: (error: grpc.ServiceError | null, response: unknown) => void,
-) => void;
+) => grpc.ClientUnaryCall;
 
 type GRPCGenerationServiceClient = grpc.Client & {
   ExportGenerations?: ExportGenerationsMethod;
@@ -60,20 +62,31 @@ const protoLoadOptions: protoLoader.Options = {
   oneofs: true,
 };
 
+const defaultExportTimeoutMs = 30_000;
+
 export class GRPCGenerationExporter implements GenerationExporter {
   private readonly endpoint: string;
   private readonly headers: Record<string, string>;
   private readonly insecure: boolean;
   private readonly userAgent: string;
+  private readonly timeoutMs: number;
 
   private initPromise: Promise<void> | undefined;
   private generationClient: GRPCGenerationServiceClient | undefined;
   private workflowStepClient: GRPCWorkflowStepServiceClient | undefined;
+  private readonly activeCalls = new Set<grpc.ClientUnaryCall>();
+  private closed = false;
 
-  constructor(endpoint: string, headers?: Record<string, string>, insecure = false) {
+  constructor(
+    endpoint: string,
+    headers?: Record<string, string>,
+    insecure = false,
+    timeoutMs = defaultExportTimeoutMs,
+  ) {
     const parsed = parseGRPCEndpoint(endpoint);
     this.endpoint = parsed.host;
     this.insecure = insecure || parsed.insecure;
+    this.timeoutMs = timeoutMs;
     // gRPC reserves the user-agent metadata key, so the User-Agent must travel
     // via the channel option rather than per-call metadata. grpc-js appends its
     // own token after this value.
@@ -84,8 +97,10 @@ export class GRPCGenerationExporter implements GenerationExporter {
 
   async exportGenerations(request: ExportGenerationsRequest): Promise<ExportGenerationsResponse> {
     await this.ensureClient();
+    this.assertOpen();
     const client = this.generationClient;
-    if (client === undefined || typeof client.ExportGenerations !== 'function') {
+    const exportGenerations = client?.ExportGenerations;
+    if (client === undefined || typeof exportGenerations !== 'function') {
       throw new Error('grpc exporter client is unavailable');
     }
 
@@ -98,23 +113,19 @@ export class GRPCGenerationExporter implements GenerationExporter {
       generations: request.generations.map(mapGenerationToProto),
     };
 
-    const response = await new Promise<unknown>((resolve, reject) => {
-      client.ExportGenerations?.(grpcRequest, metadata, (error, result) => {
-        if (error !== null) {
-          reject(error);
-          return;
-        }
-        resolve(result);
-      });
-    });
+    const response = await this.unaryCall((callback) =>
+      exportGenerations.call(client, grpcRequest, metadata, { deadline: Date.now() + this.timeoutMs }, callback),
+    );
 
     return parseGRPCExportResponse(response, request);
   }
 
   async exportWorkflowSteps(request: ExportWorkflowStepsRequest): Promise<ExportWorkflowStepsResponse> {
     await this.ensureClient();
+    this.assertOpen();
     const client = this.workflowStepClient;
-    if (client === undefined || typeof client.ExportWorkflowSteps !== 'function') {
+    const exportWorkflowSteps = client?.ExportWorkflowSteps;
+    if (client === undefined || typeof exportWorkflowSteps !== 'function') {
       throw new Error('grpc workflow-step exporter client is unavailable');
     }
 
@@ -127,20 +138,20 @@ export class GRPCGenerationExporter implements GenerationExporter {
       workflowSteps: request.workflowSteps.map(mapWorkflowStepToProto),
     };
 
-    const response = await new Promise<unknown>((resolve, reject) => {
-      client.ExportWorkflowSteps?.(grpcRequest, metadata, (error, result) => {
-        if (error !== null) {
-          reject(error);
-          return;
-        }
-        resolve(result);
-      });
-    });
+    const response = await this.unaryCall((callback) =>
+      exportWorkflowSteps.call(client, grpcRequest, metadata, { deadline: Date.now() + this.timeoutMs }, callback),
+    );
 
     return parseGRPCWorkflowStepExportResponse(response, request);
   }
 
   async shutdown(): Promise<void> {
+    this.closed = true;
+    for (const call of this.activeCalls) {
+      call.cancel();
+    }
+    this.activeCalls.clear();
+
     if (this.generationClient !== undefined) {
       this.generationClient.close();
       this.generationClient = undefined;
@@ -152,21 +163,61 @@ export class GRPCGenerationExporter implements GenerationExporter {
   }
 
   private async ensureClient(): Promise<void> {
+    this.assertOpen();
     if (this.generationClient !== undefined && this.workflowStepClient !== undefined) {
       return;
     }
     if (this.initPromise !== undefined) {
       await this.initPromise;
+      this.assertOpen();
       return;
     }
 
-    this.initPromise = this.initializeClient();
-    await this.initPromise;
-    this.initPromise = undefined;
+    const initPromise = this.initializeClient();
+    this.initPromise = initPromise;
+    try {
+      await initPromise;
+      this.assertOpen();
+    } finally {
+      if (this.initPromise === initPromise) {
+        this.initPromise = undefined;
+      }
+    }
+  }
+
+  private unaryCall(
+    start: (callback: (error: grpc.ServiceError | null, response: unknown) => void) => grpc.ClientUnaryCall,
+  ): Promise<unknown> {
+    this.assertOpen();
+    return new Promise<unknown>((resolve, reject) => {
+      let call: grpc.ClientUnaryCall | undefined;
+      let settled = false;
+      call = start((error, response) => {
+        settled = true;
+        if (call !== undefined) {
+          this.activeCalls.delete(call);
+        }
+        if (error !== null) {
+          reject(error);
+          return;
+        }
+        resolve(response);
+      });
+      if (!settled) {
+        this.activeCalls.add(call);
+      }
+    });
+  }
+
+  private assertOpen(): void {
+    if (this.closed) {
+      throw new Error('grpc generation exporter shutdown');
+    }
   }
 
   private async initializeClient(): Promise<void> {
     const packageDefinition = await protoLoader.load(defaultProtoPath, protoLoadOptions);
+    this.assertOpen();
     const loaded = grpc.loadPackageDefinition(packageDefinition) as unknown as LoadedGRPCPackage;
     const generationClientCtor = loaded.agento11y?.v1?.GenerationIngestService;
     if (generationClientCtor === undefined) {

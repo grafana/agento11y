@@ -152,6 +152,7 @@ AGENTO11Y_PROTOCOL=http
 AGENTO11Y_AUTH_MODE=basic
 AGENTO11Y_AUTH_TENANT_ID=<your-instance-id>
 AGENTO11Y_AUTH_TOKEN=<glc_... token>
+AGENTO11Y_EXPORT_TIMEOUT_MS=30000       # optional per-request generation export timeout, in milliseconds
 AGENTO11Y_TAGS=team=checkout,env=prod   # optional client tags; also emitted as agento11y.tag.<key> on OTel spans/metrics
 AGENTO11Y_USER_ID=<end-user id>          # optional; sets the user.id span attribute (all SDKs)
 
@@ -163,6 +164,8 @@ OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64 of "<otlp-instance-id>:<g
 `AGENTO11Y_PROTOCOL=http` and `AGENTO11Y_AUTH_MODE=basic` are **required** for Grafana Cloud. The SDK defaults to `protocol=grpc` and `auth_mode=none`; against a Cloud HTTP ingest endpoint those defaults fail with a `401 UNAUTHENTICATED` (grpc is the wrong transport, none sends no auth header) — silently, with no other signal. Always set both explicitly.
 
 Construct the client with no config when the env vars are present; the SDK reads them. Only use explicit `ClientConfig(...)` when the app needs values that aren't in env (e.g. test endpoints).
+
+`AGENTO11Y_EXPORT_TIMEOUT_MS` defaults to `30000`. It accepts base-10 integers from `1` through `2147483647`. An explicit SDK config value wins over the environment variable.
 
 ### Content capture
 

@@ -352,12 +352,14 @@ class Client:
                 self._generation_exporter = HTTPGenerationExporter(
                     endpoint=self._config.generation_export.endpoint,
                     headers=self._config.generation_export.headers,
+                    timeout=self._config.generation_export.export_timeout,
                 )
             elif protocol == "grpc":
                 self._generation_exporter = GRPCGenerationExporter(
                     endpoint=self._config.generation_export.endpoint,
                     headers=self._config.generation_export.headers,
                     insecure=self._config.generation_export.insecure,
+                    timeout=self._config.generation_export.export_timeout,
                 )
             elif protocol == "none":
                 self._generation_exporter = NoopGenerationExporter()

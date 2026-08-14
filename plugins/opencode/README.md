@@ -152,6 +152,7 @@ With guards on, a rule can:
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTLP password. |
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | One of `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`. |
 | `AGENTO11Y_REDACT_INPUT_MESSAGES` | `true` | Redact known secret formats out of user prompt text. Set to `false` to export prompts without redaction. |
+| `AGENTO11Y_EXPORT_TIMEOUT_MS` | `30000` | Timeout for each generation export request. Use a base-10 integer from `1` through `2147483647` milliseconds. |
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Check your prompts, the conversation sent to the model, and OpenCode tool calls against Agent Observability guards. See [Guards](#guards). |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-evaluation guard timeout in milliseconds. |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | Send the turn and allow tool calls when a guard evaluation fails. Set to `false` to refuse them instead. This covers evaluation failures at all three checks. A tool call is blocked under either setting when a guard returns redacted arguments that the plugin cannot write into the arguments OpenCode runs the tool with. |

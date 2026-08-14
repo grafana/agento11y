@@ -12,6 +12,7 @@ import type {
 
 const tenantHeaderName = 'X-Scope-OrgID';
 const authorizationHeaderName = 'Authorization';
+const maxExportTimeoutMs = 2_147_483_647;
 
 const validAuthModes: ExportAuthConfig['mode'][] = ['none', 'tenant', 'bearer', 'basic'];
 
@@ -33,6 +34,7 @@ const envEndpoint = brandedPair('ENDPOINT');
 const envProtocol = brandedPair('PROTOCOL');
 const envInsecure = brandedPair('INSECURE');
 const envHeaders = brandedPair('HEADERS');
+const envExportTimeoutMs = brandedPair('EXPORT_TIMEOUT_MS');
 const envAuthMode = brandedPair('AUTH_MODE');
 const envAuthTenantId = brandedPair('AUTH_TENANT_ID');
 const envAuthToken = brandedPair('AUTH_TOKEN');
@@ -56,6 +58,7 @@ export const defaultGenerationExportConfig: GenerationExportConfig = {
   insecure: false,
   batchSize: 100,
   flushIntervalMs: 1_000,
+  timeoutMs: 30_000,
   queueSize: 2_000,
   maxRetries: 5,
   initialBackoffMs: 100,
@@ -123,11 +126,12 @@ export function mergeConfig(
   // when defined; env fills in undefined fields; defaults fill the rest.
   // Malformed env values are logged and skipped — one typo cannot discard the
   // rest of the env layer (matches Go and Python SDK behavior).
-  const envCfg = envOverrides(env, config.logger ?? defaultLogger);
+  const logger = config.logger ?? defaultLogger;
+  const envCfg = envOverrides(env, logger);
   const overlaid = layerInputs(envCfg, config);
 
   return {
-    generationExport: mergeGenerationExportConfig(overlaid.generationExport),
+    generationExport: mergeGenerationExportConfig(overlaid.generationExport, logger),
     api: mergeAPIConfig(overlaid.api),
     embeddingCapture: mergeEmbeddingCaptureConfig(overlaid.embeddingCapture),
     hooks: mergeHooksConfig(overlaid.hooks),
@@ -172,6 +176,17 @@ function envOverrides(env: Record<string, string | undefined>, logger: Agento11y
   if (insecure !== undefined) generationExport.insecure = parseTruthy(insecure.value);
   const headers = envTrimmed(env, envHeaders);
   if (headers !== undefined) generationExport.headers = parseCsvKv(headers.value);
+  const exportTimeoutMs = envTrimmed(env, envExportTimeoutMs);
+  if (exportTimeoutMs !== undefined) {
+    const parsed = parseExportTimeoutMs(exportTimeoutMs.value);
+    if (parsed !== undefined) {
+      generationExport.timeoutMs = parsed;
+    } else {
+      logger.warn?.(
+        `agento11y: ignoring invalid ${exportTimeoutMs.key}: ${exportTimeoutMs.value}; expected a whole number from 1 through ${maxExportTimeoutMs}`,
+      );
+    }
+  }
 
   const authMode = envTrimmed(env, envAuthMode);
   if (authMode !== undefined) {
@@ -312,17 +327,39 @@ function parseCsvKv(raw: string): Record<string, string> {
   return out;
 }
 
-function mergeGenerationExportConfig(config: Partial<GenerationExportConfig> | undefined): GenerationExportConfig {
+function mergeGenerationExportConfig(
+  config: Partial<GenerationExportConfig> | undefined,
+  logger: Agento11yLogger,
+): GenerationExportConfig {
   const auth = mergeAuthConfig(config?.auth);
   const headers = config?.headers !== undefined ? { ...config.headers } : undefined;
+  const timeoutMs = isValidExportTimeoutMs(config?.timeoutMs)
+    ? config.timeoutMs
+    : defaultGenerationExportConfig.timeoutMs;
+  if (config?.timeoutMs !== undefined && !isValidExportTimeoutMs(config.timeoutMs)) {
+    logger.warn?.(
+      `agento11y: ignoring invalid generationExport.timeoutMs: ${String(config.timeoutMs)}; expected a whole number from 1 through ${maxExportTimeoutMs}`,
+    );
+  }
   const merged: GenerationExportConfig = {
     ...defaultGenerationExportConfig,
     ...config,
     auth,
     headers,
+    timeoutMs,
   };
   merged.headers = resolveHeadersWithAuth(merged.headers, merged.auth, 'generation export');
   return merged;
+}
+
+function parseExportTimeoutMs(value: string): number | undefined {
+  if (!/^[0-9]+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return isValidExportTimeoutMs(parsed) ? parsed : undefined;
+}
+
+function isValidExportTimeoutMs(value: number | undefined): value is number {
+  return value !== undefined && Number.isSafeInteger(value) && value > 0 && value <= maxExportTimeoutMs;
 }
 
 function mergeAPIConfig(config: Partial<ApiConfig> | undefined): ApiConfig {

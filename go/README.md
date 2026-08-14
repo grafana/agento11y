@@ -126,6 +126,7 @@ cfg.GenerationExport.QueueSize = 2000
 cfg.GenerationExport.MaxRetries = 5
 cfg.GenerationExport.InitialBackoff = 100 * time.Millisecond
 cfg.GenerationExport.MaxBackoff = 5 * time.Second
+cfg.GenerationExport.ExportTimeout = 30 * time.Second
 cfg.GenerationExport.GRPCMaxSendMessageBytes = 16 << 20
 cfg.GenerationExport.GRPCMaxReceiveMessageBytes = 16 << 20
 cfg.GenerationExport.PayloadMaxBytes = 16 << 20
@@ -138,6 +139,10 @@ defer func() {
 	_ = client.Shutdown(context.Background())
 }()
 ```
+
+`GenerationExport.ExportTimeout` bounds each HTTP or gRPC generation and workflow-step request. It defaults to 30 seconds. Set `AGENTO11Y_EXPORT_TIMEOUT_MS` to a base-10 integer from `1` through `2147483647` to override the default. A positive caller value wins over the environment variable.
+
+`GenerationExport.HTTPTimeout` remains an HTTP-only override. A positive value wins over `ExportTimeout` on HTTP requests. The experiments client uses this field for `ClientOptions.RetryTimeout`.
 
 Configure OTEL exporters (traces/metrics) in your application OTEL SDK setup.
 

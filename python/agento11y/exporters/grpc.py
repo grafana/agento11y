@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from urllib.parse import urlparse
 
 import grpc
@@ -18,12 +19,21 @@ from ..models import (
 )
 from ..proto_mapping import generation_to_proto, workflow_step_to_proto
 from ..version import user_agent
+from .base import DEFAULT_EXPORT_TIMEOUT_SECONDS, resolve_timeout_seconds
 
 
 class GRPCGenerationExporter:
     """Sends generation and workflow step batches to the Agent Observability gRPC services."""
 
-    def __init__(self, endpoint: str, headers: dict[str, str] | None = None, insecure: bool = False) -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        headers: dict[str, str] | None = None,
+        insecure: bool = False,
+        timeout: float | timedelta = DEFAULT_EXPORT_TIMEOUT_SECONDS,
+    ) -> None:
+        # grpc call deadlines are seconds, ClientConfig holds a timedelta.
+        self._timeout = resolve_timeout_seconds(timeout)
         host, implicit_insecure = _parse_endpoint(endpoint)
         # gRPC reserves the user-agent metadata key, so the User-Agent travels
         # via the channel option rather than per-call metadata. grpc appends its
@@ -50,7 +60,7 @@ class GRPCGenerationExporter:
         grpc_request = agento11y_pb2.ExportGenerationsRequest(
             generations=[generation_to_proto(generation) for generation in request.generations]
         )
-        response = self._stub.ExportGenerations(grpc_request, timeout=10, metadata=self._headers)
+        response = self._stub.ExportGenerations(grpc_request, timeout=self._timeout, metadata=self._headers)
         return ExportGenerationsResponse(
             results=[
                 ExportGenerationResult(
@@ -66,7 +76,9 @@ class GRPCGenerationExporter:
         grpc_request = agento11y_pb2.ExportWorkflowStepsRequest(
             workflow_steps=[workflow_step_to_proto(step) for step in request.workflow_steps]
         )
-        response = self._workflow_step_stub.ExportWorkflowSteps(grpc_request, timeout=10, metadata=self._headers)
+        response = self._workflow_step_stub.ExportWorkflowSteps(
+            grpc_request, timeout=self._timeout, metadata=self._headers
+        )
         return ExportWorkflowStepsResponse(
             results=[
                 ExportWorkflowStepResult(

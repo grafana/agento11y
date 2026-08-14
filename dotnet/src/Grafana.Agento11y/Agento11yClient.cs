@@ -151,12 +151,14 @@ public sealed partial class Agento11yClient : IAsyncDisposable
             {
                 GenerationExportProtocol.Http => new HttpGenerationExporter(
                     _config.GenerationExport.Endpoint,
-                    _config.GenerationExport.Headers
+                    _config.GenerationExport.Headers,
+                    _config.GenerationExport.ExportTimeout
                 ),
                 GenerationExportProtocol.Grpc => new GrpcGenerationExporter(
                     _config.GenerationExport.Endpoint,
                     _config.GenerationExport.Insecure!.Value,
-                    _config.GenerationExport.Headers
+                    _config.GenerationExport.Headers,
+                    _config.GenerationExport.ExportTimeout
                 ),
                 GenerationExportProtocol.None => new NoopGenerationExporter(),
                 _ => throw new InvalidOperationException(

@@ -453,6 +453,13 @@ describe("applyAgento11yDotenv", () => {
     expect(process.env.AGENTO11Y_AUTH_TOKEN).toBe("tok");
   });
 
+  it("materializes export timeout under both spellings", () => {
+    writeConfig("SIGIL_EXPORT_TIMEOUT_MS=2500\n");
+    applyAgento11yDotenv();
+    expect(process.env.SIGIL_EXPORT_TIMEOUT_MS).toBe("2500");
+    expect(process.env.AGENTO11Y_EXPORT_TIMEOUT_MS).toBe("2500");
+  });
+
   it("materializes both automatic-tag variables under both spellings", () => {
     // config.ts reads them as alias families, so both suffixes have to be in
     // ALIAS_SUFFIXES: without them a config.env `SIGIL_AUTO_CODING_AGENT_TAGS`

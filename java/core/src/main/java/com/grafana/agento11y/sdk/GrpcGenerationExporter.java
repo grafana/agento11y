@@ -9,6 +9,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -18,8 +19,19 @@ import agento11y.v1.GenerationIngestServiceGrpc;
 public final class GrpcGenerationExporter implements GenerationExporter {
     private final ManagedChannel channel;
     private final GenerationIngestServiceGrpc.GenerationIngestServiceBlockingStub stub;
+    private final Duration exportTimeout;
 
     public GrpcGenerationExporter(String endpoint, Map<String, String> headers, boolean insecure) {
+        this(endpoint, headers, insecure, GenerationExportConfig.DEFAULT_EXPORT_TIMEOUT);
+    }
+
+    /**
+     * @param exportTimeout per-call deadline from
+     *     {@link GenerationExportConfig#getExportTimeout()}. {@code null} uses
+     *     the 30-second default.
+     */
+    public GrpcGenerationExporter(String endpoint, Map<String, String> headers, boolean insecure, Duration exportTimeout) {
+        this.exportTimeout = exportTimeout == null ? GenerationExportConfig.DEFAULT_EXPORT_TIMEOUT : exportTimeout;
         Endpoint parsed = parseEndpoint(endpoint);
         ManagedChannelBuilder<?> builder = ManagedChannelBuilder.forTarget(parsed.target);
         if (insecure || parsed.insecure) {
@@ -50,8 +62,17 @@ public final class GrpcGenerationExporter implements GenerationExporter {
     @Override
     public ExportGenerationsResponse exportGenerations(ExportGenerationsRequest request) {
         return ProtoMapper.fromProtoResponse(
-                stub.exportGenerations(ProtoMapper.toProtoRequest(request)),
+                callStub().exportGenerations(ProtoMapper.toProtoRequest(request)),
                 request.getGenerations());
+    }
+
+    /**
+     * Returns the stub to call with. gRPC deadlines are absolute, so the
+     * deadline is attached per call. A stub-level deadline set at construction
+     * would expire once and fail every later export.
+     */
+    private GenerationIngestServiceGrpc.GenerationIngestServiceBlockingStub callStub() {
+        return stub.withDeadlineAfter(exportTimeout.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     @Override

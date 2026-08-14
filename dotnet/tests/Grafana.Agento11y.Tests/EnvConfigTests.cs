@@ -11,6 +11,37 @@ public sealed class EnvConfigTests
 
     private static Func<string, string?> EmptyLookup => _ => null;
 
+    /// <summary>
+    /// Values <c>AGENTO11Y_EXPORT_TIMEOUT_MS</c> / <c>SIGIL_EXPORT_TIMEOUT_MS</c>
+    /// must reject: the parser takes base-10 integer milliseconds in the
+    /// inclusive range 1..2147483647 only. Shared with
+    /// <see cref="EnvIntegrationTests"/> so the env layer and
+    /// <c>ConfigResolver</c> are exercised against the same table.
+    /// </summary>
+    public static TheoryData<string> InvalidExportTimeoutValues() => new()
+    {
+        "0",           // below the inclusive 1 ms floor
+        "-1",          // negative
+        "1.5",         // fractional
+        "abc",         // non-numeric
+        "2147483648",  // one past int.MaxValue
+        "+5",          // signs are not part of the grammar
+        "1_000",       // digit separators are a C# literal feature, not env syntax
+        "0x10",        // hex
+        "1e3",         // exponent
+        "1 000",       // embedded whitespace
+    };
+
+    /// <summary>Accepted export-timeout env values and their millisecond result.</summary>
+    public static TheoryData<string, int> ValidExportTimeoutValues() => new()
+    {
+        { "1", 1 },                      // inclusive lower bound
+        { "250", 250 },
+        { "1500", 1500 },
+        { "  2500  ", 2500 },            // surrounding whitespace is trimmed first
+        { "2147483647", int.MaxValue },  // inclusive upper bound
+    };
+
     [Fact]
     public void NoEnvKeepsBaseDefaults()
     {
@@ -23,6 +54,8 @@ public sealed class EnvConfigTests
         Assert.Null(cfg.Debug);
         Assert.Null(cfg.GenerationExport.Insecure);
         Assert.Equal("localhost:4317", cfg.GenerationExport.Endpoint);
+        Assert.Equal(TimeSpan.FromSeconds(30), cfg.GenerationExport.ExportTimeout);
+        Assert.False(cfg.GenerationExport.HasExplicitExportTimeout);
         Assert.Empty(warnings);
     }
 
@@ -44,6 +77,139 @@ public sealed class EnvConfigTests
         Assert.True(cfg.GenerationExport.Insecure);
         Assert.Equal("1", cfg.GenerationExport.Headers["X-A"]);
         Assert.Equal("two", cfg.GenerationExport.Headers["X-B"]);
+    }
+
+    [Theory]
+    [MemberData(nameof(ValidExportTimeoutValues))]
+    public void ExportTimeoutFromLegacyEnv(string raw, int expectedMs)
+    {
+        var env = new Dictionary<string, string?> { ["SIGIL_EXPORT_TIMEOUT_MS"] = raw };
+
+        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
+
+        Assert.Equal(TimeSpan.FromMilliseconds(expectedMs), cfg.GenerationExport.ExportTimeout);
+        Assert.Empty(warnings);
+    }
+
+    [Theory]
+    [MemberData(nameof(ValidExportTimeoutValues))]
+    public void ExportTimeoutFromPreferredEnv(string raw, int expectedMs)
+    {
+        var env = new Dictionary<string, string?> { ["AGENTO11Y_EXPORT_TIMEOUT_MS"] = raw };
+
+        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
+
+        Assert.Equal(TimeSpan.FromMilliseconds(expectedMs), cfg.GenerationExport.ExportTimeout);
+        Assert.Empty(warnings);
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidExportTimeoutValues))]
+    public void InvalidExportTimeoutWarnsAndPreservesOtherEnv(string raw)
+    {
+        var env = new Dictionary<string, string?>
+        {
+            ["AGENTO11Y_EXPORT_TIMEOUT_MS"] = raw,
+            ["AGENTO11Y_ENDPOINT"] = "valid.example:4318",
+            ["AGENTO11Y_AGENT_NAME"] = "valid-agent",
+            ["AGENTO11Y_INSECURE"] = "true",
+        };
+
+        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
+
+        Assert.Equal(TimeSpan.FromSeconds(30), cfg.GenerationExport.ExportTimeout);
+        Assert.False(cfg.GenerationExport.HasExplicitExportTimeout);
+        Assert.Contains(warnings, w => w.Contains("AGENTO11Y_EXPORT_TIMEOUT_MS") && w.Contains(raw.Trim()));
+        // A bad timeout must not discard the valid sibling env values.
+        Assert.Equal("valid.example:4318", cfg.GenerationExport.Endpoint);
+        Assert.Equal("valid-agent", cfg.AgentName);
+        Assert.True(cfg.GenerationExport.Insecure);
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidExportTimeoutValues))]
+    public void InvalidLegacyExportTimeoutWarnsWithLegacyKey(string raw)
+    {
+        var env = new Dictionary<string, string?> { ["SIGIL_EXPORT_TIMEOUT_MS"] = raw };
+
+        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
+
+        Assert.Equal(TimeSpan.FromSeconds(30), cfg.GenerationExport.ExportTimeout);
+        Assert.Contains(warnings, w => w.Contains("SIGIL_EXPORT_TIMEOUT_MS"));
+    }
+
+    [Fact]
+    public void InvalidPreferredExportTimeoutBlocksValidLegacy()
+    {
+        var env = new Dictionary<string, string?>
+        {
+            ["AGENTO11Y_EXPORT_TIMEOUT_MS"] = "2147483648",
+            ["SIGIL_EXPORT_TIMEOUT_MS"] = "1500",
+        };
+
+        var (cfg, warnings) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
+
+        Assert.Equal(TimeSpan.FromSeconds(30), cfg.GenerationExport.ExportTimeout);
+        Assert.Contains(warnings, w => w.Contains("AGENTO11Y_EXPORT_TIMEOUT_MS"));
+    }
+
+    [Fact]
+    public void PreferredExportTimeoutWinsOverLegacy()
+    {
+        var env = new Dictionary<string, string?>
+        {
+            ["AGENTO11Y_EXPORT_TIMEOUT_MS"] = "250",
+            ["SIGIL_EXPORT_TIMEOUT_MS"] = "1500",
+        };
+
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), new Agento11yClientConfig());
+
+        Assert.Equal(TimeSpan.FromMilliseconds(250), cfg.GenerationExport.ExportTimeout);
+    }
+
+    [Fact]
+    public void CallerExportTimeoutWinsOverEnv()
+    {
+        var baseConfig = new Agento11yClientConfig();
+        baseConfig.GenerationExport.ExportTimeout = TimeSpan.FromSeconds(5);
+        var env = new Dictionary<string, string?>
+        {
+            ["AGENTO11Y_EXPORT_TIMEOUT_MS"] = "1500",
+            ["SIGIL_EXPORT_TIMEOUT_MS"] = "1600",
+        };
+
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), baseConfig);
+
+        Assert.Equal(TimeSpan.FromSeconds(5), cfg.GenerationExport.ExportTimeout);
+    }
+
+    [Fact]
+    public void CallerExportTimeoutEqualToDefaultStillWinsOverEnv()
+    {
+        // Tri-state backing field: an explicit 30s is "set", not "unset", so env
+        // must not overwrite it.
+        var baseConfig = new Agento11yClientConfig();
+        baseConfig.GenerationExport.ExportTimeout = TimeSpan.FromSeconds(30);
+        var env = new Dictionary<string, string?> { ["AGENTO11Y_EXPORT_TIMEOUT_MS"] = "1500" };
+
+        var (cfg, _) = EnvConfig.ResolveFromEnv(MapLookup(env), baseConfig);
+
+        Assert.True(cfg.GenerationExport.HasExplicitExportTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(30), cfg.GenerationExport.ExportTimeout);
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidExportTimeoutValues))]
+    public void ParseExportTimeoutMsRejectsInvalidValues(string raw)
+    {
+        Assert.Null(EnvConfig.ParseExportTimeoutMs(raw));
+    }
+
+    [Theory]
+    [MemberData(nameof(ValidExportTimeoutValues))]
+    public void ParseExportTimeoutMsAcceptsValidValues(string raw, int expectedMs)
+    {
+        Assert.Equal(expectedMs, EnvConfig.ParseExportTimeoutMs(raw));
     }
 
     [Fact]
@@ -352,6 +518,7 @@ public sealed class EnvConfigTests
             ["PROTOCOL"] = "http",
             ["INSECURE"] = "true",
             ["HEADERS"] = "X-A=1,X-B=two",
+            ["EXPORT_TIMEOUT_MS"] = "1500",
             ["AUTH_MODE"] = "basic",
             ["AUTH_TENANT_ID"] = "42",
             ["AUTH_TOKEN"] = "glc_xxx",
@@ -375,6 +542,8 @@ public sealed class EnvConfigTests
         Assert.Equal(legacy.GenerationExport.Protocol, preferred.GenerationExport.Protocol);
         Assert.Equal(legacy.GenerationExport.Insecure, preferred.GenerationExport.Insecure);
         Assert.Equal(legacy.GenerationExport.Headers, preferred.GenerationExport.Headers);
+        Assert.Equal(TimeSpan.FromMilliseconds(1500), preferred.GenerationExport.ExportTimeout);
+        Assert.Equal(legacy.GenerationExport.ExportTimeout, preferred.GenerationExport.ExportTimeout);
         Assert.Equal(legacy.GenerationExport.Auth.Mode, preferred.GenerationExport.Auth.Mode);
         Assert.Equal(legacy.GenerationExport.Auth.TenantId, preferred.GenerationExport.Auth.TenantId);
         Assert.Equal(legacy.GenerationExport.Auth.BasicUser, preferred.GenerationExport.Auth.BasicUser);
@@ -504,6 +673,7 @@ public sealed class EnvConfigTests
         Assert.Equal("SIGIL_PROTOCOL", EnvConfig.EnvProtocol);
         Assert.Equal("SIGIL_INSECURE", EnvConfig.EnvInsecure);
         Assert.Equal("SIGIL_HEADERS", EnvConfig.EnvHeaders);
+        Assert.Equal("SIGIL_EXPORT_TIMEOUT_MS", EnvConfig.EnvExportTimeoutMs);
         Assert.Equal("SIGIL_AUTH_MODE", EnvConfig.EnvAuthMode);
         Assert.Equal("SIGIL_AUTH_TENANT_ID", EnvConfig.EnvAuthTenantId);
         Assert.Equal("SIGIL_AUTH_TOKEN", EnvConfig.EnvAuthToken);
@@ -522,6 +692,7 @@ public sealed class EnvConfigTests
         Assert.Equal("AGENTO11Y_PROTOCOL", EnvConfig.PreferredEnvProtocol);
         Assert.Equal("AGENTO11Y_INSECURE", EnvConfig.PreferredEnvInsecure);
         Assert.Equal("AGENTO11Y_HEADERS", EnvConfig.PreferredEnvHeaders);
+        Assert.Equal("AGENTO11Y_EXPORT_TIMEOUT_MS", EnvConfig.PreferredEnvExportTimeoutMs);
         Assert.Equal("AGENTO11Y_AUTH_MODE", EnvConfig.PreferredEnvAuthMode);
         Assert.Equal("AGENTO11Y_AUTH_TENANT_ID", EnvConfig.PreferredEnvAuthTenantId);
         Assert.Equal("AGENTO11Y_AUTH_TOKEN", EnvConfig.PreferredEnvAuthToken);

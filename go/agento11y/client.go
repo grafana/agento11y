@@ -169,9 +169,15 @@ type GenerationExportConfig struct {
 	InitialBackoff             time.Duration
 	MaxBackoff                 time.Duration
 	PayloadMaxBytes            int
-	// HTTPTimeout bounds each HTTP generation export request. Zero uses ten
-	// seconds. It has no effect on gRPC export.
+	// HTTPTimeout bounds each HTTP generation export request. When positive it
+	// overrides ExportTimeout for HTTP export only; zero or negative defers to
+	// ExportTimeout. It has no effect on gRPC export.
 	HTTPTimeout time.Duration
+	// ExportTimeout bounds every generation and workflow-step export attempt on
+	// both HTTP and gRPC. Zero or negative uses defaultExportTimeout (30s).
+	// Read from AGENTO11Y_EXPORT_TIMEOUT_MS (SIGIL_EXPORT_TIMEOUT_MS legacy
+	// fallback); a caller-supplied positive value wins over the env var.
+	ExportTimeout time.Duration
 }
 
 type APIConfig struct {
@@ -298,6 +304,7 @@ func DefaultConfig() Config {
 			InitialBackoff:             100 * time.Millisecond,
 			MaxBackoff:                 5 * time.Second,
 			PayloadMaxBytes:            defaultGenerationPayloadMaxBytes,
+			ExportTimeout:              defaultExportTimeout,
 		},
 		API: APIConfig{
 			Endpoint: "http://localhost:8080",

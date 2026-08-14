@@ -7,6 +7,13 @@ import java.util.Map;
 /** Generation ingest export settings. */
 public final class GenerationExportConfig {
     /**
+     * Default per-attempt export timeout applied when neither the caller nor
+     * {@code AGENTO11Y_EXPORT_TIMEOUT_MS} (legacy {@code SIGIL_EXPORT_TIMEOUT_MS})
+     * supplies one.
+     */
+    public static final Duration DEFAULT_EXPORT_TIMEOUT = Duration.ofSeconds(30);
+
+    /**
      * Export protocol. {@code null} means "not set" — env layer or
      * {@link Agento11yClient} resolves it to {@link GenerationExportProtocol#HTTP}.
      * An explicit {@code setProtocol(...)} call is preserved (caller-wins) and
@@ -34,6 +41,15 @@ public final class GenerationExportConfig {
     private Duration initialBackoff = Duration.ofMillis(100);
     private Duration maxBackoff = Duration.ofSeconds(5);
     private int payloadMaxBytes = 4 << 20;
+    private Duration exportTimeout = DEFAULT_EXPORT_TIMEOUT;
+    /**
+     * Tracks whether {@link #setExportTimeout(Duration)} was called with a
+     * non-null value, so a caller value equal to
+     * {@link #DEFAULT_EXPORT_TIMEOUT} still wins over the env layer. Preserved
+     * by {@link #copy()} because {@link Agento11yEnvConfig#resolveFromEnv} works
+     * on a copy of the caller config.
+     */
+    private boolean exportTimeoutExplicit;
 
     public GenerationExportProtocol getProtocol() {
         return protocol;
@@ -164,8 +180,40 @@ public final class GenerationExportConfig {
         return this;
     }
 
+    /**
+     * Per-attempt timeout for a single generation export call (HTTP request or
+     * gRPC deadline). Defaults to {@link #DEFAULT_EXPORT_TIMEOUT} (30s) and can
+     * be filled from {@code AGENTO11Y_EXPORT_TIMEOUT_MS} (legacy
+     * {@code SIGIL_EXPORT_TIMEOUT_MS}) when the caller leaves it unset.
+     *
+     * <p>The value bounds one attempt, not the whole retry loop. Each retry from
+     * {@link #getMaxRetries()} gets a fresh timeout.</p>
+     */
+    public Duration getExportTimeout() {
+        return exportTimeout;
+    }
+
+    /**
+     * Sets the per-attempt export timeout. The value is stored as it is, like
+     * the other duration fields in this class. The transports reject or
+     * immediately expire a non-positive value.
+     *
+     * <p>{@code null} resets the field to {@link #DEFAULT_EXPORT_TIMEOUT} and
+     * marks it unset again, so the env layer can still fill it.</p>
+     */
+    public GenerationExportConfig setExportTimeout(Duration exportTimeout) {
+        this.exportTimeout = exportTimeout == null ? DEFAULT_EXPORT_TIMEOUT : exportTimeout;
+        this.exportTimeoutExplicit = exportTimeout != null;
+        return this;
+    }
+
+    /** Returns whether the caller or the env layer set an export timeout. */
+    boolean isExportTimeoutExplicit() {
+        return exportTimeoutExplicit;
+    }
+
     public GenerationExportConfig copy() {
-        return new GenerationExportConfig()
+        GenerationExportConfig copy = new GenerationExportConfig()
                 .setProtocol(protocol)
                 .setEndpoint(endpoint)
                 .setHeaders(headers)
@@ -178,5 +226,10 @@ public final class GenerationExportConfig {
                 .setInitialBackoff(initialBackoff)
                 .setMaxBackoff(maxBackoff)
                 .setPayloadMaxBytes(payloadMaxBytes);
+        // Copied directly instead of through the setter so "unset" survives the
+        // copy that env resolution takes of the caller config.
+        copy.exportTimeout = exportTimeout;
+        copy.exportTimeoutExplicit = exportTimeoutExplicit;
+        return copy;
     }
 }
