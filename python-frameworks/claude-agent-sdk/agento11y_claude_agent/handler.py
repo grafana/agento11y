@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import secrets
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import replace
@@ -61,6 +62,8 @@ _metadata_session_id = "agento11y.framework.session_id"
 _metadata_permission_mode = "agento11y.claude_agent.permission_mode"
 _metadata_cwd = "agento11y.claude_agent.cwd"
 _metadata_total_cost_usd = "agento11y.claude_agent.total_cost_usd"
+
+logger = logging.getLogger(__name__)
 
 
 class Agento11yClaudeAgentHandler:
@@ -380,13 +383,29 @@ class Agento11yClaudeAgentHandler:
         return self._conversation_id
 
     def _finish_tool(self, run_key: str, *, result: Any = None, error: BaseException | None = None) -> None:
+        """End the recorder for ``run_key``. Log an error from the recorder instead of raising it.
+
+        Every caller is a Claude Agent SDK hook or the loop that ends open tools.
+        The SDK discards a hook's return value if the callback raises, so a raise in
+        a hook would lose a guard deny decision. A raise in the loop would leave the
+        remaining recorders open.
+        """
+
+        try:
+            self._end_tool_recorder(run_key, result=result, error=error)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("agento11y: tool execution %s not recorded: %s", run_key, exc, exc_info=True)
+
+    def _end_tool_recorder(self, run_key: str, *, result: Any, error: BaseException | None) -> None:
         recorder = self._tool_runs.pop(run_key, None)
         arguments = self._tool_arguments.pop(run_key, None)
         if recorder is None:
             return
+        exec_error: Exception | None = None
         try:
             if error is not None:
-                recorder.set_exec_error(Exception(str(error)))
+                exec_error = Exception(str(error))
+                recorder.set_exec_error(exec_error)
             else:
                 payload: dict[str, Any] = {}
                 if arguments is not None:
@@ -397,7 +416,11 @@ class Agento11yClaudeAgentHandler:
         finally:
             recorder.end()
         recorder_error = recorder.err()
-        if recorder_error is not None:
+        # err() returns the exec error it was given, so raising it would re-raise the
+        # tool failure the caller already reported. Only an error the recorder made
+        # itself, such as a failure to serialize the result, means the tool execution
+        # was not recorded.
+        if recorder_error is not None and recorder_error is not exec_error:
             raise recorder_error
 
     def _end_open_tools(self) -> None:

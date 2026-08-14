@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from datetime import timedelta
 
@@ -119,6 +120,90 @@ def _part_payload(part) -> str:
     if part.kind == PartKind.TOOL_CALL:
         return part.tool_call.name
     return part.text
+
+
+def _pre_tool_use_input(tool_use_id: str, tool_name: str = "Bash") -> dict[str, object]:
+    return {
+        "hook_event_name": "PreToolUse",
+        "session_id": "session-42",
+        "transcript_path": "",
+        "cwd": "",
+        "tool_name": tool_name,
+        "tool_input": {"command": "pwd"},
+        "tool_use_id": tool_use_id,
+    }
+
+
+def _post_tool_use_input(tool_use_id: str, tool_response: object) -> dict[str, object]:
+    return {
+        **_pre_tool_use_input(tool_use_id),
+        "hook_event_name": "PostToolUse",
+        "tool_response": tool_response,
+    }
+
+
+def _post_tool_use_failure_input(tool_use_id: str, error: str) -> dict[str, object]:
+    return {
+        **_pre_tool_use_input(tool_use_id),
+        "hook_event_name": "PostToolUseFailure",
+        "error": error,
+    }
+
+
+class _StubToolRecorder:
+    """Tool recorder that stores what it is given, and raises or returns the errors a test configures."""
+
+    def __init__(self, *, end_error: Exception | None = None, final_error: Exception | None = None) -> None:
+        self.result: dict[str, object] | None = None
+        self.ended = False
+        self._end_error = end_error
+        self._final_error = final_error
+        self._exec_error: Exception | None = None
+
+    def set_result(self, **payload) -> None:
+        self.result = payload
+
+    def set_exec_error(self, error) -> None:
+        self._exec_error = error
+
+    def end(self) -> None:
+        self.ended = True
+        if self._end_error is not None:
+            raise self._end_error
+
+    def err(self):
+        # The real recorder returns the exec error it was given.
+        return self._final_error or self._exec_error
+
+
+class _ToolRecorderClient:
+    """Client with a fixed guard decision and optional stub tool recorders.
+
+    Generations come from the real ``client``, and so does every recorder requested
+    after ``recorders`` is empty.
+    """
+
+    def __init__(
+        self,
+        client: Client | None = None,
+        *,
+        recorders: list[_StubToolRecorder] | None = None,
+        hook_response: HookEvaluateResponse | None = None,
+    ) -> None:
+        self._client = client
+        self._recorders = list(recorders or [])
+        self._hook_response = hook_response or HookEvaluateResponse(action="allow")
+
+    def start_streaming_generation(self, start):
+        return self._client.start_streaming_generation(start)
+
+    def start_tool_execution(self, start):
+        if self._recorders:
+            return self._recorders.pop(0)
+        return self._client.start_tool_execution(start)
+
+    def evaluate_hook(self, _request):
+        return self._hook_response
 
 
 @pytest.mark.asyncio
@@ -798,69 +883,159 @@ async def test_claude_agent_guard_denial_blocks_user_prompt() -> None:
 
 @pytest.mark.asyncio
 async def test_claude_agent_tool_hooks_record_tool_result() -> None:
-    class _ToolRecorder:
-        def __init__(self) -> None:
-            self.result = None
-            self.ended = False
-
-        def set_result(self, **payload) -> None:
-            self.result = payload
-
-        def set_exec_error(self, error) -> None:
-            self.result = {"error": str(error)}
-
-        def end(self) -> None:
-            self.ended = True
-
-        def err(self):
-            return None
-
-    class _ToolClient:
-        def __init__(self) -> None:
-            self.recorder = _ToolRecorder()
-
-        def start_tool_execution(self, _start):
-            return self.recorder
-
-        def evaluate_hook(self, _request):
-            return HookEvaluateResponse(action="allow")
-
-    tool_client = _ToolClient()
-    handler = Agento11yClaudeAgentHandler(client=tool_client)  # type: ignore[arg-type]
+    recorder = _StubToolRecorder()
+    handler = Agento11yClaudeAgentHandler(client=_ToolRecorderClient(recorders=[recorder]))  # type: ignore[arg-type]
     options = handler.instrument_options(ClaudeAgentOptions())
 
     pre_hook = options.hooks["PreToolUse"][0].hooks[0]
     post_hook = options.hooks["PostToolUse"][0].hooks[0]
-    await pre_hook(
-        {
-            "hook_event_name": "PreToolUse",
-            "session_id": "session-42",
-            "transcript_path": "",
-            "cwd": "",
-            "tool_name": "Bash",
-            "tool_input": {"command": "pwd"},
-            "tool_use_id": "toolu_1",
-        },
-        "toolu_1",
-        {"signal": None},
-    )
-    await post_hook(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": "session-42",
-            "transcript_path": "",
-            "cwd": "",
-            "tool_name": "Bash",
-            "tool_input": {"command": "pwd"},
-            "tool_response": {"stdout": "/tmp\n"},
-            "tool_use_id": "toolu_1",
-        },
-        "toolu_1",
-        {"signal": None},
-    )
+    await pre_hook(_pre_tool_use_input("toolu_1"), "toolu_1", {"signal": None})
+    await post_hook(_post_tool_use_input("toolu_1", {"stdout": "/tmp\n"}), "toolu_1", {"signal": None})
 
-    assert tool_client.recorder.result == {
+    assert recorder.result == {
         "arguments": {"command": "pwd"},
         "result": {"stdout": "/tmp\n"},
     }
-    assert tool_client.recorder.ended is True
+    assert recorder.ended is True
+
+
+@pytest.mark.asyncio
+async def test_agento11y_query_exports_when_tool_never_completes() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    async def fake_query(*, options, **_kwargs) -> AsyncIterator[object]:
+        pre_hook = options.hooks["PreToolUse"][0].hooks[0]
+        await pre_hook(_pre_tool_use_input("toolu_open"), "toolu_open", {"signal": None})
+        yield _success_result()
+
+    try:
+        _ = [
+            message
+            async for message in agento11y_query(
+                prompt="Inspect the README.",
+                client=client,
+                options=ClaudeAgentOptions(model="claude-sonnet-4-5"),
+                conversation_id="conv-42",
+                _query_fn=fake_query,
+            )
+        ]
+
+        client.flush()
+        assert [len(request.generations) for request in exporter.requests] == [1]
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_claude_agent_tool_failure_hook_does_not_drop_span(caplog) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        handler = Agento11yClaudeAgentHandler(client=client, conversation_id="conv-42")
+        options = handler.instrument_options(ClaudeAgentOptions())
+        pre_hook = options.hooks["PreToolUse"][0].hooks[0]
+        failure_hook = options.hooks["PostToolUseFailure"][0].hooks[0]
+
+        await pre_hook(_pre_tool_use_input("toolu_1"), "toolu_1", {"signal": None})
+        with caplog.at_level(logging.ERROR):
+            output = await failure_hook(
+                _post_tool_use_failure_input("toolu_1", "disk full"),
+                "toolu_1",
+                {"signal": None},
+            )
+
+        assert output == {}
+        assert caplog.records == []
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_claude_agent_tool_hooks_log_recorder_produced_error(caplog) -> None:
+    recorder = _StubToolRecorder(final_error=RuntimeError("serialize tool result: unsupported type"))
+    handler = Agento11yClaudeAgentHandler(client=_ToolRecorderClient(recorders=[recorder]))  # type: ignore[arg-type]
+    options = handler.instrument_options(ClaudeAgentOptions())
+    pre_hook = options.hooks["PreToolUse"][0].hooks[0]
+    failure_hook = options.hooks["PostToolUseFailure"][0].hooks[0]
+
+    await pre_hook(_pre_tool_use_input("toolu_1"), "toolu_1", {"signal": None})
+    with caplog.at_level(logging.ERROR):
+        output = await failure_hook(
+            _post_tool_use_failure_input("toolu_1", "disk full"),
+            "toolu_1",
+            {"signal": None},
+        )
+
+    assert output == {}
+    assert "toolu_1" in caplog.text
+    assert "serialize tool result" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_claude_agent_guard_denial_returns_deny_decision() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    deny = HookEvaluateResponse(action="deny", rule_id="rule-1", reason="dangerous command")
+
+    try:
+        handler = Agento11yClaudeAgentHandler(
+            client=_ToolRecorderClient(client, hook_response=deny),  # type: ignore[arg-type]
+            enable_guards=True,
+        )
+        options = handler.instrument_options(ClaudeAgentOptions())
+        pre_hook = options.hooks["PreToolUse"][0].hooks[0]
+
+        output = await pre_hook(_pre_tool_use_input("toolu_1"), "toolu_1", {"signal": None})
+
+        assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert output["hookSpecificOutput"]["permissionDecisionReason"] == "dangerous command"
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_claude_agent_guard_denial_survives_recorder_failure(caplog) -> None:
+    recorder = _StubToolRecorder(end_error=RuntimeError("denied recorder end failed"))
+    deny = HookEvaluateResponse(action="deny", rule_id="rule-1", reason="dangerous command")
+    handler = Agento11yClaudeAgentHandler(
+        client=_ToolRecorderClient(recorders=[recorder], hook_response=deny),  # type: ignore[arg-type]
+    )
+    options = handler.instrument_options(ClaudeAgentOptions())
+    pre_hook = options.hooks["PreToolUse"][0].hooks[0]
+
+    with caplog.at_level(logging.ERROR):
+        output = await pre_hook(_pre_tool_use_input("toolu_1"), "toolu_1", {"signal": None})
+
+    assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "denied recorder end failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_open_tool_teardown_continues_after_recorder_failure(caplog) -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+    first = _StubToolRecorder(end_error=RuntimeError("first recorder end failed"))
+    second = _StubToolRecorder()
+
+    try:
+        handler = Agento11yClaudeAgentHandler(
+            client=_ToolRecorderClient(client, recorders=[first, second]),  # type: ignore[arg-type]
+            conversation_id="conv-42",
+        )
+        options = handler.instrument_options(ClaudeAgentOptions(model="claude-sonnet-4-5"))
+        await handler.start(prompt="Inspect the README.", options=options)
+        pre_hook = options.hooks["PreToolUse"][0].hooks[0]
+        await pre_hook(_pre_tool_use_input("toolu_1"), "toolu_1", {"signal": None})
+        await pre_hook(_pre_tool_use_input("toolu_2"), "toolu_2", {"signal": None})
+
+        with caplog.at_level(logging.ERROR):
+            handler.finish()
+
+        assert second.ended is True
+        client.flush()
+        assert [len(request.generations) for request in exporter.requests] == [1]
+        assert "first recorder end failed" in caplog.text
+    finally:
+        client.shutdown()
