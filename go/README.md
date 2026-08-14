@@ -262,6 +262,42 @@ Set `HookContext.ConversationID` to the same ID used by `StartGeneration(...)`. 
 
 If you use transformed input, pass the transformed messages/system prompt to the provider and record those same values in `StartGeneration(...)`. For a runnable example, see [`../examples/getting-started/go-hooks/`](../examples/getting-started/go-hooks/).
 
+## Experimental: export generations as OTel spans
+
+> **Experimental.** Set both `AGENTO11Y_PROTOCOL=otel` and `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true`. With only the protocol set, `NewClient` logs `agento11y otel generation export unavailable: ...` and delivers no generations, while the metadata span and the SDK's own four metrics keep working as they do on the HTTP protocol.
+
+In otel mode each finished generation leaves the process as one GenAI semantic-convention span on your application's OTel pipeline, and the `generations:export` endpoint is not called. The span is a `CLIENT` span named `chat <model>`. It carries `gen_ai.*` attributes from semconv v1.41.0, plus the `agento11y.*` extension attributes the backend decodes back into a generation. The SDK records `gen_ai.client.operation.duration`, `gen_ai.client.token.usage`, and `gen_ai.client.operation.time_to_first_chunk` instead of its own four metrics. Direct `otelgenai` callers can record `gen_ai.client.operation.time_per_output_chunk` with `Handler.RecordChunk`.
+
+Pass the providers, not just a tracer and a meter:
+
+```go
+client := agento11y.NewClient(agento11y.Config{
+	GenerationExport: agento11y.GenerationExportConfig{Protocol: agento11y.GenerationExportProtocolOTel},
+	TracerProvider:   tracerProvider,
+	MeterProvider:    meterProvider,
+})
+```
+
+`Flush` force-flushes `Config.TracerProvider`, and without it `Flush` returns `ErrFlushNotVerifiable` rather than a success it cannot back. The generation-export handler gets its tracer and spec meter from `Config.TracerProvider` and `Config.MeterProvider`, or the corresponding global providers. `Config.Tracer` and `Config.Meter` do not affect generation export; they continue to configure the SDK's tool-execution and embedding telemetry in every mode. Only an explicit tracer provider gives `Flush` a delivery boundary it can verify.
+
+What changes when the mode is on:
+
+- Delivery is your span processor's. The SDK installs no processor, keeps no export queue of its own, retries nothing, and gets no per-generation result. A batching processor drops spans silently when its queue overflows, and an unsampled trace never reaches it.
+- `Flush` force-flushes the tracer provider instead of draining the export queue, so it still blocks until the spans leave the process and still reports the exporter's error.
+- `ExportGeneration` returns `ErrSynchronousExportUnsupported`: a span processor decides on its own when to export, so there is no delivery result to wait for.
+- Workflow steps have no span encoding. `EnqueueWorkflowStep` drops them and returns `ErrWorkflowStepEnqueueFailed`.
+- The metrics keep their `agento11y.tag.*` dimensions, the error category, and the token-semantics marker, and add `gen_ai.response.model`. `gen_ai.client.operation.time_to_first_chunk` replaces `gen_ai.client.time_to_first_token`, and `gen_ai.client.tool_calls_per_operation` is not emitted at all, so panels keyed on either name stay empty for otel-mode traffic.
+- `gen_ai.operation.name` is `chat` where the SDK's own defaults are `generateText` and `streamText`, on the span and on the metrics. A caller's own operation name rides through unchanged. The streaming half carries the span attribute `gen_ai.request.stream=true` and the sync half omits it, so filter for its presence rather than for `false`. `gen_ai.request.stream` is never a metric dimension.
+- A generation the SDK's own validator refuses is not delivered, as on every other protocol. Its span still closes, carrying the error but neither the generation id nor the message content.
+
+Content capture follows `AGENTO11Y_CONTENT_CAPTURE_MODE`, per call as well as per client. otel mode does not read the conventions' `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`: the span is the export, so a traces-side variable must not decide what the export contains. `metadata_only` emits the span without any content attribute. `full_with_metadata_spans` exists to keep content off the OTel destination, and in otel mode there is no other destination, so it exports no content at all; `NewClient` logs that.
+
+[`go/otelgenai`](otelgenai/) produces the span. It is a GenAI-semconv instrumentation util with no agento11y dependency, so used on its own it emits plain `gen_ai` spans any OTel backend can read. A completion hook in [`agento11y/otelhook`](agento11y/otelhook/) adds the `agento11y.*` attributes.
+
+Direct `otelgenai` callers can also emit one `gen_ai.client.inference.operation.details` log record for each completed `chat`, `text_completion`, `generate_content`, or caller-defined operation. `embeddings`, `execute_tool`, `invoke_agent`, `retrieval`, `fetch_response`, `invoke_workflow`, `create_agent`, and `plan` do not emit these records.
+
+The records need an OTel log provider. The handler uses the global provider by default, which is a no-op until the application installs one, and under `EVENT_ONLY` that leaves the content nowhere: off the span, and in no exported event. `EVENT_ONLY` and `SPAN_AND_EVENT` are values of `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`, and both enable the records by default. `OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT=true` or `false` overrides that default, and `otelgenai.WithEmitEvent` overrides the environment. Set to `true` under `NO_CONTENT` or `SPAN_ONLY`, it emits records without message content. The agento11y SDK's otel mode disables the records, because it configures no log destination.
+
 ## Wiring custom env vars
 
 The SDK only auto-loads `AGENTO11Y_*` env vars (`AGENTO11Y_ENDPOINT`, `AGENTO11Y_PROTOCOL`, `AGENTO11Y_AUTH_MODE`, `AGENTO11Y_AUTH_TOKEN`, etc.) when you call `agento11y.NewClient(agento11y.Config{})`. For any other env var (for example one your secret manager exposes under a different name), read it in your app and pass the value into the config:
@@ -582,6 +618,9 @@ fmt.Printf("rating=%s has_bad=%v\n", rating.Rating.Rating, rating.Summary.HasBad
 
 - Always call `client.Shutdown(ctx)` before process exit.
 - `Shutdown` flushes pending generation batches and closes generation exporters.
+  Under the experimental otel protocol that queue is always empty, so `Shutdown`
+  also force-flushes `Config.TracerProvider`; shutting the provider itself down
+  stays yours.
 - Optional `client.Flush(ctx)` is available for explicit flush points.
 
 ## SDK metrics

@@ -38,9 +38,9 @@ var Version = "dev"
 // run; see envconfig.ResolveAgentName.
 const AgentName = "claude-code"
 
-func exportConfig(endpoint, tenantID, authToken string) agento11y.GenerationExportConfig {
+func exportConfig(endpoint, tenantID, authToken string, protocol agento11y.GenerationExportProtocol) agento11y.GenerationExportConfig {
 	return agento11y.GenerationExportConfig{
-		Protocol: agento11y.GenerationExportProtocolHTTP,
+		Protocol: protocol,
 		Endpoint: endpoint + "/api/v1/generations:export",
 		Headers:  map[string]string{"User-Agent": useragent.For("claude-code")},
 		Auth: agento11y.AuthConfig{
@@ -198,17 +198,14 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	logger.Printf("produced %d generations", len(gens))
 
 	cfg := agento11y.Config{
-		GenerationExport: exportConfig(endpoint, tenantID, authToken),
+		GenerationExport: exportConfig(endpoint, tenantID, authToken, emit.ExportProtocol(otelProviders, logger)),
 		// Client tags, so AGENTO11Y_AUTO_CODING_AGENT_TAGS values reach OTel
 		// metrics as well as the export. Resolved here rather than at launch so a
 		// session the user starts with plain `claude` gets them too.
 		Tags: autotag.FromEnv(autotag.Inputs{Cwd: input.Cwd, UserID: userID}, logger),
 	}
 
-	if otelProviders != nil {
-		cfg.Tracer = otelProviders.Tracer(otelInstrumentationName)
-		cfg.Meter = otelProviders.Meter(otelInstrumentationName)
-	}
+	emit.ApplyProviders(&cfg, otelProviders, otelInstrumentationName)
 
 	cfg.ContentCapture = contentMode
 	client := agento11y.NewClient(cfg)

@@ -168,7 +168,7 @@ func NewTargetExporter(ctx context.Context, target Target, logger *log.Logger) (
 		ContentCapture: contentMode,
 		Logger:         logger,
 		GenerationExport: agento11y.GenerationExportConfig{
-			Protocol: agento11y.GenerationExportProtocolHTTP,
+			Protocol: targetExportProtocol(localTarget, providers, logger),
 			Endpoint: strings.TrimRight(endpoint, "/") + "/api/v1/generations:export",
 			Headers:  headers,
 			Auth: agento11y.AuthConfig{
@@ -178,10 +178,7 @@ func NewTargetExporter(ctx context.Context, target Target, logger *log.Logger) (
 			},
 		},
 	}
-	if providers != nil {
-		cfg.Tracer = providers.Tracer("agento11y.history")
-		cfg.Meter = providers.Meter("agento11y.history")
-	}
+	emit.ApplyProviders(&cfg, providers, "agento11y.history")
 	client := agento11y.NewClient(cfg)
 	cleanup := func(ctx context.Context) error {
 		err := client.Shutdown(ctx)
@@ -193,6 +190,18 @@ func NewTargetExporter(ctx context.Context, target Target, logger *log.Logger) (
 		return err
 	}
 	return NewExporter(client), cleanup, nil
+}
+
+// targetExportProtocol resolves the generation export protocol for an import
+// target. A local target always gets HTTP: the local daemon reads generations
+// from the proto ingest path and drains OTLP spans without storing them, so an
+// otel-mode import would mark every turn exported and persist no turn at all.
+// Any other target honours the branded PROTOCOL family.
+func targetExportProtocol(localTarget bool, providers *otel.Providers, logger *log.Logger) agento11y.GenerationExportProtocol {
+	if localTarget {
+		return agento11y.GenerationExportProtocolHTTP
+	}
+	return emit.ExportProtocol(providers, logger)
 }
 
 // otlpHeaders returns the header set for the OTLP leg. A non-nil result

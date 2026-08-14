@@ -275,3 +275,9 @@ agento11y doctor --json
 ```
 
 If you need lower-level detail, hooks always exit 0, so problems only show up in the debug log. Set `AGENTO11Y_DEBUG=true` in `~/.config/agento11y/config.env` and tail `~/.local/state/agento11y/logs/agento11y.log`. Installs that still have the pre-rename `~/.local/state/sigil` directory keep using it (with the new `agento11y.log` file name) until it is removed.
+
+### Experimental: send conversations over OTLP
+
+`AGENTO11Y_PROTOCOL=otel` plus `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` sends each generation as a GenAI semantic-convention span on the analytics pipeline instead of calling the conversations endpoint. Both pipelines then depend on the OTLP endpoint and its `traces:write` scope. Both variables are unset by default, and this mode is only intended for development stacks.
+
+The hooks fall back to HTTP export when either the OTLP endpoint or the experimental flag is missing, so no capture is lost. The fallback is written to the debug log, and `agento11y doctor` reports whichever of the two is missing. `--local` sessions always export over HTTP, because the local daemon reads generations from the proto ingest path. Guards are unaffected: they call the API directly either way.

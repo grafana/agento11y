@@ -114,7 +114,9 @@ func InferProvider(model string) string {
 		strings.HasPrefix(m, "o4"):
 		return "openai"
 	case strings.Contains(m, "gemini"):
-		return "google"
+		// "gemini" is the stored spelling the SDK's OTel provider map and the
+		// backend's inverse table both key on; "google" is in neither.
+		return "gemini"
 	}
 	return ""
 }

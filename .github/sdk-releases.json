@@ -13,6 +13,7 @@
       "go",
       "go-providers",
       "go-frameworks",
+      ":(exclude)go/otelgenai/conformance",
       ":(exclude)**/*_test.go",
       ":(exclude)**/README.md"
     ]

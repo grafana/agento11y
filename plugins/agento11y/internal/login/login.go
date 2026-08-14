@@ -941,8 +941,11 @@ type pasteFilled struct {
 // their own, because a user who points login at their own collector must not
 // get a Grafana Cloud token written next to it.
 //
-// AGENTO11Y_PROTOCOL and AGENTO11Y_AUTH_MODE are dropped: the launcher
-// hardcodes HTTP and Basic (see internal/emit).
+// applyPaste drops AGENTO11Y_PROTOCOL and AGENTO11Y_AUTH_MODE: the form has no
+// field for either, and dropping them changes nothing, because the launcher
+// already uses those values (HTTP export, Basic auth). A user who wants the
+// experimental otel generation export sets AGENTO11Y_PROTOCOL themselves; see
+// internal/emit.
 func applyPaste(v *formValues, fixed fixedValues, block string) pasteFilled {
 	env, _ := dotenv.ParseDotenv(strings.NewReader(normalizePastedBlock(block)))
 	var filled pasteFilled

@@ -222,8 +222,19 @@ func TestProcess_SinglePromptResponse(t *testing.T) {
 	if gen.Usage.OutputTokens != 50 {
 		t.Errorf("OutputTokens = %d", gen.Usage.OutputTokens)
 	}
-	if gen.Usage.TotalTokens != gen.Usage.InputTokens+gen.Usage.OutputTokens {
-		t.Errorf("TotalTokens = %d, want %d", gen.Usage.TotalTokens, gen.Usage.InputTokens+gen.Usage.OutputTokens)
+	// The fixture reports 100 uncached input tokens plus a 50-token cache read,
+	// and the exported input count is inclusive of both cache buckets.
+	if gen.Usage.InputTokens != 150 {
+		t.Errorf("InputTokens = %d, want 150", gen.Usage.InputTokens)
+	}
+	if gen.Usage.CacheReadInputTokens != 50 {
+		t.Errorf("CacheReadInputTokens = %d, want 50", gen.Usage.CacheReadInputTokens)
+	}
+	if gen.Usage.TotalTokens != 200 {
+		t.Errorf("TotalTokens = %d, want 200", gen.Usage.TotalTokens)
+	}
+	if gen.Usage.InputSemantics != agento11y.TokenInputSemanticsInclusive {
+		t.Errorf("InputSemantics = %q, want %q", gen.Usage.InputSemantics, agento11y.TokenInputSemanticsInclusive)
 	}
 	if gen.StopReason != "end_turn" {
 		t.Errorf("StopReason = %q", gen.StopReason)

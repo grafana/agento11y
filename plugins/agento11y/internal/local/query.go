@@ -586,6 +586,14 @@ func generationTime(gen summaryGeneration, receivedAt string) time.Time {
 // disjointTokenUsage splits a generation's usage into five buckets that
 // don't overlap, so the viewer can stack them without double-counting.
 //
+// Usage that carries TokenInputSemanticsInclusive needs no provider name
+// on the input axis. The marker says input_tokens already covers every
+// input token type, so both cache buckets sit inside input_tokens and
+// fresh input is input - cache_read - cache_write for every provider.
+// Usage without the marker (legacy records, and exporters that pass
+// provider-raw counts through) falls back to the provider-name heuristic
+// below.
+//
 // Providers disagree on how cache and reasoning tokens relate to the
 // input/output totals, so both carve-outs are provider-aware:
 //
@@ -599,12 +607,13 @@ func generationTime(gen summaryGeneration, receivedAt string) time.Time {
 //     doesn't populate it, so for those reasoning stands alone (see
 //     reasoningInsideOutput).
 //
-// cache_write is never folded into input by any provider we map, so it
-// always stands alone.
+// No provider the heuristic maps folds cache_write into input, so without
+// the inclusive marker cache_write always stands alone.
 //
 // For well-formed usage the buckets sum back to what the provider
-// reported: Anthropic input + cache_read + cache_write + output; OpenAI
-// input + output; Gemini input + output + reasoning (its total also
+// reported: inclusive-marked usage input + output; provider-raw Anthropic
+// input + cache_read + cache_write + output; OpenAI input + output;
+// Gemini input + output + reasoning (its total also
 // counts tool-use prompt tokens, which the SDK's TokenUsage has no field
 // for). When a subset field exceeds its total, the nonNeg clamps keep
 // the subset and zero the remainder, so the sum can exceed what was
@@ -617,7 +626,12 @@ func disjointTokenUsage(u agento11y.TokenUsage, provider string) TokenBuckets {
 		Output:     nonNeg(u.OutputTokens),
 		Reasoning:  nonNeg(u.ReasoningTokens),
 	}
-	if cacheReadInsideInput(provider) {
+	switch {
+	case u.InputSemantics == agento11y.TokenInputSemanticsInclusive:
+		// Both cache buckets are inside input under the OTel contract, so
+		// both come back out; the buckets then sum to the reported total.
+		b.FreshInput = nonNeg(b.FreshInput - b.CacheRead - b.CacheWrite)
+	case cacheReadInsideInput(provider):
 		b.FreshInput = nonNeg(b.FreshInput - b.CacheRead)
 	}
 	if reasoningInsideOutput(provider) {
@@ -627,7 +641,9 @@ func disjointTokenUsage(u agento11y.TokenUsage, provider string) TokenBuckets {
 }
 
 // cacheReadInsideInput reports whether the provider counts cache_read
-// tokens within input_tokens (subset semantics). Anthropic keeps them
+// tokens within input_tokens (subset semantics). This check is the
+// fallback for usage that carries no input-semantics marker; usage that
+// carries one never reaches it (see disjointTokenUsage). Anthropic keeps them
 // separate; OpenAI and Gemini fold them in, and so does codex, the codex
 // agent's fallback provider for model names it can't attribute (its
 // usage comes from the Responses API). Unknown providers default to

@@ -1,16 +1,20 @@
 package emit
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 )
 
 func TestExportEndpoint(t *testing.T) {
@@ -38,15 +42,21 @@ func TestExportConfig(t *testing.T) {
 	t.Setenv("SIGIL_ENDPOINT", "http://localhost:8080")
 
 	t.Run("empty user agent leaves headers unset", func(t *testing.T) {
-		if got := exportConfig("").Headers; got != nil {
+		if got := exportConfig("", agento11y.GenerationExportProtocolHTTP).Headers; got != nil {
 			t.Fatalf("Headers = %v; want nil", got)
 		}
 	})
 
 	t.Run("user agent sets header", func(t *testing.T) {
-		got := exportConfig("agento11y-plugin-codex/1.2.3").Headers["User-Agent"]
+		got := exportConfig("agento11y-plugin-codex/1.2.3", agento11y.GenerationExportProtocolHTTP).Headers["User-Agent"]
 		if got != "agento11y-plugin-codex/1.2.3" {
 			t.Fatalf("User-Agent = %q; want %q", got, "agento11y-plugin-codex/1.2.3")
+		}
+	})
+
+	t.Run("protocol is carried through", func(t *testing.T) {
+		if got := exportConfig("", agento11y.GenerationExportProtocolOTel).Protocol; got != agento11y.GenerationExportProtocolOTel {
+			t.Fatalf("Protocol = %q; want otel", got)
 		}
 	})
 }
@@ -202,6 +212,110 @@ func TestToolError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := ToolError(tc.msg).Error(); got != tc.want {
 				t.Errorf("ToolError(%q) = %q; want %q", tc.msg, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExportProtocol(t *testing.T) {
+	cases := []struct {
+		name      string
+		env       map[string]string
+		providers bool
+		want      agento11y.GenerationExportProtocol
+		wantLog   string
+	}{
+		{
+			name: "unset keeps http",
+			want: agento11y.GenerationExportProtocolHTTP,
+		},
+		{
+			name: "grpc is not honored",
+			env:  map[string]string{"AGENTO11Y_PROTOCOL": "grpc"},
+			want: agento11y.GenerationExportProtocolHTTP,
+		},
+		{
+			name: "otel with providers and the experimental gate",
+			env: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "OTEL",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+			},
+			providers: true,
+			want:      agento11y.GenerationExportProtocolOTel,
+		},
+		{
+			name: "otel without providers falls back to http",
+			env: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+			},
+			want:    agento11y.GenerationExportProtocolHTTP,
+			wantLog: "AGENTO11Y_PROTOCOL=otel but no OTLP endpoint is configured",
+		},
+		{
+			name:      "otel without the experimental gate falls back to http",
+			env:       map[string]string{"AGENTO11Y_PROTOCOL": "otel"},
+			providers: true,
+			want:      agento11y.GenerationExportProtocolHTTP,
+			wantLog:   "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES is not enabled",
+		},
+		{
+			// The gate parses 1/true/yes/on only, so an explicit off reads the
+			// same as unset and must not be described as unset.
+			name: "gate set to false falls back to http",
+			env: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "false",
+			},
+			providers: true,
+			want:      agento11y.GenerationExportProtocolHTTP,
+			wantLog:   "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES is not enabled",
+		},
+		{
+			name: "legacy spelling falls back too",
+			env: map[string]string{
+				"SIGIL_PROTOCOL":                         "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+			},
+			want:    agento11y.GenerationExportProtocolHTTP,
+			wantLog: "SIGIL_PROTOCOL=otel but no OTLP endpoint is configured",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AGENTO11Y_PROTOCOL", "")
+			t.Setenv("SIGIL_PROTOCOL", "")
+			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "")
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+
+			var providers *otel.Providers
+			if tc.providers {
+				// A zero Providers value is enough: ExportProtocol only asks
+				// whether the OTLP pipeline exists.
+				providers = &otel.Providers{}
+			}
+			// With a nil logger ExportProtocol writes no fallback notice at
+			// all, so the resolution has to hold without a logger.
+			if got := ExportProtocol(providers, nil); got != tc.want {
+				t.Errorf("ExportProtocol(nil logger) = %q, want %q", got, tc.want)
+			}
+
+			var buf bytes.Buffer
+			got := ExportProtocol(providers, log.New(&buf, "", 0))
+			if got != tc.want {
+				t.Errorf("ExportProtocol() = %q, want %q", got, tc.want)
+			}
+			if tc.wantLog == "" {
+				if buf.Len() != 0 {
+					t.Errorf("logged %q, want nothing", buf.String())
+				}
+				return
+			}
+			if !strings.Contains(buf.String(), tc.wantLog) {
+				t.Errorf("log = %q, want it to contain %q", buf.String(), tc.wantLog)
 			}
 		})
 	}

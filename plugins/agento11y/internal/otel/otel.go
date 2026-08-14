@@ -73,6 +73,24 @@ func (p *Providers) Meter(name string) metric.Meter {
 	return p.mp.Meter(name)
 }
 
+// TracerProvider and MeterProvider hand the providers themselves to the SDK.
+// The SDK needs them for the otel generation-export protocol: it flushes the
+// tracer provider to confirm delivery, and it takes its own instrumentation
+// scope from the meter provider.
+func (p *Providers) TracerProvider() trace.TracerProvider {
+	if p == nil {
+		return nil
+	}
+	return p.tp
+}
+
+func (p *Providers) MeterProvider() metric.MeterProvider {
+	if p == nil {
+		return nil
+	}
+	return p.mp
+}
+
 // ForceFlush exports pending traces and metrics concurrently.
 func (p *Providers) ForceFlush() error {
 	if p == nil {

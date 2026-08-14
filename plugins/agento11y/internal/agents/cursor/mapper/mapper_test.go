@@ -470,7 +470,7 @@ func TestMapFragment_InfersProviderFromModel(t *testing.T) {
 		{"claude-sonnet-4-6", "anthropic"},
 		{"gpt-5", "openai"},
 		{"o3-mini", "openai"},
-		{"gemini-2.5-pro", "google"},
+		{"gemini-2.5-pro", "gemini"},
 		{"some-random-model", "cursor"}, // no match → cursor fallback
 	}
 	for _, tc := range cases {

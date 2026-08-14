@@ -15,6 +15,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/toolevents"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/transcript"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
@@ -186,7 +187,7 @@ func PostAgentTurn(ctx context.Context, p Payload, logger *log.Logger) {
 	toolEvents := toolevents.Load(p.SessionID)
 
 	logger.Printf("post_agent_turn: export id=%s session=%s turn=%d", mapped.Generation.ID, p.SessionID, turnSeq)
-	if err := emit(exportCtx, client, mapped, toolEvents, logger); err != nil {
+	if err := emitTurn(exportCtx, client, mapped, toolEvents, logger); err != nil {
 		logger.Printf("post_agent_turn: emit: %v", err)
 		_ = client.Shutdown(exportCtx)
 		restoreState(p.SessionID, prior, priorFound, logger)
@@ -225,7 +226,7 @@ func restoreState(sessionID string, prior state.Session, priorFound bool, logger
 	}
 }
 
-func emit(ctx context.Context, client *agento11y.Client, mapped mapper.Mapped, toolEvents map[string]toolevents.Event, logger *log.Logger) error {
+func emitTurn(ctx context.Context, client *agento11y.Client, mapped mapper.Mapped, toolEvents map[string]toolevents.Event, logger *log.Logger) error {
 	genCtx, rec := client.StartGeneration(ctx, mapped.Start)
 	rec.SetResult(mapped.Generation, nil)
 	emitToolSpans(genCtx, client, mapped.Generation, mapped.Start.ContentCapture, toolEvents, logger)
@@ -335,19 +336,16 @@ func buildClient(mode agento11y.ContentCaptureMode, providers *otel.Providers, e
 	cfg := agento11y.Config{
 		ContentCapture:   mode,
 		Logger:           logger,
-		GenerationExport: exportConfig(endpoint, tenantID, authToken),
+		GenerationExport: exportConfig(endpoint, tenantID, authToken, emit.ExportProtocol(providers, logger)),
 		Tags:             autotag.FromEnv(autotag.Inputs{Cwd: cwd}, logger),
 	}
-	if providers != nil {
-		cfg.Tracer = providers.Tracer(otelInstrumentationName)
-		cfg.Meter = providers.Meter(otelInstrumentationName)
-	}
+	emit.ApplyProviders(&cfg, providers, otelInstrumentationName)
 	return agento11y.NewClient(cfg)
 }
 
-func exportConfig(endpoint, tenantID, authToken string) agento11y.GenerationExportConfig {
+func exportConfig(endpoint, tenantID, authToken string, protocol agento11y.GenerationExportProtocol) agento11y.GenerationExportConfig {
 	return agento11y.GenerationExportConfig{
-		Protocol: agento11y.GenerationExportProtocolHTTP,
+		Protocol: protocol,
 		Endpoint: strings.TrimRight(endpoint, "/") + "/api/v1/generations:export",
 		Headers:  map[string]string{"User-Agent": useragent.For("vibe")},
 		Auth: agento11y.AuthConfig{

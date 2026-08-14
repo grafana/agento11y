@@ -70,6 +70,17 @@ func TestLaunchEnvApply(t *testing.T) {
 			},
 		},
 		{
+			name: "pins http export over an inherited otel protocol",
+			env: []string{
+				"AGENTO11Y_PROTOCOL=otel",
+				"SIGIL_PROTOCOL=otel",
+			},
+			want: map[string]string{
+				"AGENTO11Y_PROTOCOL": "http",
+				"SIGIL_PROTOCOL":     "http",
+			},
+		},
+		{
 			name: "blank credentials get placeholders under both spellings",
 			env:  []string{"SIGIL_AUTH_TENANT_ID=  ", "SIGIL_AUTH_TOKEN="},
 			want: map[string]string{

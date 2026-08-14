@@ -134,8 +134,8 @@ func TestInferProvider(t *testing.T) {
 		{"o1-preview", "openai"},
 		{"o3-mini", "openai"},
 		{"o4-fast", "openai"},
-		{"gemini-2.5-pro", "google"},
-		{"models/gemini-pro", "google"}, // substring match anywhere
+		{"gemini-2.5-pro", "gemini"},
+		{"models/gemini-pro", "gemini"}, // substring match anywhere
 		{"some-random-model", ""},
 		{"", ""},
 	}

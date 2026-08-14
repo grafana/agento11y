@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 import time
 from datetime import timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import pytest
 from agento11y import (
     Client,
     ClientConfig,
@@ -155,6 +159,65 @@ def test_builtin_noop_generation_exporter_supports_instrumentation_only_mode() -
     finally:
         client.shutdown()
         provider.shutdown()
+
+
+def test_otel_protocol_from_env_warns_once_and_disables_export(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AGENTO11Y_PROTOCOL is shared across SDKs, so a Python app can inherit a
+    Go-only value from the agent session. Construction must not fail."""
+
+    received: list[str] = []
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            received.append(self.path)
+            self.send_response(202)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, _format, *_args):  # noqa: A003
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    monkeypatch.setenv("AGENTO11Y_PROTOCOL", "otel")
+    monkeypatch.setenv("AGENTO11Y_ENDPOINT", f"http://127.0.0.1:{server.server_address[1]}")
+
+    provider = TracerProvider()
+    tracer = provider.get_tracer("agento11y-test")
+    try:
+        with caplog.at_level(logging.WARNING, logger="agento11y"):
+            client = Client(ClientConfig(tracer=tracer))
+            try:
+                rec = client.start_generation(_seed_generation("conv-otel"))
+                rec.set_result(output=_assistant_output("ok-otel"))
+                rec.end()
+
+                assert rec.err() is None
+                client.flush()
+            finally:
+                client.shutdown()
+
+        warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "AGENTO11Y_PROTOCOL=otel" in warnings[0]
+        assert received == []
+    finally:
+        provider.shutdown()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_unknown_protocol_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Degrading on the known 'otel' value must not hide a real misconfiguration."""
+
+    monkeypatch.setenv("AGENTO11Y_PROTOCOL", "bogus")
+    with pytest.raises(ValueError, match="unsupported generation export protocol"):
+        Client()
 
 
 def test_queue_full_error_is_exposed_as_local_recorder_error() -> None:

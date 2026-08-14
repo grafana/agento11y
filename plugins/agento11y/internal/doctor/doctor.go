@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/go/proto/agento11y/wire"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
@@ -91,16 +92,24 @@ var trackedSuffixes = []string{
 	"GUARDS_ENABLED",
 	"GUARDS_FAIL_OPEN",
 	"GUARDS_TIMEOUT_MS",
+	// PROTOCOL selects the experimental otel generation export, which the
+	// analytics section reports on.
+	"PROTOCOL",
 }
 
 // trackedKeys is the full key set SnapshotEnv records: both spellings of the
-// tracked families plus the standard (unbranded) OTel vars.
+// tracked families, the standard (unbranded) OTel vars, and the SDK's
+// experimental gate, which has only the branded spelling and no SIGIL_ alias.
 var trackedKeys = func() []string {
-	keys := make([]string, 0, len(trackedSuffixes)*2+2)
+	keys := make([]string, 0, len(trackedSuffixes)*2+3)
 	for _, suffix := range trackedSuffixes {
 		keys = append(keys, envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix))
 	}
-	return append(keys, "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS")
+	return append(keys,
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_HEADERS",
+		agento11y.EnvEnableExperimentalFeatures,
+	)
 }()
 
 // Options are the parsed doctor flags.
@@ -652,6 +661,7 @@ func collectConversations(osEnv, fileEnv map[string]string) ConversationsSection
 func collectAnalytics(osEnv, fileEnv map[string]string, conversationsConfigured bool) AnalyticsSection {
 	brandedOTLP := resolveFamily("OTEL_EXPORTER_OTLP_ENDPOINT", osEnv, fileEnv)
 	stdOTLP := resolveEnv("OTEL_EXPORTER_OTLP_ENDPOINT", osEnv, fileEnv)
+	otelExport := otelGenerationExport(osEnv, fileEnv)
 
 	sec := AnalyticsSection{}
 	switch {
@@ -668,6 +678,19 @@ func collectAnalytics(osEnv, fileEnv map[string]string, conversationsConfigured 
 		sec.Messages = append(sec.Messages,
 			"no OTLP endpoint set — metrics and traces will not be exported even though conversations are configured. "+
 				"Set AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT (e.g. https://otlp-gateway-prod-<region>.grafana.net/otlp).")
+		return sec
+	case otelExport && experimentalFeaturesEnabled(osEnv, fileEnv):
+		// otel mode is unlocked and asks for generations on the OTLP traces
+		// pipeline, and there is no pipeline. The hooks fall back to HTTP
+		// export, so no capture is lost and this is not an error. The user
+		// still does not get the mode they asked for, so this arm warns. With
+		// the gate closed otel mode is not in effect, and the endpoint,
+		// conversations, and default arms decide the verdict without this arm.
+		sec.Health = HealthWarn
+		sec.Messages = append(sec.Messages,
+			"generation export is set to otel but no OTLP endpoint is set, so generations fall back to HTTP export "+
+				"and no metrics or traces are exported. Set AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT "+
+				"(e.g. https://otlp-gateway-prod-<region>.grafana.net/otlp).")
 		return sec
 	default:
 		sec.Health = HealthWarn
@@ -689,6 +712,10 @@ func collectAnalytics(osEnv, fileEnv map[string]string, conversationsConfigured 
 	// AUTH_TOKEN family). Don't report ok when none of those resolve,
 	// otherwise doctor shows a healthy analytics pipeline that exports
 	// nothing.
+	if otelExport {
+		sec.Messages = append(sec.Messages, otelExportMessage(osEnv, fileEnv))
+	}
+
 	if analyticsAuthResolvable(osEnv, fileEnv) {
 		sec.Health = HealthOK
 	} else {
@@ -699,6 +726,38 @@ func collectAnalytics(osEnv, fileEnv map[string]string, conversationsConfigured 
 				"Export will be unauthenticated unless the collector is open.")
 	}
 	return sec
+}
+
+// otelGenerationExport reports whether the branded PROTOCOL family selects the
+// experimental otel generation export, which sends generations as GenAI spans
+// on the OTLP traces pipeline instead of calling the export endpoint.
+func otelGenerationExport(osEnv, fileEnv map[string]string) bool {
+	protocol := resolveFamily("PROTOCOL", osEnv, fileEnv)
+	return protocol.set && strings.EqualFold(strings.TrimSpace(protocol.value), "otel")
+}
+
+// otelExportMessage describes what otel mode changes, or why it is not in
+// effect. The mode is gated twice, and a user who set only the protocol gets
+// the fallback with no sign of it outside the plugin log file.
+func otelExportMessage(osEnv, fileEnv map[string]string) string {
+	if !experimentalFeaturesEnabled(osEnv, fileEnv) {
+		return "generation export is set to otel, which also needs " +
+			agento11y.EnvEnableExperimentalFeatures + "=true; without it generations are exported over HTTP as usual"
+	}
+	return "generation export is set to otel: generations are exported as GenAI spans on the OTLP traces " +
+		"pipeline, and the generations:export endpoint is not called"
+}
+
+// otelGenerationExportActive reports whether otel mode is both selected and
+// unlocked, the state in which the OTLP traces pipeline carries the
+// generations.
+func otelGenerationExportActive(osEnv, fileEnv map[string]string) bool {
+	return otelGenerationExport(osEnv, fileEnv) && experimentalFeaturesEnabled(osEnv, fileEnv)
+}
+
+// experimentalFeaturesEnabled mirrors the SDK's gate on the doctor snapshot.
+func experimentalFeaturesEnabled(osEnv, fileEnv map[string]string) bool {
+	return envconfig.ParseBool(resolveEnv(agento11y.EnvEnableExperimentalFeatures, osEnv, fileEnv).value)
 }
 
 // analyticsAuthResolvable reports whether the OTLP exporter would have a
@@ -1137,9 +1196,13 @@ func runProbes(ctx context.Context, r *Report, osEnv, fileEnv map[string]string)
 				// The row shows the status and the URL, so the cause (DNS failure,
 				// refused connection, TLS error, timeout, 5xx body) is carried here or
 				// nowhere in the human report.
+				lost := "metrics and traces"
+				if otelGenerationExportActive(osEnv, fileEnv) {
+					lost = "metrics, traces, and generations"
+				}
 				r.Analytics.Messages = append(r.Analytics.Messages,
 					"could not reach the OTLP endpoint: "+describeProbe(firstUnreachable(probe))+
-						"; metrics and traces will not be exported")
+						"; "+lost+" will not be exported")
 			case probe.Metrics.routeMissing() || probe.Traces.routeMissing():
 				r.Analytics.Health = HealthError
 				r.Analytics.Messages = append(r.Analytics.Messages,

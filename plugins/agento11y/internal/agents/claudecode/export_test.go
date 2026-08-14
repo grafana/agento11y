@@ -9,7 +9,12 @@ import (
 )
 
 func TestExportConfigUserAgent(t *testing.T) {
-	ua := exportConfig("https://sigil.example", "tenant", "token").Headers["User-Agent"]
+	ua := exportConfig("https://sigil.example", "tenant", "token", agento11y.GenerationExportProtocolHTTP).Headers["User-Agent"]
 	assert.True(t, strings.HasPrefix(ua, "agento11y-plugin-claude-code/"), "got %q", ua)
 	assert.True(t, strings.HasSuffix(ua, agento11y.UserAgent()), "got %q", ua)
+}
+
+func TestExportConfigProtocol(t *testing.T) {
+	cfg := exportConfig("https://sigil.example", "tenant", "token", agento11y.GenerationExportProtocolOTel)
+	assert.Equal(t, agento11y.GenerationExportProtocolOTel, cfg.Protocol)
 }

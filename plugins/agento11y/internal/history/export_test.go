@@ -10,11 +10,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 )
 
 type capturedRecord struct {
@@ -390,6 +392,131 @@ func TestNewTargetExporterUsesExplicitEndpointAndHeaders(t *testing.T) {
 	// The explicit endpoint must win over the configured Cloud one.
 	if strings.Contains(srv.URL, "cloud.example.invalid") {
 		t.Fatal("test setup error")
+	}
+}
+
+// TestTargetExportProtocol pins the resolution rule: a local target always
+// exports over HTTP, because the local daemon only stores what arrives on the
+// proto ingest path; any other target honours the branded PROTOCOL family.
+func TestTargetExportProtocol(t *testing.T) {
+	tests := []struct {
+		name         string
+		localTarget  bool
+		withProvider bool
+		protocolEnv  string
+		want         agento11y.GenerationExportProtocol
+	}{
+		{
+			name:         "a local target pins HTTP over an otel request",
+			localTarget:  true,
+			withProvider: true,
+			protocolEnv:  "otel",
+			want:         agento11y.GenerationExportProtocolHTTP,
+		},
+		{
+			name:         "a cloud target with providers resolves to otel",
+			withProvider: true,
+			protocolEnv:  "otel",
+			want:         agento11y.GenerationExportProtocolOTel,
+		},
+		{
+			name:        "a cloud target with no OTLP pipeline falls back to HTTP",
+			protocolEnv: "otel",
+			want:        agento11y.GenerationExportProtocolHTTP,
+		},
+		{
+			name:         "an unset protocol stays on HTTP",
+			withProvider: true,
+			want:         agento11y.GenerationExportProtocolHTTP,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			t.Setenv("AGENTO11Y_PROTOCOL", tt.protocolEnv)
+			t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+
+			var providers *otel.Providers
+			if tt.withProvider {
+				otlp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/x-protobuf")
+					w.WriteHeader(http.StatusOK)
+				}))
+				defer otlp.Close()
+				var err error
+				providers, err = otel.SetupWithOptions(context.Background(), "history-test", otel.Options{Endpoint: otlp.URL})
+				if err != nil {
+					t.Fatalf("otel.SetupWithOptions: %v", err)
+				}
+				defer func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+					_ = providers.Shutdown(ctx)
+				}()
+			}
+
+			got := targetExportProtocol(tt.localTarget, providers, log.New(io.Discard, "", 0))
+			if got != tt.want {
+				t.Fatalf("targetExportProtocol = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNewTargetExporterPinsHTTPForALocalTarget pins that a loopback import
+// reaches the generations export endpoint even when the branded PROTOCOL
+// family asks for otel. The local daemon would drain the resulting OTLP spans
+// without storing them.
+func TestNewTargetExporterPinsHTTPForALocalTarget(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("AGENTO11Y_PROTOCOL", "otel")
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+
+	var exports atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		exports.Add(1)
+		_, _ = io.WriteString(w, acceptAllGenerations(r))
+	}))
+	defer srv.Close()
+	otlp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer otlp.Close()
+
+	exp, cleanup, err := NewTargetExporter(context.Background(), Target{
+		Endpoint:     srv.URL,
+		OTLPEndpoint: otlp.URL,
+		ContentMode:  "full",
+	}, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("NewTargetExporter: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = cleanup(ctx)
+	}()
+
+	err = exp.ExportHistoricalGeneration(context.Background(), HistoricalGeneration{
+		Source: SourceRef{Agent: AgentClaudeCode, SessionID: "s1", SourcePath: "/a.jsonl"},
+		Gen: agento11y.Generation{
+			ConversationID: "s1",
+			Model:          agento11y.ModelRef{Provider: "anthropic", Name: "claude"},
+			Input:          []agento11y.Message{agento11y.UserTextMessage("hello")},
+			StartedAt:      time.Now().Add(-time.Minute),
+			CompletedAt:    time.Now(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExportHistoricalGeneration: %v", err)
+	}
+	if err := exp.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := exports.Load(); got == 0 {
+		t.Fatal("generations:export received no requests, so the local import stored nothing")
 	}
 }
 

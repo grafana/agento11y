@@ -36,6 +36,13 @@ def _check_transport(cfg: ClientConfig) -> None:
     assert auth.basic_password == "glc_xxx"
 
 
+def _check_otel_protocol(cfg: ClientConfig) -> None:
+    # 'otel' is a shared cross-SDK AGENTO11Y_PROTOCOL value implemented by the Go
+    # SDK. Config resolution must pass it through untouched; the client decides
+    # what to do with a protocol it cannot export with.
+    assert cfg.generation_export.protocol == "otel"
+
+
 def _check_bearer(cfg: ClientConfig) -> None:
     assert cfg.generation_export.auth.mode == "bearer"
     assert cfg.generation_export.auth.bearer_token == "tok"
@@ -148,6 +155,11 @@ def _check_invalid_canonical_blocks_valid_legacy(cfg: ClientConfig) -> None:
             },
             _check_transport,
             id="transport from env",
+        ),
+        pytest.param(
+            {"AGENTO11Y_PROTOCOL": "otel"},
+            _check_otel_protocol,
+            id="otel protocol from env resolves unchanged",
         ),
         pytest.param(
             {"AGENTO11Y_AUTH_MODE": "bearer", "AGENTO11Y_AUTH_TOKEN": "tok"},

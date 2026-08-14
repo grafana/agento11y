@@ -353,3 +353,45 @@ func TestWriteHookSpecificOutputUpdatedInput(t *testing.T) {
 	// nil writer must not panic.
 	WriteHookSpecificOutputUpdatedInput(nil, json.RawMessage(`{}`))
 }
+
+// TestEvaluateToolCallStaysOffStderr pins that a guard evaluation writes
+// nothing to the default logger. A hook's stderr belongs to the host agent, so
+// an SDK log line there corrupts the PreToolUse hook protocol. Setting
+// AGENTO11Y_PROTOCOL=otel with the experimental gate closed makes the SDK log
+// exactly such a line.
+func TestEvaluateToolCallStaysOffStderr(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"action":"allow"}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+	t.Setenv("AGENTO11Y_PROTOCOL", "otel")
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "")
+
+	var defaultLog bytes.Buffer
+	previous := log.Default().Writer()
+	log.Default().SetOutput(&defaultLog)
+	t.Cleanup(func() { log.Default().SetOutput(previous) })
+
+	res := EvaluateToolCall(context.Background(), envconfig.GuardsConfig{
+		Enabled: true, TimeoutMs: 1500, FailOpen: true,
+	}, ToolCallInput{
+		AgentName:     "claude-code",
+		ModelProvider: "openai",
+		ModelName:     "gpt-5",
+		ToolName:      "bash",
+		ToolCallID:    "tu_1",
+		ToolInputJSON: json.RawMessage(`{"cmd":"echo hi"}`),
+	}, nil)
+
+	if res.Action != agento11y.HookActionAllow {
+		t.Fatalf("Action = %q, want allow", res.Action)
+	}
+	if got := defaultLog.String(); got != "" {
+		t.Fatalf("guard wrote %q to the default logger", got)
+	}
+}

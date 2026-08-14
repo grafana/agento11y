@@ -62,6 +62,7 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.44.0 // indirect
+	go.opentelemetry.io/otel/log v0.20.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
@@ -73,3 +74,9 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+// Temporary: the otel generation-export protocol is not in any published
+// go/v* version yet, so the SDK resolves from the local tree. Drop this
+// replace and repin github.com/grafana/agento11y/go once the SDK change is on
+// main (a pseudo-version, or the next go/v* tag).
+replace github.com/grafana/agento11y/go => ../../go

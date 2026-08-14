@@ -42,8 +42,10 @@ type ClientOptions struct {
 	InstrumentationName string
 	// ContentCapture is the resolved capture mode for the client.
 	ContentCapture agento11y.ContentCaptureMode
-	// Logger is forwarded to the SDK client. nil leaves the SDK silent
-	// (cursor relies on this).
+	// Logger is forwarded to the SDK client. Every adapter passes its own
+	// logger, which writes to the plugin log file; nil leaves the SDK on its
+	// default log.Default(), which writes to the stderr a hook shares with the
+	// host agent.
 	Logger *log.Logger
 	// Providers wires the tracer/meter when non-nil.
 	Providers *otel.Providers
@@ -59,12 +61,12 @@ type ClientOptions struct {
 	Tags map[string]string
 }
 
-// exportConfig builds the shared HTTP/basic-auth generation export config.
+// exportConfig builds the shared basic-auth generation export config.
 // A non-empty userAgent sets the export User-Agent header (each agent passes
 // its own token via useragent.For); empty leaves the SDK default in place.
-func exportConfig(userAgent string) agento11y.GenerationExportConfig {
+func exportConfig(userAgent string, protocol agento11y.GenerationExportProtocol) agento11y.GenerationExportConfig {
 	export := agento11y.GenerationExportConfig{
-		Protocol: agento11y.GenerationExportProtocolHTTP,
+		Protocol: protocol,
 		Endpoint: ExportEndpoint(),
 		Auth:     agento11y.AuthConfig{Mode: agento11y.ExportAuthModeBasic},
 	}
@@ -74,20 +76,69 @@ func exportConfig(userAgent string) agento11y.GenerationExportConfig {
 	return export
 }
 
-// NewClient builds an agento11y client with the shared HTTP/basic-auth generation
-// export defaults and optional OTel providers.
+// ExportProtocol resolves the generation export protocol from the branded
+// PROTOCOL family. The value `otel` is the only one that changes anything: it
+// exports each generation as a GenAI span on the OTLP pipeline instead of
+// calling the export endpoint.
+//
+// The mode needs both an OTLP pipeline and the SDK's experimental gate. With
+// either one missing it would drop every generation, so ExportProtocol falls
+// back to HTTP and logs which one is missing. Callers pass the result to the
+// SDK explicitly instead of leaving the SDK to read the env var itself,
+// because the fallback has to win over AGENTO11Y_PROTOCOL.
+//
+// The fallback notice goes to the plugin log file, where a user who set the
+// variable looks for it. Writing the notice to stderr would put plugin output
+// inside the host agent's hook protocol.
+func ExportProtocol(providers *otel.Providers, logger *log.Logger) agento11y.GenerationExportProtocol {
+	value, key, ok := envconfig.LookupEnv("PROTOCOL")
+	if !ok || !strings.EqualFold(value, string(agento11y.GenerationExportProtocolOTel)) {
+		return agento11y.GenerationExportProtocolHTTP
+	}
+
+	fallback := ""
+	switch {
+	case providers == nil:
+		fallback = "no OTLP endpoint is configured"
+	case !agento11y.ExperimentalFeaturesEnabled():
+		fallback = agento11y.EnvEnableExperimentalFeatures + " is not enabled"
+	}
+	if fallback != "" {
+		if logger != nil {
+			logger.Printf("otel: %s=otel but %s; exporting generations over HTTP", key, fallback)
+		}
+		return agento11y.GenerationExportProtocolHTTP
+	}
+	return agento11y.GenerationExportProtocolOTel
+}
+
+// NewClient builds an agento11y client with the shared basic-auth generation
+// export defaults, the protocol ExportProtocol resolves, and optional OTel
+// providers.
 func NewClient(opts ClientOptions) *agento11y.Client {
 	c := agento11y.Config{
 		ContentCapture:   opts.ContentCapture,
 		Logger:           opts.Logger,
-		GenerationExport: exportConfig(opts.UserAgent),
+		GenerationExport: exportConfig(opts.UserAgent, ExportProtocol(opts.Providers, opts.Logger)),
 		Tags:             opts.Tags,
 	}
-	if opts.Providers != nil {
-		c.Tracer = opts.Providers.Tracer(opts.InstrumentationName)
-		c.Meter = opts.Providers.Meter(opts.InstrumentationName)
-	}
+	ApplyProviders(&c, opts.Providers, opts.InstrumentationName)
 	return agento11y.NewClient(c)
+}
+
+// ApplyProviders wires the OTel providers into an SDK config. The tracer and
+// meter carry the plugin's own instrumentation scope. The providers go
+// alongside them because otel-mode export flushes the tracer provider to
+// confirm delivery: an adapter that deletes its on-disk fragment after Flush
+// has no other delivery signal.
+func ApplyProviders(cfg *agento11y.Config, providers *otel.Providers, instrumentationName string) {
+	if cfg == nil || providers == nil {
+		return
+	}
+	cfg.Tracer = providers.Tracer(instrumentationName)
+	cfg.Meter = providers.Meter(instrumentationName)
+	cfg.TracerProvider = providers.TracerProvider()
+	cfg.MeterProvider = providers.MeterProvider()
 }
 
 // SetupOTel builds OTel providers when an OTLP endpoint is configured

@@ -363,6 +363,18 @@ class Client:
                 )
             elif protocol == "none":
                 self._generation_exporter = NoopGenerationExporter()
+            elif protocol == "otel":
+                # AGENTO11Y_PROTOCOL is shared across SDKs, and the plugin launcher
+                # exports the variable process-wide, so a Python app can inherit a
+                # value that only the Go SDK implements. Fall back to the
+                # non-exporting exporter instead of failing construction of the
+                # app's instrumentation.
+                self._log_warn(
+                    "agento11y: AGENTO11Y_PROTOCOL=otel is implemented by the Go SDK only, "
+                    "so this process exports no generations. "
+                    "Set AGENTO11Y_PROTOCOL=http for this process to export over HTTP."
+                )
+                self._generation_exporter = NoopGenerationExporter()
             else:
                 raise ValueError(f"unsupported generation export protocol {self._config.generation_export.protocol!r}")
 

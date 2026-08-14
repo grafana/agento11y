@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe/mapper"
@@ -408,6 +409,49 @@ func TestPostAgentTurn_PromptRedactionWiring(t *testing.T) {
 				t.Errorf("assistant text lost its redaction: %s", got)
 			}
 		})
+	}
+}
+
+// TestPostAgentTurn_OTelProtocolBypassesHTTPExport pins that vibe resolves the
+// export protocol like every other adapter.
+func TestPostAgentTurn_OTelProtocolBypassesHTTPExport(t *testing.T) {
+	var exports atomic.Int64
+	srv := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		exports.Add(1)
+		writeAcceptedGenerationResponse(t, w, b)
+	}))
+	t.Cleanup(srv.Close)
+
+	// The OTLP endpoint only has to exist, so that the protocol resolution
+	// keeps otel mode instead of falling back to HTTP. The server below accepts
+	// every export with an empty body, which keeps the exporter's retry loop
+	// out of the test's runtime.
+	otlp := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(otlp.Close)
+
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("SIGIL_ENDPOINT", srv.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+	t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", otlp.URL)
+	t.Setenv("AGENTO11Y_PROTOCOL", "otel")
+	t.Setenv("AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES", "true")
+
+	dir := t.TempDir()
+	must(t, copyFile(filepath.Join("..", "testdata", "meta.json"), filepath.Join(dir, "meta.json")))
+	tp := filepath.Join(dir, "messages.jsonl")
+	must(t, os.WriteFile(tp, []byte(`{"role":"user","content":"hello","message_id":"m1"}`+"\n"), 0o644))
+
+	PostAgentTurn(context.Background(),
+		Payload{HookEventName: "post_agent_turn", SessionID: "sess-otel", TranscriptPath: tp},
+		log.New(io.Discard, "", 0))
+
+	if got := exports.Load(); got != 0 {
+		t.Fatalf("generations:export received %d requests in otel mode, want 0", got)
 	}
 }
 

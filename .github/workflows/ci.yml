@@ -107,6 +107,20 @@ jobs:
           install: true
           cache: true
 
+      - name: Read pinned Weaver version
+        id: genai-versions
+        run: grep -E '^WEAVER_VERSION=' versions.env >> "$GITHUB_OUTPUT"
+
+      - name: Install Weaver ${{ steps.genai-versions.outputs.WEAVER_VERSION }}
+        env:
+          WEAVER_VERSION: ${{ steps.genai-versions.outputs.WEAVER_VERSION }}
+        run: |
+          WEAVER_ASSET="weaver-x86_64-unknown-linux-gnu"
+          WEAVER_URL="https://github.com/open-telemetry/weaver/releases/download/${WEAVER_VERSION}/${WEAVER_ASSET}.tar.xz"
+          curl -fsSL "$WEAVER_URL" | tar -xJ -C /tmp "${WEAVER_ASSET}/weaver"
+          sudo mv "/tmp/${WEAVER_ASSET}/weaver" /usr/local/bin/weaver
+          weaver --version
+
       - name: Install JS deps
         run: pnpm install --frozen-lockfile
 
@@ -124,6 +138,9 @@ jobs:
       - name: Experiment conformance
         run: mise run test:sdk:experiments-conformance
 
+      - name: GenAI semantic-convention live check
+        run: mise run test:go:conformance
+
   go-module:
     name: Go module
     runs-on: ubuntu-latest
@@ -137,6 +154,9 @@ jobs:
           - go-providers/gemini
           - go-frameworks/google-adk
           - plugins/agento11y
+        include:
+          - module: go/otelgenai/conformance
+            lint_args: --timeout=5m --build-tags=conformance
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -153,7 +173,7 @@ jobs:
           # go.mod, matching the local `mise run lint:go` behavior.
           GOWORK: "off"
         with:
-          args: --timeout=5m
+          args: ${{ matrix.lint_args || '--timeout=5m' }}
           working-directory: ./${{ matrix.module }}
 
       - name: Test

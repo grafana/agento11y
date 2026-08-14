@@ -35,9 +35,13 @@ func setupOTelIfConfigured(ctx context.Context, instanceID string, logger *log.L
 // buildClient constructs the agento11y client. Endpoint, tenant ID, and token
 // come from the SDK's automatic SIGIL_* env resolution (config.ApplyEnv has
 // already injected dotenv values into the OS env). The plugin only owns the
-// pieces the SDK can't infer: HTTP protocol, the `/api/v1/generations:export`
-// path suffix, basic-auth mode, and the OTel tracer/meter wiring. cursor does
-// not pass a logger, so the SDK client stays silent.
+// pieces the SDK can't infer: the export protocol, the
+// `/api/v1/generations:export` path suffix, basic-auth mode, and the OTel
+// tracer/meter wiring.
+//
+// The hook hands its own logger to the SDK. That logger writes to the plugin
+// log file; without it the SDK falls back to log.Default(), which writes to
+// the stderr the host agent reads.
 //
 // The auto-tag inputs are the first workspace root and the signed-in user's
 // email, the same values mapper.MapFragment reads for git.branch and the
@@ -49,6 +53,7 @@ func buildClient(p Payload, session *fragment.Session, cfg config.Config, provid
 	return emit.NewClient(emit.ClientOptions{
 		InstrumentationName: otelInstrumentationName,
 		ContentCapture:      cfg.ContentCapture,
+		Logger:              logger,
 		Providers:           providers,
 		UserAgent:           useragent.For("cursor"),
 		Tags: autotag.FromEnv(autotag.Inputs{

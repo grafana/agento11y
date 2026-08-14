@@ -378,6 +378,7 @@ All hosts read the resolved config path. The default is
 | `AGENTO11Y_LOCAL_FORWARD` | Forward local-mode captures to Grafana Cloud |
 | `AGENTO11Y_AUTO_UPDATE` | A false value opts out of host-plugin refresh |
 | `AGENTO11Y_DEBUG` | A true value writes the debug log |
+| `AGENTO11Y_PROTOCOL` | Experimental: `otel` sends generations as GenAI spans over OTLP, and needs both `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` and an OTLP endpoint |
 
 All branded keys except `AGENTO11Y_STACK_URL` have an older `SIGIL_*` spelling.
 Doctor reports provenance only for settings in its report.

@@ -27,6 +27,15 @@ import (
 // formatters.
 const guardBehaviorHint = "Stop and tell the user this tool call was blocked, then wait for their direction before taking any other action."
 
+// guardLogger returns the logger the SDK client writes to, or a discard
+// logger when logger is nil.
+func guardLogger(logger *log.Logger) *log.Logger {
+	if logger != nil {
+		return logger
+	}
+	return log.New(io.Discard, "", 0)
+}
+
 // formatPolicyDeny wraps a rule-authored reason (which may be empty) into a
 // self-explanatory message naming the Grafana Agent Observability source, the
 // blocked tool, and the expected agent behavior.
@@ -166,6 +175,13 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 			FailOpen: &failOpen,
 		},
 		GenerationExport: agento11y.GenerationExportConfig{
+			// A guard evaluates one tool call and exports no generation, so
+			// the guard pins the protocol instead of inheriting
+			// AGENTO11Y_PROTOCOL. An experimental transport the user set for
+			// their agent would otherwise build an exporter here, and that
+			// exporter would log its problems to stderr in the middle of a
+			// PreToolUse hook.
+			Protocol: agento11y.GenerationExportProtocolNone,
 			Auth: agento11y.AuthConfig{
 				Mode:          agento11y.ExportAuthModeBasic,
 				BasicUser:     tenantID,
@@ -173,6 +189,9 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 				TenantID:      tenantID,
 			},
 		},
+		// When the config carries no logger, the SDK writes to log.Default(),
+		// which is stderr. A hook's stderr belongs to the host agent.
+		Logger: guardLogger(logger),
 	}
 
 	client := agento11y.NewClient(clientCfg)

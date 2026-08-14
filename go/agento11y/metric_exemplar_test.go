@@ -109,23 +109,8 @@ func TestToolExecutionMetricsCarryTraceExemplar(t *testing.T) {
 }
 
 func TestGenerationMetricsDoNotRetainRecordingContext(t *testing.T) {
-	type contextKey struct{}
-	type observation struct {
-		spanContext trace.SpanContext
-		recording   bool
-		value       any
-	}
-
-	var observations []observation
-	filter := func(ctx context.Context) bool {
-		observations = append(observations, observation{
-			spanContext: trace.SpanContextFromContext(ctx),
-			recording:   trace.SpanFromContext(ctx).IsRecording(),
-			value:       ctx.Value(contextKey{}),
-		})
-		return true
-	}
-	_, tp, _, mp := newExemplarTestHarness(t, filter)
+	var observations []metricContextObservation
+	_, tp, _, mp := newExemplarTestHarness(t, observeMetricContexts(&observations))
 
 	client := NewClient(Config{
 		Tracer:                 tp.Tracer("agento11y-test"),
@@ -135,7 +120,7 @@ func TestGenerationMetricsDoNotRetainRecordingContext(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = client.Shutdown(context.Background()) })
 
-	callerCtx := context.WithValue(context.Background(), contextKey{}, "caller-owned")
+	callerCtx := context.WithValue(context.Background(), exemplarContextKey{}, "caller-owned")
 	callCtx, rec := client.StartGeneration(callerCtx, GenerationStart{
 		Model:     ModelRef{Provider: "openai", Name: "gpt-5"},
 		AgentName: "test-agent",
@@ -146,6 +131,69 @@ func TestGenerationMetricsDoNotRetainRecordingContext(t *testing.T) {
 		Usage:  TokenUsage{InputTokens: 10, OutputTokens: 5},
 	}, nil)
 	rec.End()
+
+	assertDetachedMetricContexts(t, observations, wantSpanContext)
+}
+
+// TestOTelModeGenerationMetricsDoNotRetainRecordingContext covers the otel
+// export path, where otelgenai records the spec instruments from the context
+// the SDK hands to Handler.End.
+func TestOTelModeGenerationMetricsDoNotRetainRecordingContext(t *testing.T) {
+	var observations []metricContextObservation
+	client, _, _ := newOTelTestClient(t, func(cfg *Config) {
+		meterProvider := sdkmetric.NewMeterProvider(
+			sdkmetric.WithReader(sdkmetric.NewManualReader()),
+			sdkmetric.WithExemplarFilter(observeMetricContexts(&observations)),
+		)
+		t.Cleanup(func() { _ = meterProvider.Shutdown(context.Background()) })
+		cfg.MeterProvider = meterProvider
+	})
+
+	callerCtx := context.WithValue(context.Background(), exemplarContextKey{}, "caller-owned")
+	callCtx, rec := client.StartGeneration(callerCtx, GenerationStart{
+		Model:     ModelRef{Provider: "openai", Name: "gpt-5"},
+		AgentName: "test-agent",
+	})
+	wantSpanContext := trace.SpanContextFromContext(callCtx)
+	rec.SetResult(Generation{
+		Output: []Message{{Role: "assistant", Parts: []Part{{Kind: PartKindText, Text: "hello"}}}},
+		Usage:  TokenUsage{InputTokens: 10, OutputTokens: 5},
+	}, nil)
+	rec.End()
+
+	assertDetachedMetricContexts(t, observations, wantSpanContext)
+}
+
+// exemplarContextKey marks a value the caller owns. A metric context that
+// still carries it is a context the reservoir should not have.
+type exemplarContextKey struct{}
+
+type metricContextObservation struct {
+	spanContext trace.SpanContext
+	recording   bool
+	value       any
+}
+
+// observeMetricContexts returns an exemplar filter that records what every
+// metric context still holds. The SDK metric pipeline calls the filter inside
+// Record, so appends stay on the recording goroutine.
+func observeMetricContexts(observations *[]metricContextObservation) exemplar.Filter {
+	return func(ctx context.Context) bool {
+		*observations = append(*observations, metricContextObservation{
+			spanContext: trace.SpanContextFromContext(ctx),
+			recording:   trace.SpanFromContext(ctx).IsRecording(),
+			value:       ctx.Value(exemplarContextKey{}),
+		})
+		return true
+	}
+}
+
+func assertDetachedMetricContexts(
+	t *testing.T,
+	observations []metricContextObservation,
+	wantSpanContext trace.SpanContext,
+) {
+	t.Helper()
 
 	if len(observations) == 0 {
 		t.Fatal("expected the exemplar filter to observe metric contexts")

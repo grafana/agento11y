@@ -61,6 +61,30 @@ const (
 
 	// ToolCallResultAttributeKey holds the value a tool call returned.
 	ToolCallResultAttributeKey = "gen_ai.tool.call.result"
+
+	// The four gen_ai keys below are the semantic conventions' content
+	// documents. A generation span carries them only under the experimental
+	// otel export protocol, where the span is the generation export rather than
+	// metadata beside it. Every other mode leaves them absent. Listing them
+	// here costs a forwarder nothing and closes the one path where prompt text
+	// can reach a span.
+
+	// SystemInstructionsAttributeKey holds the system prompt.
+	SystemInstructionsAttributeKey = "gen_ai.system_instructions"
+
+	// InputMessagesAttributeKey holds the request messages.
+	InputMessagesAttributeKey = "gen_ai.input.messages"
+
+	// OutputMessagesAttributeKey holds the response messages.
+	OutputMessagesAttributeKey = "gen_ai.output.messages"
+
+	// ToolDefinitionsAttributeKey holds the tool descriptions and schemas
+	// visible to the model.
+	ToolDefinitionsAttributeKey = "gen_ai.tool.definitions"
+
+	// RawArtifactsAttributeKey holds the raw provider request and response
+	// payloads. Only the otel export protocol puts them on a span.
+	RawArtifactsAttributeKey = "agento11y.generation.raw_artifacts"
 )
 
 // Protocol values that must not be treated as content. A forwarder that
@@ -97,8 +121,10 @@ const (
 // Exposing a predicate instead of a set keeps callers from adding or removing
 // keys.
 //
-// Generation prompt and response text never reaches spans; it travels in the
-// proto generation export.
+// Generation prompt and response text reaches a span only under the
+// experimental otel export protocol, where the span replaces the proto
+// generation export. On every other path that text travels in the proto
+// generation export.
 func IsTraceContentAttribute(key string) bool {
 	switch key {
 	case ConversationTitleKey,
@@ -106,7 +132,12 @@ func IsTraceContentAttribute(key string) bool {
 		EmbeddingInputTextsAttributeKey,
 		ToolDescriptionAttributeKey,
 		ToolCallArgumentsAttributeKey,
-		ToolCallResultAttributeKey:
+		ToolCallResultAttributeKey,
+		SystemInstructionsAttributeKey,
+		InputMessagesAttributeKey,
+		OutputMessagesAttributeKey,
+		ToolDefinitionsAttributeKey,
+		RawArtifactsAttributeKey:
 		return true
 	default:
 		return false

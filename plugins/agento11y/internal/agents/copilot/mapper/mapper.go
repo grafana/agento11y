@@ -357,7 +357,9 @@ func inferProvider(model string) string {
 	case strings.HasPrefix(model, "claude-"):
 		return "anthropic"
 	case strings.HasPrefix(model, "gemini-"):
-		return "google"
+		// "gemini" is the stored spelling the SDK's OTel provider map and the
+		// backend's inverse table both key on; "google" is in neither.
+		return "gemini"
 	default:
 		return ""
 	}

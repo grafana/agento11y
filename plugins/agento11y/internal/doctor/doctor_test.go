@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/grafana/agento11y/go/agento11y"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
@@ -445,14 +446,32 @@ func TestConflictMessage(t *testing.T) {
 }
 
 func TestCollectAnalytics(t *testing.T) {
+	// Most cases below build osEnv by hand, so they cannot catch a key missing
+	// from the snapshot the binary actually passes in. Without these entries a
+	// shell-exported protocol or experimental gate reads as unset here, even
+	// though the hooks act on that setting. The fromShell case exercises the
+	// snapshot itself.
+	if !slices.Contains(trackedSuffixes, "PROTOCOL") {
+		t.Fatal("PROTOCOL must be in trackedSuffixes or SnapshotEnv drops it and this report reads it as unset")
+	}
+	if !slices.Contains(trackedKeys, agento11y.EnvEnableExperimentalFeatures) {
+		t.Fatalf("%s must be in trackedKeys or SnapshotEnv drops it and this report reads it as unset",
+			agento11y.EnvEnableExperimentalFeatures)
+	}
+
 	tests := []struct {
-		name         string
-		osEnv        map[string]string
+		name  string
+		osEnv map[string]string
+		// fromShell exports osEnv to the process environment and feeds
+		// collectAnalytics the SnapshotEnv() the binary passes in production,
+		// instead of the hand-built map.
+		fromShell    bool
 		convConfig   bool
 		wantHealth   Health
 		wantEndpoint string
 		wantVar      string
 		wantMsg      string
+		absentMsg    string
 	}{
 		{
 			name: "sigil otlp set with auth",
@@ -530,10 +549,100 @@ func TestCollectAnalytics(t *testing.T) {
 			convConfig: false,
 			wantHealth: HealthWarn,
 		},
+		{
+			// The hooks fall back to HTTP export here, so nothing is lost and
+			// the run must not fail on a setting that still exports.
+			name: "otel export without an otlp endpoint is a warning",
+			osEnv: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+			},
+			wantHealth: HealthWarn,
+			wantMsg:    "generation export is set to otel but no OTLP endpoint is set",
+		},
+		{
+			// Conversations configured with no OTLP endpoint is the headline
+			// error whatever the protocol says: metrics and traces go nowhere,
+			// and otel mode does not make that a warning.
+			name: "otel export with conversations configured stays the headline error",
+			osEnv: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+			},
+			convConfig: true,
+			wantHealth: HealthError,
+			wantMsg:    "metrics and traces will not be exported even though conversations are configured",
+		},
+		{
+			// With the gate closed otel mode is not in effect, so the setup is
+			// the plain one and gets the plain verdict.
+			name:       "otel export with the gate closed is the unconfigured warning",
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "otel"},
+			wantHealth: HealthWarn,
+			wantMsg:    "no OTLP endpoint set; analytics export is disabled",
+			absentMsg:  "generation export is set to otel but no OTLP endpoint is set",
+		},
+		{
+			name:       "otel export with the gate closed and conversations configured stays an error",
+			osEnv:      map[string]string{"AGENTO11Y_PROTOCOL": "otel"},
+			convConfig: true,
+			wantHealth: HealthError,
+		},
+		{
+			name: "otel export without the experimental gate says so",
+			osEnv: map[string]string{
+				"AGENTO11Y_PROTOCOL":                    "otel",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp",
+				"AGENTO11Y_AUTH_TENANT_ID":              "12345",
+				"AGENTO11Y_OTEL_AUTH_TOKEN":             "glc_tok",
+			},
+			wantHealth:   HealthOK,
+			wantEndpoint: "https://otlp",
+			wantMsg:      "AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true",
+			// The gate is closed here, so the export falls back to HTTP and
+			// the generations:export endpoint is still called. The report must
+			// ask for the gate without also saying the endpoint is skipped.
+			absentMsg: "the generations:export endpoint is not called",
+		},
+		{
+			// The production path: doctor sees the protocol and the gate only if
+			// SnapshotEnv records both keys.
+			name: "a shell-exported otel protocol reaches the report through SnapshotEnv",
+			osEnv: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT":  "https://otlp",
+				"OTEL_EXPORTER_OTLP_HEADERS":             "authorization=Basic abc",
+			},
+			fromShell:    true,
+			wantHealth:   HealthOK,
+			wantEndpoint: "https://otlp",
+			wantMsg:      "generations are exported as GenAI spans",
+		},
+		{
+			name: "otel export with both flags reports the changed destination",
+			osEnv: map[string]string{
+				"AGENTO11Y_PROTOCOL":                     "otel",
+				"AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES": "true",
+				"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT":  "https://otlp",
+				"OTEL_EXPORTER_OTLP_HEADERS":             "authorization=Basic abc",
+			},
+			wantHealth:   HealthOK,
+			wantEndpoint: "https://otlp",
+			wantMsg:      "generations are exported as GenAI spans",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sec := collectAnalytics(tc.osEnv, nil, tc.convConfig)
+			osEnv := tc.osEnv
+			if tc.fromShell {
+				isolateEnv(t)
+				for k, v := range tc.osEnv {
+					t.Setenv(k, v)
+				}
+				osEnv = SnapshotEnv()
+			}
+			sec := collectAnalytics(osEnv, nil, tc.convConfig)
 			if sec.Health != tc.wantHealth {
 				t.Fatalf("health = %q, want %q", sec.Health, tc.wantHealth)
 			}
@@ -545,6 +654,9 @@ func TestCollectAnalytics(t *testing.T) {
 			}
 			if tc.wantMsg != "" && !strings.Contains(strings.Join(sec.Messages, " "), tc.wantMsg) {
 				t.Fatalf("messages %v missing %q", sec.Messages, tc.wantMsg)
+			}
+			if tc.absentMsg != "" && strings.Contains(strings.Join(sec.Messages, " "), tc.absentMsg) {
+				t.Fatalf("messages %v contain %q", sec.Messages, tc.absentMsg)
 			}
 		})
 	}

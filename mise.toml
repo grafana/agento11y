@@ -77,7 +77,11 @@ while IFS= read -r moddir; do
     continue
   fi
   echo "==> golangci-lint ${moddir}"
-  (cd "${moddir}" && GOWORK=off golangci-lint run ./...)
+  lint_args=()
+  if [[ "${moddir}" == "./go/otelgenai/conformance" ]]; then
+    lint_args+=(--build-tags=conformance)
+  fi
+  (cd "${moddir}" && GOWORK=off golangci-lint run "${lint_args[@]}" ./...)
 done < <(find . -name go.mod -not -path './node_modules/*' -exec dirname {} \\; | sort)
 """
 
@@ -213,6 +217,11 @@ run = "GOWORK=off go test ./..."
 description = "Run agento11y plugin tests as standalone module"
 dir = "plugins/agento11y"
 run = "GOWORK=off go test ./..."
+
+[tasks."test:go:conformance"]
+description = "Check otelgenai telemetry against the pinned GenAI semantic-convention registry"
+dir = "go/otelgenai/conformance"
+run = "GOWORK=off go test -tags conformance ./..."
 
 [tasks."test:ts:plugin-pi"]
 description = "Run Pi plugin tests"
@@ -616,6 +625,7 @@ run = """
 #!/usr/bin/env bash
 set -euo pipefail
 mise run test:go:sdk-core
+mise run test:go:conformance
 mise run test:go:sdk-anthropic
 mise run test:go:sdk-openai
 mise run test:go:sdk-gemini

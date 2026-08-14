@@ -130,6 +130,14 @@ Unknown values fall back to `metadata_only` with a warning. Capture modes choose
 
 When a plugin ships content, it redacts known secret formats first, using the same pattern table the SDKs use. This covers user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results, on the generation and on the tool-execution span. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send prompts without redaction; everything else stays redacted. Prompts, system prompts and tool payloads also get the key/value heuristics (`PASSWORD=…`), which prose fields do not, so a prompt containing `sort key: name` comes out with the word after the colon replaced. Treat content capture as opt-in for shared/production machines.
 
+## Experimental: send generations over OTLP
+
+`AGENTO11Y_PROTOCOL=otel` plus `AGENTO11Y_ENABLE_EXPERIMENTAL_FEATURES=true` sends each generation as a GenAI semantic-convention span on the analytics pipeline instead of calling the `generations:export` endpoint. The conversations pipeline then depends on the OTLP endpoint and its `traces:write` scope. Both variables are unset by default, and this mode is only intended for development stacks.
+
+The hooks fall back to HTTP export when either the OTLP endpoint or the experimental flag is missing, so no capture is lost. The fallback is written to the debug log. `agento11y doctor` reports a missing OTLP endpoint, and reports the missing experimental flag when an endpoint is set. `--local` sessions always export over HTTP, and so does `agento11y history import` against a local endpoint, because the local daemon reads generations from the proto ingest path. An import against a Cloud endpoint honours the variable. Guards are unaffected: they call the API directly either way.
+
+Only the Go SDK implements this value. A Python app that inherits it from the same environment logs one warning and then exports no generations. A JavaScript app fails every generation export with `unsupported generation export protocol: otel`. Set `AGENTO11Y_PROTOCOL=http` in that app's own environment, and it exports over HTTP again.
+
 ## Verifying the install
 
 1. Run the agent normally for one turn (any prompt).

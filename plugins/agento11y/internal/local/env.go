@@ -28,8 +28,8 @@ func Environ(e *LaunchEnv) []string {
 }
 
 // Apply returns env with local-mode overrides applied. The ENDPOINT,
-// OTEL_EXPORTER_OTLP_ENDPOINT, and CONTENT_CAPTURE_MODE families are always
-// overridden — under both branded spellings, so an inherited AGENTO11Y_* or
+// OTEL_EXPORTER_OTLP_ENDPOINT, PROTOCOL, and CONTENT_CAPTURE_MODE families are
+// always overridden — under both branded spellings, so an inherited AGENTO11Y_* or
 // SIGIL_* Cloud value can never leak past local mode: the agent points at
 // the local receiver and always captures full content on this machine. The
 // configured capture mode is a Cloud-forwarding setting that applies to
@@ -49,6 +49,9 @@ func (e LaunchEnv) Apply(env []string) []string {
 		"ENDPOINT":                    e.Endpoint,
 		"OTEL_EXPORTER_OTLP_ENDPOINT": e.OTLPEndpoint,
 		"CONTENT_CAPTURE_MODE":        "full",
+		// The local daemon reads generations from the proto ingest path, so
+		// an inherited PROTOCOL=otel would leave the local UI empty.
+		"PROTOCOL": "http",
 	} {
 		overrides[envconfig.PreferredKey(suffix)] = v
 		overrides[envconfig.LegacyKey(suffix)] = v

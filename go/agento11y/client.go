@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y/contentcapture"
+	"github.com/grafana/agento11y/go/otelgenai"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -80,10 +81,23 @@ type Config struct {
 	// ExperimentRetryTimeout bounds each experiment/control HTTP attempt.
 	// Zero uses the SDK default.
 	ExperimentRetryTimeout time.Duration
-	// Tracer is optional and mainly used for tests. If nil, the client uses the global OpenTelemetry tracer.
+	// Tracer is optional and mainly used for tests. If nil, the client uses the
+	// global OpenTelemetry tracer. It configures tool-execution and embedding
+	// telemetry in every mode but does not affect generation export.
 	Tracer trace.Tracer
-	// Meter is optional and mainly used for tests. If nil, the client uses the global OpenTelemetry meter.
+	// Meter is optional and mainly used for tests. If nil, the client uses the
+	// global OpenTelemetry meter. It configures tool-execution and embedding
+	// telemetry in every mode but does not affect generation export.
 	Meter metric.Meter
+	// TracerProvider and MeterProvider are optional. The generation-export
+	// handler gets its tracer and spec meter from these providers, or the
+	// corresponding global providers. Flush force-flushes the tracer provider,
+	// which is the only delivery signal in that mode. The handler registers the
+	// spec metric instruments under its own instrumentation scope, because those
+	// instruments share names with the instruments the SDK registers for tool
+	// executions and embeddings.
+	TracerProvider trace.TracerProvider
+	MeterProvider  metric.MeterProvider
 	// Logger receives async export failures. Defaults to log.Default().
 	Logger *log.Logger
 	// Now controls clock behavior (useful for tests).
@@ -145,6 +159,12 @@ const (
 	GenerationExportProtocolGRPC GenerationExportProtocol = "grpc"
 	GenerationExportProtocolHTTP GenerationExportProtocol = "http"
 	GenerationExportProtocolNone GenerationExportProtocol = "none"
+	// GenerationExportProtocolOTel exports each generation as one
+	// GenAI-semconv span on the application's OTel pipeline instead of calling
+	// the generation-export endpoint. This protocol is experimental: NewClient
+	// also requires EnvEnableExperimentalFeatures, and falls back to the noop
+	// exporter when that variable is not set.
+	GenerationExportProtocolOTel GenerationExportProtocol = "otel"
 )
 
 type GenerationExportConfig struct {
@@ -343,6 +363,9 @@ type Client struct {
 	generationIDs     map[string]struct{}
 	generationIO      map[string]string
 	generationIDOrder []string
+
+	// otelHandler is non-nil only in otel export mode; see otel_export.go.
+	otelHandler *otelgenai.Handler
 }
 
 // GenerationRecorder records and closes one in-flight generation span.
@@ -360,9 +383,12 @@ type Client struct {
 //
 // All methods are safe to call on a nil or no-op recorder.
 type GenerationRecorder struct {
-	client             *Client
-	ctx                context.Context
-	span               trace.Span
+	client *Client
+	ctx    context.Context
+	span   trace.Span
+	// invocation is non-nil in otel export mode, where the otelgenai package
+	// owns the span's attributes, status, and metrics.
+	invocation         *otelgenai.Invocation
 	seed               GenerationStart
 	startedAt          time.Time
 	contentCaptureMode ContentCaptureMode
@@ -497,14 +523,20 @@ func NewClient(config Config) *Client {
 		generationIO:  make(map[string]string),
 	}
 
-	if cfg.Tracer != nil {
+	switch {
+	case cfg.Tracer != nil:
 		client.tracer = cfg.Tracer
-	} else {
+	case cfg.TracerProvider != nil:
+		client.tracer = cfg.TracerProvider.Tracer(instrumentationName)
+	default:
 		client.tracer = otel.Tracer(instrumentationName)
 	}
-	if cfg.Meter != nil {
+	switch {
+	case cfg.Meter != nil:
 		client.meter = cfg.Meter
-	} else {
+	case cfg.MeterProvider != nil:
+		client.meter = cfg.MeterProvider.Meter(instrumentationName)
+	default:
 		client.meter = otel.Meter(instrumentationName)
 	}
 	instruments, err := newTelemetryInstruments(client.meter)
@@ -514,8 +546,30 @@ func NewClient(config Config) *Client {
 		client.instruments = instruments
 	}
 
+	// Build the otel handler before the exporter. Without
+	// EnvEnableExperimentalFeatures the handler fails, and the client then uses
+	// the noop exporter, which exports nothing.
+	var otelErr error
+	if cfg.GenerationExport.Protocol == GenerationExportProtocolOTel {
+		client.otelHandler, otelErr = newOTelHandler(cfg)
+		switch {
+		case otelErr != nil:
+			cfg.Logger.Printf("agento11y otel generation export unavailable: %v", otelErr)
+		case resolveClientContentCaptureMode(cfg.ContentCapture) == ContentCaptureModeFullWithMetadataSpans:
+			// ContentCaptureModeFullWithMetadataSpans keeps content off the OTel
+			// destination, and in otel mode the span is the only destination.
+			cfg.Logger.Printf("agento11y otel generation export: content capture mode %s exports no content at all, because the span is the export",
+				ContentCaptureModeFullWithMetadataSpans)
+		}
+	}
+
 	exporter := cfg.testGenerationExporter
-	if exporter == nil {
+	switch {
+	case otelErr != nil:
+		// The caller asked for otel mode and did not get it, so export nothing
+		// rather than fall back to a transport they did not ask for.
+		exporter = newNoopGenerationExporter(otelErr)
+	case exporter == nil:
 		var err error
 		exporter, err = newGenerationExporter(cfg.GenerationExport)
 		if err != nil {
@@ -552,9 +606,18 @@ func (c *Client) StartGeneration(ctx context.Context, start GenerationStart) (co
 // This is intended for workflows that must durably publish a generation before
 // publishing a dependent record, such as an experiment score linked to a grader
 // generation. Normal instrumentation should use StartGeneration instead.
+//
+// The otel export protocol cannot honour that contract. The client hands the
+// span to a span processor, and the processor decides when to export the span,
+// so no per-generation delivery result exists to wait for. In that mode
+// ExportGeneration returns ErrSynchronousExportUnsupported instead of a
+// success the caller would act on.
 func (c *Client) ExportGeneration(ctx context.Context, start GenerationStart, generation Generation) error {
 	if c == nil {
 		return ErrNilClient
+	}
+	if c.otelExportEnabled() {
+		return fmt.Errorf("%w: generation export protocol %q", ErrSynchronousExportUnsupported, GenerationExportProtocolOTel)
 	}
 	_, recorder := c.startGeneration(ctx, start, GenerationModeSync)
 	recorder.mu.Lock()
@@ -576,6 +639,9 @@ func (c *Client) StartStreamingGeneration(ctx context.Context, start GenerationS
 }
 
 // EnqueueWorkflowStep enqueues a workflow execution node for export.
+//
+// The otel export protocol has no workflow-step encoding. In that mode
+// EnqueueWorkflowStep drops the step and returns ErrWorkflowStepEnqueueFailed.
 func (c *Client) EnqueueWorkflowStep(step WorkflowStep) error {
 	if c == nil {
 		return ErrNilClient
@@ -596,6 +662,11 @@ func (c *Client) EnqueueWorkflowStep(step WorkflowStep) error {
 	}
 	if len(c.config.Tags) > 0 {
 		normalized.Tags = mergeTags(c.config.Tags, normalized.Tags)
+	}
+	if c.otelExportEnabled() {
+		// Nothing that uses otel mode emits workflow steps today.
+		c.logf("agento11y: dropping workflow step %q: the otel export protocol has no workflow-step encoding", normalized.ID)
+		return fmt.Errorf("%w: the otel export protocol has no workflow-step encoding", ErrWorkflowStepEnqueueFailed)
 	}
 	if err := c.enqueueWorkflowStep(normalized); err != nil {
 		return fmt.Errorf("%w: %w", ErrWorkflowStepEnqueueFailed, err)
@@ -705,9 +776,20 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 		spanGeneration.ConversationTitle = ""
 	}
 
-	callCtx, span := c.startSpan(ctx, spanGeneration, trace.SpanKindClient, startedAt)
-	span.SetAttributes(generationSpanAttributes(spanGeneration)...)
-	setSpanTagAttributes(span, dimensionalTags)
+	var (
+		callCtx    context.Context
+		span       trace.Span
+		invocation *otelgenai.Invocation
+	)
+	if c.otelExportEnabled() {
+		// In otel mode the semconv generation span carries the generation, and
+		// otelgenai owns the span's attributes.
+		callCtx, span, invocation = c.startOTelGeneration(ctx, spanGeneration, startedAt)
+	} else {
+		callCtx, span = c.startSpan(ctx, spanGeneration, trace.SpanKindClient, startedAt)
+		span.SetAttributes(generationSpanAttributes(spanGeneration)...)
+		setSpanTagAttributes(span, dimensionalTags)
+	}
 
 	callCtx = withContentCaptureMode(callCtx, ccMode)
 
@@ -715,6 +797,7 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 		client:             c,
 		ctx:                callCtx,
 		span:               span,
+		invocation:         invocation,
 		seed:               seed,
 		startedAt:          startedAt,
 		contentCaptureMode: ccMode,
@@ -1013,24 +1096,29 @@ func (r *GenerationRecorder) End() {
 	// scoped to this change.
 	redactMapErr := r.contentCaptureMode == ContentCaptureModeFullWithMetadataSpans
 
-	r.span.SetName(generationSpanName(normalized))
-	// FullWithMetadataSpans: proto export keeps full content (normalized stays
-	// untouched), but the span path must drop content-bearing attributes. The
-	// only content-bearing attribute generationSpanAttributes emits is
-	// agento11y.conversation.title, so a shallow copy with the title zeroed is
-	// enough; no deep clone needed.
-	spanView := normalized
-	if r.contentCaptureMode == ContentCaptureModeFullWithMetadataSpans {
-		spanView.ConversationTitle = ""
-	}
-	r.span.SetAttributes(generationSpanAttributes(spanView)...)
-	if sanitizerRan && initialContentCaptureMode != ContentCaptureModeFullWithMetadataSpans {
-		// The start span published the raw seed title; overwrite with the
-		// post-sanitizer value so a sanitizer that empties or rewrites the
-		// title doesn't leave the raw value on the span. Skipped under
-		// FullWithMetadataSpans: the start span already omitted the title and
-		// re-emitting it as "" would violate the absent guarantee.
-		r.span.SetAttributes(attribute.String(spanAttrConversationTitle, spanView.ConversationTitle))
+	// In otel mode otelgenai writes the span's name and attributes at End from
+	// the invocation, so this code skips the metadata-span encoding.
+	otelMode := r.invocation != nil && r.client.otelExportEnabled()
+	if !otelMode {
+		r.span.SetName(generationSpanName(normalized))
+		// FullWithMetadataSpans: proto export keeps full content (normalized
+		// stays untouched), but the span path must drop content-bearing
+		// attributes. The only content-bearing attribute
+		// generationSpanAttributes emits is agento11y.conversation.title, so a
+		// shallow copy with the title zeroed is enough; no deep clone needed.
+		spanView := normalized
+		if r.contentCaptureMode == ContentCaptureModeFullWithMetadataSpans {
+			spanView.ConversationTitle = ""
+		}
+		r.span.SetAttributes(generationSpanAttributes(spanView)...)
+		if sanitizerRan && initialContentCaptureMode != ContentCaptureModeFullWithMetadataSpans {
+			// The start span published the raw seed title; overwrite with the
+			// post-sanitizer value so a sanitizer that empties or rewrites the
+			// title doesn't leave the raw value on the span. Skipped under
+			// FullWithMetadataSpans: the start span already omitted the title
+			// and re-emitting it as "" would violate the absent guarantee.
+			r.span.SetAttributes(attribute.String(spanAttrConversationTitle, spanView.ConversationTitle))
+		}
 	}
 
 	r.mu.Lock()
@@ -1069,6 +1157,37 @@ func (r *GenerationRecorder) End() {
 
 	errorType := generationErrorType(callErr, mapErr, enqueueErr)
 	errorCategory := generationErrorCategory(callErr, mapErr, enqueueErr)
+	if otelMode {
+		// The status text follows the same precedence as the metadata span
+		// below, so one failure reads the same on either protocol. When the
+		// caller reports a call error as a field rather than as an error, the
+		// status text stays empty, which matches the success the other protocols
+		// report for that input.
+		statusMessage := ""
+		switch {
+		case callErr != nil:
+			statusMessage = spanCallError
+		case mapErr != nil:
+			statusMessage = mapErr.Error()
+			if redactMapErr {
+				statusMessage = "sdk_error"
+			}
+		case enqueueErr != nil:
+			statusMessage = enqueueErr.Error()
+		}
+		r.client.endOTelGeneration(r.ctx, r.invocation, normalized, generationError{
+			errorType: errorType,
+			category:  errorCategory,
+			message:   statusMessage,
+			rejected:  errors.Is(enqueueErr, errGenerationValidation),
+		}, firstTokenAt, r.contentCaptureMode)
+
+		r.mu.Lock()
+		r.finalErr = combineAllErrors(enqueueErr)
+		r.mu.Unlock()
+		return
+	}
+
 	if errorType != "" {
 		r.span.SetAttributes(attribute.String(spanAttrErrorType, errorType))
 		if errorCategory != "" {
@@ -1544,6 +1663,12 @@ func combineAllErrors(errs ...error) error {
 func (c *Client) persistGeneration(generation Generation) error {
 	if err := ValidateGeneration(generation); err != nil {
 		return fmt.Errorf("%w: %v", errGenerationValidation, err)
+	}
+	if c.otelExportEnabled() {
+		// The span carries the generation in otel mode, so the export queue
+		// stays out of the path.
+		c.recordGeneration(generation)
+		return nil
 	}
 	if err := c.enqueueGeneration(generation); err != nil {
 		return fmt.Errorf("%w: %w", errGenerationEnqueue, err)

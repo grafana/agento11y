@@ -934,8 +934,8 @@ func TestValidatePastedBlock(t *testing.T) {
 				`OTEL_EXPORTER_OTLP_HEADERS='Authorization=Basic dGVzdA=='` + "\n",
 		},
 		{
-			// Accepted by the dotenv loader, consumed by nothing: the
-			// launcher hardcodes HTTP and Basic.
+			// Accepted by the dotenv loader, filling nothing: the form has no
+			// field for either, and both name the launcher's own defaults.
 			name:    "protocol and auth mode alone fill nothing",
 			in:      "AGENTO11Y_PROTOCOL=http\nAGENTO11Y_AUTH_MODE=basic\n",
 			wantErr: "no credentials",
