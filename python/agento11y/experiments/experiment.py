@@ -31,7 +31,6 @@ import hashlib
 import json
 import math
 import mimetypes
-import os
 import secrets
 import time
 from types import TracebackType
@@ -72,7 +71,7 @@ from .types import (
     TestSuite,
     TrialRef,
     TrialStatus,
-    _first_nonblank,
+    _env_value,
 )
 
 if TYPE_CHECKING:  # avoid an import cycle at runtime
@@ -1367,21 +1366,21 @@ def experiment(
     if client is None:
         from .client import Client
 
-        resolved_endpoint = (endpoint or _first_nonblank(os.environ, "AGENTO11Y_ENDPOINT")).strip()
+        resolved_endpoint = (endpoint or _env_value("ENDPOINT")).strip()
         if not resolved_endpoint:
             raise ValueError(
                 "Agent Observability endpoint is required: "
                 "pass endpoint= or set AGENTO11Y_ENDPOINT to your Grafana Cloud Agent Observability URL"
             )
-        resolved_tenant = (tenant_id or _first_nonblank(os.environ, "AGENTO11Y_AUTH_TENANT_ID")).strip()
-        resolved_token = (ingest_token or _first_nonblank(os.environ, "AGENTO11Y_AUTH_TOKEN")).strip()
+        resolved_tenant = (tenant_id or _env_value("AUTH_TENANT_ID")).strip()
+        resolved_token = (ingest_token or _env_value("AUTH_TOKEN")).strip()
         if not resolved_token:
             raise ValueError("ingest_token is required: pass ingest_token= or set AGENTO11Y_AUTH_TOKEN")
         client = Client(
             resolved_endpoint,
             tenant_id=resolved_tenant,
             ingest_token=resolved_token,
-            actor=actor or _first_nonblank(os.environ, "AGENTO11Y_INGEST_ACTOR"),
+            actor=actor or _env_value("INGEST_ACTOR"),
             grafana_url=grafana_url,
             use_experimental_otel=use_experimental_otel,
         )

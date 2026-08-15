@@ -258,3 +258,76 @@ func TestAppPluginPathsUseCurrentPluginID(t *testing.T) {
 		t.Fatalf("ExperimentURL=%q want %q", got, wantURL)
 	}
 }
+
+func TestNewTestSuitesClientEnvNames(t *testing.T) {
+	envKeys := []string{
+		"AGENTO11Y_GRAFANA_URL", "SIGIL_GRAFANA_URL",
+		"AGENTO11Y_CONTROL_ENDPOINT", "SIGIL_CONTROL_ENDPOINT",
+		"AGENTO11Y_SERVICE_ACCOUNT_TOKEN", "SIGIL_SERVICE_ACCOUNT_TOKEN",
+	}
+	tests := []struct {
+		name        string
+		env         map[string]string
+		wantErr     string
+		wantGrafana string
+	}{
+		{
+			name: "legacy grafana url resolves and supplies the control endpoint",
+			env: map[string]string{
+				"SIGIL_GRAFANA_URL":               "https://legacy.grafana.net/",
+				"AGENTO11Y_SERVICE_ACCOUNT_TOKEN": "token",
+			},
+			wantGrafana: "https://legacy.grafana.net",
+		},
+		{
+			name: "canonical grafana url wins over legacy",
+			env: map[string]string{
+				"AGENTO11Y_GRAFANA_URL":           "https://canonical.grafana.net",
+				"SIGIL_GRAFANA_URL":               "https://legacy.grafana.net",
+				"AGENTO11Y_SERVICE_ACCOUNT_TOKEN": "token",
+			},
+			wantGrafana: "https://canonical.grafana.net",
+		},
+		{
+			// Both control-plane names postdate the rename, so a SIGIL_ spelling
+			// of either resolves nothing.
+			name: "legacy control endpoint is not read",
+			env: map[string]string{
+				"SIGIL_CONTROL_ENDPOINT":          "https://legacy.grafana.net",
+				"AGENTO11Y_SERVICE_ACCOUNT_TOKEN": "token",
+			},
+			wantErr: "control endpoint is required",
+		},
+		{
+			name: "legacy service account token is not read",
+			env: map[string]string{
+				"AGENTO11Y_CONTROL_ENDPOINT":  "https://stack.grafana.net",
+				"SIGIL_SERVICE_ACCOUNT_TOKEN": "token",
+			},
+			wantErr: "service account token is required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, key := range envKeys {
+				t.Setenv(key, "")
+			}
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+			client, err := NewTestSuitesClient(TestSuitesClientOptions{})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("NewTestSuitesClient error=%v want one containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := client.GrafanaURL(); got != tt.wantGrafana {
+				t.Fatalf("GrafanaURL=%q want %q", got, tt.wantGrafana)
+			}
+		})
+	}
+}

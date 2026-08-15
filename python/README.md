@@ -563,7 +563,7 @@ cfg = ClientConfig(
 
 `generation_export.export_timeout` bounds each HTTP or gRPC generation and workflow-step request. It defaults to 30 seconds.
 
-Set `AGENTO11Y_EXPORT_TIMEOUT_MS` to a base-10 integer from `1` through `2147483647` to override the default. An explicit `export_timeout` wins over the environment variable. Invalid values produce a warning and keep the default. The Python SDK does not read any `SIGIL_*` name, so `SIGIL_EXPORT_TIMEOUT_MS` only produces a warning that tells you to rename it.
+Set `AGENTO11Y_EXPORT_TIMEOUT_MS` to a base-10 integer from `1` through `2147483647` to override the default. An explicit `export_timeout` wins over the environment variable. Invalid values produce a warning and keep the default.
 
 ## Generation export auth modes
 

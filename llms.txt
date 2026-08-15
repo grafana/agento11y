@@ -488,9 +488,6 @@ a stored test suite.
   optional `AGENTO11Y_AUTH_TENANT_ID`.
 - Stored suite push/pull is optional and additionally uses
   `AGENTO11Y_CONTROL_ENDPOINT` and `AGENTO11Y_SERVICE_ACCOUNT_TOKEN`.
-- Only canonical `AGENTO11Y_*` names are supported. Known removed `SIGIL_*`
-  connection and trial-handoff names are ignored and produce a migration
-  warning.
 - Use `trial.record_io(...)` when the harness owns candidate I/O, or
   `bind_generation`/`bind_conversation`/`bind_trace` when normal instrumentation
   already emitted it.

@@ -7,7 +7,7 @@
  * and its own base URL.
  */
 
-import { defaultEnv, resolveHeadersWithAuth } from '../config.js';
+import { brandedPair, defaultEnv, envTrimmed, resolveHeadersWithAuth } from '../config.js';
 import {
   CONFLICT_PREFIX,
   ExperimentConflictError,
@@ -35,7 +35,9 @@ const CONTROL_MAX_RETRIES = 5;
 const DEFAULT_PAGE_LIMIT = 200;
 const DEFAULT_MAX_PAGES = 100;
 
-const ENV_GRAFANA_URL = 'AGENTO11Y_GRAFANA_URL';
+const ENV_GRAFANA_URL = brandedPair('GRAFANA_URL');
+// Both control-plane names postdate the rename, so they stay canonical-only:
+// no release ever read a SIGIL_ spelling for them.
 const ENV_CONTROL_ENDPOINT = 'AGENTO11Y_CONTROL_ENDPOINT';
 const ENV_SERVICE_ACCOUNT_TOKEN = 'AGENTO11Y_SERVICE_ACCOUNT_TOKEN';
 
@@ -88,7 +90,7 @@ export class TestSuitesClient {
 
   constructor(options: TestSuitesClientOptions = {}) {
     const env = options.env ?? defaultEnv();
-    const grafana = (options.grafanaUrl ?? env[ENV_GRAFANA_URL] ?? '').trim();
+    const grafana = (options.grafanaUrl ?? envTrimmed(env, ENV_GRAFANA_URL)?.value ?? '').trim();
     let endpoint = (options.controlEndpoint ?? env[ENV_CONTROL_ENDPOINT] ?? '').trim();
     if (endpoint.length === 0) {
       if (grafana.length === 0) {

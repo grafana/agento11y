@@ -2,6 +2,7 @@ package experiments
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -1142,5 +1143,145 @@ func TestCloudTrialEvaluationBlockedWithoutTheGate(t *testing.T) {
 	// generation before triggering. A blocked call must do none of that.
 	if got := len(server.captured()) - before; got != 0 {
 		t.Fatalf("a blocked experimental call must not issue a request, got %d", got)
+	}
+}
+
+// legacyClientEnvKeys is every name TestNewClientResolvesLegacyEnvNames sets or
+// relies on being unset, cleared per case so an ambient value cannot decide the
+// outcome.
+var legacyClientEnvKeys = []string{
+	"AGENTO11Y_ENDPOINT", "SIGIL_ENDPOINT",
+	"AGENTO11Y_AUTH_TOKEN", "SIGIL_AUTH_TOKEN",
+	"AGENTO11Y_AUTH_TENANT_ID", "SIGIL_AUTH_TENANT_ID",
+	"AGENTO11Y_INGEST_ACTOR", "SIGIL_INGEST_ACTOR",
+	"AGENTO11Y_GRAFANA_URL", "SIGIL_GRAFANA_URL",
+	"AGENTO11Y_USE_EXPERIMENTAL_OTEL", "SIGIL_USE_EXPERIMENTAL_OTEL",
+}
+
+func TestNewClientResolvesLegacyEnvNames(t *testing.T) {
+	tests := []struct {
+		name string
+		// endpointKey receives the test server URL, so a request arriving at all
+		// proves that spelling was the one selected.
+		endpointKey string
+		env         map[string]string
+		wantAuth    string
+		wantActor   string
+		wantGrafana string
+		wantOTel    bool
+	}{
+		{
+			name:        "legacy endpoint and token",
+			endpointKey: "SIGIL_ENDPOINT",
+			env:         map[string]string{"SIGIL_AUTH_TOKEN": "t"},
+			wantAuth:    "Bearer t",
+			wantActor:   defaultIngestActor,
+		},
+		{
+			name:        "legacy tenant, actor, grafana url and otel gate",
+			endpointKey: "SIGIL_ENDPOINT",
+			env: map[string]string{
+				"SIGIL_AUTH_TOKEN":            "t",
+				"SIGIL_AUTH_TENANT_ID":        "42",
+				"SIGIL_INGEST_ACTOR":          "ingest:legacy",
+				"SIGIL_GRAFANA_URL":           "http://g.example/",
+				"SIGIL_USE_EXPERIMENTAL_OTEL": "1",
+			},
+			wantAuth:    "Basic " + base64.StdEncoding.EncodeToString([]byte("42:t")),
+			wantActor:   "ingest:legacy",
+			wantGrafana: "http://g.example",
+			wantOTel:    true,
+		},
+		{
+			name:        "canonical wins over legacy",
+			endpointKey: "AGENTO11Y_ENDPOINT",
+			env: map[string]string{
+				"SIGIL_ENDPOINT":                  "http://legacy.invalid",
+				"AGENTO11Y_AUTH_TOKEN":            "canonical",
+				"SIGIL_AUTH_TOKEN":                "legacy",
+				"AGENTO11Y_INGEST_ACTOR":          "ingest:canonical",
+				"SIGIL_INGEST_ACTOR":              "ingest:legacy",
+				"AGENTO11Y_GRAFANA_URL":           "http://canonical.example",
+				"SIGIL_GRAFANA_URL":               "http://legacy.example",
+				"AGENTO11Y_USE_EXPERIMENTAL_OTEL": "0",
+				"SIGIL_USE_EXPERIMENTAL_OTEL":     "1",
+			},
+			wantAuth:    "Bearer canonical",
+			wantActor:   "ingest:canonical",
+			wantGrafana: "http://canonical.example",
+			wantOTel:    false,
+		},
+		{
+			name:        "blank canonical falls through to legacy",
+			endpointKey: "SIGIL_ENDPOINT",
+			env: map[string]string{
+				"AGENTO11Y_ENDPOINT":   "   ",
+				"AGENTO11Y_AUTH_TOKEN": "",
+				"SIGIL_AUTH_TOKEN":     "t",
+			},
+			wantAuth:  "Bearer t",
+			wantActor: defaultIngestActor,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var auth, actor []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				auth = append(auth, r.Header.Get("Authorization"))
+				actor = append(actor, r.Header.Get(ingestActorHeader))
+				mu.Unlock()
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"accepted":1,"results":[{"score_id":"score","accepted":true}]}`))
+			}))
+			defer server.Close()
+			for _, key := range legacyClientEnvKeys {
+				t.Setenv(key, "")
+			}
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+			t.Setenv(tt.endpointKey, server.URL)
+
+			client, err := NewClient(ClientOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = client.Shutdown(context.Background()) }()
+			if got := client.grafanaURL; got != tt.wantGrafana {
+				t.Fatalf("grafanaURL=%q want %q", got, tt.wantGrafana)
+			}
+			if got := client.useExperimentalOTel; got != tt.wantOTel {
+				t.Fatalf("useExperimentalOTel=%v want %v", got, tt.wantOTel)
+			}
+			passed := true
+			if _, err := client.ExportScores(context.Background(), []ScoreItem{{
+				ScoreID: "score", TrialID: "trial", EvaluatorID: "eval",
+				EvaluatorVersion: "1", ScoreKey: "final", Value: NumberScoreValue(1),
+				Passed: &passed,
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(auth) == 0 {
+				t.Fatal("no request reached the server, so the endpoint resolved elsewhere")
+			}
+			if auth[0] != tt.wantAuth {
+				t.Fatalf("Authorization=%q want %q", auth[0], tt.wantAuth)
+			}
+			if actor[0] != tt.wantActor {
+				t.Fatalf("%s=%q want %q", ingestActorHeader, actor[0], tt.wantActor)
+			}
+		})
+	}
+}
+
+func TestExperimentalGateHasNoLegacySpelling(t *testing.T) {
+	clearExperimentalGate(t)
+	t.Setenv("SIGIL_ENABLE_EXPERIMENTAL_FEATURES", "1")
+	if agento11y.ExperimentalFeaturesEnabled() {
+		t.Fatal("SIGIL_ENABLE_EXPERIMENTAL_FEATURES must not open the gate; the name postdates the rename")
 	}
 }

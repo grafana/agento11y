@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import base64
 import copy
-import os
 import urllib.parse
 from typing import Any
 
 from .. import _experiments_transport as _transport
-from ..config import _warn_legacy_env
 from ..errors import ScoreExportError
 from ..experimental import FEATURE_CLOUD_TRIAL_EVALUATION, require_experimental
 from ..models import (
@@ -26,7 +24,7 @@ from ..models import (
     TrialEvaluation,
 )
 from ..redaction import redact_secret_text, redact_secret_value
-from .types import _first_nonblank
+from .types import _env_value
 
 TENANT_HEADER = "X-Scope-OrgID"
 INGEST_ACTOR_HEADER = _transport.INGEST_ACTOR_HEADER
@@ -55,10 +53,9 @@ class Client:
         use_experimental_otel: bool | None = None,
         redact_secrets: bool = True,
     ) -> None:
-        _warn_legacy_env()
         if not (endpoint or "").strip():
             raise ValueError("Agent Observability endpoint is required (your Grafana Cloud Agent Observability URL)")
-        token = (ingest_token or _first_nonblank(os.environ, "AGENTO11Y_AUTH_TOKEN")).strip()
+        token = (ingest_token or _env_value("AUTH_TOKEN")).strip()
         if not token:
             raise ValueError("ingest_token is required (your Grafana Cloud ingestion API key)")
         self.endpoint = endpoint.rstrip("/")
@@ -69,7 +66,7 @@ class Client:
         # as artifact upload that cannot carry a JSON source object.
         self.actor = actor.strip() or _transport.DEFAULT_INGEST_ACTOR
         self.trusted = trusted
-        self.grafana_url = (grafana_url or _first_nonblank(os.environ, "AGENTO11Y_GRAFANA_URL")).rstrip("/")
+        self.grafana_url = (grafana_url or _env_value("GRAFANA_URL")).rstrip("/")
         self.timeout = timeout
         self.generation_endpoint = generation_endpoint or self.endpoint
         self.generation_protocol = generation_protocol
@@ -78,9 +75,7 @@ class Client:
         self._core: Any | None = None
         self.redact_secrets = bool(redact_secrets)
         self.use_experimental_otel = (
-            _env_bool("AGENTO11Y_USE_EXPERIMENTAL_OTEL")
-            if use_experimental_otel is None
-            else bool(use_experimental_otel)
+            _env_bool("USE_EXPERIMENTAL_OTEL") if use_experimental_otel is None else bool(use_experimental_otel)
         )
 
     # --- connection args -------------------------------------------------- #
@@ -506,5 +501,5 @@ def _format_bearer(token: str) -> str:
     return f"Bearer {value}"
 
 
-def _env_bool(*names: str) -> bool:
-    return _first_nonblank(os.environ, *names).lower() in {"1", "true", "yes", "on"}
+def _env_bool(suffix: str) -> bool:
+    return _env_value(suffix).lower() in {"1", "true", "yes", "on"}

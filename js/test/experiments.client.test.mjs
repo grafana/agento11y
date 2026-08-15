@@ -60,6 +60,57 @@ test('the client reads endpoint, token, tenant, and actor from the environment',
   }
 });
 
+test('the client reads the legacy spellings of the same variables', async () => {
+  const { endpoint, seen, close } = await startServer(() => ({ status: 200, body: {} }));
+  try {
+    const client = new ExperimentsClient({
+      env: {
+        SIGIL_ENDPOINT: endpoint,
+        SIGIL_AUTH_TOKEN: 'tok-legacy',
+        SIGIL_AUTH_TENANT_ID: '12345',
+        SIGIL_INGEST_ACTOR: 'ingest:runner/legacy',
+        SIGIL_GRAFANA_URL: 'https://legacy.grafana.net/',
+        SIGIL_USE_EXPERIMENTAL_OTEL: 'true',
+      },
+    });
+    assert.equal(client.tenantId, '12345');
+    assert.equal(client.actor, 'ingest:runner/legacy');
+    assert.equal(client.grafanaUrl, 'https://legacy.grafana.net');
+    assert.equal(client.useExperimentalOtel, true);
+    await client.upsertExperiment({ name: 'nightly' });
+    assert.equal(seen[0].headers.authorization, `Basic ${Buffer.from('12345:tok-legacy').toString('base64')}`);
+  } finally {
+    await close();
+  }
+});
+
+test('a canonical variable wins over its legacy spelling', async () => {
+  const { endpoint, seen, close } = await startServer(() => ({ status: 200, body: {} }));
+  try {
+    const client = new ExperimentsClient({
+      env: {
+        AGENTO11Y_ENDPOINT: endpoint,
+        SIGIL_ENDPOINT: 'http://legacy.invalid',
+        AGENTO11Y_AUTH_TOKEN: 'tok-env',
+        SIGIL_AUTH_TOKEN: 'tok-legacy',
+        AGENTO11Y_INGEST_ACTOR: 'ingest:runner/nightly',
+        SIGIL_INGEST_ACTOR: 'ingest:runner/legacy',
+        AGENTO11Y_GRAFANA_URL: 'https://stack.grafana.net',
+        SIGIL_GRAFANA_URL: 'https://legacy.grafana.net',
+        AGENTO11Y_USE_EXPERIMENTAL_OTEL: 'false',
+        SIGIL_USE_EXPERIMENTAL_OTEL: 'true',
+      },
+    });
+    assert.equal(client.actor, 'ingest:runner/nightly');
+    assert.equal(client.grafanaUrl, 'https://stack.grafana.net');
+    assert.equal(client.useExperimentalOtel, false);
+    await client.upsertExperiment({ name: 'nightly' });
+    assert.equal(seen[0].headers.authorization, 'Bearer tok-env');
+  } finally {
+    await close();
+  }
+});
+
 test('a missing endpoint or token fails at construction', () => {
   assert.throws(() => new ExperimentsClient({ env: {} }), /endpoint is required/);
   assert.throws(() => new ExperimentsClient({ endpoint: 'http://localhost:1', env: {} }), /ingestToken is required/);

@@ -40,33 +40,44 @@ _DEFAULT_EXPORT_TIMEOUT = timedelta(seconds=DEFAULT_EXPORT_TIMEOUT_SECONDS)
 _MIN_EXPORT_TIMEOUT_MS = 1
 _MAX_EXPORT_TIMEOUT_MS = 2147483647
 _INT_PATTERN = re.compile(r"[+-]?[0-9]+")
-_LEGACY_ENV_RENAMES = {
-    "SIGIL_AGENT_NAME": "AGENTO11Y_AGENT_NAME",
-    "SIGIL_AGENT_VERSION": "AGENTO11Y_AGENT_VERSION",
-    "SIGIL_API_ENDPOINT": "AGENTO11Y_ENDPOINT",
-    "SIGIL_ATTEMPT": "AGENTO11Y_ATTEMPT",
-    "SIGIL_AUTH_MODE": "AGENTO11Y_AUTH_MODE",
-    "SIGIL_AUTH_TENANT_ID": "AGENTO11Y_AUTH_TENANT_ID",
-    "SIGIL_AUTH_TOKEN": "AGENTO11Y_AUTH_TOKEN",
-    "SIGIL_CONTENT_CAPTURE_MODE": "AGENTO11Y_CONTENT_CAPTURE_MODE",
-    "SIGIL_CONTROL_ENDPOINT": "AGENTO11Y_CONTROL_ENDPOINT",
-    "SIGIL_CONTROL_PLANE_ENDPOINT": "AGENTO11Y_CONTROL_ENDPOINT",
-    "SIGIL_CONTROL_PLANE_TOKEN": "AGENTO11Y_SERVICE_ACCOUNT_TOKEN",
-    "SIGIL_ENDPOINT": "AGENTO11Y_ENDPOINT",
-    "SIGIL_EXPORT_TIMEOUT_MS": "AGENTO11Y_EXPORT_TIMEOUT_MS",
-    "SIGIL_EXPERIMENT_ID": "AGENTO11Y_EXPERIMENT_ID",
-    "SIGIL_GRAFANA_URL": "AGENTO11Y_GRAFANA_URL",
-    "SIGIL_INGEST_ACTOR": "AGENTO11Y_INGEST_ACTOR",
-    "SIGIL_PROTOCOL": "AGENTO11Y_PROTOCOL",
-    "SIGIL_REDACT_INPUT_MESSAGES": "AGENTO11Y_REDACT_INPUT_MESSAGES",
-    "SIGIL_RUN_ID": "AGENTO11Y_EXPERIMENT_ID",
-    "SIGIL_SERVICE_ACCOUNT_TOKEN": "AGENTO11Y_SERVICE_ACCOUNT_TOKEN",
-    "SIGIL_SUITE_ID": "AGENTO11Y_SUITE_ID",
-    "SIGIL_SUITE_VERSION": "AGENTO11Y_SUITE_VERSION",
-    "SIGIL_TENANT_ID": "AGENTO11Y_AUTH_TENANT_ID",
-    "SIGIL_TEST_CASE_ID": "AGENTO11Y_TEST_CASE_ID",
-    "SIGIL_TRAJECTORY_ID": "AGENTO11Y_TRAJECTORY_ID",
-    "SIGIL_USE_EXPERIMENTAL_OTEL": "AGENTO11Y_USE_EXPERIMENTAL_OTEL",
+# Legacy SIGIL_* spellings still honoured for each AGENTO11Y_<suffix> name, in
+# fallback order. Only names that shipped before the rename are listed; a suffix
+# absent from this table is canonical-only, because no release ever read a
+# SIGIL_ spelling for it.
+_LEGACY_ENV_ALIASES: dict[str, tuple[str, ...]] = {
+    "AGENT_NAME": ("SIGIL_AGENT_NAME",),
+    "AGENT_VERSION": ("SIGIL_AGENT_VERSION",),
+    "ATTEMPT": ("SIGIL_ATTEMPT",),
+    "AUTH_MODE": ("SIGIL_AUTH_MODE",),
+    "AUTH_TENANT_ID": ("SIGIL_AUTH_TENANT_ID", "SIGIL_TENANT_ID"),
+    "AUTH_TOKEN": ("SIGIL_AUTH_TOKEN",),
+    "CONTENT_CAPTURE_MODE": ("SIGIL_CONTENT_CAPTURE_MODE",),
+    "DEBUG": ("SIGIL_DEBUG",),
+    "ENDPOINT": ("SIGIL_ENDPOINT", "SIGIL_API_ENDPOINT"),
+    # SIGIL_RUN_ID is the pre-rename name of the experiment id, kept last so a
+    # SIGIL_EXPERIMENT_ID set beside it still wins. Go does the same.
+    "EXPERIMENT_ID": ("SIGIL_EXPERIMENT_ID", "SIGIL_RUN_ID"),
+    "GRAFANA_URL": ("SIGIL_GRAFANA_URL",),
+    "HEADERS": ("SIGIL_HEADERS",),
+    "INGEST_ACTOR": ("SIGIL_INGEST_ACTOR",),
+    "INSECURE": ("SIGIL_INSECURE",),
+    "PROTOCOL": ("SIGIL_PROTOCOL",),
+    "REDACT_INPUT_MESSAGES": ("SIGIL_REDACT_INPUT_MESSAGES",),
+    "SUITE_ID": ("SIGIL_SUITE_ID",),
+    "SUITE_VERSION": ("SIGIL_SUITE_VERSION",),
+    "TAGS": ("SIGIL_TAGS",),
+    "TEST_CASE_ID": ("SIGIL_TEST_CASE_ID",),
+    "TRAJECTORY_ID": ("SIGIL_TRAJECTORY_ID",),
+    "USE_EXPERIMENTAL_OTEL": ("SIGIL_USE_EXPERIMENTAL_OTEL",),
+    "USER_ID": ("SIGIL_USER_ID",),
+}
+# SIGIL_ spellings of the canonical-only names. No release ever read them, so a
+# value set under one is unused. _env warns once for it, because the name
+# otherwise looks like it works.
+_UNREAD_LEGACY_ENV: dict[str, str] = {
+    "CONTROL_ENDPOINT": "SIGIL_CONTROL_ENDPOINT",
+    "EXPORT_TIMEOUT_MS": "SIGIL_EXPORT_TIMEOUT_MS",
+    "SERVICE_ACCOUNT_TOKEN": "SIGIL_SERVICE_ACCOUNT_TOKEN",
 }
 _WARNED_LEGACY_ENV: set[str] = set()
 
@@ -210,35 +221,50 @@ def default_config() -> ClientConfig:
 
 
 def _env(env: dict[str, str] | None, suffix: str) -> tuple[str | None, str]:
-    """Selects a nonblank ``AGENTO11Y_<suffix>`` value.
+    """Selects a nonblank ``AGENTO11Y_<suffix>`` value, then a legacy spelling.
 
-    Returns ``(value, selected_key)`` so validation messages can name the key
-    the user actually set, or ``(None, "")`` when it is unset.
+    A nonblank canonical value always wins, even when it later fails validation,
+    so stale legacy config cannot resurface behind it. Returns ``(value,
+    selected_key)`` so validation messages can name the key the user actually
+    set, or ``(None, "")`` when it is unset. Logs once per legacy name: either
+    that name supplied the value, or it is the SIGIL_ spelling of a
+    canonical-only name and nothing read it.
     """
 
     src = env if env is not None else os.environ
-    key = "AGENTO11Y_" + suffix
-    raw = src.get(key)
-    if raw is not None:
+    canonical = "AGENTO11Y_" + suffix
+    for key in (canonical, *_LEGACY_ENV_ALIASES.get(suffix, ())):
+        raw = src.get(key)
+        if raw is None:
+            continue
         val = raw.strip()
-        if val:
-            return val, key
+        if not val:
+            continue
+        if key != canonical:
+            _warn_legacy(key, "is deprecated", canonical)
+        return val, key
+    unread = _UNREAD_LEGACY_ENV.get(suffix)
+    if unread is not None and (src.get(unread) or "").strip():
+        _warn_legacy(unread, "is ignored", canonical)
     return None, ""
 
 
-def _warn_legacy_env(env: dict[str, str] | None = None) -> None:
-    """Warns once for removed SIGIL_* configuration without reading its value."""
+def _warn_legacy(legacy: str, verdict: str, replacement: str) -> None:
+    """Warns once per process about one legacy SIGIL_* name.
 
-    src = env if env is not None else os.environ
-    logger = logging.getLogger("agento11y")
-    for legacy, replacement in _LEGACY_ENV_RENAMES.items():
-        if legacy in src and legacy not in _WARNED_LEGACY_ENV:
-            _WARNED_LEGACY_ENV.add(legacy)
-            logger.warning(
-                "agento11y: %s is ignored; rename it to %s",
-                legacy,
-                replacement,
-            )
+    ``verdict`` is "is deprecated" when the name supplied the value, and "is
+    ignored" when it is the SIGIL_ spelling of a canonical-only name.
+    """
+
+    if legacy in _WARNED_LEGACY_ENV:
+        return
+    _WARNED_LEGACY_ENV.add(legacy)
+    logging.getLogger("agento11y").warning(
+        "agento11y: %s %s; rename it to %s",
+        legacy,
+        verdict,
+        replacement,
+    )
 
 
 def _parse_bool(raw: str) -> bool:
@@ -286,10 +312,9 @@ def resolve_config(
     """Resolves caller config against canonical env vars and defaults.
 
     Resolution order: explicit user-provided fields > ``AGENTO11Y_*`` env vars
-    > SDK config struct defaults.
+    (then their legacy ``SIGIL_*`` spellings) > SDK config struct defaults.
     """
 
-    _warn_legacy_env(env)
     # Clone so resolve_config never mutates the caller's config. Some fields
     # (logger, tracer, exporter) hold non-picklable resources, so we shallow-
     # clone the dataclass tree rather than deepcopying.
@@ -310,9 +335,10 @@ def resolve_config(
     if out.generation_export.headers is None:
         ev, _ = _env(env, "HEADERS")
         out.generation_export.headers = _parse_csv_kv(ev) if ev is not None else {}
-    # Export request deadline. Only the canonical AGENTO11Y_EXPORT_TIMEOUT_MS is
-    # read; an invalid value is warned about and the 30s default is retained so
-    # valid sibling env vars still apply.
+    # Export request deadline. AGENTO11Y_EXPORT_TIMEOUT_MS postdates the rename,
+    # so this SDK reads no SIGIL_ spelling for it. An invalid value logs a
+    # warning and keeps the 30s default, so the other env vars resolved in the
+    # same call still apply.
     if out.generation_export.export_timeout is _DEFAULT_EXPORT_TIMEOUT:
         ev, timeout_key = _env(env, "EXPORT_TIMEOUT_MS")
         if ev is not None:

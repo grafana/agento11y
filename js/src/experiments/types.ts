@@ -1,4 +1,5 @@
-import { defaultEnv } from '../config.js';
+import type { EnvPair } from '../config.js';
+import { brandedPair, defaultEnv, envTrimmed } from '../config.js';
 import type { Agento11yLogger } from '../types.js';
 import type { Candidate, Evaluator, EvaluatorKind } from './models.js';
 import { isRecord, normalizeEvaluatorKind } from './models.js';
@@ -170,21 +171,35 @@ export function candidateMetadata(candidate: Candidate | undefined): Record<stri
 // TrialRef: handing one trial across a process or container boundary
 // --------------------------------------------------------------------------- //
 
-export const ENV_EXPERIMENT_ID = 'AGENTO11Y_EXPERIMENT_ID';
-export const ENV_TEST_CASE_ID = 'AGENTO11Y_TEST_CASE_ID';
-export const ENV_ATTEMPT = 'AGENTO11Y_ATTEMPT';
-export const ENV_SUITE_ID = 'AGENTO11Y_SUITE_ID';
-export const ENV_SUITE_VERSION = 'AGENTO11Y_SUITE_VERSION';
-export const ENV_TRAJECTORY_ID = 'AGENTO11Y_TRAJECTORY_ID';
+// One pair per handoff field, so the name `trialRefFromEnv` reads and the name
+// `trialRefToEnv` writes cannot drift apart.
+const envExperimentId = brandedPair('EXPERIMENT_ID');
+const envTestCaseId = brandedPair('TEST_CASE_ID');
+const envAttempt = brandedPair('ATTEMPT');
+const envSuiteId = brandedPair('SUITE_ID');
+const envSuiteVersion = brandedPair('SUITE_VERSION');
+const envTrajectoryId = brandedPair('TRAJECTORY_ID');
 
-const legacyEnvRenames: Record<string, string> = {
-  SIGIL_EXPERIMENT_ID: ENV_EXPERIMENT_ID,
-  SIGIL_TEST_CASE_ID: ENV_TEST_CASE_ID,
-  SIGIL_ATTEMPT: ENV_ATTEMPT,
-  SIGIL_SUITE_ID: ENV_SUITE_ID,
-  SIGIL_SUITE_VERSION: ENV_SUITE_VERSION,
-  SIGIL_TRAJECTORY_ID: ENV_TRAJECTORY_ID,
-};
+export const ENV_EXPERIMENT_ID = envExperimentId.preferred;
+export const ENV_TEST_CASE_ID = envTestCaseId.preferred;
+export const ENV_ATTEMPT = envAttempt.preferred;
+export const ENV_SUITE_ID = envSuiteId.preferred;
+export const ENV_SUITE_VERSION = envSuiteVersion.preferred;
+export const ENV_TRAJECTORY_ID = envTrajectoryId.preferred;
+
+/**
+ * Pre-rename spellings, written beside the canonical names by `trialRefToEnv`
+ * so a child process on an older SDK build still receives the trial context.
+ */
+export const LEGACY_ENV_EXPERIMENT_ID = envExperimentId.legacy;
+export const LEGACY_ENV_TEST_CASE_ID = envTestCaseId.legacy;
+export const LEGACY_ENV_ATTEMPT = envAttempt.legacy;
+export const LEGACY_ENV_SUITE_ID = envSuiteId.legacy;
+export const LEGACY_ENV_SUITE_VERSION = envSuiteVersion.legacy;
+export const LEGACY_ENV_TRAJECTORY_ID = envTrajectoryId.legacy;
+// SIGIL_RUN_ID is the pre-rename name of the experiment id, read only after both
+// EXPERIMENT_ID spellings. Go resolves it the same way.
+const ENV_LEGACY_RUN_ID = 'SIGIL_RUN_ID';
 
 /**
  * A serializable pointer to one trial, openable in any process.
@@ -232,65 +247,93 @@ export function trialRefFromJSON(payload: unknown): TrialRef {
   };
 }
 
-/** The environment variables that carry this ref to a child process. */
+/**
+ * The environment variables that carry this ref to a child process, written
+ * under both the canonical and the legacy spelling. Go's core
+ * `agento11y.TrialRef.ToEnv` does the same, so a parent can spawn a child
+ * running an older SDK build.
+ */
 export function trialRefToEnv(ref: TrialRef): Record<string, string> {
   const env: Record<string, string> = {
     [ENV_EXPERIMENT_ID]: ref.experimentId,
+    [LEGACY_ENV_EXPERIMENT_ID]: ref.experimentId,
     [ENV_TEST_CASE_ID]: ref.testCaseId,
+    [LEGACY_ENV_TEST_CASE_ID]: ref.testCaseId,
     [ENV_ATTEMPT]: String(ref.attempt),
+    [LEGACY_ENV_ATTEMPT]: String(ref.attempt),
   };
   if (ref.suiteId !== undefined && ref.suiteId.length > 0) {
     env[ENV_SUITE_ID] = ref.suiteId;
+    env[LEGACY_ENV_SUITE_ID] = ref.suiteId;
   }
   if (ref.suiteVersion !== undefined && ref.suiteVersion.length > 0) {
     env[ENV_SUITE_VERSION] = ref.suiteVersion;
+    env[LEGACY_ENV_SUITE_VERSION] = ref.suiteVersion;
   }
   if (ref.trajectoryId !== undefined && ref.trajectoryId.length > 0) {
     env[ENV_TRAJECTORY_ID] = ref.trajectoryId;
+    env[LEGACY_ENV_TRAJECTORY_ID] = ref.trajectoryId;
   }
   return env;
 }
 
 /**
  * Reads a ref from the environment, returning undefined when the experiment or
- * test-case id is missing. A `SIGIL_*` spelling is reported and ignored, never
- * read: the rename is complete, so silently honoring the old name would hide
- * stale configuration.
+ * test-case id is missing. A nonblank `AGENTO11Y_*` value wins over every
+ * `SIGIL_*` spelling; a legacy spelling that supplies a value is read and
+ * reported once per process.
  */
 export function trialRefFromEnv(
   env: Record<string, string | undefined> = defaultEnv(),
   logger?: Agento11yLogger,
 ): TrialRef | undefined {
-  warnLegacyTrialEnv(env, logger);
-  const experimentId = (env[ENV_EXPERIMENT_ID] ?? '').trim();
-  const testCaseId = (env[ENV_TEST_CASE_ID] ?? '').trim();
+  const experimentId = resolveTrialEnv(env, envExperimentId, logger) ?? resolveLegacyRunId(env, logger) ?? '';
+  const testCaseId = resolveTrialEnv(env, envTestCaseId, logger) ?? '';
   if (experimentId.length === 0 || testCaseId.length === 0) {
     return undefined;
   }
-  const parsedAttempt = Number.parseInt((env[ENV_ATTEMPT] ?? '').trim(), 10);
+  const parsedAttempt = Number.parseInt(resolveTrialEnv(env, envAttempt, logger) ?? '', 10);
   return {
     experimentId,
     testCaseId,
     attempt: Number.isFinite(parsedAttempt) && parsedAttempt > 0 ? parsedAttempt : 1,
-    suiteId: (env[ENV_SUITE_ID] ?? '').trim(),
-    suiteVersion: (env[ENV_SUITE_VERSION] ?? '').trim(),
-    trajectoryId: (env[ENV_TRAJECTORY_ID] ?? '').trim(),
+    suiteId: resolveTrialEnv(env, envSuiteId, logger) ?? '',
+    suiteVersion: resolveTrialEnv(env, envSuiteVersion, logger) ?? '',
+    trajectoryId: resolveTrialEnv(env, envTrajectoryId, logger) ?? '',
   };
+}
+
+function resolveTrialEnv(
+  env: Record<string, string | undefined>,
+  pair: EnvPair,
+  logger?: Agento11yLogger,
+): string | undefined {
+  const selected = envTrimmed(env, pair);
+  if (selected === undefined) return undefined;
+  if (selected.key !== pair.preferred) {
+    warnLegacyTrialEnv(selected.key, pair.preferred, logger);
+  }
+  return selected.value;
+}
+
+function resolveLegacyRunId(env: Record<string, string | undefined>, logger?: Agento11yLogger): string | undefined {
+  const value = (env[ENV_LEGACY_RUN_ID] ?? '').trim();
+  if (value.length === 0) return undefined;
+  warnLegacyTrialEnv(ENV_LEGACY_RUN_ID, ENV_EXPERIMENT_ID, logger);
+  return value;
 }
 
 const warnedLegacyEnv = new Set<string>();
 
-export function warnLegacyTrialEnv(env: Record<string, string | undefined>, logger?: Agento11yLogger): void {
-  for (const [legacy, replacement] of Object.entries(legacyEnvRenames)) {
-    if (env[legacy] !== undefined && !warnedLegacyEnv.has(legacy)) {
-      warnedLegacyEnv.add(legacy);
-      const message = `agento11y: ${legacy} is ignored; rename it to ${replacement}`;
-      if (logger?.warn !== undefined) {
-        logger.warn(message);
-      } else {
-        console.warn(message);
-      }
-    }
+/** Warns once per process that a legacy name supplied a value. */
+export function warnLegacyTrialEnv(legacy: string, replacement: string, logger?: Agento11yLogger): void {
+  if (warnedLegacyEnv.has(legacy)) return;
+  warnedLegacyEnv.add(legacy);
+  const message = `agento11y: ${legacy} is deprecated; rename it to ${replacement}`;
+  if (logger?.warn !== undefined) {
+    logger.warn(message);
+  } else {
+    console.warn(message);
   }
 }
 

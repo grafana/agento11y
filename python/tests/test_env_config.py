@@ -8,7 +8,7 @@ from datetime import timedelta
 
 import pytest
 from agento11y import ApiConfig, Client, ClientConfig, GenerationExportConfig
-from agento11y.config import default_config, resolve_config
+from agento11y.config import _WARNED_LEGACY_ENV, default_config, resolve_config
 from agento11y.models import ContentCaptureMode, GenerationStart, ModelRef
 
 _DEFAULT_EXPORT_TIMEOUT = timedelta(seconds=30)
@@ -92,6 +92,44 @@ def _check_invalid_export_timeout_preserves_valid(cfg: ClientConfig) -> None:
 
 def _check_legacy_export_timeout_ignored(cfg: ClientConfig) -> None:
     assert cfg.generation_export.export_timeout == _DEFAULT_EXPORT_TIMEOUT
+
+
+def _check_legacy_transport(cfg: ClientConfig) -> None:
+    assert cfg.generation_export.endpoint == "https://legacy:4318"
+    assert cfg.generation_export.protocol == "http"
+    assert cfg.generation_export.insecure is True
+    assert cfg.generation_export.headers["X-A"] == "1"
+    assert cfg.generation_export.auth.tenant_id == "42"
+
+
+def _check_legacy_agent_user_tags(cfg: ClientConfig) -> None:
+    assert cfg.user_id == "alice@example.com"
+    assert cfg.tags == {"service": "orchestrator"}
+    assert cfg.debug is True
+
+
+def _check_legacy_api_endpoint(cfg: ClientConfig) -> None:
+    assert cfg.generation_export.endpoint == "https://legacy-api:4318"
+
+
+def _check_legacy_tenant_id(cfg: ClientConfig) -> None:
+    assert cfg.generation_export.auth.tenant_id == "legacy-42"
+
+
+def _check_canonical_wins_over_legacy(cfg: ClientConfig) -> None:
+    assert cfg.generation_export.endpoint == "https://canonical:4318"
+    # AGENTO11Y_TAGS supplies the whole map; SIGIL_TAGS adds nothing to it.
+    assert cfg.tags == {"a": "1"}
+
+
+def _check_blank_canonical_falls_back(cfg: ClientConfig) -> None:
+    assert cfg.generation_export.endpoint == "https://legacy:4318"
+
+
+def _check_invalid_canonical_blocks_valid_legacy(cfg: ClientConfig) -> None:
+    # A nonblank canonical value is selected before validation, so a valid
+    # legacy value never resurfaces behind it.
+    assert cfg.content_capture == ContentCaptureMode.DEFAULT
 
 
 @pytest.mark.parametrize(
@@ -184,6 +222,59 @@ def _check_legacy_export_timeout_ignored(cfg: ClientConfig) -> None:
             _check_legacy_export_timeout_ignored,
             id="legacy SIGIL export timeout is never read",
         ),
+        pytest.param(
+            {
+                "SIGIL_ENDPOINT": "https://legacy:4318",
+                "SIGIL_PROTOCOL": "http",
+                "SIGIL_INSECURE": "true",
+                "SIGIL_HEADERS": "X-A=1",
+                "SIGIL_AUTH_TENANT_ID": "42",
+            },
+            _check_legacy_transport,
+            id="legacy transport names still resolve",
+        ),
+        pytest.param(
+            {
+                "SIGIL_USER_ID": "alice@example.com",
+                "SIGIL_TAGS": "service=orchestrator",
+                "SIGIL_DEBUG": "true",
+            },
+            _check_legacy_agent_user_tags,
+            id="legacy user tags debug still resolve",
+        ),
+        pytest.param(
+            {"SIGIL_API_ENDPOINT": "https://legacy-api:4318"},
+            _check_legacy_api_endpoint,
+            id="legacy SIGIL_API_ENDPOINT resolves the endpoint",
+        ),
+        pytest.param(
+            {"SIGIL_TENANT_ID": "legacy-42"},
+            _check_legacy_tenant_id,
+            id="legacy SIGIL_TENANT_ID resolves the tenant",
+        ),
+        pytest.param(
+            {
+                "AGENTO11Y_ENDPOINT": "https://canonical:4318",
+                "SIGIL_ENDPOINT": "https://legacy:4318",
+                "AGENTO11Y_TAGS": "a=1",
+                "SIGIL_TAGS": "b=2",
+            },
+            _check_canonical_wins_over_legacy,
+            id="canonical wins over legacy",
+        ),
+        pytest.param(
+            {"AGENTO11Y_ENDPOINT": "   ", "SIGIL_ENDPOINT": "https://legacy:4318"},
+            _check_blank_canonical_falls_back,
+            id="blank canonical falls back to legacy",
+        ),
+        pytest.param(
+            {
+                "AGENTO11Y_CONTENT_CAPTURE_MODE": "bogus",
+                "SIGIL_CONTENT_CAPTURE_MODE": "metadata_only",
+            },
+            _check_invalid_canonical_blocks_valid_legacy,
+            id="invalid canonical blocks valid legacy",
+        ),
     ],
 )
 def test_resolve_config_env(env: dict[str, str], check: Callable[[ClientConfig], None]) -> None:
@@ -213,7 +304,9 @@ def test_invalid_export_timeout_warns_and_keeps_default(raw: str, caplog: pytest
     assert any("AGENTO11Y_EXPORT_TIMEOUT_MS" in record.getMessage() for record in caplog.records)
 
 
-def test_legacy_export_timeout_warns_and_is_ignored(caplog: pytest.LogCaptureFixture) -> None:
+def test_legacy_export_timeout_is_not_read(caplog: pytest.LogCaptureFixture) -> None:
+    """AGENTO11Y_EXPORT_TIMEOUT_MS postdates the rename: SIGIL_EXPORT_TIMEOUT_MS is unused and warns once."""
+
     with caplog.at_level(logging.WARNING, logger="agento11y"):
         cfg = resolve_config(None, env={"SIGIL_EXPORT_TIMEOUT_MS": "1500"})
 
@@ -261,20 +354,73 @@ def test_explicit_overrides_env() -> None:
     assert cfg.agent_name == "planner"
 
 
-def test_invalid_capture_mode_warning_names_selected_key(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize(
+    "env,expected_key",
+    [
+        pytest.param({"AGENTO11Y_CONTENT_CAPTURE_MODE": "bogus"}, "AGENTO11Y_CONTENT_CAPTURE_MODE", id="canonical"),
+        pytest.param({"SIGIL_CONTENT_CAPTURE_MODE": "bogus"}, "SIGIL_CONTENT_CAPTURE_MODE", id="legacy"),
+    ],
+)
+def test_invalid_capture_mode_warning_names_selected_key(
+    env: dict[str, str], expected_key: str, caplog: pytest.LogCaptureFixture
+) -> None:
     with caplog.at_level(logging.WARNING, logger="agento11y"):
-        cfg = resolve_config(None, env={"AGENTO11Y_CONTENT_CAPTURE_MODE": "bogus"})
+        cfg = resolve_config(None, env=env)
     assert cfg.content_capture == ContentCaptureMode.DEFAULT
-    assert any("AGENTO11Y_CONTENT_CAPTURE_MODE" in r.getMessage() for r in caplog.records)
+    assert any(f"ignoring invalid {expected_key}" in r.getMessage() for r in caplog.records)
 
 
-def test_legacy_env_namespace_is_ignored_with_migration_warning(caplog: pytest.LogCaptureFixture) -> None:
+def test_legacy_env_namespace_resolves_with_deprecation_warning(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="agento11y"):
         cfg = resolve_config(None, env={"SIGIL_ENDPOINT": "https://legacy.example"})
-    assert cfg.generation_export.endpoint == "localhost:4317"
+    assert cfg.generation_export.endpoint == "https://legacy.example"
     assert any(
-        "SIGIL_ENDPOINT is ignored; rename it to AGENTO11Y_ENDPOINT" in record.getMessage() for record in caplog.records
+        "SIGIL_ENDPOINT is deprecated; rename it to AGENTO11Y_ENDPOINT" in record.getMessage()
+        for record in caplog.records
     )
+
+
+def test_legacy_env_warning_fires_once_per_process(caplog: pytest.LogCaptureFixture) -> None:
+    env = {"SIGIL_ENDPOINT": "https://legacy.example"}
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
+        resolve_config(None, env=env)
+        resolve_config(None, env=env)
+    warnings = [r for r in caplog.records if "SIGIL_ENDPOINT" in r.getMessage()]
+    assert len(warnings) == 1
+
+    _WARNED_LEGACY_ENV.clear()
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
+        resolve_config(None, env=env)
+    assert len([r for r in caplog.records if "SIGIL_ENDPOINT" in r.getMessage()]) == 2
+
+
+def test_unused_legacy_env_name_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    """The warning fires at the point of use, not on every legacy name present."""
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
+        cfg = resolve_config(
+            None,
+            env={"AGENTO11Y_ENDPOINT": "https://canonical.example", "SIGIL_ENDPOINT": "https://legacy.example"},
+        )
+    assert cfg.generation_export.endpoint == "https://canonical.example"
+    assert not [r for r in caplog.records if "SIGIL_ENDPOINT" in r.getMessage()]
+
+
+def test_canonical_only_legacy_name_stays_silent_when_canonical_is_set(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
+        cfg = resolve_config(
+            None,
+            env={"AGENTO11Y_EXPORT_TIMEOUT_MS": "5000", "SIGIL_EXPORT_TIMEOUT_MS": "9000"},
+        )
+    assert cfg.generation_export.export_timeout == timedelta(milliseconds=5000)
+    assert not [r for r in caplog.records if "SIGIL_EXPORT_TIMEOUT_MS" in r.getMessage()]
+
+
+def test_canonical_only_legacy_warning_fires_once_per_process(caplog: pytest.LogCaptureFixture) -> None:
+    env = {"SIGIL_EXPORT_TIMEOUT_MS": "5000"}
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
+        resolve_config(None, env=env)
+        resolve_config(None, env=env)
+    assert len([r for r in caplog.records if "SIGIL_EXPORT_TIMEOUT_MS" in r.getMessage()]) == 1
 
 
 def test_agento11y_endpoint_also_defaults_api_endpoint() -> None:
