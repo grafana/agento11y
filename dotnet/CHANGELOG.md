@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.0] - 2026-08-17
+
+### Breaking Changes
+
+- bump default timeout to 30s and support overriding via env var (#566)
+
+### Features
+
+- **providers**: normalize provider usage to the inclusive contract (phase 1: providers) (#533)
+- **redaction**: generate secret patterns from one table and pin cross-SDK parity (#539)
+- **core**: carry TokenInputSemantics through models and mark telemetry (phase 1: core) (#532)
+
+### Bug Fixes
+
+- **sdk**: derive SDK versions from build metadata instead of constants (#445)
+
 ## [0.4.0] - 2026-07-21
 
 ### Breaking Changes
