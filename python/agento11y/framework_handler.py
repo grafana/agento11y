@@ -663,36 +663,62 @@ class Agento11yFrameworkHandlerBase:
         )
 
     def _on_tool_end(self, *, output: Any, run_id: UUID) -> None:
-        run_state = self._tool_runs.pop(str(run_id), None)
+        run_key = str(run_id)
+        run_state = self._tool_runs.pop(run_key, None)
         if run_state is None:
             return
-
-        try:
-            payload: dict[str, Any] = {}
-            if run_state.arguments is not None:
-                payload["arguments"] = run_state.arguments
-            if run_state.capture_outputs:
-                payload["result"] = _extract_tool_output(output)
-            run_state.recorder.set_result(**payload)
-        finally:
-            run_state.recorder.end()
-
-        recorder_error = run_state.recorder.err()
-        if recorder_error is not None:
-            raise recorder_error
+        self._finish_tool(run_key, run_state, output=output)
 
     def _on_tool_error(self, *, error: BaseException, run_id: UUID) -> None:
-        run_state = self._tool_runs.pop(str(run_id), None)
+        run_key = str(run_id)
+        run_state = self._tool_runs.pop(run_key, None)
         if run_state is None:
             return
+        self._finish_tool(run_key, run_state, error=error)
+
+    def _finish_tool(
+        self,
+        run_key: str,
+        run_state: _ToolRunState,
+        *,
+        output: Any = None,
+        error: BaseException | None = None,
+    ) -> None:
+        """End the tool recorder. Log an error from the recorder instead of raising it.
+
+        Both callers run inside a callback the host framework invokes. Google ADK
+        wraps a raising callback in a RuntimeError, which skips the user's own
+        tool-error recovery and replaces their exception. Failing to record a tool
+        must not change how the agent runs.
+        """
 
         try:
-            run_state.recorder.set_exec_error(Exception(str(error)))
+            self._end_tool_recorder(run_state, output=output, error=error)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("agento11y: tool execution %s not recorded: %s", run_key, exc, exc_info=True)
+
+    def _end_tool_recorder(self, run_state: _ToolRunState, *, output: Any, error: BaseException | None) -> None:
+        exec_error: Exception | None = None
+        try:
+            if error is not None:
+                exec_error = Exception(str(error))
+                run_state.recorder.set_exec_error(exec_error)
+            else:
+                payload: dict[str, Any] = {}
+                if run_state.arguments is not None:
+                    payload["arguments"] = run_state.arguments
+                if run_state.capture_outputs:
+                    payload["result"] = _extract_tool_output(output)
+                run_state.recorder.set_result(**payload)
         finally:
             run_state.recorder.end()
 
         recorder_error = run_state.recorder.err()
-        if recorder_error is not None:
+        # err() returns the exec error it was given, so raising it would re-raise the
+        # tool failure the framework already reported. Only an error the recorder made
+        # itself, such as a failure to serialize the result, means the tool execution
+        # was not recorded.
+        if recorder_error is not None and recorder_error is not exec_error:
             raise recorder_error
 
     def _on_chain_start(

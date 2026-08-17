@@ -631,6 +631,36 @@ def test_tool_execution_attributes_and_content_capture() -> None:
         provider.shutdown()
 
 
+def test_tool_recorder_err_returns_the_exec_error_object_it_was_given() -> None:
+    exporter = CapturingGenerationExporter()
+    client = _new_client(exporter)
+    exec_error = RuntimeError("the tool itself failed")
+    try:
+        # The framework handlers compare err() against the error they passed in, to tell
+        # a tool's own failure from a failure this SDK produced.
+        failed = client.start_tool_execution(ToolExecutionStart(tool_name="weather", include_content=True))
+        failed.set_exec_error(exec_error)
+        failed.set_result(arguments={"city": "Paris"}, result={"temp_c": 18})
+        failed.end()
+        assert failed.err() is exec_error
+
+        unserializable = client.start_tool_execution(ToolExecutionStart(tool_name="weather", include_content=True))
+        unserializable.set_result(result=object())
+        unserializable.end()
+        assert "serialize tool result" in str(unserializable.err())
+
+        # When both fail, the caller can no longer recognize its own error.
+        both = client.start_tool_execution(ToolExecutionStart(tool_name="weather", include_content=True))
+        both.set_exec_error(exec_error)
+        both.set_result(result=object())
+        both.end()
+        assert both.err() is not exec_error
+        assert "the tool itself failed" in str(both.err())
+        assert "serialize tool result" in str(both.err())
+    finally:
+        client.shutdown()
+
+
 def _wait_for(predicate, timeout_s: float = 1.0) -> None:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
