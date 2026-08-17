@@ -12,6 +12,7 @@
 //	agento11y vibe     [--local|--no-local] [--tag k=v] [-- args...]  — exec vibe after installing the sigil hook in vibe's hooks.toml
 //	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
 //	agento11y claude   install [--json]                               — register the Claude Code plugin without launching or prompting
+//	agento11y agents   reconcile --agents claude,cursor --json        — emit a managed-device reconciliation receipt
 //	agento11y local start|status|stop                                 — manage the local capture daemon
 //	agento11y history import <agent> [flags]                          — backfill an agent's existing local sessions
 //	agento11y skills list|show <name>                                 — print an agent skill bundled into this binary
@@ -129,6 +130,7 @@ func usageLine() string {
 	return "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] " +
 		"[--otlp-endpoint url] [--no-verify] [--yes] | agento11y doctor [--json] | " +
 		"agento11y claude install [--json] | " +
+		"agento11y agents reconcile --agents claude,cursor --json | " +
 		"agento11y skills list|show <name> | agento11y local start|status|stop | " +
 		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
 		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
@@ -250,6 +252,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// for the current user; it never launches Claude or prompts.
 	if args[0] == "claude" && len(args) >= 2 && args[1] == "install" {
 		runClaudeInstall(args[2:], stdout, stderr)
+		return
+	}
+	if args[0] == "agents" {
+		runAgentsReconcile(args[1:], stdout, stderr)
 		return
 	}
 
@@ -645,6 +651,136 @@ func runClaudeInstall(args []string, stdout, stderr io.Writer) {
 		}
 	}
 	if result.Status == "error" {
+		exit(1)
+	}
+}
+
+const managedReconcileSchemaVersion = 1
+
+// agentReconcileReport is the stable, secret-free receipt consumed by device
+// management inventory. Managed config is deliberately versioned outside of
+// the binary: MDM owns the config file and stamps its revision there.
+type agentReconcileReport struct {
+	SchemaVersion int                  `json:"schema_version"`
+	Status        string               `json:"status"`
+	Agento11y     managedBinary        `json:"agento11y"`
+	Config        managedConfig        `json:"config"`
+	Agents        []agentInstallResult `json:"agents"`
+}
+
+type managedBinary struct {
+	Version string `json:"version"`
+}
+
+type managedConfig struct {
+	Revision string `json:"revision"`
+}
+
+// runAgentsReconcile is the fleet-only aggregate over the per-agent install
+// commands. It never prompts or launches a host, and its JSON receipt is
+// deliberately stable for device-management inventory.
+func runAgentsReconcile(args []string, stdout, stderr io.Writer) {
+	if len(args) == 0 || args[0] != "reconcile" {
+		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents reconcile --agents claude,cursor --json")
+		exit(2)
+		return
+	}
+
+	fs := flag.NewFlagSet("agents reconcile", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var rawAgents string
+	var asJSON bool
+	fs.StringVar(&rawAgents, "agents", "", "comma-separated agents to reconcile (claude,cursor)")
+	fs.BoolVar(&asJSON, "json", false, "print a machine-readable receipt")
+	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 || strings.TrimSpace(rawAgents) == "" {
+		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents reconcile --agents claude,cursor --json")
+		exit(2)
+		return
+	}
+
+	wanted := map[string]bool{}
+	for name := range strings.SplitSeq(rawAgents, ",") {
+		name = strings.TrimSpace(name)
+		if name != "claude" && name != "cursor" {
+			_, _ = fmt.Fprintf(stderr, "agento11y agents reconcile: unsupported agent %q (supported: claude,cursor)\n", name)
+			exit(2)
+			return
+		}
+		wanted[name] = true
+	}
+
+	// The managed config revision is MDM metadata, not a user-facing alias
+	// family. ApplyEnv preserves a caller-supplied value over config.env.
+	dotenv.ApplyEnv(nil)
+
+	writer := stdout
+	if asJSON {
+		writer = io.Discard
+	}
+	report := make([]agentInstallResult, 0, len(wanted))
+	failed := false
+	for _, name := range []string{"claude", "cursor"} {
+		if !wanted[name] {
+			continue
+		}
+		result := agentInstallResult{Agent: name}
+		switch name {
+		case "claude":
+			changed, err := claudeInstall(context.Background(), writer)
+			switch {
+			case errors.Is(err, claudecode.ErrCLINotFound):
+				result.Status = "missing_host"
+			case err != nil:
+				result.Status, result.Error, failed = "error", err.Error(), true
+			case changed:
+				result.Status = "installed"
+			default:
+				result.Status = "already_installed"
+			}
+		case "cursor":
+			before, err := cursorStatus()
+			if err == nil {
+				err = cursorInstall(writer, stderr, cli.InitLogger("cursor"))
+			}
+			if err != nil {
+				result.Status, result.Error, failed = "error", err.Error(), true
+			} else if before {
+				result.Status = "already_installed"
+			} else {
+				result.Status = "installed"
+			}
+		}
+		report = append(report, result)
+	}
+
+	if asJSON {
+		status := "converged"
+		if failed {
+			status = "error"
+		} else {
+			for _, agent := range report {
+				if agent.Status == "missing_host" {
+					status = "deferred_missing_host"
+					break
+				}
+			}
+		}
+		receipt := agentReconcileReport{
+			SchemaVersion: managedReconcileSchemaVersion,
+			Status:        status,
+			Agento11y:     managedBinary{Version: version},
+			Config:        managedConfig{Revision: strings.TrimSpace(os.Getenv("AGENTO11Y_MANAGED_CONFIG_REVISION"))},
+			Agents:        report,
+		}
+		data, err := json.Marshal(receipt)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agento11y agents reconcile: encode result: %v\n", err)
+			failed = true
+		} else {
+			_, _ = fmt.Fprintln(stdout, string(data))
+		}
+	}
+	if failed {
 		exit(1)
 	}
 }

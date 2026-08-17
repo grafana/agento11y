@@ -598,6 +598,52 @@ func TestRun_ClaudeInstallReportsMissingHost(t *testing.T) {
 	assert.Equal(t, agentInstallResult{Agent: "claude", Status: "missing_host"}, result)
 }
 
+func TestRun_AgentsReconcileJSONIsStableAndSecretFree(t *testing.T) {
+	prevVersion := version
+	version = "v0.0.1-test"
+	t.Cleanup(func() { version = prevVersion })
+	t.Setenv("AGENTO11Y_MANAGED_CONFIG_REVISION", "jamf-42")
+	withStubClaudeInstall(t, func(context.Context, io.Writer) (bool, error) { return true, nil })
+	withStubCursorStatus(t, func() (bool, error) { return true, nil })
+	withStubCursorInstall(t, func(io.Writer, io.Writer, *log.Logger) error { return nil })
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"agents", "reconcile", "--agents", "claude,cursor", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
+	require.Empty(t, stderr.String())
+
+	var receipt agentReconcileReport
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &receipt), "stdout=%q", stdout.String())
+	assert.Equal(t, managedReconcileSchemaVersion, receipt.SchemaVersion)
+	assert.Equal(t, "converged", receipt.Status)
+	assert.Equal(t, "v0.0.1-test", receipt.Agento11y.Version)
+	assert.Equal(t, "jamf-42", receipt.Config.Revision)
+	assert.Equal(t, []agentInstallResult{
+		{Agent: "claude", Status: "installed"},
+		{Agent: "cursor", Status: "already_installed"},
+	}, receipt.Agents)
+	assert.NotContains(t, stdout.String(), "AGENTO11Y_AUTH_TOKEN")
+}
+
+func TestRun_AgentsReconcileDefersWhenHostIsMissing(t *testing.T) {
+	withStubClaudeInstall(t, func(context.Context, io.Writer) (bool, error) {
+		return false, claudecode.ErrCLINotFound
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"agents", "reconcile", "--agents", "claude", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
+
+	var receipt agentReconcileReport
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &receipt), "stdout=%q", stdout.String())
+	assert.Equal(t, "deferred_missing_host", receipt.Status)
+	assert.Equal(t, []agentInstallResult{{Agent: "claude", Status: "missing_host"}}, receipt.Agents)
+}
+
 // withStubLauncher replaces the launchers map with a single entry for the
 // duration of the test.
 func withStubLauncher(t *testing.T, name string, fn agentLauncher) {

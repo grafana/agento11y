@@ -87,6 +87,8 @@ Launch a coding agent (wires the plugin, then runs it):
       Wire (or remove) the Cursor hook. Cursor is a GUI app and has no launcher.
   claude install [--json]
       Register the Claude Code plugin without launching it or prompting.
+  agents reconcile --agents claude,cursor --json
+      Emit a stable receipt for managed-device inventory without launching agents.
 
 Commands:
   login       Save endpoint, tenant, token, and OTLP endpoint to config.env.
