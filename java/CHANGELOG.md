@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0] - 2026-08-17
+
+### Breaking Changes
+
+- bump default timeout to 30s and support overriding via env var (#566)
+
+### Features
+
+- **providers**: normalize provider usage to the inclusive contract (phase 1: providers) (#533)
+- **core**: carry TokenInputSemantics through models and mark telemetry (phase 1: core) (#532)
+
+### Bug Fixes
+
+- **deps**: update dependency com.google.genai:google-genai to v1.63.0 (#250)
+- **sdk**: derive SDK versions from build metadata instead of constants (#445)
+
 ## [0.5.0] - 2026-07-21
 
 ### Breaking Changes
