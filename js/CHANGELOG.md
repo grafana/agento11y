@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.0] - 2026-08-17
+
+### Breaking Changes
+
+- bump default timeout to 30s and support overriding via env var (#566)
+
+### Features
+
+- **plugins**: honour AGENTO11Y_REDACT_INPUT_MESSAGES in every coding agent plugin (#563)
+
+### Bug Fixes
+
+- **sdk**: restore legacy environment fallback (#573)
+
 ## [0.11.0] - 2026-08-11
 
 ### Features
