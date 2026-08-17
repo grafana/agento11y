@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.17.0] - 2026-08-17
+
+### Breaking Changes
+
+- bump default timeout to 30s and support overriding via env var (#566)
+
+### Bug Fixes
+
+- **sdk**: restore legacy environment fallback (#573)
+- **sdk/go**: prevent metric exemplars from retaining recording spans (#528)
+
 ## [0.16.0] - 2026-08-05
 
 ### Features
