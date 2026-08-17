@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.29.0] - 2026-08-17
+
+### Features
+
+- **plugins/agento11y**: update login form in the local viewer (#581)
+
 ## [0.28.0] - 2026-08-17
 
 ### Breaking Changes
