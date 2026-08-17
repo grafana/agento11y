@@ -43,10 +43,6 @@ Run, trial, generation, score, and artifact writes all use the ingest credential
 Stored test suites are the exception: they live behind the Grafana plugin control
 plane and use `TestSuitesClient` with its own service-account token.
 
-The SDK reads only the `AGENTO11Y_*` names. It warns once per process about a
-removed `SIGIL_*` trial-handoff name, through the client logger or `console.warn`,
-and never reads its value.
-
 ## Run an experiment
 
 ```ts

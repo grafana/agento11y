@@ -44,6 +44,11 @@ test('an unset variable and an empty variable are both disabled', () => {
   assert.equal(experimentalFeaturesEnabled({ [ENV_ENABLE_EXPERIMENTAL_FEATURES]: '   ' }), false);
 });
 
+test('the gate has no legacy SIGIL_ spelling', () => {
+  // The name postdates the rename, so no release ever read SIGIL_ for it.
+  assert.equal(experimentalFeaturesEnabled({ SIGIL_ENABLE_EXPERIMENTAL_FEATURES: 'true' }), false);
+});
+
 test('requireExperimental throws a named error when the gate is closed', () => {
   assert.throws(
     () => requireExperimental(FEATURE_CLOUD_TRIAL_EVALUATION, {}),

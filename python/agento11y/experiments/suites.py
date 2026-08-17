@@ -6,16 +6,14 @@ token. Stored test suites live behind the Grafana plugin control plane in Cloud.
 
 from __future__ import annotations
 
-import os
 import re
 import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
 from .. import _experiments_transport as _transport
-from ..config import _warn_legacy_env
 from ..errors import ConflictError, ExperimentTransportError, NotFoundError, ValidationError
-from .types import TestCase, TestSuite, _first_nonblank
+from .types import TestCase, TestSuite, _env_value
 
 _DEFAULT_CONTROL_PATH = "/api/plugins/grafana-agento11y-app/resources/eval"
 _GRAFANA_APP_PATH = "/a/grafana-agento11y-app"
@@ -49,15 +47,16 @@ class TestSuitesClient:
         control_endpoint: str = "",
         timeout: float = 30.0,
     ) -> None:
-        _warn_legacy_env()
-        grafana = (grafana_url or _first_nonblank(os.environ, "AGENTO11Y_GRAFANA_URL")).strip()
-        endpoint = (control_endpoint or _first_nonblank(os.environ, "AGENTO11Y_CONTROL_ENDPOINT")).strip()
+        grafana = (grafana_url or _env_value("GRAFANA_URL")).strip()
+        # CONTROL_ENDPOINT and SERVICE_ACCOUNT_TOKEN postdate the rename, so the
+        # resolver reads no legacy spelling for them.
+        endpoint = (control_endpoint or _env_value("CONTROL_ENDPOINT")).strip()
         if not endpoint:
             if not grafana:
                 raise ValueError("control_endpoint is required (or set AGENTO11Y_CONTROL_ENDPOINT)")
             endpoint = grafana
         endpoint = _normalize_control_endpoint(endpoint)
-        token = (service_account_token or _first_nonblank(os.environ, "AGENTO11Y_SERVICE_ACCOUNT_TOKEN")).strip()
+        token = (service_account_token or _env_value("SERVICE_ACCOUNT_TOKEN")).strip()
         if not token:
             raise ValueError("service_account_token is required (or set AGENTO11Y_SERVICE_ACCOUNT_TOKEN)")
         self.endpoint = endpoint.rstrip("/")

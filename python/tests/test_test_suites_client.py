@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
@@ -180,15 +181,50 @@ def test_direct_control_endpoint_keeps_separate_grafana_url(monkeypatch: pytest.
     assert client.grafana_url == "http://localhost:3000"
 
 
-def test_legacy_control_environment_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_control_environment_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Both names postdate the rename, so no SIGIL_ spelling was ever read."""
     monkeypatch.delenv("AGENTO11Y_CONTROL_ENDPOINT", raising=False)
     monkeypatch.delenv("AGENTO11Y_GRAFANA_URL", raising=False)
     monkeypatch.delenv("AGENTO11Y_SERVICE_ACCOUNT_TOKEN", raising=False)
     monkeypatch.setenv("SIGIL_CONTROL_ENDPOINT", "https://legacy.example")
     monkeypatch.setenv("SIGIL_SERVICE_ACCOUNT_TOKEN", "legacy-token")
 
-    with pytest.raises(ValueError, match="control_endpoint is required"):
+    with (
+        caplog.at_level(logging.WARNING, logger="agento11y"),
+        pytest.raises(ValueError, match="control_endpoint is required"),
+    ):
         TestSuitesClient()
+
+    assert any(
+        "SIGIL_CONTROL_ENDPOINT is ignored; rename it to AGENTO11Y_CONTROL_ENDPOINT" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(
+    "grafana_keys,expected_grafana",
+    [
+        pytest.param({"SIGIL_GRAFANA_URL": "http://legacy:3000"}, "http://legacy:3000", id="legacy grafana url"),
+        pytest.param(
+            {"AGENTO11Y_GRAFANA_URL": "http://canonical:3000", "SIGIL_GRAFANA_URL": "http://legacy:3000"},
+            "http://canonical:3000",
+            id="canonical grafana url wins",
+        ),
+    ],
+)
+def test_legacy_grafana_url_resolves(
+    grafana_keys: dict[str, str], expected_grafana: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for key, value in grafana_keys.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("AGENTO11Y_CONTROL_ENDPOINT", "http://localhost:8080/api/v1/eval")
+    monkeypatch.setenv("AGENTO11Y_SERVICE_ACCOUNT_TOKEN", "env-token")
+
+    client = TestSuitesClient(timeout=2)
+
+    assert client.grafana_url == expected_grafana
 
 
 def test_version_resolution_aliases() -> None:

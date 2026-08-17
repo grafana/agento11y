@@ -25,7 +25,7 @@ export interface EnvPair {
   legacy: string;
 }
 
-function brandedPair(suffix: string): EnvPair {
+export function brandedPair(suffix: string): EnvPair {
   return { preferred: `AGENTO11Y_${suffix}`, legacy: `SIGIL_${suffix}` };
 }
 

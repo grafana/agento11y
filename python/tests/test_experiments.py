@@ -633,7 +633,8 @@ def test_trial_ref_env_round_trip() -> None:
     assert restored.attempt == 3
 
 
-def test_trial_ref_to_env_writes_only_agento11y_names() -> None:
+def test_trial_ref_to_env_writes_both_spellings() -> None:
+    """to_env writes every populated field under both names, matching Go's agento11y.TrialRef.ToEnv."""
     ref = TrialRef(
         experiment_id="run-5",
         test_case_id="c1",
@@ -645,25 +646,93 @@ def test_trial_ref_to_env_writes_only_agento11y_names() -> None:
     env = ref.to_env()
     assert env == {
         "AGENTO11Y_EXPERIMENT_ID": "run-5",
+        "SIGIL_EXPERIMENT_ID": "run-5",
         "AGENTO11Y_TEST_CASE_ID": "c1",
+        "SIGIL_TEST_CASE_ID": "c1",
         "AGENTO11Y_ATTEMPT": "2",
+        "SIGIL_ATTEMPT": "2",
         "AGENTO11Y_SUITE_ID": "s",
+        "SIGIL_SUITE_ID": "s",
         "AGENTO11Y_SUITE_VERSION": "2.0.0",
+        "SIGIL_SUITE_VERSION": "2.0.0",
         "AGENTO11Y_TRAJECTORY_ID": "traj-1",
+        "SIGIL_TRAJECTORY_ID": "traj-1",
     }
 
 
-def test_trial_ref_from_env_rejects_sigil_names_with_warning(caplog: pytest.LogCaptureFixture) -> None:
-    env = {"SIGIL_EXPERIMENT_ID": "run-old", "SIGIL_TEST_CASE_ID": "c1", "SIGIL_ATTEMPT": "4"}
+def test_trial_ref_to_env_omits_empty_optional_fields() -> None:
+    env = TrialRef(experiment_id="run-6", test_case_id="c1").to_env()
+    assert set(env) == {
+        "AGENTO11Y_EXPERIMENT_ID",
+        "SIGIL_EXPERIMENT_ID",
+        "AGENTO11Y_TEST_CASE_ID",
+        "SIGIL_TEST_CASE_ID",
+        "AGENTO11Y_ATTEMPT",
+        "SIGIL_ATTEMPT",
+    }
+
+
+def test_trial_ref_from_env_reads_sigil_names_with_warning(caplog: pytest.LogCaptureFixture) -> None:
+    env = {
+        "SIGIL_EXPERIMENT_ID": "run-old",
+        "SIGIL_TEST_CASE_ID": "c1",
+        "SIGIL_ATTEMPT": "4",
+        "SIGIL_SUITE_ID": "s",
+        "SIGIL_SUITE_VERSION": "2.0.0",
+        "SIGIL_TRAJECTORY_ID": "traj-1",
+    }
     with caplog.at_level("WARNING", logger="agento11y"):
-        assert TrialRef.from_env(env) is None
+        ref = TrialRef.from_env(env)
+    assert ref is not None
+    assert ref.experiment_id == "run-old"
+    assert ref.test_case_id == "c1"
+    assert ref.attempt == 4
+    assert ref.suite_id == "s"
+    assert ref.suite_version == "2.0.0"
+    assert ref.trajectory_id == "traj-1"
     messages = [record.getMessage() for record in caplog.records]
-    assert any("SIGIL_EXPERIMENT_ID is ignored; rename it to AGENTO11Y_EXPERIMENT_ID" in item for item in messages)
-    assert any("SIGIL_TEST_CASE_ID is ignored; rename it to AGENTO11Y_TEST_CASE_ID" in item for item in messages)
+    assert any("SIGIL_EXPERIMENT_ID is deprecated; rename it to AGENTO11Y_EXPERIMENT_ID" in item for item in messages)
+    assert any("SIGIL_TEST_CASE_ID is deprecated; rename it to AGENTO11Y_TEST_CASE_ID" in item for item in messages)
 
 
-def test_trial_ref_from_env_ignores_agento11y_run_id() -> None:
-    assert TrialRef.from_env({"AGENTO11Y_RUN_ID": "run-x", "AGENTO11Y_TEST_CASE_ID": "c1"}) is None
+@pytest.mark.parametrize(
+    "env,expected",
+    [
+        pytest.param(
+            {"SIGIL_RUN_ID": "run-legacy", "SIGIL_TEST_CASE_ID": "c1"},
+            ("run-legacy", "c1"),
+            id="SIGIL_RUN_ID supplies the experiment id",
+        ),
+        pytest.param(
+            {"SIGIL_EXPERIMENT_ID": "run-old", "SIGIL_RUN_ID": "run-older", "SIGIL_TEST_CASE_ID": "c1"},
+            ("run-old", "c1"),
+            id="SIGIL_EXPERIMENT_ID beats SIGIL_RUN_ID",
+        ),
+        pytest.param(
+            {
+                "AGENTO11Y_EXPERIMENT_ID": "run-new",
+                "SIGIL_EXPERIMENT_ID": "run-old",
+                "SIGIL_RUN_ID": "run-older",
+                "AGENTO11Y_TEST_CASE_ID": "c-new",
+                "SIGIL_TEST_CASE_ID": "c-old",
+            },
+            ("run-new", "c-new"),
+            id="canonical wins over every legacy spelling",
+        ),
+        pytest.param(
+            {"AGENTO11Y_RUN_ID": "run-x", "AGENTO11Y_TEST_CASE_ID": "c1"},
+            None,
+            id="AGENTO11Y_RUN_ID is not a name",
+        ),
+    ],
+)
+def test_trial_ref_from_env_alias_resolution(env: dict[str, str], expected: tuple[str, str] | None) -> None:
+    ref = TrialRef.from_env(env)
+    if expected is None:
+        assert ref is None
+        return
+    assert ref is not None
+    assert (ref.experiment_id, ref.test_case_id) == expected
 
 
 def test_trial_from_ref_requires_ref() -> None:
@@ -1105,6 +1174,10 @@ def test_experimental_gate_reads_truthy_values(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv(ENV_ENABLE_EXPERIMENTAL_FEATURES, raising=False)
     assert experimental_features_enabled() is False
 
+    # The name postdates the rename, so no release ever read SIGIL_ for it.
+    monkeypatch.setenv("SIGIL_ENABLE_EXPERIMENTAL_FEATURES", "true")
+    assert experimental_features_enabled() is False
+
 
 def test_experimental_feature_disabled_error_survives_pickle() -> None:
     from agento11y.errors import ExperimentalFeatureDisabledError
@@ -1268,15 +1341,63 @@ def test_experiment_factory_uses_supplied_client() -> None:
     assert client.finalized and client.finalized[0][0] == "run-f"
 
 
-def test_experiment_factory_uses_agento11y_connection_env(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "env",
+    [
+        pytest.param(
+            {
+                "AGENTO11Y_ENDPOINT": "https://agento11y",
+                "AGENTO11Y_AUTH_TENANT_ID": "1",
+                "AGENTO11Y_AUTH_TOKEN": "token",
+                "AGENTO11Y_INGEST_ACTOR": "ingest:test",
+            },
+            id="canonical",
+        ),
+        pytest.param(
+            {
+                "SIGIL_ENDPOINT": "https://agento11y",
+                "SIGIL_AUTH_TENANT_ID": "1",
+                "SIGIL_AUTH_TOKEN": "token",
+                "SIGIL_INGEST_ACTOR": "ingest:test",
+            },
+            id="legacy",
+        ),
+        pytest.param(
+            {
+                "SIGIL_API_ENDPOINT": "https://agento11y",
+                "SIGIL_TENANT_ID": "1",
+                "SIGIL_AUTH_TOKEN": "token",
+                "SIGIL_INGEST_ACTOR": "ingest:test",
+            },
+            id="legacy secondary spellings",
+        ),
+        pytest.param(
+            {
+                "AGENTO11Y_ENDPOINT": "https://agento11y",
+                "SIGIL_ENDPOINT": "https://legacy",
+                "AGENTO11Y_AUTH_TENANT_ID": "1",
+                "SIGIL_AUTH_TENANT_ID": "2",
+                "AGENTO11Y_AUTH_TOKEN": "token",
+                "SIGIL_AUTH_TOKEN": "legacy-token",
+                "AGENTO11Y_INGEST_ACTOR": "ingest:test",
+                "SIGIL_INGEST_ACTOR": "ingest:legacy",
+            },
+            id="canonical wins over legacy",
+        ),
+    ],
+)
+def test_experiment_factory_uses_connection_env(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
     from agento11y.experiments import experiment as experiment_factory
 
-    monkeypatch.setenv("AGENTO11Y_ENDPOINT", "https://agento11y")
-    monkeypatch.setenv("AGENTO11Y_AUTH_TENANT_ID", "1")
-    monkeypatch.setenv("AGENTO11Y_AUTH_TOKEN", "token")
-    exp = experiment_factory("conn")
-    client = exp.client
-    assert (client.endpoint, client.tenant_id, client.ingest_token) == ("https://agento11y", "1", "token")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    client = experiment_factory("conn").client
+    assert (client.endpoint, client.tenant_id, client.ingest_token, client.actor) == (
+        "https://agento11y",
+        "1",
+        "token",
+        "ingest:test",
+    )
 
 
 def test_experiment_factory_ignores_agento11y_api_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1288,16 +1409,50 @@ def test_experiment_factory_ignores_agento11y_api_endpoint(monkeypatch: pytest.M
         experiment_factory("conn")
 
 
-def test_experiments_client_uses_agento11y_env(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "env,expected_otel",
+    [
+        pytest.param(
+            {
+                "AGENTO11Y_AUTH_TOKEN": "token",
+                "AGENTO11Y_GRAFANA_URL": "https://g.example/",
+                "AGENTO11Y_USE_EXPERIMENTAL_OTEL": "false",
+            },
+            False,
+            id="canonical",
+        ),
+        pytest.param(
+            {
+                "SIGIL_AUTH_TOKEN": "token",
+                "SIGIL_GRAFANA_URL": "https://g.example/",
+                "SIGIL_USE_EXPERIMENTAL_OTEL": "true",
+            },
+            True,
+            id="legacy",
+        ),
+        pytest.param(
+            {
+                "AGENTO11Y_AUTH_TOKEN": "token",
+                "SIGIL_AUTH_TOKEN": "legacy-token",
+                "AGENTO11Y_GRAFANA_URL": "https://g.example/",
+                "SIGIL_GRAFANA_URL": "https://legacy.example",
+                "AGENTO11Y_USE_EXPERIMENTAL_OTEL": "false",
+                "SIGIL_USE_EXPERIMENTAL_OTEL": "true",
+            },
+            False,
+            id="canonical wins over legacy",
+        ),
+    ],
+)
+def test_experiments_client_uses_env(env: dict[str, str], expected_otel: bool, monkeypatch: pytest.MonkeyPatch) -> None:
     from agento11y.experiments.client import Client as IngestClient
 
-    monkeypatch.setenv("AGENTO11Y_AUTH_TOKEN", "token")
-    monkeypatch.setenv("AGENTO11Y_GRAFANA_URL", "https://g.example/")
-    monkeypatch.setenv("AGENTO11Y_USE_EXPERIMENTAL_OTEL", "false")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
     client = IngestClient("https://sigil.example")
     assert client.ingest_token == "token"
     assert client.grafana_url == "https://g.example"
-    assert client.use_experimental_otel is False
+    assert client.use_experimental_otel is expected_otel
 
 
 def test_final_score_primitive_derives_boolean_verdict() -> None:

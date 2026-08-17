@@ -16,6 +16,12 @@ import {
   ENV_SUITE_VERSION,
   ENV_TEST_CASE_ID,
   ENV_TRAJECTORY_ID,
+  LEGACY_ENV_ATTEMPT,
+  LEGACY_ENV_EXPERIMENT_ID,
+  LEGACY_ENV_SUITE_ID,
+  LEGACY_ENV_SUITE_VERSION,
+  LEGACY_ENV_TEST_CASE_ID,
+  LEGACY_ENV_TRAJECTORY_ID,
   resetLegacyTrialEnvWarnings,
   suiteCase,
   testSuiteFromObject,
@@ -160,13 +166,21 @@ test('a TrialRef round-trips through the environment', () => {
     trajectoryId: 'traj-1',
   };
   const env = trialRefToEnv(ref);
+  // Every populated field is written under both spellings, so a child process on
+  // a pre-rename SDK build still receives the trial context.
   assert.deepEqual(env, {
     [ENV_EXPERIMENT_ID]: 'run-1',
+    [LEGACY_ENV_EXPERIMENT_ID]: 'run-1',
     [ENV_TEST_CASE_ID]: 'case-1',
+    [LEGACY_ENV_TEST_CASE_ID]: 'case-1',
     [ENV_ATTEMPT]: '3',
+    [LEGACY_ENV_ATTEMPT]: '3',
     [ENV_SUITE_ID]: 'smoke',
+    [LEGACY_ENV_SUITE_ID]: 'smoke',
     [ENV_SUITE_VERSION]: '2.0.0',
+    [LEGACY_ENV_SUITE_VERSION]: '2.0.0',
     [ENV_TRAJECTORY_ID]: 'traj-1',
+    [LEGACY_ENV_TRAJECTORY_ID]: 'traj-1',
   });
   const restored = trialRefFromEnv(env);
   assert.equal(restored.experimentId, 'run-1');
@@ -191,23 +205,70 @@ test('a missing or unparseable attempt falls back to one', () => {
   assert.equal(trialRefFromEnv({ ...base, [ENV_ATTEMPT]: '4' }).attempt, 4);
 });
 
-test('a SIGIL_ spelling is reported and ignored', () => {
+test('a SIGIL_ spelling is read and reported', () => {
   resetLegacyTrialEnvWarnings();
   const warnings = [];
   const ref = trialRefFromEnv(
-    { SIGIL_EXPERIMENT_ID: 'run-legacy', SIGIL_TEST_CASE_ID: 'case-legacy' },
+    {
+      SIGIL_EXPERIMENT_ID: 'run-legacy',
+      SIGIL_TEST_CASE_ID: 'case-legacy',
+      SIGIL_ATTEMPT: '2',
+      SIGIL_SUITE_ID: 'smoke',
+      SIGIL_SUITE_VERSION: '2.0.0',
+      SIGIL_TRAJECTORY_ID: 'traj-1',
+    },
     { warn: (message) => warnings.push(message) },
   );
-  assert.equal(ref, undefined, 'the legacy name is not read as a value');
+  assert.deepEqual(ref, {
+    experimentId: 'run-legacy',
+    testCaseId: 'case-legacy',
+    attempt: 2,
+    suiteId: 'smoke',
+    suiteVersion: '2.0.0',
+    trajectoryId: 'traj-1',
+  });
   assert.deepEqual(warnings, [
-    'agento11y: SIGIL_EXPERIMENT_ID is ignored; rename it to AGENTO11Y_EXPERIMENT_ID',
-    'agento11y: SIGIL_TEST_CASE_ID is ignored; rename it to AGENTO11Y_TEST_CASE_ID',
+    'agento11y: SIGIL_EXPERIMENT_ID is deprecated; rename it to AGENTO11Y_EXPERIMENT_ID',
+    'agento11y: SIGIL_TEST_CASE_ID is deprecated; rename it to AGENTO11Y_TEST_CASE_ID',
+    'agento11y: SIGIL_ATTEMPT is deprecated; rename it to AGENTO11Y_ATTEMPT',
+    'agento11y: SIGIL_SUITE_ID is deprecated; rename it to AGENTO11Y_SUITE_ID',
+    'agento11y: SIGIL_SUITE_VERSION is deprecated; rename it to AGENTO11Y_SUITE_VERSION',
+    'agento11y: SIGIL_TRAJECTORY_ID is deprecated; rename it to AGENTO11Y_TRAJECTORY_ID',
   ]);
 
   // The warning fires once per process, not once per read.
   const again = [];
   trialRefFromEnv({ SIGIL_EXPERIMENT_ID: 'run-legacy' }, { warn: (message) => again.push(message) });
   assert.deepEqual(again, []);
+});
+
+test('SIGIL_RUN_ID is the last source for the experiment id', () => {
+  resetLegacyTrialEnvWarnings();
+  const ref = trialRefFromEnv({ SIGIL_RUN_ID: 'run-older', SIGIL_TEST_CASE_ID: 'case-1' }, { warn: () => {} });
+  assert.equal(ref.experimentId, 'run-older');
+
+  const preferred = trialRefFromEnv(
+    { SIGIL_RUN_ID: 'run-older', SIGIL_EXPERIMENT_ID: 'run-old', [ENV_TEST_CASE_ID]: 'case-1' },
+    { warn: () => {} },
+  );
+  assert.equal(preferred.experimentId, 'run-old');
+});
+
+test('a canonical trial name wins over its legacy spelling', () => {
+  resetLegacyTrialEnvWarnings();
+  const warnings = [];
+  const ref = trialRefFromEnv(
+    {
+      [ENV_EXPERIMENT_ID]: 'run-new',
+      SIGIL_EXPERIMENT_ID: 'run-legacy',
+      [ENV_TEST_CASE_ID]: 'case-new',
+      SIGIL_TEST_CASE_ID: 'case-legacy',
+    },
+    { warn: (message) => warnings.push(message) },
+  );
+  assert.equal(ref.experimentId, 'run-new');
+  assert.equal(ref.testCaseId, 'case-new');
+  assert.deepEqual(warnings, [], 'an unused legacy name is not reported');
 });
 
 test('a TrialRef round-trips through JSON, including the run_id alias', () => {
@@ -274,6 +335,43 @@ test('the client requires an endpoint and a token', () => {
   });
   assert.equal(fromEnv.grafanaUrl, 'https://stack.grafana.net');
   assert.equal(fromEnv.endpoint, 'https://stack.grafana.net/api/plugins/grafana-agento11y-app/resources/eval');
+});
+
+test('the suites client reads the legacy grafana url, canonical first', () => {
+  const legacy = new TestSuitesClient({
+    env: { SIGIL_GRAFANA_URL: 'https://legacy.grafana.net', AGENTO11Y_SERVICE_ACCOUNT_TOKEN: 'glsa_token' },
+  });
+  assert.equal(legacy.grafanaUrl, 'https://legacy.grafana.net');
+
+  const both = new TestSuitesClient({
+    env: {
+      AGENTO11Y_GRAFANA_URL: 'https://stack.grafana.net',
+      SIGIL_GRAFANA_URL: 'https://legacy.grafana.net',
+      AGENTO11Y_SERVICE_ACCOUNT_TOKEN: 'glsa_token',
+    },
+  });
+  assert.equal(both.grafanaUrl, 'https://stack.grafana.net');
+});
+
+test('the control endpoint and token stay canonical-only', () => {
+  // Neither name shipped a SIGIL_ spelling, so neither gets a fallback.
+  assert.throws(
+    () =>
+      new TestSuitesClient({
+        env: { SIGIL_CONTROL_ENDPOINT: 'https://legacy.grafana.net', SIGIL_SERVICE_ACCOUNT_TOKEN: 'glsa_token' },
+      }),
+    /controlEndpoint is required/,
+  );
+  assert.throws(
+    () =>
+      new TestSuitesClient({
+        env: {
+          AGENTO11Y_CONTROL_ENDPOINT: 'https://stack.grafana.net',
+          SIGIL_SERVICE_ACCOUNT_TOKEN: 'glsa_token',
+        },
+      }),
+    /serviceAccountToken is required/,
+  );
 });
 
 test('the grafana url is derived from the control endpoint when unset', () => {

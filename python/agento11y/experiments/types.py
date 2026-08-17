@@ -14,7 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from ..config import _warn_legacy_env
+from ..config import _env
 
 
 class ExperimentStatus(str, Enum):
@@ -303,15 +303,23 @@ ENV_SUITE_ID = "AGENTO11Y_SUITE_ID"
 ENV_SUITE_VERSION = "AGENTO11Y_SUITE_VERSION"
 ENV_TRAJECTORY_ID = "AGENTO11Y_TRAJECTORY_ID"
 
+# Pre-rename spellings. ``to_env`` writes them beside the canonical names so a
+# child process running an older SDK build still receives the trial context;
+# ``from_env`` accepts them through the config resolver, which also honours
+# SIGIL_RUN_ID for the experiment id.
+LEGACY_ENV_EXPERIMENT_ID = "SIGIL_EXPERIMENT_ID"
+LEGACY_ENV_TEST_CASE_ID = "SIGIL_TEST_CASE_ID"
+LEGACY_ENV_ATTEMPT = "SIGIL_ATTEMPT"
+LEGACY_ENV_SUITE_ID = "SIGIL_SUITE_ID"
+LEGACY_ENV_SUITE_VERSION = "SIGIL_SUITE_VERSION"
+LEGACY_ENV_TRAJECTORY_ID = "SIGIL_TRAJECTORY_ID"
 
-def _first_nonblank(env: dict[str, str], *keys: str) -> str:
-    """Returns the first nonblank (trimmed) value of ``keys`` in ``env``."""
 
-    for key in keys:
-        val = (env.get(key) or "").strip()
-        if val:
-            return val
-    return ""
+def _env_value(suffix: str, env: dict[str, str] | None = None) -> str:
+    """Resolves ``AGENTO11Y_<suffix>``, then its legacy spellings, else ``""``."""
+
+    value, _ = _env(env, suffix)
+    return value or ""
 
 
 @dataclass(frozen=True)
@@ -364,36 +372,43 @@ class TrialRef:
         )
 
     def to_env(self) -> dict[str, str]:
+        """Returns the handoff variables under both the canonical and legacy names."""
+
         env = {
             ENV_EXPERIMENT_ID: self.experiment_id,
+            LEGACY_ENV_EXPERIMENT_ID: self.experiment_id,
             ENV_TEST_CASE_ID: self.test_case_id,
+            LEGACY_ENV_TEST_CASE_ID: self.test_case_id,
             ENV_ATTEMPT: str(self.attempt),
+            LEGACY_ENV_ATTEMPT: str(self.attempt),
         }
         if self.suite_id:
             env[ENV_SUITE_ID] = self.suite_id
+            env[LEGACY_ENV_SUITE_ID] = self.suite_id
         if self.suite_version:
             env[ENV_SUITE_VERSION] = self.suite_version
+            env[LEGACY_ENV_SUITE_VERSION] = self.suite_version
         if self.trajectory_id:
             env[ENV_TRAJECTORY_ID] = self.trajectory_id
+            env[LEGACY_ENV_TRAJECTORY_ID] = self.trajectory_id
         return env
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> TrialRef | None:
         env = environ if environ is not None else dict(os.environ)
-        _warn_legacy_env(env)
-        experiment_id = _first_nonblank(env, ENV_EXPERIMENT_ID)
-        test_case_id = _first_nonblank(env, ENV_TEST_CASE_ID)
+        experiment_id = _env_value("EXPERIMENT_ID", env)
+        test_case_id = _env_value("TEST_CASE_ID", env)
         if not experiment_id or not test_case_id:
             return None
         try:
-            attempt = int(_first_nonblank(env, ENV_ATTEMPT) or "1")
+            attempt = int(_env_value("ATTEMPT", env) or "1")
         except ValueError:
             attempt = 1
         return cls(
             experiment_id=experiment_id,
             test_case_id=test_case_id,
             attempt=attempt,
-            suite_id=_first_nonblank(env, ENV_SUITE_ID),
-            suite_version=_first_nonblank(env, ENV_SUITE_VERSION),
-            trajectory_id=_first_nonblank(env, ENV_TRAJECTORY_ID),
+            suite_id=_env_value("SUITE_ID", env),
+            suite_version=_env_value("SUITE_VERSION", env),
+            trajectory_id=_env_value("TRAJECTORY_ID", env),
         )

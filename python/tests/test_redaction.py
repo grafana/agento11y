@@ -328,10 +328,21 @@ def test_resolve_redact_input_messages_invalid_warns_and_falls_back(caplog) -> N
     )
 
 
-def test_resolve_redact_input_messages_ignores_legacy_namespace(caplog) -> None:
+def test_resolve_redact_input_messages_reads_legacy_namespace(caplog) -> None:
     with caplog.at_level(logging.WARNING, logger="agento11y"):
-        assert _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": "true"}) is False
-    assert any("SIGIL_REDACT_INPUT_MESSAGES is ignored" in record.getMessage() for record in caplog.records)
+        assert _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": "true"}) is True
+    assert any("SIGIL_REDACT_INPUT_MESSAGES is deprecated" in record.getMessage() for record in caplog.records)
+
+
+def test_resolve_redact_input_messages_canonical_wins_over_legacy() -> None:
+    env = {"AGENTO11Y_REDACT_INPUT_MESSAGES": "false", "SIGIL_REDACT_INPUT_MESSAGES": "true"}
+    assert _resolve_redact_input_messages(None, env=env) is False
+
+
+def test_resolve_redact_input_messages_invalid_warns_with_legacy_key(caplog) -> None:
+    with caplog.at_level(logging.WARNING, logger="agento11y"):
+        assert _resolve_redact_input_messages(None, env={"SIGIL_REDACT_INPUT_MESSAGES": "maybe"}) is False
+    assert any("ignoring invalid SIGIL_REDACT_INPUT_MESSAGES" in record.getMessage() for record in caplog.records)
 
 
 def test_create_secret_redaction_sanitizer_reads_env(monkeypatch) -> None:

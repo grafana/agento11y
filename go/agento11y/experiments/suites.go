@@ -76,6 +76,10 @@ func ClassifyConflict(err error) ConflictKind {
 	}
 }
 
+// TestSuitesClientOptions configures the control-plane client. Empty
+// connection fields are read from the environment. AGENTO11Y_CONTROL_ENDPOINT
+// and AGENTO11Y_SERVICE_ACCOUNT_TOKEN postdate the rename, so they carry no
+// SIGIL_* fallback; AGENTO11Y_GRAFANA_URL does.
 type TestSuitesClientOptions struct {
 	GrafanaURL          string
 	ServiceAccountToken string
@@ -93,7 +97,7 @@ type TestSuitesClient struct {
 }
 
 func NewTestSuitesClient(opts TestSuitesClientOptions) (*TestSuitesClient, error) {
-	grafanaURL := firstNonBlank(opts.GrafanaURL, os.Getenv("AGENTO11Y_GRAFANA_URL"))
+	grafanaURL := firstNonBlank(opts.GrafanaURL, firstEnv("AGENTO11Y_GRAFANA_URL", "SIGIL_GRAFANA_URL"))
 	endpoint := firstNonBlank(opts.ControlEndpoint, os.Getenv("AGENTO11Y_CONTROL_ENDPOINT"))
 	if endpoint == "" {
 		endpoint = grafanaURL

@@ -1,4 +1,4 @@
-import { defaultEnv, parseTruthy, resolveHeadersWithAuth } from '../config.js';
+import { brandedPair, defaultEnv, envTrimmed, parseTruthy, resolveHeadersWithAuth } from '../config.js';
 import { redactSecretText, redactSecretValue } from '../redaction.js';
 import type { Agento11yLogger, TokenUsage } from '../types.js';
 import { baseURLFromAPIEndpoint } from '../utils.js';
@@ -37,12 +37,14 @@ export const INGEST_ACTOR_HEADER = 'X-Agento11y-Ingest-Actor';
 /** Default ingest actor for this SDK. Python sends `ingest:sdk/python`. */
 export const DEFAULT_INGEST_ACTOR = 'ingest:sdk/js';
 
-const ENV_ENDPOINT = 'AGENTO11Y_ENDPOINT';
-const ENV_AUTH_TOKEN = 'AGENTO11Y_AUTH_TOKEN';
-const ENV_AUTH_TENANT_ID = 'AGENTO11Y_AUTH_TENANT_ID';
-const ENV_INGEST_ACTOR = 'AGENTO11Y_INGEST_ACTOR';
-const ENV_GRAFANA_URL = 'AGENTO11Y_GRAFANA_URL';
-const ENV_USE_EXPERIMENTAL_OTEL = 'AGENTO11Y_USE_EXPERIMENTAL_OTEL';
+// Each pair reads the canonical AGENTO11Y_* name first and falls back to the
+// SIGIL_* spelling that shipped before the rename.
+const ENV_ENDPOINT = brandedPair('ENDPOINT');
+const ENV_AUTH_TOKEN = brandedPair('AUTH_TOKEN');
+const ENV_AUTH_TENANT_ID = brandedPair('AUTH_TENANT_ID');
+const ENV_INGEST_ACTOR = brandedPair('INGEST_ACTOR');
+const ENV_GRAFANA_URL = brandedPair('GRAFANA_URL');
+const ENV_USE_EXPERIMENTAL_OTEL = brandedPair('USE_EXPERIMENTAL_OTEL');
 
 /** A client whose queued generations a trial flushes before starting an evaluation. */
 export interface FlushableGenerationClient {
@@ -166,13 +168,13 @@ export class ExperimentsClient {
 
   constructor(options: ExperimentsClientOptions = {}) {
     const env = options.env ?? defaultEnv();
-    const endpoint = (options.endpoint ?? env[ENV_ENDPOINT] ?? '').trim();
+    const endpoint = (options.endpoint ?? envTrimmed(env, ENV_ENDPOINT)?.value ?? '').trim();
     if (endpoint.length === 0) {
       throw new Error(
         'agento11y experiments: endpoint is required; pass endpoint or set AGENTO11Y_ENDPOINT to your Grafana Cloud Agent Observability URL',
       );
     }
-    const ingestToken = (options.ingestToken ?? env[ENV_AUTH_TOKEN] ?? '').trim();
+    const ingestToken = (options.ingestToken ?? envTrimmed(env, ENV_AUTH_TOKEN)?.value ?? '').trim();
     if (ingestToken.length === 0) {
       throw new Error(
         'agento11y experiments: ingestToken is required; pass ingestToken or set AGENTO11Y_AUTH_TOKEN to your Grafana Cloud ingestion API key',
@@ -180,14 +182,15 @@ export class ExperimentsClient {
     }
 
     this.endpoint = endpoint.replace(/\/+$/, '');
-    this.tenantId = (options.tenantId ?? env[ENV_AUTH_TENANT_ID] ?? '').trim();
+    this.tenantId = (options.tenantId ?? envTrimmed(env, ENV_AUTH_TENANT_ID)?.value ?? '').trim();
     // The backend derives the same identity from the run's sdk/js source. Sending
     // it on every request also covers routes such as artifact upload, which
     // cannot carry a JSON source object.
-    this.actor = (options.actor ?? env[ENV_INGEST_ACTOR] ?? '').trim() || DEFAULT_INGEST_ACTOR;
-    this.grafanaUrl = (options.grafanaUrl ?? env[ENV_GRAFANA_URL] ?? '').trim().replace(/\/+$/, '');
+    this.actor = (options.actor ?? envTrimmed(env, ENV_INGEST_ACTOR)?.value ?? '').trim() || DEFAULT_INGEST_ACTOR;
+    this.grafanaUrl = (options.grafanaUrl ?? envTrimmed(env, ENV_GRAFANA_URL)?.value ?? '').trim().replace(/\/+$/, '');
     this.redactSecrets = options.redactSecrets ?? true;
-    this.useExperimentalOtel = options.useExperimentalOtel ?? parseTruthy(env[ENV_USE_EXPERIMENTAL_OTEL] ?? '');
+    this.useExperimentalOtel =
+      options.useExperimentalOtel ?? parseTruthy(envTrimmed(env, ENV_USE_EXPERIMENTAL_OTEL)?.value ?? '');
     this.coreClient = options.coreClient;
     this.logger = options.logger;
     this.sleepFn = options.sleep ?? sleepWithSignal;

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ._redaction_patterns import BASE_FLAGS, EMAIL_PATTERN, TIER1_PATTERNS, TIER2_PATTERNS
-from .config import GenerationSanitizer, _env, _warn_legacy_env
+from .config import GenerationSanitizer, _env
 from .models import Generation, Message, MessageRole, Part, PartKind
 
 _logger = logging.getLogger("agento11y")
@@ -128,14 +128,14 @@ def _resolve_redact_input_messages(
 ) -> bool:
     """Resolve input-message redaction: explicit > env > ``False``.
 
-    ``AGENTO11Y_REDACT_INPUT_MESSAGES`` accepts ``1/0``, ``true/false``,
+    ``AGENTO11Y_REDACT_INPUT_MESSAGES`` (or its legacy
+    ``SIGIL_REDACT_INPUT_MESSAGES`` spelling) accepts ``1/0``, ``true/false``,
     ``yes/no``, ``on/off`` (case-insensitive)
     and is consulted only when ``explicit`` is ``None``. An unrecognised env
     value logs a warning naming the selected key and falls back to ``False``,
     so a typo cannot silently flip redaction.
     """
 
-    _warn_legacy_env(env)
     if explicit is not None:
         return explicit
     raw, key = _env(env, "REDACT_INPUT_MESSAGES")

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -19,7 +18,9 @@ const (
 )
 
 // ClientOptions configures experiment ingest. Empty connection fields are read
-// from their canonical AGENTO11Y_* environment variables.
+// from their canonical AGENTO11Y_* environment variables, falling back to the
+// SIGIL_* spelling that shipped before the rename. Selection happens before
+// use: a nonblank canonical value always wins.
 type ClientOptions struct {
 	Endpoint            string
 	TenantID            string
@@ -44,16 +45,16 @@ type Client struct {
 }
 
 func NewClient(opts ClientOptions) (*Client, error) {
-	endpoint := firstNonBlank(opts.Endpoint, os.Getenv("AGENTO11Y_ENDPOINT"))
+	endpoint := firstNonBlank(opts.Endpoint, firstEnv("AGENTO11Y_ENDPOINT", "SIGIL_ENDPOINT"))
 	if endpoint == "" {
 		return nil, errors.New("Agent Observability endpoint is required: pass Endpoint or set AGENTO11Y_ENDPOINT")
 	}
-	token := firstNonBlank(opts.IngestToken, os.Getenv("AGENTO11Y_AUTH_TOKEN"))
+	token := firstNonBlank(opts.IngestToken, firstEnv("AGENTO11Y_AUTH_TOKEN", "SIGIL_AUTH_TOKEN"))
 	if token == "" {
 		return nil, errors.New("ingest token is required: pass IngestToken or set AGENTO11Y_AUTH_TOKEN")
 	}
-	tenantID := firstNonBlank(opts.TenantID, os.Getenv("AGENTO11Y_AUTH_TENANT_ID"))
-	actor := firstNonBlank(opts.Actor, os.Getenv("AGENTO11Y_INGEST_ACTOR"), defaultIngestActor)
+	tenantID := firstNonBlank(opts.TenantID, firstEnv("AGENTO11Y_AUTH_TENANT_ID", "SIGIL_AUTH_TENANT_ID"))
+	actor := firstNonBlank(opts.Actor, firstEnv("AGENTO11Y_INGEST_ACTOR", "SIGIL_INGEST_ACTOR"), defaultIngestActor)
 	generationEndpoint := firstNonBlank(opts.GenerationEndpoint, endpoint)
 	insecure := opts.Insecure
 	if insecure == nil {
@@ -64,7 +65,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if opts.RedactSecrets != nil {
 		redact = *opts.RedactSecrets
 	}
-	useOTel := envBool("AGENTO11Y_USE_EXPERIMENTAL_OTEL")
+	useOTel := envBool("AGENTO11Y_USE_EXPERIMENTAL_OTEL", "SIGIL_USE_EXPERIMENTAL_OTEL")
 	if opts.UseExperimentalOTel != nil {
 		useOTel = *opts.UseExperimentalOTel
 	}
@@ -95,13 +96,14 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}
 	return &Client{
 		core:                agento11y.NewClient(cfg),
-		grafanaURL:          strings.TrimRight(firstNonBlank(opts.GrafanaURL, os.Getenv("AGENTO11Y_GRAFANA_URL")), "/"),
+		grafanaURL:          strings.TrimRight(firstNonBlank(opts.GrafanaURL, firstEnv("AGENTO11Y_GRAFANA_URL", "SIGIL_GRAFANA_URL")), "/"),
 		redactSecrets:       redact,
 		useExperimentalOTel: useOTel,
 	}, nil
 }
 
-// NewClientFromEnv constructs a client entirely from AGENTO11Y_* variables.
+// NewClientFromEnv constructs a client entirely from the environment, under the
+// precedence ClientOptions documents.
 func NewClientFromEnv() (*Client, error) { return NewClient(ClientOptions{}) }
 
 func (c *Client) Core() *agento11y.Client {
@@ -340,8 +342,8 @@ func firstNonBlank(values ...string) string {
 	return ""
 }
 
-func envBool(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+func envBool(keys ...string) bool {
+	switch strings.ToLower(firstEnv(keys...)) {
 	case "1", "true", "yes", "on":
 		return true
 	default:
