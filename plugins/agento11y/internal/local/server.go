@@ -504,9 +504,13 @@ func (s *Server) chainHookEvaluate(r *http.Request, cfg forwardConfig, body []by
 // can show what would leave this machine right now, including a reason when
 // the user opted in but the target is unusable.
 type configResponse struct {
-	Settings      Settings      `json:"settings"`
-	Preview       string        `json:"preview"`
-	Path          string        `json:"path"`
+	Settings Settings `json:"settings"`
+	Preview  string   `json:"preview"`
+	Path     string   `json:"path"`
+	// StackURL is the stack `agento11y login` was pointed at, read back so the
+	// connect flow can prefill its setup-page link. It is read-only: it is not
+	// part of Settings, so a save never writes or deletes it.
+	StackURL      string        `json:"stackUrl"`
 	ForwardStatus forwardStatus `json:"forwardStatus"`
 }
 
@@ -519,8 +523,14 @@ type configRequest struct {
 // handleGetConfig hydrates Settings from the current config.env and returns
 // them with a rendered preview. Only the page-managed keys are exposed.
 func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
-	settings := ParseSettings(dotenv.LoadDotenv(s.configPath, s.logger))
-	s.writeConfigResponse(w, settings)
+	s.writeConfigResponse(w, dotenv.LoadDotenv(s.configPath, s.logger))
+}
+
+// stackURLFrom reads the saved stack URL. STACK_URL has no alias family:
+// AliasSuffixes does not list it, and `agento11y login` writes only the
+// AGENTO11Y_ spelling, so the raw key is the whole lookup.
+func stackURLFrom(env map[string]string) string {
+	return strings.TrimSpace(env["AGENTO11Y_STACK_URL"])
 }
 
 // handlePreviewConfig renders the config.env the given form state would
@@ -557,11 +567,14 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// Re-read so the response reflects the normalised on-disk state (dropped
 	// defaults, deleted keys), which the client adopts as its saved snapshot.
-	settings = ParseSettings(dotenv.LoadDotenv(s.configPath, s.logger))
-	s.writeConfigResponse(w, settings)
+	s.writeConfigResponse(w, dotenv.LoadDotenv(s.configPath, s.logger))
 }
 
-func (s *Server) writeConfigResponse(w http.ResponseWriter, settings Settings) {
+// writeConfigResponse renders the whole response from one config.env snapshot,
+// so the settings, the preview and the stack URL cannot come from separate
+// reads of a file another writer is changing.
+func (s *Server) writeConfigResponse(w http.ResponseWriter, env map[string]string) {
+	settings := ParseSettings(env)
 	preview, err := dotenv.RenderManaged(settings.previewUpdates())
 	if err != nil {
 		http.Error(w, "render config: "+err.Error(), http.StatusInternalServerError)
@@ -571,6 +584,7 @@ func (s *Server) writeConfigResponse(w http.ResponseWriter, settings Settings) {
 		Settings:      settings,
 		Preview:       string(preview),
 		Path:          displayConfigPath(s.configPath),
+		StackURL:      stackURLFrom(env),
 		ForwardStatus: s.forward.status(),
 	})
 }

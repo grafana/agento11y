@@ -20,7 +20,7 @@ import (
 )
 
 func TestAppJSXParsesWithBabel(t *testing.T) {
-	transcriptJS(t, "")
+	appJSXAssertions(t, "")
 }
 
 func TestTranscriptDerivationScenarios(t *testing.T) {
@@ -214,12 +214,151 @@ assert.equal(missingUsageNotice(""), "No token usage was recorded for this sessi
 const large = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", Array.from({ length: 41 }, (_, index) => callPart("call-" + index, "Read")))]);
 turns = buildTranscript([large]);
 assert.equal(turns[0].blocks.find(block => block.kind === "work").calls.length, 41);
-console.log("TRANSCRIPT_ASSERTIONS_OK");
+console.log("ASSERTIONS_OK");
 `
-	transcriptJS(t, script)
+	appJSXAssertions(t, script)
 }
 
-func transcriptJS(t *testing.T, script string) {
+// TestSettingsHelperScenarios pins the pure functions behind the Cloud settings
+// panel: the pasted-block parser (which re-implements applyPaste in
+// internal/login/login.go, so the two grammars can drift), the setup-page link,
+// the forwarding-mode patch, and the header chip mapping. The viewer is served
+// as text/babel with no linter or type-checker, so this is their only coverage.
+func TestSettingsHelperScenarios(t *testing.T) {
+	script := `
+const assert = require("assert").strict;
+
+// A whole block, in the shape the setup page hands out: an ` + "`export `" + ` prefix, a
+// comment line, a quoted value with a trailing comment, and the two
+// OTEL_EXPORTER_OTLP_ variables under their raw keys.
+const full = parseConnectBlock([
+  "# copied from Grafana",
+  "export AGENTO11Y_ENDPOINT=https://agento11y-prod-eu.grafana.net",
+  'AGENTO11Y_AUTH_TENANT_ID="123456" # instance id',
+  "AGENTO11Y_AUTH_TOKEN=glc_token",
+  "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway.grafana.net/otlp",
+  "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic c2VjcmV0",
+].join("\n"));
+assert.deepEqual(full, {
+  endpoint: "https://agento11y-prod-eu.grafana.net",
+  tenantId: "123456",
+  token: "glc_token",
+  otlpEndpoint: "https://otlp-gateway.grafana.net/otlp",
+  otlpHeaders: "Authorization=Basic c2VjcmV0",
+  placeholders: [],
+  invalid: [],
+});
+
+// An unquoted value loses a trailing comment rather than keeping it as part of
+// the endpoint, the way internal/dotenv reads the same line.
+assert.equal(parseConnectBlock("AGENTO11Y_ENDPOINT=https://x # from Grafana").endpoint, "https://x");
+assert.equal(parseConnectBlock('AGENTO11Y_ENDPOINT="https://x" # from Grafana').endpoint, "https://x");
+
+// AGENTO11Y_ wins over SIGIL_ whichever order the two spellings appear in.
+for (const lines of [
+  ["SIGIL_AUTH_TOKEN=glc_old", "AGENTO11Y_AUTH_TOKEN=glc_new"],
+  ["AGENTO11Y_AUTH_TOKEN=glc_new", "SIGIL_AUTH_TOKEN=glc_old"],
+]) {
+  assert.equal(parseConnectBlock(lines.join("\n")).token, "glc_new");
+}
+assert.equal(parseConnectBlock("SIGIL_AUTH_TOKEN=glc_old").token, "glc_old");
+
+// A placeholder is not a value: a block copied before the token existed must not
+// read as complete. The key is reported, so the panel can say what is wrong with
+// it instead of calling it missing.
+const placeholder = parseConnectBlock([
+  "AGENTO11Y_ENDPOINT=https://x",
+  "AGENTO11Y_AUTH_TENANT_ID=123456",
+  "AGENTO11Y_AUTH_TOKEN=<your token>",
+].join("\n"));
+assert.equal(placeholder.token, "");
+assert.deepEqual(placeholder.placeholders, ["AGENTO11Y_AUTH_TOKEN"]);
+assert.deepEqual(placeholder.invalid, []);
+assert.equal(looksLikePlaceholder("<your token>"), true);
+assert.equal(looksLikePlaceholder("glc_token"), false);
+
+// A URL slot that is not an http(s) URL is reported too, the way requireURL
+// rejects the same value in the CLI form.
+const broken = parseConnectBlock([
+  "AGENTO11Y_ENDPOINT=not-a-url",
+  "AGENTO11Y_AUTH_TENANT_ID=123456",
+  "AGENTO11Y_AUTH_TOKEN=glc_token",
+  "OTEL_EXPORTER_OTLP_ENDPOINT=otlp-gateway.grafana.net",
+].join("\n"));
+assert.equal(broken.endpoint, "");
+assert.equal(broken.otlpEndpoint, "");
+assert.deepEqual(broken.invalid, ["AGENTO11Y_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"]);
+
+// Only the scheme and host of the typed stack URL survive: a URL copied from a
+// Grafana address bar carries a path and often an ?orgId=N, and the app path
+// replaces whatever path it came with.
+const setup = "/a/grafana-agento11y-app/setup-coding-agent";
+assert.equal(setupPageURL("https://mystack.grafana.net/?orgId=1"), "https://mystack.grafana.net" + setup);
+assert.equal(setupPageURL("https://mystack.grafana.net/a/other/page"), "https://mystack.grafana.net" + setup);
+assert.equal(setupPageURL("https://MyStack.Grafana.net/"), "https://mystack.grafana.net" + setup);
+assert.equal(setupPageURL("http://localhost:3000"), "http://localhost:3000" + setup);
+
+// A host typed without a scheme gets https://, so the button works on a value
+// pasted from a browser tab or typed by hand. A scheme already there is kept,
+// which is what keeps javascript: and mailto: out below.
+assert.equal(setupPageURL("mystack.grafana.net"), "https://mystack.grafana.net" + setup);
+assert.equal(setupPageURL("mystack.grafana.net/?orgId=1"), "https://mystack.grafana.net" + setup);
+assert.equal(setupPageURL("localhost:3000"), "https://localhost:3000" + setup);
+for (const bad of ["", "   ", "/settings", "./settings", "my stack", "javascript:alert(1)", "mailto:a@b.c"]) {
+  assert.equal(setupPageURL(bad), "", "must not build a link from " + JSON.stringify(bad));
+}
+
+// The mode patch spans two keys, and rewrites the capture mode only when the one
+// on disk forwards differently, so an advanced mode survives the switch.
+assert.deepEqual(forwardLocalPatch({ localForward: true, capture: "full" }, "off"), { localForward: false });
+assert.deepEqual(forwardLocalPatch({ localForward: false, capture: "no_tool_content" }, "metadata_only"), { localForward: true });
+assert.deepEqual(forwardLocalPatch({ localForward: false, capture: "no_tool_content" }, "full"), { localForward: true, capture: "full" });
+assert.deepEqual(forwardLocalPatch({ localForward: true, capture: "full" }, "metadata_only"), { localForward: true, capture: "metadata_only" });
+
+// The chip separates "no connection saved" from "saved, forwarding off", which
+// the status alone cannot express: enabled is false for both.
+const off = { enabled: false, mode: "off" };
+assert.equal(forwardChipMeta(null).value, "Unknown");
+assert.equal(forwardChipMeta({ settings: {}, forwardStatus: null }).value, "Unknown");
+const local = forwardChipMeta({ settings: {}, forwardStatus: off });
+assert.equal(local.value, "Local");
+assert.equal(local.color, "var(--fg2)");
+const savedOff = forwardChipMeta({ settings: { tokenSet: true }, forwardStatus: off });
+assert.equal(savedOff.value, "Local");
+assert.equal(savedOff.color, "var(--success-text)");
+assert.equal(forwardChipMeta({ settings: { tokenSet: true }, forwardStatus: { enabled: true, mode: "metadata_only", generations: true } }).value, "Metadata only");
+assert.equal(forwardChipMeta({ settings: { tokenSet: true }, forwardStatus: { enabled: true, mode: "full", generations: true } }).value, "Full");
+assert.equal(forwardChipMeta({ settings: { tokenSet: true }, forwardStatus: { enabled: true, mode: "full", failures: [{ label: "generations", detail: "connection refused" }] } }).value, "Failing");
+assert.equal(forwardChipMeta({ settings: { tokenSet: true }, forwardStatus: { enabled: false, reason: "no credentials" } }).value, "Paused");
+
+assert.equal(cloudConfigured(null), false);
+assert.equal(cloudConfigured({}), false);
+assert.equal(cloudConfigured({ endpoint: "https://x" }), true);
+assert.equal(cloudConfigured({ tenantId: "1" }), true);
+assert.equal(cloudConfigured({ tokenSet: true }), true);
+
+// A one-click Cloud write sends the saved state plus its own patch, and puts the
+// edits it does not own back on the form, so a staged token Reset is neither
+// written nor lost.
+const savedForm = { endpoint: "https://x", token: "", tokenCleared: false, capture: "", tags: [{ key: "a", value: "1" }] };
+const edited = { ...savedForm, tokenCleared: true, tags: [{ key: "a", value: "2" }] };
+assert.deepEqual(pendingEdits(edited, savedForm, { localForward: false }), { tokenCleared: true, tags: [{ key: "a", value: "2" }] });
+assert.deepEqual(pendingEdits(edited, savedForm, { tokenCleared: false, token: "" }), { tags: [{ key: "a", value: "2" }] });
+assert.equal(pendingEdits(savedForm, savedForm, null), null);
+
+// A token written by ` + "`agento11y login`" + ` changes nothing else in the settings, so
+// the flag has to count as a difference or the panel never re-hydrates.
+assert.equal(sameSettings({ tags: [], tokenSet: false }, { tags: [], tokenSet: true }), false);
+console.log("ASSERTIONS_OK");
+`
+	appJSXAssertions(t, script)
+}
+
+// appJSXAssertions Babel-transforms the embedded viewer, which fails on a syntax
+// error, and with a script runs it against the helper functions the viewer
+// defines. The region evaluated covers the transcript derivation and the
+// settings panel; components in it are never rendered, so React is a stub.
+func appJSXAssertions(t *testing.T, script string) {
 	t.Helper()
 	babel, err := webStatic.ReadFile("web/vendor/babel.min.js")
 	require.NoError(t, err)
@@ -235,11 +374,11 @@ const vm = require("vm");
 const Babel = require(process.argv[2]);
 const source = fs.readFileSync(process.argv[3], "utf8");
 const compiled = Babel.transform(source, { filename: "app.jsx", presets: ["react"] }).code;
-if (process.env.RUN_TRANSCRIPT_TESTS === "1") {
+if (process.env.RUN_APP_JSX_ASSERTIONS === "1") {
   const start = compiled.indexOf("function partKind(");
-  const end = compiled.indexOf("// ============================================================\n// Settings", start);
-  if (start < 0 || end < 0) throw new Error("transcript function region not found");
-  // URL is a browser global the markdown link check relies on.
+  const end = compiled.indexOf("// ============================================================\n// App container", start);
+  if (start < 0 || end < 0) throw new Error("helper function region not found");
+  // URL is a browser global the markdown link and stack URL checks rely on.
   const context = { console, require, URL, React: { createElement() {} } };
   vm.createContext(context);
   vm.runInContext(compiled.slice(start, end), context);
@@ -256,13 +395,41 @@ if (process.env.RUN_TRANSCRIPT_TESTS === "1") {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "node", scriptPath, babelPath, appPath, assertPath)
 	if script != "" {
-		cmd.Env = append(os.Environ(), "RUN_TRANSCRIPT_TESTS=1")
+		cmd.Env = append(os.Environ(), "RUN_APP_JSX_ASSERTIONS=1")
 	}
 	output, err := cmd.CombinedOutput()
-	require.NoErrorf(t, err, "Babel/transcript checks failed for embedded web/app.jsx:\n%s", output)
+	require.NoErrorf(t, err, "Babel/helper checks failed for embedded web/app.jsx:\n%s", output)
 	if script != "" {
-		require.Contains(t, string(output), "TRANSCRIPT_ASSERTIONS_OK", "transcript assertions did not run")
+		require.Contains(t, string(output), "ASSERTIONS_OK", "assertions did not run")
 	}
+}
+
+// TestCloudConsentDialogsNameTheSavedStack pins which endpoint the two Cloud
+// consent dialogs read. The forwarding mode switch and Disconnect both write
+// through oneClickWrite, which puts its patch on top of the saved settings, so
+// an endpoint typed into the Edit connection disclosure and not saved is not
+// the stack the write keeps forwarding to, or clears. Naming it would put the
+// wrong host in front of the user at the moment consent is given. Components
+// are never rendered in these tests, so this reads the source.
+func TestCloudConsentDialogsNameTheSavedStack(t *testing.T) {
+	src := string(appJSX)
+	tab := strings.Index(src, "function SettingsCloudTab(")
+	require.Positive(t, tab, "SettingsCloudTab not found in web/app.jsx")
+	at := strings.Index(src[tab:], "{confirmFull && (")
+	require.Positive(t, at, "the confirm dialogs were not found in SettingsCloudTab")
+	end := strings.Index(src, "function SettingsTagsEditor(")
+	require.Greater(t, end, tab+at, "SettingsTagsEditor not found after SettingsCloudTab")
+	region := src[tab+at : end]
+
+	// Both dialogs are in the region read. Without this, a rename upstream would
+	// leave the assertions below passing over a region holding neither.
+	require.Contains(t, region, "<ConfirmFullContentModal")
+	require.Contains(t, region, "Disconnect from Grafana Cloud?")
+
+	assert.Equal(t, 2, strings.Count(region, "savedEndpoint"),
+		"both consent dialogs must name savedEndpoint")
+	assert.NotContains(t, region, "form.",
+		"the consent dialogs must not read the form: an unsaved edit is not what the write applies")
 }
 
 // TestBucketLaddersAgree pins the one contract between the token endpoint

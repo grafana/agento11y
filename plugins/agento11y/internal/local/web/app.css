@@ -250,3 +250,11 @@
     @media (prefers-reduced-motion: reduce) {
       .sigil-spin, .sigil-shim { animation: none !important; }
     }
+
+    /* The header nav is flex:1 with overflow hidden and the forwarding chip is
+       flexShrink:0, so a narrow window squeezes the nav first. Below 900px the
+       chip drops its kicker and keeps the icon and the value, which is the part
+       that discloses. */
+    @media (max-width: 900px) {
+      .sigil-chip-kicker { display: none; }
+    }

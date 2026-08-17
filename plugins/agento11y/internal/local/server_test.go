@@ -858,6 +858,77 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	assert.Equal(t, saved.Settings, reread.Settings)
 }
 
+// TestServer_Config_StackURL covers the read-only stack URL the connect flow
+// prefills its setup-page link from. It is not a Settings field, so a save must
+// neither return it as editable state nor delete it from the file.
+func TestServer_Config_StackURL(t *testing.T) {
+	srv, dir := newTestServer(t)
+	path := configPathFor(dir)
+	require.NoError(t, dotenv.WriteDotenv(path, map[string]string{
+		"AGENTO11Y_STACK_URL": "https://mystack.grafana.net",
+	}, nil))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got configResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	assert.Equal(t, "https://mystack.grafana.net", got.StackURL)
+
+	resp := putConfig(t, srv, Settings{Guards: guardsOff, AutoUpdate: true})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var saved configResponse
+	decodeJSON(t, resp.Body, &saved)
+	assert.Equal(t, "https://mystack.grafana.net", saved.StackURL)
+	onDisk, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(onDisk), "AGENTO11Y_STACK_URL=https://mystack.grafana.net")
+}
+
+// TestServer_Config_OtlpHeaders covers the write-only OTLP headers over the
+// wire: an unrelated save preserves the value on disk, the connect flow replaces
+// it, disconnect deletes it, and no response ever carries it back.
+func TestServer_Config_OtlpHeaders(t *testing.T) {
+	srv, dir := newTestServer(t)
+	path := configPathFor(dir)
+	require.NoError(t, dotenv.WriteDotenv(path, map[string]string{
+		"OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Basic old",
+	}, nil))
+
+	keep := putConfig(t, srv, Settings{Guards: guardsOff, AutoUpdate: true})
+	defer keep.Body.Close()
+	require.Equal(t, http.StatusOK, keep.StatusCode)
+	var kept configResponse
+	decodeJSON(t, keep.Body, &kept)
+	assert.True(t, kept.Settings.OtlpHeadersSet)
+	assert.Empty(t, kept.Settings.OtlpHeaders, "the headers carry a credential and are never read back")
+	assert.NotContains(t, kept.Preview, "Basic old")
+	onDisk, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(onDisk), `OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic old"`)
+
+	replace := putConfig(t, srv, Settings{Guards: guardsOff, AutoUpdate: true,
+		OtlpHeadersSet: true, OtlpHeaders: "Authorization=Basic new"})
+	defer replace.Body.Close()
+	require.Equal(t, http.StatusOK, replace.StatusCode)
+	onDisk, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(onDisk), `OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic new"`)
+
+	clear := putConfig(t, srv, Settings{Guards: guardsOff, AutoUpdate: true,
+		OtlpHeadersSet: true, OtlpHeadersCleared: true})
+	defer clear.Body.Close()
+	require.Equal(t, http.StatusOK, clear.StatusCode)
+	var cleared configResponse
+	decodeJSON(t, clear.Body, &cleared)
+	assert.False(t, cleared.Settings.OtlpHeadersSet)
+	onDisk, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(onDisk), "OTEL_EXPORTER_OTLP_HEADERS")
+}
+
 // TestServer_Config_Preview renders without writing to disk.
 func TestServer_Config_Preview(t *testing.T) {
 	srv, dir := newTestServer(t)
