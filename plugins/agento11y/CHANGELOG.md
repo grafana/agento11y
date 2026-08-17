@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.28.0] - 2026-08-17
+
+### Breaking Changes
+
+- bump default timeout to 30s and support overriding via env var (#566)
+
+### Features
+
+- **plugins/agento11y**: redesign local conversation viewer (#569)
+- **plugins/agento11y**: import Cursor chat history (#568)
+- **plugins/agento11y**: bundle a setup skill in the binary (#546)
+- **plugins**: honour AGENTO11Y_REDACT_INPUT_MESSAGES in every coding agent plugin (#563)
+
+### Bug Fixes
+
+- **plugins/agento11y**: add prompt redaction row to test expectation (#567)
+
 ## [0.27.0] - 2026-08-11
 
 ### Features
