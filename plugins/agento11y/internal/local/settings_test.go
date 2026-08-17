@@ -276,6 +276,86 @@ func TestSettingsConnection(t *testing.T) {
 		_, ok := cleared["SIGIL_AUTH_TOKEN"]
 		assert.False(t, ok)
 	})
+
+	// OTEL_EXPORTER_OTLP_HEADERS carries a second copy of the OTLP credential,
+	// so it is write-only and tri-state like the token. It has no branded
+	// spelling: the raw key is the only one read and written.
+	t.Run("otlp headers are reported as set but never read back", func(t *testing.T) {
+		got := ParseSettings(map[string]string{"OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Basic c2VjcmV0"})
+		assert.True(t, got.OtlpHeadersSet)
+		assert.Empty(t, got.OtlpHeaders)
+	})
+
+	t.Run("blank otlp headers are omitted so the writer preserves them", func(t *testing.T) {
+		u := Settings{Guards: guardsOff, AutoUpdate: true, OtlpHeadersSet: true}.Updates()
+		_, ok := u["OTEL_EXPORTER_OTLP_HEADERS"]
+		assert.False(t, ok)
+	})
+
+	t.Run("new otlp headers value is written, and only under the raw key", func(t *testing.T) {
+		u := Settings{Guards: guardsOff, AutoUpdate: true, OtlpHeaders: "Authorization=Basic c2VjcmV0"}.Updates()
+		assert.Equal(t, "Authorization=Basic c2VjcmV0", u["OTEL_EXPORTER_OTLP_HEADERS"])
+		assert.NotContains(t, u, "AGENTO11Y_OTEL_EXPORTER_OTLP_HEADERS")
+		assert.NotContains(t, u, "SIGIL_OTEL_EXPORTER_OTLP_HEADERS")
+	})
+
+	t.Run("cleared otlp headers are deleted", func(t *testing.T) {
+		u := Settings{Guards: guardsOff, AutoUpdate: true, OtlpHeadersSet: true, OtlpHeadersCleared: true}.Updates()
+		v, ok := u["OTEL_EXPORTER_OTLP_HEADERS"]
+		assert.True(t, ok)
+		assert.Empty(t, v)
+	})
+
+	// The saved headers carry their own copy of the OTLP credential, and
+	// otel.ExporterHeaders prefers an explicit Authorization entry over the Basic
+	// auth it synthesizes from the tenant ID and the token. A write that replaces
+	// or removes the token therefore drops them, the way `agento11y login` drops
+	// them when a new token is entered and no block was pasted. Without this, the
+	// Reset button in Edit connection leaves OTLP authenticating with the token
+	// the user just removed.
+	t.Run("a token write drops the saved otlp headers", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			settings Settings
+			written  bool // the key is part of the write; absent means the file keeps its value
+			value    string
+			masked   bool // the preview still shows a header line
+		}{
+			{name: "token reset", settings: Settings{TokenCleared: true}, written: true},
+			{name: "new token", settings: Settings{Token: "glc_new"}, written: true},
+			{
+				name:     "headers pasted with the token win",
+				settings: Settings{Token: "glc_new", OtlpHeaders: "Authorization=Basic bmV3"},
+				written:  true,
+				value:    "Authorization=Basic bmV3",
+				masked:   true,
+			},
+			{name: "token untouched", settings: Settings{}, masked: true},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s := tt.settings
+				s.Guards, s.AutoUpdate = guardsOff, true
+				s.TokenSet, s.OtlpHeadersSet = true, true
+
+				v, ok := s.Updates()["OTEL_EXPORTER_OTLP_HEADERS"]
+				assert.Equal(t, tt.written, ok)
+				assert.Equal(t, tt.value, v)
+
+				_, shown := s.previewUpdates()["OTEL_EXPORTER_OTLP_HEADERS"]
+				assert.Equal(t, tt.masked, shown)
+			})
+		}
+	})
+
+	t.Run("preview masks set otlp headers", func(t *testing.T) {
+		p := Settings{Guards: guardsOff, AutoUpdate: true, OtlpHeaders: "Authorization=Basic c2VjcmV0"}.previewUpdates()
+		assert.Equal(t, tokenMask, p["OTEL_EXPORTER_OTLP_HEADERS"])
+
+		cleared := Settings{Guards: guardsOff, AutoUpdate: true, OtlpHeadersSet: true, OtlpHeadersCleared: true}.previewUpdates()
+		_, ok := cleared["OTEL_EXPORTER_OTLP_HEADERS"]
+		assert.False(t, ok)
+	})
 }
 
 // TestSettingsRoundTrip confirms parsing the keys Updates writes yields back

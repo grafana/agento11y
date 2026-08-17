@@ -47,13 +47,28 @@ type Settings struct {
 	TokenSet     bool   `json:"tokenSet"`
 	Token        string `json:"token"`
 	TokenCleared bool   `json:"tokenCleared"`
-	Capture      string `json:"capture"`
-	Tags         []Tag  `json:"tags"`
-	Guards       string `json:"guards"`
-	GuardTimeout string `json:"guardTimeout"`
-	Debug        bool   `json:"debug"`
-	AutoUpdate   bool   `json:"autoUpdate"`
-	UserID       string `json:"userId"`
+	// OtlpHeaders mirrors OTEL_EXPORTER_OTLP_HEADERS, which carries its own
+	// copy of the OTLP credential: Basic auth over `id:token`, where the id
+	// can differ from the ingest tenant ID and the token from AUTH_TOKEN.
+	// It is write-only and tri-state like
+	// the token: OtlpHeadersSet reports that a value is on disk, a new
+	// OtlpHeaders replaces it, OtlpHeadersCleared deletes it, and otherwise
+	// the key is omitted so the stored value survives a save. No form field
+	// edits it; the connect flow fills it from a pasted block, disconnect
+	// clears it, and a write that replaces or removes the auth token drops it
+	// too, because a stale value would keep authenticating OTLP with a token
+	// the user has replaced or removed (otel.ExporterHeaders prefers an
+	// explicit Authorization header over the synthesized one).
+	OtlpHeaders        string `json:"otlpHeaders"`
+	OtlpHeadersSet     bool   `json:"otlpHeadersSet"`
+	OtlpHeadersCleared bool   `json:"otlpHeadersCleared"`
+	Capture            string `json:"capture"`
+	Tags               []Tag  `json:"tags"`
+	Guards             string `json:"guards"`
+	GuardTimeout       string `json:"guardTimeout"`
+	Debug              bool   `json:"debug"`
+	AutoUpdate         bool   `json:"autoUpdate"`
+	UserID             string `json:"userId"`
 	// LocalForward mirrors AGENTO11Y_LOCAL_FORWARD: when on, a `--local`
 	// daemon also forwards the telemetry it captures to Grafana Cloud. The
 	// local viewer always keeps full content; Capture reduces the forwarded
@@ -79,12 +94,14 @@ func ParseSettings(env map[string]string) Settings {
 		TenantID:     fam("AUTH_TENANT_ID"),
 		OtlpEndpoint: fam("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		TokenSet:     fam("AUTH_TOKEN") != "",
-		// Token is intentionally left empty: the stored token is never read back.
-		Capture:      parseCaptureMode(fam("CONTENT_CAPTURE_MODE")),
-		Tags:         parseTags(fam("TAGS")),
-		Guards:       seedGuards(fam("GUARDS_ENABLED"), fam("GUARDS_FAIL_OPEN")),
-		GuardTimeout: fam("GUARDS_TIMEOUT_MS"),
-		Debug:        envconfig.ParseBoolDefault(fam("DEBUG"), false),
+		// Token and OtlpHeaders are intentionally left empty: both carry a
+		// credential, and neither is read back to the browser.
+		OtlpHeadersSet: strings.TrimSpace(env["OTEL_EXPORTER_OTLP_HEADERS"]) != "",
+		Capture:        parseCaptureMode(fam("CONTENT_CAPTURE_MODE")),
+		Tags:           parseTags(fam("TAGS")),
+		Guards:         seedGuards(fam("GUARDS_ENABLED"), fam("GUARDS_FAIL_OPEN")),
+		GuardTimeout:   fam("GUARDS_TIMEOUT_MS"),
+		Debug:          envconfig.ParseBoolDefault(fam("DEBUG"), false),
 		// AUTO_UPDATE is opt-out: unset means enabled. This matches
 		// updatecheck.Disabled (only explicit falsey values disable updates).
 		AutoUpdate:   envconfig.ParseBoolDefault(fam("AUTO_UPDATE"), true),
@@ -122,6 +139,12 @@ func (s Settings) Updates() map[string]string {
 		u["SIGIL_AUTH_TOKEN"] = ""
 	case strings.TrimSpace(s.Token) != "":
 		u["SIGIL_AUTH_TOKEN"] = strings.TrimSpace(s.Token)
+	}
+
+	// OTEL_EXPORTER_OTLP_HEADERS has no branded spelling: it is the raw
+	// OpenTelemetry variable, which ExpandAliases leaves alone.
+	if v, ok := s.otlpHeadersUpdate(); ok {
+		u["OTEL_EXPORTER_OTLP_HEADERS"] = v
 	}
 
 	switch s.Guards {
@@ -175,10 +198,38 @@ func (s Settings) Updates() map[string]string {
 	return envconfig.ExpandAliases(u)
 }
 
+// otlpHeadersUpdate decides what a write does to OTEL_EXPORTER_OTLP_HEADERS:
+// the value to persist, and whether the key is part of the write at all. An
+// omitted key leaves the stored value on disk.
+//
+// The headers are tri-state like the token, plus one rule that ties them to
+// it: a write that replaces or removes the auth token and carries no headers
+// of its own deletes them. A saved header set carries its own copy of the OTLP
+// credential and otel.ExporterHeaders prefers it over the Basic auth it
+// synthesizes from the tenant ID and the token, so keeping it would authenticate
+// OTLP with the token the user just replaced or removed. This is the same rule
+// `agento11y login` applies when a new token is entered and no block was pasted.
+//
+// A write that carries headers is the connect flow pasting a block, and those
+// headers win: they came from the same block as the token.
+func (s Settings) otlpHeadersUpdate() (string, bool) {
+	switch {
+	case s.OtlpHeadersCleared:
+		return "", true
+	case strings.TrimSpace(s.OtlpHeaders) != "":
+		return strings.TrimSpace(s.OtlpHeaders), true
+	case s.TokenCleared || strings.TrimSpace(s.Token) != "":
+		return "", true
+	default:
+		return "", false
+	}
+}
+
 // previewUpdates returns the keys to render in the live config.env preview. It
-// mirrors Updates but never exposes the auth token: a stored or freshly
-// entered token is shown masked (under both spellings) so the panel signals
-// the key is present without leaking the value.
+// mirrors Updates but never exposes a credential: a stored or freshly entered
+// token is shown masked (under both spellings), and so are the OTLP headers,
+// which carry a credential of their own. The panel signals that the key is
+// present without leaking the value.
 func (s Settings) previewUpdates() map[string]string {
 	u := s.Updates()
 	if !s.TokenCleared && (strings.TrimSpace(s.Token) != "" || s.TokenSet) {
@@ -187,6 +238,13 @@ func (s Settings) previewUpdates() map[string]string {
 	} else {
 		delete(u, "AGENTO11Y_AUTH_TOKEN")
 		delete(u, "SIGIL_AUTH_TOKEN")
+	}
+	// The headers are masked when the file keeps a value: one this write
+	// carries, or the stored one when the write does not touch the key.
+	if v, ok := s.otlpHeadersUpdate(); (ok && v != "") || (!ok && s.OtlpHeadersSet) {
+		u["OTEL_EXPORTER_OTLP_HEADERS"] = tokenMask
+	} else {
+		delete(u, "OTEL_EXPORTER_OTLP_HEADERS")
 	}
 	return u
 }
