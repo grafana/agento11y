@@ -80,7 +80,11 @@ while IFS= read -r moddir; do
     continue
   fi
   echo "==> golangci-lint ${moddir}"
-  (cd "${moddir}" && GOWORK=off golangci-lint run ./...)
+  lint_args=()
+  if [[ "${moddir}" == "./go/otelgenai/conformance" ]]; then
+    lint_args+=(--build-tags=conformance)
+  fi
+  (cd "${moddir}" && GOWORK=off golangci-lint run "${lint_args[@]}" ./...)
 done < <(find . \\( -path './examples' -o -path './node_modules' \\) -prune -o -name go.mod -print | while IFS= read -r mod; do dirname "$mod"; done | sort)
 """
 
@@ -216,6 +220,15 @@ run = "GOWORK=off go test ./..."
 description = "Run agento11y plugin tests as standalone module"
 dir = "plugins/agento11y"
 run = "GOWORK=off go test ./..."
+
+[tasks."test:go:conformance"]
+description = "Check otelgenai telemetry against the pinned GenAI semantic-convention registry"
+dir = "go/otelgenai/conformance"
+tools."github:open-telemetry/weaver" = "0.25.1"
+# The GenAI semantic-convention registry has no tagged releases, so pin a commit on main.
+# renovate: datasource=git-refs depName=open-telemetry/semantic-conventions-genai packageName=https://github.com/open-telemetry/semantic-conventions-genai.git versioning=git
+env.SEMCONV_GENAI_REF = "f77b9235f2ad49fe95b61e9809ca82bb08ef9d47"
+run = "GOWORK=off go test -count=1 -tags conformance ./..."
 
 [tasks."test:ts:plugin-pi"]
 description = "Run Pi plugin tests"
@@ -619,6 +632,7 @@ run = """
 #!/usr/bin/env bash
 set -euo pipefail
 mise run test:go:sdk-core
+mise run test:go:conformance
 mise run test:go:sdk-anthropic
 mise run test:go:sdk-openai
 mise run test:go:sdk-gemini

@@ -1,0 +1,20 @@
+#:schema https://raw.githubusercontent.com/open-telemetry/weaver/v0.25.1/schemas/weaver-config.json
+
+# OTel SDK resource attributes that don't belong to the genai registry — see
+# https://github.com/open-telemetry/weaver/issues/1456.
+[[live-check.finding_filters]]
+signal_type = "resource"
+exclude_samples = [
+  "service.name",
+  "service.instance.id",
+  "telemetry.sdk.language",
+  "telemetry.sdk.name",
+  "telemetry.sdk.version",
+]
+
+# Weaver reports unknown enum values as information by default. An operation
+# name outside the GenAI registry must fail the conformance suite.
+[[live-check.finding_level_overrides]]
+ids = ["undefined_enum_variant"]
+level = "violation"
+sample_names = ["gen_ai.operation.name"]
