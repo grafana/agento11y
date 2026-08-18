@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.30.0] - 2026-08-18
+
+### Features
+
+- **plugins/agento11y**: show commit hash for dev versions (#593)
+- **plugins/agento11y**: add CSP to local viewer (#595)
+- **plugins/agento11y**: require JSON media types for local writes (#591)
+- **plugins/agento11y**: route hook captures to local mode (#588)
+- **plugins/agento11y**: refresh local viewer design (#589)
+- **plugins/agento11y**: add noninteractive managed install (#570)
+
+### Bug Fixes
+
+- **plugins/agento11y**: fix Cursor conversation titles (#590)
+
 ## [0.29.0] - 2026-08-17
 
 ### Features
