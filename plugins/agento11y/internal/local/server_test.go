@@ -29,6 +29,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// httptest.NewRequest defaults to example.com, which the server refuses.
+func newLocalRequest(method, target string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.Host = "127.0.0.1:8765"
+	return req
+}
+
 func TestServer_GenerationsExport_RecordsAndAccepts(t *testing.T) {
 	s, dir := newTestServer(t)
 	body := `{"generations":[
@@ -46,15 +53,26 @@ func TestServer_GenerationsExport_RecordsAndAccepts(t *testing.T) {
 	assert.True(t, out.Results[1].Accepted)
 	assert.Equal(t, "gen-1", out.Results[0].GenerationID)
 
-	// Both generations belong to conv-A so they share one file.
+	// A runtime may send Fetch Metadata without an Origin. Ingest skips that
+	// check so a runtime update cannot stop local capture.
+	req := newLocalRequest(http.MethodPost, "/api/v1/generations:export", strings.NewReader(
+		`{"generations":[{"id":"gen-3","conversation_id":"conv-A"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	rr := httptest.NewRecorder()
+	s.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// All generations belong to conv-A so they share one file.
 	lines := readLines(t, filepath.Join(dir, ConversationsDir, "conv-A.jsonl"))
-	require.Len(t, lines, 2)
+	require.Len(t, lines, 3)
 	var rec generationRecord
 	require.NoError(t, json.Unmarshal([]byte(lines[0]), &rec))
 	assert.Equal(t, "gen-1", rec.GenerationID)
 	assert.Equal(t, "conv-A", rec.ConversationID)
 	assert.NotEmpty(t, rec.ReceivedAt)
 	assert.JSONEq(t, `{"id":"gen-1","conversation_id":"conv-A","model":{"name":"m1"}}`, string(rec.Generation))
+	assert.Contains(t, lines[2], `"id":"gen-3"`)
 }
 
 // TestServer_GenerationsExport_StampsLastActivity covers the ordering key
@@ -98,7 +116,7 @@ func TestServer_GenerationsExport_StampsLastActivity(t *testing.T) {
 	// The list bounds on that stamp, so the conversation stays in a range
 	// that covers its live turn.
 	since := live.Add(-time.Minute).Format(time.RFC3339Nano)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations?since="+url.QueryEscape(since), nil)
+	req := newLocalRequest(http.MethodGet, "/api/v1/conversations?since="+url.QueryEscape(since), nil)
 	rr := httptest.NewRecorder()
 	s.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -327,7 +345,7 @@ func TestServer_Routing(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			req := newLocalRequest(tc.method, tc.path, strings.NewReader(tc.body))
 			if tc.contentType != "" {
 				req.Header.Set("Content-Type", tc.contentType)
 			}
@@ -393,7 +411,7 @@ func TestServer_DocumentCSPNonce(t *testing.T) {
 	fetch := func(path string) (string, string) {
 		t.Helper()
 		rr := httptest.NewRecorder()
-		s.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		s.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
 		require.Equal(t, http.StatusOK, rr.Code)
 
 		csp := rr.Header().Get("Content-Security-Policy")
@@ -441,7 +459,7 @@ func TestServer_NonDocumentSecurityHeaders(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
-			s.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			s.ServeHTTP(rr, newLocalRequest(http.MethodGet, tc.path, nil))
 
 			if tc.wantRedirect {
 				require.GreaterOrEqual(t, rr.Code, http.StatusMultipleChoices)
@@ -561,7 +579,7 @@ func TestServer_APIConversations(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req := newLocalRequest(tc.method, tc.path, nil)
 			rr := httptest.NewRecorder()
 			srv.ServeHTTP(rr, req)
 			if rr.Code != tc.want {
@@ -692,7 +710,7 @@ func TestServer_GenerationsExport_ProtoJSON(t *testing.T) {
 				tc.check(t, detail)
 			}
 
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations", nil)
+			req := newLocalRequest(http.MethodGet, "/api/v1/conversations", nil)
 			rr := httptest.NewRecorder()
 			s.ServeHTTP(rr, req)
 			require.Equal(t, http.StatusOK, rr.Code)
@@ -711,7 +729,7 @@ func TestServer_GenerationsExport_ProtoJSON(t *testing.T) {
 // empty store so the viewer shows its first-launch notice.
 func TestServer_APIConversations_EmptyStorage(t *testing.T) {
 	srv, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/conversations", nil)
+	req := newLocalRequest(http.MethodGet, "/api/v1/conversations", nil)
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -755,7 +773,7 @@ func postDiscard(t *testing.T, s *Server, path, contentType, body string) {
 
 func postBytes(t *testing.T, s *Server, path, contentType string, body []byte) *http.Response {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	req := newLocalRequest(http.MethodPost, path, bytes.NewReader(body))
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -792,7 +810,7 @@ func TestServer_APITokenMetrics(t *testing.T) {
 	}, "2026-05-21T10:00:02Z")
 
 	t.Run("seeded store returns disjoint points", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/tokens", nil)
+		req := newLocalRequest(http.MethodGet, "/api/v1/metrics/tokens", nil)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -815,7 +833,7 @@ func TestServer_APITokenMetrics(t *testing.T) {
 	})
 
 	t.Run("wrong method rejected", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/tokens", strings.NewReader("{}"))
+		req := newLocalRequest(http.MethodPost, "/api/v1/metrics/tokens", strings.NewReader("{}"))
 		req.Header.Set("Content-Type", wire.ContentTypeJSON)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
@@ -829,7 +847,7 @@ func TestServer_APITokenMetrics(t *testing.T) {
 			Usage:     agento11y.TokenUsage{InputTokens: 7},
 		}, "2026-05-21T10:40:00Z")
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/tokens?since=2026-05-21T09:00:00Z&interval=3600", nil)
+		req := newLocalRequest(http.MethodGet, "/api/v1/metrics/tokens?since=2026-05-21T09:00:00Z&interval=3600", nil)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -859,7 +877,7 @@ func TestServer_APITokenMetrics(t *testing.T) {
 		// paying for the decode the modification-time break exists to avoid.
 		blockConversationFile(t, storage, "conv-old")
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/tokens?since=2026-05-21T09:00:00Z&interval=3600", nil)
+		req := newLocalRequest(http.MethodGet, "/api/v1/metrics/tokens?since=2026-05-21T09:00:00Z&interval=3600", nil)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -878,7 +896,7 @@ func TestServer_APITokenMetrics(t *testing.T) {
 			"/api/v1/metrics/tokens?interval=0",
 			"/api/v1/metrics/tokens?interval=hourly",
 		} {
-			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req := newLocalRequest(http.MethodGet, path, nil)
 			rr := httptest.NewRecorder()
 			srv.ServeHTTP(rr, req)
 			assert.Equal(t, http.StatusBadRequest, rr.Code, path)
@@ -888,7 +906,7 @@ func TestServer_APITokenMetrics(t *testing.T) {
 
 func TestServer_APITokenMetrics_EmptyStorage(t *testing.T) {
 	srv, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/tokens", nil)
+	req := newLocalRequest(http.MethodGet, "/api/v1/metrics/tokens", nil)
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -903,8 +921,9 @@ func putConfig(t *testing.T, s *Server, settings Settings) *http.Response {
 	t.Helper()
 	body, err := json.Marshal(configRequest{Settings: settings})
 	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body))
+	req := newLocalRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:8765")
 	rr := httptest.NewRecorder()
 	s.ServeHTTP(rr, req)
 	return rr.Result()
@@ -916,7 +935,7 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	srv, dir := newTestServer(t)
 
 	// GET on an absent file returns the local defaults.
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	req := newLocalRequest(http.MethodGet, "/api/v1/config", nil)
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -978,7 +997,7 @@ func TestServer_Config_RoundTrip(t *testing.T) {
 	assert.True(t, strings.HasPrefix(saved.Preview, "# Managed by `agento11y login`."))
 
 	// A fresh GET returns the same saved snapshot.
-	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	req2 := newLocalRequest(http.MethodGet, "/api/v1/config", nil)
 	rr2 := httptest.NewRecorder()
 	srv.ServeHTTP(rr2, req2)
 	require.Equal(t, http.StatusOK, rr2.Code)
@@ -997,7 +1016,7 @@ func TestServer_Config_StackURL(t *testing.T) {
 		"AGENTO11Y_STACK_URL": "https://mystack.grafana.net",
 	}, nil))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	req := newLocalRequest(http.MethodGet, "/api/v1/config", nil)
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -1102,7 +1121,7 @@ func TestServer_Config_DoesNotLeakSecrets(t *testing.T) {
 
 	// GET surfaces endpoint/tenant and reports the token is set, but never
 	// returns the token value; the preview shows it masked.
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	req := newLocalRequest(http.MethodGet, "/api/v1/config", nil)
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -1397,7 +1416,7 @@ func hookEnv(cloudURL string, extra map[string]string) map[string]string {
 // served.
 func postHook(t *testing.T, s *Server, body string, headers map[string]string, opts ...func(*http.Request) *http.Request) (int, agento11y.HookEvaluateResponse) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks:evaluate", strings.NewReader(body))
+	req := newLocalRequest(http.MethodPost, "/api/v1/hooks:evaluate", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -1776,7 +1795,7 @@ func TestServer_APISearch(t *testing.T) {
 		"2026-05-21T11:00:00Z")
 
 	t.Run("empty query returns empty hits with fts mode", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=", nil)
+		req := newLocalRequest(http.MethodGet, "/api/v1/search?q=", nil)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -1790,7 +1809,7 @@ func TestServer_APISearch(t *testing.T) {
 	})
 
 	t.Run("populated store returns ranked hits with the design shape", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=rate+limit", nil)
+		req := newLocalRequest(http.MethodGet, "/api/v1/search?q=rate+limit", nil)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -1811,7 +1830,7 @@ func TestServer_APISearch(t *testing.T) {
 	})
 
 	t.Run("unknown query returns empty hits, not error", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=zzz-impossible", nil)
+		req := newLocalRequest(http.MethodGet, "/api/v1/search?q=zzz-impossible", nil)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -1819,7 +1838,7 @@ func TestServer_APISearch(t *testing.T) {
 	})
 
 	t.Run("limit=0 falls back to the default cap", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=rate&limit=0", nil)
+		req := newLocalRequest(http.MethodGet, "/api/v1/search?q=rate&limit=0", nil)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -1836,7 +1855,7 @@ func TestServer_APISearch(t *testing.T) {
 // this build.
 func TestServer_APISearchCapabilities(t *testing.T) {
 	srv, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/search/capabilities", nil)
+	req := newLocalRequest(http.MethodGet, "/api/v1/search/capabilities", nil)
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -1859,7 +1878,7 @@ func TestServer_DevAsset_EnvPrecedence(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(legacy, "app.jsx"), []byte("// legacy"), 0o600))
 
 	fetchJSX := func() string {
-		req := httptest.NewRequest(http.MethodGet, "/assets/app.jsx", nil)
+		req := newLocalRequest(http.MethodGet, "/assets/app.jsx", nil)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -1885,7 +1904,7 @@ func TestServer_DevAsset_EnvPrecedence(t *testing.T) {
 		srv.logger.SetOutput(&logs)
 
 		rr := httptest.NewRecorder()
-		srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+		srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, "/", nil))
 		require.Equal(t, http.StatusOK, rr.Code)
 		assert.Contains(t, logs.String(), noncePlaceholder)
 	})
@@ -1955,7 +1974,7 @@ func TestServer_Forwarding_DoesNotRelayForwardedPayload(t *testing.T) {
 	})
 
 	for _, path := range []string{"/api/v1/generations:export", "/otlp/v1/traces"} {
-		req := httptest.NewRequest(http.MethodPost, path,
+		req := newLocalRequest(http.MethodPost, path,
 			strings.NewReader(`{"generations":[{"id":"gen-1","conversation_id":"conv-A","model":{"name":"m"}}]}`))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set(ForwardMarkerHeader, "1")

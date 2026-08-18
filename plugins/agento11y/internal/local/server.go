@@ -38,13 +38,14 @@ const (
 // Server is the in-process HTTP handler that records generations from
 // local agent sessions and serves the local viewer API.
 type Server struct {
-	storage    *Storage
-	logger     *log.Logger
-	now        func() time.Time
-	configPath string
-	mux        *http.ServeMux
-	forward    *forwardLoader
-	hub        *eventHub
+	storage      *Storage
+	logger       *log.Logger
+	now          func() time.Time
+	configPath   string
+	allowedHosts []string
+	mux          *http.ServeMux
+	forward      *forwardLoader
+	hub          *eventHub
 	// eventPingInterval overrides defaultEventPingInterval for tests; zero
 	// uses the default.
 	eventPingInterval time.Duration
@@ -83,12 +84,13 @@ func NewServer(storage *Storage, logger *log.Logger, configPath string) *Server 
 		storage.SetLogger(logger)
 	}
 	s := &Server{
-		storage:    storage,
-		logger:     logger,
-		configPath: configPath,
-		now:        func() time.Time { return time.Now().UTC() },
-		forward:    newForwardLoader(configPath, logger),
-		hub:        newEventHub(),
+		storage:      storage,
+		logger:       logger,
+		configPath:   configPath,
+		allowedHosts: allowedHostsFromEnv(),
+		now:          func() time.Time { return time.Now().UTC() },
+		forward:      newForwardLoader(configPath, logger),
+		hub:          newEventHub(),
 	}
 	s.mux = s.routes()
 	return s
@@ -187,16 +189,23 @@ func mediaTypeAccepted(path, header string) bool {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	securityHeaders(w.Header())
 
-	if r.Method == http.MethodPost || r.Method == http.MethodPut {
-		contentType := r.Header.Get("Content-Type")
-		if !mediaTypeAccepted(r.URL.Path, contentType) {
-			s.logger.Printf("local: refused %s %q: Content-Type %q", r.Method, r.URL.Path, contentType)
-			http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
-			return
-		}
+	if err := checkRequestOrigin(r, s.allowedHosts); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+
+	if postOrPutWithUnsupportedMediaType(r) {
+		s.logger.Printf("local: refused %s %q: Content-Type %q", r.Method, r.URL.Path, r.Header.Get("Content-Type"))
+		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+		return
 	}
 
 	s.mux.ServeHTTP(w, r)
+}
+
+func postOrPutWithUnsupportedMediaType(r *http.Request) bool {
+	return (r.Method == http.MethodPost || r.Method == http.MethodPut) &&
+		!mediaTypeAccepted(r.URL.Path, r.Header.Get("Content-Type"))
 }
 
 func securityHeaders(header http.Header) {

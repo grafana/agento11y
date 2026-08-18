@@ -99,7 +99,7 @@ func newHistoryServer(t *testing.T) (*Server, *httptest.Server) {
 
 func getJSON(t *testing.T, s *Server, path string, dst any) int {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req := newLocalRequest(http.MethodGet, path, nil)
 	rr := httptest.NewRecorder()
 	s.ServeHTTP(rr, req)
 	if dst != nil && rr.Code == http.StatusOK {
@@ -261,7 +261,7 @@ func TestHistoryPlanIsMetadataOnly(t *testing.T) {
 	assert.Equal(t, 3, sess.TurnCount)
 
 	// Nothing in the response may echo transcript content.
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/history/plan?agent=claude-code", nil)
+	req := newLocalRequest(http.MethodGet, "/api/v1/history/plan?agent=claude-code", nil)
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	for _, forbidden := range []string{"question 0", "answer 0"} {

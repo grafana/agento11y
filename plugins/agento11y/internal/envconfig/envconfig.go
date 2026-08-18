@@ -50,8 +50,9 @@ var AliasSuffixes = []string{
 	"USER_ID_SOURCE",
 	"BIN",
 	"COPILOT_HOOK_SURFACE",
-	"LOCAL",         // default launches and agento11y hooks to local mode, as if --local was passed
-	"LOCAL_FORWARD", // opt a --local daemon into forwarding to Cloud
+	"LOCAL",               // default launches and agento11y hooks to local mode, as if --local was passed
+	"LOCAL_FORWARD",       // opt a --local daemon into forwarding to Cloud
+	"LOCAL_ALLOWED_HOSTS", // let the local receiver accept named forwarded hosts
 }
 
 // LookupEnv resolves a branded variable from the process env: the first

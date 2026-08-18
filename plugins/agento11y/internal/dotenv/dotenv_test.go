@@ -275,10 +275,11 @@ func TestApplyEnv(t *testing.T) {
 
 func TestApplyEnvAliasFamilies(t *testing.T) {
 	cases := []struct {
-		name string
-		os   map[string]string
-		file string
-		want string
+		name   string
+		suffix string
+		os     map[string]string
+		file   string
+		want   string
 	}{
 		{
 			name: "shell preferred beats shell legacy",
@@ -306,13 +307,26 @@ func TestApplyEnvAliasFamilies(t *testing.T) {
 			file: "SIGIL_ENDPOINT=file-legacy\n",
 			want: "file-legacy",
 		},
+		{
+			name:   "local allowed hosts shell legacy beats file preferred",
+			suffix: "LOCAL_ALLOWED_HOSTS",
+			os:     map[string]string{"SIGIL_LOCAL_ALLOWED_HOSTS": "shell.example"},
+			file:   "AGENTO11Y_LOCAL_ALLOWED_HOSTS=file.example\n",
+			want:   "shell.example",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("XDG_CONFIG_HOME", dir)
-			t.Setenv("AGENTO11Y_ENDPOINT", "")
-			t.Setenv("SIGIL_ENDPOINT", "")
+			suffix := tc.suffix
+			if suffix == "" {
+				suffix = "ENDPOINT"
+			}
+			preferred := "AGENTO11Y_" + suffix
+			legacy := "SIGIL_" + suffix
+			t.Setenv(preferred, "")
+			t.Setenv(legacy, "")
 			for k, v := range tc.os {
 				t.Setenv(k, v)
 			}
@@ -326,11 +340,11 @@ func TestApplyEnvAliasFamilies(t *testing.T) {
 				}
 			}
 			ApplyEnv(log.New(&bytes.Buffer{}, "", 0))
-			if got := os.Getenv("AGENTO11Y_ENDPOINT"); got != tc.want {
-				t.Fatalf("AGENTO11Y_ENDPOINT = %q, want %q", got, tc.want)
+			if got := os.Getenv(preferred); got != tc.want {
+				t.Fatalf("%s = %q, want %q", preferred, got, tc.want)
 			}
-			if got := os.Getenv("SIGIL_ENDPOINT"); got != tc.want {
-				t.Fatalf("SIGIL_ENDPOINT = %q, want %q", got, tc.want)
+			if got := os.Getenv(legacy); got != tc.want {
+				t.Fatalf("%s = %q, want %q", legacy, got, tc.want)
 			}
 		})
 	}
