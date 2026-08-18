@@ -1075,7 +1075,6 @@ function Notice({ kind = "info", title, children }) {
 
 const PAGE_MAX_WIDTH = 1392;
 const SURFACE_BG = "rgba(24,27,31,0.88)";
-const HERO_BG = "var(--bg-secondary)";
 const ACTIVE_PILL_BG = "var(--action-selected, rgba(204,204,220,0.08))";
 const PANEL_BG = "rgba(17,18,23,0.42)";
 
@@ -1125,7 +1124,7 @@ function SurfaceCard({ children, style, ...rest }) {
                 overflow: "hidden",
                 background: SURFACE_BG,
                 border: "1px solid var(--border-weak)",
-                borderRadius: 10,
+                borderRadius: 8,
                 boxShadow: "0 10px 24px rgba(0,0,0,0.14)",
                 ...(style || {}),
             }}
@@ -1165,7 +1164,7 @@ function ModalFrame({
                     overflow: "hidden",
                     background: "var(--bg-secondary)",
                     border: "1px solid var(--border-strong)",
-                    borderRadius: 10,
+                    borderRadius: 8,
                     boxShadow: "0 18px 54px rgba(0,0,0,0.58)",
                     display: "flex",
                     flexDirection: "column",
@@ -1240,156 +1239,93 @@ function PageShell({ children, maxWidth = PAGE_MAX_WIDTH, style }) {
     );
 }
 
-function HeroChip({ label, value, tone }) {
+function PageHero({ title, desc, descStyle, stats = [], style }) {
     return (
         <Stack
-            gap={2}
+            direction="row"
+            align="baseline"
+            justify="space-between"
+            gap={24}
+            wrap="wrap"
             style={{
-                padding: "8px 10px",
-                border: "1px solid var(--border-medium)",
-                borderRadius: 8,
-                background: PANEL_BG,
-                minWidth: 108,
-            }}
-        >
-            <Box
-                style={{
-                    fontSize: 10,
-                    letterSpacing: ".08em",
-                    textTransform: "uppercase",
-                    color: "var(--fg3)",
-                    fontWeight: 700,
-                }}
-            >
-                {label}
-            </Box>
-            <Box
-                style={{
-                    fontSize: 12,
-                    color: tone || "var(--fg-max)",
-                    fontWeight: 600,
-                    whiteSpace: "nowrap",
-                }}
-            >
-                {value}
-            </Box>
-        </Stack>
-    );
-}
-
-function PageHero({
-    icon,
-    kicker,
-    title,
-    desc,
-    chips,
-    actions,
-    children,
-    style,
-}) {
-    return (
-        <Box
-            style={{
-                position: "relative",
-                overflow: "hidden",
-                border: "1px solid var(--border-weak)",
-                borderRadius: 10,
-                padding: "22px 24px",
+                paddingBottom: 14,
                 marginBottom: 18,
-                background: HERO_BG,
-                boxShadow: "0 12px 28px rgba(0,0,0,0.18)",
+                borderBottom: "1px solid var(--border-weak)",
                 ...(style || {}),
             }}
         >
-            <Box
-                style={{
-                    position: "absolute",
-                    left: 0,
-                    right: 0,
-                    top: 0,
-                    height: 2,
-                    background: "var(--brandVertical)",
-                }}
-            />
             <Stack
                 direction="row"
-                justify="space-between"
-                gap={24}
-                align="flex-end"
-                wrap="wrap"
+                align="baseline"
+                gap={12}
+                style={{ minWidth: 0, flex: "1 1 320px" }}
             >
-                <Box style={{ minWidth: 0, flex: "1 1 360px" }}>
-                    <Stack
-                        direction="row"
-                        align="center"
-                        gap={8}
-                        style={{ marginBottom: 8 }}
-                    >
-                        {icon && (
-                            <Icon
-                                name={icon}
-                                size={15}
-                                style={{ color: "var(--brand-orange-text)" }}
-                            />
-                        )}
-                        <Box
-                            as="span"
-                            style={{
-                                fontSize: 11,
-                                letterSpacing: ".12em",
-                                textTransform: "uppercase",
-                                color: "var(--fg3)",
-                                fontWeight: 700,
-                            }}
-                        >
-                            {kicker}
-                        </Box>
-                    </Stack>
-                    <h1
+                <h1
+                    style={{
+                        fontSize: 20,
+                        lineHeight: 1.2,
+                        fontWeight: 600,
+                        color: "var(--fg-max)",
+                        margin: 0,
+                        letterSpacing: "-0.02em",
+                        whiteSpace: "nowrap",
+                    }}
+                >
+                    {title}
+                </h1>
+                {desc && (
+                    <Box
+                        as="span"
                         style={{
-                            fontSize: 26,
-                            lineHeight: 1.15,
-                            fontWeight: 650,
-                            color: "var(--fg-max)",
-                            margin: 0,
-                            letterSpacing: "-0.03em",
+                            fontSize: 12.5,
+                            color: "var(--fg3)",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            ...(descStyle || {}),
                         }}
                     >
-                        {title}
-                    </h1>
-                    {desc && (
-                        <Box
-                            style={{
-                                marginTop: 8,
-                                fontSize: 13,
-                                color: "var(--fg2)",
-                                maxWidth: 680,
-                            }}
-                        >
-                            {desc}
-                        </Box>
-                    )}
-                    {children && (
-                        <Box style={{ marginTop: 10 }}>{children}</Box>
-                    )}
-                </Box>
-                {(chips || actions) && (
-                    <Stack
-                        direction="row"
-                        wrap="wrap"
-                        gap={8}
-                        justify="flex-end"
-                        align="center"
-                        style={{ minWidth: 0 }}
-                    >
-                        {(chips || []).map((chip) => (
-                            <HeroChip key={chip.label} {...chip} />
-                        ))}
-                        {actions}
-                    </Stack>
+                        {desc}
+                    </Box>
                 )}
             </Stack>
-        </Box>
+            {stats.length > 0 && (
+                <Stack
+                    direction="row"
+                    align="baseline"
+                    gap={18}
+                    style={{
+                        fontFamily: "var(--fontFamilyMonospace)",
+                        fontSize: 12.5,
+                        whiteSpace: "nowrap",
+                    }}
+                >
+                    {stats.map((stat) => (
+                        <span
+                            key={stat.label}
+                            style={{
+                                display: "inline-flex",
+                                alignItems: "baseline",
+                                gap: 6,
+                            }}
+                        >
+                            <Box
+                                as="span"
+                                style={{ fontSize: 11, color: "var(--fg3)" }}
+                            >
+                                {stat.label}
+                            </Box>
+                            <Box
+                                as="span"
+                                style={{ color: stat.tone || "var(--fg1)" }}
+                            >
+                                {stat.value}
+                            </Box>
+                        </span>
+                    ))}
+                </Stack>
+            )}
+        </Stack>
     );
 }
 
@@ -2114,7 +2050,7 @@ function Select({
                     minWidth: 132,
                     padding: "0 10px",
                     border: "1px solid var(--border-medium)",
-                    borderRadius: 8,
+                    borderRadius: 2,
                     background: "rgba(24,27,31,0.78)",
                     color: disabled ? "var(--fg3)" : "var(--fg1)",
                     fontSize: 13,
@@ -2158,7 +2094,7 @@ function Select({
                         overflowY: "auto",
                         padding: 4,
                         border: "1px solid var(--border-strong)",
-                        borderRadius: 8,
+                        borderRadius: 2,
                         background: "var(--bg-secondary)",
                         boxShadow: "0 12px 34px rgba(0,0,0,0.48)",
                         ...menu,
@@ -2235,7 +2171,7 @@ function TimeRangePicker({ value, onChange, ranges = TIME_RANGES }) {
                     minWidth: 166,
                     padding: "0 10px",
                     border: "1px solid var(--border-medium)",
-                    borderRadius: 8,
+                    borderRadius: 2,
                     background: "rgba(24,27,31,0.78)",
                     color: "var(--fg1)",
                     fontSize: 13,
@@ -2277,7 +2213,7 @@ function TimeRangePicker({ value, onChange, ranges = TIME_RANGES }) {
                         minWidth: 190,
                         padding: 4,
                         border: "1px solid var(--border-strong)",
-                        borderRadius: 8,
+                        borderRadius: 2,
                         background: "var(--bg-secondary)",
                         boxShadow: "0 12px 34px rgba(0,0,0,0.48)",
                     }}
@@ -2357,7 +2293,7 @@ function FilterBar({
         minWidth: 132,
         padding: "0 30px 0 11px",
         border: "1px solid var(--border-medium)",
-        borderRadius: 8,
+        borderRadius: 2,
         background: "rgba(24,27,31,0.78)",
         color: "var(--fg1)",
         fontSize: 13,
@@ -2379,7 +2315,7 @@ function FilterBar({
                     padding: "0 11px",
                     height: 34,
                     border: "1px solid var(--border-medium)",
-                    borderRadius: 8,
+                    borderRadius: 2,
                     background: "rgba(24,27,31,0.78)",
                     color: "var(--fg3)",
                     boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.12)",
@@ -2413,7 +2349,7 @@ function FilterBar({
                             color: "var(--fg3)",
                             padding: "1px 6px",
                             border: "1px solid var(--border-weak)",
-                            borderRadius: 999,
+                            borderRadius: 2,
                         }}
                     >
                         ⌘K
@@ -2471,7 +2407,7 @@ function FilterBar({
                         height: 34,
                         padding: "0 11px",
                         border: "1px solid var(--border-medium)",
-                        borderRadius: 8,
+                        borderRadius: 2,
                         color: "var(--fg2)",
                         gap: 6,
                     }}
@@ -2498,7 +2434,7 @@ function FilterBar({
                     height: 34,
                     width: 34,
                     border: "1px solid var(--border-medium)",
-                    borderRadius: 8,
+                    borderRadius: 2,
                     opacity: refreshing ? 0.5 : 1,
                     cursor: refreshing ? "wait" : "pointer",
                 }}
@@ -2522,12 +2458,6 @@ function FilterBar({
 }
 
 function ConvRow({ c, now, onOpen, prices }) {
-    const accent =
-        c.status === "err"
-            ? "var(--error-main)"
-            : c.status === "warn"
-              ? "var(--warning-main)"
-              : "transparent";
     const wallSec = durationBetweenSeconds(c.started_at, c.last_activity);
     return (
         <a
@@ -2544,7 +2474,6 @@ function ConvRow({ c, now, onOpen, prices }) {
                 gap: 16,
                 padding: "12px 16px",
                 borderBottom: "1px solid var(--border-weak)",
-                borderLeft: `3px solid ${accent}`,
                 background: "transparent",
                 cursor: "pointer",
                 fontFamily: "var(--fontFamilyMonospace)",
@@ -2835,7 +2764,8 @@ function KpiStrip({ kpi }) {
 // A workspace row reads like an observability leaderboard entry: name,
 // count + estimated cost, and a thin bar showing this workspace's share
 // of total spend. The "All" summary row is the full-bar reference and
-// carries a heavier label. Selection tints the bar + left edge orange.
+// carries a heavier label. Selection tints the bar orange and strengthens
+// the border.
 function WorkspaceItem({
     label,
     title,
@@ -2859,9 +2789,8 @@ function WorkspaceItem({
                 width: "100%",
                 textAlign: "left",
                 padding: "9px 11px",
-                border: "1px solid var(--border-weak)",
-                borderLeft: `2px solid ${active ? "var(--brand-orange)" : "var(--border-weak)"}`,
-                borderRadius: 8,
+                border: `1px solid ${active ? "var(--border-medium)" : "var(--border-weak)"}`,
+                borderRadius: 2,
                 background: active ? ACTIVE_PILL_BG : "rgba(24,27,31,0.68)",
                 color: "inherit",
                 cursor: "pointer",
@@ -3255,7 +3184,7 @@ function ConversationsView({
                     color: "var(--fg3)",
                     padding: "1px 6px",
                     border: "1px solid var(--border-weak)",
-                    borderRadius: 999,
+                    borderRadius: 2,
                 }}
             >
                 ⌘K
@@ -3464,15 +3393,13 @@ function ConversationsView({
             )}
             <PageShell maxWidth={1400} style={{ flex: 1, minWidth: 0 }}>
                 <PageHero
-                    icon="list"
-                    kicker="Local sessions"
                     title="Sessions"
                     desc={
                         searchActive
-                            ? "Search captured prompts, responses, and tool output across local sessions."
-                            : "Review captured sessions, token usage, costs, and tool-call activity from local runs."
+                            ? "Full-text search over prompts, responses, and tool output in all captured local sessions."
+                            : "Captured sessions, token usage, costs, and tool-call activity from local runs."
                     }
-                    chips={
+                    stats={
                         searchActive
                             ? [
                                   {
@@ -3488,7 +3415,7 @@ function ConversationsView({
                                       value: String(searchHits.length),
                                       tone: searchHits.length
                                           ? "var(--success-text)"
-                                          : "var(--fg2)",
+                                          : "var(--fg3)",
                                   },
                                   {
                                       label: "Status",
@@ -3499,19 +3426,14 @@ function ConversationsView({
                                       tone:
                                           searchPhase === "loading"
                                               ? "var(--warning-text)"
-                                              : "var(--fg2)",
+                                              : undefined,
                                   },
                               ]
                             : [
-                                  {
-                                      label: "Range",
-                                      value: range.label,
-                                      tone: "var(--fg2)",
-                                  },
+                                  { label: "Range", value: range.label },
                                   {
                                       label: "Workspaces",
                                       value: String(workspaces.length),
-                                      tone: "var(--primary-text)",
                                   },
                                   {
                                       label: "Cost",
@@ -3520,22 +3442,7 @@ function ConversationsView({
                                   },
                               ]
                     }
-                >
-                    <Box
-                        style={{
-                            fontFamily: "var(--fontFamilyMonospace)",
-                            fontSize: 11,
-                            color: "var(--fg3)",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                        }}
-                    >
-                        {searchActive
-                            ? "Full-text search runs across all captured sessions."
-                            : "Local traces, token accounting, and model usage from this viewer."}
-                    </Box>
-                </PageHero>
+                />
                 {history && (
                     <HistoryImportBanner
                         history={history}
@@ -3675,7 +3582,7 @@ function ConversationsView({
                                     gridTemplateColumns: CONV_GRID,
                                     alignItems: "center",
                                     gap: 16,
-                                    padding: "11px 16px 11px 19px",
+                                    padding: "11px 16px",
                                     borderBottom:
                                         "1px solid var(--border-weak)",
                                     background: "var(--bg-secondary)",
@@ -4860,7 +4767,7 @@ function PreambleChip({ text }) {
                     padding: "3px 9px",
                     background: "rgba(204,204,220,0.04)",
                     border: "1px solid var(--border-weak)",
-                    borderRadius: 6,
+                    borderRadius: 2,
                     color: "var(--fg3)",
                     cursor: "pointer",
                     fontFamily: "var(--fontFamilyMonospace)",
@@ -5077,8 +4984,8 @@ function CallErrorBlock({ block, compact = false }) {
             style={{
                 marginBottom: compact ? 0 : 12,
                 padding: compact ? "9px 10px" : "10px 12px",
-                borderLeft: "2px solid var(--error-main)",
-                borderRadius: compact ? 0 : "0 8px 8px 0",
+                border: "1px solid var(--error-border)",
+                borderRadius: 2,
                 background: "rgba(209,14,92,0.05)",
                 color: "var(--error-text)",
             }}
@@ -6263,7 +6170,7 @@ function WorthALook({ steps, turns, metrics, onJump }) {
                                 padding: "7px 10px",
                                 background: "transparent",
                                 border: `1px solid ${border}`,
-                                borderRadius: 6,
+                                borderRadius: 2,
                                 cursor: "pointer",
                                 textAlign: "left",
                             }}
@@ -6524,7 +6431,7 @@ function TraceDetailView({ conv, detail, loading, error, onBack }) {
         background: "transparent",
         color: "var(--fg1)",
         border: "1px solid var(--border-medium)",
-        borderRadius: 6,
+        borderRadius: 2,
         fontSize: 12,
         cursor: "pointer",
         fontFamily: "var(--fontFamily)",
@@ -7016,7 +6923,6 @@ function ForwardModeChip({ config, onOpenSettings }) {
                         padding: "12px 14px",
                         background: "var(--bg-secondary)",
                         border: "1px solid var(--border-medium)",
-                        borderLeft: `3px solid ${meta.border}`,
                         borderRadius: 2,
                         boxShadow: "var(--shadow-z2)",
                     }}
@@ -7233,8 +7139,7 @@ function HistoryImportBanner({ history, onOpenSettings }) {
                 padding: "10px 14px",
                 marginBottom: 14,
                 borderRadius: 2,
-                border: "1px solid var(--border-weak)",
-                borderLeft: "3px solid var(--info-border)",
+                border: "1px solid var(--info-border)",
                 background: "var(--info-transparent)",
             }}
         >
@@ -7389,8 +7294,7 @@ function HistoryImportProgress({ run, onCancel }) {
                 padding: "10px 14px",
                 marginBottom: 14,
                 borderRadius: 2,
-                border: "1px solid var(--border-weak)",
-                borderLeft: "3px solid var(--info-border)",
+                border: "1px solid var(--info-border)",
                 background: "var(--info-transparent)",
             }}
         >
@@ -7784,10 +7688,10 @@ function UnsavedBar({ onReset, onSave }) {
 }
 
 function SettingsHero({ dirty, path, config }) {
-    // The hero chip reads from the same mapping as the header chip, so the two
+    // The hero stat reads from the same mapping as the header chip, so the two
     // never name one posture two ways.
     const forwardMeta = forwardChipMeta(config);
-    const chips = [
+    const stats = [
         {
             label: "Cloud copy",
             value: forwardMeta.value,
@@ -7801,26 +7705,15 @@ function SettingsHero({ dirty, path, config }) {
     ];
     return (
         <PageHero
-            icon="wrench"
-            kicker="Local viewer settings"
             title="Settings"
-            desc="Set up cloud connection and local runtime options."
-            chips={chips}
-        >
-            <Box
-                style={{
-                    fontFamily: "var(--fontFamilyMonospace)",
-                    fontSize: 11,
-                    color: "var(--fg3)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    maxWidth: 720,
-                }}
-            >
-                {path}
-            </Box>
-        </PageHero>
+            desc={path}
+            descStyle={{
+                fontFamily: "var(--fontFamilyMonospace)",
+                fontSize: 11.5,
+                maxWidth: 720,
+            }}
+            stats={stats}
+        />
     );
 }
 
@@ -7844,7 +7737,6 @@ function SettingsTabRail({ tabs, active, onChange }) {
                         aria-pressed={isActive}
                         onClick={() => onChange(tab.id)}
                         style={{
-                            position: "relative",
                             minHeight: 76,
                             textAlign: "left",
                             padding: "12px 12px",
@@ -7875,11 +7767,11 @@ function SettingsTabRail({ tabs, active, onChange }) {
                                     display: "inline-flex",
                                     alignItems: "center",
                                     justifyContent: "center",
-                                    borderRadius: 7,
-                                    background: isActive
-                                        ? "var(--brandVertical)"
-                                        : "rgba(204,204,220,0.06)",
-                                    color: isActive ? "#fff" : "var(--fg2)",
+                                    borderRadius: 2,
+                                    background: "rgba(204,204,220,0.06)",
+                                    color: isActive
+                                        ? "var(--brand-orange-text)"
+                                        : "var(--fg2)",
                                 }}
                             >
                                 <Icon name={tab.icon} size={14} />
@@ -7887,7 +7779,7 @@ function SettingsTabRail({ tabs, active, onChange }) {
                             <span
                                 style={{
                                     fontSize: 13,
-                                    fontWeight: 650,
+                                    fontWeight: 600,
                                     color: isActive
                                         ? "var(--fg-max)"
                                         : "var(--fg1)",
@@ -7905,19 +7797,6 @@ function SettingsTabRail({ tabs, active, onChange }) {
                         >
                             {tab.desc}
                         </div>
-                        {isActive && (
-                            <span
-                                style={{
-                                    position: "absolute",
-                                    left: 12,
-                                    right: 12,
-                                    bottom: -1,
-                                    height: 2,
-                                    borderRadius: 999,
-                                    background: "var(--brandVertical)",
-                                }}
-                            />
-                        )}
                     </button>
                 );
             })}
@@ -7940,7 +7819,7 @@ function SettingsPreviewPanel({ path, preview, onCopy }) {
                     overflow: "hidden",
                     background: SURFACE_BG,
                     border: "1px solid var(--border-weak)",
-                    borderRadius: 10,
+                    borderRadius: 8,
                     boxShadow: "0 18px 42px rgba(0,0,0,0.22)",
                 }}
             >
@@ -7960,7 +7839,7 @@ function SettingsPreviewPanel({ path, preview, onCopy }) {
                             display: "inline-flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            borderRadius: 8,
+                            borderRadius: 2,
                             background: "rgba(204,204,220,0.06)",
                             color: "var(--fg2)",
                         }}
@@ -7999,7 +7878,7 @@ function SettingsPreviewPanel({ path, preview, onCopy }) {
                             background: "transparent",
                             border: "1px solid var(--secondary-border)",
                             color: "var(--fg1)",
-                            borderRadius: 6,
+                            borderRadius: 2,
                             height: 28,
                             padding: "0 9px",
                             fontSize: 12,
@@ -8045,7 +7924,6 @@ function Toast({ message }) {
                 gap: 8,
                 background: "var(--bg-secondary)",
                 border: "1px solid var(--border-medium)",
-                borderLeft: "3px solid var(--success-border)",
                 borderRadius: 2,
                 padding: "10px 14px",
                 boxShadow: "var(--shadow-z2)",
@@ -8524,7 +8402,6 @@ function SettingsConnectFlow({
                             marginTop: 10,
                             padding: "10px 12px",
                             border: `1px solid var(--${tone}-border)`,
-                            borderLeft: `3px solid var(--${tone}-border)`,
                             background: `var(--${tone}-transparent)`,
                             borderRadius: 2,
                         }}
@@ -9292,7 +9169,7 @@ function SettingsTagsEditor({ tags, setTag, addTag, removeTag }) {
                             padding: "0 12px",
                             background: "transparent",
                             border: "1px dashed var(--border-medium)",
-                            borderRadius: 999,
+                            borderRadius: 2,
                             color: "var(--fg2)",
                             fontSize: 13,
                             cursor: "pointer",
@@ -9740,7 +9617,7 @@ function SettingsView({
 
     const dirty = !sameSettings(form, saved);
     const set = (patch) => setForm((f) => ({ ...f, ...patch }));
-    // A failed poll drops the hero chip and the Cloud status line to Unknown,
+    // A failed poll drops the hero stat and the Cloud status line to Unknown,
     // the way it drops the header chip. The form keeps hydrating from the
     // last good response.
     const liveConfig = configError ? null : config;
@@ -10370,16 +10247,11 @@ function highlightTerms(text, query) {
     });
 }
 
-// SearchResultRow is one ranked hit. Stays consistent with ConvRow:
-// dense mono grid, left status accent, agent/model pills, two-line
-// clamp on the snippet. The row is a real anchor so cmd/ctrl-click
-// opens in a new tab without us re-implementing the browser.
+// SearchResultRow is one ranked hit. Stays consistent with ConvRow's dense
+// mono grid and agent/model pills, and adds a two-line clamp on the snippet.
+// The row is a real anchor so cmd/ctrl-click opens in a new tab without
+// us re-implementing the browser.
 function SearchResultRow({ hit, now, query, selected, onSelect, onOpen }) {
-    // Status is "err" when any generation in the conversation
-    // recorded a CallError, otherwise "ok" — see
-    // searchConversationFile and the qmd-fallback summary path.
-    const accent =
-        hit.status === "err" ? "var(--error-border)" : "var(--border-medium)";
     const ago = hit.last_activity ? formatAgo(hit.last_activity, now) : "";
     const titleEl = highlightTerms(hit.title || hit.id, query);
     const snippetEl = highlightTerms(hit.snippet || "", query);
@@ -10397,7 +10269,6 @@ function SearchResultRow({ hit, now, query, selected, onSelect, onOpen }) {
                 display: "block",
                 padding: "11px 16px 12px",
                 borderBottom: "1px solid var(--border-weak)",
-                borderLeft: `3px solid ${accent}`,
                 background: selected ? "rgba(204,204,220,0.06)" : "transparent",
                 cursor: "pointer",
                 textDecoration: "none",
@@ -10422,11 +10293,30 @@ function SearchResultRow({ hit, now, query, selected, onSelect, onOpen }) {
             >
                 <span
                     style={{
+                        display: "inline-flex",
+                        alignItems: "baseline",
+                        gap: 6,
                         color: "var(--fg3)",
                         fontFamily: "var(--fontFamilyMonospace)",
                         fontSize: 12,
                     }}
                 >
+                    {/* The row carries no ERR badge, so this dot is its only
+                        failure marker. Status is "err" when any generation in
+                        the conversation recorded a CallError, "ok" otherwise.
+                        See searchConversationFile in internal/local/search.go. */}
+                    {hit.status === "err" && (
+                        <span
+                            title="Failed model call"
+                            style={{
+                                width: 5,
+                                height: 5,
+                                borderRadius: "50%",
+                                flex: "none",
+                                background: "var(--error-main)",
+                            }}
+                        />
+                    )}
                     {ago}
                 </span>
                 <div
@@ -10742,7 +10632,6 @@ function ConversationSearchPanel({
                                     i < 2
                                         ? "1px solid var(--border-weak)"
                                         : "none",
-                                borderLeft: "3px solid var(--border-medium)",
                             }}
                         >
                             <div
