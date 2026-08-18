@@ -7063,7 +7063,11 @@ function useHistoryImport(liveRun) {
         if (!run || !run.run_id) return Promise.resolve();
         return fetch(
             `/api/v1/history/runs/${encodeURIComponent(run.run_id)}:cancel`,
-            { method: "POST" },
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+            },
         ).catch(() => {});
     }, [run]);
 
