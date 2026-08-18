@@ -560,6 +560,13 @@ func withStubCursorUninstall(t *testing.T, fn func(io.Writer, io.Writer, *log.Lo
 	cursorUninstall = fn
 }
 
+func withStubCursorStatus(t *testing.T, fn func() (bool, error)) {
+	t.Helper()
+	prev := cursorStatus
+	t.Cleanup(func() { cursorStatus = prev })
+	cursorStatus = fn
+}
+
 func withStubClaudeInstall(t *testing.T, fn func(context.Context, io.Writer) (bool, error)) {
 	t.Helper()
 	prev := claudeInstall

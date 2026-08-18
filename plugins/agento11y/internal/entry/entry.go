@@ -184,10 +184,13 @@ var exit = os.Exit
 var loginRun = login.Run
 
 // cursorInstall and cursorUninstall are package vars so tests can stub the
-// filesystem-touching `agento11y cursor install`/`uninstall` flow.
+// filesystem-touching `agento11y cursor install`/`uninstall` flow. cursorStatus
+// is used by the managed-only reconcile receipt to distinguish an idempotent
+// re-run from a newly wired Cursor hook.
 var (
 	cursorInstall   = cursorinstall.Run
 	cursorUninstall = cursorinstall.Uninstall
+	cursorStatus    = cursorinstall.Status
 	claudeInstall   = claudecode.Install
 )
 
