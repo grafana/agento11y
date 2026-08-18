@@ -57,7 +57,7 @@ var agentProbes = []agentProbe{
 	{name: "cursor", bin: "cursor", status: func(context.Context) (bool, string, error) {
 		installed, err := cursorinstall.Status()
 		return installed, "", err
-	}, configBased: true, fallbackVersion: true, note: "hook-based; configured in Cursor settings"},
+	}, configBased: true, fallbackVersion: true, notInstalledLabel: "not configured", note: "hook-based; configured in Cursor settings"},
 }
 
 // defaultCollectAgents runs the PATH sweep and per-agent read-only status

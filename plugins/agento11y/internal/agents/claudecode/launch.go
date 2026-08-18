@@ -120,17 +120,18 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 //
 // The returned value is true only when this invocation registered the plugin.
 func Install(ctx context.Context, stdout io.Writer) (bool, error) {
+	// A registered plugin does not need the Claude CLI to remain registered.
+	// Check that first so a managed reconcile stays converged if a developer
+	// later removes the CLI from PATH. A malformed or unreadable store is not
+	// authoritative; with a CLI available, let Claude repair it by reinstalling.
+	installed, probeErr := pluginInstalled()
+	if probeErr == nil && installed {
+		return false, nil
+	}
+
 	bin, err := lookPath("claude")
 	if err != nil {
 		return false, fmt.Errorf("%w; install Claude Code or run this in the developer's user context", ErrCLINotFound)
-	}
-
-	installed, err := pluginInstalled()
-	if err != nil {
-		return false, err
-	}
-	if installed {
-		return false, nil
 	}
 	if err := runInstall(ctx, bin, stdout); err != nil {
 		return false, err

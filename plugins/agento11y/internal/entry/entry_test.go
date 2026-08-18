@@ -574,50 +574,35 @@ func withStubClaudeInstall(t *testing.T, fn func(context.Context, io.Writer) (bo
 	claudeInstall = fn
 }
 
-func TestRun_AgentsInstallJSON(t *testing.T) {
+func TestRun_ClaudeInstallJSON(t *testing.T) {
 	withStubClaudeInstall(t, func(context.Context, io.Writer) (bool, error) { return true, nil })
-	withStubCursorStatus(t, func() (bool, error) { return false, nil })
-	withStubCursorInstall(t, func(io.Writer, io.Writer, *log.Logger) error { return nil })
 
 	var stdout, stderr bytes.Buffer
 	gotExit := withExit(t, func() {
-		run([]string{"agents", "install", "--agents", "claude,cursor", "--json"}, strings.NewReader(""), &stdout, &stderr)
+		run([]string{"claude", "install", "--json"}, strings.NewReader(""), &stdout, &stderr)
 	})
 	require.Nil(t, gotExit, "stderr=%q", stderr.String())
 	require.Empty(t, stderr.String())
 
-	var report agentInstallReport
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report), "stdout=%q", stdout.String())
-	assert.Equal(t, []agentInstallResult{
-		{Agent: "claude", Status: "installed"},
-		{Agent: "cursor", Status: "installed"},
-	}, report.Agents)
+	var result agentInstallResult
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
+	assert.Equal(t, agentInstallResult{Agent: "claude", Status: "installed"}, result)
 }
 
-func TestRun_AgentsInstallReportsMissingClaudeWithoutFailingCursor(t *testing.T) {
+func TestRun_ClaudeInstallReportsMissingHost(t *testing.T) {
 	withStubClaudeInstall(t, func(context.Context, io.Writer) (bool, error) {
 		return false, claudecode.ErrCLINotFound
-	})
-	withStubCursorStatus(t, func() (bool, error) { return true, nil })
-	cursorInstalls := 0
-	withStubCursorInstall(t, func(io.Writer, io.Writer, *log.Logger) error {
-		cursorInstalls++
-		return nil
 	})
 
 	var stdout, stderr bytes.Buffer
 	gotExit := withExit(t, func() {
-		run([]string{"agents", "install", "--agents", "claude,cursor", "--json"}, strings.NewReader(""), &stdout, &stderr)
+		run([]string{"claude", "install", "--json"}, strings.NewReader(""), &stdout, &stderr)
 	})
 	require.Nil(t, gotExit, "stderr=%q", stderr.String())
 
-	var report agentInstallReport
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report), "stdout=%q", stdout.String())
-	assert.Equal(t, []agentInstallResult{
-		{Agent: "claude", Status: "missing_host"},
-		{Agent: "cursor", Status: "already_installed"},
-	}, report.Agents)
-	assert.Equal(t, 1, cursorInstalls, "Cursor install re-runs idempotently to repair stale hooks")
+	var result agentInstallResult
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
+	assert.Equal(t, agentInstallResult{Agent: "claude", Status: "missing_host"}, result)
 }
 
 // withStubLauncher replaces the launchers map with a single entry for the

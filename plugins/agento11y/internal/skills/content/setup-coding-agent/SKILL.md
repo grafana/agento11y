@@ -250,7 +250,7 @@ agento11y cursor uninstall   # removes it
 On macOS and Linux, re-run `agento11y cursor install` after moving the binary;
 Cursor's hook stores its absolute path.
 
-For managed macOS deployment, after the administrator has placed the connection file for the target user, use `agento11y agents install --agents claude,cursor --json`; it never prompts or launches a host. `missing_host` for Claude means rerun after Claude Code is installed for that user.
+For managed macOS deployment, after the administrator has placed the connection file for the target user, use `agento11y claude install --json` and `agento11y cursor install`; neither launches a host. `missing_host` for Claude means rerun after Claude Code is installed for that user.
 
 Arguments after `--` go to the underlying CLI unchanged:
 
