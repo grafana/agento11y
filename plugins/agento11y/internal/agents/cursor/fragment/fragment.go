@@ -170,6 +170,24 @@ func SaveSession(s Session) error {
 	return fragmentstore.WriteJSON(SessionFilePath(s.ConversationID), s)
 }
 
+// UpdateSession is the canonical session read-modify-write. beforeSubmit can
+// stamp a title before sessionStart writes workspace/user fields (and the
+// reverse), so the load-mutate-save is serialized with WithFileLock. A
+// missing file starts a new Session with ConversationID set.
+func UpdateSession(conversationID string, logger *log.Logger, mutate func(s *Session) bool) error {
+	return fragmentstore.WithFileLock(SessionFilePath(conversationID), func() error {
+		s := LoadSession(conversationID, logger)
+		if s == nil {
+			s = &Session{ConversationID: conversationID}
+		}
+		if !mutate(s) {
+			return nil
+		}
+		s.ConversationID = conversationID
+		return SaveSession(*s)
+	})
+}
+
 // Update is the canonical read-modify-write. The mutator returns true when
 // the fragment should be saved; false skips the write (used by
 // afterAgentThought to avoid rewriting the fragment when ThinkingPresent is

@@ -272,6 +272,41 @@ func TestSaveSessionAndLoadSession(t *testing.T) {
 	}
 }
 
+func TestUpdateSession_PreservesExistingFields(t *testing.T) {
+	withTempState(t)
+	logger := newTestLogger()
+
+	if err := SaveSession(Session{
+		ConversationID: "conv",
+		WorkspaceRoots: []string{"/ws"},
+		UserEmail:      "alice@example.com",
+		CursorVersion:  "1.0",
+	}); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	if err := UpdateSession("conv", logger, func(s *Session) bool {
+		s.ConversationTitle = "list go files"
+		return true
+	}); err != nil {
+		t.Fatalf("UpdateSession: %v", err)
+	}
+
+	got := LoadSession("conv", logger)
+	if got == nil {
+		t.Fatal("expected session")
+	}
+	if got.ConversationTitle != "list go files" {
+		t.Errorf("ConversationTitle = %q; want list go files", got.ConversationTitle)
+	}
+	if got.UserEmail != "alice@example.com" {
+		t.Errorf("UserEmail = %q; want alice@example.com", got.UserEmail)
+	}
+	if len(got.WorkspaceRoots) != 1 || got.WorkspaceRoots[0] != "/ws" {
+		t.Errorf("WorkspaceRoots = %v; want [/ws]", got.WorkspaceRoots)
+	}
+}
+
 func TestDelete_Idempotent(t *testing.T) {
 	withTempState(t)
 	logger := newTestLogger()

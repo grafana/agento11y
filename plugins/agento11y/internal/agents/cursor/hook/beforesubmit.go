@@ -16,8 +16,8 @@ const maxTitleLen = 100
 
 // BeforeSubmit captures the user prompt for the upcoming generation. Cursor
 // doesn't always assign a generation_id at prompt-submit time; without one we
-// cannot key the fragment, so skip silently — the turn will still be exported,
-// just without the user prompt in `input`.
+// cannot key the fragment, so skip the fragment write — the turn will still
+// be exported, just without the user prompt in `input`.
 //
 // Prompt bytes are persisted only when the active content-capture mode would
 // export them (full / no_tool_content). In metadata_only the mapper drops the
@@ -25,12 +25,19 @@ const maxTitleLen = 100
 // content into the fragment file (mode 0600 — but avoidable disk-residency is
 // avoidable disk-residency).
 //
-// On the first prompt of a conversation the handler also stamps the session's
-// ConversationTitle so the mapper can surface a human-readable name instead of
-// the raw conversation UUID.
+// The conversation title is session-scoped, so it is stamped even when
+// generation_id is missing: first prompt wins, and a later sessionStart must
+// not wipe it.
 func BeforeSubmit(p Payload, cfg config.Config, logger *log.Logger) {
-	if p.ConversationID == "" || p.GenerationID == "" {
-		logger.Print("beforeSubmitPrompt: no generation_id yet — skipping")
+	if p.ConversationID == "" {
+		logger.Print("beforeSubmitPrompt: missing conversation_id — skipping")
+		return
+	}
+	if p.Prompt != "" {
+		setConversationTitle(p.ConversationID, p.Prompt, logger)
+	}
+	if p.GenerationID == "" {
+		logger.Print("beforeSubmitPrompt: no generation_id yet — skipping fragment")
 		return
 	}
 	ts := p.ResolvedTimestamp()
@@ -49,30 +56,34 @@ func BeforeSubmit(p Payload, cfg config.Config, logger *log.Logger) {
 		return
 	}
 
-	if p.Prompt != "" {
-		setConversationTitle(p.ConversationID, p.Prompt, logger)
-	}
-
 	logger.Printf("beforeSubmitPrompt: captured gen=%s promptLen=%d", p.GenerationID, len(p.Prompt))
 }
 
 // setConversationTitle sets the session's ConversationTitle to a truncated
 // version of prompt, but only when the title is not already set (first
-// prompt wins).
+// prompt wins). A missing session file is created so a beforeSubmit that
+// races ahead of sessionStart still leaves a title for stop to load.
+// UpdateSession holds the session lock so this write cannot replace a
+// sessionStart that landed between load and save.
 func setConversationTitle(conversationID, prompt string, logger *log.Logger) {
-	sess := fragment.LoadSession(conversationID, logger)
-	if sess == nil || sess.ConversationTitle != "" {
+	title := strings.TrimSpace(prompt)
+	if title == "" {
 		return
 	}
-	title := strings.TrimSpace(prompt)
 	if len(title) > maxTitleLen {
 		title = title[:maxTitleLen]
 		for !utf8.ValidString(title) {
 			title = title[:len(title)-1]
 		}
 	}
-	sess.ConversationTitle = title
-	if err := fragment.SaveSession(*sess); err != nil {
+	err := fragment.UpdateSession(conversationID, logger, func(s *fragment.Session) bool {
+		if s.ConversationTitle != "" {
+			return false
+		}
+		s.ConversationTitle = title
+		return true
+	})
+	if err != nil {
 		logger.Printf("beforeSubmitPrompt: save session title: %v", err)
 	}
 }
