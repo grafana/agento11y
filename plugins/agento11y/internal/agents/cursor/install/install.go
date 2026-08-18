@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/atomicfile"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
 )
 
@@ -331,39 +332,7 @@ func writeHooks(path string, doc *hooksDoc) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if existing, readErr := os.ReadFile(path); readErr == nil && bytes.Equal(existing, content) {
-		return false, nil
-	}
-
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return false, fmt.Errorf("mkdir %s: %w", dir, err)
-	}
-	tmp, err := os.CreateTemp(dir, "hooks.json.tmp-*")
-	if err != nil {
-		return false, fmt.Errorf("temp file in %s: %w", dir, err)
-	}
-	tmpPath := tmp.Name()
-	cleanup := func() { _ = os.Remove(tmpPath) }
-	if _, err := tmp.Write(content); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return false, fmt.Errorf("write temp: %w", err)
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return false, fmt.Errorf("chmod temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return false, fmt.Errorf("close temp: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		cleanup()
-		return false, fmt.Errorf("rename to %s: %w", path, err)
-	}
-	return true, nil
+	return atomicfile.WriteIfChanged(path, content, 0o644)
 }
 
 // unquote strips a single matching pair of surrounding single or double

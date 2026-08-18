@@ -22,6 +22,7 @@ import (
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/npmspec"
 )
 
 const (
@@ -208,7 +209,7 @@ func scopeLegacyStatus(path string) (hasLegacy, hasNew bool, err error) {
 	settingsDir := filepath.Dir(path)
 	for _, src := range sources {
 		if after, ok := strings.CutPrefix(src, npmPrefix); ok {
-			switch stripNpmVersion(after) {
+			switch npmspec.Name(after) {
 			case legacyPluginName:
 				hasLegacy = true
 			case pluginName:
@@ -221,7 +222,7 @@ func scopeLegacyStatus(path string) (hasLegacy, hasNew bool, err error) {
 			if !filepath.IsAbs(p) {
 				p = filepath.Join(settingsDir, p)
 			}
-			if name, _, ok := localPackage(p); ok && name == pluginName {
+			if name, _, ok := npmspec.ReadPackageJSON(p); ok && name == pluginName {
 				hasNew = true
 			}
 		}
@@ -280,16 +281,21 @@ type installedPlugin struct {
 
 // version resolves the installed version, exact source first: the package npm
 // installed, then a local checkout's own package.json, then the tail of a
-// pinned npm spec. A local-path entry has no npmDir, which localPackage reports
-// as unreadable.
+// pinned npm spec. A local-path entry has no npmDir, which
+// npmspec.ReadPackageJSON reports as unreadable.
 func (p installedPlugin) version() string {
-	if _, version, ok := localPackage(p.npmDir); ok && version != "" {
+	if _, version, ok := npmspec.ReadPackageJSON(p.npmDir); ok && version != "" {
 		return version
 	}
 	if p.localVersion != "" {
 		return p.localVersion
 	}
-	return versionFromPiSource(p.source)
+	// A source with no npm: prefix is a local path and pins no version.
+	after, ok := strings.CutPrefix(p.source, npmPrefix)
+	if !ok {
+		return ""
+	}
+	return npmspec.Version(after)
 }
 
 // installedPluginRecord returns the settings entry registering the
@@ -365,21 +371,6 @@ func settingsSources(path string) ([]string, error) {
 	return sources, nil
 }
 
-// versionFromPiSource returns the pinned version of an npm-spec source, e.g.
-// "0.1.1" from "npm:@grafana/agento11y-pi@0.1.1". Bare specs and local-path
-// sources yield "".
-func versionFromPiSource(source string) string {
-	after, ok := strings.CutPrefix(source, npmPrefix)
-	if !ok {
-		return ""
-	}
-	at := strings.LastIndex(after, "@")
-	if at <= 0 {
-		return ""
-	}
-	return after[at+1:]
-}
-
 // matchPluginSource reports whether a pi settings source identifies the
 // @grafana/agento11y-pi extension (or its legacy @grafana/sigil-pi name), and
 // returns the record describing where its version can be read. It handles three
@@ -395,7 +386,7 @@ func matchPluginSource(source, settingsDir string) (installedPlugin, bool) {
 		return installedPlugin{}, false
 	}
 	if after, ok := strings.CutPrefix(source, npmPrefix); ok {
-		name := stripNpmVersion(after)
+		name := npmspec.Name(after)
 		if !matchesPluginName(name) {
 			return installedPlugin{}, false
 		}
@@ -411,7 +402,7 @@ func matchPluginSource(source, settingsDir string) (installedPlugin, bool) {
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(settingsDir, path)
 		}
-		name, version, ok := localPackage(path)
+		name, version, ok := npmspec.ReadPackageJSON(path)
 		if !ok || !matchesPluginName(name) {
 			return installedPlugin{}, false
 		}
@@ -422,47 +413,11 @@ func matchPluginSource(source, settingsDir string) (installedPlugin, bool) {
 	return installedPlugin{}, false
 }
 
-// stripNpmVersion returns the package name portion of an npm spec, stripping
-// the trailing `@<version>` segment if present. Scoped packages start with
-// `@scope/...`; the leading `@` (index 0) is part of the name, not a version
-// separator, so we look for the LAST `@` after index 0.
-func stripNpmVersion(spec string) string {
-	at := strings.LastIndex(spec, "@")
-	if at <= 0 {
-		return spec
-	}
-	return spec[:at]
-}
-
 // matchesPluginName reports whether name is the extension's package name,
 // accepting the legacy pre-rename name so existing installs are not
 // duplicated under the new name.
 func matchesPluginName(name string) bool {
 	return name == pluginName || name == legacyPluginName
-}
-
-// localPackage returns the name and version a package directory's package.json
-// declares, for both a local source and the tree npm installed. Any IO/parse
-// failure means we can't confirm them — treat as unknown rather than an error,
-// since these files belong to pi or to a checkout we don't own. A package.json
-// with no `version` reports an empty version.
-func localPackage(path string) (name, version string, ok bool) {
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
-		return "", "", false
-	}
-	data, err := os.ReadFile(filepath.Join(path, "package.json"))
-	if err != nil {
-		return "", "", false
-	}
-	var pkg struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-	}
-	if err := json.Unmarshal(data, &pkg); err != nil {
-		return "", "", false
-	}
-	return pkg.Name, pkg.Version, true
 }
 
 // settingsPath returns the path to pi's global settings.json, honouring

@@ -72,7 +72,7 @@ func TestLaunch(t *testing.T) {
 			configBody:  configWithOther,
 			wantInstall: 1,
 			wantExec:    true,
-			wantStderr:  []string{"installing " + PluginSource + " into opencode"},
+			wantStderr:  []string{"installing " + PluginName + " into opencode"},
 		},
 		{
 			name:        "runs install when config file missing",
@@ -89,9 +89,9 @@ func TestLaunch(t *testing.T) {
 			wantInstall: 1,
 			wantExec:    true,
 			wantStderr: []string{
-				"install of " + PluginSource + " failed",
+				"install of " + PluginName + " failed",
 				"network down",
-				"opencode plugin " + PluginSource + " --global",
+				"opencode plugin " + PluginName + " --global",
 			},
 		},
 		{
@@ -417,7 +417,7 @@ func TestLaunch_RefreshesInstalledPluginWhenUpdateDue(t *testing.T) {
 	if updateCalls != 1 {
 		t.Fatalf("runUpdate calls = %d, want 1", updateCalls)
 	}
-	if !strings.Contains(stderr.String(), "refreshing "+PluginSource+" in opencode") {
+	if !strings.Contains(stderr.String(), "refreshing "+PluginName+" in opencode") {
 		t.Fatalf("stderr missing refresh message: %q", stderr.String())
 	}
 	stamp := filepath.Join(state, "agento11y", "update-checks", PluginName+".stamp")
@@ -513,6 +513,11 @@ func TestLaunch_MigratesLegacyConfig(t *testing.T) {
 
 			rewritten, err := os.ReadFile(filepath.Join(dir, file))
 			require.NoError(t, err)
+			// The config is opencode's file, so the rewrite keeps whatever
+			// mode it had; withConfigFiles writes it as 0600.
+			info, err := os.Stat(filepath.Join(dir, file))
+			require.NoError(t, err)
+			assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 			for _, want := range tc.wantContains {
 				assert.Contains(t, string(rewritten), want)
 			}
@@ -724,22 +729,6 @@ func envMap(env []string) map[string]string {
 
 func nopLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
-}
-
-func TestVersionFromNpmSpec(t *testing.T) {
-	cases := []struct {
-		spec string
-		want string
-	}{
-		{spec: "@grafana/agento11y-opencode", want: ""},
-		{spec: "@grafana/agento11y-opencode@0.6.0", want: "0.6.0"},
-		{spec: "@grafana/agento11y-opencode@next", want: "next"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.spec, func(t *testing.T) {
-			require.Equal(t, tc.want, versionFromNpmSpec(tc.spec))
-		})
-	}
 }
 
 func TestStatus(t *testing.T) {
