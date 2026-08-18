@@ -33,7 +33,9 @@ directory.
    `~/Library/Application Support/agento11y/jamf-reconcile.json`.
 4. Record that receipt in a Jamf extension attribute, taking care not to log
    `config.env`. The stable fields are `schema_version`, overall `status`,
-   `agento11y.version`, `config.revision`, and per-agent results. Status is
+   `agento11y.version`, `config.revision`, and per-agent results. Deferred
+   receipts retain those fields with `null` for unavailable version/revision.
+   Status is
    `converged`, `deferred_missing_config`, `deferred_missing_host`, or `error`;
    the root policy emits `deferred_no_user` when no user is logged in. A later
    policy can run
@@ -55,8 +57,9 @@ platform without a real Jamf tenant or credentials:
 ./deploy/jamf/test-bootstrap.sh
 ```
 
-It verifies missing-config deferral, stable receipt persistence, and a repeat
-reconcile through a fake `agento11y` binary. It cannot exercise the
+It verifies missing-config deferral, stable receipt persistence, the
+LaunchAgent user PATH, and a repeat reconcile through a fake `agento11y`
+binary. It cannot exercise the
 macOS-specific root-to-console-user handoff (`launchctl asuser`), so run the
 following pilot once before fleet rollout.
 

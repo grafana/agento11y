@@ -23,6 +23,13 @@ if [ "$*" != 'agents reconcile --agents claude,cursor --json' ]; then
   echo "unexpected arguments: $*" >&2
   exit 1
 fi
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *)
+    echo "managed user PATH missing $HOME/.local/bin" >&2
+    exit 1
+    ;;
+esac
 printf '%s\n' "$AGENTO11Y_TEST_CALLS" >> "$AGENTO11Y_TEST_CALLS"
 printf '%s\n' '{"schema_version":1,"status":"converged","agento11y":{"version":"test"},"config":{"revision":"1"},"agents":[{"name":"claude","status":"installed"},{"name":"cursor","status":"already_installed"}]}'
 EOF
@@ -36,7 +43,7 @@ run_bootstrap() {
     "$bootstrap"
 }
 
-missing_config='{"schema_version":1,"status":"deferred_missing_config","agents":[]}'
+missing_config='{"schema_version":1,"status":"deferred_missing_config","agento11y":{"version":null},"config":{"revision":null},"agents":[]}'
 output="$(run_bootstrap)"
 test "$output" = "$missing_config"
 test "$(cat "$receipt_dir/jamf-reconcile.json")" = "$missing_config"

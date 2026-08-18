@@ -13,14 +13,14 @@ agento11y_bin="${AGENTO11Y_BIN:-/usr/local/bin/agento11y}"
 agents="${AGENTO11Y_AGENTS:-claude,cursor}"
 
 emit_deferred_receipt() {
-  printf '%s\n' '{"schema_version":1,"status":"deferred_no_user","agents":[]}'
+  printf '{"schema_version":1,"status":"%s","agento11y":{"version":null},"config":{"revision":null},"agents":[]}\n' "$1"
 }
 
 if [ "$(id -u)" -eq 0 ]; then
   console_user="$(/usr/bin/stat -f%Su /dev/console)"
   case "$console_user" in
     ""|root|loginwindow)
-      emit_deferred_receipt
+      emit_deferred_receipt deferred_no_user
       exit 0
       ;;
   esac
@@ -41,6 +41,13 @@ if [ "${1:-}" = "--user-context" ]; then
   shift
 fi
 
+# LaunchAgents inherit launchd's minimal PATH. Keep the user-local locations
+# that commonly contain Claude Code even when this script did not start as
+# root and therefore skipped the launchctl asuser branch above.
+managed_path="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.volta/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+PATH="$managed_path:${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+export PATH
+
 if [ ! -x "$agento11y_bin" ]; then
   echo "agento11y binary is not executable: $agento11y_bin" >&2
   exit 1
@@ -59,7 +66,7 @@ write_receipt() {
 }
 
 if [ ! -r "$config_file" ]; then
-  receipt='{"schema_version":1,"status":"deferred_missing_config","agents":[]}'
+  receipt="$(emit_deferred_receipt deferred_missing_config)"
   printf '%s\n' "$receipt"
   write_receipt "$receipt"
   exit 0
