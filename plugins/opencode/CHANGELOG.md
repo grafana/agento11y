@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.20.0] - 2026-08-18
+
+### Breaking Changes
+
+- bump default timeout to 30s and support overriding via env var (#566)
+
+### Features
+
+- **plugins**: honour AGENTO11Y_REDACT_INPUT_MESSAGES in every coding agent plugin (#563)
+- **plugins/agento11y**: accept credentials block in login (#554)
+
 ## [0.19.0] - 2026-08-11
 
 ### Features
