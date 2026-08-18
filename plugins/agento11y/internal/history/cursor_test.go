@@ -225,9 +225,12 @@ func TestCursorRoots(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "cursor's chats directory under the home directory",
+			name: "cursor's chats and projects directories under the home directory",
 			imp:  &cursorImporter{},
-			want: []string{filepath.Join("/home/tester", ".cursor", "chats")},
+			want: []string{
+				filepath.Join("/home/tester", ".cursor", "chats"),
+				filepath.Join("/home/tester", ".cursor", "projects"),
+			},
 		},
 		{
 			name: "an override wins",
@@ -246,6 +249,7 @@ func TestCursorRoots(t *testing.T) {
 
 func TestCursorMatch(t *testing.T) {
 	imp := &cursorImporter{}
+	sid := "0f2b19b1-3d1f-4c1a-9a1e-2f7c1b9d4e55"
 	tests := []struct {
 		path string
 		want bool
@@ -259,6 +263,18 @@ func TestCursorMatch(t *testing.T) {
 		{path: "/c/ws/sess/other.db", want: false},
 		{path: "/c/ws/sess/store.sqlite", want: false},
 		{path: "/c/ws/sess/store.db.bak", want: false},
+		{
+			path: filepath.Join("/home/u/.cursor/projects/proj/agent-transcripts", sid, sid+".jsonl"),
+			want: true,
+		},
+		{
+			path: filepath.Join("/home/u/.cursor/projects/proj/agent-transcripts", sid, "subagents", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"),
+			want: false,
+		},
+		{
+			path: filepath.Join("/home/u/.cursor/projects/proj/agent-transcripts", sid, "other.jsonl"),
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		if got := imp.Match(tt.path); got != tt.want {
