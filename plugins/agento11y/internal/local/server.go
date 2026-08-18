@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	"github.com/grafana/agento11y/go/proto/agento11y/wire"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
@@ -25,6 +27,9 @@ const (
 	maxGenerationBodyBytes = 64 * 1024 * 1024 // 64 MiB
 	maxOTLPBodyBytes       = 16 * 1024 * 1024 // 16 MiB
 	maxHookBodyBytes       = 4 * 1024 * 1024  // 4 MiB
+
+	otlpTracesPath  = "/otlp/v1/traces"
+	otlpMetricsPath = "/otlp/v1/metrics"
 )
 
 // Server is the in-process HTTP handler that records generations from
@@ -147,8 +152,8 @@ func (s *Server) routes() *http.ServeMux {
 	// handler splits the action off it.
 	mux.HandleFunc("POST /api/v1/history/runs/{runAction}", s.handleHistoryRunCancel)
 	mux.HandleFunc("POST /api/v1/generations:export", s.handleGenerations)
-	mux.HandleFunc("POST /otlp/v1/traces", s.handleOTLP)
-	mux.HandleFunc("POST /otlp/v1/metrics", s.handleOTLP)
+	mux.HandleFunc("POST "+otlpTracesPath, s.handleOTLP)
+	mux.HandleFunc("POST "+otlpMetricsPath, s.handleOTLP)
 	// Cloud-style hook endpoint with no run prefix. The agento11y SDK strips
 	// the path from API.Endpoint before appending /api/v1/hooks:evaluate,
 	// so we must accept the bare path too — otherwise local hook
@@ -157,8 +162,35 @@ func (s *Server) routes() *http.ServeMux {
 	return mux
 }
 
+// mediaTypeAccepted permits only types that a browser cannot send cross-site
+// without a preflight. The OTLP routes also accept binary protobuf.
+func mediaTypeAccepted(path, header string) bool {
+	mediaType, _, err := mime.ParseMediaType(header)
+	if err != nil {
+		return false
+	}
+
+	switch mediaType {
+	case wire.ContentTypeJSON:
+		return true
+	case wire.ContentTypeProto:
+		return path == otlpTracesPath || path == otlpMetricsPath
+	default:
+		return false
+	}
+}
+
 // ServeHTTP routes incoming requests to the appropriate handler.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost || r.Method == http.MethodPut {
+		contentType := r.Header.Get("Content-Type")
+		if !mediaTypeAccepted(r.URL.Path, contentType) {
+			s.logger.Printf("local: refused %s %q: Content-Type %q", r.Method, r.URL.Path, contentType)
+			http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+			return
+		}
+	}
+
 	s.mux.ServeHTTP(w, r)
 }
 

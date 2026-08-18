@@ -285,15 +285,18 @@ func TestServer_HookEvaluate_InvalidJSONReturns400(t *testing.T) {
 // The richer per-endpoint behaviour lives in the generations / OTLP /
 // hook tests above.
 func TestServer_Routing(t *testing.T) {
-	s, _ := newTestServer(t)
+	s, dir := newTestServer(t)
 	cases := []struct {
-		name            string
-		method          string
-		path            string
-		body            string
-		want            int
-		wantContentType string // prefix-matched; "" skips the check
-		wantBodyHas     string // substring check; "" skips
+		name                string
+		method              string
+		path                string
+		contentType         string
+		body                string
+		want                int
+		wantContentType     string // prefix-matched; "" skips the check
+		wantBodyHas         string // substring check; "" skips
+		wantBodyNotHas      string // substring check; "" skips
+		wantNoConversations bool
 	}{
 		{name: "root serves viewer HTML", method: http.MethodGet, path: "/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `<script type="text/babel" src="/assets/app.jsx">`},
 		{name: "conversation path serves viewer HTML", method: http.MethodGet, path: "/conversations/conv-123", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `<script type="text/babel" src="/assets/app.jsx">`},
@@ -302,14 +305,24 @@ func TestServer_Routing(t *testing.T) {
 		{name: "CSS asset", method: http.MethodGet, path: "/assets/app.css", want: http.StatusOK, wantContentType: "text/css", wantBodyHas: ":root"},
 		{name: "JSX asset", method: http.MethodGet, path: "/assets/app.jsx", want: http.StatusOK, wantContentType: "text/babel", wantBodyHas: "function App()"},
 		{name: "healthz serves JSON", method: http.MethodGet, path: "/healthz", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"status":"ok"`},
-		{name: "unknown route", method: http.MethodPost, path: "/api/v1/unknown", body: "{}", want: http.StatusNotFound},
-		{name: "wrong method on generations export", method: http.MethodPut, path: "/api/v1/generations:export", body: "{}", want: http.StatusMethodNotAllowed},
-		{name: "hook evaluate serves JSON", method: http.MethodPost, path: "/api/v1/hooks:evaluate", body: `{"phase":"postflight"}`, want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"action":"allow"`},
+		{name: "unknown route", method: http.MethodPost, path: "/api/v1/unknown", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusNotFound},
+		{name: "wrong method on generations export", method: http.MethodPut, path: "/api/v1/generations:export", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusMethodNotAllowed},
+		{name: "hook evaluate serves JSON", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: wire.ContentTypeJSON, body: `{"phase":"postflight"}`, want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"action":"allow"`},
 		{name: "wrong method on hook evaluate", method: http.MethodGet, path: "/api/v1/hooks:evaluate", want: http.StatusMethodNotAllowed},
+		{name: "form type refused", method: http.MethodPost, path: "/api/v1/generations:export", contentType: "application/x-www-form-urlencoded", body: "generations=[]", want: http.StatusUnsupportedMediaType, wantNoConversations: true},
+		{name: "text type refused", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: "text/plain", body: `{"phase":"postflight"}`, want: http.StatusUnsupportedMediaType, wantBodyNotHas: `"action"`},
+		{name: "absent type refused", method: http.MethodPost, path: "/api/v1/history/runs/r1:cancel", want: http.StatusUnsupportedMediaType},
+		{name: "charset parameter accepted", method: http.MethodPost, path: "/api/v1/hooks:evaluate", contentType: "application/json; charset=utf-8", body: `{"phase":"postflight"}`, want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"action":"allow"`},
+		{name: "protobuf accepted on OTLP", method: http.MethodPost, path: otlpTracesPath, contentType: wire.ContentTypeProto, body: "protobuf", want: http.StatusOK},
+		{name: "protobuf refused outside OTLP", method: http.MethodPost, path: "/api/v1/generations:export", contentType: wire.ContentTypeProto, body: "protobuf", want: http.StatusUnsupportedMediaType},
+		{name: "GET is not gated", method: http.MethodGet, path: "/api/v1/conversations", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"conversations":[]`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			if tc.contentType != "" {
+				req.Header.Set("Content-Type", tc.contentType)
+			}
 			rr := httptest.NewRecorder()
 			s.ServeHTTP(rr, req)
 			if rr.Code != tc.want {
@@ -323,6 +336,44 @@ func TestServer_Routing(t *testing.T) {
 			if tc.wantBodyHas != "" && !strings.Contains(rr.Body.String(), tc.wantBodyHas) {
 				t.Fatalf("body missing %q\n--- body ---\n%s", tc.wantBodyHas, rr.Body.String())
 			}
+			if tc.wantBodyNotHas != "" && strings.Contains(rr.Body.String(), tc.wantBodyNotHas) {
+				t.Fatalf("body contains %q\n--- body ---\n%s", tc.wantBodyNotHas, rr.Body.String())
+			}
+			if tc.wantNoConversations {
+				entries, err := os.ReadDir(filepath.Join(dir, ConversationsDir))
+				require.NoError(t, err)
+				assert.Empty(t, entries)
+			}
+		})
+	}
+}
+
+func TestServer_MediaTypeRefusalIsLogged(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		path    string
+		wantLog string
+	}{
+		{
+			name:    "request details",
+			path:    "/api/v1/history:import",
+			wantLog: "local: refused POST \"/api/v1/history:import\": Content-Type \"text/plain\"\n",
+		},
+		{
+			name:    "escaped control character",
+			path:    "/x%0aforged",
+			wantLog: "local: refused POST \"/x\\nforged\": Content-Type \"text/plain\"\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestServer(t)
+			var logs strings.Builder
+			s.logger.SetOutput(&logs)
+
+			resp := post(t, s, tc.path, "text/plain", "{}")
+			resp.Body.Close()
+			require.Equal(t, http.StatusUnsupportedMediaType, resp.StatusCode)
+			assert.Equal(t, tc.wantLog, logs.String())
 		})
 	}
 }
@@ -688,6 +739,7 @@ func TestServer_APITokenMetrics(t *testing.T) {
 
 	t.Run("wrong method rejected", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/tokens", strings.NewReader("{}"))
+		req.Header.Set("Content-Type", wire.ContentTypeJSON)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
