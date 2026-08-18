@@ -719,6 +719,10 @@ func identByte(c byte) bool {
 	return alnumAt(string(c), 0) || c == '_' || c == '$' || c == '-'
 }
 
+func TestViewerIndexHasCSPNoncePlaceholder(t *testing.T) {
+	assert.Equal(t, 1, strings.Count(string(indexHTML), noncePlaceholder))
+}
+
 // TestViewerServesItsOwnAssets pins the offline and privacy contract: the
 // viewer renders private session data, so opening it must not reach a CDN, and
 // it must work with no network. Every third-party asset ships in the binary.
