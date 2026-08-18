@@ -11,6 +11,7 @@
 //	agento11y pi       [--local|--no-local] [--tag k=v] [-- args...]  — exec pi after bootstrapping the @grafana/agento11y-pi extension
 //	agento11y vibe     [--local|--no-local] [--tag k=v] [-- args...]  — exec vibe after installing the sigil hook in vibe's hooks.toml
 //	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
+//	agento11y claude   install [--json]                               — register the Claude Code plugin without launching or prompting
 //	agento11y local start|status|stop                                 — manage the local capture daemon
 //	agento11y history import <agent> [flags]                          — backfill an agent's existing local sessions
 //	agento11y skills list|show <name>                                 — print an agent skill bundled into this binary
@@ -34,6 +35,7 @@ package entry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -126,6 +128,7 @@ func localPrivacyLines(posture local.ForwardPosture, known bool) []string {
 func usageLine() string {
 	return "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] " +
 		"[--otlp-endpoint url] [--no-verify] [--yes] | agento11y doctor [--json] | " +
+		"agento11y claude install [--json] | " +
 		"agento11y skills list|show <name> | agento11y local start|status|stop | " +
 		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
 		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
@@ -183,6 +186,7 @@ var loginRun = login.Run
 var (
 	cursorInstall   = cursorinstall.Run
 	cursorUninstall = cursorinstall.Uninstall
+	claudeInstall   = claudecode.Install
 )
 
 // Main is the entrypoint shared by cmd/agento11y and cmd/agento11y.
@@ -238,6 +242,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// dispatch like `local`. It owns its own flag parsing.
 	if args[0] == "doctor" {
 		runDoctorCommand(args[1:], stdout, stderr)
+		return
+	}
+
+	// `agento11y claude install` is the noninteractive counterpart to the
+	// launcher. Managed deployment tooling uses it after placing a config.env
+	// for the current user; it never launches Claude or prompts.
+	if args[0] == "claude" && len(args) >= 2 && args[1] == "install" {
+		runClaudeInstall(args[2:], stdout, stderr)
 		return
 	}
 
@@ -582,6 +594,58 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 			logger.Printf("auto-login: %v", err)
 			_, _ = fmt.Fprintf(stderr, "agento11y: setup failed (%v); run `agento11y login` when ready\n", err)
 		}
+	}
+}
+
+type agentInstallResult struct {
+	Agent  string `json:"agent"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+// runClaudeInstall registers the Claude Code plugin without entering an
+// interactive setup flow or starting Claude. It is intended for managed-device
+// tooling, which writes config.env separately for each user.
+func runClaudeInstall(args []string, stdout, stderr io.Writer) {
+	fs := flag.NewFlagSet("claude install", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var asJSON bool
+	fs.BoolVar(&asJSON, "json", false, "print a machine-readable result")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		_, _ = fmt.Fprintln(stderr, "usage: agento11y claude install [--json]")
+		exit(2)
+		return
+	}
+
+	writer := stdout
+	if asJSON {
+		writer = io.Discard
+	}
+	result := agentInstallResult{Agent: "claude"}
+	changed, err := claudeInstall(context.Background(), writer)
+	switch {
+	case errors.Is(err, claudecode.ErrCLINotFound):
+		result.Status = "missing_host"
+	case err != nil:
+		result.Status, result.Error = "error", err.Error()
+	case changed:
+		result.Status = "installed"
+	default:
+		result.Status = "already_installed"
+	}
+
+	if asJSON {
+		data, err := json.Marshal(result)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agento11y claude install: encode result: %v\n", err)
+			exit(1)
+			return
+		} else {
+			_, _ = fmt.Fprintln(stdout, string(data))
+		}
+	}
+	if result.Status == "error" {
+		exit(1)
 	}
 }
 

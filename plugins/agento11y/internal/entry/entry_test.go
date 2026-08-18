@@ -3,6 +3,7 @@ package entry
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
@@ -556,6 +558,44 @@ func withStubCursorUninstall(t *testing.T, fn func(io.Writer, io.Writer, *log.Lo
 	prev := cursorUninstall
 	t.Cleanup(func() { cursorUninstall = prev })
 	cursorUninstall = fn
+}
+
+func withStubClaudeInstall(t *testing.T, fn func(context.Context, io.Writer) (bool, error)) {
+	t.Helper()
+	prev := claudeInstall
+	t.Cleanup(func() { claudeInstall = prev })
+	claudeInstall = fn
+}
+
+func TestRun_ClaudeInstallJSON(t *testing.T) {
+	withStubClaudeInstall(t, func(context.Context, io.Writer) (bool, error) { return true, nil })
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"claude", "install", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
+	require.Empty(t, stderr.String())
+
+	var result agentInstallResult
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
+	assert.Equal(t, agentInstallResult{Agent: "claude", Status: "installed"}, result)
+}
+
+func TestRun_ClaudeInstallReportsMissingHost(t *testing.T) {
+	withStubClaudeInstall(t, func(context.Context, io.Writer) (bool, error) {
+		return false, claudecode.ErrCLINotFound
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"claude", "install", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
+
+	var result agentInstallResult
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
+	assert.Equal(t, agentInstallResult{Agent: "claude", Status: "missing_host"}, result)
 }
 
 // withStubLauncher replaces the launchers map with a single entry for the

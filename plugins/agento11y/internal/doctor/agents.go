@@ -7,6 +7,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
+	cursorinstall "github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/install"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe"
@@ -23,14 +24,17 @@ type agentProbe struct {
 	name string
 	// bin is the executable looked up on PATH.
 	bin string
-	// status is the package's read-only install probe, or nil for hook-only
-	// agents (cursor) that the agento11y binary never installs.
+	// status is the package's read-only install probe.
 	status statusFn
 	// configBased is true when status reads install state from files and needs
 	// no binary on PATH (claude, opencode, pi, copilot, vibe). For these, doctor
 	// reports install state even when the CLI is absent. CLI-dependent probes
 	// (codex) shell out to the binary, so they're skipped when it's missing.
 	configBased bool
+	// fallbackVersion is used by integrations whose hooks invoke the shared
+	// agento11y binary instead of shipping their own independently versioned
+	// plugin.
+	fallbackVersion bool
 	// notInstalledLabel overrides the default "plugin not installed" wording
 	// for agents whose capture isn't plugin-based (copilot and vibe use hooks).
 	notInstalledLabel string
@@ -41,9 +45,8 @@ type agentProbe struct {
 // Test seam.
 var lookPath = exec.LookPath
 
-// agentProbes is the detection/probe table. cursor is hook-only (no launcher),
-// so it has no install probe: its capture is wired into Cursor's own hook
-// settings, and its effective version is the agento11y binary's.
+// agentProbes is the detection/probe table. Cursor is hook-based and its
+// effective version is the shared agento11y binary's.
 var agentProbes = []agentProbe{
 	{name: "claude", bin: "claude", status: claudecode.Status, configBased: true},
 	{name: "codex", bin: "codex", status: codex.Status},
@@ -51,12 +54,14 @@ var agentProbes = []agentProbe{
 	{name: "opencode", bin: "opencode", status: opencode.Status, configBased: true},
 	{name: "pi", bin: "pi", status: pi.Status, configBased: true},
 	{name: "vibe", bin: "vibe", status: vibe.Status, configBased: true, notInstalledLabel: "not configured", note: "hook-based"},
-	{name: "cursor", bin: "cursor", status: nil, note: "hook-based; configured in Cursor settings"},
+	{name: "cursor", bin: "cursor", status: func(context.Context) (bool, string, error) {
+		installed, err := cursorinstall.Status()
+		return installed, "", err
+	}, configBased: true, fallbackVersion: true, notInstalledLabel: "not configured", note: "hook-based; configured in Cursor settings"},
 }
 
 // defaultCollectAgents runs the PATH sweep and per-agent read-only status
-// probe. binaryVersion is reported as cursor's version (its hooks call the
-// agento11y binary, so they move together).
+// probe.
 func defaultCollectAgents(ctx context.Context, binaryVersion string) []AgentStatus {
 	out := make([]AgentStatus, 0, len(agentProbes))
 	for _, probe := range agentProbes {
@@ -72,9 +77,8 @@ func probeAgent(ctx context.Context, probe agentProbe, binaryVersion string) Age
 	_, lookErr := lookPath(probe.bin)
 	a.OnPath = lookErr == nil
 
-	// Hook-only agent (cursor): no install probe, detection is PATH presence.
-	// Capture is configured in the host's own settings, which the agento11y binary
-	// doesn't manage, so report it as present with the agento11y binary version.
+	// Keep the nil-status behaviour for test probes and future integrations
+	// whose host only establishes availability by being on PATH.
 	if probe.status == nil {
 		if !a.OnPath {
 			a.Health = HealthSkipped
@@ -103,10 +107,14 @@ func probeAgent(ctx context.Context, probe agentProbe, binaryVersion string) Age
 		return a
 	}
 	if installed {
+		if version == "" && probe.fallbackVersion {
+			version = binaryVersion
+		}
 		// A version belongs to an installed plugin, so both the human report and
 		// the JSON one drop a version a probe reports next to "not installed".
 		a.Version = version
 		a.Install = InstallStateInstalled
+		a.HookBased = probe.fallbackVersion
 		a.Health = HealthOK
 	} else {
 		a.Install = InstallStateNotInstalled

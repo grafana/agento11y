@@ -26,6 +26,81 @@ func TestLaunch_MissingClaudeBinary(t *testing.T) {
 	}
 }
 
+func TestInstall_RegistersWithoutLaunching(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/claude", nil })
+
+	installs := 0
+	withRunInstall(t, func(_ context.Context, bin string, _ io.Writer) error {
+		installs++
+		if bin != "/usr/local/bin/claude" {
+			t.Errorf("install bin = %q, want /usr/local/bin/claude", bin)
+		}
+		return nil
+	})
+
+	changed, err := Install(context.Background(), io.Discard)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, 1, installs)
+}
+
+func TestInstall_SkipsExistingPlugin(t *testing.T) {
+	dir := t.TempDir()
+	writeInstalled(t, dir, `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"user"}]}}`)
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/claude", nil })
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("runInstall must not be called for an existing plugin")
+		return nil
+	})
+
+	changed, err := Install(context.Background(), io.Discard)
+	require.NoError(t, err)
+	require.False(t, changed)
+}
+
+func TestInstall_SkipsExistingPluginWithoutClaudeOnPATH(t *testing.T) {
+	dir := t.TempDir()
+	writeInstalled(t, dir, `{"version":2,"plugins":{"agento11y-claude-code@agento11y":[{"scope":"user"}]}}`)
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		t.Fatal("runInstall must not be called for an existing plugin")
+		return nil
+	})
+
+	changed, err := Install(context.Background(), io.Discard)
+	require.NoError(t, err)
+	require.False(t, changed)
+}
+
+func TestInstall_RepairsUnreadablePluginStore(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "plugins"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "plugins", "installed_plugins.json"), []byte("not json"), 0o600))
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/claude", nil })
+	installs := 0
+	withRunInstall(t, func(context.Context, string, io.Writer) error {
+		installs++
+		return nil
+	})
+
+	changed, err := Install(context.Background(), io.Discard)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, 1, installs)
+}
+
+func TestInstall_MissingClaudeIsClassifiable(t *testing.T) {
+	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+
+	_, err := Install(context.Background(), io.Discard)
+	require.ErrorIs(t, err, ErrCLINotFound)
+}
+
 func TestLaunch_SkipsInstallWhenPluginPresent(t *testing.T) {
 	t.Setenv("SIGIL_AUTO_UPDATE", "false")
 

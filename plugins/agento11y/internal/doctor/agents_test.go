@@ -87,6 +87,18 @@ func TestDefaultCollectAgents(t *testing.T) {
 	}
 }
 
+func TestCursorProbeUsesHookConfigurationWording(t *testing.T) {
+	for _, probe := range agentProbes {
+		if probe.name == "cursor" {
+			if probe.notInstalledLabel != "not configured" {
+				t.Fatalf("cursor notInstalledLabel = %q, want not configured", probe.notInstalledLabel)
+			}
+			return
+		}
+	}
+	t.Fatal("cursor probe missing")
+}
+
 // An AgentStatus built without an install state must not read as a definite
 // "not installed" in either output. The zero value is outside the domain, so
 // both the renderer and the JSON contract map it to unknown.
