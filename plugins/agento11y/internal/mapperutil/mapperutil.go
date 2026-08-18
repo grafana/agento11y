@@ -99,9 +99,10 @@ func SortedToolDefinitions(names []string) []agento11y.ToolDefinition {
 
 // InferProvider maps a model name to an agento11y provider using loose substring
 // matching for Claude/Gemini/Grok and prefix matching for the OpenAI families.
-// Grok maps to "x-ai", the OpenRouter id the model-card catalog keys xAI
-// prices under. Returns "" when nothing matches so callers can supply their
-// own fallback.
+// Gemini maps to "gemini", matching the SDK's Gemini provider wrapper. Grok
+// maps to "x-ai", the OpenRouter id the model-card catalog keys xAI prices
+// under. Returns "" when nothing matches so callers can supply their own
+// fallback.
 //
 // copilot intentionally uses a stricter matcher (hyphenated prefixes) and does
 // not call this.
@@ -110,15 +111,16 @@ func InferProvider(model string) string {
 	switch {
 	case strings.Contains(m, "claude"):
 		return "anthropic"
-	case strings.HasPrefix(m, "gpt"),
-		strings.HasPrefix(m, "o1"),
-		strings.HasPrefix(m, "o3"),
-		strings.HasPrefix(m, "o4"):
+	case strings.HasPrefix(m, "gpt"), isOpenAIOSeriesModel(m):
 		return "openai"
 	case strings.Contains(m, "gemini"):
-		return "google"
+		return "gemini"
 	case strings.Contains(m, "grok"):
 		return "x-ai"
 	}
 	return ""
+}
+
+func isOpenAIOSeriesModel(model string) bool {
+	return len(model) >= 2 && model[0] == 'o' && model[1] >= '0' && model[1] <= '9'
 }

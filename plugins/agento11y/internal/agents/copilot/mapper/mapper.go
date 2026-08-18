@@ -357,7 +357,7 @@ func inferProvider(model string) string {
 	case strings.HasPrefix(model, "claude-"):
 		return "anthropic"
 	case strings.HasPrefix(model, "gemini-"):
-		return "google"
+		return "gemini"
 	default:
 		return ""
 	}
