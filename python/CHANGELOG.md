@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0] - 2026-08-18
+
+### Bug Fixes
+
+- **python**: stop re-raising recorded tool errors into host callbacks (#572)
+- **python-frameworks/claude-agent-sdk**: skip blocks with nothing to record (#571)
+
 ## [0.15.0] - 2026-08-17
 
 ### Breaking Changes
