@@ -354,13 +354,13 @@ func TestWarmStartsOnFirstViewerRead(t *testing.T) {
 	// The page stops after one conversation, so only the warm can account
 	// for the other two entries.
 	rr := httptest.NewRecorder()
-	srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/conversations?limit=1", nil))
+	srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, "/api/v1/conversations?limit=1", nil))
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Eventually(t, func() bool { return cachedSummaryCount(&storage.summaries) == 3 },
 		2*time.Second, 5*time.Millisecond, "the first viewer read starts the warm")
 
 	rr = httptest.NewRecorder()
-	srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/metrics/tokens", nil))
+	srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, "/api/v1/metrics/tokens", nil))
 	require.Equal(t, http.StatusOK, rr.Code)
 	assert.Never(t, func() bool { return warms.Load() > 1 }, 50*time.Millisecond, 5*time.Millisecond,
 		"the store is warmed once, not once per request")

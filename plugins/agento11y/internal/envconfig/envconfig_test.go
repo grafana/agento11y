@@ -646,13 +646,10 @@ func TestResolveContentModeValue(t *testing.T) {
 	}
 }
 
-// TestAliasSuffixesCoversLocalFamilies pins LOCAL and LOCAL_FORWARD into the
-// alias families so PinAliasEnvBlank clears them in tests and ExpandAliases
-// mirrors them on write. LOCAL decides whether a launcher starts in local mode,
-// so an unpinned developer shell value would silently reroute launcher tests to
-// the local daemon.
+// Local settings use alias-family dotenv precedence across the AGENTO11Y_ and
+// SIGIL_ spellings.
 func TestAliasSuffixesCoversLocalFamilies(t *testing.T) {
-	for _, suffix := range []string{"LOCAL", "LOCAL_FORWARD"} {
+	for _, suffix := range []string{"LOCAL", "LOCAL_FORWARD", "LOCAL_ALLOWED_HOSTS"} {
 		if !slices.Contains(AliasSuffixes, suffix) {
 			t.Fatalf("AliasSuffixes must contain %s", suffix)
 		}

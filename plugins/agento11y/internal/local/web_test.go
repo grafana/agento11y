@@ -734,6 +734,16 @@ func TestViewerServesItsOwnAssets(t *testing.T) {
 		assert.NotContains(t, string(appCSS), host, "app.css must not load anything from %s", host)
 	}
 
+	req := newLocalRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), `nonce="`)
+	assert.NotContains(t, rr.Body.String(), noncePlaceholder)
+
 	assets := map[string]string{
 		"/assets/vendor/react.production.min.js":     "application/javascript; charset=utf-8",
 		"/assets/vendor/react-dom.production.min.js": "application/javascript; charset=utf-8",
@@ -748,7 +758,7 @@ func TestViewerServesItsOwnAssets(t *testing.T) {
 			require.Contains(t, string(indexHTML)+string(appCSS), path, "nothing references %s", path)
 
 			rr := httptest.NewRecorder()
-			srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
 			require.Equal(t, http.StatusOK, rr.Code)
 			assert.Equal(t, wantType, rr.Header().Get("Content-Type"))
 			assert.NotEmpty(t, rr.Body.Bytes())
@@ -771,7 +781,7 @@ func TestViewerAssetRoutesRejectTraversal(t *testing.T) {
 	} {
 		t.Run(path, func(t *testing.T) {
 			rr := httptest.NewRecorder()
-			srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+			srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, path, nil))
 			assert.NotEqual(t, http.StatusOK, rr.Code, "%s must not be served", path)
 		})
 	}
