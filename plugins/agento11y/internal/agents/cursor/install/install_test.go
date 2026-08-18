@@ -371,6 +371,26 @@ func TestInstallThenUninstallRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStatus(t *testing.T) {
+	home := t.TempDir()
+	withHome(t, home)
+
+	installed, err := Status()
+	require.NoError(t, err)
+	assert.False(t, installed, "a missing hooks file is not installed")
+
+	withExecutable(t, testBin)
+	require.NoError(t, Run(io.Discard, io.Discard, nopLogger()))
+	installed, err = Status()
+	require.NoError(t, err)
+	assert.True(t, installed)
+
+	seedHooks(t, home, `{"version":1,"hooks":{"sessionStart":[{"command":"agento11y cursor hook"}]}}`)
+	installed, err = Status()
+	require.NoError(t, err)
+	assert.False(t, installed, "partial hook wiring is not a healthy install")
+}
+
 func TestIsOursHook(t *testing.T) {
 	cases := []struct {
 		cmd  string

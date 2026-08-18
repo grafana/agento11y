@@ -200,7 +200,7 @@ func TestRun_HelpIsARealCommand(t *testing.T) {
 // The subcommand list is hand-written for the reason given at helpBody, so
 // adding a subcommand to run and forgetting this list is not caught.
 func helpRows() []string {
-	rows := []string{"\n  <agent> hook", "\n  cursor install|uninstall"}
+	rows := []string{"\n  <agent> hook", "\n  cursor install|uninstall", "\n  agents install --agents claude,cursor [--json]"}
 	for _, name := range []string{"login", "doctor", "skills", "local", "history", "help"} {
 		rows = append(rows, "\n  "+name+" ")
 	}

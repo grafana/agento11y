@@ -140,6 +140,33 @@ func Uninstall(stdout, _ io.Writer, logger *log.Logger) error {
 	return nil
 }
 
+// Status reports whether every Cursor event agento11y wires has one of this
+// installer's hook commands. It is read-only so `agento11y doctor` can use it
+// safely in a managed deployment health check.
+func Status() (bool, error) {
+	path, err := cursorHooksPath()
+	if err != nil {
+		return false, err
+	}
+	doc, err := loadHooks(path)
+	if err != nil {
+		return false, err
+	}
+	for _, event := range cursorEvents {
+		found := false
+		for _, entry := range doc.hooks[event] {
+			if isOursHook(commandOf(entry)) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // cursorHooksPath returns the user-level Cursor hooks file path.
 //
 // Cursor reads ~/.cursor/hooks.json for user-global hooks. No config-dir

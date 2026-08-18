@@ -65,9 +65,9 @@ Branch on these fields. The JSON also reports auto-update state:
 | `analytics.status` | The OTLP metrics and traces pipeline. | `error`: Troubleshooting |
 | `agents[]` | One entry per coding agent, with `install_state` and `on_path`. | target agent `not_installed`: Step 4 |
 
-Cursor is hook-based and always reports `install_state: unknown`; doctor cannot
-inspect `~/.cursor/hooks.json`. Do not use that field to decide whether Cursor is
-wired. Run `agento11y cursor install` when the user wants Cursor wired;
+Cursor is hook-based. `install_state: installed` means every agento11y Cursor
+hook is present in `~/.cursor/hooks.json`; `not_installed` means one or more is
+absent. Run `agento11y cursor install` when the user wants Cursor wired;
 re-running it is safe.
 
 `agento11y doctor` exits 1 when conversations, analytics, or config is in
@@ -250,6 +250,8 @@ agento11y cursor uninstall   # removes it
 On macOS and Linux, re-run `agento11y cursor install` after moving the binary;
 Cursor's hook stores its absolute path.
 
+For managed macOS deployment, after the administrator has placed the connection file for the target user, use `agento11y agents install --agents claude,cursor --json`; it never prompts or launches a host. `missing_host` for Claude means rerun after Claude Code is installed for that user.
+
 Arguments after `--` go to the underlying CLI unchanged:
 
 ```sh
@@ -369,7 +371,6 @@ All hosts read the resolved config path. The default is
 | `AGENTO11Y_CONTENT_CAPTURE_MODE` | Which content fields ship (see below) |
 | `AGENTO11Y_TAGS` | `key=value,key=value` attached to every generation |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | Opt-in automatic user, repo, and branch tags |
-| `AGENTO11Y_EXPORT_TIMEOUT_MS` | Generation export timeout in milliseconds; defaults to 30000 |
 | `AGENTO11Y_GUARDS_ENABLED` | Send supported preflight and tool calls for guard evaluation |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | Guard evaluation timeout in milliseconds |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | Allow the operation when guard evaluation fails |
@@ -458,14 +459,7 @@ set.
 
 The viewer and Grafana Cloud both start empty: they hold only sessions captured
 after the install. `agento11y history import` backfills sessions an agent
-already wrote to disk. Supported agents are `claude-code`, `codex`, `cursor`, and
-`pi`.
-
-A `cursor` import reads Cursor's session databases under `~/.cursor/chats`. That
-format records no token usage and stamps no message with a time, so an imported
-turn carries no usage and its times are marked approximate. Reading a session can
-add a `store.db-shm` file next to the session database, which SQLite needs to
-read the newest part of a session.
+already wrote to disk. Supported agents are `claude-code`, `codex`, and `pi`.
 
 ```sh
 agento11y history import claude-code --dry-run   # plan only, nothing exported

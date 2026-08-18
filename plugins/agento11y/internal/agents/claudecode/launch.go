@@ -42,6 +42,10 @@ const (
 	updateCheckTTL = 24 * time.Hour
 )
 
+// ErrCLINotFound means the Claude Code binary is not available on PATH for the
+// current user. Managed deployment tooling can treat this as a skipped agent.
+var ErrCLINotFound = errors.New("claude CLI not found")
+
 // Test seams.
 var (
 	lookPath   = exec.LookPath
@@ -108,6 +112,30 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 		UpdateTTL:     updateCheckTTL,
 		BinaryVersion: binaryVersion,
 	})
+}
+
+// Install registers the Claude Code plugin without starting Claude or
+// prompting for Agent Observability credentials. It is intended for managed
+// deployment tooling that has already configured the current user.
+//
+// The returned value is true only when this invocation registered the plugin.
+func Install(ctx context.Context, stdout io.Writer) (bool, error) {
+	bin, err := lookPath("claude")
+	if err != nil {
+		return false, fmt.Errorf("%w; install Claude Code or run this in the developer's user context", ErrCLINotFound)
+	}
+
+	installed, err := pluginInstalled()
+	if err != nil {
+		return false, err
+	}
+	if installed {
+		return false, nil
+	}
+	if err := runInstall(ctx, bin, stdout); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Status reports whether the Claude Code plugin is installed for the current

@@ -11,6 +11,7 @@
 //	agento11y pi       [--local|--no-local] [--tag k=v] [-- args...]  — exec pi after bootstrapping the @grafana/agento11y-pi extension
 //	agento11y vibe     [--local|--no-local] [--tag k=v] [-- args...]  — exec vibe after installing the sigil hook in vibe's hooks.toml
 //	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
+//	agento11y agents install --agents claude,cursor [--json]           — wire coding agents without launching or prompting
 //	agento11y local start|status|stop                                 — manage the local capture daemon
 //	agento11y history import <agent> [flags]                          — backfill an agent's existing local sessions
 //	agento11y skills list|show <name>                                 — print an agent skill bundled into this binary
@@ -34,6 +35,7 @@ package entry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -126,6 +128,7 @@ func localPrivacyLines(posture local.ForwardPosture, known bool) []string {
 func usageLine() string {
 	return "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] " +
 		"[--otlp-endpoint url] [--no-verify] [--yes] | agento11y doctor [--json] | " +
+		"agento11y agents install --agents claude,cursor [--json] | " +
 		"agento11y skills list|show <name> | agento11y local start|status|stop | " +
 		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
 		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
@@ -183,6 +186,8 @@ var loginRun = login.Run
 var (
 	cursorInstall   = cursorinstall.Run
 	cursorUninstall = cursorinstall.Uninstall
+	cursorStatus    = cursorinstall.Status
+	claudeInstall   = claudecode.Install
 )
 
 // Main is the entrypoint shared by cmd/agento11y and cmd/agento11y.
@@ -238,6 +243,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// dispatch like `local`. It owns its own flag parsing.
 	if args[0] == "doctor" {
 		runDoctorCommand(args[1:], stdout, stderr)
+		return
+	}
+
+	// `agento11y agents install` is the noninteractive counterpart to the
+	// per-agent launchers. Managed deployment tooling uses it after placing a
+	// config.env for the current user; it never launches an agent or prompts.
+	if args[0] == "agents" {
+		runAgentsCommand(args[1:], stdout, stderr)
 		return
 	}
 
@@ -582,6 +595,103 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 			logger.Printf("auto-login: %v", err)
 			_, _ = fmt.Fprintf(stderr, "agento11y: setup failed (%v); run `agento11y login` when ready\n", err)
 		}
+	}
+}
+
+type agentInstallResult struct {
+	Agent  string `json:"agent"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+type agentInstallReport struct {
+	Agents []agentInstallResult `json:"agents"`
+}
+
+// runAgentsCommand installs coding-agent integrations without entering an
+// interactive setup flow or starting the underlying agent. It is primarily for
+// managed-device tooling, which writes config.env separately for each user.
+func runAgentsCommand(args []string, stdout, stderr io.Writer) {
+	if len(args) == 0 || args[0] != "install" {
+		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents install --agents claude,cursor [--json]")
+		exit(2)
+		return
+	}
+
+	fs := flag.NewFlagSet("agents install", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var rawAgents string
+	var asJSON bool
+	fs.StringVar(&rawAgents, "agents", "", "comma-separated agents to install (claude,cursor)")
+	fs.BoolVar(&asJSON, "json", false, "print a machine-readable result")
+	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 || strings.TrimSpace(rawAgents) == "" {
+		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents install --agents claude,cursor [--json]")
+		exit(2)
+		return
+	}
+
+	wanted := map[string]bool{}
+	for name := range strings.SplitSeq(rawAgents, ",") {
+		name = strings.TrimSpace(name)
+		if name != "claude" && name != "cursor" {
+			_, _ = fmt.Fprintf(stderr, "agento11y agents install: unsupported agent %q (supported: claude,cursor)\n", name)
+			exit(2)
+			return
+		}
+		wanted[name] = true
+	}
+
+	writer := stdout
+	if asJSON {
+		writer = io.Discard
+	}
+	report := agentInstallReport{Agents: make([]agentInstallResult, 0, len(wanted))}
+	failed := false
+	for _, name := range []string{"claude", "cursor"} {
+		if !wanted[name] {
+			continue
+		}
+		result := agentInstallResult{Agent: name}
+		switch name {
+		case "claude":
+			changed, err := claudeInstall(context.Background(), writer)
+			switch {
+			case errors.Is(err, claudecode.ErrCLINotFound):
+				result.Status = "missing_host"
+			case err != nil:
+				result.Status, result.Error, failed = "error", err.Error(), true
+			case changed:
+				result.Status = "installed"
+			default:
+				result.Status = "already_installed"
+			}
+		case "cursor":
+			before, err := cursorStatus()
+			if err == nil {
+				err = cursorInstall(writer, stderr, cli.InitLogger("cursor"))
+			}
+			if err != nil {
+				result.Status, result.Error, failed = "error", err.Error(), true
+			} else if before {
+				result.Status = "already_installed"
+			} else {
+				result.Status = "installed"
+			}
+		}
+		report.Agents = append(report.Agents, result)
+	}
+
+	if asJSON {
+		data, err := json.Marshal(report)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agento11y agents install: encode result: %v\n", err)
+			failed = true
+		} else {
+			_, _ = fmt.Fprintln(stdout, string(data))
+		}
+	}
+	if failed {
+		exit(1)
 	}
 }
 

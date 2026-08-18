@@ -3,6 +3,7 @@ package entry
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
@@ -556,6 +558,66 @@ func withStubCursorUninstall(t *testing.T, fn func(io.Writer, io.Writer, *log.Lo
 	prev := cursorUninstall
 	t.Cleanup(func() { cursorUninstall = prev })
 	cursorUninstall = fn
+}
+
+func withStubCursorStatus(t *testing.T, fn func() (bool, error)) {
+	t.Helper()
+	prev := cursorStatus
+	t.Cleanup(func() { cursorStatus = prev })
+	cursorStatus = fn
+}
+
+func withStubClaudeInstall(t *testing.T, fn func(context.Context, io.Writer) (bool, error)) {
+	t.Helper()
+	prev := claudeInstall
+	t.Cleanup(func() { claudeInstall = prev })
+	claudeInstall = fn
+}
+
+func TestRun_AgentsInstallJSON(t *testing.T) {
+	withStubClaudeInstall(t, func(context.Context, io.Writer) (bool, error) { return true, nil })
+	withStubCursorStatus(t, func() (bool, error) { return false, nil })
+	withStubCursorInstall(t, func(io.Writer, io.Writer, *log.Logger) error { return nil })
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"agents", "install", "--agents", "claude,cursor", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
+	require.Empty(t, stderr.String())
+
+	var report agentInstallReport
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report), "stdout=%q", stdout.String())
+	assert.Equal(t, []agentInstallResult{
+		{Agent: "claude", Status: "installed"},
+		{Agent: "cursor", Status: "installed"},
+	}, report.Agents)
+}
+
+func TestRun_AgentsInstallReportsMissingClaudeWithoutFailingCursor(t *testing.T) {
+	withStubClaudeInstall(t, func(context.Context, io.Writer) (bool, error) {
+		return false, claudecode.ErrCLINotFound
+	})
+	withStubCursorStatus(t, func() (bool, error) { return true, nil })
+	cursorInstalls := 0
+	withStubCursorInstall(t, func(io.Writer, io.Writer, *log.Logger) error {
+		cursorInstalls++
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"agents", "install", "--agents", "claude,cursor", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
+
+	var report agentInstallReport
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report), "stdout=%q", stdout.String())
+	assert.Equal(t, []agentInstallResult{
+		{Agent: "claude", Status: "missing_host"},
+		{Agent: "cursor", Status: "already_installed"},
+	}, report.Agents)
+	assert.Equal(t, 1, cursorInstalls, "Cursor install re-runs idempotently to repair stale hooks")
 }
 
 // withStubLauncher replaces the launchers map with a single entry for the

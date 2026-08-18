@@ -85,6 +85,8 @@ Launch a coding agent (wires the plugin, then runs it):
       agento11y <name> [--local|--no-local] [--tag key=value]... [-- args...]
   cursor install|uninstall
       Wire (or remove) the Cursor hook. Cursor is a GUI app and has no launcher.
+  agents install --agents claude,cursor [--json]
+      Wire managed coding-agent installs without launching an agent or prompting.
 
 Commands:
   login       Save endpoint, tenant, token, and OTLP endpoint to config.env.
