@@ -67,9 +67,8 @@ func ToProto(g model.Generation) (*agento11yv1.Generation, error) {
 		ParentGenerationIds: cloneStringSlice(g.ParentGenerationIDs),
 	}
 
-	if trimmed := strings.TrimSpace(g.EffectiveVersion); trimmed != "" {
-		sum := sha256.Sum256([]byte(trimmed))
-		out.EffectiveVersion = proto.String("sha256:" + hex.EncodeToString(sum[:]))
+	if digest := EffectiveVersionDigest(g.EffectiveVersion); digest != "" {
+		out.EffectiveVersion = proto.String(digest)
 	}
 
 	if !g.StartedAt.IsZero() {
@@ -80,6 +79,17 @@ func ToProto(g model.Generation) (*agento11yv1.Generation, error) {
 	}
 
 	return out, nil
+}
+
+// EffectiveVersionDigest returns the sha256:<hex> digest of a raw
+// effective-version string, or "" when it holds nothing.
+func EffectiveVersionDigest(effectiveVersion string) string {
+	trimmed := strings.TrimSpace(effectiveVersion)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // WorkflowStepToProto converts a model.WorkflowStep into the wire-level
