@@ -361,12 +361,22 @@ function formatCost(usd) {
     return "$" + (usd / 1000).toFixed(1) + "k";
 }
 
-// workspaceLabel shortens an absolute cwd to its last two path segments
-// (repo/branch-ish) for the sidebar; the full path stays in the title.
 function workspaceLabel(path) {
     if (!path) return "(unknown)";
     const parts = path.replace(/\/+$/, "").split("/").filter(Boolean);
     return parts.slice(-2).join("/") || path;
+}
+
+function splitWorkspacePath(path) {
+    if (!path) return { dir: "", leaf: "(unknown)" };
+    const clean = path.replace(/\/+$/, "");
+    if (!clean) return { dir: "", leaf: "/" };
+    const cut = clean.lastIndexOf("/");
+    if (cut < 0) return { dir: "", leaf: clean };
+    return {
+        dir: clean.slice(0, cut + 1),
+        leaf: clean.slice(cut + 1) || clean,
+    };
 }
 
 // timeWindow computes a chart's [start, end] for a range selection.
@@ -598,6 +608,7 @@ function Icon({ name, size = 16, style, className }) {
         download: <path d="M12 4v12m0 0-4-4m4 4 4-4M4 20h16" />,
         copy: <path d="M9 9h11v11H9zM4 4h11v3" />,
         list: <path d="M4 6h16M4 12h16M4 18h16" />,
+        sortlines: <path d="M4 6h16M7 12h13M10 18h10" />,
         wrench: (
             <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
         ),
@@ -1962,6 +1973,8 @@ function Select({
     menu,
     id,
     disabled,
+    icon,
+    prefix,
 }) {
     const [open, setOpen] = useState(false);
     const [cursor, setCursor] = useState(0);
@@ -2067,12 +2080,33 @@ function Select({
             >
                 <span
                     style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                        minWidth: 0,
                         overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
                     }}
                 >
-                    {selected ? selected.label : ""}
+                    {icon && (
+                        <Icon
+                            name={icon}
+                            size={14}
+                            style={{ color: "var(--fg3)" }}
+                        />
+                    )}
+                    {prefix && (
+                        <span style={{ color: "var(--fg3)" }}>{prefix}</span>
+                    )}
+                    <span
+                        style={{
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                        }}
+                    >
+                        {selected ? selected.label : ""}
+                    </span>
                 </span>
                 <Icon
                     name="chevron"
@@ -2262,12 +2296,571 @@ function TimeRangePicker({ value, onChange, ranges = TIME_RANGES }) {
     );
 }
 
+const GROUP_BY_OPTIONS = [
+    { value: "workspace", label: "Workspace" },
+    { value: "agent", label: "Agent" },
+    { value: "model", label: "Model" },
+    { value: "day", label: "Day" },
+    { value: "none", label: "None" },
+];
+
+function WorkspaceFacet({
+    workspaces,
+    selected,
+    onSelect,
+    totalCount,
+    totalCost,
+    now,
+    rangeLabel,
+}) {
+    const [open, setOpen] = useState(false);
+    const [filter, setFilter] = useState("");
+    const [cursor, setCursor] = useState(0);
+    const rootRef = useRef(null);
+    const buttonRef = useRef(null);
+    const inputRef = useRef(null);
+    const listRef = useRef(null);
+    const optionRefs = useRef(new Map());
+    const selectedPath = selected == null ? null : splitWorkspacePath(selected);
+    const selectedParent = selectedPath?.dir
+        ? selectedPath.dir === "/"
+            ? "/"
+            : `${splitWorkspacePath(selectedPath.dir).leaf}/`
+        : "";
+    const shown = useMemo(() => {
+        const q = filter.trim().toLowerCase();
+        return q
+            ? workspaces.filter((w) =>
+                  (w.path || "").toLowerCase().includes(q),
+              )
+            : workspaces;
+    }, [workspaces, filter]);
+    const selectedInRange = workspaces.some((w) => w.path === selected);
+    const noMatches = filter.trim().length > 0 && shown.length === 0;
+    const activeOptionId =
+        cursor < 0
+            ? undefined
+            : cursor === 0
+              ? "workspace-facet-option-all"
+              : `workspace-facet-option-${cursor - 1}`;
+
+    useEffect(() => {
+        setCursor((current) =>
+            noMatches ? -1 : Math.max(0, Math.min(current, shown.length)),
+        );
+    }, [shown.length, noMatches]);
+
+    useEffect(() => {
+        if (!open || cursor <= 0) return;
+        const list = listRef.current;
+        const option = optionRefs.current.get(cursor);
+        if (!list || !option) return;
+        const listRect = list.getBoundingClientRect();
+        const optionRect = option.getBoundingClientRect();
+        if (optionRect.top < listRect.top)
+            list.scrollTop -= listRect.top - optionRect.top;
+        else if (optionRect.bottom > listRect.bottom)
+            list.scrollTop += optionRect.bottom - listRect.bottom;
+    }, [open, cursor, shown.length]);
+
+    const close = (refocus) => {
+        setOpen(false);
+        if (refocus && buttonRef.current) buttonRef.current.focus();
+    };
+    const openMenu = () => {
+        const selectedIndex = workspaces.findIndex((w) => w.path === selected);
+        setFilter("");
+        setCursor(selectedIndex < 0 ? 0 : selectedIndex + 1);
+        setOpen(true);
+        setTimeout(() => inputRef.current?.focus(), 0);
+    };
+    const pick = (path) => {
+        onSelect(path);
+        close(true);
+    };
+    const onKeyDown = (e) => {
+        if (!open) {
+            if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
+                e.preventDefault();
+                openMenu();
+            }
+            return;
+        }
+        if (e.key === "Escape") {
+            e.preventDefault();
+            close(true);
+            return;
+        }
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            if (!noMatches)
+                setCursor((current) =>
+                    Math.min(shown.length, Math.max(0, current + 1)),
+                );
+            return;
+        }
+        if (e.key === "ArrowUp") {
+            e.preventDefault();
+            if (!noMatches)
+                setCursor((current) => Math.max(0, current - 1));
+            return;
+        }
+        if (
+            (e.key === "Home" || e.key === "End") &&
+            e.target === inputRef.current
+        )
+            return;
+        if (e.key === "Home") {
+            e.preventDefault();
+            setCursor(noMatches ? -1 : 0);
+            return;
+        }
+        if (e.key === "End") {
+            e.preventDefault();
+            setCursor(noMatches ? -1 : shown.length);
+            return;
+        }
+        if (e.key === "Enter") {
+            e.preventDefault();
+            if (cursor < 0) return;
+            if (cursor === 0) {
+                pick(null);
+                return;
+            }
+            const workspace = shown[cursor - 1];
+            if (workspace) pick(workspace.path);
+        }
+    };
+
+    const triggerCount = selectedPath
+        ? `${selectedInRange ? 1 : 0}/${workspaces.length}`
+        : String(workspaces.length);
+
+    return (
+        <div
+            ref={rootRef}
+            style={{ position: "relative", flex: "0 0 auto" }}
+            onBlur={(e) => {
+                if (!rootRef.current?.contains(e.relatedTarget)) setOpen(false);
+            }}
+            onKeyDown={onKeyDown}
+        >
+            <button
+                ref={buttonRef}
+                type="button"
+                title="Filter by workspace"
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                onClick={() => (open ? close(false) : openMenu())}
+                style={{
+                    height: 34,
+                    minWidth: 198,
+                    maxWidth: 360,
+                    padding: "0 10px",
+                    border: `1px solid ${selectedPath ? "var(--primary-border)" : "var(--border-medium)"}`,
+                    borderRadius: 2,
+                    background: "rgba(24,27,31,0.78)",
+                    color: "var(--fg1)",
+                    fontSize: 13,
+                    fontFamily: "var(--fontFamily)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    cursor: "pointer",
+                }}
+            >
+                <span
+                    style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                        minWidth: 0,
+                    }}
+                >
+                    <Icon name="box" size={14} style={{ color: "var(--fg3)" }} />
+                    {selectedPath ? (
+                        <React.Fragment>
+                            <span
+                                style={{
+                                    color: "var(--fg-max)",
+                                    whiteSpace: "nowrap",
+                                }}
+                            >
+                                {selectedPath.leaf}
+                            </span>
+                            {selectedParent && (
+                                <span
+                                    style={{
+                                        minWidth: 0,
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        whiteSpace: "nowrap",
+                                        color: "var(--fg3)",
+                                        fontFamily: "var(--fontFamilyMonospace)",
+                                        fontSize: 10.5,
+                                    }}
+                                >
+                                    {selectedParent}
+                                </span>
+                            )}
+                        </React.Fragment>
+                    ) : (
+                        <span style={{ whiteSpace: "nowrap" }}>All workspaces</span>
+                    )}
+                </span>
+                <span
+                    style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                        color: "var(--fg3)",
+                        fontFamily: "var(--fontFamilyMonospace)",
+                        fontSize: 11,
+                        whiteSpace: "nowrap",
+                    }}
+                >
+                    {triggerCount}
+                    <Icon name="chevron" size={14} />
+                </span>
+            </button>
+            {open && (
+                <div
+                    style={{
+                        position: "absolute",
+                        top: "calc(100% + 5px)",
+                        left: 0,
+                        zIndex: 30,
+                        width: 420,
+                        padding: 6,
+                        border: "1px solid var(--border-strong)",
+                        borderRadius: 2,
+                        background: "var(--bg-secondary)",
+                        boxShadow: "0 12px 34px rgba(0,0,0,0.48)",
+                    }}
+                >
+                    <div
+                        style={{
+                            height: 30,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 7,
+                            padding: "0 9px",
+                            background: "rgba(17,18,23,0.42)",
+                            borderRadius: 2,
+                            color: "var(--fg3)",
+                        }}
+                    >
+                        <Icon name="search" size={13} />
+                        <input
+                            ref={inputRef}
+                            value={filter}
+                            onChange={(e) => {
+                                const next = e.target.value;
+                                const q = next.trim().toLowerCase();
+                                setFilter(next);
+                                setCursor(
+                                    q.length === 0
+                                        ? 0
+                                        : workspaces.some((w) =>
+                                                (w.path || "")
+                                                    .toLowerCase()
+                                                    .includes(q),
+                                            )
+                                          ? 1
+                                          : -1,
+                                );
+                            }}
+                            placeholder="Filter workspaces…"
+                            role="combobox"
+                            aria-label="Filter workspaces"
+                            aria-autocomplete="list"
+                            aria-controls="workspace-facet-listbox"
+                            aria-expanded={open}
+                            aria-activedescendant={activeOptionId}
+                            style={{
+                                flex: 1,
+                                minWidth: 0,
+                                border: "none",
+                                outline: "none",
+                                background: "transparent",
+                                color: "var(--fg1)",
+                                fontFamily: "var(--fontFamily)",
+                                fontSize: 12,
+                            }}
+                        />
+                    </div>
+                    <div
+                        id="workspace-facet-listbox"
+                        role="listbox"
+                        aria-label="Workspaces"
+                    >
+                        <button
+                            id="workspace-facet-option-all"
+                            type="button"
+                            role="option"
+                            aria-selected={selected == null}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onMouseEnter={() => setCursor(0)}
+                            onClick={() => pick(null)}
+                            style={{
+                                width: "100%",
+                                minHeight: 34,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                gap: 12,
+                                padding: "7px 9px",
+                                border: "none",
+                                borderRadius: 2,
+                                background:
+                                    cursor === 0 ? ACTIVE_PILL_BG : "transparent",
+                                color:
+                                    selected == null
+                                        ? "var(--primary-text)"
+                                        : "var(--fg1)",
+                                cursor: "pointer",
+                                fontFamily: "var(--fontFamily)",
+                                fontSize: 12.5,
+                                textAlign: "left",
+                            }}
+                        >
+                            <span>All workspaces</span>
+                            <span
+                                style={{
+                                    color: "var(--fg3)",
+                                    fontFamily: "var(--fontFamilyMonospace)",
+                                    fontSize: 11,
+                                }}
+                            >
+                                {totalCount} · {formatCost(totalCost)}
+                            </span>
+                        </button>
+                        <div
+                            style={{
+                                height: 1,
+                                margin: "5px 4px",
+                                background: "var(--border-weak)",
+                            }}
+                        />
+                        <div
+                            ref={listRef}
+                            style={{ maxHeight: 296, overflowY: "auto" }}
+                        >
+                            {shown.map((w, i) => {
+                                const path = splitWorkspacePath(w.path);
+                                const active = selected === w.path;
+                                const shareAvailable =
+                                    totalCost != null &&
+                                    totalCost > 0 &&
+                                    w.cost != null;
+                                const share = shareAvailable
+                                    ? w.cost / totalCost
+                                    : null;
+                                const pct =
+                                    share == null ? null : Math.round(share * 100);
+                                return (
+                                    <button
+                                        key={w.path || "(unknown)"}
+                                        id={`workspace-facet-option-${i}`}
+                                        ref={(node) => {
+                                            if (node)
+                                                optionRefs.current.set(i + 1, node);
+                                            else optionRefs.current.delete(i + 1);
+                                        }}
+                                        type="button"
+                                        role="option"
+                                        aria-selected={active}
+                                        title={w.path || "(unknown)"}
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onMouseEnter={() => setCursor(i + 1)}
+                                        onClick={() => pick(w.path)}
+                                        style={{
+                                            width: "100%",
+                                            display: "grid",
+                                            gridTemplateColumns: "1fr 54px 62px 56px",
+                                            alignItems: "center",
+                                            gap: 10,
+                                            padding: "7px 9px",
+                                            border: "none",
+                                            borderRadius: 2,
+                                            background:
+                                                cursor === i + 1
+                                                    ? ACTIVE_PILL_BG
+                                                    : "transparent",
+                                            color: active
+                                                ? "var(--primary-text)"
+                                                : "var(--fg1)",
+                                            cursor: "pointer",
+                                            textAlign: "left",
+                                        }}
+                                    >
+                                        <span
+                                            style={{
+                                                minWidth: 0,
+                                                display: "flex",
+                                                flexDirection: "column",
+                                                gap: 2,
+                                            }}
+                                        >
+                                            <span
+                                                style={{
+                                                    overflow: "hidden",
+                                                    textOverflow: "ellipsis",
+                                                    whiteSpace: "nowrap",
+                                                    color: active
+                                                        ? "var(--primary-text)"
+                                                        : "var(--fg-max)",
+                                                    fontFamily: "var(--fontFamily)",
+                                                    fontSize: 12.5,
+                                                }}
+                                            >
+                                                {path.leaf}
+                                            </span>
+                                            <span
+                                                style={{
+                                                    overflow: "hidden",
+                                                    textOverflow: "ellipsis",
+                                                    whiteSpace: "nowrap",
+                                                    direction: "rtl",
+                                                    textAlign: "left",
+                                                    color: "var(--fg3)",
+                                                    fontFamily:
+                                                        "var(--fontFamilyMonospace)",
+                                                    fontSize: 10,
+                                                }}
+                                            >
+                                                {path.dir || NO_VALUE}
+                                            </span>
+                                        </span>
+                                        <span
+                                            style={{
+                                                color: "var(--fg2)",
+                                                fontFamily:
+                                                    "var(--fontFamilyMonospace)",
+                                                fontSize: 11,
+                                                textAlign: "right",
+                                            }}
+                                        >
+                                            {w.count}
+                                        </span>
+                                        <span
+                                            style={{
+                                                color: "var(--fg1)",
+                                                fontFamily:
+                                                    "var(--fontFamilyMonospace)",
+                                                fontSize: 11,
+                                                textAlign: "right",
+                                            }}
+                                        >
+                                            {formatCost(w.cost)}
+                                        </span>
+                                        <span
+                                            style={{
+                                                minWidth: 0,
+                                                display: "flex",
+                                                flexDirection: "column",
+                                                gap: 4,
+                                                color: "var(--fg3)",
+                                                fontFamily:
+                                                    "var(--fontFamilyMonospace)",
+                                                fontSize: 10,
+                                                textAlign: "right",
+                                            }}
+                                        >
+                                            <span>
+                                                {formatAgo(
+                                                    w.last
+                                                        ? new Date(w.last).toISOString()
+                                                        : null,
+                                                    now,
+                                                )}
+                                            </span>
+                                            <span
+                                                title={
+                                                    pct == null
+                                                        ? "Spend share unavailable"
+                                                        : `${pct}% of range spend`
+                                                }
+                                                aria-label={
+                                                    pct == null
+                                                        ? "Spend share unavailable"
+                                                        : `${pct}% of range spend`
+                                                }
+                                                style={{
+                                                    display: "block",
+                                                    height: 2,
+                                                    borderRadius: 2,
+                                                    background:
+                                                        "rgba(204,204,220,0.08)",
+                                                    overflow: "hidden",
+                                                }}
+                                            >
+                                                <span
+                                                    style={{
+                                                        display: "block",
+                                                        width: `${Math.max(0, Math.min(100, pct || 0))}%`,
+                                                        height: "100%",
+                                                        background:
+                                                            "var(--brand-orange)",
+                                                    }}
+                                                />
+                                            </span>
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                            {shown.length === 0 && (
+                                <div
+                                    style={{
+                                        padding: "14px 9px",
+                                        color: "var(--fg3)",
+                                        fontFamily: "var(--fontFamilyMonospace)",
+                                        fontSize: 11,
+                                    }}
+                                >
+                                    No matching workspaces.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    <div
+                        style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            gap: 12,
+                            padding: "7px 9px 2px",
+                            color: "var(--fg3)",
+                            fontFamily: "var(--fontFamilyMonospace)",
+                            fontSize: 10.5,
+                        }}
+                    >
+                        <span>
+                            {workspaces.length} workspaces · {rangeLabel}
+                        </span>
+                        <span>sessions · cost · share</span>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 function FilterBar({
     query,
     onQueryChange,
     inputRef,
     timeRange,
     onTimeRangeChange,
+    workspaces = [],
+    workspace,
+    onWorkspaceChange,
+    workspaceSessionCount = 0,
+    workspaceTotalCost = 0,
+    now,
+    rangeLabel,
+    groupBy,
+    onGroupByChange,
     agentFilter = "all",
     onAgentFilterChange,
     agentOptions = [],
@@ -2285,6 +2878,8 @@ function FilterBar({
     rightAdornment,
 }) {
     const showTimeRange = !!timeRange && !!onTimeRangeChange;
+    const showWorkspaceFacet = !!onWorkspaceChange;
+    const showGroupBy = !!onGroupByChange;
     const showAgentFilter = !!onAgentFilterChange;
     const showModelFilter = !!onModelFilterChange;
     const showStatusFilter = !!onStatusFilterChange;
@@ -2311,7 +2906,7 @@ function FilterBar({
                 align="center"
                 gap={8}
                 style={{
-                    flex: "1 1 320px",
+                    flex: "1 1 260px",
                     padding: "0 11px",
                     height: 34,
                     border: "1px solid var(--border-medium)",
@@ -2356,10 +2951,32 @@ function FilterBar({
                     </span>
                 )}
             </Stack>
+            {showWorkspaceFacet && (
+                <WorkspaceFacet
+                    workspaces={workspaces}
+                    selected={workspace}
+                    onSelect={onWorkspaceChange}
+                    totalCount={workspaceSessionCount}
+                    totalCost={workspaceTotalCost}
+                    now={now}
+                    rangeLabel={rangeLabel}
+                />
+            )}
             {showTimeRange && (
                 <TimeRangePicker
                     value={timeRange}
                     onChange={onTimeRangeChange}
+                />
+            )}
+            {showGroupBy && (
+                <Select
+                    value={groupBy}
+                    onChange={onGroupByChange}
+                    title="Group sessions"
+                    icon="sortlines"
+                    prefix="Group by"
+                    trigger={{ ...selectStyle, minWidth: 196, padding: "0 10px" }}
+                    options={GROUP_BY_OPTIONS}
                 />
             )}
             {showAgentFilter && (
@@ -2457,7 +3074,14 @@ function FilterBar({
     );
 }
 
-function ConvRow({ c, now, onOpen, prices }) {
+function ConvRow({
+    c,
+    now,
+    onOpen,
+    prices,
+    grouped = false,
+    hideWorkspace = false,
+}) {
     const wallSec = durationBetweenSeconds(c.started_at, c.last_activity);
     return (
         <a
@@ -2472,7 +3096,7 @@ function ConvRow({ c, now, onOpen, prices }) {
                 gridTemplateColumns: CONV_GRID,
                 alignItems: "center",
                 gap: 16,
-                padding: "12px 16px",
+                padding: grouped ? "12px 16px 12px 40px" : "12px 16px",
                 borderBottom: "1px solid var(--border-weak)",
                 background: "transparent",
                 cursor: "pointer",
@@ -2540,17 +3164,19 @@ function ConvRow({ c, now, onOpen, prices }) {
                         </span>
                     )}
                 </span>
-                <span
-                    style={{
-                        color: "var(--fg3)",
-                        fontSize: 11,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                    }}
-                >
-                    {c.workspace ? workspaceLabel(c.workspace) : c.id}
-                </span>
+                {!hideWorkspace && (
+                    <span
+                        style={{
+                            color: "var(--fg3)",
+                            fontSize: 11,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                        }}
+                    >
+                        {c.workspace ? workspaceLabel(c.workspace) : c.id}
+                    </span>
+                )}
             </div>
             <AgentCell agents={c.agents} />
             <span style={{ color: "var(--fg1)" }} title="Estimated cost">
@@ -2600,6 +3226,335 @@ function ConvRow({ c, now, onOpen, prices }) {
 // Agent shows the host launcher only (claude-code, …) — not the per-
 // subagent rows, which were the noise; subagent presence is the ⊂N badge.
 const CONV_GRID = "84px minmax(260px, 1.7fr) 132px 80px 96px 136px 176px";
+const OPEN_GROUPS = 3;
+
+// Use the full sorted agent or model set as one key so each session appears once.
+function groupKeyFor(c, groupBy) {
+    if (groupBy === "workspace") return c.workspace || "";
+    if (groupBy === "agent")
+        return agentHosts(c.agents).sort().join(" + ") || "(unknown)";
+    if (groupBy === "model")
+        return [...new Set(c.models || [])]
+            .filter(Boolean)
+            .sort()
+            .join(" + ") || "(unknown)";
+    if (groupBy === "day") {
+        const t = conversationTime(c);
+        if (t == null) return "(unknown)";
+        const d = new Date(t);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
+    return "";
+}
+
+function SessionGroupHeader({
+    groupBy,
+    label,
+    open,
+    onToggle,
+    count,
+    cost,
+    tokens,
+    last,
+    share,
+    now,
+}) {
+    const path = groupBy === "workspace" ? splitWorkspacePath(label) : null;
+    const pct = share == null ? null : Math.round(share * 100);
+    return (
+        <button
+            type="button"
+            aria-expanded={open}
+            onClick={onToggle}
+            style={{
+                width: "100%",
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr) auto",
+                alignItems: "center",
+                gap: 16,
+                padding: "10px 16px",
+                border: "none",
+                borderBottom: "1px solid var(--border-weak)",
+                background: "rgba(34,37,43,0.55)",
+                color: "inherit",
+                cursor: "pointer",
+                textAlign: "left",
+                font: "inherit",
+            }}
+            onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(34,37,43,0.8)";
+            }}
+            onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(34,37,43,0.55)";
+            }}
+        >
+            <span
+                style={{
+                    minWidth: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 9,
+                    overflow: "hidden",
+                }}
+            >
+                <Icon
+                    name={open ? "chevron" : "cright"}
+                    size={13}
+                    style={{ color: "var(--fg3)" }}
+                />
+                {path ? (
+                    <span
+                        title={label || "(unknown)"}
+                        style={{
+                            minWidth: 0,
+                            flex: "1 1 auto",
+                            display: "inline-flex",
+                            alignItems: "baseline",
+                            gap: 5,
+                            overflow: "hidden",
+                            whiteSpace: "nowrap",
+                        }}
+                    >
+                        <span
+                            style={{
+                                minWidth: 0,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                direction: "rtl",
+                                textAlign: "left",
+                                color: "var(--fg3)",
+                                fontFamily: "var(--fontFamilyMonospace)",
+                                fontSize: 11.5,
+                            }}
+                        >
+                            {path.dir}
+                        </span>
+                        <span
+                            style={{
+                                color: "var(--fg-max)",
+                                fontFamily: "var(--fontFamily)",
+                                fontSize: 13,
+                                fontWeight: 600,
+                            }}
+                        >
+                            {path.leaf}
+                        </span>
+                    </span>
+                ) : (
+                    <span
+                        title={label || "(unknown)"}
+                        style={{
+                            minWidth: 0,
+                            flex: "1 1 auto",
+                            color: "var(--fg-max)",
+                            fontFamily: "var(--fontFamily)",
+                            fontSize: 13,
+                            fontWeight: 600,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                        }}
+                    >
+                        {label}
+                    </span>
+                )}
+                <span
+                    style={{
+                        width: 120,
+                        height: 3,
+                        flex: "0 0 auto",
+                        borderRadius: 2,
+                        background: "rgba(204,204,220,0.08)",
+                        overflow: "hidden",
+                    }}
+                >
+                    <span
+                        style={{
+                            display: "block",
+                            height: "100%",
+                            width: `${Math.max(0, Math.min(100, pct || 0))}%`,
+                            background: "var(--brand-orange)",
+                        }}
+                    />
+                </span>
+                <span
+                    style={{
+                        color: "var(--fg3)",
+                        fontFamily: "var(--fontFamilyMonospace)",
+                        fontSize: 11,
+                        whiteSpace: "nowrap",
+                    }}
+                >
+                    {pct == null
+                        ? "Spend share unavailable"
+                        : `${pct}% of spend`}
+                </span>
+            </span>
+            <span
+                style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 16,
+                    fontFamily: "var(--fontFamilyMonospace)",
+                    fontSize: 11.5,
+                    whiteSpace: "nowrap",
+                }}
+            >
+                <span style={{ color: "var(--fg2)" }}>
+                    {count} {count === 1 ? "session" : "sessions"}
+                </span>
+                <span style={{ color: "var(--fg1)" }}>{formatCost(cost)}</span>
+                <span style={{ color: "var(--fg2)" }}>{formatTokens(tokens)}</span>
+                <span style={{ color: "var(--fg3)" }}>
+                    {formatAgo(
+                        last ? new Date(last).toISOString() : null,
+                        now,
+                    )}
+                </span>
+            </span>
+        </button>
+    );
+}
+
+function WorkspaceContextStrip({
+    path,
+    count,
+    cost,
+    tokens,
+    last,
+    share,
+    now,
+    onClear,
+}) {
+    const label = splitWorkspacePath(path);
+    const pct = share == null ? null : Math.round(share * 100);
+    return (
+        <div
+            style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 14,
+                padding: "10px 16px",
+                borderBottom: "1px solid var(--border-weak)",
+                background: "rgba(34,37,43,0.55)",
+                color: "var(--fg2)",
+                fontFamily: "var(--fontFamilyMonospace)",
+                fontSize: 11.5,
+            }}
+        >
+            <span
+                title={path || "(unknown)"}
+                style={{
+                    minWidth: 0,
+                    flex: "1 1 auto",
+                    display: "inline-flex",
+                    alignItems: "baseline",
+                    gap: 5,
+                    overflow: "hidden",
+                    whiteSpace: "nowrap",
+                }}
+            >
+                <span
+                    style={{
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        direction: "rtl",
+                        textAlign: "left",
+                        color: "var(--fg3)",
+                    }}
+                >
+                    {label.dir}
+                </span>
+                <span
+                    style={{
+                        flex: "0 0 auto",
+                        color: "var(--fg-max)",
+                        fontFamily: "var(--fontFamily)",
+                        fontSize: 13,
+                        fontWeight: 600,
+                    }}
+                >
+                    {label.leaf}
+                </span>
+            </span>
+            <span
+                style={{
+                    width: 120,
+                    height: 3,
+                    flex: "0 0 auto",
+                    borderRadius: 2,
+                    background: "rgba(204,204,220,0.08)",
+                    overflow: "hidden",
+                }}
+            >
+                <span
+                    style={{
+                        display: "block",
+                        width: `${Math.max(0, Math.min(100, pct || 0))}%`,
+                        height: "100%",
+                        background: "var(--brand-orange)",
+                    }}
+                />
+            </span>
+            <span style={{ color: "var(--fg3)", whiteSpace: "nowrap" }}>
+                {pct == null
+                    ? "Range spend unavailable"
+                    : `${pct}% of range spend`}
+            </span>
+            <span
+                style={{
+                    marginLeft: "auto",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 16,
+                    whiteSpace: "nowrap",
+                }}
+            >
+                <span style={{ color: "var(--fg3)" }}>Range totals</span>
+                <span>
+                    {count} {count === 1 ? "session" : "sessions"}
+                </span>
+                <span
+                    title="Workspace cost in the selected range"
+                    style={{ color: "var(--fg1)" }}
+                >
+                    {formatCost(cost)}
+                </span>
+                <span title="Workspace tokens in the selected range">
+                    {formatTokens(tokens)}
+                </span>
+                <span style={{ color: "var(--fg3)" }}>
+                    {formatAgo(
+                        last ? new Date(last).toISOString() : null,
+                        now,
+                    )}
+                </span>
+                <button
+                    type="button"
+                    onClick={onClear}
+                    title="Clear workspace filter"
+                    style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 5,
+                        padding: "1px 8px",
+                        border: "1px solid var(--border-medium)",
+                        borderRadius: 2,
+                        background: "transparent",
+                        color: "var(--fg2)",
+                        cursor: "pointer",
+                        fontFamily: "var(--fontFamilyMonospace)",
+                        fontSize: 11,
+                    }}
+                >
+                    <Icon name="times" size={11} />
+                    clear
+                </button>
+            </span>
+        </div>
+    );
+}
 
 // SortHeader is a clickable list-header cell: click sorts by the
 // column, clicking again flips the direction.
@@ -2756,191 +3711,6 @@ function KpiStrip({ kpi }) {
     );
 }
 
-// WorkspaceSidebar is the landing page's primary navigation: one row per
-// cwd in the current time range, each showing conversation count and
-// estimated cost, with an "All" row on top. Selecting one filters the
-// list, charts, and KPIs. Rows are sorted by most-recent activity so the
-// workspace you're in now sits near the top.
-// A workspace row reads like an observability leaderboard entry: name,
-// count + estimated cost, and a thin bar showing this workspace's share
-// of total spend. The "All" summary row is the full-bar reference and
-// carries a heavier label. Selection tints the bar orange and strengthens
-// the border.
-function WorkspaceItem({
-    label,
-    title,
-    count,
-    cost,
-    active,
-    onClick,
-    share,
-    summary,
-}) {
-    const pct =
-        share > 0 ? Math.max(3, Math.min(100, Math.round(share * 100))) : 0;
-    return (
-        <button
-            onClick={onClick}
-            title={title}
-            style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 6,
-                width: "100%",
-                textAlign: "left",
-                padding: "9px 11px",
-                border: `1px solid ${active ? "var(--border-medium)" : "var(--border-weak)"}`,
-                borderRadius: 2,
-                background: active ? ACTIVE_PILL_BG : "rgba(24,27,31,0.68)",
-                color: "inherit",
-                cursor: "pointer",
-                font: "inherit",
-                transition: "background 80ms ease, border-color 80ms ease",
-            }}
-            onMouseEnter={(e) => {
-                if (!active)
-                    e.currentTarget.style.background = "rgba(204,204,220,0.04)";
-            }}
-            onMouseLeave={(e) => {
-                if (!active)
-                    e.currentTarget.style.background = "rgba(24,27,31,0.68)";
-            }}
-        >
-            <span
-                style={{
-                    fontFamily: "var(--fontFamily)",
-                    fontSize: 12.5,
-                    fontWeight: summary ? 600 : 400,
-                    color: active ? "var(--fg1)" : "var(--fg2)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                }}
-            >
-                {label}
-            </span>
-            <span
-                style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    fontFamily: "var(--fontFamilyMonospace)",
-                    fontSize: 11,
-                    color: "var(--fg3)",
-                }}
-            >
-                <span>
-                    {count} {count === 1 ? "session" : "sessions"}
-                </span>
-                <span
-                    style={{
-                        marginLeft: "auto",
-                        color: active ? "var(--fg1)" : "var(--fg2)",
-                    }}
-                >
-                    {formatCost(cost)}
-                </span>
-            </span>
-            <span
-                style={{
-                    display: "block",
-                    height: 3,
-                    borderRadius: 2,
-                    background: "rgba(204,204,220,0.08)",
-                    overflow: "hidden",
-                }}
-            >
-                <span
-                    style={{
-                        display: "block",
-                        height: "100%",
-                        width: `${pct}%`,
-                        background: active
-                            ? "var(--brand-orange)"
-                            : "rgba(204,204,220,0.28)",
-                        transition: "width 220ms ease",
-                    }}
-                />
-            </span>
-        </button>
-    );
-}
-
-function WorkspaceSidebar({
-    workspaces,
-    selected,
-    onSelect,
-    totalCount,
-    totalCost,
-}) {
-    return (
-        <div
-            style={{
-                width: 248,
-                flexShrink: 0,
-                borderRight: "1px solid var(--border-weak)",
-                background: "var(--bg-primary)",
-                display: "flex",
-                flexDirection: "column",
-                maxHeight: `calc(100vh - ${HEADER_H}px)`,
-                position: "sticky",
-                top: HEADER_H,
-            }}
-        >
-            {/* 34px caption slot: the first card below starts at the same
-             vertical offset as the search bar in the content column. */}
-            <div
-                style={{
-                    height: 34,
-                    padding: "14px 16px 0",
-                    display: "flex",
-                    alignItems: "flex-start",
-                    lineHeight: "14px",
-                    fontSize: 11,
-                    letterSpacing: "0.06em",
-                    color: "var(--fg3)",
-                    fontWeight: 500,
-                    textTransform: "uppercase",
-                }}
-            >
-                Workspaces
-            </div>
-            <div
-                style={{
-                    overflowY: "auto",
-                    padding: "0 8px 12px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 6,
-                }}
-            >
-                <WorkspaceItem
-                    label="All workspaces"
-                    title="All workspaces"
-                    count={totalCount}
-                    cost={totalCost}
-                    share={1}
-                    summary
-                    active={selected == null}
-                    onClick={() => onSelect(null)}
-                />
-                {workspaces.map((w) => (
-                    <WorkspaceItem
-                        key={w.path || "(unknown)"}
-                        label={workspaceLabel(w.path)}
-                        title={w.path || "(unknown)"}
-                        count={w.count}
-                        cost={w.cost}
-                        share={totalCost > 0 ? (w.cost || 0) / totalCost : 0}
-                        active={selected === w.path}
-                        onClick={() => onSelect(w.path)}
-                    />
-                ))}
-            </div>
-        </div>
-    );
-}
-
 function ConversationsView({
     conversations,
     storeCount,
@@ -2959,6 +3729,10 @@ function ConversationsView({
     setChartMetric,
     bucketSel,
     setBucketSel,
+    workspace,
+    setWorkspace,
+    groupBy,
+    setGroupBy,
     listSort,
     setListSort,
     onOpen,
@@ -2994,43 +3768,75 @@ function ConversationsView({
         });
     }, [conversations, range.ms, now]);
 
-    // Workspace facet, derived from the time-range set (not the search or
-    // the selected workspace, so the rail stays stable while you browse).
-    // Sorted by most-recent activity so the workspace you're in now floats
-    // up. Selecting one narrows the list, charts, and KPIs alike.
-    // ponytail: local state — resets on navigate-away. Lift to App alongside
-    // bucketSel if cross-navigation persistence is wanted.
-    const [workspace, setWorkspace] = useState(null);
+    // Explicit group overrides survive filters because they are keyed by group.
+    // A groupBy change resets them because the keys change meaning.
+    const [groupOpen, setGroupOpen] = useState(() => new Map());
+    useEffect(() => setGroupOpen(new Map()), [groupBy]);
+    const toggleGroup = useCallback((key, open) => {
+        setGroupOpen((previous) => {
+            const next = new Map(previous);
+            next.set(key, !open);
+            return next;
+        });
+    }, []);
     const workspaces = useMemo(() => {
         const map = new Map();
         for (const c of rangeFiltered) {
             const w = c.workspace || "";
             let e = map.get(w);
             if (!e) {
-                e = { path: w, count: 0, cost: 0, last: 0 };
+                e = {
+                    path: w,
+                    count: 0,
+                    cost: 0,
+                    costComplete: true,
+                    tokens: 0,
+                    dur: 0,
+                    last: 0,
+                };
                 map.set(w, e);
             }
             e.count++;
-            e.cost += conversationCost(c, prices) || 0;
+            const cost = conversationCost(c, prices);
+            if (cost == null) e.costComplete = false;
+            else e.cost += cost;
+            e.tokens += c.total_tokens || 0;
+            const d = durationBetweenSeconds(c.started_at, c.last_activity);
+            if (d != null) e.dur += d;
             const t = conversationTime(c);
             if (t != null && t > e.last) e.last = t;
         }
-        return [...map.values()].sort((a, b) => b.last - a.last);
+        return [...map.values()]
+            .map((entry) => ({
+                ...entry,
+                cost: entry.costComplete ? entry.cost : null,
+            }))
+            .sort((a, b) => b.last - a.last);
     }, [rangeFiltered, prices]);
-    const totalCost = useMemo(
-        () =>
-            rangeFiltered.reduce(
-                (s, c) => s + (conversationCost(c, prices) || 0),
-                0,
-            ),
-        [rangeFiltered, prices],
-    );
-    // A selected workspace that vanishes from the set (range change) falls
-    // back to "all" by derivation, mirroring the token-model fallback.
-    const activeWorkspace =
-        workspace != null && workspaces.some((w) => w.path === workspace)
-            ? workspace
-            : null;
+    const totalCost = useMemo(() => {
+        let cost = 0;
+        for (const conversation of rangeFiltered) {
+            const value = conversationCost(conversation, prices);
+            if (value == null) return null;
+            cost += value;
+        }
+        return cost;
+    }, [rangeFiltered, prices]);
+    // Keep an out-of-range workspace selected so the page can show its empty
+    // context instead of silently returning to all workspaces.
+    const activeWorkspace = workspace;
+    const selectedWorkspaceRangeAggregate =
+        activeWorkspace == null
+            ? null
+            : workspaces.find((w) => w.path === activeWorkspace) || {
+                  path: activeWorkspace,
+                  count: 0,
+                  cost: 0,
+                  costComplete: true,
+                  tokens: 0,
+                  dur: 0,
+                  last: 0,
+              };
     const wsFiltered = useMemo(
         () =>
             activeWorkspace == null
@@ -3086,14 +3892,16 @@ function ConversationsView({
     }, [wsFiltered, activeAgentFilter, activeModelFilter, activeStatusFilter]);
 
     const activeFilterCount =
+        (activeWorkspace != null ? 1 : 0) +
         (activeAgentFilter !== "all" ? 1 : 0) +
         (activeModelFilter !== "all" ? 1 : 0) +
         (activeStatusFilter !== "all" ? 1 : 0);
     const clearFilters = useCallback(() => {
+        setWorkspace(null);
         setAgentFilter("all");
         setModelFilter("all");
         setStatusFilter("all");
-    }, []);
+    }, [setWorkspace]);
     const clearSearch = useCallback(() => {
         setQuery("");
         setTimeout(() => {
@@ -3310,11 +4118,85 @@ function ConversationsView({
         return [...listFiltered].sort((a, b) => (val(a) - val(b)) * dir);
     }, [listFiltered, listSort, prices]);
 
+    const grouped = useMemo(() => {
+        if (groupBy === "none") return [];
+        const map = new Map();
+        for (const c of sorted) {
+            const key = groupKeyFor(c, groupBy);
+            let group = map.get(key);
+            if (!group) {
+                group = {
+                    key,
+                    rows: [],
+                    count: 0,
+                    cost: 0,
+                    costComplete: true,
+                    tokens: 0,
+                    dur: 0,
+                    last: 0,
+                };
+                map.set(key, group);
+            }
+            group.rows.push(c);
+            group.count++;
+            const cost = conversationCost(c, prices);
+            if (cost == null) group.costComplete = false;
+            else group.cost += cost;
+            group.tokens += c.total_tokens || 0;
+            const duration = durationBetweenSeconds(
+                c.started_at,
+                c.last_activity,
+            );
+            if (duration != null) group.dur += duration;
+            const time = conversationTime(c);
+            if (time != null && time > group.last) group.last = time;
+        }
+        const direction = listSort.dir === "asc" ? 1 : -1;
+        const value = (group) => {
+            if (listSort.key === "cost") return group.cost;
+            if (listSort.key === "tokens") return group.tokens;
+            if (listSort.key === "duration") return group.dur;
+            return group.last;
+        };
+        return [...map.values()]
+            .filter((group) => group.rows.length > 0)
+            .sort((a, b) => (value(a) - value(b)) * direction)
+            .map((group) => ({
+                ...group,
+                cost: group.costComplete ? group.cost : null,
+            }));
+    }, [sorted, groupBy, listSort, prices]);
+    const groupedTotalCost = useMemo(() => {
+        let cost = 0;
+        for (const group of grouped) {
+            if (group.cost == null) return null;
+            cost += group.cost;
+        }
+        return cost;
+    }, [grouped]);
+    const collapsed = useMemo(() => {
+        if (
+            groupBy === "none" ||
+            (groupBy === "workspace" && activeWorkspace != null)
+        )
+            return { groups: 0, sessions: 0 };
+        let groups = 0;
+        let sessions = 0;
+        grouped.forEach((group, index) => {
+            const open = groupOpen.has(group.key)
+                ? groupOpen.get(group.key)
+                : index < OPEN_GROUPS;
+            if (open) return;
+            groups++;
+            sessions += group.count;
+        });
+        return { groups, sessions };
+    }, [grouped, groupOpen, groupBy, activeWorkspace]);
+
     // KPI tiles read the range + workspace + search set (not the bucket
     // drill-down), computed straight off each conversation's token buckets.
-    // This keeps the headline tokens, cost, and cache rate in agreement
-    // with the workspace rail and the rows below — all conversation-based —
-    // rather than the token-series chart, which keeps its own model filter.
+    // This keeps headline tokens, cost, and cache rate conversation-based rather
+    // than tied to the token-series chart, which has its own model filter.
     const kpi = useMemo(() => {
         let calls = 0,
             errConvs = 0,
@@ -3359,9 +4241,8 @@ function ConversationsView({
                   : "estimated";
         return {
             conversations: filtered.length,
-            conversationsSub: activeWorkspace
-                ? "in workspace"
-                : "active in range",
+            conversationsSub:
+                activeWorkspace != null ? "in workspace" : "active in range",
             tokens,
             cost: priced ? cost : null, // nothing priced, so NO_VALUE rather than a misleading $0
             costSub,
@@ -3381,381 +4262,508 @@ function ConversationsView({
     }, [filtered, activeWorkspace, prices]);
 
     return (
-        <Stack direction="row" align="flex-start" style={{ width: "100%" }}>
-            {!searchActive && (
-                <WorkspaceSidebar
-                    workspaces={workspaces}
-                    selected={activeWorkspace}
-                    onSelect={setWorkspace}
-                    totalCount={rangeFiltered.length}
-                    totalCost={totalCost}
+        <PageShell maxWidth={1400}>
+            <PageHero
+                title="Sessions"
+                desc={
+                    searchActive
+                        ? "Full-text search over prompts, responses, and tool output in all captured local sessions."
+                        : "Captured sessions, token usage, costs, and tool-call activity from local runs."
+                }
+                stats={
+                    searchActive
+                        ? [
+                              {
+                                  label: "Index",
+                                  value:
+                                      searchMode === "semantic"
+                                          ? "QMD"
+                                          : "FTS",
+                                  tone: "var(--primary-text)",
+                              },
+                              {
+                                  label: "Results",
+                                  value: String(searchHits.length),
+                                  tone: searchHits.length
+                                      ? "var(--success-text)"
+                                      : "var(--fg3)",
+                              },
+                              {
+                                  label: "Status",
+                                  value:
+                                      searchPhase === "loading"
+                                          ? "Searching"
+                                          : "Ready",
+                                  tone:
+                                      searchPhase === "loading"
+                                          ? "var(--warning-text)"
+                                          : undefined,
+                              },
+                          ]
+                        : [
+                              { label: "Range", value: range.label },
+                              {
+                                  label: "Workspaces",
+                                  value: String(workspaces.length),
+                              },
+                              {
+                                  label: "Cost",
+                                  value: formatCost(totalCost),
+                                  tone: "var(--brand-orange-text)",
+                              },
+                          ]
+                }
+            />
+            {history && (
+                <HistoryImportBanner
+                    history={history}
+                    onOpenSettings={onOpenSettings}
                 />
             )}
-            <PageShell maxWidth={1400} style={{ flex: 1, minWidth: 0 }}>
-                <PageHero
-                    title="Sessions"
-                    desc={
-                        searchActive
-                            ? "Full-text search over prompts, responses, and tool output in all captured local sessions."
-                            : "Captured sessions, token usage, costs, and tool-call activity from local runs."
-                    }
-                    stats={
-                        searchActive
-                            ? [
-                                  {
-                                      label: "Index",
-                                      value:
-                                          searchMode === "semantic"
-                                              ? "QMD"
-                                              : "FTS",
-                                      tone: "var(--primary-text)",
-                                  },
-                                  {
-                                      label: "Results",
-                                      value: String(searchHits.length),
-                                      tone: searchHits.length
-                                          ? "var(--success-text)"
-                                          : "var(--fg3)",
-                                  },
-                                  {
-                                      label: "Status",
-                                      value:
-                                          searchPhase === "loading"
-                                              ? "Searching"
-                                              : "Ready",
-                                      tone:
-                                          searchPhase === "loading"
-                                              ? "var(--warning-text)"
-                                              : undefined,
-                                  },
-                              ]
-                            : [
-                                  { label: "Range", value: range.label },
-                                  {
-                                      label: "Workspaces",
-                                      value: String(workspaces.length),
-                                  },
-                                  {
-                                      label: "Cost",
-                                      value: formatCost(totalCost),
-                                      tone: "var(--brand-orange-text)",
-                                  },
-                              ]
-                    }
+            <FilterBar
+                query={query}
+                onQueryChange={setQuery}
+                inputRef={searchInputRef}
+                timeRange={searchActive ? null : timeRange}
+                onTimeRangeChange={searchActive ? null : setTimeRange}
+                workspaces={searchActive ? [] : workspaces}
+                workspace={searchActive ? undefined : activeWorkspace}
+                onWorkspaceChange={searchActive ? undefined : setWorkspace}
+                workspaceSessionCount={rangeFiltered.length}
+                workspaceTotalCost={totalCost}
+                now={now}
+                rangeLabel={range.label}
+                groupBy={searchActive ? undefined : groupBy}
+                onGroupByChange={searchActive ? undefined : setGroupBy}
+                agentFilter={searchActive ? undefined : activeAgentFilter}
+                onAgentFilterChange={
+                    searchActive ? undefined : setAgentFilter
+                }
+                agentOptions={searchActive ? [] : agentOptions}
+                modelFilter={searchActive ? undefined : activeModelFilter}
+                onModelFilterChange={
+                    searchActive ? undefined : setModelFilter
+                }
+                modelOptions={searchActive ? [] : modelFacetOptions}
+                statusFilter={searchActive ? undefined : activeStatusFilter}
+                onStatusFilterChange={
+                    searchActive ? undefined : setStatusFilter
+                }
+                activeFilterCount={searchActive ? 0 : activeFilterCount}
+                onClearFilters={clearFilters}
+                onRefresh={onRefresh}
+                refreshing={refreshing}
+                placeholder="Search prompts, responses, tool output, title, agent, model…"
+                onInputKeyDown={onSearchInputKey}
+                rightAdornment={searchRightAdornment}
+            />
+            {searchActive ? (
+                <ConversationSearchPanel
+                    query={trimmedQuery}
+                    hits={searchHits}
+                    phase={searchPhase}
+                    mode={searchMode}
+                    error={searchError}
+                    selectedIndex={searchSelectedIndex}
+                    setSelectedIndex={setSearchSelectedIndex}
+                    retry={retrySearch}
+                    now={now}
+                    onOpen={onOpen}
                 />
-                {history && (
-                    <HistoryImportBanner
-                        history={history}
-                        onOpenSettings={onOpenSettings}
-                    />
-                )}
-                <FilterBar
-                    query={query}
-                    onQueryChange={setQuery}
-                    inputRef={searchInputRef}
-                    timeRange={searchActive ? null : timeRange}
-                    onTimeRangeChange={searchActive ? null : setTimeRange}
-                    agentFilter={searchActive ? undefined : activeAgentFilter}
-                    onAgentFilterChange={
-                        searchActive ? undefined : setAgentFilter
-                    }
-                    agentOptions={searchActive ? [] : agentOptions}
-                    modelFilter={searchActive ? undefined : activeModelFilter}
-                    onModelFilterChange={
-                        searchActive ? undefined : setModelFilter
-                    }
-                    modelOptions={searchActive ? [] : modelFacetOptions}
-                    statusFilter={searchActive ? undefined : activeStatusFilter}
-                    onStatusFilterChange={
-                        searchActive ? undefined : setStatusFilter
-                    }
-                    activeFilterCount={searchActive ? 0 : activeFilterCount}
-                    onClearFilters={clearFilters}
-                    onRefresh={onRefresh}
-                    refreshing={refreshing}
-                    placeholder="Search prompts, responses, tool output, title, agent, model…"
-                    onInputKeyDown={onSearchInputKey}
-                    rightAdornment={searchRightAdornment}
-                />
-                {searchActive ? (
-                    <ConversationSearchPanel
-                        query={trimmedQuery}
-                        hits={searchHits}
-                        phase={searchPhase}
-                        mode={searchMode}
-                        error={searchError}
-                        selectedIndex={searchSelectedIndex}
-                        setSelectedIndex={setSearchSelectedIndex}
-                        retry={retrySearch}
-                        now={now}
-                        onOpen={onOpen}
-                    />
-                ) : (
-                    <React.Fragment>
-                        <KpiStrip kpi={kpi} />
-                        {chartMetric === "activity" ? (
-                            <ActivityChart
-                                data={activity.buckets}
-                                bucketLabel={activity.bucketLabel}
-                                selection={bucketSel}
-                                onBucketClick={onBucketClick}
-                                switcher={
-                                    <ChartSwitch
-                                        value={chartMetric}
-                                        onChange={setChartMetric}
-                                    />
-                                }
-                            />
-                        ) : (
-                            <TokenChart
-                                data={tokenUsage.buckets}
-                                bucketLabel={tokenUsage.bucketLabel}
-                                grandTotal={tokenUsage.grandTotal}
-                                models={tokenModels}
-                                model={effectiveModel}
-                                onModelChange={setTokenModel}
-                                hidden={hiddenSeries}
-                                onToggleSeries={toggleSeries}
-                                selection={bucketSel}
-                                onBucketClick={onBucketClick}
-                                switcher={
-                                    <ChartSwitch
-                                        value={chartMetric}
-                                        onChange={setChartMetric}
-                                    />
-                                }
-                            />
-                        )}
+            ) : (
+                <React.Fragment>
+                    <KpiStrip kpi={kpi} />
+                    {chartMetric === "activity" ? (
+                        <ActivityChart
+                            data={activity.buckets}
+                            bucketLabel={activity.bucketLabel}
+                            selection={bucketSel}
+                            onBucketClick={onBucketClick}
+                            switcher={
+                                <ChartSwitch
+                                    value={chartMetric}
+                                    onChange={setChartMetric}
+                                />
+                            }
+                        />
+                    ) : (
+                        <TokenChart
+                            data={tokenUsage.buckets}
+                            bucketLabel={tokenUsage.bucketLabel}
+                            grandTotal={tokenUsage.grandTotal}
+                            models={tokenModels}
+                            model={effectiveModel}
+                            onModelChange={setTokenModel}
+                            hidden={hiddenSeries}
+                            onToggleSeries={toggleSeries}
+                            selection={bucketSel}
+                            onBucketClick={onBucketClick}
+                            switcher={
+                                <ChartSwitch
+                                    value={chartMetric}
+                                    onChange={setChartMetric}
+                                />
+                            }
+                        />
+                    )}
 
-                        {bucketSel && (
-                            <div
-                                style={{
-                                    marginTop: 10,
-                                    display: "flex",
-                                    alignItems: "center",
-                                    gap: 10,
-                                    fontSize: 11,
-                                    fontFamily: "var(--fontFamilyMonospace)",
-                                    color: "var(--fg2)",
-                                }}
-                            >
-                                <span>
-                                    Showing{" "}
-                                    {formatBucketLabel(
-                                        bucketSel.start,
-                                        bucketSel.end - bucketSel.start,
-                                    )}{" "}
-                                    to{" "}
-                                    {formatBucketLabel(
-                                        bucketSel.end,
-                                        bucketSel.end - bucketSel.start,
-                                    )}
-                                </span>
-                                <button
-                                    onClick={() => setBucketSel(null)}
-                                    style={{
-                                        background: "transparent",
-                                        border: "1px solid var(--border-medium)",
-                                        borderRadius: 2,
-                                        color: "var(--fg2)",
-                                        cursor: "pointer",
-                                        fontSize: 11,
-                                        fontFamily:
-                                            "var(--fontFamilyMonospace)",
-                                        padding: "1px 8px",
-                                    }}
-                                >
-                                    ✕ clear
-                                </button>
-                            </div>
-                        )}
-
-                        <SurfaceCard
+                    {bucketSel && (
+                        <div
                             style={{
-                                marginTop: 18,
-                                overflow: "hidden",
+                                marginTop: 10,
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 10,
+                                fontSize: 11,
+                                fontFamily: "var(--fontFamilyMonospace)",
+                                color: "var(--fg2)",
                             }}
                         >
-                            <div
+                            <span>
+                                Showing{" "}
+                                {formatBucketLabel(
+                                    bucketSel.start,
+                                    bucketSel.end - bucketSel.start,
+                                )}{" "}
+                                to{" "}
+                                {formatBucketLabel(
+                                    bucketSel.end,
+                                    bucketSel.end - bucketSel.start,
+                                )}
+                            </span>
+                            <button
+                                onClick={() => setBucketSel(null)}
                                 style={{
-                                    display: "grid",
-                                    gridTemplateColumns: CONV_GRID,
-                                    alignItems: "center",
-                                    gap: 16,
-                                    padding: "11px 16px",
-                                    borderBottom:
-                                        "1px solid var(--border-weak)",
-                                    background: "var(--bg-secondary)",
-                                    fontFamily: "var(--fontFamily)",
-                                    fontSize: 12,
-                                    color: "var(--fg3)",
-                                    fontWeight: 500,
+                                    background: "transparent",
+                                    border: "1px solid var(--border-medium)",
+                                    borderRadius: 2,
+                                    color: "var(--fg2)",
+                                    cursor: "pointer",
+                                    fontSize: 11,
+                                    fontFamily:
+                                        "var(--fontFamilyMonospace)",
+                                    padding: "1px 8px",
                                 }}
                             >
-                                <SortHeader
-                                    label="Last activity"
-                                    sortKey="last_activity"
-                                    sort={listSort}
-                                    onSort={handleSort}
-                                />
-                                <span>Session</span>
-                                <span>Agent</span>
-                                <SortHeader
-                                    label="Cost"
-                                    sortKey="cost"
-                                    sort={listSort}
-                                    onSort={handleSort}
-                                />
-                                <SortHeader
-                                    label="Tokens"
-                                    sortKey="tokens"
-                                    sort={listSort}
-                                    onSort={handleSort}
-                                />
-                                <SortHeader
-                                    label="Duration"
-                                    sortKey="duration"
-                                    sort={listSort}
-                                    onSort={handleSort}
-                                />
-                                <span>Models</span>
-                            </div>
+                                ✕ clear
+                            </button>
+                        </div>
+                    )}
 
-                            {error && (
+                    <SurfaceCard
+                        style={{
+                            marginTop: 18,
+                            overflow: "hidden",
+                        }}
+                    >
+                        <div
+                            style={{
+                                display: "grid",
+                                gridTemplateColumns: CONV_GRID,
+                                alignItems: "center",
+                                gap: 16,
+                                padding: "11px 16px",
+                                borderBottom:
+                                    "1px solid var(--border-weak)",
+                                background: "var(--bg-secondary)",
+                                fontFamily: "var(--fontFamily)",
+                                fontSize: 12,
+                                color: "var(--fg3)",
+                                fontWeight: 500,
+                            }}
+                        >
+                            <SortHeader
+                                label="Last activity"
+                                sortKey="last_activity"
+                                sort={listSort}
+                                onSort={handleSort}
+                            />
+                            <span>Session</span>
+                            <span>Agent</span>
+                            <SortHeader
+                                label="Cost"
+                                sortKey="cost"
+                                sort={listSort}
+                                onSort={handleSort}
+                            />
+                            <SortHeader
+                                label="Tokens"
+                                sortKey="tokens"
+                                sort={listSort}
+                                onSort={handleSort}
+                            />
+                            <SortHeader
+                                label="Duration"
+                                sortKey="duration"
+                                sort={listSort}
+                                onSort={handleSort}
+                            />
+                            <span>Models</span>
+                        </div>
+
+                        {!error &&
+                            (!loading ||
+                                selectedWorkspaceRangeAggregate?.count > 0) &&
+                            selectedWorkspaceRangeAggregate && (
+                                <WorkspaceContextStrip
+                                    path={
+                                        selectedWorkspaceRangeAggregate.path
+                                    }
+                                    count={
+                                        selectedWorkspaceRangeAggregate.count
+                                    }
+                                    cost={
+                                        selectedWorkspaceRangeAggregate.cost
+                                    }
+                                    tokens={
+                                        selectedWorkspaceRangeAggregate.tokens
+                                    }
+                                    last={
+                                        selectedWorkspaceRangeAggregate.last
+                                    }
+                                    share={
+                                        totalCost != null &&
+                                        totalCost > 0 &&
+                                        selectedWorkspaceRangeAggregate.cost !=
+                                            null
+                                            ? selectedWorkspaceRangeAggregate.cost /
+                                              totalCost
+                                            : null
+                                    }
+                                    now={now}
+                                    onClear={() => setWorkspace(null)}
+                                />
+                            )}
+
+                        {error && (
+                            <div style={{ padding: 16 }}>
+                                <Notice
+                                    kind="error"
+                                    title="Failed to load sessions"
+                                >
+                                    {error}
+                                </Notice>
+                            </div>
+                        )}
+                        {!error &&
+                            loading &&
+                            conversations.length === 0 && (
+                                <div
+                                    style={{
+                                        padding: "32px 18px",
+                                        color: "var(--fg3)",
+                                        fontFamily:
+                                            "var(--fontFamilyMonospace)",
+                                        fontSize: 12,
+                                    }}
+                                >
+                                    Loading…
+                                </div>
+                            )}
+                        {/* The list request is range-scoped, so an empty page does not
+                            mean an empty store. storeCount comes from the response and
+                            decides which notice applies; null (no response yet, or an
+                            older daemon) falls back to reading the page. */}
+                        {!error &&
+                            !loading &&
+                            activeWorkspace == null &&
+                            rangeFiltered.length === 0 &&
+                            (storeCount === 0 ||
+                                (storeCount == null &&
+                                    conversations.length === 0)) && (
                                 <div style={{ padding: 16 }}>
                                     <Notice
-                                        kind="error"
-                                        title="Failed to load sessions"
+                                        kind="info"
+                                        title="No sessions yet"
                                     >
-                                        {error}
+                                        Run an agent against this daemon
+                                        with{" "}
+                                        <code
+                                            style={{ color: "var(--fg1)" }}
+                                        >
+                                            agento11y pi --local
+                                        </code>{" "}
+                                        or{" "}
+                                        <code
+                                            style={{ color: "var(--fg1)" }}
+                                        >
+                                            agento11y claude --local
+                                        </code>
+                                        . Captured generations appear here
+                                        as soon as the agent emits its first
+                                        one.
                                     </Notice>
                                 </div>
                             )}
-                            {!error &&
-                                loading &&
-                                conversations.length === 0 && (
-                                    <div
-                                        style={{
-                                            padding: "32px 18px",
-                                            color: "var(--fg3)",
-                                            fontFamily:
-                                                "var(--fontFamilyMonospace)",
-                                            fontSize: 12,
-                                        }}
-                                    >
-                                        Loading…
-                                    </div>
-                                )}
-                            {/* The list request is range-scoped, so an empty page does not
-                mean an empty store. storeCount comes from the response and
-                decides which notice applies; null (no response yet, or an
-                older daemon) falls back to reading the page. */}
-                            {!error &&
-                                !loading &&
-                                rangeFiltered.length === 0 &&
-                                (storeCount === 0 ||
-                                    (storeCount == null &&
-                                        conversations.length === 0)) && (
-                                    <div style={{ padding: 16 }}>
-                                        <Notice
-                                            kind="info"
-                                            title="No sessions yet"
-                                        >
-                                            Run an agent against this daemon
-                                            with{" "}
-                                            <code
-                                                style={{ color: "var(--fg1)" }}
-                                            >
-                                                agento11y pi --local
-                                            </code>{" "}
-                                            or{" "}
-                                            <code
-                                                style={{ color: "var(--fg1)" }}
-                                            >
-                                                agento11y claude --local
-                                            </code>
-                                            . Captured generations appear here
-                                            as soon as the agent emits its first
-                                            one.
-                                        </Notice>
-                                    </div>
-                                )}
-                            {!error &&
-                                !loading &&
-                                rangeFiltered.length === 0 &&
-                                (storeCount > 0 ||
-                                    conversations.length > 0) && (
-                                    <div
-                                        style={{
-                                            padding: "16px 18px",
-                                            color: "var(--fg2)",
-                                            fontSize: 12,
-                                        }}
-                                    >
-                                        No sessions in{" "}
-                                        <code style={{ color: "var(--fg1)" }}>
-                                            {range.label}
-                                        </code>
-                                        .
-                                    </div>
-                                )}
-                            {!error &&
-                                filtered.length === 0 &&
-                                rangeFiltered.length > 0 && (
-                                    <div
-                                        style={{
-                                            padding: "16px 18px",
-                                            color: "var(--fg2)",
-                                            fontSize: 12,
-                                        }}
-                                    >
-                                        No sessions match the current filters.
-                                    </div>
-                                )}
-                            {!error &&
-                                bucketSel &&
-                                listFiltered.length === 0 &&
-                                filtered.length > 0 && (
-                                    <div
-                                        style={{
-                                            padding: "16px 18px",
-                                            color: "var(--fg2)",
-                                            fontSize: 12,
-                                        }}
-                                    >
-                                        No sessions in the selected bucket.
-                                    </div>
-                                )}
-                            {sorted.map((c) => (
-                                <ConvRow
-                                    key={c.id}
-                                    c={c}
-                                    now={now}
-                                    onOpen={onOpen}
-                                    prices={prices}
-                                />
-                            ))}
-                        </SurfaceCard>
-
+                        {!error &&
+                            !loading &&
+                            activeWorkspace == null &&
+                            rangeFiltered.length === 0 &&
+                            (storeCount > 0 ||
+                                conversations.length > 0) && (
+                                <div
+                                    style={{
+                                        padding: "16px 18px",
+                                        color: "var(--fg2)",
+                                        fontSize: 12,
+                                    }}
+                                >
+                                    No sessions in{" "}
+                                    <code style={{ color: "var(--fg1)" }}>
+                                        {range.label}
+                                    </code>
+                                    .
+                                </div>
+                            )}
+                        {!error &&
+                            !loading &&
+                            selectedWorkspaceRangeAggregate?.count === 0 && (
+                                <div
+                                    style={{
+                                        padding: "16px 18px",
+                                        color: "var(--fg2)",
+                                        fontSize: 12,
+                                    }}
+                                >
+                                    No sessions in this range.
+                                </div>
+                            )}
+                        {!error &&
+                            filtered.length === 0 &&
+                            rangeFiltered.length > 0 &&
+                            (activeWorkspace == null ||
+                                selectedWorkspaceRangeAggregate?.count > 0) && (
+                                <div
+                                    style={{
+                                        padding: "16px 18px",
+                                        color: "var(--fg2)",
+                                        fontSize: 12,
+                                    }}
+                                >
+                                    No sessions match the current filters.
+                                </div>
+                            )}
+                        {!error &&
+                            bucketSel &&
+                            listFiltered.length === 0 &&
+                            filtered.length > 0 && (
+                                <div
+                                    style={{
+                                        padding: "16px 18px",
+                                        color: "var(--fg2)",
+                                        fontSize: 12,
+                                    }}
+                                >
+                                    No sessions in the selected bucket.
+                                </div>
+                            )}
+                        {groupBy === "none"
+                            ? sorted.map((c) => (
+                                  <ConvRow
+                                      key={c.id}
+                                      c={c}
+                                      now={now}
+                                      onOpen={onOpen}
+                                      prices={prices}
+                                  />
+                              ))
+                            : groupBy === "workspace" &&
+                                activeWorkspace != null
+                              ? sorted.map((c) => (
+                                    <ConvRow
+                                        key={c.id}
+                                        c={c}
+                                        now={now}
+                                        onOpen={onOpen}
+                                        prices={prices}
+                                        hideWorkspace
+                                    />
+                                ))
+                              : grouped.map((group, index) => {
+                                  const open = groupOpen.has(group.key)
+                                      ? groupOpen.get(group.key)
+                                      : index < OPEN_GROUPS;
+                                  return (
+                                      <React.Fragment
+                                          key={`${groupBy}:${group.key}`}
+                                      >
+                                          <SessionGroupHeader
+                                              groupBy={groupBy}
+                                              label={group.key}
+                                              open={open}
+                                              onToggle={() =>
+                                                  toggleGroup(group.key, open)
+                                              }
+                                              count={group.count}
+                                              cost={group.cost}
+                                              tokens={group.tokens}
+                                              last={group.last}
+                                              share={
+                                                  groupedTotalCost != null &&
+                                                  groupedTotalCost > 0 &&
+                                                  group.cost != null
+                                                      ? group.cost /
+                                                        groupedTotalCost
+                                                      : null
+                                              }
+                                              now={now}
+                                          />
+                                          {open &&
+                                              group.rows.map((c) => (
+                                                  <ConvRow
+                                                      key={c.id}
+                                                      c={c}
+                                                      now={now}
+                                                      onOpen={onOpen}
+                                                      prices={prices}
+                                                      grouped
+                                                      hideWorkspace={
+                                                          groupBy ===
+                                                          "workspace"
+                                                      }
+                                                  />
+                                              ))}
+                                      </React.Fragment>
+                                  );
+                              })}
                         <div
                             style={{
-                                marginTop: 14,
-                                padding: "10px 14px",
+                                padding: "11px 16px",
                                 fontSize: 11,
                                 color: "var(--fg3)",
                                 fontFamily: "var(--fontFamilyMonospace)",
                             }}
                         >
                             {sorted.length} of {filtered.length}{" "}
-                            {filtered.length === 1 ? "session" : "sessions"}
+                            {filtered.length === 1
+                                ? "session"
+                                : "sessions"}
+                            {collapsed.groups > 0 && (
+                                <React.Fragment>
+                                    {" · "}
+                                    {collapsed.groups} collapsed{" "}
+                                    {groupBy === "workspace"
+                                        ? collapsed.groups === 1
+                                            ? "workspace"
+                                            : "workspaces"
+                                        : `${groupBy} ${collapsed.groups === 1 ? "group" : "groups"}`}{" "}
+                                    {collapsed.groups === 1
+                                        ? "hides"
+                                        : "hide"}{" "}
+                                    {collapsed.sessions}{" "}
+                                    {collapsed.sessions === 1
+                                        ? "session"
+                                        : "sessions"}
+                                </React.Fragment>
+                            )}
                             {activeFilterCount > 0
                                 ? ` · ${activeFilterCount} ${activeFilterCount === 1 ? "filter" : "filters"} active`
                                 : ""}
                         </div>
-                    </React.Fragment>
-                )}
-            </PageShell>
-        </Stack>
+                    </SurfaceCard>
+                </React.Fragment>
+            )}
+        </PageShell>
     );
 }
 
@@ -10719,6 +11727,12 @@ function App() {
         (v) => v === "tokens" || v === "activity",
     );
     const [bucketSel, setBucketSel] = useState(null);
+    const [workspace, setWorkspace] = useState(null);
+    const [groupBy, setGroupBy] = usePersistedState(
+        "sigil.local.groupBy",
+        "workspace",
+        (value) => GROUP_BY_OPTIONS.some((option) => option.value === value),
+    );
     const [listSort, setListSort] = useState({
         key: "last_activity",
         dir: "desc",
@@ -11290,6 +12304,10 @@ function App() {
                         setChartMetric={setChartMetric}
                         bucketSel={bucketSel}
                         setBucketSel={setBucketSel}
+                        workspace={workspace}
+                        setWorkspace={setWorkspace}
+                        groupBy={groupBy}
+                        setGroupBy={setGroupBy}
                         listSort={listSort}
                         setListSort={setListSort}
                         onOpen={openConv}
