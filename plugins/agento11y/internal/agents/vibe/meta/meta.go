@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 )
 
 // Meta is the subset of meta.json fields the vibe agent adapter consumes.
@@ -60,11 +62,57 @@ type Stats struct {
 // matching entry in Models carries the API id ("mistral-vibe-cli-latest")
 // and provider ("mistral").
 type Config struct {
-	ActiveModel string        `json:"active_model"`
-	Models      []ModelConfig `json:"models,omitempty"`
+	ActiveModel string       `json:"active_model"`
+	Models      ModelConfigs `json:"models,omitempty"`
 }
 
-// ModelConfig is one entry of config.models[]. Alias matches ActiveModel.
+// ModelConfigs is meta.json's config.models. Vibe wrote a JSON array of model
+// tables until 2.21.0 and an alias-keyed object from 2.21.0 on (models:
+// dict[str, ModelConfig] in vibe/core/config/vibe_schema.py). Both decode into
+// the same slice, so ActiveModelRef has one shape to search. The array shape
+// still turns up because vibe rewrites meta.json only on save, so a session
+// started under an older vibe keeps its array until the first save.
+type ModelConfigs []ModelConfig
+
+// UnmarshalJSON decodes either shape. A value in neither shape (a string, a
+// number, an object of something other than model tables) decodes to no models
+// instead of an error: models only feeds ActiveModelRef, which falls back to
+// the alias, and an error here would stop the whole turn export. A malformed
+// element inside an array still errors.
+func (m *ModelConfigs) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*m = nil
+		return nil
+	}
+	if strings.HasPrefix(string(data), "[") {
+		var list []ModelConfig
+		if err := json.Unmarshal(data, &list); err != nil {
+			return err
+		}
+		*m = list
+		return nil
+	}
+	byAlias := map[string]ModelConfig{}
+	if err := json.Unmarshal(data, &byAlias); err != nil {
+		*m = nil
+		return nil
+	}
+	out := make(ModelConfigs, 0, len(byAlias))
+	for alias, mc := range byAlias {
+		// Vibe resolves active_model against the key, and raises when the key
+		// and the inner alias disagree (normalize_model_configs in
+		// vibe/core/config/vibe_schema.py), so the key wins here too.
+		mc.Alias = alias
+		out = append(out, mc)
+	}
+	// Sorted so iteration order does not depend on map order. Aliases come
+	// from the map keys, so no two entries tie.
+	slices.SortFunc(out, func(a, b ModelConfig) int { return strings.Compare(a.Alias, b.Alias) })
+	*m = out
+	return nil
+}
+
+// ModelConfig is one entry of config.models. Alias matches ActiveModel.
 type ModelConfig struct {
 	Name     string `json:"name"`
 	Provider string `json:"provider"`

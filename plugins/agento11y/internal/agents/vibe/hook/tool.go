@@ -16,25 +16,25 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 )
 
-// guardEvalBuffer pads the guard timeout to bound the whole before_tool
+// guardEvalBuffer pads the guard timeout to bound the whole pre_tool
 // handler; the SDK's own timeout (cfg.TimeoutMs) does the real work.
 const guardEvalBuffer = 500 * time.Millisecond
 
-// BeforeTool evaluates a tool call against agento11y guard policy before vibe
+// PreTool evaluates a tool call against agento11y guard policy before vibe
 // runs it. With guards disabled (the default) it is a pass-through that
 // writes nothing, which vibe reads as "allow". A deny writes vibe's
 // structured deny response so the call never runs; a redaction transform
 // writes a tool_input rewrite so vibe runs the redacted arguments. Stdout is
 // the only channel that influences vibe here, so this is the one handler
 // that writes to it.
-func BeforeTool(ctx context.Context, stdout io.Writer, p Payload, logger *log.Logger) {
+func PreTool(ctx context.Context, stdout io.Writer, p Payload, logger *log.Logger) {
 	cfg := envconfig.ResolveGuards(logger)
 	if !cfg.Enabled {
 		return
 	}
 	toolName := p.ToolName()
 	if toolName == "" {
-		logger.Print("before_tool: missing tool_name; allowing")
+		logger.Print("pre_tool: missing tool_name; allowing")
 		return
 	}
 
@@ -56,24 +56,24 @@ func BeforeTool(ctx context.Context, stdout io.Writer, p Payload, logger *log.Lo
 		ModelName:     modelName,
 	}, logger)
 	if res.Blocked() {
-		writeBeforeToolDeny(stdout, res.Reason)
+		writePreToolDeny(stdout, res.Reason)
 		return
 	}
 	if len(res.UpdatedInputJSON) > 0 {
-		writeBeforeToolRewrite(stdout, res.UpdatedInputJSON)
+		writePreToolRewrite(stdout, res.UpdatedInputJSON)
 	}
 }
 
-// AfterTool records a completed tool call's timing and status so the
-// post_agent_turn export can attach them to that tool's execute_tool span.
+// PostTool records a completed tool call's timing and status so the
+// post_agent export can attach them to that tool's execute_tool span.
 // It is skipped when no OTel exporter is configured, because without one the
 // spans are no-ops and the recorded events would never be read.
-func AfterTool(p Payload, logger *log.Logger) {
+func PostTool(p Payload, logger *log.Logger) {
 	if otel.EndpointFromEnv() == "" {
 		return
 	}
 	if p.SessionID == "" || p.ToolCallID() == "" {
-		logger.Print("after_tool: missing session_id or tool_call_id")
+		logger.Print("post_tool: missing session_id or tool_call_id")
 		return
 	}
 	ev := toolevents.Event{
@@ -85,7 +85,7 @@ func AfterTool(p Payload, logger *log.Logger) {
 		CompletedAt: time.Now().UTC(),
 	}
 	if err := toolevents.Save(p.SessionID, ev); err != nil {
-		logger.Printf("after_tool: save tool event: %v", err)
+		logger.Printf("post_tool: save tool event: %v", err)
 	}
 }
 
@@ -108,40 +108,40 @@ func guardModel(p Payload) (provider, modelName string) {
 	return provider, modelName
 }
 
-// beforeToolDeny is vibe's structured deny response: a non-empty stdout
+// preToolDeny is vibe's structured deny response: a non-empty stdout
 // object with decision="deny". vibe surfaces Reason to the model as the
 // blocked-tool error (vibe/core/hooks/models.py HookStructuredResponse).
-type beforeToolDeny struct {
+type preToolDeny struct {
 	Decision string `json:"decision"`
 	Reason   string `json:"reason,omitempty"`
 }
 
-// beforeToolRewrite replaces the tool arguments via hook_specific_output.
+// preToolRewrite replaces the tool arguments via hook_specific_output.
 // decision is omitted (defaults to allow) so the call proceeds with the
 // rewritten input rather than skipping the user's permission prompt.
-type beforeToolRewrite struct {
-	HookSpecificOutput beforeToolRewriteBody `json:"hook_specific_output"`
+type preToolRewrite struct {
+	HookSpecificOutput preToolRewriteBody `json:"hook_specific_output"`
 }
 
-type beforeToolRewriteBody struct {
+type preToolRewriteBody struct {
 	ToolInput json.RawMessage `json:"tool_input"`
 }
 
-func writeBeforeToolDeny(stdout io.Writer, reason string) {
+func writePreToolDeny(stdout io.Writer, reason string) {
 	if stdout == nil {
 		return
 	}
 	if strings.TrimSpace(reason) == "" {
 		reason = "tool call denied by agento11y guard"
 	}
-	_ = json.NewEncoder(stdout).Encode(beforeToolDeny{Decision: "deny", Reason: reason})
+	_ = json.NewEncoder(stdout).Encode(preToolDeny{Decision: "deny", Reason: reason})
 }
 
-func writeBeforeToolRewrite(stdout io.Writer, updatedInput json.RawMessage) {
+func writePreToolRewrite(stdout io.Writer, updatedInput json.RawMessage) {
 	if stdout == nil || len(updatedInput) == 0 {
 		return
 	}
-	_ = json.NewEncoder(stdout).Encode(beforeToolRewrite{
-		HookSpecificOutput: beforeToolRewriteBody{ToolInput: updatedInput},
+	_ = json.NewEncoder(stdout).Encode(preToolRewrite{
+		HookSpecificOutput: preToolRewriteBody{ToolInput: updatedInput},
 	})
 }

@@ -1,6 +1,7 @@
 package meta
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -46,6 +47,70 @@ func TestLoad(t *testing.T) {
 	}
 	if m.SystemPrompt.Content == "" {
 		t.Errorf("SystemPrompt.Content is empty")
+	}
+}
+
+func TestLoad_ModelsShapes(t *testing.T) {
+	// Vibe writes config.models as an alias-keyed object from 2.21.0 on and
+	// as an array before that. Both have to resolve the same model.
+	tests := []struct {
+		name    string
+		models  string
+		wantAPI string
+	}{
+		{
+			name:    "object keyed by alias",
+			models:  `{"mistral-medium-3.5": {"name": "mistral-vibe-cli-latest", "provider": "mistral", "alias": "mistral-medium-3.5"}}`,
+			wantAPI: "mistral-vibe-cli-latest",
+		},
+		{
+			name:    "array of model tables",
+			models:  `[{"name": "mistral-vibe-cli-latest", "provider": "mistral", "alias": "mistral-medium-3.5"}]`,
+			wantAPI: "mistral-vibe-cli-latest",
+		},
+		{
+			name:    "object value omitting its inner alias",
+			models:  `{"mistral-medium-3.5": {"name": "mistral-vibe-cli-latest", "provider": "mistral"}}`,
+			wantAPI: "mistral-vibe-cli-latest",
+		},
+		{
+			name:    "object value whose inner alias disagrees with its key",
+			models:  `{"mistral-medium-3.5": {"name": "mistral-vibe-cli-latest", "provider": "mistral", "alias": "something-else"}}`,
+			wantAPI: "mistral-vibe-cli-latest",
+		},
+		{
+			// Neither shape: the lookup falls back to the alias rather than
+			// failing the load, which would drop the turn export.
+			name:    "out-of-contract value",
+			models:  `"mistral-vibe-cli-latest"`,
+			wantAPI: "mistral-medium-3.5",
+		},
+		{
+			// No table to search, so the alias is the best answer.
+			name:    "absent",
+			models:  `null`,
+			wantAPI: "mistral-medium-3.5",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			body := `{"session_id":"s1","config":{"active_model":"mistral-medium-3.5","models":` + tc.models + `}}`
+			if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			m, err := Load(filepath.Join(dir, "messages.jsonl"))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			provider, api := m.ActiveModelRef()
+			if provider != "mistral" {
+				t.Errorf("provider = %q, want mistral", provider)
+			}
+			if api != tc.wantAPI {
+				t.Errorf("api id = %q, want %q", api, tc.wantAPI)
+			}
+		})
 	}
 }
 

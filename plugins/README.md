@@ -44,7 +44,7 @@ Cursor has no launcher; see [`cursor/README.md`](cursor/README.md) for setup.
 | [Cursor](https://cursor.com) | [`cursor/`](cursor/) | Available |
 | [OpenCode](https://opencode.ai) | [`opencode/`](opencode/) | Available |
 | [Pi](https://github.com/earendil-works/pi) | [`pi/`](pi/) | Available |
-| [Vibe](https://github.com/mistralai/vibe) | [`vibe/`](vibe/) | Experimental |
+| [Vibe](https://github.com/mistralai/mistral-vibe) | [`vibe/`](vibe/) | Experimental |
 
 ## Content and redaction
 

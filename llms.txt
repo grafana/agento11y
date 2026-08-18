@@ -83,7 +83,7 @@ A binary older than that command prints `agento11y: unknown agent "skills"` and 
 | [Cursor](https://cursor.com) | [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) | Shared `agento11y` Go binary via hooks |
 | [OpenCode](https://opencode.ai) | [`plugins/opencode/`](https://github.com/grafana/agento11y/tree/main/plugins/opencode) | Shared `agento11y` Go binary, installs `@grafana/agento11y-opencode` |
 | [Pi](https://github.com/earendil-works/pi) | [`plugins/pi/`](https://github.com/grafana/agento11y/tree/main/plugins/pi) | Independent npm package `@grafana/agento11y-pi` |
-| [Vibe](https://github.com/mistralai/vibe) | [`plugins/vibe/`](https://github.com/grafana/agento11y/tree/main/plugins/vibe) | Shared `agento11y` Go binary via `hooks.toml` |
+| [Vibe](https://github.com/mistralai/mistral-vibe) | [`plugins/vibe/`](https://github.com/grafana/agento11y/tree/main/plugins/vibe) | Shared `agento11y` Go binary via `hooks.toml` |
 
 ## Fast path
 

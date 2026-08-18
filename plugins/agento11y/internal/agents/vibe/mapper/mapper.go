@@ -2,7 +2,7 @@
 // session's meta.json into an agento11y.Generation ready for export.
 //
 // One mapper.Map call produces exactly one generation per
-// post_agent_turn hook fire. agento11y groups records by ConversationID
+// post_agent hook fire. agento11y groups records by ConversationID
 // (= vibe session_id), so multi-turn sessions get one generation per
 // turn under the same conversation.
 package mapper
@@ -81,7 +81,7 @@ type Mapped struct {
 
 // Map converts the new transcript slice plus meta.json into a single
 // generation. The caller chooses the turn sequence (typically the
-// number of post_agent_turn calls observed for this session) so the
+// number of post_agent calls observed for this session) so the
 // generation ID stays deterministic across re-runs.
 func Map(in Inputs, turnSeq int) Mapped {
 	now := in.Now

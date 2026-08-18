@@ -32,29 +32,35 @@ type hooksFileEntry struct {
 }
 
 // desiredHooks returns the agento11y-owned [[hooks]] entries vibe runs. Vibe
-// defines exactly three event types and we wire all three: post_agent_turn
-// for the per-turn generation export, before_tool for guard enforcement, and
-// after_tool for per-tool span timing. before_tool/after_tool take a "*"
-// matcher (every tool); match is forbidden on post_agent_turn. Each entry is
-// upserted by its unique name so repeated installs are idempotent and
-// hand-authored hooks in the same file are preserved.
+// defines exactly three event types and we wire all three: post_agent for the
+// per-turn generation export, pre_tool for guard enforcement, and post_tool
+// for per-tool span timing. The two tool hooks take a "*" matcher (every
+// tool); match is forbidden on post_agent. Each entry is upserted by its
+// unique name so repeated installs are idempotent and hand-authored hooks in
+// the same file are preserved.
+//
+// types carries the spelling of those three events. Before vibe 2.21.0 they
+// were post_agent_turn, before_tool, and after_tool. Entry names are the same
+// on both sides of that rename, so an install that crosses it rewrites three
+// types in place rather than adding three entries.
 //
 // command is the shell command vibe runs for each fire, built from this
 // executable's own path so hooks keep working for users who installed only
 // the agento11y (or only the legacy sigil) command.
-func desiredHooks(command string) []hooksFileEntry {
+func desiredHooks(command string, types hookTypeSet) []hooksFileEntry {
 	return []hooksFileEntry{
-		{Name: "agento11y", Type: "post_agent_turn", Command: command, Timeout: hookTimeoutSec},
-		{Name: "agento11y-before-tool", Type: "before_tool", Command: command, Timeout: hookTimeoutSec, Match: "*"},
-		{Name: "agento11y-after-tool", Type: "after_tool", Command: command, Timeout: hookTimeoutSec, Match: "*"},
+		{Name: "agento11y", Type: types.postAgent, Command: command, Timeout: hookTimeoutSec},
+		{Name: "agento11y-before-tool", Type: types.preTool, Command: command, Timeout: hookTimeoutSec, Match: "*"},
+		{Name: "agento11y-after-tool", Type: types.postTool, Command: command, Timeout: hookTimeoutSec, Match: "*"},
 	}
 }
 
 // legacyHookNames maps each agento11y-owned entry name to the pre-rename name
 // an older version wrote. The merge drops legacy entries so a refreshed
 // install does not fire every hook twice (once per name), but HooksInstalled
-// still counts them: they keep capturing until the next launch replaces them,
-// and doctor must not report a working install as broken.
+// still counts one whose type this vibe accepts: it keeps capturing until the
+// next launch replaces it, and doctor must not report a working install as
+// broken.
 var legacyHookNames = map[string]string{
 	"agento11y":             "sigil",
 	"agento11y-before-tool": "sigil-before-tool",
@@ -95,12 +101,17 @@ func hooksFilePath() (string, error) {
 }
 
 // HooksInstalled reports whether every agento11y-owned entry is present in
-// vibe's hooks.toml, under its current or its pre-rename name. It reads the
-// file directly, so `agento11y doctor` can report install state without vibe
-// on PATH. Read-only: it never merges or writes.
+// vibe's hooks.toml, under its current or its pre-rename name, carrying the
+// type the installed vibe accepts. It reads the file directly, so
+// `agento11y doctor` can report install state without vibe on PATH. Read-only:
+// it never merges or writes.
+//
+// The type has to match because vibe validates it against an enum and skips
+// the entry when it does not, so an install spelled for the other side of the
+// 2.21.0 rename captures nothing.
 //
 // A hooks.toml holding only hand-authored hooks does not count as installed.
-func HooksInstalled() (bool, error) {
+func HooksInstalled(types hookTypeSet) (bool, error) {
 	path, err := hooksFilePath()
 	if err != nil {
 		return false, err
@@ -112,23 +123,26 @@ func HooksInstalled() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("read %s: %w", path, err)
 	}
-	// Only the entry names matter, so decode those and ignore every other key
-	// a hand-authored hook may carry.
+	// Only each entry's name and type matter, so decode those and ignore every
+	// other key a hand-authored hook may carry.
 	var doc struct {
 		Hooks []struct {
 			Name string `toml:"name"`
+			Type string `toml:"type"`
 		} `toml:"hooks"`
 	}
 	if err := toml.Unmarshal(data, &doc); err != nil {
 		return false, fmt.Errorf("parse %s: %w", path, err)
 	}
-	present := map[string]bool{}
+	typeByName := map[string]string{}
 	for _, entry := range doc.Hooks {
-		present[entry.Name] = true
+		typeByName[entry.Name] = entry.Type
 	}
-	for _, want := range desiredHooks("") {
-		legacy := legacyHookNames[want.Name]
-		if present[want.Name] || (legacy != "" && present[legacy]) {
+	for _, want := range desiredHooks("", types) {
+		if typeByName[want.Name] == want.Type {
+			continue
+		}
+		if legacy := legacyHookNames[want.Name]; legacy != "" && typeByName[legacy] == want.Type {
 			continue
 		}
 		return false, nil
@@ -136,15 +150,15 @@ func HooksInstalled() (bool, error) {
 	return true, nil
 }
 
-// ensureHookInstalled merges an agento11y-owned post_agent_turn entry into
-// vibe's hooks.toml. The write is atomic (temp file + rename), idempotent
-// (skipped when the entry already matches), and preserves any
-// hand-authored hooks that share the same file.
+// ensureHookInstalled merges the three agento11y-owned entries into vibe's
+// hooks.toml, spelled for the installed vibe. The write is atomic (temp file +
+// rename), idempotent (skipped when the entries already match), and preserves
+// any hand-authored hooks that share the same file.
 //
 // Returns the path that was inspected (or written) and whether the file
 // was actually changed. A best-effort failure path returns the error so
 // the caller can log it.
-func ensureHookInstalled() (string, bool, error) {
+func ensureHookInstalled(types hookTypeSet) (string, bool, error) {
 	path, err := hooksFilePath()
 	if err != nil {
 		return "", false, err
@@ -158,7 +172,7 @@ func ensureHookInstalled() (string, bool, error) {
 	if err != nil {
 		return path, false, err
 	}
-	updated, changed, err := mergeHooksTOML(existing, command)
+	updated, changed, err := mergeHooksTOML(existing, command, types)
 	if err != nil {
 		return path, false, err
 	}
@@ -206,7 +220,7 @@ func ensureHookInstalled() (string, bool, error) {
 //
 // Unknown top-level keys (vibe may add future settings to hooks.toml)
 // are preserved by round-tripping through a permissive map.
-func mergeHooksTOML(existing []byte, command string) (out []byte, changed bool, err error) {
+func mergeHooksTOML(existing []byte, command string, types hookTypeSet) (out []byte, changed bool, err error) {
 	// Use a permissive map so we keep anything we don't know about.
 	doc := map[string]any{}
 	if len(bytes.TrimSpace(existing)) > 0 {
@@ -217,7 +231,7 @@ func mergeHooksTOML(existing []byte, command string) (out []byte, changed bool, 
 
 	hooks, _ := doc["hooks"].([]any)
 	hooks = dropLegacyHooks(hooks)
-	for _, desired := range desiredHooks(command) {
+	for _, desired := range desiredHooks(command, types) {
 		hooks = upsertHook(hooks, desired)
 	}
 	doc["hooks"] = hooks

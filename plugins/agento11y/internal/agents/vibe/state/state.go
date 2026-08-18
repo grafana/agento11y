@@ -15,7 +15,7 @@ import (
 // Session holds the persisted state for a single vibe session.
 //
 // Offset tracks how far into messages.jsonl we have already exported, so
-// subsequent post_agent_turn hooks only read new lines.
+// subsequent post_agent hooks only read new lines.
 //
 // SessionPromptTokens / SessionCompletionTokens / SessionCost and the
 // ToolCalls* counters record the meta.json session-wide totals at the time

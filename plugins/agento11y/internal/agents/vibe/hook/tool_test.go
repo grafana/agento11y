@@ -14,11 +14,11 @@ import (
 
 func discardLogger() *log.Logger { return log.New(io.Discard, "", 0) }
 
-func TestBeforeTool_GuardsDisabledPassesThrough(t *testing.T) {
+func TestPreTool_GuardsDisabledPassesThrough(t *testing.T) {
 	t.Setenv("SIGIL_GUARDS_ENABLED", "false")
 	var out bytes.Buffer
-	BeforeTool(context.Background(), &out, Payload{
-		HookEventName: "before_tool",
+	PreTool(context.Background(), &out, Payload{
+		HookEventName: "pre_tool",
 		SessionID:     "s",
 		ToolNameValue: "bash",
 	}, discardLogger())
@@ -27,7 +27,7 @@ func TestBeforeTool_GuardsDisabledPassesThrough(t *testing.T) {
 	}
 }
 
-func TestBeforeTool_FailClosedDeniesOnMissingCreds(t *testing.T) {
+func TestPreTool_FailClosedDeniesOnMissingCreds(t *testing.T) {
 	t.Setenv("SIGIL_GUARDS_ENABLED", "true")
 	t.Setenv("SIGIL_GUARDS_FAIL_OPEN", "false")
 	t.Setenv("SIGIL_ENDPOINT", "")
@@ -35,8 +35,8 @@ func TestBeforeTool_FailClosedDeniesOnMissingCreds(t *testing.T) {
 	t.Setenv("SIGIL_AUTH_TOKEN", "")
 
 	var out bytes.Buffer
-	BeforeTool(context.Background(), &out, Payload{
-		HookEventName:  "before_tool",
+	PreTool(context.Background(), &out, Payload{
+		HookEventName:  "pre_tool",
 		SessionID:      "s",
 		ToolNameValue:  "bash",
 		ToolInputValue: json.RawMessage(`{"command":"ls"}`),
@@ -57,7 +57,7 @@ func TestBeforeTool_FailClosedDeniesOnMissingCreds(t *testing.T) {
 	}
 }
 
-func TestBeforeTool_FailOpenAllowsOnMissingCreds(t *testing.T) {
+func TestPreTool_FailOpenAllowsOnMissingCreds(t *testing.T) {
 	t.Setenv("SIGIL_GUARDS_ENABLED", "true")
 	t.Setenv("SIGIL_GUARDS_FAIL_OPEN", "true")
 	t.Setenv("SIGIL_ENDPOINT", "")
@@ -65,8 +65,8 @@ func TestBeforeTool_FailOpenAllowsOnMissingCreds(t *testing.T) {
 	t.Setenv("SIGIL_AUTH_TOKEN", "")
 
 	var out bytes.Buffer
-	BeforeTool(context.Background(), &out, Payload{
-		HookEventName: "before_tool",
+	PreTool(context.Background(), &out, Payload{
+		HookEventName: "pre_tool",
 		SessionID:     "s",
 		ToolNameValue: "bash",
 	}, discardLogger())
@@ -75,10 +75,10 @@ func TestBeforeTool_FailOpenAllowsOnMissingCreds(t *testing.T) {
 	}
 }
 
-func TestBeforeToolWriters(t *testing.T) {
+func TestPreToolWriters(t *testing.T) {
 	t.Run("deny", func(t *testing.T) {
 		var out bytes.Buffer
-		writeBeforeToolDeny(&out, "blocked by policy")
+		writePreToolDeny(&out, "blocked by policy")
 		var resp map[string]any
 		if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
 			t.Fatalf("invalid deny JSON: %v", err)
@@ -90,7 +90,7 @@ func TestBeforeToolWriters(t *testing.T) {
 
 	t.Run("deny falls back to a default reason", func(t *testing.T) {
 		var out bytes.Buffer
-		writeBeforeToolDeny(&out, "  ")
+		writePreToolDeny(&out, "  ")
 		if !strings.Contains(out.String(), "denied by agento11y guard") {
 			t.Errorf("missing default reason: %s", out.String())
 		}
@@ -98,7 +98,7 @@ func TestBeforeToolWriters(t *testing.T) {
 
 	t.Run("rewrite", func(t *testing.T) {
 		var out bytes.Buffer
-		writeBeforeToolRewrite(&out, json.RawMessage(`{"command":"ls -la"}`))
+		writePreToolRewrite(&out, json.RawMessage(`{"command":"ls -la"}`))
 		var resp struct {
 			HookSpecificOutput struct {
 				ToolInput json.RawMessage `json:"tool_input"`
@@ -114,19 +114,19 @@ func TestBeforeToolWriters(t *testing.T) {
 
 	t.Run("rewrite with empty input writes nothing", func(t *testing.T) {
 		var out bytes.Buffer
-		writeBeforeToolRewrite(&out, nil)
+		writePreToolRewrite(&out, nil)
 		if out.Len() != 0 {
 			t.Errorf("stdout = %q, want empty for an empty rewrite", out.String())
 		}
 	})
 }
 
-func TestAfterTool_RecordsEventWhenOTelConfigured(t *testing.T) {
+func TestPostTool_RecordsEventWhenOTelConfigured(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318")
 
-	AfterTool(Payload{
-		HookEventName:   "after_tool",
+	PostTool(Payload{
+		HookEventName:   "post_tool",
 		SessionID:       "sess-after",
 		ToolNameValue:   "bash",
 		ToolCallIDValue: "tc-1",
@@ -151,13 +151,13 @@ func TestAfterTool_RecordsEventWhenOTelConfigured(t *testing.T) {
 	}
 }
 
-func TestAfterTool_NoOpWithoutOTel(t *testing.T) {
+func TestPostTool_NoOpWithoutOTel(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
-	AfterTool(Payload{
-		HookEventName:   "after_tool",
+	PostTool(Payload{
+		HookEventName:   "post_tool",
 		SessionID:       "sess-noop",
 		ToolCallIDValue: "tc-1",
 		ToolStatusValue: "success",
