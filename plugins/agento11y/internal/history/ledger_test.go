@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 // pinStateHome points the application state root at a fresh directory so a
@@ -157,7 +157,7 @@ func TestLedgerShouldImport(t *testing.T) {
 
 // TestLedgerMarkAppendsOnly is the structural half of the linear-scaling
 // requirement: a mark must add bytes at the end and leave every earlier byte
-// alone. The timing half is TestLedgerMarkScalesLinearly.
+// alone. The cost half is TestLedgerMarkScalesLinearly.
 func TestLedgerMarkAppendsOnly(t *testing.T) {
 	pinStateHome(t)
 	path := filepath.Join(t.TempDir(), "ledger.jsonl")
@@ -189,43 +189,52 @@ func TestLedgerMarkAppendsOnly(t *testing.T) {
 // rewrote the whole file on every call, which took 109 seconds to reach 20,000
 // entries and would have taken hours for the 277,625 turns on the development
 // machine.
+//
+// The measure is bytes allocated, not wall clock. Wall clock made this test
+// flaky: `go test ./...` runs packages in parallel, and load that arrives
+// during the 20,000-mark run but not the 2,000-mark run inflates the ratio on
+// an implementation that is linear. Allocation is unaffected by load, and it
+// separates the two implementations just as widely: cloning the map and
+// re-marshalling every record per mark measures at 100x here, an append at 9x.
 func TestLedgerMarkScalesLinearly(t *testing.T) {
 	pinStateHome(t)
 
-	markN := func(n int) time.Duration {
+	markN := func(n int) uint64 {
 		path := filepath.Join(t.TempDir(), "ledger.jsonl")
 		l, err := openLedgerAt(path)
 		if err != nil {
 			t.Fatalf("open ledger: %v", err)
 		}
 		defer func() { _ = l.Close() }()
-		start := time.Now()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
 		for i := range n {
 			if err := l.Mark(identity(i), StatusExported, "gen", "", int64(i)); err != nil {
 				t.Fatalf("mark %d: %v", i, err)
 			}
 		}
-		return time.Since(start)
+		runtime.ReadMemStats(&after)
+		return after.TotalAlloc - before.TotalAlloc
 	}
 
-	median := func(n, runs int) time.Duration {
-		samples := make([]time.Duration, runs)
+	// TotalAlloc counts the whole process, so another goroutine can only add to
+	// a sample. The smallest one is the closest to what Mark itself allocated.
+	minAllocs := func(n, runs int) uint64 {
+		samples := make([]uint64, runs)
 		for i := range runs {
 			samples[i] = markN(n)
 		}
-		slices.Sort(samples)
-		return samples[runs/2]
+		return slices.Min(samples)
 	}
 
-	markN(500) // warm up the filesystem and the allocator
-	small := median(2_000, 3)
-	large := median(20_000, 3)
+	small := minAllocs(2_000, 3)
+	large := minAllocs(20_000, 3)
 
-	// Ten times the work, so allow 15x for fixed overhead and timer noise.
+	// Ten times the work, so allow 15x for the fixed cost of opening a ledger.
 	// Quadratic behaviour would put the ratio near 100x.
 	const maxRatio = 15
-	if large > time.Duration(maxRatio)*small {
-		t.Fatalf("20,000 marks took %v, more than %dx the %v for 2,000 marks", large, maxRatio, small)
+	if large > maxRatio*small {
+		t.Fatalf("20,000 marks allocated %d bytes, more than %dx the %d for 2,000 marks", large, maxRatio, small)
 	}
 }
 
