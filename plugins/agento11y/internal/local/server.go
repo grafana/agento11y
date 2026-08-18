@@ -1,7 +1,9 @@
 package local
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"log"
@@ -28,8 +30,9 @@ const (
 	maxOTLPBodyBytes       = 16 * 1024 * 1024 // 16 MiB
 	maxHookBodyBytes       = 4 * 1024 * 1024  // 4 MiB
 
-	otlpTracesPath  = "/otlp/v1/traces"
-	otlpMetricsPath = "/otlp/v1/metrics"
+	otlpTracesPath   = "/otlp/v1/traces"
+	otlpMetricsPath  = "/otlp/v1/metrics"
+	noncePlaceholder = "{{AGENTO11Y_CSP_NONCE}}"
 )
 
 // Server is the in-process HTTP handler that records generations from
@@ -182,6 +185,8 @@ func mediaTypeAccepted(path, header string) bool {
 
 // ServeHTTP routes incoming requests to the appropriate handler.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	securityHeaders(w.Header())
+
 	if r.Method == http.MethodPost || r.Method == http.MethodPut {
 		contentType := r.Header.Get("Content-Type")
 		if !mediaTypeAccepted(r.URL.Path, contentType) {
@@ -192,6 +197,27 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mux.ServeHTTP(w, r)
+}
+
+func securityHeaders(header http.Header) {
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Referrer-Policy", "no-referrer")
+	header.Set("X-Frame-Options", "DENY")
+	header.Set("Cross-Origin-Resource-Policy", "same-origin")
+	header.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+}
+
+func documentCSP(nonce string) string {
+	return "default-src 'self'; " +
+		"script-src 'self' 'nonce-" + nonce + "'; " +
+		"style-src 'self'; " +
+		"img-src 'self' data:; " +
+		"font-src 'self'; " +
+		"connect-src 'self' https://models.dev; " +
+		"object-src 'none'; " +
+		"frame-ancestors 'none'; " +
+		"base-uri 'none'; " +
+		"form-action 'none'"
 }
 
 // devAsset returns the on-disk copy of a web asset when the
@@ -211,9 +237,17 @@ func devAsset(name string, embedded []byte) []byte {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
+	nonce := rand.Text()
+	body := devAsset("index.html", indexHTML)
+	if !bytes.Contains(body, []byte(noncePlaceholder)) {
+		s.logger.Printf("local: index.html missing CSP nonce placeholder %q", noncePlaceholder)
+	}
+	body = bytes.ReplaceAll(body, []byte(noncePlaceholder), []byte(nonce))
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(devAsset("index.html", indexHTML))
+	w.Header().Set("Content-Security-Policy", documentCSP(nonce))
+	_, _ = w.Write(body)
 }
 
 func (s *Server) handleAppCSS(w http.ResponseWriter, _ *http.Request) {

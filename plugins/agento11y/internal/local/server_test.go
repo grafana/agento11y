@@ -281,6 +281,14 @@ func TestServer_HookEvaluate_InvalidJSONReturns400(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "hooks should not be persisted")
 }
 
+func assertFixedSecurityHeaders(t *testing.T, header http.Header) {
+	t.Helper()
+	assert.Equal(t, "nosniff", header.Get("X-Content-Type-Options"))
+	assert.Equal(t, "no-referrer", header.Get("Referrer-Policy"))
+	assert.Equal(t, "DENY", header.Get("X-Frame-Options"))
+	assert.Equal(t, "same-origin", header.Get("Cross-Origin-Resource-Policy"))
+}
+
 // TestServer_Routing covers the small router-level status responses.
 // The richer per-endpoint behaviour lives in the generations / OTLP /
 // hook tests above.
@@ -298,10 +306,10 @@ func TestServer_Routing(t *testing.T) {
 		wantBodyNotHas      string // substring check; "" skips
 		wantNoConversations bool
 	}{
-		{name: "root serves viewer HTML", method: http.MethodGet, path: "/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `<script type="text/babel" src="/assets/app.jsx">`},
-		{name: "conversation path serves viewer HTML", method: http.MethodGet, path: "/conversations/conv-123", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `<script type="text/babel" src="/assets/app.jsx">`},
-		{name: "settings path serves viewer HTML", method: http.MethodGet, path: "/settings", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `<script type="text/babel" src="/assets/app.jsx">`},
-		{name: "settings trailing slash serves viewer HTML", method: http.MethodGet, path: "/settings/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `<script type="text/babel" src="/assets/app.jsx">`},
+		{name: "root serves viewer HTML", method: http.MethodGet, path: "/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.jsx"`},
+		{name: "conversation path serves viewer HTML", method: http.MethodGet, path: "/conversations/conv-123", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.jsx"`},
+		{name: "settings path serves viewer HTML", method: http.MethodGet, path: "/settings", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.jsx"`},
+		{name: "settings trailing slash serves viewer HTML", method: http.MethodGet, path: "/settings/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.jsx"`},
 		{name: "CSS asset", method: http.MethodGet, path: "/assets/app.css", want: http.StatusOK, wantContentType: "text/css", wantBodyHas: ":root"},
 		{name: "JSX asset", method: http.MethodGet, path: "/assets/app.jsx", want: http.StatusOK, wantContentType: "text/babel", wantBodyHas: "function App()"},
 		{name: "healthz serves JSON", method: http.MethodGet, path: "/healthz", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"status":"ok"`},
@@ -325,6 +333,7 @@ func TestServer_Routing(t *testing.T) {
 			}
 			rr := httptest.NewRecorder()
 			s.ServeHTTP(rr, req)
+			assertFixedSecurityHeaders(t, rr.Header())
 			if rr.Code != tc.want {
 				t.Fatalf("status = %d, want %d", rr.Code, tc.want)
 			}
@@ -374,6 +383,74 @@ func TestServer_MediaTypeRefusalIsLogged(t *testing.T) {
 			resp.Body.Close()
 			require.Equal(t, http.StatusUnsupportedMediaType, resp.StatusCode)
 			assert.Equal(t, tc.wantLog, logs.String())
+		})
+	}
+}
+
+func TestServer_DocumentCSPNonce(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	fetch := func(path string) (string, string) {
+		t.Helper()
+		rr := httptest.NewRecorder()
+		s.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		csp := rr.Header().Get("Content-Security-Policy")
+		const prefix = "script-src 'self' 'nonce-"
+		start := strings.Index(csp, prefix)
+		require.NotEqual(t, -1, start, "CSP missing %q", prefix)
+		remainder := csp[start+len(prefix):]
+		end := strings.IndexByte(remainder, '\'')
+		require.Greater(t, end, 0, "CSP has no closing quote after nonce")
+		nonce := remainder[:end]
+		assert.Equal(t, 1, strings.Count(rr.Body.String(), nonce))
+		assert.Contains(t, rr.Body.String(), `nonce="`+nonce+`"`)
+		assert.NotContains(t, rr.Body.String(), noncePlaceholder)
+		return nonce, csp
+	}
+
+	firstNonce, _ := fetch("/")
+	secondNonce, _ := fetch("/")
+	assert.NotEqual(t, firstNonce, secondNonce)
+
+	settingsNonce, settingsCSP := fetch("/settings")
+	assert.Equal(t, "default-src 'self'; "+
+		"script-src 'self' 'nonce-"+settingsNonce+"'; "+
+		"style-src 'self'; "+
+		"img-src 'self' data:; "+
+		"font-src 'self'; "+
+		"connect-src 'self' https://models.dev; "+
+		"object-src 'none'; "+
+		"frame-ancestors 'none'; "+
+		"base-uri 'none'; "+
+		"form-action 'none'", settingsCSP)
+}
+
+func TestServer_NonDocumentSecurityHeaders(t *testing.T) {
+	s, _ := newTestServer(t)
+	cases := []struct {
+		name         string
+		path         string
+		wantStatus   int
+		wantRedirect bool
+	}{
+		{name: "JSON response", path: "/api/v1/conversations", wantStatus: http.StatusOK},
+		{name: "mux redirect", path: "//settings", wantRedirect: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			s.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, tc.path, nil))
+
+			if tc.wantRedirect {
+				require.GreaterOrEqual(t, rr.Code, http.StatusMultipleChoices)
+				require.Less(t, rr.Code, http.StatusBadRequest)
+			} else {
+				require.Equal(t, tc.wantStatus, rr.Code)
+			}
+			assertFixedSecurityHeaders(t, rr.Header())
+			assert.Equal(t, "default-src 'none'; frame-ancestors 'none'; base-uri 'none'", rr.Header().Get("Content-Security-Policy"))
 		})
 	}
 }
@@ -1799,6 +1876,18 @@ func TestServer_DevAsset_EnvPrecedence(t *testing.T) {
 		t.Setenv("AGENTO11Y_LOCAL_WEB_DIR", "")
 		t.Setenv("SIGIL_LOCAL_WEB_DIR", legacy)
 		assert.Equal(t, "// legacy", fetchJSX())
+	})
+
+	t.Run("missing index nonce placeholder is logged", func(t *testing.T) {
+		t.Setenv("AGENTO11Y_LOCAL_WEB_DIR", preferred)
+		require.NoError(t, os.WriteFile(filepath.Join(preferred, "index.html"), []byte("<!doctype html>"), 0o600))
+		var logs bytes.Buffer
+		srv.logger.SetOutput(&logs)
+
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+		require.Equal(t, http.StatusOK, rr.Code)
+		assert.Contains(t, logs.String(), noncePlaceholder)
 	})
 }
 
