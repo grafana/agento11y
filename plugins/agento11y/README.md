@@ -1,8 +1,8 @@
 # agento11y
 
-The launcher binary behind the [Claude Code](../claude-code), [Codex](../codex), [Copilot](../copilot), [Cursor](../cursor), [OpenCode](../opencode), [pi](../pi), and [Vibe](../vibe) plugins for [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
+`agento11y` records coding-agent sessions in [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) or stores them on your machine for the local viewer.
 
-The command was renamed from `sigil`. Every install method also installs a `sigil` alias, which will be removed in a future release.
+Refer to [Instrument coding agents](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/guides/instrument-coding-agents/) in the Grafana Cloud documentation.
 
 ## Install
 
@@ -38,60 +38,21 @@ This installs the binary to `go env GOPATH`/bin (or `GOBIN` if set); make sure t
 
 Verify the install with `agento11y --version`.
 
+## Launch a coding agent
+
+Run `agento11y <agent>` with your coding agent's command name:
+
+```sh
+agento11y claude
+```
+
+Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`.
+
 ## Configure
 
-All hosts read the same config file at `~/.config/agento11y/config.env`. If you only have the old `~/.config/sigil/config.env`, that file is read and updated instead. The first run of `agento11y claude`, `agento11y opencode`, or `agento11y pi` prompts for the connection values and writes them there; run `agento11y login` to re-enter them later. Cursor has no launcher, so wire it once with `agento11y cursor install` (which also prompts on first run) and remove it with `agento11y cursor uninstall`.
+Run `agento11y login` to connect to Grafana Cloud. It prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
 
-The prompt starts by asking for your Grafana stack (for example `mystack.grafana.net`), and answers that itself where it can: the field arrives pre-filled from the stack your last run saved, or from your [gcx](https://github.com/grafana/gcx) configuration, so Enter accepts it. With more than one stack to choose between you get a list, whose last entry still lets you type one neither source knows. It then prints `https://mystack.grafana.net/a/grafana-agento11y-app/setup-coding-agent` and tries to open it in a browser. That page hands out one environment block; paste the whole block into the next field and login fills the endpoint, tenant ID, token, OTLP endpoint, and OTLP headers from it. The field is masked, because the block carries a token. Anything the block does not carry is asked for field by field, and pasting is optional: press Enter on the empty box to type the values instead. After the connection details comes an optional preferences step for content capture mode, session tags, and guards; leave it at the defaults to keep the current behaviour.
-
-The stack is saved as `AGENTO11Y_STACK_URL`, which is what a later run offers back first. It only builds the printed links. The ingest endpoint is a different host, and login never saves the stack as `AGENTO11Y_ENDPOINT`.
-
-Before anything is written, login sends one request to the configured endpoint with the credentials you gave it. If the endpoint rejects them, login prints why and asks whether to save anyway.
-
-The connection values can also come from flags, which is what a script or a devcontainer wants. The preferences have no flags; set them in the config file or answer the prompt.
-
-```sh
-agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token glc_...
-```
-
-| Flag | Meaning |
-|------|---------|
-| `--endpoint url` | conversations API URL |
-| `--tenant id` | instance ID |
-| `--token value` | access-policy token with the `sigil:write` scope |
-| `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant` |
-| `--otlp-endpoint url` | OTLP endpoint for SDK traces and metrics |
-| `--no-verify` | write the file without checking the credentials |
-| `--yes` | save even when the check fails |
-
-Passing `--endpoint`, `--tenant`, and a token together skips the value prompts, so login works over SSH, in a devcontainer, and from a script. One prompt can still appear: if the credential check fails and stdin is a terminal, login asks whether to save anyway. Pass `--yes` (or `--no-verify`) so a script never stops there. Keeping a token out of your shell history:
-
-```sh
-printf %s "$TOKEN" | agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token-stdin
-```
-
-To preconfigure without the prompt, create the file:
-
-```dotenv
-AGENTO11Y_ENDPOINT=https://agento11y-prod-<region>.grafana.net
-AGENTO11Y_AUTH_TENANT_ID=<instance-id>
-AGENTO11Y_AUTH_TOKEN=glc_...
-AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
-```
-
-`AGENTO11Y_EXPORT_TIMEOUT_MS` bounds each generation export request. It defaults to `30000` milliseconds and accepts base-10 integers from `1` through `2147483647`.
-
-Find these values in Grafana Cloud at `https://<your-grafana>.grafana.net/plugins/grafana-agento11y-app`.
-
-Then follow your agent's quickstart:
-
-- [Claude Code](../claude-code/README.md)
-- [Codex](../codex/README.md)
-- [Copilot](../copilot/README.md)
-- [Cursor](../cursor/README.md)
-- [OpenCode](../opencode/README.md)
-- [pi](../pi/README.md)
-- [Vibe](../vibe/README.md)
+If no Grafana Cloud connection is saved, `agento11y <agent>` and `agento11y cursor install` start the same flow. Local mode skips it. Run `agento11y login` again to change the connection, content capture, tags, or guard settings.
 
 ## Skills
 
@@ -164,9 +125,15 @@ Unknown values fall back to `metadata_only` with a warning. `default` is accepte
 
 A plugin can only export fields the host agent passes through to it, so individual plugins may capture less than the SDK matrix shows. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the SDK-level behavior matrix and plugin defaults.
 
-## Local mode and history import
+## Local mode
 
-`agento11y <agent> --local` records the session to a JSONL store on this machine and opens a viewer at `http://127.0.0.1:8765`. `AGENTO11Y_LOCAL=true` in the shell or `config.env` does the same for every launch and for hook-based agents (Cursor, Copilot, Vibe, and a host `claude`/`codex` whose agento11y hooks are installed). Start and stop the daemon by hand with `agento11y local start|status|stop`.
+`agento11y <agent> --local` records the session to a JSONL store and starts the local viewer. The command prints the viewer URL. It first tries `http://127.0.0.1:8765` and uses a higher port when that port is unavailable.
+
+`AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. Use `--no-local` to override this setting for one launcher session.
+
+Local mode stores full session content. Manage the viewer separately with `agento11y local start|status|stop|restart`.
+
+## History import
 
 The viewer starts empty: it holds only the sessions captured after you installed agento11y. `agento11y history import` backfills the ones an agent already wrote to disk.
 
@@ -234,6 +201,53 @@ Each imported turn is recorded in a per-agent ledger under `~/.local/state/agent
 `agento11y claude`, `agento11y codex`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out.
 
 `AGENTO11Y_AUTO_UPDATE` does not apply to the other launchers. `agento11y copilot` rewrites its own `agento11y.json` hooks file, and `agento11y vibe` re-upserts its three entries into vibe's `hooks.toml`, so both always point at the installed binary. `agento11y pi` leaves upgrades to pi's own installer.
+
+## Advanced configuration
+
+### Config file
+
+All integrations read `~/.config/agento11y/config.env`. If you only have the old `~/.config/sigil/config.env`, that file is read and updated instead.
+
+The stack is saved as `AGENTO11Y_STACK_URL`. It is used only to build links; the ingest endpoint is a different host. Login never saves the stack as `AGENTO11Y_ENDPOINT`.
+
+To configure the connection without the prompt, create the file:
+
+```dotenv
+AGENTO11Y_ENDPOINT=https://agento11y-prod-<region>.grafana.net
+AGENTO11Y_AUTH_TENANT_ID=<instance-id>
+AGENTO11Y_AUTH_TOKEN=glc_...
+AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
+```
+
+Find these values at `https://<your-grafana>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`.
+
+`AGENTO11Y_EXPORT_TIMEOUT_MS` bounds each generation export request. It defaults to `30000` milliseconds and accepts base-10 integers from `1` through `2147483647`.
+
+### Login flags
+
+Scripts and devcontainers can pass the connection values as flags. Preferences have no flags; set them in the config file or answer the prompt.
+
+```sh
+agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token glc_...
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--endpoint url` | conversations API URL |
+| `--tenant id` | instance ID |
+| `--token value` | access-policy token with the `sigil:write` scope |
+| `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant` |
+| `--otlp-endpoint url` | OTLP endpoint for SDK traces and metrics |
+| `--no-verify` | write the file without checking the credentials |
+| `--yes` | save even when the check fails |
+
+Passing `--endpoint`, `--tenant`, and a token together skips the value prompts. Login verifies the credentials before it writes the file. If verification fails and stdin is a terminal, login asks whether to save anyway. Pass `--yes` or `--no-verify` so a script never stops there.
+
+Keep the token out of your shell history with `--token-stdin`:
+
+```sh
+printf %s "$TOKEN" | agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token-stdin
+```
 
 ## Troubleshooting
 

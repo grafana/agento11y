@@ -6,7 +6,11 @@
 
 [Grafana Agent observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) is a product from Grafana for teams running agents in production. This repo holds the open-source SDKs and the coding-agent plugins that send telemetry to it.
 
-## Quick start (with an AI coding agent)
+## Coding-agent observability
+
+`agento11y` CLI lets you monitor coding agents. Refer to the [`agento11y` documentation](plugins/agento11y/README.md) for installation and setup.
+
+## Instrument an application with an AI coding agent
 
 If you want your own app or agent code instrumented, the recommended path is the `agento11y-instrument` agent skill. [`gcx`](https://github.com/grafana/gcx) is Grafana's CLI for working with Grafana Cloud resources; see the [`gcx` installation docs](https://github.com/grafana/gcx#installation) if you want more detail.
 
@@ -36,14 +40,11 @@ Use the `agento11y-instrument` skill to instrument this codebase with Grafana Ag
 
 The skill inspects your code, applies the SDK with small diffs after confirmation, and verifies that data lands in Grafana Cloud with `gcx agento11y`.
 
-If you want to capture sessions from your coding agent instead, or if your agent does not support skills, drop [`llms.txt`](llms.txt) into your repo and ask your agent what you want. It handles either case, depending on what your repo is:
-
-- `Instrument this codebase with Grafana Agent observability`: the agent wires the [SDK](#sdks) into your app or agent code.
-- `Set up Grafana Agent observability for my coding agent`: the agent installs one of the [`plugins/`](plugins/) launchers to capture sessions from popular coding agents.
+If your agent does not support skills, give it [`llms.txt`](llms.txt) and ask it to `Instrument this codebase with Grafana Agent observability`. The agent wires the [SDK](#sdks) into your app or agent code.
 
 Or open the Agent Observability plugin in your Grafana Cloud stack and use the onboarding wizard.
 
-## Quick start (manual)
+## Instrument an application manually
 
 Set the [`AGENTO11Y_*` env vars](#grafana-cloud-credentials) and construct the client. To configure it explicitly instead, see the per-SDK READMEs linked under [SDKs](#sdks).
 
@@ -187,10 +188,6 @@ https://<your-stack>.grafana.net/plugins/grafana-agento11y-app
 Follow *Create a token in Cloud Access Policies* on the Connection page and create one token scoped with `sigil:write`, `metrics:write`, `traces:write`, and `logs:write`. The same token then covers both `AGENTO11Y_AUTH_TOKEN` (Agent Observability ingest) and `OTEL_EXPORTER_OTLP_HEADERS` (OTel traces and metrics).
 
 See the [Grafana Cloud Agent observability getting started docs](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/) for the full setup flow.
-
-## Plugins for coding agents
-
-Plugins can record sessions from Claude Code, Codex, Copilot CLI, Cursor, OpenCode, Pi, and Vibe without changing application code. See [`plugins/README.md`](plugins/README.md) for install and config per agent.
 
 ## Why Grafana Agent observability
 
