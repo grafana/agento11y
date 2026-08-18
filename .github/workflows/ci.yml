@@ -159,6 +159,10 @@ jobs:
       - name: Test
         run: cd ${{ matrix.module }} && GOWORK=off go test ./...
 
+      - name: Test Jamf bootstrap contract
+        if: matrix.module == 'plugins/agento11y'
+        run: ./deploy/jamf/test-bootstrap.sh
+
       - name: Build agento11y CLI
         if: matrix.module == 'plugins/agento11y'
         env:

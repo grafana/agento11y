@@ -48,6 +48,18 @@ not a security control or a replacement for token rotation.
 
 ## Rollout test
 
+The repository test exercises the user-context bootstrap contract on every
+platform without a real Jamf tenant or credentials:
+
+```sh
+./deploy/jamf/test-bootstrap.sh
+```
+
+It verifies missing-config deferral, stable receipt persistence, and a repeat
+reconcile through a fake `agento11y` binary. It cannot exercise the
+macOS-specific root-to-console-user handoff (`launchctl asuser`), so run the
+following pilot once before fleet rollout.
+
 Before a fleet rollout, use a disposable macOS test account with Claude Code
 and Cursor installed:
 
