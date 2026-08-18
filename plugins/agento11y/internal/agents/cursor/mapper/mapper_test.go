@@ -163,10 +163,15 @@ func TestMapFragment_ContentCaptureModes(t *testing.T) {
 					t.Errorf("mode %s leaks raw secret %q: %s", tc.mode, secret, body)
 				}
 			}
-			// The prompt carries the tier-1 token, so the marker is visible
-			// in exactly the modes that keep the prompt.
-			if marked := bytes.Contains(body, []byte("[REDACTED:")); marked != tc.wantUserPrompt {
-				t.Errorf("redaction marker present = %v; want %v: %s", marked, tc.wantUserPrompt, body)
+			// Title is derived from the prompt and is redacted in every
+			// mode; the SDK strips it later under metadata_only. The
+			// prompt itself only carries the marker in modes that keep it.
+			wantTitle := "hello [REDACTED:grafana-cloud-token]"
+			if got.Generation.ConversationTitle != wantTitle {
+				t.Errorf("ConversationTitle = %q; want %q", got.Generation.ConversationTitle, wantTitle)
+			}
+			if !bytes.Contains(body, []byte("[REDACTED:")) {
+				t.Errorf("expected redaction marker on title: %s", body)
 			}
 		})
 	}
@@ -540,17 +545,48 @@ func TestMapFragment_ConversationTitleFromSession(t *testing.T) {
 	}
 }
 
-func TestMapFragment_ConversationTitleEmptyWithoutSession(t *testing.T) {
+func TestMapFragment_ConversationTitleFallsBackToUserPrompt(t *testing.T) {
 	got := MapFragment(Inputs{
 		Fragment:       basicFragment(t),
 		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
 		Now:            fixedTime,
 	})
-	if got.Start.ConversationTitle != "" {
-		t.Errorf("Start.ConversationTitle = %q; want empty", got.Start.ConversationTitle)
+	if got.Start.ConversationTitle != "hello" {
+		t.Errorf("Start.ConversationTitle = %q; want hello from UserPrompt", got.Start.ConversationTitle)
 	}
-	if got.Generation.ConversationTitle != "" {
-		t.Errorf("Generation.ConversationTitle = %q; want empty", got.Generation.ConversationTitle)
+	if got.Generation.ConversationTitle != "hello" {
+		t.Errorf("Generation.ConversationTitle = %q; want hello from UserPrompt", got.Generation.ConversationTitle)
+	}
+}
+
+func TestMapFragment_ConversationTitleFallsBackToConversationID(t *testing.T) {
+	frag := basicFragment(t)
+	frag.UserPrompt = ""
+	got := MapFragment(Inputs{
+		Fragment:       frag,
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+		Now:            fixedTime,
+	})
+	if got.Start.ConversationTitle != "conv-1" {
+		t.Errorf("Start.ConversationTitle = %q; want conv-1", got.Start.ConversationTitle)
+	}
+	if got.Generation.ConversationTitle != "conv-1" {
+		t.Errorf("Generation.ConversationTitle = %q; want conv-1", got.Generation.ConversationTitle)
+	}
+}
+
+func TestMapFragment_ConversationTitlePrefersSessionOverPrompt(t *testing.T) {
+	got := MapFragment(Inputs{
+		Fragment: basicFragment(t),
+		Session: &fragment.Session{
+			ConversationID:    "conv-1",
+			ConversationTitle: "session title",
+		},
+		ContentCapture: agento11y.ContentCaptureModeMetadataOnly,
+		Now:            fixedTime,
+	})
+	if got.Generation.ConversationTitle != "session title" {
+		t.Errorf("ConversationTitle = %q; want session title", got.Generation.ConversationTitle)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
@@ -24,6 +25,10 @@ import (
 )
 
 var errCursorStop = errors.New("cursor_stop_error")
+
+// maxTitleLen caps the conversation title derived from the first user prompt,
+// matching claude-code so a long first message does not become the list label.
+const maxTitleLen = 100
 
 // AgentName is the default value reported as `agent_name` on every emitted
 // generation. AGENTO11Y_AGENT_NAME overrides it per run through
@@ -116,14 +121,14 @@ func MapFragment(in Inputs) Mapped {
 	if in.Session != nil && len(in.Session.WorkspaceRoots) > 0 {
 		workspaceRoot = in.Session.WorkspaceRoots[0]
 	}
-	var cursorVersion, userEmail, conversationTitle string
+	var cursorVersion, userEmail string
 	var isBackgroundAgent bool
 	if in.Session != nil {
 		cursorVersion = in.Session.CursorVersion
 		userEmail = in.Session.UserEmail
 		isBackgroundAgent = in.Session.IsBackgroundAgent
-		conversationTitle = red.Title(in.Session.ConversationTitle)
 	}
+	title := conversationTitle(in.Session, frag, red)
 
 	tagMap := tags.Build(tags.BuiltinInputs{
 		WorkspaceRoot:     workspaceRoot,
@@ -145,7 +150,7 @@ func MapFragment(in Inputs) Mapped {
 	start := agento11y.GenerationStart{
 		ID:                frag.GenerationID,
 		ConversationID:    frag.ConversationID,
-		ConversationTitle: conversationTitle,
+		ConversationTitle: title,
 		UserID:            uid,
 		AgentName:         in.agent(),
 		AgentVersion:      cursorVersion,
@@ -165,7 +170,7 @@ func MapFragment(in Inputs) Mapped {
 	gen := agento11y.Generation{
 		ID:                frag.GenerationID,
 		ConversationID:    frag.ConversationID,
-		ConversationTitle: conversationTitle,
+		ConversationTitle: title,
 		UserID:            uid,
 		AgentName:         in.agent(),
 		AgentVersion:      cursorVersion,
@@ -194,6 +199,43 @@ func MapFragment(in Inputs) Mapped {
 		mapped.CallError = extractCallError(in.Stop, red)
 	}
 	return mapped
+}
+
+// conversationTitle is the human-readable list label for this turn. The
+// session's first-prompt stamp wins so later turns keep the same name. When
+// that stamp is missing (sessionStart never ran, or beforeSubmit skipped
+// because Cursor had no generation_id yet), the fragment's user prompt is
+// the same string. With neither, the conversation id is still a stable
+// label instead of an empty title the local viewer replaces with a UUID.
+func conversationTitle(session *fragment.Session, frag *fragment.Fragment, red *redact.Redactor) string {
+	raw := ""
+	if session != nil {
+		raw = session.ConversationTitle
+	}
+	if strings.TrimSpace(raw) == "" && frag != nil {
+		raw = frag.UserPrompt
+	}
+	fallback := ""
+	if frag != nil {
+		fallback = frag.ConversationID
+	}
+	t := strings.TrimSpace(raw)
+	if t == "" {
+		return fallback
+	}
+	if red != nil {
+		t = red.Title(t)
+	}
+	if t == "" {
+		return fallback
+	}
+	if len(t) > maxTitleLen {
+		t = t[:maxTitleLen]
+		for !utf8.ValidString(t) {
+			t = t[:len(t)-1]
+		}
+	}
+	return t
 }
 
 // resolveStopStatus normalizes Cursor's stop.status to the subset agento11y uses.

@@ -54,7 +54,7 @@ func TestBeforeSubmit_GatesUserPromptByMode(t *testing.T) {
 	}
 }
 
-func TestBeforeSubmit_MissingIDsSilent(t *testing.T) {
+func TestBeforeSubmit_MissingConversationIDSilent(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	var buf bytes.Buffer
 	logger := log.New(&buf, "", 0)
@@ -62,5 +62,52 @@ func TestBeforeSubmit_MissingIDsSilent(t *testing.T) {
 	BeforeSubmit(Payload{HookEventName: "beforeSubmitPrompt"}, cfg, logger)
 	if !bytes.Contains(buf.Bytes(), []byte("skipping")) {
 		t.Errorf("expected 'skipping' log; got %q", buf.String())
+	}
+}
+
+func TestBeforeSubmit_StampsTitleWithoutGenerationID(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
+
+	BeforeSubmit(Payload{
+		HookEventName:  "beforeSubmitPrompt",
+		ConversationID: "conv",
+		Prompt:         "list go files",
+	}, cfg, logger)
+
+	sess := fragment.LoadSession("conv", logger)
+	if sess == nil {
+		t.Fatal("expected a session so the title survives until stop")
+	}
+	if sess.ConversationTitle != "list go files" {
+		t.Errorf("ConversationTitle = %q; want list go files", sess.ConversationTitle)
+	}
+}
+
+func TestBeforeSubmit_FirstPromptWinsTitle(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
+
+	BeforeSubmit(Payload{
+		HookEventName:  "beforeSubmitPrompt",
+		ConversationID: "conv",
+		GenerationID:   "gen-1",
+		Prompt:         "first prompt",
+	}, cfg, logger)
+	BeforeSubmit(Payload{
+		HookEventName:  "beforeSubmitPrompt",
+		ConversationID: "conv",
+		GenerationID:   "gen-2",
+		Prompt:         "second prompt",
+	}, cfg, logger)
+
+	sess := fragment.LoadSession("conv", logger)
+	if sess == nil {
+		t.Fatal("expected a session")
+	}
+	if sess.ConversationTitle != "first prompt" {
+		t.Errorf("ConversationTitle = %q; want first prompt", sess.ConversationTitle)
 	}
 }
