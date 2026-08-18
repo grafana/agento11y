@@ -195,6 +195,21 @@ func TestCursorTranscriptTurnEndedError(t *testing.T) {
 	if gens[0].Gen.StopReason != "error" {
 		t.Fatalf("StopReason = %q, want error", gens[0].Gen.StopReason)
 	}
+	if gens[0].Gen.CallError != "tool failed" {
+		t.Fatalf("CallError = %q, want the turn_ended error", gens[0].Gen.CallError)
+	}
+}
+
+func TestCursorTranscriptTimesSameMinute(t *testing.T) {
+	stamp := time.Date(2026, 5, 13, 12, 30, 0, 0, time.UTC)
+	r := &cursorTranscriptReplay{previousEnd: stamp.Add(cursorNominalStep)}
+	start, end := r.times(&cursorTranscriptTurn{dated: stamp})
+	if !start.Equal(stamp.Add(cursorNominalStep)) {
+		t.Fatalf("start = %v, want the previous turn's end", start)
+	}
+	if !end.After(start) {
+		t.Fatalf("end %v must be after start %v so same-minute turns stay ordered", end, start)
+	}
 }
 
 func TestCursorDiscoverTranscriptsWithoutChats(t *testing.T) {

@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -170,11 +172,10 @@ func cursorTimestampFromLine(raw []byte) time.Time {
 func cursorWorkspaceFromTranscriptPath(path string) string {
 	slash := filepath.ToSlash(path)
 	const marker = "/.cursor/projects/"
-	i := strings.Index(slash, marker)
-	if i < 0 {
+	_, rest, ok := strings.Cut(slash, marker)
+	if !ok {
 		return ""
 	}
-	rest := slash[i+len(marker):]
 	slug, _, ok := strings.Cut(rest, "/")
 	if !ok || slug == "" {
 		return ""
@@ -407,7 +408,7 @@ func (c *cursorImporter) turnsTranscript(ctx context.Context, sess SessionPrevie
 				return
 			}
 		}
-		if err := sc.Err(); err != nil && err != io.EOF {
+		if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
 			yield(HistoricalGeneration{}, fmt.Errorf("read cursor transcript %s: %w", sess.SourcePath, err))
 			return
 		}
@@ -445,10 +446,8 @@ type cursorTranscriptTurn struct {
 }
 
 func (t *cursorTranscriptTurn) note(n string) {
-	for _, existing := range t.notes {
-		if existing == n {
-			return
-		}
+	if slices.Contains(t.notes, n) {
+		return
 	}
 	t.notes = append(t.notes, n)
 }
@@ -587,6 +586,9 @@ func (r *cursorTranscriptReplay) emit() bool {
 	})
 	gen := mapped.Generation
 	gen.ID = src.GenerationID()
+	if mapped.CallError != nil {
+		gen.CallError = mapped.CallError.Error()
+	}
 	r.emitted++
 	return !r.yield(HistoricalGeneration{Source: src, Gen: gen, Quality: quality}, nil)
 }
@@ -604,8 +606,10 @@ func (r *cursorTranscriptReplay) times(turn *cursorTranscriptTurn) (start, end t
 	if start.Before(r.previousEnd) {
 		start = r.previousEnd
 	}
-	if end.Before(start) {
-		end = start
+	// Dated stamps are minute-resolution. A later turn in the same minute
+	// clamps onto the prior end; keep a non-zero window so exports stay ordered.
+	if !end.After(start) {
+		end = start.Add(cursorNominalStep)
 	}
 	return start, end
 }
