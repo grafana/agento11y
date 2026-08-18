@@ -240,11 +240,34 @@ func TestCursorTranscriptFilterUsesTimestamp(t *testing.T) {
 }
 
 func TestParseCursorTranscriptTimestamp(t *testing.T) {
-	text := "<timestamp>Wednesday, May 13, 2026, 2:30 PM (UTC+2)</timestamp>\n<user_query>\nhi\n</user_query>"
-	got := parseCursorTranscriptTimestamp(text)
-	want := time.Date(2026, 5, 13, 14, 30, 0, 0, time.FixedZone("UTC+2", 2*3600))
-	if !got.Equal(want) {
-		t.Fatalf("got %v, want %v", got, want)
+	tests := []struct {
+		name string
+		text string
+		want time.Time
+	}{
+		{
+			name: "full month name",
+			text: "<timestamp>Wednesday, May 13, 2026, 2:30 PM (UTC+2)</timestamp>\n<user_query>\nhi\n</user_query>",
+			want: time.Date(2026, 5, 13, 14, 30, 0, 0, time.FixedZone("UTC+2", 2*3600)),
+		},
+		{
+			name: "abbreviated month name as Cursor writes today",
+			text: "<timestamp>Tuesday, Jul 21, 2026, 1:04 PM (UTC+2)</timestamp>\n<user_query>\nhi\n</user_query>",
+			want: time.Date(2026, 7, 21, 13, 4, 0, 0, time.FixedZone("UTC+2", 2*3600)),
+		},
+		{
+			name: "full July still parses",
+			text: "<timestamp>Tuesday, July 21, 2026, 1:04 PM (UTC+2)</timestamp>",
+			want: time.Date(2026, 7, 21, 13, 4, 0, 0, time.FixedZone("UTC+2", 2*3600)),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseCursorTranscriptTimestamp(tt.text)
+			if !got.Equal(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
 	}
 	if !parseCursorTranscriptTimestamp("no stamp").IsZero() {
 		t.Fatal("expected zero without timestamp wrapper")

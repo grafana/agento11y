@@ -236,7 +236,8 @@ func cursorMatchSlugPath(root, slug string) string {
 }
 
 // parseCursorTranscriptTimestamp parses Cursor's human-readable prompt
-// wrapper, e.g. "Wednesday, May 13, 2026, 2:30 PM (UTC+2)".
+// wrapper, e.g. "Wednesday, May 13, 2026, 2:30 PM (UTC+2)" or with an
+// abbreviated month such as "Tuesday, Jul 21, 2026, 1:04 PM (UTC+2)".
 func parseCursorTranscriptTimestamp(text string) time.Time {
 	opensAt := strings.Index(text, cursorTranscriptTSOpen)
 	closesAt := strings.Index(text, cursorTranscriptTSClose)
@@ -254,8 +255,8 @@ func parseCursorTranscriptTimestamp(text string) time.Time {
 		body = raw
 		zone = ""
 	}
-	t, err := time.Parse("Monday, January 2, 2006, 3:04 PM", body)
-	if err != nil {
+	t, ok := parseCursorTranscriptBody(body)
+	if !ok {
 		return time.Time{}
 	}
 	if zone == "" || zone == "UTC" {
@@ -267,6 +268,22 @@ func parseCursorTranscriptTimestamp(text string) time.Time {
 	}
 	loc := time.FixedZone(zone, offset)
 	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, loc)
+}
+
+// parseCursorTranscriptBody accepts both full and abbreviated English month
+// names. Current Cursor builds write "Jul"; older or hand-edited wrappers may
+// still spell "July".
+func parseCursorTranscriptBody(body string) (time.Time, bool) {
+	for _, layout := range []string{
+		"Monday, January 2, 2006, 3:04 PM",
+		"Monday, Jan 2, 2006, 3:04 PM",
+	} {
+		t, err := time.Parse(layout, body)
+		if err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // parseCursorUTCOffset parses zone labels Cursor puts in timestamps: UTC,
