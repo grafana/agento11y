@@ -42,6 +42,17 @@ Verify the install with `agento11y --version`.
 
 All hosts read the same config file at `~/.config/agento11y/config.env`. If you only have the old `~/.config/sigil/config.env`, that file is read and updated instead. The first run of `agento11y claude`, `agento11y opencode`, or `agento11y pi` prompts for the connection values and writes them there; run `agento11y login` to re-enter them later. Cursor has no launcher, so wire it once with `agento11y cursor install` (which also prompts on first run) and remove it with `agento11y cursor uninstall`.
 
+## Managed macOS deployment
+
+For a Jamf policy, install the signed `agento11y` release binary, create the connection file for each developer, then run the bootstrap as that developer. The bootstrap wires Claude Code and Cursor without starting either application or prompting for credentials. Its `agents reconcile --json` receipt has a schema version, binary version, managed-config revision, and per-agent state for Jamf inventory:
+
+```sh
+AGENTO11Y_BIN=/usr/local/bin/agento11y \
+  /path/to/agento11y/deploy/jamf/bootstrap.sh
+```
+
+The policy must run in the target developer's user context: both the config and the host-agent plugin state live in that user's home directory. See [the Jamf deployment guide](../../deploy/jamf/README.md) for the full sequence, including how to pass the token without placing it in a policy log.
+
 The prompt starts by asking for your Grafana stack (for example `mystack.grafana.net`), and answers that itself where it can: the field arrives pre-filled from the stack your last run saved, or from your [gcx](https://github.com/grafana/gcx) configuration, so Enter accepts it. With more than one stack to choose between you get a list, whose last entry still lets you type one neither source knows. It then prints `https://mystack.grafana.net/a/grafana-agento11y-app/setup-coding-agent` and tries to open it in a browser. That page hands out one environment block; paste the whole block into the next field and login fills the endpoint, tenant ID, token, OTLP endpoint, and OTLP headers from it. The field is masked, because the block carries a token. Anything the block does not carry is asked for field by field, and pasting is optional: press Enter on the empty box to type the values instead. After the connection details comes an optional preferences step for content capture mode, session tags, and guards; leave it at the defaults to keep the current behaviour.
 
 The stack is saved as `AGENTO11Y_STACK_URL`, which is what a later run offers back first. It only builds the printed links. The ingest endpoint is a different host, and login never saves the stack as `AGENTO11Y_ENDPOINT`.
@@ -78,8 +89,6 @@ AGENTO11Y_AUTH_TENANT_ID=<instance-id>
 AGENTO11Y_AUTH_TOKEN=glc_...
 AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
 ```
-
-`AGENTO11Y_EXPORT_TIMEOUT_MS` bounds each generation export request. It defaults to `30000` milliseconds and accepts base-10 integers from `1` through `2147483647`.
 
 Find these values in Grafana Cloud at `https://<your-grafana>.grafana.net/plugins/grafana-agento11y-app`.
 
@@ -181,7 +190,7 @@ agento11y history import claude-code --local
 agento11y history import claude-code
 ```
 
-Supported agents are `claude-code`, `codex`, `cursor`, and `pi`. `agento11y history import` with no agent lists them.
+Supported agents are `claude-code`, `codex`, and `pi`. `agento11y history import` with no agent lists them.
 
 A `pi` import reads pi's session logs under `$PI_CODING_AGENT_DIR/sessions` (by default `~/.pi/agent/sessions`) and produces one generation per assistant turn, with its prompt, thinking, tool calls, matched tool results, model, token usage, cost, both timestamps, and parent turn. Three things live capture records are not in the session log, so an imported pi session is thinner than a captured one:
 
@@ -191,23 +200,11 @@ A `pi` import reads pi's session logs under `$PI_CODING_AGENT_DIR/sessions` (by 
 
 Subagent runs are in neither: the nested `run-N/session.jsonl` logs come from the third-party `pi-subagents` package, which live capture ignores too, so importing them would exceed live fidelity rather than match it.
 
-A `cursor` import reads Cursor's session databases under `~/.cursor/chats` and produces one generation per prompt, with that prompt, the assistant's reply, its tool calls and matched results, the workspace, and the session's model. Cursor records less about a turn than the other three sources do, so an imported Cursor session is the thinnest of them:
-
-- No token usage. Cursor keeps no per-turn counts, so every turn reports no usage and is marked approximate. A dashboard shows no cost for an imported Cursor turn.
-- Approximate times. Cursor stamps no message with a time. Some sessions can be dated to the second, and in the rest the turns are spread across the session's span, which orders them and measures nothing. Every turn is marked approximate either way.
-- A session the import cannot date is exported as ending where it started, rather than at a later time nothing in the session supports.
-- One model name per session, and only when the session recorded one. A turn from a session that names none is marked as having no model.
-- No system prompt and no turn IDs. Cursor's own system prompt is dropped, because a live capture exports none either. An imported turn is numbered by its position. The workspace and git-status block Cursor puts in front of a prompt stays there, because the model saw it.
-
-Reading a Cursor session can add a `store.db-shm` file next to the session database. SQLite needs that file to read the newest part of a session. The import writes nothing else in `~/.cursor`, and a dry run is no different, because it opens the same databases.
-
-Cursor publishes no schema for this format and stamps no version into it, so a Cursor release can change it.
-
 A forked pi session imports only the turns the fork itself ran. The trunk holds the entries a fork copied from it and exports those turns under its own import, and, when the trunk exported the fork's parent turn, the fork's first turn carries `pi.fork.parent_session_id` and `pi.fork.parent_generation_id` metadata instead of a parent edge. A fork of a fork carries neither key, because no trunk generation exists to name.
 
 `--local` picks the endpoint. Without it, the import exports to the configured Grafana Cloud endpoint, exactly as a live session does. With it, the import exports to the local daemon on this machine.
 
-A dry run reads up to 1 MiB of each session file (a head and a tail window) to count turns and read session metadata. A `cursor` session is a SQLite database rather than a log file, so the dry run queries it for the same counts instead, and no message body leaves the database. Nothing from those bytes is decoded into prompt or response text, shown, exported, or stored.
+A dry run reads up to 1 MiB of each session file (a head and a tail window) to count turns and read session metadata. Nothing from those bytes is decoded into prompt or response text, shown, exported, or stored.
 
 Without `--since`, an import covers the last 90 days. The local store is a linear scan over JSONL files, so an unbounded first import makes the viewer slow before you have used it. Pass `--since 365d`, `--since 2026-01-01T00:00:00Z`, or any duration to widen the window, and `--until` to bound the other end.
 
