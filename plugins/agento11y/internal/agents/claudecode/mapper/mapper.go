@@ -544,13 +544,18 @@ func processAssistantLine(line transcript.Line, uctx *userContext, _ *state.Sess
 	// closest real one.
 	startedAt := clampSpanStart(requestAt, completedAt)
 
+	// Anthropic reports input_tokens exclusive of both cache buckets. The OTel
+	// GenAI Anthropic page requires gen_ai.usage.input_tokens to cover both
+	// buckets as well, which is the inclusive contract the SDK emits.
+	inputTokens := msg.Usage.InputTokens + msg.Usage.CacheReadInputTokens + msg.Usage.CacheCreationInputTokens
 	usage := agento11y.TokenUsage{
-		InputTokens:           msg.Usage.InputTokens,
+		InputTokens:           inputTokens,
 		OutputTokens:          msg.Usage.OutputTokens,
+		TotalTokens:           inputTokens + msg.Usage.OutputTokens,
 		CacheReadInputTokens:  msg.Usage.CacheReadInputTokens,
 		CacheWriteInputTokens: msg.Usage.CacheCreationInputTokens,
+		InputSemantics:        agento11y.TokenInputSemanticsInclusive,
 	}
-	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 
 	gen := agento11y.Generation{
 		ID:                generationID(line),

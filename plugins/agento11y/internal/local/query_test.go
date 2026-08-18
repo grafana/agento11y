@@ -781,11 +781,14 @@ func TestConversationDetail_InputOutputPassThrough(t *testing.T) {
 	}
 }
 
-// TestDisjointTokenUsage covers the provider-aware split into
-// non-overlapping buckets. Anthropic keeps cache tokens separate from
-// input; OpenAI, Gemini, and codex fold cache_read into input; OpenAI
-// and codex also nest reasoning in output while Gemini keeps thoughts
-// additive; unknown providers default to "separate" on both axes.
+// TestDisjointTokenUsage covers the split into non-overlapping buckets.
+// Usage marked TokenInputSemanticsInclusive carries both cache buckets
+// inside input_tokens, so both are carved back out whatever the provider
+// is named. Without the marker the provider-name heuristic decides:
+// Anthropic keeps cache tokens separate from input; OpenAI, Gemini, and
+// codex fold cache_read into input; OpenAI and codex also nest reasoning
+// in output while Gemini keeps thoughts additive; unknown providers
+// default to "separate" on both axes.
 func TestDisjointTokenUsage(t *testing.T) {
 	cases := []struct {
 		name                                                 string
@@ -906,6 +909,77 @@ func TestDisjointTokenUsage(t *testing.T) {
 			usage:      agento11y.TokenUsage{InputTokens: -5, OutputTokens: -1, CacheReadInputTokens: -3},
 			freshInput: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0,
 		},
+		{
+			// The claude-code mapper's golden turn: input_tokens is the
+			// OTel-inclusive count (160 fresh + 15 cache read), so the
+			// buckets must sum to the reported total of 193, not 208.
+			name:     "inclusive anthropic carves cache_read out of input",
+			provider: "anthropic",
+			usage: agento11y.TokenUsage{
+				InputTokens:          175,
+				OutputTokens:         18,
+				TotalTokens:          193,
+				CacheReadInputTokens: 15,
+				InputSemantics:       agento11y.TokenInputSemanticsInclusive,
+			},
+			freshInput: 160, cacheRead: 15, cacheWrite: 0, output: 18, reasoning: 0,
+		},
+		{
+			// cache_write is inside input under the inclusive contract too,
+			// unlike the provider-raw Anthropic case above it.
+			name:     "inclusive anthropic carves both cache buckets out of input",
+			provider: "anthropic",
+			usage: agento11y.TokenUsage{
+				InputTokens:           170,
+				OutputTokens:          50,
+				TotalTokens:           220,
+				CacheReadInputTokens:  30,
+				CacheWriteInputTokens: 20,
+				InputSemantics:        agento11y.TokenInputSemanticsInclusive,
+			},
+			freshInput: 120, cacheRead: 30, cacheWrite: 20, output: 50, reasoning: 0,
+		},
+		{
+			// The marker, not the provider name, decides the input axis; the
+			// reasoning carve-out stays provider-driven.
+			name:     "inclusive marker also applies to openai and leaves reasoning provider-driven",
+			provider: "openai",
+			usage: agento11y.TokenUsage{
+				InputTokens:           100,
+				OutputTokens:          50,
+				CacheReadInputTokens:  30,
+				CacheWriteInputTokens: 10,
+				ReasoningTokens:       10,
+				InputSemantics:        agento11y.TokenInputSemanticsInclusive,
+			},
+			freshInput: 60, cacheRead: 30, cacheWrite: 10, output: 40, reasoning: 10,
+		},
+		{
+			// A fully cached prompt leaves no fresh input, and an
+			// over-reported cache never turns fresh input negative.
+			name:     "inclusive fully cached prompt leaves zero fresh input",
+			provider: "anthropic",
+			usage: agento11y.TokenUsage{
+				InputTokens:          15,
+				OutputTokens:         18,
+				CacheReadInputTokens: 20,
+				InputSemantics:       agento11y.TokenInputSemanticsInclusive,
+			},
+			freshInput: 0, cacheRead: 20, cacheWrite: 0, output: 18, reasoning: 0,
+		},
+		{
+			// Same numbers as the golden turn without the marker: legacy
+			// records keep the additive provider heuristic exactly as before.
+			name:     "unspecified anthropic keeps the additive heuristic",
+			provider: "anthropic",
+			usage: agento11y.TokenUsage{
+				InputTokens:          175,
+				OutputTokens:         18,
+				TotalTokens:          193,
+				CacheReadInputTokens: 15,
+			},
+			freshInput: 175, cacheRead: 15, cacheWrite: 0, output: 18, reasoning: 0,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -917,6 +991,95 @@ func TestDisjointTokenUsage(t *testing.T) {
 				Output:     tc.output,
 				Reasoning:  tc.reasoning,
 			}, b)
+		})
+	}
+}
+
+// TestInputSemanticsMarkerSurvivesTheStore pins the whole local path for
+// the marker the claude-code mapper sets. An inclusive Anthropic turn
+// must reach every reader (detail view, conversation list, token chart,
+// search) with disjoint buckets that sum to the reported total, and a
+// record without the marker must keep the old additive numbers. The
+// golden turn below is the one in
+// internal/entry/testdata/golden/claude-code-subagent: input 175
+// (inclusive of a 15-token cache read), output 18, total 193.
+func TestInputSemanticsMarkerSurvivesTheStore(t *testing.T) {
+	cases := []struct {
+		name        string
+		usageJSON   string
+		wantBuckets TokenBuckets
+		wantTotal   int64
+		// wantBucketSum is what the five buckets add up to. For
+		// inclusive usage it equals the reported total; for a legacy
+		// record the additive heuristic still overshoots it, which is
+		// exactly the behaviour this test freezes.
+		wantBucketSum int64
+	}{
+		{
+			name:          "inclusive marker as the proto-json enum name",
+			usageJSON:     `{"input_tokens":"175","output_tokens":"18","total_tokens":"193","cache_read_input_tokens":"15","input_semantics":"TOKEN_INPUT_SEMANTICS_INCLUSIVE"}`,
+			wantBuckets:   TokenBuckets{FreshInput: 160, CacheRead: 15, Output: 18},
+			wantTotal:     193,
+			wantBucketSum: 193,
+		},
+		{
+			name:          "inclusive marker as the enum number",
+			usageJSON:     `{"input_tokens":175,"output_tokens":18,"total_tokens":193,"cache_read_input_tokens":15,"input_semantics":1}`,
+			wantBuckets:   TokenBuckets{FreshInput: 160, CacheRead: 15, Output: 18},
+			wantTotal:     193,
+			wantBucketSum: 193,
+		},
+		{
+			name:          "record without the marker keeps the additive heuristic",
+			usageJSON:     `{"input_tokens":"175","output_tokens":"18","total_tokens":"193","cache_read_input_tokens":"15"}`,
+			wantBuckets:   TokenBuckets{FreshInput: 175, CacheRead: 15, Output: 18},
+			wantTotal:     193,
+			wantBucketSum: 208,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStorage(t)
+			// Written as raw JSON, not through agento11y.Generation, so the
+			// test also covers the encoding the HTTP receiver stores.
+			raw := json.RawMessage(`{"id":"g-sem","conversation_id":"conv-sem","agent_name":"claude-code",` +
+				`"model":{"provider":"anthropic","name":"claude-sonnet-4"},` +
+				`"started_at":"2026-05-21T10:00:00Z","completed_at":"2026-05-21T10:00:02Z",` +
+				`"output":[{"role":"MESSAGE_ROLE_ASSISTANT","parts":[{"kind":"text","text":"semantics"}]}],` +
+				`"usage":` + tc.usageJSON + `}`)
+			require.NoError(t, s.AppendGeneration(generationRecord{
+				ReceivedAt:     "2026-05-21T10:00:02Z",
+				GenerationID:   "g-sem",
+				ConversationID: "conv-sem",
+				Generation:     raw,
+			}))
+
+			detail, err := s.ConversationDetail("conv-sem")
+			require.NoError(t, err)
+			require.NotNil(t, detail)
+			require.Len(t, detail.Generations, 1)
+			assert.Equal(t, tc.wantBuckets, detail.Generations[0].TokenBuckets, "detail buckets")
+			assert.Equal(t, tc.wantTotal, detail.Generations[0].TotalTokens, "detail total")
+
+			summaries, _, err := s.ListConversations(ConversationListOptions{})
+			require.NoError(t, err)
+			require.Len(t, summaries, 1)
+			assert.Equal(t, tc.wantBuckets, summaries[0].TokenBuckets, "list buckets")
+			assert.Equal(t, tc.wantTotal, summaries[0].TotalTokens, "list total")
+
+			points, _, err := s.TokenUsagePoints(TokenUsageOptions{Interval: time.Hour})
+			require.NoError(t, err)
+			require.Len(t, points, 1)
+			assert.Equal(t, tc.wantBuckets, points[0].TokenBuckets, "chart buckets")
+
+			hits, err := s.SearchConversations("semantics", 10)
+			require.NoError(t, err)
+			require.Len(t, hits, 1)
+			assert.Equal(t, tc.wantBuckets, hits[0].TokenBuckets, "search buckets")
+
+			b := detail.Generations[0].TokenBuckets
+			sum := b.FreshInput + b.CacheRead + b.CacheWrite + b.Output + b.Reasoning
+			assert.Equal(t, tc.wantBucketSum, sum, "buckets must stay disjoint")
 		})
 	}
 }

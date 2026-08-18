@@ -55,9 +55,10 @@
         },
         "usage": {
           "cache_read_input_tokens": "15",
-          "input_tokens": "160",
+          "input_semantics": "TOKEN_INPUT_SEMANTICS_INCLUSIVE",
+          "input_tokens": "175",
           "output_tokens": "18",
-          "total_tokens": "178"
+          "total_tokens": "193"
         }
       },
       {
@@ -162,9 +163,10 @@
         ],
         "usage": {
           "cache_read_input_tokens": "10",
-          "input_tokens": "120",
+          "input_semantics": "TOKEN_INPUT_SEMANTICS_INCLUSIVE",
+          "input_tokens": "130",
           "output_tokens": "25",
-          "total_tokens": "145"
+          "total_tokens": "155"
         }
       }
     ]
