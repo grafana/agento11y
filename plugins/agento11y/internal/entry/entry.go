@@ -186,7 +186,6 @@ var loginRun = login.Run
 var (
 	cursorInstall   = cursorinstall.Run
 	cursorUninstall = cursorinstall.Uninstall
-	cursorStatus    = cursorinstall.Status
 	claudeInstall   = claudecode.Install
 )
 
