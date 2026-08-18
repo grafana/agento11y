@@ -127,6 +127,7 @@ Subagent turns are not tagged `subagent`. Mistral Vibe only exposes a session-le
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
 | `AGENTO11Y_USER_ID` | — | Override the user id. |
 | `AGENTO11Y_AGENT_NAME` | `mistral-vibe` | Override the exported `agent_name`. Avoid a `/` in the name: a slash marks a subagent generation, so every turn of the run is counted as one. Guard rules and dashboards that filter on `mistral-vibe` no longer match the generations this run exports. |
+| `AGENTO11Y_LOCAL` | `false` | Send Vibe hook captures to the local viewer at `http://127.0.0.1:8765` instead of Grafana Cloud. Local mode always stores full content. Cloud forwarding also requires `AGENTO11Y_LOCAL_FORWARD`. |
 | `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Evaluate every `before_tool` fire against guard policy. Denied calls are blocked; Transform rules rewrite the tool arguments. |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | On timeout, network error, or 5xx, run the tool anyway. Set `false` for strict mode. |

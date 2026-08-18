@@ -41,7 +41,9 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -384,6 +386,32 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	}
 }
 
+// hookLocalStartTimeout is the same deadline launchers use. It must be
+// longer than startDaemon's 5s readiness wait: a shorter context cancels
+// that poll, kills a healthy child, and then the failure stamp skips
+// retries while the hook still points at a dead loopback URL. Repeat
+// start cost after a real failure is bounded by skipLocalHookStart, not
+// by shrinking this timeout.
+const hookLocalStartTimeout = 10 * time.Second
+
+// hookStartFailFile / hookStartFailTTL remember a failed start across
+// hook processes (Cursor execs a new binary per event). A healthy
+// IsRunning check still wins, so a later successful `agento11y local start`
+// is picked up without waiting out the TTL.
+const (
+	hookStartFailFile = "hook-start-failed"
+	hookStartFailTTL  = 30 * time.Second
+)
+
+var (
+	localHookStartMu     sync.Mutex
+	localHookStartFailed bool
+	// hookLocalReceiverSupported is a test seam for the Windows path,
+	// where the local receiver cannot start and hooks must keep Cloud
+	// credentials instead of rewriting to loopback.
+	hookLocalReceiverSupported = local.ReceiverSupported
+)
+
 // applyLocalHookEnv rewrites the hook process so AGENTO11Y_LOCAL=true (or
 // SIGIL_LOCAL) sends generations to the local daemon instead of Grafana
 // Cloud. Launchers already do this for `agento11y <agent>`; Cursor, Copilot,
@@ -394,23 +422,76 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 // The rewrite is silent: hooks fire many times per turn and must not print
 // the local-mode banner to the host agent's stderr. A failure to start the
 // daemon is logged and the env still points at loopback so a down receiver
-// cannot leak the turn to Cloud.
+// cannot leak the turn to Cloud. A later hook in this process, or a later
+// process within hookStartFailTTL, skips the start attempt unless a
+// receiver is already healthy. On platforms where the receiver cannot
+// run (Windows), the Cloud endpoint is left in place.
 func applyLocalHookEnv(logger *log.Logger) {
 	if !envconfig.ParseBool(envconfig.Getenv("LOCAL")) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
+	if !hookLocalReceiverSupported() {
+		logger.Printf("local hook: receiver not supported on this OS; exporting to the configured endpoint")
+		return
+	}
 	endpoint := fmt.Sprintf("http://127.0.0.1:%d", local.DefaultPort)
-	status, err := local.EnsureRunning(ctx, local.StateDir(), logger)
-	if err != nil {
-		logger.Printf("local hook: failed to start receiver: %v", err)
-	} else if status != nil && status.Endpoint != "" {
+	dir := local.StateDir()
+	if status, err := local.IsRunning(dir); err == nil && status != nil && status.Endpoint != "" {
 		endpoint = status.Endpoint
+		clearLocalHookStartFailure(dir)
+	} else if !skipLocalHookStart(dir) {
+		ctx, cancel := context.WithTimeout(context.Background(), hookLocalStartTimeout)
+		status, err := local.EnsureRunning(ctx, dir, logger)
+		cancel()
+		if err != nil {
+			logger.Printf("local hook: failed to start receiver: %v", err)
+			markLocalHookStartFailure(dir)
+		} else if status != nil && status.Endpoint != "" {
+			endpoint = status.Endpoint
+			clearLocalHookStartFailure(dir)
+		}
 	}
 	local.LaunchEnv{Endpoint: endpoint, OTLPEndpoint: endpoint + "/otlp"}.ApplyOS()
 	logger.Printf("local hook: endpoint=%s", endpoint)
+}
+
+func skipLocalHookStart(dir string) bool {
+	localHookStartMu.Lock()
+	failed := localHookStartFailed
+	localHookStartMu.Unlock()
+	if failed {
+		return true
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, hookStartFailFile))
+	if err != nil {
+		return false
+	}
+	stamped, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(raw)))
+	if err != nil {
+		return false
+	}
+	return time.Since(stamped) < hookStartFailTTL
+}
+
+func markLocalHookStartFailure(dir string) {
+	localHookStartMu.Lock()
+	localHookStartFailed = true
+	localHookStartMu.Unlock()
+	_ = os.MkdirAll(dir, 0o700)
+	_ = os.WriteFile(filepath.Join(dir, hookStartFailFile), []byte(time.Now().UTC().Format(time.RFC3339Nano)+"\n"), 0o600)
+}
+
+func clearLocalHookStartFailure(dir string) {
+	localHookStartMu.Lock()
+	localHookStartFailed = false
+	localHookStartMu.Unlock()
+	_ = os.Remove(filepath.Join(dir, hookStartFailFile))
+}
+
+func resetLocalHookStartFailureForTest() {
+	localHookStartMu.Lock()
+	localHookStartFailed = false
+	localHookStartMu.Unlock()
 }
 
 // runLoginCommand handles `agento11y login`. Values can arrive as flags, on

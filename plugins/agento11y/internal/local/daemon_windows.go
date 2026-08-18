@@ -15,6 +15,11 @@ import (
 // touches this code path.
 var errLocalUnsupported = errors.New("agento11y local receiver is not supported on Windows")
 
+// ReceiverSupported reports whether this platform can run the local
+// capture daemon. Windows returns false so hook dispatch leaves Cloud
+// credentials in place instead of rewriting to a dead loopback URL.
+func ReceiverSupported() bool { return false }
+
 type daemonLock struct{}
 
 func acquireDaemonLock(dir string) (*daemonLock, error) { return nil, errLocalUnsupported }

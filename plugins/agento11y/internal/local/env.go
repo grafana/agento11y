@@ -105,6 +105,11 @@ var hookOverrideSuffixes = []string{
 // environment. Hook dispatch uses this because hooks run in-process and
 // cannot inherit a rewritten child environ the way `agento11y <agent>
 // --local` does.
+//
+// ApplyOS only Setenv keys present in Apply's result. It does not unset an
+// inherited empty preferred-spelling AUTH_* var when the family was kept via
+// the legacy spelling. LookupEnv trims blanks and falls through, so that
+// case still resolves the real credential.
 func (e LaunchEnv) ApplyOS() {
 	applied := map[string]string{}
 	for _, kv := range e.Apply(os.Environ()) {

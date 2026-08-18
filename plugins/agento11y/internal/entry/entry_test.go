@@ -264,6 +264,7 @@ func TestRun_HookLocalRewritesEndpoint(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			resetLocalHookStartFailureForTest()
 			isolateDotenvHome(t)
 			t.Setenv("AGENTO11Y_ENDPOINT", "https://cloud.example.test")
 			t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.test")
@@ -321,6 +322,99 @@ func TestRun_HookLocalRewritesEndpoint(t *testing.T) {
 				t.Fatalf("CONTENT_CAPTURE_MODE = %q, want metadata_only", gotCapture)
 			}
 		})
+	}
+}
+
+func TestRun_HookLocalSkipsStartAfterFailure(t *testing.T) {
+	resetLocalHookStartFailureForTest()
+	isolateDotenvHome(t)
+	t.Setenv("AGENTO11Y_LOCAL", "true")
+	t.Setenv("AGENTO11Y_ENDPOINT", "https://cloud.example.test")
+	t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.test")
+
+	startCalls := 0
+	restore := local.SetStartDaemonForTesting(func(_ context.Context, _ string, _ *log.Logger) (*local.Status, error) {
+		startCalls++
+		return nil, errors.New("bind failed")
+	})
+	t.Cleanup(restore)
+
+	prev := agents
+	t.Cleanup(func() { agents = prev })
+	agents = map[string]agentHook{
+		"cursor": func(_ context.Context, _ io.Reader, _ io.Writer, _ *log.Logger) error { return nil },
+	}
+
+	runHook := func() {
+		var stdout, stderr bytes.Buffer
+		gotExit := withExit(t, func() {
+			run([]string{"cursor", "hook"}, strings.NewReader(`{}`), &stdout, &stderr)
+		})
+		if gotExit != nil {
+			t.Fatalf("exit code = %d, want no exit", *gotExit)
+		}
+	}
+
+	runHook()
+	if startCalls != 1 {
+		t.Fatalf("first hook start calls = %d, want 1", startCalls)
+	}
+	runHook()
+	if startCalls != 1 {
+		t.Fatalf("second hook start calls = %d, want 1 (in-process short-circuit)", startCalls)
+	}
+
+	// A later hook process only has the stamp file, not the in-memory flag.
+	resetLocalHookStartFailureForTest()
+	runHook()
+	if startCalls != 1 {
+		t.Fatalf("third hook start calls = %d, want 1 (stamp-file short-circuit)", startCalls)
+	}
+	if os.Getenv("AGENTO11Y_ENDPOINT") != "http://127.0.0.1:8765" {
+		t.Fatalf("ENDPOINT = %q, want loopback fallback", os.Getenv("AGENTO11Y_ENDPOINT"))
+	}
+}
+
+func TestRun_HookLocalUnsupportedKeepsCloudEndpoint(t *testing.T) {
+	resetLocalHookStartFailureForTest()
+	isolateDotenvHome(t)
+	t.Setenv("AGENTO11Y_LOCAL", "true")
+	t.Setenv("AGENTO11Y_ENDPOINT", "https://cloud.example.test")
+	t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.test")
+	t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", "metadata_only")
+
+	prevSupported := hookLocalReceiverSupported
+	hookLocalReceiverSupported = func() bool { return false }
+	t.Cleanup(func() { hookLocalReceiverSupported = prevSupported })
+
+	startCalls := 0
+	restore := local.SetStartDaemonForTesting(func(_ context.Context, _ string, _ *log.Logger) (*local.Status, error) {
+		startCalls++
+		return nil, errors.New("should not start")
+	})
+	t.Cleanup(restore)
+
+	prev := agents
+	t.Cleanup(func() { agents = prev })
+	agents = map[string]agentHook{
+		"cursor": func(_ context.Context, _ io.Reader, _ io.Writer, _ *log.Logger) error { return nil },
+	}
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"cursor", "hook"}, strings.NewReader(`{}`), &stdout, &stderr)
+	})
+	if gotExit != nil {
+		t.Fatalf("exit code = %d, want no exit", *gotExit)
+	}
+	if startCalls != 0 {
+		t.Fatalf("start calls = %d, want 0", startCalls)
+	}
+	if os.Getenv("AGENTO11Y_ENDPOINT") != "https://cloud.example.test" {
+		t.Fatalf("ENDPOINT = %q, want cloud", os.Getenv("AGENTO11Y_ENDPOINT"))
+	}
+	if os.Getenv("AGENTO11Y_CONTENT_CAPTURE_MODE") != "metadata_only" {
+		t.Fatalf("CONTENT_CAPTURE_MODE = %q, want metadata_only", os.Getenv("AGENTO11Y_CONTENT_CAPTURE_MODE"))
 	}
 }
 

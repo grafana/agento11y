@@ -123,6 +123,7 @@ tail -f ~/.local/state/agento11y/logs/agento11y.log
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
 | `AGENTO11Y_USER_ID` | — | Override the user id. |
 | `AGENTO11Y_AGENT_NAME` | `codex` | Override the exported `agent_name`. Subagent turns become `<name>/subagent`. Avoid a `/` in the name itself: a slash marks a subagent generation, so every turn of the run is counted as one. Guard rules and dashboards that filter on `codex` no longer match the generations this run exports. |
+| `AGENTO11Y_LOCAL` | `false` | Send Codex captures (launches and installed hooks) to the local viewer at `http://127.0.0.1:8765` instead of Grafana Cloud. Local mode always stores full content. Cloud forwarding also requires `AGENTO11Y_LOCAL_FORWARD`. |
 | `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable Codex `PreToolUse` guards against Agent Observability rules. |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | Allow the tool call when the guard request fails (set `false` for fail-closed). |
