@@ -20,9 +20,9 @@
 // --tag is repeatable and adds key=value pairs to SIGIL_TAGS so they land
 // on every generation the launched session produces.
 //
-// --local can also be turned on for every launch with AGENTO11Y_LOCAL=true in
-// the shell or in config.env. --no-local runs one session against Cloud while
-// that setting stays on.
+// --local can also be turned on for every launch — and for hook dispatch —
+// with AGENTO11Y_LOCAL=true in the shell or in config.env. --no-local runs
+// one session against Cloud while that setting stays on.
 //
 // Unknown agents and unknown verbs exit with code 2 and a usage message on
 // stderr. For hook agents the binary must never crash the calling agent
@@ -377,10 +377,40 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	dotenv.ApplyEnv(nil)
 	logger := cli.InitLogger(agent)
 	defer cli.RecoverAndLog(logger)
+	applyLocalHookEnv(logger)
 
 	if err := hook(context.Background(), stdin, stdout, logger); err != nil {
 		logger.Printf("hook: %v", err)
 	}
+}
+
+// applyLocalHookEnv rewrites the hook process so AGENTO11Y_LOCAL=true (or
+// SIGIL_LOCAL) sends generations to the local daemon instead of Grafana
+// Cloud. Launchers already do this for `agento11y <agent>`; Cursor, Copilot,
+// Vibe, and a plain `claude`/`codex` whose agento11y hooks are installed
+// have no launcher wrap, so the hook itself applies the same LaunchEnv
+// contract.
+//
+// The rewrite is silent: hooks fire many times per turn and must not print
+// the local-mode banner to the host agent's stderr. A failure to start the
+// daemon is logged and the env still points at loopback so a down receiver
+// cannot leak the turn to Cloud.
+func applyLocalHookEnv(logger *log.Logger) {
+	if !envconfig.ParseBool(envconfig.Getenv("LOCAL")) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d", local.DefaultPort)
+	status, err := local.EnsureRunning(ctx, local.StateDir(), logger)
+	if err != nil {
+		logger.Printf("local hook: failed to start receiver: %v", err)
+	} else if status != nil && status.Endpoint != "" {
+		endpoint = status.Endpoint
+	}
+	local.LaunchEnv{Endpoint: endpoint, OTLPEndpoint: endpoint + "/otlp"}.ApplyOS()
+	logger.Printf("local hook: endpoint=%s", endpoint)
 }
 
 // runLoginCommand handles `agento11y login`. Values can arrive as flags, on

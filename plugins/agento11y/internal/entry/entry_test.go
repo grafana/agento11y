@@ -216,6 +216,114 @@ func TestRun_DotenvSIGILDebugEnablesLogging(t *testing.T) {
 	}
 }
 
+func TestRun_HookLocalRewritesEndpoint(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T)
+		startErr    error
+		wantStart   bool
+		wantRewrite bool
+	}{
+		{
+			name: "shell LOCAL rewrites cloud endpoint",
+			setup: func(t *testing.T) {
+				t.Setenv("AGENTO11Y_LOCAL", "true")
+			},
+			wantStart:   true,
+			wantRewrite: true,
+		},
+		{
+			name: "config.env LOCAL rewrites cloud endpoint",
+			setup: func(t *testing.T) {
+				cfgDir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "agento11y")
+				if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(cfgDir, "config.env"), []byte("AGENTO11Y_LOCAL=true\n"), 0o600); err != nil {
+					t.Fatalf("write dotenv: %v", err)
+				}
+			},
+			wantStart:   true,
+			wantRewrite: true,
+		},
+		{
+			name: "LOCAL off leaves cloud endpoint",
+			setup: func(t *testing.T) {
+				t.Setenv("AGENTO11Y_LOCAL", "false")
+			},
+		},
+		{
+			name: "daemon start failure still points at loopback",
+			setup: func(t *testing.T) {
+				t.Setenv("AGENTO11Y_LOCAL", "true")
+			},
+			startErr:    errors.New("bind failed"),
+			wantStart:   true,
+			wantRewrite: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			t.Setenv("AGENTO11Y_ENDPOINT", "https://cloud.example.test")
+			t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.test")
+			t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", "metadata_only")
+			t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "metadata_only")
+			tc.setup(t)
+
+			startCalls := 0
+			restore := local.SetStartDaemonForTesting(func(_ context.Context, _ string, _ *log.Logger) (*local.Status, error) {
+				startCalls++
+				if tc.startErr != nil {
+					return nil, tc.startErr
+				}
+				return &local.Status{PID: os.Getpid(), Port: 8765, Endpoint: "http://127.0.0.1:8765", StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}, nil
+			})
+			t.Cleanup(restore)
+
+			var gotEndpoint, gotCapture string
+			prev := agents
+			t.Cleanup(func() { agents = prev })
+			agents = map[string]agentHook{
+				"cursor": func(_ context.Context, _ io.Reader, _ io.Writer, _ *log.Logger) error {
+					gotEndpoint = os.Getenv("AGENTO11Y_ENDPOINT")
+					gotCapture = os.Getenv("AGENTO11Y_CONTENT_CAPTURE_MODE")
+					return nil
+				},
+			}
+
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run([]string{"cursor", "hook"}, strings.NewReader(`{}`), &stdout, &stderr)
+			})
+			if gotExit != nil {
+				t.Fatalf("exit code = %d, want no exit", *gotExit)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty (no local-mode banner on hooks)", stderr.String())
+			}
+			if (startCalls > 0) != tc.wantStart {
+				t.Fatalf("daemon starts = %d, wantStart %v", startCalls, tc.wantStart)
+			}
+			if tc.wantRewrite {
+				if gotEndpoint != "http://127.0.0.1:8765" {
+					t.Fatalf("ENDPOINT = %q, want local receiver", gotEndpoint)
+				}
+				if gotCapture != "full" {
+					t.Fatalf("CONTENT_CAPTURE_MODE = %q, want full", gotCapture)
+				}
+				return
+			}
+			if gotEndpoint != "https://cloud.example.test" {
+				t.Fatalf("ENDPOINT = %q, want cloud", gotEndpoint)
+			}
+			if gotCapture != "metadata_only" {
+				t.Fatalf("CONTENT_CAPTURE_MODE = %q, want metadata_only", gotCapture)
+			}
+		})
+	}
+}
+
 func TestRun_HookErrorIsSwallowedAfterDispatch(t *testing.T) {
 	prev := agents
 	t.Cleanup(func() { agents = prev })

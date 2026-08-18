@@ -1,6 +1,7 @@
 package local
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -88,6 +89,39 @@ func TestLaunchEnvApply(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLaunchEnvApplyOS(t *testing.T) {
+	t.Setenv("AGENTO11Y_ENDPOINT", "https://cloud.example")
+	t.Setenv("SIGIL_ENDPOINT", "https://cloud.example")
+	t.Setenv("AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT", "https://otlp.example")
+	t.Setenv("SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT", "https://otlp.example")
+	t.Setenv("AGENTO11Y_CONTENT_CAPTURE_MODE", "metadata_only")
+	t.Setenv("SIGIL_CONTENT_CAPTURE_MODE", "metadata_only")
+	t.Setenv("AGENTO11Y_AUTH_TENANT_ID", "")
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
+	t.Setenv("AGENTO11Y_AUTH_TOKEN", "")
+	t.Setenv("SIGIL_AUTH_TOKEN", "")
+
+	LaunchEnv{Endpoint: "http://127.0.0.1:4319", OTLPEndpoint: "http://127.0.0.1:4320/otlp"}.ApplyOS()
+
+	want := map[string]string{
+		"AGENTO11Y_ENDPOINT":                    "http://127.0.0.1:4319",
+		"SIGIL_ENDPOINT":                        "http://127.0.0.1:4319",
+		"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4320/otlp",
+		"SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT":     "http://127.0.0.1:4320/otlp",
+		"AGENTO11Y_CONTENT_CAPTURE_MODE":        "full",
+		"SIGIL_CONTENT_CAPTURE_MODE":            "full",
+		"AGENTO11Y_AUTH_TENANT_ID":              "local",
+		"SIGIL_AUTH_TENANT_ID":                  "local",
+		"AGENTO11Y_AUTH_TOKEN":                  "local",
+		"SIGIL_AUTH_TOKEN":                      "local",
+	}
+	for k, v := range want {
+		if got := os.Getenv(k); got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
 	}
 }
 

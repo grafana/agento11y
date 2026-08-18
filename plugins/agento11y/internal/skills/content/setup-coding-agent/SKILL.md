@@ -373,7 +373,7 @@ All hosts read the resolved config path. The default is
 | `AGENTO11Y_GUARDS_ENABLED` | Send supported preflight and tool calls for guard evaluation |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | Guard evaluation timeout in milliseconds |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | Allow the operation when guard evaluation fails |
-| `AGENTO11Y_LOCAL` | Route `agento11y <agent>` launches to the local daemon |
+| `AGENTO11Y_LOCAL` | Route `agento11y <agent>` launches and agento11y hooks to the local daemon |
 | `AGENTO11Y_LOCAL_FORWARD` | Forward local-mode captures to Grafana Cloud |
 | `AGENTO11Y_AUTO_UPDATE` | A false value opts out of host-plugin refresh |
 | `AGENTO11Y_DEBUG` | A true value writes the debug log |
@@ -444,12 +444,13 @@ it does not open a browser. Cloud forwarding also requires
 `AGENTO11Y_LOCAL_FORWARD` and valid Cloud settings. Manage the daemon with
 `agento11y local start|status|stop|restart`.
 
-Local mode covers launches that go through `agento11y <agent>`, and nothing
-else. A session the host agent starts on its own, such as Cursor or a plain
-`claude`, keeps exporting to the configured endpoint. Never describe local mode
-to the user as a switch that keeps all data on the machine. Doctor prints this
-correction when `AGENTO11Y_LOCAL` is enabled in the environment or config file;
-it cannot see a one-off `--local` flag after the launch.
+Local mode routes `agento11y <agent>` launches and agento11y hooks (Cursor,
+Claude Code, Codex, Copilot, Vibe) to the local viewer. It still captures
+full content in the local store. Cloud forwarding also requires
+`AGENTO11Y_LOCAL_FORWARD`. Never describe local mode as a switch that keeps
+all data on the machine. Doctor prints this correction when
+`AGENTO11Y_LOCAL` is enabled in the environment or config file; it cannot
+see a one-off `--local` flag after the launch.
 
 `--no-local` runs one session against Cloud while `AGENTO11Y_LOCAL=true` stays
 set.

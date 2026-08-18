@@ -50,7 +50,7 @@ var AliasSuffixes = []string{
 	"USER_ID_SOURCE",
 	"BIN",
 	"COPILOT_HOOK_SURFACE",
-	"LOCAL",         // default `agento11y <agent>` launches to local mode, as if --local was passed
+	"LOCAL",         // default launches and agento11y hooks to local mode, as if --local was passed
 	"LOCAL_FORWARD", // opt a --local daemon into forwarding to Cloud
 }
 

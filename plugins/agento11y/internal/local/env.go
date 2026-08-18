@@ -89,3 +89,34 @@ func (e LaunchEnv) Apply(env []string) []string {
 	}
 	return out
 }
+
+// hookOverrideSuffixes are the alias families Apply rewrites. ApplyOS
+// materializes only these so an in-process hook does not os.Setenv the rest
+// of the inherited environment.
+var hookOverrideSuffixes = []string{
+	"ENDPOINT",
+	"OTEL_EXPORTER_OTLP_ENDPOINT",
+	"CONTENT_CAPTURE_MODE",
+	"AUTH_TENANT_ID",
+	"AUTH_TOKEN",
+}
+
+// ApplyOS writes the same overrides Apply produces into the current process
+// environment. Hook dispatch uses this because hooks run in-process and
+// cannot inherit a rewritten child environ the way `agento11y <agent>
+// --local` does.
+func (e LaunchEnv) ApplyOS() {
+	applied := map[string]string{}
+	for _, kv := range e.Apply(os.Environ()) {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			applied[k] = v
+		}
+	}
+	for _, suffix := range hookOverrideSuffixes {
+		for _, key := range []string{envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix)} {
+			if v, ok := applied[key]; ok {
+				_ = os.Setenv(key, v)
+			}
+		}
+	}
+}
