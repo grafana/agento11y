@@ -101,6 +101,33 @@ func SetBothEnv(suffix, value string) {
 	_ = os.Setenv(LegacyKey(suffix), value)
 }
 
+// WithoutCaptureEndpoints removes every conversations and OTLP endpoint from env.
+// A launcher calls it after the receiver fails to start on a default-local
+// launch, so the child cannot export through a partial Cloud configuration.
+func WithoutCaptureEndpoints(env []string) []string {
+	blocked := map[string]bool{
+		PreferredKey("ENDPOINT"): true, LegacyKey("ENDPOINT"): true,
+		PreferredKey("OTEL_EXPORTER_OTLP_ENDPOINT"): true, LegacyKey("OTEL_EXPORTER_OTLP_ENDPOINT"): true,
+		"OTEL_EXPORTER_OTLP_ENDPOINT": true,
+	}
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		key, _, ok := strings.Cut(kv, "=")
+		if ok && blocked[key] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// ClearCaptureEndpoints removes capture endpoints from the current process.
+func ClearCaptureEndpoints() {
+	for _, key := range []string{PreferredKey("ENDPOINT"), LegacyKey("ENDPOINT"), PreferredKey("OTEL_EXPORTER_OTLP_ENDPOINT"), LegacyKey("OTEL_EXPORTER_OTLP_ENDPOINT"), "OTEL_EXPORTER_OTLP_ENDPOINT"} {
+		_ = os.Unsetenv(key)
+	}
+}
+
 // EnvSetter is the subset of testing.TB PinAliasEnvBlank needs. Declared
 // locally so this package does not import testing.
 type EnvSetter interface {

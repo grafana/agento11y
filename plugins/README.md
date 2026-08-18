@@ -1,6 +1,6 @@
 # Agent Observability plugins for coding agents
 
-Send conversations from your coding agent to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) — model, tokens, tool calls, timing, and optionally the conversation content.
+Record conversations from your coding agent: model, tokens, tool calls, timing, and optionally the conversation content. Sessions go to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) when Grafana Cloud credentials are configured, and stay on your machine without them.
 
 Full docs: [Instrument coding agents](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/instrument-coding-agents/).
 
@@ -30,9 +30,9 @@ The command was renamed from `sigil`; the old name still works but will be remov
 
 ## Launch your agent
 
-Launch with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, or `vibe`. On first run it installs the agent plugin or extension, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches the agent.
+Launch with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, or `vibe`. The command installs the agent plugin or extension and then launches the agent. With Grafana Cloud credentials, the session goes to Cloud. Without them, the launcher captures the session locally and prints the viewer URL instead of asking you to log in. Local capture needs macOS or Linux, so a launch on Windows uses Grafana Cloud. `--local` (or `AGENTO11Y_LOCAL=true`) and `--no-local` pick one for you; `--no-local` prompts for missing credentials.
 
-Cursor has no launcher; see [`cursor/README.md`](cursor/README.md) for setup.
+Cursor has no launcher and no local capture; see [`cursor/README.md`](cursor/README.md) for setup.
 
 ## All plugins
 
@@ -48,10 +48,10 @@ Cursor has no launcher; see [`cursor/README.md`](cursor/README.md) for setup.
 
 ## Content and redaction
 
-Plugins send metadata only by default. `AGENTO11Y_CONTENT_CAPTURE_MODE=full` adds conversation content; see [Content Capture Modes](../docs/concepts/content-capture-modes.md).
+Plugins send metadata only to Grafana Cloud by default. `AGENTO11Y_CONTENT_CAPTURE_MODE=full` adds conversation content to Cloud exports. Local capture always records full content. See [Content Capture Modes](../docs/concepts/content-capture-modes.md).
 
 When a plugin exports content, it redacts known secret formats first. That covers user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results, on the generation and on the tool-execution span. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send prompts without redaction; everything else stays redacted. The strength differs per field, and prose fields are deliberately treated more gently than pasted content; [Content Capture Modes](../docs/concepts/content-capture-modes.md#strength-per-field) has the table.
 
 ## Configuration
 
-Plugins backed by the `agento11y` launcher share one config file at `~/.config/agento11y/config.env`. If you only have the old `~/.config/sigil/config.env`, that file is read and updated instead. The launcher creates or updates it on first run; `agento11y login` re-runs the same prompt later. The prompt asks for your Grafana stack, prints that stack's coding-agent setup page, and tries to open it in a browser. The credentials are then filled from the environment block you paste back. The stack is saved, so a later run offers it back and you press Enter. The same values can be passed as `--endpoint`, `--tenant`, and `--token` (or `--token-stdin`), which always outrank the prompt and also let login run where there is no terminal to prompt on. Cursor has no launcher, so register its plugin in-app and run `agento11y login` once for the shared config.
+Plugins backed by the `agento11y` launcher share one config file at `~/.config/agento11y/config.env`. If you only have the old `~/.config/sigil/config.env`, that file is read and updated instead. Run `agento11y login` to create or update the file. A launcher only prompts for credentials when the session is going to Grafana Cloud. The prompt asks for your Grafana stack, prints that stack's coding-agent setup page, and tries to open it in a browser. The credentials are then filled from the environment block you paste back. The stack is saved, so a later run offers it back and you press Enter. The same values can be passed as `--endpoint`, `--tenant`, and `--token` (or `--token-stdin`), which always outrank the prompt and also let login run where there is no terminal to prompt on. Cursor has no launcher, so register its plugin in-app and run `agento11y login` once for the shared config.

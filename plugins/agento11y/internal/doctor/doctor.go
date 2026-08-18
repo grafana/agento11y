@@ -30,6 +30,7 @@ import (
 
 	"github.com/grafana/agento11y/go/proto/agento11y/wire"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/capturemode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
@@ -100,7 +101,7 @@ var trackedKeys = func() []string {
 	for _, suffix := range trackedSuffixes {
 		keys = append(keys, envconfig.PreferredKey(suffix), envconfig.LegacyKey(suffix))
 	}
-	return append(keys, "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS")
+	return append(keys, "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", capturemode.LaunchDestinationEnv, capturemode.LaunchReasonEnv)
 }()
 
 // Options are the parsed doctor flags.
@@ -226,6 +227,8 @@ type ConfigSection struct {
 	AutoTagsSource     string `json:"auto_tags_source,omitempty"`
 	AutoTagNamesKey    string `json:"auto_tag_names_key,omitempty"`
 	AutoTagNamesSource string `json:"auto_tag_names_source,omitempty"`
+	// Capture is the destination a bare `agento11y <agent>` launch resolves to.
+	Capture CaptureSection `json:"capture"`
 	// Local is the resolved LOCAL family: whether `agento11y <agent>` starts in
 	// local mode without --local, and where the value came from.
 	Local envValue `json:"local"`
@@ -260,6 +263,12 @@ type ConfigSection struct {
 type HookForwardSection struct {
 	Enabled bool   `json:"enabled"`
 	Reason  string `json:"reason,omitempty"`
+}
+
+// CaptureSection names where a bare agent launch sends its session and which resolver rule selected it.
+type CaptureSection struct {
+	Destination string `json:"destination"`
+	Reason      string `json:"reason"`
 }
 
 // ConversationsSection reports the generation-export pipeline.
@@ -495,6 +504,16 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 	r.Conversations = collectConversations(osEnv, fileEnv)
 	r.Analytics = collectAnalytics(osEnv, fileEnv, r.Conversations.configured())
 	r.Config = collectConfig(osEnv, fileEnv)
+	if r.Config.Capture.Destination == "local" {
+		if !r.Conversations.Endpoint.Set && !r.Conversations.TenantID.Set && !r.Conversations.Token.Set {
+			r.Conversations.Health = HealthOK
+			r.Conversations.Messages = nil
+		}
+		if !r.Analytics.Endpoint.Set {
+			r.Analytics.Health = HealthOK
+			r.Analytics.Messages = nil
+		}
+	}
 	r.Agents = collectAgents(ctx, r.Binary.Version)
 	r.AutoUpdate = resolveFamily("AUTO_UPDATE", osEnv, fileEnv).envValue()
 	r.AutoUpdateDisabled = updatecheck.Disabled()
@@ -874,9 +893,17 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 	// LOCAL turns every launcher run into a local session, so report the
 	// effective value and where it came from.
 	localMode := resolveFamily("LOCAL", osEnv, fileEnv)
-	localOn, localValid := envconfig.ParseBoolValue(localMode.value)
+	_, localValid := envconfig.ParseBoolValue(localMode.value)
 	sec.Local = localMode.envValue()
 	sec.LocalInvalid = localMode.set && !localValid
+	capture := capturemode.Resolve(capturemode.Request{
+		EnvValue: localMode.value, EnvKey: localMode.key,
+		HasCloudCreds: hasCloudCredentials(osEnv, fileEnv), DaemonSupported: local.DaemonSupported,
+	})
+	sec.Capture = captureSection(capture, localMode.value, localMode.source)
+	if destination := strings.TrimSpace(osEnv[capturemode.LaunchDestinationEnv]); destination != "" {
+		sec.Capture = CaptureSection{Destination: destination, Reason: strings.TrimSpace(osEnv[capturemode.LaunchReasonEnv])}
+	}
 
 	// LOCAL_FORWARD sends a copy of every --local session to Cloud, so make the
 	// effective value and its source visible.
@@ -1001,21 +1028,29 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 		sec.Messages = append(sec.Messages, fmt.Sprintf(
 			"%s is set in the environment and in config.env; the local daemon uses the config.env value", forward.key))
 	}
+	// Skipping the value hands the choice to the rules below it, which can land
+	// on Cloud through credentials or on Windows through the unsupported
+	// platform, so naming one outcome here would contradict the capture row.
 	if sec.LocalInvalid {
 		sec.Health = HealthWarn
 		sec.Messages = append(sec.Messages, fmt.Sprintf(
-			"the %s value is not a boolean; local mode stays off", localMode.key))
+			"the %s value is not a boolean, so it is ignored; the capture row states the destination in force", localMode.key))
 	}
 	if localMode.legacyWon() {
 		sec.Messages = append(sec.Messages,
 			"local mode set via legacy SIGIL_LOCAL — this keeps working, but the preferred name is AGENTO11Y_LOCAL")
 	}
-	if localOn {
-		// Launchers and hooks both read this family, but LOCAL_FORWARD still
-		// copies local captures to Cloud, so "nothing leaves this machine" is
-		// still the wrong reading.
+	if localMode.set && envconfig.ParseBool(localMode.value) {
 		sec.Messages = append(sec.Messages,
 			"local mode sends `agento11y <agent>` launches and agento11y hooks to the local viewer; Cloud forwarding still requires AGENTO11Y_LOCAL_FORWARD")
+	}
+	// Default-local is narrower than AGENTO11Y_LOCAL=true above: the launcher
+	// gives the local endpoint to the agent it starts, and a hook that fires in a
+	// session the user started themselves resolves the Cloud config instead. The
+	// capture row alone reads as if every session on this machine is captured.
+	if capture.Local && capture.Source == capturemode.SourceDefault {
+		sec.Messages = append(sec.Messages,
+			"local capture covers `agento11y <agent>` launches. A session started directly by the host agent exports to the configured Cloud endpoint, or is dropped when Cloud credentials are incomplete.")
 	}
 	return sec
 }
@@ -1025,6 +1060,35 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 // resolve with decide validity, so doctor cannot call a value good that a hook
 // throws away. The row attributes GUARDS_ENABLED alone, so these names are the
 // only place a reader learns which guard value is broken.
+func hasCloudCredentials(osEnv, fileEnv map[string]string) bool {
+	return resolveFamily("ENDPOINT", osEnv, fileEnv).set &&
+		resolveFamily("AUTH_TENANT_ID", osEnv, fileEnv).set &&
+		resolveFamily("AUTH_TOKEN", osEnv, fileEnv).set
+}
+
+func captureSection(mode capturemode.Mode, envValue, envSource string) CaptureSection {
+	section := CaptureSection{Destination: "Grafana Cloud"}
+	if mode.Local {
+		section.Destination = "local"
+	}
+	switch mode.Source {
+	case capturemode.SourceFlag:
+		section.Reason = "command-line flag"
+	case capturemode.SourceEnv:
+		section.Reason = mode.EnvKey + "=" + envValue
+		if envSource != "" {
+			section.Reason += ", " + envSource
+		}
+	case capturemode.SourceUnsupported:
+		section.Reason = "the local receiver does not run on Windows"
+	case capturemode.SourceCredentials:
+		section.Reason = "credentials configured"
+	case capturemode.SourceDefault:
+		section.Reason = "default; no Cloud credentials configured"
+	}
+	return section
+}
+
 func invalidGuardKeys(enabled, timeout, failOpen resolved) []string {
 	isBool := func(raw string) bool { _, ok := envconfig.ParseBoolValue(raw); return ok }
 	isTimeout := func(raw string) bool { _, ok := envconfig.ParseIntValue(raw); return ok }

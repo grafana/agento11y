@@ -1,8 +1,8 @@
 # @grafana/agento11y-pi
 
-[Pi](https://github.com/earendil-works/pi) agent extension that sends LLM generations to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
+[Pi](https://github.com/earendil-works/pi) agent extension that records LLM generations. With Grafana Cloud credentials, they go to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/). Without them, they stay on your machine.
 
-By default only metadata is sent (token counts, cost, model, tool names, durations). Set `AGENTO11Y_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
+Cloud exports contain only metadata by default (token counts, cost, model, tool names, durations); set `AGENTO11Y_CONTENT_CAPTURE_MODE` to change that. Local capture always records full content. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the accepted values.
 
 ## 1. Install and launch
 
@@ -29,7 +29,7 @@ agento11y pi
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y pi` installs the `@grafana/agento11y-pi` extension on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches pi.
+`agento11y pi` installs the `@grafana/agento11y-pi` extension on first run and then launches pi. With Grafana Cloud credentials, the session goes to Cloud; without them, the launcher captures it locally and prints the viewer URL. Use `--local` or `--no-local` to pick one; see [Local mode](../agento11y/README.md#local-mode).
 
 <details>
 <summary>Manual extension registration</summary>
@@ -39,13 +39,13 @@ pi install npm:@grafana/agento11y-pi
 agento11y login
 ```
 
-The extension reads the same `~/.config/agento11y/config.env` file whether you start pi with `agento11y pi` or plain `pi`. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
+The extension reads the same `~/.config/agento11y/config.env` file whether you start pi with `agento11y pi` or plain `pi`. If you only have the old `~/.config/sigil/config.env`, that file is used instead. Plain `pi` does not capture locally; use the launcher for that.
 
 </details>
 
 ## 2. Credentials
 
-When `agento11y pi` or `agento11y login` prompts, it asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
+Credentials are optional on macOS and Linux: without them the session stays on this machine. Run `agento11y login` to enter them. The prompt asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack. An administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 To type the values instead, press Enter on the empty paste box. They come from three Grafana Cloud pages:
 
@@ -78,7 +78,7 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana
 
 When `AGENTO11Y_AUTH_TENANT_ID` and `AGENTO11Y_AUTH_TOKEN` are set, the extension uses them for Agent Observability and OTLP auth. If the OpenTelemetry card shows a different Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 
-To include conversation text (with automatic secret redaction), add this to your `config.env`:
+To send conversation text to Grafana Cloud (with automatic secret redaction), add this to your `config.env`:
 
 ```dotenv
 AGENTO11Y_CONTENT_CAPTURE_MODE=full
@@ -86,7 +86,7 @@ AGENTO11Y_CONTENT_CAPTURE_MODE=full
 
 ## 3. Verify
 
-Run one pi turn, then open **Agent Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
+Run one pi turn. If the launcher printed a local viewer URL, open it and check Sessions. Otherwise, open **Agent Observability → Conversations** in Grafana Cloud.
 
 If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/agento11y/config.env`, run another turn, and check the debug log at `~/.local/state/agento11y/logs/agento11y.log` (honors `XDG_STATE_HOME`).
 
@@ -123,7 +123,7 @@ The plugin exports each of those calls as its own generation so they show up in 
 - `operation_name` is `generateText` rather than the `streamText` a turn gets, because there is no token stream to time.
 - The parent generation is the nearest assistant turn above the entry in pi's session tree. For a compaction that is the turn it followed. For a branch summary it is the turn above the navigation target, which can sit earlier in the session than the branch that was summarized.
 - Metadata carries `cost_usd` whenever pi priced the call, on the same rule as a turn. Compactions add `pi.tokens_before`, `pi.compaction.reason`, and `pi.compaction.will_retry`. Branch summaries carry none of those three, because pi records no pre-summary context estimate and no trigger reason for them.
-- The summary text is exported as assistant output, so `AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only` drops it while keeping tokens, cost, and timing. The request side is not exported: these generations carry no input messages and no system prompt, so input tokens are reported without the text they came from.
+- The summary text is exported as assistant output, so a Cloud export with `AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only` drops it while keeping tokens, cost, and timing. The request side is not exported: these generations carry no input messages and no system prompt, so input tokens are reported without the text they came from.
 
 Two cases export nothing, because no model call happened: an extension supplied the compaction, or you navigated the tree without asking for a summary. Older pi versions record no usage on the entry; those still export a generation, with timing and metadata but no token counts.
 
@@ -178,7 +178,7 @@ Limits:
 | `AGENTO11Y_AGENT_VERSION` | — | Optional version string reported with the agent. |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. These reach OTel metrics as `agento11y_tag_*` labels, unlike the per-generation built-ins. The plugin builds one client per session, so the values freeze at session start. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
-| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | One of `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`. |
+| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. Applies to Cloud exports; local capture keeps full content. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
 | `AGENTO11Y_DEBUG` | `false` | Write lifecycle events to `~/.local/state/agento11y/logs/agento11y.log` (honors `XDG_STATE_HOME`). Never written to the terminal, to avoid corrupting pi's TUI. |
 | `AGENTO11Y_REDACT_INPUT_MESSAGES` | `true` | Redact known secret patterns in user input messages before export. |
 | `AGENTO11Y_EXPORT_TIMEOUT_MS` | `30000` | Timeout for each generation export request. Use a base-10 integer from `1` through `2147483647` milliseconds. |

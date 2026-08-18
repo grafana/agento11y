@@ -332,8 +332,8 @@ func TestLaunch_LocalInjectsEnvAndForwardsArgs(t *testing.T) {
 		return nil
 	})
 	// Clear cloud creds inherited from the host shell so the placeholder
-	// branch fires. User-set values are preserved by design — that's
-	// covered in TestLaunch_NormalModeDoesNotInjectLocalEnv.
+	// branch fires. User-set values are preserved by design. The --no-local
+	// case below covers that behavior.
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
 	t.Setenv("SIGIL_AUTH_TOKEN", "")
 	// Local forces full content on this machine regardless of the configured
@@ -402,13 +402,17 @@ func TestLaunch_LocalDefaultsFullContentWhenUnset(t *testing.T) {
 	}
 }
 
-func TestLaunch_NormalModeDoesNotInjectLocalEnv(t *testing.T) {
+// A --no-local launch reaches the adapter with a nil LaunchEnv and LOCAL=false
+// already set by the entrypoint. The adapter must preserve the Cloud settings.
+func TestLaunch_NoLocalDoesNotInjectLocalEnv(t *testing.T) {
 	dir := t.TempDir()
 	writeSettings(t, dir, `{"packages":["npm:@grafana/agento11y-pi"]}`)
 	t.Setenv("PI_CODING_AGENT_DIR", dir)
 	t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.com")
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "real-tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "real-token")
+	t.Setenv("AGENTO11Y_LOCAL", "false")
+	t.Setenv("SIGIL_LOCAL", "false")
 
 	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/pi", nil })
 
@@ -426,7 +430,10 @@ func TestLaunch_NormalModeDoesNotInjectLocalEnv(t *testing.T) {
 		t.Errorf("SIGIL_ENDPOINT changed in normal mode: %q", got["SIGIL_ENDPOINT"])
 	}
 	if got["SIGIL_AUTH_TENANT_ID"] != "real-tenant" {
-		t.Errorf("auth changed in normal mode: %q", got["SIGIL_AUTH_TENANT_ID"])
+		t.Errorf("auth changed in Cloud mode: %q", got["SIGIL_AUTH_TENANT_ID"])
+	}
+	if got["AGENTO11Y_LOCAL"] != "false" || got["SIGIL_LOCAL"] != "false" {
+		t.Errorf("LOCAL aliases changed: AGENTO11Y_LOCAL=%q SIGIL_LOCAL=%q", got["AGENTO11Y_LOCAL"], got["SIGIL_LOCAL"])
 	}
 }
 

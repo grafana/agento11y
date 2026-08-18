@@ -176,9 +176,7 @@ func renderHuman(w io.Writer, r *Report, color bool) {
 		b.kv("auto tags", withTrailer(formatAutoTags(r.Config.AutoTagNames, r.Config.AutoTags),
 			describeSource(p, r.Config.AutoTagsKey, r.Config.AutoTagsSource)))
 	}
-	if r.Config.Local.Set {
-		b.kv("local mode", describeLocal(p, r.Config.Local, r.Config.LocalInvalid))
-	}
+	b.kv("capture", describeCapture(p, r.Config.Capture))
 	if r.Config.LocalForward.Set {
 		b.kv("local forwarding", describeEnv(p, r.Config.LocalForward))
 	}
@@ -243,15 +241,11 @@ func brokenSections(r *Report) []string {
 	return broken
 }
 
-// needsSetup reports whether this machine has setup left to do: a section in
-// error, or a conversations pipeline that was never configured at all.
-//
-// The second case is the reason this is not just brokenSections. A machine
-// with no endpoint, no tenant and no token reports every pipeline as a
-// warning, never an error, so the summary above says "no problems detected".
-// That reader has wired nothing and needs the paste block most.
+// needsSetup reports whether this machine has setup left to do. Missing Cloud
+// credentials need setup only when the resolved destination is not local.
 func needsSetup(r *Report) bool {
-	return len(brokenSections(r)) > 0 || !r.Conversations.configured()
+	return len(brokenSections(r)) > 0 ||
+		(!r.Conversations.configured() && r.Config.Capture.Destination != "local")
 }
 
 // writeSetupHint points the reader at the bundled setup skill. A machine with
@@ -314,19 +308,8 @@ func describeEnv(p palette, v envValue) string {
 	return withTrailer(v.Value, describeSource(p, v.Key, v.Source))
 }
 
-// describeLocal renders the LOCAL row. The launcher ignores a value outside the
-// boolean whitelist, so an invalid value renders the state in force and keeps
-// the rejected value in the trailer. Printing the raw value as the state would
-// make the row read as "local mode: enabled" while sessions export to Cloud.
-func describeLocal(p palette, v envValue, invalid bool) string {
-	if !invalid {
-		return describeEnv(p, v)
-	}
-	rejected := fmt.Sprintf("%q is not a boolean", v.Value)
-	if v.Key != "" {
-		rejected = fmt.Sprintf("%s=%q is not a boolean", v.Key, v.Value)
-	}
-	return withTrailer("off", describeSource(p, rejected, v.Source))
+func describeCapture(p palette, capture CaptureSection) string {
+	return withTrailer(capture.Destination, describeSource(p, capture.Reason))
 }
 
 func describeToken(p palette, t tokenValue) string {

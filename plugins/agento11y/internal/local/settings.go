@@ -69,8 +69,17 @@ type Settings struct {
 	Debug              bool   `json:"debug"`
 	AutoUpdate         bool   `json:"autoUpdate"`
 	UserID             string `json:"userId"`
-	// LocalForward mirrors AGENTO11Y_LOCAL_FORWARD: when on, a `--local`
-	// daemon also forwards the telemetry it captures to Grafana Cloud. The
+	// Local is the optional AGENTO11Y_LOCAL override. The connect flow sets it
+	// true, so saving Cloud credentials for daemon forwarding does not send the
+	// next bare launch straight to Cloud. LocalCleared deletes the key, which is
+	// what disconnect does: the pin outranks the credentials rule, so leaving it
+	// behind would hold every later launch on local, including one a fresh
+	// `agento11y login` was meant to send to Cloud. An unset field with the flag
+	// off leaves the stored value alone, like the token.
+	Local        *bool `json:"local,omitempty"`
+	LocalCleared bool  `json:"localCleared"`
+	// LocalForward mirrors AGENTO11Y_LOCAL_FORWARD: when on, the local daemon
+	// also forwards the telemetry it captures to Grafana Cloud. The
 	// local viewer always keeps full content; Capture reduces the forwarded
 	// copy (full vs metadata_only) and, being the shared
 	// CONTENT_CAPTURE_MODE key, also applies to non-local Cloud sessions.
@@ -106,6 +115,7 @@ func ParseSettings(env map[string]string) Settings {
 		// updatecheck.Disabled (only explicit falsey values disable updates).
 		AutoUpdate:   envconfig.ParseBoolDefault(fam("AUTO_UPDATE"), true),
 		UserID:       fam("USER_ID"),
+		Local:        parseOptionalBool(fam("LOCAL")),
 		LocalForward: envconfig.ParseBoolDefault(fam("LOCAL_FORWARD"), false),
 	}
 }
@@ -124,9 +134,9 @@ func (s Settings) Updates() map[string]string {
 	}
 
 	// Capture mode is written only when explicitly set. Leaving it unset keeps
-	// the runtime defaults intact (metadata_only for Cloud, full for --local via
-	// env.go), so saving unrelated settings never silently forces a capture mode
-	// onto config.env.
+	// the runtime defaults intact (metadata_only for Cloud, full for local
+	// capture via env.go), so saving unrelated settings never silently forces a
+	// capture mode onto config.env.
 	if c := parseCaptureMode(s.Capture); c != "" {
 		u["SIGIL_CONTENT_CAPTURE_MODE"] = c
 	}
@@ -180,6 +190,12 @@ func (s Settings) Updates() map[string]string {
 		u["SIGIL_AUTO_UPDATE"] = "false"
 	}
 
+	if s.LocalCleared {
+		u["SIGIL_LOCAL"] = ""
+	} else if s.Local != nil {
+		u["SIGIL_LOCAL"] = strconv.FormatBool(*s.Local)
+	}
+
 	// SIGIL_LOCAL_FORWARD is written explicitly in both directions rather than
 	// deleted when off, the same trick SIGIL_AUTO_UPDATE uses above. The local
 	// daemon materializes its own environment from config.env at boot and falls
@@ -196,6 +212,14 @@ func (s Settings) Updates() map[string]string {
 	// Managed values are written and deleted under both branded spellings so
 	// old binaries that only read SIGIL_* keep working.
 	return envconfig.ExpandAliases(u)
+}
+
+func parseOptionalBool(raw string) *bool {
+	value, ok := envconfig.ParseBoolValue(raw)
+	if !ok {
+		return nil
+	}
+	return &value
 }
 
 // otlpHeadersUpdate decides what a write does to OTEL_EXPORTER_OTLP_HEADERS:
@@ -255,7 +279,7 @@ func (s Settings) previewUpdates() map[string]string {
 //
 // Returning "" for an unset mode is deliberate: Updates omits the key in that
 // case so the runtime defaults stand (metadata_only for Cloud,
-// full for --local via env.go). Forcing a value here would let an unrelated
+// full for local capture via env.go). Forcing a value here would let an unrelated
 // save silently enable full content capture for Cloud sessions.
 func parseCaptureMode(raw string) string {
 	raw = strings.TrimSpace(raw)

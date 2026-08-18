@@ -391,13 +391,17 @@ func TestLaunch_LocalInjectsEnvAndForwardsArgs(t *testing.T) {
 	}
 }
 
-func TestLaunch_NormalModeDoesNotInjectLocalEnv(t *testing.T) {
+// A --no-local launch reaches the adapter with a nil LaunchEnv and LOCAL=false
+// already set by the entrypoint. The adapter must preserve the Cloud settings.
+func TestLaunch_NoLocalDoesNotInjectLocalEnv(t *testing.T) {
 	dir := t.TempDir()
 	writeInstalled(t, dir, `{"version":2,"plugins":{"sigil-cc@grafana-sigil":[{"scope":"user"}]}}`)
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
 	t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.com")
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "real-tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "real-token")
+	t.Setenv("AGENTO11Y_LOCAL", "false")
+	t.Setenv("SIGIL_LOCAL", "false")
 
 	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/claude", nil })
 
@@ -416,6 +420,9 @@ func TestLaunch_NormalModeDoesNotInjectLocalEnv(t *testing.T) {
 	}
 	if got["SIGIL_AUTH_TENANT_ID"] != "real-tenant" {
 		t.Errorf("SIGIL_AUTH_TENANT_ID changed: %q", got["SIGIL_AUTH_TENANT_ID"])
+	}
+	if got["AGENTO11Y_LOCAL"] != "false" || got["SIGIL_LOCAL"] != "false" {
+		t.Errorf("LOCAL aliases changed: AGENTO11Y_LOCAL=%q SIGIL_LOCAL=%q", got["AGENTO11Y_LOCAL"], got["SIGIL_LOCAL"])
 	}
 }
 

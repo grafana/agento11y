@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/capturemode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 )
@@ -166,6 +167,12 @@ func TestHistoryArgumentValidation(t *testing.T) {
 			wantStderr: "cannot be negative",
 		},
 		{
+			name:       "help lists the Cloud opt-out",
+			args:       []string{"history", "import", "claude-code", "--help"},
+			wantExit:   2,
+			wantStderr: "no-local",
+		},
+		{
 			name:       "unknown flag",
 			args:       []string{"history", "import", "claude-code", "--nope"},
 			wantExit:   2,
@@ -306,8 +313,10 @@ func TestHistoryNonInteractiveForcesADryRun(t *testing.T) {
 	}
 }
 
-// TestHistoryNonInteractiveWithAllAndYesImports is the other half of the rule.
-func TestHistoryNonInteractiveWithAllAndYesImports(t *testing.T) {
+// TestHistoryImportWithoutCredentialsDefaultsLocal covers both halves of the
+// non-interactive rule and the credential-aware destination: --all --yes runs
+// the import, and no credentials or destination flag selects the local daemon.
+func TestHistoryImportWithoutCredentialsDefaultsLocal(t *testing.T) {
 	withHistoryNow(t)
 	isolateDotenvHome(t)
 	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
@@ -315,15 +324,43 @@ func TestHistoryNonInteractiveWithAllAndYesImports(t *testing.T) {
 	exported := 0
 	withStubHistoryExporter(t, &exported)
 
-	stdout, stderr, code := runHistory(t, "history", "import", "claude-code", "--local", "--all", "--yes")
+	stdout, stderr, code := runHistory(t, "history", "import", "claude-code", "--all", "--yes")
 	if code != nil {
 		t.Fatalf("exit = %d, want no exit (stderr=%q)", *code, stderr)
 	}
 	if exported != 1 {
 		t.Fatalf("exported %d turns, want 1", exported)
 	}
-	if !strings.Contains(stdout, "Imported 1 turns from 1 sessions") {
-		t.Errorf("stdout = %q, want the import summary", stdout)
+	if !strings.Contains(stdout, "destination: the local store on this machine") {
+		t.Errorf("stdout = %q, want the plan to name the local destination", stdout)
+	}
+	if !strings.Contains(stdout, "Imported 1 turns from 1 sessions into the local store on this machine") {
+		t.Errorf("stdout = %q, want the import summary to name the local destination", stdout)
+	}
+	if !strings.Contains(stdout, "import ledger is shared") {
+		t.Errorf("stdout = %q, want the cross-destination --force warning", stdout)
+	}
+}
+
+func TestHistoryNoLocalSelectsCloudWithoutCredentials(t *testing.T) {
+	withHistoryNow(t)
+	isolateDotenvHome(t)
+	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+
+	prev := historyEnsureLocal
+	t.Cleanup(func() { historyEnsureLocal = prev })
+	historyEnsureLocal = func(context.Context) (string, error) {
+		t.Fatal("--no-local must not start the local receiver")
+		return "", nil
+	}
+
+	_, stderr, code := runHistory(t,
+		"history", "import", "claude-code", "--local", "--no-local", "--all", "--yes")
+	if code == nil || *code != 1 {
+		t.Fatalf("exit = %v, want 1 (stderr=%q)", code, stderr)
+	}
+	if !strings.Contains(stderr, "Grafana Cloud import has no endpoint configured") {
+		t.Fatalf("stderr = %q, want the resolved Cloud destination", stderr)
 	}
 }
 
@@ -350,10 +387,10 @@ func TestHistoryPickerSelectsSessions(t *testing.T) {
 		// historyImport is called directly: run() would see a non-terminal
 		// stdin and force a dry run before the picker.
 		if err := historyImport(historyImportOptions{
-			Agent: history.AgentClaudeCode,
-			Since: historyFixedNow.Add(-history.DefaultSinceWindow),
-			Yes:   true,
-			Local: true,
+			Agent:       history.AgentClaudeCode,
+			Since:       historyFixedNow.Add(-history.DefaultSinceWindow),
+			Yes:         true,
+			CaptureFlag: capturemode.FlagLocal,
 		}, true, &out, &errOut); err != nil {
 			t.Fatalf("historyImport: %v", err)
 		}

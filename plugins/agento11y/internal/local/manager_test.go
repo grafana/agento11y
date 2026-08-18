@@ -303,6 +303,29 @@ func withProcessCommandLine(t *testing.T, fn func(int) (string, error)) {
 	processCommandLineFn = fn
 }
 
+// looksLikeTestBinary is what stops startDaemon from re-executing a test binary
+// as the daemon. The re-executed binary ignores the "local serve" arguments and
+// runs its whole suite again, and that suite starts another daemon.
+func TestLooksLikeTestBinary(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{path: "/var/folders/x/go-build123/b001/entry.test", want: true},
+		{path: "/var/folders/x/go-build123/b001/local.test.exe", want: true},
+		{path: "/usr/local/bin/agento11y", want: false},
+		{path: "/usr/local/bin/agento11y.exe", want: false},
+		// `go run` compiles to "main" in the build cache.
+		{path: "/Users/x/Library/Caches/go-build/ab/cd-d/main", want: false},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			if got := looksLikeTestBinary(tc.path); got != tc.want {
+				t.Errorf("looksLikeTestBinary(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestEnsureRunning_ConcurrentCallersSpawnOnce(t *testing.T) {
 	dir := t.TempDir()
 

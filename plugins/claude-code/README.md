@@ -1,6 +1,6 @@
 # Agent Observability for Claude Code
 
-Sends every Claude Code turn to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/): model, tokens, tools, timing, and optionally the conversation content.
+Records every Claude Code turn: model, tokens, tools, timing, and optionally the conversation content. With Grafana Cloud credentials, the turn goes to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/). Without them, it stays on your machine.
 
 ## 1. Install and launch
 
@@ -27,7 +27,7 @@ agento11y claude
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y claude` registers the `agento11y-claude-code` plugin on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches Claude Code.
+`agento11y claude` registers the `agento11y-claude-code` plugin on first run and then launches Claude Code. With Grafana Cloud credentials, the session goes to Cloud; without them, the launcher captures it locally and prints the viewer URL. Use `--local` or `--no-local` to pick one; see [Local mode](../agento11y/README.md#local-mode).
 
 <details>
 <summary>Manual plugin registration</summary>
@@ -41,7 +41,7 @@ The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOP
 
 ## 2. Credentials
 
-When `agento11y claude` prompts, it asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
+Credentials are optional on macOS and Linux: without them the session stays on this machine. Run `agento11y login` to enter them. The prompt asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack. An administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 To type the values instead, press Enter on the empty paste box. They come from three Grafana Cloud pages:
 
@@ -72,7 +72,7 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana
 
 </details>
 
-To also send the conversation text (with automatic secret redaction), add this to your `config.env`:
+Local capture always records full content. To send conversation text to Grafana Cloud (with automatic secret redaction), add this to your `config.env`:
 
 ```dotenv
 AGENTO11Y_CONTENT_CAPTURE_MODE=full
@@ -80,7 +80,7 @@ AGENTO11Y_CONTENT_CAPTURE_MODE=full
 
 ## 3. Verify
 
-Run any turn in Claude Code, then open **Agent Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
+Run any turn in Claude Code. If the launcher printed a local viewer URL, open it and check Sessions. Otherwise, open **Agent Observability → Conversations** in Grafana Cloud.
 
 If nothing shows up:
 
@@ -89,7 +89,7 @@ AGENTO11Y_DEBUG=true agento11y claude  # one turn
 tail -f ~/.local/state/agento11y/logs/agento11y.log
 ```
 
-Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a missing token, or a token without the `sigil:write` scope.
+Check that `agento11y --version` works and that the binary is on `PATH`. For a Cloud session, also check the token exists and has the `sigil:write` scope.
 
 ## All options
 
@@ -100,7 +100,7 @@ Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a mi
 | `AGENTO11Y_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
 | `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the Agent Observability latency and tool-call panels stay empty. |
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTel password. |
-| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
+| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. Applies to Cloud exports; local capture keeps full content. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
 | `AGENTO11Y_REDACT_INPUT_MESSAGES` | `true` | Redact known secret formats out of user prompt text. Set to `false` to export prompts without redaction; assistant and tool content stay redacted. |
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. Unlike the built-ins, these reach OTel metrics as `agento11y_tag_*` labels. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |

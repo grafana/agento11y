@@ -1,25 +1,24 @@
 agento11y doctor v0.22.0
 
-! Conversations (generation export)
+✓ Conversations (generation export)
   endpoint:         not set
   tenant id:        not set
   auth token:       not set
-  ! not configured — run `agento11y login` or set AGENTO11Y_ENDPOINT, AGENTO11Y_AUTH_TENANT_ID and AGENTO11Y_AUTH_TOKEN
 
-! Analytics (OTLP metrics & traces)
+✓ Analytics (OTLP metrics & traces)
   endpoint:         not set
-  ! no OTLP endpoint set; analytics export is disabled
 
 ✓ Config
   file:             /home/u/.config/agento11y/config.env (missing)
   content capture:  metadata_only (default)
   prompt redaction: enabled
   guards:           disabled (default)
+  capture:          local (default; no Cloud credentials configured)
+  ! local capture covers `agento11y <agent>` launches. A session started directly by the host agent exports to the configured Cloud endpoint, or is dropped when Cloud credentials are incomplete.
 
 Coding agents
   claude:           plugin not installed
 
 ✓ no problems detected
 
-Need help? Paste this to your coding agent:
-Run `agento11y skills show setup-coding-agent` and follow it to set up Grafana Agent observability for my coding agent.
+Setting up another coding agent? Run agento11y skills show setup-coding-agent.

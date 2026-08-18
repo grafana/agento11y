@@ -19,6 +19,12 @@ describe("resolveConfig", () => {
     expect(resolveConfig()).toBeNull();
   });
 
+  it("returns null when the launcher disabled capture", () => {
+    process.env.AGENTO11Y_LAUNCH_CAPTURE_DISABLED = "true";
+    process.env.AGENTO11Y_ENDPOINT = "https://partial.example.test";
+    expect(resolveConfig()).toBeNull();
+  });
+
   it("returns null when endpoint is whitespace", () => {
     process.env.SIGIL_ENDPOINT = "   ";
     expect(resolveConfig()).toBeNull();

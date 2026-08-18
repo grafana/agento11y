@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/charmbracelet/huh"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/capturemode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/cli"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"golang.org/x/term"
@@ -32,7 +34,7 @@ type historyImportOptions struct {
 	Yes         bool
 	DryRun      bool
 	Force       bool
-	Local       bool
+	CaptureFlag capturemode.Flag
 }
 
 // repeatedFlag collects a flag given more than once.
@@ -128,7 +130,8 @@ func runHistoryImport(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		yes         = fs.Bool("yes", false, "skip the confirmation prompt")
 		dryRun      = fs.Bool("dry-run", false, "show what would be imported and exit")
 		force       = fs.Bool("force", false, "re-export turns already recorded in the import ledger")
-		useLocal    = fs.Bool("local", false, "import into the local daemon instead of Grafana Cloud")
+		useLocal    = fs.Bool("local", false, "import into the local store on this machine")
+		noLocal     = fs.Bool("no-local", false, "import into Grafana Cloud")
 	)
 	fs.Var(&sources, "source", "restrict to this discovered path (repeatable); a path outside the agent's roots matches nothing")
 	fs.Usage = func() {
@@ -186,7 +189,12 @@ func runHistoryImport(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		Yes:         *yes,
 		DryRun:      *dryRun,
 		Force:       *force,
-		Local:       *useLocal,
+	}
+	switch {
+	case *noLocal:
+		opts.CaptureFlag = capturemode.FlagNoLocal
+	case *useLocal:
+		opts.CaptureFlag = capturemode.FlagLocal
 	}
 
 	var err error
@@ -275,6 +283,7 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 	// set only in config.env still turns on file logging, as it does for the
 	// other commands.
 	dotenv.ApplyEnv(nil)
+	mode := resolveHistoryCapture(opts.CaptureFlag)
 	logger := cli.InitLogger("history")
 
 	filter := history.NewFilter()
@@ -289,7 +298,7 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 	if err != nil {
 		return err
 	}
-	printHistoryPlan(stdout, opts, plan)
+	printHistoryPlan(stdout, opts, plan, mode.Local)
 
 	if len(opts.SourcePaths) > 0 && len(plan.Sessions) == 0 {
 		// --source filters discovery; it never adds a root. A path outside the
@@ -317,7 +326,7 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 		return nil
 	}
 	if interactive && !opts.Yes {
-		confirmed, err := historyConfirm(opts, sessions)
+		confirmed, err := historyConfirm(mode.Local, sessions)
 		if err != nil {
 			return err
 		}
@@ -327,7 +336,7 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 		}
 	}
 
-	target, err := historyTarget(ctx, opts)
+	target, err := historyTarget(ctx, mode.Local)
 	if err != nil {
 		return err
 	}
@@ -371,8 +380,9 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(stdout, "Imported %d turns from %d sessions (%d already imported, %d failed).\n",
-		result.Imported, result.Sessions, result.Skipped, result.Failed)
+	_, _ = fmt.Fprintf(stdout, "Imported %d turns from %d sessions into %s (%d already imported, %d failed).\n",
+		result.Imported, result.Sessions, historyDestination(mode.Local), result.Skipped, result.Failed)
+	_, _ = fmt.Fprintln(stdout, "The import ledger is shared, so a later import to another destination skips these turns. Use --force to send them again.")
 	for _, warning := range result.Warnings {
 		_, _ = fmt.Fprintf(stderr, "agento11y: warning: %s\n", warning)
 	}
@@ -392,12 +402,23 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 // historyProgressInterval is how often the progress line is redrawn.
 const historyProgressInterval = 200 * time.Millisecond
 
-// historyTarget builds the export destination. Without --local the import goes
-// to the configured Grafana Cloud endpoint; with it, to the local daemon, which
-// [history.NewTargetExporter] recognises as loopback and gives full content and
-// the forward marker, so the backfill stays on this machine.
-func historyTarget(ctx context.Context, opts historyImportOptions) (history.Target, error) {
-	if !opts.Local {
+func resolveHistoryCapture(flag capturemode.Flag) capturemode.Mode {
+	localValue, localKey, _ := envconfig.LookupEnv("LOCAL")
+	return capturemode.Resolve(capturemode.Request{
+		Flag:            flag,
+		EnvValue:        localValue,
+		EnvKey:          localKey,
+		HasCloudCreds:   dotenv.HasCredentials(),
+		DaemonSupported: local.DaemonSupported,
+	})
+}
+
+// historyTarget builds the resolved export destination. A local import uses
+// the daemon endpoint, which [history.NewTargetExporter] recognises as loopback
+// and gives full content and the forward marker. A Cloud import returns an
+// empty target so the exporter reads the configured endpoint and credentials.
+func historyTarget(ctx context.Context, localCapture bool) (history.Target, error) {
+	if !localCapture {
 		return history.Target{}, nil
 	}
 	startCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -412,7 +433,7 @@ func historyTarget(ctx context.Context, opts historyImportOptions) (history.Targ
 	}, nil
 }
 
-func printHistoryPlan(stdout io.Writer, opts historyImportOptions, plan history.ImportPlan) {
+func printHistoryPlan(stdout io.Writer, opts historyImportOptions, plan history.ImportPlan, localCapture bool) {
 	spec, _ := history.Spec(plan.Agent)
 	name := spec.DisplayName
 	if name == "" {
@@ -423,6 +444,7 @@ func printHistoryPlan(stdout io.Writer, opts historyImportOptions, plan history.
 		_, _ = fmt.Fprintf(stdout, " until %s", opts.Until.Format(time.RFC3339))
 	}
 	_, _ = fmt.Fprintln(stdout)
+	_, _ = fmt.Fprintf(stdout, "  destination: %s\n", historyDestination(localCapture))
 
 	turns, approx := historyTurnTotals(plan.Sessions)
 	_, _ = fmt.Fprintf(stdout, "  planned: %d sessions, %s turns\n", len(plan.Sessions), historyTurnCount(turns, approx))
@@ -514,12 +536,16 @@ func historySessionLabel(s history.SessionPreview) string {
 	return fmt.Sprintf("%s  %s  %s", when, workspace, turns)
 }
 
-func historyConfirm(opts historyImportOptions, sessions []history.SessionPreview) (bool, error) {
-	turns, approx := historyTurnTotals(sessions)
-	destination := "Grafana Cloud"
-	if opts.Local {
-		destination = "the local store on this machine"
+func historyDestination(localCapture bool) string {
+	if localCapture {
+		return "the local store on this machine"
 	}
+	return "Grafana Cloud"
+}
+
+func historyConfirm(localCapture bool, sessions []history.SessionPreview) (bool, error) {
+	turns, approx := historyTurnTotals(sessions)
+	destination := historyDestination(localCapture)
 	confirmed := false
 	form := huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().

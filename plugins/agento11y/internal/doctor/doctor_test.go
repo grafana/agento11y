@@ -1709,6 +1709,8 @@ func TestCollectConfig_Local(t *testing.T) {
 		t.Fatal("LOCAL must be in trackedSuffixes or SnapshotEnv drops it and this report reads it as unset")
 	}
 	const scopeMsg = "local mode sends `agento11y <agent>` launches and agento11y hooks to the local viewer"
+	const launcherOnlyMsg = "local capture covers `agento11y <agent>` launches."
+	const invalidMsg = "the AGENTO11Y_LOCAL value is not a boolean, so it is ignored; the capture row states the destination in force"
 	tests := []struct {
 		name            string
 		osEnv           map[string]string
@@ -1723,18 +1725,30 @@ func TestCollectConfig_Local(t *testing.T) {
 		wantNotRendered []string
 	}{
 		{
+			// Capture falls back to local here, and that covers launches only, so
+			// the narrower caveat replaces the scope message.
 			name:            "unset",
 			wantHealth:      HealthOK,
+			wantMsg:         launcherOnlyMsg,
 			wantNotRendered: []string{"local mode"},
 		},
 		{
-			name:         "from config.env",
-			fileEnv:      map[string]string{"AGENTO11Y_LOCAL": "true"},
-			wantValue:    "true",
-			wantSource:   sourceConfig,
-			wantHealth:   HealthOK,
-			wantScopeMsg: true,
-			wantRendered: []string{"local mode", "true (AGENTO11Y_LOCAL, config.env)"},
+			name:            "cloud credentials send launches to cloud",
+			osEnv:           map[string]string{"AGENTO11Y_ENDPOINT": "https://example.net", "AGENTO11Y_AUTH_TENANT_ID": "12345", "AGENTO11Y_AUTH_TOKEN": "glc_secret"},
+			wantHealth:      HealthOK,
+			wantRendered:    []string{"capture:          Grafana Cloud (credentials configured)"},
+			wantNotRendered: []string{launcherOnlyMsg},
+		},
+		{
+			// The pin covers hooks too, so the launcher-only caveat must not fire.
+			name:            "from config.env",
+			fileEnv:         map[string]string{"AGENTO11Y_LOCAL": "true"},
+			wantValue:       "true",
+			wantSource:      sourceConfig,
+			wantHealth:      HealthOK,
+			wantScopeMsg:    true,
+			wantRendered:    []string{"local mode", "local (AGENTO11Y_LOCAL=true, config.env)"},
+			wantNotRendered: []string{launcherOnlyMsg},
 		},
 		{
 			name:         "from env",
@@ -1743,7 +1757,7 @@ func TestCollectConfig_Local(t *testing.T) {
 			wantSource:   sourceEnv,
 			wantHealth:   HealthOK,
 			wantScopeMsg: true,
-			wantRendered: []string{"local mode", "true (AGENTO11Y_LOCAL, env)"},
+			wantRendered: []string{"local mode", "local (AGENTO11Y_LOCAL=true, env)"},
 		},
 		{
 			name:         "legacy spelling",
@@ -1753,7 +1767,7 @@ func TestCollectConfig_Local(t *testing.T) {
 			wantHealth:   HealthOK,
 			wantScopeMsg: true,
 			wantMsg:      "the preferred name is AGENTO11Y_LOCAL",
-			wantRendered: []string{"on (SIGIL_LOCAL, env)"},
+			wantRendered: []string{"local (SIGIL_LOCAL=on, env)"},
 		},
 		{
 			// The one-off Cloud session: the shell value is what the launcher
@@ -1764,7 +1778,7 @@ func TestCollectConfig_Local(t *testing.T) {
 			wantValue:       "false",
 			wantSource:      sourceEnv,
 			wantHealth:      HealthOK,
-			wantRendered:    []string{"false (AGENTO11Y_LOCAL, env)"},
+			wantRendered:    []string{"Grafana Cloud (AGENTO11Y_LOCAL=false, env)"},
 			wantNotRendered: []string{"invalid value"},
 		},
 		{
@@ -1777,9 +1791,25 @@ func TestCollectConfig_Local(t *testing.T) {
 			wantSource:      sourceEnv,
 			wantInvalid:     true,
 			wantHealth:      HealthWarn,
-			wantMsg:         "the AGENTO11Y_LOCAL value is not a boolean; local mode stays off",
-			wantRendered:    []string{`local mode:       off (AGENTO11Y_LOCAL="enabled" is not a boolean, env)`},
+			wantMsg:         invalidMsg,
+			wantRendered:    []string{`capture:          local (default; no Cloud credentials configured)`},
 			wantNotRendered: []string{"enabled (AGENTO11Y_LOCAL, env)", "invalid value, local mode is off"},
+		},
+		{
+			// Skipping the rejected value leaves the credentials rule to pick the
+			// destination, so the message must not claim the default applied.
+			name: "value outside the whitelist with cloud credentials",
+			osEnv: map[string]string{
+				"AGENTO11Y_LOCAL": "enabled", "AGENTO11Y_ENDPOINT": "https://example.net",
+				"AGENTO11Y_AUTH_TENANT_ID": "12345", "AGENTO11Y_AUTH_TOKEN": "glc_secret",
+			},
+			wantValue:       "enabled",
+			wantSource:      sourceEnv,
+			wantInvalid:     true,
+			wantHealth:      HealthWarn,
+			wantMsg:         invalidMsg,
+			wantRendered:    []string{"capture:          Grafana Cloud (credentials configured)"},
+			wantNotRendered: []string{"default applies", launcherOnlyMsg},
 		},
 	}
 	for _, tc := range tests {

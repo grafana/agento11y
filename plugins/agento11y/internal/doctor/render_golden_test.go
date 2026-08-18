@@ -101,6 +101,7 @@ func goldenHealthyReport() *Report {
 		Analytics:     collectAnalytics(osEnv, nil, conversations.configured()),
 		Config: ConfigSection{
 			Path: "/home/u/.config/agento11y/config.env", Exists: true,
+			Capture:            CaptureSection{Destination: "Grafana Cloud", Reason: "credentials configured"},
 			ContentCaptureMode: "full",
 			ContentModeKey:     "AGENTO11Y_CONTENT_CAPTURE_MODE", ContentModeSource: sourceConfig,
 			RedactInput:   true,
@@ -136,10 +137,11 @@ func goldenHealthyReport() *Report {
 func goldenMinimalReport() *Report {
 	return &Report{
 		Binary:        BinarySection{Version: "v0.22.0"},
-		Conversations: collectConversations(nil, nil),
-		Analytics:     collectAnalytics(nil, nil, false),
+		Conversations: ConversationsSection{Health: HealthOK},
+		Analytics:     AnalyticsSection{Health: HealthOK},
 		Config: ConfigSection{
-			Path: "/home/u/.config/agento11y/config.env",
+			Path:    "/home/u/.config/agento11y/config.env",
+			Capture: CaptureSection{Destination: "local", Reason: "default; no Cloud credentials configured"},
 			// The daemon's answer with LOCAL_FORWARD unset. The line itself is
 			// suppressed, which is what this fixture pins.
 			LocalHookForward: HookForwardSection{Reason: local.HookForwardReason(false, false, "", "", "")},
@@ -149,6 +151,9 @@ func goldenMinimalReport() *Report {
 			RedactInput:        true,
 			GuardsTimeoutMs:    1500, GuardsFailOpen: true,
 			Health: HealthOK,
+			Messages: []string{
+				"local capture covers `agento11y <agent>` launches. A session started directly by the host agent exports to the configured Cloud endpoint, or is dropped when Cloud credentials are incomplete.",
+			},
 		},
 		Agents: []AgentStatus{
 			{Name: "claude", OnPath: false, Install: InstallStateNotInstalled, Health: HealthWarn},
@@ -157,8 +162,8 @@ func goldenMinimalReport() *Report {
 }
 
 // goldenBrokenReport is the support case: a malformed endpoint, no OTLP
-// endpoint, a config that fell back, a local mode value the launcher ignores,
-// and agents whose state is neither plain "installed" nor plain "missing".
+// endpoint, a config that fell back, a rejected LOCAL value, and agents whose
+// state is neither plain "installed" nor plain "missing".
 func goldenBrokenReport() *Report {
 	conversations := collectConversations(
 		map[string]string{"AGENTO11Y_ENDPOINT": "not a url ://"},
@@ -170,6 +175,7 @@ func goldenBrokenReport() *Report {
 		Analytics:     collectAnalytics(nil, nil, conversations.configured()),
 		Config: ConfigSection{
 			Path: "/home/u/.config/agento11y/config.env", Exists: true,
+			Capture: CaptureSection{Destination: "Grafana Cloud", Reason: "credentials configured"},
 			// The mode came from a value envconfig rejected, so the row credits the
 			// built-in default and the message names the variable to fix.
 			ContentCaptureMode: "metadata_only", ContentModeFellBack: true,
@@ -211,7 +217,7 @@ func goldenBrokenReport() *Report {
 				"AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES has unsupported names team; supported: user, repo, branch, all",
 				"these auto tags resolved no value in this directory and are left off: branch",
 				"these auto tags are also set in AGENTO11Y_TAGS, which wins: repo",
-				"the AGENTO11Y_LOCAL value is not a boolean; local mode stays off",
+				"the AGENTO11Y_LOCAL value is not a boolean, so it is ignored; the capture row states the destination in force",
 			},
 		},
 		Agents: []AgentStatus{

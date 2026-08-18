@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/capturemode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
@@ -41,11 +42,24 @@ import (
 // isolateDotenvHome pins them per test on top of that. A developer shell that
 // exports AGENTO11Y_LOCAL=true would otherwise route every launcher test into
 // local mode, and the daemon those tests would start is this test binary.
+//
+// A local destination is the default, so a launcher test reaches the daemon
+// with nothing set in the environment. The daemon seam therefore panics. A
+// test that needs a local destination installs inProcessDaemon, and one that
+// reaches the real launcher fails instead of re-running this binary. A stub
+// that returned an error would let such a test pass: the launcher treats a
+// daemon that cannot start as a reason to continue without capture.
 func TestMain(m *testing.M) {
 	loginRun = func(context.Context, login.RunOpts) error { return login.ErrNotInteractive }
+	local.SetStartDaemonForTesting(func(context.Context, string, *log.Logger) (*local.Status, error) {
+		panic("test reached the real local daemon launcher, which re-runs this test binary; install a stub with inProcessDaemon(t)")
+	})
 	for _, suffix := range envconfig.AliasSuffixes {
 		_ = os.Unsetenv(envconfig.PreferredKey(suffix))
 		_ = os.Unsetenv(envconfig.LegacyKey(suffix))
+	}
+	for _, key := range []string{capturemode.LaunchDestinationEnv, capturemode.LaunchReasonEnv, capturemode.LaunchDisabledEnv} {
+		_ = os.Unsetenv(key)
 	}
 	tmp, err := os.MkdirTemp("", "sigil-entry-test-home-*")
 	if err != nil {
@@ -482,6 +496,7 @@ func TestRun_LauncherDispatch(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			pinCloudCapture(t)
 			var gotArgs []string
 			called := 0
 			withStubLauncher(t, tc.agent, func(_ context.Context, args []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
@@ -558,6 +573,7 @@ func TestRun_CodexHookDispatchesEvenWithLauncher(t *testing.T) {
 }
 
 func TestRun_CodexLauncherBare(t *testing.T) {
+	pinCloudCapture(t)
 	var got []string
 	called := 0
 	withStubLauncher(t, "codex", func(_ context.Context, args []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
@@ -582,6 +598,7 @@ func TestRun_CodexLauncherBare(t *testing.T) {
 }
 
 func TestRun_CodexLauncherForwardsArgs(t *testing.T) {
+	pinCloudCapture(t)
 	var got []string
 	withStubLauncher(t, "codex", func(_ context.Context, args []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 		got = append([]string{}, args...)
@@ -616,6 +633,7 @@ func TestRun_CodexLauncherMissingSeparatorExits2(t *testing.T) {
 }
 
 func TestRun_CodexLauncherErrorExits1(t *testing.T) {
+	pinCloudCapture(t)
 	withStubLauncher(t, "codex", func(_ context.Context, _ []string, _ *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
 		return errors.New("boom")
 	})
@@ -839,6 +857,19 @@ func isolateDotenvHome(t *testing.T) string {
 	return dir
 }
 
+// pinCloudCapture sends the capture destination to Grafana Cloud, for a test
+// that is not about the destination. Credentials are the rule that decides it:
+// without them the launcher defaults to local and starts the daemon, which the
+// seam in TestMain refuses. The Cloud path also keeps the local-mode banner off
+// stderr, which the dispatch tests assert on.
+func pinCloudCapture(t *testing.T) {
+	t.Helper()
+	isolateDotenvHome(t)
+	t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.com")
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+}
+
 // withExit replaces the package's exit function with a recorder, runs f, and
 // returns the recorded code (nil if exit was never called).
 func withExit(t *testing.T, f func()) (code *int) {
@@ -937,7 +968,7 @@ func TestRun_LauncherAutoPromptsWhenCredsMissing(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	gotExit := withExit(t, func() {
-		run([]string{"pi", "--"}, strings.NewReader(""), &stdout, &stderr)
+		run([]string{"pi", "--no-local", "--"}, strings.NewReader(""), &stdout, &stderr)
 	})
 	if gotExit != nil {
 		t.Fatalf("exit = %v, want no exit", *gotExit)
@@ -997,7 +1028,7 @@ func TestRun_LauncherContinuesWhenLoginAborted(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	gotExit := withExit(t, func() {
-		run([]string{"pi", "--"}, strings.NewReader(""), &stdout, &stderr)
+		run([]string{"pi", "--no-local", "--"}, strings.NewReader(""), &stdout, &stderr)
 	})
 	if gotExit != nil {
 		t.Fatalf("exit = %v, want no exit", *gotExit)
@@ -1195,7 +1226,7 @@ func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := renderLocalBanner("http://127.0.0.1:8765", tc.posture, tc.postureErr, "")
+			got := renderLocalBanner("http://127.0.0.1:8765", tc.posture, tc.postureErr, capturemode.Mode{Source: capturemode.SourceFlag})
 			for _, want := range tc.want {
 				assert.Contains(t, got, want)
 			}
@@ -1292,8 +1323,12 @@ func TestRun_LauncherLocalFromEnv(t *testing.T) {
 			configEnv: "AGENTO11Y_LOCAL=true\n",
 		},
 		{
-			name:     "unsupported boolean",
-			shellEnv: map[string]string{"AGENTO11Y_LOCAL": "enabled"},
+			// A value outside the boolean whitelist is not a choice, so the
+			// default rule decides: no credentials, so local. The banner blames
+			// no variable, because none selected the destination.
+			name:      "unsupported boolean",
+			shellEnv:  map[string]string{"AGENTO11Y_LOCAL": "enabled"},
+			wantLocal: true,
 		},
 		{
 			name:     "no-local beats env",
@@ -1832,7 +1867,7 @@ func TestRun_LauncherAutoLoginKeepsNextStepQuiet(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	gotExit := withExit(t, func() {
-		run([]string{"pi", "--"}, strings.NewReader(""), &stdout, &stderr)
+		run([]string{"pi", "--no-local", "--"}, strings.NewReader(""), &stdout, &stderr)
 	})
 	if gotExit != nil {
 		t.Fatalf("exit = %v, want no exit", *gotExit)

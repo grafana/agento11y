@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func boolPtr(v bool) *bool { return &v }
+
 func TestParseSettings(t *testing.T) {
 	tests := []struct {
 		name string
@@ -46,6 +48,16 @@ func TestParseSettings(t *testing.T) {
 				UserID:       "alice",
 				LocalForward: true,
 			},
+		},
+		{
+			name: "local override is preserved",
+			env:  map[string]string{"AGENTO11Y_LOCAL": "true"},
+			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true, Local: boolPtr(true)},
+		},
+		{
+			name: "invalid local override is unset",
+			env:  map[string]string{"AGENTO11Y_LOCAL": "invalid"},
+			want: Settings{Capture: "", Tags: []Tag{}, Guards: guardsOff, AutoUpdate: true},
 		},
 		{
 			name: "local forward is opt-in and only truthy values enable it",
@@ -193,6 +205,37 @@ func TestSettingsUpdates(t *testing.T) {
 				"SIGIL_DEBUG":                "",
 				"SIGIL_AUTO_UPDATE":          "",
 				"SIGIL_USER_ID":              "",
+			},
+		},
+		{
+			name: "local override is written under both names",
+			in:   Settings{Capture: "", Guards: guardsOff, AutoUpdate: true, Local: boolPtr(true)},
+			want: map[string]string{
+				"SIGIL_TAGS":              "",
+				"SIGIL_GUARDS_ENABLED":    "false",
+				"SIGIL_GUARDS_FAIL_OPEN":  "",
+				"SIGIL_GUARDS_TIMEOUT_MS": "",
+				"SIGIL_DEBUG":             "",
+				"SIGIL_AUTO_UPDATE":       "",
+				"SIGIL_USER_ID":           "",
+				"SIGIL_LOCAL":             "true",
+			},
+		},
+		{
+			// Disconnect sends the flag: an empty value deletes the key, which hands
+			// the destination back to the credentials rule. The flag wins over a
+			// value in the same request, like TokenCleared does.
+			name: "cleared local override deletes the key",
+			in:   Settings{Capture: "", Guards: guardsOff, AutoUpdate: true, Local: boolPtr(true), LocalCleared: true},
+			want: map[string]string{
+				"SIGIL_TAGS":              "",
+				"SIGIL_GUARDS_ENABLED":    "false",
+				"SIGIL_GUARDS_FAIL_OPEN":  "",
+				"SIGIL_GUARDS_TIMEOUT_MS": "",
+				"SIGIL_DEBUG":             "",
+				"SIGIL_AUTO_UPDATE":       "",
+				"SIGIL_USER_ID":           "",
+				"SIGIL_LOCAL":             "",
 			},
 		},
 		{

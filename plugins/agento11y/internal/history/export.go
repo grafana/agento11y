@@ -117,7 +117,7 @@ func NewTargetExporter(ctx context.Context, target Target, logger *log.Logger) (
 		endpoint = strings.TrimSpace(envconfig.Getenv("ENDPOINT"))
 	}
 	if endpoint == "" {
-		return nil, nil, errors.New("history: no endpoint configured for import (set AGENTO11Y_ENDPOINT or use --local)")
+		return nil, nil, errors.New("history: Grafana Cloud import has no endpoint configured (run `agento11y login` or set AGENTO11Y_ENDPOINT)")
 	}
 	tenantID, authToken := envconfig.LocalAuthPlaceholders(
 		endpoint,
@@ -127,7 +127,7 @@ func NewTargetExporter(ctx context.Context, target Target, logger *log.Logger) (
 	// The SDK panics on a basic-auth config with no password, and a Cloud
 	// import with no credentials is a setup mistake rather than a bug. Say so.
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(authToken) == "" {
-		return nil, nil, errors.New("history: no credentials configured for import (run `agento11y login` or use --local)")
+		return nil, nil, errors.New("history: Grafana Cloud import has no credentials configured (run `agento11y login` or set AGENTO11Y_AUTH_TENANT_ID and AGENTO11Y_AUTH_TOKEN)")
 	}
 
 	// The endpoint decides the loopback rules, not the caller. A configured

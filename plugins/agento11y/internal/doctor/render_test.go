@@ -12,7 +12,9 @@ func sampleReport() *Report {
 		Binary: BinarySection{Version: "v1.2.3"},
 		Config: ConfigSection{
 			Path: "/tmp/agento11y/config.env", Exists: true,
-			ContentCaptureMode: "metadata_only", Health: HealthOK,
+			ContentCaptureMode: "metadata_only",
+			Capture:            CaptureSection{Destination: "Grafana Cloud", Reason: "credentials configured"},
+			Health:             HealthOK,
 		},
 		Conversations: ConversationsSection{
 			Endpoint: envValue{Set: true, Value: "https://sigil.example", Source: sourceEnv, Key: "AGENTO11Y_ENDPOINT"},
@@ -64,6 +66,7 @@ func TestRenderHuman_NoColorIsPlain(t *testing.T) {
 		"set (glc_…, AGENTO11Y_AUTH_TOKEN, env)",
 		// No variable is configured, so the row says the value is the built-in one.
 		"content capture:  metadata_only (default)",
+		"capture:          Grafana Cloud (credentials configured)",
 		"guards:           disabled (default)",
 		"1 problem(s)",
 	} {
@@ -240,16 +243,15 @@ func TestRenderHuman_FaultsStayOnTheMessageLine(t *testing.T) {
 			wantNoRow: "invalid value, fell back",
 		},
 		{
-			// The launcher ignores the value, so the row reports the state in force and
-			// carries the rejected value in its one trailer.
 			name: "local mode value is not a boolean",
 			config: func(c *ConfigSection) {
 				c.Local = envValue{Set: true, Value: "enabled", Source: sourceEnv, Key: "AGENTO11Y_LOCAL"}
 				c.LocalInvalid = true
+				c.Capture = CaptureSection{Destination: "local", Reason: "default; no Cloud credentials configured"}
 			},
-			message:   "the AGENTO11Y_LOCAL value is not a boolean; local mode stays off",
-			wantRow:   `local mode:       off (AGENTO11Y_LOCAL="enabled" is not a boolean, env)`,
-			wantNoRow: "invalid value, local mode is off",
+			message:   "the AGENTO11Y_LOCAL value is not a boolean, so it is ignored; the capture row states the destination in force",
+			wantRow:   "capture:          local (default; no Cloud credentials configured)",
+			wantNoRow: "local mode",
 		},
 	}
 	for _, tc := range tests {
@@ -544,26 +546,21 @@ func TestDescribeSource(t *testing.T) {
 	}
 }
 
-// TestDescribeLocal covers the one row whose value is not the resolved string:
-// the launcher acts on the boolean whitelist, so a value outside it leaves local
-// mode off and the row has to say so.
-func TestDescribeLocal(t *testing.T) {
+func TestDescribeCapture(t *testing.T) {
 	p := palette{color: false}
 	tests := []struct {
 		name    string
-		value   envValue
-		invalid bool
+		capture CaptureSection
 		want    string
 	}{
-		{name: "valid value", value: envValue{Set: true, Value: "true", Source: sourceEnv, Key: "AGENTO11Y_LOCAL"}, want: "true (AGENTO11Y_LOCAL, env)"},
-		{name: "rejected value", value: envValue{Set: true, Value: "enabled", Source: sourceEnv, Key: "AGENTO11Y_LOCAL"}, invalid: true, want: `off (AGENTO11Y_LOCAL="enabled" is not a boolean, env)`},
-		// A hand-built value carries no key, so the trailer quotes the value alone.
-		{name: "rejected value without a key", value: envValue{Set: true, Value: "enabled", Source: sourceConfig}, invalid: true, want: `off ("enabled" is not a boolean, config.env)`},
+		{name: "default local", capture: CaptureSection{Destination: "local", Reason: "default; no Cloud credentials configured"}, want: "local (default; no Cloud credentials configured)"},
+		{name: "environment opt-out", capture: CaptureSection{Destination: "Grafana Cloud", Reason: "AGENTO11Y_LOCAL=false"}, want: "Grafana Cloud (AGENTO11Y_LOCAL=false)"},
+		{name: "credentials", capture: CaptureSection{Destination: "Grafana Cloud", Reason: "credentials configured"}, want: "Grafana Cloud (credentials configured)"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := describeLocal(p, tc.value, tc.invalid); got != tc.want {
-				t.Fatalf("describeLocal = %q, want %q", got, tc.want)
+			if got := describeCapture(p, tc.capture); got != tc.want {
+				t.Fatalf("describeCapture = %q, want %q", got, tc.want)
 			}
 		})
 	}

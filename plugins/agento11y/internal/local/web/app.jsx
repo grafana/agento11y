@@ -4581,13 +4581,13 @@ function ConversationsView({
                                         <code
                                             style={{ color: "var(--fg1)" }}
                                         >
-                                            agento11y pi --local
+                                            agento11y pi
                                         </code>{" "}
                                         or{" "}
                                         <code
                                             style={{ color: "var(--fg1)" }}
                                         >
-                                            agento11y claude --local
+                                            agento11y claude
                                         </code>
                                         . Captured generations appear here
                                         as soon as the agent emits its first
@@ -7640,6 +7640,7 @@ function sameSettings(a, b) {
         a.debug !== b.debug ||
         a.autoUpdate !== b.autoUpdate ||
         a.userId !== b.userId ||
+        a.local !== b.local ||
         a.localForward !== b.localForward ||
         a.semanticSearch !== b.semanticSearch ||
         a.securityFindingsExport !== b.securityFindingsExport ||
@@ -10698,6 +10699,11 @@ function SettingsView({
     // applies: it is rewritten only when the mode on disk forwards
     // differently.
     //
+    // local pins AGENTO11Y_LOCAL=true because these credentials are for the
+    // daemon to forward with. Without the pin, saving them sends the next bare
+    // `agento11y <agent>` launch to Cloud, and the store this page reads stops
+    // filling.
+    //
     // OTLP headers carry their own copy of the credential, so a block without
     // them clears the stored value rather than leaving the previous stack's
     // header to authenticate the new one's traces.
@@ -10711,6 +10717,8 @@ function SettingsView({
                 otlpEndpoint: parsed.otlpEndpoint || "",
                 otlpHeaders: parsed.otlpHeaders || "",
                 otlpHeadersCleared: !parsed.otlpHeaders,
+                local: true,
+                localCleared: false,
                 localForward: true,
                 ...(captureForwardMode(saved.capture) === mode
                     ? {}
@@ -10719,9 +10727,11 @@ function SettingsView({
             "Connected. Saved to config.env.",
         );
 
-    // disconnect clears the connection and stops forwarding. capture is left
-    // alone: CONTENT_CAPTURE_MODE also governs non-local Cloud sessions, so
-    // clearing it would change a setting the user did not touch.
+    // disconnect clears the connection and stops forwarding, and drops the
+    // AGENTO11Y_LOCAL pin connect wrote with it: the pin outranks credentials, so
+    // keeping it would hold a later `agento11y login` on local capture. capture
+    // is left alone: CONTENT_CAPTURE_MODE also governs non-local Cloud sessions,
+    // so clearing it would change a setting the user did not touch.
     const disconnect = () =>
         oneClickWrite(
             {
@@ -10732,6 +10742,8 @@ function SettingsView({
                 otlpEndpoint: "",
                 otlpHeaders: "",
                 otlpHeadersCleared: true,
+                local: null,
+                localCleared: true,
                 localForward: false,
             },
             "Disconnected. Credentials cleared from config.env.",
