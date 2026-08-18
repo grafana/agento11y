@@ -58,6 +58,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/buildversion"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/cli"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
@@ -191,12 +192,11 @@ var (
 	claudeInstall   = claudecode.Install
 )
 
-// Main is the entrypoint shared by cmd/agento11y and cmd/agento11y.
-// buildVersion is the caller's -ldflags-stamped main.version; each main
-// package declares its own variable so the -X flag does not depend on this
-// module's import path.
+// Main is the entrypoint shared by cmd/agento11y and cmd/sigil.
+// buildVersion is the caller's main.version. Release builds stamp it through
+// ldflags; unstamped builds get their version from Go build metadata.
 func Main(buildVersion string) {
-	version = buildVersion
+	version = buildversion.Resolve(buildVersion)
 	run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
 }
 
