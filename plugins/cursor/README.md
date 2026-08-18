@@ -115,6 +115,7 @@ tail -f ~/.local/state/agento11y/logs/agento11y.log
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
 | `AGENTO11Y_USER_ID` | from Cursor | Override the user id. |
 | `AGENTO11Y_AGENT_NAME` | `cursor` | Override the exported `agent_name`. Avoid a `/` in the name: a slash marks a subagent generation, so every turn of the run is counted as one. Guard rules and dashboards that filter on `cursor` no longer match the generations this run exports. |
+| `AGENTO11Y_LOCAL` | `false` | Send Cursor hook captures to the local viewer at `http://127.0.0.1:8765` instead of Grafana Cloud. Local mode always stores full content. Cloud forwarding also requires `AGENTO11Y_LOCAL_FORWARD`. |
 | `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Cursor `preToolUse` hook is evaluated against Agent Observability: tool calls denied by guard rules are blocked, and Transform rules rewrite the tool arguments before execution. |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |

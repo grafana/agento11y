@@ -1697,8 +1697,9 @@ func TestCollectConfig_AutoTagsResolveFromTheCheckout(t *testing.T) {
 }
 
 // TestCollectConfig_Local covers the LOCAL row: doctor reports the value the
-// launcher acts on (shell before config.env), renders it, warns when the value
-// is not a boolean, and states that local mode stops at the launcher.
+// launcher and hooks act on (shell before config.env), renders it, warns when
+// the value is not a boolean, and states that local mode covers launches and
+// hooks.
 func TestCollectConfig_Local(t *testing.T) {
 	// The table below builds osEnv by hand, so it cannot catch a family missing
 	// from the snapshot the binary actually passes in. Without the entry, a
@@ -1707,7 +1708,7 @@ func TestCollectConfig_Local(t *testing.T) {
 	if !slices.Contains(trackedSuffixes, "LOCAL") {
 		t.Fatal("LOCAL must be in trackedSuffixes or SnapshotEnv drops it and this report reads it as unset")
 	}
-	const scopeMsg = "local mode covers `agento11y <agent>` launches"
+	const scopeMsg = "local mode sends `agento11y <agent>` launches and agento11y hooks to the local viewer"
 	tests := []struct {
 		name            string
 		osEnv           map[string]string
@@ -1839,7 +1840,7 @@ func TestCollect_LocalModeScopeReachesTheReport(t *testing.T) {
 		t.Fatalf("Config.Local = %+v, want the config.env value", r.Config.Local)
 	}
 	joined := strings.Join(r.Config.Messages, " ")
-	if !strings.Contains(joined, "local mode covers `agento11y <agent>` launches") {
+	if !strings.Contains(joined, "local mode sends `agento11y <agent>` launches and agento11y hooks to the local viewer") {
 		t.Fatalf("report messages %v missing the local-mode scope message", r.Config.Messages)
 	}
 }

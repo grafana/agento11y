@@ -1011,11 +1011,11 @@ func collectConfig(osEnv, fileEnv map[string]string) ConfigSection {
 			"local mode set via legacy SIGIL_LOCAL — this keeps working, but the preferred name is AGENTO11Y_LOCAL")
 	}
 	if localOn {
-		// The launcher is the only thing that reads this family, so a user who
-		// reads it as "nothing leaves this machine" is wrong about every other
-		// way a session starts.
+		// Launchers and hooks both read this family, but LOCAL_FORWARD still
+		// copies local captures to Cloud, so "nothing leaves this machine" is
+		// still the wrong reading.
 		sec.Messages = append(sec.Messages,
-			"local mode covers `agento11y <agent>` launches; sessions the host agent starts on its own, such as Cursor or a plain `claude`, keep exporting to the configured endpoint")
+			"local mode sends `agento11y <agent>` launches and agento11y hooks to the local viewer; Cloud forwarding still requires AGENTO11Y_LOCAL_FORWARD")
 	}
 	return sec
 }

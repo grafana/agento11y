@@ -166,7 +166,7 @@ A plugin can only export fields the host agent passes through to it, so individu
 
 ## Local mode and history import
 
-`agento11y <agent> --local` records the session to a JSONL store on this machine and opens a viewer at `http://127.0.0.1:8765`. Start and stop the daemon by hand with `agento11y local start|status|stop`.
+`agento11y <agent> --local` records the session to a JSONL store on this machine and opens a viewer at `http://127.0.0.1:8765`. `AGENTO11Y_LOCAL=true` in the shell or `config.env` does the same for every launch and for hook-based agents (Cursor, Copilot, Vibe, and a host `claude`/`codex` whose agento11y hooks are installed). Start and stop the daemon by hand with `agento11y local start|status|stop`.
 
 The viewer starts empty: it holds only the sessions captured after you installed agento11y. `agento11y history import` backfills the ones an agent already wrote to disk.
 

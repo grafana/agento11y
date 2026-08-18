@@ -16,6 +16,11 @@ import (
 	"time"
 )
 
+// ReceiverSupported reports whether this platform can run the local
+// capture daemon. Windows returns false so hook dispatch leaves Cloud
+// credentials in place instead of rewriting to a dead loopback URL.
+func ReceiverSupported() bool { return true }
+
 type daemonLock struct {
 	f *os.File
 }

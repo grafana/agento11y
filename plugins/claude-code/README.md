@@ -108,6 +108,7 @@ Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a mi
 | `AGENTO11Y_USER_ID` | from `~/.claude.json` | Override the user id. |
 | `AGENTO11Y_AGENT_NAME` | `claude-code` | Override the exported `agent_name`. Subagent turns become `<name>/<subagent type>`, or `<name>/subagent` when Claude Code names no type. Avoid a `/` in the name itself: a slash marks a subagent generation, so every turn of the run is counted as one. Guard rules and dashboards that filter on `claude-code` no longer match the generations this run exports. |
 | `AGENTO11Y_USER_ID_SOURCE` | `email` | Which field to read from `~/.claude.json`: `email` or `accountUuid`. |
+| `AGENTO11Y_LOCAL` | `false` | Send Claude Code captures (launches and installed hooks) to the local viewer at `http://127.0.0.1:8765` instead of Grafana Cloud. Local mode always stores full content. Cloud forwarding also requires `AGENTO11Y_LOCAL_FORWARD`. |
 | `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
 | `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `agento11y-claude-code` plugin automatically. Set `false` to pin the installed version. |
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Claude Code `PreToolUse` hook calls the Agent Observability `/api/v1/hooks:evaluate` API and blocks tool calls denied by guard rules. |
