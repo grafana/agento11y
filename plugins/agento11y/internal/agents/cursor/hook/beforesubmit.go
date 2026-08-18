@@ -63,23 +63,27 @@ func BeforeSubmit(p Payload, cfg config.Config, logger *log.Logger) {
 // version of prompt, but only when the title is not already set (first
 // prompt wins). A missing session file is created so a beforeSubmit that
 // races ahead of sessionStart still leaves a title for stop to load.
+// UpdateSession holds the session lock so this write cannot replace a
+// sessionStart that landed between load and save.
 func setConversationTitle(conversationID, prompt string, logger *log.Logger) {
-	sess := fragment.LoadSession(conversationID, logger)
-	if sess == nil {
-		sess = &fragment.Session{ConversationID: conversationID}
-	}
-	if sess.ConversationTitle != "" {
+	title := strings.TrimSpace(prompt)
+	if title == "" {
 		return
 	}
-	title := strings.TrimSpace(prompt)
 	if len(title) > maxTitleLen {
 		title = title[:maxTitleLen]
 		for !utf8.ValidString(title) {
 			title = title[:len(title)-1]
 		}
 	}
-	sess.ConversationTitle = title
-	if err := fragment.SaveSession(*sess); err != nil {
+	err := fragment.UpdateSession(conversationID, logger, func(s *fragment.Session) bool {
+		if s.ConversationTitle != "" {
+			return false
+		}
+		s.ConversationTitle = title
+		return true
+	})
+	if err != nil {
 		logger.Printf("beforeSubmitPrompt: save session title: %v", err)
 	}
 }

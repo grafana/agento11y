@@ -13,24 +13,20 @@ func SessionStart(p Payload, logger *log.Logger) {
 		logger.Print("sessionStart: missing conversation_id")
 		return
 	}
-	s := fragment.Session{
-		ConversationID:    p.ConversationID,
-		WorkspaceRoots:    p.WorkspaceRoots,
-		UserEmail:         p.UserEmail,
-		CursorVersion:     p.CursorVersion,
-		IsBackgroundAgent: p.IsBackgroundAgent,
-		StartedAt:         p.ResolvedTimestamp(),
-	}
-	// beforeSubmit can race ahead of sessionStart and stamp the first-prompt
-	// title onto a session file. Keep that title: this payload never carries
-	// one, and overwriting would send the conversation out untitled.
-	if existing := fragment.LoadSession(p.ConversationID, logger); existing != nil {
-		s.ConversationTitle = existing.ConversationTitle
-		if s.StartedAt == "" {
-			s.StartedAt = existing.StartedAt
+	// UpdateSession holds the session lock so a racing beforeSubmit title
+	// write cannot replace this file with a title-only session (and so we
+	// keep a title that beforeSubmit already stamped).
+	err := fragment.UpdateSession(p.ConversationID, logger, func(s *fragment.Session) bool {
+		s.WorkspaceRoots = p.WorkspaceRoots
+		s.UserEmail = p.UserEmail
+		s.CursorVersion = p.CursorVersion
+		s.IsBackgroundAgent = p.IsBackgroundAgent
+		if ts := p.ResolvedTimestamp(); ts != "" {
+			s.StartedAt = ts
 		}
-	}
-	if err := fragment.SaveSession(s); err != nil {
+		return true
+	})
+	if err != nil {
 		logger.Printf("sessionStart: save: %v", err)
 		return
 	}
