@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.31.0] - 2026-08-18
+
+### Features
+
+- **plugins/agento11y**: add local viewer filtering and grouping (#597)
+
+### Documentation
+
+- update coding agents o11y documentation (#598)
+
 ## [0.30.0] - 2026-08-18
 
 ### Features
