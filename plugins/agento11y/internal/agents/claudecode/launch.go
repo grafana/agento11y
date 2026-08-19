@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 )
@@ -45,6 +46,16 @@ const (
 // ErrCLINotFound means the Claude Code binary is not available on PATH for the
 // current user. Managed deployment tooling can treat this as a skipped agent.
 var ErrCLINotFound = errors.New("claude CLI not found")
+
+func init() {
+	agentinstall.Register(agentinstall.Spec{
+		Name: "claude",
+		Install: func(ctx context.Context, stdout io.Writer, _ *log.Logger) (bool, error) {
+			return Install(ctx, stdout)
+		},
+		IsMissingHost: func(err error) bool { return errors.Is(err, ErrCLINotFound) },
+	})
+}
 
 // Test seams.
 var (

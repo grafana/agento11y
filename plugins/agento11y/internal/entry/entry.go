@@ -50,6 +50,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
@@ -131,7 +132,7 @@ func localPrivacyLines(posture local.ForwardPosture, known bool) []string {
 func usageLine() string {
 	return "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] " +
 		"[--otlp-endpoint url] [--no-verify] [--yes] | agento11y doctor [--json] | " +
-		"agento11y <claude|copilot|opencode|pi> install [--json] | " +
+		"agento11y <claude|copilot|opencode|pi> install [--json] | agento11y agents reconcile --agents all|name[,name...] --json | " +
 		"agento11y skills list|show <name> | agento11y local start|status|stop | " +
 		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
 		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
@@ -183,6 +184,10 @@ var exit = os.Exit
 // loginRun is a package var so tests can stub the interactive login flow
 // without driving the huh TTY. Production code points at login.Run.
 var loginRun = login.Run
+
+// registeredInstallers is a seam for reconciliation tests. Production returns
+// every adapter that registered a noninteractive installer at package init.
+var registeredInstallers = agentinstall.All
 
 // cursorInstall and cursorUninstall are package vars so tests can stub the
 // filesystem-touching `agento11y cursor install`/`uninstall` flow.
@@ -247,6 +252,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// dispatch like `local`. It owns its own flag parsing.
 	if args[0] == "doctor" {
 		runDoctorCommand(args[1:], stdout, stderr)
+		return
+	}
+
+	if args[0] == "agents" {
+		runAgentsReconcile(args[1:], stdout, stderr)
 		return
 	}
 
@@ -773,6 +783,164 @@ func runAgentInstall(agent string, args []string, stdout, stderr io.Writer) {
 	if result.Status == "error" {
 		exit(1)
 	}
+}
+
+const agentReconcileSchemaVersion = 1
+
+// agentReconcileReport is a stable, secret-free result for any management
+// system or script. Credential and policy lifecycle remain outside the binary.
+type agentReconcileReport struct {
+	SchemaVersion int                  `json:"schema_version"`
+	Status        string               `json:"status"`
+	Agento11y     reconcileBinary      `json:"agento11y"`
+	Agents        []agentInstallResult `json:"agents"`
+}
+
+type reconcileBinary struct {
+	Version string `json:"version"`
+}
+
+// runAgentsReconcile runs only installers registered by host adapters. Adding
+// a noninteractive adapter registration automatically makes it available here;
+// this command deliberately has no MDM-, credential-, or policy-specific code.
+func runAgentsReconcile(args []string, stdout, stderr io.Writer) {
+	if len(args) == 0 || args[0] != "reconcile" {
+		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents reconcile --agents all|name[,name...] --json")
+		exit(2)
+		return
+	}
+
+	fs := flag.NewFlagSet("agents reconcile", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var rawAgents string
+	var asJSON bool
+	fs.StringVar(&rawAgents, "agents", "", "comma-separated registered agent installers")
+	fs.BoolVar(&asJSON, "json", false, "print a machine-readable reconciliation receipt")
+	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
+		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents reconcile --agents all|name[,name...] --json")
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agento11y agents reconcile: invalid flags: %v\n", err)
+		} else {
+			_, _ = fmt.Fprintln(stderr, "agento11y agents reconcile: positional arguments are not supported")
+		}
+		exit(2)
+		return
+	}
+
+	specs := registeredInstallers()
+	available := make(map[string]agentinstall.Spec, len(specs))
+	availableNames := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		available[spec.Name] = spec
+		availableNames = append(availableNames, spec.Name)
+	}
+	if len(availableNames) == 0 {
+		_, _ = fmt.Fprintln(stderr, "agento11y agents reconcile: no noninteractive installers are registered in this binary")
+		exit(1)
+		return
+	}
+	if strings.TrimSpace(rawAgents) == "" {
+		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents reconcile --agents all|name[,name...] --json")
+		_, _ = fmt.Fprintf(stderr, "agento11y agents reconcile: --agents is required; available installers: %s\n", strings.Join(availableNames, ", "))
+		exit(2)
+		return
+	}
+	if !asJSON {
+		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents reconcile --agents all|name[,name...] --json")
+		_, _ = fmt.Fprintln(stderr, "agento11y agents reconcile: --json is required so management tooling can parse the reconciliation receipt")
+		exit(2)
+		return
+	}
+
+	selected, ok := parseReconcileAgents(rawAgents, available, availableNames, stderr)
+	if !ok {
+		return
+	}
+
+	report := make([]agentInstallResult, 0, len(selected))
+	failed := false
+	missingHost := false
+	for _, spec := range selected {
+		changed, err := spec.Install(context.Background(), io.Discard, cli.InitLogger("reconcile-"+spec.Name))
+		result := agentInstallResult{Agent: spec.Name}
+		switch {
+		case err != nil && spec.IsMissingHost != nil && spec.IsMissingHost(err):
+			result.Status = "missing_host"
+			missingHost = true
+		case err != nil:
+			result.Status = "error"
+			result.Error = fmt.Sprintf("%s install failed: %v", spec.Name, err)
+			failed = true
+		case changed:
+			result.Status = "installed"
+		default:
+			result.Status = "already_installed"
+		}
+		report = append(report, result)
+	}
+
+	status := "converged"
+	if failed {
+		status = "error"
+	} else if missingHost {
+		status = "deferred_missing_host"
+	}
+	receipt := agentReconcileReport{
+		SchemaVersion: agentReconcileSchemaVersion,
+		Status:        status,
+		Agento11y:     reconcileBinary{Version: version},
+		Agents:        report,
+	}
+	data, err := json.Marshal(receipt)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "agento11y agents reconcile: could not encode reconciliation receipt: %v\n", err)
+		exit(1)
+		return
+	}
+	_, _ = fmt.Fprintln(stdout, string(data))
+	if failed {
+		exit(1)
+	}
+}
+
+func parseReconcileAgents(raw string, available map[string]agentinstall.Spec, availableNames []string, stderr io.Writer) ([]agentinstall.Spec, bool) {
+	if strings.TrimSpace(raw) == "all" {
+		selected := make([]agentinstall.Spec, 0, len(availableNames))
+		for _, name := range availableNames {
+			selected = append(selected, available[name])
+		}
+		return selected, true
+	}
+
+	selected := make([]agentinstall.Spec, 0)
+	seen := map[string]bool{}
+	for name := range strings.SplitSeq(raw, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			_, _ = fmt.Fprintln(stderr, "agento11y agents reconcile: --agents contains an empty name; use a comma-separated list such as claude,cursor")
+			exit(2)
+			return nil, false
+		}
+		if name == "all" {
+			_, _ = fmt.Fprintln(stderr, "agento11y agents reconcile: --agents=all must be used by itself; do not combine it with named agents")
+			exit(2)
+			return nil, false
+		}
+		if seen[name] {
+			_, _ = fmt.Fprintf(stderr, "agento11y agents reconcile: --agents repeats %q; name each agent once\n", name)
+			exit(2)
+			return nil, false
+		}
+		spec, found := available[name]
+		if !found {
+			_, _ = fmt.Fprintf(stderr, "agento11y agents reconcile: %q has no noninteractive installer in this binary (available: %s)\n", name, strings.Join(availableNames, ", "))
+			exit(2)
+			return nil, false
+		}
+		seen[name] = true
+		selected = append(selected, spec)
+	}
+	return selected, true
 }
 
 // runDoctorCommand handles `agento11y doctor`. doctor is strictly read-only and

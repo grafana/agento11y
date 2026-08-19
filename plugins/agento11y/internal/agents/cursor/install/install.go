@@ -17,6 +17,7 @@ package install
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
 )
 
@@ -48,6 +50,22 @@ var cursorEvents = []string{
 
 // Test seam.
 var userHomeDir = os.UserHomeDir
+
+func init() {
+	agentinstall.Register(agentinstall.Spec{
+		Name: "cursor",
+		Install: func(_ context.Context, stdout io.Writer, logger *log.Logger) (bool, error) {
+			installed, err := Status()
+			if err != nil {
+				return false, fmt.Errorf("read Cursor hook state: %w", err)
+			}
+			if err := Run(stdout, io.Discard, logger); err != nil {
+				return false, fmt.Errorf("write Cursor hooks: %w", err)
+			}
+			return !installed, nil
+		},
+	})
+}
 
 // hookEntry is a single Cursor hook command entry. Cursor entries may carry
 // other fields, but agento11y only ever writes the command; extra fields on other

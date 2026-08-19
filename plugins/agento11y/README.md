@@ -74,6 +74,16 @@ deferral, so a later run can configure a host installed after the script.
 
 Claude Code provides the same command as `agento11y claude install --json`.
 
+## Fleet reconciliation
+
+For MDM, configuration management, and other unattended rollout tools, reconcile the noninteractive host installers and receive one JSON result per agent:
+
+```sh
+agento11y agents reconcile --agents all --json
+```
+
+`all` includes every noninteractive installer registered in the installed binary, including an agent added by a future release. To target a fixed allowlist, pass names instead: `--agents claude,cursor`. The command never launches a coding agent or opens a login prompt. Its receipt reports `installed`, `already_installed`, `missing_host`, or a per-agent descriptive error; it exits non-zero only when an installer fails. This command contains no MDM-vendor, credential, or device-policy assumptions.
+
 ## Skills
 
 The binary carries agent skills: markdown workflows a coding agent reads and follows. They ship inside the binary, so there is nothing to fetch and no second CLI to install. Upgrading `agento11y` upgrades them.
