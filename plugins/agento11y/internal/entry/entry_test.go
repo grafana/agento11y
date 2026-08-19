@@ -824,7 +824,10 @@ func TestRegisteredInstallersIncludeExistingManagedInstallers(t *testing.T) {
 		names = append(names, spec.Name)
 	}
 	assert.Contains(t, names, "claude")
+	assert.Contains(t, names, "copilot")
 	assert.Contains(t, names, "cursor")
+	assert.Contains(t, names, "opencode")
+	assert.Contains(t, names, "pi")
 }
 
 func withStubCopilotInstall(t *testing.T, fn func() (bool, error)) {
