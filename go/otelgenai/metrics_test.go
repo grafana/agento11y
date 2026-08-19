@@ -113,6 +113,13 @@ func tokenTypeSums(t *testing.T, m metricdata.Metrics) map[string]int64 {
 func TestSpecMetrics(t *testing.T) {
 	t.Parallel()
 
+	if otelgenai.TokenTypeCacheWrite != "cache_write" {
+		t.Errorf("TokenTypeCacheWrite = %q, want cache_write", otelgenai.TokenTypeCacheWrite)
+	}
+	if otelgenai.TokenTypeCacheCreation != "cache_creation" {
+		t.Errorf("TokenTypeCacheCreation = %q, want cache_creation", otelgenai.TokenTypeCacheCreation)
+	}
+
 	cases := []struct {
 		name           string
 		options        []otelgenai.Option
@@ -151,7 +158,7 @@ func TestSpecMetrics(t *testing.T) {
 			},
 		},
 		{
-			name:           "cache and reasoning token types",
+			name:           "cache and reasoning token types preserve compatibility",
 			extendedTokens: true,
 			mutate: func(inv *otelgenai.Invocation) {
 				inv.Usage.CacheReadInputTokens = 12
@@ -162,6 +169,22 @@ func TestSpecMetrics(t *testing.T) {
 				sums := tokenTypeSums(t, metrics["gen_ai.client.token.usage"])
 				if sums["cache_read"] != 12 || sums["cache_write"] != 7 || sums["reasoning"] != 5 {
 					t.Errorf("token sums = %v, want cache_read 12, cache_write 7, reasoning 5", sums)
+				}
+			},
+		},
+		{
+			name:           "conformant cache and reasoning token types",
+			options:        []otelgenai.Option{otelgenai.WithConformantMetrics()},
+			extendedTokens: true,
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.Usage.CacheReadInputTokens = 12
+				inv.Usage.CacheWriteInputTokens = 7
+				inv.Usage.ReasoningTokens = 5
+			},
+			check: func(t *testing.T, metrics map[string]metricdata.Metrics) {
+				sums := tokenTypeSums(t, metrics["gen_ai.client.token.usage"])
+				if sums["cache_read"] != 12 || sums["cache_creation"] != 7 || sums["reasoning"] != 5 {
+					t.Errorf("token sums = %v, want cache_read 12, cache_creation 7, reasoning 5", sums)
 				}
 			},
 		},
@@ -471,7 +494,7 @@ func TestSpecMetrics(t *testing.T) {
 			},
 		},
 		{
-			name: "token usage carries error type",
+			name: "token usage preserves error type by default",
 			mutate: func(inv *otelgenai.Invocation) {
 				inv.ErrorType = "timeout"
 			},
@@ -482,10 +505,35 @@ func TestSpecMetrics(t *testing.T) {
 					t.Fatalf("token usage data = %T, want an int64 histogram", usage.Data)
 				}
 				for _, point := range histogram.DataPoints {
-					errorType, _ := point.Attributes.Value("error.type")
-					if got := errorType.AsString(); got != "timeout" {
-						t.Errorf("token usage error.type = %q, want timeout", got)
+					errorType, present := point.Attributes.Value("error.type")
+					if !present || errorType.AsString() != "timeout" {
+						t.Errorf("token usage error.type = %q, present = %v, want timeout", errorType.AsString(), present)
 					}
+				}
+			},
+		},
+		{
+			// The conventions put error.type on the duration instrument only, so
+			// the token series must not gain a dimension a conformant consumer
+			// does not expect.
+			name:    "conformant token usage carries no error type",
+			options: []otelgenai.Option{otelgenai.WithConformantMetrics()},
+			mutate: func(inv *otelgenai.Invocation) {
+				inv.ErrorType = "timeout"
+			},
+			check: func(t *testing.T, metrics map[string]metricdata.Metrics) {
+				usage := metrics["gen_ai.client.token.usage"]
+				histogram, ok := usage.Data.(metricdata.Histogram[int64])
+				if !ok {
+					t.Fatalf("token usage data = %T, want an int64 histogram", usage.Data)
+				}
+				for _, point := range histogram.DataPoints {
+					if got, present := point.Attributes.Value("error.type"); present {
+						t.Errorf("token usage carries error.type = %q", got.AsString())
+					}
+				}
+				if got := metrics["gen_ai.client.operation.duration"]; got.Name == "" {
+					t.Error("the failure is not countable on the duration instrument either")
 				}
 			},
 		},

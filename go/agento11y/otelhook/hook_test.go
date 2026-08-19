@@ -51,6 +51,7 @@ func TestOnEnd(t *testing.T) {
 				InclusiveTokenSemantics: true,
 			},
 			want: map[string]string{
+				"agento11y.record":                           "true",
 				"agento11y.generation.id":                    "gen-1",
 				"user.id":                                    "user-1",
 				"agento11y.generation.tags":                  `{" env ":" dev ","team":"sigil"}`,
@@ -69,7 +70,10 @@ func TestOnEnd(t *testing.T) {
 		{
 			name:   "id only",
 			vendor: otelhook.Generation{ID: "gen-2"},
-			want:   map[string]string{"agento11y.generation.id": "gen-2"},
+			want: map[string]string{
+				"agento11y.record":        "true",
+				"agento11y.generation.id": "gen-2",
+			},
 			absent: []string{
 				"user.id",
 				"agento11y.generation.tags",
@@ -80,12 +84,12 @@ func TestOnEnd(t *testing.T) {
 		{
 			name:   "no vendor payload",
 			vendor: nil,
-			absent: []string{"agento11y.generation.id"},
+			absent: []string{"agento11y.record", "agento11y.generation.id"},
 		},
 		{
 			name:   "foreign vendor payload",
 			vendor: "not-a-generation",
-			absent: []string{"agento11y.generation.id"},
+			absent: []string{"agento11y.record", "agento11y.generation.id"},
 		},
 		{
 			name:    "content capture off drops the title and the artifacts",
@@ -211,6 +215,7 @@ func TestOnEndReportsDroppedPayloads(t *testing.T) {
 		name   string
 		vendor any
 		want   string
+		absent []string
 	}{
 		{
 			name: "metadata that does not marshal",
@@ -234,6 +239,7 @@ func TestOnEndReportsDroppedPayloads(t *testing.T) {
 			name:   "a generation with no id",
 			vendor: otelhook.Generation{},
 			want:   "has no id",
+			absent: []string{"agento11y.record", "agento11y.generation.id"},
 		},
 	}
 
@@ -246,10 +252,15 @@ func TestOnEndReportsDroppedPayloads(t *testing.T) {
 			}))
 			t.Cleanup(func() { otel.SetErrorHandler(previous) })
 
-			otelhook.New().OnEnd(context.Background(), &otelgenai.Invocation{Vendor: tc.vendor}, otelgenai.CaptureSpanOnly)
+			got := attributeMap(otelhook.New().OnEnd(context.Background(), &otelgenai.Invocation{Vendor: tc.vendor}, otelgenai.CaptureSpanOnly))
 
 			if !slices.ContainsFunc(reported, func(msg string) bool { return strings.Contains(msg, tc.want) }) {
 				t.Errorf("reported %v, want one mentioning %q", reported, tc.want)
+			}
+			for _, key := range tc.absent {
+				if _, ok := got[key]; ok {
+					t.Errorf("%s is present, want it absent", key)
+				}
 			}
 		})
 	}

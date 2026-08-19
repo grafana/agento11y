@@ -29,6 +29,7 @@ import (
 )
 
 const (
+	attrRecord              = "agento11y.record"
 	AttrGenerationID        = "agento11y.generation.id"
 	AttrParentGenerationIDs = "agento11y.generation.parent_generation_ids"
 	AttrTags                = "agento11y.generation.tags"
@@ -140,7 +141,10 @@ func (h *Hook) OnEnd(_ context.Context, inv *otelgenai.Invocation, capture otelg
 
 	var attrs []attribute.KeyValue
 	if generation.ID != "" {
-		attrs = append(attrs, attribute.String(AttrGenerationID, generation.ID))
+		attrs = append(attrs,
+			attribute.String(attrRecord, "true"),
+			attribute.String(AttrGenerationID, generation.ID),
+		)
 	}
 	if generation.UserID != "" {
 		attrs = append(attrs, attribute.String(AttrUserID, generation.UserID))

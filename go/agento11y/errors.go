@@ -36,6 +36,13 @@ var (
 	ErrWorkflowStepQueueFull = errors.New("agento11y: workflow step queue is full")
 	// ErrClientShutdown is returned when enqueue happens after shutdown starts.
 	ErrClientShutdown = errors.New("agento11y: client is shutting down")
+	// ErrSynchronousExportUnsupported is returned by ExportGeneration when the
+	// configured protocol has no per-generation delivery result to report.
+	ErrSynchronousExportUnsupported = errors.New("agento11y: synchronous generation export is not supported by this protocol")
+	// ErrFlushNotVerifiable is returned by Flush when the configured protocol
+	// delivers through a component the client cannot flush, so a success would
+	// not mean the records left the process.
+	ErrFlushNotVerifiable = errors.New("agento11y: flush cannot confirm delivery with this configuration")
 	// ErrMappingFailed wraps provider-to-generation mapping failures.
 	ErrMappingFailed = errors.New("agento11y: generation mapping failed")
 	// ErrRatingValidationFailed wraps conversation rating input validation failures.

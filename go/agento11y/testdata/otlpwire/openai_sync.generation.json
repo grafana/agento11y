@@ -1,0 +1,72 @@
+{
+  "id": "gen-openai-sync-1",
+  "conversation_id": "conv-9b2f",
+  "operation_name": "generateText",
+  "mode": "GENERATION_MODE_SYNC",
+  "trace_id": "0123456789abcdef0123456789abcdef",
+  "span_id": "0123456789abcdef",
+  "model": {
+    "provider": "openai",
+    "name": "gpt-4o-mini"
+  },
+  "response_id": "chatcmpl_1",
+  "response_model": "gpt-4o-mini",
+  "system_prompt": "You are concise.",
+  "input": [
+    {
+      "role": "MESSAGE_ROLE_SYSTEM",
+      "parts": [
+        {
+          "text": "You are a helpful bot"
+        }
+      ]
+    },
+    {
+      "role": "MESSAGE_ROLE_USER",
+      "parts": [
+        {
+          "text": "What is the weather in Paris?"
+        }
+      ]
+    },
+    {
+      "role": "MESSAGE_ROLE_TOOL",
+      "parts": [
+        {
+          "tool_result": {
+            "tool_call_id": "call_weather",
+            "content": "{\"temp_c\":18}"
+          }
+        }
+      ]
+    }
+  ],
+  "output": [
+    {
+      "role": "MESSAGE_ROLE_ASSISTANT",
+      "parts": [
+        {
+          "tool_call": {
+            "id": "call_weather",
+            "name": "weather",
+            "input_json": "eyJjaXR5IjoiUGFyaXMifQ=="
+          }
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": "120",
+    "output_tokens": "42",
+    "total_tokens": "162"
+  },
+  "stop_reason": "tool_calls",
+  "started_at": "2026-06-10T12:00:00Z",
+  "completed_at": "2026-06-10T12:00:01.250Z",
+  "agent_name": "assistant-openai",
+  "agent_version": "1.0.0",
+  "parent_generation_ids": [
+    "gen-abc123"
+  ],
+  "effective_version": "agent-build-42"
+}

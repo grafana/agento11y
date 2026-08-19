@@ -71,6 +71,17 @@ func TestResolveFromEnv(t *testing.T) {
 			},
 		},
 		{
+			name: "otel protocol from env",
+			env: map[string]string{
+				"AGENTO11Y_PROTOCOL": "OTel",
+			},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.GenerationExport.Protocol != GenerationExportProtocolOTel {
+					t.Errorf("Protocol=%q want otel", cfg.GenerationExport.Protocol)
+				}
+			},
+		},
+		{
 			name: "basic auth from env",
 			env: map[string]string{
 				"SIGIL_AUTH_MODE":      "basic",
