@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.33.0] - 2026-08-19
+
+### Features
+
+- **plugins/agento11y**: enable auto_coding_agent_tags by default in local mode (#617)
+
 ## [0.32.0] - 2026-08-19
 
 ### Features
