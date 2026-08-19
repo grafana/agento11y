@@ -69,7 +69,7 @@ Three steps run per release, and none of them creates a tag on the release PR:
 | `plugins/claude-code/`, `plugins/codex/`, `plugins/copilot/`, `plugins/cursor/` | Thin glue: hook scripts and READMEs that wire the host agent to the shared `agento11y` binary. No independent code paths. |
 | `plugins/opencode/` | Independent npm package `@grafana/agento11y-opencode`. Runs in-process inside opencode through its TypeScript plugin API; `agento11y opencode` installs and launches it. |
 | `plugins/pi/` | Independent npm package `@grafana/agento11y-pi`. Runs in-process inside pi; `agento11y pi` installs and launches it. |
-| `plugins/vibe/` | README only. `agento11y vibe` upserts three `[[hooks]]` entries into `hooks.toml` under `$VIBE_HOME` (default `~/.vibe`) and sets `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` on the child so vibe loads them. |
+| `plugins/vibe/` | README only. `agento11y vibe` upserts three `[[hooks]]` entries into `hooks.toml` under `$VIBE_HOME` (default `~/.vibe`) and sets `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` on the child, which only a vibe below 2.21.0 needs. Vibe 2.21.0 renamed all three hook types, so the install path picks the spelling from `vibe --version` and the hook dispatcher answers to both. See `internal/agents/vibe/version.go`. |
 
 If you change shared-binary behavior, the four glue plugins and vibe all see it. The OpenCode and pi plugins evolve independently, but the shared binary owns their install/launch flow.
 

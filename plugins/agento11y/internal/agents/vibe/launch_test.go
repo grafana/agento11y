@@ -82,18 +82,28 @@ func TestStatus(t *testing.T) {
 	hook := func(name, typ string) string {
 		return "[[hooks]]\nname = \"" + name + "\"\ntype = \"" + typ + "\"\ncommand = \"agento11y vibe hook\"\ntimeout = 30\n\n"
 	}
-	all := hook("agento11y", "post_agent_turn") +
+	all := hook("agento11y", "post_agent") +
+		hook("agento11y-before-tool", "pre_tool") +
+		hook("agento11y-after-tool", "post_tool")
+	allPreRename := hook("agento11y", "post_agent_turn") +
 		hook("agento11y-before-tool", "before_tool") +
 		hook("agento11y-after-tool", "after_tool")
 
+	// Status answers for the installed vibe, so the same file reads differently
+	// either side of the 2.21.0 rename. vibeVersion is pinned in every case:
+	// otherwise the answer would depend on the vibe on the developer's PATH.
 	tests := []struct {
 		name          string
 		hooksFile     string
+		vibeVersion   string
 		wantInstalled bool
 	}{
-		{name: "all hooks present", hooksFile: all, wantInstalled: true},
-		{name: "hooks file absent"},
-		{name: "hooks file without agento11y entries", hooksFile: hook("user-custom", "after_tool")},
+		{name: "all hooks present", hooksFile: all, vibeVersion: "vibe 2.24.2", wantInstalled: true},
+		{name: "pre-rename hooks on a pre-2.21.0 vibe", hooksFile: allPreRename, vibeVersion: "vibe 2.20.0", wantInstalled: true},
+		{name: "pre-rename hooks on a current vibe", hooksFile: allPreRename, vibeVersion: "vibe 2.24.2"},
+		{name: "current hooks on a pre-2.21.0 vibe", hooksFile: all, vibeVersion: "vibe 2.20.0"},
+		{name: "hooks file absent", vibeVersion: "vibe 2.24.2"},
+		{name: "hooks file without agento11y entries", hooksFile: hook("user-custom", "post_tool"), vibeVersion: "vibe 2.24.2"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -104,6 +114,7 @@ func TestStatus(t *testing.T) {
 					t.Fatalf("seed: %v", err)
 				}
 			}
+			withVibeVersion(t, tt.vibeVersion)
 
 			installed, version, err := Status(context.Background())
 			if err != nil {
@@ -125,6 +136,7 @@ func TestStatus_ReportsUnreadableConfig(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "hooks.toml"), []byte("[[hooks]\nname ="), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	withVibeVersion(t, "vibe 2.24.2")
 
 	installed, _, err := Status(context.Background())
 	if err == nil {
@@ -158,4 +170,14 @@ func TestEnvWithExperimentalHooks_AppendsWhenMissing(t *testing.T) {
 
 func hasEnv(env []string, want string) bool {
 	return slices.Contains(env, want)
+}
+
+// withVibeVersion pins what `vibe --version` reports, so a test's expectation
+// does not depend on the vibe installed on the machine running it.
+func withVibeVersion(t *testing.T, out string) {
+	t.Helper()
+	origLookPath, origOutput := lookPath, vibeVersionOutput
+	t.Cleanup(func() { lookPath, vibeVersionOutput = origLookPath, origOutput })
+	lookPath = func(string) (string, error) { return "/fake/vibe", nil }
+	vibeVersionOutput = func(context.Context, string) ([]byte, error) { return []byte(out), nil }
 }

@@ -1,10 +1,10 @@
 // Package toolevents persists per-tool-call outcomes between vibe's
-// after_tool hook fires and the post_agent_turn export.
+// post_tool hook fires and the post_agent export.
 //
 // Vibe runs the tool calls within a turn concurrently, so multiple
-// after_tool hooks can fire at once. Each writes its own file named by the
+// post_tool hooks can fire at once. Each writes its own file named by the
 // (sanitized) tool_call_id, so two concurrent fires never touch the same
-// file and no lock is needed. The post_agent_turn handler loads the events
+// file and no lock is needed. The post_agent handler loads the events
 // for the session to give each execute_tool span real timing and an error
 // status, then clears them so they do not leak into the next turn.
 package toolevents
@@ -21,8 +21,8 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
 )
 
-// Event is one tool call's recorded outcome, taken from the after_tool hook
-// payload. CompletedAt is stamped when the event is saved (after_tool fires
+// Event is one tool call's recorded outcome, taken from the post_tool hook
+// payload. CompletedAt is stamped when the event is saved (post_tool fires
 // right after the tool body returns), so it is a close stand-in for the real
 // completion time. DurationMs is vibe's measured tool-body duration.
 type Event struct {

@@ -20,7 +20,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
-func TestPostAgentTurn_EndToEnd(t *testing.T) {
+func TestPostAgent_EndToEnd(t *testing.T) {
 	// Drive the handler through a httptest server playing the role of
 	// the Agent Observability export endpoint, then assert the offset and token
 	// snapshot in state were advanced.
@@ -60,9 +60,9 @@ func TestPostAgentTurn_EndToEnd(t *testing.T) {
 	tp := filepath.Join(dir, "messages.jsonl")
 
 	logger := log.New(io.Discard, "", 0)
-	payload := Payload{HookEventName: "post_agent_turn", SessionID: "sess-end-to-end", TranscriptPath: tp}
+	payload := Payload{HookEventName: "post_agent", SessionID: "sess-end-to-end", TranscriptPath: tp}
 
-	PostAgentTurn(context.Background(), payload, logger)
+	PostAgent(context.Background(), payload, logger)
 
 	mu.Lock()
 	got := recs
@@ -112,7 +112,7 @@ func TestPostAgentTurn_EndToEnd(t *testing.T) {
 	}
 }
 
-func TestPostAgentTurn_UsesMetaParentSessionID(t *testing.T) {
+func TestPostAgent_UsesMetaParentSessionID(t *testing.T) {
 	// A subagent session carries its parent only in meta.json, not on the
 	// thin hook payload. The handler must still resolve the parent edge.
 	var (
@@ -142,7 +142,7 @@ func TestPostAgentTurn_UsesMetaParentSessionID(t *testing.T) {
 	tp := filepath.Join(dir, "messages.jsonl")
 
 	logger := log.New(io.Discard, "", 0)
-	PostAgentTurn(context.Background(), Payload{HookEventName: "post_agent_turn", SessionID: "child-session", TranscriptPath: tp}, logger)
+	PostAgent(context.Background(), Payload{HookEventName: "post_agent", SessionID: "child-session", TranscriptPath: tp}, logger)
 
 	mu.Lock()
 	got := body
@@ -175,7 +175,7 @@ func TestPostAgentTurn_UsesMetaParentSessionID(t *testing.T) {
 	}
 }
 
-func TestPostAgentTurn_SaveStateFailureSkipsExport(t *testing.T) {
+func TestPostAgent_SaveStateFailureSkipsExport(t *testing.T) {
 	// State is saved before the export. If the save fails, nothing is
 	// exported, so a successful export can never be stranded by a lost
 	// offset. Force a save failure by pointing XDG_STATE_HOME at a file.
@@ -205,7 +205,7 @@ func TestPostAgentTurn_SaveStateFailureSkipsExport(t *testing.T) {
 	tp := filepath.Join(dir, "messages.jsonl")
 
 	logger := log.New(io.Discard, "", 0)
-	PostAgentTurn(context.Background(), Payload{HookEventName: "post_agent_turn", SessionID: "sess-save-fails", TranscriptPath: tp}, logger)
+	PostAgent(context.Background(), Payload{HookEventName: "post_agent", SessionID: "sess-save-fails", TranscriptPath: tp}, logger)
 
 	mu.Lock()
 	got := exports
@@ -223,9 +223,9 @@ func replaceInFile(path, old, replacement string) error {
 	return os.WriteFile(path, []byte(strings.ReplaceAll(string(data), old, replacement)), 0o600)
 }
 
-func TestPostAgentTurn_NoNewMessagesNoExport(t *testing.T) {
+func TestPostAgent_NoNewMessagesNoExport(t *testing.T) {
 	// Pre-populate state with the file's full byte length so the next
-	// read returns zero lines; PostAgentTurn must skip silently.
+	// read returns zero lines; PostAgent must skip silently.
 	dir := t.TempDir()
 	must(t, copyFile(filepath.Join("..", "testdata", "messages.jsonl"), filepath.Join(dir, "messages.jsonl")))
 	must(t, copyFile(filepath.Join("..", "testdata", "meta.json"), filepath.Join(dir, "meta.json")))
@@ -248,7 +248,7 @@ func TestPostAgentTurn_NoNewMessagesNoExport(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 	logger := log.New(io.Discard, "", 0)
-	PostAgentTurn(context.Background(), Payload{HookEventName: "post_agent_turn", SessionID: "sess-empty", TranscriptPath: tp}, logger)
+	PostAgent(context.Background(), Payload{HookEventName: "post_agent", SessionID: "sess-empty", TranscriptPath: tp}, logger)
 
 	// State must be unchanged; if export had run it would have
 	// overwritten our token snapshot.
@@ -258,7 +258,7 @@ func TestPostAgentTurn_NoNewMessagesNoExport(t *testing.T) {
 	}
 }
 
-func TestPostAgentTurn_MissingCredsSkipsExport(t *testing.T) {
+func TestPostAgent_MissingCredsSkipsExport(t *testing.T) {
 	// No SIGIL_* env: the handler must log and bail without touching
 	// state, so a re-run later with credentials still picks up from
 	// the same offset.
@@ -272,13 +272,13 @@ func TestPostAgentTurn_MissingCredsSkipsExport(t *testing.T) {
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
 	t.Setenv("SIGIL_AUTH_TOKEN", "")
 	logger := log.New(io.Discard, "", 0)
-	PostAgentTurn(context.Background(), Payload{HookEventName: "post_agent_turn", SessionID: "sess-noauth", TranscriptPath: tp}, logger)
+	PostAgent(context.Background(), Payload{HookEventName: "post_agent", SessionID: "sess-noauth", TranscriptPath: tp}, logger)
 	if got, found := state.Load("sess-noauth"); found || (got != state.Session{}) {
 		t.Errorf("state was written despite missing creds: found=%v got=%+v", found, got)
 	}
 }
 
-func TestPostAgentTurn_SessionCostSnapshot(t *testing.T) {
+func TestPostAgent_SessionCostSnapshot(t *testing.T) {
 	// The snapshot is the baseline the next turn subtracts from. A
 	// meta.json reporting no session_cost must leave the prior baseline
 	// standing, otherwise a later turn that does report a cost deltas
@@ -332,7 +332,7 @@ func TestPostAgentTurn_SessionCostSnapshot(t *testing.T) {
 
 			must(t, state.Save("sess-cost", state.Session{SessionCost: 5}))
 			logger := log.New(io.Discard, "", 0)
-			PostAgentTurn(context.Background(), Payload{HookEventName: "post_agent_turn", SessionID: "sess-cost", TranscriptPath: tp}, logger)
+			PostAgent(context.Background(), Payload{HookEventName: "post_agent", SessionID: "sess-cost", TranscriptPath: tp}, logger)
 
 			st, found := state.Load("sess-cost")
 			if !found {
@@ -345,10 +345,10 @@ func TestPostAgentTurn_SessionCostSnapshot(t *testing.T) {
 	}
 }
 
-// TestPostAgentTurn_PromptRedactionWiring pins AGENTO11Y_REDACT_INPUT_MESSAGES
+// TestPostAgent_PromptRedactionWiring pins AGENTO11Y_REDACT_INPUT_MESSAGES
 // from the environment through to the exported body. The mapper tests cover
 // the flag itself; this one covers the wire between them.
-func TestPostAgentTurn_PromptRedactionWiring(t *testing.T) {
+func TestPostAgent_PromptRedactionWiring(t *testing.T) {
 	const secret = "glc_abcdefghijklmnopqrstuvwxyz"
 
 	tests := []struct {
@@ -392,7 +392,7 @@ func TestPostAgentTurn_PromptRedactionWiring(t *testing.T) {
 			must(t, os.WriteFile(tp, []byte(lines), 0o644))
 
 			logger := log.New(io.Discard, "", 0)
-			PostAgentTurn(context.Background(), Payload{HookEventName: "post_agent_turn", SessionID: "sess-redaction", TranscriptPath: tp}, logger)
+			PostAgent(context.Background(), Payload{HookEventName: "post_agent", SessionID: "sess-redaction", TranscriptPath: tp}, logger)
 
 			mu.Lock()
 			got := string(body)
@@ -411,10 +411,10 @@ func TestPostAgentTurn_PromptRedactionWiring(t *testing.T) {
 	}
 }
 
-func TestPostAgentTurn_MissingPayloadFields(t *testing.T) {
+func TestPostAgent_MissingPayloadFields(t *testing.T) {
 	logger := log.New(io.Discard, "", 0)
-	PostAgentTurn(context.Background(), Payload{HookEventName: "post_agent_turn"}, logger)
-	PostAgentTurn(context.Background(), Payload{HookEventName: "post_agent_turn", SessionID: "s"}, logger)
+	PostAgent(context.Background(), Payload{HookEventName: "post_agent"}, logger)
+	PostAgent(context.Background(), Payload{HookEventName: "post_agent", SessionID: "s"}, logger)
 }
 
 func copyFile(src, dst string) error {
@@ -546,15 +546,15 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 
 			logger := log.New(io.Discard, "", 0)
 			var stdout bytes.Buffer
-			BeforeTool(context.Background(), &stdout, Payload{
-				HookEventName:   "before_tool",
+			PreTool(context.Background(), &stdout, Payload{
+				HookEventName:   "pre_tool",
 				SessionID:       "sess-agent-name",
 				ToolNameValue:   "shell",
 				ToolCallIDValue: "call-1",
 				ToolInputValue:  json.RawMessage(`{"command":"echo hi"}`),
 			}, logger)
-			PostAgentTurn(context.Background(), Payload{
-				HookEventName:  "post_agent_turn",
+			PostAgent(context.Background(), Payload{
+				HookEventName:  "post_agent",
 				SessionID:      "sess-agent-name",
 				TranscriptPath: tp,
 			}, logger)

@@ -18,7 +18,7 @@ import (
 )
 
 // TestEmitToolSpans asserts that each assistant tool call becomes one
-// execute_tool span, that an after_tool event drives real duration and an
+// execute_tool span, that a post_tool event drives real duration and an
 // error status, and that a call with no event still produces a span with
 // synthetic (zero-duration) timing.
 func TestEmitToolSpans(t *testing.T) {
@@ -57,7 +57,7 @@ func TestEmitToolSpans(t *testing.T) {
 	events := map[string]toolevents.Event{
 		"tc1": {ToolCallID: "tc1", Status: "success", DurationMs: 1500, CompletedAt: completed},
 		"tc2": {ToolCallID: "tc2", Status: "failure", Error: "boom", DurationMs: 200, CompletedAt: completed},
-		// tc3 intentionally has no after_tool event -> synthetic timing.
+		// tc3 intentionally has no post_tool event -> synthetic timing.
 	}
 
 	genCtx, rec := client.StartGeneration(context.Background(), agento11y.GenerationStart{
@@ -89,7 +89,7 @@ func TestEmitToolSpans(t *testing.T) {
 		t.Fatal("missing execute_tool bash span")
 	}
 	if d := bash.EndTime().Sub(bash.StartTime()); d != 1500*time.Millisecond {
-		t.Errorf("bash span duration = %v, want 1.5s from after_tool duration_ms", d)
+		t.Errorf("bash span duration = %v, want 1.5s from post_tool duration_ms", d)
 	}
 	if bash.Status().Code == codes.Error {
 		t.Error("bash span marked error despite success status")
@@ -100,7 +100,7 @@ func TestEmitToolSpans(t *testing.T) {
 		t.Fatal("missing execute_tool read span")
 	}
 	if read.Status().Code != codes.Error {
-		t.Errorf("read span status = %v, want error from after_tool failure", read.Status().Code)
+		t.Errorf("read span status = %v, want error from post_tool failure", read.Status().Code)
 	}
 
 	grep, ok := toolSpans["grep"]
@@ -108,6 +108,6 @@ func TestEmitToolSpans(t *testing.T) {
 		t.Fatal("missing execute_tool grep span")
 	}
 	if d := grep.EndTime().Sub(grep.StartTime()); d != 0 {
-		t.Errorf("grep span duration = %v, want 0 (synthetic timing without an after_tool event)", d)
+		t.Errorf("grep span duration = %v, want 0 (synthetic timing without a post_tool event)", d)
 	}
 }
