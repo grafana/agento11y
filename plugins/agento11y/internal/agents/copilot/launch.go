@@ -84,6 +84,53 @@ func Launch(_ context.Context, args []string, localEnv *local.LaunchEnv, _ io.Re
 	return nil
 }
 
+// Install writes the shared user-level Copilot hooks file without launching
+// Copilot or requiring its CLI to be present. VS Code reads the same file even
+// on a machine that does not have the Copilot CLI on PATH.
+//
+// The returned value is true when it changed the hooks file or removed a
+// stale legacy plugin. When the Copilot CLI is available, cleanup failures are
+// returned so unattended deployment does not report convergence while every
+// hook would still fire twice.
+func Install() (bool, error) {
+	_, wrote, err := writeUserHooks()
+	if err != nil {
+		return false, err
+	}
+
+	// The CLI is optional because VS Code reads the shared hook file directly.
+	// When it is available, remove the pre-migration plugin too: Copilot loads
+	// plugins and ~/.copilot/hooks together, so leaving sigil-copilot installed
+	// would export each hook twice after an unattended install.
+	bin, err := lookPath("copilot")
+	if err != nil {
+		return wrote, nil
+	}
+	removed, err := removeStalePluginForInstall(context.Background(), bin)
+	if err != nil {
+		return wrote, err
+	}
+	return wrote || removed, nil
+}
+
+// removeStalePluginForInstall removes the legacy plugin for an unattended
+// install. Unlike the launcher cleanup, it returns probe and removal errors:
+// the launcher can safely continue a user's session, while a management tool
+// needs to retry rather than declare duplicate capture healthy.
+func removeStalePluginForInstall(ctx context.Context, bin string) (bool, error) {
+	installed, err := pluginInstalled(ctx, bin)
+	if err != nil {
+		return false, fmt.Errorf("list Copilot plugins before removing legacy %s: %w", PluginName, err)
+	}
+	if !installed {
+		return false, nil
+	}
+	if err := runUninstall(ctx, bin, io.Discard); err != nil {
+		return false, fmt.Errorf("remove legacy Copilot plugin %s to prevent duplicate capture: %w", PluginName, err)
+	}
+	return true, nil
+}
+
 // installUserHooks writes the shared user-level Copilot hooks file and reports
 // the outcome. It never returns an error: failing to install the hooks must
 // not block the rest of the launch flow.
@@ -103,7 +150,7 @@ func installUserHooks(stderr io.Writer, logger *log.Logger) {
 // removeStalePlugin uninstalls the sigil-copilot plugin if a previous sigil
 // version registered it. It is best-effort: probe and uninstall failures are
 // logged for SIGIL_DEBUG but never block the launch.
-func removeStalePlugin(bin string, stderr io.Writer, logger *log.Logger) {
+func removeStalePlugin(bin string, stderr io.Writer, logger *log.Logger) bool {
 	installed, err := pluginInstalled(context.Background(), bin)
 	if err != nil {
 		// The probe failed, so we cannot confirm whether the plugin is
@@ -116,10 +163,10 @@ func removeStalePlugin(bin string, stderr io.Writer, logger *log.Logger) {
 		if uninstallErr := runUninstall(context.Background(), bin, io.Discard); uninstallErr != nil {
 			logger.Printf("best-effort uninstall %s after probe failure: %v", PluginName, uninstallErr)
 		}
-		return
+		return false
 	}
 	if !installed {
-		return
+		return false
 	}
 	_, _ = fmt.Fprintf(stderr,
 		"agento11y: removing the legacy %s plugin (capture now runs from ~/.copilot/hooks)\n",
@@ -131,7 +178,9 @@ func removeStalePlugin(bin string, stderr io.Writer, logger *log.Logger) {
 				"agento11y: to avoid duplicate capture, remove it manually:\n"+
 				"          copilot plugin uninstall %s\n",
 			PluginName, err, PluginName)
+		return false
 	}
+	return true
 }
 
 // copilotHooksDir resolves the user-level Copilot hooks directory. It honors

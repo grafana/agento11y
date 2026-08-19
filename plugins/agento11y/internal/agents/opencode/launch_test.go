@@ -189,6 +189,46 @@ func TestLaunch_InvalidConfigProbeFallsThroughToInstall(t *testing.T) {
 	assert.Contains(t, logbuf.String(), "opencode config probe")
 }
 
+func TestInstall(t *testing.T) {
+	t.Run("already installed does not need host", func(t *testing.T) {
+		withConfig(t, `{"plugin":["@grafana/agento11y-opencode"]}`)
+		withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+		withRunInstall(t, func(context.Context, string, io.Writer) error {
+			t.Fatal("install must not run when the plugin is registered")
+			return nil
+		})
+
+		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		require.NoError(t, err)
+		assert.False(t, changed)
+	})
+
+	t.Run("missing host is reported", func(t *testing.T) {
+		withConfig(t, "")
+		withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+
+		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		assert.False(t, changed)
+		assert.ErrorIs(t, err, ErrCLINotFound)
+	})
+
+	t.Run("installs without launching host", func(t *testing.T) {
+		withConfig(t, "")
+		withLookPath(t, func(string) (string, error) { return "/usr/local/bin/opencode", nil })
+		calls := 0
+		withRunInstall(t, func(_ context.Context, bin string, _ io.Writer) error {
+			calls++
+			assert.Equal(t, "/usr/local/bin/opencode", bin)
+			return nil
+		})
+
+		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 1, calls)
+	})
+}
+
 func TestLaunch_LocalEnv(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

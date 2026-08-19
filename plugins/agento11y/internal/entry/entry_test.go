@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
@@ -769,6 +770,27 @@ func withStubClaudeInstall(t *testing.T, fn func(context.Context, io.Writer) (bo
 	claudeInstall = fn
 }
 
+func withStubCopilotInstall(t *testing.T, fn func() (bool, error)) {
+	t.Helper()
+	prev := copilotInstall
+	t.Cleanup(func() { copilotInstall = prev })
+	copilotInstall = fn
+}
+
+func withStubOpenCodeInstall(t *testing.T, fn func(context.Context, io.Writer, *log.Logger) (bool, error)) {
+	t.Helper()
+	prev := opencodeInstall
+	t.Cleanup(func() { opencodeInstall = prev })
+	opencodeInstall = fn
+}
+
+func withStubPiInstall(t *testing.T, fn func(context.Context, io.Writer, *log.Logger) (bool, error)) {
+	t.Helper()
+	prev := piInstall
+	t.Cleanup(func() { piInstall = prev })
+	piInstall = fn
+}
+
 func TestRun_ClaudeInstallJSON(t *testing.T) {
 	withStubClaudeInstall(t, func(context.Context, io.Writer) (bool, error) { return true, nil })
 
@@ -798,6 +820,51 @@ func TestRun_ClaudeInstallReportsMissingHost(t *testing.T) {
 	var result agentInstallResult
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
 	assert.Equal(t, agentInstallResult{Agent: "claude", Status: "missing_host"}, result)
+}
+
+func TestRun_AgentInstallsJSON(t *testing.T) {
+	cases := []struct {
+		agent string
+		stub  func(t *testing.T)
+		want  agentInstallResult
+	}{
+		{
+			agent: "copilot",
+			stub: func(t *testing.T) {
+				withStubCopilotInstall(t, func() (bool, error) { return true, nil })
+			},
+			want: agentInstallResult{Agent: "copilot", Status: "installed"},
+		},
+		{
+			agent: "opencode",
+			stub: func(t *testing.T) {
+				withStubOpenCodeInstall(t, func(context.Context, io.Writer, *log.Logger) (bool, error) { return false, nil })
+			},
+			want: agentInstallResult{Agent: "opencode", Status: "already_installed"},
+		},
+		{
+			agent: "pi",
+			stub: func(t *testing.T) {
+				withStubPiInstall(t, func(context.Context, io.Writer, *log.Logger) (bool, error) { return false, pi.ErrCLINotFound })
+			},
+			want: agentInstallResult{Agent: "pi", Status: "missing_host"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.agent, func(t *testing.T) {
+			tc.stub(t)
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run([]string{tc.agent, "install", "--json"}, strings.NewReader(""), &stdout, &stderr)
+			})
+			require.Nil(t, gotExit, "stderr=%q", stderr.String())
+			require.Empty(t, stderr.String())
+
+			var result agentInstallResult
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
+			assert.Equal(t, tc.want, result)
+		})
+	}
 }
 
 // withStubLauncher replaces the launchers map with a single entry for the

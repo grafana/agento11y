@@ -47,6 +47,10 @@ const (
 	updateCheckTTL = 24 * time.Hour
 )
 
+// ErrCLINotFound means the OpenCode binary is not available on PATH for the
+// current user. Callers can defer setup until the host is installed.
+var ErrCLINotFound = errors.New("opencode CLI not found")
+
 // Test seams.
 var (
 	lookPath    = exec.LookPath
@@ -114,6 +118,26 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 		UpdateTTL:     updateCheckTTL,
 		BinaryVersion: binaryVersion,
 	})
+}
+
+// Install registers the OpenCode plugin without starting OpenCode or prompting
+// for Agent Observability credentials. The returned value is true only when
+// this invocation registered the plugin.
+func Install(ctx context.Context, stdout io.Writer, logger *log.Logger) (bool, error) {
+	migrateLegacyConfig(stdout, logger)
+	installed, probeErr := pluginInstalled()
+	if probeErr == nil && installed {
+		return false, nil
+	}
+
+	bin, err := lookPath("opencode")
+	if err != nil {
+		return false, fmt.Errorf("%w; install OpenCode or run this in the developer's user context", ErrCLINotFound)
+	}
+	if err := runInstall(ctx, bin, stdout); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
