@@ -361,6 +361,11 @@ function formatCost(usd) {
     return "$" + (usd / 1000).toFixed(1) + "k";
 }
 
+// List-price token math, not the provider invoice: subscriptions and
+// committed-use discounts never reach this table.
+const ESTIMATED_COST_TOOLTIP =
+    "Estimated from token usage at published model rates. Does not include provider subscription discounts or committed-use pricing, so this can differ from the actual bill.";
+
 function workspaceLabel(path) {
     if (!path) return "(unknown)";
     const parts = path.replace(/\/+$/, "").split("/").filter(Boolean);
@@ -742,6 +747,8 @@ function ModelPill({ name, dot }) {
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 6,
+                minWidth: 0,
+                maxWidth: "100%",
                 padding: "2px 8px",
                 border: "1px solid var(--border-medium)",
                 borderRadius: 2,
@@ -758,9 +765,18 @@ function ModelPill({ name, dot }) {
                     height: 7,
                     borderRadius: "50%",
                     background: color,
+                    flexShrink: 0,
                 }}
             />
-            {shortModel(name)}
+            <span
+                style={{
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                }}
+            >
+                {shortModel(name)}
+            </span>
         </span>
     );
 }
@@ -877,8 +893,9 @@ function ModelCell({ models }) {
                 display: "flex",
                 gap: 6,
                 alignItems: "center",
-                flexWrap: "wrap",
+                flexWrap: "nowrap",
                 minWidth: 0,
+                overflow: "hidden",
             }}
         >
             {shown.map((m) => (
@@ -3021,12 +3038,15 @@ function FilterBar({
                     onClick={onClearFilters}
                     style={{
                         ...iconBtn,
+                        width: "auto",
                         height: 34,
                         padding: "0 11px",
                         border: "1px solid var(--border-medium)",
                         borderRadius: 2,
                         color: "var(--fg2)",
                         gap: 6,
+                        flex: "0 0 auto",
+                        whiteSpace: "nowrap",
                     }}
                     title="Clear session filters"
                     onMouseEnter={(e) => {
@@ -3050,6 +3070,7 @@ function FilterBar({
                     ...iconBtn,
                     height: 34,
                     width: 34,
+                    flex: "0 0 34px",
                     border: "1px solid var(--border-medium)",
                     borderRadius: 2,
                     opacity: refreshing ? 0.5 : 1,
@@ -3179,7 +3200,7 @@ function ConvRow({
                 )}
             </div>
             <AgentCell agents={c.agents} />
-            <span style={{ color: "var(--fg1)" }} title="Estimated cost">
+            <span style={{ color: "var(--fg1)" }} title={ESTIMATED_COST_TOOLTIP}>
                 {formatCost(conversationCost(c, prices))}
             </span>
             <span
@@ -3222,10 +3243,11 @@ function ConvRow({
 }
 
 // Shared by ConvRow and its header so the columns stay aligned:
-// Last activity · Conversation · Agent · Cost · Tokens · Duration · Models.
+// Last activity · Conversation · Agent · Estimated cost · Tokens · Duration · Models.
 // Agent shows the host launcher only (claude-code, …) — not the per-
 // subagent rows, which were the noise; subagent presence is the ⊂N badge.
-const CONV_GRID = "84px minmax(260px, 1.7fr) 132px 80px 96px 136px 176px";
+const CONV_GRID =
+    "84px minmax(260px, 1.4fr) 132px 118px 96px 136px minmax(220px, 1.2fr)";
 const OPEN_GROUPS = 3;
 
 // Use the full sorted agent or model set as one key so each session appears once.
@@ -3516,7 +3538,7 @@ function WorkspaceContextStrip({
                     {count} {count === 1 ? "session" : "sessions"}
                 </span>
                 <span
-                    title="Workspace cost in the selected range"
+                    title={ESTIMATED_COST_TOOLTIP}
                     style={{ color: "var(--fg1)" }}
                 >
                     {formatCost(cost)}
@@ -3556,43 +3578,141 @@ function WorkspaceContextStrip({
     );
 }
 
+// HelpTip is an info-icon disclosure. Native `title` waits on the browser
+// delay; this opens after 300ms so a pass-through does not flash it.
+const HELP_TIP_DELAY_MS = 300;
+
+function HelpTip({ text, ariaLabel }) {
+    const [open, setOpen] = useState(false);
+    const triggerRef = useRef(null);
+    const timerRef = useRef(null);
+    const [pos, setPos] = useState(null);
+
+    function clearTimer() {
+        if (timerRef.current != null) {
+            clearTimeout(timerRef.current);
+            timerRef.current = null;
+        }
+    }
+
+    function hide() {
+        clearTimer();
+        setOpen(false);
+    }
+
+    function show() {
+        clearTimer();
+        const el = triggerRef.current;
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const width = 300;
+        const left = Math.max(
+            8,
+            Math.min(r.left, window.innerWidth - width - 8),
+        );
+        setPos({ top: r.bottom + 6, left });
+        timerRef.current = setTimeout(() => setOpen(true), HELP_TIP_DELAY_MS);
+    }
+
+    useEffect(() => clearTimer, []);
+
+    return (
+        <span
+            ref={triggerRef}
+            role="button"
+            tabIndex={0}
+            aria-label={ariaLabel}
+            onMouseEnter={show}
+            onMouseLeave={hide}
+            onFocus={show}
+            onBlur={hide}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+                position: "relative",
+                display: "inline-flex",
+                color: "inherit",
+                cursor: "help",
+            }}
+        >
+            <Icon name="info" size={12} />
+            {open && pos && (
+                <span
+                    role="tooltip"
+                    style={{
+                        position: "fixed",
+                        top: pos.top,
+                        left: pos.left,
+                        zIndex: 80,
+                        width: 300,
+                        padding: "10px 12px",
+                        background: "var(--bg-secondary)",
+                        border: "1px solid var(--border-medium)",
+                        borderRadius: 2,
+                        boxShadow: "var(--shadow-z2)",
+                        color: "var(--fg1)",
+                        fontFamily: "var(--fontFamily)",
+                        fontSize: 12,
+                        fontWeight: 400,
+                        lineHeight: 1.45,
+                        whiteSpace: "normal",
+                        pointerEvents: "none",
+                    }}
+                >
+                    {text}
+                </span>
+            )}
+        </span>
+    );
+}
+
 // SortHeader is a clickable list-header cell: click sorts by the
 // column, clicking again flips the direction.
-function SortHeader({ label, sortKey, sort, onSort }) {
+function SortHeader({ label, sortKey, sort, onSort, tooltip }) {
     const active = sort.key === sortKey;
     return (
-        <button
-            onClick={() => onSort(sortKey)}
-            title={`Sort by ${label.toLowerCase()}`}
+        <span
             style={{
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 4,
-                background: "transparent",
-                border: "none",
-                padding: 0,
-                cursor: "pointer",
-                font: "inherit",
-                textAlign: "left",
-                fontWeight: 500,
-                whiteSpace: "nowrap",
-                color: active ? "var(--fg1)" : "inherit",
             }}
         >
-            {label}
-            {active && (
-                <span style={{ fontSize: 8 }}>
-                    {sort.dir === "asc" ? "▲" : "▼"}
-                </span>
+            <button
+                onClick={() => onSort(sortKey)}
+                title={`Sort by ${label.toLowerCase()}`}
+                style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    background: "transparent",
+                    border: "none",
+                    padding: 0,
+                    cursor: "pointer",
+                    font: "inherit",
+                    textAlign: "left",
+                    fontWeight: 500,
+                    whiteSpace: "nowrap",
+                    color: active ? "var(--fg1)" : "inherit",
+                }}
+            >
+                {label}
+                {active && (
+                    <span style={{ fontSize: 8 }}>
+                        {sort.dir === "asc" ? "▲" : "▼"}
+                    </span>
+                )}
+            </button>
+            {tooltip && (
+                <HelpTip text={tooltip} ariaLabel={`${label} help`} />
             )}
-        </button>
+        </span>
     );
 }
 
 // KpiTile is one cell of the KPI strip: a sentence-case label, a big
 // mono value (optionally tinted, with a leading status dot), an
 // optional progress bar, and a sub line.
-function KpiTile({ label, value, valueColor, sub, dot, bar }) {
+function KpiTile({ label, value, valueColor, sub, dot, bar, tooltip }) {
     return (
         <SurfaceCard
             style={{
@@ -3603,7 +3723,20 @@ function KpiTile({ label, value, valueColor, sub, dot, bar }) {
                 minHeight: 104,
             }}
         >
-            <span style={{ fontSize: 11, color: "var(--fg3)" }}>{label}</span>
+            <span
+                style={{
+                    fontSize: 11,
+                    color: "var(--fg3)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                }}
+            >
+                {label}
+                {tooltip && (
+                    <HelpTip text={tooltip} ariaLabel={`${label} help`} />
+                )}
+            </span>
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 {dot && (
                     <span
@@ -3679,9 +3812,10 @@ function KpiStrip({ kpi }) {
                 sub={kpi.conversationsSub}
             />
             <KpiTile
-                label="Total cost"
+                label="Cost"
                 value={formatCost(kpi.cost)}
                 sub={kpi.costSub}
+                tooltip={ESTIMATED_COST_TOOLTIP}
             />
             <KpiTile
                 label="Total tokens"
@@ -3814,14 +3948,25 @@ function ConversationsView({
             .sort((a, b) => b.last - a.last);
     }, [rangeFiltered, prices]);
     const totalCost = useMemo(() => {
+        // Sum priced sessions only. One unpriced model used to zero the
+        // whole header to NO_VALUE even when other sessions had a real
+        // dollar figure — the KPI tile already skips those.
         let cost = 0;
+        let priced = 0;
         for (const conversation of rangeFiltered) {
             const value = conversationCost(conversation, prices);
-            if (value == null) return null;
+            if (value == null) continue;
             cost += value;
+            priced++;
         }
-        return cost;
+        return priced ? cost : null;
     }, [rangeFiltered, prices]);
+    const agentCount = useMemo(() => {
+        const set = new Set();
+        for (const c of rangeFiltered)
+            for (const a of agentHosts(c.agents)) set.add(a);
+        return set.size;
+    }, [rangeFiltered]);
     // Keep an out-of-range workspace selected so the page can show its empty
     // context instead of silently returning to all workspaces.
     const activeWorkspace = workspace;
@@ -4261,6 +4406,23 @@ function ConversationsView({
         };
     }, [filtered, activeWorkspace, prices]);
 
+    const emptyStore =
+        !error &&
+        !loading &&
+        !searchActive &&
+        activeWorkspace == null &&
+        rangeFiltered.length === 0 &&
+        (storeCount === 0 ||
+            (storeCount == null && conversations.length === 0));
+    const hasSessions = storeCount > 0 || conversations.length > 0;
+    // Offers stay `show` until the user imports or dismisses, so a store
+    // filled by live capture still gets the Settings → History hint. A
+    // completed first import answers the offer and the hint stays gone.
+    const importUnused = (history && history.offers
+        ? history.offers
+        : []
+    ).some((offer) => offer.show);
+
     return (
         <PageShell maxWidth={1400}>
             <PageHero
@@ -4307,19 +4469,21 @@ function ConversationsView({
                                   value: String(workspaces.length),
                               },
                               {
-                                  label: "Cost",
-                                  value: formatCost(totalCost),
-                                  tone: "var(--brand-orange-text)",
+                                  label: "Agents",
+                                  value: String(agentCount),
                               },
                           ]
                 }
             />
-            {history && (
-                <HistoryImportBanner
-                    history={history}
-                    onOpenSettings={onOpenSettings}
-                />
-            )}
+            {!searchActive &&
+                (history && importRunIsActive(history.run) ? (
+                    <HistoryImportProgress
+                        run={history.run}
+                        onCancel={history.cancel}
+                    />
+                ) : hasSessions && importUnused ? (
+                    <ImportHintBanner onOpenSettings={onOpenSettings} />
+                ) : null)}
             <FilterBar
                 query={query}
                 onQueryChange={setQuery}
@@ -4370,6 +4534,8 @@ function ConversationsView({
                     now={now}
                     onOpen={onOpen}
                 />
+            ) : emptyStore ? (
+                history && <SettingsHistoryTab history={history} />
             ) : (
                 <React.Fragment>
                     <KpiStrip kpi={kpi} />
@@ -4485,6 +4651,7 @@ function ConversationsView({
                                 sortKey="cost"
                                 sort={listSort}
                                 onSort={handleSort}
+                                tooltip={ESTIMATED_COST_TOOLTIP}
                             />
                             <SortHeader
                                 label="Tokens"
@@ -4563,38 +4730,8 @@ function ConversationsView({
                         {/* The list request is range-scoped, so an empty page does not
                             mean an empty store. storeCount comes from the response and
                             decides which notice applies; null (no response yet, or an
-                            older daemon) falls back to reading the page. */}
-                        {!error &&
-                            !loading &&
-                            activeWorkspace == null &&
-                            rangeFiltered.length === 0 &&
-                            (storeCount === 0 ||
-                                (storeCount == null &&
-                                    conversations.length === 0)) && (
-                                <div style={{ padding: 16 }}>
-                                    <Notice
-                                        kind="info"
-                                        title="No sessions yet"
-                                    >
-                                        Run an agent against this daemon
-                                        with{" "}
-                                        <code
-                                            style={{ color: "var(--fg1)" }}
-                                        >
-                                            agento11y pi --local
-                                        </code>{" "}
-                                        or{" "}
-                                        <code
-                                            style={{ color: "var(--fg1)" }}
-                                        >
-                                            agento11y claude --local
-                                        </code>
-                                        . Captured generations appear here
-                                        as soon as the agent emits its first
-                                        one.
-                                    </Notice>
-                                </div>
-                            )}
+                            older daemon) falls back to reading the page. The empty-store
+                            case is handled above. */}
                         {!error &&
                             !loading &&
                             activeWorkspace == null &&
@@ -8126,129 +8263,126 @@ function useHistoryImport(liveRun) {
     };
 }
 
-function formatImportTurns(offer) {
-    const turns = offer.turns || 0;
-    const count = `${turns.toLocaleString()} turn${turns === 1 ? "" : "s"}`;
-    return offer.approx_turns ? `about ${count}` : count;
-}
+const IMPORT_HINT_KEY = "sigil.importHint.v1";
 
-// HistoryImportBanner offers a backfill when discovery found sessions the
-// store does not have yet. Its text is metadata only: session counts and
-// turn counts, never a prompt or a title.
-function HistoryImportBanner({ history, onOpenSettings }) {
-    const offer = (history.offers || []).find((o) => o.show);
-    const run = history.run;
-    if (importRunIsActive(run)) {
-        return <HistoryImportProgress run={run} onCancel={history.cancel} />;
+// ImportHintBanner points at Settings → History until the user dismisses
+// it. Shown only when the store already has sessions and the first-use
+// import was never used (the daemon still has an unanswered offer). An
+// empty store gets the full import card instead. Dismiss lives in
+// localStorage.
+function ImportHintBanner({ onOpenSettings }) {
+    const [dismissed, setDismissed] = useState(() => {
+        try {
+            return localStorage.getItem(IMPORT_HINT_KEY) === "1";
+        } catch {
+            return false;
+        }
+    });
+    if (dismissed) return null;
+
+    function dismiss() {
+        try {
+            localStorage.setItem(IMPORT_HINT_KEY, "1");
+        } catch {
+            /* quota / private mode */
+        }
+        setDismissed(true);
     }
-    if (!offer) return null;
+
+    function openHistory(e) {
+        if (!isPlainLeftClick(e)) return;
+        e.preventDefault();
+        if (onOpenSettings) onOpenSettings("history");
+    }
+
     return (
         <div
+            role="status"
             style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 12,
-                padding: "10px 14px",
+                gap: 10,
+                height: 34,
+                padding: "0 6px 0 0",
                 marginBottom: 14,
                 borderRadius: 2,
-                border: "1px solid var(--info-border)",
-                background: "var(--info-transparent)",
+                border: "1px solid var(--border-medium)",
+                borderLeft: "2px solid var(--info-text)",
+                background: "rgba(24,27,31,0.78)",
+                boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.12)",
             }}
         >
-            <Icon
-                name="clock"
-                size={15}
-                style={{ color: "var(--info-text)", flex: "none" }}
-            />
             <span
+                aria-hidden="true"
                 style={{
-                    fontSize: 10.5,
-                    textTransform: "uppercase",
-                    letterSpacing: 0.6,
-                    color: "var(--fg3)",
+                    width: 22,
+                    height: 22,
+                    marginLeft: 8,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                     flex: "none",
+                    borderRadius: 2,
+                    background: "var(--info-transparent)",
+                    color: "var(--info-text)",
                 }}
             >
-                Existing history
+                <Icon name="clock" size={13} />
             </span>
             <span
                 style={{
-                    fontSize: 12.5,
-                    color: "var(--fg2)",
                     minWidth: 0,
+                    fontSize: 12.5,
+                    lineHeight: "34px",
+                    color: "var(--fg2)",
+                    whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
                 }}
             >
-                {offer.display_name} wrote {offer.sessions} session
-                {offer.sessions === 1 ? "" : "s"} ({formatImportTurns(offer)})
-                to this machine in the last 90 days. Importing adds the ones
-                this viewer does not have yet, and sends nothing to Grafana
-                Cloud.
-            </span>
-            {history.error && (
-                <span
+                Import previous sessions from your coding agents in{" "}
+                <a
+                    href={settingsPath("history")}
+                    onClick={openHistory}
                     style={{
-                        fontSize: 12,
-                        color: "var(--error-text)",
-                        flex: "none",
+                        color: "var(--info-text)",
+                        fontWeight: 500,
+                        textDecoration: "none",
+                    }}
+                    onMouseEnter={(e) => {
+                        e.currentTarget.style.textDecoration = "underline";
+                        e.currentTarget.style.textUnderlineOffset = "3px";
+                    }}
+                    onMouseLeave={(e) => {
+                        e.currentTarget.style.textDecoration = "none";
                     }}
                 >
-                    {history.error}
-                </span>
-            )}
+                    Settings → History
+                </a>
+            </span>
             <span style={{ flex: 1 }} />
             <button
                 type="button"
-                onClick={() => history.start(offer.agent)}
+                onClick={dismiss}
+                aria-label="Dismiss import hint"
+                title="Dismiss"
                 style={{
+                    ...iconBtn,
+                    width: 22,
+                    height: 22,
                     flex: "none",
-                    background: "var(--primary-main)",
-                    border: "1px solid var(--primary-main)",
-                    borderRadius: 2,
-                    color: "#fff",
-                    fontSize: 11.5,
-                    fontFamily: "var(--fontFamily)",
-                    padding: "3px 9px",
-                    cursor: "pointer",
-                }}
-            >
-                Import
-            </button>
-            <button
-                type="button"
-                onClick={() => onOpenSettings && onOpenSettings("history")}
-                style={{
-                    flex: "none",
-                    background: "transparent",
-                    border: "1px solid var(--border-medium)",
-                    borderRadius: 2,
-                    color: "var(--fg2)",
-                    fontSize: 11.5,
-                    fontFamily: "var(--fontFamily)",
-                    padding: "3px 9px",
-                    cursor: "pointer",
-                }}
-            >
-                Options
-            </button>
-            <button
-                type="button"
-                onClick={() => history.dismiss("")}
-                style={{
-                    flex: "none",
-                    background: "transparent",
-                    border: "1px solid transparent",
-                    borderRadius: 2,
                     color: "var(--fg3)",
-                    fontSize: 11.5,
-                    fontFamily: "var(--fontFamily)",
-                    padding: "3px 9px",
-                    cursor: "pointer",
+                }}
+                onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "var(--action-hover)";
+                    e.currentTarget.style.color = "var(--fg1)";
+                }}
+                onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.color = "var(--fg3)";
                 }}
             >
-                Not now
+                <Icon name="times" size={12} />
             </button>
         </div>
     );
