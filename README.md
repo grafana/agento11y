@@ -1,7 +1,7 @@
 # Grafana Agent Observability SDK
 
 <p align="center">
-  <img src="./assets/readme/agento11y-tri-shot.svg" alt="Grafana Agent observability landing, analytics, and conversation explore views" width="100%" />
+  <img src="./assets/readme/agento11y-tri-shot.png" alt="Grafana Agent observability landing, analytics, and conversation explore views" width="100%" />
 </p>
 
 [Grafana Agent observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) is a product from Grafana for teams running agents in production. This repo holds the open-source SDKs and the coding-agent plugins that send telemetry to it.
