@@ -25,6 +25,20 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// EffectiveVersionDigest returns the canonical sha256:<hex> digest of an
+// effective version, and returns "" when effectiveVersion is empty or holds
+// only whitespace. Every transport sends the digest rather than the raw
+// value, so one agent build resolves to one stored version on every
+// transport.
+func EffectiveVersionDigest(effectiveVersion string) string {
+	trimmed := strings.TrimSpace(effectiveVersion)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 // ToProto converts a model.Generation into the wire-level proto used by
 // the generation ingest service. The effective_version field is hashed with
 // the canonical sha256:<hex> rule.
@@ -79,17 +93,6 @@ func ToProto(g model.Generation) (*agento11yv1.Generation, error) {
 	}
 
 	return out, nil
-}
-
-// EffectiveVersionDigest returns the sha256:<hex> digest of a raw
-// effective-version string, or "" when it holds nothing.
-func EffectiveVersionDigest(effectiveVersion string) string {
-	trimmed := strings.TrimSpace(effectiveVersion)
-	if trimmed == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(trimmed))
-	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // WorkflowStepToProto converts a model.WorkflowStep into the wire-level

@@ -223,6 +223,7 @@ func conformanceScenarios() []scenario {
 				"gen_ai.client.token.usage",
 			},
 			expectedViolations: []expectedViolation{
+				{adviceID: "missing_attribute", messageContains: "agento11y.record"},
 				{adviceID: "missing_attribute", messageContains: "agento11y.generation.id"},
 				{adviceID: "missing_attribute", messageContains: "agento11y.generation.metadata"},
 			},
@@ -276,6 +277,7 @@ func executeScenario(t *testing.T, assets weavertest.Assets, test scenario) weav
 		otelgenai.WithTracerProvider(providers.traces),
 		otelgenai.WithMeterProvider(providers.metrics),
 		otelgenai.WithLoggerProvider(providers.logs),
+		otelgenai.WithConformantMetrics(),
 	}
 	options = append(options, test.options...)
 	handler := otelgenai.NewHandler(options...)

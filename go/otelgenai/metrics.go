@@ -24,13 +24,16 @@ var tokenUsageBuckets = []float64{
 	65536, 262144, 1048576, 4194304, 16777216, 67108864,
 }
 
-// These token types are outside the registry's input/output pair. An
-// instrumentation opts into the series with WithExtendedTokenTypes when it
-// needs cache and reasoning breakdowns.
+// These token types are outside the registry's input/output pair, which the
+// conventions allow because gen_ai.token.type is an open enum. Instrumentations
+// opt into the series with WithExtendedTokenTypes when they need cache and
+// reasoning breakdowns. WithConformantMetrics selects cache_creation instead
+// of cache_write for Usage.CacheWriteInputTokens.
 const (
-	TokenTypeCacheRead  = "cache_read"
-	TokenTypeCacheWrite = "cache_write"
-	TokenTypeReasoning  = "reasoning"
+	TokenTypeCacheRead     = "cache_read"
+	TokenTypeCacheWrite    = "cache_write"
+	TokenTypeCacheCreation = "cache_creation"
+	TokenTypeReasoning     = "reasoning"
 )
 
 // instruments holds the spec metric instruments. The genaiconv constructors
@@ -41,6 +44,7 @@ type instruments struct {
 	timeToFirstChunk   genaiconv.ClientOperationTimeToFirstChunk
 	timePerOutputChunk genaiconv.ClientOperationTimePerOutputChunk
 	extendedTokenTypes bool
+	conformantMetrics  bool
 }
 
 func newInstruments(meter metric.Meter) (instruments, error) {
@@ -111,9 +115,13 @@ func (i instruments) record(ctx context.Context, inv *Invocation, extra []attrib
 		{string(genaiconv.TokenTypeOutput), inv.Usage.OutputTokens},
 	}
 	if i.extendedTokenTypes {
+		cacheWriteType := TokenTypeCacheWrite
+		if i.conformantMetrics {
+			cacheWriteType = TokenTypeCacheCreation
+		}
 		buckets = append(buckets,
 			tokenBucket{TokenTypeCacheRead, inv.Usage.CacheReadInputTokens},
-			tokenBucket{TokenTypeCacheWrite, inv.Usage.CacheWriteInputTokens},
+			tokenBucket{cacheWriteType, inv.Usage.CacheWriteInputTokens},
 			tokenBucket{TokenTypeReasoning, inv.Usage.ReasoningTokens},
 		)
 	}
@@ -122,8 +130,10 @@ func (i instruments) record(ctx context.Context, inv *Invocation, extra []attrib
 			continue
 		}
 		attrs := append([]attribute.KeyValue(nil), extra...)
-		if errorType := inv.errorType(); errorType != "" {
-			attrs = append(attrs, semconv.ErrorTypeKey.String(errorType))
+		if !i.conformantMetrics {
+			if errorType := inv.errorType(); errorType != "" {
+				attrs = append(attrs, semconv.ErrorTypeKey.String(errorType))
+			}
 		}
 		attrs = append(attrs, semconv.GenAITokenTypeKey.String(bucket.tokenType))
 		i.tokenUsage.RecordSet(ctx, bucket.value, metricAttributeSet(inv, attrs...))

@@ -1,0 +1,47 @@
+{
+  "id": "gen-gemini-sync-1",
+  "conversation_id": "conv-9b2f",
+  "operation_name": "generateText",
+  "mode": "GENERATION_MODE_SYNC",
+  "trace_id": "00112233445566778899aabbccddeeff",
+  "span_id": "0011223344556677",
+  "model": {
+    "provider": "gemini",
+    "name": "gemini-2.5-pro"
+  },
+  "response_id": "resp_1",
+  "response_model": "gemini-2.5-pro-001",
+  "system_prompt": "Be concise.",
+  "output": [
+    {
+      "role": "MESSAGE_ROLE_ASSISTANT",
+      "parts": [
+        {
+          "tool_call": {
+            "id": "call_weather",
+            "name": "weather",
+            "input_json": "eyJjaXR5IjoiUGFyaXMifQ=="
+          }
+        },
+        {
+          "text": "It is 18C and sunny."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": "120",
+    "output_tokens": "40",
+    "total_tokens": "170",
+    "cache_read_input_tokens": "12",
+    "reasoning_tokens": "10"
+  },
+  "stop_reason": "STOP",
+  "started_at": "2026-06-10T14:00:00Z",
+  "completed_at": "2026-06-10T14:00:03Z",
+  "metadata": {
+    "model_version": "gemini-2.5-pro-001"
+  },
+  "agent_name": "assistant-gemini",
+  "agent_version": "1.0.0"
+}

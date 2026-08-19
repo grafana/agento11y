@@ -2,6 +2,7 @@ package agento11y
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,7 +18,9 @@ import (
 	agento11yv1 "github.com/grafana/agento11y/go/proto/agento11y/v1"
 	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -273,7 +276,7 @@ func TestExportAttemptTimesOutOnHungIngest(t *testing.T) {
 				if err == nil {
 					t.Fatalf("%s export against hung ingest returned nil error", export.name)
 				}
-				if !strings.Contains(strings.ToLower(err.Error()), "deadline exceeded") {
+				if !errors.Is(err, context.DeadlineExceeded) && status.Code(err) != codes.DeadlineExceeded {
 					t.Fatalf("%s export error = %v, want a deadline-exceeded failure", export.name, err)
 				}
 				if elapsed >= maxElapsed {

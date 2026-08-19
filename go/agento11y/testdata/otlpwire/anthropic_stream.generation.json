@@ -1,0 +1,44 @@
+{
+  "id": "gen-anthropic-stream-1",
+  "conversation_id": "conv-stream",
+  "operation_name": "streamText",
+  "mode": "GENERATION_MODE_STREAM",
+  "trace_id": "fedcba9876543210fedcba9876543210",
+  "span_id": "fedcba9876543210",
+  "model": {
+    "provider": "anthropic",
+    "name": "claude-sonnet-4-5"
+  },
+  "response_id": "msg_stream_1",
+  "response_model": "claude-sonnet-4-5",
+  "output": [
+    {
+      "role": "MESSAGE_ROLE_ASSISTANT",
+      "parts": [
+        {
+          "thinking": "look up tool"
+        },
+        {
+          "tool_call": {
+            "id": "toolu_2",
+            "name": "weather",
+            "input_json": "eyJjaXR5IjoiUGFyaXMifQ=="
+          }
+        },
+        {
+          "text": "It's 18C and sunny."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": "80",
+    "output_tokens": "25",
+    "total_tokens": "105"
+  },
+  "stop_reason": "end_turn",
+  "started_at": "2026-06-10T13:30:00Z",
+  "completed_at": "2026-06-10T13:30:02Z",
+  "agent_name": "assistant-anthropic",
+  "agent_version": "1.0.0"
+}

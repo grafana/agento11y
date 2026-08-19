@@ -346,6 +346,10 @@ func newGenerationExporter(cfg GenerationExportConfig) (generationExporter, erro
 		return newHTTPGenerationExporter(cfg)
 	case GenerationExportProtocolNone:
 		return newNoopGenerationExporter(nil), nil
+	case GenerationExportProtocolOTel:
+		// In otel mode generations travel on the OTel span pipeline, so the
+		// client has nothing to export over the gRPC or HTTP transports.
+		return newNoopGenerationExporter(nil), nil
 	default:
 		return nil, fmt.Errorf("unsupported generation export protocol %q", cfg.Protocol)
 	}
@@ -1061,6 +1065,15 @@ func (c *Client) enqueueWorkflowStep(step WorkflowStep) error {
 	}
 }
 
+// Flush blocks until the client has handed everything recorded so far to its
+// destination, and returns any error from that delivery.
+//
+// In otel export mode the destination is the tracer provider, so Flush
+// force-flushes that provider: callers use Flush as the proof that a batch
+// left the process before they discard their own copy of the batch. That
+// requires Config.TracerProvider. With only Config.Tracer set, the SDK cannot
+// reach the provider, and Flush returns ErrFlushNotVerifiable instead of a
+// success it cannot back.
 func (c *Client) Flush(ctx context.Context) error {
 	if c == nil {
 		return nil
@@ -1073,6 +1086,10 @@ func (c *Client) Flush(ctx context.Context) error {
 	c.queueMu.RUnlock()
 	if shuttingDown {
 		return ErrClientShutdown
+	}
+
+	if c.otelExportEnabled() {
+		return c.flushOTel(ctx)
 	}
 
 	ack := make(chan error, 1)
@@ -1115,6 +1132,16 @@ func (c *Client) Shutdown(ctx context.Context) error {
 
 		if err := c.exporter.Shutdown(ctx); err != nil {
 			shutdownErr = errors.Join(shutdownErr, err)
+		}
+
+		// In otel mode the generations are spans that the caller's provider
+		// still holds, and the queue drained above is empty. The force flush
+		// here is what keeps the documented "shut the client down before exit"
+		// true in that mode. The caller still shuts down the provider itself.
+		if c.otelExportEnabled() {
+			if err := c.flushOTel(ctx); err != nil && !errors.Is(err, ErrFlushNotVerifiable) {
+				shutdownErr = errors.Join(shutdownErr, err)
+			}
 		}
 	})
 

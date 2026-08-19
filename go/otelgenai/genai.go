@@ -22,6 +22,12 @@ import (
 const ScopeName = "github.com/grafana/agento11y/go/otelgenai"
 
 // SchemaURL is the semantic-convention schema the emitted telemetry follows.
+//
+// v1.41.0 is the last core semconv release that carried the GenAI conventions.
+// They now live in open-telemetry/semantic-conventions-genai, which has no
+// release and whose own README leaves its schema URL open, so there is no newer
+// URL to point at. The two attributes below are therefore conventions the
+// declared schema does not describe.
 const SchemaURL = semconv.SchemaURL
 
 // These attributes were added to the GenAI conventions after semconv v1.41.0,
@@ -92,6 +98,7 @@ type config struct {
 	capture            CaptureMode
 	emitEventOverride  *bool
 	extendedTokenTypes bool
+	conformantMetrics  bool
 }
 
 // Option configures a Handler.
@@ -141,9 +148,10 @@ func WithEndHook(hook EndHook) Option {
 	})
 }
 
-// WithExtendedTokenTypes makes the handler record the cache_read,
-// cache_write, and reasoning token series. By default, a handler records only
-// the registry's input and output token types.
+// WithExtendedTokenTypes makes the handler record the cache_read, cache_write,
+// and reasoning token series. By default, a handler records only the registry's
+// input and output token types. WithConformantMetrics changes cache_write to the
+// conventions' cache_creation spelling.
 //
 // Whether the extra series overlap the input count depends on the provider.
 // OpenAI counts cached tokens inside its input count, so recording cache_read
@@ -155,6 +163,17 @@ func WithEndHook(hook EndHook) Option {
 func WithExtendedTokenTypes() Option {
 	return optionFunc(func(c config) config {
 		c.extendedTokenTypes = true
+		return c
+	})
+}
+
+// WithConformantMetrics limits metric attributes to the GenAI conventions. It
+// uses cache_creation for cache-write input tokens and puts error.type only on
+// gen_ai.client.operation.duration. Without this option, token usage keeps the
+// cache_write spelling and error.type dimension for compatibility.
+func WithConformantMetrics() Option {
+	return optionFunc(func(c config) config {
+		c.conformantMetrics = true
 		return c
 	})
 }
@@ -251,6 +270,7 @@ func NewHandler(opts ...Option) *Handler {
 		extendedTokenTypes: cfg.extendedTokenTypes,
 	}
 	inst.extendedTokenTypes = handler.extendedTokenTypes
+	inst.conformantMetrics = cfg.conformantMetrics
 	handler.instruments = inst
 	return handler
 }

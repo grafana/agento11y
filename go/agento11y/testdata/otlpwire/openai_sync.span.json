@@ -1,0 +1,130 @@
+{
+  "trace_id": "ASNFZ4mrze8BI0VniavN7w==",
+  "span_id": "ASNFZ4mrze8=",
+  "name": "generateText gpt-4o-mini",
+  "kind": "SPAN_KIND_CLIENT",
+  "start_time_unix_nano": "1781092800000000000",
+  "end_time_unix_nano": "1781092801250000000",
+  "attributes": [
+    {
+      "key": "agento11y.generation.id",
+      "value": {
+        "string_value": "gen-openai-sync-1"
+      }
+    },
+    {
+      "key": "gen_ai.conversation.id",
+      "value": {
+        "string_value": "conv-9b2f"
+      }
+    },
+    {
+      "key": "gen_ai.operation.name",
+      "value": {
+        "string_value": "generateText"
+      }
+    },
+    {
+      "key": "gen_ai.provider.name",
+      "value": {
+        "string_value": "openai"
+      }
+    },
+    {
+      "key": "gen_ai.request.model",
+      "value": {
+        "string_value": "gpt-4o-mini"
+      }
+    },
+    {
+      "key": "gen_ai.response.id",
+      "value": {
+        "string_value": "chatcmpl_1"
+      }
+    },
+    {
+      "key": "gen_ai.response.model",
+      "value": {
+        "string_value": "gpt-4o-mini"
+      }
+    },
+    {
+      "key": "gen_ai.response.finish_reasons",
+      "value": {
+        "array_value": {
+          "values": [
+            {
+              "string_value": "tool_calls"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "key": "gen_ai.system_instructions",
+      "value": {
+        "string_value": "[{\"type\":\"text\",\"content\":\"You are concise.\"}]"
+      }
+    },
+    {
+      "key": "gen_ai.input.messages",
+      "value": {
+        "string_value": "[{\"role\":\"system\",\"parts\":[{\"type\":\"text\",\"content\":\"You are a helpful bot\"}]},{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is the weather in Paris?\"}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_weather\",\"response\":\"{\\\"temp_c\\\":18}\"}]}]"
+      }
+    },
+    {
+      "key": "gen_ai.output.messages",
+      "value": {
+        "string_value": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_weather\",\"name\":\"weather\",\"arguments\":{\"city\":\"Paris\"}}],\"finish_reason\":\"tool_calls\"}]"
+      }
+    },
+    {
+      "key": "gen_ai.usage.input_tokens",
+      "value": {
+        "int_value": "120"
+      }
+    },
+    {
+      "key": "gen_ai.usage.output_tokens",
+      "value": {
+        "int_value": "42"
+      }
+    },
+    {
+      "key": "agento11y.gen_ai.usage.total_tokens",
+      "value": {
+        "int_value": "162"
+      }
+    },
+    {
+      "key": "gen_ai.agent.name",
+      "value": {
+        "string_value": "assistant-openai"
+      }
+    },
+    {
+      "key": "gen_ai.agent.version",
+      "value": {
+        "string_value": "1.0.0"
+      }
+    },
+    {
+      "key": "agento11y.generation.parent_generation_ids",
+      "value": {
+        "array_value": {
+          "values": [
+            {
+              "string_value": "gen-abc123"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "key": "agento11y.agent.effective_version",
+      "value": {
+        "string_value": "sha256:6f314875d2b746b0c3b855ccde0dfe9842d13bf048cc043d99401f1246dbc549"
+      }
+    }
+  ]
+}
