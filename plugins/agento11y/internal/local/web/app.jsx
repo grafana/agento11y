@@ -3943,7 +3943,11 @@ function ConversationsView({
         return [...map.values()]
             .map((entry) => ({
                 ...entry,
-                cost: entry.costComplete ? entry.cost : null,
+                // Keep the priced sum when a workspace mixes priced and
+                // unpriced sessions. Null only when nothing in it can be
+                // priced, so share bars match totalCost.
+                cost:
+                    entry.costComplete || entry.cost > 0 ? entry.cost : null,
             }))
             .sort((a, b) => b.last - a.last);
     }, [rangeFiltered, prices]);
@@ -4308,16 +4312,18 @@ function ConversationsView({
             .sort((a, b) => (value(a) - value(b)) * direction)
             .map((group) => ({
                 ...group,
-                cost: group.costComplete ? group.cost : null,
+                cost: group.costComplete || group.cost > 0 ? group.cost : null,
             }));
     }, [sorted, groupBy, listSort, prices]);
     const groupedTotalCost = useMemo(() => {
         let cost = 0;
+        let priced = 0;
         for (const group of grouped) {
-            if (group.cost == null) return null;
+            if (group.cost == null) continue;
             cost += group.cost;
+            priced++;
         }
-        return cost;
+        return priced ? cost : null;
     }, [grouped]);
     const collapsed = useMemo(() => {
         if (
@@ -4535,7 +4541,16 @@ function ConversationsView({
                     onOpen={onOpen}
                 />
             ) : emptyStore ? (
-                history && <SettingsHistoryTab history={history} />
+                <React.Fragment>
+                    <div style={{ marginBottom: 16 }}>
+                        <Notice kind="info" title="No sessions yet">
+                            Nothing has been captured since you set up Grafana
+                            Agent Observability. You can import past sessions
+                            from your coding agents below.
+                        </Notice>
+                    </div>
+                    {history && <SettingsHistoryTab history={history} />}
+                </React.Fragment>
             ) : (
                 <React.Fragment>
                     <KpiStrip kpi={kpi} />
