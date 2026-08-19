@@ -227,6 +227,25 @@ func TestInstall(t *testing.T) {
 		assert.True(t, changed)
 		assert.Equal(t, 1, calls)
 	})
+
+	t.Run("legacy migration failure is reported so reconciliation retries", func(t *testing.T) {
+		withConfig(t, `{"plugin":["@grafana/sigil-opencode"]}`)
+		withWriteConfig(t, func(string, []byte) error {
+			return errors.New("permission denied")
+		})
+		withLookPath(t, func(string) (string, error) { return "/usr/local/bin/opencode", nil })
+		withRunInstall(t, func(context.Context, string, io.Writer) error {
+			t.Fatal("install must not run after a failed legacy migration")
+			return nil
+		})
+
+		var output bytes.Buffer
+		changed, err := Install(context.Background(), &output, nopLogger())
+		assert.False(t, changed)
+		assert.ErrorContains(t, err, "migrate legacy OpenCode plugin configuration")
+		assert.ErrorContains(t, err, "write")
+		assert.Contains(t, output.String(), "To migrate manually")
+	})
 }
 
 func TestLaunch_LocalEnv(t *testing.T) {
@@ -742,6 +761,13 @@ func withRunUpdate(t *testing.T, fn func(context.Context, string, io.Writer) err
 	prev := runUpdate
 	t.Cleanup(func() { runUpdate = prev })
 	runUpdate = fn
+}
+
+func withWriteConfig(t *testing.T, fn func(string, []byte) error) {
+	t.Helper()
+	prev := writeConfig
+	t.Cleanup(func() { writeConfig = prev })
+	writeConfig = fn
 }
 
 func withExecFn(t *testing.T, fn func(string, []string, []string) error) {

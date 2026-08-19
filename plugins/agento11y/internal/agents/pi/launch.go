@@ -20,6 +20,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 )
@@ -48,6 +49,14 @@ const (
 // ErrCLINotFound means the pi binary is not available on PATH for the current
 // user. Callers can defer setup until the host is installed.
 var ErrCLINotFound = errors.New("pi CLI not found")
+
+func init() {
+	agentinstall.Register(agentinstall.Spec{
+		Name:          "pi",
+		Install:       Install,
+		IsMissingHost: func(err error) bool { return errors.Is(err, ErrCLINotFound) },
+	})
+}
 
 // Test seams.
 var (

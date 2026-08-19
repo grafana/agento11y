@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
@@ -46,6 +47,15 @@ var (
 	runUninstall = defaultRunUninstall
 	pluginList   = defaultPluginList
 )
+
+func init() {
+	agentinstall.Register(agentinstall.Spec{
+		Name: "copilot",
+		Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
+			return Install()
+		},
+	})
+}
 
 // Launch installs the shared user-level Copilot hooks file (read by both
 // Copilot Chat in VS Code and the copilot CLI), resolves the `copilot` binary
