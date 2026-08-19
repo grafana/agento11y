@@ -81,8 +81,8 @@ framework to normalize `SourcePath` for every agent.
 
 ## Fields that are not in the fixture at all
 
-Each one is either live-only or import-only, so comparing it would fail for a
-reason that is not drift.
+Each field here is on one side only, or on both with values that cannot agree,
+so comparing it would fail for a reason that is not drift.
 
 | Field | Which side | Why |
 |-------|------------|-----|
@@ -90,7 +90,7 @@ reason that is not drift.
 | `max_tokens`, `temperature`, `top_p`, `tool_choice`, thinking budget | live only | Read from the `before_provider_request` payload. Not persisted. |
 | time to first token | live only | Observed from the first `message_update`. Not persisted. |
 | `tools[].description`, `tools[].input_schema_json` | live only | Read from pi's tool registry. The log records only the calls a turn made, so an imported turn carries name-only definitions for those tools, and which tools were offered but unused is unrecoverable. |
-| `tags` (`cwd`, `git.branch`) | live only | Resolved from `process.cwd()` per turn. The header's `cwd` is the session's start directory, not the turn's. |
+| `tags` (`cwd`, `git.branch`) | both, not compared | Both sides emit `cwd`, but live resolves it per turn and import reads the session's start directory. Only live emits `git.branch`; the log does not record a branch. |
 | `agent_version`, `effective_version` | live only | The plugin's own version. Nothing in the log says which version wrote it. |
 | `agent_name` | filled later | The importer leaves it empty and `Exporter.prepare` fills it from the agent ID, giving `pi`, which is what the plugin sends. |
 | `agento11y.sdk.*` metadata | live only | Stamped by the SDK that exports. |
