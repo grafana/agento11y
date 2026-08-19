@@ -3614,7 +3614,24 @@ function HelpTip({ text, ariaLabel }) {
         timerRef.current = setTimeout(() => setOpen(true), HELP_TIP_DELAY_MS);
     }
 
-    useEffect(() => clearTimer, []);
+    useEffect(() => {
+        function onScrollOrResize() {
+            if (timerRef.current != null) {
+                clearTimeout(timerRef.current);
+                timerRef.current = null;
+            }
+            setOpen(false);
+        }
+        // Capture so an inner pane (the session list) dismisses the fixed
+        // tooltip instead of leaving it at stale viewport coordinates.
+        window.addEventListener("scroll", onScrollOrResize, true);
+        window.addEventListener("resize", onScrollOrResize);
+        return () => {
+            window.removeEventListener("scroll", onScrollOrResize, true);
+            window.removeEventListener("resize", onScrollOrResize);
+            onScrollOrResize();
+        };
+    }, []);
 
     return (
         <span
