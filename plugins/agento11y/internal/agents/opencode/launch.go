@@ -23,21 +23,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/atomicfile"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/npmspec"
 	"github.com/tailscale/hujson"
 )
 
 const (
-	// PluginSource is the npm spec passed to `opencode plugin <pkg>`.
-	PluginSource = "@grafana/agento11y-opencode"
-	// PluginName is the package.json `name` of the plugin. Used to detect
-	// versioned npm specs (e.g. `@grafana/agento11y-opencode@0.6.0`) in the
-	// config probe.
+	// PluginName is the package.json `name` of the plugin. It is also the
+	// spec passed to `opencode plugin <pkg>`, and what the config probe
+	// compares an entry against after stripping any `@<version>` suffix, so
+	// an entry like `@grafana/agento11y-opencode@0.6.0` still matches.
 	PluginName = "@grafana/agento11y-opencode"
 	// legacyPluginName is the pre-rename package name. Existing configs may
 	// still reference it; treating it as installed avoids registering the
@@ -81,18 +81,18 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 	// refresh-skip below.
 	migrateLegacyConfig(stderr, logger)
 
-	// The periodic refresh installs PluginSource. When the config still
+	// The periodic refresh installs PluginName. When the config still
 	// references the legacy package name (because the migration above could
 	// not rewrite it), that would register the plugin a second time under the
 	// new name, so skip the refresh for legacy installs and leave the existing
 	// entry alone.
 	update := runUpdate
-	if src, found, err := installedPluginSource(); err == nil && found && stripNpmVersion(src) == legacyPluginName {
+	if src, found, err := installedPluginSource(); err == nil && found && npmspec.Name(src) == legacyPluginName {
 		update = nil
 	}
 	return launcher.Bootstrap(ctx, launcher.BootstrapSpec{
 		BinName:     "opencode",
-		PluginLabel: PluginSource,
+		PluginLabel: PluginName,
 		LookPath:    lookPath,
 		ExecFn:      execFn,
 		Args:        args,
@@ -106,14 +106,14 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 		Probe:           func(context.Context, string) (bool, error) { return pluginInstalled() },
 		ProbeErrLog:     "opencode config probe",
 		ProbeErrEcho:    true,
-		RegisterMessage: fmt.Sprintf("agento11y: installing %s into opencode\n", PluginSource),
+		RegisterMessage: fmt.Sprintf("agento11y: installing %s into opencode\n", PluginName),
 		Install:         runInstall,
 		InstallRecoveryHint: func(w io.Writer) {
-			fmt.Fprintf(w, "          opencode plugin %s --global\n", PluginSource)
+			fmt.Fprintf(w, "          opencode plugin %s --global\n", PluginName)
 		},
 		Update: update,
 		UpdateRecoveryHint: func(w io.Writer) {
-			fmt.Fprintf(w, "          opencode plugin %s --global --force\n", PluginSource)
+			fmt.Fprintf(w, "          opencode plugin %s --global --force\n", PluginName)
 		},
 		UpdateTTL:     updateCheckTTL,
 		BinaryVersion: binaryVersion,
@@ -142,13 +142,13 @@ func Install(ctx context.Context, stdout io.Writer, logger *log.Logger) (bool, e
 
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {
 	return launcher.RunSteps(ctx, bin, w, [][]string{
-		{"plugin", PluginSource, "--global"},
+		{"plugin", PluginName, "--global"},
 	})
 }
 
 func defaultRunUpdate(ctx context.Context, bin string, w io.Writer) error {
 	return launcher.RunSteps(ctx, bin, w, [][]string{
-		{"plugin", PluginSource, "--global", "--force"},
+		{"plugin", PluginName, "--global", "--force"},
 	})
 }
 
@@ -237,7 +237,7 @@ func legacyPluginOps(v hujson.Value) ([]byte, error) {
 		if !ok {
 			continue
 		}
-		switch stripNpmVersion(name) {
+		switch npmspec.Name(name) {
 		case legacyPluginName:
 			legacy = append(legacy, legacyEntry{index: i, tuple: isTuple})
 		case PluginName:
@@ -271,38 +271,15 @@ func legacyPluginOps(v hujson.Value) ([]byte, error) {
 
 // writeConfigAtomic replaces path with content through a temp file in the
 // same directory plus rename, so a crash never leaves a half-written config.
-// The original file's permission bits are preserved when they can be read.
+// The original file's permission bits are preserved when they can be read:
+// this file is opencode's, and a user who tightened it keeps that mode.
 func writeConfigAtomic(path string, content []byte) error {
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
 		mode = info.Mode().Perm()
 	}
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("temp file in %s: %w", dir, err)
-	}
-	tmpPath := tmp.Name()
-	cleanup := func() { _ = os.Remove(tmpPath) }
-	if _, err := tmp.Write(content); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return fmt.Errorf("write temp: %w", err)
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return fmt.Errorf("chmod temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return fmt.Errorf("close temp: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		cleanup()
-		return fmt.Errorf("rename to %s: %w", path, err)
-	}
-	return nil
+	_, err := atomicfile.WriteIfChanged(path, content, mode)
+	return err
 }
 
 // opencodeConfig is the subset of opencode's global config this launcher
@@ -347,7 +324,7 @@ func Status(_ context.Context) (installed bool, version string, err error) {
 	if version := cachedVersion(source); version != "" {
 		return true, version, nil
 	}
-	return true, versionFromNpmSpec(source), nil
+	return true, npmspec.Version(source), nil
 }
 
 // cachedVersion returns the version of the plugin opencode installed for a
@@ -361,7 +338,7 @@ func cachedVersion(source string) string {
 	if err != nil {
 		return ""
 	}
-	name := stripNpmVersion(source)
+	name := npmspec.Name(source)
 	// A scoped name and a spec both contain a `/`; convert it to the OS
 	// separator so `@scope/pkg` is two directories on Windows too.
 	pkg := filepath.FromSlash(name)
@@ -370,7 +347,9 @@ func cachedVersion(source string) string {
 		filepath.Join(cache, "node_modules", pkg),
 	}
 	for _, dir := range candidates {
-		if version := packageVersion(dir); version != "" {
+		// The cache tree is opencode's, so an unreadable package.json means
+		// the version is unknown rather than an error doctor reports.
+		if _, version, ok := npmspec.ReadPackageJSON(dir); ok && version != "" {
 			return version
 		}
 	}
@@ -382,27 +361,10 @@ func cachedVersion(source string) string {
 // bare package name to `<name>@latest` and passes anything else through, so a
 // pinned spec and a dist tag keep their own directories.
 func cachedPackageSpec(source string) string {
-	if versionFromNpmSpec(source) == "" {
+	if npmspec.Version(source) == "" {
 		return source + "@latest"
 	}
 	return source
-}
-
-// packageVersion reads the `version` a package directory's package.json
-// declares. A missing, unreadable, or malformed file means unknown — the file
-// belongs to opencode, so doctor never turns it into an error.
-func packageVersion(dir string) string {
-	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
-	if err != nil {
-		return ""
-	}
-	var pkg struct {
-		Version string `json:"version"`
-	}
-	if err := json.Unmarshal(data, &pkg); err != nil {
-		return ""
-	}
-	return pkg.Version
 }
 
 // installedPluginSource reads opencode's global config and returns the plugin
@@ -480,18 +442,6 @@ func readConfigFile() (path string, data []byte, err error) {
 	return "", nil, nil
 }
 
-// versionFromNpmSpec returns the pinned version of a scoped npm spec, e.g.
-// "1.2.3" from "@grafana/agento11y-opencode@1.2.3". The leading `@` of a scoped
-// package is part of the name, so only a later `@` separates the version.
-// Returns "" for an unpinned spec.
-func versionFromNpmSpec(spec string) string {
-	at := strings.LastIndex(spec, "@")
-	if at <= 0 {
-		return ""
-	}
-	return spec[at+1:]
-}
-
 // sourceMatchesPlugin returns true when a plugin entry identifies the
 // @grafana/agento11y-opencode package (or its legacy @grafana/sigil-opencode
 // name), accounting for optional `@<version>` suffixes (e.g.
@@ -500,21 +450,8 @@ func sourceMatchesPlugin(source string) bool {
 	if source == "" {
 		return false
 	}
-	name := stripNpmVersion(source)
+	name := npmspec.Name(source)
 	return name == PluginName || name == legacyPluginName
-}
-
-// stripNpmVersion returns the package name portion of an npm spec,
-// stripping the trailing `@<version>` segment if present. Scoped
-// packages start with `@scope/...`; the leading `@` (index 0) is part of
-// the name, not a version separator, so we look for the LAST `@` after
-// index 0.
-func stripNpmVersion(spec string) string {
-	at := strings.LastIndex(spec, "@")
-	if at <= 0 {
-		return spec
-	}
-	return spec[:at]
 }
 
 // defaultConfigDir returns the directory holding opencode's global

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/atomicfile"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
@@ -221,39 +222,14 @@ func writeUserHooks() (path string, wrote bool, err error) {
 	if err != nil {
 		return "", false, err
 	}
-	if existing, readErr := os.ReadFile(path); readErr == nil && bytes.Equal(existing, content) {
-		removeLegacyUserHooks(dir)
-		return path, false, nil
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", false, fmt.Errorf("mkdir %s: %w", dir, err)
-	}
-	tmp, err := os.CreateTemp(dir, userHooksFileName+".tmp-*")
+	wrote, err = atomicfile.WriteIfChanged(path, content, 0o644)
 	if err != nil {
-		return "", false, fmt.Errorf("temp file in %s: %w", dir, err)
+		return "", false, err
 	}
-	tmpPath := tmp.Name()
-	cleanup := func() { _ = os.Remove(tmpPath) }
-	if _, err := tmp.Write(content); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return "", false, fmt.Errorf("write temp: %w", err)
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return "", false, fmt.Errorf("chmod temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return "", false, fmt.Errorf("close temp: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		cleanup()
-		return "", false, fmt.Errorf("rename to %s: %w", path, err)
-	}
+	// Remove the legacy file only after the new one is on disk: a failed write
+	// above leaves sigil.json as the install's only hooks file.
 	removeLegacyUserHooks(dir)
-	return path, true, nil
+	return path, wrote, nil
 }
 
 // removeLegacyUserHooks deletes the pre-rename hooks file: Copilot runs every

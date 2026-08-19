@@ -11,6 +11,7 @@ import (
 
 	toml "github.com/pelletier/go-toml/v2"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/atomicfile"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
 )
 
@@ -166,35 +167,13 @@ func ensureHookInstalled() (string, bool, error) {
 		return path, false, nil
 	}
 
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return path, false, fmt.Errorf("mkdir %s: %w", dir, err)
-	}
-	tmp, err := os.CreateTemp(dir, "hooks.toml.tmp-*")
+	// mergeHooksTOML already compared the trimmed bytes and found a
+	// difference, so the writer's own equality check cannot skip this write.
+	wrote, err := atomicfile.WriteIfChanged(path, updated, 0o644)
 	if err != nil {
-		return path, false, fmt.Errorf("temp file in %s: %w", dir, err)
+		return path, false, err
 	}
-	tmpPath := tmp.Name()
-	cleanup := func() { _ = os.Remove(tmpPath) }
-	if _, err := tmp.Write(updated); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return path, false, fmt.Errorf("write temp: %w", err)
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return path, false, fmt.Errorf("chmod temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return path, false, fmt.Errorf("close temp: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		cleanup()
-		return path, false, fmt.Errorf("rename to %s: %w", path, err)
-	}
-	return path, true, nil
+	return path, wrote, nil
 }
 
 // mergeHooksTOML decodes the existing hooks.toml bytes, drops entries with

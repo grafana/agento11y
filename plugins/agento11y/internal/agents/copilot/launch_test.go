@@ -532,6 +532,27 @@ func TestWriteUserHooks_KeepsLegacyFileOnFailure(t *testing.T) {
 	assert.FileExists(t, legacyPath, "legacy hooks file must survive a failed write")
 }
 
+// A read-only hooks directory fails the write itself rather than the
+// executable lookup, and sigil.json is still the install's only hooks file, so
+// it must survive.
+func TestWriteUserHooks_KeepsLegacyFileWhenHooksDirReadOnly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("COPILOT_HOME", home)
+	withExecutable(t, "/usr/local/bin/agento11y")
+	dir := filepath.Join(home, "hooks")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	legacyPath := filepath.Join(dir, "sigil.json")
+	require.NoError(t, os.WriteFile(legacyPath, []byte("{}"), 0o644))
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	_, wrote, err := writeUserHooks()
+	require.Error(t, err)
+	assert.False(t, wrote)
+	assert.FileExists(t, legacyPath, "legacy hooks file must survive a blocked write")
+	assert.NoFileExists(t, filepath.Join(dir, userHooksFileName))
+}
+
 // When agento11y.json is already up to date the write is skipped, but a
 // leftover legacy sigil.json must still be removed or every hook fires twice.
 func TestWriteUserHooks_RemovesLegacyFileWhenUpToDate(t *testing.T) {

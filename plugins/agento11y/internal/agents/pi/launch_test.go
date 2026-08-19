@@ -820,24 +820,6 @@ func TestPluginInstalled_AbsoluteLocalPath(t *testing.T) {
 	}
 }
 
-func TestStripNpmVersion(t *testing.T) {
-	cases := map[string]string{
-		"@grafana/agento11y-pi":       "@grafana/agento11y-pi",
-		"@grafana/agento11y-pi@0.1.1": "@grafana/agento11y-pi",
-		"@grafana/agento11y-pi@next":  "@grafana/agento11y-pi",
-		"pkg":                         "pkg",
-		"pkg@1.0.0":                   "pkg",
-		"@grafana/agento11y-pi-extra": "@grafana/agento11y-pi-extra",
-	}
-	for in, want := range cases {
-		t.Run(in, func(t *testing.T) {
-			if got := stripNpmVersion(in); got != want {
-				t.Fatalf("stripNpmVersion(%q) = %q, want %q", in, got, want)
-			}
-		})
-	}
-}
-
 // writeFiles writes each entry under root, creating parent directories. Keys
 // are slash-separated paths relative to root.
 func writeFiles(t *testing.T, root string, files map[string]string) {
@@ -890,27 +872,6 @@ func withExecFn(t *testing.T, fn func(string, []string, []string) error) {
 
 func nopLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
-}
-
-func TestVersionFromPiSource(t *testing.T) {
-	cases := []struct {
-		source string
-		want   string
-	}{
-		{source: "npm:@grafana/agento11y-pi", want: ""},
-		{source: "npm:@grafana/agento11y-pi@0.1.1", want: "0.1.1"},
-		{source: "npm:@grafana/agento11y-pi@1.0.0-rc.3", want: "1.0.0-rc.3"},
-		{source: "npm:@grafana/agento11y-pi@next", want: "next"},
-		{source: "./local-plugin", want: ""},
-		{source: "/abs/path", want: ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.source, func(t *testing.T) {
-			if got := versionFromPiSource(tc.source); got != tc.want {
-				t.Fatalf("versionFromPiSource(%q) = %q, want %q", tc.source, got, tc.want)
-			}
-		})
-	}
 }
 
 func TestStatus(t *testing.T) {
