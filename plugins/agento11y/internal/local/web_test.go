@@ -219,6 +219,32 @@ console.log("ASSERTIONS_OK");
 	appJSXAssertions(t, script)
 }
 
+func TestPriceLookupCanonicalizesCursorGrok(t *testing.T) {
+	script := `
+const assert = require("assert").strict;
+assert.equal(canonicalizePriceModel("cursor-grok-4.6-high-fast"), "grok-4.6");
+assert.equal(canonicalizePriceModel("cursor-grok-4.6-xhigh-fast"), "grok-4.6");
+assert.equal(canonicalizePriceModel("cursor-grok-4.6-xhigh"), "grok-4.6");
+assert.equal(canonicalizePriceModel("cursor-grok-4.5-medium"), "grok-4.5");
+assert.equal(canonicalizePriceModel("grok-4.6"), "grok-4.6");
+assert.equal(canonicalizePriceModel("claude-opus-4-8"), "claude-opus-4-8");
+assert.equal(canonicalizePriceModel("composer-2.5-fast"), "composer-2.5-fast");
+
+const prices = { "grok-4.6": { input: 2, output: 6, cache_read: 0.5 } };
+assert.deepEqual(liveModelCost(prices, "grok-4.6"), prices["grok-4.6"]);
+assert.deepEqual(liveModelCost(prices, "cursor-grok-4.6-high-fast"), prices["grok-4.6"]);
+assert.deepEqual(liveModelCost(prices, "cursor-grok-4.6-xhigh-fast"), prices["grok-4.6"]);
+assert.equal(liveModelCost(prices, "cursor-grok-4.5-high-fast"), null);
+
+const buckets = { fresh_input: 1e6, output: 0, cache_read: 0, cache_write: 0, reasoning: 0 };
+assert.equal(conversationCost({ models: ["grok-4.6"], token_buckets: buckets }, prices), 2);
+assert.equal(conversationCost({ models: ["cursor-grok-4.6-high-fast"], token_buckets: buckets }, prices), 2);
+assert.equal(conversationCost({ models: ["cursor-grok-4.6-high-fast"], token_buckets: buckets }, {}), null);
+console.log("ASSERTIONS_OK");
+`
+	appJSXAssertionsRegion(t, script, "const MODEL_PRICES = [", "function workspaceLabel(")
+}
+
 // TestSettingsHelperScenarios pins the pure functions behind the Cloud settings
 // panel: the pasted-block parser (which re-implements applyPaste in
 // internal/login/login.go, so the two grammars can drift), the setup-page link,
@@ -360,6 +386,11 @@ console.log("ASSERTIONS_OK");
 // settings panel; components in it are never rendered, so React is a stub.
 func appJSXAssertions(t *testing.T, script string) {
 	t.Helper()
+	appJSXAssertionsRegion(t, script, "function partKind(", "// ============================================================\n// App container")
+}
+
+func appJSXAssertionsRegion(t *testing.T, script, startNeedle, endNeedle string) {
+	t.Helper()
 	babel, err := webStatic.ReadFile("web/vendor/babel.min.js")
 	require.NoError(t, err)
 
@@ -375,8 +406,10 @@ const Babel = require(process.argv[2]);
 const source = fs.readFileSync(process.argv[3], "utf8");
 const compiled = Babel.transform(source, { filename: "app.jsx", presets: ["react"] }).code;
 if (process.env.RUN_APP_JSX_ASSERTIONS === "1") {
-  const start = compiled.indexOf("function partKind(");
-  const end = compiled.indexOf("// ============================================================\n// App container", start);
+  const startNeedle = process.env.APP_JSX_START;
+  const endNeedle = process.env.APP_JSX_END;
+  const start = compiled.indexOf(startNeedle);
+  const end = compiled.indexOf(endNeedle, start);
   if (start < 0 || end < 0) throw new Error("helper function region not found");
   // URL is a browser global the markdown link and stack URL checks rely on.
   const context = { console, require, URL, React: { createElement() {} } };
@@ -395,7 +428,11 @@ if (process.env.RUN_APP_JSX_ASSERTIONS === "1") {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "node", scriptPath, babelPath, appPath, assertPath)
 	if script != "" {
-		cmd.Env = append(os.Environ(), "RUN_APP_JSX_ASSERTIONS=1")
+		cmd.Env = append(os.Environ(),
+			"RUN_APP_JSX_ASSERTIONS=1",
+			"APP_JSX_START="+startNeedle,
+			"APP_JSX_END="+endNeedle,
+		)
 	}
 	output, err := cmd.CombinedOutput()
 	require.NoErrorf(t, err, "Babel/helper checks failed for embedded web/app.jsx:\n%s", output)

@@ -242,6 +242,47 @@ function modelPrice(model) {
     return MODEL_PRICES.find((p) => m.includes(p.match)) || null;
 }
 
+// Cursor hosted Grok SKUs are `cursor-grok-4.6-high-fast`. models.dev (and
+// the Cloud catalog) key the same model as `grok-4.6`. Keep this suffix
+// list in sync with canonicalizeCursorModel in the cursor mapper.
+const CURSOR_GROK_EFFORT_SUFFIXES = [
+    "-xhigh-fast",
+    "-extra-high-fast",
+    "-high-fast",
+    "-low-fast",
+    "-medium-fast",
+    "-extra-high",
+    "-xhigh",
+    "-high",
+    "-medium",
+    "-low",
+];
+
+function canonicalizePriceModel(model) {
+    const trimmed = (model || "").trim();
+    if (!trimmed) return trimmed;
+    const lower = trimmed.toLowerCase();
+    const prefix = "cursor-";
+    if (!lower.startsWith(prefix)) return trimmed;
+    const rest = trimmed.slice(prefix.length);
+    const restLower = lower.slice(prefix.length);
+    if (!restLower.includes("grok")) return trimmed;
+    for (const suffix of CURSOR_GROK_EFFORT_SUFFIXES) {
+        if (restLower.endsWith(suffix)) {
+            return rest.slice(0, rest.length - suffix.length);
+        }
+    }
+    return rest;
+}
+
+function liveModelCost(prices, model) {
+    if (!prices || !model) return null;
+    if (prices[model]) return prices[model];
+    const canonical = canonicalizePriceModel(model);
+    if (canonical !== model && prices[canonical]) return prices[canonical];
+    return null;
+}
+
 // models.dev is the authoritative, multi-provider price catalog (OpenAI,
 // Anthropic, Gemini, …) — strictly better than the bundled table, and it
 // carries explicit per-model cache_read / cache_write rates instead of the
@@ -328,7 +369,7 @@ function conversationCost(c, prices) {
     if (!b) return null;
     const model = (c.models || [])[0];
     let inRate, outRate, cacheReadRate, cacheWriteRate;
-    const live = prices && model && prices[model];
+    const live = liveModelCost(prices, model);
     if (live) {
         inRate = live.input;
         outRate = live.output != null ? live.output : live.input;
