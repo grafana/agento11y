@@ -136,6 +136,10 @@ func TestInferProvider(t *testing.T) {
 		{"o4-fast", "openai"},
 		{"gemini-2.5-pro", "google"},
 		{"models/gemini-pro", "google"}, // substring match anywhere
+		{"grok-4.5", "x-ai"},
+		{"grok-4.6", "x-ai"},
+		{"cursor-grok-4.6-high-fast", "x-ai"}, // substring match anywhere
+		{"x-ai/grok-4", "x-ai"},
 		{"some-random-model", ""},
 		{"", ""},
 	}

@@ -99,18 +99,10 @@ func MapFragment(in Inputs) Mapped {
 	completedAt := timeutil.ParseTimestamp(frag.LastEventAt, now)
 	startedAt := timeutil.ParseTimestamp(frag.StartedAt, completedAt)
 
-	// Provider/model fallback: SDK validation requires both to be non-empty.
-	provider := frag.Provider
-	if provider == "" {
-		provider = mapperutil.InferProvider(frag.Model)
-	}
-	if provider == "" {
-		provider = "cursor"
-	}
-	modelName := frag.Model
-	if modelName == "" {
-		modelName = "unknown"
-	}
+	// SDK validation requires provider and name. Cursor Grok SKUs are rewritten
+	// onto the catalog id (x-ai/grok-4.5) so Agent Observability can price
+	// the turn; the composer slug stays on response_model.
+	provider, modelName, responseModel := resolveModel(frag)
 	model := agento11y.ModelRef{Provider: provider, Name: modelName}
 
 	stopStatus := resolveStopStatus(in.Stop)
@@ -178,7 +170,7 @@ func MapFragment(in Inputs) Mapped {
 		Mode:              agento11y.GenerationModeSync,
 		OperationName:     "generateText",
 		Model:             model,
-		ResponseModel:     modelName,
+		ResponseModel:     responseModel,
 		Input:             input,
 		Output:            output,
 		Tools:             toolDefs,
@@ -199,6 +191,77 @@ func MapFragment(in Inputs) Mapped {
 		mapped.CallError = extractCallError(in.Stop, red)
 	}
 	return mapped
+}
+
+// resolveModel picks the provider and catalog model name for a Cursor turn.
+// SDK validation requires both to be non-empty. Cursor's generic provider
+// string "cursor" is treated as unset so a recognisable model (Grok, Claude)
+// still infers its vendor; that is what the model-card catalog keys prices
+// under. The composer slug is returned separately as responseModel.
+func resolveModel(frag *fragment.Fragment) (provider, catalogName, responseModel string) {
+	responseModel = strings.TrimSpace(frag.Model)
+	if responseModel == "" {
+		responseModel = "unknown"
+	}
+	catalogName = canonicalizeCursorModel(responseModel)
+
+	inferred := mapperutil.InferProvider(catalogName)
+	if inferred == "" {
+		inferred = mapperutil.InferProvider(responseModel)
+	}
+
+	provider = strings.TrimSpace(frag.Provider)
+	if provider == "" || strings.EqualFold(provider, "cursor") {
+		if inferred != "" {
+			provider = inferred
+		} else if provider == "" {
+			provider = "cursor"
+		}
+	}
+	return provider, catalogName, responseModel
+}
+
+// cursorGrokEffortSuffixes are thinking/speed tiers Cursor appends to hosted
+// Grok SKUs (`cursor-grok-4.6-high-fast`). Longest first so "-high-fast" is
+// not reduced to "-high" plus a leftover "-fast". Bare "-fast" is omitted:
+// xAI ships models named grok-*-fast, and those names only reach this path
+// without a cursor- prefix.
+var cursorGrokEffortSuffixes = []string{
+	"-high-fast",
+	"-low-fast",
+	"-medium-fast",
+	"-extra-high",
+	"-high",
+	"-medium",
+	"-low",
+}
+
+// canonicalizeCursorModel maps a Cursor composer slug onto the catalog name
+// Agent Observability prices against. Hosted Grok SKUs are prefixed with
+// "cursor-" and often carry an effort tier; stripping both yields grok-4.5
+// from cursor-grok-4.5-high-fast. Names that are not cursor-grok SKUs are
+// returned unchanged, including a bare grok-4.5 model_id.
+func canonicalizeCursorModel(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return trimmed
+	}
+	lower := strings.ToLower(trimmed)
+	const cursorPrefix = "cursor-"
+	if !strings.HasPrefix(lower, cursorPrefix) {
+		return trimmed
+	}
+	rest := trimmed[len(cursorPrefix):]
+	restLower := lower[len(cursorPrefix):]
+	if !strings.Contains(restLower, "grok") {
+		return trimmed
+	}
+	for _, suffix := range cursorGrokEffortSuffixes {
+		if strings.HasSuffix(restLower, suffix) {
+			return rest[:len(rest)-len(suffix)]
+		}
+	}
+	return rest
 }
 
 // conversationTitle is the human-readable list label for this turn. The

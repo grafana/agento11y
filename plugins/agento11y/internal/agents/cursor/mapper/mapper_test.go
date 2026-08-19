@@ -471,7 +471,10 @@ func TestMapFragment_InfersProviderFromModel(t *testing.T) {
 		{"gpt-5", "openai"},
 		{"o3-mini", "openai"},
 		{"gemini-2.5-pro", "google"},
+		{"grok-4.5", "x-ai"},
+		{"cursor-grok-4.6-high-fast", "x-ai"},
 		{"some-random-model", "cursor"}, // no match → cursor fallback
+		{"composer-2.5-fast", "cursor"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.model, func(t *testing.T) {
@@ -479,6 +482,111 @@ func TestMapFragment_InfersProviderFromModel(t *testing.T) {
 			got := MapFragment(Inputs{Fragment: frag, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: fixedTime})
 			if got.Generation.Model.Provider != tc.want {
 				t.Errorf("provider for model %q = %q; want %q", tc.model, got.Generation.Model.Provider, tc.want)
+			}
+		})
+	}
+}
+
+func TestCanonicalizeCursorModel(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"cursor-grok-4.6-high-fast", "grok-4.6"},
+		{"cursor-grok-4.5-high-fast", "grok-4.5"},
+		{"cursor-grok-4.5-medium", "grok-4.5"},
+		{"cursor-grok-4.5", "grok-4.5"},
+		{"CURSOR-GROK-4.6-HIGH-FAST", "GROK-4.6"},
+		{"grok-4.5", "grok-4.5"},           // already a catalog id
+		{"grok-4.1-fast", "grok-4.1-fast"}, // xAI's own *-fast SKU
+		{"claude-sonnet-4-6", "claude-sonnet-4-6"},
+		{"claude-opus-4-8-thinking-max", "claude-opus-4-8-thinking-max"},
+		{"composer-2.5-fast", "composer-2.5-fast"},
+		{"gpt-5-cursor", "gpt-5-cursor"},
+		{"cursor-composer-2.5-fast", "cursor-composer-2.5-fast"}, // not grok
+		{"", ""},
+		{"  cursor-grok-4.6-high-fast  ", "grok-4.6"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			if got := canonicalizeCursorModel(tc.in); got != tc.want {
+				t.Errorf("canonicalizeCursorModel(%q) = %q; want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMapFragment_CanonicalizesCursorGrokForPricing(t *testing.T) {
+	cases := []struct {
+		name         string
+		model        string
+		provider     string
+		wantProvider string
+		wantName     string
+		wantResponse string
+	}{
+		{
+			name:         "high-fast slug",
+			model:        "cursor-grok-4.6-high-fast",
+			wantProvider: "x-ai",
+			wantName:     "grok-4.6",
+			wantResponse: "cursor-grok-4.6-high-fast",
+		},
+		{
+			name:         "medium slug",
+			model:        "cursor-grok-4.5-medium",
+			wantProvider: "x-ai",
+			wantName:     "grok-4.5",
+			wantResponse: "cursor-grok-4.5-medium",
+		},
+		{
+			name:         "bare model_id",
+			model:        "grok-4.5",
+			wantProvider: "x-ai",
+			wantName:     "grok-4.5",
+			wantResponse: "grok-4.5",
+		},
+		{
+			name:         "generic cursor provider is overridden",
+			model:        "cursor-grok-4.5-high-fast",
+			provider:     "cursor",
+			wantProvider: "x-ai",
+			wantName:     "grok-4.5",
+			wantResponse: "cursor-grok-4.5-high-fast",
+		},
+		{
+			name:         "explicit vendor is kept",
+			model:        "cursor-grok-4.5-high-fast",
+			provider:     "xai",
+			wantProvider: "xai",
+			wantName:     "grok-4.5",
+			wantResponse: "cursor-grok-4.5-high-fast",
+		},
+		{
+			name:         "claude composer slug is unchanged",
+			model:        "claude-opus-4-8-thinking-max",
+			wantProvider: "anthropic",
+			wantName:     "claude-opus-4-8-thinking-max",
+			wantResponse: "claude-opus-4-8-thinking-max",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			frag := &fragment.Fragment{
+				ConversationID: "c",
+				GenerationID:   "g",
+				Model:          tc.model,
+				Provider:       tc.provider,
+			}
+			got := MapFragment(Inputs{Fragment: frag, ContentCapture: agento11y.ContentCaptureModeMetadataOnly, Now: fixedTime})
+			if got.Generation.Model.Provider != tc.wantProvider {
+				t.Errorf("Provider = %q; want %q", got.Generation.Model.Provider, tc.wantProvider)
+			}
+			if got.Generation.Model.Name != tc.wantName {
+				t.Errorf("Name = %q; want %q", got.Generation.Model.Name, tc.wantName)
+			}
+			if got.Generation.ResponseModel != tc.wantResponse {
+				t.Errorf("ResponseModel = %q; want %q", got.Generation.ResponseModel, tc.wantResponse)
+			}
+			if got.Start.Model.Provider != tc.wantProvider || got.Start.Model.Name != tc.wantName {
+				t.Errorf("Start.Model = %+v; want %s/%s", got.Start.Model, tc.wantProvider, tc.wantName)
 			}
 		})
 	}
