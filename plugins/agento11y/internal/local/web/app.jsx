@@ -4412,23 +4412,6 @@ function ConversationsView({
         };
     }, [filtered, activeWorkspace, prices]);
 
-    const emptyStore =
-        !error &&
-        !loading &&
-        !searchActive &&
-        activeWorkspace == null &&
-        rangeFiltered.length === 0 &&
-        (storeCount === 0 ||
-            (storeCount == null && conversations.length === 0));
-    const hasSessions = storeCount > 0 || conversations.length > 0;
-    // Offers stay `show` until the user imports or dismisses, so a store
-    // filled by live capture still gets the Settings → History hint. A
-    // completed first import answers the offer and the hint stays gone.
-    const importUnused = (history && history.offers
-        ? history.offers
-        : []
-    ).some((offer) => offer.show);
-
     return (
         <PageShell maxWidth={1400}>
             <PageHero
@@ -4481,15 +4464,12 @@ function ConversationsView({
                           ]
                 }
             />
-            {!searchActive &&
-                (history && importRunIsActive(history.run) ? (
-                    <HistoryImportProgress
-                        run={history.run}
-                        onCancel={history.cancel}
-                    />
-                ) : hasSessions && importUnused ? (
-                    <ImportHintBanner onOpenSettings={onOpenSettings} />
-                ) : null)}
+            {history && (
+                <HistoryImportBanner
+                    history={history}
+                    onOpenSettings={onOpenSettings}
+                />
+            )}
             <FilterBar
                 query={query}
                 onQueryChange={setQuery}
@@ -4540,17 +4520,6 @@ function ConversationsView({
                     now={now}
                     onOpen={onOpen}
                 />
-            ) : emptyStore ? (
-                <React.Fragment>
-                    <div style={{ marginBottom: 16 }}>
-                        <Notice kind="info" title="No sessions yet">
-                            Nothing has been captured since you set up Grafana
-                            Agent Observability. You can import past sessions
-                            from your coding agents below.
-                        </Notice>
-                    </div>
-                    {history && <SettingsHistoryTab history={history} />}
-                </React.Fragment>
             ) : (
                 <React.Fragment>
                     <KpiStrip kpi={kpi} />
@@ -4745,8 +4714,38 @@ function ConversationsView({
                         {/* The list request is range-scoped, so an empty page does not
                             mean an empty store. storeCount comes from the response and
                             decides which notice applies; null (no response yet, or an
-                            older daemon) falls back to reading the page. The empty-store
-                            case is handled above. */}
+                            older daemon) falls back to reading the page. */}
+                        {!error &&
+                            !loading &&
+                            activeWorkspace == null &&
+                            rangeFiltered.length === 0 &&
+                            (storeCount === 0 ||
+                                (storeCount == null &&
+                                    conversations.length === 0)) && (
+                                <div style={{ padding: 16 }}>
+                                    <Notice
+                                        kind="info"
+                                        title="No sessions yet"
+                                    >
+                                        Run an agent against this daemon
+                                        with{" "}
+                                        <code
+                                            style={{ color: "var(--fg1)" }}
+                                        >
+                                            agento11y pi --local
+                                        </code>{" "}
+                                        or{" "}
+                                        <code
+                                            style={{ color: "var(--fg1)" }}
+                                        >
+                                            agento11y claude --local
+                                        </code>
+                                        . Captured generations appear here
+                                        as soon as the agent emits its first
+                                        one.
+                                    </Notice>
+                                </div>
+                            )}
                         {!error &&
                             !loading &&
                             activeWorkspace == null &&
@@ -8278,126 +8277,129 @@ function useHistoryImport(liveRun) {
     };
 }
 
-const IMPORT_HINT_KEY = "sigil.importHint.v1";
+function formatImportTurns(offer) {
+    const turns = offer.turns || 0;
+    const count = `${turns.toLocaleString()} turn${turns === 1 ? "" : "s"}`;
+    return offer.approx_turns ? `about ${count}` : count;
+}
 
-// ImportHintBanner points at Settings → History until the user dismisses
-// it. Shown only when the store already has sessions and the first-use
-// import was never used (the daemon still has an unanswered offer). An
-// empty store gets the full import card instead. Dismiss lives in
-// localStorage.
-function ImportHintBanner({ onOpenSettings }) {
-    const [dismissed, setDismissed] = useState(() => {
-        try {
-            return localStorage.getItem(IMPORT_HINT_KEY) === "1";
-        } catch {
-            return false;
-        }
-    });
-    if (dismissed) return null;
-
-    function dismiss() {
-        try {
-            localStorage.setItem(IMPORT_HINT_KEY, "1");
-        } catch {
-            /* quota / private mode */
-        }
-        setDismissed(true);
+// HistoryImportBanner offers a backfill when discovery found sessions the
+// store does not have yet. Its text is metadata only: session counts and
+// turn counts, never a prompt or a title.
+function HistoryImportBanner({ history, onOpenSettings }) {
+    const offer = (history.offers || []).find((o) => o.show);
+    const run = history.run;
+    if (importRunIsActive(run)) {
+        return <HistoryImportProgress run={run} onCancel={history.cancel} />;
     }
-
-    function openHistory(e) {
-        if (!isPlainLeftClick(e)) return;
-        e.preventDefault();
-        if (onOpenSettings) onOpenSettings("history");
-    }
-
+    if (!offer) return null;
     return (
         <div
-            role="status"
             style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 10,
-                height: 34,
-                padding: "0 6px 0 0",
+                gap: 12,
+                padding: "10px 14px",
                 marginBottom: 14,
                 borderRadius: 2,
-                border: "1px solid var(--border-medium)",
-                borderLeft: "2px solid var(--info-text)",
-                background: "rgba(24,27,31,0.78)",
-                boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.12)",
+                border: "1px solid var(--info-border)",
+                background: "var(--info-transparent)",
             }}
         >
+            <Icon
+                name="clock"
+                size={15}
+                style={{ color: "var(--info-text)", flex: "none" }}
+            />
             <span
-                aria-hidden="true"
                 style={{
-                    width: 22,
-                    height: 22,
-                    marginLeft: 8,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
+                    fontSize: 10.5,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.6,
+                    color: "var(--fg3)",
                     flex: "none",
-                    borderRadius: 2,
-                    background: "var(--info-transparent)",
-                    color: "var(--info-text)",
                 }}
             >
-                <Icon name="clock" size={13} />
+                Existing history
             </span>
             <span
                 style={{
-                    minWidth: 0,
                     fontSize: 12.5,
-                    lineHeight: "34px",
                     color: "var(--fg2)",
-                    whiteSpace: "nowrap",
+                    minWidth: 0,
                     overflow: "hidden",
                     textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
                 }}
             >
-                Import previous sessions from your coding agents in{" "}
-                <a
-                    href={settingsPath("history")}
-                    onClick={openHistory}
+                {offer.display_name} wrote {offer.sessions} session
+                {offer.sessions === 1 ? "" : "s"} ({formatImportTurns(offer)})
+                to this machine in the last 90 days. Importing adds the ones
+                this viewer does not have yet, and sends nothing to Grafana
+                Cloud.
+            </span>
+            {history.error && (
+                <span
                     style={{
-                        color: "var(--info-text)",
-                        fontWeight: 500,
-                        textDecoration: "none",
-                    }}
-                    onMouseEnter={(e) => {
-                        e.currentTarget.style.textDecoration = "underline";
-                        e.currentTarget.style.textUnderlineOffset = "3px";
-                    }}
-                    onMouseLeave={(e) => {
-                        e.currentTarget.style.textDecoration = "none";
+                        fontSize: 12,
+                        color: "var(--error-text)",
+                        flex: "none",
                     }}
                 >
-                    Settings → History
-                </a>
-            </span>
+                    {history.error}
+                </span>
+            )}
             <span style={{ flex: 1 }} />
             <button
                 type="button"
-                onClick={dismiss}
-                aria-label="Dismiss import hint"
-                title="Dismiss"
+                onClick={() => history.start(offer.agent)}
                 style={{
-                    ...iconBtn,
-                    width: 22,
-                    height: 22,
                     flex: "none",
-                    color: "var(--fg3)",
-                }}
-                onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "var(--action-hover)";
-                    e.currentTarget.style.color = "var(--fg1)";
-                }}
-                onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                    e.currentTarget.style.color = "var(--fg3)";
+                    background: "var(--primary-main)",
+                    border: "1px solid var(--primary-main)",
+                    borderRadius: 2,
+                    color: "#fff",
+                    fontSize: 11.5,
+                    fontFamily: "var(--fontFamily)",
+                    padding: "3px 9px",
+                    cursor: "pointer",
                 }}
             >
-                <Icon name="times" size={12} />
+                Import
+            </button>
+            <button
+                type="button"
+                onClick={() => onOpenSettings && onOpenSettings("history")}
+                style={{
+                    flex: "none",
+                    background: "transparent",
+                    border: "1px solid var(--border-medium)",
+                    borderRadius: 2,
+                    color: "var(--fg2)",
+                    fontSize: 11.5,
+                    fontFamily: "var(--fontFamily)",
+                    padding: "3px 9px",
+                    cursor: "pointer",
+                }}
+            >
+                Options
+            </button>
+            <button
+                type="button"
+                onClick={() => history.dismiss("")}
+                style={{
+                    flex: "none",
+                    background: "transparent",
+                    border: "1px solid transparent",
+                    borderRadius: 2,
+                    color: "var(--fg3)",
+                    fontSize: 11.5,
+                    fontFamily: "var(--fontFamily)",
+                    padding: "3px 9px",
+                    cursor: "pointer",
+                }}
+            >
+                Not now
             </button>
         </div>
     );
