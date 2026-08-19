@@ -82,7 +82,7 @@ Usage:
 
 Launch a coding agent (wires the plugin, then runs it):
   claude, codex, copilot, opencode, pi, vibe
-      agento11y <name> [--local|--no-local] [--tag key=value]... [-- args...]
+      agento11y <name> [--no-local|--local] [--tag key=value]... [-- args...]
   cursor install|uninstall
       Wire (or remove) the Cursor hook. Cursor is a GUI app and has no launcher.
   claude install [--json]

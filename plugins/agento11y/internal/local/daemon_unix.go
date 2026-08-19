@@ -16,6 +16,10 @@ import (
 	"time"
 )
 
+// DaemonSupported is the build-time form of ReceiverSupported, for callers that
+// resolve a capture destination before they call the daemon.
+const DaemonSupported = true
+
 // ReceiverSupported reports whether this platform can run the local
 // capture daemon. Windows returns false so hook dispatch leaves Cloud
 // credentials in place instead of rewriting to a dead loopback URL.
@@ -67,6 +71,13 @@ func startDaemon(ctx context.Context, dir string, logger *log.Logger) (*Status, 
 	bin, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("resolve agento11y binary: %w", err)
+	}
+	// os.Executable() is the test binary when a test reaches this function. A
+	// test binary ignores the "local serve" arguments and runs its whole suite
+	// again, and that suite starts another daemon, so the processes multiply.
+	// Tests must install a stub with SetStartDaemonForTesting.
+	if looksLikeTestBinary(bin) {
+		return nil, fmt.Errorf("refusing to start the daemon from test binary %s: stub it with local.SetStartDaemonForTesting", filepath.Base(bin))
 	}
 
 	logPath := filepath.Join(dir, "server.log")

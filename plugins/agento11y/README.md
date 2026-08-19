@@ -127,7 +127,7 @@ A plugin can only export fields the host agent passes through to it, so individu
 
 ## Local mode
 
-`agento11y <agent> --local` records the session to a JSONL store and starts the local viewer. The command prints the viewer URL. It first tries `http://127.0.0.1:8765` and uses a higher port when that port is unavailable.
+`agento11y <agent> --local` records the session to a JSONL store and starts the local viewer. The command prints the viewer URL. It first tries `http://127.0.0.1:8765` and uses a higher port when that port is unavailable. A launch without Grafana Cloud credentials does the same without the flag; local capture needs macOS or Linux, so a launch on Windows uses Grafana Cloud.
 
 `AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. Use `--no-local` to override this setting for one launcher session.
 

@@ -1,8 +1,8 @@
 # @grafana/agento11y-opencode
 
-[OpenCode](https://opencode.ai) plugin that sends LLM generations to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
+[OpenCode](https://opencode.ai) plugin that records LLM generations. With Grafana Cloud credentials, they go to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/). Without them, they stay on your machine.
 
-By default only metadata is sent (token counts, cost, model, tool names, durations). Set `AGENTO11Y_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
+Cloud exports contain only metadata by default (token counts, cost, model, tool names, durations); set `AGENTO11Y_CONTENT_CAPTURE_MODE` to change that. Local capture always records full content. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the accepted values.
 
 ## 1. Install and launch
 
@@ -29,7 +29,7 @@ agento11y opencode
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y opencode` installs `@grafana/agento11y-opencode` into OpenCode on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches OpenCode. Pass arguments to OpenCode after `--`, e.g. `agento11y opencode -- run "say hi"`.
+`agento11y opencode` installs `@grafana/agento11y-opencode` into OpenCode on first run and then launches OpenCode. With Grafana Cloud credentials, the session goes to Cloud; without them, the launcher captures it locally and prints the viewer URL. Use `--local` or `--no-local` to pick one; see [Local mode](../agento11y/README.md#local-mode). Pass arguments to OpenCode after `--`, e.g. `agento11y opencode -- run "say hi"`.
 
 <details>
 <summary>Manual plugin registration</summary>
@@ -39,13 +39,13 @@ opencode plugin @grafana/agento11y-opencode --global
 agento11y login
 ```
 
-The plugin reads `~/.config/agento11y/config.env` on every session start, whether you start OpenCode with `agento11y opencode` or plain `opencode`. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
+The plugin reads `~/.config/agento11y/config.env` on every session start, whether you start OpenCode with `agento11y opencode` or plain `opencode`. If you only have the old `~/.config/sigil/config.env`, that file is used instead. Plain `opencode` does not capture locally; use the launcher for that.
 
 </details>
 
 ## 2. Credentials
 
-When `agento11y opencode` or `agento11y login` prompts, it asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
+Credentials are optional on macOS and Linux: without them the session stays on this machine. Run `agento11y login` to enter them. The prompt asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack. An administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 To type the values instead, press Enter on the empty paste box. They come from three Grafana Cloud pages:
 
@@ -78,7 +78,7 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana
 
 When `AGENTO11Y_AUTH_TENANT_ID` and `AGENTO11Y_AUTH_TOKEN` are set, the plugin uses them for Agent Observability and OTLP auth. If the OpenTelemetry card shows a different Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 
-To include conversation text, add this to your `config.env`:
+To send conversation text to Grafana Cloud, add this to your `config.env`:
 
 ```dotenv
 AGENTO11Y_CONTENT_CAPTURE_MODE=full
@@ -88,7 +88,7 @@ OpenCode redacts known secret formats out of assistant text, the system prompt, 
 
 ## 3. Verify
 
-Run one OpenCode turn, then open **Agent Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds.
+Run one OpenCode turn. If the launcher printed a local viewer URL, open it and check Sessions. Otherwise, open **Agent Observability → Conversations** in Grafana Cloud.
 
 If nothing shows up, set `AGENTO11Y_DEBUG=true` in `~/.config/agento11y/config.env`, run another turn, and check OpenCode stderr.
 
@@ -150,7 +150,7 @@ With guards on, a rule can:
 | `AGENTO11Y_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
 | `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the Agent Observability latency and tool-call panels stay empty. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTLP password. |
-| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | One of `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`. |
+| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. Applies to Cloud exports; local capture keeps full content. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md). |
 | `AGENTO11Y_REDACT_INPUT_MESSAGES` | `true` | Redact known secret formats out of user prompt text. Set to `false` to export prompts without redaction. |
 | `AGENTO11Y_EXPORT_TIMEOUT_MS` | `30000` | Timeout for each generation export request. Use a base-10 integer from `1` through `2147483647` milliseconds. |
 | `AGENTO11Y_GUARDS_ENABLED` | `false` | Check your prompts, the conversation sent to the model, and OpenCode tool calls against Agent Observability guards. See [Guards](#guards). |

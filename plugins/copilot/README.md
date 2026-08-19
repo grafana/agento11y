@@ -1,8 +1,9 @@
 # Agent Observability for GitHub Copilot CLI
 
-Forwards completed GitHub Copilot turns, hook-visible tool calls, error
-metadata, subagent lifecycle metadata, and optional prompt/tool content to
-[Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
+Records completed GitHub Copilot turns, hook-visible tool calls, error
+metadata, subagent lifecycle metadata, and optional prompt/tool content. With
+Grafana Cloud credentials, they go to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
+Without them, they stay on your machine.
 Powered by the shared `agento11y` binary and driven by a single hooks file at
 `~/.copilot/hooks/agento11y.json`, which is read by **both** the GitHub Copilot CLI
 and Copilot Chat in **VS Code**. Each exported turn is tagged with the host it
@@ -40,9 +41,9 @@ agento11y copilot -- <copilot args>
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y copilot` writes the shared hooks file to `~/.copilot/hooks/agento11y.json`, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, removes any legacy `sigil-copilot` plugin left by older versions, and then launches Copilot CLI.
+`agento11y copilot` writes the shared hooks file to `~/.copilot/hooks/agento11y.json`, removes any legacy `sigil-copilot` plugin left by older versions, and then launches Copilot CLI. With Grafana Cloud credentials, the session goes to Cloud; without them, the launcher captures it locally and prints the viewer URL. Use `--local` or `--no-local` to pick one; see [Local mode](../agento11y/README.md#local-mode).
 
-For VS Code, no launch wrapper is needed — once `~/.copilot/hooks/agento11y.json` exists, add `~/.copilot/hooks` to the `chat.hookFilesLocations` setting and Copilot Chat picks it up.
+For VS Code, no launch wrapper is needed. Once `~/.copilot/hooks/agento11y.json` exists, add `~/.copilot/hooks` to the `chat.hookFilesLocations` setting and Copilot Chat picks it up. VS Code sessions are not captured locally, so they need Grafana Cloud credentials.
 
 > The integration deliberately does **not** register a Copilot CLI plugin. The
 > CLI runs hooks from the plugin store *and* `~/.copilot/hooks`, so a plugin
@@ -52,7 +53,7 @@ For VS Code, no launch wrapper is needed — once `~/.copilot/hooks/agento11y.js
 
 ## 2. Credentials
 
-When `agento11y copilot` prompts, it asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
+Credentials are optional on macOS and Linux: without them the session stays on this machine. Run `agento11y login` to enter them. The prompt asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack. An administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 To type the values instead, press Enter on the empty paste box. They come from three Grafana Cloud pages:
 
@@ -83,7 +84,7 @@ AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana
 
 </details>
 
-To also send the conversation text (with automatic secret redaction), add this to your `config.env`:
+Local capture always records full content. To send conversation text to Grafana Cloud (with automatic secret redaction), add this to your `config.env`:
 
 ```dotenv
 AGENTO11Y_CONTENT_CAPTURE_MODE=full
@@ -93,8 +94,9 @@ AGENTO11Y_CONTENT_CAPTURE_MODE=full
 
 Start a Copilot CLI session in a repository and give it a prompt that triggers
 at least one tool call. The plugin only exports completed turns at `agentStop`.
-Then open **Agent Observability → Conversations** in Grafana Cloud and look for
-generations with `agent_name=copilot`.
+If the launcher printed a local viewer URL, open it and check Sessions.
+Otherwise, open **Agent Observability → Conversations** in Grafana Cloud and
+look for generations with `agent_name=copilot`.
 
 If nothing shows up:
 
@@ -162,7 +164,7 @@ Limits:
 | `AGENTO11Y_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
 | `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Without it, the Agent Observability latency and tool-call panels stay empty. |
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTel password. |
-| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. |
+| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. Applies to Cloud exports; local capture keeps full content. |
 | `AGENTO11Y_REDACT_INPUT_MESSAGES` | `true` | Redact known secret formats out of user prompt text. Set to `false` to export prompts without redaction; assistant and tool content stay redacted. |
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics (e.g. `project=my-app`). |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. Unlike the built-ins, these reach OTel metrics as `agento11y_tag_*` labels. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |
@@ -235,9 +237,9 @@ field and the `AGENTO11Y_DEBUG` log line (`dispatch: event=… surface=…`).
 | Hooks file missing at `~/.copilot/hooks/agento11y.json` | Re-run `agento11y copilot -- <args>` (it writes the file before launching). For VS Code, also add `~/.copilot/hooks` to `chat.hookFilesLocations`. |
 | Turns appear twice in Agent Observability | A leftover `sigil-copilot` plugin is firing alongside the shared file. Remove it: `copilot plugin uninstall sigil-copilot` (newer `agento11y copilot` runs do this automatically). |
 | Command not found | Reinstall `agento11y` (see step 1). Check `agento11y --version` and that its install dir is on `PATH`. |
-| Hooks run but nothing appears in Agent Observability | Check `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TENANT_ID`, and `AGENTO11Y_AUTH_TOKEN`. Without all three, the plugin discards the completed fragment. |
+| Hooks run but nothing appears | Cloud session: check the endpoint, tenant ID, and token; without all three the turn is dropped. Local session: open the printed viewer URL, and run `agento11y local status` if it does not load. |
 | No latency/tool charts in Agent Observability | Set `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` so the plugin can emit traces and metrics. |
-| Prompt or tool content is missing | Check `AGENTO11Y_CONTENT_CAPTURE_MODE`. The default is `metadata_only`. |
+| Prompt or tool content is missing | Cloud exports default to `metadata_only`; check `AGENTO11Y_CONTENT_CAPTURE_MODE`. |
 | Assistant response text is missing | Check that `agentStop` included a readable `transcriptPath` and that the local `events.jsonl` transcript still exists under `~/.copilot/session-state/<session-id>/`. |
 | Model or output tokens are still missing | The local Copilot transcript for that turn did not include those fields. This plugin can only export the fields Copilot recorded locally. |
 | Cloud agent cannot reach Agent Observability | Expected unless your admin allows the agento11y endpoint through the cloud-agent firewall. This plugin is documented for Copilot CLI first. |

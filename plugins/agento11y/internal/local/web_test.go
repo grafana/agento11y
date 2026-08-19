@@ -432,6 +432,33 @@ func TestCloudConsentDialogsNameTheSavedStack(t *testing.T) {
 		"the consent dialogs must not read the form: an unsaved edit is not what the write applies")
 }
 
+// TestConnectPinsLocalCapture pins the AGENTO11Y_LOCAL writes in the connect and
+// disconnect patches. capturemode picks Cloud for a bare launch as soon as all
+// three credentials are set, so without the pin one Connect click stops this page
+// from filling; the pin then outranks credentials, so Disconnect has to delete it
+// or a later `agento11y login` never reaches Cloud. Components are never rendered
+// in these tests, so this reads the source.
+func TestConnectPinsLocalCapture(t *testing.T) {
+	src := string(appJSX)
+	view := strings.Index(src, "function SettingsView(")
+	require.Positive(t, view, "SettingsView not found in web/app.jsx")
+	at := strings.Index(src[view:], "const connect = (parsed, mode) =>")
+	require.Positive(t, at, "the connect flow was not found in SettingsView")
+	split := strings.Index(src[view+at:], "const disconnect = () =>")
+	require.Positive(t, split, "disconnect not found after connect")
+	end := strings.Index(src[view+at+split:], "const commitMode = (")
+	require.Positive(t, end, "commitMode not found after disconnect")
+	connect := src[view+at : view+at+split]
+	disconnect := src[view+at+split : view+at+split+end]
+
+	assert.Contains(t, connect, "local: true",
+		"connect must pin AGENTO11Y_LOCAL so saving forwarding credentials keeps bare launches local")
+	assert.Contains(t, connect, "localForward: true",
+		"connect must turn forwarding on")
+	assert.Contains(t, disconnect, "localCleared: true",
+		"disconnect must delete the AGENTO11Y_LOCAL pin connect wrote")
+}
+
 // TestBucketLaddersAgree pins the one contract between the token endpoint
 // and the chart: both bucket on the same ladder, and every step divides the
 // next. The client folds server points onto its own bars, so a step that

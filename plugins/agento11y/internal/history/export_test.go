@@ -421,12 +421,12 @@ func TestNewTargetExporterRejectsAnIncompleteTarget(t *testing.T) {
 		{
 			name:   "no endpoint at all",
 			target: Target{},
-			want:   "no endpoint configured",
+			want:   "Grafana Cloud import has no endpoint configured",
 		},
 		{
 			name:   "a Cloud endpoint with no credentials",
 			target: Target{Endpoint: "https://cloud.example.invalid"},
-			want:   "no credentials configured",
+			want:   "Grafana Cloud import has no credentials configured",
 		},
 	}
 	for _, tc := range tests {

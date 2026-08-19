@@ -43,7 +43,9 @@ If skills are unavailable, the install fails, or the request matches Path A, con
 - SDK + plugin source: https://github.com/grafana/agento11y
 - Grafana Cloud OTLP setup: https://grafana.com/docs/grafana-cloud/send-data/otlp/send-data-otlp
 
-## Credentials (both paths)
+## Grafana Cloud credentials
+
+Path A can start without credentials on macOS and Linux: the launcher captures sessions locally instead. Windows and Path B need them.
 
 All four values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the Agent Observability plugin in the user's stack:
 
@@ -67,7 +69,7 @@ printf '%s' '<otlp-instance-id>:<glc_token>' | base64 | tr -d '\n'
 
 # Path A: Monitor a coding agent
 
-The user wants Grafana Agent observability to capture sessions from their coding agent. They do not write app code for this; they install a plugin and configure credentials.
+The user wants Grafana Agent observability to capture sessions from their coding agent. They do not write app code for this; they install a plugin. Credentials are optional for launcher-based agents on macOS and Linux, where sessions can be captured locally instead. Cursor and Windows need them.
 
 If the `agento11y` binary is already installed on this machine, run `agento11y skills show setup-coding-agent`. It prints a fuller version of everything below: doctor-based triage, troubleshooting, and the config reference.
 
@@ -95,11 +97,11 @@ Install the `agento11y` binary (renamed from `sigil`; the old name still works b
 
 The script installs to `~/.local/bin`; `go install` puts the binary in `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`.
 
-Then launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, or `vibe`. On first run it wires the agent up, prompts for credentials, writes `~/.config/agento11y/config.env`, and launches the agent.
+Then launch your agent with `agento11y <agent>`, where `<agent>` is `claude`, `codex`, `copilot`, `opencode`, `pi`, or `vibe`. The command wires the agent up and launches it. With Grafana Cloud credentials, the session goes to Cloud. Without them, it starts local capture and prints the viewer URL instead of prompting for a login. Local capture needs macOS or Linux, so a launch on Windows uses Cloud. `--local` (or `AGENTO11Y_LOCAL=true`) and `--no-local` pick one for you; `--no-local` prompts for missing credentials.
 
 Cursor has no launcher (it is a GUI app). After installing the binary, wire its hooks once with `agento11y cursor install` (it merges into `~/.cursor/hooks.json` and prompts for credentials on first run); `agento11y cursor uninstall` removes them. See [`plugins/cursor/`](https://github.com/grafana/agento11y/tree/main/plugins/cursor) for details.
 
-To skip the prompt, pass the values as flags:
+To configure Grafana Cloud without the interactive prompt, pass the values as flags:
 
 ```sh
 agento11y login --endpoint <your-agento11y-api-url> --tenant <your-instance-id> --token glc_...
@@ -120,21 +122,21 @@ To re-enter credentials later, run `agento11y login`. It first asks for your Gra
 
 ## Content capture
 
-Coding-agent plugins default to `metadata_only`: only model, tokens, tool names, timing, and cost are sent. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`.
+Coding-agent plugins default to `metadata_only` for Grafana Cloud exports: only model, tokens, tool names, timing, and cost are sent. To send content to Cloud, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`. Local capture always records full prompts, responses, and tool I/O, whatever this is set to.
 
 Accepted values depend on the plugin surface:
 
 - Claude Code, Codex, Copilot, Cursor, Vibe (shared `agento11y` binary), OpenCode (`@grafana/agento11y-opencode`), and Pi (`@grafana/agento11y-pi`): `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only`.
 
-Unknown values fall back to `metadata_only` with a warning. Capture modes choose which fields ship, not whether the shipped fields are scrubbed.
+Unknown values fall back to `metadata_only` with a warning. Capture modes choose which fields ship to Cloud, not whether the shipped fields are scrubbed.
 
-When a plugin ships content, it redacts known secret formats first, using the same pattern table the SDKs use. This covers user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results, on the generation and on the tool-execution span. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send prompts without redaction; everything else stays redacted. Prompts, system prompts and tool payloads also get the key/value heuristics (`PASSWORD=…`), which prose fields do not, so a prompt containing `sort key: name` comes out with the word after the colon replaced. Treat content capture as opt-in for shared/production machines.
+When a plugin ships content, it redacts known secret formats first, using the same pattern table the SDKs use. This covers user prompts, system prompts, assistant text, thinking, conversation titles, error messages, tool arguments, and tool results, on the generation and on the tool-execution span. Set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to send prompts without redaction; everything else stays redacted. Prompts, system prompts and tool payloads also get the key/value heuristics (`PASSWORD=…`), which prose fields do not, so a prompt containing `sort key: name` comes out with the word after the colon replaced. Treat sending content to Grafana Cloud as opt-in for shared or production machines.
 
 ## Verifying the install
 
 1. Run the agent normally for one turn (any prompt).
-2. Open Grafana Cloud → Agent Observability → Conversations. A new conversation should appear within a few seconds.
-3. If it doesn't, check the launcher's stderr for `agento11y:` warnings and confirm `~/.config/agento11y/config.env` is readable. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
+2. If the launcher prints a local viewer URL, open it and check the Sessions page. Otherwise, open Grafana Cloud → Agent Observability → Conversations.
+3. If the session is missing, run `agento11y doctor`: its `capture` row names the destination. Also check the launcher's stderr for `agento11y:` warnings.
 
 ---
 
@@ -173,7 +175,7 @@ The core SDK clients default to `no_tool_content`: generation content (prompts, 
 
 Use the cross-language reference at [`docs/concepts/content-capture-modes.md`](https://github.com/grafana/agento11y/blob/main/docs/concepts/content-capture-modes.md) and the per-language READMEs for examples. Modes supported by the SDKs: `full`, `no_tool_content`, `metadata_only`, `full_with_metadata_spans`. User-provided `metadata` and `tags` are not stripped by capture modes; do not put sensitive content there.
 
-This default differs from coding-agent plugin defaults (Path A), which ship `metadata_only`. Do not mix the two.
+This default differs from coding-agent Cloud exports (Path A), which use `metadata_only`.
 
 ### Tags, metadata, and user id
 

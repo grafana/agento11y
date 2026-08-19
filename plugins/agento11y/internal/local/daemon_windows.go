@@ -8,11 +8,14 @@ import (
 	"log"
 )
 
+// DaemonSupported is the build-time form of ReceiverSupported, for callers that
+// resolve a capture destination before they call the daemon.
+const DaemonSupported = false
+
 // errLocalUnsupported is returned by every daemon entry point on Windows.
 // The local receiver relies on Unix process semantics (flock, Setsid,
 // signal-based liveness and termination) that have no portable equivalent
-// here, so `--local` capture mode is unavailable. Default Cloud mode never
-// touches this code path.
+// here, so local capture is unavailable.
 var errLocalUnsupported = errors.New("agento11y local receiver is not supported on Windows")
 
 // ReceiverSupported reports whether this platform can run the local

@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/capturemode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
@@ -22,6 +23,9 @@ type LaunchEnv struct {
 func Environ(e *LaunchEnv) []string {
 	env := os.Environ()
 	if e == nil {
+		if envconfig.ParseBool(os.Getenv(capturemode.LaunchDisabledEnv)) {
+			return envconfig.WithoutCaptureEndpoints(env)
+		}
 		return env
 	}
 	return e.Apply(env)

@@ -49,6 +49,7 @@ export async function loadConfig(): Promise<Agento11yPiConfig | null> {
 }
 
 export function resolveConfig(): Agento11yPiConfig | null {
+  if (captureDisabled()) return null;
   const endpoint = normalizeBaseEndpoint(brandedEnv("ENDPOINT")?.value ?? "");
   if (!endpoint) return null;
 
@@ -69,6 +70,12 @@ export function resolveConfig(): Agento11yPiConfig | null {
     guards: resolveGuards(),
     autoTags: resolveAutoTagValues(),
   };
+}
+
+function captureDisabled(): boolean {
+  return ["1", "true", "yes", "on"].includes(
+    (process.env.AGENTO11Y_LAUNCH_CAPTURE_DISABLED ?? "").trim().toLowerCase(),
+  );
 }
 
 // resolveAutoTagValues reads AGENTO11Y_AUTO_CODING_AGENT_TAGS and the optional

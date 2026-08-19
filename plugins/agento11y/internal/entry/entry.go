@@ -44,6 +44,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -59,6 +60,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/buildversion"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/capturemode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/cli"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
@@ -88,16 +90,19 @@ var (
 // renderLocalBanner draws the local-mode banner. envKey names the variable that
 // turned local mode on (AGENTO11Y_LOCAL or the legacy SIGIL_LOCAL), and is
 // empty when a flag on this command line did.
-func renderLocalBanner(uiURL string, posture local.ForwardPosture, postureErr error, envKey string) string {
+func renderLocalBanner(uiURL string, posture local.ForwardPosture, postureErr error, mode capturemode.Mode) string {
 	privacy := localPrivacyLines(posture, postureErr == nil)
-	lines := make([]string, 0, len(privacy)+3)
+	lines := make([]string, 0, len(privacy)+4)
 	title := localBannerTitle.Render("agento11y local mode")
-	if envKey != "" {
-		title += "  " + localBannerLabel.Render("(enabled by "+envKey+")")
+	if mode.Source == capturemode.SourceEnv {
+		title += "  " + localBannerLabel.Render("(enabled by "+mode.EnvKey+")")
 	}
 	lines = append(lines, title)
 	for _, line := range privacy {
 		lines = append(lines, localBannerLabel.Render(line))
+	}
+	if mode.Source == capturemode.SourceDefault {
+		lines = append(lines, localBannerLabel.Render("Run `agento11y login` to send sessions to Grafana Cloud instead."))
 	}
 	lines = append(lines, "", localBannerLabel.Render("View ")+localBannerURL.Render(uiURL))
 	return localBannerBox.Render(strings.Join(lines, "\n"))
@@ -284,18 +289,32 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		// writes the winning value under both spellings, which erases which one
 		// the user set, and the banner names that spelling.
 		localValue, localKey, inShell := envconfig.LookupEnv("LOCAL")
+		localSource := "environment"
 		fileEnv := dotenv.ApplyEnv(nil)
 		if !inShell {
-			localValue, localKey, _ = envconfig.LookupMap(fileEnv, "LOCAL")
+			var inFile bool
+			localValue, localKey, inFile = envconfig.LookupMap(fileEnv, "LOCAL")
+			if inFile {
+				localSource = "config.env"
+			} else {
+				localSource = ""
+			}
 		}
-		envLocal := localEnvRequest{on: envconfig.ParseBool(localValue), key: localKey}
-
-		launcherArgs, localEnv, ok := parseLauncherArgs(args[0], args[1:], stderr, envLocal)
-		if !ok {
-			return
+		request := capturemode.Request{
+			EnvValue:        localValue,
+			EnvKey:          localKey,
+			HasCloudCreds:   dotenv.HasCredentials(),
+			DaemonSupported: local.DaemonSupported,
 		}
 
 		logger := cli.InitLogger(args[0])
+		launcherArgs, localEnv, mode, ok := parseLauncherArgs(args[0], args[1:], stderr, request, localSource)
+		if !ok {
+			return
+		}
+		if envconfig.ParseBool(os.Getenv(capturemode.LaunchDisabledEnv)) {
+			logger.Printf("local receiver did not start; launching %s without capture", args[0])
+		}
 
 		// Auto-prompt for credentials on first run. login.Run returns
 		// ErrNotInteractive when stdin is not a TTY (e.g. CI, piped input);
@@ -305,10 +324,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		// launch — the user explicitly asked to start claude/pi, and we
 		// don't want sigil to gate that on its own setup.
 		//
-		// In --local mode we never prompt: the launcher will inject
-		// placeholder credentials so the SDK proceeds without contacting
-		// Grafana Cloud.
-		if localEnv == nil && !dotenv.HasCredentials() {
+		// A local destination never prompts: the launcher injects placeholder
+		// credentials when the daemon starts. If the daemon fails on a
+		// default-local launch, the session continues without capture.
+		if !mode.Local && !dotenv.HasCredentials() {
 			err := loginRun(context.Background(), login.RunOpts{
 				Stderr: stderr,
 				Logger: logger,
@@ -389,6 +408,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	// Cursor (and Codex headless) launch hooks under a stripped environment
 	// where the dotenv is the only place SIGIL_DEBUG could come from.
 	dotenv.ApplyEnv(nil)
+	if envconfig.ParseBool(os.Getenv(capturemode.LaunchDisabledEnv)) {
+		envconfig.ClearCaptureEndpoints()
+	}
 	logger := cli.InitLogger(agent)
 	defer cli.RecoverAndLog(logger)
 	applyLocalHookEnv(logger)
@@ -777,22 +799,14 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) {
 	}
 }
 
-// localEnvRequest is the LOCAL family as the launcher acts on it: whether it
-// turns local mode on, and the spelling that set it so diagnostics can name a
-// variable the user actually set.
-type localEnvRequest struct {
-	on  bool
-	key string
-}
-
 // parseLauncherArgs splits sigil-side tokens from forwarded args at the
 // first `--`. Recognised sigil-side flags are:
 //   - `--local`, which redirects the launched agent at the local receiver.
-//     envLocal carries the same request from the LOCAL env family, which the
-//     caller resolves across the shell and config.env.
 //   - `--no-local`, which forces a Cloud session for this run. It wins over
-//     both `--local` and the env family, whatever the argument order, so a
-//     user with local mode on by default can opt out once.
+//     `--local` whatever the argument order, and both flags outrank request,
+//     the destination the caller resolved from the LOCAL env family, the
+//     credentials, and the platform. So a user with local mode on by default
+//     can opt out once.
 //   - `--tag key=value` (repeatable; also `--tag=key=value`), which adds
 //     a tag to SIGIL_TAGS so it lands on every generation the session
 //     produces. Flag tags merge onto (and override) any SIGIL_TAGS already
@@ -800,9 +814,11 @@ type localEnvRequest struct {
 //
 // Any other token before `--` is an error.
 //
-// Returns the forwarded args plus a non-nil *local.LaunchEnv when the session
-// is local, that is when `--local` or the env family asked for it and
-// `--no-local` did not; the env values point at the local daemon. When --tag is used,
+// Returns the forwarded args, the resolved Mode, and a non-nil
+// *local.LaunchEnv pointing at the local daemon when the session captures
+// locally. A receiver that will not start exits the process, unless local was
+// only the default, in which case the launch continues with a nil LaunchEnv
+// and no capture. When --tag is used,
 // SIGIL_TAGS is updated in the current process environment so the exec'd
 // child (which inherits os.Environ via local.Environ) sees it.
 //
@@ -811,7 +827,7 @@ type localEnvRequest struct {
 //     forgot the separator, so we point them at `agento11y <name> -- <args>`.
 //   - `--` is present but unrecognised tokens precede it: those are
 //     genuinely unknown sigil-side options, so we name them explicitly.
-func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal localEnvRequest) ([]string, *local.LaunchEnv, bool) {
+func parseLauncherArgs(name string, rest []string, stderr io.Writer, request capturemode.Request, localSource string) ([]string, *local.LaunchEnv, capturemode.Mode, bool) {
 	sep := -1
 	for i, a := range rest {
 		if a == "--" {
@@ -844,14 +860,14 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 			if i+1 >= len(launcherSide) {
 				_, _ = fmt.Fprintln(stderr, "agento11y: --tag requires a key=value argument")
 				exit(2)
-				return nil, nil, false
+				return nil, nil, capturemode.Mode{}, false
 			}
 			i++
 			kv, ok := normalizeTag(launcherSide[i])
 			if !ok {
 				_, _ = fmt.Fprintf(stderr, "agento11y: invalid --tag %q (want key=value)\n", launcherSide[i])
 				exit(2)
-				return nil, nil, false
+				return nil, nil, capturemode.Mode{}, false
 			}
 			flagTags = append(flagTags, kv)
 		case strings.HasPrefix(tok, "--tag="):
@@ -860,7 +876,7 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 			if !ok {
 				_, _ = fmt.Fprintf(stderr, "agento11y: invalid --tag %q (want key=value)\n", raw)
 				exit(2)
-				return nil, nil, false
+				return nil, nil, capturemode.Mode{}, false
 			}
 			flagTags = append(flagTags, kv)
 		default:
@@ -875,7 +891,7 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 			_, _ = fmt.Fprintf(stderr, "agento11y: unknown options before `--`: %v\n", unknown)
 		}
 		exit(2)
-		return nil, nil, false
+		return nil, nil, capturemode.Mode{}, false
 	}
 
 	if len(flagTags) > 0 {
@@ -884,30 +900,64 @@ func parseLauncherArgs(name string, rest []string, stderr io.Writer, envLocal lo
 		envconfig.SetBothEnv("TAGS", mergeTags(envconfig.Getenv("TAGS"), flagTags))
 	}
 
-	if noLocalFlag {
-		// The agent, its hooks, and any nested agento11y call inherit this
-		// environment, where dotenv already materialized the family under both
-		// spellings. Leaving it true there would describe a session that is not
-		// local. --tag writes back for the same reason.
-		envconfig.SetBothEnv("LOCAL", "false")
+	switch {
+	case noLocalFlag:
+		request.Flag = capturemode.FlagNoLocal
+	case localFlag:
+		request.Flag = capturemode.FlagLocal
 	}
+	mode := capturemode.Resolve(request)
+
+	// The agent, its hooks, and nested agento11y calls inherit the resolved
+	// destination under both branded spellings. Separate launcher markers keep
+	// doctor from mistaking that injected value for a user override.
+	envconfig.SetBothEnv("LOCAL", strconv.FormatBool(mode.Local))
+	markLaunchCapture(mode, request.EnvValue, localSource)
+	_ = os.Unsetenv(capturemode.LaunchDisabledEnv)
 
 	var localEnv *local.LaunchEnv
-	if !noLocalFlag && (localFlag || envLocal.on) {
-		// An explicit --local speaks for itself, so name the variable only when
-		// it is what turned local mode on.
-		sourceKey := envLocal.key
-		if localFlag {
-			sourceKey = ""
-		}
-		endpoint, otlp, err := setupLocalLaunch(stderr, sourceKey)
+	if mode.Local {
+		endpoint, otlp, err := setupLocalLaunch(stderr, mode)
 		if err != nil {
-			exit(1)
-			return nil, nil, false
+			if mode.Source != capturemode.SourceDefault {
+				exit(1)
+				return nil, nil, mode, false
+			}
+			envconfig.SetBothEnv("LOCAL", "false")
+			_ = os.Setenv(capturemode.LaunchDestinationEnv, "not captured")
+			_ = os.Setenv(capturemode.LaunchReasonEnv, "the local receiver did not start")
+			_ = os.Setenv(capturemode.LaunchDisabledEnv, "true")
+			_, _ = fmt.Fprintln(stderr, "agento11y: the local receiver did not start; this session is not captured. Run `agento11y local status` to diagnose it, or `agento11y login` to send later sessions to Grafana Cloud.")
+		} else {
+			localEnv = &local.LaunchEnv{Endpoint: endpoint, OTLPEndpoint: otlp}
 		}
-		localEnv = &local.LaunchEnv{Endpoint: endpoint, OTLPEndpoint: otlp}
 	}
-	return forwarded, localEnv, true
+	return forwarded, localEnv, mode, true
+}
+
+func markLaunchCapture(mode capturemode.Mode, envValue, envSource string) {
+	destination := "Grafana Cloud"
+	if mode.Local {
+		destination = "local"
+	}
+	reason := ""
+	switch mode.Source {
+	case capturemode.SourceFlag:
+		reason = "command-line flag"
+	case capturemode.SourceEnv:
+		reason = mode.EnvKey + "=" + envValue
+		if envSource != "" {
+			reason += ", " + envSource
+		}
+	case capturemode.SourceUnsupported:
+		reason = "the local receiver does not run on Windows"
+	case capturemode.SourceCredentials:
+		reason = "credentials configured"
+	case capturemode.SourceDefault:
+		reason = "default; no Cloud credentials configured"
+	}
+	_ = os.Setenv(capturemode.LaunchDestinationEnv, destination)
+	_ = os.Setenv(capturemode.LaunchReasonEnv, reason)
 }
 
 // normalizeTag validates a `--tag` value and returns it as a trimmed
@@ -970,7 +1020,7 @@ func mergeTags(existing string, flagTags []string) string {
 // setupLocalLaunch starts the local receiver if needed and returns the
 // endpoint URLs the launcher should pass to the agent. envKey names the
 // variable that turned local mode on, or is empty when a flag did.
-func setupLocalLaunch(stderr io.Writer, envKey string) (endpoint, otlp string, err error) {
+func setupLocalLaunch(stderr io.Writer, mode capturemode.Mode) (endpoint, otlp string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -978,11 +1028,10 @@ func setupLocalLaunch(stderr io.Writer, envKey string) (endpoint, otlp string, e
 	status, err := local.EnsureRunning(ctx, dir, nil)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "agento11y: failed to start local receiver: %v\n", err)
-		if envKey != "" {
-			// The user did not ask for local mode in this command, so the
-			// failure looks like the launcher is broken. Name the setting and
-			// the way past it.
-			_, _ = fmt.Fprintf(stderr, "agento11y: local mode is on because %s is set; pass --no-local to run this session against Grafana Cloud\n", envKey)
+		if mode.Source == capturemode.SourceEnv {
+			// The failure looks unrelated to the command when the environment
+			// selected local capture. Name the setting and the way past it.
+			_, _ = fmt.Fprintf(stderr, "agento11y: local mode is on because %s is set; pass --no-local to run this session against Grafana Cloud\n", mode.EnvKey)
 		}
 		return "", "", err
 	}
@@ -996,7 +1045,7 @@ func setupLocalLaunch(stderr io.Writer, envKey string) (endpoint, otlp string, e
 		// on its own reads like "nothing is forwarded". Say why it is hedged.
 		_, _ = fmt.Fprintf(stderr, "agento11y: could not read the daemon's forwarding posture: %v\n", postureErr)
 	}
-	_, _ = fmt.Fprintln(stderr, renderLocalBanner(status.Endpoint, posture, postureErr, envKey))
+	_, _ = fmt.Fprintln(stderr, renderLocalBanner(status.Endpoint, posture, postureErr, mode))
 	return endpoint, otlp, nil
 }
 

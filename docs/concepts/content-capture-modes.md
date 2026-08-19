@@ -35,16 +35,21 @@ Capture modes decide *which fields ship*, not what's inside them. To sanitize th
 
 `full_with_metadata_spans` only protects spans. Generation content still flows through the SDK's generation export channel. Use `metadata_only` if you also want the ingest channel to receive no content.
 
+A locally captured coding-agent session always records full prompts, responses, and tool I/O on that machine, whatever the capture mode.
+
 ## Defaults
 
-The default differs between SDK clients and coding-agent plugins.
+The default differs between SDK clients and coding-agent destinations.
 
 | Surface | Default mode |
 | --- | --- |
 | Core SDK client (Go, Python, JS/TS, Java, .NET) | `no_tool_content`. Generation content is captured; tool-execution arguments and results stay out of spans. |
-| Coding-agent plugins (shared `agento11y` binary, `@grafana/agento11y-pi`, `@grafana/agento11y-opencode`) | `metadata_only`. Coding-agent sessions usually run on shared machines, so the plugins ship metadata-only by default. |
+| Coding-agent plugin exporting to Grafana Cloud | `metadata_only`. Only metadata leaves the machine unless the user selects another mode. |
+| Coding-agent plugin capturing locally | `full`. Local capture keeps full content; the configured mode still applies to anything sent to Grafana Cloud. |
 
 `default` at the client level resolves to `no_tool_content`. To get full content on a core SDK client, set `contentCapture: 'full'` (or the language equivalent) explicitly.
+
+Which row applies to an `agento11y <agent>` launch follows from the credentials: with Grafana Cloud credentials the session goes to Cloud, without them it is captured locally. [`plugins/README.md`](../../plugins/README.md#launch-your-agent) has the flags and the platform limits.
 
 ## Resolution precedence
 
@@ -76,7 +81,7 @@ Per-language READMEs include code examples:
 - Java: [`java/README.md`](../../java/README.md)
 - .NET: [`dotnet/README.md`](../../dotnet/README.md)
 
-For coding-agent plugins, the relevant env var is `AGENTO11Y_CONTENT_CAPTURE_MODE`. All plugins (the shared `agento11y` binary used by Claude Code, Codex, Copilot, Cursor, and Vibe; Pi via `@grafana/agento11y-pi`; OpenCode via `@grafana/agento11y-opencode`) accept `full`, `no_tool_content`, `metadata_only`, and `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only` so plugins match the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`.
+For coding-agent plugins, `AGENTO11Y_CONTENT_CAPTURE_MODE` controls what is sent to Grafana Cloud. It does not reduce what local capture records. All plugins (the shared `agento11y` binary used by Claude Code, Codex, Copilot, Cursor, and Vibe; Pi via `@grafana/agento11y-pi`; OpenCode via `@grafana/agento11y-opencode`) accept `full`, `no_tool_content`, `metadata_only`, and `full_with_metadata_spans`. `default` is accepted as an alias for `metadata_only` so plugins match the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`.
 
 Unknown values fall back to `metadata_only` with a warning in the plugin log. A plugin can still export less than the SDK allows. For example, an adapter may drop a field if the host agent does not pass it through.
 

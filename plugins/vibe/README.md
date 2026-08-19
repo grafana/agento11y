@@ -1,10 +1,10 @@
 # Agent Observability for Mistral Vibe
 
-[Mistral Vibe](https://github.com/mistralai/vibe) is sent to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) by registering hooks in Mistral Vibe's `hooks.toml` that forward each turn to the `agento11y` binary. `post_agent_turn` exports one generation per turn; `before_tool` enforces Agent Observability guard policy (when enabled); `after_tool` records per-tool timing for tool spans.
+[Mistral Vibe](https://github.com/mistralai/vibe) is captured through hooks in its `hooks.toml`. With Grafana Cloud credentials, `agento11y vibe` sends each turn to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/); without them, each turn stays on your machine. `post_agent_turn` exports one generation per turn; `before_tool` enforces Agent Observability guard policy (when enabled); `after_tool` records per-tool timing for tool spans.
 
 > Status: **Experimental.** Mistral Vibe's hook contract is itself marked experimental and may change between releases; the launcher pins to the shape verified at build time.
 
-By default only metadata is sent (token counts, model, tool names). Set `AGENTO11Y_CONTENT_CAPTURE_MODE` to `full`, `no_tool_content`, `metadata_only`, or `full_with_metadata_spans` to control what is sent. `default` is accepted as an alias for `metadata_only`. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the full reference.
+Cloud exports contain only metadata by default (token counts, model, tool names); set `AGENTO11Y_CONTENT_CAPTURE_MODE` to change that. Local capture always records full content. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the accepted values.
 
 Exported content is redacted for known secret formats first. That includes the user prompt; set `AGENTO11Y_REDACT_INPUT_MESSAGES=false` to export prompt text without redaction. Assistant text, reasoning, and tool results stay redacted either way. Tool-call arguments and the conversation title are not redacted yet.
 
@@ -33,7 +33,7 @@ agento11y vibe
 
 The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y vibe` resolves the `vibe` binary on `PATH`, upserts the three agento11y-owned `[[hooks]]` entries into `~/.vibe/hooks.toml` (or `$VIBE_HOME/hooks.toml`) on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then execs it. Repeated runs are no-ops: each entry is matched by name (`agento11y`, `agento11y-before-tool`, `agento11y-after-tool`); entries under the pre-rename `sigil*` names are replaced and any hand-authored hooks in the same file are preserved.
+`agento11y vibe` resolves the `vibe` binary on `PATH`, upserts the three agento11y-owned `[[hooks]]` entries into `~/.vibe/hooks.toml` (or `$VIBE_HOME/hooks.toml`) on first run, and then execs it. With Grafana Cloud credentials, the session goes to Cloud; without them, the launcher captures it locally and prints the viewer URL. Use `--local` or `--no-local` to pick one; see [Local mode](../agento11y/README.md#local-mode). Repeated runs are no-ops: each entry is matched by name (`agento11y`, `agento11y-before-tool`, `agento11y-after-tool`); entries under the pre-rename `sigil*` names are replaced and any hand-authored hooks in the same file are preserved.
 
 The launcher always sets `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` in Mistral Vibe's environment because these events are gated behind that flag.
 
@@ -64,17 +64,17 @@ timeout = 30
 match = "*"
 ```
 
-Then export `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` in the shell where you run `vibe`, and run `agento11y login` once for credentials.
+Then export `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` in the shell where you run `vibe`, and run `agento11y login` once for credentials. Plain `vibe` does not capture locally; use the launcher for that.
 
 </details>
 
 ## 2. Credentials
 
-Credentials are shared with every other `agento11y` launcher; see [`pi/README.md`](../pi/README.md#2-credentials) for the field-by-field walkthrough. Once `~/.config/agento11y/config.env` exists, every launcher (and the Mistral Vibe hook) picks it up. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
+Credentials are optional on macOS and Linux: without them the session stays on this machine. They are shared with every `agento11y` launcher; run `agento11y login` to enter them. See [`pi/README.md`](../pi/README.md#2-credentials) for the field-by-field walkthrough. Once `~/.config/agento11y/config.env` exists, every launcher and the Mistral Vibe hook picks it up. If you only have the old `~/.config/sigil/config.env`, that file is used instead.
 
 ## 3. Verify
 
-Run one agent turn, then open **Agent Observability → Conversations** in Grafana Cloud. A new generation should appear within a few seconds, labelled with agent `mistral-vibe` and conversation id equal to the Mistral Vibe `session_id`.
+Run one agent turn. If the launcher printed a local viewer URL, open it and check Sessions. Otherwise, open **Agent Observability → Conversations** in Grafana Cloud. The generation is labelled with agent `mistral-vibe` and uses the Mistral Vibe `session_id` as its conversation ID.
 
 Hooks always exit 0, so a failed export never interrupts the session and never prints an error. If nothing shows up, turn on the debug log:
 
@@ -116,12 +116,12 @@ Subagent turns are not tagged `subagent`. Mistral Vibe only exposes a session-le
 
 | Variable | Default | Description |
 |---|---|---|
-| `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL. Find it at `/plugins/grafana-agento11y-app`. Without it the turn is not exported. |
+| `AGENTO11Y_ENDPOINT` | — | Agent Observability API URL. Without it, the turn is not exported. |
 | `AGENTO11Y_AUTH_TENANT_ID` | — | Grafana Cloud instance ID. |
 | `AGENTO11Y_AUTH_TOKEN` | — | `glc_…` Cloud Access Policy Token. |
 | `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. With neither set, tool spans and metrics are dropped and the `after_tool` hook records nothing. |
 | `AGENTO11Y_OTEL_AUTH_TOKEN` | `AGENTO11Y_AUTH_TOKEN` | Override the OTel password. |
-| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. |
+| `AGENTO11Y_CONTENT_CAPTURE_MODE` | `metadata_only` | `metadata_only`, `no_tool_content`, `full`, or `full_with_metadata_spans`. Applies to Cloud exports; local capture keeps full content. |
 | `AGENTO11Y_TAGS` | — | `key=value,key=value` tags on every generation and as `agento11y.tag.<key>` on OTel spans/metrics. Same as `--tag`. |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS` | `false` | Opt in to client tags resolved for the session: the user, the repository, and the branch. Unlike the built-ins, these reach OTel metrics as `agento11y_tag_*` labels. See [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#opt-in-automatic-tags-agento11y_auto_coding_agent_tags) for the cardinality and personal-data trade-offs. |
 | `AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES` | all names | Narrows the switch above to a comma-separated subset of `user`, `repo`, `branch` (`all` is also accepted). Does nothing while the switch is off. |
@@ -144,7 +144,7 @@ If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your Agent
 | Command not found | Reinstall `agento11y` (see step 1). Check `agento11y --version` and that its install dir is on `PATH`. |
 | Hooks never fire | Mistral Vibe gates these events behind an experimental flag. `agento11y vibe` sets `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` for you; when you start `vibe` yourself, export that variable or set `enable_experimental_hooks = true` in `~/.vibe/config.toml`. |
 | No `[[hooks]]` entries in `hooks.toml` | Re-run `agento11y vibe` (it upserts them before exec) and check `agento11y doctor`, which reads the same file. |
-| Hooks fire but nothing appears in Agent Observability | Check `AGENTO11Y_ENDPOINT`, `AGENTO11Y_AUTH_TENANT_ID`, and `AGENTO11Y_AUTH_TOKEN`. Without all three the hook logs `not exporting: missing …` and skips the turn. |
+| Hooks fire but nothing appears | Cloud session: check the endpoint, tenant ID, and token; without all three the turn is dropped. Local session: open the printed viewer URL, and run `agento11y local status` if it does not load. |
 | No latency or tool-call charts | Set `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT` (or the standard `OTEL_EXPORTER_OTLP_ENDPOINT`). Tool spans only leave the process through the OTel exporter. |
-| Prompt or tool content is missing | Check `AGENTO11Y_CONTENT_CAPTURE_MODE`. The default is `metadata_only`. |
+| Prompt or tool content is missing | Cloud exports default to `metadata_only`; check `AGENTO11Y_CONTENT_CAPTURE_MODE`. |
 | A tool call was blocked unexpectedly | Guards are enabled and a deny rule matched, or `AGENTO11Y_GUARDS_FAIL_OPEN=false` and the guard call itself failed (missing credentials, timeout, transport error). The reason is shown to the model and logged; turn guards off with `AGENTO11Y_GUARDS_ENABLED=false`. |

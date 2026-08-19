@@ -13,9 +13,8 @@ import (
 // accepts whatever the renderer produced, so this test is what fails when the
 // footer is dropped or the wrong branch fires.
 //
-// The minimal case is the one that matters most: a machine that has configured
-// nothing reports "no problems detected", and still needs the paste block. See
-// needsSetup.
+// The minimal case is a healthy local setup, so missing Cloud credentials do
+// not trigger the setup block.
 func TestRenderHuman_SetupHint(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -23,7 +22,7 @@ func TestRenderHuman_SetupHint(t *testing.T) {
 		wantBlock bool
 	}{
 		{name: "healthy and configured", report: goldenHealthyReport()},
-		{name: "nothing configured", report: goldenMinimalReport(), wantBlock: true},
+		{name: "healthy local capture", report: goldenMinimalReport()},
 		{name: "config in error", report: brokenConfigReport(), wantBlock: true},
 	}
 	for _, tc := range cases {
