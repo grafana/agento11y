@@ -31,9 +31,10 @@ type Payload struct {
 	// beforeSubmitPrompt
 	Prompt string `json:"prompt"`
 
-	// afterAgentResponse / stop
+	// afterAgentResponse / stop / common schema
 	Text             string `json:"text"`
 	Model            string `json:"model"`
+	ModelID          string `json:"model_id"`
 	Provider         string `json:"provider"`
 	InputTokens      *int64 `json:"input_tokens"`
 	OutputTokens     *int64 `json:"output_tokens"`
