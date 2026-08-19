@@ -59,6 +59,27 @@ func runSkillsCommand(args []string, stdout, stderr io.Writer) {
 	}
 }
 
+const localUsage = "usage: agento11y local start | open | status | stop | restart"
+
+// runLocalHelpCommand prints the user-facing local daemon commands. The serve
+// verb is internal and stays out of help and usage output.
+func runLocalHelpCommand(stdout io.Writer) {
+	_, _ = io.WriteString(stdout, localHelpBody)
+}
+
+const localHelpBody = `Manage the local capture daemon and viewer.
+
+Usage:
+  agento11y local <command>
+
+Commands:
+  start     Start the receiver if needed and print its address.
+  open      Start the receiver if needed, print its address, and try to open the viewer.
+  status    Report whether the receiver is running.
+  stop      Stop the receiver.
+  restart   Stop and start the receiver.
+`
+
 // runHelpCommand prints the expanded command list, which the one-line
 // usageLine cannot carry.
 func runHelpCommand(stdout io.Writer) {
@@ -92,7 +113,8 @@ Commands:
   login       Save endpoint, tenant, token, and OTLP endpoint to config.env.
   doctor      Check both export pipelines, the config, and installed plugins.
   skills      List or print the agent skills bundled into this binary.
-  local       Manage the local capture daemon: start, status, stop.
+  local       Manage the local capture daemon: start, open, status, stop, restart.
+              agento11y local open starts it if needed and tries to open the viewer.
   history     Backfill sessions an agent wrote before agento11y was installed.
   help        Print this text.
 
@@ -101,8 +123,7 @@ Commands:
 
 Flags:
   --version   Print the build version.
-  --help, -h  Print this text. Both are top-level forms: a subcommand given
-              the wrong arguments prints its own usage line instead.
+  --help, -h  Print this text. agento11y local also accepts help, --help, and -h.
 
 Skills:
   agento11y skills list

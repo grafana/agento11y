@@ -189,6 +189,11 @@ func TestRun_HelpIsARealCommand(t *testing.T) {
 			if !strings.Contains(out, "agento11y skills list") {
 				t.Errorf("help does not name `agento11y skills list`:\n%s", out)
 			}
+			for _, want := range []string{"agento11y local open", "restart"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("help does not name %q:\n%s", want, out)
+				}
+			}
 			if !strings.Contains(out, skills.SetupCodingAgentCommand) {
 				t.Errorf("help does not carry the setup hint %q:\n%s", skills.SetupCodingAgentCommand, out)
 			}

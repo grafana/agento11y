@@ -1351,28 +1351,46 @@ func TestRun_LauncherContinuesWhenLoginAborted(t *testing.T) {
 	}
 }
 
-// TestRun_LocalSubcommand covers the friendly-failure paths of the
-// `sigil local` verbs when no daemon is running: status / stop just
-// print the friendly message, unknown / missing verb exit 2 with a
-// usage hint. The happy-path verbs (start, restart) that spawn or
-// adopt a real daemon are exercised elsewhere via inProcessDaemon.
+// TestRun_LocalSubcommand covers local help, friendly responses when no daemon
+// is running, and misuse errors.
 func TestRun_LocalSubcommand(t *testing.T) {
+	localHelpRows := []string{
+		"\n  start     ",
+		"\n  open      ",
+		"\n  status    ",
+		"\n  stop      ",
+		"\n  restart   ",
+	}
 	cases := []struct {
-		name          string
-		argv          []string
-		wantExit      *int   // nil = no exit
-		wantStdoutHas string // empty = skip
-		wantStderrHas string // empty = skip
+		name            string
+		argv            []string
+		wantExit        *int // nil = no exit
+		wantStdoutHas   []string
+		wantStdoutLacks string
+		wantStderrHas   string
+		wantStderrEmpty bool
+		checkNoDotenv   bool
 	}{
-		{name: "status with no daemon prints friendly message", argv: []string{"local", "status"}, wantStdoutHas: "not running"},
-		{name: "stop with no daemon prints friendly message", argv: []string{"local", "stop"}, wantStdoutHas: "not running"},
+		{name: "status with no daemon prints friendly message", argv: []string{"local", "status"}, wantStdoutHas: []string{"not running"}},
+		{name: "stop with no daemon prints friendly message", argv: []string{"local", "stop"}, wantStdoutHas: []string{"not running"}},
+		{name: "help", argv: []string{"local", "help"}, wantStdoutHas: localHelpRows, wantStdoutLacks: "serve", wantStderrEmpty: true, checkNoDotenv: true},
+		{name: "long help flag", argv: []string{"local", "--help"}, wantStdoutHas: localHelpRows, wantStdoutLacks: "serve", wantStderrEmpty: true, checkNoDotenv: true},
+		{name: "short help flag", argv: []string{"local", "-h"}, wantStdoutHas: localHelpRows, wantStdoutLacks: "serve", wantStderrEmpty: true, checkNoDotenv: true},
 		{name: "unknown verb exits 2", argv: []string{"local", "bogus"}, wantExit: intPtr(2), wantStderrHas: `unknown local verb "bogus"`},
 		{name: "no verb exits 2 with usage hint", argv: []string{"local"}, wantExit: intPtr(2), wantStderrHas: "usage: agento11y local"},
-		{name: "usage hint lists restart", argv: []string{"local"}, wantExit: intPtr(2), wantStderrHas: "restart"},
+		{name: "usage hint lists open and restart", argv: []string{"local"}, wantExit: intPtr(2), wantStderrHas: "open | status | stop | restart"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			isolateDotenvHome(t)
+			home := isolateDotenvHome(t)
+			const sentinel = "AGENTO11Y_LOCAL_HELP_SENTINEL"
+			if tc.checkNoDotenv {
+				cfgDir := filepath.Join(home, "config", "agento11y")
+				require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.env"), []byte(sentinel+"=loaded\n"), 0o600))
+				t.Setenv(sentinel, "")
+			}
+
 			var stdout, stderr bytes.Buffer
 			gotExit := withExit(t, func() {
 				run(tc.argv, strings.NewReader(""), &stdout, &stderr)
@@ -1383,11 +1401,84 @@ func TestRun_LocalSubcommand(t *testing.T) {
 			case tc.wantExit != nil && (gotExit == nil || *gotExit != *tc.wantExit):
 				t.Fatalf("exit = %v, want %d", gotExit, *tc.wantExit)
 			}
-			if tc.wantStdoutHas != "" && !strings.Contains(stdout.String(), tc.wantStdoutHas) {
-				t.Fatalf("stdout missing %q: %q", tc.wantStdoutHas, stdout.String())
+			for _, want := range tc.wantStdoutHas {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("stdout missing %q: %q", want, stdout.String())
+				}
+			}
+			if tc.wantStdoutLacks != "" && strings.Contains(stdout.String(), tc.wantStdoutLacks) {
+				t.Errorf("stdout contains %q: %q", tc.wantStdoutLacks, stdout.String())
 			}
 			if tc.wantStderrHas != "" && !strings.Contains(stderr.String(), tc.wantStderrHas) {
-				t.Fatalf("stderr missing %q: %q", tc.wantStderrHas, stderr.String())
+				t.Errorf("stderr missing %q: %q", tc.wantStderrHas, stderr.String())
+			}
+			if tc.wantStderrEmpty && stderr.Len() != 0 {
+				t.Errorf("stderr non-empty: %q", stderr.String())
+			}
+			if tc.checkNoDotenv && os.Getenv(sentinel) != "" {
+				t.Errorf("%s = %q, help loaded config.env", sentinel, os.Getenv(sentinel))
+			}
+		})
+	}
+}
+
+func TestRun_LocalOpen(t *testing.T) {
+	openErr := errors.New("browser command unavailable")
+	for _, tc := range []struct {
+		name       string
+		startErr   error
+		openErr    error
+		wantExit   *int
+		wantStderr string
+		wantOpen   bool
+	}{
+		{name: "starts stopped receiver and opens returned endpoint", wantOpen: true},
+		{name: "browser failure is best effort", openErr: openErr, wantStderr: openErr.Error(), wantOpen: true},
+		{name: "receiver startup failure", startErr: errors.New("receiver failed to start"), wantExit: intPtr(1), wantStderr: "receiver failed to start"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			var endpoint string
+			starts := new(int)
+			if tc.startErr != nil {
+				restore := local.SetStartDaemonForTesting(func(context.Context, string, *log.Logger) (*local.Status, error) {
+					*starts++
+					return nil, tc.startErr
+				})
+				t.Cleanup(restore)
+			} else {
+				_, endpoint, starts = inProcessDaemonWithStartCount(t)
+			}
+
+			var opened []string
+			previousOpenURL := openURL
+			openURL = func(target string) error {
+				opened = append(opened, target)
+				return tc.openErr
+			}
+			t.Cleanup(func() { openURL = previousOpenURL })
+
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run([]string{"local", "open"}, strings.NewReader(""), &stdout, &stderr)
+			})
+			switch {
+			case tc.wantExit == nil && gotExit != nil:
+				t.Fatalf("exit = %d, want no exit (stderr=%q)", *gotExit, stderr.String())
+			case tc.wantExit != nil && (gotExit == nil || *gotExit != *tc.wantExit):
+				t.Fatalf("exit = %v, want %d", gotExit, *tc.wantExit)
+			}
+			assert.Equal(t, 1, *starts, "daemon starts")
+			if tc.wantOpen {
+				assert.Contains(t, stdout.String(), endpoint)
+				assert.Equal(t, []string{endpoint}, opened)
+			} else {
+				assert.Empty(t, opened)
+			}
+			if tc.wantStderr == "" {
+				assert.Empty(t, stderr.String())
+			} else {
+				assert.Contains(t, stderr.String(), tc.wantStderr)
 			}
 		})
 	}

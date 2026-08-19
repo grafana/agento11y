@@ -96,7 +96,7 @@ The skills for instrumenting your own application code are separate and ship wit
 
 `AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. Choosing **Local only** at first-run login writes that setting (and `SIGIL_LOCAL=true`) and later runs do not ask again. Local mode is available on macOS and Linux only; Windows has no local receiver. Use `--no-local` to override local mode for one launcher session.
 
-Local mode stores full session content. Manage the app with `agento11y local start|status|stop|restart`.
+Local mode stores full session content. Manage the app with `agento11y local start|open|status|stop|restart`. `agento11y local open` starts the receiver if needed, prints its address, and tries to open the app.
 
 ### History import
 

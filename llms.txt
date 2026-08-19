@@ -120,7 +120,7 @@ To re-enter credentials later, run `agento11y login`. It asks where sessions go 
 
 ## Local mode
 
-`agento11y <agent> --local`, or **Local only** at the first-run question, records full session content to a JSONL store on this machine and serves a local viewer. The launcher prints the viewer URL: it tries `http://127.0.0.1:8765` first and moves to a higher port when that one is taken. Manage the daemon with `agento11y local start|status|stop|restart`. Local mode runs on macOS and Linux only; Windows has no local receiver.
+`agento11y <agent> --local`, or **Local only** at the first-run question, records full session content to a JSONL store on this machine and serves a local viewer. The launcher prints the viewer URL: it tries `http://127.0.0.1:8765` first and moves to a higher port when that one is taken. Manage the daemon with `agento11y local start|open|status|stop|restart`. Use `agento11y local open` to start the receiver if needed, print its address, and try to open the viewer. Local mode runs on macOS and Linux only; Windows has no local receiver.
 
 **Local only** writes `AGENTO11Y_LOCAL=true` and `SIGIL_LOCAL=true` to `~/.config/agento11y/config.env`, so later launchers and installed hooks use the local store without asking again. `--no-local` sends one launcher session to Grafana Cloud without changing the saved answer. Local mode captures full content regardless of `AGENTO11Y_CONTENT_CAPTURE_MODE`, and it forwards to Grafana Cloud only when `AGENTO11Y_LOCAL_FORWARD` is set with valid Cloud credentials.
 
