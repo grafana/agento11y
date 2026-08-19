@@ -554,6 +554,7 @@ func piGeneration(
 		Output:        append(piAssistantOutput(blocks), piToolResultsOutput(log, index, blocks)...),
 		Tools:         piToolDefinitions(blocks),
 		CallError:     msg.ErrorMessage,
+		Tags:          piTags(log.header.CWD),
 	}
 	if piHasThinking(blocks) {
 		gen.ThinkingEnabled = piBoolPtr(true)
@@ -578,6 +579,17 @@ func piGeneration(
 	quality := piQuality(gen)
 	piApplyLineage(&gen, &quality, log, entry, conversationID, sourcePath, fork)
 	return HistoricalGeneration{Source: src, Gen: gen, Quality: quality}
+}
+
+// piTags returns the built-in tags for an imported pi turn. There is no branch
+// tag: the log records no branch, and resolving one at import time would record
+// the branch checked out now rather than the one the session ran on.
+func piTags(cwd string) map[string]string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return nil
+	}
+	return map[string]string{"cwd": cwd}
 }
 
 // piQuality reports what the session log did not carry. Neither timestamp flag

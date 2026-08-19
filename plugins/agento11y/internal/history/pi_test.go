@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -541,6 +542,50 @@ func TestPiTurnsMapOneGenerationPerAssistantEntry(t *testing.T) {
 	}
 	if first.Gen.Tools[0].Description != "" || len(first.Gen.Tools[0].InputSchema) != 0 {
 		t.Fatal("tool definitions must be name-only: descriptions and schemas are runtime-only")
+	}
+}
+
+func TestPiTurnsTagTheWorkspaceFromTheSessionHeader(t *testing.T) {
+	tests := []struct {
+		name string
+		cwd  string
+		want map[string]string
+	}{
+		{name: "cwd present", cwd: "/work/repo", want: map[string]string{"cwd": "/work/repo"}},
+		{name: "cwd empty"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			sessionID := "019ead07-cfbf-78d3-8b03-875769426583"
+			body := piHeader(t, sessionID, tt.cwd, "2026-06-09T15:37:10.848Z") +
+				piUserEntry(t, "u1", "", "2026-06-09T15:37:20.000Z", "first", 1781019439000) +
+				piAssistantEntry(t, "a1", "u1", "2026-06-09T15:37:24.526Z", 1781019441000,
+					[]map[string]any{piTextBlock("one")}, nil) +
+				piUserEntry(t, "u2", "a1", "2026-06-09T15:38:00.000Z", "second", 1781019480000) +
+				piAssistantEntry(t, "a2", "u2", "2026-06-09T15:38:06.000Z", 1781019482000,
+					[]map[string]any{piTextBlock("two")}, nil)
+			path := writeFile(t, filepath.Join(root, "--work-repo--", "2026-06-09T15-37-10-848Z_"+sessionID+".jsonl"), body)
+			imp := piImporterAt(root)
+			if !imp.Match(path) {
+				t.Fatalf("Match(%q) = false, want true", path)
+			}
+
+			turns := collectTurns(t, imp, piPreview(t, imp, path))
+			if len(turns) != 2 {
+				t.Fatalf("got %d turns, want 2", len(turns))
+			}
+			for i, turn := range turns {
+				if tt.want == nil && turn.Gen.Tags != nil {
+					t.Errorf("turn %d Tags = %v, want nil", i, turn.Gen.Tags)
+					continue
+				}
+				if !maps.Equal(turn.Gen.Tags, tt.want) {
+					t.Errorf("turn %d Tags = %v, want %v", i, turn.Gen.Tags, tt.want)
+				}
+			}
+		})
 	}
 }
 
