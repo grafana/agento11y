@@ -158,23 +158,29 @@ A `pi` import reads pi's session logs under `$PI_CODING_AGENT_DIR/sessions` (by 
 
 Subagent runs are in neither: the nested `run-N/session.jsonl` logs come from the third-party `pi-subagents` package, which live capture ignores too, so importing them would exceed live fidelity rather than match it.
 
-A `cursor` import reads Cursor's session databases under `~/.cursor/chats` and produces one generation per prompt, with that prompt, the assistant's reply, its tool calls and matched results, the workspace, and the session's model. Cursor records less about a turn than the other three sources do, so an imported Cursor session is the thinnest of them:
+A `cursor` import reads Cursor sessions from two layouts and produces one generation per prompt, with that prompt, the assistant's reply, and whatever tool data the source recorded:
+
+- `~/.cursor/projects/<project>/agent-transcripts/<uuid>/<uuid>.jsonl` — what current Cursor builds write. Parent transcripts only; nested `subagents/` files are skipped.
+- `~/.cursor/chats/<workspace-hash>/<session-uuid>/store.db` — the older SQLite store, still imported when present.
+
+Cursor records less about a turn than the other three sources do, so an imported Cursor session is the thinnest of them:
 
 - No token usage. Cursor keeps no per-turn counts, so every turn reports no usage and is marked approximate. A dashboard shows no cost for an imported Cursor turn.
-- Approximate times. Cursor stamps no message with a time. Some sessions can be dated to the second, and in the rest the turns are spread across the session's span, which orders them and measures nothing. Every turn is marked approximate either way.
+- Approximate times on store.db sessions. The SQLite store stamps no message with a time. Some sessions can be dated to the second from provider IDs, and in the rest the turns are spread across the session's span, which orders them and measures nothing. Every store.db turn is marked approximate either way. Agent-transcript prompts sometimes carry a `<timestamp>` wrapper; those turns keep that time and are not marked approximate.
 - A session the import cannot date is exported as ending where it started, rather than at a later time nothing in the session supports.
-- One model name per session, and only when the session recorded one. A turn from a session that names none is marked as having no model.
+- Model names only when a store.db session recorded one. Agent transcripts record none, so every transcript turn is marked as having no model.
+- No tool results on agent transcripts. The JSONL lists tool calls (`tool_use`) but not their outputs, so imported transcript turns carry one-sided tool records.
 - No system prompt and no turn IDs. Cursor's own system prompt is dropped, because a live capture exports none either. An imported turn is numbered by its position. The workspace and git-status block Cursor puts in front of a prompt stays there, because the model saw it.
 
-Reading a Cursor session can add a `store.db-shm` file next to the session database. SQLite needs that file to read the newest part of a session. The import writes nothing else in `~/.cursor`, and a dry run is no different, because it opens the same databases.
+Reading a `store.db` session can add a `store.db-shm` file next to the session database. SQLite needs that file to read the newest part of a session. The import writes nothing else in `~/.cursor`, and a dry run is no different, because it opens the same databases.
 
-Cursor publishes no schema for this format and stamps no version into it, so a Cursor release can change it.
+Cursor publishes no schema for either format and stamps no version into them, so a Cursor release can change them.
 
 A forked pi session imports only the turns the fork itself ran. The trunk holds the entries a fork copied from it and exports those turns under its own import, and, when the trunk exported the fork's parent turn, the fork's first turn carries `pi.fork.parent_session_id` and `pi.fork.parent_generation_id` metadata instead of a parent edge. A fork of a fork carries neither key, because no trunk generation exists to name.
 
 `--local` picks the endpoint. Without it, the import exports to the configured Grafana Cloud endpoint, exactly as a live session does. With it, the import exports to the local daemon on this machine.
 
-A dry run reads up to 1 MiB of each session file (a head and a tail window) to count turns and read session metadata. A `cursor` session is a SQLite database rather than a log file, so the dry run queries it for the same counts instead, and no message body leaves the database. Nothing from those bytes is decoded into prompt or response text, shown, exported, or stored.
+A dry run reads up to 1 MiB of each session file (a head and a tail window) to count turns and read session metadata. A `cursor` `store.db` session is a SQLite database rather than a log file, so the dry run queries it for the same counts instead, and no message body leaves the database. A Cursor agent-transcript dry run uses the same bounded head/tail window as the other JSONL importers. Nothing from those bytes is decoded into prompt or response text, shown, exported, or stored.
 
 Without `--since`, an import covers the last 90 days. The local store is a linear scan over JSONL files, so an unbounded first import makes the viewer slow before you have used it. Pass `--since 365d`, `--since 2026-01-01T00:00:00Z`, or any duration to widen the window, and `--until` to bound the other end.
 

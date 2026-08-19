@@ -1,0 +1,6 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Wednesday, May 13, 2026, 2:30 PM (UTC+2)</timestamp>\n<user_query>\nrun the tests\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"I will run the tests now."}]}}
+{"type":"turn_ended","status":"success"}
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Wednesday, May 13, 2026, 2:35 PM (UTC+2)</timestamp>\n<user_query>\nsummarize the failures\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Two tests failed in the mapper package."}]}}
+{"type":"turn_ended","status":"success"}

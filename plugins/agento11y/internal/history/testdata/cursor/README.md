@@ -33,6 +33,9 @@ repository.
 Neither fixture names a Cursor version, because none is recoverable from a
 session on disk.
 
+Agent-transcript JSONL fixtures (current Cursor layout) live under
+`transcripts/` and are covered by `cursor_transcript_test.go`.
+
 ## Checking against a real Cursor
 
 `chatstore` ships an opt-in harness that runs the reader over every store on the

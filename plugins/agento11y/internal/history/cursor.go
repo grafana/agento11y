@@ -62,23 +62,26 @@ const (
 	cursorWALHeaderSize = 32
 )
 
-// cursorImporter reads Cursor sessions under ~/.cursor/chats.
+// cursorImporter reads Cursor sessions from two layouts Cursor has used:
 //
-// Cursor stores a session as a content-addressed blob table rather than a
-// transcript, so the decoding lives in [chatstore] and this file only groups the
-// decoded messages into turns and hands each turn to the live [mapper].
+//   - ~/.cursor/chats/<workspace-hash>/<session-uuid>/store.db — the older
+//     SQLite content-addressed store; decoding lives in [chatstore]
+//   - ~/.cursor/projects/<project-slug>/agent-transcripts/<uuid>/<uuid>.jsonl —
+//     the JSONL transcripts current Cursor builds write; decoding lives in
+//     cursor_transcript.go
+//
+// Both paths group messages into turns and hand each turn to the live [mapper].
 //
 // The store records no per-turn timestamp field, no per-turn token usage, and
-// only a session-wide model name. Every turn is therefore marked
-// ApproxStartedAt, ApproxCompletedAt and ApproxUsage, and a session with no
-// recorded model is marked MissingModel. Usage is left at zero rather than
-// charged from the session total.
+// only a session-wide model name. Transcripts record neither model nor usage,
+// and tool results are absent. Every turn is therefore marked ApproxUsage and
+// MissingModel; store.db turns are also ApproxStartedAt/ApproxCompletedAt, and
+// transcript turns are those only when no <timestamp> wrapper dated them.
 //
-// A turn is dated from the provider IDs its messages carry, which is a
-// measurement at second resolution taken on the provider's clock: see
-// cursor_clock.go. A turn whose provider issues IDs with no time in them, and a
-// session on a model that never does, fall back to a window interpolated across
-// the session's span, which is a guess and is flagged as one.
+// A store.db turn is dated from the provider IDs its messages carry (see
+// cursor_clock.go). A turn whose provider issues IDs with no time in them, and
+// a session on a model that never does, fall back to a window interpolated
+// across the session's span, which is a guess and is flagged as one.
 //
 // A prompt is what the user typed, with Cursor's <user_query> wrapper removed,
 // and the environment block Cursor prepends as a message of its own kept in
@@ -90,7 +93,7 @@ const (
 // changes nothing, but it does mean the framework is not the single redaction
 // point here that its documentation describes.
 type cursorImporter struct {
-	// roots overrides the resolved chats directory. Tests set it.
+	// roots overrides the resolved chats and projects directories. Tests set it.
 	roots []string
 	// now supplies the clock the mapper falls back to. nil uses time.Now.
 	now func() time.Time
@@ -104,14 +107,23 @@ func (c *cursorImporter) Roots() []string {
 	if err != nil {
 		return nil
 	}
-	return []string{filepath.Join(home, ".cursor", "chats")}
+	base := filepath.Join(home, ".cursor")
+	return []string{
+		filepath.Join(base, "chats"),
+		filepath.Join(base, "projects"),
+	}
 }
 
-// Match accepts the session database and nothing beside it. SQLite's
-// store.db-wal and store.db-shm sit in the same directory, and matching either
-// would preview and import the same session more than once.
+// Match accepts a Cursor session file: the SQLite store.db, or a parent
+// agent-transcripts JSONL. SQLite's store.db-wal and store.db-shm sit beside
+// the database, and matching either would preview and import the same session
+// more than once. Subagent transcripts under .../subagents/ are not sessions
+// of their own and are excluded here.
 func (c *cursorImporter) Match(path string) bool {
-	return filepath.Base(path) == cursorStoreName
+	if filepath.Base(path) == cursorStoreName {
+		return true
+	}
+	return isCursorParentTranscript(path)
 }
 
 func (c *cursorImporter) clock() time.Time {
@@ -135,6 +147,9 @@ func (c *cursorImporter) clock() time.Time {
 func (c *cursorImporter) Preview(ctx context.Context, path string) (SessionPreview, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return SessionPreview{}, false, err
+	}
+	if isCursorParentTranscript(path) {
+		return c.previewTranscript(ctx, path)
 	}
 	store, err := chatstore.Open(path)
 	if err != nil {
@@ -293,6 +308,9 @@ func cursorStoreFiles(path string) []string {
 // One turn is held at a time. The messages are read one blob at a time, so a
 // session of several hundred megabytes costs one turn's memory.
 func (c *cursorImporter) Turns(ctx context.Context, sess SessionPreview) iter.Seq2[HistoricalGeneration, error] {
+	if isCursorParentTranscript(sess.SourcePath) {
+		return c.turnsTranscript(ctx, sess)
+	}
 	return func(yield func(HistoricalGeneration, error) bool) {
 		if err := ctx.Err(); err != nil {
 			yield(HistoricalGeneration{}, err)
@@ -377,6 +395,9 @@ const (
 	// ID with a time in it, so the turn's times are a share of the session's span
 	// rather than anything measured.
 	cursorNoteInterpolatedTimes = "interpolated_times"
+	// cursorNoteMissingToolResults says the transcript recorded tool calls but
+	// never their outputs, so every ToolRecord is one-sided.
+	cursorNoteMissingToolResults = "missing_tool_results"
 )
 
 // cursorReplay walks a session's messages and holds the open turn only.
