@@ -61,6 +61,35 @@ const (
 
 	// ToolCallResultAttributeKey holds the value a tool call returned.
 	ToolCallResultAttributeKey = "gen_ai.tool.call.result"
+
+	// The six gen_ai keys below are the semantic conventions' content
+	// documents. Only a span from the otelgenai util carries them, because
+	// there the span is the generation export rather than metadata beside it.
+	// Listing them keeps a forwarder from relaying prompt text under a reduced
+	// capture mode.
+
+	// SystemInstructionsAttributeKey holds the system prompt.
+	SystemInstructionsAttributeKey = "gen_ai.system_instructions"
+
+	// InputMessagesAttributeKey holds the request messages.
+	InputMessagesAttributeKey = "gen_ai.input.messages"
+
+	// OutputMessagesAttributeKey holds the response messages.
+	OutputMessagesAttributeKey = "gen_ai.output.messages"
+
+	// ToolDefinitionsAttributeKey holds the tool descriptions and schemas
+	// visible to the model.
+	ToolDefinitionsAttributeKey = "gen_ai.tool.definitions"
+
+	// RetrievalQueryTextAttributeKey holds the query a retrieval ran.
+	RetrievalQueryTextAttributeKey = "gen_ai.retrieval.query.text"
+
+	// RetrievalDocumentsAttributeKey holds the documents a retrieval returned.
+	RetrievalDocumentsAttributeKey = "gen_ai.retrieval.documents"
+
+	// RawArtifactsAttributeKey holds the raw provider request and response
+	// payloads. Only the otelgenai util puts them on a span.
+	RawArtifactsAttributeKey = "agento11y.generation.raw_artifacts"
 )
 
 // Protocol values that must not be treated as content. A forwarder that
@@ -97,8 +126,9 @@ const (
 // Exposing a predicate instead of a set keeps callers from adding or removing
 // keys.
 //
-// Generation prompt and response text never reaches spans; it travels in the
-// proto generation export.
+// Generation prompt and response text reaches a span only through the
+// otelgenai util, where the span replaces the proto generation export. On
+// every other path that text travels in that export instead.
 func IsTraceContentAttribute(key string) bool {
 	switch key {
 	case ConversationTitleKey,
@@ -106,7 +136,14 @@ func IsTraceContentAttribute(key string) bool {
 		EmbeddingInputTextsAttributeKey,
 		ToolDescriptionAttributeKey,
 		ToolCallArgumentsAttributeKey,
-		ToolCallResultAttributeKey:
+		ToolCallResultAttributeKey,
+		SystemInstructionsAttributeKey,
+		InputMessagesAttributeKey,
+		OutputMessagesAttributeKey,
+		ToolDefinitionsAttributeKey,
+		RetrievalQueryTextAttributeKey,
+		RetrievalDocumentsAttributeKey,
+		RawArtifactsAttributeKey:
 		return true
 	default:
 		return false

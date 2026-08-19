@@ -381,6 +381,15 @@ func TestIsTraceContentAttribute(t *testing.T) {
 		{key: "gen_ai.embeddings.input_texts", want: true},
 		{key: "agento11y.conversation.title", want: true},
 		{key: "sigil.conversation.title", want: true},
+		// The semconv content documents and the raw artifacts appear on a
+		// generation span under the otel export protocol.
+		{key: "gen_ai.system_instructions", want: true},
+		{key: "gen_ai.input.messages", want: true},
+		{key: "gen_ai.output.messages", want: true},
+		{key: "gen_ai.tool.definitions", want: true},
+		{key: "gen_ai.retrieval.query.text", want: true},
+		{key: "gen_ai.retrieval.documents", want: true},
+		{key: "agento11y.generation.raw_artifacts", want: true},
 		{key: "gen_ai.tool.name", want: false},
 		{key: "gen_ai.usage.input_tokens", want: false},
 		{key: contentcapture.ErrorCategoryAttributeKey, want: false},

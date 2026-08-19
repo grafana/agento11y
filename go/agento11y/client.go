@@ -9,7 +9,6 @@ import (
 	"maps"
 	"reflect"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y/contentcapture"
+	"github.com/grafana/agento11y/go/agento11y/internal/tagattr"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -2232,30 +2232,7 @@ func metricExemplarContext(ctx context.Context) context.Context {
 }
 
 func tagAttributes(tags map[string]string) []attribute.KeyValue {
-	if len(tags) == 0 {
-		return nil
-	}
-	type tagPair struct {
-		key   string
-		value string
-	}
-	pairs := make([]tagPair, 0, len(tags))
-	for k, v := range tags {
-		key := strings.TrimSpace(k)
-		if key == "" {
-			continue
-		}
-		pairs = append(pairs, tagPair{key: key, value: strings.TrimSpace(v)})
-	}
-	if len(pairs) == 0 {
-		return nil
-	}
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i].key < pairs[j].key })
-	attrs := make([]attribute.KeyValue, 0, len(pairs))
-	for _, p := range pairs {
-		attrs = append(attrs, attribute.String(spanAttrTagPrefix+p.key, p.value))
-	}
-	return attrs
+	return tagattr.Attributes(spanAttrTagPrefix, tags)
 }
 
 func setSpanTagAttributes(span trace.Span, tags map[string]string) {
