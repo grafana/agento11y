@@ -75,7 +75,7 @@ func TestRun_NoTTYReturnsErrNotInteractive(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.env")
 
-	err := Run(context.Background(), RunOpts{
+	_, err := Run(context.Background(), RunOpts{
 		ConfigPath: path,
 		Stdin:      nonTTYStdin(t),
 	})
@@ -1121,6 +1121,74 @@ func TestStackOptions(t *testing.T) {
 	}
 }
 
+func TestShouldOfferLocal(t *testing.T) {
+	tests := []struct {
+		name      string
+		askUser   bool
+		requested bool
+		supported bool
+		want      bool
+	}{
+		{name: "interactive first run", askUser: true, requested: true, supported: true, want: true},
+		{name: "promptless run", requested: true, supported: true},
+		{name: "destination already set", askUser: true, supported: true},
+		{name: "receiver unsupported", askUser: true, requested: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldOfferLocal(tc.askUser, tc.requested, tc.supported); got != tc.want {
+				t.Errorf("shouldOfferLocal() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDestinationQuestionShape(t *testing.T) {
+	if destinationTitle != "Where should sessions go?" {
+		t.Errorf("destination title = %q", destinationTitle)
+	}
+	options := destinationOptions()
+	if len(options) != 2 {
+		t.Fatalf("destination options = %d, want 2", len(options))
+	}
+	want := []huh.Option[bool]{
+		huh.NewOption("Local only", true),
+		huh.NewOption("Grafana Cloud", false),
+	}
+	for i := range want {
+		if options[i].Key != want[i].Key || options[i].Value != want[i].Value {
+			t.Errorf("option %d = %q, %v, want %q, %v", i, options[i].Key, options[i].Value, want[i].Key, want[i].Value)
+		}
+	}
+}
+
+// TestDestinationFormFirstFrame renders the question the way a user first sees
+// it. Both options have to be on that frame, with the cursor on Local only: huh
+// scrolls the option viewport to whatever the select was bound to when its
+// options were set, so binding the value after the options leaves the cursor
+// above the visible rows and the first frame shows Grafana Cloud alone.
+func TestDestinationFormFirstFrame(t *testing.T) {
+	localMode := true
+	form := destinationForm(&localMode)
+	form.Init()
+	view := form.View()
+
+	var cursorLine string
+	for line := range strings.SplitSeq(view, "\n") {
+		if strings.Contains(line, "›") {
+			cursorLine = line
+		}
+	}
+	for _, want := range []string{"Local only", "Grafana Cloud"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("first frame does not show %q:\n%s", want, view)
+		}
+	}
+	if !strings.Contains(cursorLine, "Local only") {
+		t.Errorf("cursor line = %q, want it on Local only:\n%s", cursorLine, view)
+	}
+}
+
 // TestStackQuestionShape composes the decisions promptStack makes, which it
 // cannot be tested through because it runs the forms. It pins the fallback in
 // particular: with no gcx installed, gcxStacks reports nothing and the question
@@ -1472,8 +1540,11 @@ func TestSetupPageLinkWrapsOnANarrowTerminal(t *testing.T) {
 }
 
 func TestWelcomeBanner(t *testing.T) {
-	if banner := welcomeBanner(); strings.Contains(banner, "<your-stack>") {
+	if banner := welcomeBanner(false); strings.Contains(banner, "<your-stack>") {
 		t.Error("the welcome banner should leave the setup link to setupPageLink")
+	}
+	if banner := welcomeBanner(true); !strings.Contains(banner, "Choose where to keep your sessions.") {
+		t.Errorf("destination banner has the Cloud-only subtitle:\n%s", banner)
 	}
 }
 
@@ -1535,7 +1606,7 @@ func runNonInteractive(t *testing.T, opts RunOpts) (string, error) {
 	var stderr bytes.Buffer
 	opts.Stdin = nonTTYStdin(t)
 	opts.Stderr = &stderr
-	err := Run(context.Background(), opts)
+	_, err := Run(context.Background(), opts)
 	return stderr.String(), err
 }
 
@@ -1727,7 +1798,7 @@ func TestRun_ProbeResolvesInsecureLikeExporter(t *testing.T) {
 			path := writeDotenv(t, c.file)
 			var calls []probeCall
 			var stderr bytes.Buffer
-			err := Run(context.Background(), RunOpts{
+			_, err := Run(context.Background(), RunOpts{
 				ConfigPath: path,
 				Stdin:      nonTTYStdin(t),
 				Stderr:     &stderr,
@@ -1746,6 +1817,35 @@ func TestRun_ProbeResolvesInsecureLikeExporter(t *testing.T) {
 				t.Errorf("probe insecure = %v, want %v", calls[0].insecure, c.want)
 			}
 		})
+	}
+}
+
+func TestEnableLocalMode(t *testing.T) {
+	envconfig.PinAliasEnvBlank(t)
+	path := filepath.Join(t.TempDir(), "config.env")
+	var stderr bytes.Buffer
+
+	result, err := enableLocalMode(path, RunOpts{Stderr: &stderr})
+	if err != nil {
+		t.Fatalf("enableLocalMode: %v", err)
+	}
+	if !result.LocalMode {
+		t.Error("LocalMode = false, want true")
+	}
+	want := map[string]string{
+		"AGENTO11Y_LOCAL": "true",
+		"SIGIL_LOCAL":     "true",
+	}
+	if got := dotenv.LoadDotenv(path, nil); !reflect.DeepEqual(got, want) {
+		t.Errorf("saved config = %v, want %v", got, want)
+	}
+	for key, value := range want {
+		if got := os.Getenv(key); got != value {
+			t.Errorf("%s = %q, want %q", key, got, value)
+		}
+	}
+	if !strings.Contains(stderr.String(), "captured on this machine") {
+		t.Errorf("stderr does not confirm the local destination:\n%s", stderr.String())
 	}
 }
 
@@ -1770,18 +1870,21 @@ func TestRun_ExplicitValues(t *testing.T) {
 		want        map[string]string
 	}{
 		{
-			name: "flags override existing configuration",
-			file: existing,
+			name: "Cloud credentials disable saved local mode",
+			file: existing + "AGENTO11Y_LOCAL=true\nSIGIL_LOCAL=true\n",
 			opts: RunOpts{
-				Endpoint: "https://new.example",
-				TenantID: "222",
-				Token:    "new-token",
+				Endpoint:   "https://new.example",
+				TenantID:   "222",
+				Token:      "new-token",
+				OfferLocal: true,
 			},
 			want: map[string]string{
 				"AGENTO11Y_ENDPOINT":       "https://new.example",
 				"AGENTO11Y_AUTH_TENANT_ID": "222",
 				"AGENTO11Y_AUTH_TOKEN":     "new-token",
 				"SIGIL_ENDPOINT":           "https://new.example",
+				"AGENTO11Y_LOCAL":          "false",
+				"SIGIL_LOCAL":              "false",
 			},
 		},
 		{
@@ -1917,7 +2020,7 @@ func TestRun_ExplicitValues(t *testing.T) {
 			opts.Stderr = io.Discard
 			opts.SkipVerify = true
 
-			err := Run(context.Background(), opts)
+			_, err := Run(context.Background(), opts)
 			if c.wantErrText != "" {
 				if err == nil || !strings.Contains(err.Error(), c.wantErrText) {
 					t.Fatalf("Run err = %v, want a complaint naming %s", err, c.wantErrText)
@@ -1937,6 +2040,11 @@ func TestRun_ExplicitValues(t *testing.T) {
 			for k, want := range c.want {
 				if saved[k] != want {
 					t.Errorf("saved[%q] = %q, want %q", k, saved[k], want)
+				}
+				if k == envconfig.PreferredKey("LOCAL") || k == envconfig.LegacyKey("LOCAL") {
+					if got := os.Getenv(k); got != want {
+						t.Errorf("%s = %q, want %q in process env", k, got, want)
+					}
 				}
 			}
 		})

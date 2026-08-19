@@ -40,7 +40,7 @@ agento11y copilot -- <copilot args>
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y copilot` writes the shared hooks file to `~/.copilot/hooks/agento11y.json`, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, removes any legacy `sigil-copilot` plugin left by older versions, and then launches Copilot CLI.
+On first run, `agento11y copilot` asks where sessions go, saves the answer to `~/.config/agento11y/config.env`, then writes `~/.copilot/hooks/agento11y.json`, removes any legacy `sigil-copilot` plugin, and launches Copilot CLI. **Grafana Cloud** asks for the credentials below. **Local only** sets `AGENTO11Y_LOCAL=true` and starts the local receiver for that launch. The question needs macOS or Linux and a terminal; see [Configure](../agento11y/README.md#configure) for the full rules.
 
 For VS Code, no launch wrapper is needed — once `~/.copilot/hooks/agento11y.json` exists, add `~/.copilot/hooks` to the `chat.hookFilesLocations` setting and Copilot Chat picks it up.
 
@@ -52,7 +52,7 @@ For VS Code, no launch wrapper is needed — once `~/.copilot/hooks/agento11y.js
 
 ## 2. Credentials
 
-When `agento11y copilot` prompts, it asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
+When `agento11y copilot` prompts and you pick Grafana Cloud, it asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack: an administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 To type the values instead, press Enter on the empty paste box. They come from three Grafana Cloud pages:
 
@@ -67,7 +67,7 @@ To type the values instead, press Enter on the empty paste box. They come from t
 3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
    - **OTLP endpoint URL** → `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT`
 
-Run `agento11y login` later to update saved credentials.
+Run `agento11y login` later to update saved credentials; a rerun asks the Cloud questions again.
 
 <details>
 <summary>Non-interactive config.env</summary>

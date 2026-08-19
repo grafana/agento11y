@@ -124,33 +124,43 @@ install a `sigil` alias. `go install` installs only the binary you name. The old
 name will be removed in a future release, so do not write new instructions
 against `sigil`.
 
-## Step 3: Save credentials
+## Step 3: Choose a destination
 
-`agento11y login` writes credentials to `$XDG_CONFIG_HOME/agento11y/config.env`,
-or `~/.config/agento11y/config.env` when `XDG_CONFIG_HOME` is unset. The user can
-paste a block from their stack or pass values as flags. The paste flow is normal.
+A first `agento11y login` asks where sessions go: **Local only**, or **Grafana
+Cloud**. Windows has no local receiver, so its flow starts at the Cloud
+questions.
+
+**Local only** writes `AGENTO11Y_LOCAL=true` and `SIGIL_LOCAL=true` to
+`$XDG_CONFIG_HOME/agento11y/config.env`, or `~/.config/agento11y/config.env` when
+`XDG_CONFIG_HOME` is unset. **Grafana Cloud** continues to the credential flow,
+which writes credentials there too.
 
 ### The paste flow
 
 Tell the user to run `agento11y login` in their own terminal, then wait. You
 cannot drive it yourself: it needs a terminal, and the block it asks for holds a
-live token that must not pass through this conversation. What the user sees:
+live token that must not pass through this conversation. The destination question
+appears only on macOS and Linux, and only when no destination and no credentials
+are saved. The Cloud questions after it run on every interactive `agento11y login`
+without complete credential flags, including a rerun with saved credentials.
 
-1. **Your Grafana Cloud URL**: the Grafana they open in a browser, for example
+1. **Where should sessions go?**: a two-option list. **Local only** saves local
+   mode and ends the flow. **Grafana Cloud** continues with the steps below.
+2. **Your Grafana Cloud URL**: the Grafana they open in a browser, for example
    `https://mystack.grafana.net`. The field arrives pre-filled from the stack an
    earlier run saved or from a gcx configuration, and becomes a list when more
    than one is known. It only builds the links below; it is never the ingest
    endpoint.
-2. Login prints `https://<stack>/a/grafana-agento11y-app/setup-coding-agent` and
+3. Login prints `https://<stack>/a/grafana-agento11y-app/setup-coding-agent` and
    tries to open it in a browser. That page has three steps: create an API token,
    copy the connection settings, and paste them back in the terminal. The page
    creates the token when the user has permission and the stack supports it.
    Otherwise it links to Cloud Access Policies and accepts an existing token.
-3. **Paste from Grafana**: the whole block goes into this one masked field, which
+4. **Paste from Grafana**: the whole block goes into this one masked field, which
    fills the endpoint, instance ID, token, and OTLP settings. Login then asks
    only for what the block did not carry. Pasting is optional: Enter on the empty
    box types the values field by field instead.
-4. **Preferences**: content capture mode, session tags, guards and their timeout,
+5. **Preferences**: content capture mode, session tags, guards and their timeout,
    and automatic tags. Enter keeps the current behavior, which is the answer
    unless the user asks otherwise. Read the privacy warning in Rule 5 before
    enabling full capture or guards. Read **Automatic tags** below before enabling
@@ -179,10 +189,10 @@ the integrations use only these three.
 
 ### The flags
 
-`--endpoint`, `--tenant`, and a token together skip the value prompts, so this
-form works over SSH, in a devcontainer, and from a script. A failed credential
-check can still prompt on an interactive terminal. Use this form for values the
-user has already given you.
+`--endpoint`, `--tenant`, and a token together skip the destination and value
+prompts, so this form works over SSH, in a devcontainer, and from a script. A
+failed credential check can still prompt on an interactive terminal. Use this
+form for values the user has already given you.
 
 ```sh
 printf %s "$TOKEN" | agento11y login \
@@ -217,11 +227,12 @@ token.
 
 ## Step 4: Wire the coding agent
 
-Six agents launch through `agento11y <agent>`. On a normal first run, the
-command prompts for credentials, installs the host integration, and then replaces
-itself with the agent. It skips login in local mode and when no terminal is
-available. Existing integrations follow the **Auto-update** rules in the
-Reference.
+Six agents launch through `agento11y <agent>`. A first run asks where sessions go
+as Step 3 describes, and **Local only** there starts the receiver for that launch.
+The command then installs the host integration and replaces itself with the agent.
+It asks nothing when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`)
+or when stdin is not a terminal. Existing integrations follow the **Auto-update**
+rules in the Reference.
 
 | Agent | Command | Mechanism |
 | --- | --- | --- |
@@ -374,13 +385,16 @@ All hosts read the resolved config path. The default is
 | `AGENTO11Y_GUARDS_ENABLED` | Send supported preflight and tool calls for guard evaluation |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | Guard evaluation timeout in milliseconds |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | Allow the operation when guard evaluation fails |
-| `AGENTO11Y_LOCAL` | Route `agento11y <agent>` launches and agento11y hooks to the local daemon |
+| `AGENTO11Y_LOCAL` | Route `agento11y <agent>` launches and agento11y hooks to the local daemon, and skip the destination question |
 | `AGENTO11Y_LOCAL_FORWARD` | Forward local-mode captures to Grafana Cloud |
 | `AGENTO11Y_AUTO_UPDATE` | A false value opts out of host-plugin refresh |
 | `AGENTO11Y_DEBUG` | A true value writes the debug log |
 
 All branded keys except `AGENTO11Y_STACK_URL` have an older `SIGIL_*` spelling.
-Doctor reports provenance only for settings in its report.
+**Local only** writes both `AGENTO11Y_LOCAL=true` and `SIGIL_LOCAL=true`, so later
+launchers and `agento11y cursor install` ask nothing. An explicit `agento11y login`
+still runs the Cloud questions, and does not ask where sessions go again. Doctor
+reports provenance only for settings in its report.
 
 ### Tagging sessions
 
@@ -435,26 +449,19 @@ Every plugin redacts known secret formats from captured content, but capture mod
 chooses which fields ship, not whether the shipped fields are clean. Treat
 `full` as opt-in on shared machines.
 
-Local mode overrides the configured mode and captures full content in its store.
-
 ### Local mode
 
-`agento11y <agent> --local` records full content in a JSONL store and serves a
-viewer. It tries `http://127.0.0.1:8765`, then higher ports, and prints the URL;
-it does not open a browser. Cloud forwarding also requires
-`AGENTO11Y_LOCAL_FORWARD` and valid Cloud settings. Manage the daemon with
-`agento11y local start|status|stop|restart`.
-
-Local mode routes `agento11y <agent>` launches and agento11y hooks (Cursor,
-Claude Code, Codex, Copilot, Vibe) to the local viewer. It still captures
-full content in the local store. Cloud forwarding also requires
-`AGENTO11Y_LOCAL_FORWARD`. Never describe local mode as a switch that keeps
-all data on the machine. Doctor prints this correction when
-`AGENTO11Y_LOCAL` is enabled in the environment or config file; it cannot
-see a one-off `--local` flag after the launch.
-
-`--no-local` runs one session against Cloud while `AGENTO11Y_LOCAL=true` stays
-set.
+`agento11y <agent> --local`, or **Local only** at the first-run question, routes
+launcher runs and agento11y hooks to a JSONL store on the machine. It also
+overrides the capture mode with full content. The launcher prints the viewer URL.
+Manage the daemon with `agento11y local start|status|stop|restart`. Local mode
+runs on macOS and Linux only. **Local only** at a launcher starts the receiver for
+that launch; after `agento11y login` or `agento11y cursor install` the receiver
+starts on the next launch or hook. `--no-local` runs one session against Cloud
+while the saved answer stays set. Never describe local mode as a switch that keeps
+all data on the machine: with `AGENTO11Y_LOCAL_FORWARD` and valid Cloud settings
+it forwards to Grafana Cloud too. Doctor prints that correction only for a
+configured `AGENTO11Y_LOCAL`.
 
 ### History import
 

@@ -55,15 +55,16 @@ func isolateEnv(t *testing.T) string {
 // tests stay hermetic.
 func stubSeams(t *testing.T) {
 	t.Helper()
-	prevAgents, prevConv, prevOTLP := collectAgents, probeConversationsFn, probeOTLPFn
+	prevAgents, prevConv, prevOTLP, prevReceiverSupported := collectAgents, probeConversationsFn, probeOTLPFn, receiverSupported
 	t.Cleanup(func() {
-		collectAgents, probeConversationsFn, probeOTLPFn = prevAgents, prevConv, prevOTLP
+		collectAgents, probeConversationsFn, probeOTLPFn, receiverSupported = prevAgents, prevConv, prevOTLP, prevReceiverSupported
 	})
 	collectAgents = func(context.Context, string) []AgentStatus { return nil }
 	probeConversationsFn = func(context.Context, string, envValue, string, bool) *ProbeResult {
 		return &ProbeResult{StatusCode: 200, OK: true}
 	}
 	probeOTLPFn = func(context.Context, envValue) *AnalyticsProbe { return nil }
+	receiverSupported = func() bool { return true }
 }
 
 func writeConfig(t *testing.T, content string) {
@@ -1827,21 +1828,87 @@ func TestCollectConfig_Local(t *testing.T) {
 	}
 }
 
-// TestCollect_LocalModeScopeReachesTheReport pins the wiring: the scope message
-// has to survive Collect, not just collectConfig, or the whole warning is
-// invisible in the command a user actually runs.
-func TestCollect_LocalModeScopeReachesTheReport(t *testing.T) {
-	isolateEnv(t)
-	stubSeams(t)
-	writeConfig(t, "AGENTO11Y_LOCAL=true\n")
-
-	r := Collect(context.Background(), Options{}, Params{Version: "1.2.3"})
-	if !r.Config.Local.Set || r.Config.Local.Value != "true" {
-		t.Fatalf("Config.Local = %+v, want the config.env value", r.Config.Local)
+// TestCollect_LocalModeReachesTheReport pins the local-mode wiring through
+// Collect, including the pipeline state shown to users who chose local capture.
+func TestCollect_LocalModeReachesTheReport(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        string
+		wantConv      Health
+		wantAnalytics Health
+		wantConvMsg   string
+		denyConvMsg   string
+		unsupported   bool
+		wantSetup     bool
+	}{
+		{
+			name:          "local mode needs no Cloud credentials",
+			config:        "AGENTO11Y_LOCAL=true\n",
+			wantConv:      HealthOK,
+			wantAnalytics: HealthOK,
+			wantConvMsg:   "Grafana Cloud credentials are not required",
+			denyConvMsg:   "run `agento11y login`",
+		},
+		{
+			name:          "local forwarding still needs Cloud credentials",
+			config:        "AGENTO11Y_LOCAL=true\nAGENTO11Y_LOCAL_FORWARD=true\n",
+			wantConv:      HealthWarn,
+			wantAnalytics: HealthWarn,
+			wantConvMsg:   "not configured",
+			wantSetup:     true,
+		},
+		{
+			name:          "unsupported receiver still needs Cloud credentials",
+			config:        "AGENTO11Y_LOCAL=true\n",
+			wantConv:      HealthWarn,
+			wantAnalytics: HealthWarn,
+			wantConvMsg:   "not configured",
+			unsupported:   true,
+			wantSetup:     true,
+		},
+		{
+			name:          "partial Cloud credentials remain an error",
+			config:        "AGENTO11Y_LOCAL=true\nAGENTO11Y_ENDPOINT=https://example.invalid\n",
+			wantConv:      HealthError,
+			wantAnalytics: HealthWarn,
+			wantConvMsg:   "incomplete credentials",
+			wantSetup:     true,
+		},
 	}
-	joined := strings.Join(r.Config.Messages, " ")
-	if !strings.Contains(joined, "local mode sends `agento11y <agent>` launches and agento11y hooks to the local viewer") {
-		t.Fatalf("report messages %v missing the local-mode scope message", r.Config.Messages)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEnv(t)
+			stubSeams(t)
+			if tc.unsupported {
+				receiverSupported = func() bool { return false }
+			}
+			writeConfig(t, tc.config)
+
+			r := Collect(context.Background(), Options{}, Params{Version: "1.2.3"})
+			if !r.Config.Local.Set || r.Config.Local.Value != "true" {
+				t.Fatalf("Config.Local = %+v, want the config.env value", r.Config.Local)
+			}
+			configMessages := strings.Join(r.Config.Messages, " ")
+			if !strings.Contains(configMessages, "local mode sends `agento11y <agent>` launches and agento11y hooks to the local viewer") {
+				t.Fatalf("report messages %v missing the local-mode scope message", r.Config.Messages)
+			}
+			if r.Conversations.Health != tc.wantConv {
+				t.Errorf("Conversations.Health = %q, want %q", r.Conversations.Health, tc.wantConv)
+			}
+			if r.Analytics.Health != tc.wantAnalytics {
+				t.Errorf("Analytics.Health = %q, want %q", r.Analytics.Health, tc.wantAnalytics)
+			}
+			conversationMessages := strings.Join(r.Conversations.Messages, " ")
+			if !strings.Contains(conversationMessages, tc.wantConvMsg) {
+				t.Errorf("Conversations.Messages = %v, want %q", r.Conversations.Messages, tc.wantConvMsg)
+			}
+			if tc.denyConvMsg != "" && strings.Contains(conversationMessages, tc.denyConvMsg) {
+				t.Errorf("Conversations.Messages = %v, must not contain %q", r.Conversations.Messages, tc.denyConvMsg)
+			}
+			if got := needsSetup(r); got != tc.wantSetup {
+				t.Errorf("needsSetup() = %v, want %v", got, tc.wantSetup)
+			}
+		})
 	}
 }
 

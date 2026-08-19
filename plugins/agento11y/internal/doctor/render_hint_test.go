@@ -23,6 +23,7 @@ func TestRenderHuman_SetupHint(t *testing.T) {
 		wantBlock bool
 	}{
 		{name: "healthy and configured", report: goldenHealthyReport()},
+		{name: "local capture configured", report: localCaptureReport()},
 		{name: "nothing configured", report: goldenMinimalReport(), wantBlock: true},
 		{name: "config in error", report: brokenConfigReport(), wantBlock: true},
 	}
@@ -58,6 +59,16 @@ func TestRenderHuman_SetupHint(t *testing.T) {
 			}
 		})
 	}
+}
+
+func localCaptureReport() *Report {
+	r := goldenMinimalReport()
+	r.Conversations.Health = HealthOK
+	r.Conversations.Messages = []string{"local capture is enabled; Grafana Cloud credentials are not required"}
+	r.Analytics.Health = HealthOK
+	r.Analytics.Messages = []string{"local capture is enabled; a Cloud OTLP endpoint is not required"}
+	r.localCaptureConfigured = true
+	return r
 }
 
 // brokenConfigReport is a report whose only failing section is config, so the

@@ -131,6 +131,10 @@ type Report struct {
 	// which values opt out stays in one place.
 	AutoUpdate         envValue `json:"auto_update"`
 	AutoUpdateDisabled bool     `json:"auto_update_disabled"`
+
+	// localCaptureConfigured means local capture alone is a complete setup, so the
+	// Cloud setup hint and the Cloud pipeline warnings do not apply to this machine.
+	localCaptureConfigured bool
 }
 
 // BinarySection reports the binary's build version.
@@ -414,6 +418,7 @@ var (
 	collectAgents        = defaultCollectAgents
 	probeConversationsFn = defaultProbeConversations
 	probeOTLPFn          = defaultProbeOTLP
+	receiverSupported    = local.ReceiverSupported
 )
 
 // SnapshotEnv records the OS-env values of the tracked keys. Call it before
@@ -495,6 +500,19 @@ func Collect(ctx context.Context, opts Options, p Params) *Report {
 	r.Conversations = collectConversations(osEnv, fileEnv)
 	r.Analytics = collectAnalytics(osEnv, fileEnv, r.Conversations.configured())
 	r.Config = collectConfig(osEnv, fileEnv)
+	forward := daemonFamily("LOCAL_FORWARD", osEnv, fileEnv)
+	r.localCaptureConfigured = receiverSupported() &&
+		r.Config.Local.Set && envconfig.ParseBool(r.Config.Local.Value) &&
+		!envconfig.ParseBool(forward.value) &&
+		!r.Conversations.Endpoint.Set && !r.Conversations.TenantID.Set && !r.Conversations.Token.Set
+	if r.localCaptureConfigured {
+		r.Conversations.Health = HealthOK
+		r.Conversations.Messages = []string{"local capture is enabled; Grafana Cloud credentials are not required"}
+		if !r.Analytics.Endpoint.Set {
+			r.Analytics.Health = HealthOK
+			r.Analytics.Messages = []string{"local capture is enabled; a Cloud OTLP endpoint is not required"}
+		}
+	}
 	r.Agents = collectAgents(ctx, r.Binary.Version)
 	r.AutoUpdate = resolveFamily("AUTO_UPDATE", osEnv, fileEnv).envValue()
 	r.AutoUpdateDisabled = updatecheck.Disabled()

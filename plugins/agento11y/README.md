@@ -50,9 +50,9 @@ Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor n
 
 ## Configure
 
-Run `agento11y login` to connect to Grafana Cloud. It prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
+Run `agento11y login` to configure capture. It first asks where sessions go: **Local only**, or **Grafana Cloud**. That question needs macOS or Linux, with no destination and no Grafana Cloud credentials saved yet; Windows cannot run the local receiver, so its flow starts at the Cloud credential questions. The Cloud flow prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
 
-If no Grafana Cloud connection is saved, `agento11y <agent>` and `agento11y cursor install` start the same flow. Local mode skips it. Run `agento11y login` again to change the connection, content capture, tags, or guard settings.
+`agento11y <agent>` and `agento11y cursor install` start the same flow on first run. Neither asks anything when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`) or when stdin is not a terminal. Run `agento11y login` again to change the Cloud connection, content capture, tags, or guard settings. A rerun goes straight to the Cloud questions, and asks where sessions go only when neither that answer nor credentials are saved.
 
 ## Noninteractive agent setup
 
@@ -149,7 +149,7 @@ A plugin can only export fields the host agent passes through to it, so individu
 
 `agento11y <agent> --local` records the session to a JSONL store and starts the local viewer. The command prints the viewer URL. It first tries `http://127.0.0.1:8765` and uses a higher port when that port is unavailable.
 
-`AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. Use `--no-local` to override this setting for one launcher session.
+`AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. Choosing **Local only** at the first-run question writes `AGENTO11Y_LOCAL=true` and `SIGIL_LOCAL=true` to `config.env`, and later runs do not ask again. When the question comes from `agento11y <agent>`, that launch starts the receiver. After `agento11y login` or `agento11y cursor install`, the receiver starts on the next launch or hook. The question appears on macOS and Linux only, because Windows has no local receiver. Use `--no-local` to override this setting for one launcher session.
 
 Local mode stores full session content. Manage the viewer separately with `agento11y local start|status|stop|restart`.
 

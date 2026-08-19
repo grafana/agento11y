@@ -29,7 +29,7 @@ agento11y pi
 
 The script installs `agento11y` to `~/.local/bin`; `go install` uses `go env GOPATH`/bin (or `GOBIN`). Make sure that directory is on your `PATH`. See the [`agento11y` binary README](../agento11y/README.md#install) for all install options. The command was renamed from `sigil`; the old name still works but will be removed in a future release.
 
-`agento11y pi` installs the `@grafana/agento11y-pi` extension on first run, prompts for missing Grafana Cloud credentials, writes `~/.config/agento11y/config.env`, and then launches pi.
+On first run, `agento11y pi` asks where sessions go, saves the answer to `~/.config/agento11y/config.env`, then installs the `@grafana/agento11y-pi` extension and launches pi. **Grafana Cloud** asks for the credentials below. **Local only** sets `AGENTO11Y_LOCAL=true` and starts the local receiver for that launch. The question needs macOS or Linux and a terminal; see [Configure](../agento11y/README.md#configure) for the full rules.
 
 <details>
 <summary>Manual extension registration</summary>
@@ -45,7 +45,7 @@ The extension reads the same `~/.config/agento11y/config.env` file whether you s
 
 ## 2. Credentials
 
-When `agento11y pi` or `agento11y login` prompts, it asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
+When `agento11y pi` or `agento11y login` prompts and you pick Grafana Cloud, it asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack: an administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 To type the values instead, press Enter on the empty paste box. They come from three Grafana Cloud pages:
 
@@ -60,7 +60,7 @@ To type the values instead, press Enter on the empty paste box. They come from t
 3. **Grafana Cloud Portal → your stack → OpenTelemetry card**
    - **OTLP endpoint URL** → `AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT`
 
-Run `agento11y login` later to update saved credentials.
+Run `agento11y login` later to update saved credentials; a rerun asks the Cloud questions again.
 
 <details>
 <summary>Non-interactive config.env</summary>
