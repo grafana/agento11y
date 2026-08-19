@@ -45,6 +45,10 @@ const (
 	projectConfigDirName = ".pi"
 )
 
+// ErrCLINotFound means the pi binary is not available on PATH for the current
+// user. Callers can defer setup until the host is installed.
+var ErrCLINotFound = errors.New("pi CLI not found")
+
 // Test seams.
 var (
 	lookPath   = exec.LookPath
@@ -92,6 +96,28 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 		},
 		// No Update: pi's own installer handles upgrades.
 	})
+}
+
+// Install registers the pi extension without starting pi or prompting for
+// Agent Observability credentials. The returned value is true only when this
+// invocation registered the extension. A legacy extension is first migrated
+// using the same best-effort path as Launch so it does not stay frozen on the
+// old npm package name.
+func Install(ctx context.Context, stdout io.Writer, logger *log.Logger) (bool, error) {
+	migrateLegacyInstall(ctx, stdout, logger)
+	installed, probeErr := pluginInstalled()
+	if probeErr == nil && installed {
+		return false, nil
+	}
+
+	bin, err := lookPath("pi")
+	if err != nil {
+		return false, fmt.Errorf("%w; install pi or run this in the developer's user context", ErrCLINotFound)
+	}
+	if err := runInstall(ctx, bin, stdout); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {

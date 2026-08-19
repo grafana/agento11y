@@ -409,6 +409,20 @@ func TestLaunch_MissingBinaryInstallsUserHooks(t *testing.T) {
 	assert.Contains(t, stderr.String(), "installed Copilot hooks at")
 }
 
+func TestInstall_WritesHooksWithoutCopilotCLI(t *testing.T) {
+	t.Setenv("COPILOT_HOME", t.TempDir())
+	withExecutable(t, "/usr/local/bin/agento11y")
+
+	changed, err := Install()
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
+
+	changed, err = Install()
+	require.NoError(t, err)
+	assert.False(t, changed)
+}
+
 // The shared hooks file must be installed and KEPT even when copilot is present
 // and a stale plugin is uninstalled — VS Code relies on it and the CLI reads
 // the same file, so it is the single source of truth.

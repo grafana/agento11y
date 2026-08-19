@@ -84,6 +84,16 @@ func Launch(_ context.Context, args []string, localEnv *local.LaunchEnv, _ io.Re
 	return nil
 }
 
+// Install writes the shared user-level Copilot hooks file without launching
+// Copilot or requiring its CLI to be present. VS Code reads the same file even
+// on a machine that does not have the Copilot CLI on PATH.
+//
+// The returned value is true only when the hooks file content changed.
+func Install() (bool, error) {
+	_, wrote, err := writeUserHooks()
+	return wrote, err
+}
+
 // installUserHooks writes the shared user-level Copilot hooks file and reports
 // the outcome. It never returns an error: failing to install the hooks must
 // not block the rest of the launch flow.

@@ -131,7 +131,7 @@ func localPrivacyLines(posture local.ForwardPosture, known bool) []string {
 func usageLine() string {
 	return "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] " +
 		"[--otlp-endpoint url] [--no-verify] [--yes] | agento11y doctor [--json] | " +
-		"agento11y claude install [--json] | " +
+		"agento11y <claude|copilot|opencode|pi> install [--json] | " +
 		"agento11y skills list|show <name> | agento11y local start|status|stop | " +
 		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
 		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
@@ -190,6 +190,9 @@ var (
 	cursorInstall   = cursorinstall.Run
 	cursorUninstall = cursorinstall.Uninstall
 	claudeInstall   = claudecode.Install
+	copilotInstall  = copilot.Install
+	opencodeInstall = opencode.Install
+	piInstall       = pi.Install
 )
 
 // Main is the entrypoint shared by cmd/agento11y and cmd/sigil.
@@ -247,11 +250,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		return
 	}
 
-	// `agento11y claude install` is the noninteractive counterpart to the
-	// launcher. Managed deployment tooling uses it after placing a config.env
-	// for the current user; it never launches Claude or prompts.
-	if args[0] == "claude" && len(args) >= 2 && args[1] == "install" {
-		runClaudeInstall(args[2:], stdout, stderr)
+	// These installers configure one host without launching it or prompting for
+	// Agent Observability credentials. They are safe to invoke from unattended
+	// setup after the current user's config.env is in place.
+	if len(args) >= 2 && args[1] == "install" &&
+		(args[0] == "claude" || args[0] == "copilot" || args[0] == "opencode" || args[0] == "pi") {
+		runAgentInstall(args[0], args[2:], stdout, stderr)
 		return
 	}
 
@@ -714,16 +718,16 @@ type agentInstallResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// runClaudeInstall registers the Claude Code plugin without entering an
-// interactive setup flow or starting Claude. It is intended for managed-device
-// tooling, which writes config.env separately for each user.
-func runClaudeInstall(args []string, stdout, stderr io.Writer) {
-	fs := flag.NewFlagSet("claude install", flag.ContinueOnError)
+// runAgentInstall registers one supported host integration without entering an
+// interactive setup flow or starting the host. It is suitable for scripts
+// after the current user's config.env has been created.
+func runAgentInstall(agent string, args []string, stdout, stderr io.Writer) {
+	fs := flag.NewFlagSet(agent+" install", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var asJSON bool
 	fs.BoolVar(&asJSON, "json", false, "print a machine-readable result")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: agento11y claude install [--json]")
+		_, _ = fmt.Fprintf(stderr, "usage: agento11y %s install [--json]\n", agent)
 		exit(2)
 		return
 	}
@@ -732,10 +736,21 @@ func runClaudeInstall(args []string, stdout, stderr io.Writer) {
 	if asJSON {
 		writer = io.Discard
 	}
-	result := agentInstallResult{Agent: "claude"}
-	changed, err := claudeInstall(context.Background(), writer)
+	result := agentInstallResult{Agent: agent}
+	var changed bool
+	var err error
+	switch agent {
+	case "claude":
+		changed, err = claudeInstall(context.Background(), writer)
+	case "copilot":
+		changed, err = copilotInstall()
+	case "opencode":
+		changed, err = opencodeInstall(context.Background(), writer, cli.InitLogger("opencode"))
+	case "pi":
+		changed, err = piInstall(context.Background(), writer, cli.InitLogger("pi"))
+	}
 	switch {
-	case errors.Is(err, claudecode.ErrCLINotFound):
+	case errors.Is(err, claudecode.ErrCLINotFound), errors.Is(err, opencode.ErrCLINotFound), errors.Is(err, pi.ErrCLINotFound):
 		result.Status = "missing_host"
 	case err != nil:
 		result.Status, result.Error = "error", err.Error()
@@ -748,7 +763,7 @@ func runClaudeInstall(args []string, stdout, stderr io.Writer) {
 	if asJSON {
 		data, err := json.Marshal(result)
 		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "agento11y claude install: encode result: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "agento11y %s install: encode result: %v\n", agent, err)
 			exit(1)
 			return
 		} else {

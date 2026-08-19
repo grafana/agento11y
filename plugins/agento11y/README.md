@@ -93,6 +93,26 @@ Then follow your agent's quickstart:
 - [pi](../pi/README.md)
 - [Vibe](../vibe/README.md)
 
+## Noninteractive agent setup
+
+After writing the current user's `config.env`, a script can register an agent
+integration without launching the host or opening the credential prompt:
+
+```sh
+agento11y copilot install --json
+agento11y opencode install --json
+agento11y pi install --json
+```
+
+Each command prints one secret-free result with `installed`,
+`already_installed`, `missing_host`, or `error`. Copilot writes its shared
+user hook file and does not require the Copilot CLI on `PATH`; that file is
+also read by Copilot Chat in VS Code. OpenCode and pi require their respective
+CLI to be on the current user's `PATH`; `missing_host` is a successful
+deferral, so a later run can configure a host installed after the script.
+
+Claude Code provides the same command as `agento11y claude install --json`.
+
 ## Skills
 
 The binary carries agent skills: markdown workflows a coding agent reads and follows. They ship inside the binary, so there is nothing to fetch and no second CLI to install. Upgrading `agento11y` upgrades them.
