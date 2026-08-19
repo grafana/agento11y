@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -810,6 +811,22 @@ func withStubClaudeInstall(t *testing.T, fn func(context.Context, io.Writer) (bo
 	claudeInstall = fn
 }
 
+func withStubRegisteredInstallers(t *testing.T, specs []agentinstall.Spec) {
+	t.Helper()
+	prev := registeredInstallers
+	t.Cleanup(func() { registeredInstallers = prev })
+	registeredInstallers = func() []agentinstall.Spec { return specs }
+}
+
+func TestRegisteredInstallersIncludeExistingManagedInstallers(t *testing.T) {
+	names := make([]string, 0)
+	for _, spec := range registeredInstallers() {
+		names = append(names, spec.Name)
+	}
+	assert.Contains(t, names, "claude")
+	assert.Contains(t, names, "cursor")
+}
+
 func withStubCopilotInstall(t *testing.T, fn func() (bool, error)) {
 	t.Helper()
 	prev := copilotInstall
@@ -903,6 +920,123 @@ func TestRun_AgentInstallsJSON(t *testing.T) {
 			var result agentInstallResult
 			require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
 			assert.Equal(t, tc.want, result)
+		})
+	}
+}
+
+func TestRun_AgentsReconcileJSON(t *testing.T) {
+	prevVersion := version
+	version = "v0.0.1-test"
+	t.Cleanup(func() { version = prevVersion })
+
+	called := make([]string, 0, 2)
+	withStubRegisteredInstallers(t, []agentinstall.Spec{
+		{Name: "claude", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
+			called = append(called, "claude")
+			return true, nil
+		}},
+		{Name: "cursor", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
+			called = append(called, "cursor")
+			return false, nil
+		}},
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"agents", "reconcile", "--agents", "cursor,claude", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
+	require.Empty(t, stderr.String())
+	assert.Equal(t, []string{"cursor", "claude"}, called)
+
+	var result agentReconcileReport
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
+	assert.Equal(t, agentReconcileReport{
+		SchemaVersion: agentReconcileSchemaVersion,
+		Status:        "converged",
+		Agento11y:     reconcileBinary{Version: "v0.0.1-test"},
+		Agents: []agentInstallResult{
+			{Agent: "cursor", Status: "already_installed"},
+			{Agent: "claude", Status: "installed"},
+		},
+	}, result)
+}
+
+func TestRun_AgentsReconcileAllIncludesNewlyRegisteredInstallers(t *testing.T) {
+	called := make([]string, 0, 3)
+	withStubRegisteredInstallers(t, []agentinstall.Spec{
+		{Name: "claude", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
+			called = append(called, "claude")
+			return false, nil
+		}},
+		{Name: "cursor", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
+			called = append(called, "cursor")
+			return false, nil
+		}},
+		{Name: "opencode", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
+			called = append(called, "opencode")
+			return true, nil
+		}},
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"agents", "reconcile", "--agents", "all", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
+	assert.Equal(t, []string{"claude", "cursor", "opencode"}, called)
+	assert.Contains(t, stdout.String(), `"agent":"opencode","status":"installed"`)
+}
+
+func TestRun_AgentsReconcileReportsMissingHostAndInstallerErrors(t *testing.T) {
+	withStubRegisteredInstallers(t, []agentinstall.Spec{
+		{Name: "claude", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) { return false, claudecode.ErrCLINotFound }, IsMissingHost: func(err error) bool { return errors.Is(err, claudecode.ErrCLINotFound) }},
+		{Name: "opencode", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
+			return false, errors.New("could not write plugin file: permission denied")
+		}},
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"agents", "reconcile", "--agents", "claude,opencode", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.NotNil(t, gotExit)
+	assert.Equal(t, 1, *gotExit)
+	require.Empty(t, stderr.String())
+
+	var result agentReconcileReport
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
+	assert.Equal(t, "error", result.Status)
+	assert.Equal(t, []agentInstallResult{
+		{Agent: "claude", Status: "missing_host"},
+		{Agent: "opencode", Status: "error", Error: "opencode install failed: could not write plugin file: permission denied"},
+	}, result.Agents)
+}
+
+func TestRun_AgentsReconcileUsageErrorsNameTheProblem(t *testing.T) {
+	withStubRegisteredInstallers(t, []agentinstall.Spec{
+		{Name: "claude", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) { return false, nil }},
+		{Name: "cursor", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) { return false, nil }},
+	})
+
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "missing agents", args: []string{"agents", "reconcile", "--json"}, want: "--agents is required; available installers: claude, cursor"},
+		{name: "missing json", args: []string{"agents", "reconcile", "--agents", "claude"}, want: "--json is required so management tooling can parse the reconciliation receipt"},
+		{name: "unknown installer", args: []string{"agents", "reconcile", "--agents", "opencode", "--json"}, want: `"opencode" has no noninteractive installer in this binary (available: claude, cursor)`},
+		{name: "all mixed with name", args: []string{"agents", "reconcile", "--agents", "all,claude", "--json"}, want: "--agents=all must be used by itself"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() { run(tc.args, strings.NewReader(""), &stdout, &stderr) })
+			require.NotNil(t, gotExit)
+			assert.Equal(t, 2, *gotExit)
+			assert.Empty(t, stdout.String())
+			assert.Contains(t, stderr.String(), tc.want)
 		})
 	}
 }

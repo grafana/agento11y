@@ -240,6 +240,32 @@ func TestRun_Idempotent(t *testing.T) {
 	assert.Contains(t, stdout.String(), "already up to date")
 }
 
+func TestReconcileReportsRewriteOfStaleOwnedHooks(t *testing.T) {
+	home := t.TempDir()
+	withHome(t, home)
+	withExecutable(t, testBin)
+
+	legacyHooks := make(map[string][]map[string]string, len(cursorEvents))
+	for _, event := range cursorEvents {
+		legacyHooks[event] = []map[string]string{{"command": "/old/bin/sigil cursor hook"}}
+	}
+	seed, err := json.Marshal(map[string]any{"version": 1, "hooks": legacyHooks})
+	require.NoError(t, err)
+	seedHooks(t, home, string(seed))
+
+	installed, err := Status()
+	require.NoError(t, err)
+	assert.True(t, installed, "Status recognises stale owned hooks as installed")
+
+	changed, err := Reconcile(io.Discard, io.Discard, nopLogger())
+	require.NoError(t, err)
+	assert.True(t, changed, "reconciliation rewrites stale binary paths")
+
+	changed, err = Reconcile(io.Discard, io.Discard, nopLogger())
+	require.NoError(t, err)
+	assert.False(t, changed, "the exact desired hook file is already converged")
+}
+
 // A corrupt hooks.json must abort with an error and leave the file byte-for-byte
 // untouched, so a file shared with other tools is never lost to a partial
 // rewrite.

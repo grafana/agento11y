@@ -17,6 +17,7 @@ package install
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
 )
 
@@ -49,6 +51,19 @@ var cursorEvents = []string{
 // Test seam.
 var userHomeDir = os.UserHomeDir
 
+func init() {
+	agentinstall.Register(agentinstall.Spec{
+		Name: "cursor",
+		Install: func(_ context.Context, stdout io.Writer, logger *log.Logger) (bool, error) {
+			changed, err := Reconcile(stdout, io.Discard, logger)
+			if err != nil {
+				return false, fmt.Errorf("write Cursor hooks: %w", err)
+			}
+			return changed, nil
+		},
+	})
+}
+
 // hookEntry is a single Cursor hook command entry. Cursor entries may carry
 // other fields, but agento11y only ever writes the command; extra fields on other
 // tools' entries are preserved as raw JSON, not through this type.
@@ -63,25 +78,37 @@ type hookEntry struct {
 // install, or a legacy run.sh entry when detectable) is replaced in place to
 // avoid double-firing capture. The write is atomic and idempotent — when the
 // result already matches what is on disk, the file is left untouched.
-func Run(stdout, _ io.Writer, logger *log.Logger) error {
+func Run(stdout, stderr io.Writer, logger *log.Logger) error {
+	_, err := Reconcile(stdout, stderr, logger)
+	return err
+}
+
+// Reconcile has the same behavior as Run and also reports whether it modified
+// the hooks file. Management tooling uses this result for an accurate
+// installed versus already_installed receipt.
+//
+// A Status probe alone cannot provide that result: Status intentionally treats
+// legacy run.sh entries and hooks pointing to another agento11y binary as
+// installed, while this function upgrades those entries in place.
+func Reconcile(stdout, _ io.Writer, logger *log.Logger) (bool, error) {
 	path, err := cursorHooksPath()
 	if err != nil {
-		return err
+		return false, err
 	}
 	cmd, err := execpath.HookCommand("cursor hook")
 	if err != nil {
-		return err
+		return false, err
 	}
 	logger.Printf("cursor install: hooks=%s command=%q", path, cmd)
 
 	doc, err := loadHooks(path)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	entry, err := json.Marshal(hookEntry{Command: cmd})
 	if err != nil {
-		return fmt.Errorf("encode cursor hook entry: %w", err)
+		return false, fmt.Errorf("encode cursor hook entry: %w", err)
 	}
 	for _, event := range cursorEvents {
 		doc.hooks[event] = upsertOurs(doc.hooks[event], entry)
@@ -89,14 +116,14 @@ func Run(stdout, _ io.Writer, logger *log.Logger) error {
 
 	wrote, err := writeHooks(path, doc)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if wrote {
 		_, _ = fmt.Fprintf(stdout, "agento11y: wired Cursor hooks at %s\n", path)
 	} else {
 		_, _ = fmt.Fprintf(stdout, "agento11y: Cursor hooks already up to date at %s\n", path)
 	}
-	return nil
+	return wrote, nil
 }
 
 // Uninstall removes agento11y's hook entries from ~/.cursor/hooks.json, leaving
