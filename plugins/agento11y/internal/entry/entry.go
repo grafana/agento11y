@@ -12,6 +12,7 @@
 //	agento11y vibe     [--local|--no-local] [--tag k=v] [-- args...]  — exec vibe after installing the sigil hook in vibe's hooks.toml
 //	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
 //	agento11y claude   install [--json]                               — register the Claude Code plugin without launching or prompting
+//	agento11y agents   reconcile --agents all|name[,name...] --json   — reconcile registered noninteractive installers
 //	agento11y local start|status|stop                                 — manage the local capture daemon
 //	agento11y history import <agent> [flags]                          — backfill an agent's existing local sessions
 //	agento11y skills list|show <name>                                 — print an agent skill bundled into this binary
