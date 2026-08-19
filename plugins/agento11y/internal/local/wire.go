@@ -49,6 +49,57 @@ func (n *protoInt64) UnmarshalJSON(data []byte) error {
 
 func (n protoInt64) int64() int64 { return int64(n) }
 
+// protoTokenInputSemantics accepts every shape a stored record can carry for
+// TokenUsage.input_semantics: the proto-JSON enum name
+// ("TOKEN_INPUT_SEMANTICS_INCLUSIVE"), the enum number as a JSON number, and
+// the number quoted as a string. A record written before the marker existed
+// carries no such field, and the value stays unspecified, which sends the
+// reader to the provider-name heuristic in disjointTokenUsage.
+type protoTokenInputSemantics agento11y.TokenInputSemantics
+
+const (
+	protoTokenInputSemanticsUnspecifiedName = "TOKEN_INPUT_SEMANTICS_UNSPECIFIED"
+	protoTokenInputSemanticsInclusiveName   = "TOKEN_INPUT_SEMANTICS_INCLUSIVE"
+)
+
+func (s *protoTokenInputSemantics) UnmarshalJSON(data []byte) error {
+	text := strings.TrimSpace(string(data))
+	if text == "" || text == "null" {
+		*s = 0
+		return nil
+	}
+	if strings.HasPrefix(text, "\"") {
+		var quoted string
+		if err := json.Unmarshal(data, &quoted); err != nil {
+			return err
+		}
+		text = strings.TrimSpace(quoted)
+	}
+	switch strings.ToUpper(text) {
+	case "", protoTokenInputSemanticsUnspecifiedName:
+		*s = protoTokenInputSemantics(agento11y.TokenInputSemanticsUnspecified)
+		return nil
+	case protoTokenInputSemanticsInclusiveName:
+		*s = protoTokenInputSemantics(agento11y.TokenInputSemanticsInclusive)
+		return nil
+	}
+	v, err := strconv.ParseInt(text, 10, 32)
+	if err != nil {
+		// A newer exporter can write an enum name this build does not know.
+		// Treat that name as unspecified, the same state a record without the
+		// field is in, rather than drop the whole line: the reader falls back
+		// to the provider heuristic instead of losing the generation.
+		*s = protoTokenInputSemantics(agento11y.TokenInputSemanticsUnspecified)
+		return nil
+	}
+	*s = protoTokenInputSemantics(v)
+	return nil
+}
+
+func (s protoTokenInputSemantics) semantics() agento11y.TokenInputSemantics {
+	return agento11y.TokenInputSemantics(s)
+}
+
 type storedUsage struct {
 	InputTokens           protoInt64 `json:"input_tokens,omitempty"`
 	OutputTokens          protoInt64 `json:"output_tokens,omitempty"`
@@ -56,6 +107,12 @@ type storedUsage struct {
 	CacheReadInputTokens  protoInt64 `json:"cache_read_input_tokens,omitempty"`
 	CacheWriteInputTokens protoInt64 `json:"cache_write_input_tokens,omitempty"`
 	ReasoningTokens       protoInt64 `json:"reasoning_tokens,omitempty"`
+	// InputSemantics marks what InputTokens covers. An exporter sets the
+	// marker when it identified the provider payload shape. Without the
+	// marker the reader cannot tell an OTel-inclusive input count (both
+	// cache buckets already inside input) from a provider-raw additive
+	// count, and would count cache reads twice.
+	InputSemantics protoTokenInputSemantics `json:"input_semantics,omitempty"`
 }
 
 func (u storedUsage) toSDK() agento11y.TokenUsage {
@@ -66,6 +123,7 @@ func (u storedUsage) toSDK() agento11y.TokenUsage {
 		CacheReadInputTokens:  u.CacheReadInputTokens.int64(),
 		CacheWriteInputTokens: u.CacheWriteInputTokens.int64(),
 		ReasoningTokens:       u.ReasoningTokens.int64(),
+		InputSemantics:        u.InputSemantics.semantics(),
 	}
 }
 

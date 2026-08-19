@@ -6,9 +6,7 @@ require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/google/uuid v1.6.0
-	// Pseudo-version, not a tag: agento11y/contentcapture is not in go/v0.15.0.
-	// Repin at the next go/v* tag.
-	github.com/grafana/agento11y/go v0.15.1-0.20260731161227-97bfa653b7ae
+	github.com/grafana/agento11y/go v0.17.0
 	github.com/pelletier/go-toml/v2 v2.4.0
 	github.com/stretchr/testify v1.11.1
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
