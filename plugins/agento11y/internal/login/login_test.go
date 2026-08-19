@@ -1833,8 +1833,10 @@ func TestEnableLocalMode(t *testing.T) {
 		t.Error("LocalMode = false, want true")
 	}
 	want := map[string]string{
-		"AGENTO11Y_LOCAL": "true",
-		"SIGIL_LOCAL":     "true",
+		"AGENTO11Y_AUTO_CODING_AGENT_TAGS": "true",
+		"AGENTO11Y_LOCAL":                  "true",
+		"SIGIL_AUTO_CODING_AGENT_TAGS":     "true",
+		"SIGIL_LOCAL":                      "true",
 	}
 	if got := dotenv.LoadDotenv(path, nil); !reflect.DeepEqual(got, want) {
 		t.Errorf("saved config = %v, want %v", got, want)
