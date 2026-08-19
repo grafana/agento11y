@@ -41,12 +41,7 @@ func Stop(p Payload, cfg config.Config, logger *log.Logger) {
 	}
 
 	fragment.Touch(frag, ts)
-	if p.Model != "" && frag.Model == "" {
-		frag.Model = p.Model
-	}
-	if p.Provider != "" && frag.Provider == "" {
-		frag.Provider = p.Provider
-	}
+	applyStopModel(frag, p)
 	// Stop's token counts reflect the full turn including cache + tool
 	// rounds; prefer them over earlier afterAgentResponse counts.
 	if p.InputTokens != nil || p.OutputTokens != nil ||

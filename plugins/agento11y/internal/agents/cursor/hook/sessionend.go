@@ -3,6 +3,7 @@ package hook
 import (
 	"context"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/grafana/agento11y/go/agento11y"
@@ -100,6 +101,19 @@ func emitOneStranded(
 		return true
 	}
 
+	// Thought-only leftovers come from older afterAgentThought handlers that
+	// keyed fragments by Cursor's per-step generation_id. They carry no
+	// prompt, tools, or assistant text — emitting them floods the dashboard
+	// with model=unknown generations. Drop them instead of exporting.
+	if isThoughtOnlyFragment(frag) {
+		if err := fragment.Delete(conversationID, generationID); err != nil {
+			logger.Printf("sessionEnd: delete thought-only gen=%s: %v", generationID, err)
+		} else {
+			logger.Printf("sessionEnd: dropped thought-only gen=%s", generationID)
+		}
+		return true
+	}
+
 	// Prefer the status that handleStop saw if it preserved the fragment on
 	// a flush failure. Otherwise this is a truly stranded turn — default to
 	// "aborted".
@@ -131,6 +145,34 @@ func emitOneStranded(
 		logger.Printf("sessionEnd: delete gen=%s: %v", generationID, err)
 	}
 	logger.Printf("sessionEnd: swept gen=%s stopReason=%s", generationID, mapped.StopStatus)
+	return true
+}
+
+// isThoughtOnlyFragment reports leftovers from the old afterAgentThought
+// per-step generation_id bug: a file keyed by Cursor's suffixed step id
+// (`<turn-uuid>-<n>-<xxxx>`) that holds no prompt, tools, assistant text,
+// tokens, pending stop, or model.
+//
+// Bare turn-level generation IDs are never dropped here — even when
+// metadata_only left only thinkingPresent on disk — so a real aborted turn
+// still gets swept.
+func isThoughtOnlyFragment(frag *fragment.Fragment) bool {
+	if frag == nil {
+		return false
+	}
+	// Only step-id orphans. Collapsed/new turns use the bare turn id.
+	if turnGenerationID(frag.GenerationID) == frag.GenerationID {
+		return false
+	}
+	if len(frag.Tools) > 0 ||
+		len(frag.Assistant) > 0 ||
+		strings.TrimSpace(frag.UserPrompt) != "" ||
+		frag.PendingStop != nil ||
+		frag.TokenUsage != nil ||
+		frag.Model != "" ||
+		frag.Provider != "" {
+		return false
+	}
 	return true
 }
 

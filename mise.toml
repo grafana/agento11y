@@ -71,6 +71,9 @@ description = "Lint Go code in all modules"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
+# Match CI's go-module matrix: lint go.work members and other first-party
+# modules, but skip examples/ (those modules often lack a committed go.sum
+# and are not linted in .github/workflows/ci.yml).
 while IFS= read -r moddir; do
   if [[ -z "$(cd "${moddir}" && GOWORK=off go list ./... 2>/dev/null || true)" ]]; then
     echo "==> skip golangci-lint ${moddir} (no Go packages)"
@@ -78,7 +81,7 @@ while IFS= read -r moddir; do
   fi
   echo "==> golangci-lint ${moddir}"
   (cd "${moddir}" && GOWORK=off golangci-lint run ./...)
-done < <(find . -name go.mod -not -path './node_modules/*' -exec dirname {} \\; | sort)
+done < <(find . \\( -path './examples' -o -path './node_modules' \\) -prune -o -name go.mod -print | while IFS= read -r mod; do dirname "$mod"; done | sort)
 """
 
 [tasks."lint:py"]

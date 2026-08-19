@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
@@ -29,12 +30,19 @@ type preToolUseResponse struct {
 // transport, credential, fail-open/closed, and transform-extraction
 // behaviour lives in the shared guard helper so this stays in lockstep with
 // the other agents.
+//
+// Cursor puts `model` on every agent hook. Tool-heavy turns often never
+// reach afterAgentResponse or stop, so we also persist model/provider onto
+// the fragment here — otherwise the mapper falls back to "unknown".
 func PreToolUse(ctx context.Context, p Payload, cfg config.Config, stdout io.Writer, logger *log.Logger) {
+	persistModelFromPreToolUse(p, logger)
+
+	modelName := resolvedModel(p)
 	res := guard.EvaluateToolCall(ctx, envconfig.ResolveGuards(logger), guard.ToolCallInput{
 		AgentName:     cfg.Agent(),
 		AgentVersion:  strings.TrimSpace(p.CursorVersion),
 		ModelProvider: strings.TrimSpace(p.Provider),
-		ModelName:     strings.TrimSpace(p.Model),
+		ModelName:     modelName,
 		ToolName:      strings.TrimSpace(p.ToolName),
 		ToolCallID:    strings.TrimSpace(p.ToolUseID),
 		ToolInputJSON: p.ToolInput,
@@ -65,4 +73,27 @@ func hasStringCommand(raw json.RawMessage) bool {
 	}
 	_, ok := obj["command"].(string)
 	return ok
+}
+
+// persistModelFromPreToolUse copies model/provider onto the turn fragment
+// when Cursor sent them. Missing conversation/generation ids skip silently
+// — the guard response still goes out.
+func persistModelFromPreToolUse(p Payload, logger *log.Logger) {
+	if p.ConversationID == "" || p.GenerationID == "" {
+		return
+	}
+	if resolvedModel(p) == "" && strings.TrimSpace(p.Provider) == "" {
+		return
+	}
+	ts := p.ResolvedTimestamp()
+	err := fragment.Update(p.ConversationID, p.GenerationID, logger, func(f *fragment.Fragment) bool {
+		if !applyModelMeta(f, p) {
+			return false
+		}
+		fragment.Touch(f, ts)
+		return true
+	})
+	if err != nil {
+		logger.Printf("preToolUse: save model: %v", err)
+	}
 }

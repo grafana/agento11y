@@ -2,6 +2,7 @@ package hook
 
 import (
 	"log"
+	"strings"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
@@ -28,11 +29,17 @@ func AfterAgentResponse(p Payload, cfg config.Config, logger *log.Logger) {
 
 	err := fragment.Update(p.ConversationID, p.GenerationID, logger, func(f *fragment.Fragment) bool {
 		fragment.Touch(f, ts)
-		if p.Model != "" {
-			f.Model = p.Model
+		// Prefer the composer `model` slug. A later chunk that only carries
+		// model_id must not downgrade an already-stored slug.
+		if model := strings.TrimSpace(p.Model); model != "" {
+			f.Model = model
+		} else if f.Model == "" {
+			if id := strings.TrimSpace(p.ModelID); id != "" {
+				f.Model = id
+			}
 		}
-		if p.Provider != "" {
-			f.Provider = p.Provider
+		if provider := strings.TrimSpace(p.Provider); provider != "" {
+			f.Provider = provider
 		}
 		if keepText && p.Text != "" {
 			f.Assistant = append(f.Assistant, fragment.AssistantSegment{Text: p.Text, Timestamp: ts})
