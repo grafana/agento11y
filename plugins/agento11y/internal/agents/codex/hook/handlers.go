@@ -18,6 +18,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/autotag"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/emit"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/mapperutil"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/otel"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/redact"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
@@ -91,7 +92,7 @@ func PreToolUse(ctx context.Context, stdout io.Writer, p Payload, cfg config.Con
 		ToolName:      p.ToolName,
 		ToolCallID:    p.ToolUseID,
 		ToolInputJSON: p.ToolInput,
-		ModelProvider: guardProviderFromModel(p.Model),
+		ModelProvider: mapperutil.InferProvider(p.Model),
 		ModelName:     p.Model,
 	}, logger)
 	if res.Blocked() {
@@ -119,30 +120,6 @@ func hasStringCommand(raw json.RawMessage) bool {
 	}
 	_, ok := obj["command"].(string)
 	return ok
-}
-
-func guardProviderFromModel(model string) string {
-	m := strings.ToLower(model)
-	switch {
-	case strings.Contains(m, "claude"):
-		return "anthropic"
-	case strings.HasPrefix(m, "gpt"), isOpenAIOSeriesModel(m):
-		return "openai"
-	case strings.Contains(m, "gemini"):
-		return "google"
-	}
-	return ""
-}
-
-// isOpenAIOSeriesModel reports whether m starts with the OpenAI "o-series"
-// prefix `o` immediately followed by a digit (o1, o3, o4, o5, …). Matching
-// the family rather than a fixed list keeps future releases attributed to
-// OpenAI without code changes.
-func isOpenAIOSeriesModel(m string) bool {
-	if len(m) < 2 || m[0] != 'o' {
-		return false
-	}
-	return m[1] >= '0' && m[1] <= '9'
 }
 
 func PostToolUse(p Payload, cfg config.Config, logger *log.Logger) {

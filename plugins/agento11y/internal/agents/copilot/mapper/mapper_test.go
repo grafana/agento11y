@@ -303,3 +303,25 @@ func TestMapAgentNameOverride(t *testing.T) {
 		})
 	}
 }
+
+func TestInferProvider(t *testing.T) {
+	cases := []struct {
+		model string
+		want  string
+	}{
+		{model: "gemini-2.5-pro", want: "gemini"},
+		{model: "Gemini-1.5-Flash", want: "gemini"},
+		{model: "gpt-5", want: "openai"},
+		{model: "claude-sonnet-4", want: "anthropic"},
+		{model: "gemini", want: ""},
+		{model: "", want: ""},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.model, func(t *testing.T) {
+			if got := inferProvider(tt.model); got != tt.want {
+				t.Errorf("inferProvider(%q) = %q, want %q", tt.model, got, tt.want)
+			}
+		})
+	}
+}

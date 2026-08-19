@@ -470,7 +470,7 @@ func TestMapFragment_InfersProviderFromModel(t *testing.T) {
 		{"claude-sonnet-4-6", "anthropic"},
 		{"gpt-5", "openai"},
 		{"o3-mini", "openai"},
-		{"gemini-2.5-pro", "google"},
+		{"gemini-2.5-pro", "gemini"},
 		{"grok-4.5", "x-ai"},
 		{"cursor-grok-4.6-high-fast", "x-ai"},
 		{"some-random-model", "cursor"}, // no match → cursor fallback

@@ -1034,7 +1034,7 @@ func TestPreToolUseGuardSendsExpectedRequest(t *testing.T) {
 		ToolName:      "Bash",
 		ToolUseID:     "tu_1",
 		ToolInput:     json.RawMessage(`{"command":"rm -rf /"}`),
-		Model:         "gpt-5",
+		Model:         "gemini-2.5-pro",
 	}
 	PreToolUse(context.Background(), &stdout, payload, cfg, log.New(io.Discard, "", 0))
 
@@ -1050,6 +1050,10 @@ func TestPreToolUseGuardSendsExpectedRequest(t *testing.T) {
 		Phase   string `json:"phase"`
 		Context struct {
 			AgentName string `json:"agent_name"`
+			Model     *struct {
+				Provider string `json:"provider"`
+				Name     string `json:"name"`
+			} `json:"model"`
 		} `json:"context"`
 		Input struct {
 			Output []struct {
@@ -1073,6 +1077,12 @@ func TestPreToolUseGuardSendsExpectedRequest(t *testing.T) {
 	}
 	if req.Context.AgentName != mapper.AgentName {
 		t.Errorf("agent_name = %q, want %q", req.Context.AgentName, mapper.AgentName)
+	}
+	if req.Context.Model == nil {
+		t.Fatal("missing context model")
+	}
+	if req.Context.Model.Provider != "gemini" || req.Context.Model.Name != "gemini-2.5-pro" {
+		t.Errorf("context model = %+v, want gemini/gemini-2.5-pro", req.Context.Model)
 	}
 	if len(req.Input.Output) != 1 || len(req.Input.Output[0].Parts) != 1 {
 		t.Fatalf("unexpected output shape: %+v", req.Input.Output)
