@@ -246,10 +246,13 @@ function modelPrice(model) {
 // the Cloud catalog) key the same model as `grok-4.6`. Keep this suffix
 // list in sync with canonicalizeCursorModel in the cursor mapper.
 const CURSOR_GROK_EFFORT_SUFFIXES = [
+    "-xhigh-fast",
+    "-extra-high-fast",
     "-high-fast",
     "-low-fast",
     "-medium-fast",
     "-extra-high",
+    "-xhigh",
     "-high",
     "-medium",
     "-low",

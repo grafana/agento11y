@@ -490,6 +490,9 @@ func TestMapFragment_InfersProviderFromModel(t *testing.T) {
 func TestCanonicalizeCursorModel(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"cursor-grok-4.6-high-fast", "grok-4.6"},
+		{"cursor-grok-4.6-xhigh-fast", "grok-4.6"},
+		{"cursor-grok-4.6-xhigh", "grok-4.6"},
+		{"cursor-grok-4.6-extra-high-fast", "grok-4.6"},
 		{"cursor-grok-4.5-high-fast", "grok-4.5"},
 		{"cursor-grok-4.5-medium", "grok-4.5"},
 		{"cursor-grok-4.5", "grok-4.5"},
@@ -528,6 +531,20 @@ func TestMapFragment_CanonicalizesCursorGrokForPricing(t *testing.T) {
 			wantProvider: "x-ai",
 			wantName:     "grok-4.6",
 			wantResponse: "cursor-grok-4.6-high-fast",
+		},
+		{
+			name:         "xhigh-fast slug is not truncated to grok-*-x",
+			model:        "cursor-grok-4.6-xhigh-fast",
+			wantProvider: "x-ai",
+			wantName:     "grok-4.6",
+			wantResponse: "cursor-grok-4.6-xhigh-fast",
+		},
+		{
+			name:         "xhigh slug",
+			model:        "cursor-grok-4.6-xhigh",
+			wantProvider: "x-ai",
+			wantName:     "grok-4.6",
+			wantResponse: "cursor-grok-4.6-xhigh",
 		},
 		{
 			name:         "medium slug",

@@ -222,15 +222,19 @@ func resolveModel(frag *fragment.Fragment) (provider, catalogName, responseModel
 }
 
 // cursorGrokEffortSuffixes are thinking/speed tiers Cursor appends to hosted
-// Grok SKUs (`cursor-grok-4.6-high-fast`). Longest first so "-high-fast" is
-// not reduced to "-high" plus a leftover "-fast". Bare "-fast" is omitted:
+// Grok SKUs (`cursor-grok-4.6-high-fast`). Longest overlapping suffixes first:
+// "-xhigh-fast" must precede "-high-fast" (otherwise xhigh-fast strips to
+// grok-*-x) and "-high-fast" must precede "-high". Bare "-fast" is omitted:
 // xAI ships models named grok-*-fast, and those names only reach this path
 // without a cursor- prefix.
 var cursorGrokEffortSuffixes = []string{
+	"-xhigh-fast",
+	"-extra-high-fast",
 	"-high-fast",
 	"-low-fast",
 	"-medium-fast",
 	"-extra-high",
+	"-xhigh",
 	"-high",
 	"-medium",
 	"-low",

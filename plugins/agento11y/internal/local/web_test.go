@@ -223,6 +223,8 @@ func TestPriceLookupCanonicalizesCursorGrok(t *testing.T) {
 	script := `
 const assert = require("assert").strict;
 assert.equal(canonicalizePriceModel("cursor-grok-4.6-high-fast"), "grok-4.6");
+assert.equal(canonicalizePriceModel("cursor-grok-4.6-xhigh-fast"), "grok-4.6");
+assert.equal(canonicalizePriceModel("cursor-grok-4.6-xhigh"), "grok-4.6");
 assert.equal(canonicalizePriceModel("cursor-grok-4.5-medium"), "grok-4.5");
 assert.equal(canonicalizePriceModel("grok-4.6"), "grok-4.6");
 assert.equal(canonicalizePriceModel("claude-opus-4-8"), "claude-opus-4-8");
@@ -231,6 +233,7 @@ assert.equal(canonicalizePriceModel("composer-2.5-fast"), "composer-2.5-fast");
 const prices = { "grok-4.6": { input: 2, output: 6, cache_read: 0.5 } };
 assert.deepEqual(liveModelCost(prices, "grok-4.6"), prices["grok-4.6"]);
 assert.deepEqual(liveModelCost(prices, "cursor-grok-4.6-high-fast"), prices["grok-4.6"]);
+assert.deepEqual(liveModelCost(prices, "cursor-grok-4.6-xhigh-fast"), prices["grok-4.6"]);
 assert.equal(liveModelCost(prices, "cursor-grok-4.5-high-fast"), null);
 
 const buckets = { fresh_input: 1e6, output: 0, cache_read: 0, cache_write: 0, reasoning: 0 };
