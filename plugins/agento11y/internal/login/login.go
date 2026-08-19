@@ -307,6 +307,10 @@ type RunOpts struct {
 	// credentials. The caller leaves it false when a destination is already set.
 	OfferLocal bool
 
+	// KeepLocalSetting leaves the saved LOCAL family unchanged after Cloud
+	// setup. One-run Cloud overrides set it so later runs still use local mode.
+	KeepLocalSetting bool
+
 	// Stdin is consulted for the TTY check. nil resolves to os.Stdin.
 	Stdin *os.File
 
@@ -447,8 +451,10 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	}
 
 	updates := buildUpdates(v)
-	updates[envconfig.PreferredKey("LOCAL")] = "false"
-	updates[envconfig.LegacyKey("LOCAL")] = "false"
+	if !opts.KeepLocalSetting {
+		updates[envconfig.PreferredKey("LOCAL")] = "false"
+		updates[envconfig.LegacyKey("LOCAL")] = "false"
+	}
 	if err := dotenv.WriteDotenv(configPath, updates, opts.Logger); err != nil {
 		return Result{}, err
 	}

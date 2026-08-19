@@ -1890,6 +1890,38 @@ func TestRun_ExplicitValues(t *testing.T) {
 			},
 		},
 		{
+			name: "one-run Cloud override keeps saved local mode",
+			file: existing + "AGENTO11Y_LOCAL=true\nSIGIL_LOCAL=true\n",
+			env: map[string]string{
+				"AGENTO11Y_LOCAL": "true",
+				"SIGIL_LOCAL":     "true",
+			},
+			opts: RunOpts{
+				Endpoint:         "https://new.example",
+				TenantID:         "222",
+				Token:            "new-token",
+				KeepLocalSetting: true,
+			},
+			want: map[string]string{
+				"AGENTO11Y_AUTH_TOKEN": "new-token",
+				"AGENTO11Y_LOCAL":      "true",
+				"SIGIL_LOCAL":          "true",
+			},
+		},
+		{
+			name: "one-run Cloud override does not save a local setting",
+			opts: RunOpts{
+				Endpoint:         "https://new.example",
+				TenantID:         "222",
+				Token:            "new-token",
+				KeepLocalSetting: true,
+			},
+			want: map[string]string{
+				"AGENTO11Y_LOCAL": "",
+				"SIGIL_LOCAL":     "",
+			},
+		},
+		{
 			name: "otlp endpoint is persisted",
 			opts: RunOpts{
 				Endpoint:     "https://new.example",

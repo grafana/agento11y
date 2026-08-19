@@ -22,9 +22,9 @@
 // --tag is repeatable and adds key=value pairs to SIGIL_TAGS so they land
 // on every generation the launched session produces.
 //
-// --local can also be turned on for every launch — and for hook dispatch —
-// with AGENTO11Y_LOCAL=true in the shell or in config.env. --no-local runs
-// one session against Cloud while that setting stays on.
+// --local can also be turned on for every launch, hook dispatch, and history
+// import with AGENTO11Y_LOCAL=true in the shell or config.env. --no-local runs
+// one session or import against Cloud while that setting stays on.
 //
 // Unknown agents and unknown verbs exit with code 2 and a usage message on
 // stderr. For hook agents the binary must never crash the calling agent
@@ -327,9 +327,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		// Grafana Cloud.
 		if localEnv == nil && !dotenv.HasCredentials() {
 			result, err := loginRun(context.Background(), login.RunOpts{
-				Stderr:     stderr,
-				Logger:     logger,
-				OfferLocal: !destinationSet,
+				Stderr:           stderr,
+				Logger:           logger,
+				OfferLocal:       !destinationSet,
+				KeepLocalSetting: destinationSet,
 			})
 			switch {
 			case err == nil, errors.Is(err, login.ErrNotInteractive):

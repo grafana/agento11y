@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"sort"
 	"strings"
@@ -14,8 +15,10 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/cli"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
 	"golang.org/x/term"
 )
 
@@ -33,6 +36,10 @@ type historyImportOptions struct {
 	DryRun      bool
 	Force       bool
 	Local       bool
+	NoLocal     bool
+	// LocalEnvKey names the LOCAL spelling that selected the local store.
+	// It stays empty when a flag or the first-run answer selected it.
+	LocalEnvKey string
 }
 
 // repeatedFlag collects a flag given more than once.
@@ -110,9 +117,12 @@ var historyEnsureLocal = func(ctx context.Context) (string, error) {
 	return status.Endpoint, nil
 }
 
-// historySelect shows the session picker. It is a package var so tests can
-// drive selection without a TTY.
-var historySelect = historySelectSessions
+// historySelect and historyConfirm are package vars so tests can drive the
+// interactive path without a TTY.
+var (
+	historySelect  = historySelectSessions
+	historyConfirm = historyConfirmImport
+)
 
 func runHistoryImport(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	fs := flag.NewFlagSet("history import", flag.ContinueOnError)
@@ -129,6 +139,7 @@ func runHistoryImport(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		dryRun      = fs.Bool("dry-run", false, "show what would be imported and exit")
 		force       = fs.Bool("force", false, "re-export turns already recorded in the import ledger")
 		useLocal    = fs.Bool("local", false, "import into the local daemon instead of Grafana Cloud")
+		noLocal     = fs.Bool("no-local", false, "import into Grafana Cloud even when local mode is on")
 	)
 	fs.Var(&sources, "source", "restrict to this discovered path (repeatable); a path outside the agent's roots matches nothing")
 	fs.Usage = func() {
@@ -186,7 +197,8 @@ func runHistoryImport(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		Yes:         *yes,
 		DryRun:      *dryRun,
 		Force:       *force,
-		Local:       *useLocal,
+		Local:       *useLocal && !*noLocal,
+		NoLocal:     *noLocal,
 	}
 
 	var err error
@@ -269,12 +281,59 @@ func historyIsInteractive(stdin io.Reader) bool {
 	return ok && term.IsTerminal(int(f.Fd()))
 }
 
+func historyResolveDestination(ctx context.Context, opts *historyImportOptions, envLocal localEnvRequest, interactive bool, stderr io.Writer, logger *log.Logger) error {
+	switch {
+	case opts.NoLocal:
+		opts.Local = false
+	case opts.Local:
+		return nil
+	case envLocal.on:
+		opts.Local = true
+		opts.LocalEnvKey = envLocal.key
+		return nil
+	}
+	if historyDestinationConfigured() || !interactive {
+		return nil
+	}
+
+	result, err := loginRun(ctx, login.RunOpts{
+		Stderr:           stderr,
+		Logger:           logger,
+		OfferLocal:       !opts.NoLocal && !localDestinationSet(),
+		KeepLocalSetting: opts.NoLocal,
+	})
+	switch {
+	case err == nil:
+		opts.Local = result.LocalMode
+		return nil
+	case errors.Is(err, login.ErrAborted), errors.Is(err, login.ErrNotInteractive):
+		return errors.New("nothing was imported because setup did not finish; run `agento11y login` or pass --local to import into the local store")
+	case errors.Is(err, login.ErrNotVerified):
+		logger.Printf("import setup: %v", err)
+		return errors.New("nothing was imported because the endpoint did not accept those credentials; run `agento11y login` to try again, `agento11y login --yes` to save them anyway, or pass --local to import into the local store")
+	default:
+		return fmt.Errorf("setup: %w", err)
+	}
+}
+
+// historyDestinationConfigured reports whether first-run setup has anything to
+// ask. Cloud needs complete credentials, while a loopback endpoint needs none.
+func historyDestinationConfigured() bool {
+	return dotenv.HasCredentials() || envconfig.IsLocalEndpoint(envconfig.Getenv("ENDPOINT"))
+}
+
 func historyImport(opts historyImportOptions, interactive bool, stdout, stderr io.Writer) error {
 	ctx := context.Background()
 	// The dotenv file is applied before the logger is built so AGENTO11Y_DEBUG
 	// set only in config.env still turns on file logging, as it does for the
-	// other commands.
-	dotenv.ApplyEnv(nil)
+	// other commands. Read LOCAL around that merge so an error can name the
+	// spelling that selected the local store.
+	localValue, localKey, inShell := envconfig.LookupEnv("LOCAL")
+	fileEnv := dotenv.ApplyEnv(nil)
+	if !inShell {
+		localValue, localKey, _ = envconfig.LookupMap(fileEnv, "LOCAL")
+	}
+	envLocal := localEnvRequest{on: envconfig.ParseBool(localValue), key: localKey}
 	logger := cli.InitLogger("history")
 
 	filter := history.NewFilter()
@@ -302,6 +361,10 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 	}
 	if len(plan.Sessions) == 0 {
 		return nil
+	}
+
+	if err := historyResolveDestination(ctx, &opts, envLocal, interactive, stderr, logger); err != nil {
+		return err
 	}
 
 	sessions := plan.Sessions
@@ -392,10 +455,10 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 // historyProgressInterval is how often the progress line is redrawn.
 const historyProgressInterval = 200 * time.Millisecond
 
-// historyTarget builds the export destination. Without --local the import goes
-// to the configured Grafana Cloud endpoint; with it, to the local daemon, which
-// [history.NewTargetExporter] recognises as loopback and gives full content and
-// the forward marker, so the backfill stays on this machine.
+// historyTarget builds the export destination from the resolved Local value.
+// A Cloud import leaves the target empty so [history.NewTargetExporter] reads
+// the configured endpoint. A local import points at the daemon, where the
+// exporter enables full content and adds the marker that prevents forwarding.
 func historyTarget(ctx context.Context, opts historyImportOptions) (history.Target, error) {
 	if !opts.Local {
 		return history.Target{}, nil
@@ -404,6 +467,9 @@ func historyTarget(ctx context.Context, opts historyImportOptions) (history.Targ
 	defer cancel()
 	endpoint, err := historyEnsureLocal(startCtx)
 	if err != nil {
+		if opts.LocalEnvKey != "" {
+			return history.Target{}, fmt.Errorf("start the local receiver: %w (local mode is on because %s is set; pass --no-local to import into Grafana Cloud)", err, opts.LocalEnvKey)
+		}
 		return history.Target{}, fmt.Errorf("start the local receiver: %w", err)
 	}
 	return history.Target{
@@ -514,16 +580,19 @@ func historySessionLabel(s history.SessionPreview) string {
 	return fmt.Sprintf("%s  %s  %s", when, workspace, turns)
 }
 
-func historyConfirm(opts historyImportOptions, sessions []history.SessionPreview) (bool, error) {
-	turns, approx := historyTurnTotals(sessions)
-	destination := "Grafana Cloud"
+func historyDestinationName(opts historyImportOptions) string {
 	if opts.Local {
-		destination = "the local store on this machine"
+		return "the local store on this machine"
 	}
+	return "Grafana Cloud"
+}
+
+func historyConfirmImport(opts historyImportOptions, sessions []history.SessionPreview) (bool, error) {
+	turns, approx := historyTurnTotals(sessions)
 	confirmed := false
 	form := huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().
-			Title(fmt.Sprintf("Import %d sessions (%s turns) into %s?", len(sessions), historyTurnCount(turns, approx), destination)).
+			Title(fmt.Sprintf("Import %d sessions (%s turns) into %s?", len(sessions), historyTurnCount(turns, approx), historyDestinationName(opts))).
 			Value(&confirmed),
 	))
 	if err := form.Run(); err != nil {

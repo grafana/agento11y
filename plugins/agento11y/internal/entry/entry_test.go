@@ -1197,6 +1197,45 @@ func TestRun_LauncherAutoPromptsWhenCredsMissing(t *testing.T) {
 	}
 }
 
+func TestRun_LauncherNoLocalKeepsSavedLocalSettingDuringSetup(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		localEnv string
+	}{
+		{name: "saved local mode", localEnv: "true"},
+		{name: "no saved destination"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			t.Setenv(envconfig.PreferredKey("LOCAL"), tt.localEnv)
+
+			withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
+				if opts.OfferLocal {
+					t.Error("--no-local must skip the destination question")
+				}
+				if !opts.KeepLocalSetting {
+					t.Error("--no-local setup must keep the saved local setting")
+				}
+				return login.Result{}, nil
+			})
+			withStubLauncher(t, "pi", func(_ context.Context, _ []string, env *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
+				if env != nil {
+					t.Error("--no-local launcher received a local environment")
+				}
+				return nil
+			})
+
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run([]string{"pi", "--no-local", "--"}, strings.NewReader(""), &stdout, &stderr)
+			})
+			if gotExit != nil {
+				t.Fatalf("exit = %d, want no exit (stderr=%q)", *gotExit, stderr.String())
+			}
+		})
+	}
+}
+
 func TestRun_LauncherLocalAnswerStartsReceiver(t *testing.T) {
 	isolateDotenvHome(t)
 	_, daemonURL := inProcessDaemon(t)
