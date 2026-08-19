@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.32.0] - 2026-08-19
+
+### Features
+
+- **plugins/agento11y**: ask for local or cloud mode on first run (#614)
+- **plugins/agento11y**: add noninteractive agent installs (#608)
+
+### Bug Fixes
+
+- **plugins/agento11y**: price Cursor Grok turns against the xAI catalog (#613)
+- **plugins/agento11y**: import pi session workspace tags (#612)
+- **plugins/agento11y**: fix Cursor unknown model generations (#609)
+- **plugins/agento11y**: import Cursor agent-transcript JSONL history (#594)
+
 ## [0.31.0] - 2026-08-18
 
 ### Features
