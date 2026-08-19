@@ -244,14 +244,14 @@ func brokenSections(r *Report) []string {
 }
 
 // needsSetup reports whether this machine has setup left to do: a section in
-// error, or a conversations pipeline that was never configured at all.
+// error, or neither a configured Cloud pipeline nor usable local-only capture.
 //
 // The second case is the reason this is not just brokenSections. A machine
 // with no endpoint, no tenant and no token reports every pipeline as a
 // warning, never an error, so the summary above says "no problems detected".
 // That reader has wired nothing and needs the paste block most.
 func needsSetup(r *Report) bool {
-	return len(brokenSections(r)) > 0 || !r.Conversations.configured()
+	return len(brokenSections(r)) > 0 || (!r.Conversations.configured() && !r.localCaptureConfigured)
 }
 
 // writeSetupHint points the reader at the bundled setup skill. A machine with

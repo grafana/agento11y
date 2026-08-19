@@ -298,11 +298,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		if !ok {
 			return
 		}
+		destinationSet := localDestinationSet()
 
 		logger := cli.InitLogger(args[0])
 
-		// Auto-prompt for credentials on first run. login.Run returns
-		// ErrNotInteractive when stdin is not a TTY (e.g. CI, piped input);
+		// Run first-time setup before launching. login.Run asks where sessions go
+		// before it asks for Cloud credentials. It returns ErrNotInteractive when
+		// stdin is not a TTY (e.g. CI, piped input);
 		// in that case we silently fall through to exec, matching the
 		// previous behaviour where hooks just emit a "missing credentials"
 		// line on stderr. A failed or aborted login does not block the
@@ -313,9 +315,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		// placeholder credentials so the SDK proceeds without contacting
 		// Grafana Cloud.
 		if localEnv == nil && !dotenv.HasCredentials() {
-			err := loginRun(context.Background(), login.RunOpts{
-				Stderr: stderr,
-				Logger: logger,
+			result, err := loginRun(context.Background(), login.RunOpts{
+				Stderr:     stderr,
+				Logger:     logger,
+				OfferLocal: !destinationSet,
 			})
 			switch {
 			case err == nil, errors.Is(err, login.ErrNotInteractive):
@@ -328,6 +331,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 			default:
 				logger.Printf("auto-login: %v", err)
 				_, _ = fmt.Fprintf(stderr, "agento11y: setup failed (%v); continuing without capture\n", err)
+			}
+			if err == nil && result.LocalMode {
+				endpoint, otlp, localErr := setupLocalLaunch(stderr, "")
+				if localErr == nil {
+					localEnv = &local.LaunchEnv{Endpoint: endpoint, OTLPEndpoint: otlp}
+				} else {
+					logger.Printf("auto-login: start local receiver: %v", localErr)
+				}
 			}
 		}
 		// Launcher panics must surface to the user (non-zero exit, message on
@@ -521,9 +532,11 @@ func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] [--otlp-endpoint url] [--no-verify] [--yes]")
 		_, _ = fmt.Fprintln(stderr)
-		_, _ = fmt.Fprintln(stderr, "Save agento11y credentials to $XDG_CONFIG_HOME/agento11y/config.env")
+		_, _ = fmt.Fprintln(stderr, "Save agento11y capture settings to $XDG_CONFIG_HOME/agento11y/config.env")
 		_, _ = fmt.Fprintln(stderr, "(or the old $XDG_CONFIG_HOME/sigil/config.env if only that file exists).")
-		_, _ = fmt.Fprintln(stderr, "Values not given as flags are prompted for. Login asks for your Grafana stack,")
+		_, _ = fmt.Fprintln(stderr, "Values not given as flags are prompted for. With no destination and no")
+		_, _ = fmt.Fprintln(stderr, "credentials saved, login first asks where sessions go: this machine, on macOS")
+		_, _ = fmt.Fprintln(stderr, "and Linux only, or Grafana Cloud. The Grafana Cloud answer asks for your stack,")
 		_, _ = fmt.Fprintln(stderr, "prints that stack's coding-agent setup page, and tries to open it. Paste the")
 		_, _ = fmt.Fprintln(stderr, "environment block from that page to fill every credential. Before writing the")
 		_, _ = fmt.Fprintln(stderr, "file, login sends one request to the endpoint to check the credentials,")
@@ -574,13 +587,15 @@ func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 	}
 
 	dotenv.ApplyEnv(nil)
+	destinationSet := localDestinationSet()
 	logger := cli.InitLogger("login")
 
-	err := loginRun(context.Background(), login.RunOpts{
+	result, err := loginRun(context.Background(), login.RunOpts{
 		// Only the explicit `agento11y login` shows the “Try sigil claude/pi”
 		// hint. The launcher auto-prompt path leaves this false because the
 		// launcher is about to exec the agent anyway.
 		ShowNextStep: true,
+		OfferLocal:   !destinationSet && !dotenv.HasCredentials(),
 		Stderr:       stderr,
 		Logger:       logger,
 		Endpoint:     endpoint,
@@ -591,6 +606,9 @@ func runLoginCommand(args []string, stdin io.Reader, stderr io.Writer) {
 		AssumeYes:    assumeYes,
 	})
 	switch {
+	case err == nil && result.LocalMode:
+		_, _ = fmt.Fprintln(stderr, "Run `agento11y claude`, `agento11y codex`, or another launcher to capture sessions locally.")
+		return
 	case err == nil:
 		return
 	case errors.Is(err, login.ErrAborted):
@@ -662,8 +680,9 @@ func readTokenStdin(fs *flag.FlagSet, endpoint, tenant string, stdin io.Reader, 
 
 // runCursorInstall handles `agento11y cursor install` and `sigil cursor
 // uninstall`. install wires agento11y's hook into ~/.cursor/hooks.json and, when
-// no credentials are configured yet, chains the interactive login prompt the
-// same way the launchers do; uninstall removes the hook entries.
+// neither Cloud credentials nor a local answer are configured yet, chains the
+// interactive login prompt the same way the launchers do; uninstall removes the
+// hook entries.
 func runCursorInstall(verb string, stdout, stderr io.Writer) {
 	// dotenv must run before InitLogger so SIGIL_DEBUG=true set only in
 	// $XDG_CONFIG_HOME/agento11y/config.env still enables file logging, and
@@ -687,17 +706,20 @@ func runCursorInstall(verb string, stdout, stderr io.Writer) {
 		return
 	}
 
-	// Wiring the hook does nothing without credentials, so chain the login
-	// prompt on first install, mirroring the launcher auto-prompt. login.Run
-	// returns ErrNotInteractive when stdin is not a TTY (CI, piped input), in
-	// which case we skip silently and leave `agento11y login` for later. A failed
-	// or aborted login never fails the install: the hook is already wired.
-	if !dotenv.HasCredentials() {
-		err := loginRun(context.Background(), login.RunOpts{
-			Stderr: stderr,
-			Logger: logger,
+	// A wired hook needs Cloud credentials or local mode. If it has neither, chain
+	// the login prompt on first install. login.Run returns ErrNotInteractive when
+	// stdin is not a TTY (CI, piped input); in that case we leave setup for later.
+	// A failed or aborted login never fails the install: the hook is already wired.
+	localValue, _, _ := envconfig.LookupEnv("LOCAL")
+	if !dotenv.HasCredentials() && !envconfig.ParseBool(localValue) {
+		result, err := loginRun(context.Background(), login.RunOpts{
+			Stderr:     stderr,
+			Logger:     logger,
+			OfferLocal: !localDestinationSet(),
 		})
 		switch {
+		case err == nil && result.LocalMode:
+			_, _ = fmt.Fprintln(stderr, "agento11y: Cursor hook now captures sessions locally")
 		case err == nil, errors.Is(err, login.ErrNotInteractive):
 			// either succeeded or no TTY; nothing to report.
 		case errors.Is(err, login.ErrAborted):
@@ -790,6 +812,15 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) {
 	if code != 0 {
 		exit(code)
 	}
+}
+
+func localDestinationSet() bool {
+	value, _, set := envconfig.LookupEnv("LOCAL")
+	if !set {
+		return false
+	}
+	_, valid := envconfig.ParseBoolValue(value)
+	return valid
 }
 
 // localEnvRequest is the LOCAL family as the launcher acts on it: whether it

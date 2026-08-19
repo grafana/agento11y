@@ -308,6 +308,12 @@ func Serve(ctx context.Context, dir string, port int, logger *log.Logger) error 
 	}
 }
 
+// looksLikeTestBinary reports whether path is a Go test binary. `go test` names
+// them "<pkg>.test", and "<pkg>.test.exe" on Windows.
+func looksLikeTestBinary(path string) bool {
+	return strings.HasSuffix(strings.TrimSuffix(filepath.Base(path), ".exe"), ".test")
+}
+
 func processLooksLikeDaemon(pid int) (bool, error) {
 	cmdline, err := processCommandLineFn(pid)
 	if err != nil {

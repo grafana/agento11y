@@ -2,11 +2,16 @@
 // the explicit `agento11y login` subcommand and the auto-prompt that runs
 // before `agento11y claude` / `agento11y pi` when no credentials are configured.
 //
-// The flow asks which Grafana stack the user is on. A stack the machine already
-// knows about — saved by an earlier run, or configured in gcx — comes back as
-// the answer rather than as a question: pre-filled into the input when there is
-// one, offered as a list whose last entry is still that input when there are
-// several.
+// On first setup the flow asks where sessions go, when RunOpts.OfferLocal is set
+// and the platform has a local receiver. Local only writes the LOCAL setting and
+// ends the flow. Grafana Cloud continues to the stack and credential questions
+// below.
+//
+// The Cloud flow asks which Grafana stack the user is on. A stack the machine
+// already knows about — saved by an earlier run, or configured in gcx — comes
+// back as the answer rather than as a question: pre-filled into the input when
+// there is one, offered as a list whose last entry is still that input when
+// there are several.
 //
 // It prints that stack's coding-agent setup page and tries to open it in a
 // browser. The environment block from that page goes into one paste field,
@@ -59,6 +64,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 	"golang.org/x/term"
 )
@@ -258,6 +264,11 @@ func grafanaTheme() *huh.Theme {
 // still handled, as a check that produced no verdict.
 type ProbeFunc func(ctx context.Context, endpoint, tenant, token string, insecure bool) *doctor.ProbeResult
 
+// Result reports whether the flow saved local mode instead of Cloud credentials.
+type Result struct {
+	LocalMode bool
+}
+
 // RunOpts controls the login flow.
 type RunOpts struct {
 	// ConfigPath overrides the dotenv path; empty resolves to
@@ -292,6 +303,10 @@ type RunOpts struct {
 	// hint would just be noise).
 	ShowNextStep bool
 
+	// OfferLocal asks where sessions should go before asking for Cloud
+	// credentials. The caller leaves it false when a destination is already set.
+	OfferLocal bool
+
 	// Stdin is consulted for the TTY check. nil resolves to os.Stdin.
 	Stdin *os.File
 
@@ -322,7 +337,7 @@ var (
 // Run executes the login flow. On success the dotenv file is rewritten and
 // the resolved values are also exported into the current process env so a
 // subsequent in-process launcher dispatch sees them without re-loading.
-func Run(ctx context.Context, opts RunOpts) error {
+func Run(ctx context.Context, opts RunOpts) (Result, error) {
 	if opts.Stdin == nil {
 		opts.Stdin = os.Stdin
 	}
@@ -348,7 +363,7 @@ func Run(ctx context.Context, opts RunOpts) error {
 		otelEndpoint: strings.TrimSpace(opts.OTLPEndpoint),
 	}
 	if err := fixed.validate(); err != nil {
-		return err
+		return Result{}, err
 	}
 
 	// The form runs only while a required credential is still missing after
@@ -357,8 +372,9 @@ func Run(ctx context.Context, opts RunOpts) error {
 	askUser := !fixed.completeCredentials()
 	isTTY := term.IsTerminal(int(opts.Stdin.Fd()))
 	if askUser && !isTTY {
-		return ErrNotInteractive
+		return Result{}, ErrNotInteractive
 	}
+	offerLocal := shouldOfferLocal(askUser, opts.OfferLocal, local.ReceiverSupported())
 
 	// Seed prompt fields from the existing dotenv (and any SIGIL_* vars
 	// already set in the process env) so re-running login — or the launcher
@@ -389,8 +405,11 @@ func Run(ctx context.Context, opts RunOpts) error {
 	}
 
 	if askUser {
-		if err := promptValues(ctx, &v, fixed, existingToken, opts.Stderr); err != nil {
-			return err
+		if err := promptValues(ctx, &v, fixed, existingToken, opts.Stderr, offerLocal); err != nil {
+			return Result{}, err
+		}
+		if v.localMode {
+			return enableLocalMode(configPath, opts)
 		}
 	}
 
@@ -424,12 +443,14 @@ func Run(ctx context.Context, opts RunOpts) error {
 	// reported here instead of showing up as an empty Conversations page.
 	verdict, err := verifyCredentials(ctx, opts, v, envconfig.ParseBool(existing["SIGIL_INSECURE"]), isTTY)
 	if err != nil {
-		return err
+		return Result{}, err
 	}
 
 	updates := buildUpdates(v)
+	updates[envconfig.PreferredKey("LOCAL")] = "false"
+	updates[envconfig.LegacyKey("LOCAL")] = "false"
 	if err := dotenv.WriteDotenv(configPath, updates, opts.Logger); err != nil {
-		return err
+		return Result{}, err
 	}
 
 	// Mirror into process env so a following in-process launcher dispatch
@@ -445,7 +466,23 @@ func Run(ctx context.Context, opts RunOpts) error {
 	if opts.ShowNextStep {
 		printNextStep(opts.Stderr, verdict, v.stackURL)
 	}
-	return nil
+	return Result{}, nil
+}
+
+func shouldOfferLocal(askUser, requested, supported bool) bool {
+	return askUser && requested && supported
+}
+
+func enableLocalMode(configPath string, opts RunOpts) (Result, error) {
+	updates := envconfig.ExpandAliases(map[string]string{
+		envconfig.LegacyKey("LOCAL"): "true",
+	})
+	if err := dotenv.WriteDotenv(configPath, updates, opts.Logger); err != nil {
+		return Result{}, err
+	}
+	envconfig.SetBothEnv("LOCAL", "true")
+	fmt.Fprintln(opts.Stderr, "Sessions will be captured on this machine.")
+	return Result{LocalMode: true}, nil
 }
 
 // fixedValues are the values the command line supplied. An empty field means
@@ -486,7 +523,7 @@ func (f fixedValues) validate() error {
 // The paste is its own form because huh binds a field to its value when the
 // field is built, so a value pasted into one form cannot reach another field
 // of the same form.
-func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existingToken string, stderr io.Writer) error {
+func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existingToken string, stderr io.Writer, offerLocal bool) error {
 	// Guidance goes to stderr before huh takes over rendering. huh stays in
 	// inline mode, so this text remains static scrollback above the form and
 	// the URL stays selectable. The deferred escape erases it on any outcome:
@@ -501,7 +538,18 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 	}
 	defer func() { fmt.Fprintf(stderr, "\033[%dA\033[J", printed) }()
 
-	say(welcomeBanner())
+	say(welcomeBanner(offerLocal))
+
+	if offerLocal {
+		chooseLocal, err := promptDestination()
+		if err != nil {
+			return err
+		}
+		if chooseLocal {
+			v.localMode = true
+			return nil
+		}
+	}
 
 	// The stack is what the setup-page link is built from, so it is asked for on
 	// every run. A saved answer is the answer already filled in, which makes a
@@ -638,6 +686,46 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 	}
 	v.capturePrompted = true
 	return nil
+}
+
+const (
+	destinationTitle = "Where should sessions go?"
+	// The answer is not a one-way door, and a first-run reader has no way to know
+	// that. login rewrites it, and the flags override it for one launch.
+	destinationHelp = "You can change this later: agento11y login, or --local per launch."
+)
+
+func promptDestination() (bool, error) {
+	localMode := true
+	if err := formError(destinationForm(&localMode).Run()); err != nil {
+		return false, err
+	}
+	return localMode, nil
+}
+
+// destinationForm builds the destination question.
+//
+// Value comes before Options: Options points both the cursor and the viewport at
+// whichever option matches the value bound at that moment, and a select with no
+// binding yet holds the zero bool, which is Grafana Cloud. Bind first and both
+// land on Local only. Bind last and only the cursor moves back, leaving it on a
+// row the viewport has already scrolled past, so the first frame shows Grafana
+// Cloud alone until a key press repairs the offset.
+func destinationForm(localMode *bool) *huh.Form {
+	return huh.NewForm(huh.NewGroup(
+		huh.NewSelect[bool]().
+			Title(destinationTitle).
+			Description(destinationHelp).
+			Value(localMode).
+			Options(destinationOptions()...),
+	)).WithTheme(grafanaTheme())
+}
+
+func destinationOptions() []huh.Option[bool] {
+	return []huh.Option[bool]{
+		huh.NewOption("Local only", true),
+		huh.NewOption("Grafana Cloud", false),
+	}
 }
 
 // manualStackChoice is the list value that opens the free-form field. Not the
@@ -1381,6 +1469,7 @@ const (
 // formValues holds the resolved field values the form produced. It exists so
 // buildUpdates can be unit-tested without driving the huh TUI.
 type formValues struct {
+	localMode    bool
 	endpoint     string
 	tenantID     string
 	token        string
@@ -1641,10 +1730,14 @@ func requireNonEmpty(field string) func(string) error {
 }
 
 // welcomeBanner returns the rendered banner box promptValues prints first.
-func welcomeBanner() string {
+func welcomeBanner(offerLocal bool) string {
+	subtitle := "Let's connect your Grafana stack."
+	if offerLocal {
+		subtitle = "Choose where to keep your sessions."
+	}
 	lines := []string{
 		bannerTitle.Render("Welcome to Grafana Agent Observability"),
-		bannerSubtitle.Render("Let's connect your Grafana stack."),
+		bannerSubtitle.Render(subtitle),
 	}
 	return bannerBox.Render(strings.Join(lines, "\n"))
 }

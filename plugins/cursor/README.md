@@ -34,7 +34,7 @@ Run this once from a terminal:
 agento11y cursor install
 ```
 
-It registers `agento11y cursor hook` for the Cursor events agento11y captures in `~/.cursor/hooks.json`, merging with any hooks other tools already added. Re-running is safe: it updates agento11y's entry in place instead of adding a duplicate. On first run it also prompts for credentials (the same prompt as `agento11y login`).
+It registers `agento11y cursor hook` for the Cursor events agento11y captures in `~/.cursor/hooks.json`, merging with any hooks other tools already added. Re-running is safe: it updates agento11y's entry in place instead of adding a duplicate. On first run it also runs the same setup prompt as `agento11y login`, which asks where sessions go. **Local only** is saved for later hooks, and the local receiver starts on the next Cursor hook, not during the install. **Grafana Cloud** continues to the credential questions. The destination question needs macOS or Linux, a terminal, and no destination and no credentials saved yet; Windows cannot run the local receiver, so its flow starts at the Cloud questions. The install asks nothing when local mode is already on (`AGENTO11Y_LOCAL=true`) or when stdin is not a terminal.
 
 To undo the wiring later, run `agento11y cursor uninstall` — it removes only agento11y's entries and leaves other tools' hooks alone.
 
@@ -53,7 +53,7 @@ Do not use both. `/add-plugin` and `agento11y cursor install` write to the same 
 
 ## 3. Add your credentials
 
-`agento11y cursor install` already prompts for these on first run; run `agento11y login` from a terminal to enter or change them later. The prompt asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. Make sure Agent Observability is enabled on your stack — an administrator opens **Observability → Agent Observability** once and accepts the terms.
+`agento11y cursor install` already prompts for these on first run; run `agento11y login` from a terminal to enter or change them later. After you pick Grafana Cloud, the prompt asks which Grafana stack you are on, then prints that stack's coding-agent setup page (`https://<your-stack>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`) and tries to open it in a browser. Copy the environment block that page hands out, paste it into the next prompt, and the endpoint, instance ID, token, and OTLP endpoint are all filled from it. The stack is saved, so a later run offers it back and you press Enter. A rerun of `agento11y login` goes straight to the Cloud questions, and asks where sessions go only when neither that answer nor credentials are saved. Make sure Agent Observability is enabled on your stack: an administrator opens **Observability → Agent Observability** once and accepts the terms.
 
 To type the values instead, press Enter on the empty paste box. They come from three Grafana Cloud pages:
 

@@ -43,7 +43,9 @@ import (
 // exports AGENTO11Y_LOCAL=true would otherwise route every launcher test into
 // local mode, and the daemon those tests would start is this test binary.
 func TestMain(m *testing.M) {
-	loginRun = func(context.Context, login.RunOpts) error { return login.ErrNotInteractive }
+	loginRun = func(context.Context, login.RunOpts) (login.Result, error) {
+		return login.Result{}, login.ErrNotInteractive
+	}
 	for _, suffix := range envconfig.AliasSuffixes {
 		_ = os.Unsetenv(envconfig.PreferredKey(suffix))
 		_ = os.Unsetenv(envconfig.LegacyKey(suffix))
@@ -711,15 +713,47 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 	cases := []struct {
 		name           string
 		creds          bool
+		local          bool
+		invalidLocal   bool
+		result         login.Result
+		loginErr       error
 		wantLoginCalls int
+		wantOfferLocal bool
+		wantStderr     string
 	}{
-		{name: "chains login when credentials missing", creds: false, wantLoginCalls: 1},
-		{name: "skips login when credentials present", creds: true, wantLoginCalls: 0},
+		{
+			name:           "chains login when credentials missing",
+			loginErr:       login.ErrNotInteractive,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+		},
+		{name: "skips login when credentials present", creds: true},
+		{name: "skips login when local mode is persisted", local: true},
+		{
+			name:           "invalid local value still offers destination",
+			invalidLocal:   true,
+			loginErr:       login.ErrNotInteractive,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+		},
+		{
+			name:           "local result enables local hook capture",
+			result:         login.Result{LocalMode: true},
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+			wantStderr:     "Cursor hook now captures sessions locally",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateDotenvHome(t)
+			if tc.local {
+				t.Setenv("AGENTO11Y_LOCAL", "true")
+			}
+			if tc.invalidLocal {
+				t.Setenv("AGENTO11Y_LOCAL", "maybe")
+			}
 			if tc.creds {
 				t.Setenv("SIGIL_ENDPOINT", "https://cloud.example.com")
 				t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
@@ -732,9 +766,11 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 
 			withStubCursorInstall(t, func(io.Writer, io.Writer, *log.Logger) error { return nil })
 			loginCalls := 0
-			withStubLoginRun(t, func(context.Context, login.RunOpts) error {
+			offerLocal := false
+			withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
 				loginCalls++
-				return login.ErrNotInteractive
+				offerLocal = opts.OfferLocal
+				return tc.result, tc.loginErr
 			})
 
 			var stdout, stderr bytes.Buffer
@@ -743,6 +779,10 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 			})
 			require.Nil(t, gotExit, "stderr=%q", stderr.String())
 			assert.Equal(t, tc.wantLoginCalls, loginCalls)
+			assert.Equal(t, tc.wantOfferLocal, offerLocal)
+			if tc.wantStderr != "" {
+				assert.Contains(t, stderr.String(), tc.wantStderr)
+			}
 		})
 	}
 }
@@ -884,7 +924,7 @@ func withStubLaunchers(t *testing.T, stubs map[string]agentLauncher) {
 // withStubLoginRun replaces the package's loginRun seam for the duration of
 // a single test so per-test login behaviour can be asserted without driving
 // huh's TUI.
-func withStubLoginRun(t *testing.T, fn func(context.Context, login.RunOpts) error) {
+func withStubLoginRun(t *testing.T, fn func(context.Context, login.RunOpts) (login.Result, error)) {
 	t.Helper()
 	prev := loginRun
 	t.Cleanup(func() { loginRun = prev })
@@ -932,8 +972,8 @@ type exitSentinel struct{}
 
 func TestRun_LoginSubcommand_NotInteractiveExits1(t *testing.T) {
 	isolateDotenvHome(t)
-	withStubLoginRun(t, func(context.Context, login.RunOpts) error {
-		return login.ErrNotInteractive
+	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+		return login.Result{}, login.ErrNotInteractive
 	})
 
 	var stdout, stderr bytes.Buffer
@@ -961,8 +1001,8 @@ func TestRun_LoginSubcommand_NotInteractiveExits1(t *testing.T) {
 
 func TestRun_LoginSubcommand_AbortedExits0(t *testing.T) {
 	isolateDotenvHome(t)
-	withStubLoginRun(t, func(context.Context, login.RunOpts) error {
-		return login.ErrAborted
+	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+		return login.Result{}, login.ErrAborted
 	})
 
 	var stdout, stderr bytes.Buffer
@@ -984,13 +1024,16 @@ func TestRun_LauncherAutoPromptsWhenCredsMissing(t *testing.T) {
 	t.Setenv("SIGIL_AUTH_TOKEN", "")
 
 	loginCalled := 0
-	withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) error {
+	withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
 		loginCalled++
+		if !opts.OfferLocal {
+			t.Error("login did not offer the destination question")
+		}
 		// Simulate the prompt populating the credential env vars.
 		_ = os.Setenv("SIGIL_ENDPOINT", "https://sigil.example.com")
 		_ = os.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 		_ = os.Setenv("SIGIL_AUTH_TOKEN", "secret")
-		return nil
+		return login.Result{}, nil
 	})
 
 	launcherCalled := 0
@@ -1017,15 +1060,70 @@ func TestRun_LauncherAutoPromptsWhenCredsMissing(t *testing.T) {
 	}
 }
 
+func TestRun_LauncherLocalAnswerStartsReceiver(t *testing.T) {
+	isolateDotenvHome(t)
+	_, daemonURL := inProcessDaemon(t)
+
+	withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
+		if !opts.OfferLocal {
+			t.Error("login did not offer the destination question")
+		}
+		return login.Result{LocalMode: true}, nil
+	})
+
+	var gotEnv *local.LaunchEnv
+	withStubLauncher(t, "pi", func(_ context.Context, _ []string, env *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
+		gotEnv = env
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"pi", "--"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
+	require.NotNil(t, gotEnv)
+	assert.Equal(t, daemonURL, gotEnv.Endpoint)
+	assert.Equal(t, daemonURL+"/otlp", gotEnv.OTLPEndpoint)
+}
+
+func TestRun_LauncherLocalAnswerLogsReceiverFailure(t *testing.T) {
+	dir := isolateDotenvHome(t)
+	t.Setenv("AGENTO11Y_DEBUG", "true")
+	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+		return login.Result{LocalMode: true}, nil
+	})
+	restore := local.SetStartDaemonForTesting(func(context.Context, string, *log.Logger) (*local.Status, error) {
+		return nil, errors.New("port 8765 is taken")
+	})
+	t.Cleanup(restore)
+	withStubLauncher(t, "pi", func(_ context.Context, _ []string, env *local.LaunchEnv, _ io.Reader, _, _ io.Writer, _ *log.Logger, _ string) error {
+		assert.Nil(t, env)
+		return nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"pi", "--"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
+	assert.Contains(t, stderr.String(), "failed to start local receiver")
+
+	logPath := filepath.Join(dir, "state", "agento11y", "logs", "agento11y.log")
+	data, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "auto-login: start local receiver: port 8765 is taken")
+}
+
 func TestRun_LauncherSkipsAutoPromptWhenCredsPresent(t *testing.T) {
 	isolateDotenvHome(t)
 	t.Setenv("SIGIL_ENDPOINT", "https://sigil.example.com")
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 	t.Setenv("SIGIL_AUTH_TOKEN", "secret")
 
-	withStubLoginRun(t, func(context.Context, login.RunOpts) error {
+	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
 		t.Fatal("loginRun must not be called when credentials are present")
-		return nil
+		return login.Result{}, nil
 	})
 
 	launcherCalled := 0
@@ -1052,8 +1150,8 @@ func TestRun_LauncherContinuesWhenLoginAborted(t *testing.T) {
 	t.Setenv("SIGIL_AUTH_TENANT_ID", "")
 	t.Setenv("SIGIL_AUTH_TOKEN", "")
 
-	withStubLoginRun(t, func(context.Context, login.RunOpts) error {
-		return login.ErrAborted
+	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+		return login.Result{}, login.ErrAborted
 	})
 
 	launcherCalled := 0
@@ -1318,13 +1416,22 @@ func TestRun_LauncherLocalFlagInjectsOpts(t *testing.T) {
 // is on: a shell override and --no-local.
 func TestRun_LauncherLocalFromEnv(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		shellEnv   map[string]string
-		configEnv  string   // config.env contents; written when non-empty
-		argv       []string // launcher-side args, before any `--`
-		wantLocal  bool
-		wantSource string // variable the banner names, or "" for no source line
+		name           string
+		shellEnv       map[string]string
+		configEnv      string   // config.env contents; written when non-empty
+		argv           []string // launcher-side args, before any `--`
+		wantLocal      bool
+		wantOfferLocal bool
+		wantSource     string // variable the banner names, or "" for no source line
 	}{
+		{
+			name:           "no destination",
+			wantOfferLocal: true,
+		},
+		{
+			name: "no-local names Cloud as the destination",
+			argv: []string{"--no-local"},
+		},
 		{
 			name:       "shell preferred spelling",
 			shellEnv:   map[string]string{"AGENTO11Y_LOCAL": "true"},
@@ -1352,6 +1459,10 @@ func TestRun_LauncherLocalFromEnv(t *testing.T) {
 			wantSource: "SIGIL_LOCAL",
 		},
 		{
+			name:      "config.env false",
+			configEnv: "AGENTO11Y_LOCAL=false\n",
+		},
+		{
 			// A shell value beats a config.env one, so this is the one-off
 			// Cloud session for a user who set the file value.
 			name:      "shell false beats config.env true",
@@ -1359,8 +1470,9 @@ func TestRun_LauncherLocalFromEnv(t *testing.T) {
 			configEnv: "AGENTO11Y_LOCAL=true\n",
 		},
 		{
-			name:     "unsupported boolean",
-			shellEnv: map[string]string{"AGENTO11Y_LOCAL": "enabled"},
+			name:           "unsupported boolean still offers destination",
+			shellEnv:       map[string]string{"AGENTO11Y_LOCAL": "enabled"},
+			wantOfferLocal: true,
 		},
 		{
 			name:     "no-local beats env",
@@ -1408,9 +1520,11 @@ func TestRun_LauncherLocalFromEnv(t *testing.T) {
 			// No credentials are configured, so a Cloud session prompts for
 			// login and a local one does not.
 			loginCalls := 0
-			withStubLoginRun(t, func(context.Context, login.RunOpts) error {
+			offerLocal := false
+			withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
 				loginCalls++
-				return login.ErrNotInteractive
+				offerLocal = opts.OfferLocal
+				return login.Result{}, login.ErrNotInteractive
 			})
 
 			var gotEnv *local.LaunchEnv
@@ -1433,6 +1547,7 @@ func TestRun_LauncherLocalFromEnv(t *testing.T) {
 				assert.Equal(t, 0, *starts, "daemon must not start")
 				assert.NotContains(t, stderr.String(), "agento11y local mode")
 				assert.Equal(t, 1, loginCalls, "a Cloud session with no credentials prompts for login")
+				assert.Equal(t, tc.wantOfferLocal, offerLocal, "OfferLocal")
 				if slices.Contains(tc.argv, "--no-local") {
 					// The agent and anything it starts inherit this environment,
 					// where dotenv materialized the family under both spellings.
@@ -1735,9 +1850,11 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 		name  string
 		args  []string
 		stdin string
+		env   map[string]string
 		// stubErr is what the stubbed login.Run returns, for the cases that
 		// check how the command reports an outcome rather than how it parses
 		// its flags.
+		stubResult login.Result
 		stubErr    error
 		wantExit   *int
 		wantOpts   *login.RunOpts
@@ -1762,6 +1879,7 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 				SkipVerify:   true,
 				AssumeYes:    true,
 				ShowNextStep: true,
+				OfferLocal:   true,
 			},
 		},
 		{
@@ -1774,6 +1892,7 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 				Token:        "secret-token",
 				SkipVerify:   true,
 				ShowNextStep: true,
+				OfferLocal:   true,
 			},
 		},
 		{
@@ -1832,17 +1951,33 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 			args:       []string{"login"},
 			stubErr:    login.ErrNotVerified,
 			wantExit:   intPtr(1),
-			wantOpts:   &login.RunOpts{ShowNextStep: true},
+			wantOpts:   &login.RunOpts{ShowNextStep: true, OfferLocal: true},
 			wantStderr: []string{"nothing was saved", "--yes"},
+		},
+		{
+			name:       "local result prints the next launcher step",
+			args:       []string{"login"},
+			stubResult: login.Result{LocalMode: true},
+			wantOpts:   &login.RunOpts{ShowNextStep: true, OfferLocal: true},
+			wantStderr: []string{"agento11y claude", "capture sessions locally"},
+		},
+		{
+			name:     "invalid local value still offers destination",
+			args:     []string{"login"},
+			env:      map[string]string{"AGENTO11Y_LOCAL": "maybe"},
+			wantOpts: &login.RunOpts{ShowNextStep: true, OfferLocal: true},
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			isolateDotenvHome(t)
+			for key, value := range c.env {
+				t.Setenv(key, value)
+			}
 			var got *login.RunOpts
-			withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) error {
+			withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
 				got = &opts
-				return c.stubErr
+				return c.stubResult, c.stubErr
 			})
 
 			var stdout, stderr bytes.Buffer
@@ -1873,7 +2008,8 @@ func TestRun_LoginSubcommandFlags(t *testing.T) {
 			// Stderr, Logger, and Stdin are wiring, not user input.
 			if got.Endpoint != want.Endpoint || got.TenantID != want.TenantID || got.Token != want.Token ||
 				got.OTLPEndpoint != want.OTLPEndpoint || got.SkipVerify != want.SkipVerify ||
-				got.AssumeYes != want.AssumeYes || got.ShowNextStep != want.ShowNextStep {
+				got.AssumeYes != want.AssumeYes || got.ShowNextStep != want.ShowNextStep ||
+				got.OfferLocal != want.OfferLocal {
 				t.Errorf("RunOpts =\n%+v\nwant\n%+v", *got, want)
 			}
 		})
@@ -1889,9 +2025,9 @@ func TestRun_LauncherAutoLoginKeepsNextStepQuiet(t *testing.T) {
 	t.Setenv("SIGIL_AUTH_TOKEN", "")
 
 	var got *login.RunOpts
-	withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) error {
+	withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
 		got = &opts
-		return login.ErrNotInteractive
+		return login.Result{}, login.ErrNotInteractive
 	})
 	withStubLauncher(t, "pi", func(context.Context, []string, *local.LaunchEnv, io.Reader, io.Writer, io.Writer, *log.Logger, string) error {
 		return nil
