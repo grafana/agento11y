@@ -104,7 +104,28 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 // using the same best-effort path as Launch so it does not stay frozen on the
 // old npm package name.
 func Install(ctx context.Context, stdout io.Writer, logger *log.Logger) (bool, error) {
+	// A legacy entry is usable but frozen at the pre-rename package name. Do
+	// not report it as converged while pi is absent: return missing_host so a
+	// later fleet reconciliation retries the migration once the host arrives.
+	legacy, err := legacyPluginRegistered()
+	if err != nil {
+		logger.Printf("pi legacy migration probe: %v", err)
+	} else if legacy {
+		if _, err := lookPath("pi"); err != nil {
+			return false, fmt.Errorf("%w; install pi or run this in the developer's user context", ErrCLINotFound)
+		}
+	}
+
 	migrateLegacyInstall(ctx, stdout, logger)
+	if legacy {
+		stillLegacy, err := legacyPluginRegistered()
+		if err != nil {
+			return false, fmt.Errorf("check pi legacy migration state: %w", err)
+		}
+		if stillLegacy {
+			return false, fmt.Errorf("legacy pi extension %s is still registered after migration; run `pi remove %s` and `pi install %s`", legacyPluginSource, legacyPluginSource, PluginSource)
+		}
+	}
 	installed, probeErr := pluginInstalled()
 	if probeErr == nil && installed {
 		return false, nil
@@ -118,6 +139,26 @@ func Install(ctx context.Context, stdout io.Writer, logger *log.Logger) (bool, e
 		return false, err
 	}
 	return true, nil
+}
+
+// legacyPluginRegistered reports whether either pi settings scope still names
+// the frozen pre-rename npm package. It deliberately ignores local developer
+// checkouts, matching migrateLegacyInstall's migration criteria.
+func legacyPluginRegistered() (bool, error) {
+	for _, pathFn := range []func() (string, error){settingsPath, projectSettingsPath} {
+		path, err := pathFn()
+		if err != nil {
+			return false, err
+		}
+		hasLegacy, _, err := scopeLegacyStatus(path)
+		if err != nil {
+			return false, err
+		}
+		if hasLegacy {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func defaultRunInstall(ctx context.Context, bin string, w io.Writer) error {

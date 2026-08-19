@@ -312,6 +312,35 @@ func TestInstall(t *testing.T) {
 		assert.ErrorIs(t, err, ErrCLINotFound)
 	})
 
+	t.Run("legacy package with missing host defers migration", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSettings(t, dir, `{"packages":["npm:@grafana/sigil-pi@0.17.0"]}`)
+		t.Setenv("PI_CODING_AGENT_DIR", dir)
+		withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+		withRunPi(t, func(context.Context, string, io.Writer, ...string) error {
+			t.Fatal("migration must not run while pi is absent")
+			return nil
+		})
+
+		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		assert.False(t, changed)
+		assert.ErrorIs(t, err, ErrCLINotFound)
+	})
+
+	t.Run("legacy package that remains after migration reports a retryable error", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSettings(t, dir, `{"packages":["npm:@grafana/sigil-pi@0.17.0"]}`)
+		t.Setenv("PI_CODING_AGENT_DIR", dir)
+		withLookPath(t, func(string) (string, error) { return "/usr/local/bin/pi", nil })
+		withRunPi(t, func(context.Context, string, io.Writer, ...string) error {
+			return errors.New("registry unavailable")
+		})
+
+		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		assert.False(t, changed)
+		assert.ErrorContains(t, err, "legacy pi extension npm:@grafana/sigil-pi is still registered after migration")
+	})
+
 	t.Run("installs without launching host", func(t *testing.T) {
 		dir := t.TempDir()
 		writeSettings(t, dir, `{"packages":[]}`)

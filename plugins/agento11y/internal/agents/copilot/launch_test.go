@@ -412,6 +412,7 @@ func TestLaunch_MissingBinaryInstallsUserHooks(t *testing.T) {
 func TestInstall_WritesHooksWithoutCopilotCLI(t *testing.T) {
 	t.Setenv("COPILOT_HOME", t.TempDir())
 	withExecutable(t, "/usr/local/bin/agento11y")
+	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
 	changed, err := Install()
 	require.NoError(t, err)
@@ -421,6 +422,43 @@ func TestInstall_WritesHooksWithoutCopilotCLI(t *testing.T) {
 	changed, err = Install()
 	require.NoError(t, err)
 	assert.False(t, changed)
+}
+
+func TestInstall_RemovesStalePluginWhenCopilotCLIIsAvailable(t *testing.T) {
+	t.Setenv("COPILOT_HOME", t.TempDir())
+	withExecutable(t, "/usr/local/bin/agento11y")
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/copilot", nil })
+	withPluginList(t, func(context.Context, string) ([]byte, error) {
+		return []byte("Installed plugins:\n  • sigil-copilot (v0.2.0)\n"), nil
+	})
+	removed := 0
+	withRunUninstall(t, func(context.Context, string, io.Writer) error {
+		removed++
+		return nil
+	})
+
+	changed, err := Install()
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Equal(t, 1, removed)
+	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
+}
+
+func TestInstall_ReportsStalePluginCleanupFailure(t *testing.T) {
+	t.Setenv("COPILOT_HOME", t.TempDir())
+	withExecutable(t, "/usr/local/bin/agento11y")
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/copilot", nil })
+	withPluginList(t, func(context.Context, string) ([]byte, error) {
+		return []byte("Installed plugins:\n  • sigil-copilot (v0.2.0)\n"), nil
+	})
+	withRunUninstall(t, func(context.Context, string, io.Writer) error {
+		return errors.New("permission denied")
+	})
+
+	_, err := Install()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "remove legacy Copilot plugin sigil-copilot to prevent duplicate capture")
+	assert.ErrorContains(t, err, "permission denied")
 }
 
 // The shared hooks file must be installed and KEPT even when copilot is present
