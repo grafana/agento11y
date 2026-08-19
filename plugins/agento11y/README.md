@@ -1,8 +1,15 @@
-# agento11y
+# Coding Agent Observability
 
-`agento11y` records coding-agent sessions in [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) or stores them on your machine for the local viewer.
+Monitor the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, and others. Observe usage, cost, tokens, and tools across all of them in one place. Keep sessions on your machine with the local Agent Observability app, or send them to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
-Refer to [Instrument coding agents](https://grafana.com/docs/grafana-cloud/observe-and-act/agent-observability/guides/instrument-coding-agents/) in the Grafana Cloud documentation.
+## Quick start
+
+1. [Install](#install) `agento11y`.
+2. [Configure](#configure) with `agento11y login` (use local Agent Observability app or Grafana Cloud Agent Observability).
+3. [Launch a coding agent](#launch-a-coding-agent) with `agento11y <agent>` (for example `agento11y claude`).
+4. If something looks wrong, run [`agento11y doctor`](#troubleshooting).
+
+Or hand setup to a coding agent already in your terminal — see [Skills](#skills).
 
 ## Install
 
@@ -12,11 +19,7 @@ Refer to [Instrument coding agents](https://grafana.com/docs/grafana-cloud/obser
 curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.sh | sh
 ```
 
-The script downloads the latest [release](https://github.com/grafana/agento11y/releases) for your OS and architecture, verifies its SHA-256 checksum, and installs the binary to `~/.local/bin`. Re-run it to upgrade. Set `INSTALL_DIR` to change the directory and `VERSION` to pin a release:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agento11y/scripts/install.sh | INSTALL_DIR=/usr/local/bin sh
-```
+Installs to `~/.local/bin`. Put that directory on your `PATH` if it is not already.
 
 **Homebrew (macOS):**
 
@@ -24,19 +27,27 @@ curl -fsSL https://raw.githubusercontent.com/grafana/agento11y/main/plugins/agen
 brew install grafana/grafana/agento11y
 ```
 
-Upgrade later with `brew upgrade grafana/grafana/agento11y`.
-
-**Prebuilt binary (Windows):** download the `windows_amd64` or `windows_arm64` zip from the [releases page](https://github.com/grafana/agento11y/releases), extract `agento11y.exe`, and put it on your `PATH`.
-
-**Go install (any platform with Go 1.25+):**
+**Go install (Windows, or any platform with Go 1.25+):**
 
 ```sh
 go install github.com/grafana/agento11y/plugins/agento11y/cmd/agento11y@latest
 ```
 
-This installs the binary to `go env GOPATH`/bin (or `GOBIN` if set); make sure that directory is on your `PATH`. Re-run the same command to upgrade.
+Installs to `$(go env GOPATH)/bin` (or `GOBIN`). Put that directory on your `PATH`.
 
-Verify the install with `agento11y --version`.
+**Windows (prebuilt binary):** download the `windows_amd64` or `windows_arm64` zip from the [releases page](https://github.com/grafana/agento11y/releases), extract `agento11y.exe`, and put it on your `PATH`.
+
+Verify with `agento11y --version`.
+
+> **Note:** The command was renamed from `sigil`; the old name still works but will be removed.
+
+## Configure
+
+Run `agento11y login` to configure capture. On first run it asks where sessions go: **Local only**, or **Grafana Cloud**. That choice appears only on macOS and Linux when nothing is configured yet. Windows has no local receiver, so login goes straight to the Cloud credential questions. The Cloud path prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
+
+Run `agento11y login` again to change the Cloud connection, content capture, tags, or guard settings. A rerun goes straight to the Cloud questions, and asks where sessions go only when neither that answer nor credentials are saved.
+
+For scripts and automation (register an agent without prompts), see [Noninteractive agent setup](#noninteractive-agent-setup).
 
 ## Launch a coding agent
 
@@ -46,33 +57,17 @@ Run `agento11y <agent>` with your coding agent's command name:
 agento11y claude
 ```
 
-Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`.
+| Agent | How to run |
+|-------|------------|
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `agento11y claude` |
+| [Codex](https://developers.openai.com/codex) | `agento11y codex` |
+| [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli/using-github-copilot-in-the-cli) | `agento11y copilot` |
+| [Cursor](https://cursor.com) | `agento11y cursor install`, then start Cursor |
+| [OpenCode](https://opencode.ai) | `agento11y opencode` |
+| [Pi](https://github.com/earendil-works/pi) | `agento11y pi` |
+| [Vibe](https://github.com/mistralai/vibe) | `agento11y vibe` |
 
-## Configure
-
-Run `agento11y login` to configure capture. It first asks where sessions go: **Local only**, or **Grafana Cloud**. That question needs macOS or Linux, with no destination and no Grafana Cloud credentials saved yet; Windows cannot run the local receiver, so its flow starts at the Cloud credential questions. The Cloud flow prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
-
-`agento11y <agent>` and `agento11y cursor install` start the same flow on first run. Neither asks anything when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`) or when stdin is not a terminal. Run `agento11y login` again to change the Cloud connection, content capture, tags, or guard settings. A rerun goes straight to the Cloud questions, and asks where sessions go only when neither that answer nor credentials are saved.
-
-## Noninteractive agent setup
-
-After writing the current user's `config.env`, a script can register an agent
-integration without launching the host or opening the credential prompt:
-
-```sh
-agento11y copilot install --json
-agento11y opencode install --json
-agento11y pi install --json
-```
-
-Each command prints one secret-free result with `installed`,
-`already_installed`, `missing_host`, or `error`. Copilot writes its shared
-user hook file and does not require the Copilot CLI on `PATH`; that file is
-also read by Copilot Chat in VS Code. OpenCode and pi require their respective
-CLI to be on the current user's `PATH`; `missing_host` is a successful
-deferral, so a later run can configure a host installed after the script.
-
-Claude Code provides the same command as `agento11y claude install --json`.
+Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md). Per-agent notes and glue live under [`plugins/`](../).
 
 ## Skills
 
@@ -95,7 +90,101 @@ Run `agento11y skills show setup-coding-agent` and follow it to set up Grafana A
 
 The skills for instrumenting your own application code are separate and ship with [`gcx`](https://github.com/grafana/gcx) instead: `gcx agent skills install agento11y-instrument`.
 
-## Tagging sessions
+## Local mode
+
+`agento11y <agent> --local` records the session to a JSONL store and starts the local Agent Observability app. The command prints the app URL (tries `http://127.0.0.1:8765`, then a higher port if needed).
+
+`AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. Choosing **Local only** at first-run login writes that setting (and `SIGIL_LOCAL=true`) and later runs do not ask again. Local mode is available on macOS and Linux only; Windows has no local receiver. Use `--no-local` to override local mode for one launcher session.
+
+Local mode stores full session content. Manage the app with `agento11y local start|status|stop|restart`.
+
+### History import
+
+The local Agent Observability app starts empty: it only has sessions captured after you installed agento11y. To backfill earlier sessions, prefer the app — a banner on the Sessions page, or Settings → History. Imports run in the background with live progress; you can cancel them, and a cancelled run keeps what it already imported.
+
+You can also use the CLI. Supported agents are `claude-code`, `codex`, `cursor`, and `pi` (`agento11y history import` with no agent lists them):
+
+```sh
+# See what would be imported. Nothing is decoded, exported, or stored.
+agento11y history import claude-code --dry-run
+
+# Import into the local store on this machine.
+agento11y history import claude-code --local
+
+# Import into Grafana Cloud, the default without --local.
+agento11y history import claude-code
+```
+
+Imported sessions are thinner than live capture — host logs omit fields that live hooks see:
+
+- **pi** — reads `$PI_CODING_AGENT_DIR/sessions` (default `~/.pi/agent/sessions`). One generation per assistant turn. Missing vs live: compaction/branch-summary generations, system prompt and request controls, full tool schemas, and `git.branch`. Forks import only the fork's own turns; subagent logs are skipped.
+- **cursor** — reads agent-transcript JSONL under `~/.cursor/projects/…/agent-transcripts/` and the older `store.db` under `~/.cursor/chats/…`. Missing vs live: token usage/cost (turns are marked approximate), reliable timestamps on `store.db` sessions, models on transcripts, and tool results on transcripts. Cursor formats can change without notice.
+
+Without `--since`, an import covers the last 90 days. Pass `--since 365d` (or a timestamp) to widen the window, and `--until` to bound the other end. Other useful flags: `--workspace`, `--max-sessions`, `--max-turns`, `--all`, `--yes`, `--force`. Without a terminal, pass `--all --yes` to import from a script.
+
+Re-running an import is safe: a per-agent ledger under `~/.local/state/agento11y/history/ledger/` skips turns already recorded. `--force` re-exports those turns under the same generation IDs.
+
+## Grafana Agent Observability
+
+Send sessions to Grafana Cloud Agent Observability. Choose **Grafana Cloud** during [`agento11y login`](#configure), or write Cloud credentials into `config.env` (see below).
+
+### Credentials
+
+To configure the connection without the prompt, set these in `~/.config/agento11y/config.env`:
+
+```dotenv
+AGENTO11Y_ENDPOINT=https://agento11y-prod-<region>.grafana.net
+AGENTO11Y_AUTH_TENANT_ID=<instance-id>
+AGENTO11Y_AUTH_TOKEN=glc_...
+AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
+```
+
+Find these values at `https://<your-grafana>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`.
+
+### Content capture
+
+The shared `agento11y` binary defaults to `metadata_only`: only model, tokens, tool names, timing, and cost ship to Grafana Agent Observability. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`. The shared binary parser accepts every mode the SDKs support:
+
+```dotenv
+# valid values: full | no_tool_content | metadata_only | full_with_metadata_spans
+AGENTO11Y_CONTENT_CAPTURE_MODE=full
+```
+
+Unknown values fall back to `metadata_only` with a warning. `default` is accepted as an alias for `metadata_only` so the shared binary matches the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`. The Pi (`@grafana/agento11y-pi`) and OpenCode (`@grafana/agento11y-opencode`) plugins ship their own parsers but accept the same set of values.
+
+A plugin can only export fields the host agent passes through to it, so individual plugins may capture less than the SDK matrix shows. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the SDK-level behavior matrix and plugin defaults.
+
+### Login flags
+
+Scripts and devcontainers can pass the Cloud connection values as flags. Preferences have no flags; set them in the config file or answer the prompt.
+
+```sh
+agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token glc_...
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--endpoint url` | conversations API URL |
+| `--tenant id` | instance ID |
+| `--token value` | access-policy token with the `sigil:write` scope |
+| `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant` |
+| `--otlp-endpoint url` | OTLP endpoint for SDK traces and metrics |
+| `--no-verify` | write the file without checking the credentials |
+| `--yes` | save even when the check fails |
+
+Passing `--endpoint`, `--tenant`, and a token together skips the value prompts. Login verifies the credentials before it writes the file. If verification fails and stdin is a terminal, login asks whether to save anyway. Pass `--yes` or `--no-verify` so a script never stops there.
+
+Keep the token out of your shell history with `--token-stdin`:
+
+```sh
+printf %s "$TOKEN" | agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token-stdin
+```
+
+## Settings
+
+Shared options that apply whether you use local mode or Grafana Cloud.
+
+### Tagging sessions
 
 Add `--tag key=value` (repeatable) before any `--` to attach tags to every generation the launched session produces. This is shorthand for setting `AGENTO11Y_TAGS`; flag tags merge onto (and override) any `AGENTO11Y_TAGS` already in the environment.
 
@@ -107,7 +196,7 @@ agento11y claude --tag project=hackathon -- --resume
 
 The same flag works for every launcher (`claude`, `codex`, `copilot`, `opencode`, `pi`, `vibe`) and combines with `--local`.
 
-### Automatic tags
+#### Automatic tags
 
 `AGENTO11Y_AUTO_CODING_AGENT_TAGS` resolves the session's user, repository, and branch and attaches them as client tags, which are the tags that also become OTel metric labels. Use it to break usage and cost down by person, repository, or branch. The switch is off by default, and on its own it enables every name:
 
@@ -132,151 +221,41 @@ The setting works whether the session starts through `agento11y <agent>` or thro
 
 Before enabling it, read the cardinality and personal-data notes in [Tags and Metadata](../../docs/concepts/tags-and-metadata.md#cardinality-and-personal-data). The `user` value is commonly an email address, and it is kept for the metric retention period. Run `agento11y doctor` to see the exact values first.
 
-## Content capture
-
-The shared `agento11y` binary defaults to `metadata_only`: only model, tokens, tool names, timing, and cost ship to Grafana Agent Observability. Prompts, responses, and tool I/O stay on the local machine. To opt into sending content, set `AGENTO11Y_CONTENT_CAPTURE_MODE` in `~/.config/agento11y/config.env`. The shared binary parser accepts every mode the SDKs support:
-
-```dotenv
-# valid values: full | no_tool_content | metadata_only | full_with_metadata_spans
-AGENTO11Y_CONTENT_CAPTURE_MODE=full
-```
-
-Unknown values fall back to `metadata_only` with a warning. `default` is accepted as an alias for `metadata_only` so the shared binary matches the Go envconfig resolver rather than the JS SDK's client-level default of `no_tool_content`. The Pi (`@grafana/agento11y-pi`) and OpenCode (`@grafana/agento11y-opencode`) plugins ship their own parsers but accept the same set of values.
-
-A plugin can only export fields the host agent passes through to it, so individual plugins may capture less than the SDK matrix shows. See [Content Capture Modes](../../docs/concepts/content-capture-modes.md) for the SDK-level behavior matrix and plugin defaults.
-
-## Local mode
-
-`agento11y <agent> --local` records the session to a JSONL store and starts the local viewer. The command prints the viewer URL. It first tries `http://127.0.0.1:8765` and uses a higher port when that port is unavailable.
-
-`AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. Choosing **Local only** at the first-run question writes `AGENTO11Y_LOCAL=true` and `SIGIL_LOCAL=true` to `config.env`, and later runs do not ask again. When the question comes from `agento11y <agent>`, that launch starts the receiver. After `agento11y login` or `agento11y cursor install`, the receiver starts on the next launch or hook. The question appears on macOS and Linux only, because Windows has no local receiver. Use `--no-local` to override this setting for one launcher session.
-
-Local mode stores full session content. Manage the viewer separately with `agento11y local start|status|stop|restart`.
-
-## History import
-
-The viewer starts empty: it holds only the sessions captured after you installed agento11y. `agento11y history import` backfills the ones an agent already wrote to disk.
-
-```sh
-# See what would be imported. Nothing is decoded, exported, or stored.
-agento11y history import claude-code --dry-run
-
-# Import into the local store on this machine.
-agento11y history import claude-code --local
-
-# Import into Grafana Cloud, the default without --local.
-agento11y history import claude-code
-```
-
-Supported agents are `claude-code`, `codex`, `cursor`, and `pi`. `agento11y history import` with no agent lists them.
-
-A `pi` import reads pi's session logs under `$PI_CODING_AGENT_DIR/sessions` (by default `~/.pi/agent/sessions`). It produces one generation per assistant turn. Each generation includes the prompt, thinking, tool calls, matched tool results, model, token usage, cost, both timestamps, and parent turn. Live capture records four things the log does not, so an imported pi session is thinner than a captured one:
-
-- No compaction or branch-summary generations. Live exports each summarization call as its own generation. pi's `compaction` entry carries the summary text, the token count it compacted away, and, on recent pi versions, the call's `usage` and cost, but never the model or the provider, so the call cannot be reconstructed as a generation. An imported session therefore holds fewer generations than a captured one, and the missing ones are the expensive calls.
-- No system prompt, request controls (`max_tokens`, `temperature`, `top_p`, tool choice, thinking budget), or time to first token. pi records none of them.
-- Tool definitions are name-only, and only for the tools a turn called. The log does not record the descriptions, the schemas, or which tools went unused.
-- No `git.branch` tag. The log does not record a branch.
-
-Imported turns carry a `cwd` tag holding the directory the session started in.
-
-Subagent runs are in neither: the nested `run-N/session.jsonl` logs come from the third-party `pi-subagents` package, which live capture ignores too, so importing them would exceed live fidelity rather than match it.
-
-A `cursor` import reads Cursor sessions from two layouts and produces one generation per prompt, with that prompt, the assistant's reply, and whatever tool data the source recorded:
-
-- `~/.cursor/projects/<project>/agent-transcripts/<uuid>/<uuid>.jsonl` — what current Cursor builds write. Parent transcripts only; nested `subagents/` files are skipped.
-- `~/.cursor/chats/<workspace-hash>/<session-uuid>/store.db` — the older SQLite store, still imported when present.
-
-Cursor records less about a turn than the other three sources do, so an imported Cursor session is the thinnest of them:
-
-- No token usage. Cursor keeps no per-turn counts, so every turn reports no usage and is marked approximate. A dashboard shows no cost for an imported Cursor turn.
-- Approximate times on store.db sessions. The SQLite store stamps no message with a time. Some sessions can be dated to the second from provider IDs, and in the rest the turns are spread across the session's span, which orders them and measures nothing. Every store.db turn is marked approximate either way. Agent-transcript prompts sometimes carry a `<timestamp>` wrapper; those turns keep that time and are not marked approximate.
-- A session the import cannot date is exported as ending where it started, rather than at a later time nothing in the session supports.
-- Model names only when a store.db session recorded one. Agent transcripts record none, so every transcript turn is marked as having no model.
-- No tool results on agent transcripts. The JSONL lists tool calls (`tool_use`) but not their outputs, so imported transcript turns carry one-sided tool records.
-- No system prompt and no turn IDs. Cursor's own system prompt is dropped, because a live capture exports none either. An imported turn is numbered by its position. The workspace and git-status block Cursor puts in front of a prompt stays there, because the model saw it.
-
-Reading a `store.db` session can add a `store.db-shm` file next to the session database. SQLite needs that file to read the newest part of a session. The import writes nothing else in `~/.cursor`, and a dry run is no different, because it opens the same databases.
-
-Cursor publishes no schema for either format and stamps no version into them, so a Cursor release can change them.
-
-A forked pi session imports only the turns the fork itself ran. The trunk holds the entries a fork copied from it and exports those turns under its own import, and, when the trunk exported the fork's parent turn, the fork's first turn carries `pi.fork.parent_session_id` and `pi.fork.parent_generation_id` metadata instead of a parent edge. A fork of a fork carries neither key, because no trunk generation exists to name.
-
-`--local` picks the endpoint. Without it, the import exports to the configured Grafana Cloud endpoint, exactly as a live session does. With it, the import exports to the local daemon on this machine.
-
-A dry run reads up to 1 MiB of each session file (a head and a tail window) to count turns and read session metadata. A `cursor` `store.db` session is a SQLite database rather than a log file, so the dry run queries it for the same counts instead, and no message body leaves the database. A Cursor agent-transcript dry run uses the same bounded head/tail window as the other JSONL importers. Nothing from those bytes is decoded into prompt or response text, shown, exported, or stored.
-
-Without `--since`, an import covers the last 90 days. The local store is a linear scan over JSONL files, so an unbounded first import makes the viewer slow before you have used it. Pass `--since 365d`, `--since 2026-01-01T00:00:00Z`, or any duration to widen the window, and `--until` to bound the other end.
-
-The rest of the flags:
-
-- `--source` restricts the import to one discovered path (repeatable). It filters the paths discovery already found; it cannot add a path outside the agent's roots.
-- `--workspace` keeps only sessions whose workspace path contains the given text.
-- `--max-sessions` and `--max-turns` cap how many sessions the run imports and how many turns it takes from each.
-- `--all` skips the picker, `--yes` skips the confirmation.
-- `--dry-run` prints the plan and imports nothing.
-- `--force` re-exports turns the ledger already records.
-- `--local` targets the local daemon instead of Grafana Cloud.
-
-Without a terminal there is no picker and no confirmation, so the command prints the plan and imports nothing. Pass `--all --yes` to import from a script.
-
-The viewer offers the same import in two places: a banner on the Sessions page, and Settings, then History, for the full form. An import there runs in the background and reports progress live; you can cancel it, and a cancelled run keeps what it already imported.
-
-A local import never leaves this machine. Whether an import stays local follows from the endpoint, not from the flag. An import that exports to a loopback endpoint sets the daemon's forwarding marker on every request, and captures full content, matching live local capture. The daemon stores a marked backfill without relaying it to Grafana Cloud, whatever `AGENTO11Y_LOCAL_FORWARD` and `AGENTO11Y_CONTENT_CAPTURE_MODE` are set to. An import that reaches `127.0.0.1` is therefore marked even when it was started without `--local`. An import without `--local` and with a Cloud endpoint configured does leave the machine, which is the point of it.
-
-Each imported turn is recorded in a per-agent ledger under `~/.local/state/agento11y/history/ledger/`. The ledger holds hashes, statuses, and counts, never paths or content. Re-running an import skips the turns the ledger already records, so an import is safe to repeat and a cancelled or failed run resumes where it stopped. `--force` re-exports those turns under the same generation IDs, so the export replaces the stored copy rather than adding a second one.
-
-## Auto-update
-
-`agento11y claude`, `agento11y codex`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out.
-
-`AGENTO11Y_AUTO_UPDATE` does not apply to the other launchers. `agento11y copilot` rewrites its own `agento11y.json` hooks file, and `agento11y vibe` re-upserts its three entries into vibe's `hooks.toml`, so both always point at the installed binary. `agento11y pi` leaves upgrades to pi's own installer.
-
-## Advanced configuration
-
 ### Config file
 
 All integrations read `~/.config/agento11y/config.env`. If you only have the old `~/.config/sigil/config.env`, that file is read and updated instead.
 
 The stack is saved as `AGENTO11Y_STACK_URL`. It is used only to build links; the ingest endpoint is a different host. Login never saves the stack as `AGENTO11Y_ENDPOINT`.
 
-To configure the connection without the prompt, create the file:
-
-```dotenv
-AGENTO11Y_ENDPOINT=https://agento11y-prod-<region>.grafana.net
-AGENTO11Y_AUTH_TENANT_ID=<instance-id>
-AGENTO11Y_AUTH_TOKEN=glc_...
-AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
-```
-
-Find these values at `https://<your-grafana>.grafana.net/a/grafana-agento11y-app/setup-coding-agent`.
+Cloud credentials in this file are documented under [Grafana Agent Observability](#grafana-agent-observability).
 
 `AGENTO11Y_EXPORT_TIMEOUT_MS` bounds each generation export request. It defaults to `30000` milliseconds and accepts base-10 integers from `1` through `2147483647`.
 
-### Login flags
+### Noninteractive agent setup
 
-Scripts and devcontainers can pass the connection values as flags. Preferences have no flags; set them in the config file or answer the prompt.
-
-```sh
-agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token glc_...
-```
-
-| Flag | Meaning |
-|------|---------|
-| `--endpoint url` | conversations API URL |
-| `--tenant id` | instance ID |
-| `--token value` | access-policy token with the `sigil:write` scope |
-| `--token-stdin` | read the token from stdin; requires `--endpoint` and `--tenant` |
-| `--otlp-endpoint url` | OTLP endpoint for SDK traces and metrics |
-| `--no-verify` | write the file without checking the credentials |
-| `--yes` | save even when the check fails |
-
-Passing `--endpoint`, `--tenant`, and a token together skips the value prompts. Login verifies the credentials before it writes the file. If verification fails and stdin is a terminal, login asks whether to save anyway. Pass `--yes` or `--no-verify` so a script never stops there.
-
-Keep the token out of your shell history with `--token-stdin`:
+After writing the current user's `config.env`, a script can register an agent
+integration without launching the host or opening the credential prompt:
 
 ```sh
-printf %s "$TOKEN" | agento11y login --endpoint https://agento11y-prod-<region>.grafana.net --tenant <instance-id> --token-stdin
+agento11y copilot install --json
+agento11y opencode install --json
+agento11y pi install --json
 ```
+
+Each command prints one secret-free result with `installed`,
+`already_installed`, `missing_host`, or `error`. Copilot writes its shared
+user hook file and does not require the Copilot CLI on `PATH`; that file is
+also read by Copilot Chat in VS Code. OpenCode and pi require their respective
+CLI to be on the current user's `PATH`; `missing_host` is a successful
+deferral, so a later run can configure a host installed after the script.
+
+Claude Code provides the same command as `agento11y claude install --json`.
+
+### Auto-update
+
+`agento11y claude`, `agento11y codex`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out.
+
+`AGENTO11Y_AUTO_UPDATE` does not apply to the other launchers. `agento11y copilot` rewrites its own `agento11y.json` hooks file, and `agento11y vibe` re-upserts its three entries into vibe's `hooks.toml`, so both always point at the installed binary. `agento11y pi` leaves upgrades to pi's own installer.
 
 ## Troubleshooting
 
@@ -304,3 +283,7 @@ agento11y doctor --json
 ```
 
 If you need lower-level detail, hooks always exit 0, so problems only show up in the debug log. Set `AGENTO11Y_DEBUG=true` in `~/.config/agento11y/config.env` and tail `~/.local/state/agento11y/logs/agento11y.log`. Installs that still have the pre-rename `~/.local/state/sigil` directory keep using it (with the new `agento11y.log` file name) until it is removed.
+
+## Further reading
+
+This page is the setup guide for the `agento11y` CLI. Product docs: [Instrument coding agents](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/instrument-coding-agents/).

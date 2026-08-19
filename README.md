@@ -4,13 +4,17 @@
   <img src="./assets/readme/agento11y-tri-shot.svg" alt="Grafana Agent observability landing, analytics, and conversation explore views" width="100%" />
 </p>
 
-[Grafana Agent observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) is a product from Grafana for teams running agents in production. This repo holds the open-source SDKs and the coding-agent plugins that send telemetry to it.
+[Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/) monitors the agents you build and the coding agents you use. This repo provides the open-source SDKs and plugins that send telemetry to it.
 
-## Coding-agent observability
+## Coding agent observability
 
-`agento11y` CLI lets you monitor coding agents. Refer to the [`agento11y` documentation](plugins/agento11y/README.md) for installation and setup.
+Capture sessions from the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, and others — so you can observe usage, cost, tokens, and tools across all of them in one place. Install `agento11y`, then start most agents with a single command (`agento11y claude`, `agento11y codex`, …). See the [Coding Agent Observability documentation](plugins/agento11y/README.md) for more information.
 
-## Instrument an application with an AI coding agent
+## Observability for agents you build
+
+Use Grafana Agent Observability to monitor the agents you build and run in your own apps and services — generations, tools, cost, traces, and evals. Instrument them with the SDKs (Go, Python, JS, .NET, Java). The rest of this README covers setup.
+
+### Instrument an application with an AI coding agent
 
 If you want your own app or agent code instrumented, the recommended path is the `agento11y-instrument` agent skill. [`gcx`](https://github.com/grafana/gcx) is Grafana's CLI for working with Grafana Cloud resources; see the [`gcx` installation docs](https://github.com/grafana/gcx#installation) if you want more detail.
 
@@ -44,11 +48,11 @@ If your agent does not support skills, give it [`llms.txt`](llms.txt) and ask it
 
 Or open the Agent Observability plugin in your Grafana Cloud stack and use the onboarding wizard.
 
-## Instrument an application manually
+### Instrument an application manually
 
 Set the [`AGENTO11Y_*` env vars](#grafana-cloud-credentials) and construct the client. To configure it explicitly instead, see the per-SDK READMEs linked under [SDKs](#sdks).
 
-### TypeScript
+#### TypeScript
 
 ```ts
 import { Agento11yClient } from "@grafana/agento11y";
@@ -65,7 +69,7 @@ await client.startGeneration(
 await client.shutdown();
 ```
 
-### Python
+#### Python
 
 ```python
 from agento11y import Client, GenerationStart, ModelRef, assistant_text_message
@@ -83,7 +87,7 @@ with client.start_generation(
 client.shutdown()
 ```
 
-### Go
+#### Go
 
 ```go
 client := agento11y.NewClient(agento11y.Config{}) // reads AGENTO11Y_* env vars
@@ -100,7 +104,7 @@ rec.SetResult(agento11y.Generation{
 }, nil)
 ```
 
-## SDKs
+### SDKs
 
 | Language | Package | Path |
 |----------|---------|------|
@@ -110,7 +114,7 @@ rec.SetResult(agento11y.Generation{
 | .NET/C# | `Grafana.Agento11y` | [`dotnet/`](dotnet/) |
 | Java | `com.grafana.agento11y` | [`java/`](java/) |
 
-## Provider adapters
+### Provider adapters
 
 | Language | Providers | Where |
 |----------|-----------|-------|
@@ -120,7 +124,7 @@ rec.SetResult(agento11y.Generation{
 | .NET | Anthropic, OpenAI, Gemini | [`dotnet/src/`](dotnet/src/) |
 | TypeScript/JavaScript | Anthropic, OpenAI, Gemini | Subpath exports of `@grafana/agento11y`. See [`js/README.md`](js/README.md). |
 
-## Framework integrations
+### Framework integrations
 
 | Language | Frameworks | Where |
 |----------|------------|-------|
@@ -129,7 +133,7 @@ rec.SetResult(agento11y.Generation{
 | Go | Google ADK | [`go-frameworks/`](go-frameworks/) |
 | Java | Google ADK | [`java/frameworks/`](java/frameworks/) |
 
-## Runnable examples
+### Runnable examples
 
 Self-contained examples grouped into three tiers. See [`examples/README.md`](examples/README.md) for the full map.
 
@@ -165,11 +169,11 @@ The reference app is a fuller FastAPI service with framework callbacks and manua
 | Python + LangChain (FastAPI) | [`examples/python-langchain/`](examples/python-langchain/) |
 | Python + LangChain (Amazon Bedrock AgentCore) | [`examples/bedrock-agentcore/`](examples/bedrock-agentcore/) |
 
-## Hooks and guards
+### Hooks and guards
 
 Application SDK hooks evaluate Agent Observability guard rules on your request path before a provider call. A guard can allow the request, deny it, or return transformed input such as redacted messages. Go, Python, and TypeScript hook requests propagate the active conversation and OpenTelemetry trace correlation so Agent Observability can show a denied preflight attempt in conversation detail even when no generation was created. See the SDK READMEs for manual hook evaluation, and the runnable [`examples/getting-started/go-hooks/`](examples/getting-started/go-hooks/), [`examples/getting-started/python-hooks/`](examples/getting-started/python-hooks/), and [`examples/getting-started/typescript-hooks/`](examples/getting-started/typescript-hooks/) examples for preflight guard setups.
 
-## Content capture and privacy
+### Content capture and privacy
 
 The SDKs default to `no_tool_content`: full generation messages ship to Agent Observability, but tool-execution arguments and results stay out of spans. The coding-agent plugins default to `metadata_only`. See [Content Capture Modes](docs/concepts/content-capture-modes.md) for the mode matrix, defaults per surface, and the generation, tool-execution, and embedding resolution rules.
 
@@ -177,7 +181,7 @@ The SDKs emit spans and metrics through OpenTelemetry providers your application
 
 To attach custom key/values (team, project, env, request id, end-user id), see [Tags and Metadata](docs/concepts/tags-and-metadata.md). It covers which of client tags, per-generation tags, metadata, and `user_id` reach the generation export vs OTel spans vs metrics, and the cardinality rules for metric labels.
 
-## Grafana Cloud credentials
+### Grafana Cloud credentials
 
 All four connection values (API URL, Instance ID, API token, and OTLP endpoint) live on the Connection tab of the Agent Observability plugin in your stack:
 
@@ -189,7 +193,7 @@ Follow *Create a token in Cloud Access Policies* on the Connection page and crea
 
 See the [Grafana Cloud Agent observability getting started docs](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/get-started/grafana-cloud/) for the full setup flow.
 
-## Why Grafana Agent observability
+### Why Grafana Agent observability
 
 - The SDK emits traces and metrics as standard OTLP, so they can use existing OTel pipelines. Conversations and generations go through Agent Observability ingest so Grafana can join them with traces, costs, and scores.
 - It uses OTel GenAI semantic conventions where they exist. agento11y-specific fields cover agent versions, generation IDs, and tool executions.
