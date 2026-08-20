@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0] - 2026-08-20
+
+### Features
+
+- **plugins**: support AGENTO11Y_LOCAL env var in Pi and OpenCode (#635)
+- **plugins/agento11y**: ask for local or cloud mode on first run (#614)
+
 ## [0.23.0] - 2026-08-18
 
 ### Breaking Changes
