@@ -52,15 +52,14 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/browser"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
@@ -174,26 +173,7 @@ func validateStack(s string) error {
 
 // openURL opens a URL in the user's browser. It is a package var so tests can
 // record the call instead of launching anything.
-var openURL = openBrowser
-
-func openBrowser(target string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", target)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", target)
-	default:
-		cmd = exec.Command("xdg-open", target)
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	// The browser outlives this call and login then waits on the user, so reap
-	// the child in the background instead of leaving a zombie behind.
-	go func() { _ = cmd.Wait() }()
-	return nil
-}
+var openURL = browser.Open
 
 // docsURL points at the plugins directory so users can discover every
 // agent adapter we ship (claude-code, codex, cursor, pi, …). Linked as a

@@ -452,11 +452,11 @@ chooses which fields ship, not whether the shipped fields are clean. Treat
 ### Local mode
 
 `agento11y <agent> --local`, or **Local only** at the first-run question, routes
-launcher runs and agento11y hooks to a JSONL store on the machine. It also
-overrides the capture mode with full content. The launcher prints the viewer URL.
-Manage the daemon with `agento11y local start|status|stop|restart`. Local mode
-runs on macOS and Linux only. **Local only** at a launcher starts the receiver for
-that launch; after `agento11y login` or `agento11y cursor install` the receiver
+launcher runs and agento11y hooks to a JSONL store on the machine. Local mode uses
+full content regardless of the configured capture mode. The launcher prints the viewer URL.
+Manage the daemon with `agento11y local start|open|status|stop|restart`. `agento11y local open`
+starts it if needed, prints its address, and tries to open the viewer. Local mode runs on macOS and Linux only. **Local only** at a launcher
+starts the receiver for that launch; after `agento11y login` or `agento11y cursor install` the receiver
 starts on the next launch or hook. `--no-local` runs one session against Cloud
 while the saved answer stays set. Never describe local mode as a switch that keeps
 all data on the machine: with `AGENTO11Y_LOCAL_FORWARD` and valid Cloud settings

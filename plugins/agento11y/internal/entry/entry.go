@@ -13,7 +13,7 @@
 //	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
 //	agento11y claude   install [--json]                               — register the Claude Code plugin without launching or prompting
 //	agento11y agents   reconcile --agents all|name[,name...] --json   — reconcile registered noninteractive installers
-//	agento11y local start|status|stop                                 — manage the local capture daemon
+//	agento11y local start|open|status|stop|restart                    — manage the local capture daemon
 //	agento11y history import <agent> [flags]                          — backfill an agent's existing local sessions
 //	agento11y skills list|show <name>                                 — print an agent skill bundled into this binary
 //	agento11y help                                                    — print the expanded command list
@@ -60,6 +60,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/browser"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/buildversion"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/cli"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/doctor"
@@ -134,7 +135,7 @@ func usageLine() string {
 	return "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] " +
 		"[--otlp-endpoint url] [--no-verify] [--yes] | agento11y doctor [--json] | " +
 		"agento11y <claude|copilot|opencode|pi> install [--json] | agento11y agents reconcile --agents all|name[,name...] --json | " +
-		"agento11y skills list|show <name> | agento11y local start|status|stop | " +
+		"agento11y skills list|show <name> | agento11y local start|open|status|stop|restart | " +
 		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
 		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
 }
@@ -185,6 +186,9 @@ var exit = os.Exit
 // loginRun is a package var so tests can stub the interactive login flow
 // without driving the huh TTY. Production code points at login.Run.
 var loginRun = login.Run
+
+// openURL is a package var so local command tests do not launch a browser.
+var openURL = browser.Open
 
 // registeredInstallers is a seam for reconciliation tests. Production returns
 // every adapter that registered a noninteractive installer at package init.
@@ -1219,13 +1223,17 @@ func setupLocalLaunch(stderr io.Writer, envKey string) (endpoint, otlp string, e
 // runLocalCommand dispatches `agento11y local <verb>` subcommands.
 func runLocalCommand(args []string, stdout, stderr io.Writer) {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: agento11y local start | status | stop | restart | serve")
+		_, _ = fmt.Fprintln(stderr, localUsage)
 		exit(2)
+		return
+	}
+	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+		runLocalHelpCommand(stdout)
 		return
 	}
 	// Apply dotenv before resolving the state dir so XDG_STATE_HOME set
 	// only in $XDG_CONFIG_HOME/agento11y/config.env reaches local.StateDir().
-	// Each verb relies on that resolution.
+	// Each stateful verb relies on that resolution.
 	dotenv.ApplyEnv(nil)
 	dir := local.StateDir()
 	switch args[0] {
@@ -1239,6 +1247,19 @@ func runLocalCommand(args []string, stdout, stderr io.Writer) {
 			return
 		}
 		_, _ = fmt.Fprintf(stdout, "agento11y local receiver running at %s (pid %d)\n", status.Endpoint, status.PID)
+	case "open":
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		status, err := local.EnsureRunning(ctx, dir, nil)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
+			exit(1)
+			return
+		}
+		_, _ = fmt.Fprintln(stdout, status.Endpoint)
+		if err := openURL(status.Endpoint); err != nil {
+			_, _ = fmt.Fprintf(stderr, "agento11y: could not open browser: %v\n", err)
+		}
 	case "status":
 		status, err := local.IsRunning(dir)
 		if err != nil {
