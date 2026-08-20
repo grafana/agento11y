@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.34.0] - 2026-08-20
+
+### Features
+
+- **plugins/agento11y**: report Claude Code input tokens including cache (#599)
+- **plugins/agento11y**: support new mistral vibe hooks (#601)
+- **plugins/agento11y**: register additional managed installers (#611)
+- **plugins/agento11y**: reconcile managed agent installs (#610)
+
+### Bug Fixes
+
+- **plugins/agento11y**: send gemini as the provider for Gemini models (#600)
+
 ## [0.33.0] - 2026-08-19
 
 ### Features
