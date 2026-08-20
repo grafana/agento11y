@@ -399,7 +399,7 @@ func resolveForwardConfig(logger *log.Logger, get envReader) forwardConfig {
 func hookForwardDisabledReason(guardsEnabled bool, endpoint, tenant, token string) string {
 	switch {
 	case !guardsEnabled:
-		return envconfig.PreferredKey("GUARDS_ENABLED") + " is off, so there are no guards to enforce"
+		return envconfig.PreferredKey("GUARDS_ENABLED") + " is off, so no guard check is made at all"
 	case endpoint == "":
 		return envconfig.PreferredKey("ENDPOINT") + " is empty"
 	case envconfig.IsLocalEndpoint(endpoint):
