@@ -2,12 +2,6 @@
 
 Monitor the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, and others. Observe usage, cost, tokens, and tools across all of them in one place. Keep sessions on your machine with the local Agent Observability app, or send them to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
-<p align="center">
-  <a href="https://github.com/grafana/agento11y/releases/download/demo-assets/agento11y-demo.mp4">
-    <img src="../../assets/readme/agento11y-demo.gif" alt="Agento11y coding agent observability demo" width="100%" />
-  </a>
-</p>
-
 ## Quick start
 
 1. [Install](#install) `agento11y`.
