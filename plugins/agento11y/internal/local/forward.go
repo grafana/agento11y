@@ -383,7 +383,9 @@ func resolveForwardConfig(logger *log.Logger, get envReader) forwardConfig {
 }
 
 // hookForwardDisabledReason reports why hook evaluation from a --local session
-// must not be relayed to Cloud, or "" when it may be.
+// must not be relayed to Cloud, or "" when it may be. It describes the Cloud
+// leg only: the daemon's own ruleset in guards.toml can still enforce
+// while this returns a reason.
 //
 // The hook leg is gated harder than the generation leg on purpose.
 // forwardDisabledReason accepts a local endpoint with empty or placeholder
@@ -394,11 +396,13 @@ func resolveForwardConfig(logger *log.Logger, get envReader) forwardConfig {
 func hookForwardDisabledReason(guardsEnabled bool, endpoint, tenant, token string) string {
 	switch {
 	case !guardsEnabled:
-		return envconfig.PreferredKey("GUARDS_ENABLED") + " is off, so there are no guards to enforce"
+		// With guards off no host agent sends a hook request at all, so neither
+		// the local ruleset nor Cloud sees the call.
+		return envconfig.PreferredKey("GUARDS_ENABLED") + " is off, so no guard check is made at all"
 	case endpoint == "":
 		return envconfig.PreferredKey("ENDPOINT") + " is empty"
 	case envconfig.IsLocalEndpoint(endpoint):
-		return "endpoint " + endpoint + " is local, so there are no Cloud rules to consult"
+		return "endpoint " + endpoint + " is local, so no Cloud rules are consulted; local rules still run"
 	case tenant == "" || token == "" || tenant == envconfig.LocalAuthPlaceholder || token == envconfig.LocalAuthPlaceholder:
 		return "Cloud credentials are missing or are the " + envconfig.LocalAuthPlaceholder + " placeholder"
 	default:

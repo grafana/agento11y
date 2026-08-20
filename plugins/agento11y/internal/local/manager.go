@@ -350,6 +350,11 @@ type ForwardPosture struct {
 	// Hooks reports whether guard evaluation is relayed to Cloud, which sends
 	// the content being evaluated regardless of Mode. See handleHookEvaluate.
 	Hooks bool
+	// LocalRules counts the rules in guards.toml that can act locally. It
+	// is independent of Hooks: rules can enforce here with nothing forwarded at
+	// all. It says nothing about GUARDS_ENABLED, which the launcher resolves from
+	// its own environment because that is what the agent child inherits.
+	LocalRules int
 }
 
 // FetchForwardPosture asks a running daemon what it would forward. A non-nil
@@ -383,9 +388,10 @@ func FetchForwardPosture(ctx context.Context, endpoint string) (ForwardPosture, 
 		return ForwardPosture{}, fmt.Errorf("decode config from %s: %w", req.URL, err)
 	}
 	return ForwardPosture{
-		Enabled: body.ForwardStatus.Enabled,
-		Mode:    body.ForwardStatus.Mode,
-		Hooks:   body.ForwardStatus.Hooks,
+		Enabled:    body.ForwardStatus.Enabled,
+		Mode:       body.ForwardStatus.Mode,
+		Hooks:      body.ForwardStatus.Hooks,
+		LocalRules: body.LocalGuards.Rules,
 	}, nil
 }
 

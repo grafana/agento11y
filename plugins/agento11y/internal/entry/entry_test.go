@@ -1647,8 +1647,11 @@ func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
 		name       string
 		posture    local.ForwardPosture
 		postureErr error
-		want       []string
-		wantNone   []string
+		// guardsEnabled is the launcher's own GUARDS_ENABLED resolution, which
+		// is what the agent child inherits.
+		guardsEnabled bool
+		want          []string
+		wantNone      []string
 	}{
 		{
 			name:     "forwarding_off",
@@ -1671,6 +1674,30 @@ func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
 			wantNone: []string{"stays on this machine"},
 		},
 		{
+			// Rules are evaluated on the machine with nothing forwarded, so the
+			// banner does not claim anything reached Cloud.
+			name:          "local_rules_only",
+			posture:       local.ForwardPosture{LocalRules: 2},
+			guardsEnabled: true,
+			want:          []string{"stays on this machine", "2 local guard rules are evaluated"},
+			wantNone:      []string{"Grafana Cloud"},
+		},
+		{
+			name:          "one_local_rule",
+			posture:       local.ForwardPosture{LocalRules: 1},
+			guardsEnabled: true,
+			want:          []string{"1 local guard rule is evaluated"},
+			wantNone:      []string{"Grafana Cloud"},
+		},
+		{
+			// GUARDS_ENABLED is off by default, and with it off the host agent
+			// sends no hook request, so a rule count must say that evaluation is off.
+			name:     "local_rules_with_guards_off",
+			posture:  local.ForwardPosture{LocalRules: 2},
+			want:     []string{"2 local guard rules are not evaluated: AGENTO11Y_GUARDS_ENABLED is off"},
+			wantNone: []string{"Grafana Cloud"},
+		},
+		{
 			// The daemon did not answer, so no posture may be claimed either
 			// way.
 			name:       "posture_unknown",
@@ -1682,7 +1709,7 @@ func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := renderLocalBanner("http://127.0.0.1:8765", tc.posture, tc.postureErr, "")
+			got := renderLocalBanner("http://127.0.0.1:8765", tc.posture, tc.postureErr, "", tc.guardsEnabled)
 			for _, want := range tc.want {
 				assert.Contains(t, got, want)
 			}
