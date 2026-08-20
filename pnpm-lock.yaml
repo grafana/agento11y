@@ -117,6 +117,8 @@ importers:
         specifier: 6.0.2
         version: 6.0.2
 
+  plugins/agento11y: {}
+
   plugins/opencode:
     devDependencies:
       '@grafana/agento11y':
