@@ -1,4 +1,4 @@
-const { useState, useEffect, useMemo, useCallback, useRef, createContext, useContext } = React;
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
 // ============================================================
 // Formatters — all server responses ship raw numbers + RFC3339
@@ -12,16 +12,16 @@ const { useState, useEffect, useMemo, useCallback, useRef, createContext, useCon
 const NO_VALUE = '-';
 
 function formatTokens(n) {
-  if (n == null || isNaN(n)) return NO_VALUE;
+  if (n == null || Number.isNaN(Number(n))) return NO_VALUE;
   if (n < 1000) return String(n);
-  if (n < 1_000_000) return (n / 1_000).toFixed(n < 10_000 ? 1 : 1).replace(/\.0$/, '') + 'k';
-  return (n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 1).replace(/\.0$/, '') + 'M';
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(n < 10_000 ? 1 : 1).replace(/\.0$/, '')}k`;
+  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 1).replace(/\.0$/, '')}M`;
 }
 
 function formatDuration(seconds) {
-  if (seconds == null || isNaN(seconds)) return NO_VALUE;
+  if (seconds == null || Number.isNaN(Number(seconds))) return NO_VALUE;
   if (seconds < 1) return '<1s';
-  if (seconds < 60) return seconds.toFixed(seconds < 10 ? 2 : 1).replace(/\.0+$/, '') + 's';
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 2 : 1).replace(/\.0+$/, '')}s`;
   const m = Math.floor(seconds / 60);
   const s = Math.round(seconds % 60);
   if (m < 60) return s === 0 ? `${m}m` : `${m}m ${s}s`;
@@ -51,7 +51,7 @@ function formatAgo(iso, now) {
 function formatTime(iso) {
   if (!iso) return NO_VALUE;
   const d = new Date(iso);
-  if (isNaN(d)) return NO_VALUE;
+  if (Number.isNaN(d.getTime())) return NO_VALUE;
   return d.toLocaleTimeString([], { hour12: false });
 }
 
@@ -78,7 +78,6 @@ const TIME_RANGES = [
 // to. A narrower default would open on an empty list right after an
 // import, because everything backfilled is older than it.
 const DEFAULT_TIME_RANGE = '90d';
-const FEED_TIME_RANGES = TIME_RANGES.filter((r) => r.value !== '5m' && r.value !== '15m');
 
 // LIST_PAGE_SIZE is how many conversations one list request asks for.
 // The rows are not virtualised and the server decodes only what it
@@ -119,7 +118,7 @@ function formatBucketLabel(ts, bucketMs) {
   // 2h+ buckets mean the chart spans more than a day, so a bare
   // time is ambiguous — prefix the date.
   if (bucketMs >= 2 * 60 * 60 * 1000) {
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time;
+    return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
   }
   // Sub-minute buckets need seconds or adjacent labels collide.
   if (bucketMs < 60 * 1000) {
@@ -274,7 +273,7 @@ let modelPricesPromise = null;
 function flattenModelsDev(data) {
   const map = {};
   for (const provider of Object.values(data || {})) {
-    const models = provider && provider.models;
+    const models = provider?.models;
     if (!models) continue;
     for (const [id, m] of Object.entries(models)) {
       if (m && m.cost && m.cost.input != null) map[id] = m.cost;
@@ -288,7 +287,7 @@ function loadModelPrices() {
   modelPricesPromise = (async () => {
     try {
       const cached = JSON.parse(localStorage.getItem(PRICE_CACHE_KEY) || 'null');
-      if (cached && cached.map && Date.now() - cached.at < PRICE_TTL_MS) return cached.map;
+      if (cached?.map && Date.now() - cached.at < PRICE_TTL_MS) return cached.map;
     } catch {
       /* corrupt cache, refetch */
     }
@@ -335,7 +334,7 @@ function useModelPrices() {
 // ponytail: per-model attribution would need per-generation buckets — not
 // worth it until mixed-model conversations are common.
 function conversationCost(c, prices) {
-  const b = c && c.token_buckets;
+  const b = c?.token_buckets;
   if (!b) return null;
   const model = (c.models || [])[0];
   let inRate, outRate, cacheReadRate, cacheWriteRate;
@@ -366,8 +365,8 @@ function formatCost(usd) {
   if (usd == null) return NO_VALUE; // unpriced model, distinct from $0
   if (usd === 0) return '$0';
   if (usd < 0.01) return '<$0.01';
-  if (usd < 1000) return '$' + usd.toFixed(2).replace(/\.00$/, '');
-  return '$' + (usd / 1000).toFixed(1) + 'k';
+  if (usd < 1000) return `$${usd.toFixed(2).replace(/\.00$/, '')}`;
+  return `$${(usd / 1000).toFixed(1)}k`;
 }
 
 // List-price token math, not the provider invoice: subscriptions and
@@ -659,6 +658,8 @@ function Icon({ name, size = 16, style, className }) {
       strokeLinecap="round"
       strokeLinejoin="round"
       className={className}
+      aria-hidden="true"
+      focusable="false"
       style={{ flexShrink: 0, display: 'block', ...(style || {}) }}
     >
       {paths[name]}
@@ -786,6 +787,8 @@ function AgentPill({ name, size }) {
         fill="none"
         stroke="currentColor"
         strokeWidth="2"
+        aria-hidden="true"
+        focusable="false"
       >
         <circle cx="12" cy="8" r="4" />
         <path d="M4 21a8 8 0 0 1 16 0" />
@@ -835,7 +838,16 @@ function AgentCell({ agents }) {
             whiteSpace: 'nowrap',
           }}
         >
-          <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg
+            width={10}
+            height={10}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            aria-hidden="true"
+            focusable="false"
+          >
             <circle cx="12" cy="8" r="4" />
             <path d="M4 21a8 8 0 0 1 16 0" />
           </svg>
@@ -906,7 +918,7 @@ function NavTab({ label, href, active, onClick }) {
       onClick={(e) => {
         if (!isPlainLeftClick(e)) return;
         e.preventDefault();
-        onClick && onClick(e);
+        onClick?.(e);
       }}
       style={{
         position: 'relative',
@@ -953,47 +965,45 @@ const HEADER_H = 68;
 
 function TopBar({ tabs = [], activeTab, config, onOpenSettings }) {
   return (
-    <>
-      <header
+    <header
+      style={{
+        height: HEADER_H,
+        background: 'var(--bg-primary)',
+        display: 'flex',
+        alignItems: 'center',
+        padding: '0 16px',
+        gap: 20,
+        position: 'sticky',
+        top: 0,
+        zIndex: 5,
+      }}
+    >
+      <Wordmark />
+      <div
         style={{
-          height: HEADER_H,
-          background: 'var(--bg-primary)',
+          width: 1,
+          height: 28,
+          background: 'var(--border-weak)',
+          margin: '0 4px',
+        }}
+      />
+      <nav
+        style={{
           display: 'flex',
           alignItems: 'center',
-          padding: '0 16px',
-          gap: 20,
-          position: 'sticky',
-          top: 0,
-          zIndex: 5,
+          alignSelf: 'stretch',
+          gap: 18,
+          minWidth: 0,
+          flex: 1,
+          overflow: 'hidden',
         }}
       >
-        <Wordmark />
-        <div
-          style={{
-            width: 1,
-            height: 28,
-            background: 'var(--border-weak)',
-            margin: '0 4px',
-          }}
-        />
-        <nav
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            alignSelf: 'stretch',
-            gap: 18,
-            minWidth: 0,
-            flex: 1,
-            overflow: 'hidden',
-          }}
-        >
-          {tabs.map((t) => (
-            <NavTab key={t.key} label={t.label} href={t.href} active={t.key === activeTab} onClick={t.onClick} />
-          ))}
-        </nav>
-        <ForwardModeChip config={config} onOpenSettings={onOpenSettings} />
-      </header>
-    </>
+        {tabs.map((t) => (
+          <NavTab key={t.key} label={t.label} href={t.href} active={t.key === activeTab} onClick={t.onClick} />
+        ))}
+      </nav>
+      <ForwardModeChip config={config} onOpenSettings={onOpenSettings} />
+    </header>
   );
 }
 
@@ -1110,8 +1120,15 @@ function SurfaceCard({ children, style, ...rest }) {
 
 function ModalFrame({ title, desc, onClose, children, width = 'min(860px, 100%)' }) {
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: The backdrop handles clicks outside the dialog.
     <div
-      onClick={onClose}
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onClose();
+      }}
       style={{
         position: 'fixed',
         inset: 0,
@@ -1124,7 +1141,9 @@ function ModalFrame({ title, desc, onClose, children, width = 'min(860px, 100%)'
       }}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         style={{
           width,
           maxHeight: '82vh',
@@ -1477,6 +1496,7 @@ function ActivityChart({ data, bucketLabel, switcher, selection, onBucketClick, 
             preserveAspectRatio="none"
             style={{ width: '100%', height: 130, display: 'block' }}
           >
+            <title>Session activity over time</title>
             {[0, 0.5].map((g) => (
               <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2" />
             ))}
@@ -1492,11 +1512,23 @@ function ActivityChart({ data, bucketLabel, switcher, selection, onBucketClick, 
                 selection && (d.start + d.end) / 2 >= selection.start && (d.start + d.end) / 2 < selection.end;
               const dim = selection && !isSel;
               return (
+                // biome-ignore lint/a11y/useSemanticElements: The bucket must stay in the SVG coordinate system.
                 <g
                   key={i}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${d.t}: ${d.c} ${d.c === 1 ? 'session' : 'sessions'}. Filter to this time bucket.`}
                   onMouseEnter={() => setHover(i)}
                   onMouseLeave={() => setHover(null)}
+                  onFocus={() => setHover(i)}
+                  onBlur={() => setHover(null)}
                   onClick={onBucketClick ? () => onBucketClick(d) : undefined}
+                  onKeyDown={(e) => {
+                    if (onBucketClick && (e.key === 'Enter' || e.key === ' ')) {
+                      e.preventDefault();
+                      onBucketClick(d);
+                    }
+                  }}
                   style={{
                     cursor: onBucketClick ? 'pointer' : 'default',
                   }}
@@ -1614,6 +1646,7 @@ function TokenChart({
             return (
               <button
                 key={s.key}
+                type="button"
                 onClick={() => onToggleSeries(s.key)}
                 title={off ? `Show ${s.label}` : `Hide ${s.label}`}
                 style={{
@@ -1679,6 +1712,7 @@ function TokenChart({
             preserveAspectRatio="none"
             style={{ width: '100%', height: 130, display: 'block' }}
           >
+            <title>Token usage over time</title>
             {[0, 0.5].map((g) => (
               <line key={g} x1={0} x2={W} y1={H * g} y2={H * g} stroke="rgba(204,204,220,0.06)" strokeWidth="0.2" />
             ))}
@@ -1710,11 +1744,23 @@ function TokenChart({
                 );
               }
               return (
+                // biome-ignore lint/a11y/useSemanticElements: The bucket must stay in the SVG coordinate system.
                 <g
                   key={i}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${d.t}: ${formatTokens(visibleTotal(d))} tokens. Filter to this time bucket.`}
                   onMouseEnter={() => setHover(i)}
                   onMouseLeave={() => setHover(null)}
+                  onFocus={() => setHover(i)}
+                  onBlur={() => setHover(null)}
                   onClick={onBucketClick ? () => onBucketClick(d) : undefined}
+                  onKeyDown={(e) => {
+                    if (onBucketClick && (e.key === 'Enter' || e.key === ' ')) {
+                      e.preventDefault();
+                      onBucketClick(d);
+                    }
+                  }}
                   style={{
                     cursor: onBucketClick ? 'pointer' : 'default',
                   }}
@@ -1881,8 +1927,10 @@ function Select({ value, options, onChange, title, trigger, menu, id, disabled, 
   };
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: Child controls own focus; the wrapper closes the menu.
     <div
       ref={rootRef}
+      role="presentation"
       style={{ position: 'relative', flex: '0 0 auto' }}
       onBlur={(e) => {
         if (!rootRef.current?.contains(e.relatedTarget)) setOpen(false);
@@ -2210,8 +2258,10 @@ function WorkspaceFacet({ workspaces, selected, onSelect, totalCount, totalCost,
   const triggerCount = selectedPath ? `${selectedInRange ? 1 : 0}/${workspaces.length}` : String(workspaces.length);
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: Child controls own focus; the wrapper handles their keyboard events.
     <div
       ref={rootRef}
+      role="presentation"
       style={{ position: 'relative', flex: '0 0 auto' }}
       onBlur={(e) => {
         if (!rootRef.current?.contains(e.relatedTarget)) setOpen(false);
@@ -2506,6 +2556,7 @@ function WorkspaceFacet({ workspaces, selected, onSelect, totalCount, totalCost,
                     >
                       <span>{formatAgo(w.last ? new Date(w.last).toISOString() : null, now)}</span>
                       <span
+                        role="img"
                         title={pct == null ? 'Spend share unavailable' : `${pct}% of range spend`}
                         aria-label={pct == null ? 'Spend share unavailable' : `${pct}% of range spend`}
                         style={{
@@ -2721,6 +2772,7 @@ function FilterBar({
       )}
       {activeFilterCount > 0 && onClearFilters && (
         <button
+          type="button"
           onClick={onClearFilters}
           style={{
             ...iconBtn,
@@ -2749,6 +2801,7 @@ function FilterBar({
         </button>
       )}
       <button
+        type="button"
         onClick={onRefresh}
         disabled={refreshing}
         style={{
@@ -3249,10 +3302,9 @@ function HelpTip({ text, ariaLabel }) {
   }, []);
 
   return (
-    <span
+    <button
       ref={triggerRef}
-      role="button"
-      tabIndex={0}
+      type="button"
       aria-label={ariaLabel}
       onMouseEnter={show}
       onMouseLeave={hide}
@@ -3264,6 +3316,10 @@ function HelpTip({ text, ariaLabel }) {
         display: 'inline-flex',
         color: 'inherit',
         cursor: 'help',
+        background: 'transparent',
+        border: 'none',
+        padding: 0,
+        font: 'inherit',
       }}
     >
       <Icon name="info" size={12} />
@@ -3293,7 +3349,7 @@ function HelpTip({ text, ariaLabel }) {
           {text}
         </span>
       )}
-    </span>
+    </button>
   );
 }
 
@@ -3310,6 +3366,7 @@ function SortHeader({ label, sortKey, sort, onSort, tooltip }) {
       }}
     >
       <button
+        type="button"
         onClick={() => onSort(sortKey)}
         title={`Sort by ${label.toLowerCase()}`}
         style={{
@@ -3636,7 +3693,7 @@ function ConversationsView({
   const clearSearch = useCallback(() => {
     setQuery('');
     setTimeout(() => {
-      const el = searchInputRef && searchInputRef.current;
+      const el = searchInputRef?.current;
       if (el) el.focus();
     }, 0);
   }, [setQuery, searchInputRef]);
@@ -3674,6 +3731,7 @@ function ConversationsView({
           borderTopColor: 'var(--fg2)',
           display: 'inline-block',
         }}
+        role="status"
         aria-label="Searching"
       />
     ) : searchActive ? (
@@ -4074,6 +4132,7 @@ function ConversationsView({
                 {formatBucketLabel(bucketSel.end, bucketSel.end - bucketSel.start)}
               </span>
               <button
+                type="button"
                 onClick={() => setBucketSel(null)}
                 style={{
                   background: 'transparent',
@@ -4340,14 +4399,14 @@ function resultParts(messages) {
 }
 
 function outputCalls(gen) {
-  return messageParts((gen && gen.output) || [])
+  return messageParts(gen?.output || [])
     .filter((part) => partKind(part) === 'tool_call' && part.tool_call)
     .map((part) => part.tool_call);
 }
 
 function resolveResult(gen, next, call, used = new Set()) {
-  const sameGeneration = resultParts([].concat((gen && gen.output) || [], (gen && gen.input) || []));
-  const following = resultParts((next && next.input) || []);
+  const sameGeneration = resultParts([].concat(gen?.output || [], gen?.input || []));
+  const following = resultParts(next?.input || []);
   const available = (result) => !used.has(result);
   let result = null;
   if (call.id) {
@@ -4532,13 +4591,13 @@ function CappedBlock({ children, maxHeight = 180, preStyle }) {
 
 function toolCallArgPreview(input) {
   if (!input) return '';
-  if (typeof input === 'string') return input.length > 140 ? input.slice(0, 140) + '…' : input;
+  if (typeof input === 'string') return input.length > 140 ? `${input.slice(0, 140)}…` : input;
   for (const key of ['command', 'file_path', 'path', 'pattern', 'query', 'url', 'cmd', 'name']) {
     if (input[key] != null && input[key] !== '') return String(input[key]).replace(/\s+/g, ' ');
   }
   try {
     const value = JSON.stringify(input);
-    return value.length > 140 ? value.slice(0, 140) + '…' : value;
+    return value.length > 140 ? `${value.slice(0, 140)}…` : value;
   } catch (_) {
     return '';
   }
@@ -4682,7 +4741,7 @@ function flattenForest(forest) {
 }
 
 function stepTokenWork(gen) {
-  const buckets = (gen && gen.token_buckets) || {};
+  const buckets = gen?.token_buckets || {};
   const generated = (buckets.output || 0) + (buckets.reasoning || 0);
   const ingested = (buckets.fresh_input || 0) + (buckets.cache_write || 0);
   return { generated, ingested, work: generated + ingested };
@@ -4784,7 +4843,7 @@ function generationTranscriptBlocks(gen, next, subruns, consumedResults = new Se
           name: call.name || 'tool',
           input: call.input_json == null ? null : call.input_json,
           result,
-          failed: !!(result && result.is_error),
+          failed: !!result?.is_error,
         };
         ensureWork().calls.push(row);
         continue;
@@ -5005,7 +5064,7 @@ function promptLine(turn) {
       .split('\n')
       .map((part) => part.trim())
       .find(Boolean) || '';
-  return line.length > 120 ? line.slice(0, 120) + '…' : line;
+  return line.length > 120 ? `${line.slice(0, 120)}…` : line;
 }
 
 // The turn rule and the speaker labels stack into two sticky lines under
@@ -5433,6 +5492,7 @@ function SuccessGlyph() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
+      <title>Succeeded</title>
       <path d="m5 13 4 4L19 7" />
     </svg>
   );
@@ -5450,6 +5510,7 @@ function FailureGlyph() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
+      <title>Failed</title>
       <path d="M6 6l12 12M18 6 6 18" />
     </svg>
   );
@@ -5612,7 +5673,16 @@ function SubagentRun({ run }) {
         }}
       >
         <Icon name={open ? 'chevron' : 'cright'} size={11} style={{ color: 'var(--fg3)' }} />
-        <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
+        <svg
+          width={11}
+          height={11}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          aria-hidden="true"
+          focusable="false"
+        >
           <circle cx="12" cy="8" r="4" />
           <path d="M4 21a8 8 0 0 1 16 0" />
         </svg>
@@ -6865,7 +6935,7 @@ function pendingEdits(form, saved, owned) {
   if (!form || !saved) return null;
   const out = {};
   Object.keys(form).forEach((key) => {
-    if (owned && Object.prototype.hasOwnProperty.call(owned, key)) return;
+    if (owned && Object.hasOwn(owned, key)) return;
     const same =
       key === 'tags' ? JSON.stringify(form.tags || []) === JSON.stringify(saved.tags || []) : form[key] === saved[key];
     if (!same) out[key] = form[key];
@@ -7038,20 +7108,22 @@ function ForwardModeChip({ config, onOpenSettings }) {
   // then reads the sentence out.
   const tipID = 'sigil-forward-chip-tip';
   return (
-    <div
-      style={{ position: 'relative', flexShrink: 0 }}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-    >
+    <div style={{ position: 'relative', flexShrink: 0 }}>
       <button
         type="button"
-        onClick={() => onOpenSettings && onOpenSettings('cloud')}
+        onClick={() => onOpenSettings?.('cloud')}
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         aria-label={`${meta.kicker}: ${meta.value}. Open the forwarding settings.`}
         aria-describedby={open ? tipID : undefined}
-        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--action-hover)')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(24,27,31,0.78)')}
+        onMouseEnter={(e) => {
+          setOpen(true);
+          e.currentTarget.style.background = 'var(--action-hover)';
+        }}
+        onMouseLeave={(e) => {
+          setOpen(false);
+          e.currentTarget.style.background = 'rgba(24,27,31,0.78)';
+        }}
         style={{
           display: 'inline-flex',
           alignItems: 'center',
@@ -7169,14 +7241,14 @@ function useHistoryImport(liveRun) {
   const loadAgents = useCallback(() => {
     return fetch('/api/v1/history/agents')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((b) => setAgents((b && b.agents) || []))
+      .then((b) => setAgents(b?.agents || []))
       .catch(() => setAgents([]));
   }, []);
 
   const loadOffers = useCallback(() => {
     return fetch('/api/v1/history/offer')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((b) => setOffers((b && b.offers) || []))
+      .then((b) => setOffers(b?.offers || []))
       .catch(() => setOffers([]));
   }, []);
 
@@ -7224,7 +7296,7 @@ function useHistoryImport(liveRun) {
   }, []);
 
   const cancel = useCallback(() => {
-    if (!run || !run.run_id) return Promise.resolve();
+    if (!run?.run_id) return Promise.resolve();
     return fetch(`/api/v1/history/runs/${encodeURIComponent(run.run_id)}:cancel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -7355,7 +7427,7 @@ function HistoryImportBanner({ history, onOpenSettings }) {
       </button>
       <button
         type="button"
-        onClick={() => onOpenSettings && onOpenSettings('history')}
+        onClick={() => onOpenSettings?.('history')}
         style={{
           flex: 'none',
           background: 'transparent',
@@ -7519,6 +7591,7 @@ function forwardLocalPatch(form, mode) {
 function Toggle({ checked, onChange }) {
   return (
     <button
+      type="button"
       role="switch"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
@@ -7581,6 +7654,7 @@ function MonoInput({ value, onChange, placeholder, width, align, type }) {
 function PrimaryButton({ onClick, children }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       onMouseEnter={(e) => {
         e.currentTarget.style.background = 'var(--primary-shade)';
@@ -7610,6 +7684,7 @@ function PrimaryButton({ onClick, children }) {
 function GhostButton({ onClick, children }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--action-hover)')}
       onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
@@ -7836,7 +7911,9 @@ function SettingsHero({ dirty, path }) {
 
 function SettingsTabRail({ tabs, active, onChange }) {
   return (
+    // biome-ignore lint/a11y/useSemanticElements: These buttons navigate sections; they do not edit one grouped field.
     <div
+      role="group"
       aria-label="Settings sections"
       style={{
         display: 'grid',
@@ -7979,6 +8056,7 @@ function SettingsPreviewPanel({ path, preview, onCopy }) {
             </div>
           </div>
           <button
+            type="button"
             onClick={onCopy}
             style={{
               display: 'inline-flex',
@@ -8224,7 +8302,7 @@ function setupPageURL(raw) {
   const href = markdownURL(BARE_HOST_RE.test(typed) ? `https://${typed}` : typed);
   if (!href || !/^https?:\/\//i.test(href)) return '';
   try {
-    return new URL(href).origin + '/a/grafana-agento11y-app/setup-coding-agent';
+    return `${new URL(href).origin}/a/grafana-agento11y-app/setup-coding-agent`;
   } catch (_) {
     return '';
   }
@@ -8722,14 +8800,14 @@ function SettingsCloudTab({
   // The daemon prefers config.env, but it also inherits LOCAL_FORWARD into
   // its own environment at boot, so "off here, on there" is reachable until
   // an explicit false is saved.
-  const daemonStillOn = !!(forwardStatus && forwardStatus.enabled) && !form.localForward;
+  const daemonStillOn = !!forwardStatus?.enabled && !form.localForward;
   // Say it next to the control that sets the capture mode, not only in the
   // header chip.
-  const guardsChained = !!(forwardStatus && forwardStatus.hooks);
-  const failures = (forwardStatus && forwardStatus.failures) || [];
+  const guardsChained = !!forwardStatus?.hooks;
+  const failures = forwardStatus?.failures || [];
   // recentFailures outlives being turned off, so a failure list alone would
   // put an error notice under the calm "forwarding is off" line.
-  const failing = !!(forwardStatus && forwardStatus.enabled) && failures.length > 0;
+  const failing = !!forwardStatus?.enabled && failures.length > 0;
   // Widening is the only direction that asks. Narrowing takes effect at once,
   // because less content leaving the machine needs no consent.
   //
@@ -9085,6 +9163,7 @@ function SettingsTagsEditor({ tags, setTag, addTag, removeTag }) {
               </span>
               <MonoInput value={t.value} onChange={(v) => setTag(i, { value: v })} placeholder="value" width={200} />
               <button
+                type="button"
                 onClick={() => removeTag(i)}
                 title="Remove tag"
                 aria-label="Remove tag"
@@ -9108,6 +9187,7 @@ function SettingsTagsEditor({ tags, setTag, addTag, removeTag }) {
             </div>
           ))}
           <button
+            type="button"
             onClick={addTag}
             style={{
               alignSelf: 'flex-start',
@@ -9181,7 +9261,7 @@ function SettingsHistoryTab({ history }) {
   const [planError, setPlanError] = useState(null);
   const [loadingPlan, setLoadingPlan] = useState(false);
 
-  const selected = agent || (agents[0] && agents[0].id) || '';
+  const selected = agent || agents[0]?.id || '';
   const run = history.run;
   const active = importRunIsActive(run);
 
@@ -9207,7 +9287,7 @@ function SettingsHistoryTab({ history }) {
     if (run && !active) loadPlan(selected);
   }, [run, active, selected, loadPlan]);
 
-  const sessions = (plan && plan.sessions) || [];
+  const sessions = plan?.sessions || [];
   const turns = sessions.reduce((n, s) => n + (s.turn_count || 0), 0);
   const approx = sessions.some((s) => s.approx_turns);
 
@@ -9260,7 +9340,7 @@ function SettingsHistoryTab({ history }) {
           ) : (
             `${sessions.length} sessions · ${approx ? 'about ' : ''}${turns.toLocaleString()} turns`
           )}
-          {plan && plan.since && (
+          {plan?.since && (
             <div
               style={{
                 fontSize: 11,
@@ -9572,7 +9652,7 @@ function SettingsView({ history, config, configError, activeSettingsTab, onSelec
     );
   };
   const copy = () => {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
+    if (navigator.clipboard?.writeText) {
       navigator.clipboard
         .writeText(preview)
         .then(() => showToast('Copied to clipboard.'))
@@ -9610,7 +9690,7 @@ function SettingsView({ history, config, configError, activeSettingsTab, onSelec
             addTag={addTag}
             removeTag={removeTag}
             config={liveConfig}
-            stackUrl={(config && config.stackUrl) || ''}
+            stackUrl={config?.stackUrl || ''}
             configured={cloudConfigured(saved)}
             configPath={path}
             onConnect={connect}
@@ -9648,12 +9728,6 @@ function conversationIDFromPath() {
 
 function conversationPath(id) {
   return `/conversations/${encodeURIComponent(id)}`;
-}
-
-function conversationGenerationPath(id, generationID) {
-  const url = new URL(conversationPath(id), window.location.origin);
-  if (generationID) url.hash = generationID;
-  return url.pathname + url.hash;
 }
 
 function generationIDFromHash() {
@@ -9743,155 +9817,6 @@ function usePersistedState(key, initial, accept) {
 
 // ---------- generic UI primitives ----------
 
-function Switch({ checked, onChange, size = 'md', title }) {
-  const w = size === 'sm' ? 28 : 34,
-    h = size === 'sm' ? 16 : 20,
-    knob = h - 4;
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      title={title}
-      onClick={(e) => {
-        e.stopPropagation();
-        onChange(!checked);
-      }}
-      style={{
-        width: w,
-        height: h,
-        flexShrink: 0,
-        borderRadius: 9999,
-        border: 'none',
-        cursor: 'pointer',
-        padding: 0,
-        background: checked ? 'var(--primary-main)' : 'rgba(204,204,220,0.20)',
-        position: 'relative',
-        transition: 'background 120ms ease',
-      }}
-    >
-      <span
-        style={{
-          position: 'absolute',
-          top: 2,
-          left: checked ? w - knob - 2 : 2,
-          width: knob,
-          height: knob,
-          borderRadius: '50%',
-          background: '#fff',
-          transition: 'left 120ms ease',
-        }}
-      />
-    </button>
-  );
-}
-
-const BADGE_TONES = {
-  block: {
-    bg: 'var(--error-transparent)',
-    fg: 'var(--error-text)',
-    bd: 'var(--error-border)',
-  },
-  redact: {
-    bg: 'var(--warning-transparent)',
-    fg: 'var(--warning-text)',
-    bd: 'var(--warning-border)',
-  },
-  regex: {
-    bg: 'var(--info-transparent)',
-    fg: 'var(--primary-text)',
-    bd: 'var(--primary-text)',
-  },
-  cloud: {
-    bg: 'rgba(204,204,220,0.06)',
-    fg: 'var(--fg2)',
-    bd: 'var(--border-medium)',
-  },
-  preflight: {
-    bg: 'transparent',
-    fg: 'var(--warning-text)',
-    bd: 'var(--warning-border)',
-  },
-};
-function Badge({ tone = 'cloud', children }) {
-  const t = BADGE_TONES[tone] || BADGE_TONES.cloud;
-  return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        height: 16,
-        padding: '0 6px',
-        borderRadius: 2,
-        background: t.bg,
-        color: t.fg,
-        border: `1px solid ${t.bd}`,
-        fontSize: 9.5,
-        letterSpacing: '0.06em',
-        textTransform: 'uppercase',
-        fontFamily: 'var(--fontFamilyMonospace)',
-        whiteSpace: 'nowrap',
-      }}
-    >
-      {children}
-    </span>
-  );
-}
-function btnStyle(kind) {
-  const base = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    height: 32,
-    padding: '0 12px',
-    borderRadius: 8,
-    fontSize: 12.5,
-    fontWeight: 500,
-    fontFamily: 'var(--fontFamily)',
-    whiteSpace: 'nowrap',
-  };
-  if (kind === 'primary')
-    return {
-      ...base,
-      background: 'var(--primary-main)',
-      color: '#fff',
-      border: '1px solid var(--primary-border)',
-    };
-  if (kind === 'danger')
-    return {
-      ...base,
-      background: 'transparent',
-      color: 'var(--error-text)',
-      border: '1px solid var(--error-border)',
-    };
-  return {
-    ...base,
-    background: 'rgba(17,18,23,0.30)',
-    color: 'var(--fg1)',
-    border: '1px solid var(--border-medium)',
-  };
-}
-function Button({ kind = 'secondary', icon, children, disabled, onClick, title, style }) {
-  return (
-    <button
-      type="button"
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-      style={{
-        ...btnStyle(kind),
-        opacity: disabled ? 0.45 : 1,
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        ...(style || {}),
-      }}
-    >
-      {icon && <Icon name={icon} size={13} />}
-      {children}
-    </button>
-  );
-}
-
 const fieldInput = {
   width: '100%',
   height: 34,
@@ -9904,84 +9829,6 @@ const fieldInput = {
   fontFamily: 'var(--fontFamily)',
   outline: 'none',
 };
-const monoInput = {
-  ...fieldInput,
-  fontFamily: 'var(--fontFamilyMonospace)',
-  fontSize: 12,
-};
-const sectionLabel = {
-  display: 'block',
-  fontSize: 11,
-  color: 'var(--fg3)',
-  textTransform: 'uppercase',
-  letterSpacing: '0.06em',
-  marginBottom: 7,
-};
-
-function FieldLabel({ children, hint }) {
-  return (
-    <label style={sectionLabel}>
-      {children}
-      {hint && (
-        <span
-          style={{
-            textTransform: 'none',
-            letterSpacing: 0,
-            color: 'var(--fg3)',
-            marginLeft: 8,
-            fontSize: 11,
-          }}
-        >
-          {hint}
-        </span>
-      )}
-    </label>
-  );
-}
-
-function Section({ title, children, defaultOpen = true }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div
-      style={{
-        border: '1px solid var(--border-weak)',
-        borderRadius: 2,
-        marginBottom: 12,
-      }}
-    >
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          width: '100%',
-          padding: '10px 12px',
-          background: 'transparent',
-          border: 'none',
-          cursor: 'pointer',
-          color: 'var(--fg1)',
-        }}
-      >
-        <Icon name={open ? 'chevron' : 'cright'} size={12} style={{ color: 'var(--fg3)' }} />
-        <span
-          style={{
-            fontSize: 12,
-            fontWeight: 500,
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-            color: 'var(--fg2)',
-          }}
-        >
-          {title}
-        </span>
-      </button>
-      {open && <div style={{ padding: '4px 14px 16px' }}>{children}</div>}
-    </div>
-  );
-}
-
 // SEARCH_DEBOUNCE_MS controls how long after the last keystroke the
 // viewer waits before issuing the search request. 320ms matches the
 // upper end of the design handoff's 320–340ms window: snappy enough to
@@ -10061,6 +9908,13 @@ function SearchResultRow({ hit, now, query, selected, onSelect, onOpen }) {
     <a
       href={conversationPath(hit.id)}
       onMouseEnter={onSelect}
+      onFocus={(e) => {
+        onSelect();
+        if (!selected) e.currentTarget.style.background = 'var(--row-hover)';
+      }}
+      onBlur={(e) => {
+        if (!selected) e.currentTarget.style.background = 'transparent';
+      }}
       onClick={(e) => {
         if (!isPlainLeftClick(e)) return;
         e.preventDefault();
@@ -10388,37 +10242,35 @@ function ConversationSearchPanel({
         </React.Fragment>
       )}
 
-      {!error && showLoadingSkeleton && (
-        <React.Fragment>
-          {[0, 1, 2].map((i) => (
+      {!error &&
+        showLoadingSkeleton &&
+        [0, 1, 2].map((i) => (
+          <div
+            key={i}
+            style={{
+              padding: '14px 16px',
+              borderBottom: i < 2 ? '1px solid var(--border-weak)' : 'none',
+            }}
+          >
             <div
-              key={i}
+              className="sigil-shim"
               style={{
-                padding: '14px 16px',
-                borderBottom: i < 2 ? '1px solid var(--border-weak)' : 'none',
+                height: 14,
+                width: '40%',
+                borderRadius: 2,
               }}
-            >
-              <div
-                className="sigil-shim"
-                style={{
-                  height: 14,
-                  width: '40%',
-                  borderRadius: 2,
-                }}
-              />
-              <div
-                className="sigil-shim"
-                style={{
-                  height: 10,
-                  width: '80%',
-                  borderRadius: 2,
-                  marginTop: 8,
-                }}
-              />
-            </div>
-          ))}
-        </React.Fragment>
-      )}
+            />
+            <div
+              className="sigil-shim"
+              style={{
+                height: 10,
+                width: '80%',
+                borderRadius: 2,
+                marginTop: 8,
+              }}
+            />
+          </div>
+        ))}
 
       {!error && showNoResults && (
         <div style={{ padding: '34px 16px 36px' }}>
@@ -10823,7 +10675,7 @@ function App() {
       } catch (_) {
         /* ignore */
       }
-      if (ev && ev.import) {
+      if (ev?.import) {
         // Import events carry state rather than naming a conversation, so
         // they are applied directly and skip the refetch debounce.
         const active = importRunIsActive(ev.import);

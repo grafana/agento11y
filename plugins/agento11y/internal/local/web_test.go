@@ -520,10 +520,10 @@ func bucketIntervalsFromJSX(t *testing.T, src string) []time.Duration {
 func TestViewerDefaultRangeMatchesImportWindow(t *testing.T) {
 	src := string(appJSX)
 
-	defaultRange := regexp.MustCompile(`const DEFAULT_TIME_RANGE = "([^"]+)"`).FindStringSubmatch(src)
+	defaultRange := regexp.MustCompile(`const DEFAULT_TIME_RANGE = ['"]([^'"]+)['"]`).FindStringSubmatch(src)
 	require.Len(t, defaultRange, 2, "DEFAULT_TIME_RANGE not found in web/app.jsx")
 
-	pattern := fmt.Sprintf(`\{ value: %q, label: "[^"]+", ms: ([0-9 */]+) \}`, defaultRange[1])
+	pattern := fmt.Sprintf(`\{ value: ['"]%s['"], label: ['"][^'"]+['"], ms: ([0-9 */]+) \}`, regexp.QuoteMeta(defaultRange[1]))
 	entry := regexp.MustCompile(pattern).FindStringSubmatch(src)
 	require.Len(t, entry, 2, "no TIME_RANGES entry for %q", defaultRange[1])
 

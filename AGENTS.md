@@ -6,6 +6,8 @@ For agents working in a *consumer* project (instrumenting their app, or installi
 
 Read the README and `mise tasks` for the obvious stuff: layout, package names, where languages live. This file only documents what you can't discover by looking.
 
+Git blame ignores the local viewer reformat in `.git-blame-ignore-revs`. Run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once in each clone.
+
 ## Proto is the source of truth
 
 `proto/agento11y/v1/*.proto` is the source of truth. Generated stubs live under each language tree:
