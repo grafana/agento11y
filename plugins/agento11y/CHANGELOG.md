@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.35.0] - 2026-08-20
+
+### Features
+
+- **plugins/agento11y**: add agento11y local open command (#624)
+
+### Bug Fixes
+
+- **plugins/agento11y**: align local viewer settings layout (#627)
+- **plugins/agento11y**: honor local mode in history import (#625)
+
+### Documentation
+
+- **plugins/agento11y**: collocate fleet reconcile with noninteractive install (#629)
+- clarify coding-agent vs SDK paths in READMEs (#622)
+
 ## [0.34.0] - 2026-08-20
 
 ### Features
