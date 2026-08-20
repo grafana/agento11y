@@ -39,18 +39,19 @@ const (
 	// under both the current and the pre-rename spelling, are removed no matter
 	// who wrote them.
 	ContentCaptureModeMetadataOnly
-	// ContentCaptureModeFullWithMetadataSpans splits the proto and span paths
-	// for generation content. Use this mode when the gRPC ingest destination is
-	// private but the OTel traces/metrics destination is shared and must not
-	// receive any content.
+	// ContentCaptureModeFullWithMetadataSpans splits the generation-export and
+	// span paths for generation content. Use this mode when the generation-export
+	// destination is private but the OTel traces/metrics destination is shared and
+	// must not receive any content. On a client with the OTel generation-export
+	// protocol and its experimental gate enabled, this mode resolves to Full.
 	//
-	// Per-entity behaviour:
-	//   - Generation: full content goes to the gRPC export; the generation span
-	//     omits agento11y.conversation.title.
-	//   - ToolExecution: there is no separate gRPC export — the tool execution
+	// Per-entity behaviour on the gRPC and HTTP generation-export protocols:
+	//   - Generation: full content goes to the generation export; the generation
+	//     span omits agento11y.conversation.title.
+	//   - ToolExecution: there is no separate generation export. The tool execution
 	//     span omits gen_ai.tool.call.arguments, gen_ai.tool.call.result, and
 	//     agento11y.conversation.title. Equivalent to MetadataOnly for tool spans.
-	//   - Embedding: there is no separate gRPC export — the embedding span
+	//   - Embedding: there is no separate generation export. The embedding span
 	//     omits gen_ai.embeddings.input_texts. Equivalent to MetadataOnly for
 	//     embedding spans.
 	//   - Rating: the Rating.Comment field is preserved; only MetadataOnly

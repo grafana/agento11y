@@ -38,10 +38,12 @@
 //     tool input schemas, and detailed error text.
 //   - ContentCaptureModeFullWithMetadataSpans: keep full content on the
 //     generation export (gRPC/HTTP) but omit content fields from OTel spans.
-//     Use this when the gRPC ingest destination is private but the OTel
-//     traces/metrics destination is shared. Tool execution and embedding
-//     spans behave like MetadataOnly under this mode because they have no
-//     separate gRPC export.
+//     On a client with the OTel generation-export protocol and its experimental
+//     gate enabled, this mode resolves to Full. Use this mode when the
+//     generation-export destination is private but the OTel traces/metrics
+//     destination is shared.
+//     On the gRPC and HTTP protocols, tool execution and embedding spans behave
+//     like MetadataOnly because they have no separate generation export.
 //
 // Per-generation and per-tool-execution overrides are available via the
 // ContentCapture field on GenerationStart and ToolExecutionStart.

@@ -569,12 +569,8 @@ func NewClient(config Config) *Client {
 	var otelErr error
 	if cfg.GenerationExport.Protocol == GenerationExportProtocolOTel {
 		client.otelHandler, otelErr = newOTelHandler(cfg)
-		switch {
-		case otelErr != nil:
+		if otelErr != nil {
 			cfg.Logger.Printf("agento11y otel generation export unavailable: %v", otelErr)
-		case resolveClientContentCaptureMode(cfg.ContentCapture) == ContentCaptureModeFullWithMetadataSpans:
-			cfg.Logger.Printf("agento11y otel generation export: content capture mode %s exports no content, because the span is the only destination. Set %s to put content on the span",
-				ContentCaptureModeFullWithMetadataSpans, ContentCaptureModeFull)
 		}
 	}
 
@@ -769,7 +765,8 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 	// attaches sensitive content to live span attributes.
 	resolverMode := callContentCaptureResolver(ctx, c.config.ContentCaptureResolver, seed.Metadata)
 	clientMode := resolveClientContentCaptureMode(resolveContentCaptureMode(resolverMode, c.config.ContentCapture))
-	ccMode := resolveContentCaptureMode(seed.ContentCapture, clientMode)
+	contextMode := resolveContentCaptureMode(seed.ContentCapture, clientMode)
+	ccMode := c.resolveOTelContentCaptureMode(contextMode)
 
 	spanGeneration := Generation{
 		ID:                seed.ID,
@@ -806,7 +803,9 @@ func (c *Client) startGeneration(ctx context.Context, start GenerationStart, def
 		setSpanTagAttributes(span, dimensionalTags)
 	}
 
-	callCtx = withContentCaptureMode(callCtx, ccMode)
+	// Keep the inherited mode protocol-neutral. The returned context may be
+	// passed to a different client, which must apply its own protocol semantics.
+	callCtx = withContentCaptureMode(callCtx, contextMode)
 
 	recorder := &GenerationRecorder{
 		client:             c,
@@ -862,6 +861,7 @@ func (c *Client) StartEmbedding(ctx context.Context, start EmbeddingStart) (cont
 
 	resolverMode := callContentCaptureResolver(ctx, c.config.ContentCaptureResolver, seed.Metadata)
 	effectiveMode := resolveClientContentCaptureMode(resolveContentCaptureMode(resolverMode, c.config.ContentCapture))
+	effectiveMode = c.resolveOTelContentCaptureMode(effectiveMode)
 
 	tracer := c.tracer
 	if tracer == nil {
@@ -944,6 +944,7 @@ func (c *Client) StartToolExecution(ctx context.Context, start ToolExecutionStar
 	effectiveClientDefault := resolveContentCaptureMode(resolverMode, c.config.ContentCapture)
 	ctxMode, ctxSet := contentCaptureModeFromContext(ctx)
 	toolMode := resolveToolContentCaptureMode(seed.ContentCapture, ctxMode, ctxSet, effectiveClientDefault)
+	toolMode = c.resolveOTelContentCaptureMode(toolMode)
 
 	var includeContent bool
 	switch toolMode {
