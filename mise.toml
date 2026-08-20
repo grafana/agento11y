@@ -221,6 +221,11 @@ description = "Run agento11y plugin tests as standalone module"
 dir = "plugins/agento11y"
 run = "GOWORK=off go test ./..."
 
+[tasks."test:go:weavertest"]
+description = "Run the Weaver conformance harness unit tests as standalone module"
+dir = "go/otelgenai/weavertest"
+run = "GOWORK=off go test ./..."
+
 [tasks."test:go:conformance"]
 description = "Check otelgenai telemetry against the pinned GenAI semantic-convention registry"
 dir = "go/otelgenai/conformance"
@@ -632,6 +637,7 @@ run = """
 #!/usr/bin/env bash
 set -euo pipefail
 mise run test:go:sdk-core
+mise run test:go:weavertest
 mise run test:go:conformance
 mise run test:go:sdk-anthropic
 mise run test:go:sdk-openai

@@ -140,6 +140,7 @@ jobs:
           - go-providers/gemini
           - go-frameworks/google-adk
           - plugins/agento11y
+          - go/otelgenai/weavertest
         include:
           - module: go/otelgenai/conformance
             lint_args: --timeout=5m --build-tags=conformance

@@ -14,6 +14,7 @@
       "go-providers",
       "go-frameworks",
       ":(exclude)go/otelgenai/conformance",
+      ":(exclude)go/otelgenai/weavertest",
       ":(exclude)**/*_test.go",
       ":(exclude)**/README.md"
     ]

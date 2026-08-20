@@ -7,5 +7,6 @@ use (
 	./go-providers/gemini
 	./go-providers/openai
 	./go/otelgenai/conformance
+	./go/otelgenai/weavertest
 	./plugins/agento11y
 )

@@ -254,13 +254,20 @@ deny contains _span_finding(
 	},
 	sprintf(
 		"Span '%v' (operation '%v') has kind '%v'; semconv expects one of %v",
-		[input.sample.span.name, op, input.sample.span.kind, sort([k | expected_kinds[k]])],
+		[input.sample.span.name, op, input.sample.span.kind, sorted_kinds],
 	),
 ) if {
 	input.sample.span
 	op := _attr_value(input.sample.span, "gen_ai.operation.name")
 	expected_kinds := _expected_kinds_for_op[op]
 	not expected_kinds[input.sample.span.kind]
+
+	# The comprehension and the sort stay in the body. Evaluating them
+	# inside the sprintf arguments of the head makes OPA fail the whole
+	# query with "statements not scheduled in query", which Weaver
+	# reports as a fatal advisor error rather than a finding, so one span
+	# with an unexpected kind aborts the run.
+	sorted_kinds := sort([k | expected_kinds[k]])
 }
 
 # ─── Span status (violation) ────────────────────────────────────────────────
