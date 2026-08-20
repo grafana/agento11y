@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
@@ -60,7 +59,7 @@ func init() {
 // Test seams.
 var (
 	lookPath   = exec.LookPath
-	execFn     = syscall.Exec
+	execFn     = launcher.DefaultExec
 	runInstall = defaultRunInstall
 	runUpdate  = defaultRunUpdate
 	runSteps   = launcher.RunSteps

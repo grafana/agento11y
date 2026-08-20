@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"os/exec"
-	"syscall"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
@@ -15,7 +14,7 @@ import (
 // Test seams.
 var (
 	lookPath = exec.LookPath
-	execFn   = syscall.Exec
+	execFn   = launcher.DefaultExec
 )
 
 // Launch resolves the `vibe` binary on PATH, ensures the three agento11y-owned

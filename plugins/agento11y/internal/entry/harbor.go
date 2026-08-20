@@ -12,16 +12,21 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
 )
 
+// harborRun is a test seam so dispatch tests do not need the Python bridge.
+var harborRun = harbor.Run
+
 // runHarborCommand runs `agento11y harbor ...`, logging in first when no
 // Grafana Cloud credentials are configured.
 func runHarborCommand(args []string, stderr io.Writer) {
 	dotenv.ApplyEnv(nil)
 	if !dotenv.HasCredentials() {
+		logger, closeLog := cli.InitLogger("harbor")
 		_, err := loginRun(context.Background(), login.RunOpts{
 			Stderr:     stderr,
-			Logger:     cli.InitLogger("harbor"),
+			Logger:     logger,
 			OfferLocal: false,
 		})
+		closeLog()
 		if err != nil && !errors.Is(err, login.ErrNotInteractive) {
 			_, _ = fmt.Fprintf(stderr, "agento11y: setup failed: %v\n", err)
 			exit(1)
@@ -29,9 +34,8 @@ func runHarborCommand(args []string, stderr io.Writer) {
 		}
 		dotenv.ApplyEnv(nil)
 	}
-	if err := harbor.Run(args, stderr); err != nil {
-		_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
-		exit(1)
+	if err := harborRun(args, stderr); err != nil {
+		exitAfterLaunchError(stderr, err)
 	}
 }
 

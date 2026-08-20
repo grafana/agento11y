@@ -61,6 +61,7 @@ type Server struct {
 	mux          *http.ServeMux
 	forward      *forwardLoader
 	hub          *eventHub
+	shutdown     func()
 	// eventPingInterval overrides defaultEventPingInterval for tests; zero
 	// uses the default.
 	eventPingInterval time.Duration
@@ -129,6 +130,12 @@ func (s *Server) Close() {
 	s.hub.closeAll()
 }
 
+// SetShutdown sets the function the shutdown endpoint calls after accepting a
+// request. Serve uses it to cancel the daemon's serving context.
+func (s *Server) SetShutdown(shutdown func()) {
+	s.shutdown = shutdown
+}
+
 // WarmSummariesOnFirstRead arms the background summary-cache warm. The warm
 // starts once the first viewer read has answered, and stops when ctx is
 // done. Nothing warms before that read. Several commands start a daemon
@@ -165,6 +172,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /assets/vendor/{file}", s.handleVendorAsset)
 	mux.HandleFunc("GET /assets/fonts/{file}", s.handleFontAsset)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("POST /api/v1/shutdown", s.handleShutdown)
 	mux.HandleFunc("GET /api/v1/conversations", s.handleListConversations)
 	mux.HandleFunc("GET /api/v1/search", s.handleSearch)
 	mux.HandleFunc("GET /api/v1/search/capabilities", s.handleSearchCapabilities)
@@ -360,6 +368,13 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
+func (s *Server) handleShutdown(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusAccepted)
+	if s.shutdown != nil {
+		go s.shutdown()
+	}
+}
+
 // generationsRequest mirrors the proto-JSON ExportGenerationsRequest
 // envelope used by the HTTP exporter. The local receiver stores each
 // generation exactly as it arrived; the query layer decodes only the
@@ -433,6 +448,10 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 		}
 		// json.Unmarshal allocates a fresh slice per RawMessage element, so
 		// raw is private to this request and needs no copy.
+		if !validConversationID(gen.ConversationID) {
+			http.Error(w, "invalid conversation_id", http.StatusBadRequest)
+			return
+		}
 		stored[i] = raw
 		if _, ok := groups[gen.ConversationID]; !ok {
 			order = append(order, gen.ConversationID)

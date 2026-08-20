@@ -129,17 +129,17 @@ against `sigil`.
 A first `agento11y login` asks where sessions go: **Local only**, or **Grafana
 Cloud**. **Local only** needs no Cloud credentials and never forwards sessions.
 **Grafana Cloud** continues to the credential flow. Its interactive preferences
-on macOS and Linux include **Local web UI**. It starts on **Yes** by default and
+include **Local web UI**. It starts on **Yes** by default and
 remembers an earlier answer. **Yes** keeps a full local copy and forwards a Cloud
 copy. **No** sends directly
-to Cloud. Windows has no local receiver, so it shows neither local choice.
+to Cloud.
 
 ### The paste flow
 
 Tell the user to run `agento11y login` in their own terminal, then wait. You
 cannot drive it yourself: it needs a terminal, and the block it asks for holds a
 live token that must not pass through this conversation. The destination question
-appears only on macOS and Linux when no destination or credentials are saved. A
+appears only when no destination or credentials are saved. A
 saved Cloud connection starts at step 2.
 
 1. **Where should sessions go?**: a two-option list. **Local only** saves local
@@ -453,7 +453,7 @@ chooses which fields ship, not whether the shipped fields are clean. Treat
 
 `agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** routes launcher runs and agento11y hooks through the local daemon. The daemon stores full generation content in its JSONL store. It forwards full content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`; every other selected mode becomes `metadata_only` for Cloud.
 **Local only** does not forward. **Local web UI = No** sends directly to Cloud without a local copy. `--no-local` uses Cloud once without changing either saved alias family. The launcher prints the viewer URL. Manage the daemon with `agento11y local start|open|status|stop|restart`.
-Local mode runs on macOS and Linux only. A launcher starts the receiver in the same invocation; a saved choice from Cursor install applies to the next hook.
+Local mode is available on every supported platform. A launcher starts the receiver in the same invocation; a saved choice from Cursor install applies to the next hook.
 With `AGENTO11Y_GUARDS_ENABLED=true`, evaluate `guards.toml` next to `config.env`. `reject = true` blocks on match; `shell_command` is for shell policies. Fail-open is Cloud-only. For pack selection, configuration, and testing, follow `agento11y skills show setup-local-guards`.
 
 For an offline dry run, use `agento11y guards test 'rm -rf ~/.ssh'`. It does not execute input, check Cloud rules, contact endpoints, start a daemon, or write files. It tests saved policy even when host guard requests are disabled, without predicting host enforcement. Disabled rules and absent packs stay unchanged.

@@ -516,16 +516,15 @@ tool_filter.blocked_names = ["Bash"]
 	})
 
 	t.Run("an unreadable file is reported", func(t *testing.T) {
-		if os.Geteuid() == 0 {
-			t.Skip("root reads a mode-000 file")
-		}
 		dir := t.TempDir()
 		path := filepath.Join(dir, ConfigFile)
 		require.NoError(t, os.WriteFile(path, []byte(oneRule), 0o600))
-		require.NoError(t, os.Chmod(path, 0o000))
+		makeUnreadable(t, path)
+		_, readErr := os.ReadFile(path)
+		require.Error(t, readErr)
 
 		engine := NewEngine(Config{ConfigDir: dir})
-		assert.Contains(t, joinStrings(engine.Status().Errors), "permission denied")
+		assert.Contains(t, joinStrings(engine.Status().Errors), readErr.Error())
 	})
 }
 

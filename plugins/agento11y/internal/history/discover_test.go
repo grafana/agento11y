@@ -21,6 +21,14 @@ func writeFile(t *testing.T, path, content string) string {
 	return path
 }
 
+// setHomeDir points os.UserHomeDir at dir: it reads HOME on unix and
+// USERPROFILE on Windows, so both are set.
+func setHomeDir(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
 func setModTime(t *testing.T, path string, at time.Time) {
 	t.Helper()
 	if err := os.Chtimes(path, at, at); err != nil {

@@ -1,6 +1,6 @@
 // Package launcher holds the small pieces shared by the agent CLI launchers:
-// the execve handoff that replaces the sigil process with the target CLI, and
-// a command runner that captures stdout while surfacing stderr on failure.
+// the platform handoff to the target CLI and a command runner that captures
+// stdout while surfacing stderr on failure.
 //
 // Each launcher keeps its own lookPath/execFn/runInstall/pluginList package
 // vars — the test seams — so these helpers take the exec function and command
@@ -23,17 +23,27 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/updatecheck"
 )
 
-// ExecFunc matches syscall.Exec: it replaces the current process image with a
-// new program. The launchers assign syscall.Exec to a package var and pass it
-// here so tests can substitute a recording stub.
+// ExitError reports the target agent's exit code when a platform handoff must
+// wait for a child process instead of replacing the launcher process.
+type ExitError struct {
+	Code int
+}
+
+func (e *ExitError) Error() string { return fmt.Sprintf("process exited with code %d", e.Code) }
+
+// ExitCode returns the target agent's process exit code.
+func (e *ExitError) ExitCode() int { return e.Code }
+
+// ExecFunc runs the target executable with the supplied argv and environment.
+// Platform defaults replace the launcher process on Unix and wait for a child
+// process on Windows. Launchers keep this as a package variable for tests.
 type ExecFunc func(argv0 string, argv []string, envv []string) error
 
-// Exec replaces the current process with bin, prepending bin as argv[0] and
-// forwarding args plus env. name is used only for the error prefix
-// ("exec <name>"). Callers pass the env explicitly so local-mode launches can
-// inject SIGIL_ENDPOINT overrides via local.Environ; pass os.Environ() for the
-// normal path. On success the process is replaced and Exec does not return; a
-// returned error means the execve syscall itself failed.
+// Exec hands control to bin, prepending bin as argv[0] and forwarding args plus
+// env. name is used only for the error prefix ("exec <name>"). Callers pass
+// the env explicitly so local-mode launches can inject endpoint overrides via
+// local.Environ; pass os.Environ() for the normal path. A returned error means
+// the platform handoff failed or the Windows child exited.
 func Exec(execFn ExecFunc, bin, name string, args, env []string) error {
 	argv := append([]string{bin}, args...)
 	if err := execFn(bin, argv, env); err != nil {
@@ -133,7 +143,7 @@ type BootstrapSpec struct {
 	PluginLabel string
 
 	// LookPath and ExecFn are the test seams forwarded from the adapter so
-	// launch tests can stub PATH resolution and the execve handoff.
+	// launch tests can stub PATH resolution and the platform handoff.
 	LookPath func(string) (string, error)
 	ExecFn   ExecFunc
 	Args     []string
@@ -184,9 +194,8 @@ type BootstrapSpec struct {
 // through to exec so the user's session is never blocked by a broken
 // install), and finally exec's spec.BinName with spec.Args and spec.Env.
 //
-// Returns the lookup error when spec.BinName isn't on PATH. Returns the
-// execve error when the final exec syscall fails. Install/update failures
-// are intentionally not propagated.
+// Returns lookup errors and errors from the final platform handoff.
+// Install/update failures are intentionally not propagated.
 func Bootstrap(ctx context.Context, spec BootstrapSpec) error {
 	bin, err := spec.LookPath(spec.BinName)
 	if err != nil {

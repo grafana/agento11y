@@ -40,9 +40,10 @@ func TestStateRootIgnoresRelativeXDGStateHome(t *testing.T) {
 }
 
 func TestStateRootHonorsAbsoluteXDGStateHome(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", "/tmp/test-state")
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
 	got := StateRoot("sigil")
-	want := filepath.Join("/tmp/test-state", "sigil")
+	want := filepath.Join(dir, "sigil")
 	if got != want {
 		t.Fatalf("StateRoot() = %q, want %q", got, want)
 	}
@@ -86,9 +87,10 @@ func TestAppStateRoot(t *testing.T) {
 }
 
 func TestConfigFilePathUsesConfigRoot(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/tmp/test-config")
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
 	got := ConfigFilePath("sigil", "config.env")
-	want := filepath.Join("/tmp/test-config", "sigil", "config.env")
+	want := filepath.Join(dir, "sigil", "config.env")
 	if got != want {
 		t.Fatalf("ConfigFilePath() = %q, want %q", got, want)
 	}

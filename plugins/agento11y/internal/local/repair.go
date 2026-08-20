@@ -1,5 +1,3 @@
-//go:build !windows
-
 package local
 
 import (
@@ -8,14 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"time"
 )
-
-// errLockBusy reports that a non-blocking lock request found the lock held
-// by another process.
-var errLockBusy = errors.New("lock held by another process")
 
 // storeMeta records what a daemon has already done to the store on disk.
 // It lives in StoreFile so the modification-time pass over every
@@ -29,7 +22,7 @@ type storeMeta struct {
 }
 
 func readStoreMeta(dir string) (storeMeta, error) {
-	data, err := os.ReadFile(filepath.Join(dir, StoreFile))
+	data, err := readShared(filepath.Join(dir, StoreFile))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return storeMeta{}, nil
