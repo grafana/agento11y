@@ -1,8 +1,10 @@
 package agento11y
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"slices"
 	"strings"
 	"testing"
@@ -147,6 +149,32 @@ func TestOTelProtocolSpan(t *testing.T) {
 				}
 				if attrs["agento11y.generation.id"].AsString() == "" {
 					t.Error("otel-mode span carries no agento11y.generation.id")
+				}
+			},
+		},
+		{
+			name: "full with metadata spans carries content on the only export",
+			mutate: func(cfg *Config) {
+				cfg.ContentCapture = ContentCaptureModeFullWithMetadataSpans
+			},
+			content: Generation{
+				SystemPrompt:      "SYSTEM-CONTENT",
+				Input:             []Message{UserTextMessage("INPUT-CONTENT")},
+				Output:            []Message{AssistantTextMessage("OUTPUT-CONTENT")},
+				ConversationTitle: "TITLE-CONTENT",
+			},
+			check: func(t *testing.T, span sdktrace.ReadOnlySpan) {
+				attrs := spanAttributeMapOf(span)
+				for key, want := range map[string]string{
+					"gen_ai.system_instructions":    "SYSTEM-CONTENT",
+					"gen_ai.input.messages":         "INPUT-CONTENT",
+					"gen_ai.output.messages":        "OUTPUT-CONTENT",
+					"agento11y.conversation.title":  "TITLE-CONTENT",
+					"agento11y.generation.metadata": `"agento11y.sdk.content_capture_mode":"full"`,
+				} {
+					if got := attrs[key].AsString(); !strings.Contains(got, want) {
+						t.Errorf("%s = %q, want it to contain %q", key, got, want)
+					}
 				}
 			},
 		},
@@ -313,20 +341,29 @@ func TestOTelProtocolSpan(t *testing.T) {
 }
 
 func TestOTelProtocolCallErrorSetsStatus(t *testing.T) {
-	client, recorder, _ := newOTelTestClient(t, nil)
+	for _, mode := range []ContentCaptureMode{
+		ContentCaptureModeFull,
+		ContentCaptureModeFullWithMetadataSpans,
+	} {
+		t.Run(mode.String(), func(t *testing.T) {
+			client, recorder, _ := newOTelTestClient(t, func(cfg *Config) {
+				cfg.ContentCapture = mode
+			})
 
-	_, rec := client.StartGeneration(context.Background(), GenerationStart{
-		Model: ModelRef{Provider: "openai", Name: "gpt-5"},
-	})
-	rec.SetCallError(errors.New("provider exploded"))
-	rec.End()
+			_, rec := client.StartGeneration(context.Background(), GenerationStart{
+				Model: ModelRef{Provider: "openai", Name: "gpt-5"},
+			})
+			rec.SetCallError(errors.New("provider exploded"))
+			rec.End()
 
-	span := onlySpan(t, recorder)
-	if got := span.Status().Description; got != "provider exploded" {
-		t.Errorf("status description = %q, want the provider error", got)
-	}
-	if got := spanAttributeMapOf(span)["error.type"].AsString(); got == "" {
-		t.Error("error span carries no error.type")
+			span := onlySpan(t, recorder)
+			if got := span.Status().Description; got != "provider exploded" {
+				t.Errorf("status description = %q, want the provider error", got)
+			}
+			if got := spanAttributeMapOf(span)["error.type"].AsString(); got == "" {
+				t.Error("error span carries no error.type")
+			}
+		})
 	}
 }
 
@@ -392,6 +429,7 @@ func TestOTelProtocolRequiresExperimentalGate(t *testing.T) {
 
 			cfg := DefaultConfig()
 			cfg.GenerationExport.Protocol = GenerationExportProtocolOTel
+			cfg.ContentCapture = ContentCaptureModeFullWithMetadataSpans
 			cfg.TracerProvider = provider
 			cfg.Now = time.Now
 			client := NewClient(cfg)
@@ -407,7 +445,8 @@ func TestOTelProtocolRequiresExperimentalGate(t *testing.T) {
 			}
 
 			_, rec := client.StartGeneration(context.Background(), GenerationStart{
-				Model: ModelRef{Provider: "openai", Name: "gpt-5"},
+				Model:             ModelRef{Provider: "openai", Name: "gpt-5"},
+				ConversationTitle: "GATE-TITLE",
 			})
 			rec.SetResult(Generation{Output: []Message{AssistantTextMessage("Hi!")}}, nil)
 			rec.End()
@@ -422,6 +461,10 @@ func TestOTelProtocolRequiresExperimentalGate(t *testing.T) {
 			if !tc.wantOTel && operation != "generateText" {
 				t.Errorf("gen_ai.operation.name = %q, want the unchanged default", operation)
 			}
+			_, hasTitle := spanAttributeMapOf(span)["agento11y.conversation.title"]
+			if hasTitle != tc.wantOTel {
+				t.Errorf("conversation title present = %v, want %v", hasTitle, tc.wantOTel)
+			}
 		})
 	}
 }
@@ -434,9 +477,9 @@ func TestOTelCaptureModeTranslation(t *testing.T) {
 		{mode: ContentCaptureModeDefault, want: "SPAN_ONLY"},
 		{mode: ContentCaptureModeFull, want: "SPAN_ONLY"},
 		{mode: ContentCaptureModeNoToolContent, want: "SPAN_ONLY"},
-		// The mode exists to keep content off the OTel destination, and in
-		// otel mode that destination is the export.
-		{mode: ContentCaptureModeFullWithMetadataSpans, want: "NO_CONTENT"},
+		// The span is the only generation export in otel mode. Without span
+		// content, this mode would discard generation content.
+		{mode: ContentCaptureModeFullWithMetadataSpans, want: "SPAN_ONLY"},
 		{mode: ContentCaptureModeMetadataOnly, want: "NO_CONTENT"},
 	}
 	for _, tc := range cases {
@@ -492,20 +535,29 @@ func TestOTelHandlerDisablesOperationDetailsEvents(t *testing.T) {
 
 func TestOTelPerCallCaptureModeReachesTheSpan(t *testing.T) {
 	cases := []struct {
-		name        string
-		clientMode  ContentCaptureMode
-		callMode    ContentCaptureMode
-		wantContent bool
+		name         string
+		clientMode   ContentCaptureMode
+		resolverMode ContentCaptureMode
+		callMode     ContentCaptureMode
+		wantContent  bool
 	}{
 		{name: "call downgrades to metadata only", clientMode: ContentCaptureModeFull, callMode: ContentCaptureModeMetadataOnly},
 		{name: "call upgrades to full", clientMode: ContentCaptureModeMetadataOnly, callMode: ContentCaptureModeFull, wantContent: true},
+		{name: "call upgrades full with metadata spans", clientMode: ContentCaptureModeMetadataOnly, callMode: ContentCaptureModeFullWithMetadataSpans, wantContent: true},
+		{name: "resolver upgrades full with metadata spans", clientMode: ContentCaptureModeMetadataOnly, resolverMode: ContentCaptureModeFullWithMetadataSpans, wantContent: true},
 		{name: "call inherits the client mode", clientMode: ContentCaptureModeFull, wantContent: true},
+		{name: "call inherits full with metadata spans", clientMode: ContentCaptureModeFullWithMetadataSpans, wantContent: true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client, recorder, _ := newOTelTestClient(t, func(cfg *Config) {
 				cfg.ContentCapture = tc.clientMode
+				if tc.resolverMode != ContentCaptureModeDefault {
+					cfg.ContentCaptureResolver = func(context.Context, map[string]any) ContentCaptureMode {
+						return tc.resolverMode
+					}
+				}
 			})
 
 			_, rec := client.StartGeneration(context.Background(), GenerationStart{
@@ -520,6 +572,131 @@ func TestOTelPerCallCaptureModeReachesTheSpan(t *testing.T) {
 				t.Errorf("gen_ai.input.messages = %q, want content present = %v", got, tc.wantContent)
 			}
 		})
+	}
+}
+
+func TestOTelCaptureModeContextResolvesForEachClient(t *testing.T) {
+	otelClient, otelRecorder, _ := newOTelTestClient(t, func(cfg *Config) {
+		cfg.ContentCapture = ContentCaptureModeFullWithMetadataSpans
+	})
+	ctx, generationRecorder := otelClient.StartGeneration(context.Background(), GenerationStart{
+		Model: ModelRef{Provider: "openai", Name: "gpt-5"},
+	})
+	generationRecorder.SetResult(Generation{Output: []Message{AssistantTextMessage("Hi!")}}, nil)
+
+	recordTool := func(client *Client) {
+		_, toolRecorder := client.StartToolExecution(ctx, ToolExecutionStart{ToolName: "weather"})
+		toolRecorder.SetResult(ToolExecutionEnd{
+			Arguments: map[string]any{"city": "Paris"},
+			Result:    map[string]any{"temperature": 18},
+		})
+		toolRecorder.End()
+	}
+
+	recordTool(otelClient)
+	otelAttrs := spanAttributeMapOf(onlySpan(t, otelRecorder))
+	if _, ok := otelAttrs[spanAttrToolCallArguments]; !ok {
+		t.Error("tool span does not carry arguments resolved for the OTel client")
+	}
+	if _, ok := otelAttrs[spanAttrToolCallResult]; !ok {
+		t.Error("tool span does not carry a result resolved for the OTel client")
+	}
+
+	for _, protocol := range []GenerationExportProtocol{
+		GenerationExportProtocolGRPC,
+		GenerationExportProtocolHTTP,
+	} {
+		t.Run(string(protocol), func(t *testing.T) {
+			client, recorder, _ := newTestClient(t, Config{
+				ContentCapture: ContentCaptureModeFullWithMetadataSpans,
+				GenerationExport: GenerationExportConfig{
+					Protocol: protocol,
+				},
+			})
+
+			recordTool(client)
+			attrs := spanAttributeMapOf(onlySpan(t, recorder))
+			if _, ok := attrs[spanAttrToolCallArguments]; ok {
+				t.Error("tool span carries arguments resolved for the OTel client")
+			}
+			if _, ok := attrs[spanAttrToolCallResult]; ok {
+				t.Error("tool span carries a result resolved for the OTel client")
+			}
+		})
+	}
+
+	generationRecorder.End()
+}
+
+func TestOTelFullWithMetadataSpansCoversToolContent(t *testing.T) {
+	client, recorder, _ := newOTelTestClient(t, func(cfg *Config) {
+		cfg.ContentCapture = ContentCaptureModeFullWithMetadataSpans
+	})
+
+	_, rec := client.StartToolExecution(context.Background(), ToolExecutionStart{ToolName: "weather"})
+	rec.SetResult(ToolExecutionEnd{
+		Arguments: map[string]any{"city": "Paris"},
+		Result:    map[string]any{"temperature": 18},
+	})
+	rec.End()
+	if err := rec.Err(); err != nil {
+		t.Fatalf("tool execution: %v", err)
+	}
+
+	attrs := spanAttributeMapOf(onlySpan(t, recorder))
+	if got := attrs[spanAttrToolCallArguments].AsString(); !strings.Contains(got, "Paris") {
+		t.Errorf("%s = %q, want the tool arguments", spanAttrToolCallArguments, got)
+	}
+	if got := attrs[spanAttrToolCallResult].AsString(); !strings.Contains(got, "18") {
+		t.Errorf("%s = %q, want the tool result", spanAttrToolCallResult, got)
+	}
+}
+
+func TestOTelFullWithMetadataSpansEmbeddingCaptureInput(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		captureInput bool
+	}{
+		{name: "enabled", captureInput: true},
+		{name: "disabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, recorder, _ := newOTelTestClient(t, func(cfg *Config) {
+				cfg.ContentCapture = ContentCaptureModeFullWithMetadataSpans
+				cfg.EmbeddingCapture.CaptureInput = tc.captureInput
+			})
+
+			_, rec := client.StartEmbedding(context.Background(), EmbeddingStart{
+				Model: ModelRef{Provider: "openai", Name: "text-embedding-3-small"},
+			})
+			rec.SetResult(EmbeddingResult{InputCount: 1, InputTexts: []string{"EMBEDDING-CONTENT"}})
+			rec.End()
+			if err := rec.Err(); err != nil {
+				t.Fatalf("embedding: %v", err)
+			}
+
+			got, present := spanAttributeMapOf(onlySpan(t, recorder))[spanAttrEmbeddingInputTexts]
+			if present != tc.captureInput {
+				t.Fatalf("%s present = %v, want %v", spanAttrEmbeddingInputTexts, present, tc.captureInput)
+			}
+			if tc.captureInput && !slices.Contains(got.AsStringSlice(), "EMBEDDING-CONTENT") {
+				t.Errorf("%s = %v, want EMBEDDING-CONTENT", spanAttrEmbeddingInputTexts, got.AsStringSlice())
+			}
+		})
+	}
+}
+
+func TestOTelFullWithMetadataSpansConstructionDoesNotLogCaptureMode(t *testing.T) {
+	var logs bytes.Buffer
+	client, _, _ := newOTelTestClient(t, func(cfg *Config) {
+		cfg.ContentCapture = ContentCaptureModeFullWithMetadataSpans
+		cfg.Logger = log.New(&logs, "", 0)
+	})
+	if !client.otelExportEnabled() {
+		t.Fatal("otel export is not enabled")
+	}
+	if got := logs.String(); strings.Contains(got, "content capture mode") {
+		t.Errorf("construction log contains a content-capture message: %q", got)
 	}
 }
 

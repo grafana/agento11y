@@ -120,18 +120,27 @@ func otelHandlerOptions(cfg Config) []otelgenai.Option {
 // OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT would otherwise let a
 // traces-side setting overrule the SDK's own content policy.
 //
-// FullWithMetadataSpans keeps content off the OTel destination by contract,
-// and in otel mode there is no second destination, so that mode exports
-// metadata only. NewClient logs that restriction when it builds the handler.
+// In otel mode, FullWithMetadataSpans resolves to Full because the span is the
+// only generation export.
 func otelCaptureMode(mode ContentCaptureMode) otelgenai.CaptureMode {
 	switch resolveClientContentCaptureMode(mode) {
-	case ContentCaptureModeFull, ContentCaptureModeNoToolContent:
+	case ContentCaptureModeFull, ContentCaptureModeNoToolContent, ContentCaptureModeFullWithMetadataSpans:
 		return otelgenai.CaptureSpanOnly
-	case ContentCaptureModeMetadataOnly, ContentCaptureModeFullWithMetadataSpans:
+	case ContentCaptureModeMetadataOnly:
 		return otelgenai.CaptureNoContent
 	default:
 		return otelgenai.CaptureNoContent
 	}
+}
+
+// resolveOTelContentCaptureMode upgrades the mode only when this client has an
+// active OTel export handler. The configured protocol is not enough because the
+// experimental gate can prevent handler construction.
+func (c *Client) resolveOTelContentCaptureMode(mode ContentCaptureMode) ContentCaptureMode {
+	if mode == ContentCaptureModeFullWithMetadataSpans && c.otelExportEnabled() {
+		return ContentCaptureModeFull
+	}
+	return mode
 }
 
 // startOTelGeneration opens the generation's span through otelgenai. Only the
