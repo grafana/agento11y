@@ -13,7 +13,7 @@
 //	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
 //	agento11y claude   install [--json]                               — register the Claude Code plugin without launching or prompting
 //	agento11y agents   reconcile --agents all|name[,name...] --json   — reconcile registered noninteractive installers
-//	agento11y local start|open|status|stop|restart                    — manage the local capture daemon
+//	agento11y local start|open|status [--json]|stop|restart           — manage the local capture daemon
 //	agento11y history import <agent> [flags]                          — backfill an agent's existing local sessions
 //	agento11y skills list|show <name>                                 — print an agent skill bundled into this binary
 //	agento11y help                                                    — print the expanded command list
@@ -135,7 +135,7 @@ func usageLine() string {
 	return "usage: agento11y login [--endpoint url] [--tenant id] [--token value|--token-stdin] " +
 		"[--otlp-endpoint url] [--no-verify] [--yes] | agento11y doctor [--json] | " +
 		"agento11y <claude|copilot|opencode|pi> install [--json] | agento11y agents reconcile --agents all|name[,name...] --json | " +
-		"agento11y skills list|show <name> | agento11y local start|open|status|stop|restart | " +
+		"agento11y skills list|show <name> | agento11y local start|open|status [--json]|stop|restart | " +
 		"agento11y history import <" + historyAgentNames() + "> | agento11y cursor install|uninstall | agento11y <agent> hook | " +
 		"agento11y <claude|codex|copilot|opencode|pi|vibe> [--local|--no-local] [--tag key=value]... [-- args...]"
 }
@@ -1220,6 +1220,38 @@ func setupLocalLaunch(stderr io.Writer, envKey string) (endpoint, otlp string, e
 	return endpoint, otlp, nil
 }
 
+// localStatusPayload is the `agento11y local status --json` result. The
+// in-process pi and OpenCode plugins parse it to attach to a running
+// receiver, so the field names must stay stable and `running` must stay
+// unconditional: they read it as the running/stopped signal, and the other
+// fields are omitempty.
+type localStatusPayload struct {
+	Running   bool   `json:"running"`
+	PID       int    `json:"pid,omitempty"`
+	Port      int    `json:"port,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	StartedAt string `json:"started_at,omitempty"`
+}
+
+func writeLocalStatusJSON(stdout io.Writer, status *local.Status) error {
+	payload := localStatusPayload{}
+	if status != nil {
+		payload = localStatusPayload{
+			Running:   true,
+			PID:       status.PID,
+			Port:      status.Port,
+			Endpoint:  status.Endpoint,
+			StartedAt: status.StartedAt,
+		}
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(stdout, string(data))
+	return nil
+}
+
 // runLocalCommand dispatches `agento11y local <verb>` subcommands.
 func runLocalCommand(args []string, stdout, stderr io.Writer) {
 	if len(args) == 0 {
@@ -1261,10 +1293,26 @@ func runLocalCommand(args []string, stdout, stderr io.Writer) {
 			_, _ = fmt.Fprintf(stderr, "agento11y: could not open browser: %v\n", err)
 		}
 	case "status":
+		fs := flag.NewFlagSet("local status", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		var asJSON bool
+		fs.BoolVar(&asJSON, "json", false, "print a machine-readable result")
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
+			_, _ = fmt.Fprintln(stderr, "usage: agento11y local status [--json]")
+			exit(2)
+			return
+		}
 		status, err := local.IsRunning(dir)
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
 			exit(1)
+			return
+		}
+		if asJSON {
+			if err := writeLocalStatusJSON(stdout, status); err != nil {
+				_, _ = fmt.Fprintf(stderr, "agento11y: encode status: %v\n", err)
+				exit(1)
+			}
 			return
 		}
 		if status == nil {

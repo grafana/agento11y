@@ -42,6 +42,7 @@ vi.mock("./git.js", () => ({
 import type { Agento11yClient } from "@grafana/agento11y";
 import registerExtension, { emitToolSpans } from "./index.js";
 import { stablePiGenerationId } from "./lineage.js";
+import { LocalReceiverError } from "./local.js";
 import type {
   PiAssistantMessage,
   PiToolResult,
@@ -4681,5 +4682,130 @@ describe("emitToolSpans", () => {
     expect(args).toContain("deploy.sh");
     expect(result).not.toContain(token);
     expect(result).toBe("authenticated with [REDACTED:grafana-cloud-token]");
+  });
+});
+
+// A saved AGENTO11Y_LOCAL=true reaches the plugin as a config whose endpoint
+// is the machine's own receiver, or as a LocalReceiverError when no receiver
+// answered. Neither case may end with a Cloud client.
+describe("local mode session_start", () => {
+  function localConfig() {
+    return {
+      endpoint: "http://127.0.0.1:8768",
+      auth: {
+        mode: "basic",
+        basicUser: "local",
+        basicPassword: "local",
+        tenantId: "local",
+      },
+      agentName: "pi",
+      contentCapture: "full",
+      local: true,
+    };
+  }
+
+  function uiCtx(hasUI: boolean) {
+    return {
+      ...makeCtx({ sessionId: "sess-local" }),
+      hasUI,
+      ui: { notify: vi.fn() },
+    };
+  }
+
+  function fakeClient(): Agento11yLike {
+    return {
+      startStreamingGeneration: vi.fn(async () => {}),
+      startToolExecution: vi.fn(),
+      shutdown: vi.fn(async () => {}),
+    };
+  }
+
+  beforeEach(() => {
+    loadConfigMock.mockReset();
+    createAgento11yClientMock.mockReset();
+    createTelemetryProvidersMock.mockReset();
+    resolveGitBranchMock.mockReset();
+    resolveGitBranchMock.mockReturnValue(undefined);
+    loggerMock.debug.mockReset();
+    loggerMock.warn.mockReset();
+    loggerMock.error.mockReset();
+  });
+
+  it("names the receiver the session records to", async () => {
+    loadConfigMock.mockResolvedValue(localConfig());
+    createAgento11yClientMock.mockReturnValue(fakeClient());
+
+    const pi = new FakePi();
+    registerExtension(pi as any);
+    const ctx = uiCtx(true);
+    await pi.emit("session_start", {}, ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("http://127.0.0.1:8768"),
+      "info",
+    );
+    expect(createAgento11yClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays silent in a mode without a UI", async () => {
+    // `pi -p` and JSON mode have no place to put a notice, and pi's own docs
+    // say to gate notify on hasUI.
+    loadConfigMock.mockResolvedValue(localConfig());
+    createAgento11yClientMock.mockReturnValue(fakeClient());
+
+    const pi = new FakePi();
+    registerExtension(pi as any);
+    const ctx = uiCtx(false);
+    await pi.emit("session_start", {}, ctx);
+
+    expect(ctx.ui.notify).not.toHaveBeenCalled();
+    expect(createAgento11yClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("captures nothing and never builds a Cloud client when no receiver answers", async () => {
+    loadConfigMock.mockRejectedValue(
+      new LocalReceiverError("no local receiver is running"),
+    );
+
+    const pi = new FakePi();
+    registerExtension(pi as any);
+    const ctx = uiCtx(true);
+    await pi.emit("session_start", {}, ctx);
+
+    expect(createAgento11yClientMock).not.toHaveBeenCalled();
+    expect(createTelemetryProvidersMock).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("no local receiver is running"),
+      "error",
+    );
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      "local capture unavailable",
+      expect.any(LocalReceiverError),
+    );
+
+    // The session still runs; the turn path finds no client and exports
+    // nothing.
+    await pi.emit("turn_start", {}, ctx);
+    await pi.emit(
+      "turn_end",
+      { message: assistantMessage(), toolResults: [] },
+      ctx,
+    );
+  });
+
+  it("leaves an unrelated config failure on the generic error path", async () => {
+    loadConfigMock.mockRejectedValue(new Error("disk on fire"));
+
+    const pi = new FakePi();
+    registerExtension(pi as any);
+    const ctx = uiCtx(true);
+    await pi.emit("session_start", {}, ctx);
+
+    expect(createAgento11yClientMock).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).not.toHaveBeenCalled();
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      "session_start failed",
+      expect.any(Error),
+    );
   });
 });

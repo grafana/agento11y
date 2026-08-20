@@ -18,6 +18,7 @@ import {
   resolvePiSummaryLineage,
   type SessionManagerLike,
 } from "./lineage.js";
+import { LocalReceiverError } from "./local.js";
 import { logger } from "./logger.js";
 import {
   applyRedactedText,
@@ -394,7 +395,23 @@ export default function (pi: ExtensionAPI) {
         currentConversation = undefined;
       }
 
-      config = await loadConfig();
+      try {
+        config = await loadConfig();
+      } catch (err) {
+        if (!(err instanceof LocalReceiverError)) throw err;
+        // Local mode was chosen for this machine, and no receiver answered.
+        // The saved Cloud endpoint is not a fallback: a session told to stay
+        // local must not be sent to Cloud because the receiver is down. Pi
+        // itself carries on with no capture.
+        logger.error("local capture unavailable", err);
+        notify(
+          ctx,
+          `Agent Observability: local capture is off: ${err.message}`,
+          "error",
+        );
+        await resetSessionState();
+        return;
+      }
       if (!config) return;
 
       if (!config.agentVersion) {
@@ -430,8 +447,19 @@ export default function (pi: ExtensionAPI) {
       }
 
       logger.debug(
-        `enabled, endpoint=${config.endpoint} auth=${config.auth.mode}`,
+        `enabled, endpoint=${config.endpoint} auth=${config.auth.mode}${
+          config.local ? " local=true" : ""
+        }`,
       );
+      if (config.local) {
+        // Where the session went is not obvious once the endpoint stops being
+        // the configured one, so name the receiver the transcript lands in.
+        notify(
+          ctx,
+          `Agent Observability: recording to the local receiver at ${config.endpoint}`,
+          "info",
+        );
+      }
     } catch (err) {
       logger.error("session_start failed", err);
       sigil = null;
@@ -928,6 +956,35 @@ export default function (pi: ExtensionAPI) {
     lastSeenModel = null;
     await resetSessionState();
   });
+}
+
+/**
+ * Slice of pi's `ExtensionContext` used to reach the user. Structural and
+ * fully optional: pi only has a UI in TUI and RPC modes, and `-p` / JSON runs
+ * pass a context whose notify would go nowhere.
+ */
+interface PiNotifyContext {
+  hasUI?: boolean;
+  ui?: {
+    notify?: (message: string, type?: "info" | "warning" | "error") => void;
+  };
+}
+
+/**
+ * Tells the user something the debug log alone would not surface. Silent
+ * without a UI, and a failing notify never breaks the handler that called it.
+ */
+function notify(
+  ctx: PiNotifyContext,
+  message: string,
+  type: "info" | "warning" | "error",
+): void {
+  if (!ctx?.hasUI) return;
+  try {
+    ctx.ui?.notify?.(message, type);
+  } catch (err) {
+    logger.debug("ui notify failed", err);
+  }
 }
 
 /**

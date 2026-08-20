@@ -1372,13 +1372,16 @@ func TestRun_LocalSubcommand(t *testing.T) {
 		checkNoDotenv   bool
 	}{
 		{name: "status with no daemon prints friendly message", argv: []string{"local", "status"}, wantStdoutHas: []string{"not running"}},
+		{name: "json status with no daemon reports running false", argv: []string{"local", "status", "--json"}, wantStdoutHas: []string{`{"running":false}`}},
+		{name: "status rejects an unknown flag", argv: []string{"local", "status", "--nope"}, wantExit: intPtr(2), wantStderrHas: "usage: agento11y local status [--json]"},
+		{name: "status rejects a positional argument", argv: []string{"local", "status", "json"}, wantExit: intPtr(2), wantStderrHas: "usage: agento11y local status [--json]"},
 		{name: "stop with no daemon prints friendly message", argv: []string{"local", "stop"}, wantStdoutHas: []string{"not running"}},
 		{name: "help", argv: []string{"local", "help"}, wantStdoutHas: localHelpRows, wantStdoutLacks: "serve", wantStderrEmpty: true, checkNoDotenv: true},
 		{name: "long help flag", argv: []string{"local", "--help"}, wantStdoutHas: localHelpRows, wantStdoutLacks: "serve", wantStderrEmpty: true, checkNoDotenv: true},
 		{name: "short help flag", argv: []string{"local", "-h"}, wantStdoutHas: localHelpRows, wantStdoutLacks: "serve", wantStderrEmpty: true, checkNoDotenv: true},
 		{name: "unknown verb exits 2", argv: []string{"local", "bogus"}, wantExit: intPtr(2), wantStderrHas: `unknown local verb "bogus"`},
 		{name: "no verb exits 2 with usage hint", argv: []string{"local"}, wantExit: intPtr(2), wantStderrHas: "usage: agento11y local"},
-		{name: "usage hint lists open and restart", argv: []string{"local"}, wantExit: intPtr(2), wantStderrHas: "open | status | stop | restart"},
+		{name: "usage hint lists open and restart", argv: []string{"local"}, wantExit: intPtr(2), wantStderrHas: "open | status [--json] | stop | restart"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1480,6 +1483,58 @@ func TestRun_LocalOpen(t *testing.T) {
 			} else {
 				assert.Contains(t, stderr.String(), tc.wantStderr)
 			}
+		})
+	}
+}
+
+// TestRun_LocalStatusRunning covers the two shapes `local status` prints for a
+// healthy receiver. The JSON one is the contract the in-process pi and
+// OpenCode plugins parse to attach to it, and the human one is what an older
+// binary prints when a newer plugin passes --json, so both are pinned.
+func TestRun_LocalStatusRunning(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		argv []string
+		json bool
+	}{
+		{name: "human output", argv: []string{"local", "status"}},
+		{name: "json output", argv: []string{"local", "status", "--json"}, json: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			storage, err := local.NewStorage(t.TempDir())
+			require.NoError(t, err)
+			ts := httptest.NewServer(local.NewServer(storage, nil, filepath.Join(t.TempDir(), "config.env")))
+			t.Cleanup(ts.Close)
+			dir := local.StateDir()
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			require.NoError(t, local.SaveStatus(dir, local.Status{
+				PID:       os.Getpid(),
+				Port:      8765,
+				Endpoint:  ts.URL,
+				StartedAt: "2024-05-05T10:00:00Z",
+			}))
+
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run(tc.argv, strings.NewReader(""), &stdout, &stderr)
+			})
+			require.Nil(t, gotExit, "stderr=%q", stderr.String())
+
+			if !tc.json {
+				assert.Contains(t, stdout.String(), "agento11y local receiver: running at "+ts.URL)
+				assert.Contains(t, stdout.String(), "started 2024-05-05T10:00:00Z")
+				return
+			}
+			var got localStatusPayload
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &got))
+			assert.Equal(t, localStatusPayload{
+				Running:   true,
+				PID:       os.Getpid(),
+				Port:      8765,
+				Endpoint:  ts.URL,
+				StartedAt: "2024-05-05T10:00:00Z",
+			}, got)
 		})
 	}
 }
