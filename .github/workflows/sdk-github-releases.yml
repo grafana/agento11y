@@ -20,6 +20,7 @@ on:
       - 'sdk-dotnet/v*'
       - 'plugins/pi/v*'
       - 'plugins/opencode/v*'
+      - 'plugins/dsh/v*'
 
 permissions:
   contents: read

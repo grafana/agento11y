@@ -77,5 +77,13 @@
     "paths": [
       "plugins/opencode"
     ]
+  },
+  {
+    "id": "dsh",
+    "changelog": "plugins/dsh/CHANGELOG.md",
+    "tag_prefix": "plugins/dsh",
+    "paths": [
+      "plugins/dsh"
+    ]
   }
 ]

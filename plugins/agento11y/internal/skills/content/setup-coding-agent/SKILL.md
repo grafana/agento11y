@@ -2,7 +2,7 @@
 name: setup-coding-agent
 description: >-
   Set up Grafana Agent observability for a coding agent (Claude Code, Codex,
-  Copilot CLI, Cursor, OpenCode, pi, or Vibe) with the agento11y binary:
+  Copilot CLI, Cursor, dsh, OpenCode, pi, or Vibe) with the agento11y binary:
   install it, save credentials, wire the agent, verify a session reaches
   Grafana Cloud, and diagnose a broken pipeline. Use when the user says "set
   up agento11y", "monitor my coding agent", "agento11y doctor says something
@@ -14,9 +14,8 @@ description: >-
 
 Grafana Agent observability records model calls, tokens, timing, tool names, and
 reported or estimated cost. Conversation content is opt-in. The `agento11y`
-binary launches agents and hosts hook-based integrations; pi and OpenCode export
-in process. This path installs and configures the integration. It never changes
-the user's application code.
+binary launches agents and hosts hook-based integrations; pi, OpenCode, and dsh
+export in process. It never changes the user's application code.
 
 Do the steps the machine's current state calls for, not all five. Step 1 says
 where to start: a machine that needs one credential re-saved does not need a
@@ -227,7 +226,7 @@ token.
 
 ## Step 4: Wire the coding agent
 
-Six agents launch through `agento11y <agent>`. A first run asks where sessions go
+Seven agents launch through `agento11y <agent>`. A first run asks where sessions go
 as Step 3 describes, and **Local only** there starts the receiver for that launch.
 The command then installs the host integration and replaces itself with the agent.
 It asks nothing when local mode is already on (`--local` or `AGENTO11Y_LOCAL=true`)
@@ -239,6 +238,7 @@ rules in the Reference.
 | Claude Code | `agento11y claude` | shared Go binary, plugin `agento11y-claude-code` |
 | Codex | `agento11y codex` | shared Go binary, plugin `agento11y-codex` |
 | Copilot CLI | `agento11y copilot` | hooks shared with Copilot Chat in VS Code |
+| DeepSeek Harness | `agento11y dsh -- web` | macOS/Linux only; installs `@grafana/agento11y-dsh` as an overlay |
 | OpenCode | `agento11y opencode` | installs `@grafana/agento11y-opencode` |
 | pi | `agento11y pi` | installs `@grafana/agento11y-pi` |
 | Vibe | `agento11y vibe` | shared Go binary via `hooks.toml` |
@@ -487,7 +487,7 @@ A cancelled or failed run resumes from turns not marked exported.
 
 ### Auto-update
 
-Claude, Codex, and OpenCode refresh after a binary version change and, after
+Claude, Codex, dsh, and OpenCode refresh after a binary version change and, after
 the first post-install refresh, at most once a day. A relaunch inside that period
 does not pick up a plugin fix. `AGENTO11Y_AUTO_UPDATE=0|false|no|off` opts out.
 Copilot and Vibe reconcile hooks on each launch. Pi leaves upgrades to pi's
