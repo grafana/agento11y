@@ -723,7 +723,7 @@ def test_trial_ref_from_env_reads_sigil_names_with_warning(caplog: pytest.LogCap
         ),
     ],
 )
-def test_trial_ref_from_env_alias_resolution(env: dict[str, str], expected: tuple[str, str] | None) -> None:
+def test_env_aliases_resolve_trial_ref(env: dict[str, str], expected: tuple[str, str] | None) -> None:
     ref = TrialRef.from_env(env)
     if expected is None:
         assert ref is None
@@ -1188,7 +1188,7 @@ def test_experimental_feature_disabled_error_survives_pickle() -> None:
     assert str(restored) == str(original)
 
 
-def test_trial_cleanup_runs_when_flush_fails() -> None:
+def test_trial_cleanup_after_flush_failure() -> None:
     client = FailingExportClient()
     suite = _suite()
     with pytest.raises(RuntimeError, match="score export failed"):

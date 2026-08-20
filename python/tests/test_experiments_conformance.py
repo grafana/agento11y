@@ -162,7 +162,7 @@ def _assert_matches(captured: dict[str, Any], fixture: dict[str, Any]) -> None:
     assert differences == [], "body differs from the fixture:\n" + "\n".join(differences)
 
 
-def test_stable_ids_match_the_shared_vectors() -> None:
+def test_stable_ids_match_vectors() -> None:
     vectors = _load("ids.json")["vectors"]
     assert vectors
     for vector in vectors:
