@@ -235,6 +235,9 @@ jobs:
       - name: Lint opencode plugin
         run: mise run lint:ts:plugin-opencode
 
+      - name: Lint local viewer
+        run: mise run lint:ts:local-viewer
+
       - name: Typecheck opencode plugin
         run: pnpm --filter @grafana/agento11y-opencode run typecheck
 

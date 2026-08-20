@@ -60,9 +60,14 @@ description = "Format OpenCode plugin code"
 depends = ["deps"]
 run = "pnpm --filter @grafana/agento11y-opencode run lint:fix"
 
+[tasks."format:ts:local-viewer"]
+description = "Format local viewer code"
+depends = ["deps"]
+run = "pnpm --filter @grafana/agento11y-local-viewer run lint:fix"
+
 [tasks.format]
 description = "Format all code"
-depends = ["format:go", "format:py", "format:cs", "format:ts:sdk-js", "format:ts:plugin-pi", "format:ts:plugin-opencode"]
+depends = ["format:go", "format:py", "format:cs", "format:ts:sdk-js", "format:ts:plugin-pi", "format:ts:plugin-opencode", "format:ts:local-viewer"]
 
 # --- Linting ---
 
@@ -125,6 +130,11 @@ description = "Lint OpenCode plugin code"
 depends = ["deps"]
 run = "pnpm --filter @grafana/agento11y-opencode run lint"
 
+[tasks."lint:ts:local-viewer"]
+description = "Lint local viewer code"
+depends = ["deps"]
+run = "pnpm --filter @grafana/agento11y-local-viewer run lint"
+
 [tasks."lint:ts:redaction-generator"]
 description = "Lint the secret-pattern generator"
 dir = "redaction"
@@ -136,7 +146,7 @@ run = "pnpm run check:js-dependency-pinning"
 
 [tasks.lint]
 description = "Run all linting"
-depends = ["lint:go", "lint:py", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi", "lint:ts:plugin-opencode", "lint:ts:redaction-generator", "lint:js-dependency-pinning"]
+depends = ["lint:go", "lint:py", "lint:cs", "lint:ts:sdk-js", "lint:ts:plugin-pi", "lint:ts:plugin-opencode", "lint:ts:local-viewer", "lint:ts:redaction-generator", "lint:js-dependency-pinning"]
 
 # --- Type checking ---
 

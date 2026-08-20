@@ -1,0 +1,8 @@
+{
+  "name": "@grafana/agento11y-local-viewer",
+  "private": true,
+  "scripts": {
+    "lint": "biome check .",
+    "lint:fix": "biome check --fix ."
+  }
+}
