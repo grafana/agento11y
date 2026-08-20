@@ -447,7 +447,7 @@ Cloud skill trace visibility requires retained tool and generation spans in Temp
 
 ### Local mode
 
-`agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** routes launcher runs and agento11y hooks through the local daemon. The daemon stores full generation content in its JSONL store. It forwards full content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`; every other selected mode becomes `metadata_only` for Cloud.
+`agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** routes launcher runs and agento11y hooks through the local daemon. The daemon stores full generation content in its SQLite database. Existing JSONL stores migrate in the background and later remove their JSONL files after SQLite becomes the source of truth. It forwards full content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`; every other selected mode becomes `metadata_only` for Cloud.
 **Local only** does not forward. **Local web UI = No** sends directly to Cloud without a local copy. `--no-local` uses Cloud once without changing either saved alias family. The launcher prints the viewer URL. Manage the daemon with `agento11y local start|open|status|stop|restart`.
 Local mode is available on every supported platform. A launcher starts the receiver in the same invocation; a saved choice from Cursor install applies to the next hook.
 With `AGENTO11Y_GUARDS_ENABLED=true`, evaluate `guards.toml` next to `config.env`. `reject = true` blocks on match; `shell_command` is for shell policies. Fail-open is Cloud-only. For pack selection, configuration, and testing, follow `agento11y skills show setup-local-guards`.
