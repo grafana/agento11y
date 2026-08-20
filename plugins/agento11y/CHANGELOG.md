@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.36.0] - 2026-08-20
+
+### Features
+
+- **plugins/agento11y**: show that forwarding is disabled in local mode (#640)
+- **plugins**: support AGENTO11Y_LOCAL env var in Pi and OpenCode (#635)
+
+### Documentation
+
+- **plugins/agento11y**: fix README demo video playback (#632)
+- **plugins/agento11y**: add coding agent observability demo video (#630)
+
 ## [0.35.0] - 2026-08-20
 
 ### Features
