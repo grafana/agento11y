@@ -52,6 +52,12 @@ const ALIAS_SUFFIXES = [
   "GUARDS_ENABLED",
   "GUARDS_TIMEOUT_MS",
   "GUARDS_FAIL_OPEN",
+  // Local-mode selection and the binary that answers `local status`. Neither
+  // reaches the SDK: config.ts reads LOCAL, local.ts reads BIN. They are
+  // resolved here so a saved AGENTO11Y_LOCAL=true obeys the same
+  // shell-before-file, preferred-before-legacy precedence as the launcher.
+  "LOCAL",
+  "BIN",
 ] as const;
 
 function preferredKey(suffix: string): string {

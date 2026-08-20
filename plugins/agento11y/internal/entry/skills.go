@@ -59,7 +59,7 @@ func runSkillsCommand(args []string, stdout, stderr io.Writer) {
 	}
 }
 
-const localUsage = "usage: agento11y local start | open | status | stop | restart"
+const localUsage = "usage: agento11y local start | open | status [--json] | stop | restart"
 
 // runLocalHelpCommand prints the user-facing local daemon commands. The serve
 // verb is internal and stays out of help and usage output.
@@ -75,7 +75,7 @@ Usage:
 Commands:
   start     Start the receiver if needed and print its address.
   open      Start the receiver if needed, print its address, and try to open the viewer.
-  status    Report whether the receiver is running.
+  status    Report whether the receiver is running; pass --json for machine-readable output.
   stop      Stop the receiver.
   restart   Stop and start the receiver.
 `

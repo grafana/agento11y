@@ -476,6 +476,20 @@ describe("applyAgento11yDotenv", () => {
     );
   });
 
+  it("materializes both local-mode variables under both spellings", () => {
+    // config.ts reads LOCAL and local.ts reads BIN; neither reaches the SDK,
+    // so nothing else in the suite would notice them missing from
+    // ALIAS_SUFFIXES. Outside it they keep exact-key semantics, and a file
+    // AGENTO11Y_LOCAL=true would beat a shell SIGIL_LOCAL=false instead of
+    // losing to it.
+    writeConfig("SIGIL_LOCAL=true\nSIGIL_BIN=/from/file/agento11y\n");
+    applyAgento11yDotenv();
+    expect(process.env.SIGIL_LOCAL).toBe("true");
+    expect(process.env.AGENTO11Y_LOCAL).toBe("true");
+    expect(process.env.SIGIL_BIN).toBe("/from/file/agento11y");
+    expect(process.env.AGENTO11Y_BIN).toBe("/from/file/agento11y");
+  });
+
   it("file AGENTO11Y_ENDPOINT beats file SIGIL_ENDPOINT", () => {
     writeConfig(
       "AGENTO11Y_ENDPOINT=https://preferred\nSIGIL_ENDPOINT=https://legacy\n",

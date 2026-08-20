@@ -28,6 +28,7 @@ import {
   makeOpencodeClient,
 } from "./hooks.testutil.js";
 import { Agento11yPlugin } from "./index.js";
+import { LocalReceiverError } from "./local.js";
 
 // `dispose` is not in the pinned `Hooks` type (see the version note in
 // index.ts), so the plugin's return type does not declare it either.
@@ -108,5 +109,79 @@ describe("Agento11yPlugin", () => {
     expect(input.client.tui.showToast).toHaveBeenCalledTimes(1);
 
     await hooks.dispose?.();
+  });
+
+  // A saved AGENTO11Y_LOCAL=true reaches the plugin as a config whose endpoint
+  // is the machine's own receiver, or as a LocalReceiverError when no receiver
+  // answered. Neither case may end with a Cloud client.
+  it("names the receiver the session records to", async () => {
+    const { sigil } = makeAgento11yMock();
+    createAgento11yClientMock.mockReturnValue(sigil);
+    loadConfigMock.mockResolvedValue(
+      baseConfig({ endpoint: "http://127.0.0.1:8768", local: true }),
+    );
+
+    const input = pluginInput();
+    const hooks = (await Agento11yPlugin(input)) as PluginHooks;
+
+    expect(input.client.tui.showToast).toHaveBeenCalledWith({
+      body: {
+        title: "Agent Observability",
+        message: expect.stringContaining("http://127.0.0.1:8768"),
+        variant: "info",
+      },
+    });
+    expect(hooks.dispose).toBeTypeOf("function");
+
+    await hooks.dispose?.();
+  });
+
+  it("registers no hooks and warns when no local receiver answers", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    loadConfigMock.mockRejectedValue(
+      new LocalReceiverError("no local receiver is running"),
+    );
+
+    const input = pluginInput();
+    const hooks = (await Agento11yPlugin(input)) as PluginHooks;
+
+    expect(Object.keys(hooks)).toEqual([]);
+    expect(createAgento11yClientMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("no local receiver is running"),
+    );
+    expect(input.client.tui.showToast).toHaveBeenCalledWith({
+      body: {
+        title: "Agent Observability",
+        message: expect.stringContaining("no local receiver is running"),
+        variant: "error",
+      },
+    });
+    warn.mockRestore();
+  });
+
+  it("loads even when the failure toast cannot be shown", async () => {
+    // opencode loads plugins before the TUI is necessarily attached, and a
+    // rejected toast must not turn a disabled capture into a broken host.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    loadConfigMock.mockRejectedValue(new LocalReceiverError("nothing running"));
+
+    const input = pluginInput();
+    input.client.tui.showToast = vi.fn(async () => {
+      throw new Error("no tui");
+    });
+
+    await expect(Agento11yPlugin(input)).resolves.toEqual({});
+    warn.mockRestore();
+  });
+
+  it("lets an unrelated config failure out", async () => {
+    // Only a missing receiver is contained here. Anything else is a bug the
+    // host should surface rather than a capture decision.
+    loadConfigMock.mockRejectedValue(new Error("disk on fire"));
+
+    await expect(Agento11yPlugin(pluginInput())).rejects.toThrow(
+      "disk on fire",
+    );
   });
 });

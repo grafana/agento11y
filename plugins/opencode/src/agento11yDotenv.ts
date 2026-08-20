@@ -51,6 +51,12 @@ const ALIAS_SUFFIXES = [
   "GUARDS_ENABLED",
   "GUARDS_FAIL_OPEN",
   "GUARDS_TIMEOUT_MS",
+  // Local-mode selection and the binary that answers `local status`. Neither
+  // reaches the SDK: config.ts reads LOCAL, local.ts reads BIN. They are
+  // resolved here so a saved AGENTO11Y_LOCAL=true obeys the same
+  // shell-before-file, preferred-before-legacy precedence as the launcher.
+  "LOCAL",
+  "BIN",
 ];
 
 // Preferred config directory name and the pre-rename fallback. The legacy

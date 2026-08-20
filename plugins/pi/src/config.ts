@@ -1,6 +1,8 @@
 import type { ContentCaptureMode } from "@grafana/agento11y";
 import { applyAgento11yDotenv } from "./agento11yDotenv.js";
 import { parseTagPairs, resolveAutoTags, selectAutoTags } from "./autotag.js";
+import { normalizeBaseEndpoint } from "./endpoint.js";
+import { type LocalReceiver, resolveLocalReceiver } from "./local.js";
 import { logger } from "./logger.js";
 
 export type Agento11yAuthConfig =
@@ -38,6 +40,12 @@ export interface Agento11yPiConfig {
    * but undefined keeps the client config free of an empty `tags` object.
    */
   autoTags?: Record<string, string>;
+  /**
+   * True when this session records to the local receiver instead of Grafana
+   * Cloud. index.ts reads it to name the destination; client.ts never passes
+   * it to the SDK, so it is never part of an exported generation.
+   */
+  local?: boolean;
 }
 
 export async function loadConfig(): Promise<Agento11yPiConfig | null> {
@@ -45,27 +53,79 @@ export async function loadConfig(): Promise<Agento11yPiConfig | null> {
   // credentials from the same place. Shell values in process.env always beat
   // config.env values, across both env-var spellings.
   applyAgento11yDotenv();
-  return resolveConfig();
+  // A saved AGENTO11Y_LOCAL=true means this session records to the machine,
+  // whatever Cloud endpoint config.env also holds. Resolving the receiver can
+  // fail; the caller reports that and captures nothing rather than falling
+  // back to Cloud.
+  if (!envBoolOr("LOCAL", false)) return resolveConfig();
+  return resolveLocalConfig(await resolveLocalReceiver());
+}
+
+// local.LaunchEnv fills a missing tenant or token with this stand-in. The
+// receiver does not check credentials, but the export paths short-circuit on
+// an empty one.
+const LOCAL_AUTH_PLACEHOLDER = "local";
+
+/**
+ * Config for a session that records to `receiver`. Mirrors
+ * `plugins/agento11y/internal/local/env.go::LaunchEnv.Apply`: the receiver
+ * owns both endpoints whatever Cloud values are configured, content capture
+ * is always full on this machine, and a missing tenant or token is filled
+ * independently with the placeholder.
+ *
+ * Nothing here is written back to `process.env`. Pi reloads config on every
+ * session start, so an override that leaked into the environment would follow
+ * a later non-local session.
+ */
+export function resolveLocalConfig(receiver: LocalReceiver): Agento11yPiConfig {
+  const tenantId =
+    brandedEnv("AUTH_TENANT_ID")?.value ?? LOCAL_AUTH_PLACEHOLDER;
+  const token = brandedEnv("AUTH_TOKEN")?.value ?? LOCAL_AUTH_PLACEHOLDER;
+  return {
+    ...resolveSharedConfig(),
+    endpoint: receiver.endpoint,
+    auth: {
+      mode: "basic",
+      basicUser: tenantId,
+      basicPassword: token,
+      tenantId,
+    },
+    contentCapture: "full",
+    otlp: {
+      endpoint: receiver.otlpEndpoint,
+      headers: otlpHeaders(
+        tenantId,
+        brandedEnv("OTEL_AUTH_TOKEN")?.value ?? token,
+      ),
+    },
+    local: true,
+  };
 }
 
 export function resolveConfig(): Agento11yPiConfig | null {
   const endpoint = normalizeBaseEndpoint(brandedEnv("ENDPOINT")?.value ?? "");
   if (!endpoint) return null;
 
-  const agentName = brandedEnv("AGENT_NAME")?.value ?? "pi";
-  const agentVersion = brandedEnv("AGENT_VERSION")?.value;
-
-  const contentCapture = resolveContentCapture();
-  const redactInputMessages = envBoolOr("REDACT_INPUT_MESSAGES", true);
-
   return {
+    ...resolveSharedConfig(),
     endpoint,
     auth: resolveAuth(),
-    agentName,
-    agentVersion,
-    contentCapture,
-    redactInputMessages,
+    contentCapture: resolveContentCapture(),
     otlp: resolveOtlp(),
+  };
+}
+
+// The settings a local session reads exactly as a Cloud one does. The two
+// resolvers differ only in where the session goes, how it authenticates, and
+// how much of it is captured.
+function resolveSharedConfig(): Omit<
+  Agento11yPiConfig,
+  "endpoint" | "auth" | "contentCapture" | "otlp"
+> {
+  return {
+    agentName: brandedEnv("AGENT_NAME")?.value ?? "pi",
+    agentVersion: brandedEnv("AGENT_VERSION")?.value,
+    redactInputMessages: envBoolOr("REDACT_INPUT_MESSAGES", true),
     guards: resolveGuards(),
     autoTags: resolveAutoTagValues(),
   };
@@ -115,16 +175,22 @@ function resolveOtlp(): OtlpConfig | undefined {
     (env("OTEL_EXPORTER_OTLP_ENDPOINT") ?? "").trim();
   if (!endpoint) return undefined;
 
-  const headers = parseOtelHeaders(env("OTEL_EXPORTER_OTLP_HEADERS") ?? "");
   const tenant = brandedEnv("AUTH_TENANT_ID")?.value ?? "";
   const token =
     brandedEnv("OTEL_AUTH_TOKEN")?.value ??
     brandedEnv("AUTH_TOKEN")?.value ??
     "";
+  return { endpoint, headers: otlpHeaders(tenant, token) };
+}
+
+// Configured OTLP headers plus a basic Authorization header built from the
+// resolved credentials, unless the user already supplied one.
+function otlpHeaders(tenant: string, token: string): Record<string, string> {
+  const headers = parseOtelHeaders(env("OTEL_EXPORTER_OTLP_HEADERS") ?? "");
   if (tenant && token && !hasAuthorizationHeader(headers)) {
     headers.Authorization = `Basic ${Buffer.from(`${tenant}:${token}`).toString("base64")}`;
   }
-  return { endpoint, headers };
+  return headers;
 }
 
 function parseOtelHeaders(raw: string): Record<string, string> {
@@ -256,29 +322,6 @@ function toBool(v: unknown): boolean | undefined {
   return undefined;
 }
 
-export const EXPORT_PATH = "/api/v1/generations:export";
-
-/**
- * Normalize an Agent Observability endpoint to the bare API base URL. Accepts either the
- * base URL (`https://host` or `https://host/prefix`) or a full generations
- * export URL (`https://host/api/v1/generations:export`) — the latter is a
- * common copy-paste mistake. Trailing slashes are stripped. The export path
- * is reapplied in `client.ts` when constructing the generationExport URL.
- */
-function normalizeBaseEndpoint(endpoint: string): string {
-  if (!endpoint) return "";
-  try {
-    const url = new URL(endpoint);
-    let pathname = url.pathname.replace(/\/+$/, "");
-    if (pathname.endsWith(EXPORT_PATH)) {
-      pathname = pathname.slice(0, pathname.length - EXPORT_PATH.length);
-    }
-    url.pathname = pathname;
-    return url.toString().replace(/\/+$/, "");
-  } catch {
-    const trimmed = endpoint.replace(/\/+$/, "");
-    return trimmed.endsWith(EXPORT_PATH)
-      ? trimmed.slice(0, trimmed.length - EXPORT_PATH.length)
-      : trimmed;
-  }
-}
+// Re-exported so client.ts keeps one import for the config it reads and the
+// path it appends to the endpoint.
+export { EXPORT_PATH } from "./endpoint.js";

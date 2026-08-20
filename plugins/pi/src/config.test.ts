@@ -4,13 +4,22 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgento11yEnv as clearEnv } from "./testEnv.js";
 
-const { loggerMock } = vi.hoisted(() => ({
+const { loggerMock, resolveLocalReceiverMock } = vi.hoisted(() => ({
   loggerMock: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  resolveLocalReceiverMock: vi.fn(),
 }));
 
 vi.mock("./logger.js", () => ({ logger: loggerMock }));
 
+// Only the discovery call is faked; LocalReceiverError stays real so the
+// no-fallback case asserts on the type the host lifecycle catches.
+vi.mock("./local.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./local.js")>();
+  return { ...actual, resolveLocalReceiver: resolveLocalReceiverMock };
+});
+
 import { loadConfig, resolveConfig } from "./config.js";
+import { LocalReceiverError } from "./local.js";
 
 describe("resolveConfig", () => {
   beforeEach(clearEnv);
@@ -644,5 +653,147 @@ describe("loadConfig reads ~/.config/agento11y/config.env", () => {
 
     const cfg = await loadConfig();
     expect(cfg).toBeNull();
+  });
+});
+
+// A saved AGENTO11Y_LOCAL=true has to route plain `pi` at the machine's own
+// receiver. Nothing else in this suite covers a config whose endpoint does
+// not come from the endpoint family.
+describe("loadConfig in local mode", () => {
+  let dir: string;
+  let homeBackup: string | undefined;
+
+  const receiver = {
+    endpoint: "http://127.0.0.1:8768",
+    otlpEndpoint: "http://127.0.0.1:8768/otlp",
+  };
+
+  beforeEach(() => {
+    clearEnv();
+    vi.clearAllMocks();
+    resolveLocalReceiverMock.mockResolvedValue(receiver);
+    dir = mkdtempSync(join(tmpdir(), "sigil-pi-localconfig-"));
+    process.env.XDG_CONFIG_HOME = dir;
+    homeBackup = process.env.HOME;
+    process.env.HOME = dir;
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    if (homeBackup === undefined) delete process.env.HOME;
+    else process.env.HOME = homeBackup;
+    clearEnv();
+  });
+
+  function writeConfigEnv(...lines: string[]): void {
+    const cfgDir = join(dir, "agento11y");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(join(cfgDir, "config.env"), `${lines.join("\n")}\n`);
+  }
+
+  const cloudLines = [
+    "AGENTO11Y_ENDPOINT=https://cloud.example.com",
+    "AGENTO11Y_AUTH_TENANT_ID=tenant-1",
+    "AGENTO11Y_AUTH_TOKEN=glc_token",
+  ];
+
+  it("routes conversations and OTLP at the receiver over saved Cloud settings", async () => {
+    writeConfigEnv(
+      ...cloudLines,
+      "AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com/otlp",
+      "AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only",
+      "AGENTO11Y_LOCAL=true",
+    );
+
+    const cfg = await loadConfig();
+
+    expect(cfg?.endpoint).toBe("http://127.0.0.1:8768");
+    expect(cfg?.otlp?.endpoint).toBe("http://127.0.0.1:8768/otlp");
+    expect(cfg?.contentCapture).toBe("full");
+    expect(cfg?.local).toBe(true);
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      basicUser: "tenant-1",
+      basicPassword: "glc_token",
+      tenantId: "tenant-1",
+    });
+  });
+
+  it("fills a missing tenant and token independently", async () => {
+    writeConfigEnv("AGENTO11Y_AUTH_TENANT_ID=tenant-1", "AGENTO11Y_LOCAL=true");
+
+    const cfg = await loadConfig();
+
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      basicUser: "tenant-1",
+      basicPassword: "local",
+      tenantId: "tenant-1",
+    });
+  });
+
+  it("captures locally with no endpoint configured at all", async () => {
+    writeConfigEnv("SIGIL_LOCAL=true");
+
+    const cfg = await loadConfig();
+
+    expect(cfg?.endpoint).toBe("http://127.0.0.1:8768");
+    expect(cfg?.auth).toEqual({
+      mode: "basic",
+      basicUser: "local",
+      basicPassword: "local",
+      tenantId: "local",
+    });
+  });
+
+  it("does not write the local overrides into process.env", async () => {
+    // Pi reloads config on every session start, so an override that leaked
+    // into the environment would follow a later AGENTO11Y_LOCAL=false session.
+    writeConfigEnv(
+      ...cloudLines,
+      "AGENTO11Y_CONTENT_CAPTURE_MODE=metadata_only",
+      "AGENTO11Y_LOCAL=true",
+    );
+
+    const cfg = await loadConfig();
+
+    expect(cfg?.contentCapture).toBe("full");
+    expect(process.env.AGENTO11Y_ENDPOINT).toBe("https://cloud.example.com");
+    expect(process.env.SIGIL_ENDPOINT).toBe("https://cloud.example.com");
+    expect(process.env.AGENTO11Y_CONTENT_CAPTURE_MODE).toBe("metadata_only");
+    expect(process.env.AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined();
+  });
+
+  it("keeps the Cloud path when the shell disables a saved local choice", async () => {
+    writeConfigEnv(...cloudLines, "AGENTO11Y_LOCAL=true");
+    process.env.AGENTO11Y_LOCAL = "false";
+
+    const cfg = await loadConfig();
+
+    expect(cfg?.endpoint).toBe("https://cloud.example.com");
+    expect(cfg?.contentCapture).toBe("metadata_only");
+    expect(cfg?.local).toBeUndefined();
+    expect(resolveLocalReceiverMock).not.toHaveBeenCalled();
+  });
+
+  it("treats an invalid local value as off and warns", async () => {
+    writeConfigEnv(...cloudLines, "AGENTO11Y_LOCAL=maybe");
+
+    const cfg = await loadConfig();
+
+    expect(cfg?.endpoint).toBe("https://cloud.example.com");
+    expect(resolveLocalReceiverMock).not.toHaveBeenCalled();
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining("AGENTO11Y_LOCAL"),
+    );
+  });
+
+  it("fails instead of falling back to Cloud when no receiver is available", async () => {
+    writeConfigEnv(...cloudLines, "AGENTO11Y_LOCAL=true");
+    resolveLocalReceiverMock.mockRejectedValue(
+      new LocalReceiverError("no local receiver is running"),
+    );
+
+    await expect(loadConfig()).rejects.toBeInstanceOf(LocalReceiverError);
   });
 });
