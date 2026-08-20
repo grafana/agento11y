@@ -8908,16 +8908,8 @@ function UnsavedBar({ onReset, onSave }) {
     );
 }
 
-function SettingsHero({ dirty, path, config }) {
-    // The hero stat reads from the same mapping as the header chip, so the two
-    // never name one posture two ways.
-    const forwardMeta = forwardChipMeta(config);
+function SettingsHero({ dirty, path }) {
     const stats = [
-        {
-            label: "Cloud copy",
-            value: forwardMeta.value,
-            tone: forwardMeta.color,
-        },
         {
             label: "Config",
             value: dirty ? "Unsaved" : "Synced",
@@ -10814,15 +10806,10 @@ function SettingsView({
         };
     }, [form]);
 
-    const page = {
-        maxWidth: 1360,
-        margin: "0 auto",
-        padding: "28px 24px 110px",
-        width: "100%",
-    };
+    const pageStyle = { paddingBottom: 110 };
     if (!form) {
         return (
-            <div style={page}>
+            <PageShell maxWidth={1400} style={pageStyle}>
                 {configError ? (
                     <Notice kind="error" title="Failed to load settings">
                         {configError}
@@ -10832,7 +10819,7 @@ function SettingsView({
                         Reading config.env.
                     </Notice>
                 )}
-            </div>
+            </PageShell>
         );
     }
 
@@ -10970,8 +10957,8 @@ function SettingsView({
         }
     };
     return (
-        <div style={page}>
-            <SettingsHero dirty={dirty} path={path} config={liveConfig} />
+        <PageShell maxWidth={1400} style={pageStyle}>
+            <SettingsHero dirty={dirty} path={path} />
 
             {error && (
                 <div style={{ marginBottom: 16 }}>
@@ -11023,7 +11010,7 @@ function SettingsView({
 
             {dirty && <UnsavedBar onReset={reset} onSave={save} />}
             {toast && <Toast message={toast} />}
-        </div>
+        </PageShell>
     );
 }
 
