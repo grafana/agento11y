@@ -12,6 +12,7 @@ const publishedManifests = [
   "js-core/package.json",
   "plugins/pi/package.json",
   "plugins/opencode/package.json",
+  "plugins/dsh/package.json",
 ];
 const privateManifests = [
   "package.json",

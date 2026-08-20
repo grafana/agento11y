@@ -452,11 +452,6 @@ func TestRun_HookErrorIsSwallowedAfterDispatch(t *testing.T) {
 	}
 }
 
-// TestRun_LauncherDispatch covers argv parsing for both agent launchers.
-// pi and claude share the same flag-parsing path, so each row pins both
-// agents to the same behaviour (separator handling, exit codes, stderr
-// hints). When launcherErr is non-nil the stub returns it after being
-// called, which exercises the "sigil: ..." error-formatting path.
 func TestRun_LauncherDispatch(t *testing.T) {
 	boom := errors.New("boom")
 	exitPtr := func(c int) *int { return &c }
@@ -505,6 +500,9 @@ func TestRun_LauncherDispatch(t *testing.T) {
 		{name: "claude child exit is propagated", agent: "claude", argv: []string{"--"}, launcherErr: &launcher.ExitError{Code: 42}, wantCalled: 1, wantExit: exitPtr(42), wantStderr: stringPtr("")},
 		// A child's exit 2 is the agent's own status, not a wrapper usage error.
 		{name: "claude wrapped child exit 2 prints nothing", agent: "claude", argv: []string{"--"}, launcherErr: fmt.Errorf("exec claude: %w", &launcher.ExitError{Code: 2}), wantCalled: 1, wantExit: exitPtr(2), wantStderr: stringPtr("")},
+
+		{name: "dsh forwards args after separator", agent: "dsh", argv: []string{"--", "web", "--host", "127.0.0.1"}, wantCalled: 1, wantArgs: []string{"web", "--host", "127.0.0.1"}},
+		{name: "dsh preserves a second separator", agent: "dsh", argv: []string{"--", "--", "web", "--host", "127.0.0.1"}, wantCalled: 1, wantArgs: []string{"--", "web", "--host", "127.0.0.1"}},
 
 		{name: "opencode bare", agent: "opencode", wantCalled: 1},
 		{name: "opencode separator only", agent: "opencode", argv: []string{"--"}, wantCalled: 1},
@@ -1805,7 +1803,7 @@ func TestRun_LocalOpen(t *testing.T) {
 }
 
 // TestRun_LocalStatusRunning covers the two shapes `local status` prints for a
-// healthy receiver. The JSON one is the contract the in-process pi and
+// healthy receiver. The JSON one is the contract the in-process dsh, pi, and
 // OpenCode plugins parse to attach to it, and the human one is what an older
 // binary prints when a newer plugin passes --json, so both are pinned.
 func TestRun_LocalStatusRunning(t *testing.T) {

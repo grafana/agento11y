@@ -2020,7 +2020,7 @@ func TestServer_Forwarding_RelaysOTLP(t *testing.T) {
 
 	c := <-received
 	assert.Equal(t, "/v1/traces", c.path)
-	assertTraceStripped(t, c.body, wire.ContentTypeProto)
+	assertTraceStripped(t, c.body, wire.ContentTypeProto, "invalid_request")
 }
 
 // hookCloud is a fake Cloud hook endpoint: it records what the daemon relayed

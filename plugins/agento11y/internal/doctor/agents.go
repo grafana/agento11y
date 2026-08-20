@@ -8,6 +8,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
 	cursorinstall "github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/install"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/dsh"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/kiro"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
@@ -53,6 +54,7 @@ var agentProbes = []agentProbe{
 	{name: "claude", bin: "claude", status: claudecode.Status, configBased: true},
 	{name: "codex", bin: "codex", status: codex.Status},
 	{name: "copilot", bin: "copilot", status: copilot.Status, configBased: true, notInstalledLabel: "not configured", note: "hook-based"},
+	{name: "dsh", bin: "dsh", status: dsh.Status, configBased: true},
 	{name: "opencode", bin: "opencode", status: opencode.Status, configBased: true},
 	{name: "pi", bin: "pi", status: pi.Status, configBased: true},
 	{name: "vibe", bin: "vibe", status: vibe.Status, configBased: true, notInstalledLabel: "not configured", note: "hook-based"},

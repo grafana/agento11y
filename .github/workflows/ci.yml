@@ -281,6 +281,18 @@ jobs:
       - name: Build opencode plugin
         run: pnpm --filter @grafana/agento11y-opencode run build
 
+      - name: Lint dsh plugin
+        run: mise run lint:ts:plugin-dsh
+
+      - name: Typecheck dsh plugin
+        run: mise run typecheck:ts:plugin-dsh
+
+      - name: Test dsh plugin
+        run: mise run test:ts:plugin-dsh
+
+      - name: Build dsh plugin
+        run: mise run build:ts:plugin-dsh
+
   hermes-checks:
     name: Hermes lint, types, and artifacts
     runs-on: ubuntu-latest

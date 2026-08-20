@@ -95,7 +95,7 @@ choice. The SDKs redact addresses by default (`RedactEmailAddresses`). The
 routinely carry commit authors and reviewer addresses, and redacting them costs
 more context than it protects.
 
-Pi and Hermes use their SDK sanitizers and redact email addresses.
+Pi, dsh, and Hermes use their SDK sanitizers and redact email addresses.
 Hermes also redacts addresses on tool-execution spans. Unlike the tiering,
 email handling has not been unified across plugins.
 

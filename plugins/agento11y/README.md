@@ -4,7 +4,7 @@
   <img src="../../.github/img/agento11y.gif" alt="agento11y capturing a coding agent session" width="80%" />
 </p>
 
-Monitor the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, experimental Kiro CLI, and others. Observe usage, cost, tokens, and tools across all of them in one place. Keep sessions on your machine with the local Agent Observability app, or send them to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
+Monitor the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, DeepSeek Harness (`dsh`), OpenCode, Pi, Vibe, experimental Kiro CLI, and others. Observe usage, cost, tokens, and tools across all of them in one place. Keep sessions on your machine with the local Agent Observability app, or send them to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
 ## Quick start
 
@@ -77,12 +77,13 @@ agento11y claude
 | [Codex](https://developers.openai.com/codex) | `agento11y codex` |
 | [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli/using-github-copilot-in-the-cli) | `agento11y copilot` |
 | [Cursor](https://cursor.com) | `agento11y cursor install`, then start Cursor |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | `agento11y dsh -- web` |
 | [OpenCode](https://opencode.ai) | `agento11y opencode` |
 | [Pi](https://github.com/earendil-works/pi) | `agento11y pi` |
 | [Vibe](https://github.com/mistralai/vibe) | `agento11y vibe` |
 | [Kiro CLI 3 (experimental)](../kiro/README.md) | `agento11y kiro -- chat` |
 
-Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md). Per-agent notes and glue live under [`plugins/`](../).
+Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md). The dsh launcher is available on macOS and Linux only, and capture applies only to dsh processes it starts. Per-agent notes and glue live under [`plugins/`](../).
 
 Kiro capture is workspace-scoped and captures prompts and tools only; assistant text, model usage, and cost are unavailable. See the [Kiro limitations](../kiro/README.md#captured-data-and-limits).
 
@@ -399,7 +400,7 @@ agento11y agents reconcile --agents all --json
 
 ### Auto-update
 
-`agento11y claude`, `agento11y codex`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out. On OpenCode 2, `agento11y opencode` does not refresh the plugin, because `opencode plugin update` starts or contacts OpenCode's background service. Run `opencode plugin update @grafana/agento11y-opencode` yourself.
+`agento11y claude`, `agento11y codex`, `agento11y dsh`, and `agento11y opencode` refresh the installed host plugin automatically. Set `AGENTO11Y_AUTO_UPDATE=false` to opt out. On OpenCode 2, `agento11y opencode` does not refresh the plugin, because `opencode plugin update` starts or contacts OpenCode's background service. Run `opencode plugin update @grafana/agento11y-opencode` yourself.
 
 `AGENTO11Y_AUTO_UPDATE` does not apply to the other launchers. `agento11y copilot` rewrites its own `agento11y.json` hooks file, and `agento11y vibe` re-upserts its three entries into vibe's `hooks.toml`, so both always point at the installed binary. `agento11y pi` leaves upgrades to pi's own installer.
 
