@@ -72,7 +72,7 @@ EVAL_REFERENCE_SET_VERSION = "gen_ai.evaluation.reference_set.version"
 # Trial / suite identity on the trial span (test.* family)
 # --------------------------------------------------------------------------- #
 
-TEST_SUITE_RUN_ID = "test.suite.run.id"  # proposed for genai (#79) = experiment/run id
+TEST_SUITE_RUN_ID = "test.suite.run.id"  # proposed for genai (#79) = experiment id
 TEST_SUITE_NAME = "test.suite.name"  # merged (general OTel)
 TEST_SUITE_RUN_STATUS = "test.suite.run.status"  # merged (general OTel)
 TEST_SUITE_ID = "test.suite.id"  # proposed (Grafana) — suite identity distinct from name

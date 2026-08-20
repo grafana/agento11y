@@ -162,7 +162,7 @@ def _assert_matches(captured: dict[str, Any], fixture: dict[str, Any]) -> None:
     assert differences == [], "body differs from the fixture:\n" + "\n".join(differences)
 
 
-def test_stable_ids_match_the_shared_vectors() -> None:
+def test_stable_ids_match_vectors() -> None:
     vectors = _load("ids.json")["vectors"]
     assert vectors
     for vector in vectors:
@@ -174,7 +174,7 @@ def test_run_upsert_matches_the_fixture() -> None:
     captured = _capture(
         lambda client: client.upsert_experiment(
             CreateExperimentRequest(
-                run_id=INPUTS["experiment_id"],
+                experiment_id=INPUTS["experiment_id"],
                 name=INPUTS["experiment_name"],
                 source="external",
                 tags=INPUTS["tags"],
@@ -343,7 +343,7 @@ def test_both_report_envelopes_parse_alike() -> None:
     run_envelope = {key: value for key, value in RESPONSES["report_run_envelope"].items() if key != "comment"}
     from_run = transport._parse_report(run_envelope)  # noqa: SLF001
     assert from_experiment == from_run
-    assert from_experiment.run.run_id == INPUTS["experiment_id"]
+    assert from_experiment.run.experiment_id == INPUTS["experiment_id"]
     assert from_experiment.summary.trial_count == 1
     # Only a score under the "final" key feeds the pass rate, and a stored
     # evaluator writes under its own key.

@@ -125,13 +125,19 @@ def _experiment_body(**overrides: object) -> dict[str, object]:
 
 def test_create_experiment_upserts_external_run() -> None:
     recorder = _Recorder()
-    recorder.push(200, {"run": _experiment_body(tags=["smoke"], metadata={"git_sha": "abc"}), "created": True})
+    recorder.push(
+        200,
+        {
+            "run": _experiment_body(tags=["smoke"], metadata={"git_sha": "abc"}, online_evaluations_enabled=True),
+            "created": True,
+        },
+    )
     server = _serve(recorder)
     try:
         run = transport.create_experiment(
             **_args(server),
             request=CreateExperimentRequest(
-                run_id="run_1",
+                experiment_id="run_1",
                 name="PR 123",
                 source="external",
                 tags=["smoke"],
@@ -139,6 +145,7 @@ def test_create_experiment_upserts_external_run() -> None:
                 suite_version="v2",
                 candidate={"agent_name": "agent-a", "model_name": "model-a"},
                 planned_trial_count=30,
+                online_evaluations_enabled=True,
                 metadata={"git_sha": "abc"},
             ),
         )
@@ -156,10 +163,12 @@ def test_create_experiment_upserts_external_run() -> None:
             "suite_version": "v2",
             "candidate": {"agent_name": "agent-a", "model_name": "model-a"},
             "planned_trial_count": 30,
+            "online_evaluations_enabled": True,
             "metadata": {"git_sha": "abc"},
         }
-        assert run.run_id == "run_1"
+        assert run.experiment_id == "run_1"
         assert run.status == "running"
+        assert run.online_evaluations_enabled is True
         assert run.created_at is not None and run.created_at.tzinfo == timezone.utc
     finally:
         server.shutdown()
@@ -177,7 +186,25 @@ def test_create_experiment_sends_known_empty_plan() -> None:
         )
 
         assert recorder.requests[0]["payload"]["planned_trial_count"] == 0
+        assert "online_evaluations_enabled" not in recorder.requests[0]["payload"]
         assert run.planned_trial_count == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_create_experiment_preserves_explicit_disabled_online_policy() -> None:
+    recorder = _Recorder()
+    recorder.push(200, {"run": _experiment_body(online_evaluations_enabled=False), "created": True})
+    server = _serve(recorder)
+    try:
+        run = transport.create_experiment(
+            **_args(server),
+            request=CreateExperimentRequest(name="disabled", online_evaluations_enabled=False),
+        )
+
+        assert recorder.requests[0]["payload"]["online_evaluations_enabled"] is False
+        assert run.online_evaluations_enabled is False
     finally:
         server.shutdown()
         server.server_close()
@@ -231,7 +258,7 @@ def test_complete_experiment_finalizes_run() -> None:
         # SUCCEEDED is a friendly alias; the backend's terminal status is `completed`.
         run = transport.finalize_experiment(
             **_args(server),
-            run_id="run_1",
+            experiment_id="run_1",
             status=ExperimentStatus.SUCCEEDED,
             score_count=3,
         )
@@ -279,7 +306,7 @@ def test_conflict_has_stable_kind_for_real_server_messages(
         with pytest.raises(ConflictError) as caught:
             transport.finalize_experiment(
                 **_args(server),
-                run_id="run_1",
+                experiment_id="run_1",
                 status="completed",
             )
         assert caught.value.kind is kind
@@ -601,7 +628,7 @@ def test_export_scores_round_trip_and_accepted_count() -> None:
                     score_id="sc1",
                     generation_id="gen1",
                     conversation_id="conv1",
-                    run_id="run_1",
+                    experiment_id="run_1",
                     evaluator_id="smoke.reward",
                     evaluator_version="2026-05-28",
                     score_key="reward",
@@ -613,7 +640,7 @@ def test_export_scores_round_trip_and_accepted_count() -> None:
                 ScoreItem(
                     score_id="sc2",
                     generation_id="gen2",
-                    run_id="run_1",
+                    experiment_id="run_1",
                     evaluator_id="smoke.reward",
                     evaluator_version="2026-05-28",
                     score_key="pass",
@@ -626,7 +653,6 @@ def test_export_scores_round_trip_and_accepted_count() -> None:
         scores = request["payload"]["scores"]
         assert scores[0]["value"] == {"number": 0.82}
         assert scores[0]["experiment_id"] == "run_1"
-        assert "run_id" not in scores[0]  # backend has no run_id field
         assert scores[0]["source"] == {"kind": "experiment", "id": "run_1"}
         assert scores[1]["value"] == {"bool": True}
         assert response.accepted_count == 1
@@ -858,7 +884,7 @@ def test_get_experiment_maps_not_found() -> None:
     server = _serve(recorder)
     try:
         with pytest.raises(NotFoundError):
-            transport.get_experiment(**_args(server), run_id="run_missing")
+            transport.get_experiment(**_args(server), experiment_id="run_missing")
     finally:
         server.shutdown()
         server.server_close()
@@ -924,7 +950,7 @@ def test_experiment_lifecycle_and_scores_share_configured_auth() -> None:
     try:
         transport.create_experiment(
             **_args(server),
-            request=CreateExperimentRequest(run_id="run_1", name="shared auth", source="external"),
+            request=CreateExperimentRequest(experiment_id="run_1", name="shared auth", source="external"),
         )
         create_req = recorder.requests[0]
         assert create_req["path"] == "/api/v1/experiment-runs:upsert"
@@ -941,7 +967,7 @@ def test_experiment_lifecycle_and_scores_share_configured_auth() -> None:
                     evaluator_version="v1",
                     score_key="reward",
                     value=ScoreValue(number=1.0),
-                    run_id="run_1",
+                    experiment_id="run_1",
                 )
             ],
         )
@@ -981,7 +1007,7 @@ def test_get_experiment_report_parses_summary() -> None:
     )
     server = _serve(recorder)
     try:
-        report = transport.get_experiment_report(**_args(server), run_id="run_1")
+        report = transport.get_experiment_report(**_args(server), experiment_id="run_1")
         assert recorder.requests[0]["path"] == "/api/v1/eval/experiments/run_1/report"
         assert report.run.status == "completed"
         assert report.summary.test_case_count == 2

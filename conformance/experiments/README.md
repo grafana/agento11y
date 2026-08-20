@@ -45,9 +45,9 @@ Every dynamic path segment is percent-encoded with no safe characters. Go's
 `:evaluate` verb off the raw path segment before it decodes the trial id, so an
 unescaped colon inside an id would change which route the request reaches.
 
-The run key is `experiment_id` on the wire. Go and Python expose it as `run_id` on
-their types, JavaScript as `runId`, but the ingest route keys on `experiment_id`
-and rejects unknown fields, so the rename happens at serialization.
+The run key is `experiment_id` on the wire. Python exposes the same canonical
+name. Go and JavaScript retain language-specific client model names, but the
+ingest route keys on `experiment_id` and rejects unknown fields.
 
 Blank optional fields are omitted, not sent empty. `trial_create` carries only the
 four fields the route requires. `trial_evaluate_latest_version` shows the same
