@@ -98,9 +98,10 @@ import (
 
 	"google.golang.org/protobuf/encoding/protowire"
 
-	// The pure-Go driver. The release binary builds with CGO_ENABLED=0
-	// (.goreleaser.yaml), so a cgo driver cannot be used.
-	_ "modernc.org/sqlite"
+	// The pure-Go driver is required by CGO-disabled release builds. Do not
+	// import modernc.org/sqlite here: both drivers register the database/sql
+	// name "sqlite", and the second registration panics during init.
+	_ "github.com/glebarez/go-sqlite"
 )
 
 // ErrNoMeta reports a store whose meta table holds no row, which is a Cursor
