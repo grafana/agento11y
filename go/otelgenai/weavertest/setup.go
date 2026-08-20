@@ -1,9 +1,22 @@
+// Package weavertest prepares the pinned OpenTelemetry GenAI
+// semantic-convention registry and checks telemetry against it with
+// [Weaver].
+//
+// The policies and the Weaver configuration are embedded, so a caller needs
+// no files of its own. [Setup] writes them next to the cached registry and
+// returns the paths. Two runners consume those assets: [Start] sends live
+// telemetry over OTLP, and [LiveCheck] checks recorded spans from a file.
+//
+// [Weaver]: https://github.com/open-telemetry/weaver
 package weavertest
 
 import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"embed"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -12,15 +25,26 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 )
+
+// inputs holds the Rego policies and the Weaver configuration. They are
+// embedded rather than read from the repository so that a consumer outside
+// this repository gets the same rules as the SDK's own conformance suite.
+//
+//go:embed policies/*.rego weaver.toml
+var inputs embed.FS
 
 const (
 	fetchTimeout          = 60 * time.Second
 	registryStampContents = "v1\n"
 )
+
+// maxEntryBytes limits the size of each extracted file. The registry's largest
+// file is a few hundred kilobytes, well below the 64 MiB default. Tests can
+// lower the limit.
+var maxEntryBytes int64 = 64 << 20
 
 var (
 	migratedDirs   = []string{"gen-ai", "mcp", "openai"}
@@ -32,57 +56,144 @@ var (
 	}
 )
 
-// Assets are the local registry and policy inputs for Weaver.
+// Assets are the local registry, policy and configuration inputs for Weaver.
 type Assets struct {
-	Registry   string
-	Policies   string
-	Config     string
+	// Registry is the model directory of the prepared GenAI registry.
+	Registry string
+	// Policies is the directory holding the Rego advice policies.
+	Policies string
+	// Config is the Weaver configuration file.
+	Config string
+	// AdviceData is a glob of the registry's JSON schema advice data.
 	AdviceData string
+	// RegistryRef is the semantic-conventions-genai commit the registry
+	// was built from.
+	RegistryRef string
+	// UpstreamVersion is the semantic-conventions release that commit
+	// depends on, read from the registry's versions.env.
+	UpstreamVersion string
 }
 
-// Setup prepares the pinned GenAI registry and returns Weaver's local inputs.
-func Setup(ctx context.Context) (Assets, error) {
-	root, err := workspaceRoot()
+// Setup prepares the GenAI registry at registryRef and returns Weaver's local
+// inputs. registryRef must identify a commit in
+// open-telemetry/semantic-conventions-genai. The registry has no tagged
+// releases. A cold run downloads the selected commit and the upstream
+// semantic-conventions release pinned by that commit. Later runs reuse
+// $SEMCONV_CACHE, or the user cache directory if the variable is unset.
+func Setup(ctx context.Context, registryRef string) (Assets, error) {
+	if registryRef == "" {
+		return Assets{}, errors.New("registry ref is empty")
+	}
+
+	registryRoot, err := provisionRegistry(ctx, registryRef)
 	if err != nil {
 		return Assets{}, err
 	}
-	genAIRef := os.Getenv("SEMCONV_GENAI_REF")
-	if genAIRef == "" {
-		return Assets{}, errors.New("SEMCONV_GENAI_REF is not set; run the conformance test through mise")
+	upstream, err := upstreamVersion(registryRoot)
+	if err != nil {
+		return Assets{}, err
 	}
-
-	registryRoot, err := provisionRegistry(ctx, genAIRef)
+	policies, config, err := writeInputs(registryRoot)
 	if err != nil {
 		return Assets{}, err
 	}
 
 	return Assets{
-		Registry:   filepath.Join(registryRoot, "model"),
-		Policies:   filepath.Join(root, "conformance", "genai", "policies"),
-		Config:     filepath.Join(root, "conformance", "genai", ".weaver.toml"),
-		AdviceData: adviceDataGlob(registryRoot),
+		Registry:        filepath.Join(registryRoot, "model"),
+		Policies:        policies,
+		Config:          config,
+		AdviceData:      adviceDataGlob(registryRoot),
+		RegistryRef:     registryRef,
+		UpstreamVersion: upstream,
 	}, nil
 }
 
-func workspaceRoot() (string, error) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", errors.New("cannot locate Weaver setup source")
-	}
-	for dir := filepath.Dir(file); ; dir = filepath.Dir(dir) {
-		if isFile(filepath.Join(dir, "mise.toml")) && isDir(filepath.Join(dir, "conformance", "genai", "policies")) {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("cannot find workspace root above %s", file)
-		}
-	}
+type embeddedInput struct {
+	name     string
+	contents []byte
 }
 
-func isFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
+// writeInputs installs the embedded policies and configuration below the
+// prepared registry and returns the policy directory and the config file. Each
+// content digest has its own directory, and writeInputs never replaces it. A
+// rename publishes all files together for concurrent callers.
+func writeInputs(registryRoot string) (policies string, config string, err error) {
+	files, digest, err := loadEmbeddedInputs()
+	if err != nil {
+		return "", "", err
+	}
+	root := filepath.Join(registryRoot, ".weavertest-"+digest)
+	policies = filepath.Join(root, "policies")
+	config = filepath.Join(root, "weaver.toml")
+	if isDir(root) {
+		return policies, config, nil
+	}
+
+	parent := filepath.Dir(root)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", "", fmt.Errorf("create Weaver input cache: %w", err)
+	}
+	staging, err := os.MkdirTemp(parent, ".weavertest-staging-")
+	if err != nil {
+		return "", "", fmt.Errorf("create Weaver input staging directory: %w", err)
+	}
+	defer os.RemoveAll(staging)
+
+	for _, file := range files {
+		target := filepath.Join(staging, filepath.FromSlash(file.name))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return "", "", fmt.Errorf("create Weaver input directory: %w", err)
+		}
+		if err := os.WriteFile(target, file.contents, 0o644); err != nil {
+			return "", "", fmt.Errorf("write %s: %w", target, err)
+		}
+	}
+	if err := os.Rename(staging, root); err != nil && !isDir(root) {
+		return "", "", fmt.Errorf("install Weaver inputs: %w", err)
+	}
+	return policies, config, nil
+}
+
+func loadEmbeddedInputs() ([]embeddedInput, string, error) {
+	entries, err := fs.ReadDir(inputs, "policies")
+	if err != nil {
+		return nil, "", err
+	}
+	names := make([]string, 0, len(entries)+1)
+	for _, entry := range entries {
+		names = append(names, "policies/"+entry.Name())
+	}
+	names = append(names, "weaver.toml")
+
+	files := make([]embeddedInput, 0, len(names))
+	var digestInput []byte
+	for _, name := range names {
+		contents, err := inputs.ReadFile(name)
+		if err != nil {
+			return nil, "", err
+		}
+		files = append(files, embeddedInput{name: name, contents: contents})
+		digestInput = append(digestInput, name...)
+		digestInput = append(digestInput, 0)
+		digestInput = binary.AppendUvarint(digestInput, uint64(len(contents)))
+		digestInput = append(digestInput, contents...)
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256(digestInput))
+	return files, digest, nil
+}
+
+// upstreamVersion reads the semantic-conventions release the GenAI registry
+// depends on.
+func upstreamVersion(registryRoot string) (string, error) {
+	pins, err := loadPins(filepath.Join(registryRoot, "versions.env"))
+	if err != nil {
+		return "", err
+	}
+	version := pins["SEMCONV_VERSION"]
+	if version == "" {
+		return "", errors.New("GenAI registry versions.env has no SEMCONV_VERSION")
+	}
+	return version, nil
 }
 
 func isDir(path string) bool {
@@ -144,18 +255,14 @@ func provisionRegistry(ctx context.Context, genAIRef string) (string, error) {
 	if err := downloadAndExtract(ctx, genAIURL, genAIRoot, "genai-semconv"); err != nil {
 		return "", err
 	}
-	upstreamPins, err := loadPins(filepath.Join(genAIRoot, "versions.env"))
+	upstream, err := upstreamVersion(genAIRoot)
 	if err != nil {
 		return "", err
 	}
-	upstreamVersion := upstreamPins["SEMCONV_VERSION"]
-	if upstreamVersion == "" {
-		return "", errors.New("GenAI registry versions.env has no SEMCONV_VERSION")
-	}
 
-	upstreamRoot := filepath.Join(cache, "upstream-"+upstreamVersion)
+	upstreamRoot := filepath.Join(cache, "upstream-"+upstream)
 	if !isDir(filepath.Join(upstreamRoot, "model")) {
-		upstreamURL := "https://github.com/open-telemetry/semantic-conventions/archive/refs/tags/" + upstreamVersion + ".tar.gz"
+		upstreamURL := "https://github.com/open-telemetry/semantic-conventions/archive/refs/tags/" + upstream + ".tar.gz"
 		if err := downloadAndExtract(ctx, upstreamURL, upstreamRoot, "upstream-semconv"); err != nil {
 			return "", err
 		}
@@ -243,6 +350,9 @@ func extractTar(src io.Reader, target string) error {
 		if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
 			return fmt.Errorf("archive entry escapes extraction root: %q", header.Name)
 		}
+		if err := checkNoSymlinkParent(target, name); err != nil {
+			return err
+		}
 		path := filepath.Join(target, name)
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -257,10 +367,13 @@ func extractTar(src io.Reader, target string) error {
 			if err != nil {
 				return err
 			}
-			_, copyErr := io.Copy(file, reader)
+			written, copyErr := io.Copy(file, io.LimitReader(reader, maxEntryBytes+1))
 			closeErr := file.Close()
 			if err := errors.Join(copyErr, closeErr); err != nil {
 				return err
+			}
+			if written > maxEntryBytes {
+				return fmt.Errorf("archive entry %q is larger than %d bytes", header.Name, maxEntryBytes)
 			}
 		case tar.TypeSymlink:
 			linkTarget := filepath.Clean(filepath.Join(filepath.Dir(name), filepath.FromSlash(header.Linkname)))
@@ -279,6 +392,29 @@ func extractTar(src io.Reader, target string) error {
 			return fmt.Errorf("unsupported archive entry type %d for %q", header.Typeflag, header.Name)
 		}
 	}
+}
+
+// checkNoSymlinkParent rejects paths that traverse symlinks from earlier
+// archive entries. Lexical checks cannot detect a symlink chain whose
+// individual targets stay inside the extraction root but resolve outside it
+// when combined.
+func checkNoSymlinkParent(target, name string) error {
+	current := target
+	for part := range strings.SplitSeq(name, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if errors.Is(err, fs.ErrNotExist) {
+			// Nothing below this component exists yet either.
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("archive entry %q writes through symlink %q", name, current)
+		}
+	}
+	return nil
 }
 
 func materializeFilteredUpstream(genAIRoot, upstreamRoot string) (string, error) {

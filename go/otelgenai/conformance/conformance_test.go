@@ -25,7 +25,7 @@ import (
 
 	"github.com/grafana/agento11y/go/agento11y/otelhook"
 	"github.com/grafana/agento11y/go/otelgenai"
-	"github.com/grafana/agento11y/go/otelgenai/conformance/internal/weavertest"
+	"github.com/grafana/agento11y/go/otelgenai/weavertest"
 )
 
 type expectedViolation struct {
@@ -56,9 +56,13 @@ func TestConformance(t *testing.T) {
 	if _, err := exec.LookPath("weaver"); err != nil {
 		t.Skip("weaver is not on PATH")
 	}
+	registryRef := os.Getenv("SEMCONV_GENAI_REF")
+	if registryRef == "" {
+		t.Fatal("SEMCONV_GENAI_REF is not set; run the conformance test through mise")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	assets, err := weavertest.Setup(ctx)
+	assets, err := weavertest.Setup(ctx, registryRef)
 	if err != nil {
 		t.Fatalf("prepare Weaver inputs: %v", err)
 	}
