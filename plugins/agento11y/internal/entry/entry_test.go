@@ -22,6 +22,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
 	"github.com/stretchr/testify/assert"
@@ -450,6 +451,7 @@ func TestRun_HookErrorIsSwallowedAfterDispatch(t *testing.T) {
 func TestRun_LauncherDispatch(t *testing.T) {
 	boom := errors.New("boom")
 	exitPtr := func(c int) *int { return &c }
+	stringPtr := func(s string) *string { return &s }
 
 	cases := []struct {
 		name               string
@@ -461,6 +463,7 @@ func TestRun_LauncherDispatch(t *testing.T) {
 		wantExit           *int     // nil → run must not call exit
 		wantStderrContains string
 		wantStderrPrefix   string
+		wantStderr         *string
 	}{
 		{name: "pi bare", agent: "pi", wantCalled: 1},
 		{name: "pi separator only", agent: "pi", argv: []string{"--"}, wantCalled: 1},
@@ -475,6 +478,7 @@ func TestRun_LauncherDispatch(t *testing.T) {
 		{name: "claude missing separator exits 2", agent: "claude", argv: []string{"foo"}, wantExit: exitPtr(2), wantStderrContains: "use `agento11y claude -- <args>`"},
 		{name: "claude unknown options before separator exits 2", agent: "claude", argv: []string{"--foo", "--", "args"}, wantExit: exitPtr(2), wantStderrContains: "unknown options before `--`: [--foo]"},
 		{name: "claude launcher error exits 1", agent: "claude", argv: []string{"--"}, launcherErr: boom, wantCalled: 1, wantExit: exitPtr(1), wantStderrPrefix: "agento11y:"},
+		{name: "claude child exit is propagated", agent: "claude", argv: []string{"--"}, launcherErr: &launcher.ExitError{Code: 42}, wantCalled: 1, wantExit: exitPtr(42), wantStderr: stringPtr("")},
 
 		{name: "opencode bare", agent: "opencode", wantCalled: 1},
 		{name: "opencode separator only", agent: "opencode", argv: []string{"--"}, wantCalled: 1},
@@ -522,6 +526,9 @@ func TestRun_LauncherDispatch(t *testing.T) {
 			}
 			if tc.wantStderrPrefix != "" && !strings.HasPrefix(stderr.String(), tc.wantStderrPrefix) {
 				t.Fatalf("stderr does not start with %q: %q", tc.wantStderrPrefix, stderr.String())
+			}
+			if tc.wantStderr != nil && stderr.String() != *tc.wantStderr {
+				t.Fatalf("stderr = %q, want %q", stderr.String(), *tc.wantStderr)
 			}
 		})
 	}

@@ -120,16 +120,11 @@ func TestReadDotenvReportsReadFailures(t *testing.T) {
 	dir := t.TempDir()
 
 	t.Run("open fails", func(t *testing.T) {
-		if os.Geteuid() == 0 {
-			t.Skip("root ignores file permissions")
-		}
 		path := filepath.Join(dir, "unreadable.env")
 		if err := os.WriteFile(path, []byte("AGENTO11Y_LOCAL_FORWARD=false\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(path, 0o000); err != nil {
-			t.Fatal(err)
-		}
+		makeUnreadable(t, path)
 
 		var buf bytes.Buffer
 		got, err := ReadDotenv(path, log.New(&buf, "", 0))
@@ -365,6 +360,7 @@ func TestFilePathDefaultsToHomeDotConfigWhenXDGUnset(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	got := FilePath()
 	want := filepath.Join(home, ".config", "agento11y", "config.env")

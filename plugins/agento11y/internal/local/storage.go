@@ -363,9 +363,28 @@ func writeFileAtomic(dir, name string, data []byte) error {
 	if err := os.Chmod(tmp, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(dir, name))
+	return replaceFile(tmp, filepath.Join(dir, name))
 }
 
 func validConversationID(id string) bool {
-	return id != "" && !strings.ContainsAny(id, "/\\") && !strings.ContainsRune(id, 0)
+	if id == "" || strings.ContainsAny(id, `<>:"/\|?*`) || strings.HasSuffix(id, ".") || strings.HasSuffix(id, " ") {
+		return false
+	}
+	if strings.IndexFunc(id, func(r rune) bool { return r >= 0 && r < 32 }) >= 0 {
+		return false
+	}
+
+	name, _, _ := strings.Cut(id, ".")
+	name = strings.ToUpper(name)
+	switch name {
+	case "CON", "PRN", "AUX", "NUL":
+		return false
+	}
+	if strings.HasPrefix(name, "COM") || strings.HasPrefix(name, "LPT") {
+		switch name[3:] {
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9", "¹", "²", "³":
+			return false
+		}
+	}
+	return true
 }

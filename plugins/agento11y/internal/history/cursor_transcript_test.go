@@ -291,7 +291,7 @@ func TestParseCursorTranscriptTimestamp(t *testing.T) {
 
 func TestCursorWorkspaceFromTranscriptPath(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHomeDir(t, home)
 	// Build a real workspace path under the fake home.
 	ws := filepath.Join(home, "Development", "demo-app")
 	if err := os.MkdirAll(ws, 0o750); err != nil {

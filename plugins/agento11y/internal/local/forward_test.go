@@ -1077,25 +1077,20 @@ func TestForwardLoader_StatusReportsUnreadableConfig(t *testing.T) {
 	// and the open fails. Both must refuse to forward, since the daemon's
 	// process environment still holds the boot-time LOCAL_FORWARD=true.
 	t.Run("stat fails", func(t *testing.T) {
-		parent := filepath.Join(t.TempDir(), "not-a-dir")
-		require.NoError(t, os.WriteFile(parent, []byte("x"), 0o600))
-		assertForwardRefusedAsUnreadable(t, filepath.Join(parent, "config.env"))
+		assertForwardRefusedAsUnreadable(t, unstatablePath(t))
 	})
 
 	t.Run("open fails", func(t *testing.T) {
-		if os.Geteuid() == 0 {
-			t.Skip("root ignores file permissions")
-		}
 		path := filepath.Join(t.TempDir(), "config.env")
 		require.NoError(t, os.WriteFile(path, []byte(envconfig.PreferredKey("LOCAL_FORWARD")+"=false\n"), 0o600))
-		require.NoError(t, os.Chmod(path, 0o000))
+		restoreReads := makeUnreadable(t, path)
 
 		l := assertForwardRefusedAsUnreadable(t, path)
 
-		// Chmod changes neither size nor mtime, so the refusal must not be
-		// cached against them: the file's own "off" has to win once it can be
-		// read.
-		require.NoError(t, os.Chmod(path, 0o600))
+		// Restoring reads changes neither size nor mtime, so the refusal must
+		// not be cached against them: the file's own "off" has to win once it
+		// can be read.
+		restoreReads()
 		st := l.status()
 		assert.False(t, st.Enabled)
 		assert.Empty(t, st.Reason)

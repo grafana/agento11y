@@ -334,7 +334,8 @@ func historyImport(opts historyImportOptions, interactive bool, stdout, stderr i
 		localValue, localKey, _ = envconfig.LookupMap(fileEnv, "LOCAL")
 	}
 	envLocal := localEnvRequest{on: envconfig.ParseBool(localValue), key: localKey}
-	logger := cli.InitLogger("history")
+	logger, closeLog := cli.InitLogger("history")
+	defer closeLog()
 
 	filter := history.NewFilter()
 	filter.Since = opts.Since
