@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	_ "github.com/glebarez/go-sqlite"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/chatstore"
-	_ "modernc.org/sqlite"
 )
 
 const schema = `

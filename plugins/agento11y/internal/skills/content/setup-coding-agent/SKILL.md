@@ -454,7 +454,7 @@ chooses which fields ship, not whether the shipped fields are clean. Treat
 
 `agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** routes
 launcher runs and agento11y hooks through the local daemon. The daemon stores
-full generation content in its JSONL store. It forwards full content only when
+full generation content in its SQLite database. It forwards full content only when
 `AGENTO11Y_CONTENT_CAPTURE_MODE=full`; every other selected mode is reduced to
 `metadata_only` for Cloud. **Local only** does not forward. **Local web UI = No**
 sends directly to Cloud without a local copy. `--no-local` uses Cloud once without

@@ -120,9 +120,11 @@ To re-enter credentials later, run `agento11y login`. It asks where sessions go 
 
 ## Local mode
 
-`agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** records full session content to a JSONL store on this machine and serves a local viewer. The launcher prints the viewer URL: it tries `http://127.0.0.1:8765` first and moves to a higher port when that one is taken. Manage the daemon with `agento11y local start|open|status|stop|restart`. Use `agento11y local open` to start the receiver if needed, print its address, and try to open the viewer. Local mode runs on macOS and Linux only; Windows has no local receiver.
+`agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** records full session content to a SQLite database on this machine and serves a local viewer. The launcher prints the viewer URL: it tries `http://127.0.0.1:8765` first and moves to a higher port when that one is taken. Manage the daemon with `agento11y local start|open|status|stop|restart`. Use `agento11y local open` to start the receiver if needed, print its address, and try to open the viewer. Local mode runs on macOS and Linux only; Windows has no local receiver.
 
 **Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and writes `AGENTO11Y_LOCAL_FORWARD` and `SIGIL_LOCAL_FORWARD` as false. Sessions then stay on the machine. **Local web UI = Yes** writes all four keys as true and forwards with valid Cloud credentials. **Local web UI = No** writes all four keys as false and sends directly to Cloud. `--no-local` sends one launcher session to Cloud without changing those keys.
+
+Existing JSONL stores migrate in the background. A later daemon start removes the JSONL files after SQLite becomes the source of truth.
 
 The daemon always stores full generation content locally. It forwards full generation content only when `AGENTO11Y_CONTENT_CAPTURE_MODE=full`. Every other selected mode is reduced to `metadata_only` for the forwarded Cloud copy.
 
