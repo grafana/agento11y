@@ -2,8 +2,10 @@ package local
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/grafana/agento11y/go/agento11y"
+	"gorm.io/gorm"
 )
 
 // ConversationSummary is one row in the viewer's list screen. Numeric
@@ -109,73 +112,130 @@ type ConversationDetail struct {
 
 // ConversationListOptions bounds one conversation-list request.
 //
-// The page is cut before any file is decoded: entries are ordered by file
-// modification time (newest first) and only the requested page is
-// summarised, so the cost of a request follows Limit rather than the size
-// of the store.
+// SQLite applies Since and Limit while querying the returned page. The
+// JSONL fallback decodes the legacy store before filtering and limiting it.
 type ConversationListOptions struct {
-	// Limit caps how many conversations are summarised and returned.
+	// Limit caps how many conversations are returned.
 	// ≤ 0 means unbounded.
 	Limit int
 	// Since drops conversations whose last activity predates it. The bound
 	// is inclusive, so a conversation whose last activity is exactly Since
-	// is kept. It applies to the file modification time, which every append
-	// stamps with the newest activity the file holds. Zero means no lower
-	// bound.
+	// is kept. Zero means no lower bound.
 	Since time.Time
 }
 
-// ListConversations produces one ConversationSummary per conversation
-// file, newest-first by file modification time with ties broken by
-// conversation id, so paging is deterministic. total counts the
-// conversation files in the store before Limit and Since: a caller holding
-// one page still knows whether the store is empty. A missing directory
-// returns an empty slice and a zero total (first-launch case).
-//
-// The limit can apply before the decode only because the order comes from
-// the file modification time rather than the decoded last_activity. The two
-// agree because an append stamps the file with the newest activity it holds
-// (recordActivity), and the modification-time pass at startup sets the same
-// stamp on every file whose records disagree with it. A copy or restore
-// that rewrites modification times reorders the list until the next append.
+// ListConversations produces one ConversationSummary per conversation,
+// newest-first by activity with ties broken by conversation id. total counts
+// the store before Limit and Since, so a caller holding one page still knows
+// whether the store is empty. When sqliteReadsReady reports false, it
+// decodes legacy JSONL directly.
 func (s *Storage) ListConversations(opts ConversationListOptions) (page []ConversationSummary, total int, err error) {
+	ready, err := s.sqliteReadsReady()
+	if err != nil {
+		return nil, 0, err
+	}
+	if ready {
+		return s.listConversationsSQL(opts)
+	}
 	files, err := s.conversationFiles()
 	if err != nil {
 		return nil, 0, err
 	}
-	capacity := len(files)
-	if opts.Limit > 0 && opts.Limit < capacity {
-		capacity = opts.Limit
-	}
-	out := make([]ConversationSummary, 0, capacity)
+	out := make([]ConversationSummary, 0, len(files))
 	var skipped int
 	defer func() { s.logSkipped("list conversations", skipped) }()
 	for _, f := range files {
-		// Files are newest-first, so the first one below the bound ends
-		// the walk without opening it.
-		if !opts.Since.IsZero() && f.modTime.Before(opts.Since) {
-			break
-		}
-		entry, err := s.summaries.get(f)
+		entry, err := decodeFileSummary(f)
 		if err != nil {
 			return nil, 0, err
 		}
 		skipped += entry.skipped
-		if !entry.ok {
-			continue // empty or all-invalid file
-		}
-		out = append(out, entry.summary)
-		if opts.Limit > 0 && len(out) == opts.Limit {
-			break
+		if entry.ok && (opts.Since.IsZero() || !entry.summary.LastActivity.Before(opts.Since)) {
+			out = append(out, entry.summary)
 		}
 	}
-	s.summaries.prune(files)
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].LastActivity.Equal(out[j].LastActivity) {
+			return out[i].LastActivity.After(out[j].LastActivity)
+		}
+		return out[i].ID < out[j].ID
+	})
+	if opts.Limit > 0 && len(out) > opts.Limit {
+		out = out[:opts.Limit]
+	}
 	return out, len(files), nil
 }
 
-// conversationFile is one conversation JSONL file with the modification
-// time the list and metrics endpoints order and filter on, and the size
-// that validates a cached summary alongside it.
+func (s *Storage) listConversationsSQL(opts ConversationListOptions) ([]ConversationSummary, int, error) {
+	var total int64
+	if err := s.sql.db.Model(&sqlConversation{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	query := s.sql.db.Model(&sqlConversation{}).Order("activity DESC").Order("conv_id ASC")
+	if !opts.Since.IsZero() {
+		query = query.Where("activity >= ?", opts.Since)
+	}
+	if opts.Limit > 0 {
+		query = query.Limit(opts.Limit)
+	}
+	var rows []sqlConversation
+	if err := query.Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	out := make([]ConversationSummary, 0, len(rows))
+	for _, row := range rows {
+		agents, err := decodeSQLStringList(row.Agents)
+		if err != nil {
+			return nil, 0, err
+		}
+		models, err := decodeSQLStringList(row.Models)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, ConversationSummary{
+			ID:           row.ConvID,
+			Title:        row.Title,
+			StartedAt:    row.StartedAt,
+			LastActivity: row.Activity,
+			Calls:        row.Calls,
+			InputTokens:  row.InputTokens,
+			OutputTokens: row.OutputTokens,
+			TotalTokens:  row.TotalTokens,
+			TokenBuckets: TokenBuckets{
+				FreshInput: row.FreshInput,
+				CacheRead:  row.CacheRead,
+				CacheWrite: row.CacheWrite,
+				Output:     row.Output,
+				Reasoning:  row.Reasoning,
+			},
+			Agents:    agents,
+			Models:    models,
+			Status:    row.Status,
+			Workspace: row.Workspace,
+			Branch:    row.Branch,
+			Subagents: row.Subagents,
+		})
+	}
+	return out, int(total), nil
+}
+
+func decodeSQLStringList(raw string) ([]string, error) {
+	out := []string{}
+	if raw == "" {
+		return out, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out, nil
+}
+
+// conversationFile describes one legacy conversation JSONL file.
+// fileNeedsMigration checks its retry marker, size, and modTime against the
+// migrated_file state.
 type conversationFile struct {
 	id      string
 	path    string
@@ -183,9 +243,8 @@ type conversationFile struct {
 	modTime time.Time
 }
 
-// conversationFiles lists the conversation files newest-first by
-// modification time, breaking ties by id so a page boundary is stable
-// across requests. A missing directory yields no files and no error.
+// conversationFiles lists legacy conversation files by id. A missing
+// directory yields no files and no error.
 func (s *Storage) conversationFiles() ([]conversationFile, error) {
 	dir := filepath.Join(s.dir, ConversationsDir)
 	entries, err := os.ReadDir(dir)
@@ -214,13 +273,118 @@ func (s *Storage) conversationFiles() ([]conversationFile, error) {
 			modTime: info.ModTime(),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].modTime.Equal(out[j].modTime) {
-			return out[i].modTime.After(out[j].modTime)
-		}
-		return out[i].id < out[j].id
-	})
+	sort.Slice(out, func(i, j int) bool { return out[i].id < out[j].id })
 	return out, nil
+}
+
+// fileSummary is the uncached JSONL projection used whenever
+// sqliteReadsReady reports false.
+type fileSummary struct {
+	summary ConversationSummary
+	ok      bool
+	points  []TokenUsagePoint
+	first   time.Time
+	last    time.Time
+	skipped int
+}
+
+func (e *fileSummary) bounds(since time.Time) (first, last time.Time, ok bool) {
+	if len(e.points) == 0 {
+		return time.Time{}, time.Time{}, false
+	}
+	if since.IsZero() || !e.first.Before(since) {
+		return e.first, e.last, true
+	}
+	if e.last.Before(since) {
+		return time.Time{}, time.Time{}, false
+	}
+	for _, point := range e.points {
+		if point.Timestamp.Before(since) {
+			continue
+		}
+		if !ok || point.Timestamp.Before(first) {
+			first = point.Timestamp
+		}
+		if point.Timestamp.After(last) {
+			last = point.Timestamp
+		}
+		ok = true
+	}
+	return first, last, ok
+}
+
+func decodeFileSummary(file conversationFile) (*fileSummary, error) {
+	entry := &fileSummary{}
+	agents := map[string]struct{}{}
+	models := map[string]struct{}{}
+	var summary ConversationSummary
+	var hasError, seen bool
+
+	skipped, err := scanLatestSummaryRecords(file.path, func(rec summaryRecord) {
+		gen := rec.Generation
+		seen = true
+		if summary.ID == "" {
+			summary.ID = rec.ConversationID
+		}
+		summary.Calls++
+		usage := gen.Usage.toSDK()
+		summary.InputTokens += usage.InputTokens
+		summary.OutputTokens += usage.OutputTokens
+		summary.TotalTokens += totalTokensForView(usage, gen.Model.Provider)
+		summary.TokenBuckets = summary.TokenBuckets.plus(disjointTokenUsage(usage, gen.Model.Provider))
+		if !gen.StartedAt.IsZero() && (summary.StartedAt.IsZero() || gen.StartedAt.Before(summary.StartedAt)) {
+			summary.StartedAt = gen.StartedAt
+		}
+		if when := recordActivity(gen, rec.ReceivedAt); when.After(summary.LastActivity) {
+			summary.LastActivity = when
+		}
+		if gen.AgentName != "" {
+			agents[gen.AgentName] = struct{}{}
+		}
+		if model := gen.modelName(); model != "" {
+			models[model] = struct{}{}
+		}
+		if summary.Title == "" {
+			summary.Title = gen.title()
+		}
+		if summary.Workspace == "" {
+			summary.Workspace = gen.Tags["cwd"]
+		}
+		if summary.Branch == "" {
+			summary.Branch = gen.Tags["git.branch"]
+		}
+		if strings.Contains(gen.AgentName, "/") {
+			summary.Subagents++
+		}
+		if gen.CallError != "" {
+			hasError = true
+		}
+		if point, ok := tokenUsagePoint(rec); ok {
+			entry.points = append(entry.points, point)
+			if entry.first.IsZero() || point.Timestamp.Before(entry.first) {
+				entry.first = point.Timestamp
+			}
+			if point.Timestamp.After(entry.last) {
+				entry.last = point.Timestamp
+			}
+		}
+	})
+	entry.skipped = skipped
+	if err != nil {
+		return nil, err
+	}
+	if !seen {
+		return entry, nil
+	}
+	summary.Agents = sortedKeys(agents)
+	summary.Models = sortedKeys(models)
+	summary.Status = "ok"
+	if hasError {
+		summary.Status = "err"
+	}
+	entry.summary = summary
+	entry.ok = true
+	return entry, nil
 }
 
 // ConversationDetail returns the chronological generation list for one
@@ -230,39 +394,20 @@ func (s *Storage) ConversationDetail(id string) (*ConversationDetail, error) {
 	if !validConversationID(id) {
 		return nil, errors.New("invalid conversation id")
 	}
+	ready, err := s.sqliteReadsReady()
+	if err != nil {
+		return nil, err
+	}
+	if ready {
+		return s.conversationDetailSQL(id)
+	}
 	path := filepath.Join(s.dir, ConversationsDir, id+".jsonl")
 	out := &ConversationDetail{ID: id}
 	skipped, err := scanLatestGenerationRecords(path, func(_ generationRecord, gen storedGeneration) {
 		if out.Title == "" && gen.title() != "" {
 			out.Title = gen.title()
 		}
-		usage := gen.Usage.toSDK()
-		input := gen.inputMessages()
-		output := gen.outputMessages()
-		view := GenerationView{
-			GenerationID:        gen.ID,
-			AgentName:           gen.AgentName,
-			Model:               gen.modelName(),
-			Provider:            gen.Model.Provider,
-			StartedAt:           gen.StartedAt,
-			CompletedAt:         gen.CompletedAt,
-			InputTokens:         usage.InputTokens,
-			OutputTokens:        usage.OutputTokens,
-			TotalTokens:         totalTokensForView(usage, gen.Model.Provider),
-			TokenBuckets:        disjointTokenUsage(usage, gen.Model.Provider),
-			Input:               input,
-			Output:              output,
-			StopReason:          gen.StopReason,
-			CallError:           gen.CallError,
-			ParentGenerationIDs: gen.ParentGenerationIDs,
-			ThinkingEnabled:     gen.ThinkingEnabled,
-		}
-		if !gen.StartedAt.IsZero() && !gen.CompletedAt.IsZero() {
-			view.DurationSeconds = gen.CompletedAt.Sub(gen.StartedAt).Seconds()
-		}
-		view.Tools, view.ToolPreview = extractTools(output)
-		view.Skills = gen.skillViews()
-		out.Generations = append(out.Generations, view)
+		out.Generations = append(out.Generations, generationView(gen))
 	})
 	s.logSkipped("conversation "+id, skipped)
 	if err != nil {
@@ -285,6 +430,68 @@ func (s *Storage) ConversationDetail(id string) (*ConversationDetail, error) {
 		out.Generations[i].Messages = threadMessages(out.Generations[i].Input, out.Generations[i].Output)
 	}
 	return out, nil
+}
+
+func (s *Storage) conversationDetailSQL(id string) (*ConversationDetail, error) {
+	var conversation sqlConversation
+	if err := s.sql.db.Where("conv_id = ?", id).Take(&conversation).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var rows []sqlGeneration
+	if err := s.sql.db.Where("conv_id = ?", id).Order("rowid ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := &ConversationDetail{ID: id, Title: conversation.Title, Generations: make([]GenerationView, 0, len(rows))}
+	for _, row := range rows {
+		gen, err := storedGenerationFromRaw(row.Raw, row.ConvID)
+		if err != nil {
+			return nil, err
+		}
+		out.Generations = append(out.Generations, generationView(gen))
+	}
+	if len(out.Generations) == 0 {
+		return nil, nil
+	}
+	sort.SliceStable(out.Generations, func(i, j int) bool {
+		return out.Generations[i].StartedAt.Before(out.Generations[j].StartedAt)
+	})
+	for i := range out.Generations {
+		out.Generations[i].Messages = threadMessages(out.Generations[i].Input, out.Generations[i].Output)
+	}
+	return out, nil
+}
+
+func generationView(gen storedGeneration) GenerationView {
+	usage := gen.Usage.toSDK()
+	input := gen.inputMessages()
+	output := gen.outputMessages()
+	view := GenerationView{
+		GenerationID:        gen.ID,
+		AgentName:           gen.AgentName,
+		Model:               gen.modelName(),
+		Provider:            gen.Model.Provider,
+		StartedAt:           gen.StartedAt,
+		CompletedAt:         gen.CompletedAt,
+		InputTokens:         usage.InputTokens,
+		OutputTokens:        usage.OutputTokens,
+		TotalTokens:         totalTokensForView(usage, gen.Model.Provider),
+		TokenBuckets:        disjointTokenUsage(usage, gen.Model.Provider),
+		Input:               input,
+		Output:              output,
+		StopReason:          gen.StopReason,
+		CallError:           gen.CallError,
+		ParentGenerationIDs: gen.ParentGenerationIDs,
+		ThinkingEnabled:     gen.ThinkingEnabled,
+	}
+	if !gen.StartedAt.IsZero() && !gen.CompletedAt.IsZero() {
+		view.DurationSeconds = gen.CompletedAt.Sub(gen.StartedAt).Seconds()
+	}
+	view.Tools, view.ToolPreview = extractTools(output)
+	view.Skills = gen.skillViews()
+	return view
 }
 
 // TokenBuckets is token usage split into five non-overlapping buckets
@@ -322,9 +529,9 @@ type TokenUsagePoint struct {
 
 // TokenUsageOptions bounds one token-metrics request.
 type TokenUsageOptions struct {
-	// Since drops generations older than it, and drops whole conversation
-	// files whose modification time is below it before any decode. Zero
-	// means no lower bound.
+	// Since drops older generations. SQLite applies it in the query; the
+	// JSONL fallback decodes legacy files before applying it. Zero means no
+	// lower bound.
 	Since time.Time
 	// Interval is the bucket width. Zero asks for a derived interval that
 	// keeps the response under maxTokenUsageBuckets buckets.
@@ -361,13 +568,16 @@ var tokenUsageIntervals = []time.Duration{
 // so the response holds at most one point per model and provider per
 // non-empty bucket.
 //
-// A missing conversations dir yields no points (first-launch case).
-//
-// Points are read through the per-file summary cache and folded straight
-// into their buckets, rather than concatenated first. Concatenating would
-// allocate the whole store's usage on every request, to produce a response
-// that newTokenUsageBuckets bounds by the bucket count.
+// A missing conversations dir yields no points. When sqliteReadsReady
+// reports false, legacy JSONL files are decoded directly.
 func (s *Storage) TokenUsagePoints(opts TokenUsageOptions) ([]TokenUsagePoint, time.Duration, error) {
+	ready, err := s.sqliteReadsReady()
+	if err != nil {
+		return nil, 0, err
+	}
+	if ready {
+		return s.tokenUsagePointsSQL(opts)
+	}
 	files, err := s.conversationFiles()
 	if err != nil {
 		return nil, 0, err
@@ -379,22 +589,11 @@ func (s *Storage) TokenUsagePoints(opts TokenUsageOptions) ([]TokenUsagePoint, t
 	var first, last time.Time
 	var pointCount int
 	for _, f := range files {
-		// Files are newest-first, so the first one below the bound ends
-		// the walk without opening it.
-		if !opts.Since.IsZero() && f.modTime.Before(opts.Since) {
-			break
-		}
-		entry, err := s.summaries.get(f)
+		entry, err := decodeFileSummary(f)
 		if err != nil {
 			return nil, 0, err
 		}
 		skipped += entry.skipped
-		// The break above cuts whole files, because a file's modification time
-		// is the newest activity it holds. The older points inside a file it
-		// keeps can still fall below the bound, which is what bounds cuts on. A
-		// file left with no point is skipped rather than ending the walk: a copy
-		// or restore that rewrote modification times orders the files by
-		// something other than their activity.
 		entryFirst, entryLast, ok := entry.bounds(opts.Since)
 		if !ok {
 			continue
@@ -408,7 +607,6 @@ func (s *Storage) TokenUsagePoints(opts TokenUsageOptions) ([]TokenUsagePoint, t
 		pointCount += len(entry.points)
 		eligible = append(eligible, entry)
 	}
-	s.summaries.prune(files)
 
 	interval := opts.Interval
 	if interval <= 0 {
@@ -422,6 +620,73 @@ func (s *Storage) TokenUsagePoints(opts TokenUsageOptions) ([]TokenUsagePoint, t
 			}
 			buckets.add(p)
 		}
+	}
+	return buckets.points(), interval, nil
+}
+
+type sqlTokenUsageRow struct {
+	ReceivedAt  string    `gorm:"column:received_at"`
+	StartedAt   time.Time `gorm:"column:started_at"`
+	CompletedAt time.Time `gorm:"column:completed_at"`
+	Model       string    `gorm:"column:model"`
+	Provider    string    `gorm:"column:provider"`
+	FreshInput  int64     `gorm:"column:fresh_input"`
+	CacheRead   int64     `gorm:"column:cache_read"`
+	CacheWrite  int64     `gorm:"column:cache_write"`
+	Output      int64     `gorm:"column:output"`
+	Reasoning   int64     `gorm:"column:reasoning"`
+}
+
+func (s *Storage) tokenUsagePointsSQL(opts TokenUsageOptions) ([]TokenUsagePoint, time.Duration, error) {
+	query := s.sql.db.Table("generation").Select(
+		"received_at, started_at, completed_at, model, provider, fresh_input, cache_read, cache_write, output, reasoning",
+	)
+	if !opts.Since.IsZero() {
+		query = query.Where("activity >= ?", opts.Since)
+	}
+	var rows []sqlTokenUsageRow
+	if err := query.Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	points := make([]TokenUsagePoint, 0, len(rows))
+	var first, last time.Time
+	for _, row := range rows {
+		buckets := TokenBuckets{
+			FreshInput: row.FreshInput,
+			CacheRead:  row.CacheRead,
+			CacheWrite: row.CacheWrite,
+			Output:     row.Output,
+			Reasoning:  row.Reasoning,
+		}
+		if buckets == (TokenBuckets{}) {
+			continue
+		}
+		when := row.StartedAt
+		if when.IsZero() {
+			when = row.CompletedAt
+		}
+		if when.IsZero() {
+			when, _ = time.Parse(time.RFC3339Nano, row.ReceivedAt)
+		}
+		if when.IsZero() || !nanosRepresentable(when) || (!opts.Since.IsZero() && when.Before(opts.Since)) {
+			continue
+		}
+		point := TokenUsagePoint{Timestamp: when, Model: row.Model, Provider: row.Provider, TokenBuckets: buckets}
+		points = append(points, point)
+		if first.IsZero() || when.Before(first) {
+			first = when
+		}
+		if when.After(last) {
+			last = when
+		}
+	}
+	interval := opts.Interval
+	if interval <= 0 {
+		interval = tokenUsageIntervalFor(last.Sub(first))
+	}
+	buckets := newTokenUsageBuckets(interval, len(points))
+	for _, point := range points {
+		buckets.add(point)
 	}
 	return buckets.points(), interval, nil
 }
@@ -820,6 +1085,92 @@ func scanLatestGenerationRecords(path string, visit func(generationRecord, store
 	}, func(r scannedGenerationRecord) {
 		visit(r.record, r.gen)
 	})
+}
+
+// scanLatestGenerationRecordsUpTo visits the latest generation records in
+// the first size bytes of path without retaining their transcript bodies.
+// The first pass records only the last position of each generation id; the
+// second pass decodes and visits those positions.
+func scanLatestGenerationRecordsUpTo(
+	ctx context.Context,
+	path string,
+	size int64,
+	visit func(generationRecord, storedGeneration) error,
+) (int, error) {
+	if info, err := os.Stat(path); err == nil && !info.Mode().IsRegular() {
+		var visitErr error
+		skipped, scanErr := scanLatestGenerationRecords(path, func(rec generationRecord, gen storedGeneration) {
+			if visitErr == nil {
+				visitErr = visit(rec, gen)
+			}
+		})
+		if scanErr != nil {
+			return skipped, scanErr
+		}
+		return skipped, visitErr
+	}
+
+	lastPosition := map[string]int{}
+	position := 0
+	skipped, err := scanJSONLUpTo(ctx, path, size, func(line []byte) error {
+		decoded, ok := decodeGenerationRecord(line)
+		if !ok {
+			return errSkippedJSONLLine
+		}
+		if key := decoded.generationID(); key != "" {
+			lastPosition[key] = position
+		}
+		position++
+		return nil
+	})
+	if err != nil {
+		return skipped, err
+	}
+	position = 0
+	_, err = scanJSONLUpTo(ctx, path, size, func(line []byte) error {
+		decoded, ok := decodeGenerationRecord(line)
+		if !ok {
+			return nil
+		}
+		key := decoded.generationID()
+		current := position
+		position++
+		if key != "" && lastPosition[key] != current {
+			return nil
+		}
+		return visit(decoded.record, decoded.gen)
+	})
+	return skipped, err
+}
+
+var errSkippedJSONLLine = errors.New("skipped JSONL line")
+
+func scanJSONLUpTo(ctx context.Context, path string, size int64, visit func([]byte) error) (skipped int, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(io.LimitReader(f, size))
+	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
+	for sc.Scan() {
+		if err := ctx.Err(); err != nil {
+			return skipped, err
+		}
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		if err := visit(line); errors.Is(err, errSkippedJSONLLine) {
+			skipped++
+		} else if err != nil {
+			return skipped, err
+		}
+	}
+	return skipped, sc.Err()
 }
 
 func (r scannedGenerationRecord) generationID() string {

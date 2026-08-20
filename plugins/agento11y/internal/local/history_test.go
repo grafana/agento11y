@@ -269,9 +269,8 @@ func TestHistoryPlanIsMetadataOnly(t *testing.T) {
 	}
 }
 
-// TestHistoryPlanDefaultsToNinetyDays pins the lower bound the viewer opens
-// with, which is also what keeps a first import from filling a linear-scan
-// store with every turn ever recorded.
+// TestHistoryPlanDefaultsToNinetyDays pins the lower bound that the viewer
+// uses for its first import.
 func TestHistoryPlanDefaultsToNinetyDays(t *testing.T) {
 	isolateHistoryState(t)
 	srv, _ := newTestServer(t)

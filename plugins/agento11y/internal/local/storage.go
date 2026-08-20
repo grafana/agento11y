@@ -1,8 +1,7 @@
 // Package local implements the in-process HTTP receiver used by
 // `agento11y pi --local` and `agento11y claude --local`. It stores generation
-// exports to JSONL files under the agento11y state root so agent sessions can
-// be inspected with standard shell tools, without requiring a Grafana Cloud
-// or local stack deployment.
+// exports in SQLite under the agento11y state root, without requiring a
+// Grafana Cloud or local stack deployment.
 package local
 
 import (
@@ -21,6 +20,9 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/xdg"
 )
 
+// errLockBusy reports that another process holds the requested file lock.
+var errLockBusy = errors.New("lock held by another process")
+
 // File names under the local state root. Kept exported so tests and docs
 // can reference the canonical paths.
 const (
@@ -31,23 +33,20 @@ const (
 	StatusFile = "server.json"
 	LockFile   = "server.lock"
 
-	// StoreFile records what the daemon has already done to the store on
-	// disk, so the modification-time pass over every conversation file runs
-	// once per store and not on every start. See storeMeta.
-	StoreFile = "store.json"
-	// RepairLockFile guards that pass across processes, because more than
-	// one daemon can share a store.
-	RepairLockFile = "repair.lock"
+	// MigrationLockFile lets one daemon at a time copy JSONL into SQLite.
+	MigrationLockFile = "migration.lock"
+	// RetirementLockFile coordinates dual-writes with cross-process JSONL retirement.
+	RetirementLockFile = "retirement.lock"
 )
 
 // StateDir returns the root directory for local capture data.
-// All JSONL files and the server status file live under this directory.
 func StateDir() string {
 	return filepath.Join(xdg.AppStateRoot(), "local")
 }
 
-// Storage owns the JSONL files under StateDir and serialises writes so
-// concurrent handlers can append safely.
+// Storage owns the local SQLite store and any legacy JSONL files being
+// migrated. It serialises legacy appends so concurrent handlers cannot
+// interleave lines.
 type Storage struct {
 	dir string
 
@@ -55,19 +54,15 @@ type Storage struct {
 	// attaches its logger through SetLogger before it serves.
 	logger *log.Logger
 
-	// openAppend opens one JSONL file for appending. Tests replace it to
-	// count open/close cycles; a nil value uses openAppendFile.
-	openAppend func(path string) (io.WriteCloser, error)
+	// sql mirrors successful JSONL appends while an existing store migrates,
+	// then becomes the only write target after the rollback copy is retired.
+	// It is nil in tests that exercise the legacy writer alone.
+	sql *sqlStore
 
-	// summaries holds the decoded projection of every conversation file the
-	// list and the token chart have read, so an unchanged file is not
-	// decoded again. It carries its own mutex; the read paths take no other
-	// lock.
-	summaries summaryCache
-
-	// chtimes stamps a file's modification time. Tests replace it to
-	// exercise the failure path; a nil value uses os.Chtimes.
-	chtimes func(path string, atime, mtime time.Time) error
+	// modeMu keeps the one-time switch to SQLite-only writes from racing an
+	// in-flight dual-write in this process.
+	modeMu  sync.RWMutex
+	sqlOnly bool
 
 	// One mutex per file path. We don't expect contention high enough to
 	// need finer locking; this just stops interleaved JSON lines.
@@ -121,71 +116,19 @@ func (s *Storage) Path(name string) string {
 	return filepath.Join(s.dir, name)
 }
 
-// Append writes one JSON-encoded record followed by a newline to the named
-// file. Files are created with 0o600 permissions; the per-path mutex
-// prevents concurrent goroutines in this process from interleaving lines.
-//
-// This is the single-record form. Generation ingest batches through
-// AppendGenerations instead.
-func (s *Storage) Append(name string, record any) error {
-	_, err := appendJSONL(s, name, []any{record}, nil)
-	return err
-}
-
-// appendJSONL writes every record as one JSON line to the named file
-// through a single open and close cycle. It returns how many records
-// reached the file: on error the records before the returned count are
-// written and the rest are not, so a caller with per-record results can
-// report exactly which ones it accepted.
-//
-// A missing parent directory is recreated once and the open retried, so
-// ingest and export recover if the conversations directory disappears
-// while the daemon runs.
-//
-// activities carries the activity of each record, in the same order. It
-// stamps the file's modification time, which is what the conversation list
-// orders and bounds on. A nil slice leaves the write time in place, which
-// is what Append's non-conversation files want.
-func appendJSONL[T any](s *Storage, name string, records []T, activities []time.Time) (int, error) {
-	if len(records) == 0 {
-		return 0, nil
-	}
+// appendJSONLLocked appends legacy JSONL with the per-path lock already
+// held. Generation ingest keeps that lock through its SQLite mirror write so
+// migration cannot snapshot the JSONL between the two writes.
+func appendJSONLLocked[T any](s *Storage, name string, records []T) (written int, previousSize int64, previousMTime time.Time, err error) {
 	path := s.Path(name)
-	lock := s.lockFor(path)
-	lock.Lock()
-	defer lock.Unlock()
-
-	var previous time.Time
-	if len(activities) > 0 {
-		if info, err := os.Stat(path); err == nil {
-			previous = info.ModTime()
-		}
+	if info, statErr := os.Stat(path); statErr == nil {
+		previousSize = info.Size()
+		previousMTime = info.ModTime()
 	}
-	written, err := writeJSONL(s, path, name, records)
-	// Only the records that reached the file may set its modification time.
-	// A batch cut short by a write error would otherwise stamp activity the
-	// file does not hold, which shows the conversation in ranges its records
-	// do not cover.
-	if activity := newestActivity(activities, written); !activity.IsZero() {
-		s.stampActivity(path, activity, previous)
-	}
-	return written, err
+	written, err = writeJSONL(s, path, name, records)
+	return written, previousSize, previousMTime, err
 }
 
-// newestActivity is the latest of the first n activities, zero when there
-// is none.
-func newestActivity(activities []time.Time, n int) time.Time {
-	var newest time.Time
-	for _, when := range activities[:min(n, len(activities))] {
-		if when.After(newest) {
-			newest = when
-		}
-	}
-	return newest
-}
-
-// writeJSONL is the write half of appendJSONL, split out so the file is
-// closed before the stamp is applied to it.
 func writeJSONL[T any](s *Storage, path, name string, records []T) (int, error) {
 	f, err := s.openForAppend(path)
 	if err != nil {
@@ -206,56 +149,11 @@ func writeJSONL[T any](s *Storage, path, name string, records []T) (int, error) 
 	return len(records), nil
 }
 
-// stampActivity sets a conversation file's modification time to the newest
-// activity it holds, so the newest-first order in conversationFiles stays
-// monotone and the Since bounds computed from it stay sound. previous is
-// the file's modification time before this append, zero for a new file.
-//
-// The stamp never moves backwards: a history import appending months-old
-// turns to a conversation that also holds today's must not sink the file
-// below them. It never moves past now either, because a generation dated in
-// the future would pin its file to the top of every page.
-//
-// A failed stamp costs ordering, not data: the records are already on disk,
-// so the caller still reports them as written and logs the failure.
-func (s *Storage) stampActivity(path string, activity, previous time.Time) {
-	now := time.Now()
-	// A modification time in the future does not come from the records; a
-	// restore, or a copy from a machine with a fast clock, leaves one. Clamp
-	// it to now, because carrying it into the guard below would skip the
-	// stamp and leave the file ordered by its write time.
-	if previous.After(now) {
-		previous = now
-	}
-	stamp := activity
-	if previous.After(stamp) {
-		stamp = previous
-	}
-	if stamp.IsZero() || stamp.After(now) {
-		return
-	}
-	if err := s.setModTime(path, stamp); err != nil {
-		s.logf("local: stamp %s: %v", path, err)
-	}
-}
-
-func (s *Storage) setModTime(path string, when time.Time) error {
-	chtimes := s.chtimes
-	if chtimes == nil {
-		chtimes = os.Chtimes
-	}
-	return chtimes(path, when, when)
-}
-
 // openForAppend opens path for appending, recreating the parent directory
 // when it is gone (a user or another tool removed it under the running
 // daemon) and retrying the open once.
 func (s *Storage) openForAppend(path string) (io.WriteCloser, error) {
-	open := s.openAppend
-	if open == nil {
-		open = openAppendFile
-	}
-	f, err := open(path)
+	f, err := openAppendFile(path)
 	if err == nil {
 		return f, nil
 	}
@@ -265,7 +163,7 @@ func (s *Storage) openForAppend(path string) (io.WriteCloser, error) {
 	if mkErr := os.MkdirAll(filepath.Dir(path), 0o700); mkErr != nil {
 		return nil, fmt.Errorf("local storage: mkdir %s: %w", filepath.Dir(path), mkErr)
 	}
-	f, err = open(path)
+	f, err = openAppendFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("local storage: open %s: %w", path, err)
 	}
@@ -287,54 +185,94 @@ func (s *Storage) lockFor(path string) *sync.Mutex {
 	return lock
 }
 
-// AppendGeneration writes one record into conversations/<id>.jsonl through
-// AppendGenerations, deriving the activity stamp from the record itself.
-// Only the tests call it; the ingest handler passes a whole batch with the
-// activity it already decoded.
 func (s *Storage) AppendGeneration(rec generationRecord) error {
-	var gen summaryGeneration
-	// A generation this build cannot decode leaves gen zero, so the stamp
-	// falls back to received_at. The list drops such a record too, so the
-	// ignored error costs nothing.
-	_ = json.Unmarshal(rec.Generation, &gen)
-	_, err := s.AppendGenerations(rec.ConversationID, []generationRecord{rec}, []time.Time{recordActivity(gen, rec.ReceivedAt)})
+	_, err := s.AppendGenerations(rec.ConversationID, []generationRecord{rec})
 	return err
 }
 
-// AppendGenerations writes every record for one conversation into
-// conversations/<convID>.jsonl through a single open and close cycle, so
-// one export request costs one file open per conversation it touches.
-//
-// It returns how many records were written. On error the first n records
-// are stored and the remaining records are not. The ingest handler turns
-// that boundary into a per-generation accepted or rejected result.
-//
-// activities carries one recordActivity per record, in the same order as
-// recs. The file's modification time takes the newest activity among the
-// records that reached it. A nil slice appends without stamping.
-func (s *Storage) AppendGenerations(convID string, recs []generationRecord, activities []time.Time) (int, error) {
+// AppendGenerations stores one conversation batch and returns the prefix
+// accepted by ingest: recs[:n] was written. JSONL can return a short prefix;
+// SQLite-only writes return either zero or the full batch.
+func (s *Storage) AppendGenerations(convID string, recs []generationRecord) (int, error) {
 	if convID == "" {
 		return 0, fmt.Errorf("local storage: empty conversation_id")
 	}
 	if !validConversationID(convID) {
 		return 0, fmt.Errorf("local storage: unsafe conversation_id %q", convID)
 	}
-	if len(activities) != 0 && len(activities) != len(recs) {
-		return 0, fmt.Errorf("local storage: %d activity stamps for %d records", len(activities), len(recs))
+	if len(recs) == 0 {
+		return 0, nil
 	}
 	for _, rec := range recs {
 		if rec.ConversationID != convID {
 			return 0, fmt.Errorf("local storage: record conversation_id %q does not match batch %q", rec.ConversationID, convID)
 		}
 	}
+	var written int
+	err := withRetirementReadLock(s.dir, func() error {
+		var appendErr error
+		written, appendErr = s.appendGenerationsLocked(convID, recs)
+		return appendErr
+	})
+	return written, err
+}
+
+func (s *Storage) appendGenerationsLocked(convID string, recs []generationRecord) (int, error) {
+	s.refreshSQLiteOnly()
+	s.modeMu.RLock()
+	defer s.modeMu.RUnlock()
+	if s.sqlOnly {
+		if s.sql == nil {
+			return 0, errors.New("local storage: SQLite-only store is not open")
+		}
+		if err := s.sql.writeGenerations(recs); err != nil {
+			return 0, fmt.Errorf("local storage: write SQLite: %w", err)
+		}
+		return len(recs), nil
+	}
+
 	name := filepath.Join(ConversationsDir, convID+".jsonl")
-	written, err := appendJSONL(s, name, recs, activities)
-	if written > 0 || err != nil {
-		// A partial write moved the file too, so the cached projection goes
-		// on the error path as well.
-		s.summaries.invalidate(s.Path(name))
+	path := s.Path(name)
+	lock := s.lockFor(path)
+	lock.Lock()
+	defer lock.Unlock()
+
+	written, previousSize, previousMTime, err := appendJSONLLocked(s, name, recs)
+	if written > 0 && s.sql != nil {
+		var currentSize int64
+		var mtime time.Time
+		if info, statErr := os.Stat(path); statErr == nil {
+			currentSize = info.Size()
+			mtime = info.ModTime()
+		}
+		if sqlErr := s.sql.appendGenerations(name, previousSize, currentSize, previousMTime, mtime, recs[:written]); sqlErr != nil {
+			s.logf("local: mirror conversation %s to SQLite: %v", convID, sqlErr)
+			if markerErr := s.markForRemigration(convID); markerErr != nil {
+				s.logf("local: record conversation %s for SQLite migration: %v", convID, markerErr)
+			}
+		}
 	}
 	return written, err
+}
+
+func (s *Storage) refreshSQLiteOnly() {
+	if s.sql == nil {
+		return
+	}
+	s.modeMu.RLock()
+	only := s.sqlOnly
+	s.modeMu.RUnlock()
+	if only {
+		return
+	}
+	retired, err := s.sql.jsonlRetired()
+	if err != nil {
+		s.logf("local: read SQLite retirement state: %v", err)
+		return
+	}
+	if retired {
+		s.setSQLiteOnly()
+	}
 }
 
 // writeFileAtomic writes data to dir/name through a temp file and a

@@ -249,8 +249,7 @@ func TestHistoryDryRunReportsThePlan(t *testing.T) {
 	}
 }
 
-// TestHistoryDefaultsToNinetyDays pins the default window. An unbounded first
-// import would put every turn ever recorded into a linear-scan JSONL store.
+// TestHistoryDefaultsToNinetyDays pins the first import's default window.
 func TestHistoryDefaultsToNinetyDays(t *testing.T) {
 	withHistoryNow(t)
 	isolateDotenvHome(t)

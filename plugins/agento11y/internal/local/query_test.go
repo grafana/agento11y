@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -111,8 +110,7 @@ func TestListConversations_Aggregates(t *testing.T) {
 	// list should still surface it via the received_at fallback.
 	writeGen(t, s, "conv-C", "g5", agento11y.Generation{AgentName: "vistra"}, "2026-05-21T11:10:00Z")
 
-	// The order comes from the file modification time, which each append
-	// above stamped with the newest activity it carried.
+	// The list orders conversations by their decoded latest activity.
 	got, _, err := s.ListConversations(ConversationListOptions{})
 	if err != nil {
 		t.Fatalf("ListConversations: %v", err)
@@ -251,72 +249,6 @@ func TestListConversations_LimitAndEmpty(t *testing.T) {
 	}
 }
 
-// TestListConversations_BoundedPage proves the page is cut before any
-// conversation file is decoded: entries are ordered by modification time,
-// the limit ends the walk, and ?since= drops older files. Files past the
-// page are made unreadable, so a request that would open one fails and a
-// bounded request cannot pass by accident.
-func TestListConversations_BoundedPage(t *testing.T) {
-	activity := map[string]string{
-		"conv-a": "2026-08-03T12:00:00Z",
-		"conv-b": "2026-08-03T11:00:00Z",
-		"conv-c": "2026-08-03T10:00:00Z",
-	}
-	oldestFirst := []string{"conv-c", "conv-b", "conv-a"}
-
-	cases := []struct {
-		name string
-		opts ConversationListOptions
-		// blockFrom makes the files older than position blockFrom (in the
-		// returned newest-first order) unreadable. -1 blocks nothing.
-		blockFrom int
-		wantIDs   []string
-		wantErr   bool
-	}{
-		{name: "newest modification time first", blockFrom: -1, wantIDs: []string{"conv-a", "conv-b", "conv-c"}},
-		{name: "limit stops before the older files", opts: ConversationListOptions{Limit: 2}, blockFrom: 2, wantIDs: []string{"conv-a", "conv-b"}},
-		{name: "since excludes older files before decoding", opts: ConversationListOptions{Since: mustParse(t, "2026-08-03T11:30:00Z")}, blockFrom: 1, wantIDs: []string{"conv-a"}},
-		{name: "since bound is inclusive", opts: ConversationListOptions{Since: mustParse(t, "2026-08-03T11:00:00Z")}, blockFrom: 2, wantIDs: []string{"conv-a", "conv-b"}},
-		{name: "unbounded request reads every file", blockFrom: 2, wantErr: true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.blockFrom >= 0 {
-				requireUnreadableFilesSupported(t)
-			}
-			s := newStorage(t)
-			// Write oldest-first, so an order that follows the seeded
-			// activity can only come from the stamp each append writes.
-			for _, id := range oldestFirst {
-				writeGen(t, s, id, "g-"+id, agento11y.Generation{
-					AgentName:   "pi",
-					Model:       agento11y.ModelRef{Name: "m"},
-					StartedAt:   mustParse(t, activity[id]),
-					CompletedAt: mustParse(t, activity[id]),
-					Usage:       agento11y.TokenUsage{InputTokens: 1, OutputTokens: 1},
-				}, activity[id])
-			}
-			if tc.blockFrom >= 0 {
-				for _, id := range []string{"conv-a", "conv-b", "conv-c"}[tc.blockFrom:] {
-					blockConversationFile(t, s, id)
-				}
-			}
-
-			got, _, err := s.ListConversations(tc.opts)
-			if tc.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			ids := make([]string, 0, len(got))
-			for _, c := range got {
-				ids = append(ids, c.ID)
-			}
-			assert.Equal(t, tc.wantIDs, ids)
-		})
-	}
-}
-
 // TestListConversations_SkipsMessageTrees proves the summary decoder never
 // materialises the stored input and output trees. The second case stores
 // trees that are not message-shaped at all: the summary reads them, and so
@@ -380,37 +312,7 @@ func TestListConversations_SkipsMessageTrees(t *testing.T) {
 	}
 }
 
-// setConversationModTime pins one conversation file's modification time.
-// The list and metrics endpoints order and filter on that timestamp.
-func setConversationModTime(t *testing.T, s *Storage, convID string, when time.Time) {
-	t.Helper()
-	path := filepath.Join(s.Dir(), ConversationsDir, convID+".jsonl")
-	require.NoError(t, os.Chtimes(path, when, when))
-}
-
-// blockConversationFile makes one conversation file unreadable, so any
-// request that opens it fails. Tests use it to prove a bounded request
-// never touches the files past its page.
-func blockConversationFile(t *testing.T, s *Storage, convID string) {
-	t.Helper()
-	path := filepath.Join(s.Dir(), ConversationsDir, convID+".jsonl")
-	require.NoError(t, os.Chmod(path, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
-}
-
-// requireUnreadableFilesSupported skips tests that rely on a file being
-// unreadable, which neither Windows ACLs nor a root user honour.
-func requireUnreadableFilesSupported(t *testing.T) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("posix-only permission check")
-	}
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores file permissions")
-	}
-}
-
-func TestListAndDetailUseCacheAwareTotalFallback(t *testing.T) {
+func TestListAndDetailUseProviderAwareTotalFallback(t *testing.T) {
 	s := newStorage(t)
 
 	writeGen(t, s, "conv-cache", "g-cache", agento11y.Generation{
@@ -1158,12 +1060,9 @@ func TestTokenUsagePoints(t *testing.T) {
 	assert.Equal(t, mustParse(t, "2026-05-21T12:00:00Z"), points[2].Timestamp)
 }
 
-// TestTokenUsagePoints_InvertedTimestampsStayInRange covers a generation
-// whose completed_at precedes its started_at, which a clock adjustment on
-// the exporting machine produces. Activity takes the later of the two, so a
-// file's modification time never sits below the point the chart places at
-// started_at, and the Since bound that skips whole files cannot drop a
-// point inside the range.
+// TestTokenUsagePoints_InvertedTimestampsStayInRange covers completed_at
+// preceding started_at. Metrics prefer started_at; list activity uses the
+// later of started_at and completed_at.
 func TestTokenUsagePoints_InvertedTimestampsStayInRange(t *testing.T) {
 	s := newStorage(t)
 	started := mustParse(t, "2026-05-21T10:00:00Z")
@@ -1173,10 +1072,6 @@ func TestTokenUsagePoints_InvertedTimestampsStayInRange(t *testing.T) {
 		CompletedAt: started.Add(-30 * time.Minute),
 		Usage:       agento11y.TokenUsage{InputTokens: 5, OutputTokens: 3},
 	}, started.Format(time.RFC3339Nano))
-
-	info, err := os.Stat(filepath.Join(s.Dir(), ConversationsDir, "conv-inverted.jsonl"))
-	require.NoError(t, err)
-	assert.WithinDuration(t, started, info.ModTime(), time.Second, "the stamp follows started_at")
 
 	points, _, err := s.TokenUsagePoints(TokenUsageOptions{
 		Since:    started.Add(-time.Minute),
@@ -1322,11 +1217,7 @@ func TestTokenUsagePoints_ScaleFollowsBucketsNotGenerations(t *testing.T) {
 				Generation:     raw,
 			})
 		}
-		activities := make([]time.Time, len(recs))
-		for i := range activities {
-			activities[i] = start
-		}
-		written, err := s.AppendGenerations(convID, recs, activities)
+		written, err := s.AppendGenerations(convID, recs)
 		require.NoError(t, err)
 		require.Equal(t, perConv, written)
 	}
@@ -1526,10 +1417,7 @@ func TestReadsReportSkippedLines(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, points, 1)
 
-	// The list and the token chart answer the second round from the cached
-	// summaries. The count describes the store, so a cache hit reports it
-	// again instead of reporting zero. The detail read has no cache, so it
-	// scans the file again and reports its own count twice.
+	// Each fallback read scans the legacy file and reports its skipped tail.
 	again, _, err := s.ListConversations(ConversationListOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, convs, again)
@@ -1549,51 +1437,8 @@ func TestReadsReportSkippedLines(t *testing.T) {
 	}
 }
 
-// TestReadsShareOneDecodePerFile pins the cache's reach across the two
-// endpoints: they read the same per-file summary, so whichever runs first
-// pays the decode and the other one does not.
-func TestReadsShareOneDecodePerFile(t *testing.T) {
-	list := func(t *testing.T, s *Storage) {
-		t.Helper()
-		convs, _, err := s.ListConversations(ConversationListOptions{})
-		require.NoError(t, err)
-		require.Len(t, convs, 1)
-		assert.Equal(t, int64(10), convs[0].InputTokens)
-	}
-	tokens := func(t *testing.T, s *Storage) {
-		t.Helper()
-		points, _, err := s.TokenUsagePoints(TokenUsageOptions{Interval: time.Hour})
-		require.NoError(t, err)
-		require.Len(t, points, 1)
-		assert.Equal(t, TokenBuckets{FreshInput: 10, Output: 3}, points[0].TokenBuckets)
-	}
-	cases := []struct {
-		name         string
-		first, other func(*testing.T, *Storage)
-	}{
-		{name: "the list warms the token chart", first: list, other: tokens},
-		{name: "the token chart warms the list", first: tokens, other: list},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			s := newStorage(t)
-			writeGen(t, s, "conv-A", "g1", agento11y.Generation{
-				Model:     agento11y.ModelRef{Name: "m"},
-				StartedAt: mustParse(t, "2026-08-03T10:00:00Z"),
-				Usage:     agento11y.TokenUsage{InputTokens: 10, OutputTokens: 3},
-			}, "2026-08-03T10:00:01Z")
-			decoded := recordDecodes(&s.summaries)
-
-			tc.first(t, s)
-			tc.other(t, s)
-			assert.Equal(t, []string{"conv-A"}, *decoded)
-		})
-	}
-}
-
-// TestTokenUsagePointsFollowAppends checks that a conversation written
-// between two requests is the only one decoded again, and that its new
-// usage lands in the totals.
+// TestTokenUsagePointsFollowAppends checks that usage appended between two
+// requests lands in the totals.
 func TestTokenUsagePointsFollowAppends(t *testing.T) {
 	s := newStorage(t)
 	for _, id := range []string{"conv-A", "conv-B"} {
@@ -1608,7 +1453,6 @@ func TestTokenUsagePointsFollowAppends(t *testing.T) {
 	require.Len(t, before, 1)
 	assert.Equal(t, TokenBuckets{FreshInput: 8, Output: 2}, before[0].TokenBuckets)
 
-	decoded := recordDecodes(&s.summaries)
 	writeGen(t, s, "conv-A", "g-extra", agento11y.Generation{
 		Model:     agento11y.ModelRef{Name: "m"},
 		StartedAt: mustParse(t, "2026-08-03T10:30:00Z"),
@@ -1619,5 +1463,4 @@ func TestTokenUsagePointsFollowAppends(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, after, 1)
 	assert.Equal(t, TokenBuckets{FreshInput: 21, Output: 4}, after[0].TokenBuckets)
-	assert.Equal(t, []string{"conv-A"}, *decoded, "the untouched conversation stays cached")
 }

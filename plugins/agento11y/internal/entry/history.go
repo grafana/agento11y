@@ -190,9 +190,7 @@ func runHistoryImport(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 	}
 
 	var err error
-	// An unset --since defaults to 90 days. The local store is a linear-scan
-	// JSONL store, and an unbounded first import would make the viewer slow
-	// before the user ever sees it.
+	// An unset --since uses history.DefaultSinceWindow.
 	if opts.Since, err = parseHistoryBound(*since, now, now.Add(-history.DefaultSinceWindow)); err != nil {
 		_, _ = fmt.Fprintf(stderr, "agento11y: invalid --since %q: %v\n", *since, err)
 		exit(2)

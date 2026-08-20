@@ -50,12 +50,6 @@ type Server struct {
 	// uses the default.
 	eventPingInterval time.Duration
 
-	// warmStore fills the summary cache in the background. Serve sets it;
-	// a nil hook means no warming. warmOnce keeps the first viewer read the
-	// only trigger.
-	warmStore func()
-	warmOnce  sync.Once
-
 	// importMu guards the history-import fields below. One import runs at a
 	// time: two would write the same per-agent ledger and race on it.
 	importMu sync.Mutex
@@ -101,26 +95,6 @@ func NewServer(storage *Storage, logger *log.Logger, configPath string) *Server 
 // deadline. Safe to call more than once.
 func (s *Server) Close() {
 	s.hub.closeAll()
-}
-
-// WarmSummariesOnFirstRead arms the background summary-cache warm. The warm
-// starts once the first viewer read has answered, and stops when ctx is
-// done. Nothing warms before that read. Several commands start a daemon
-// without opening the viewer: an agent session in local mode, `local start`,
-// `local restart`, `history import`. Warming at startup would make each of
-// them decode the whole store and hold it resident until the daemon exits.
-func (s *Server) WarmSummariesOnFirstRead(ctx context.Context) {
-	s.warmStore = func() { s.storage.warmSummaries(ctx) }
-}
-
-// warmSummariesInBackground starts the warm the first time a viewer read
-// finishes. It runs after the response so the request the user is waiting
-// on does not queue behind the rest of the store.
-func (s *Server) warmSummariesInBackground() {
-	if s.warmStore == nil {
-		return
-	}
-	s.warmOnce.Do(func() { go s.warmStore() })
 }
 
 func (s *Server) routes() *http.ServeMux {
@@ -336,16 +310,12 @@ type generationRecord struct {
 	Generation     json.RawMessage `json:"generation"`
 }
 
-// pendingGeneration is one decoded generation waiting to be appended,
+// pendingGeneration is one decoded generation waiting to be stored,
 // carrying its position in the request so the per-record result keeps its
 // request position.
 type pendingGeneration struct {
 	index  int
 	record generationRecord
-	// activity is the moment this record represents. The newest activity
-	// among the records a write accepts becomes the conversation file's
-	// modification time, which is the key the list orders and bounds by.
-	activity time.Time
 }
 
 func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
@@ -393,9 +363,6 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 				ConversationID: gen.ConversationID,
 				Generation:     stored[i],
 			},
-			// gen already carries the timestamps recordActivity reads, so
-			// the stamp costs no extra decode.
-			activity: recordActivity(gen.summaryGeneration, receivedAt),
 		})
 	}
 
@@ -406,12 +373,10 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 	for _, convID := range order {
 		pending := groups[convID]
 		recs := make([]generationRecord, len(pending))
-		activities := make([]time.Time, len(pending))
 		for i, p := range pending {
 			recs[i] = p.record
-			activities[i] = p.activity
 		}
-		written, err := s.storage.AppendGenerations(convID, recs, activities)
+		written, err := s.storage.AppendGenerations(convID, recs)
 		if err != nil {
 			s.logger.Printf("local: append generations: %v", err)
 		}
@@ -453,7 +418,7 @@ func (s *Server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Best-effort Cloud forwarding runs after the local store so a Cloud
-	// failure can never affect the JSONL write or the ack below. Off by
+	// failure can never affect the local write or the acknowledgement. Off by
 	// default: when forwarding is disabled load() returns enabled=false and we
 	// spawn nothing.
 	if len(accepted) > 0 && !isForwardedRequest(r) {
@@ -684,21 +649,17 @@ func (s *Server) decodeConfigRequest(w http.ResponseWriter, r *http.Request) (Se
 	return req.Settings, true
 }
 
-// conversationListLimit caps how many conversations the list endpoint
-// summarises when the client does not pass a limit. The cost of a request
-// follows this number, not the size of the store, and the viewer's list is
-// not virtualised, so an unbounded default would hurt both ends. Same
-// idiom as searchResultLimit: the default lives in the handler, and
-// Storage.ListConversations keeps ≤ 0 as unbounded for its own callers.
+// conversationListLimit caps the default list response because the viewer
+// does not virtualise it. The default lives in the handler;
+// Storage.ListConversations keeps ≤ 0 as unbounded for other callers.
 const conversationListLimit = 200
 
-// handleListConversations returns the aggregated conversation list as
-// JSON. The response is newest-first. ?limit= caps the page and ?since=
-// (RFC 3339) drops conversations whose file is older, both applied before
-// any conversation file is decoded. For an append-only file the
-// modification time is the last activity; see ConversationListOptions.
+// handleListConversations returns the aggregated conversation list as JSON,
+// newest activity first. ?limit= caps the page. ?since= (RFC 3339) drops
+// conversations whose last activity is older. SQLite applies these bounds
+// while querying; the JSONL fallback decodes legacy files first.
 //
-// total_conversations counts the conversation files in the store, before
+// total_conversations counts the stored conversations, before
 // either bound. The viewer needs it to tell an empty store from an empty
 // range: with a range-scoped page it cannot otherwise distinguish first
 // launch from a quiet week, and the two want different notices.
@@ -727,7 +688,6 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 		"conversations":       convs,
 		"total_conversations": total,
 	})
-	s.warmSummariesInBackground()
 }
 
 // limitParam reads a ?limit= page size, falling back to def when the
@@ -839,7 +799,6 @@ func (s *Server) handleTokenMetrics(w http.ResponseWriter, r *http.Request) {
 		"points":           points,
 		"interval_seconds": int64(used.Seconds()),
 	})
-	s.warmSummariesInBackground()
 }
 
 // sinceParam reads the shared ?since= lower bound. RFC 3339 is the only

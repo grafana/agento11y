@@ -157,7 +157,9 @@ A plugin can only export fields the host agent passes through to it, so individu
 
 ## Local mode
 
-`agento11y <agent> --local` records the session to a JSONL store and starts the local viewer. The command prints the viewer URL. It first tries `http://127.0.0.1:8765` and uses a higher port when that port is unavailable.
+`agento11y <agent> --local` records the session in a SQLite database and starts the local viewer. The command prints the viewer URL. It first tries `http://127.0.0.1:8765` and uses a higher port when that port is unavailable.
+
+After an upgrade, the daemon migrates existing conversation JSONL files into `conversations.db` in the background. It resumes interrupted work on later starts and keeps the JSONL files for that run. A later start removes them when its migration check finds no pending work. After removal, an older agento11y version shows an empty viewer.
 
 `AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. Choosing **Local only** at the first-run question writes `AGENTO11Y_LOCAL=true` and `SIGIL_LOCAL=true` to `config.env`, and later runs do not ask again. When the question comes from `agento11y <agent>`, that launch starts the receiver. After `agento11y login` or `agento11y cursor install`, the receiver starts on the next launch or hook. The question appears on macOS and Linux only, because Windows has no local receiver. Use `--no-local` to override this setting for one launcher session.
 
@@ -215,7 +217,7 @@ A forked pi session imports only the turns the fork itself ran. The trunk holds 
 
 A dry run reads up to 1 MiB of each session file (a head and a tail window) to count turns and read session metadata. A `cursor` `store.db` session is a SQLite database rather than a log file, so the dry run queries it for the same counts instead, and no message body leaves the database. A Cursor agent-transcript dry run uses the same bounded head/tail window as the other JSONL importers. Nothing from those bytes is decoded into prompt or response text, shown, exported, or stored.
 
-Without `--since`, an import covers the last 90 days. The local store is a linear scan over JSONL files, so an unbounded first import makes the viewer slow before you have used it. Pass `--since 365d`, `--since 2026-01-01T00:00:00Z`, or any duration to widen the window, and `--until` to bound the other end.
+Without `--since`, an import covers the last 90 days. Pass `--since 365d`, `--since 2026-01-01T00:00:00Z`, or any duration to widen the window. Use `--until` to bound the other end.
 
 The rest of the flags:
 

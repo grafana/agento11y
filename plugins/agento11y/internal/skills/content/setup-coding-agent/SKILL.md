@@ -452,7 +452,7 @@ chooses which fields ship, not whether the shipped fields are clean. Treat
 ### Local mode
 
 `agento11y <agent> --local`, or **Local only** at the first-run question, routes
-launcher runs and agento11y hooks to a JSONL store on the machine. It also
+launcher runs and agento11y hooks to a SQLite database on the machine. It also
 overrides the capture mode with full content. The launcher prints the viewer URL.
 Manage the daemon with `agento11y local start|status|stop|restart`. Local mode
 runs on macOS and Linux only. **Local only** at a launcher starts the receiver for

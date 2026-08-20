@@ -9,7 +9,6 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -37,7 +36,7 @@ func newLocalRequest(method, target string, body io.Reader) *http.Request {
 }
 
 func TestServer_GenerationsExport_RecordsAndAccepts(t *testing.T) {
-	s, dir := newTestServer(t)
+	s, _ := newTestServer(t)
 	body := `{"generations":[
 		{"id":"gen-1","conversation_id":"conv-A","model":{"name":"m1"}},
 		{"id":"gen-2","conversation_id":"conv-A"}
@@ -63,68 +62,19 @@ func TestServer_GenerationsExport_RecordsAndAccepts(t *testing.T) {
 	s.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 
-	// All generations belong to conv-A so they share one file.
-	lines := readLines(t, filepath.Join(dir, ConversationsDir, "conv-A.jsonl"))
-	require.Len(t, lines, 3)
-	var rec generationRecord
-	require.NoError(t, json.Unmarshal([]byte(lines[0]), &rec))
-	assert.Equal(t, "gen-1", rec.GenerationID)
-	assert.Equal(t, "conv-A", rec.ConversationID)
-	assert.NotEmpty(t, rec.ReceivedAt)
-	assert.JSONEq(t, `{"id":"gen-1","conversation_id":"conv-A","model":{"name":"m1"}}`, string(rec.Generation))
-	assert.Contains(t, lines[2], `"id":"gen-3"`)
-}
-
-// TestServer_GenerationsExport_StampsLastActivity covers the ordering key
-// ingest writes: a conversation file's modification time is the newest
-// activity the batch carried for it, and a later import of older turns
-// leaves it where it was, so the conversation keeps its place among
-// today's.
-func TestServer_GenerationsExport_StampsLastActivity(t *testing.T) {
-	s, dir := newTestServer(t)
-	live := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
-	earlier := live.Add(-30 * time.Minute)
-	backfill := live.Add(-90 * 24 * time.Hour)
-	stamp := func() time.Time {
-		t.Helper()
-		info, err := os.Stat(filepath.Join(dir, ConversationsDir, "conv-A.jsonl"))
-		require.NoError(t, err)
-		return info.ModTime()
-	}
-	export := func(body string) {
-		t.Helper()
-		resp := post(t, s, "/api/v1/generations:export", "application/json", body)
-		defer resp.Body.Close()
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-	}
-
-	// One request, two turns of the same conversation, out of order.
-	export(fmt.Sprintf(`{"generations":[
-		{"id":"gen-2","conversation_id":"conv-A","started_at":%q,"completed_at":%q},
-		{"id":"gen-1","conversation_id":"conv-A","started_at":%q,"completed_at":%q}
-	]}`,
-		live.Add(-time.Minute).Format(time.RFC3339Nano), live.Format(time.RFC3339Nano),
-		earlier.Add(-time.Minute).Format(time.RFC3339Nano), earlier.Format(time.RFC3339Nano)))
-	assert.WithinDuration(t, live, stamp(), time.Second, "the newest activity in the batch")
-
-	// A history import appending months-old turns to the same conversation.
-	export(fmt.Sprintf(`{"generations":[
-		{"id":"gen-0","conversation_id":"conv-A","started_at":%q,"completed_at":%q}
-	]}`, backfill.Add(-time.Minute).Format(time.RFC3339Nano), backfill.Format(time.RFC3339Nano)))
-	assert.WithinDuration(t, live, stamp(), time.Second, "a backfill must not sink a live conversation")
-
-	// The list bounds on that stamp, so the conversation stays in a range
-	// that covers its live turn.
-	since := live.Add(-time.Minute).Format(time.RFC3339Nano)
-	req := newLocalRequest(http.MethodGet, "/api/v1/conversations?since="+url.QueryEscape(since), nil)
-	rr := httptest.NewRecorder()
-	s.ServeHTTP(rr, req)
-	require.Equal(t, http.StatusOK, rr.Code)
-	assert.Contains(t, rr.Body.String(), `"id":"conv-A"`)
+	detail, err := s.storage.ConversationDetail("conv-A")
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	require.Len(t, detail.Generations, 3)
+	assert.Equal(t, []string{"gen-1", "gen-2", "gen-3"}, []string{
+		detail.Generations[0].GenerationID,
+		detail.Generations[1].GenerationID,
+		detail.Generations[2].GenerationID,
+	})
 }
 
 func TestServer_GenerationsExport_RejectsMissingAndUnsafeConversationID(t *testing.T) {
-	s, dir := newTestServer(t)
+	s, _ := newTestServer(t)
 	body := `{"generations":[
 		{"id":"missing-conv"},
 		{"id":"bad-path","conversation_id":"../runs"}
@@ -141,109 +91,23 @@ func TestServer_GenerationsExport_RejectsMissingAndUnsafeConversationID(t *testi
 		assert.NotEmpty(t, r.Error)
 	}
 
-	assertConversationDirEmpty(t, &Storage{dir: dir})
+	conversations, total, err := s.storage.ListConversations(ConversationListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, conversations)
+	assert.Zero(t, total)
 }
 
 func TestServer_GenerationsExport_AppendsByConversation(t *testing.T) {
-	s, dir := newTestServer(t)
+	s, _ := newTestServer(t)
 	postDiscard(t, s, "/api/v1/generations:export", "application/json", `{"generations":[{"id":"gen-a","conversation_id":"conv-shared"}]}`)
 	postDiscard(t, s, "/api/v1/generations:export", "application/json", `{"generations":[{"id":"gen-b","conversation_id":"conv-shared"}]}`)
 
-	lines := readLines(t, filepath.Join(dir, ConversationsDir, "conv-shared.jsonl"))
-	require.Len(t, lines, 2)
-	var first, second generationRecord
-	require.NoError(t, json.Unmarshal([]byte(lines[0]), &first))
-	require.NoError(t, json.Unmarshal([]byte(lines[1]), &second))
-	assert.Equal(t, "gen-a", first.GenerationID)
-	assert.Equal(t, "gen-b", second.GenerationID)
-}
-
-// TestServer_GenerationsExport_BatchesPerConversation covers the batched
-// ingest path: one request opens each conversation file once, per-record
-// results stay in request order, a mid-batch write failure keeps the
-// records written before it accepted, and a conversations directory removed
-// under the running server (a cleanup script, a synced state directory) is
-// recreated.
-func TestServer_GenerationsExport_BatchesPerConversation(t *testing.T) {
-	cases := []struct {
-		name           string
-		convIDs        []string // one generation per entry, in request order
-		failWriteAfter int
-		removeDir      bool
-		wantAccepted   []bool
-		wantOpens      int
-		wantLines      map[string]int
-	}{
-		{
-			name:         "five generations one conversation",
-			convIDs:      []string{"conv-A", "conv-A", "conv-A", "conv-A", "conv-A"},
-			wantAccepted: []bool{true, true, true, true, true},
-			wantOpens:    1,
-			wantLines:    map[string]int{"conv-A": 5},
-		},
-		{
-			name:         "interleaved conversations open once each",
-			convIDs:      []string{"conv-A", "conv-B", "conv-A", "conv-B", "conv-A"},
-			wantAccepted: []bool{true, true, true, true, true},
-			wantOpens:    2,
-			wantLines:    map[string]int{"conv-A": 3, "conv-B": 2},
-		},
-		{
-			name:           "third append fails",
-			convIDs:        []string{"conv-A", "conv-A", "conv-A", "conv-A", "conv-A"},
-			failWriteAfter: 2,
-			wantAccepted:   []bool{true, true, false, false, false},
-			wantOpens:      1,
-			wantLines:      map[string]int{"conv-A": 2},
-		},
-		{
-			name:         "missing conversations dir is recreated",
-			convIDs:      []string{"conv-A", "conv-A"},
-			removeDir:    true,
-			wantAccepted: []bool{true, true},
-			wantOpens:    1,
-			wantLines:    map[string]int{"conv-A": 2},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, storage, dir := newTestServerStorage(t)
-			opener := &countingOpener{failWriteAfter: tc.failWriteAfter}
-			storage.openAppend = opener.open
-			if tc.removeDir {
-				require.NoError(t, os.RemoveAll(filepath.Join(dir, ConversationsDir)))
-			}
-
-			gens := make([]string, 0, len(tc.convIDs))
-			for i, convID := range tc.convIDs {
-				gens = append(gens, fmt.Sprintf(`{"id":"gen-%d","conversation_id":%q}`, i, convID))
-			}
-			resp := post(t, srv, "/api/v1/generations:export", "application/json",
-				`{"generations":[`+strings.Join(gens, ",")+`]}`)
-			defer resp.Body.Close()
-			require.Equal(t, http.StatusOK, resp.StatusCode)
-
-			var out generationsResponse
-			decodeJSON(t, resp.Body, &out)
-			require.Len(t, out.Results, len(tc.convIDs))
-			for i, want := range tc.wantAccepted {
-				assert.Equal(t, fmt.Sprintf("gen-%d", i), out.Results[i].GenerationID, "result %d out of request order", i)
-				assert.Equal(t, want, out.Results[i].Accepted, "result %d accepted", i)
-				if want {
-					assert.Empty(t, out.Results[i].Error, "result %d error", i)
-				} else {
-					assert.NotEmpty(t, out.Results[i].Error, "result %d error", i)
-				}
-			}
-
-			for convID, wantLines := range tc.wantLines {
-				assert.Len(t, readLines(t, filepath.Join(dir, ConversationsDir, convID+".jsonl")), wantLines, convID)
-			}
-			opens, closes := opener.counts()
-			assert.Equal(t, tc.wantOpens, opens, "file opens")
-			assert.Equal(t, opens, closes, "every open must be closed")
-		})
-	}
+	detail, err := s.storage.ConversationDetail("conv-shared")
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	require.Len(t, detail.Generations, 2)
+	assert.Equal(t, "gen-a", detail.Generations[0].GenerationID)
+	assert.Equal(t, "gen-b", detail.Generations[1].GenerationID)
 }
 
 func TestServer_OTLPDrainsAndReturns200(t *testing.T) {
@@ -865,18 +729,13 @@ func TestServer_APITokenMetrics(t *testing.T) {
 		assert.Equal(t, int64(107), body.Points[0].FreshInput)
 	})
 
-	t.Run("since skips older files without decoding them", func(t *testing.T) {
-		requireUnreadableFilesSupported(t)
+	t.Run("since excludes older generations", func(t *testing.T) {
 		writeGen(t, storage, "conv-old", "g3", agento11y.Generation{
 			Model:       agento11y.ModelRef{Provider: "anthropic", Name: "claude-sonnet-4"},
 			StartedAt:   mustParse(t, "2026-05-01T10:00:00Z"),
 			CompletedAt: mustParse(t, "2026-05-01T10:00:01Z"),
 			Usage:       agento11y.TokenUsage{InputTokens: 999},
 		}, "2026-05-01T10:00:01Z")
-		// Unreadable, so a request that opens it fails instead of quietly
-		// paying for the decode the modification-time break exists to avoid.
-		blockConversationFile(t, storage, "conv-old")
-
 		req := newLocalRequest(http.MethodGet, "/api/v1/metrics/tokens?since=2026-05-21T09:00:00Z&interval=3600", nil)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
@@ -887,7 +746,7 @@ func TestServer_APITokenMetrics(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
 		require.Len(t, body.Points, 1)
-		assert.Equal(t, int64(107), body.Points[0].FreshInput, "the older file contributes nothing")
+		assert.Equal(t, int64(107), body.Points[0].FreshInput, "the older generation contributes nothing")
 	})
 
 	t.Run("invalid parameters rejected", func(t *testing.T) {
@@ -1176,15 +1035,28 @@ func TestServer_Config_RejectsBadBody(t *testing.T) {
 // newForwardingTestServer builds a server whose config.env enables (or not)
 // Cloud forwarding to the given fake Cloud server. The forward client is
 // pointed at the fake server so its self-signed TLS cert is trusted.
-func newForwardingTestServer(t *testing.T, cloud *httptest.Server, env map[string]string) (*Server, string) {
+func newForwardingTestServer(t *testing.T, cloud *httptest.Server, env map[string]string) (*Server, *Storage) {
 	t.Helper()
 	clearForwardEnv(t)
 	dir := filepath.Join(t.TempDir(), "local")
 	storage, err := NewStorage(dir)
 	require.NoError(t, err)
+	store, err := openSQLStore(dir, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	require.NoError(t, store.setJSONLRetired())
+	storage.sql = store
+	storage.setSQLiteOnly()
 	s := NewServer(storage, nil, writeConfigEnvFile(t, env))
 	s.forward.client = cloud.Client()
-	return s, dir
+	return s, storage
+}
+
+func storedSQLGeneration(t *testing.T, storage *Storage, id string) sqlGeneration {
+	t.Helper()
+	var row sqlGeneration
+	require.NoError(t, storage.sql.db.Where("gen_id = ?", id).Take(&row).Error)
+	return row
 }
 
 // TestServer_Forwarding_OffByDefault covers the opt-in guarantee: without the
@@ -1197,7 +1069,7 @@ func TestServer_Forwarding_OffByDefault(t *testing.T) {
 	}))
 	defer cloud.Close()
 
-	s, dir := newForwardingTestServer(t, cloud, map[string]string{
+	s, storage := newForwardingTestServer(t, cloud, map[string]string{
 		"AGENTO11Y_ENDPOINT": cloud.URL, "AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
 	})
 
@@ -1206,7 +1078,7 @@ func TestServer_Forwarding_OffByDefault(t *testing.T) {
 	postDiscard(t, s, "/otlp/v1/traces", "application/x-protobuf", "")
 	s.forward.wait()
 
-	assert.Len(t, readLines(t, filepath.Join(dir, ConversationsDir, "conv-A.jsonl")), 1)
+	assert.Equal(t, "conv-A", storedSQLGeneration(t, storage, "gen-1").ConvID)
 	assert.Empty(t, hits, "no Cloud request should be made when forwarding is off")
 }
 
@@ -1224,7 +1096,7 @@ func TestServer_Forwarding_OnForwardsGeneration(t *testing.T) {
 	}))
 	defer cloud.Close()
 
-	s, dir := newForwardingTestServer(t, cloud, map[string]string{
+	s, storage := newForwardingTestServer(t, cloud, map[string]string{
 		"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud.URL,
 		"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
 	})
@@ -1234,9 +1106,7 @@ func TestServer_Forwarding_OnForwardsGeneration(t *testing.T) {
 	s.forward.wait()
 
 	// The local store keeps the full content the forwarded copy dropped.
-	lines := readLines(t, filepath.Join(dir, ConversationsDir, "conv-A.jsonl"))
-	require.Len(t, lines, 1)
-	assert.Contains(t, lines[0], "secret")
+	assert.Contains(t, string(storedSQLGeneration(t, storage, "gen-1").Raw), "secret")
 
 	body := <-received
 	assert.Equal(t, wire.GenerationExportHTTPPath, gotPath)
@@ -1257,7 +1127,7 @@ func TestServer_Forwarding_FailureKeepsLocalStore(t *testing.T) {
 	}))
 	defer cloud.Close()
 
-	s, dir := newForwardingTestServer(t, cloud, map[string]string{
+	s, storage := newForwardingTestServer(t, cloud, map[string]string{
 		"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud.URL,
 		"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
 	})
@@ -1272,7 +1142,7 @@ func TestServer_Forwarding_FailureKeepsLocalStore(t *testing.T) {
 	assert.True(t, out.Results[0].Accepted, "child ack succeeds despite Cloud failure")
 
 	s.forward.wait()
-	assert.Len(t, readLines(t, filepath.Join(dir, ConversationsDir, "conv-A.jsonl")), 1)
+	assert.Equal(t, "conv-A", storedSQLGeneration(t, storage, "gen-1").ConvID)
 }
 
 // TestServer_Forwarding_RejectedGenerationNotForwarded covers the ordering
@@ -1967,7 +1837,7 @@ func TestServer_Forwarding_DoesNotRelayForwardedPayload(t *testing.T) {
 	}))
 	defer cloud.Close()
 
-	s, dir := newForwardingTestServer(t, cloud, map[string]string{
+	s, storage := newForwardingTestServer(t, cloud, map[string]string{
 		"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": cloud.URL,
 		"AGENTO11Y_AUTH_TENANT_ID": "t", "AGENTO11Y_AUTH_TOKEN": "k",
 		"AGENTO11Y_OTEL_EXPORTER_OTLP_ENDPOINT": cloud.URL,
@@ -1985,6 +1855,6 @@ func TestServer_Forwarding_DoesNotRelayForwardedPayload(t *testing.T) {
 	s.forward.wait()
 
 	// Stored locally, never relayed.
-	assert.Len(t, readLines(t, filepath.Join(dir, ConversationsDir, "conv-A.jsonl")), 1)
+	assert.Equal(t, "conv-A", storedSQLGeneration(t, storage, "gen-1").ConvID)
 	assert.Empty(t, hits)
 }
