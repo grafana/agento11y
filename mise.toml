@@ -67,7 +67,7 @@ run = "pnpm --filter @grafana/agento11y-local-viewer run lint:fix"
 
 [tasks.format]
 description = "Format all code"
-depends = ["format:go", "format:py", "format:cs", "format:ts:sdk-js", "format:ts:plugin-pi", "format:ts:plugin-opencode"]
+depends = ["format:go", "format:py", "format:cs", "format:ts:sdk-js", "format:ts:plugin-pi", "format:ts:plugin-opencode", "format:ts:local-viewer"]
 
 # --- Linting ---
 
