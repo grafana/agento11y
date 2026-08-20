@@ -518,10 +518,10 @@ def tool_result_message(tool_call_id: str, content: str) -> Message:
 #
 # These models map to the Agent Observability experiment and score APIs (HTTP):
 #   POST   /api/v1/experiment-runs:upsert
-#   POST   /api/v1/experiment-runs/{run_id}:finalize
-#   GET    /api/v1/eval/experiments/{run_id}
+#   POST   /api/v1/experiment-runs/{experiment_id}:finalize
+#   GET    /api/v1/eval/experiments/{experiment_id}
 #   POST   /api/v1/scores:export
-#   GET    /api/v1/eval/experiments/{run_id}/report
+#   GET    /api/v1/eval/experiments/{experiment_id}/report
 # ---------------------------------------------------------------------------
 
 
@@ -605,11 +605,8 @@ class ScoreSource:
 class ScoreItem:
     """A score to export via ``POST /api/v1/scores:export``.
 
-    The backend keys scores on ``experiment_id`` (the canonical run identifier);
-    set it to attach the score to an experiment report. A score must reference a
-    ``generation_id`` **or** a ``trial_id``. ``run_id`` is accepted as a
-    client-side alias for ``experiment_id`` and is mapped to ``experiment_id`` on
-    the wire — the backend has no ``run_id`` field and rejects unknown fields.
+    Set ``experiment_id`` to attach the score to an experiment report. A score
+    must reference a ``generation_id`` **or** a ``trial_id``.
     """
 
     score_id: str
@@ -628,19 +625,12 @@ class ScoreItem:
     grader_conversation_id: str = ""
     grader_generation_id: str = ""
     grader_trace_id: str = ""
-    run_id: str = ""  # client-side alias for experiment_id (mapped on the wire)
     evaluator_kind: str = ""
     passed: bool | None = None
     explanation: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime | None = None
     source: ScoreSource | None = None
-
-    @property
-    def resolved_experiment_id(self) -> str:
-        """The experiment id to send on the wire (``experiment_id`` or ``run_id``)."""
-
-        return (self.experiment_id or self.run_id or "").strip()
 
 
 @dataclass(slots=True)
@@ -708,13 +698,14 @@ class CreateExperimentRequest:
 
     name: str
     source: ExperimentSource | str = ExperimentSource.EXTERNAL
-    run_id: str = ""
+    experiment_id: str = ""
     description: str = ""
     tags: list[str] = field(default_factory=list)
     suite_id: str = ""
     suite_version: str = ""
     candidate: dict[str, Any] = field(default_factory=dict)
     planned_trial_count: int | None = None
+    online_evaluations_enabled: bool | None = None
     collection_id: str = ""
     evaluators: list[ExperimentEvaluator] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -724,7 +715,7 @@ class CreateExperimentRequest:
 class Experiment:
     """An experiment run as returned by Agent Observability."""
 
-    run_id: str
+    experiment_id: str
     name: str
     status: str
     tenant_id: str = ""
@@ -736,6 +727,7 @@ class Experiment:
     metadata: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     planned_trial_count: int | None = None
+    online_evaluations_enabled: bool = False
     result_status: str = ""
     result_error: str = ""
     result: ExperimentReportSummary | None = None

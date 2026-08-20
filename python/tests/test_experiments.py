@@ -174,18 +174,20 @@ def test_experiment_lifecycle_and_score_wire_fields() -> None:
         name="smoke run",
         suite=suite,
         planned_trial_count=3,
+        online_evaluations_enabled=False,
     ) as exp:
         with exp.trial(suite.test_cases[0]) as trial:
             trial.final_score(1.0, passed=True, explanation="matched", evaluator=verifier)
             trial.check_score("json_valid", passed=True)
             trial.rubric_score("helpfulness", 0.9, explanation="clear")
 
-    # Upsert sent experiment_id (not run_id) and source=external.
+    # Upsert sent the canonical experiment identifier and source=external.
     assert len(client.upserts) == 1
-    assert client.upserts[0].run_id == "run-1"
+    assert client.upserts[0].experiment_id == "run-1"
     assert client.upserts[0].suite_id == "smoke"
     assert client.upserts[0].suite_version == "1.2.0"
     assert client.upserts[0].planned_trial_count == 3
+    assert client.upserts[0].online_evaluations_enabled is False
 
     # Three scores, all attributed to the run + trial + test case.
     assert len(client.scores) == 3
@@ -212,7 +214,7 @@ def test_experiment_lifecycle_and_score_wire_fields() -> None:
     for s in client.scores:
         assert s.experiment_id == "run-1"
         assert s.test_case_id == "add"
-        assert s.resolved_experiment_id == "run-1"
+        assert s.experiment_id == "run-1"
         # The typed trial_id attributes the score (the trial was created on enter).
         assert s.trial_id == client.scores[0].trial_id
         assert s.trial_id  # non-empty
@@ -241,6 +243,15 @@ def test_experiment_finalize_can_assert_score_count_explicitly() -> None:
     exp.finalize(score_count=4)
 
     assert client.finalized == [("run-assert", "completed", 4)]
+
+
+def test_experiment_omits_online_evaluation_policy_by_default() -> None:
+    client = FakeClient()
+
+    with Experiment(client, experiment_id="run-default-policy"):
+        pass
+
+    assert client.upserts[0].online_evaluations_enabled is None
 
 
 def test_experiment_rejects_negative_planned_trial_count() -> None:
@@ -282,6 +293,8 @@ def test_llm_judge_evaluates_publishes_transcript_and_links_score() -> None:
     assert generation["input_text"].startswith("Input: 2+2")
     assert generation["input_text"].endswith('Return {"score": 1}')
     assert generation["output_text"].startswith('{"score"')
+    assert generation["tags"]["experiment_id"] == "run-judge"
+    assert generation["metadata"]["experiment_id"] == "run-judge"
 
 
 def test_regex_judge_scores_without_publishing_transcript() -> None:
@@ -699,30 +712,14 @@ def test_trial_ref_from_env_reads_sigil_names_with_warning(caplog: pytest.LogCap
     "env,expected",
     [
         pytest.param(
-            {"SIGIL_RUN_ID": "run-legacy", "SIGIL_TEST_CASE_ID": "c1"},
-            ("run-legacy", "c1"),
-            id="SIGIL_RUN_ID supplies the experiment id",
-        ),
-        pytest.param(
-            {"SIGIL_EXPERIMENT_ID": "run-old", "SIGIL_RUN_ID": "run-older", "SIGIL_TEST_CASE_ID": "c1"},
-            ("run-old", "c1"),
-            id="SIGIL_EXPERIMENT_ID beats SIGIL_RUN_ID",
-        ),
-        pytest.param(
             {
                 "AGENTO11Y_EXPERIMENT_ID": "run-new",
                 "SIGIL_EXPERIMENT_ID": "run-old",
-                "SIGIL_RUN_ID": "run-older",
                 "AGENTO11Y_TEST_CASE_ID": "c-new",
                 "SIGIL_TEST_CASE_ID": "c-old",
             },
             ("run-new", "c-new"),
-            id="canonical wins over every legacy spelling",
-        ),
-        pytest.param(
-            {"AGENTO11Y_RUN_ID": "run-x", "AGENTO11Y_TEST_CASE_ID": "c1"},
-            None,
-            id="AGENTO11Y_RUN_ID is not a name",
+            id="canonical wins over the legacy product prefix",
         ),
     ],
 )
@@ -779,6 +776,8 @@ def test_record_io_mints_real_conversation() -> None:
         conv = trial.conversation_id
     assert conv != ""
     assert client.generations == [trial.generation_id]
+    assert client.generation_calls[0][1]["tags"]["experiment_id"] == "run-y"
+    assert client.generation_calls[0][1]["metadata"]["experiment_id"] == "run-y"
     assert all(s.conversation_id == conv for s in client.scores)
 
 
@@ -1556,7 +1555,7 @@ def test_parse_report_matches_backend_shape() -> None:
         "rows": [{"test_case_id": "add", "trials": []}],
     }
     report = _parse_report(payload)
-    assert report.run.run_id == "run-9"  # not blank (parsed from the `experiment` key)
+    assert report.run.experiment_id == "run-9"  # not blank (parsed from the `experiment` key)
     assert report.run.name == "nightly"
     assert report.run.suite_id == "suite-9"
     assert report.run.suite_version == "v4"

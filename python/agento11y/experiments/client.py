@@ -114,7 +114,7 @@ class Client:
 
         return _transport.finalize_experiment(
             **self._args(),
-            run_id=experiment_id,
+            experiment_id=experiment_id,
             status=status,
             score_count=score_count,
             error=error or None,
@@ -458,7 +458,7 @@ class Client:
     def get_report(self, experiment_id: str) -> ExperimentReport:
         """Fetches the aggregated report for a run."""
 
-        return _transport.get_experiment_report(**self._args(), run_id=experiment_id, retry=self._retry)
+        return _transport.get_experiment_report(**self._args(), experiment_id=experiment_id, retry=self._retry)
 
     def list_scores(
         self, experiment_id: str, *, limit: int = 50, cursor: str | None = None
@@ -466,7 +466,7 @@ class Client:
         """Lists stored scores for a run."""
 
         return _transport.list_experiment_scores(
-            **self._args(), run_id=experiment_id, limit=limit, cursor=cursor, retry=self._retry
+            **self._args(), experiment_id=experiment_id, limit=limit, cursor=cursor, retry=self._retry
         )
 
     # --- links ------------------------------------------------------------ #

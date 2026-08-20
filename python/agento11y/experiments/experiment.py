@@ -724,13 +724,13 @@ class Trial:
                 operation_name=grader.operation_name,
                 usage=grader.usage,
                 tags={
-                    "experiment.run_id": self.ref.experiment_id,
+                    "experiment_id": self.ref.experiment_id,
                     "test.case.id": self.ref.test_case_id,
                     "test.case.attempt": str(self.ref.attempt),
                     "evaluator.id": result.evaluator.evaluator_id,
                 },
                 metadata={
-                    "experiment_run_id": self.ref.experiment_id,
+                    "experiment_id": self.ref.experiment_id,
                     "test_case_id": self.ref.test_case_id,
                     "attempt": self.ref.attempt,
                     **result.metadata,
@@ -1051,9 +1051,12 @@ class Trial:
             agent_version=self._io.get("agent_version", (cand.agent_version if cand else "")),
             input_tokens=self._io.get("input_tokens"),
             output_tokens=self._io.get("output_tokens"),
-            tags={"experiment.run_id": self.ref.experiment_id, "task_id": self.ref.test_case_id},
+            tags={
+                "experiment_id": self.ref.experiment_id,
+                "task_id": self.ref.test_case_id,
+            },
             metadata={
-                "experiment_run_id": self.ref.experiment_id,
+                "experiment_id": self.ref.experiment_id,
                 "task_id": self.ref.test_case_id,
                 "trial_id": self.trial_id,
                 "attempt": self.ref.attempt,
@@ -1109,6 +1112,7 @@ class Experiment:
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         planned_trial_count: int | None = None,
+        online_evaluations_enabled: bool | None = None,
         auto_finalize: bool = True,
         use_experimental_otel: bool | None = None,
     ) -> None:
@@ -1124,6 +1128,7 @@ class Experiment:
         self._tags = list(tags or [])
         self._metadata = dict(metadata or {})
         self.planned_trial_count = planned_trial_count
+        self.online_evaluations_enabled = online_evaluations_enabled
         self._auto_finalize = auto_finalize
         self._use_experimental_otel = (
             bool(use_experimental_otel)
@@ -1136,11 +1141,6 @@ class Experiment:
         self._open_trials: dict[str, Trial] = {}
         self._claimed_trial_ids: set[str] = set()
         self._owns_client = False  # set by the experiment() factory when it built the client
-
-    # alias: many callers spell the identifier ``run_id``
-    @property
-    def run_id(self) -> str:
-        return self.experiment_id
 
     @property
     def client(self) -> Client:
@@ -1163,7 +1163,7 @@ class Experiment:
             metadata.update(candidate_metadata)
         self._client.upsert_experiment(
             CreateExperimentRequest(
-                run_id=self.experiment_id,
+                experiment_id=self.experiment_id,
                 name=self.name,
                 source="external",
                 description=self.description,
@@ -1172,6 +1172,7 @@ class Experiment:
                 suite_version=suite_version,
                 candidate=candidate_metadata,
                 planned_trial_count=self.planned_trial_count,
+                online_evaluations_enabled=self.online_evaluations_enabled,
                 metadata=metadata,
             )
         )
@@ -1345,6 +1346,7 @@ def experiment(
     tags: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
     planned_trial_count: int | None = None,
+    online_evaluations_enabled: bool | None = None,
 ) -> Experiment:
     """Opens a cloud experiment, building a client from the environment.
 
@@ -1395,6 +1397,7 @@ def experiment(
         tags=tags,
         metadata=metadata,
         planned_trial_count=planned_trial_count,
+        online_evaluations_enabled=online_evaluations_enabled,
         use_experimental_otel=use_experimental_otel,
     )
     exp._owns_client = owns_client
@@ -1423,6 +1426,7 @@ def experiment_from_suite(
     tags: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
     planned_trial_count: int | None = None,
+    online_evaluations_enabled: bool | None = None,
 ) -> Experiment:
     """Pulls a stored suite and opens an experiment linked to that exact version.
 
@@ -1458,4 +1462,5 @@ def experiment_from_suite(
         tags=tags,
         metadata=metadata,
         planned_trial_count=planned_trial_count,
+        online_evaluations_enabled=online_evaluations_enabled,
     )

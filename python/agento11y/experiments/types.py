@@ -305,8 +305,7 @@ ENV_TRAJECTORY_ID = "AGENTO11Y_TRAJECTORY_ID"
 
 # Pre-rename spellings. ``to_env`` writes them beside the canonical names so a
 # child process running an older SDK build still receives the trial context;
-# ``from_env`` accepts them through the config resolver, which also honours
-# SIGIL_RUN_ID for the experiment id.
+# ``from_env`` accepts them through the config resolver.
 LEGACY_ENV_EXPERIMENT_ID = "SIGIL_EXPERIMENT_ID"
 LEGACY_ENV_TEST_CASE_ID = "SIGIL_TEST_CASE_ID"
 LEGACY_ENV_ATTEMPT = "SIGIL_ATTEMPT"
@@ -340,11 +339,6 @@ class TrialRef:
     test_case_name: str = ""
     trajectory_id: str = ""
 
-    # Backwards-compatible alias: some callers spell the run id ``run_id``.
-    @property
-    def run_id(self) -> str:
-        return self.experiment_id
-
     def to_json(self) -> dict[str, Any]:
         return {
             "experiment_id": self.experiment_id,
@@ -359,7 +353,7 @@ class TrialRef:
 
     @classmethod
     def from_json(cls, payload: dict[str, Any]) -> TrialRef:
-        experiment_id = str(payload.get("experiment_id") or payload.get("run_id") or "").strip()
+        experiment_id = str(payload.get("experiment_id") or "").strip()
         return cls(
             experiment_id=experiment_id,
             test_case_id=str(payload.get("test_case_id") or "").strip(),

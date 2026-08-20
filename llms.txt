@@ -497,6 +497,10 @@ a stored test suite.
 - Use `trial.record_io(...)` when the harness owns candidate I/O, or
   `bind_generation`/`bind_conversation`/`bind_trace` when normal instrumentation
   already emitted it.
+- Pass `online_evaluations_enabled=True` to opt experiment generations into
+  matching automatic online evaluation rules. When omitted, the SDK omits the
+  field and the server defaults it to `False`; explicit on-demand trial
+  evaluation remains available for either policy.
 - Local `LLMJudge` and `RegexJudge` helpers do not require an evaluator created
   in Grafana. Frameworks can submit their native grader result and transcript
   through `trial.record_evaluation(...)`.

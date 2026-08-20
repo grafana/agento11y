@@ -54,9 +54,7 @@ _LEGACY_ENV_ALIASES: dict[str, tuple[str, ...]] = {
     "CONTENT_CAPTURE_MODE": ("SIGIL_CONTENT_CAPTURE_MODE",),
     "DEBUG": ("SIGIL_DEBUG",),
     "ENDPOINT": ("SIGIL_ENDPOINT", "SIGIL_API_ENDPOINT"),
-    # SIGIL_RUN_ID is the pre-rename name of the experiment id, kept last so a
-    # SIGIL_EXPERIMENT_ID set beside it still wins. Go does the same.
-    "EXPERIMENT_ID": ("SIGIL_EXPERIMENT_ID", "SIGIL_RUN_ID"),
+    "EXPERIMENT_ID": ("SIGIL_EXPERIMENT_ID",),
     "GRAFANA_URL": ("SIGIL_GRAFANA_URL",),
     "HEADERS": ("SIGIL_HEADERS",),
     "INGEST_ACTOR": ("SIGIL_INGEST_ACTOR",),

@@ -4,23 +4,23 @@ External writes go through the ingest lifecycle on the same tenant token used
 for generation export:
 
   POST   /api/v1/experiment-runs:upsert              create or claim an external run
-  POST   /api/v1/experiment-runs/{run_id}:finalize   finalize an external run
-  POST   /api/v1/scores:export                       publish scores (attribute via run_id)
-  POST   /api/v1/experiment-runs/{run_id}/trials     create or claim a typed trial
-  PATCH  /api/v1/experiment-runs/{run_id}/trials/{trial_id}
+  POST   /api/v1/experiment-runs/{experiment_id}:finalize   finalize an external run
+  POST   /api/v1/scores:export                       publish scores
+  POST   /api/v1/experiment-runs/{experiment_id}/trials     create or claim a typed trial
+  PATCH  /api/v1/experiment-runs/{experiment_id}/trials/{trial_id}
                                                         update a typed trial
-  POST   /api/v1/experiment-runs/{run_id}/trials/{trial_id}/artifacts:upload
+  POST   /api/v1/experiment-runs/{experiment_id}/trials/{trial_id}/artifacts:upload
                                                         attach a trial artifact
-  POST   /api/v1/experiment-runs/{run_id}/trials/{trial_id}:evaluate
+  POST   /api/v1/experiment-runs/{experiment_id}/trials/{trial_id}:evaluate
                                                         run a stored evaluator
-  GET    /api/v1/experiment-runs/{run_id}/trials/{trial_id}/evaluations/{evaluation_id}
+  GET    /api/v1/experiment-runs/{experiment_id}/trials/{trial_id}/evaluations/{evaluation_id}
                                                         read evaluator work status
 
 Reads use the Agent Observability query routes with the same configured endpoint and auth:
 
-  GET    /api/v1/eval/experiments/{run_id}           fetch a run
-  GET    /api/v1/eval/experiments/{run_id}/scores    list run scores (paginated)
-  GET    /api/v1/eval/experiments/{run_id}/report    aggregated run report
+  GET    /api/v1/eval/experiments/{experiment_id}           fetch a run
+  GET    /api/v1/eval/experiments/{experiment_id}/scores    list run scores (paginated)
+  GET    /api/v1/eval/experiments/{experiment_id}/report    aggregated run report
 
 The functions here are thin; :class:`agento11y.client.Client` wraps them with
 resolved endpoint, insecure flag, and auth headers.
@@ -122,13 +122,13 @@ def get_experiment(
     api_endpoint: str,
     insecure: bool,
     headers: dict[str, str],
-    run_id: str,
+    experiment_id: str,
     path_prefix: str = _DEFAULT_PATH_PREFIX,
     retry: RetryPolicy | None = None,
 ) -> Experiment:
     """Fetches a single experiment run by id."""
 
-    url = _experiment_url(api_endpoint, insecure, run_id, path_prefix)
+    url = _experiment_url(api_endpoint, insecure, experiment_id, path_prefix)
     body = _request_json("GET", url, headers, None, retry, ExperimentTransportError, "experiment get")
     return _parse_experiment(body)
 
@@ -138,7 +138,7 @@ def finalize_experiment(
     api_endpoint: str,
     insecure: bool,
     headers: dict[str, str],
-    run_id: str,
+    experiment_id: str,
     status: ExperimentStatus | str,
     score_count: int | None = None,
     error: str | None = None,
@@ -153,10 +153,10 @@ def finalize_experiment(
         normalized_status = "completed"
     elif normalized_status != "failed":
         raise ValidationError("agento11y experiment validation failed: status must be completed or failed")
-    normalized_run_id = _validate_run_id(run_id)
+    normalized_experiment_id = _validate_experiment_id(experiment_id)
     url = (
         _base_url(api_endpoint, insecure)
-        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(normalized_run_id, safe='')}:finalize"
+        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(normalized_experiment_id, safe='')}:finalize"
     )
     payload: dict[str, Any] = {
         "status": normalized_status,
@@ -179,7 +179,7 @@ def export_scores(
     scores_path: str = _SCORES_EXPORT_PATH,
     retry: RetryPolicy | None = None,
 ) -> ExportScoresResponse:
-    """Publishes scores; set ``run_id`` on each score to attribute it to a run.
+    """Publishes scores; set ``experiment_id`` on each score to attribute it to a run.
 
     ``scores_path`` defaults to the direct ingest path; on Grafana Cloud it is
     the plugin proxy's score route (``.../eval/scores:export``).
@@ -244,7 +244,7 @@ def create_test_case_trial(
     the tenant ingest credential (no Grafana actor required).
     """
 
-    normalized = _validate_run_id(experiment_id)
+    normalized = _validate_experiment_id(experiment_id)
     url = (
         _base_url(api_endpoint, insecure)
         + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(normalized, safe='')}/trials"
@@ -269,12 +269,14 @@ def update_test_case_trial(
     normalized = (trial_id or "").strip()
     if normalized == "":
         raise ValidationError("agento11y test case trial validation failed: trial_id is required")
-    run_id = (experiment_id or "").strip()
-    if run_id == "":
+    normalized_experiment_id = (experiment_id or "").strip()
+    if normalized_experiment_id == "":
         raise ValidationError("agento11y test case trial validation failed: experiment_id is required for trial update")
-    quoted_run_id = urllib_parse.quote(run_id, safe="")
+    quoted_experiment_id = urllib_parse.quote(normalized_experiment_id, safe="")
     quoted_trial_id = urllib_parse.quote(normalized, safe="")
-    url = _base_url(api_endpoint, insecure) + f"{_EXPERIMENT_RUNS_PREFIX}/{quoted_run_id}/trials/{quoted_trial_id}"
+    url = (
+        _base_url(api_endpoint, insecure) + f"{_EXPERIMENT_RUNS_PREFIX}/{quoted_experiment_id}/trials/{quoted_trial_id}"
+    )
     body = _request_json("PATCH", url, headers, request, retry, ExperimentTransportError, "test case trial update")
     return body if isinstance(body, dict) else {}
 
@@ -292,7 +294,7 @@ def trigger_trial_evaluation(
 ) -> TrialEvaluation:
     """Queues a stored evaluator for a trial's bound conversation."""
 
-    run_id, normalized_trial_id = _validate_trial_evaluation_path(experiment_id, trial_id)
+    normalized_experiment_id, normalized_trial_id = _validate_trial_evaluation_path(experiment_id, trial_id)
     normalized_evaluator_id = (evaluator_id or "").strip()
     if normalized_evaluator_id == "":
         raise ValidationError("agento11y trial evaluation validation failed: evaluator_id is required")
@@ -302,7 +304,7 @@ def trigger_trial_evaluation(
         payload["evaluator_version"] = normalized_version
     url = (
         _base_url(api_endpoint, insecure)
-        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(run_id, safe='')}/trials/"
+        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(normalized_experiment_id, safe='')}/trials/"
         + f"{urllib_parse.quote(normalized_trial_id, safe='')}:evaluate"
     )
     body = _request_json("POST", url, headers, payload, retry, ExperimentTransportError, "trial evaluation trigger")
@@ -321,13 +323,13 @@ def get_trial_evaluation(
 ) -> TrialEvaluation:
     """Reads durable status for a triggered trial evaluation."""
 
-    run_id, normalized_trial_id = _validate_trial_evaluation_path(experiment_id, trial_id)
+    normalized_experiment_id, normalized_trial_id = _validate_trial_evaluation_path(experiment_id, trial_id)
     normalized_evaluation_id = (evaluation_id or "").strip()
     if normalized_evaluation_id == "":
         raise ValidationError("agento11y trial evaluation validation failed: evaluation_id is required")
     url = (
         _base_url(api_endpoint, insecure)
-        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(run_id, safe='')}/trials/"
+        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(normalized_experiment_id, safe='')}/trials/"
         + f"{urllib_parse.quote(normalized_trial_id, safe='')}/evaluations/"
         + urllib_parse.quote(normalized_evaluation_id, safe="")
     )
@@ -350,8 +352,8 @@ def upload_trial_artifact(
 ) -> dict[str, Any]:
     """Uploads raw artifact bytes to the experiment-run ingest route."""
 
-    run_id = (experiment_id or "").strip()
-    if run_id == "":
+    normalized_experiment_id = (experiment_id or "").strip()
+    if normalized_experiment_id == "":
         raise ValidationError("agento11y artifact validation failed: experiment_id is required")
     normalized_trial_id = (trial_id or "").strip()
     if normalized_trial_id == "":
@@ -369,7 +371,7 @@ def upload_trial_artifact(
     query = urllib_parse.urlencode({"name": normalized_name, "kind": normalized_kind, "mime": (mime or "").strip()})
     url = (
         _base_url(api_endpoint, insecure)
-        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(run_id, safe='')}/trials/"
+        + f"{_EXPERIMENT_RUNS_PREFIX}/{urllib_parse.quote(normalized_experiment_id, safe='')}/trials/"
         + f"{urllib_parse.quote(normalized_trial_id, safe='')}/artifacts:upload?{query}"
     )
     request_headers = {**(headers or {}), "Content-Type": (mime or "").strip() or "application/octet-stream"}
@@ -390,7 +392,7 @@ def list_experiment_scores(
     api_endpoint: str,
     insecure: bool,
     headers: dict[str, str],
-    run_id: str,
+    experiment_id: str,
     limit: int = 50,
     cursor: str | None = None,
     path_prefix: str = _DEFAULT_PATH_PREFIX,
@@ -401,7 +403,7 @@ def list_experiment_scores(
     Score items are returned as decoded JSON dicts for this first iteration.
     """
 
-    base = _experiment_url(api_endpoint, insecure, run_id, path_prefix) + "/scores"
+    base = _experiment_url(api_endpoint, insecure, experiment_id, path_prefix) + "/scores"
     query: dict[str, str] = {"limit": str(limit)}
     if cursor:
         query["cursor"] = cursor
@@ -417,13 +419,13 @@ def get_experiment_report(
     api_endpoint: str,
     insecure: bool,
     headers: dict[str, str],
-    run_id: str,
+    experiment_id: str,
     path_prefix: str = _DEFAULT_PATH_PREFIX,
     retry: RetryPolicy | None = None,
 ) -> ExperimentReport:
     """Fetches the aggregated report for a run."""
 
-    url = _experiment_url(api_endpoint, insecure, run_id, path_prefix) + "/report"
+    url = _experiment_url(api_endpoint, insecure, experiment_id, path_prefix) + "/report"
     body = _request_json("GET", url, headers, None, retry, ExperimentTransportError, "experiment report")
     return _parse_report(body)
 
@@ -443,10 +445,8 @@ def _serialize_upsert_request(request: CreateExperimentRequest) -> dict[str, Any
         "name": request.name.strip(),
         "source": dict(_EXPERIMENT_RUN_SOURCE),
     }
-    # The backend ingest route keys on `experiment_id`, not `run_id`, and rejects
-    # unknown fields. `CreateExperimentRequest.run_id` is the client-side spelling.
-    if request.run_id:
-        out["experiment_id"] = request.run_id
+    if request.experiment_id:
+        out["experiment_id"] = request.experiment_id
     if request.description:
         out["description"] = request.description
     if request.tags:
@@ -461,6 +461,8 @@ def _serialize_upsert_request(request: CreateExperimentRequest) -> dict[str, Any
         if request.planned_trial_count < 0:
             raise ValidationError("agento11y experiment validation failed: planned_trial_count must be non-negative")
         out["planned_trial_count"] = request.planned_trial_count
+    if request.online_evaluations_enabled is not None:
+        out["online_evaluations_enabled"] = request.online_evaluations_enabled
     if request.metadata:
         out["metadata"] = dict(request.metadata)
     return out
@@ -478,8 +480,7 @@ def _serialize_score(score: ScoreItem) -> dict[str, Any]:
         out["generation_id"] = score.generation_id
     if score.conversation_id:
         out["conversation_id"] = score.conversation_id
-    # `experiment_id` is the canonical run key; `run_id` is a client-side alias.
-    experiment_id = score.resolved_experiment_id
+    experiment_id = score.experiment_id.strip()
     if experiment_id:
         out["experiment_id"] = experiment_id
     if score.trial_id:
@@ -578,7 +579,7 @@ def _parse_experiment(payload: Any) -> Experiment:
     if not isinstance(payload, dict):
         raise ExperimentTransportError("agento11y experiment transport failed: invalid response payload")
     return Experiment(
-        run_id=_str(payload.get("experiment_id")) or _str(payload.get("run_id")),
+        experiment_id=_str(payload.get("experiment_id")),
         name=_str(payload.get("name")),
         status=_str(payload.get("status")),
         tenant_id=_str(payload.get("tenant_id")),
@@ -592,6 +593,7 @@ def _parse_experiment(payload: Any) -> Experiment:
         planned_trial_count=(
             _int(payload.get("planned_trial_count")) if payload.get("planned_trial_count") is not None else None
         ),
+        online_evaluations_enabled=bool(payload.get("online_evaluations_enabled", False)),
         result_status=_str(payload.get("result_status")),
         result_error=_str(payload.get("result_error")),
         result=_parse_report_summary(payload.get("result")) if isinstance(payload.get("result"), dict) else None,
@@ -846,26 +848,26 @@ def _experiments_url(endpoint: str, insecure: bool, path_prefix: str) -> str:
     return _base_url(endpoint, insecure) + prefix + _EVAL_EXPERIMENTS_SUFFIX
 
 
-def _experiment_url(endpoint: str, insecure: bool, run_id: str, path_prefix: str) -> str:
-    normalized = _validate_run_id(run_id)
+def _experiment_url(endpoint: str, insecure: bool, experiment_id: str, path_prefix: str) -> str:
+    normalized = _validate_experiment_id(experiment_id)
     return f"{_experiments_url(endpoint, insecure, path_prefix)}/{urllib_parse.quote(normalized, safe='')}"
 
 
-def _validate_run_id(run_id: str) -> str:
-    normalized = (run_id or "").strip()
+def _validate_experiment_id(experiment_id: str) -> str:
+    normalized = (experiment_id or "").strip()
     if normalized == "":
-        raise ValidationError("agento11y experiment validation failed: run_id is required")
+        raise ValidationError("agento11y experiment validation failed: experiment_id is required")
     return normalized
 
 
 def _validate_trial_evaluation_path(experiment_id: str, trial_id: str) -> tuple[str, str]:
-    run_id = (experiment_id or "").strip()
-    if run_id == "":
+    normalized_experiment_id = (experiment_id or "").strip()
+    if normalized_experiment_id == "":
         raise ValidationError("agento11y trial evaluation validation failed: experiment_id is required")
     normalized_trial_id = (trial_id or "").strip()
     if normalized_trial_id == "":
         raise ValidationError("agento11y trial evaluation validation failed: trial_id is required")
-    return run_id, normalized_trial_id
+    return normalized_experiment_id, normalized_trial_id
 
 
 def _base_url(endpoint: str, insecure: bool) -> str:

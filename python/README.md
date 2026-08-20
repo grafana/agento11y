@@ -758,6 +758,12 @@ to `exp.finalize(...)` only when you want the server to assert an exact count.
 A/B testing is two runs with different `experiment_id`/`tags` over the same
 suite and evaluators.
 
+Pass `online_evaluations_enabled=True` to apply matching automatic online
+evaluation rules to generations recorded by the experiment. When omitted, the
+SDK leaves the field out and the server defaults it to `False`; on-demand trial
+evaluation remains available either way. Pass `False` explicitly when the
+request should assert the disabled policy for an existing experiment ID.
+
 Experiment writes use the same Grafana Cloud ingestion API key as generation
 ingest. They do not require a control-plane URL or a separate eval API key.
 Experiment transcripts, string scores, explanations, metadata, and text
