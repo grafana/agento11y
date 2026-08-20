@@ -4,7 +4,7 @@ Monitor the coding agents you already use — Cursor, Claude Code, Codex, Copilo
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=t4Gv0XFaOSI">
-    <img src="https://img.youtube.com/vi/t4Gv0XFaOSI/maxresdefault.jpg" alt="Coding Agent Observability demo" />
+    <img src="../../assets/readme/agento11y-demo.gif" alt="Coding Agent Observability demo" />
   </a>
 </p>
 
