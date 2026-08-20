@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
 )
 
 // historyFixedNow pins the clock so the 90-day default boundary is checkable.
@@ -233,6 +238,10 @@ func TestHistoryDryRunReportsThePlan(t *testing.T) {
 	withHistoryNow(t)
 	isolateDotenvHome(t)
 	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+		t.Fatal("dry run must not prompt for a destination")
+		return login.Result{}, nil
+	})
 
 	stdout, stderr, code := runHistory(t, "history", "import", "claude-code", "--dry-run")
 	if code != nil {
@@ -246,6 +255,215 @@ func TestHistoryDryRunReportsThePlan(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout = %q, want it to contain %q", stdout, want)
 		}
+	}
+}
+
+func TestHistoryEmptyPlanSkipsSetup(t *testing.T) {
+	withHistoryNow(t)
+	isolateDotenvHome(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+		t.Fatal("an empty import plan must not start setup")
+		return login.Result{}, nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	err := historyImport(historyImportOptions{
+		Agent: history.AgentClaudeCode,
+		Since: historyFixedNow.Add(-history.DefaultSinceWindow),
+	}, true, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("historyImport: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "planned: 0 sessions") {
+		t.Fatalf("stdout = %q, want an empty plan", stdout.String())
+	}
+}
+
+func TestHistoryResolveDestination(t *testing.T) {
+	setupErr := errors.New("broken login")
+	tests := []struct {
+		name            string
+		opts            historyImportOptions
+		localEnv        string
+		localEnvKey     string
+		endpoint        string
+		credentials     bool
+		interactive     bool
+		loginResult     login.Result
+		loginErr        error
+		wantLocal       bool
+		wantLocalEnvKey string
+		wantLoginCalls  int
+		wantOfferLocal  bool
+		wantKeepLocal   bool
+		wantErr         string
+	}{
+		{
+			name:        "no-local beats local flag and environment",
+			opts:        historyImportOptions{Local: true, NoLocal: true},
+			localEnv:    "true",
+			credentials: true,
+			interactive: true,
+		},
+		{
+			name:        "local flag needs no setup",
+			opts:        historyImportOptions{Local: true},
+			interactive: true,
+			wantLocal:   true,
+		},
+		{
+			name:            "local environment enables local destination",
+			localEnv:        "true",
+			localEnvKey:     envconfig.LegacyKey("LOCAL"),
+			interactive:     true,
+			wantLocal:       true,
+			wantLocalEnvKey: envconfig.LegacyKey("LOCAL"),
+		},
+		{
+			name:        "saved credentials select Cloud",
+			credentials: true,
+			interactive: true,
+		},
+		{
+			name:        "loopback endpoint needs no setup",
+			endpoint:    "http://127.0.0.1:8765",
+			interactive: true,
+		},
+		{
+			name:           "Cloud endpoint without credentials starts setup",
+			endpoint:       "https://agento11y.example.com",
+			interactive:    true,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+		},
+		{
+			name:        "non-interactive import leaves exporter to report missing credentials",
+			interactive: false,
+		},
+		{
+			name:           "local login answer selects local destination",
+			interactive:    true,
+			loginResult:    login.Result{LocalMode: true},
+			wantLocal:      true,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+		},
+		{
+			name:           "Cloud login answer selects Cloud destination",
+			interactive:    true,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+		},
+		{
+			name:           "no-local starts only Cloud setup and keeps saved local mode",
+			opts:           historyImportOptions{Local: true, NoLocal: true},
+			localEnv:       "true",
+			interactive:    true,
+			wantLoginCalls: 1,
+			wantKeepLocal:  true,
+		},
+		{
+			name:           "false local value skips the destination question",
+			localEnv:       "false",
+			interactive:    true,
+			wantLoginCalls: 1,
+		},
+		{
+			name:           "invalid local value still offers destination",
+			localEnv:       "maybe",
+			interactive:    true,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+		},
+		{
+			name:           "aborted setup stops import",
+			interactive:    true,
+			loginErr:       login.ErrAborted,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+			wantErr:        "nothing was imported because setup did not finish; run `agento11y login` or pass --local",
+		},
+		{
+			name:           "login without terminal stops import",
+			interactive:    true,
+			loginErr:       login.ErrNotInteractive,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+			wantErr:        "nothing was imported because setup did not finish; run `agento11y login` or pass --local",
+		},
+		{
+			name:           "refused credentials stop import with recovery paths",
+			interactive:    true,
+			loginErr:       login.ErrNotVerified,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+			wantErr:        "did not accept those credentials; run `agento11y login` to try again, `agento11y login --yes` to save them anyway, or pass --local",
+		},
+		{
+			name:           "other setup failure is wrapped",
+			interactive:    true,
+			loginErr:       setupErr,
+			wantLoginCalls: 1,
+			wantOfferLocal: true,
+			wantErr:        "setup: broken login",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			localKey := tt.localEnvKey
+			if localKey == "" {
+				localKey = envconfig.PreferredKey("LOCAL")
+			}
+			t.Setenv(localKey, tt.localEnv)
+			endpoint := tt.endpoint
+			if tt.credentials {
+				if endpoint == "" {
+					endpoint = "https://agento11y.example.com"
+				}
+				t.Setenv(envconfig.PreferredKey("AUTH_TENANT_ID"), "tenant")
+				t.Setenv(envconfig.PreferredKey("AUTH_TOKEN"), "token")
+			}
+			if endpoint != "" {
+				t.Setenv(envconfig.PreferredKey("ENDPOINT"), endpoint)
+			}
+
+			loginCalls := 0
+			withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
+				loginCalls++
+				if opts.OfferLocal != tt.wantOfferLocal {
+					t.Errorf("OfferLocal = %v, want %v", opts.OfferLocal, tt.wantOfferLocal)
+				}
+				if opts.KeepLocalSetting != tt.wantKeepLocal {
+					t.Errorf("KeepLocalSetting = %v, want %v", opts.KeepLocalSetting, tt.wantKeepLocal)
+				}
+				return tt.loginResult, tt.loginErr
+			})
+
+			envLocal := localEnvRequest{on: envconfig.ParseBool(tt.localEnv), key: localKey}
+			if tt.localEnv == "" {
+				envLocal.key = ""
+			}
+			opts := tt.opts
+			err := historyResolveDestination(context.Background(), &opts, envLocal, tt.interactive, io.Discard, log.New(io.Discard, "", 0))
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("historyResolveDestination() error = %v", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("historyResolveDestination() error = %v, want it to contain %q", err, tt.wantErr)
+			}
+			if opts.Local != tt.wantLocal {
+				t.Errorf("Local = %v, want %v", opts.Local, tt.wantLocal)
+			}
+			if opts.LocalEnvKey != tt.wantLocalEnvKey {
+				t.Errorf("LocalEnvKey = %q, want %q", opts.LocalEnvKey, tt.wantLocalEnvKey)
+			}
+			if loginCalls != tt.wantLoginCalls {
+				t.Errorf("loginRun called %d times, want %d", loginCalls, tt.wantLoginCalls)
+			}
+		})
 	}
 }
 
@@ -324,6 +542,288 @@ func TestHistoryNonInteractiveWithAllAndYesImports(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "Imported 1 turns from 1 sessions") {
 		t.Errorf("stdout = %q, want the import summary", stdout)
+	}
+}
+
+func TestHistoryImportUsesLocalModeFromConfigEnv(t *testing.T) {
+	withHistoryNow(t)
+	isolateDotenvHome(t)
+	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+	writeHistoryConfig(t, "AGENTO11Y_LOCAL=true\n")
+	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+		t.Fatal("configured local mode must not prompt")
+		return login.Result{}, nil
+	})
+
+	exported := 0
+	withStubHistoryExporter(t, &exported)
+	var destination string
+	prevConfirm := historyConfirm
+	t.Cleanup(func() { historyConfirm = prevConfirm })
+	historyConfirm = func(opts historyImportOptions, _ []history.SessionPreview) (bool, error) {
+		destination = historyDestinationName(opts)
+		return true, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := historyImport(historyImportOptions{
+		Agent: history.AgentClaudeCode,
+		Since: historyFixedNow.Add(-history.DefaultSinceWindow),
+		All:   true,
+	}, true, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("historyImport: %v", err)
+	}
+	if destination != "the local store on this machine" {
+		t.Fatalf("confirmation destination = %q", destination)
+	}
+	if exported != 1 {
+		t.Fatalf("exported %d turns, want 1", exported)
+	}
+}
+
+func TestHistoryImportNoLocalOverridesLocalMode(t *testing.T) {
+	for _, flags := range [][]string{{"--local", "--no-local"}, {"--no-local", "--local"}} {
+		t.Run(strings.Join(flags, "_"), func(t *testing.T) {
+			withHistoryNow(t)
+			isolateDotenvHome(t)
+			writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+			t.Setenv(envconfig.PreferredKey("LOCAL"), "true")
+
+			exported := 0
+			endpoint := newCountingIngest(t, &exported)
+			setHistoryCloudCredentials(t, endpoint)
+			withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+				t.Fatal("saved Cloud credentials must not prompt")
+				return login.Result{}, nil
+			})
+
+			args := []string{"history", "import", "claude-code"}
+			args = append(args, flags...)
+			args = append(args, "--all", "--yes")
+			_, stderr, code := runHistory(t, args...)
+			if code != nil {
+				t.Fatalf("exit = %d, want no exit (stderr=%q)", *code, stderr)
+			}
+			if exported != 1 {
+				t.Fatalf("exported %d turns to Cloud, want 1", exported)
+			}
+		})
+	}
+}
+
+func TestHistoryImportSavedCredentialsSkipSetup(t *testing.T) {
+	withHistoryNow(t)
+	isolateDotenvHome(t)
+	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+
+	exported := 0
+	endpoint := newCountingIngest(t, &exported)
+	setHistoryCloudCredentials(t, endpoint)
+	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+		t.Fatal("saved Cloud credentials must not prompt")
+		return login.Result{}, nil
+	})
+
+	_, stderr, code := runHistory(t, "history", "import", "claude-code", "--all", "--yes")
+	if code != nil {
+		t.Fatalf("exit = %d, want no exit (stderr=%q)", *code, stderr)
+	}
+	if exported != 1 {
+		t.Fatalf("exported %d turns to Cloud, want 1", exported)
+	}
+}
+
+func TestHistoryImportFirstRunUsesLoginDestination(t *testing.T) {
+	tests := []struct {
+		name   string
+		result login.Result
+		cloud  bool
+	}{
+		{name: "local", result: login.Result{LocalMode: true}},
+		{name: "Cloud", cloud: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withHistoryNow(t)
+			isolateDotenvHome(t)
+			writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+
+			exported := 0
+			cloudEndpoint := ""
+			if tt.cloud {
+				cloudEndpoint = newCountingIngest(t, &exported)
+			} else {
+				withStubHistoryExporter(t, &exported)
+			}
+			loginCalls := 0
+			withStubLoginRun(t, func(_ context.Context, opts login.RunOpts) (login.Result, error) {
+				loginCalls++
+				if !opts.OfferLocal {
+					t.Error("first-run setup did not offer the destination question")
+				}
+				if cloudEndpoint != "" {
+					setHistoryCloudCredentials(t, cloudEndpoint)
+				}
+				return tt.result, nil
+			})
+
+			var stdout, stderr bytes.Buffer
+			err := historyImport(historyImportOptions{
+				Agent: history.AgentClaudeCode,
+				Since: historyFixedNow.Add(-history.DefaultSinceWindow),
+				All:   true,
+				Yes:   true,
+			}, true, &stdout, &stderr)
+			if err != nil {
+				t.Fatalf("historyImport: %v", err)
+			}
+			if loginCalls != 1 {
+				t.Fatalf("loginRun called %d times, want 1", loginCalls)
+			}
+			if exported != 1 {
+				t.Fatalf("exported %d turns, want 1", exported)
+			}
+		})
+	}
+}
+
+func TestHistoryImportAbortedSetupExportsNothing(t *testing.T) {
+	withHistoryNow(t)
+	isolateDotenvHome(t)
+	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+		return login.Result{}, login.ErrAborted
+	})
+
+	exported := 0
+	withStubHistoryExporter(t, &exported)
+	var stdout, stderr bytes.Buffer
+	err := historyImport(historyImportOptions{
+		Agent: history.AgentClaudeCode,
+		Since: historyFixedNow.Add(-history.DefaultSinceWindow),
+		All:   true,
+		Yes:   true,
+	}, true, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "nothing was imported") {
+		t.Fatalf("historyImport error = %v", err)
+	}
+	if exported != 0 {
+		t.Fatalf("exported %d turns, want none", exported)
+	}
+}
+
+func TestHistoryImportNonInteractiveMissingCredentialsDoesNotPrompt(t *testing.T) {
+	withHistoryNow(t)
+	isolateDotenvHome(t)
+	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+	t.Setenv(envconfig.PreferredKey("ENDPOINT"), "https://agento11y.example.com")
+	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+		t.Fatal("non-interactive import must not prompt")
+		return login.Result{}, nil
+	})
+
+	_, stderr, code := runHistory(t, "history", "import", "claude-code", "--all", "--yes")
+	if code == nil || *code != 1 {
+		t.Fatalf("exit = %v, want 1 (stderr=%q)", code, stderr)
+	}
+	want := "history: no credentials configured for import (run `agento11y login` or use --local)"
+	if !strings.Contains(stderr, want) {
+		t.Fatalf("stderr = %q, want it to contain %q", stderr, want)
+	}
+}
+
+func TestHistoryImportLoopbackEndpointSkipsSetup(t *testing.T) {
+	withHistoryNow(t)
+	isolateDotenvHome(t)
+	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+
+	exported := 0
+	writeHistoryConfig(t, envconfig.PreferredKey("ENDPOINT")+"="+newCountingIngest(t, &exported)+"\n")
+	withStubLoginRun(t, func(context.Context, login.RunOpts) (login.Result, error) {
+		t.Fatal("a configured loopback endpoint must not prompt")
+		return login.Result{}, nil
+	})
+	prev := historyEnsureLocal
+	t.Cleanup(func() { historyEnsureLocal = prev })
+	historyEnsureLocal = func(context.Context) (string, error) {
+		t.Error("a configured endpoint must not start another local receiver")
+		return "", errors.New("unexpected local receiver start")
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := historyImport(historyImportOptions{
+		Agent: history.AgentClaudeCode,
+		Since: historyFixedNow.Add(-history.DefaultSinceWindow),
+		All:   true,
+		Yes:   true,
+	}, true, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("historyImport: %v", err)
+	}
+	if exported != 1 {
+		t.Fatalf("exported %d turns to the configured endpoint, want 1", exported)
+	}
+}
+
+func TestHistoryLocalReceiverFailureNamesTheSetting(t *testing.T) {
+	tests := []struct {
+		name     string
+		opts     historyImportOptions
+		wantHint bool
+	}{
+		{
+			name:     "environment selected local mode",
+			opts:     historyImportOptions{Local: true, LocalEnvKey: envconfig.LegacyKey("LOCAL")},
+			wantHint: true,
+		},
+		{
+			name: "local flag selected local mode",
+			opts: historyImportOptions{Local: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prev := historyEnsureLocal
+			t.Cleanup(func() { historyEnsureLocal = prev })
+			historyEnsureLocal = func(context.Context) (string, error) {
+				return "", errors.New("agento11y local receiver is not supported on Windows")
+			}
+
+			_, err := historyTarget(context.Background(), tt.opts)
+			if err == nil {
+				t.Fatal("historyTarget() error = nil, want the receiver failure")
+			}
+			if !strings.Contains(err.Error(), "start the local receiver") {
+				t.Errorf("error = %q, want it to name the failed step", err)
+			}
+			hasHint := strings.Contains(err.Error(), envconfig.LegacyKey("LOCAL")) && strings.Contains(err.Error(), "--no-local")
+			if hasHint != tt.wantHint {
+				t.Errorf("error = %q, setting hint = %v, want %v", err, hasHint, tt.wantHint)
+			}
+		})
+	}
+}
+
+func TestHistoryImportReportsTheConfigEnvSpelling(t *testing.T) {
+	withHistoryNow(t)
+	isolateDotenvHome(t)
+	writeClaudeHistory(t, "sess-recent", 24*time.Hour)
+	writeHistoryConfig(t, "SIGIL_LOCAL=true\n")
+	prev := historyEnsureLocal
+	t.Cleanup(func() { historyEnsureLocal = prev })
+	historyEnsureLocal = func(context.Context) (string, error) {
+		return "", errors.New("no receiver here")
+	}
+
+	_, stderr, code := runHistory(t, "history", "import", "claude-code", "--all", "--yes")
+	if code == nil || *code != 1 {
+		t.Fatalf("exit = %v, want 1 (stderr=%q)", code, stderr)
+	}
+	for _, want := range []string{"start the local receiver", envconfig.LegacyKey("LOCAL"), "--no-local"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, want it to contain %q", stderr, want)
+		}
 	}
 }
 
@@ -482,6 +982,30 @@ func TestHistorySessionLabelCarriesNoPromptText(t *testing.T) {
 	})
 	if !strings.Contains(label, "/work/repo") || !strings.Contains(label, "about 12 turns") {
 		t.Fatalf("label = %q, want the workspace and an approximate turn count", label)
+	}
+}
+
+func writeHistoryConfig(t *testing.T, contents string) {
+	t.Helper()
+	configDir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "agento11y")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.env"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setHistoryCloudCredentials(t *testing.T, endpoint string) {
+	t.Helper()
+	t.Setenv(envconfig.PreferredKey("ENDPOINT"), endpoint)
+	t.Setenv(envconfig.PreferredKey("AUTH_TENANT_ID"), "tenant")
+	t.Setenv(envconfig.PreferredKey("AUTH_TOKEN"), "token")
+	prev := historyEnsureLocal
+	t.Cleanup(func() { historyEnsureLocal = prev })
+	historyEnsureLocal = func(context.Context) (string, error) {
+		t.Error("Cloud import tried to start the local receiver")
+		return "", errors.New("unexpected local receiver start")
 	}
 }
 

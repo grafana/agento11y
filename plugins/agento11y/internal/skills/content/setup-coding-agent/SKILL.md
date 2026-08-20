@@ -385,7 +385,7 @@ All hosts read the resolved config path. The default is
 | `AGENTO11Y_GUARDS_ENABLED` | Send supported preflight and tool calls for guard evaluation |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | Guard evaluation timeout in milliseconds |
 | `AGENTO11Y_GUARDS_FAIL_OPEN` | Allow the operation when guard evaluation fails |
-| `AGENTO11Y_LOCAL` | Route `agento11y <agent>` launches and agento11y hooks to the local daemon, and skip the destination question |
+| `AGENTO11Y_LOCAL` | A true value routes `agento11y <agent>` launches, agento11y hooks, and history imports to the local daemon |
 | `AGENTO11Y_LOCAL_FORWARD` | Forward local-mode captures to Grafana Cloud |
 | `AGENTO11Y_AUTO_UPDATE` | A false value opts out of host-plugin refresh |
 | `AGENTO11Y_DEBUG` | A true value writes the debug log |
@@ -465,25 +465,24 @@ configured `AGENTO11Y_LOCAL`.
 
 ### History import
 
-The viewer and Grafana Cloud both start empty: they hold only sessions captured
-after the install. `agento11y history import` backfills sessions an agent
-already wrote to disk. Supported agents are `claude-code`, `codex`, and `pi`.
+Until an import runs, the viewer and Grafana Cloud hold only sessions captured after installation.
+`agento11y history import` backfills sessions `claude-code`, `codex`, `cursor`, or `pi` already wrote to disk.
 
 ```sh
-agento11y history import claude-code --dry-run   # plan only, nothing exported
-agento11y history import claude-code --local     # use the local daemon
-agento11y history import claude-code             # use AGENTO11Y_ENDPOINT
+agento11y history import claude-code --dry-run   # plan only; no setup or export
+agento11y history import claude-code --local     # import into the local store
+agento11y history import claude-code --no-local  # import into Grafana Cloud
 ```
 
-Without `--since`, an import selects sessions active during the last 90 days.
-Each imported turn is recorded in a per-agent ledger. The ledger does not include
-the destination. If the same turns must go first to local storage and later to
-Grafana Cloud, use `--force` for the second import; otherwise the ledger skips
-them. A cancelled or failed run resumes from turns not marked exported.
+The import resolves the destination in this order: `--no-local`, `--local`, a true
+`AGENTO11Y_LOCAL`/`SIGIL_LOCAL` value from the shell or `config.env`, then saved Cloud credentials.
+With none set, an interactive run asks where sessions go. `--no-local` or any valid LOCAL value
+skips that question; missing Cloud credentials still starts Cloud setup. A noninteractive run never
+asks. It imports only with both `--all` and `--yes`; otherwise it prints a dry-run plan and exits 0.
 
-Without a terminal there is no picker or confirmation. Without `--all --yes`,
-the command prints a dry-run plan, imports nothing, and exits 0. Pass both flags
-from a script that should export data.
+Without `--since`, an import selects sessions active during the last 90 days. Each imported turn goes into a per-agent ledger that omits the destination.
+To send the same turns to another destination, add `--force` to the second import. If saved local mode would keep that import local, add `--no-local` too.
+A cancelled or failed run resumes from turns not marked exported.
 
 ### Auto-update
 
