@@ -47,7 +47,7 @@ Run `agento11y login` to configure capture. On first run it asks where sessions 
 
 Run `agento11y login` again to change the Cloud connection, content capture, tags, or guard settings. A rerun goes straight to the Cloud questions, and asks where sessions go only when neither that answer nor credentials are saved.
 
-For scripts and automation (register an agent without prompts), see [Noninteractive agent setup](#noninteractive-agent-setup).
+For scripts and unattended rollout (register an agent without prompts), see [Noninteractive agent setup](#noninteractive-agent-setup) and [Fleet reconciliation](#fleet-reconciliation).
 
 ## Launch a coding agent
 
@@ -68,16 +68,6 @@ agento11y claude
 | [Vibe](https://github.com/mistralai/vibe) | `agento11y vibe` |
 
 Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md). Per-agent notes and glue live under [`plugins/`](../).
-
-## Fleet reconciliation
-
-For MDM, configuration management, and other unattended rollout tools, reconcile the noninteractive host installers and receive one JSON result per agent:
-
-```sh
-agento11y agents reconcile --agents all --json
-```
-
-`all` includes every noninteractive installer registered in the installed binary, including an agent added by a future release. To target a fixed allowlist, pass names instead: `--agents claude,cursor`. The command never launches a coding agent or opens a login prompt. Its receipt reports `installed`, `already_installed`, `missing_host`, or a per-agent descriptive error; it exits non-zero only when an installer fails. This command contains no MDM-vendor, credential, or device-policy assumptions.
 
 ## Skills
 
@@ -243,8 +233,7 @@ Cloud credentials in this file are documented under [Grafana Agent Observability
 
 ### Noninteractive agent setup
 
-After writing the current user's `config.env`, a script can register an agent
-integration without launching the host or opening the credential prompt:
+After writing the current user's `config.env`, a script can register an agent integration without launching the host or opening the credential prompt:
 
 ```sh
 agento11y copilot install --json
@@ -252,14 +241,19 @@ agento11y opencode install --json
 agento11y pi install --json
 ```
 
-Each command prints one secret-free result with `installed`,
-`already_installed`, `missing_host`, or `error`. Copilot writes its shared
-user hook file and does not require the Copilot CLI on `PATH`; that file is
-also read by Copilot Chat in VS Code. OpenCode and pi require their respective
-CLI to be on the current user's `PATH`; `missing_host` is a successful
-deferral, so a later run can configure a host installed after the script.
+Each command prints one secret-free result with `installed`, `already_installed`, `missing_host`, or `error`. Copilot writes its shared user hook file and does not require the Copilot CLI on `PATH`; that file is also read by Copilot Chat in VS Code. OpenCode and pi require their respective CLI to be on the current user's `PATH`; `missing_host` is a successful deferral, so a later run can configure a host installed after the script.
 
 Claude Code provides the same command as `agento11y claude install --json`.
+
+#### Fleet reconciliation
+
+For MDM, configuration management, and other unattended rollout tools, reconcile those installers in one shot and receive one JSON result per agent:
+
+```sh
+agento11y agents reconcile --agents all --json
+```
+
+`all` includes every noninteractive installer registered in the installed binary, including an agent added by a future release. To target a fixed allowlist, pass names instead: `--agents claude,cursor`. The command never launches a coding agent or opens a login prompt. Its receipt reports `installed`, `already_installed`, `missing_host`, or a per-agent descriptive error; it exits non-zero only when an installer fails. This command contains no MDM-vendor, credential, or device-policy assumptions.
 
 ### Auto-update
 
