@@ -462,12 +462,14 @@ func shouldOfferLocal(askUser, requested, supported bool) bool {
 func enableLocalMode(configPath string, opts RunOpts) (Result, error) {
 	updates := envconfig.ExpandAliases(map[string]string{
 		envconfig.LegacyKey("LOCAL"):                  "true",
+		envconfig.LegacyKey("LOCAL_FORWARD"):          "false",
 		envconfig.LegacyKey(envconfig.AutoTagsSuffix): "true",
 	})
 	if err := dotenv.WriteDotenv(configPath, updates, opts.Logger); err != nil {
 		return Result{}, err
 	}
 	envconfig.SetBothEnv("LOCAL", "true")
+	envconfig.SetBothEnv("LOCAL_FORWARD", "false")
 	envconfig.SetBothEnv(envconfig.AutoTagsSuffix, "true")
 	fmt.Fprintln(opts.Stderr, "Sessions will be captured on this machine.")
 	return Result{LocalMode: true}, nil

@@ -1822,7 +1822,8 @@ func TestRun_ProbeResolvesInsecureLikeExporter(t *testing.T) {
 
 func TestEnableLocalMode(t *testing.T) {
 	envconfig.PinAliasEnvBlank(t)
-	path := filepath.Join(t.TempDir(), "config.env")
+	envconfig.SetBothEnv("LOCAL_FORWARD", "true")
+	path := writeDotenv(t, "AGENTO11Y_LOCAL_FORWARD=true\nSIGIL_LOCAL_FORWARD=true\n")
 	var stderr bytes.Buffer
 
 	result, err := enableLocalMode(path, RunOpts{Stderr: &stderr})
@@ -1835,8 +1836,10 @@ func TestEnableLocalMode(t *testing.T) {
 	want := map[string]string{
 		"AGENTO11Y_AUTO_CODING_AGENT_TAGS": "true",
 		"AGENTO11Y_LOCAL":                  "true",
+		"AGENTO11Y_LOCAL_FORWARD":          "false",
 		"SIGIL_AUTO_CODING_AGENT_TAGS":     "true",
 		"SIGIL_LOCAL":                      "true",
+		"SIGIL_LOCAL_FORWARD":              "false",
 	}
 	if got := dotenv.LoadDotenv(path, nil); !reflect.DeepEqual(got, want) {
 		t.Errorf("saved config = %v, want %v", got, want)
