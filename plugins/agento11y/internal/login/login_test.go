@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -338,9 +339,60 @@ func TestAutoTagNamesValue(t *testing.T) {
 	}
 }
 
+// ansiEscape matches the colour sequences lipgloss adds when the test binary
+// writes to a terminal. Stripping them lets a rendered form be compared as
+// text wherever the tests run.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// TestPreferenceGroupsMarkTheAnswer renders the preferences group and pins how
+// the questions the cursor is not on are drawn. huh draws every field of the
+// group, and a blurred list used to draw all of its options the same way, so a
+// user moving through the form could not see what the questions behind and
+// ahead of them were set to. Every list now marks its answer, and the options
+// it did not take stay on screen.
+//
+// The automatic-tag question is in there as a list as well. It was a pair of
+// Yes/No buttons, which read as the form's submit rather than as one more
+// answer, and which huh draws with the selected button highlighted even while
+// the field is blurred.
+func TestPreferenceGroupsMarkTheAnswer(t *testing.T) {
+	v := &formValues{
+		contentMode:  contentModeFull,
+		guards:       guardsClosed,
+		guardTimeout: "1500",
+		autoTags:     true,
+	}
+	form := huh.NewForm(preferenceGroups(v)...).WithTheme(grafanaTheme()).WithWidth(100).WithHeight(40)
+	form.Init()
+	view := ansiEscape.ReplaceAllString(form.View(), "")
+
+	// The first field holds the cursor, so it carries the focused marker; the
+	// rest are answered questions and carry the check.
+	for _, want := range []string{
+		"› Full — capture everything",
+		"✓ Enabled, fail-closed",
+		"✓ On — choose which of the three to send next",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("form does not show %q:\n%s", want, view)
+		}
+	}
+	// The answers not taken are still listed, so a question can be answered
+	// again without walking into it first.
+	for _, want := range []string{
+		"Metadata only",
+		"Disabled (default)",
+		"Off — no user, repository, or branch labels (default)",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("form does not list %q:\n%s", want, view)
+		}
+	}
+}
+
 // TestValidateAutoTagNames pins that the checklist cannot be submitted empty:
 // with the switch on and no name selected, nothing would be attached, which is
-// what answering No already means.
+// what turning the switch off already means.
 func TestValidateAutoTagNames(t *testing.T) {
 	if err := validateAutoTagNames(nil); err == nil {
 		t.Error("validateAutoTagNames(nil) = nil, want an error")

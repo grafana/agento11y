@@ -215,7 +215,7 @@ AGENTO11Y_AUTO_CODING_AGENT_TAGS_NAMES=user,repo
 
 A key already set in `AGENTO11Y_TAGS` wins, an unresolved value leaves its key off, and an unsupported name is logged and skipped. The allowlist does nothing while the switch is off. Because these are client tags, they arrive in Prometheus as `agento11y_tag_user`, `agento11y_tag_repo`, and `agento11y_tag_git_branch`.
 
-`agento11y login` asks the same question. Answer Yes to "Automatic tags" and it opens a checklist of the three values, ticked to match the saved allowlist. A first run ticks all three. Login then writes the switch and the allowlist for you. Answering No sets the switch to false and deletes the allowlist.
+`agento11y login` asks the same question. Choose On under "Automatic tags" and it opens a checklist of the three values, ticked to match the saved allowlist. A first run ticks all three. Login then writes the switch and the allowlist for you. Choosing Off sets the switch to false and deletes the allowlist.
 
 The setting works whether the session starts through `agento11y <agent>` or through the host agent directly: the installed hooks read it when they build their client.
 
