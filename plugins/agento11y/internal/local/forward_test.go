@@ -249,9 +249,7 @@ func TestForwardLoader_Resolve(t *testing.T) {
 			wantHookURL:    "https://cloud.example.test/api/v1/hooks:evaluate",
 		},
 		{
-			// A local endpoint is a legitimate generation target but never a
-			// hook target: it is either this daemon or another always-allow
-			// stub.
+			// A local daemon can receive telemetry, but its hook endpoint always allows.
 			name: "hooks_refused_for_local_endpoint",
 			lines: map[string]string{
 				"AGENTO11Y_LOCAL_FORWARD": "true", "AGENTO11Y_ENDPOINT": "http://127.0.0.1:8080",
@@ -999,7 +997,9 @@ func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 	l.client = srv.Client()
 	cfg := l.load()
 	require.True(t, cfg.enabled)
-	assert.Empty(t, l.status().Failures)
+	initial := l.status()
+	assert.Empty(t, initial.Failures)
+	assert.Nil(t, initial.Legs, "no forwarding attempt has run")
 
 	status = http.StatusBadRequest
 	raw := generationRawJSON(t, contentRichGeneration(t))
@@ -1011,11 +1011,25 @@ func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 	assert.Contains(t, failures[0].Detail, "status 400")
 	assert.Contains(t, failures[0].Detail, "parts.media.url")
 	assert.NotEmpty(t, failures[0].At)
+	failedLeg := l.status().Legs[forwardLabelGenerations]
+	assert.Equal(t, failures[0].At, failedLeg.LastFailureAt)
+	assert.Equal(t, failures[0].Detail, failedLeg.LastFailureDetail)
+	assert.Empty(t, failedLeg.LastSuccessAt)
 
-	// A success clears the leg, so a non-empty Failures means "failing now".
+	// A success clears the ring but keeps the earlier failure in the leg record.
 	status = http.StatusOK
 	l.forwardGenerations(cfg, []json.RawMessage{raw})
-	assert.Empty(t, l.status().Failures)
+	recovered := l.status()
+	assert.Empty(t, recovered.Failures)
+	generationLeg := recovered.Legs[forwardLabelGenerations]
+	assert.NotEmpty(t, generationLeg.LastSuccessAt)
+	failureAt, err := time.Parse(time.RFC3339Nano, generationLeg.LastFailureAt)
+	require.NoError(t, err)
+	successAt, err := time.Parse(time.RFC3339Nano, generationLeg.LastSuccessAt)
+	require.NoError(t, err)
+	assert.True(t, successAt.After(failureAt), "sub-second recovery order must be preserved")
+	assert.Equal(t, failedLeg.LastFailureAt, generationLeg.LastFailureAt)
+	assert.Equal(t, failedLeg.LastFailureDetail, generationLeg.LastFailureDetail)
 
 	// Only the leg that delivered is cleared. config.env cannot configure the
 	// OTLP leg at a 127.0.0.1 test server (otlpForwardTarget refuses a loopback
@@ -1024,12 +1038,16 @@ func TestForwardLoader_StatusReportsFailures(t *testing.T) {
 	status = http.StatusBadRequest
 	l.forwardGenerations(cfg, []json.RawMessage{raw})
 	require.Len(t, l.status().Failures, 1)
+	generationBeforeMetrics := l.status().Legs[forwardLabelGenerations]
 
 	status = http.StatusOK
 	l.forwardOTLP(cfg, "metrics", wire.ContentTypeProto, "", []byte("metrics-payload"))
-	failures = l.status().Failures
+	metricsDelivered := l.status()
+	failures = metricsDelivered.Failures
 	require.Len(t, failures, 1, "a metrics success must not clear a generations failure")
 	assert.Equal(t, forwardLabelGenerations, failures[0].Label)
+	assert.Equal(t, generationBeforeMetrics, metricsDelivered.Legs[forwardLabelGenerations])
+	assert.NotEmpty(t, metricsDelivered.Legs[otlpForwardLabel("metrics")].LastSuccessAt)
 
 	l.forwardGenerations(cfg, []json.RawMessage{raw})
 	assert.Empty(t, l.status().Failures)

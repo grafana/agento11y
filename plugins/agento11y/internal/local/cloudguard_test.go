@@ -16,10 +16,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// hookLoader builds a forward loader with the hook leg pointed at the fake
-// Cloud. resolveForwardConfig refuses a loopback endpoint, which is the whole
-// point of that gate, so the resolved config is assembled here by hand; the
-// gate itself is covered through the server in server_test.go.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type cancelReadBody struct {
+	ctx     context.Context
+	started chan struct{}
+}
+
+func (b *cancelReadBody) Read(_ []byte) (int, error) {
+	close(b.started)
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+
+func (*cancelReadBody) Close() error { return nil }
+
+// hookLoader builds a forward loader for the fake Cloud endpoint.
+// Relay-level tests assemble the resolved config directly.
 func hookLoader(t *testing.T, f *hookCloud) (*forwardLoader, forwardConfig) {
 	t.Helper()
 	clearForwardEnv(t)
@@ -188,7 +205,8 @@ func TestEvaluateCloudHook(t *testing.T) {
 			}
 			resp, err := l.evaluateCloudHook(ctx, cfg, timeout, []byte(`{"phase":"postflight"}`))
 
-			failures := l.status().Failures
+			st := l.status()
+			failures := st.Failures
 			if tc.wantFailure == "" {
 				require.NoError(t, err)
 				assert.Equal(t, 1, f.count())
@@ -206,6 +224,8 @@ func TestEvaluateCloudHook(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.wantFailure)
 			if tc.abortMidCall {
 				assert.Empty(t, failures, "a caller-side abort is not a Cloud delivery failure")
+				assert.Nil(t, st.Legs, "an abandoned verdict changes no leg record")
+				assert.Zero(t, st.HookFailOpens, "an abandoned verdict is not a fail-open allow")
 			} else {
 				require.Len(t, failures, 1)
 				assert.Equal(t, forwardLabelHooks, failures[0].Label)
@@ -218,6 +238,41 @@ func TestEvaluateCloudHook(t *testing.T) {
 	}
 }
 
+func TestEvaluateCloudHook_CallerAbortWhileReadingBodyIsNotFailure(t *testing.T) {
+	clearForwardEnv(t)
+	l := newForwardLoader(writeConfigEnvFile(t, nil), nil)
+	started := make(chan struct{})
+	l.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Header:        make(http.Header),
+			Body:          &cancelReadBody{ctx: r.Context(), started: started},
+			ContentLength: -1,
+			Request:       r,
+		}, nil
+	})}
+	cfg := forwardConfig{
+		enabled:     true,
+		hookURL:     "https://cloud.example.test" + hookEvaluatePath,
+		hookHeaders: generationForwardHeaders("tenant-1", "token-1"),
+		failOpen:    true,
+		timeoutMs:   1500,
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	_, err := l.evaluateCloudHook(ctx, cfg, time.Minute, []byte(`{"phase":"postflight"}`))
+	require.ErrorIs(t, err, context.Canceled)
+	st := l.status()
+	assert.Empty(t, st.Failures)
+	assert.Nil(t, st.Legs)
+	assert.Zero(t, st.HookFailOpens)
+}
+
 // TestEvaluateCloudHook_SuccessClearsFailures covers the ring's semantics for
 // the hook leg: a delivered evaluation means the leg is healthy now.
 func TestEvaluateCloudHook_SuccessClearsFailures(t *testing.T) {
@@ -227,12 +282,21 @@ func TestEvaluateCloudHook_SuccessClearsFailures(t *testing.T) {
 
 	_, err := l.evaluateCloudHook(t.Context(), cfg, time.Second, []byte(`{}`))
 	require.Error(t, err)
-	require.Len(t, l.status().Failures, 1)
+	failed := l.status()
+	require.Len(t, failed.Failures, 1)
+	failedLeg := failed.Legs[forwardLabelHooks]
+	assert.Equal(t, failed.Failures[0].At, failedLeg.LastFailureAt)
+	assert.Equal(t, failed.Failures[0].Detail, failedLeg.LastFailureDetail)
 
 	f.status = http.StatusOK
 	_, err = l.evaluateCloudHook(t.Context(), cfg, time.Second, []byte(`{}`))
 	require.NoError(t, err)
-	assert.Empty(t, l.status().Failures)
+	recovered := l.status()
+	assert.Empty(t, recovered.Failures)
+	hooksLeg := recovered.Legs[forwardLabelHooks]
+	assert.NotEmpty(t, hooksLeg.LastSuccessAt)
+	assert.Equal(t, failedLeg.LastFailureAt, hooksLeg.LastFailureAt)
+	assert.Equal(t, failedLeg.LastFailureDetail, hooksLeg.LastFailureDetail)
 }
 
 // TestHookTimeoutFromHeader covers the budget the daemon gives its Cloud call.

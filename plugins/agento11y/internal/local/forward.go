@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -154,11 +155,11 @@ type forwardLoader struct {
 	cached       forwardConfig
 	loggedReason string // last refusal logged, so we log it only once
 
-	// failMu guards the failure ring and the fail-open counter, which are
-	// written from forward goroutines and the hook handler and read by the
-	// status endpoint.
+	// failMu guards delivery state written by forward goroutines and the hook
+	// handler and read by the status endpoint.
 	failMu    sync.Mutex
 	failures  []forwardFailure
+	legs      map[string]forwardLeg
 	failOpens int
 }
 
@@ -171,6 +172,7 @@ func newForwardLoader(path string, logger *log.Logger) *forwardLoader {
 		logger: logger,
 		client: &http.Client{Timeout: 10 * time.Second},
 		sem:    make(chan struct{}, maxInFlightForwards),
+		legs:   make(map[string]forwardLeg),
 	}
 }
 
@@ -242,6 +244,8 @@ type forwardStatus struct {
 	// delivering, which no other channel would tell the user about: the
 	// daemon's logger is discarded unless debug logging is on.
 	Failures []forwardFailure `json:"failures,omitempty"`
+	// Legs keeps each forwarding leg's last delivery and last failure.
+	Legs map[string]forwardLeg `json:"legs,omitempty"`
 	// HookFailOpens counts the tool calls allowed since the daemon started
 	// because a chained guard evaluation failed and GUARDS_FAIL_OPEN was on.
 	// Unlike Failures it is never cleared: the agent cannot tell such an allow
@@ -256,6 +260,13 @@ type forwardFailure struct {
 	At     string `json:"at"`
 	Label  string `json:"label"`
 	Detail string `json:"detail"`
+}
+
+// forwardLeg keeps the last delivery and failure after the failure ring clears.
+type forwardLeg struct {
+	LastSuccessAt     string `json:"lastSuccessAt,omitempty"`
+	LastFailureAt     string `json:"lastFailureAt,omitempty"`
+	LastFailureDetail string `json:"lastFailureDetail,omitempty"`
 }
 
 const (
@@ -279,6 +290,7 @@ func (l *forwardLoader) status() forwardStatus {
 		OTLPReason:    cfg.otlpReason,
 		HookReason:    cfg.hookReason,
 		Failures:      l.recentFailures(),
+		Legs:          l.recentLegs(),
 		HookFailOpens: l.recentFailOpens(),
 	}
 	switch {
@@ -382,15 +394,8 @@ func resolveForwardConfig(logger *log.Logger, get envReader) forwardConfig {
 	return cfg
 }
 
-// hookForwardDisabledReason reports why hook evaluation from a --local session
-// must not be relayed to Cloud, or "" when it may be.
-//
-// The hook leg is gated harder than the generation leg on purpose.
-// forwardDisabledReason accepts a local endpoint with empty or placeholder
-// credentials because posting telemetry to a second local daemon is a
-// legitimate setup; a hook chain to a local endpoint is not. It is either this
-// daemon (a recursion) or another always-allow stub, which would answer allow
-// while the user believes their Cloud rules ran.
+// hookForwardDisabledReason refuses hook relay when Cloud evaluation cannot
+// run. Unlike telemetry forwarding, a local hook target always allows.
 func hookForwardDisabledReason(guardsEnabled bool, endpoint, tenant, token string) string {
 	switch {
 	case !guardsEnabled:
@@ -623,11 +628,16 @@ func (l *forwardLoader) recordFailuref(label, format string, args ...any) {
 
 	l.failMu.Lock()
 	defer l.failMu.Unlock()
+	at := time.Now().UTC().Format(time.RFC3339Nano)
 	l.failures = append(l.failures, forwardFailure{
-		At:     time.Now().UTC().Format(time.RFC3339),
+		At:     at,
 		Label:  label,
 		Detail: detail,
 	})
+	leg := l.legs[label]
+	leg.LastFailureAt = at
+	leg.LastFailureDetail = detail
+	l.legs[label] = leg
 	// Trim this leg only. The hook leg records once per tool call, so a
 	// global trim would silently drop the one entry another leg had.
 	// Iterating backwards makes the deletions safe: they only shift entries
@@ -664,6 +674,9 @@ func (l *forwardLoader) recordSuccess(label string) {
 	l.failures = slices.DeleteFunc(l.failures, func(f forwardFailure) bool {
 		return f.Label == label
 	})
+	leg := l.legs[label]
+	leg.LastSuccessAt = time.Now().UTC().Format(time.RFC3339Nano)
+	l.legs[label] = leg
 }
 
 // recentFailOpens returns how many tool calls have been allowed without a
@@ -686,6 +699,16 @@ func (l *forwardLoader) recentFailures() []forwardFailure {
 		out = append(out, f)
 	}
 	return out
+}
+
+// recentLegs returns a copy of the per-leg delivery records.
+func (l *forwardLoader) recentLegs() map[string]forwardLeg {
+	l.failMu.Lock()
+	defer l.failMu.Unlock()
+	if len(l.legs) == 0 {
+		return nil
+	}
+	return maps.Clone(l.legs)
 }
 
 // enqueue runs fn on a bounded goroutine. When the in-flight limit is reached

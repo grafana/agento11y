@@ -204,6 +204,13 @@ interface ForwardFailure {
   detail: string;
 }
 
+/** forwardLeg in forward.go: one forwarding leg's latest outcomes. */
+export interface ForwardLeg {
+  lastSuccessAt?: string;
+  lastFailureAt?: string;
+  lastFailureDetail?: string;
+}
+
 /** forwardStatus in forward.go: what the daemon would actually send to Cloud. */
 export interface ForwardStatus {
   enabled: boolean;
@@ -216,6 +223,8 @@ export interface ForwardStatus {
   otlpReason?: string;
   hookReason?: string;
   failures?: ForwardFailure[];
+  legs?: Record<string, ForwardLeg>;
+  hookFailOpens?: number;
 }
 
 /** configResponse in server.go: GET /api/v1/config. */

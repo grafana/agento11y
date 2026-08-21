@@ -1343,10 +1343,7 @@ func TestServer_Forwarding_RelaysOTLP(t *testing.T) {
 // hookCloud is a fake Cloud hook endpoint: it records what the daemon relayed
 // and answers with a canned status and body, both settable between calls.
 //
-// It serves TLS because resolveForwardConfig refuses an http://127.0.0.1
-// endpoint as a hook target, so an https test server is what lets the server
-// tests go through the real gate instead of around it. newForwardingTestServer
-// trusts its cert, and the relay-level tests inject srv.Client() themselves.
+// TLS keeps this server outside IsLocalEndpoint. The test client trusts its cert.
 type hookCloud struct {
 	srv *httptest.Server
 
@@ -1512,6 +1509,27 @@ func TestServer_HookEvaluate_Gates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServer_HookEvaluate_RefusesLocalRelay(t *testing.T) {
+	peer, _ := newTestServer(t)
+	hits := make(chan struct{}, 1)
+	peerHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits <- struct{}{}
+		peer.ServeHTTP(w, r)
+	}))
+	defer peerHTTP.Close()
+
+	source, _ := newForwardingTestServer(t, peerHTTP, hookEnv(peerHTTP.URL, nil))
+	status, out := postHook(t, source, hookToolCallBody, nil)
+
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionAllow, out.Action)
+	st := source.forward.status()
+	assert.False(t, st.Hooks)
+	assert.Contains(t, st.HookReason, "is local")
+	assert.Len(t, hits, 0, "a local hook target must make no outbound request")
+	assert.Nil(t, st.Legs, "a refused relay must not record a Cloud delivery")
 }
 
 // TestServer_HookEvaluate_CloudVerdict covers the verdicts a chained call
