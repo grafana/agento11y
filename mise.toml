@@ -165,9 +165,19 @@ description = "Type-check OpenCode plugin code"
 depends = ["deps", "build:ts:sdk-js"]
 run = "pnpm --filter @grafana/agento11y-opencode run typecheck"
 
+[tasks."typecheck:ts:local-viewer"]
+description = "Type-check local viewer code"
+depends = ["deps"]
+run = "pnpm --filter @grafana/agento11y-local-viewer run typecheck"
+
 [tasks.typecheck]
 description = "Run all type checks"
-depends = ["typecheck:ts:sdk-js", "typecheck:ts:plugin-pi", "typecheck:ts:plugin-opencode"]
+depends = [
+  "typecheck:ts:sdk-js",
+  "typecheck:ts:plugin-pi",
+  "typecheck:ts:plugin-opencode",
+  "typecheck:ts:local-viewer",
+]
 
 # --- Build ---
 
@@ -254,6 +264,11 @@ run = "pnpm --filter @grafana/agento11y-pi run test"
 description = "Run OpenCode plugin tests"
 depends = ["deps", "build:ts:sdk-js"]
 run = "pnpm --filter @grafana/agento11y-opencode run test"
+
+[tasks."test:ts:local-viewer"]
+description = "Run local viewer tests"
+depends = ["deps"]
+run = "pnpm --filter @grafana/agento11y-local-viewer run test"
 
 [tasks."test:go:sdk-conformance"]
 description = "Run the Go SDK core conformance harness"
@@ -657,6 +672,7 @@ mise run test:go:plugin
 mise run test:ts:sdk-js
 mise run test:ts:plugin-pi
 mise run test:ts:plugin-opencode
+mise run test:ts:local-viewer
 mise run test:py:sdk-core
 mise run test:py:sdk-provider-conformance
 mise run test:py:sdk-framework-conformance
@@ -864,12 +880,15 @@ run = """
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The local viewer ships React, Babel, and its two fonts in the binary rather
-# than pulling them from a CDN: it renders private session data, so opening it
-# must not tell a third party that you did, and it has to work offline.
-# Versions are pinned here. Bumping one means editing this task, not the files.
+# The local viewer ships React, markdown-to-jsx, and its two fonts in the
+# binary rather than pulling them from a CDN: it renders private session data,
+# so opening it must not tell a third party that you did, and it has to work
+# offline. The three script versions are pinned here and again in
+# plugins/agento11y/package.json, which is what the vitest suite runs against;
+# the fonts are pinned here only. Bumping a script means editing this task and
+# package.json, then re-running this task rather than editing the vendored
+# files. tests/vendor-globals.test.ts fails when the two pins disagree.
 REACT=18.3.1
-BABEL=7.29.0
 MARKDOWN_TO_JSX=9.9.0
 # Google serves a content-hashed URL per font revision. Re-fetch these from
 # https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=Roboto+Mono:wght@400..500&display=swap
@@ -884,7 +903,6 @@ fetch() { echo "==> $2"; curl -fsSL -o "$2" "$1"; }
 
 fetch "https://unpkg.com/react@$REACT/umd/react.production.min.js"         "$web/vendor/react.production.min.js"
 fetch "https://unpkg.com/react-dom@$REACT/umd/react-dom.production.min.js" "$web/vendor/react-dom.production.min.js"
-fetch "https://unpkg.com/@babel/standalone@$BABEL/babel.min.js"            "$web/vendor/babel.min.js"
 fetch "$INTER_URL"       "$web/fonts/inter-latin.woff2"
 fetch "$ROBOTO_MONO_URL" "$web/fonts/roboto-mono-latin.woff2"
 

@@ -26,6 +26,8 @@ require (
 	modernc.org/sqlite v1.56.0
 )
 
+require github.com/evanw/esbuild v0.28.2
+
 require (
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
