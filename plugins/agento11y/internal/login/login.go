@@ -225,8 +225,15 @@ func grafanaTheme() *huh.Theme {
 	t.Blurred.Title = faint.Bold(true)
 	t.Blurred.NoteTitle = faint
 	t.Blurred.Description = faint
-	t.Blurred.SelectSelector = faint
-	t.Blurred.SelectedOption = faint
+	// A blurred list keeps its answer marked. huh draws every field of the
+	// group, and one style for both option states makes an answered question
+	// look like an unanswered one, so moving between questions does not show
+	// what is set. The mark is a check rather than the cursor the focused list
+	// draws: the row is an answer now, not a place the cursor sits. Dim
+	// orange, because orange marks the answer on the active field too.
+	chosen := faint.Foreground(grafanaOrange)
+	t.Blurred.SelectSelector = chosen.SetString("✓ ")
+	t.Blurred.SelectedOption = chosen
 	t.Blurred.UnselectedOption = faint
 	t.Blurred.NextIndicator = faint
 	t.Blurred.PrevIndicator = faint
@@ -618,7 +625,32 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 	if len(required) > 0 {
 		groups = append(groups, huh.NewGroup(required...))
 	}
-	groups = append(groups,
+	groups = append(groups, preferenceGroups(v)...)
+
+	if err := formError(huh.NewForm(groups...).WithTheme(grafanaTheme()).Run()); err != nil {
+		return err
+	}
+	v.capturePrompted = true
+	return nil
+}
+
+// preferenceGroups builds the questions that follow the credentials: what
+// leaves the machine, and what it is labelled with. Every one of them is a
+// list or a field, none is a pair of buttons. The group is one column of
+// questions the eye runs down, a row of buttons in it reads as the form's
+// submit rather than as one more answer, and huh draws the chosen button
+// highlighted even while the field is blurred, which reads as the field the
+// keyboard is on.
+//
+// Each list binds Value after Options. Options() aims the cursor and the
+// viewport at whatever the field holds when it runs, and Value() afterwards
+// moves the cursor alone. In that order the viewport starts at the top, since
+// the string lists hold nothing yet and the automatic-tag list holds the zero
+// bool, which is its first option. Bound the other way round, a saved answer
+// scrolls the options above it out of sight. destinationForm binds Value
+// first for the same reason: there the true option leads.
+func preferenceGroups(v *formValues) []*huh.Group {
+	return []*huh.Group{
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Content capture").
@@ -651,16 +683,15 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 					return validateGuardTimeout(s)
 				}).
 				Value(&v.guardTimeout),
-			huh.NewConfirm().
+			huh.NewSelect[bool]().
 				Title("Automatic tags").
 				Description("Tag every session with the user, the repository, and the branch, and turn those into metric labels so Usage and Cost can be split by person, repository, or branch.\nThe values are stored with the metrics and kept for the metric retention period; the user value is often an email address.").
-				Affirmative("Yes").
-				Negative("No, keep them off").
+				Options(autoTagSwitchOptions()...).
 				Value(&v.autoTags),
 		),
 		// The names only matter once the switch is on, so this group is skipped
-		// while the answer above is No: the form asks the yes/no question first
-		// and unfolds the list after it.
+		// while the answer above is Off: the form asks whether to tag at all
+		// first and unfolds the list after it.
 		huh.NewGroup(
 			huh.NewMultiSelect[string]().
 				Title("Which values to tag with").
@@ -669,13 +700,18 @@ func promptValues(ctx context.Context, v *formValues, fixed fixedValues, existin
 				Validate(validateAutoTagNames).
 				Value(&v.autoTagNames),
 		).WithHideFunc(func() bool { return !v.autoTags }),
-	)
-
-	if err := formError(huh.NewForm(groups...).WithTheme(grafanaTheme()).Run()); err != nil {
-		return err
 	}
-	v.capturePrompted = true
-	return nil
+}
+
+// autoTagSwitchOptions answers the automatic-tag question. Off leads, like the
+// default option of every other list here, and says what staying off means:
+// the question describes what turning it on sends, so the answer that sends
+// nothing needs its own words rather than a bare No.
+func autoTagSwitchOptions() []huh.Option[bool] {
+	return []huh.Option[bool]{
+		huh.NewOption("Off — no user, repository, or branch labels (default)", false),
+		huh.NewOption("On — choose which of the three to send next", true),
+	}
 }
 
 const (
@@ -1181,11 +1217,11 @@ func autoTagOptions(selected []string) []huh.Option[string] {
 }
 
 // validateAutoTagNames requires at least one name once the switch is on. An
-// empty list would be the same as answering No, and silently treating it as
-// "all" would attach values the user just deselected.
+// empty list would be the same as turning the switch off, and silently
+// treating it as "all" would attach values the user just deselected.
 func validateAutoTagNames(selected []string) error {
 	if len(selected) == 0 {
-		return errors.New("select at least one value, or answer No to automatic tags")
+		return errors.New("select at least one value, or turn automatic tags off")
 	}
 	return nil
 }
