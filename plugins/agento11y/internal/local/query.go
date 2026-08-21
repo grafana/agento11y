@@ -339,8 +339,8 @@ const maxTokenUsageBuckets = 500
 // tokenUsageIntervals is the ladder a derived interval is picked from.
 // Every step divides the next, so a client that buckets on one step can
 // fold points aggregated on a finer step without splitting a bucket
-// across two bars. This list and BUCKET_INTERVALS_MS in app.jsx must stay
-// equal; TestBucketLaddersAgree checks that.
+// across two bars. This list and BUCKET_INTERVALS_MS in web/src/formatters.ts
+// must stay equal; TestBucketLaddersAgree checks that.
 var tokenUsageIntervals = []time.Duration{
 	10 * time.Second,
 	30 * time.Second,

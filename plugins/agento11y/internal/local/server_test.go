@@ -324,12 +324,12 @@ func TestServer_Routing(t *testing.T) {
 		wantBodyNotHas      string // substring check; "" skips
 		wantNoConversations bool
 	}{
-		{name: "root serves viewer HTML", method: http.MethodGet, path: "/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.jsx"`},
-		{name: "conversation path serves viewer HTML", method: http.MethodGet, path: "/conversations/conv-123", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.jsx"`},
-		{name: "settings path serves viewer HTML", method: http.MethodGet, path: "/settings", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.jsx"`},
-		{name: "settings trailing slash serves viewer HTML", method: http.MethodGet, path: "/settings/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.jsx"`},
+		{name: "root serves viewer HTML", method: http.MethodGet, path: "/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
+		{name: "conversation path serves viewer HTML", method: http.MethodGet, path: "/conversations/conv-123", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
+		{name: "settings path serves viewer HTML", method: http.MethodGet, path: "/settings", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
+		{name: "settings trailing slash serves viewer HTML", method: http.MethodGet, path: "/settings/", want: http.StatusOK, wantContentType: "text/html", wantBodyHas: `src="/assets/app.js"`},
 		{name: "CSS asset", method: http.MethodGet, path: "/assets/app.css", want: http.StatusOK, wantContentType: "text/css", wantBodyHas: ":root"},
-		{name: "JSX asset", method: http.MethodGet, path: "/assets/app.jsx", want: http.StatusOK, wantContentType: "text/babel", wantBodyHas: "function App()"},
+		{name: "app bundle asset", method: http.MethodGet, path: "/assets/app.js", want: http.StatusOK, wantContentType: "application/javascript", wantBodyHas: "function App()"},
 		{name: "healthz serves JSON", method: http.MethodGet, path: "/healthz", want: http.StatusOK, wantContentType: "application/json", wantBodyHas: `"status":"ok"`},
 		{name: "unknown route", method: http.MethodPost, path: "/api/v1/unknown", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusNotFound},
 		{name: "wrong method on generations export", method: http.MethodPut, path: "/api/v1/generations:export", contentType: wire.ContentTypeJSON, body: "{}", want: http.StatusMethodNotAllowed},
@@ -750,6 +750,11 @@ func newTestServerStorage(t *testing.T) (*Server, *Storage, string) {
 	// with forwarding and real credentials exported would otherwise have this
 	// suite POST to their live tenant.
 	clearForwardEnv(t)
+	// LOCAL_WEB_DIR is deliberately not an alias family, so PinAliasEnvBlank
+	// leaves it alone. A developer with it exported would otherwise have the
+	// asset tests compile their working tree instead of the embedded viewer.
+	t.Setenv(envconfig.PreferredKey("LOCAL_WEB_DIR"), "")
+	t.Setenv(envconfig.LegacyKey("LOCAL_WEB_DIR"), "")
 	dir := filepath.Join(t.TempDir(), "local")
 	storage, err := NewStorage(dir)
 	if err != nil {
@@ -1869,16 +1874,19 @@ func TestServer_APISearchCapabilities(t *testing.T) {
 // TestServer_DevAsset_EnvPrecedence checks that the preferred
 // AGENTO11Y_LOCAL_WEB_DIR wins over the legacy SIGIL_LOCAL_WEB_DIR, and
 // that the legacy spelling still works on its own.
+//
+// The viewer fixtures are statements rather than comments: the bundle is
+// compiled, and esbuild strips comments, so a fixture written as a comment
+// would compile to the same bytes whichever directory it came from, and the
+// marker each subtest looks for would never be in the response.
 func TestServer_DevAsset_EnvPrecedence(t *testing.T) {
 	srv, _ := newTestServer(t)
 
-	preferred := t.TempDir()
-	legacy := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(preferred, "app.jsx"), []byte("// preferred"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(legacy, "app.jsx"), []byte("// legacy"), 0o600))
+	preferred := writeDevViewer(t, "preferred")
+	legacy := writeDevViewer(t, "legacy")
 
-	fetchJSX := func() string {
-		req := newLocalRequest(http.MethodGet, "/assets/app.jsx", nil)
+	fetchBundle := func() string {
+		req := newLocalRequest(http.MethodGet, "/assets/app.js", nil)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -1888,13 +1896,52 @@ func TestServer_DevAsset_EnvPrecedence(t *testing.T) {
 	t.Run("preferred wins over legacy", func(t *testing.T) {
 		t.Setenv("AGENTO11Y_LOCAL_WEB_DIR", preferred)
 		t.Setenv("SIGIL_LOCAL_WEB_DIR", legacy)
-		assert.Equal(t, "// preferred", fetchJSX())
+		bundle := fetchBundle()
+		assert.Contains(t, bundle, `"preferred"`)
+		assert.NotContains(t, bundle, `"legacy"`)
 	})
 
 	t.Run("legacy is used as a fallback", func(t *testing.T) {
 		t.Setenv("AGENTO11Y_LOCAL_WEB_DIR", "")
 		t.Setenv("SIGIL_LOCAL_WEB_DIR", legacy)
-		assert.Equal(t, "// legacy", fetchJSX())
+		assert.Contains(t, fetchBundle(), `"legacy"`)
+	})
+
+	// An edit reaches the browser with no Go rebuild, which is the whole point
+	// of the variable: the daemon compiles the viewer, so without a rebuild per
+	// request the browser would keep getting the bundle built at startup.
+	//
+	// This writes into a directory of its own. Editing one of the fixtures above
+	// would make the two subtests before it depend on running first.
+	t.Run("an edited module is rebuilt per request", func(t *testing.T) {
+		edited := writeDevViewer(t, "before")
+		t.Setenv("AGENTO11Y_LOCAL_WEB_DIR", edited)
+		require.Contains(t, fetchBundle(), `"before"`)
+
+		require.NoError(t, os.WriteFile(filepath.Join(edited, "src", viewerEntry),
+			[]byte("globalThis.devMarker = \"edited\";\n"), 0o600))
+		assert.Contains(t, fetchBundle(), `"edited"`)
+	})
+
+	t.Run("a broken module answers 500 and names the file", func(t *testing.T) {
+		t.Setenv("AGENTO11Y_LOCAL_WEB_DIR", writeDevViewerSource(t, "const broken = (;\n"))
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, "/assets/app.js", nil))
+		require.Equal(t, http.StatusInternalServerError, rr.Code)
+		assert.Contains(t, rr.Body.String(), viewerEntry)
+	})
+
+	// Every way of pointing the variable at the wrong place ends in the same
+	// esbuild message about a missing entry point, so the response has to say
+	// which variable it read and where it looked.
+	t.Run("a directory with no src answers 500 and names the variable", func(t *testing.T) {
+		empty := t.TempDir()
+		t.Setenv("AGENTO11Y_LOCAL_WEB_DIR", empty)
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, newLocalRequest(http.MethodGet, "/assets/app.js", nil))
+		require.Equal(t, http.StatusInternalServerError, rr.Code)
+		assert.Contains(t, rr.Body.String(), "AGENTO11Y_LOCAL_WEB_DIR")
+		assert.Contains(t, rr.Body.String(), filepath.Join(empty, "src"))
 	})
 
 	t.Run("missing index nonce placeholder is logged", func(t *testing.T) {
@@ -1908,6 +1955,21 @@ func TestServer_DevAsset_EnvPrecedence(t *testing.T) {
 		require.Equal(t, http.StatusOK, rr.Code)
 		assert.Contains(t, logs.String(), noncePlaceholder)
 	})
+}
+
+// writeDevViewer lays out a LOCAL_WEB_DIR whose bundle carries marker as a
+// string literal, and returns the directory.
+func writeDevViewer(t *testing.T, marker string) string {
+	t.Helper()
+	return writeDevViewerSource(t, "globalThis.devMarker = \""+marker+"\";\n")
+}
+
+func writeDevViewerSource(t *testing.T, source string) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "src"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src", viewerEntry), []byte(source), 0o600))
+	return dir
 }
 
 // TestServer_Forwarding_ToggleOffStopsForwarding covers the config.env write

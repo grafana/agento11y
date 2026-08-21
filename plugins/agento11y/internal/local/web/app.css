@@ -115,8 +115,8 @@
 
     /* Agent prose is rendered from markdown into a React tree by
        markdown-to-jsx, so the elements below are generated rather than written
-       in app.jsx, and their styling cannot be inline. Code and tables sit on
-       the canvas colour so they read as inset against the agent card. */
+       in the viewer source, and their styling cannot be inline. Code and tables
+       sit on the canvas colour so they read as inset against the agent card. */
     .sigil-md {
       color: var(--fg1);
       font-size: 14.5px;

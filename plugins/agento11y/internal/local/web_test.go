@@ -1,17 +1,15 @@
 package local
 
 import (
-	"context"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
@@ -19,426 +17,84 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAppJSXParsesWithBabel(t *testing.T) {
-	appJSXAssertions(t, "")
-}
-
-func TestTranscriptDerivationScenarios(t *testing.T) {
-	script := `
-const assert = require("assert").strict;
-const message = (role, parts) => ({ role, parts });
-const callPart = (id, name, input = {}) => ({ kind: "tool_call", tool_call: { id, name, input_json: input } });
-const resultPart = (id, name, content, isError = false) => ({ kind: "tool_result", tool_result: { tool_call_id: id, name, content_json: content, is_error: isError } });
-const generation = (id, input, output) => ({
-  generation_id: id,
-  agent_name: "cursor",
-  started_at: "2026-01-01T00:00:0" + (id === "g1" ? "0" : "2") + "Z",
-  completed_at: "2026-01-01T00:00:0" + (id === "g1" ? "1" : "3") + "Z",
-  input,
-  output,
-  total_tokens: 0,
-  token_buckets: {},
-  parent_generation_ids: [],
-});
-
-const same = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [
-  message("assistant", [callPart("", "Read"), resultPart("", "Read", "line 1\nline 2")]),
-]);
-let turns = buildTranscript([same]);
-let row = turns[0].blocks.find(block => block.kind === "work").calls[0];
-assert.equal(resultBody(row.result), "line 1\nline 2");
-assert.equal(resultBody(row.result).split("\n").length, 2);
-assert.equal(row.failed, false);
-
-const first = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [callPart("call-1", "Read")])]);
-const second = generation("g2", [message("tool", [resultPart("call-1", "Read", "done")])], [message("assistant", [{ kind: "text", text: "answer" }])]);
-turns = buildTranscript([first, second]);
-row = turns[0].blocks.find(block => block.kind === "work").calls[0];
-assert.equal(resultBody(row.result), "done");
-
-const final = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [callPart("call-final", "Read")])]);
-turns = buildTranscript([final]);
-row = turns[0].blocks.find(block => block.kind === "work").calls[0];
-assert.equal(row.result, null);
-assert.equal(row.failed, false);
-
-assert.deepEqual(
-  splitPreamble("<user_info>A</user_info>\n<rules>B</rules>\nCompare <old> and <new>."),
-  { preamble: "<user_info>A</user_info>\n<rules>B</rules>\n", prompt: "Compare <old> and <new>." },
-);
-const only = "<user_info>A</user_info>\n<rules>B</rules>";
-assert.deepEqual(splitPreamble(only), { preamble: "", prompt: only });
-
-// Harness blocks carry attributes, and pi's skill block is the common one.
-const skill = '<skill name="plan" location="/x/y/SKILL.md">body</skill>';
-assert.deepEqual(splitPreamble(skill + "\nfix rebase issues"), { preamble: skill + "\n", prompt: "fix rebase issues" });
-assert.deepEqual(splitPreamble(skill), { preamble: "", prompt: skill });
-
-// Markdown link targets: relative forms pass through, and a scheme that can
-// run script or carry a payload renders the link with no href at all.
-for (const relative of ["/panel", "./notes.md", "../up", "#anchor", "?q=1"]) {
-  assert.equal(markdownURL(relative), relative);
-}
-assert.equal(markdownURL("https://grafana.com/"), "https://grafana.com/");
-assert.equal(markdownURL("mailto:a@b.c"), "mailto:a@b.c");
-for (const blocked of [
-  "javascript:alert(1)",
-  "JaVaScRiPt:alert(1)",
-  "java\tscript:alert(1)",
-  "java\nscript:alert(1)",
-  "data:text/html;base64,PHNjcmlwdD4=",
-  "vbscript:msgbox(1)",
-  "file:///etc/passwd",
-  "//evil.example.com",
-  "\\\\evil.example.com",
-  "",
-  "   ",
-]) {
-  assert.equal(markdownURL(blocked), undefined, "must not render href " + JSON.stringify(blocked));
-}
-
-// Raw HTML never becomes an element, and every remote-loading tag is dropped.
-assert.equal(MARKDOWN_OPTIONS.disableParsingRawHTML, true);
-for (const tag of ["script", "iframe", "img", "style", "object", "embed", "form", "svg"]) {
-  assert.equal(MARKDOWN_OPTIONS.overrides[tag].component, BlockedElement, tag + " must be blocked");
-}
-assert.equal(MARKDOWN_OPTIONS.overrides.a.component, SafeAnchor);
-
-const metrics = buildTranscriptMetrics([same], turns);
-assert.equal(metrics.usageAvailable, false);
-assert.equal(metrics.totalTokens, 0);
-const used = buildTranscriptMetrics([{ ...same, total_tokens: 120 }, { ...second, total_tokens: 30 }], turns);
-assert.equal(used.usageAvailable, true);
-assert.equal(used.totalTokens, 150);
-
-const mixed = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [
-  { kind: "text", text: "before" },
-  { kind: "thinking", thinking: "reason" },
-  callPart("a", "Read"),
-  callPart("b", "Grep"),
-  { kind: "text", text: "after" },
-])]);
-turns = buildTranscript([mixed]);
-assert.deepEqual(turns[0].blocks.map(block => block.kind), ["prose", "reasoning", "work", "prose"]);
-
-// A generation that interleaves prose and tool calls splits into several work
-// blocks. Only the first one carries the generation's duration, so a merge with
-// the next generation's work adds that generation's time and nothing more.
-const split = { ...generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [
-  callPart("a", "Read"),
-  { kind: "text", text: "middle" },
-  callPart("b", "Grep"),
-  { kind: "text", text: "" },
-  callPart("c", "Glob"),
-])]), duration_seconds: 4 };
-turns = buildTranscript([split]);
-assert.deepEqual(turns[0].blocks.map(block => block.kind), ["work", "prose", "work"]);
-assert.deepEqual(turns[0].blocks.filter(block => block.kind === "work").map(block => block.durationSec), [4, 0]);
-
-const splitNext = { ...generation("g2", [message("tool", [resultPart("c", "Glob", "done")])], [message("assistant", [callPart("d", "Read")])]), duration_seconds: 3 };
-turns = buildTranscript([split, splitNext]);
-assert.deepEqual(turns[0].blocks.filter(block => block.kind === "work").map(block => block.durationSec), [4, 3]);
-
-const sameName = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [
-  callPart("", "Read"),
-  callPart("", "Read"),
-  resultPart("", "Read", "first"),
-  resultPart("", "Read", "second"),
-])]);
-turns = buildTranscript([sameName]);
-assert.deepEqual(
-  turns[0].blocks.find(block => block.kind === "work").calls.map(call => resultBody(call.result)),
-  ["first", "second"],
-);
-
-const repeatFirst = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [callPart("", "weather")])]);
-const repeatSecond = generation("g2", [message("tool", [resultPart("", "weather", "first result")])], [message("assistant", [callPart("", "weather")])]);
-const repeatThird = { ...generation("g3", [message("tool", [resultPart("", "weather", "second result")])], [message("assistant", [{ kind: "text", text: "answer" }])]), started_at: "2026-01-01T00:00:04Z", completed_at: "2026-01-01T00:00:05Z" };
-turns = buildTranscript([repeatFirst, repeatSecond, repeatThird]);
-assert.deepEqual(
-  turns[0].blocks.flatMap(block => block.kind === "work" ? block.calls : []).map(call => resultBody(call.result)),
-  ["first result", "second result"],
-);
-
-const failed = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [
-  callPart("failed-call", "Shell"),
-  resultPart("failed-call", "Shell", "bad", true),
-])]);
-turns = buildTranscript([failed]);
-assert.equal(turns[0].failedCount, 1);
-assert.equal(turns[0].blocks.find(block => block.kind === "work").calls[0].failed, true);
-
-const callErrorOnly = { ...generation("g1", [message("user", [{ kind: "text", text: "question" }])], []), call_error: "provider unavailable" };
-turns = buildTranscript([callErrorOnly]);
-assert.equal(turns[0].failedCount, 1);
-assert.deepEqual(turns[0].blocks.map(block => block.kind), ["error"]);
-assert.equal(turns[0].blocks[0].text, "provider unavailable");
-
-const callErrorAfterResult = {
-  ...generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", [
-    callPart("successful-call", "Read"),
-    resultPart("successful-call", "Read", "ok"),
-  ])]),
-  call_error: "model call failed",
-};
-turns = buildTranscript([callErrorAfterResult]);
-const successfulRow = turns[0].blocks.find(block => block.kind === "work").calls[0];
-assert.equal(successfulRow.failed, false);
-assert.equal(resultBody(successfulRow.result), "ok");
-assert.equal(turns[0].blocks.find(block => block.kind === "error").text, "model call failed");
-assert.equal(turns[0].failedCount, 1);
-
-const parent = generation("g1", [message("user", [{ kind: "text", text: "question" }])], []);
-const child = {
-  ...generation("child", [], []),
-  agent_name: "cursor/subagent",
-  parent_generation_ids: ["g1"],
-  started_at: "2026-01-01T00:00:02Z",
-  completed_at: "2026-01-01T00:00:03Z",
-};
-const nestedFailure = {
-  ...generation("nested", [], []),
-  agent_name: "cursor/nested",
-  parent_generation_ids: ["child"],
-  call_error: "nested model call failed",
-  started_at: "2026-01-01T00:00:04Z",
-  completed_at: "2026-01-01T00:00:05Z",
-};
-turns = buildTranscript([parent, child, nestedFailure]);
-assert.equal(turns[0].failedCount, 1);
-assert.equal(turns[0].blocks.find(block => block.kind === "work").subruns[0].failedCount, 1);
-
-assert.equal(missingUsageNotice("cursor"), "No token usage was recorded for this cursor session, so token counts and cost are unavailable.");
-assert.equal(missingUsageNotice(""), "No token usage was recorded for this session, so token counts and cost are unavailable.");
-
-const large = generation("g1", [message("user", [{ kind: "text", text: "question" }])], [message("assistant", Array.from({ length: 41 }, (_, index) => callPart("call-" + index, "Read")))]);
-turns = buildTranscript([large]);
-assert.equal(turns[0].blocks.find(block => block.kind === "work").calls.length, 41);
-console.log("ASSERTIONS_OK");
-`
-	appJSXAssertions(t, script)
-}
-
-func TestPriceLookupCanonicalizesCursorGrok(t *testing.T) {
-	script := `
-const assert = require("assert").strict;
-assert.equal(canonicalizePriceModel("cursor-grok-4.6-high-fast"), "grok-4.6");
-assert.equal(canonicalizePriceModel("cursor-grok-4.6-xhigh-fast"), "grok-4.6");
-assert.equal(canonicalizePriceModel("cursor-grok-4.6-xhigh"), "grok-4.6");
-assert.equal(canonicalizePriceModel("cursor-grok-4.5-medium"), "grok-4.5");
-assert.equal(canonicalizePriceModel("grok-4.6"), "grok-4.6");
-assert.equal(canonicalizePriceModel("claude-opus-4-8"), "claude-opus-4-8");
-assert.equal(canonicalizePriceModel("composer-2.5-fast"), "composer-2.5-fast");
-
-const prices = { "grok-4.6": { input: 2, output: 6, cache_read: 0.5 } };
-assert.deepEqual(liveModelCost(prices, "grok-4.6"), prices["grok-4.6"]);
-assert.deepEqual(liveModelCost(prices, "cursor-grok-4.6-high-fast"), prices["grok-4.6"]);
-assert.deepEqual(liveModelCost(prices, "cursor-grok-4.6-xhigh-fast"), prices["grok-4.6"]);
-assert.equal(liveModelCost(prices, "cursor-grok-4.5-high-fast"), null);
-
-const buckets = { fresh_input: 1e6, output: 0, cache_read: 0, cache_write: 0, reasoning: 0 };
-assert.equal(conversationCost({ models: ["grok-4.6"], token_buckets: buckets }, prices), 2);
-assert.equal(conversationCost({ models: ["cursor-grok-4.6-high-fast"], token_buckets: buckets }, prices), 2);
-assert.equal(conversationCost({ models: ["cursor-grok-4.6-high-fast"], token_buckets: buckets }, {}), null);
-console.log("ASSERTIONS_OK");
-`
-	appJSXAssertionsRegion(t, script, "const MODEL_PRICES = [", "function workspaceLabel(")
-}
-
-// TestSettingsHelperScenarios pins the pure functions behind the Cloud settings
-// panel: the pasted-block parser (which re-implements applyPaste in
-// internal/login/login.go, so the two grammars can drift), the setup-page link,
-// the forwarding-mode patch, and the header chip mapping. The viewer is served
-// as text/babel with no linter or type-checker, so this is their only coverage.
-func TestSettingsHelperScenarios(t *testing.T) {
-	script := `
-const assert = require("assert").strict;
-
-// A whole block, in the shape the setup page hands out: an ` + "`export `" + ` prefix, a
-// comment line, a quoted value with a trailing comment, and the two
-// OTEL_EXPORTER_OTLP_ variables under their raw keys.
-const full = parseConnectBlock([
-  "# copied from Grafana",
-  "export AGENTO11Y_ENDPOINT=https://agento11y-prod-eu.grafana.net",
-  'AGENTO11Y_AUTH_TENANT_ID="123456" # instance id',
-  "AGENTO11Y_AUTH_TOKEN=glc_token",
-  "OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway.grafana.net/otlp",
-  "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic c2VjcmV0",
-].join("\n"));
-assert.deepEqual(full, {
-  endpoint: "https://agento11y-prod-eu.grafana.net",
-  tenantId: "123456",
-  token: "glc_token",
-  otlpEndpoint: "https://otlp-gateway.grafana.net/otlp",
-  otlpHeaders: "Authorization=Basic c2VjcmV0",
-  placeholders: [],
-  invalid: [],
-});
-
-// An unquoted value loses a trailing comment rather than keeping it as part of
-// the endpoint, the way internal/dotenv reads the same line.
-assert.equal(parseConnectBlock("AGENTO11Y_ENDPOINT=https://x # from Grafana").endpoint, "https://x");
-assert.equal(parseConnectBlock('AGENTO11Y_ENDPOINT="https://x" # from Grafana').endpoint, "https://x");
-
-// AGENTO11Y_ wins over SIGIL_ whichever order the two spellings appear in.
-for (const lines of [
-  ["SIGIL_AUTH_TOKEN=glc_old", "AGENTO11Y_AUTH_TOKEN=glc_new"],
-  ["AGENTO11Y_AUTH_TOKEN=glc_new", "SIGIL_AUTH_TOKEN=glc_old"],
-]) {
-  assert.equal(parseConnectBlock(lines.join("\n")).token, "glc_new");
-}
-assert.equal(parseConnectBlock("SIGIL_AUTH_TOKEN=glc_old").token, "glc_old");
-
-// A placeholder is not a value: a block copied before the token existed must not
-// read as complete. The key is reported, so the panel can say what is wrong with
-// it instead of calling it missing.
-const placeholder = parseConnectBlock([
-  "AGENTO11Y_ENDPOINT=https://x",
-  "AGENTO11Y_AUTH_TENANT_ID=123456",
-  "AGENTO11Y_AUTH_TOKEN=<your token>",
-].join("\n"));
-assert.equal(placeholder.token, "");
-assert.deepEqual(placeholder.placeholders, ["AGENTO11Y_AUTH_TOKEN"]);
-assert.deepEqual(placeholder.invalid, []);
-assert.equal(looksLikePlaceholder("<your token>"), true);
-assert.equal(looksLikePlaceholder("glc_token"), false);
-
-// A URL slot that is not an http(s) URL is reported too, the way requireURL
-// rejects the same value in the CLI form.
-const broken = parseConnectBlock([
-  "AGENTO11Y_ENDPOINT=not-a-url",
-  "AGENTO11Y_AUTH_TENANT_ID=123456",
-  "AGENTO11Y_AUTH_TOKEN=glc_token",
-  "OTEL_EXPORTER_OTLP_ENDPOINT=otlp-gateway.grafana.net",
-].join("\n"));
-assert.equal(broken.endpoint, "");
-assert.equal(broken.otlpEndpoint, "");
-assert.deepEqual(broken.invalid, ["AGENTO11Y_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"]);
-
-// Only the scheme and host of the typed stack URL survive: a URL copied from a
-// Grafana address bar carries a path and often an ?orgId=N, and the app path
-// replaces whatever path it came with.
-const setup = "/a/grafana-agento11y-app/setup-coding-agent";
-assert.equal(setupPageURL("https://mystack.grafana.net/?orgId=1"), "https://mystack.grafana.net" + setup);
-assert.equal(setupPageURL("https://mystack.grafana.net/a/other/page"), "https://mystack.grafana.net" + setup);
-assert.equal(setupPageURL("https://MyStack.Grafana.net/"), "https://mystack.grafana.net" + setup);
-assert.equal(setupPageURL("http://localhost:3000"), "http://localhost:3000" + setup);
-
-// A host typed without a scheme gets https://, so the button works on a value
-// pasted from a browser tab or typed by hand. A scheme already there is kept,
-// which is what keeps javascript: and mailto: out below.
-assert.equal(setupPageURL("mystack.grafana.net"), "https://mystack.grafana.net" + setup);
-assert.equal(setupPageURL("mystack.grafana.net/?orgId=1"), "https://mystack.grafana.net" + setup);
-assert.equal(setupPageURL("localhost:3000"), "https://localhost:3000" + setup);
-for (const bad of ["", "   ", "/settings", "./settings", "my stack", "javascript:alert(1)", "mailto:a@b.c"]) {
-  assert.equal(setupPageURL(bad), "", "must not build a link from " + JSON.stringify(bad));
-}
-
-// The mode patch spans two keys, and rewrites the capture mode only when the one
-// on disk forwards differently, so an advanced mode survives the switch.
-assert.deepEqual(forwardLocalPatch({ localForward: true, capture: "full" }, "off"), { localForward: false });
-assert.deepEqual(forwardLocalPatch({ localForward: false, capture: "no_tool_content" }, "metadata_only"), { localForward: true });
-assert.deepEqual(forwardLocalPatch({ localForward: false, capture: "no_tool_content" }, "full"), { localForward: true, capture: "full" });
-assert.deepEqual(forwardLocalPatch({ localForward: true, capture: "full" }, "metadata_only"), { localForward: true, capture: "metadata_only" });
-
-// The chip separates "no connection saved" from "saved, forwarding off", which
-// the status alone cannot express: enabled is false for both.
-const off = { enabled: false, mode: "off" };
-assert.equal(forwardChipMeta(null).value, "Unknown");
-assert.equal(forwardChipMeta({ settings: {}, forwardStatus: null }).value, "Unknown");
-const local = forwardChipMeta({ settings: {}, forwardStatus: off });
-assert.equal(local.value, "Local");
-assert.equal(local.color, "var(--fg2)");
-const savedOff = forwardChipMeta({ settings: { tokenSet: true }, forwardStatus: off });
-assert.equal(savedOff.value, "Local");
-assert.equal(savedOff.color, "var(--success-text)");
-assert.equal(forwardChipMeta({ settings: { tokenSet: true }, forwardStatus: { enabled: true, mode: "metadata_only", generations: true } }).value, "Metadata only");
-assert.equal(forwardChipMeta({ settings: { tokenSet: true }, forwardStatus: { enabled: true, mode: "full", generations: true } }).value, "Full");
-assert.equal(forwardChipMeta({ settings: { tokenSet: true }, forwardStatus: { enabled: true, mode: "full", failures: [{ label: "generations", detail: "connection refused" }] } }).value, "Failing");
-assert.equal(forwardChipMeta({ settings: { tokenSet: true }, forwardStatus: { enabled: false, reason: "no credentials" } }).value, "Paused");
-
-assert.equal(cloudConfigured(null), false);
-assert.equal(cloudConfigured({}), false);
-assert.equal(cloudConfigured({ endpoint: "https://x" }), true);
-assert.equal(cloudConfigured({ tenantId: "1" }), true);
-assert.equal(cloudConfigured({ tokenSet: true }), true);
-
-// A one-click Cloud write sends the saved state plus its own patch, and puts the
-// edits it does not own back on the form, so a staged token Reset is neither
-// written nor lost.
-const savedForm = { endpoint: "https://x", token: "", tokenCleared: false, capture: "", tags: [{ key: "a", value: "1" }] };
-const edited = { ...savedForm, tokenCleared: true, tags: [{ key: "a", value: "2" }] };
-assert.deepEqual(pendingEdits(edited, savedForm, { localForward: false }), { tokenCleared: true, tags: [{ key: "a", value: "2" }] });
-assert.deepEqual(pendingEdits(edited, savedForm, { tokenCleared: false, token: "" }), { tags: [{ key: "a", value: "2" }] });
-assert.equal(pendingEdits(savedForm, savedForm, null), null);
-
-// A token written by ` + "`agento11y login`" + ` changes nothing else in the settings, so
-// the flag has to count as a difference or the panel never re-hydrates.
-assert.equal(sameSettings({ tags: [], tokenSet: false }, { tags: [], tokenSet: true }), false);
-console.log("ASSERTIONS_OK");
-`
-	appJSXAssertions(t, script)
-}
-
-// appJSXAssertions Babel-transforms the embedded viewer, which fails on a syntax
-// error, and with a script runs it against the helper functions the viewer
-// defines. The region evaluated covers the transcript derivation and the
-// settings panel; components in it are never rendered, so React is a stub.
-func appJSXAssertions(t *testing.T, script string) {
-	t.Helper()
-	appJSXAssertionsRegion(t, script, "function partKind(", "// ============================================================\n// App container")
-}
-
-func appJSXAssertionsRegion(t *testing.T, script, startNeedle, endNeedle string) {
-	t.Helper()
-	babel, err := webStatic.ReadFile("web/vendor/babel.min.js")
+// TestViewerSourcesBuild is the syntax gate on the viewer. It runs the same
+// in-process esbuild pass the daemon serves, over the embedded sources, so a
+// module that does not compile fails the Go suite rather than blanking the
+// page. It covers every module reachable from the entry point, which the
+// vitest suite does not: vitest only sees what a test imports.
+//
+// The bundle is checked for the mount rather than for being non-empty. esbuild
+// answers an entry point that exports nothing with a 15-byte IIFE, so a
+// not-empty assertion passes over a viewer that renders nothing.
+func TestViewerSourcesBuild(t *testing.T) {
+	sources, err := fs.Sub(webSrc, "web/src")
 	require.NoError(t, err)
 
-	dir := t.TempDir()
-	babelPath := filepath.Join(dir, "babel.cjs")
-	require.NoError(t, os.WriteFile(babelPath, babel, 0o600))
-
-	scriptPath := filepath.Join(dir, "test.cjs")
-	runner := `
-const fs = require("fs");
-const vm = require("vm");
-const Babel = require(process.argv[2]);
-const source = fs.readFileSync(process.argv[3], "utf8");
-const compiled = Babel.transform(source, { filename: "app.jsx", presets: ["react"] }).code;
-if (process.env.RUN_APP_JSX_ASSERTIONS === "1") {
-  const startNeedle = process.env.APP_JSX_START;
-  const endNeedle = process.env.APP_JSX_END;
-  const start = compiled.indexOf(startNeedle);
-  const end = compiled.indexOf(endNeedle, start);
-  if (start < 0 || end < 0) throw new Error("helper function region not found");
-  // URL is a browser global the markdown link and stack URL checks rely on.
-  const context = { console, require, URL, React: { createElement() {} } };
-  vm.createContext(context);
-  vm.runInContext(compiled.slice(start, end), context);
-  vm.runInContext(fs.readFileSync(process.argv[4], "utf8"), context);
+	bundle, err := buildViewerBundle(sources)
+	require.NoError(t, err)
+	assert.Contains(t, string(bundle), `document.getElementById("root")`,
+		"the bundle must still mount the app")
 }
-`
-	require.NoError(t, os.WriteFile(scriptPath, []byte(runner), 0o600))
 
-	appPath := filepath.Join(dir, "app.jsx")
-	require.NoError(t, os.WriteFile(appPath, appJSX, 0o600))
-	assertPath := filepath.Join(dir, "assert.cjs")
-	require.NoError(t, os.WriteFile(assertPath, []byte(script), 0o600))
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "node", scriptPath, babelPath, appPath, assertPath)
-	if script != "" {
-		cmd.Env = append(os.Environ(),
-			"RUN_APP_JSX_ASSERTIONS=1",
-			"APP_JSX_START="+startNeedle,
-			"APP_JSX_END="+endNeedle,
-		)
+// TestViewerBundleResolution pins the resolution rules the daemon cannot
+// relax. It bundles with no node_modules and no filesystem, so an import it
+// cannot answer has nowhere to come from and must fail the build instead of
+// resolving to an empty module.
+func TestViewerBundleResolution(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		sources fstest.MapFS
+		wantErr string
+	}{
+		{
+			name:    "a bare import that is not shimmed fails",
+			sources: fstest.MapFS{viewerEntry: &fstest.MapFile{Data: []byte("import 'lodash';\n")}},
+			wantErr: "lodash",
+		},
+		{
+			name:    "a relative import of a module that is not there fails",
+			sources: fstest.MapFS{viewerEntry: &fstest.MapFile{Data: []byte("import './gone';\n")}},
+			wantErr: `no viewer module at "gone"`,
+		},
+		{
+			name:    "a missing entry point fails",
+			sources: fstest.MapFS{"other.tsx": &fstest.MapFile{Data: []byte("export const x = 1;\n")}},
+			wantErr: viewerEntry,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildViewerBundle(tt.sources)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
 	}
-	output, err := cmd.CombinedOutput()
-	require.NoErrorf(t, err, "Babel/helper checks failed for embedded web/app.jsx:\n%s", output)
-	if script != "" {
-		require.Contains(t, string(output), "ASSERTIONS_OK", "assertions did not run")
-	}
+
+	t.Run("an extensionless relative import resolves", func(t *testing.T) {
+		bundle, err := buildViewerBundle(fstest.MapFS{
+			viewerEntry:  &fstest.MapFile{Data: []byte("import { mark } from './other';\nglobalThis.mark = mark;\n")},
+			"other.tsx":  &fstest.MapFile{Data: []byte("export const mark: string = 'resolved';\n")},
+			"other.d.ts": &fstest.MapFile{Data: []byte("broken(\n")},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, string(bundle), "resolved")
+	})
+}
+
+// The two viewer modules the tests below read. Naming each one here means a
+// module rename is one edit, not one per reading test.
+const (
+	viewerFormattersModule = "formatters.ts"
+	viewerSettingsModule   = "settings-screen.tsx"
+)
+
+// viewerModule returns one embedded viewer module as text. The tests below
+// read source because they pin things no rendered output shows: which constant
+// a literal holds, and which names the import UI does not write down.
+func viewerModule(t *testing.T, name string) string {
+	t.Helper()
+	body, err := webSrc.ReadFile("web/src/" + name)
+	require.NoErrorf(t, err, "viewer module %q", name)
+	return string(body)
 }
 
 // TestCloudConsentDialogsNameTheSavedStack pins which endpoint the two Cloud
@@ -449,9 +105,9 @@ if (process.env.RUN_APP_JSX_ASSERTIONS === "1") {
 // wrong host in front of the user at the moment consent is given. Components
 // are never rendered in these tests, so this reads the source.
 func TestCloudConsentDialogsNameTheSavedStack(t *testing.T) {
-	src := string(appJSX)
+	src := viewerModule(t, viewerSettingsModule)
 	tab := strings.Index(src, "function SettingsCloudTab(")
-	require.Positive(t, tab, "SettingsCloudTab not found in web/app.jsx")
+	require.Positive(t, tab, "SettingsCloudTab not found in %s", viewerSettingsModule)
 	at := strings.Index(src[tab:], "{confirmFull && (")
 	require.Positive(t, at, "the confirm dialogs were not found in SettingsCloudTab")
 	end := strings.Index(src, "function SettingsTagsEditor(")
@@ -473,27 +129,28 @@ func TestCloudConsentDialogsNameTheSavedStack(t *testing.T) {
 // and the chart: both bucket on the same ladder, and every step divides the
 // next. The client folds server points onto its own bars, so a step that
 // does not divide the bar width would split a bucket across two bars. The
-// viewer is served as text/babel and no JS toolchain covers it, which
-// leaves this test as the only check.
+// two ladders are written in different languages, so the vitest suite cannot
+// see the Go side and this stays a Go test.
 func TestBucketLaddersAgree(t *testing.T) {
 	for i := 1; i < len(tokenUsageIntervals); i++ {
 		assert.Zero(t, tokenUsageIntervals[i]%tokenUsageIntervals[i-1],
 			"%v must divide %v", tokenUsageIntervals[i-1], tokenUsageIntervals[i])
 	}
 
-	got := bucketIntervalsFromJSX(t, string(appJSX))
+	got := bucketIntervalsFromSource(t, viewerModule(t, viewerFormattersModule))
 	want := make([]time.Duration, 0, len(tokenUsageIntervals))
 	want = append(want, tokenUsageIntervals...)
-	assert.Equal(t, want, got, "BUCKET_INTERVALS_MS in web/app.jsx and tokenUsageIntervals must match")
+	assert.Equal(t, want, got,
+		"BUCKET_INTERVALS_MS in %s and tokenUsageIntervals must match", viewerFormattersModule)
 }
 
-// bucketIntervalsFromJSX reads the BUCKET_INTERVALS_MS literal out of the
+// bucketIntervalsFromSource reads the BUCKET_INTERVALS_MS literal out of the
 // embedded viewer and returns it as durations. The entries are arithmetic
 // (`5 * 60_000`), so each one is evaluated as a product of its factors.
-func bucketIntervalsFromJSX(t *testing.T, src string) []time.Duration {
+func bucketIntervalsFromSource(t *testing.T, src string) []time.Duration {
 	t.Helper()
 	literal := regexp.MustCompile(`(?s)const BUCKET_INTERVALS_MS = \[(.*?)\]`).FindStringSubmatch(src)
-	require.Len(t, literal, 2, "BUCKET_INTERVALS_MS literal not found in web/app.jsx")
+	require.Len(t, literal, 2, "BUCKET_INTERVALS_MS literal not found in %s", viewerFormattersModule)
 
 	out := []time.Duration{}
 	for entry := range strings.SplitSeq(literal[1], ",") {
@@ -515,13 +172,14 @@ func bucketIntervalsFromJSX(t *testing.T, src string) []time.Duration {
 // TestViewerDefaultRangeMatchesImportWindow pins the one number the viewer and
 // the importer have to agree on. A history import defaults to the previous 90
 // days; a viewer that opened on a narrower window would show an empty list
-// right after one, because everything backfilled is older than it. The viewer
-// is served as text/babel with no JS toolchain, so this is the only check.
+// right after one, because everything backfilled is older than it. The window
+// is a Go constant and the default is a TypeScript literal, so only a Go test
+// can compare them.
 func TestViewerDefaultRangeMatchesImportWindow(t *testing.T) {
-	src := string(appJSX)
+	src := viewerModule(t, viewerFormattersModule)
 
 	defaultRange := regexp.MustCompile(`const DEFAULT_TIME_RANGE = ['"]([^'"]+)['"]`).FindStringSubmatch(src)
-	require.Len(t, defaultRange, 2, "DEFAULT_TIME_RANGE not found in web/app.jsx")
+	require.Len(t, defaultRange, 2, "DEFAULT_TIME_RANGE not found in %s", viewerFormattersModule)
 
 	pattern := fmt.Sprintf(`\{ value: ['"]%s['"], label: ['"][^'"]+['"], ms: ([0-9 */]+) \}`, regexp.QuoteMeta(defaultRange[1]))
 	entry := regexp.MustCompile(pattern).FindStringSubmatch(src)
@@ -549,7 +207,7 @@ func TestViewerDefaultRangeMatchesImportWindow(t *testing.T) {
 // "pointer"`. The word boundary kills the first kind; dropping style objects
 // kills the second.
 func TestViewerHasNoHardcodedHistoryAgents(t *testing.T) {
-	src := string(appJSX)
+	src := viewerModule(t, viewerSettingsModule)
 	require.Contains(t, src, "/api/v1/history/agents", "the viewer must read the agent list from the registry endpoint")
 
 	searchable := searchableImportUI(t, src)
@@ -585,7 +243,7 @@ func TestViewerHardcodedAgentGuardCatchesHardcoding(t *testing.T) {
 	}
 	for _, tt := range caught {
 		t.Run(tt.name, func(t *testing.T) {
-			searchable := searchableImportUI(t, plantInImportUI(t, string(appJSX), tt.planted))
+			searchable := searchableImportUI(t, plantInImportUI(t, viewerModule(t, viewerSettingsModule), tt.planted))
 			assert.GreaterOrEqual(t, namesAgentAt(searchable, "codex"), 0,
 				"the guard missed hardcoding written as %s", tt.planted)
 		})
@@ -594,10 +252,11 @@ func TestViewerHardcodedAgentGuardCatchesHardcoding(t *testing.T) {
 	// The one construct deliberately out of scope, and the reason style objects
 	// are dropped: a CSS property name is not an agent name, and "cursor" is
 	// both a CSS property and an agent this repo ships a plugin for.
-	searchable := searchableImportUI(t, string(appJSX))
+	searchable := searchableImportUI(t, viewerModule(t, viewerSettingsModule))
 	assert.Negative(t, namesAgentAt(searchable, "cursor"),
 		`cursor: "pointer" in a style object must not read as a hardcoded agent`)
-	planted := searchableImportUI(t, plantInImportUI(t, string(appJSX), `<div>Import from Cursor</div>`))
+	planted := searchableImportUI(t,
+		plantInImportUI(t, viewerModule(t, viewerSettingsModule), `<div>Import from Cursor</div>`))
 	assert.GreaterOrEqual(t, namesAgentAt(planted, "cursor"), 0,
 		"dropping style objects must not hide an agent named in rendered text")
 }
@@ -606,13 +265,20 @@ func TestViewerHardcodedAgentGuardCatchesHardcoding(t *testing.T) {
 // UI region with style objects removed.
 //
 // The region runs from useHistoryImport to the end of the Settings history tab.
-// Agent names elsewhere in the file are explanatory prose about how one agent
-// records its transcripts, not a list to keep in sync, so prose that has to name
-// an agent belongs outside these bounds.
+// Both live in the same module, which is why the settings module was not split
+// further: the import UI and the settings screen have to stay joined for this
+// region to exist. Agent names elsewhere in the file are explanatory prose about
+// how one agent records its transcripts, not a list to keep in sync, so prose
+// that has to name an agent belongs outside these bounds.
+//
+// The bound is checked with GreaterOrEqual rather than Positive because
+// strings.Index reports "not found" as -1, and 0 is a legal offset: a module
+// that opened with useHistoryImport would fail a "must be positive" check
+// while being exactly what the test wants.
 func searchableImportUI(t *testing.T, src string) string {
 	t.Helper()
 	start := strings.Index(src, "function useHistoryImport(")
-	require.Positive(t, start, "useHistoryImport not found in web/app.jsx")
+	require.GreaterOrEqual(t, start, 0, "useHistoryImport not found in %s", viewerSettingsModule)
 	end := strings.Index(src, "function SettingsTabPanels(")
 	require.Greater(t, end, start, "SettingsTabPanels not found after useHistoryImport")
 
@@ -633,7 +299,7 @@ func searchableImportUI(t *testing.T, src string) string {
 func plantInImportUI(t *testing.T, src, snippet string) string {
 	t.Helper()
 	at := strings.Index(src, "function SettingsHistoryTab(")
-	require.Positive(t, at, "SettingsHistoryTab not found in web/app.jsx")
+	require.Positive(t, at, "SettingsHistoryTab not found in %s", viewerSettingsModule)
 	return src[:at] + snippet + "\n" + src[at:]
 }
 
@@ -697,10 +363,10 @@ func snippetAround(text string, off int) string {
 // inside a style object is still caught, and so is everything outside the
 // attribute: a style attribute ends at }} before the element's children.
 //
-// The viewer is served as text/babel and no JS toolchain covers it, so this
-// counts braces rather than parsing. A style object holding an unbalanced brace
-// inside a string would swallow the rest of the region, which is what the
-// sentinels in searchableImportUI catch.
+// This counts braces rather than parsing, because the Go suite has no parser
+// for the viewer's source. A style object holding an unbalanced brace inside a
+// string would swallow the rest of the region, which is what the sentinels in
+// searchableImportUI catch.
 func withoutStylePropertyNames(src string) string {
 	const open = "style={{"
 	var out strings.Builder
@@ -781,10 +447,25 @@ func TestViewerServesItsOwnAssets(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), `nonce="`)
 	assert.NotContains(t, rr.Body.String(), noncePlaceholder)
 
+	// The vendored scripts have to load in this order and before the bundle:
+	// markdown-to-jsx reads the React global when it loads, and the bundle reads
+	// all three. A reordered head is a blank page, and nothing else checks it.
+	var previous int
+	for _, tag := range []string{
+		"/assets/vendor/react.production.min.js",
+		"/assets/vendor/react-dom.production.min.js",
+		"/assets/vendor/markdown-to-jsx.js",
+		"/assets/app.js",
+	} {
+		at := strings.Index(string(indexHTML), tag)
+		require.GreaterOrEqual(t, at, 0, "index.html does not load %s", tag)
+		assert.Greater(t, at, previous, "index.html must load %s after the scripts it reads", tag)
+		previous = at
+	}
+
 	assets := map[string]string{
 		"/assets/vendor/react.production.min.js":     "application/javascript; charset=utf-8",
 		"/assets/vendor/react-dom.production.min.js": "application/javascript; charset=utf-8",
-		"/assets/vendor/babel.min.js":                "application/javascript; charset=utf-8",
 		"/assets/vendor/markdown-to-jsx.js":          "application/javascript; charset=utf-8",
 		"/assets/fonts/inter-latin.woff2":            "font/woff2",
 		"/assets/fonts/roboto-mono-latin.woff2":      "font/woff2",
@@ -809,12 +490,12 @@ func TestViewerAssetRoutesRejectTraversal(t *testing.T) {
 	srv, _ := newTestServer(t)
 
 	for _, path := range []string{
-		"/assets/vendor/../app.jsx",
-		"/assets/vendor/..%2Fapp.jsx",
-		"/assets/fonts/../vendor/babel.min.js",
+		"/assets/vendor/../app.css",
+		"/assets/vendor/..%2Fapp.css",
+		"/assets/fonts/../vendor/react.production.min.js",
 		"/assets/vendor/nope.js",
 		"/assets/fonts/inter-latin.woff2.js",
-		"/assets/vendor/babel.min.js.woff2",
+		"/assets/vendor/react.production.min.js.woff2",
 	} {
 		t.Run(path, func(t *testing.T) {
 			rr := httptest.NewRecorder()

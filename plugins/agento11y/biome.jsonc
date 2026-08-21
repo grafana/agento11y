@@ -1,0 +1,64 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.11/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true,
+    "root": "../.."
+  },
+  "files": {
+    "includes": ["internal/local/web/src/**", "tests/**", "vitest.config.ts"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 120,
+    "lineEnding": "lf"
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "trailingCommas": "all",
+      "semicolons": "always",
+      "arrowParentheses": "always",
+      "bracketSpacing": true
+    }
+  },
+  "json": {
+    "formatter": {
+      "trailingCommas": "none"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  },
+  "overrides": [
+    {
+      // noArrayIndexKey reports 11 lists that were keyed by array index before
+      // this change, unchanged through the split. It reports them now because
+      // biome only turns its react rules on for a package that declares react,
+      // and this package declared no dependencies until the vitest suite was
+      // added. Rekeying a list changes which DOM node React reuses and where
+      // focus lands after a row is removed, and no test covers these lists yet,
+      // so they are exempted by file and fixed separately. A new module is
+      // still checked.
+      "includes": [
+        "internal/local/web/src/conversations.tsx",
+        "internal/local/web/src/detail.tsx",
+        "internal/local/web/src/routing.tsx",
+        "internal/local/web/src/settings-screen.tsx"
+      ],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noArrayIndexKey": "off"
+          }
+        }
+      }
+    }
+  ]
+}

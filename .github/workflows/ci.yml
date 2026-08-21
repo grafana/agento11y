@@ -238,6 +238,12 @@ jobs:
       - name: Lint local viewer
         run: mise run lint:ts:local-viewer
 
+      - name: Typecheck local viewer
+        run: mise run typecheck:ts:local-viewer
+
+      - name: Test local viewer
+        run: mise run test:ts:local-viewer
+
       - name: Typecheck opencode plugin
         run: pnpm --filter @grafana/agento11y-opencode run typecheck
 

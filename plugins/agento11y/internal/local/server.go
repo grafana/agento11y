@@ -131,7 +131,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /settings", s.handleIndex)
 	mux.HandleFunc("GET /settings/{$}", s.handleIndex)
 	mux.HandleFunc("GET /assets/app.css", s.handleAppCSS)
-	mux.HandleFunc("GET /assets/app.jsx", s.handleAppJSX)
+	mux.HandleFunc("GET /assets/app.js", s.handleAppJS)
 	mux.HandleFunc("GET /assets/vendor/{file}", s.handleVendorAsset)
 	mux.HandleFunc("GET /assets/fonts/{file}", s.handleFontAsset)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
@@ -265,10 +265,20 @@ func (s *Server) handleAppCSS(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(devAsset("app.css", appCSS))
 }
 
-func (s *Server) handleAppJSX(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/babel; charset=utf-8")
+// handleAppJS serves the compiled viewer. A compile error is reported as a 500
+// carrying esbuild's message: a blank page with a working status code would
+// send whoever edited the source looking at the browser console for a runtime
+// fault that is not there.
+func (s *Server) handleAppJS(w http.ResponseWriter, _ *http.Request) {
+	bundle, err := viewerBundle()
+	if err != nil {
+		s.logger.Printf("local: viewer bundle failed: %v", err)
+		http.Error(w, "viewer bundle failed:\n"+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(devAsset("app.jsx", appJSX))
+	_, _ = w.Write(bundle)
 }
 
 func (s *Server) handleVendorAsset(w http.ResponseWriter, r *http.Request) {
@@ -285,7 +295,7 @@ func (s *Server) handleFontAsset(w http.ResponseWriter, r *http.Request) {
 // servable.
 //
 // These assets are versioned by their content and never change for a given
-// binary, so they are cached for a year. app.css and app.jsx stay no-cache,
+// binary, so they are cached for a year. app.css and app.js stay no-cache,
 // because LOCAL_WEB_DIR reloads them from disk during development.
 func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, dir, ext, contentType string) {
 	name := r.PathValue("file")
