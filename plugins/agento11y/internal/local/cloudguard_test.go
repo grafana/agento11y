@@ -72,16 +72,23 @@ func TestEvaluateCloudHook(t *testing.T) {
 			wantAction: agento11y.HookActionAllow,
 		},
 		{
-			name:       "transform_survives_the_relay",
-			respond:    `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"bash","input_json":{"command":"echo safe"}}}]}]}}`,
+			name: "transform_survives_the_relay",
+			respond: `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[` +
+				`{"kind":"tool_call","tool_call":{"id":"c1","name":"bash","input_json":"eyJjb21tYW5kIjoiZWNobyBzYWZlIn0="}},` +
+				`{"kind":"tool_result","tool_result":{"tool_call_id":"c1","content_json":"eyJvayI6dHJ1ZX0="}}]}],` +
+				`"tools":[{"name":"bash","input_schema_json":"eyJ0eXBlIjoib2JqZWN0In0="}]}}`,
 			wantAction: agento11y.HookActionAllow,
 			assertMore: func(t *testing.T, resp agento11y.HookEvaluateResponse) {
 				require.NotNil(t, resp.TransformedInput)
 				require.Len(t, resp.TransformedInput.Output, 1)
 				parts := resp.TransformedInput.Output[0].Parts
-				require.Len(t, parts, 1)
+				require.Len(t, parts, 2)
 				require.NotNil(t, parts[0].ToolCall)
 				assert.JSONEq(t, `{"command":"echo safe"}`, string(parts[0].ToolCall.InputJSON))
+				require.NotNil(t, parts[1].ToolResult)
+				assert.JSONEq(t, `{"ok":true}`, string(parts[1].ToolResult.ContentJSON))
+				require.Len(t, resp.TransformedInput.Tools, 1)
+				assert.JSONEq(t, `{"type":"object"}`, string(resp.TransformedInput.Tools[0].InputSchema))
 			},
 		},
 		{
@@ -285,7 +292,9 @@ func TestHookTimeoutFromHeader(t *testing.T) {
 // be evaluated rather than that a policy blocked the call.
 func TestDenyFromCloudError(t *testing.T) {
 	body := []byte(`{"phase":"postflight","input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash"}}]}]}}`)
-	resp := denyFromCloudError(body, errors.New("POST https://cloud.example.test/api/v1/hooks:evaluate: connection refused"))
+	req, err := decodeHookEvaluateRequest(body)
+	require.NoError(t, err)
+	resp := denyFromCloudError(req, errors.New("POST https://cloud.example.test/api/v1/hooks:evaluate: connection refused"))
 
 	assert.Equal(t, agento11y.HookActionDeny, resp.Action)
 	assert.Equal(t, guard.EvaluationFailureRuleID, resp.RuleID)
@@ -296,9 +305,9 @@ func TestDenyFromCloudError(t *testing.T) {
 }
 
 // TestHookRequestToolName covers naming the blocked call in the fail-closed
-// message across the request shapes the daemon receives. The Go and JS SDKs
-// serialize a tool-call part differently, and the JS shape is what the pi and
-// opencode plugins send.
+// message across the request shapes the daemon receives. The bodies go through
+// the same decode the handler runs, because that is where the older camelCase
+// spelling is normalized.
 func TestHookRequestToolName(t *testing.T) {
 	cases := []struct {
 		name string
@@ -331,11 +340,12 @@ func TestHookRequestToolName(t *testing.T) {
 			want: "Edit",
 		},
 		{name: "preflight_without_tool_call", body: `{"phase":"preflight","input":{"messages":[]}}`, want: unknownToolName},
-		{name: "undecodable_body", body: `{"phase":`, want: unknownToolName},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, hookRequestToolName([]byte(tc.body)))
+			req, err := decodeHookEvaluateRequest([]byte(tc.body))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, hookRequestToolName(req))
 		})
 	}
 }

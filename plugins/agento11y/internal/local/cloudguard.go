@@ -3,7 +3,6 @@ package local
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -51,12 +50,11 @@ const maxHookFailureDetail = 512
 // verdict. A non-nil error means no verdict was obtained and the caller decides
 // what to do with it based on cfg.failOpen.
 //
-// body is the exact payload the calling agent sent. Relaying it verbatim means
-// the daemon cannot drop a field an agent's newer SDK knows about and this one
-// does not, and it sidesteps the released SDK client's phase filter: v0.15.0
-// defaults HooksConfig.Phases to preflight only, so routing this through the
-// SDK client would answer allow without contacting Cloud for exactly the
-// postflight tool-call checks this repo's own guard path sends.
+// body is either the original request or encodeRelayBody's output after a
+// local redaction. Posting those bytes directly sidesteps the released SDK
+// client's phase filter: v0.15.0 defaults HooksConfig.Phases to preflight only,
+// so routing this through the SDK client would answer allow without contacting
+// Cloud for the postflight tool-call checks this repo's guard path sends.
 //
 // Failures are recorded in the forwarding failure ring, so the viewer shows a
 // hook leg that looks live but is not delivering.
@@ -107,7 +105,8 @@ func (l *forwardLoader) evaluateCloudHook(ctx context.Context, cfg forwardConfig
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return out, l.recordHookFailure("POST %s status %d: %s", cfg.hookURL, resp.StatusCode, hookFailureDetail(respBody, http.StatusText(resp.StatusCode)))
 	}
-	if err := json.Unmarshal(respBody, &out); err != nil {
+	out, err = decodeHookEvaluateResponse(respBody)
+	if err != nil {
 		return out, l.recordHookFailure("decode response from %s: %v", cfg.hookURL, err)
 	}
 	// Mirrors the SDK's own decode: an omitted action is an allow.
@@ -191,7 +190,7 @@ func hookTimeoutFromHeader(r *http.Request, fallback time.Duration) time.Duratio
 // guard.EvaluationFailureRuleID so every consumer can tell an infrastructure
 // failure from a policy decision, and reuses guard.FormatEvalFailure so the
 // wording matches the cloud-only path word for word.
-func denyFromCloudError(body []byte, err error) agento11y.HookEvaluateResponse {
+func denyFromCloudError(req agento11y.HookEvaluateRequest, err error) agento11y.HookEvaluateResponse {
 	detail := ""
 	if err != nil {
 		detail = err.Error()
@@ -199,70 +198,29 @@ func denyFromCloudError(body []byte, err error) agento11y.HookEvaluateResponse {
 	return agento11y.HookEvaluateResponse{
 		Action:      agento11y.HookActionDeny,
 		RuleID:      guard.EvaluationFailureRuleID,
-		Reason:      guard.FormatEvalFailure(hookRequestToolName(body), detail),
+		Reason:      guard.FormatEvalFailure(hookRequestToolName(req), detail),
 		Evaluations: []agento11y.HookEvaluation{},
 	}
 }
 
-// hookRequestToolName returns the name of the first tool call in a hook
-// request body (output messages first, then input messages) so the fail-closed
-// reason can name the blocked call. The body is decoded leniently and only for
-// this: a request the daemon cannot read is still relayed verbatim, and a
-// request with no tool call (a pi preflight context event) has no name to give.
-func hookRequestToolName(body []byte) string {
-	var req hookToolCallProbe
-	if err := json.Unmarshal(body, &req); err != nil {
-		return unknownToolName
-	}
-	for _, msgs := range [][]hookProbeMessage{req.Input.Output, req.Input.Messages} {
+// hookRequestToolName returns the name of the first tool call in a decoded hook
+// request (output messages first, then input messages) so the fail-closed
+// reason can name the blocked call. A request with no tool call (a pi preflight
+// context event) has no name to give.
+func hookRequestToolName(req agento11y.HookEvaluateRequest) string {
+	for _, msgs := range [][]agento11y.Message{req.Input.Output, req.Input.Messages} {
 		for _, m := range msgs {
 			for _, p := range m.Parts {
-				if name := strings.TrimSpace(p.toolCallName()); name != "" {
+				if p.ToolCall == nil {
+					continue
+				}
+				if name := strings.TrimSpace(p.ToolCall.Name); name != "" {
 					return name
 				}
 			}
 		}
 	}
 	return unknownToolName
-}
-
-// hookToolCallProbe is a lenient view of a hook request: just enough to name a
-// tool call. It is deliberately not agento11y.HookEvaluateRequest, which binds
-// the Go SDK's `kind` / `tool_call` spelling only. The JS SDK sends
-// `type` / `toolCall` (js/src/types.ts), so requests from the pi and opencode
-// plugins would decode into zero tool calls and every fail-closed message
-// would name the tool "unknown".
-type hookToolCallProbe struct {
-	Input struct {
-		Output   []hookProbeMessage `json:"output"`
-		Messages []hookProbeMessage `json:"messages"`
-	} `json:"input"`
-}
-
-type hookProbeMessage struct {
-	Parts []hookProbePart `json:"parts"`
-}
-
-// hookProbePart accepts both spellings of the tool-call payload. The two JSON
-// tags do not collide: encoding/json's case-insensitive fall-back compares
-// "tool_call" and "toolcall", which differ.
-type hookProbePart struct {
-	ToolCall   *hookProbeToolCall `json:"tool_call"`
-	ToolCallJS *hookProbeToolCall `json:"toolCall"`
-}
-
-func (p hookProbePart) toolCallName() string {
-	if p.ToolCall != nil {
-		return p.ToolCall.Name
-	}
-	if p.ToolCallJS != nil {
-		return p.ToolCallJS.Name
-	}
-	return ""
-}
-
-type hookProbeToolCall struct {
-	Name string `json:"name"`
 }
 
 // unknownToolName stands in when the hook request names no tool call, so the

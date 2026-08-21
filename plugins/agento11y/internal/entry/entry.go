@@ -91,8 +91,8 @@ var (
 // renderLocalBanner draws the local-mode banner. envKey names the variable that
 // turned local mode on (AGENTO11Y_LOCAL or the legacy SIGIL_LOCAL), and is
 // empty when a flag on this command line did.
-func renderLocalBanner(uiURL string, posture local.ForwardPosture, postureErr error, envKey string) string {
-	privacy := localPrivacyLines(posture, postureErr == nil)
+func renderLocalBanner(uiURL string, posture local.ForwardPosture, postureErr error, envKey string, guardsEnabled bool) string {
+	privacy := localPrivacyLines(posture, postureErr == nil, guardsEnabled)
 	lines := make([]string, 0, len(privacy)+3)
 	title := localBannerTitle.Render("agento11y local mode")
 	if envKey != "" {
@@ -109,23 +109,42 @@ func renderLocalBanner(uiURL string, posture local.ForwardPosture, postureErr er
 // localPrivacyLines describes what leaves the machine in this session. The
 // daemon is shared and re-reads config.env, so the claim has to come from the
 // posture it reports rather than from the fact that --local was passed.
-func localPrivacyLines(posture local.ForwardPosture, known bool) []string {
-	switch {
-	case !known:
+func localPrivacyLines(posture local.ForwardPosture, known, guardsEnabled bool) []string {
+	if !known {
 		// The daemon did not answer. Say what is certain (the local store)
 		// rather than guess at the forwarding posture.
 		return []string{"Captured agent data is recorded on this machine."}
+	}
+
+	var lines []string
+	switch {
 	case !posture.Enabled:
-		return []string{"Captured agent data stays on this machine."}
+		lines = []string{"Captured agent data stays on this machine."}
 	case posture.Hooks:
-		return []string{
+		lines = []string{
 			"Captured agent data is also forwarded to Grafana Cloud (" + posture.Mode + ").",
 			"Guard checks send tool calls, and any conversation checked before it is sent",
 			"to the model, to Cloud regardless of that mode.",
 		}
 	default:
-		return []string{"Captured agent data is also forwarded to Grafana Cloud (" + posture.Mode + ")."}
+		lines = []string{"Captured agent data is also forwarded to Grafana Cloud (" + posture.Mode + ")."}
 	}
+
+	// The local ruleset is separate from forwarding and sends nothing. Report
+	// whether the child agent will submit checks, because it short-circuits when
+	// guardsEnabled is false.
+	if posture.LocalRules > 0 {
+		noun := "local guard rules are"
+		if posture.LocalRules == 1 {
+			noun = "local guard rule is"
+		}
+		claim := "evaluated on this machine."
+		if !guardsEnabled {
+			claim = "not evaluated: " + envconfig.PreferredKey("GUARDS_ENABLED") + " is off."
+		}
+		lines = append(lines, fmt.Sprintf("%d %s %s", posture.LocalRules, noun, claim))
+	}
+	return lines
 }
 
 // usageLine is a function rather than a constant because the history agents
@@ -1216,7 +1235,11 @@ func setupLocalLaunch(stderr io.Writer, envKey string) (endpoint, otlp string, e
 		// on its own reads like "nothing is forwarded". Say why it is hedged.
 		_, _ = fmt.Fprintf(stderr, "agento11y: could not read the daemon's forwarding posture: %v\n", postureErr)
 	}
-	_, _ = fmt.Fprintln(stderr, renderLocalBanner(status.Endpoint, posture, postureErr, envKey))
+	// dotenv.ApplyEnv has already merged config.env into this process, and the
+	// agent child inherits it, so this resolution is the one that decides whether
+	// a guard check is made at all.
+	guardsEnabled := envconfig.ResolveGuards(nil).Enabled
+	_, _ = fmt.Fprintln(stderr, renderLocalBanner(status.Endpoint, posture, postureErr, envKey, guardsEnabled))
 	return endpoint, otlp, nil
 }
 

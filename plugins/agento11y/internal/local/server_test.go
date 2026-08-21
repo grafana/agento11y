@@ -3,6 +3,7 @@ package local
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/dotenv"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/guardeval"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -273,7 +275,9 @@ func TestServer_OTLPDrainsAndReturns200(t *testing.T) {
 	}
 }
 
-func TestServer_HookEvaluate_Allow(t *testing.T) {
+// A daemon with no guards.toml has no rules to enforce, so every call is
+// allowed and nothing about the call is written to the store.
+func TestServer_HookEvaluate_AllowsWithEmptyRuleset(t *testing.T) {
 	s, dir := newTestServer(t)
 	body := `{"phase":"postflight","context":{"agent_name":"x"}}`
 
@@ -284,6 +288,7 @@ func TestServer_HookEvaluate_Allow(t *testing.T) {
 	decodeJSON(t, resp.Body, &out)
 	assert.Equal(t, agento11y.HookActionAllow, out.Action)
 	assert.NotNil(t, out.Evaluations)
+	assert.Empty(t, out.Evaluations)
 
 	_, err := os.Stat(filepath.Join(dir, "hooks.jsonl"))
 	assert.True(t, os.IsNotExist(err), "hooks should not be persisted")
@@ -1430,7 +1435,10 @@ func postHook(t *testing.T, s *Server, body string, headers map[string]string, o
 	defer func() { _ = resp.Body.Close() }()
 	var out agento11y.HookEvaluateResponse
 	if resp.StatusCode == http.StatusOK {
-		decodeJSON(t, resp.Body, &out)
+		raw, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		out, err = decodeHookEvaluateResponse(raw)
+		require.NoError(t, err)
 	}
 	return resp.StatusCode, out
 }
@@ -1534,16 +1542,23 @@ func TestServer_HookEvaluate_CloudVerdict(t *testing.T) {
 			wantReason: "blocked by policy",
 		},
 		{
-			name:       "transform",
-			respond:    `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"echo safe"}}}]}]}}`,
+			name: "transform",
+			respond: `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[` +
+				`{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":"eyJjb21tYW5kIjoiZWNobyBzYWZlIn0="}},` +
+				`{"kind":"tool_result","tool_result":{"tool_call_id":"c1","content_json":"eyJvayI6dHJ1ZX0="}}]}],` +
+				`"tools":[{"name":"Bash","input_schema_json":"eyJ0eXBlIjoib2JqZWN0In0="}]}}`,
 			wantAction: agento11y.HookActionAllow,
 			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
 				require.NotNil(t, out.TransformedInput)
 				require.Len(t, out.TransformedInput.Output, 1)
 				parts := out.TransformedInput.Output[0].Parts
-				require.Len(t, parts, 1)
+				require.Len(t, parts, 2)
 				require.NotNil(t, parts[0].ToolCall)
 				assert.JSONEq(t, `{"command":"echo safe"}`, string(parts[0].ToolCall.InputJSON))
+				require.NotNil(t, parts[1].ToolResult)
+				assert.JSONEq(t, `{"ok":true}`, string(parts[1].ToolResult.ContentJSON))
+				require.Len(t, out.TransformedInput.Tools, 1)
+				assert.JSONEq(t, `{"type":"object"}`, string(out.TransformedInput.Tools[0].InputSchema))
 			},
 		},
 		{
@@ -1581,10 +1596,380 @@ func TestServer_HookEvaluate_CloudVerdict(t *testing.T) {
 	}
 }
 
-// TestServer_HookEvaluate_FailModes covers what the agent is told when the
-// Cloud call does not produce a verdict. Fail-open keeps the local allow;
-// fail-closed denies, and that deny has to be labelled as an evaluation
-// failure or every consumer renders it as "a policy blocked this call".
+// writeGuardsFileFor installs a ruleset the given server will read on its next
+// hook request.
+func writeGuardsFileFor(t *testing.T, s *Server, rulesTOML string) {
+	t.Helper()
+	require.NotEmpty(t, s.guards.RulesPath)
+	require.NoError(t, os.WriteFile(s.guards.RulesPath, []byte(rulesTOML), 0o600))
+}
+
+func TestServer_HookEvaluate_ReadsRulesOnEachRequest(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	status, out := postHook(t, s, `{"phase":"postflight","input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"name":"Bash","input_json":{"command":"rm -rf /tmp/x"}}}]}]}}`, nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionAllow, out.Action)
+
+	writeGuardsFileFor(t, s, blockRmRules)
+	status, out = postHook(t, s, `{"phase":"postflight","input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"name":"Bash","input_json":{"command":"rm -rf /tmp/x"}}}]}]}}`, nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, agento11y.HookActionDeny, out.Action)
+	assert.Equal(t, "block.rm", out.RuleID)
+}
+
+// blockRmRules denies a Bash call whose serialized arguments contain rm -rf.
+const blockRmRules = `
+[[rules]]
+rule_id = "block.rm"
+phase = "postflight"
+action_on_fail = "deny"
+tool_filter.blocked_names = ["Bash(*rm -rf*)"]
+`
+
+// redactSecretRules rewrites an API key out of the tool arguments and allows.
+const redactSecretRules = `
+[[rules]]
+rule_id = "redact.key"
+phase = "postflight"
+transform.patterns = [{ id = "api_key", regex = "sk-[A-Za-z0-9]+" }]
+`
+
+// redactPairRules removes an API key and, with a second pattern, a whole JSON
+// key/value pair. The pair pattern cannot rewrite input_json without leaving it
+// unmarshalable, so every redaction of that field is dropped once the payload
+// carries a password.
+const redactPairRules = `
+[[rules]]
+rule_id = "redact.pair"
+phase = "postflight"
+transform.patterns = [
+  { id = "api_key", regex = "sk-[A-Za-z0-9]+" },
+  { id = "pw", regex = '"password":\s*"[^"]*"' },
+]
+`
+
+// passingRegexRules records one passing local evaluation without denying.
+const passingRegexRules = `
+[[rules]]
+rule_id = "check.reset"
+phase = "postflight"
+action_on_fail = "deny"
+
+  [[rules.evaluators]]
+  kind = "regex"
+  config.target = "response"
+  config.reject = true
+  config.patterns = ["git reset --hard"]
+`
+
+// hookRmToolCallBody is a postflight tool call the block.rm rule denies.
+const hookRmToolCallBody = `{"phase":"postflight","context":{"agent_name":"claude-code"},"input":{"output":[{"role":"assistant",` +
+	`"parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"rm -rf /tmp/x"}}}]}]}}`
+
+// hookSecretToolCallBody is a postflight tool call the redact.key rule rewrites.
+const hookSecretToolCallBody = `{"phase":"postflight","context":{"agent_name":"claude-code"},"input":{"output":[{"role":"assistant",` +
+	`"parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"curl -H sk-abc123"}}}]}]}}`
+
+// TestServer_HookEvaluate_LocalRules covers the local engine as the first
+// verdict source, with Cloud chaining configured throughout: a local deny must
+// answer without the relay, so a payload this machine already rejected never
+// leaves it, and a local transform must survive a Cloud response that carries
+// none of its own.
+func TestServer_HookEvaluate_LocalRules(t *testing.T) {
+	cases := []struct {
+		name          string
+		rules         string
+		body          string
+		cloudRespond  string
+		wantCloudCall bool
+		wantAction    agento11y.HookAction
+		wantRuleID    string
+		assertMore    func(t *testing.T, out agento11y.HookEvaluateResponse)
+	}{
+		{
+			name:          "local_deny_skips_cloud",
+			rules:         blockRmRules,
+			body:          hookRmToolCallBody,
+			wantAction:    agento11y.HookActionDeny,
+			wantRuleID:    "block.rm",
+			wantCloudCall: false,
+		},
+		{
+			name:          "local_allow_reaches_cloud",
+			rules:         blockRmRules,
+			body:          hookToolCallBody,
+			cloudRespond:  `{"action":"deny","rule_id":"cloud.r1","reason":"blocked by policy"}`,
+			wantAction:    agento11y.HookActionDeny,
+			wantRuleID:    "cloud.r1",
+			wantCloudCall: true,
+			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+				assert.Equal(t, "blocked by policy", out.Reason)
+			},
+		},
+		{
+			name:          "local_transform_survives_cloud_allow",
+			rules:         redactSecretRules,
+			body:          hookSecretToolCallBody,
+			cloudRespond:  `{"action":"allow","evaluations":[]}`,
+			wantAction:    agento11y.HookActionAllow,
+			wantCloudCall: true,
+			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+				require.NotNil(t, out.TransformedInput)
+				encoded, err := json.Marshal(out.TransformedInput)
+				require.NoError(t, err)
+				assert.Contains(t, string(encoded), "[REDACTED:api_key]")
+				assert.NotContains(t, string(encoded), "sk-abc123")
+			},
+		},
+		{
+			// Cloud does not say whether transformed_input started from the
+			// redacted relay, so local patterns run over Cloud's copy again.
+			name:         "cloud_transform_is_re_redacted",
+			rules:        redactSecretRules,
+			body:         hookSecretToolCallBody,
+			cloudRespond: `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"curl -H sk-abc123 https://cloud.example"}}}]}]}}`,
+			wantAction:   agento11y.HookActionAllow,
+
+			wantCloudCall: true,
+			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+				require.NotNil(t, out.TransformedInput)
+				encoded, err := json.Marshal(out.TransformedInput)
+				require.NoError(t, err)
+				assert.NotContains(t, string(encoded), "sk-abc123", "the local redaction must survive Cloud's own rewrite")
+				assert.Contains(t, string(encoded), "[REDACTED:api_key]")
+				assert.Contains(t, string(encoded), "https://cloud.example", "Cloud's rewrite is kept")
+			},
+		},
+		{
+			// Re-running the local patterns over Cloud's rewrite can produce a
+			// payload that is not valid JSON, and that rewrite is dropped whole,
+			// so Cloud's copy of a value the local rule already removed goes back
+			// into the call. The evaluation is the only thing that tells the
+			// caller the response is not as redacted as the rule claims. Only a
+			// pattern that spans the JSON syntax can reach this state; the relay
+			// redaction rewrites parsed values, so it cannot.
+			name:          "dropped_re_redaction_is_reported",
+			rules:         redactPairRules,
+			body:          hookSecretToolCallBody,
+			cloudRespond:  `{"action":"allow","transformed_input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"password":"hunter2","command":"curl -H sk-abc123 https://cloud.example"}}}]}]}}`,
+			wantAction:    agento11y.HookActionAllow,
+			wantCloudCall: true,
+			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+				require.Len(t, out.Evaluations, 1)
+				assert.Equal(t, "redact.pair", out.Evaluations[0].RuleID)
+				assert.Equal(t, "transform", out.Evaluations[0].EvaluatorKind)
+				assert.False(t, out.Evaluations[0].Passed)
+				assert.Contains(t, out.Evaluations[0].Reason, "tool_call.input_json")
+				assert.Contains(t, out.Evaluations[0].Reason, "could not be re-applied to Cloud's rewrite")
+				require.NotNil(t, out.TransformedInput)
+				encoded, err := json.Marshal(out.TransformedInput)
+				require.NoError(t, err)
+				assert.Contains(t, string(encoded), "sk-abc123", "the drop is all or nothing, so Cloud's value stands unredacted")
+			},
+		},
+		{
+			// The call does not run, so there is nothing to rewrite. Re-attaching
+			// the local transform would break the invariant that a deny carries
+			// none.
+			name:          "cloud_deny_drops_the_local_transform",
+			rules:         redactSecretRules,
+			body:          hookSecretToolCallBody,
+			cloudRespond:  `{"action":"deny","rule_id":"cloud.r1","reason":"blocked by policy"}`,
+			wantAction:    agento11y.HookActionDeny,
+			wantRuleID:    "cloud.r1",
+			wantCloudCall: true,
+			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+				assert.Nil(t, out.TransformedInput)
+			},
+		},
+		{
+			name:          "local_evaluations_precede_cloud",
+			rules:         passingRegexRules,
+			body:          hookToolCallBody,
+			cloudRespond:  `{"action":"allow","evaluations":[{"rule_id":"cloud.r1","passed":true}]}`,
+			wantAction:    agento11y.HookActionAllow,
+			wantCloudCall: true,
+			assertMore: func(t *testing.T, out agento11y.HookEvaluateResponse) {
+				require.Len(t, out.Evaluations, 2)
+				assert.Equal(t, "check.reset", out.Evaluations[0].RuleID)
+				assert.Equal(t, "cloud.r1", out.Evaluations[1].RuleID)
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cloud := newHookCloud(t)
+			if tc.cloudRespond != "" {
+				cloud.respond = tc.cloudRespond
+			}
+			s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+			writeGuardsFileFor(t, s, tc.rules)
+
+			status, out := postHook(t, s, tc.body, nil)
+			require.Equal(t, http.StatusOK, status)
+			assert.Equal(t, tc.wantAction, out.Action)
+			assert.Equal(t, tc.wantRuleID, out.RuleID)
+			if tc.wantCloudCall {
+				assert.Equal(t, 1, cloud.count())
+			} else {
+				assert.Zero(t, cloud.count(), "a locally denied call must not be relayed to Cloud")
+			}
+			if tc.assertMore != nil {
+				tc.assertMore(t, out)
+			}
+		})
+	}
+}
+
+func TestServer_HookEvaluate_CamelRequestGetsCanonicalTransform(t *testing.T) {
+	s, _ := newTestServer(t)
+	writeGuardsFileFor(t, s, redactSecretRules)
+
+	body := `{"phase":"postflight","context":{"agentName":"pi"},"input":{"output":[{"role":"assistant",` +
+		`"parts":[{"type":"tool_call","toolCall":{"id":"c1","name":"Bash","inputJSON":"{\"command\":\"curl -H sk-abc123\"}"}}]}]}}`
+	resp := post(t, s, "/api/v1/hooks:evaluate", "application/json", body)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	var out struct {
+		TransformedInput struct {
+			Output []struct {
+				Parts []map[string]any `json:"parts"`
+			} `json:"output"`
+		} `json:"transformed_input"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &out))
+	require.Len(t, out.TransformedInput.Output, 1)
+	require.Len(t, out.TransformedInput.Output[0].Parts, 1)
+	part := out.TransformedInput.Output[0].Parts[0]
+	assert.Equal(t, "tool_call", part["kind"])
+	assert.NotContains(t, part, "type")
+	assert.NotContains(t, part, "toolCall")
+	toolCall, ok := part["tool_call"].(map[string]any)
+	require.True(t, ok)
+	encoded, ok := toolCall["input_json"].(string)
+	require.True(t, ok)
+	assertBase64JSONEq(t, `{"command":"curl -H [REDACTED:api_key]"}`, encoded)
+}
+
+// A transform returns the whole input, so a part the decode/encode round trip
+// drops is a part the host stops sending. No SDK builds a media part today (the
+// server has no media kind and only Go's model.Part has the field), so this
+// covers a hand-written or proto-JSON body rather than a shipped client.
+func TestServer_HookEvaluate_TransformedInputKeepsMediaParts(t *testing.T) {
+	s, _ := newTestServer(t)
+	writeGuardsFileFor(t, s, redactSecretRules)
+
+	body := `{"phase":"postflight","context":{"agent_name":"claude-code"},"input":{"output":[{"role":"assistant","parts":[` +
+		`{"kind":"text","text":"here is sk-abc123"},` +
+		`{"kind":"media","media":{"kind":"image","url":"https://example.test/a.png","mime_type":"image/png","name":"a.png"}}]}]}}`
+	resp := post(t, s, "/api/v1/hooks:evaluate", "application/json", body)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "sk-abc123")
+
+	var out struct {
+		TransformedInput struct {
+			Output []struct {
+				Parts []map[string]any `json:"parts"`
+			} `json:"output"`
+		} `json:"transformed_input"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &out))
+	require.Len(t, out.TransformedInput.Output, 1)
+	parts := out.TransformedInput.Output[0].Parts
+	require.Len(t, parts, 2, "the media part must not be dropped from the replacement input")
+	assert.Contains(t, parts[0]["text"], "[REDACTED:api_key]")
+
+	media, ok := parts[1]["media"].(map[string]any)
+	require.True(t, ok, "the media payload has to survive, not only the part")
+	assert.Equal(t, "https://example.test/a.png", media["url"], "the host transform leaves media fields alone")
+	assert.Equal(t, "image", media["kind"])
+	assert.Equal(t, "a.png", media["name"])
+	assert.Equal(t, "image/png", media["mime_type"])
+}
+
+// transformed_input replaces the whole input, tools included, so a tool the
+// host cannot read the schema of is a tool it calls the model with untyped
+// arguments. The response contract puts that schema under input_schema_json as
+// base64; every SDK parser reads that key and ignores the input_schema spelling
+// the Go ToolDefinition marshals (conformance/hooks/README.md).
+func TestServer_HookEvaluate_TransformedToolsCarrySchemas(t *testing.T) {
+	const schema = `{"type":"object","properties":{"command":{"type":"string"}}}`
+	cases := []struct {
+		name string
+		tool string
+	}{
+		{
+			name: "request_schema_is_raw_json",
+			tool: `{"name":"Bash","description":"runs sk-abc123","input_schema":` + schema + `}`,
+		},
+		{
+			name: "request_schema_is_base64",
+			tool: `{"name":"Bash","description":"runs sk-abc123","input_schema_json":"` +
+				base64.StdEncoding.EncodeToString([]byte(schema)) + `"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestServer(t)
+			writeGuardsFileFor(t, s, redactSecretRules)
+
+			body := `{"phase":"postflight","context":{"agent_name":"claude-code"},"input":{"tools":[` + tc.tool + `],` +
+				`"output":[{"role":"assistant","parts":[` +
+				`{"kind":"tool_call","tool_call":{"name":"Bash","input_json":{"command":"sk-abc123"}}},` +
+				`{"kind":"tool_result","tool_result":{"tool_call_id":"c1","content_json":{"value":"sk-abc123"}}}]}]}}`
+
+			resp := post(t, s, "/api/v1/hooks:evaluate", "application/json", body)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			raw, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.NotContains(t, string(raw), "sk-abc123")
+
+			var out struct {
+				TransformedInput struct {
+					Tools  []map[string]any `json:"tools"`
+					Output []struct {
+						Parts []struct {
+							ToolCall *struct {
+								InputJSON string `json:"input_json"`
+							} `json:"tool_call"`
+							ToolResult *struct {
+								ContentJSON string `json:"content_json"`
+							} `json:"tool_result"`
+						} `json:"parts"`
+					} `json:"output"`
+				} `json:"transformed_input"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &out))
+			require.Len(t, out.TransformedInput.Tools, 1)
+			tool := out.TransformedInput.Tools[0]
+			assert.Equal(t, "Bash", tool["name"])
+			assert.NotContains(t, tool, "input_schema", "the key no hook client reads")
+
+			encoded, ok := tool["input_schema_json"].(string)
+			require.True(t, ok, "the schema has to travel as a base64 string")
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			require.NoError(t, err)
+			assert.JSONEq(t, schema, string(decoded))
+
+			require.Len(t, out.TransformedInput.Output, 1)
+			parts := out.TransformedInput.Output[0].Parts
+			require.Len(t, parts, 2)
+			require.NotNil(t, parts[0].ToolCall)
+			assertBase64JSONEq(t, `{"command":"[REDACTED:api_key]"}`, parts[0].ToolCall.InputJSON)
+			require.NotNil(t, parts[1].ToolResult)
+			assertBase64JSONEq(t, `{"value":"[REDACTED:api_key]"}`, parts[1].ToolResult.ContentJSON)
+		})
+	}
+}
+
 func TestServer_HookEvaluate_FailModes(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -1683,9 +2068,129 @@ func TestServer_HookEvaluate_FailOpenCountSurvivesRecovery(t *testing.T) {
 	assert.Equal(t, 1, st.HookFailOpens, "but not the record that one call went unchecked")
 }
 
-// TestServer_HookEvaluate_RelayShape covers what the daemon puts on the wire:
-// the received bytes unchanged, the loop marker, Cloud auth, and the budget
-// derived from the calling agent's own deadline.
+func TestServer_HookEvaluate_RelayIsRedacted(t *testing.T) {
+	cloud := newHookCloud(t)
+	s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+	writeGuardsFileFor(t, s, redactSecretRules)
+
+	const schema = `{"type":"object","description":"sk-abc123"}`
+	body := `{"phase":"postflight","context":{"agent_name":"sk-abc123","tags":{"route":"sk-abc123"}},"input":{` +
+		`"tools":[{"name":"Bash","description":"runs sk-abc123","input_schema_json":"` + base64.StdEncoding.EncodeToString([]byte(schema)) + `","deferred":true}],` +
+		`"output":[{"role":"assistant","parts":[` +
+		`{"kind":"text","text":"use sk-abc123"},` +
+		`{"kind":"thinking","thinking":"keep sk-abc123 for the host"},` +
+		`{"kind":"media","media":{"kind":"image","url":"https://example.test/sk-abc123.png","mime_type":"image/png","name":"sk-abc123.png"}}]}]}}`
+
+	status, out := postHook(t, s, body, nil)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, 1, cloud.count())
+
+	_, sent, _ := cloud.lastCall()
+	var relay struct {
+		Context agento11y.HookContext `json:"context"`
+		Input   struct {
+			Output []agento11y.Message `json:"output"`
+			Tools  []struct {
+				InputSchemaJSON string `json:"input_schema_json"`
+				Deferred        bool   `json:"deferred"`
+			} `json:"tools"`
+		} `json:"input"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(sent), &relay))
+	assert.Equal(t, "sk-abc123", relay.Context.AgentName, "routing context must not be rewritten")
+	assert.Equal(t, "sk-abc123", relay.Context.Tags["route"], "routing tags must not be rewritten")
+	require.Len(t, relay.Input.Output, 1)
+	require.Len(t, relay.Input.Output[0].Parts, 3)
+	parts := relay.Input.Output[0].Parts
+	assert.Equal(t, "use [REDACTED:api_key]", parts[0].Text)
+	assert.Equal(t, "keep [REDACTED:api_key] for the host", parts[1].Thinking)
+	require.NotNil(t, parts[2].Media)
+	assert.Equal(t, "https://example.test/[REDACTED:api_key].png", parts[2].Media.URL)
+	assert.Equal(t, "[REDACTED:api_key].png", parts[2].Media.Name)
+	assert.Equal(t, "image/png", parts[2].Media.MIMEType)
+	require.Len(t, relay.Input.Tools, 1)
+	assert.True(t, relay.Input.Tools[0].Deferred)
+	assertBase64JSONEq(t, `{"type":"object","description":"[REDACTED:api_key]"}`, relay.Input.Tools[0].InputSchemaJSON)
+
+	require.NotNil(t, out.TransformedInput)
+	hostParts := out.TransformedInput.Output[0].Parts
+	assert.Equal(t, "use [REDACTED:api_key]", hostParts[0].Text)
+	assert.Equal(t, "keep sk-abc123 for the host", hostParts[1].Thinking)
+	require.NotNil(t, hostParts[2].Media)
+	assert.Equal(t, "https://example.test/sk-abc123.png", hostParts[2].Media.URL)
+	assert.Equal(t, "sk-abc123.png", hostParts[2].Media.Name)
+}
+
+func TestServer_HookEvaluate_RelayPreparationFailureUsesFailMode(t *testing.T) {
+	cases := []struct {
+		name       string
+		failOpen   bool
+		textPart   string
+		wantAction agento11y.HookAction
+	}{
+		{
+			name:       "fail_open_when_only_JSON_rewrite_is_dropped",
+			failOpen:   true,
+			wantAction: agento11y.HookActionAllow,
+		},
+		{
+			name:       "fail_closed_when_another_field_was_redacted",
+			textPart:   `{"kind":"text","text":"also sk-abc123"},`,
+			wantAction: agento11y.HookActionDeny,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cloud := newHookCloud(t)
+			s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, map[string]string{
+				"AGENTO11Y_GUARDS_FAIL_OPEN": strconv.FormatBool(tc.failOpen),
+			}))
+			writeGuardsFileFor(t, s, redactPairRules)
+
+			body := `{"phase":"postflight","input":{"output":[{"role":"assistant","parts":[` + tc.textPart +
+				`{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":` +
+				`{"password":"hunter2","command":"curl -H sk-abc123"}}}]}]}}`
+			status, out := postHook(t, s, body, nil)
+
+			require.Equal(t, http.StatusOK, status)
+			assert.Equal(t, tc.wantAction, out.Action)
+			assert.Zero(t, cloud.count(), "a relay with an unresolved redaction must stay on this machine")
+			st := s.forward.status()
+			require.Len(t, st.Failures, 1)
+			assert.Contains(t, st.Failures[0].Detail, "tool_call.input_json")
+			assert.NotContains(t, st.Failures[0].Detail, "hunter2")
+			assert.NotContains(t, st.Failures[0].Detail, "sk-abc123")
+			if tc.failOpen {
+				assert.Equal(t, 1, st.HookFailOpens)
+				return
+			}
+			assert.Zero(t, st.HookFailOpens)
+			assert.Equal(t, guard.EvaluationFailureRuleID, out.RuleID)
+			assert.Contains(t, out.Reason, "could not evaluate")
+		})
+	}
+}
+
+// A rule that rewrote nothing must leave the relay alone, so the common case
+// keeps the agent's bytes on the wire.
+func TestServer_HookEvaluate_RelayKeepsBytesWhenNothingMatched(t *testing.T) {
+	cloud := newHookCloud(t)
+	s, _ := newForwardingTestServer(t, cloud.srv, hookEnv(cloud.srv.URL, nil))
+	writeGuardsFileFor(t, s, redactSecretRules)
+
+	body := `{"phase":"postflight","context":{"agent_name":"claude-code"},"input":{"output":[{"role":"assistant",` +
+		`"parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash","input_json":{"command":"ls"}}}]}]}}`
+	status, _ := postHook(t, s, body, nil)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, 1, cloud.count())
+	_, sent, _ := cloud.lastCall()
+	assert.Equal(t, body, sent)
+}
+
+// TestServer_HookEvaluate_RelayShape covers what the daemon puts on the wire
+// when no local rule rewrote anything: the received bytes unchanged, the loop
+// marker, Cloud auth, and the budget derived from the calling agent's own
+// deadline.
 func TestServer_HookEvaluate_RelayShape(t *testing.T) {
 	cloud := newHookCloud(t)
 	cloud.respond = `{"action":"allow"}`
@@ -1987,4 +2492,141 @@ func TestServer_Forwarding_DoesNotRelayForwardedPayload(t *testing.T) {
 	// Stored locally, never relayed.
 	assert.Len(t, readLines(t, filepath.Join(dir, ConversationsDir, "conv-A.jsonl")), 1)
 	assert.Empty(t, hits)
+}
+
+// The guards-management endpoints (GET/PUT /api/v1/guards, POST
+// /api/v1/guards:test). The engine they call is unit-tested in
+// internal/guardeval; what follows covers the HTTP layer over it.
+
+// newGuardsServer builds a server with explicit guards and config.env paths the
+// guards-management tests can inspect and rewrite. Both GUARDS_ENABLED
+// spellings are cleared from the OS env so the enabled flag resolves from
+// config.env, not the developer's shell.
+func newGuardsServer(t *testing.T) (s *Server, guardsPath, configPath string) {
+	t.Helper()
+	envconfig.PinAliasEnvBlank(t)
+	dir := filepath.Join(t.TempDir(), "local")
+	storage, err := NewStorage(dir)
+	require.NoError(t, err)
+	guardsPath = filepath.Join(t.TempDir(), guardeval.ConfigFile)
+	configPath = filepath.Join(t.TempDir(), "config.env")
+	return newServer(storage, nil, configPath, guardsPath), guardsPath, configPath
+}
+
+// newTestServerWithGuards builds a server whose on-disk ruleset is rulesJSON.
+func newTestServerWithGuards(t *testing.T, rulesJSON string) *Server {
+	t.Helper()
+	s, guardsPath, _ := newGuardsServer(t)
+	require.NoError(t, os.WriteFile(guardsPath, []byte(rulesJSON), 0o600))
+	return s
+}
+
+func doReq(t *testing.T, s *Server, method, path, body string) *http.Response {
+	t.Helper()
+	req := newLocalRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	s.ServeHTTP(rr, req)
+	return rr.Result()
+}
+
+func TestNewServer_DerivesGuardsPathFromConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	storage, err := NewStorage(filepath.Join(dir, "local"))
+	require.NoError(t, err)
+
+	configPath := filepath.Join(dir, "config.env")
+	s := NewServer(storage, nil, configPath)
+	assert.Equal(t, filepath.Join(dir, guardeval.ConfigFile), s.guards.RulesPath)
+
+	// An empty config path leaves no rules file to read, which the engine takes
+	// as an empty ruleset rather than a fault.
+	s = NewServer(storage, nil, "")
+	assert.Empty(t, s.guards.RulesPath)
+	status := guardeval.NewEngine(s.guards).Status()
+	assert.Zero(t, status.Enforcing)
+	assert.Empty(t, status.Errors)
+}
+
+func TestServer_Guards_UncompilableRuleSkippedSiblingsEnforce(t *testing.T) {
+	s := newTestServerWithGuards(t, `
+[[rules]]
+rule_id = "broken"
+phase = "postflight"
+transform.patterns = [{ regex = "(" }]
+
+[[rules]]
+rule_id = "block.rm"
+phase = "postflight"
+action_on_fail = "deny"
+tool_filter.blocked_names = ["Bash(*rm -rf*)"]
+`)
+
+	evalBody := `{"phase":"postflight","context":{},"input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call",` +
+		`"tool_call":{"id":"t1","name":"Bash","input_json":{"command":"rm -rf /tmp/x"}}}]}]}}`
+	er := post(t, s, "/api/v1/hooks:evaluate", "application/json", evalBody)
+	defer er.Body.Close()
+	var verdict agento11y.HookEvaluateResponse
+	decodeJSON(t, er.Body, &verdict)
+	assert.Equal(t, agento11y.HookActionDeny, verdict.Action)
+	assert.Equal(t, "block.rm", verdict.RuleID)
+
+	resp := doReq(t, s, http.MethodGet, "/api/v1/config", "")
+	defer resp.Body.Close()
+	var out configResponse
+	decodeJSON(t, resp.Body, &out)
+	assert.Contains(t, out.LocalGuards.Error, "broken", "the skipped rule is reported, not hidden")
+	assert.Equal(t, 1, out.LocalGuards.Rules, "its sibling still enforces")
+}
+
+// A ruleset the daemon cannot parse enforces nothing rather than blocking every
+// tool call.
+func TestServer_Guards_MalformedFileAllows(t *testing.T) {
+	s := newTestServerWithGuards(t, "[[rules]\nrule_id = ")
+	resp := post(t, s, "/api/v1/hooks:evaluate", "application/json",
+		`{"phase":"postflight","context":{},"input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call",`+
+			`"tool_call":{"id":"t1","name":"Bash","input_json":{"command":"rm -rf /tmp/x"}}}]}]}}`)
+	defer resp.Body.Close()
+	var verdict agento11y.HookEvaluateResponse
+	decodeJSON(t, resp.Body, &verdict)
+	assert.Equal(t, agento11y.HookActionAllow, verdict.Action)
+}
+
+// The launcher banner reads its posture from GET /api/v1/config, so the local
+// rule count has to travel with the forwarding status rather than only through
+// the guards endpoint.
+func TestServer_Config_ReportsLocalGuardCount(t *testing.T) {
+	s := newTestServerWithGuards(t, `
+[[rules]]
+rule_id = "block.rm"
+phase = "postflight"
+tool_filter.blocked_names = ["Bash(*rm -rf*)"]
+
+[[rules]]
+rule_id = "off"
+enabled = false
+tool_filter.blocked_names = ["x"]
+`)
+	resp := doReq(t, s, http.MethodGet, "/api/v1/config", "")
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var out configResponse
+	decodeJSON(t, resp.Body, &out)
+
+	assert.Equal(t, 1, out.LocalGuards.Rules, "the disabled rule is not counted")
+	assert.Contains(t, out.LocalGuards.Path, guardeval.ConfigFile)
+	assert.Empty(t, out.LocalGuards.Error)
+	assert.False(t, out.LocalGuards.Enabled, "GUARDS_ENABLED is off, so no host agent asks")
+
+	// The shared posture is embedded, so its keys sit next to "enabled" rather
+	// than under an object of their own. Decoding into the same struct cannot
+	// see that, so check the encoded shape.
+	encoded, err := json.Marshal(out.LocalGuards)
+	require.NoError(t, err)
+	var keys map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(encoded, &keys))
+	assert.Contains(t, keys, "rules")
+	assert.Contains(t, keys, "path")
+	assert.Contains(t, keys, "enabled")
+	assert.NotContains(t, keys, "Posture")
 }
