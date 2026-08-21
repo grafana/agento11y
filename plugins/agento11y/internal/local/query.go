@@ -29,9 +29,10 @@ type ConversationSummary struct {
 	TotalTokens  int64     `json:"total_tokens"`
 	// TokenBuckets sums the disjoint per-generation buckets across the
 	// conversation, for the list's token breakdown tooltip.
-	TokenBuckets TokenBuckets `json:"token_buckets"`
-	Agents       []string     `json:"agents"`
-	Models       []string     `json:"models"`
+	TokenBuckets        TokenBuckets            `json:"token_buckets"`
+	TokenBucketsByModel map[string]TokenBuckets `json:"token_buckets_by_model,omitempty"`
+	Agents              []string                `json:"agents"`
+	Models              []string                `json:"models"`
 	// Status is "ok" or "err". "err" means at least one generation in
 	// the conversation recorded a call_error.
 	Status string `json:"status"`
@@ -43,6 +44,18 @@ type ConversationSummary struct {
 	Workspace string `json:"workspace,omitempty"`
 	Branch    string `json:"branch,omitempty"`
 	Subagents int    `json:"subagents,omitempty"`
+}
+
+// ConversationMetricsAggregate contains exact KPI totals across every
+// conversation matched by a metrics query, before its row limit.
+type ConversationMetricsAggregate struct {
+	Calls               int                     `json:"calls"`
+	Errored             int                     `json:"errored"`
+	Agents              int                     `json:"agents"`
+	Workspaces          int                     `json:"workspaces"`
+	TokenBuckets        TokenBuckets            `json:"token_buckets"`
+	TokenBucketsByModel map[string]TokenBuckets `json:"token_buckets_by_model"`
+	Models              []string                `json:"models"`
 }
 
 // GenerationView is one step in the conversation thread.
@@ -123,6 +136,26 @@ type ConversationListOptions struct {
 	// stamps with the newest activity the file holds. Zero means no lower
 	// bound.
 	Since time.Time
+	// Before is an exclusive generation-time upper bound for analytics
+	// queries. ListConversations ignores it.
+	Before time.Time
+	// Workspace filters analytics queries when non-nil. A pointer to the
+	// empty string selects conversations whose lifetime cwd is unknown.
+	// ListConversations ignores it.
+	Workspace *string
+}
+
+// ToolUsage is one tool's totals within a conversation.
+type ToolUsage struct {
+	Name     string `json:"name"`
+	Calls    int    `json:"calls"`
+	Failures int    `json:"failures"`
+}
+
+// ConversationToolUsage is one row returned by the tool metrics endpoint.
+type ConversationToolUsage struct {
+	ID    string      `json:"id"`
+	Tools []ToolUsage `json:"tools"`
 }
 
 // ListConversations produces one ConversationSummary per conversation
@@ -171,6 +204,220 @@ func (s *Storage) ListConversations(opts ConversationListOptions) (page []Conver
 	}
 	s.summaries.prune(files)
 	return out, len(files), nil
+}
+
+// ConversationMetrics returns lifetime conversation metadata with every
+// analytic field clipped to generations in [Since, Before). matched counts
+// matching conversations before Limit. Rows are ordered by clipped newest
+// activity, then id.
+func (s *Storage) ConversationMetrics(opts ConversationListOptions) ([]ConversationSummary, int, ConversationMetricsAggregate, error) {
+	files, err := s.conversationFiles()
+	if err != nil {
+		return nil, 0, ConversationMetricsAggregate{}, err
+	}
+	out := make([]ConversationSummary, 0, len(files))
+	var skipped int
+	defer func() { s.logSkipped("conversation metrics", skipped) }()
+	for _, f := range files {
+		if !opts.Since.IsZero() && f.modTime.Before(opts.Since) {
+			break
+		}
+		entry, err := s.summaries.get(f)
+		if err != nil {
+			return nil, 0, ConversationMetricsAggregate{}, err
+		}
+		skipped += entry.skipped
+		if !entry.ok || !workspaceMatches(entry.summary.Workspace, opts.Workspace) {
+			continue
+		}
+		if summary, ok := clippedConversationSummary(entry, opts.Since, opts.Before); ok {
+			out = append(out, summary)
+		}
+	}
+	s.summaries.prune(files)
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].LastActivity.Equal(out[j].LastActivity) {
+			return out[i].LastActivity.After(out[j].LastActivity)
+		}
+		return out[i].ID < out[j].ID
+	})
+	matched := len(out)
+	aggregate := aggregateConversationMetrics(out)
+	if opts.Limit > 0 && len(out) > opts.Limit {
+		out = out[:opts.Limit]
+	}
+	return out, matched, aggregate, nil
+}
+
+func aggregateConversationMetrics(rows []ConversationSummary) ConversationMetricsAggregate {
+	aggregate := ConversationMetricsAggregate{
+		TokenBucketsByModel: map[string]TokenBuckets{},
+		Models:              []string{},
+	}
+	agents := map[string]struct{}{}
+	models := map[string]struct{}{}
+	workspaces := map[string]struct{}{}
+	for _, row := range rows {
+		aggregate.Calls += row.Calls
+		if row.Status == "err" {
+			aggregate.Errored++
+		}
+		aggregate.TokenBuckets = aggregate.TokenBuckets.plus(row.TokenBuckets)
+		for model, buckets := range row.TokenBucketsByModel {
+			aggregate.TokenBucketsByModel[model] = aggregate.TokenBucketsByModel[model].plus(buckets)
+		}
+		for _, agent := range row.Agents {
+			host, _, _ := strings.Cut(agent, "/")
+			if host != "" {
+				agents[host] = struct{}{}
+			}
+		}
+		for _, model := range row.Models {
+			models[model] = struct{}{}
+		}
+		workspaces[row.Workspace] = struct{}{}
+	}
+	aggregate.Agents = len(agents)
+	aggregate.Models = sortedKeys(models)
+	aggregate.Workspaces = len(workspaces)
+	return aggregate
+}
+
+// ToolUsage returns period-clipped per-conversation tool totals. Conversation
+// membership and ordering use the same clipped summaries as
+// ConversationMetrics; result failures remain attributed to their call's
+// generation timestamp.
+func (s *Storage) ToolUsage(opts ConversationListOptions) ([]ConversationToolUsage, error) {
+	files, err := s.conversationFiles()
+	if err != nil {
+		return nil, err
+	}
+	type candidate struct {
+		summary ConversationSummary
+		row     ConversationToolUsage
+	}
+	candidates := make([]candidate, 0, len(files))
+	var skipped int
+	defer func() { s.logSkipped("tool metrics", skipped) }()
+	for _, f := range files {
+		if !opts.Since.IsZero() && f.modTime.Before(opts.Since) {
+			break
+		}
+		entry, err := s.summaries.get(f)
+		if err != nil {
+			return nil, err
+		}
+		skipped += entry.skipped
+		if !entry.ok || !workspaceMatches(entry.summary.Workspace, opts.Workspace) {
+			continue
+		}
+		summary, ok := clippedConversationSummary(entry, opts.Since, opts.Before)
+		if !ok {
+			continue
+		}
+		tools := toolUsage(entry.toolOccurrences, opts.Since, opts.Before)
+		if tools == nil {
+			tools = []ToolUsage{}
+		}
+		candidates = append(candidates, candidate{
+			summary: summary,
+			row:     ConversationToolUsage{ID: summary.ID, Tools: tools},
+		})
+	}
+	s.summaries.prune(files)
+	sort.Slice(candidates, func(i, j int) bool {
+		if !candidates[i].summary.LastActivity.Equal(candidates[j].summary.LastActivity) {
+			return candidates[i].summary.LastActivity.After(candidates[j].summary.LastActivity)
+		}
+		return candidates[i].summary.ID < candidates[j].summary.ID
+	})
+	if opts.Limit > 0 && len(candidates) > opts.Limit {
+		candidates = candidates[:opts.Limit]
+	}
+	out := make([]ConversationToolUsage, len(candidates))
+	for i := range candidates {
+		out[i] = candidates[i].row
+	}
+	return out, nil
+}
+
+func workspaceMatches(workspace string, filter *string) bool {
+	return filter == nil || workspace == *filter
+}
+
+// inPeriod applies the shared half-open generation-time range. A zero
+// timestamp cannot be placed in a period and is therefore never matched.
+func inPeriod(timestamp, since, before time.Time) bool {
+	if timestamp.IsZero() || (!since.IsZero() && timestamp.Before(since)) {
+		return false
+	}
+	return before.IsZero() || timestamp.Before(before)
+}
+
+func clippedConversationSummary(entry *fileSummary, since, before time.Time) (ConversationSummary, bool) {
+	sum := ConversationSummary{
+		ID:        entry.summary.ID,
+		Title:     entry.summary.Title,
+		Workspace: entry.summary.Workspace,
+		Branch:    entry.summary.Branch,
+		Status:    "ok",
+	}
+	agents := map[string]struct{}{}
+	models := map[string]struct{}{}
+	var seen, hasError bool
+	for _, period := range entry.generations {
+		if !inPeriod(period.timestamp, since, before) {
+			continue
+		}
+		seen = true
+		sum.Calls++
+		usage := period.usage.toSDK()
+		sum.InputTokens += usage.InputTokens
+		sum.OutputTokens += usage.OutputTokens
+		sum.TotalTokens += totalTokensForView(usage, period.provider)
+		buckets := disjointTokenUsage(usage, period.provider)
+		sum.TokenBuckets = sum.TokenBuckets.plus(buckets)
+		model := period.model
+		if sum.TokenBucketsByModel == nil {
+			sum.TokenBucketsByModel = map[string]TokenBuckets{}
+		}
+		sum.TokenBucketsByModel[model] = sum.TokenBucketsByModel[model].plus(buckets)
+		startedAt := period.startedAt
+		if startedAt.IsZero() {
+			startedAt = period.timestamp
+		}
+		if sum.StartedAt.IsZero() || startedAt.Before(sum.StartedAt) {
+			sum.StartedAt = startedAt
+		}
+		activity := period.activity
+		if activity.IsZero() {
+			activity = period.timestamp
+		}
+		if activity.After(sum.LastActivity) {
+			sum.LastActivity = activity
+		}
+		if period.agent != "" {
+			agents[period.agent] = struct{}{}
+		}
+		if model != "" {
+			models[model] = struct{}{}
+		}
+		if period.hasError {
+			hasError = true
+		}
+		if strings.Contains(period.agent, "/") {
+			sum.Subagents++
+		}
+	}
+	if !seen {
+		return ConversationSummary{}, false
+	}
+	sum.Agents = sortedKeys(agents)
+	sum.Models = sortedKeys(models)
+	if hasError {
+		sum.Status = "err"
+	}
+	return sum, true
 }
 
 // conversationFile is one conversation JSONL file with the modification
@@ -309,23 +556,29 @@ func (b TokenBuckets) plus(o TokenBuckets) TokenBuckets {
 	}
 }
 
-// TokenUsagePoint is one generation's disjoint token buckets tagged
-// with the model/provider that produced them and the time it ran. The
-// viewer re-buckets these by time to draw the token-usage chart. The
-// embedded TokenBuckets fields flatten into the JSON object.
+// TokenUsagePoint is one generation's call count and disjoint token buckets
+// tagged with the model/provider that produced them and the time it ran. The
+// viewer re-buckets these by time to draw usage charts. The embedded
+// TokenBuckets fields flatten into the JSON object.
 type TokenUsagePoint struct {
 	Timestamp time.Time `json:"t"`
 	Model     string    `json:"model,omitempty"`
 	Provider  string    `json:"provider,omitempty"`
+	Calls     int       `json:"calls"`
 	TokenBuckets
 }
 
 // TokenUsageOptions bounds one token-metrics request.
 type TokenUsageOptions struct {
-	// Since drops generations older than it, and drops whole conversation
-	// files whose modification time is below it before any decode. Zero
-	// means no lower bound.
+	// Since is an inclusive generation-time lower bound. Zero means no lower
+	// bound.
 	Since time.Time
+	// Before is an exclusive generation-time upper bound. Zero means no upper
+	// bound.
+	Before time.Time
+	// Workspace filters by the conversation's lifetime cwd when non-nil. The
+	// empty string selects conversations with no known cwd.
+	Workspace *string
 	// Interval is the bucket width. Zero asks for a derived interval that
 	// keeps the response under maxTokenUsageBuckets buckets.
 	Interval time.Duration
@@ -356,10 +609,9 @@ var tokenUsageIntervals = []time.Duration{
 	7 * 24 * time.Hour,
 }
 
-// TokenUsagePoints returns token usage aggregated per interval bucket and
-// model, oldest-first, plus the interval used. Empty buckets are omitted,
-// so the response holds at most one point per model and provider per
-// non-empty bucket.
+// TokenUsagePoints returns model calls and token usage aggregated per interval
+// bucket and model, oldest-first, plus the interval used. The response holds at
+// most one point per model and provider per bucket.
 //
 // A missing conversations dir yields no points (first-launch case).
 //
@@ -395,7 +647,10 @@ func (s *Storage) TokenUsagePoints(opts TokenUsageOptions) ([]TokenUsagePoint, t
 		// file left with no point is skipped rather than ending the walk: a copy
 		// or restore that rewrote modification times orders the files by
 		// something other than their activity.
-		entryFirst, entryLast, ok := entry.bounds(opts.Since)
+		if !workspaceMatches(entry.summary.Workspace, opts.Workspace) {
+			continue
+		}
+		entryFirst, entryLast, ok := entry.bounds(opts.Since, opts.Before)
 		if !ok {
 			continue
 		}
@@ -417,7 +672,7 @@ func (s *Storage) TokenUsagePoints(opts TokenUsageOptions) ([]TokenUsagePoint, t
 	buckets := newTokenUsageBuckets(interval, pointCount)
 	for _, entry := range eligible {
 		for _, p := range entry.points {
-			if !opts.Since.IsZero() && p.Timestamp.Before(opts.Since) {
+			if !inPeriod(p.Timestamp, opts.Since, opts.Before) {
 				continue
 			}
 			buckets.add(p)
@@ -468,6 +723,7 @@ func (b *tokenUsageBuckets) add(p TokenUsagePoint) {
 	start := intervalStart(p.Timestamp, b.interval)
 	key := tokenBucketKey{start: start.UnixNano(), model: p.Model, provider: p.Provider}
 	if idx, ok := b.indexByKey[key]; ok {
+		b.out[idx].Calls += p.Calls
 		b.out[idx].TokenBuckets = b.out[idx].TokenBuckets.plus(p.TokenBuckets)
 		return
 	}
@@ -476,6 +732,7 @@ func (b *tokenUsageBuckets) add(p TokenUsagePoint) {
 		Timestamp:    start,
 		Model:        p.Model,
 		Provider:     p.Provider,
+		Calls:        p.Calls,
 		TokenBuckets: p.TokenBuckets,
 	})
 }
@@ -525,16 +782,12 @@ func nanosRepresentable(t time.Time) bool {
 	return !t.Before(time.Unix(0, math.MinInt64)) && !t.After(time.Unix(0, math.MaxInt64))
 }
 
-// tokenUsagePoint builds a TokenUsagePoint from one record. ok is false
-// when the generation recorded no tokens, has no usable timestamp, or
-// carries a timestamp bucketing cannot place, so the caller can skip it
-// rather than plot a zero-height bar at the epoch.
+// tokenUsagePoint builds a TokenUsagePoint from one record. ok is false when
+// the generation has no usable timestamp or carries a timestamp bucketing
+// cannot place.
 func tokenUsagePoint(rec summaryRecord) (TokenUsagePoint, bool) {
 	gen := rec.Generation
 	buckets := disjointTokenUsage(gen.Usage.toSDK(), gen.Model.Provider)
-	if buckets == (TokenBuckets{}) {
-		return TokenUsagePoint{}, false
-	}
 	when := generationTime(gen, rec.ReceivedAt)
 	if when.IsZero() || !nanosRepresentable(when) {
 		return TokenUsagePoint{}, false
@@ -543,6 +796,7 @@ func tokenUsagePoint(rec summaryRecord) (TokenUsagePoint, bool) {
 		Timestamp:    when,
 		Model:        gen.modelName(),
 		Provider:     gen.Model.Provider,
+		Calls:        1,
 		TokenBuckets: buckets,
 	}, true
 }
@@ -802,11 +1056,14 @@ func decodeGenerationRecord(line []byte) (scannedGenerationRecord, bool) {
 	}
 	var gen storedGeneration
 	if err := json.Unmarshal(rec.Generation, &gen); err != nil {
-		var summary summaryGeneration
+		var summary summaryGenerationCore
 		if err := json.Unmarshal(rec.Generation, &summary); err != nil {
 			return scannedGenerationRecord{}, false
 		}
-		gen = storedGeneration{summaryGeneration: summary, ConversationID: rec.ConversationID}
+		gen = storedGeneration{
+			summaryGeneration: summaryGeneration{summaryGenerationCore: summary},
+			ConversationID:    rec.ConversationID,
+		}
 	}
 	return scannedGenerationRecord{record: rec, gen: gen}, true
 }
@@ -830,8 +1087,8 @@ func (r scannedGenerationRecord) generationID() string {
 }
 
 // scanLatestSummaryRecords walks one per-conversation JSONL file decoding
-// only the summary projection, no input or output message trees, and
-// keeping the last record per generation id.
+// the summary and narrow tool projections, and keeps the last record per
+// generation id.
 func scanLatestSummaryRecords(path string, visit func(summaryRecord)) (int, error) {
 	return scanLatestJSONL(path, decodeSummaryRecord, func(r summaryRecord) string {
 		return r.generationID()
@@ -840,10 +1097,19 @@ func scanLatestSummaryRecords(path string, visit func(summaryRecord)) (int, erro
 
 func decodeSummaryRecord(line []byte) (summaryRecord, bool) {
 	var rec summaryRecord
-	if err := json.Unmarshal(line, &rec); err != nil {
+	if err := json.Unmarshal(line, &rec); err == nil {
+		return rec, true
+	}
+	var fallback summaryRecordWithoutTools
+	if err := json.Unmarshal(line, &fallback); err != nil {
 		return summaryRecord{}, false
 	}
-	return rec, true
+	return summaryRecord{
+		ReceivedAt:     fallback.ReceivedAt,
+		GenerationID:   fallback.GenerationID,
+		ConversationID: fallback.ConversationID,
+		Generation:     summaryGeneration{summaryGenerationCore: fallback.Generation},
+	}, true
 }
 
 // extractTools walks the assistant's output messages and collects the

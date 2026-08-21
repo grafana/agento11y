@@ -117,6 +117,50 @@ func TestSummaryCache(t *testing.T) {
 	}
 }
 
+func TestDecodeFileSummaryTokenBucketsByModel(t *testing.T) {
+	s := newStorage(t)
+	writeGen(t, s, "conv-A", "g1", agento11y.Generation{
+		Model:     agento11y.ModelRef{Name: "model-a"},
+		StartedAt: mustParse(t, "2026-08-03T10:00:00Z"),
+		Usage: agento11y.TokenUsage{
+			InputTokens:          100,
+			OutputTokens:         20,
+			CacheReadInputTokens: 30,
+		},
+	}, "2026-08-03T10:00:01Z")
+	writeGen(t, s, "conv-A", "g2", agento11y.Generation{
+		Model:     agento11y.ModelRef{Name: "model-b"},
+		StartedAt: mustParse(t, "2026-08-03T10:01:00Z"),
+		Usage: agento11y.TokenUsage{
+			InputTokens:           40,
+			OutputTokens:          10,
+			CacheWriteInputTokens: 5,
+		},
+		Output: []agento11y.Message{{Parts: []agento11y.Part{{
+			ToolCall: &agento11y.ToolCall{ID: "call-1", Name: "Read"},
+		}}}},
+	}, "2026-08-03T10:01:01Z")
+
+	entry, err := s.summaries.get(conversationFileFor(t, s, "conv-A"))
+	require.NoError(t, err)
+	require.True(t, entry.ok)
+	require.Len(t, entry.summary.TokenBucketsByModel, 2)
+
+	var byModelTotal TokenBuckets
+	for _, buckets := range entry.summary.TokenBucketsByModel {
+		byModelTotal = byModelTotal.plus(buckets)
+	}
+	assert.Equal(t, entry.summary.TokenBuckets, byModelTotal)
+	assert.Equal(t, TokenBuckets{FreshInput: 100, CacheRead: 30, Output: 20}, entry.summary.TokenBucketsByModel["model-a"])
+	assert.Equal(t, TokenBuckets{FreshInput: 40, CacheWrite: 5, Output: 10}, entry.summary.TokenBucketsByModel["model-b"])
+	require.Len(t, entry.generations, 2, "the cache retains narrow period records")
+	assert.Equal(t, mustParse(t, "2026-08-03T10:01:00Z"), entry.generations[1].timestamp)
+	require.Len(t, entry.toolOccurrences, 1, "the cache retains timestamped tool occurrences")
+	assert.Equal(t, toolOccurrence{
+		Timestamp: mustParse(t, "2026-08-03T10:01:00Z"), Name: "Read",
+	}, entry.toolOccurrences[0])
+}
+
 // TestSummaryCacheHitDoesNotOpenTheFile proves the validation is what saves
 // the read: the file is made unreadable after the first decode, and the
 // second get still answers.
