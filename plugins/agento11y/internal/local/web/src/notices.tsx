@@ -83,7 +83,7 @@ export function Notice({ kind = 'info', title, children }: NoticeProps) {
 const PAGE_MAX_WIDTH = 1392;
 export const SURFACE_BG = 'rgba(24,27,31,0.88)';
 export const ACTIVE_PILL_BG = 'var(--action-selected, rgba(204,204,220,0.08))';
-const PANEL_BG = 'rgba(17,18,23,0.42)';
+export const PANEL_BG = 'rgba(17,18,23,0.42)';
 
 interface BoxProps extends HTMLAttributes<HTMLElement> {
   as?: ElementType;

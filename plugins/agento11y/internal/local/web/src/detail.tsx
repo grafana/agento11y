@@ -2704,10 +2704,12 @@ interface TraceDetailViewProps {
   detail: ConversationDetail | null;
   loading: boolean;
   error: string | null;
+  backHref: string;
+  backLabel: string;
   onBack: () => void;
 }
 
-export function TraceDetailView({ conv, detail, loading, error, onBack }: TraceDetailViewProps) {
+export function TraceDetailView({ conv, detail, loading, error, backHref, backLabel, onBack }: TraceDetailViewProps) {
   const steps = useMemo(() => (detail ? detail.generations : []), [detail]);
   const turns = useMemo(() => buildTranscript(steps), [steps]);
   const metrics = useMemo(() => buildTranscriptMetrics(steps, turns), [steps, turns]);
@@ -2767,7 +2769,8 @@ export function TraceDetailView({ conv, detail, loading, error, onBack }: TraceD
         }}
       >
         <a
-          href="/"
+          href={backHref}
+          aria-label={`Back to ${backLabel}`}
           onClick={(event) => {
             if (!isPlainLeftClick(event)) return;
             event.preventDefault();
@@ -2784,7 +2787,7 @@ export function TraceDetailView({ conv, detail, loading, error, onBack }: TraceD
           onMouseEnter={(event) => (event.currentTarget.style.color = 'var(--fg-max)')}
           onMouseLeave={(event) => (event.currentTarget.style.color = 'var(--fg2)')}
         >
-          Sessions
+          {backLabel}
         </a>
         <Icon name="cright" size={11} style={{ color: 'var(--fg3)', flexShrink: 0 }} />
         <span

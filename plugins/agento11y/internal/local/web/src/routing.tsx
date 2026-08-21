@@ -25,6 +25,17 @@ export function conversationPath(id: string) {
   return `/conversations/${encodeURIComponent(id)}`;
 }
 
+export function conversationsPath(workspace: string | null = null) {
+  if (workspace == null) return '/';
+  return `/?workspace=${encodeURIComponent(workspace)}`;
+}
+
+export function workspaceFromLocation() {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  return params.has('workspace') ? (params.get('workspace') ?? '') : null;
+}
+
 export function generationIDFromHash() {
   const raw = (window.location.hash || '').replace(/^#/, '');
   if (!raw) return '';
@@ -39,6 +50,12 @@ export function generationIDFromHash() {
 export function settingsRouteActive() {
   if (typeof window === 'undefined') return false;
   return window.location.pathname.replace(/\/$/, '') === '/settings';
+}
+
+// analyticsRouteActive reports whether the URL is the Analytics tab.
+export function analyticsRouteActive() {
+  if (typeof window === 'undefined') return false;
+  return window.location.pathname.replace(/\/$/, '') === '/analytics';
 }
 
 // The mouse-event fields the test reads. React's synthetic mouse events and

@@ -2,14 +2,14 @@ package local
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
-// fileSummary holds one conversation file's two decoded projections, the
-// list's conversation summary and the token chart's usage points, against
-// the size and modification time they were decoded at.
+// fileSummary holds one conversation file's list, token, and tool projections
+// against the size and modification time they were decoded at.
 //
 // Conversation files are append-only: appendJSONL opens with O_APPEND and
 // never O_TRUNC, and nothing in the package rewrites or compacts them. So a
@@ -33,34 +33,42 @@ type fileSummary struct {
 	first  time.Time
 	last   time.Time
 
+	// generations is the narrow per-generation projection used to build
+	// period-clipped conversation rows. toolOccurrences holds one timestamped
+	// occurrence per call (or orphan result), after calls and results have been
+	// paired across generations.
+	generations     []periodGeneration
+	toolOccurrences []toolOccurrence
+
 	// skipped counts the lines no projection could decode. A reader adds it
 	// on every hit, so the count it reports describes the store rather than
 	// the state of the cache.
 	skipped int
 }
 
-// bounds returns the oldest and newest point timestamp at or after since,
-// and whether the entry holds any such point. A file whose oldest point is
-// already at or after the bound answers from first and last without walking
-// the points, which is every file except the one the bound cuts through.
-func (e *fileSummary) bounds(since time.Time) (first, last time.Time, ok bool) {
+// bounds returns the oldest and newest token point in [since, before), and
+// whether the entry holds one. Points need not be in timestamp order because
+// imports preserve source record order.
+func (e *fileSummary) bounds(since, before time.Time) (first, last time.Time, ok bool) {
 	if len(e.points) == 0 {
 		return time.Time{}, time.Time{}, false
 	}
-	if since.IsZero() || !e.first.Before(since) {
-		return e.first, e.last, true
-	}
-	if e.last.Before(since) {
-		return time.Time{}, time.Time{}, false
+	if before.IsZero() {
+		if since.IsZero() || !e.first.Before(since) {
+			return e.first, e.last, true
+		}
+		if e.last.Before(since) {
+			return time.Time{}, time.Time{}, false
+		}
 	}
 	for _, p := range e.points {
-		if p.Timestamp.Before(since) {
+		if !inPeriod(p.Timestamp, since, before) {
 			continue
 		}
 		if !ok || p.Timestamp.Before(first) {
 			first = p.Timestamp
 		}
-		if p.Timestamp.After(last) {
+		if !ok || p.Timestamp.After(last) {
 			last = p.Timestamp
 		}
 		ok = true
@@ -213,16 +221,176 @@ func (c *summaryCache) prune(files []conversationFile) {
 	}
 }
 
-// decodeFileSummary reads one per-conversation JSONL file and fills both
-// projections in a single pass, so a list request warms what the token
-// chart reads and the other way round. It decodes the summary projection
-// only, so a conversation holding megabytes of messages costs the line scan
-// and nothing more.
+// periodGeneration is the cached, narrow record used by period analytics.
+// Its timestamp is generationTime: this, rather than completion time or file
+// modification time, decides whether the generation belongs to a request.
+type periodGeneration struct {
+	usage     storedUsage
+	provider  string
+	model     string
+	agent     string
+	startedAt time.Time
+	timestamp time.Time
+	activity  time.Time
+	hasError  bool
+}
+
+type toolOccurrence struct {
+	Timestamp time.Time
+	Name      string
+	Failed    bool
+}
+
+// toolUsageCounter pairs result events to call occurrences while preserving
+// duplicate call IDs. A keyed result consumes the oldest unmatched call with
+// that ID; once no call remains, later cumulative copies of the same keyed
+// result are ignored. Anonymous results cannot be identified as cumulative,
+// so each one consumes one same-name call or becomes its own orphan.
+type toolUsageCounter struct {
+	occurrences      []toolOccurrence
+	pendingByID      map[string][]int
+	pendingAnonymous map[string][]int
+	seenResultID     map[string]bool
+	inputResultsByID map[string][]toolProbeResult
+}
+
+func (c *toolUsageCounter) addGeneration(gen summaryGeneration, timestamp time.Time) {
+	// Cursor-style results arrive in the next request's input. They must be
+	// observed before Pi-style calls/results emitted in this output.
+	inputByID := map[string][]toolProbeResult{}
+	for _, message := range gen.ToolInput {
+		for _, part := range message.Parts {
+			if part.ToolResult == nil {
+				continue
+			}
+			id := strings.TrimSpace(part.ToolResult.ToolCallID)
+			if id == "" {
+				c.addResult(*part.ToolResult, timestamp)
+				continue
+			}
+			inputByID[id] = append(inputByID[id], *part.ToolResult)
+		}
+	}
+	if c.inputResultsByID == nil {
+		c.inputResultsByID = map[string][]toolProbeResult{}
+	}
+	for id, current := range inputByID {
+		previous := c.inputResultsByID[id]
+		common := 0
+		for common < len(previous) && common < len(current) && sameToolResult(previous[common], current[common]) {
+			common++
+		}
+		// A pending reused ID does not make an unchanged cumulative result new.
+		for _, result := range current[common:] {
+			c.addResult(result, timestamp)
+		}
+		c.inputResultsByID[id] = append([]toolProbeResult(nil), current...)
+	}
+	// Pi can emit a result in output beside its call; preserve part order so
+	// that result pairs to the call immediately before it.
+	for _, message := range gen.ToolOutput {
+		for _, part := range message.Parts {
+			switch {
+			case part.ToolCall != nil:
+				c.addCall(*part.ToolCall, timestamp)
+			case part.ToolResult != nil:
+				c.addResult(*part.ToolResult, timestamp)
+			}
+		}
+	}
+}
+
+func sameToolResult(a, b toolProbeResult) bool {
+	return strings.TrimSpace(a.ToolCallID) == strings.TrimSpace(b.ToolCallID) &&
+		strings.TrimSpace(a.Name) == strings.TrimSpace(b.Name) && a.IsError == b.IsError
+}
+
+func (c *toolUsageCounter) addCall(call toolProbeCall, timestamp time.Time) {
+	id := strings.TrimSpace(call.ID)
+	name := strings.TrimSpace(call.Name)
+	idx := len(c.occurrences)
+	c.occurrences = append(c.occurrences, toolOccurrence{Timestamp: timestamp, Name: name})
+	if id != "" {
+		if c.pendingByID == nil {
+			c.pendingByID = map[string][]int{}
+		}
+		c.pendingByID[id] = append(c.pendingByID[id], idx)
+		return
+	}
+	if name != "" {
+		if c.pendingAnonymous == nil {
+			c.pendingAnonymous = map[string][]int{}
+		}
+		c.pendingAnonymous[name] = append(c.pendingAnonymous[name], idx)
+	}
+}
+
+func (c *toolUsageCounter) addResult(result toolProbeResult, timestamp time.Time) {
+	id := strings.TrimSpace(result.ToolCallID)
+	name := strings.TrimSpace(result.Name)
+	if id != "" {
+		if pending := c.pendingByID[id]; len(pending) > 0 {
+			idx := pending[0]
+			c.pendingByID[id] = pending[1:]
+			if c.occurrences[idx].Name == "" {
+				c.occurrences[idx].Name = name
+			}
+			c.occurrences[idx].Failed = c.occurrences[idx].Failed || result.IsError
+			if c.seenResultID == nil {
+				c.seenResultID = map[string]bool{}
+			}
+			c.seenResultID[id] = true
+			return
+		}
+		if c.seenResultID[id] {
+			return // repeated cumulative result for an already-accounted call
+		}
+		if c.seenResultID == nil {
+			c.seenResultID = map[string]bool{}
+		}
+		c.seenResultID[id] = true
+		c.occurrences = append(c.occurrences, toolOccurrence{Timestamp: timestamp, Name: name, Failed: result.IsError})
+		return
+	}
+	if pending := c.pendingAnonymous[name]; name != "" && len(pending) > 0 {
+		idx := pending[0]
+		c.pendingAnonymous[name] = pending[1:]
+		c.occurrences[idx].Failed = c.occurrences[idx].Failed || result.IsError
+		return
+	}
+	c.occurrences = append(c.occurrences, toolOccurrence{Timestamp: timestamp, Name: name, Failed: result.IsError})
+}
+
+func toolUsage(occurrences []toolOccurrence, since, before time.Time) []ToolUsage {
+	counts := map[string]ToolUsage{}
+	for _, occurrence := range occurrences {
+		if !inPeriod(occurrence.Timestamp, since, before) || occurrence.Name == "" {
+			continue
+		}
+		usage := counts[occurrence.Name]
+		usage.Name = occurrence.Name
+		usage.Calls++
+		if occurrence.Failed {
+			usage.Failures++
+		}
+		counts[occurrence.Name] = usage
+	}
+	out := make([]ToolUsage, 0, len(counts))
+	for _, usage := range counts {
+		out = append(out, usage)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// decodeFileSummary reads one per-conversation JSONL file and fills the
+// list, token, and tool projections in a single pass.
 func decodeFileSummary(f conversationFile) (*fileSummary, error) {
 	entry := &fileSummary{size: f.size, modTime: f.modTime}
 	agents := map[string]struct{}{}
 	models := map[string]struct{}{}
 	var sum ConversationSummary
+	var tools toolUsageCounter
 	var hasError, seen bool
 
 	skipped, err := scanLatestSummaryRecords(f.path, func(rec summaryRecord) {
@@ -236,7 +404,14 @@ func decodeFileSummary(f conversationFile) (*fileSummary, error) {
 		sum.InputTokens += usage.InputTokens
 		sum.OutputTokens += usage.OutputTokens
 		sum.TotalTokens += totalTokensForView(usage, gen.Model.Provider)
-		sum.TokenBuckets = sum.TokenBuckets.plus(disjointTokenUsage(usage, gen.Model.Provider))
+		disjoint := disjointTokenUsage(usage, gen.Model.Provider)
+		sum.TokenBuckets = sum.TokenBuckets.plus(disjoint)
+		name := gen.modelName()
+		if sum.TokenBucketsByModel == nil {
+			sum.TokenBucketsByModel = make(map[string]TokenBuckets, 1)
+		}
+		// The empty key keeps unlabelled usage in the reconciliation total.
+		sum.TokenBucketsByModel[name] = sum.TokenBucketsByModel[name].plus(disjoint)
 
 		if !gen.StartedAt.IsZero() && (sum.StartedAt.IsZero() || gen.StartedAt.Before(sum.StartedAt)) {
 			sum.StartedAt = gen.StartedAt
@@ -249,7 +424,7 @@ func decodeFileSummary(f conversationFile) (*fileSummary, error) {
 		if gen.AgentName != "" {
 			agents[gen.AgentName] = struct{}{}
 		}
-		if name := gen.modelName(); name != "" {
+		if name != "" {
 			models[name] = struct{}{}
 		}
 		if sum.Title == "" && gen.title() != "" {
@@ -271,6 +446,19 @@ func decodeFileSummary(f conversationFile) (*fileSummary, error) {
 		if strings.Contains(gen.AgentName, "/") {
 			sum.Subagents++
 		}
+
+		timestamp := generationTime(gen, r.ReceivedAt)
+		entry.generations = append(entry.generations, periodGeneration{
+			usage:     gen.Usage,
+			provider:  gen.Model.Provider,
+			model:     name,
+			agent:     gen.AgentName,
+			startedAt: gen.StartedAt,
+			timestamp: timestamp,
+			activity:  when,
+			hasError:  gen.CallError != "",
+		})
+		tools.addGeneration(gen, timestamp)
 
 		if p, ok := tokenUsagePoint(rec); ok {
 			entry.points = append(entry.points, p)
@@ -295,7 +483,11 @@ func decodeFileSummary(f conversationFile) (*fileSummary, error) {
 	if hasError {
 		sum.Status = "err"
 	}
+	if sum.ID == "" {
+		sum.ID = f.id
+	}
 	entry.summary = sum
+	entry.toolOccurrences = tools.occurrences
 	entry.ok = true
 	return entry, nil
 }

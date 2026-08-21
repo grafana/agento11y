@@ -191,16 +191,20 @@ func (g storedGeneration) skillViews() []SkillView {
 	return out
 }
 
-// summaryRecord is one JSONL line decoded down to the fields the
-// conversation list and the token chart read. It exists so a list or
-// metrics request never materialises the stored input and output message
-// trees: encoding/json skips the fields this struct omits, and a stored
-// tree of a few megabytes then costs nothing beyond the line scan.
+// summaryRecord is one JSONL line decoded down to the fields the list and
+// metrics endpoints read. Its message projection omits text and tool content.
 type summaryRecord struct {
 	ReceivedAt     string            `json:"received_at"`
 	GenerationID   string            `json:"generation_id"`
 	ConversationID string            `json:"conversation_id"`
 	Generation     summaryGeneration `json:"generation"`
+}
+
+type summaryRecordWithoutTools struct {
+	ReceivedAt     string                `json:"received_at"`
+	GenerationID   string                `json:"generation_id"`
+	ConversationID string                `json:"conversation_id"`
+	Generation     summaryGenerationCore `json:"generation"`
 }
 
 func (r summaryRecord) generationID() string {
@@ -210,11 +214,9 @@ func (r summaryRecord) generationID() string {
 	return strings.TrimSpace(r.Generation.ID)
 }
 
-// summaryGeneration is the stored generation projected onto the fields the
-// list and the token chart read. storedGeneration embeds it, so every
-// field here is shared with the full decode by construction. Tags carry
-// the agent's per-session context (cwd, git.branch, entrypoint, …).
-type summaryGeneration struct {
+// summaryGenerationCore excludes messages so malformed message data can
+// fall back without dropping the generation summary.
+type summaryGenerationCore struct {
 	ID                string             `json:"id,omitempty"`
 	ConversationTitle string             `json:"conversation_title,omitempty"`
 	AgentName         string             `json:"agent_name,omitempty"`
@@ -228,10 +230,36 @@ type summaryGeneration struct {
 	Tags              map[string]string  `json:"tags,omitempty"`
 }
 
+type summaryGeneration struct {
+	summaryGenerationCore
+	ToolInput  []toolProbeMessage `json:"input,omitempty"`
+	ToolOutput []toolProbeMessage `json:"output,omitempty"`
+}
+
+type toolProbeMessage struct {
+	Parts []toolProbePart `json:"parts"`
+}
+
+type toolProbePart struct {
+	ToolCall   *toolProbeCall   `json:"tool_call,omitempty"`
+	ToolResult *toolProbeResult `json:"tool_result,omitempty"`
+}
+
+type toolProbeCall struct {
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name"`
+}
+
+type toolProbeResult struct {
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	Name       string `json:"name,omitempty"`
+	IsError    bool   `json:"is_error,omitempty"`
+}
+
 // title is the conversation title a generation carries: the explicit field
 // first, then the metadata key the SDK writes. storedGeneration promotes
 // this method, so the list and the detail view read the same rule.
-func (g summaryGeneration) title() string {
+func (g summaryGenerationCore) title() string {
 	if strings.TrimSpace(g.ConversationTitle) != "" {
 		return g.ConversationTitle
 	}
@@ -246,7 +274,7 @@ func (g summaryGeneration) title() string {
 
 // modelName prefers the model the provider answered with over the model the
 // request asked for.
-func (g summaryGeneration) modelName() string {
+func (g summaryGenerationCore) modelName() string {
 	if g.ResponseModel != "" {
 		return g.ResponseModel
 	}

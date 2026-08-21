@@ -32,6 +32,7 @@ export interface ConversationSummary {
   output_tokens: number;
   total_tokens: number;
   token_buckets: TokenBuckets;
+  token_buckets_by_model?: Record<string, TokenBuckets>;
   agents: string[];
   models: string[];
   /** "ok", or "err" when a generation in the conversation recorded a call error. */
@@ -44,6 +45,22 @@ export interface ConversationSummary {
 export interface ConversationListResponse {
   conversations: ConversationSummary[];
   total_conversations: number;
+}
+
+export interface ConversationMetricsAggregate {
+  calls: number;
+  errored: number;
+  agents: number;
+  workspaces: number;
+  token_buckets: TokenBuckets;
+  token_buckets_by_model: Record<string, TokenBuckets>;
+  models: string[];
+}
+
+export interface ConversationMetricsResponse {
+  aggregate: ConversationMetricsAggregate;
+  conversations: ConversationSummary[];
+  matched_conversations: number;
 }
 
 export type MessageRole = 'user' | 'assistant' | 'tool' | 'system' | string;
@@ -134,11 +151,27 @@ export interface TokenUsagePoint extends TokenBuckets {
   t: string;
   model?: string;
   provider?: string;
+  calls: number;
 }
 
 export interface TokenUsageResponse {
   points: TokenUsagePoint[];
   interval_seconds: number;
+}
+
+export interface ToolUsage {
+  name: string;
+  calls: number;
+  failures: number;
+}
+
+export interface ConversationToolUsage {
+  id: string;
+  tools: ToolUsage[];
+}
+
+export interface ToolUsageResponse {
+  conversations: ConversationToolUsage[];
 }
 
 /** SearchHit in search.go: one row of GET /api/v1/search. */
