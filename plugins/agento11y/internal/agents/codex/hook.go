@@ -46,7 +46,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	case "SessionStart":
 		hook.SessionStart(payload, cfg, logger)
 	case "UserPromptSubmit":
-		hook.UserPromptSubmit(payload, cfg, logger)
+		hook.UserPromptSubmit(ctx, stdout, payload, cfg, logger)
 	case "PreToolUse":
 		hook.PreToolUse(ctx, stdout, payload, cfg, logger)
 	case "PostToolUse":

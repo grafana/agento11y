@@ -145,6 +145,19 @@ func TestHookEventRouting(t *testing.T) {
 			},
 		},
 		{
+			name: "UserPromptSubmit does not process transcript",
+			setup: func(t *testing.T, dir string) hookInput {
+				t.Helper()
+				return hookInput{
+					HookEventName:  "UserPromptSubmit",
+					SessionID:      "prompt-route",
+					TranscriptPath: filepath.Join(dir, "missing.jsonl"),
+					Prompt:         "hello",
+				}
+			},
+			wantMissingLogs: []string{"read transcript:", "raw lines"},
+		},
+		{
 			name: "unknown event does not process transcript",
 			setup: func(t *testing.T, dir string) hookInput {
 				t.Helper()
@@ -309,6 +322,130 @@ func TestHandlePreToolUse(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHandleUserPromptSubmit(t *testing.T) {
+	var calls atomic.Int32
+	var responseBody atomic.Value
+	responseBody.Store("")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		body, _ := responseBody.Load().(string)
+		if body == "" {
+			body = `{"action":"allow"}`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	tests := []struct {
+		name               string
+		env                map[string]string
+		serverResponds     string
+		expectServerCall   bool
+		wantStdoutContains []string
+		wantStdoutEmpty    bool
+	}{
+		{
+			name:            "disabled_by_default",
+			wantStdoutEmpty: true,
+		},
+		{
+			name:             "enabled_allow",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:   `{"action":"allow"}`,
+			expectServerCall: true,
+			wantStdoutEmpty:  true,
+		},
+		{
+			name:             "enabled_deny_writes_block_envelope",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:   `{"action":"deny","reason":"secret in prompt"}`,
+			expectServerCall: true,
+			wantStdoutContains: []string{
+				`"decision":"block"`,
+				`A Grafana Agent Observability policy`,
+				`secret in prompt`,
+			},
+		},
+		{
+			// Claude Code cannot apply a prompt transform.
+			name:             "enabled_allow_transform_stays_silent",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:   `{"action":"allow","transformed_input":{"messages":[{"role":"user","parts":[{"kind":"text","text":"[REDACTED]"}]}]}}`,
+			expectServerCall: true,
+			wantStdoutEmpty:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			envconfig.PinAliasEnvBlank(t)
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			t.Setenv("SIGIL_ENDPOINT", server.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+			t.Setenv("SIGIL_AUTH_TOKEN", "token")
+
+			calls.Store(0)
+			responseBody.Store(tt.serverResponds)
+
+			var stdout bytes.Buffer
+			var logs bytes.Buffer
+			input := &hookInput{
+				HookEventName:  "UserPromptSubmit",
+				SessionID:      "s1",
+				TranscriptPath: "/tmp/t.jsonl",
+				Prompt:         "my token is glc_secret",
+			}
+			st := state.Session{Model: "claude-sonnet-4"}
+
+			handleUserPromptSubmit(context.Background(), &stdout, input, st, AgentName, log.New(&logs, "", 0))
+
+			if tt.expectServerCall && calls.Load() == 0 {
+				t.Errorf("expected server call, got 0")
+			}
+			if !tt.expectServerCall && calls.Load() != 0 {
+				t.Errorf("expected no server call, got %d", calls.Load())
+			}
+			if tt.wantStdoutEmpty && stdout.Len() != 0 {
+				t.Errorf("stdout not empty: %q", stdout.String())
+			}
+			for _, want := range tt.wantStdoutContains {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("stdout missing %q\nfull output: %s", want, stdout.String())
+				}
+			}
+		})
+	}
+}
+
+// Hook must return nil because a non-zero exit runs the `sigil` fallback and
+// sends the prompt.
+func TestHook_UserPromptSubmitDenyReturnsNil(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"action":"deny","reason":"secret in prompt"}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	envconfig.PinAliasEnvBlank(t)
+	t.Setenv("SIGIL_GUARDS_ENABLED", "true")
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+
+	stdin := strings.NewReader(`{"hook_event_name":"UserPromptSubmit","session_id":"s1","transcript_path":"/tmp/t.jsonl","prompt":"my token is glc_secret"}`)
+	var stdout bytes.Buffer
+	if err := Hook(context.Background(), stdin, &stdout, log.New(io.Discard, "", 0)); err != nil {
+		t.Fatalf("Hook returned %v; a non-zero exit would run the sigil fallback", err)
+	}
+	if !strings.Contains(stdout.String(), `"decision":"block"`) {
+		t.Errorf("stdout = %q, want a block envelope", stdout.String())
 	}
 }
 

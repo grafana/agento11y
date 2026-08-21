@@ -2,13 +2,19 @@ package hook
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"log"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/grafana/agento11y/go/agento11y"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 // In metadata_only mode the user prompt gets stripped at emit time, so the
@@ -31,7 +37,7 @@ func TestBeforeSubmit_GatesUserPromptByMode(t *testing.T) {
 			logger := log.New(&bytes.Buffer{}, "", 0)
 			cfg := config.Config{ContentCapture: tc.mode}
 
-			BeforeSubmit(Payload{
+			BeforeSubmit(context.Background(), io.Discard, Payload{
 				HookEventName:  "beforeSubmitPrompt",
 				ConversationID: "conv",
 				GenerationID:   "gen",
@@ -54,12 +60,51 @@ func TestBeforeSubmit_GatesUserPromptByMode(t *testing.T) {
 	}
 }
 
+// A denied message must not become the conversation title because the mapper
+// repeats the title on every later generation.
+func TestBeforeSubmit_DenyCapturesNothing(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	envconfig.PinAliasEnvBlank(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"action":"deny","reason":"secret in prompt"}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("SIGIL_GUARDS_ENABLED", "true")
+	t.Setenv("SIGIL_ENDPOINT", server.URL)
+	t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+	t.Setenv("SIGIL_AUTH_TOKEN", "token")
+
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
+
+	var stdout bytes.Buffer
+	BeforeSubmit(context.Background(), &stdout, Payload{
+		HookEventName:  "beforeSubmitPrompt",
+		ConversationID: "conv",
+		GenerationID:   "gen",
+		Prompt:         "my token is glc_secret",
+	}, cfg, logger)
+
+	if !strings.Contains(stdout.String(), `"continue":false`) {
+		t.Fatalf("stdout = %q; want the stop envelope", stdout.String())
+	}
+	if sess := fragment.LoadSession("conv", logger); sess != nil && sess.ConversationTitle != "" {
+		t.Errorf("ConversationTitle = %q; a denied message must not become the title", sess.ConversationTitle)
+	}
+	if got := fragment.LoadTolerant("conv", "gen", logger); got != nil && got.UserPrompt != "" {
+		t.Errorf("UserPrompt = %q; a denied message must not reach the fragment", got.UserPrompt)
+	}
+}
+
 func TestBeforeSubmit_MissingConversationIDSilent(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	var buf bytes.Buffer
 	logger := log.New(&buf, "", 0)
 	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
-	BeforeSubmit(Payload{HookEventName: "beforeSubmitPrompt"}, cfg, logger)
+	BeforeSubmit(context.Background(), io.Discard, Payload{HookEventName: "beforeSubmitPrompt"}, cfg, logger)
 	if !bytes.Contains(buf.Bytes(), []byte("skipping")) {
 		t.Errorf("expected 'skipping' log; got %q", buf.String())
 	}
@@ -70,7 +115,7 @@ func TestBeforeSubmit_StampsTitleWithoutGenerationID(t *testing.T) {
 	logger := log.New(&bytes.Buffer{}, "", 0)
 	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 
-	BeforeSubmit(Payload{
+	BeforeSubmit(context.Background(), io.Discard, Payload{
 		HookEventName:  "beforeSubmitPrompt",
 		ConversationID: "conv",
 		Prompt:         "list go files",
@@ -90,13 +135,13 @@ func TestBeforeSubmit_FirstPromptWinsTitle(t *testing.T) {
 	logger := log.New(&bytes.Buffer{}, "", 0)
 	cfg := config.Config{ContentCapture: agento11y.ContentCaptureModeFull}
 
-	BeforeSubmit(Payload{
+	BeforeSubmit(context.Background(), io.Discard, Payload{
 		HookEventName:  "beforeSubmitPrompt",
 		ConversationID: "conv",
 		GenerationID:   "gen-1",
 		Prompt:         "first prompt",
 	}, cfg, logger)
-	BeforeSubmit(Payload{
+	BeforeSubmit(context.Background(), io.Discard, Payload{
 		HookEventName:  "beforeSubmitPrompt",
 		ConversationID: "conv",
 		GenerationID:   "gen-2",
@@ -125,7 +170,7 @@ func TestBeforeSubmit_TitleWriteKeepsSessionMetadata(t *testing.T) {
 		CursorVersion:  "2.0",
 		Timestamp:      "2026-04-28T12:00:00Z",
 	}, logger)
-	BeforeSubmit(Payload{
+	BeforeSubmit(context.Background(), io.Discard, Payload{
 		HookEventName:  "beforeSubmitPrompt",
 		ConversationID: "conv",
 		Prompt:         "list go files",

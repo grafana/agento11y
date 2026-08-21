@@ -106,7 +106,7 @@ function formatPromptDeny(reason: string | undefined): string {
 /** Fail-closed message for a prompt whose guard evaluation could not run. */
 function formatPromptEvalFailure(detail: string | undefined): string {
   let msg =
-    "agento11y could not evaluate the Grafana Agent Observability guard for this message, so it was blocked as a safety measure. Set AGENTO11Y_GUARDS_FAIL_OPEN=true to send it anyway.";
+    "agento11y could not evaluate the Grafana Agent Observability guard and blocked this message. Set AGENTO11Y_GUARDS_FAIL_OPEN=true in your shell or in ~/.config/agento11y/config.env. Restart the agent and resend.";
   const trimmed = detail?.trim();
   if (trimmed) {
     msg += ` Details: ${trimmed}`;

@@ -135,13 +135,16 @@ Captured prompt, assistant, and tool content is redacted before export. Set `AGE
 
 ## Guards
 
-Guards do two things when enabled: block tool calls that match a deny rule, and apply Transform rules to redact sensitive tool arguments. They're off by default:
+Guards apply [Agent Observability rules](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/guards/) to submitted messages and tool calls. 
+Guards can block tool calls that match a deny rule. They're off by default:
 
 ```sh
 AGENTO11Y_GUARDS_ENABLED=true agento11y copilot
 ```
 
 By default, transport errors and timeouts let the tool call through. Set `AGENTO11Y_GUARDS_FAIL_OPEN=false` to block tool calls on errors instead. Raise or lower `AGENTO11Y_GUARDS_TIMEOUT_MS` (default `1500`) to trade latency against tolerance for slow evaluators.
+
+Copilot does not support blocking messages with `preflight` guards. 
 
 ### Transform guards (redaction)
 

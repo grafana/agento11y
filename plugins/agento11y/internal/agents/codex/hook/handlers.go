@@ -66,7 +66,24 @@ func SessionStart(p Payload, _ config.Config, logger *log.Logger) {
 	}
 }
 
-func UserPromptSubmit(p Payload, cfg config.Config, logger *log.Logger) {
+// UserPromptSubmit evaluates preflight guards before capturing the prompt.
+// On denial it writes a block response, and Codex stops the turn.
+func UserPromptSubmit(ctx context.Context, stdout io.Writer, p Payload, cfg config.Config, logger *log.Logger) {
+	res := guard.EvaluatePrompt(ctx, cfg.Guards, guard.PromptInput{
+		AgentName:     cfg.Agent(),
+		ModelProvider: mapperutil.InferProvider(p.Model),
+		ModelName:     p.Model,
+		Prompt:        p.Prompt,
+	}, logger)
+	if res.Blocked() {
+		guard.WritePromptBlock(stdout, res.Reason)
+		return
+	}
+
+	capturePrompt(p, cfg, logger)
+}
+
+func capturePrompt(p Payload, cfg config.Config, logger *log.Logger) {
 	if p.SessionID == "" || p.TurnID == "" {
 		logger.Print("userPromptSubmit: missing session_id or turn_id")
 		return

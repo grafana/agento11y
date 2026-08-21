@@ -77,6 +77,7 @@ type hookInput struct {
 	ToolName       string          `json:"tool_name,omitempty"`
 	ToolInput      json.RawMessage `json:"tool_input,omitempty"`
 	ToolUseID      string          `json:"tool_use_id,omitempty"`
+	Prompt         string          `json:"prompt,omitempty"`
 }
 
 // Hook reads a single Claude Code hook payload from stdin, processes it, and
@@ -117,6 +118,11 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 		guardCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		handlePreToolUse(guardCtx, stdout, input, st, resolvedAgentName, logger)
+		return nil
+	case "UserPromptSubmit":
+		guardCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		handleUserPromptSubmit(guardCtx, stdout, input, st, resolvedAgentName, logger)
 		return nil
 	case "", "Stop", "SessionEnd":
 		// Fall through to transcript export below.
@@ -268,6 +274,23 @@ func handlePreToolUse(ctx context.Context, stdout io.Writer, input *hookInput, s
 	}
 	if len(res.UpdatedInputJSON) > 0 {
 		guard.WriteHookSpecificOutputUpdatedInput(stdout, res.UpdatedInputJSON)
+	}
+}
+
+// handleUserPromptSubmit writes a block response when a preflight guard denies
+// the prompt or fails closed. Claude Code shows the reason and stops the turn.
+//
+// Prompt capture still happens from the transcript at Stop.
+func handleUserPromptSubmit(ctx context.Context, stdout io.Writer, input *hookInput, st state.Session, agentName string, logger *log.Logger) {
+	res := guard.EvaluatePrompt(ctx, envconfig.ResolveGuards(logger), guard.PromptInput{
+		AgentName:     agentName,
+		AgentVersion:  Version,
+		ModelProvider: "anthropic",
+		ModelName:     strings.TrimSpace(st.Model),
+		Prompt:        input.Prompt,
+	}, logger)
+	if res.Blocked() {
+		guard.WritePromptBlock(stdout, res.Reason)
 	}
 }
 

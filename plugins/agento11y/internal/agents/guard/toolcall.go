@@ -1,8 +1,5 @@
-// Package guard evaluates tool calls against agento11y guard policy and
-// returns a host-neutral result. Callers translate the result into their
-// own stdout response shape; convenience writers are provided for shapes
-// shared by more than one host agent (e.g. WriteHookSpecificOutputDeny
-// for the Claude Code / Codex PreToolUse envelope).
+// Package guard evaluates submitted prompts and tool calls against agento11y
+// guard rules and returns host-independent results.
 package guard
 
 import (
@@ -68,6 +65,44 @@ func FormatEvalFailure(toolName, detail string) string {
 	return msg + "\n\n" + guardBehaviorHint
 }
 
+// errMissingCredentials uses the primary variable names in user-facing errors.
+var errMissingCredentials = errors.New("missing AGENTO11Y_ENDPOINT/AGENTO11Y_AUTH_TENANT_ID/AGENTO11Y_AUTH_TOKEN")
+
+// newGuardClient builds a client for one guard phase. The caller applies
+// FailOpen when credentials are missing. Localhost endpoints use placeholder
+// credentials, so local mode needs no Cloud credentials.
+func newGuardClient(cfg envconfig.GuardsConfig, phase agento11y.HookPhase) (*agento11y.Client, string, error) {
+	endpoint := envconfig.Getenv("ENDPOINT")
+	tenantID := envconfig.Getenv("AUTH_TENANT_ID")
+	authToken := envconfig.Getenv("AUTH_TOKEN")
+	tenantID, authToken = envconfig.LocalAuthPlaceholders(endpoint, tenantID, authToken)
+	if endpoint == "" || tenantID == "" || authToken == "" {
+		return nil, endpoint, errMissingCredentials
+	}
+
+	failOpen := cfg.FailOpen
+	clientCfg := agento11y.Config{
+		API: agento11y.APIConfig{
+			Endpoint: endpoint,
+		},
+		Hooks: agento11y.HooksConfig{
+			Enabled:  true,
+			Phases:   []agento11y.HookPhase{phase},
+			Timeout:  time.Duration(cfg.TimeoutMs) * time.Millisecond,
+			FailOpen: &failOpen,
+		},
+		GenerationExport: agento11y.GenerationExportConfig{
+			Auth: agento11y.AuthConfig{
+				Mode:          agento11y.ExportAuthModeBasic,
+				BasicUser:     tenantID,
+				BasicPassword: authToken,
+				TenantID:      tenantID,
+			},
+		},
+	}
+	return agento11y.NewClient(clientCfg), endpoint, nil
+}
+
 // ToolCallInput is the host-neutral set of fields needed to evaluate a
 // tool call against agento11y guards.
 type ToolCallInput struct {
@@ -93,7 +128,8 @@ type Result struct {
 	// Reason is the deny reason from agento11y or the host-friendly description
 	// of a fail-closed transport/config error.
 	Reason string
-	// RuleID identifies the rule that produced a deny verdict, when known.
+	// RuleID identifies the denying rule. EvaluationFailureRuleID marks an
+	// evaluation failure, whether local or returned by the server.
 	RuleID string
 	// UpdatedInputJSON carries the transformed (redacted) tool arguments
 	// when agento11y returned a usable Transform verdict for this tool call.
@@ -122,10 +158,6 @@ func (r Result) Blocked() bool {
 //   - agento11y returns deny: returns deny with the rule reason.
 //   - transport error and fail-open: returns allow (matches SDK behaviour).
 //   - transport error and fail-closed: returns deny with a transport reason.
-//
-// A local-mode endpoint (http://127.0.0.1, http://localhost, http://[::1])
-// uses stand-in placeholder credentials for the credential check so that
-// running against a local agento11y instance does not require real cloud creds.
 func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCallInput, logger *log.Logger) Result {
 	if !cfg.Enabled {
 		return Result{Action: agento11y.HookActionAllow}
@@ -134,11 +166,8 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 		return Result{Action: agento11y.HookActionAllow}
 	}
 
-	endpoint := envconfig.Getenv("ENDPOINT")
-	tenantID := envconfig.Getenv("AUTH_TENANT_ID")
-	authToken := envconfig.Getenv("AUTH_TOKEN")
-	tenantID, authToken = envconfig.LocalAuthPlaceholders(endpoint, tenantID, authToken)
-	if endpoint == "" || tenantID == "" || authToken == "" {
+	client, endpoint, err := newGuardClient(cfg, agento11y.HookPhasePostflight)
+	if err != nil {
 		if cfg.FailOpen {
 			if logger != nil {
 				logger.Printf("guard: missing AGENTO11Y_*/SIGIL_* credentials; failing open")
@@ -150,32 +179,10 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 		}
 		return Result{
 			Action: agento11y.HookActionDeny,
-			Reason: FormatEvalFailure(in.ToolName, "missing AGENTO11Y_ENDPOINT/AGENTO11Y_AUTH_TENANT_ID/AGENTO11Y_AUTH_TOKEN"),
+			Reason: FormatEvalFailure(in.ToolName, err.Error()),
+			RuleID: EvaluationFailureRuleID,
 		}
 	}
-
-	failOpen := cfg.FailOpen
-	clientCfg := agento11y.Config{
-		API: agento11y.APIConfig{
-			Endpoint: endpoint,
-		},
-		Hooks: agento11y.HooksConfig{
-			Enabled:  true,
-			Phases:   []agento11y.HookPhase{agento11y.HookPhasePostflight},
-			Timeout:  time.Duration(cfg.TimeoutMs) * time.Millisecond,
-			FailOpen: &failOpen,
-		},
-		GenerationExport: agento11y.GenerationExportConfig{
-			Auth: agento11y.AuthConfig{
-				Mode:          agento11y.ExportAuthModeBasic,
-				BasicUser:     tenantID,
-				BasicPassword: authToken,
-				TenantID:      tenantID,
-			},
-		},
-	}
-
-	client := agento11y.NewClient(clientCfg)
 	defer func() { _ = client.Shutdown(ctx) }()
 
 	provider := strings.TrimSpace(in.ModelProvider)
@@ -224,6 +231,7 @@ func EvaluateToolCall(ctx context.Context, cfg envconfig.GuardsConfig, in ToolCa
 		return Result{
 			Action: agento11y.HookActionDeny,
 			Reason: FormatEvalFailure(in.ToolName, err.Error()),
+			RuleID: EvaluationFailureRuleID,
 		}
 	}
 
