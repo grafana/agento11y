@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/semconv/v1.41.0/genaiconv"
 
 	"github.com/grafana/agento11y/go/otelgenai"
 )
@@ -999,6 +1000,122 @@ func TestOTelProtocolDropsValidatorRejectedRecords(t *testing.T) {
 	}
 	if got := exceptionEventCount(span); got != 0 {
 		t.Errorf("a rejected record carries %d exception events, want 0", got)
+	}
+}
+
+func TestOTelSharedMetricMetadata(t *testing.T) {
+	durationConvention := genaiconv.ClientOperationDuration{}
+	usageConvention := genaiconv.ClientTokenUsage{}
+	if got := durationConvention.Name(); metricOperationDuration != got {
+		t.Fatalf("metricOperationDuration = %q, want %q", metricOperationDuration, got)
+	}
+	if got := usageConvention.Name(); metricTokenUsage != got {
+		t.Fatalf("metricTokenUsage = %q, want %q", metricTokenUsage, got)
+	}
+
+	reader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = meterProvider.Shutdown(context.Background()) })
+
+	const sdkScope = "agento11y-test"
+	client, _, _ := newOTelTestClient(t, func(cfg *Config) {
+		cfg.Meter = meterProvider.Meter(sdkScope)
+		cfg.MeterProvider = meterProvider
+	})
+
+	_, generation := client.StartGeneration(context.Background(), GenerationStart{
+		Model: ModelRef{Provider: "openai", Name: "gpt-5"},
+	})
+	generation.SetResult(Generation{
+		Usage: TokenUsage{InputTokens: 10, OutputTokens: 2},
+	}, nil)
+	generation.End()
+	if err := generation.Err(); err != nil {
+		t.Fatalf("generation: %v", err)
+	}
+
+	_, tool := client.StartToolExecution(context.Background(), ToolExecutionStart{ToolName: "weather"})
+	tool.SetResult(ToolExecutionEnd{Result: map[string]any{"temperature": 18}})
+	tool.End()
+	if err := tool.Err(); err != nil {
+		t.Fatalf("tool execution: %v", err)
+	}
+
+	_, embedding := client.StartEmbedding(context.Background(), EmbeddingStart{
+		Model: ModelRef{Provider: "openai", Name: "text-embedding-3-small"},
+	})
+	embedding.SetResult(EmbeddingResult{InputCount: 1, InputTokens: 3})
+	embedding.End()
+	if err := embedding.Err(); err != nil {
+		t.Fatalf("embedding: %v", err)
+	}
+
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+
+	metricsByScope := make(map[string]map[string]metricdata.Metrics)
+	for _, scope := range collected.ScopeMetrics {
+		metrics := make(map[string]metricdata.Metrics, len(scope.Metrics))
+		for _, m := range scope.Metrics {
+			metrics[m.Name] = m
+		}
+		metricsByScope[scope.Scope.Name] = metrics
+	}
+
+	sdkMetrics, ok := metricsByScope[sdkScope]
+	if !ok {
+		t.Fatalf("no metrics recorded under %s", sdkScope)
+	}
+	otelMetrics, ok := metricsByScope[otelgenai.ScopeName]
+	if !ok {
+		t.Fatalf("no metrics recorded under %s", otelgenai.ScopeName)
+	}
+
+	conventions := map[string]struct {
+		description string
+		unit        string
+	}{
+		durationConvention.Name(): {
+			description: durationConvention.Description(),
+			unit:        durationConvention.Unit(),
+		},
+		usageConvention.Name(): {
+			description: usageConvention.Description(),
+			unit:        usageConvention.Unit(),
+		},
+	}
+	for name, convention := range conventions {
+		for scopeName, metrics := range map[string]map[string]metricdata.Metrics{
+			sdkScope:            sdkMetrics,
+			otelgenai.ScopeName: otelMetrics,
+		} {
+			m, present := metrics[name]
+			if !present {
+				t.Errorf("%s not recorded under %s", name, scopeName)
+				continue
+			}
+			if m.Description != convention.description {
+				t.Errorf("%s description under %s = %q, want %q", name, scopeName, m.Description, convention.description)
+			}
+			if m.Unit != convention.unit {
+				t.Errorf("%s unit under %s = %q, want %q", name, scopeName, m.Unit, convention.unit)
+			}
+		}
+	}
+
+	for name, sdkMetric := range sdkMetrics {
+		otelMetric, shared := otelMetrics[name]
+		if !shared {
+			continue
+		}
+		if sdkMetric.Description != otelMetric.Description {
+			t.Errorf("%s descriptions differ: SDK = %q, otelgenai = %q", name, sdkMetric.Description, otelMetric.Description)
+		}
+		if sdkMetric.Unit != otelMetric.Unit {
+			t.Errorf("%s units differ: SDK = %q, otelgenai = %q", name, sdkMetric.Unit, otelMetric.Unit)
+		}
 	}
 }
 

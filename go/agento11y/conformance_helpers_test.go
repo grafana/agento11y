@@ -593,6 +593,27 @@ func findHistogram[N int64 | float64](t *testing.T, collected metricdata.Resourc
 	return metricdata.Histogram[N]{}
 }
 
+func requireMetricMetadata(t *testing.T, collected metricdata.ResourceMetrics, name, description, unit string) {
+	t.Helper()
+
+	for _, scopeMetrics := range collected.ScopeMetrics {
+		for _, metric := range scopeMetrics.Metrics {
+			if metric.Name != name {
+				continue
+			}
+			if metric.Description != description {
+				t.Fatalf("%s description = %q, want %q", name, metric.Description, description)
+			}
+			if metric.Unit != unit {
+				t.Fatalf("%s unit = %q, want %q", name, metric.Unit, unit)
+			}
+			return
+		}
+	}
+
+	t.Fatalf("expected metric %q", name)
+}
+
 func requireNoHistogram(t *testing.T, collected metricdata.ResourceMetrics, name string) {
 	t.Helper()
 

@@ -438,6 +438,13 @@ public sealed class ConformanceTests
         Assert.Equal("streamText gpt-5", span.DisplayName);
         Assert.Contains("gen_ai.client.operation.duration", env.MetricNames);
         Assert.Contains("gen_ai.client.time_to_first_token", env.MetricNames);
+
+        var duration = env.MetricMetadata["gen_ai.client.operation.duration"];
+        Assert.Equal("GenAI operation duration.", duration.Description);
+        Assert.Equal("s", duration.Unit);
+        var tokenUsage = env.MetricMetadata["gen_ai.client.token.usage"];
+        Assert.Equal("Number of input and output tokens used.", tokenUsage.Description);
+        Assert.Equal("{token}", tokenUsage.Unit);
     }
 
     [Fact]
@@ -721,6 +728,8 @@ public sealed class ConformanceTests
         public Agento11yClient Client { get; }
         public ConcurrentQueue<Activity> Spans { get; } = new();
         public ConcurrentDictionary<string, byte> MetricNames { get; } = new(StringComparer.Ordinal);
+        public ConcurrentDictionary<string, (string? Description, string? Unit)> MetricMetadata { get; } =
+            new(StringComparer.Ordinal);
         public ConcurrentQueue<MetricMeasurement> MetricMeasurements { get; } = new();
 
         public ConformanceEnv(int batchSize = 1, Dictionary<string, string>? tags = null)
@@ -747,6 +756,7 @@ public sealed class ConformanceTests
             _meterListener.SetMeasurementEventCallback<double>((instrument, _, tags, _) =>
             {
                 MetricNames[instrument.Name] = 0;
+                MetricMetadata[instrument.Name] = (instrument.Description, instrument.Unit);
                 var tagSnapshot = new Dictionary<string, object?>(StringComparer.Ordinal);
                 foreach (var tag in tags)
                 {
