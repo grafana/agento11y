@@ -49,6 +49,22 @@ class _Model:
         }
 
 
+class _NestedParamsModel:
+    def __init__(self, **params) -> None:
+        self._params = params
+
+    def get_config(self):
+        return {"model_id": "gpt-4o", "params": self._params}
+
+
+class _FlatConfigModel:
+    def __init__(self, **config) -> None:
+        self._config = config
+
+    def get_config(self):
+        return {"model_id": "mistral-large-latest", **self._config}
+
+
 class _ToolRegistry:
     def get_all_tools_config(self):
         return {
@@ -71,6 +87,24 @@ def _agent():
         messages=[{"role": "user", "content": [{"text": "hello"}]}],
         tool_registry=_ToolRegistry(),
     )
+
+
+def _record_one_model_call(client, agent, *, message=None) -> None:
+    hooks = create_agento11y_strands_hook_provider(client=client, provider_resolver="auto")
+    invocation_state = {"conversation_id": "conv-mode"}
+    hooks.before_model_call(SimpleNamespace(agent=agent, invocation_state=invocation_state))
+    hooks.after_model_call(
+        SimpleNamespace(
+            agent=agent,
+            invocation_state=invocation_state,
+            stop_response=SimpleNamespace(
+                message=message if message is not None else {"role": "assistant", "content": [{"text": "ok"}]},
+                stop_reason="end_turn",
+            ),
+            exception=None,
+        )
+    )
+    client.flush()
 
 
 def test_strands_model_lifecycle_exports_generation_with_framework_metadata() -> None:
@@ -289,6 +323,83 @@ def test_with_agento11y_strands_hooks_adds_provider_to_config_once() -> None:
         hooks = config["hooks"]
         assert len(hooks) == 1
         assert isinstance(hooks[0], Agento11yStrandsHookProvider)
+    finally:
+        client.shutdown()
+
+
+def test_strands_nested_params_config_reports_sync_mode_and_sampling_params() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        agent = _agent()
+        agent.model = _NestedParamsModel(stream=False, temperature=0.2, max_tokens=256, top_p=0.9)
+        _record_one_model_call(client, agent)
+
+        generation = exporter.requests[0].generations[0]
+        assert generation.mode.value == "SYNC"
+        assert generation.temperature == 0.2
+        assert generation.max_tokens == 256
+        assert generation.top_p == 0.9
+    finally:
+        client.shutdown()
+
+
+def test_strands_flat_config_stream_flag_reports_sync_mode() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        agent = _agent()
+        agent.model = _FlatConfigModel(stream=False, temperature=0.3)
+        _record_one_model_call(client, agent)
+
+        generation = exporter.requests[0].generations[0]
+        assert generation.mode.value == "SYNC"
+        assert generation.temperature == 0.3
+    finally:
+        client.shutdown()
+
+
+def test_strands_bedrock_streaming_flag_reports_sync_mode() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        agent = _agent()
+        agent.model = _FlatConfigModel(streaming=False)
+        _record_one_model_call(client, agent)
+
+        assert exporter.requests[0].generations[0].mode.value == "SYNC"
+    finally:
+        client.shutdown()
+
+
+def test_strands_streaming_is_the_default_when_the_config_omits_the_flag() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        agent = _agent()
+        agent.model = _NestedParamsModel(temperature=0.5)
+        _record_one_model_call(client, agent)
+
+        assert exporter.requests[0].generations[0].mode.value == "STREAM"
+    finally:
+        client.shutdown()
+
+
+def test_strands_model_call_without_message_metadata_records_no_usage() -> None:
+    exporter = _CapturingExporter()
+    client = _new_client(exporter)
+
+    try:
+        agent = _agent()
+        _record_one_model_call(client, agent, message={"role": "assistant", "content": [{"text": "ok"}]})
+
+        generation = exporter.requests[0].generations[0]
+        assert generation.stop_reason == "end_turn"
+        assert generation.usage is None or generation.usage.total_tokens == 0
     finally:
         client.shutdown()
 
