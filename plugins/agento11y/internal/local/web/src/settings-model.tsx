@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { formatAgo } from './formatters';
 import type { ConfigResponse, ForwardStatus, Settings } from './types';
 
 // ============================================================
@@ -14,13 +15,12 @@ export interface FormSettings extends Settings {
   promptGuardUrl?: unknown;
 }
 
-// ForwardStatusView adds the fail-open counter forwardStatus carries in
-// forward.go (omitempty, so it is absent when zero).
-interface ForwardStatusView extends ForwardStatus {
-  hookFailOpens?: number;
-}
-
 type ForwardAccent = 'success' | 'info' | 'warning' | 'error';
+
+export interface GuardStatusMeta {
+  accent: ForwardAccent;
+  line: string;
+}
 
 interface ForwardBannerMeta {
   accent: ForwardAccent;
@@ -136,7 +136,7 @@ export const GUARD_CONTENT_NOTE =
 // settings hero from. The saved toggle is deliberately not an input:
 // config.env and the daemon's own environment can disagree, and only the
 // daemon knows what it would actually send.
-function forwardBannerMeta(st: ForwardStatusView | null | undefined): ForwardBannerMeta {
+function forwardBannerMeta(st: ForwardStatus | null | undefined): ForwardBannerMeta {
   if (!st) {
     return {
       accent: 'warning',
@@ -214,6 +214,64 @@ function forwardBannerMeta(st: ForwardStatusView | null | undefined): ForwardBan
     accent: st.mode === 'full' || st.hooks ? 'warning' : 'info',
     pill: st.mode === 'full' ? 'Full content' : st.hooks ? 'Metadata + guard content' : 'Metadata only',
     line: parts.join(' '),
+  };
+}
+
+function timestampIsAfter(left: string, right: string): boolean {
+  const leftMillis = Date.parse(left);
+  const rightMillis = Date.parse(right);
+  if (leftMillis !== rightMillis) return leftMillis > rightMillis;
+
+  // Date.parse drops the digits after milliseconds.
+  const nanoseconds = (timestamp: string) => {
+    const fraction = timestamp.match(/\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/)?.[1] ?? '';
+    return Number(fraction.padEnd(9, '0').slice(0, 9));
+  };
+  return nanoseconds(left) > nanoseconds(right);
+}
+
+// guardStatusMeta reports the most recent outcome of the Cloud guard leg.
+export function guardStatusMeta(st: ForwardStatus | null | undefined, now: number): GuardStatusMeta {
+  if (!st) {
+    return {
+      accent: 'warning',
+      line: "Couldn't read the daemon's guard status.",
+    };
+  }
+  if (st.hookReason) {
+    return { accent: 'info', line: st.hookReason };
+  }
+  if (!st.enabled) {
+    return {
+      accent: 'info',
+      line: 'Cloud forwarding is off, so this daemon does not relay guard checks.',
+    };
+  }
+
+  const leg = st.legs?.hooks;
+  if (!leg?.lastSuccessAt && !leg?.lastFailureAt) {
+    return {
+      accent: 'info',
+      line: 'The daemon has not recorded a Cloud guard verdict or evaluation failure since it started.',
+    };
+  }
+
+  const failureIsLatest =
+    !!leg.lastFailureAt && (!leg.lastSuccessAt || timestampIsAfter(leg.lastFailureAt, leg.lastSuccessAt));
+  if (failureIsLatest) {
+    const lastVerdict = leg.lastSuccessAt ? ` The last Cloud verdict was ${formatAgo(leg.lastSuccessAt, now)}.` : '';
+    return {
+      accent: 'error',
+      line: `The latest guard evaluation got no Cloud verdict ${formatAgo(leg.lastFailureAt, now)}: ${leg.lastFailureDetail || 'Unknown error'}.${lastVerdict}`,
+    };
+  }
+
+  const earlierFailure = leg.lastFailureAt
+    ? ` The previous evaluation got no verdict ${formatAgo(leg.lastFailureAt, now)}: ${leg.lastFailureDetail || 'Unknown error'}.`
+    : '';
+  return {
+    accent: 'success',
+    line: `Cloud returned a verdict ${formatAgo(leg.lastSuccessAt, now)}.${earlierFailure}`,
   };
 }
 

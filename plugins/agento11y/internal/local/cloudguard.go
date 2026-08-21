@@ -99,6 +99,9 @@ func (l *forwardLoader) evaluateCloudHook(ctx context.Context, cfg forwardConfig
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxHookResponseBytes+1))
 	if err != nil {
+		if isCallerAbort(err) {
+			return out, fmt.Errorf("read response from %s: %w", cfg.hookURL, err)
+		}
 		return out, l.recordHookFailure("read response from %s: %v", cfg.hookURL, err)
 	}
 	if len(respBody) > maxHookResponseBytes {

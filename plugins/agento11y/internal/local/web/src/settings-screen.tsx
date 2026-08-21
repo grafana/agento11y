@@ -18,13 +18,22 @@ import {
   cloneSettings,
   cloudConfigured,
   forwardChipMeta,
-  GUARD_CONTENT_NOTE,
+  guardStatusMeta,
   Mono,
   pendingEdits,
   sameSettings,
 } from './settings-model';
 import { Icon } from './shell';
-import type { ConfigResponse, HistoryAgent, HistoryOffer, HistoryPlan, ImportRun, Settings, Tag } from './types';
+import type {
+  ConfigResponse,
+  ForwardStatus,
+  HistoryAgent,
+  HistoryOffer,
+  HistoryPlan,
+  ImportRun,
+  Settings,
+  Tag,
+} from './types';
 
 // ============================================================
 // History import — backfill sessions an agent recorded before
@@ -1074,6 +1083,11 @@ const FORWARD_LOCAL_OPTIONS = [
   { value: 'metadata_only', label: 'Metadata only' },
   { value: 'full', label: 'Full' },
 ];
+const GUARD_OPTIONS = [
+  { value: 'off', label: 'Off' },
+  { value: 'failopen', label: 'Fail open' },
+  { value: 'failclosed', label: 'Fail closed' },
+];
 // Connecting turns forwarding on, so the connect flow offers the same modes
 // without the off case.
 const CONNECT_MODE_OPTIONS = FORWARD_LOCAL_OPTIONS.filter((o) => o.value !== 'off');
@@ -1758,6 +1772,7 @@ interface SettingsCloudTabProps {
   form: Settings;
   set: (patch: Partial<Settings>) => void;
   savedEndpoint: string;
+  savedGuards: string;
   config: ConfigResponse | null;
   stackUrl: string;
   configured: boolean;
@@ -1765,6 +1780,114 @@ interface SettingsCloudTabProps {
   onConnect: (parsed: ConnectBlock, mode: string) => void;
   onDisconnect: () => void;
   onMode: (mode: string, forceLocalOff?: boolean) => void;
+}
+
+interface SettingsGuardsCardProps {
+  form: Settings;
+  savedGuards: string;
+  set: (patch: Partial<Settings>) => void;
+  status: ForwardStatus | null;
+  localOnly: boolean;
+}
+
+export function SettingsGuardsCard({ form, savedGuards, set, status, localOnly }: SettingsGuardsCardProps) {
+  const guardsConfigured = form.guards === 'failopen' || form.guards === 'failclosed';
+  const savedGuardsConfigured = savedGuards === 'failopen' || savedGuards === 'failclosed';
+  const guardsOn = guardsConfigured && !localOnly;
+  const timeout = form.guardTimeout.trim();
+  const invalidTimeout = timeout !== '' && !/^[1-9]\d*$/.test(timeout);
+  const meta = guardStatusMeta(status, Date.now());
+
+  return (
+    <SettingsCard>
+      <SectionLabel>Guards</SectionLabel>
+      <div
+        style={{
+          fontSize: 12,
+          lineHeight: 1.5,
+          color: 'var(--fg3)',
+          padding: '0 0 4px',
+          maxWidth: 620,
+        }}
+      >
+        A guard check runs before a tool call and is evaluated by your Cloud rules.
+      </div>
+      <SettingRow
+        label="Fail mode"
+        help="Fail open allows the call when Cloud cannot answer. Fail closed blocks it. Off skips guard checks."
+      >
+        <PillToggle
+          size="md"
+          value={guardsOn ? form.guards : 'off'}
+          onChange={(guards) => set({ guards })}
+          options={GUARD_OPTIONS}
+          disabled={localOnly}
+        />
+      </SettingRow>
+      {guardsOn && (
+        <SettingRow label="Timeout" help="Maximum time to wait for a guard verdict.">
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+              <MonoInput
+                value={form.guardTimeout}
+                onChange={(guardTimeout) => set({ guardTimeout })}
+                placeholder="1500"
+                width={100}
+                align="right"
+              />
+              <Mono>ms</Mono>
+            </div>
+            {invalidTimeout && (
+              <div style={{ color: 'var(--warning-text)', fontSize: 12, lineHeight: 1.5, marginTop: 6 }}>
+                Enter a positive integer.
+              </div>
+            )}
+          </div>
+        </SettingRow>
+      )}
+      {localOnly ? (
+        <div style={{ padding: '14px 0 0' }}>
+          <Notice kind="info" title="Cloud guards are off for local sessions">
+            Select Metadata only or Full above to use Cloud guards.
+            {savedGuardsConfigured && (
+              <>
+                {' '}
+                Non-local sessions still use the saved {savedGuards === 'failclosed' ? 'Fail closed' : 'Fail open'}{' '}
+                mode.
+              </>
+            )}
+          </Notice>
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--fg3)', padding: '12px 0 0' }}>
+          Restart a running agent if it does not use the new guard settings.
+        </div>
+      )}
+      {guardsOn && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 10,
+            alignItems: 'flex-start',
+            padding: '14px 0 4px',
+            maxWidth: 640,
+          }}
+        >
+          <span
+            style={{
+              flex: 'none',
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              marginTop: 6,
+              background: `var(--${meta.accent}-text)`,
+            }}
+          />
+          <div style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg2)' }}>{meta.line}</div>
+        </div>
+      )}
+    </SettingsCard>
+  );
 }
 
 // savedEndpoint is the endpoint on disk, which is not form.endpoint while the
@@ -1775,6 +1898,7 @@ function SettingsCloudTab({
   form,
   set,
   savedEndpoint,
+  savedGuards,
   config,
   stackUrl,
   configured,
@@ -1811,9 +1935,7 @@ function SettingsCloudTab({
   // its own environment at boot, so "off here, on there" is reachable until
   // an explicit false is saved.
   const daemonStillOn = !!forwardStatus?.enabled && !form.localForward;
-  // Say it next to the control that sets the capture mode, not only in the
-  // header chip.
-  const guardsChained = !!forwardStatus?.hooks;
+  const localOnly = forwardMode === 'off' && !daemonStillOn;
   const failures = forwardStatus?.failures || [];
   // recentFailures outlives being turned off, so a failure list alone would
   // put an error notice under the calm "forwarding is off" line.
@@ -1833,7 +1955,7 @@ function SettingsCloudTab({
     onMode(mode, mode === 'off' && daemonStillOn);
   };
 
-  return (
+  const forwardingCard = (
     <SettingsCard style={{ padding: '4px 20px 20px' }}>
       <SectionLabel>Cloud forwarding</SectionLabel>
       <div
@@ -1892,17 +2014,6 @@ function SettingsCloudTab({
               overrides that, but only once it holds an explicit <Mono>false</Mono>.{' '}
               <b style={{ fontWeight: 500, color: 'var(--fg2)' }}>Local only</b> is already selected here, so click it
               to write that <Mono>false</Mono>.
-            </div>
-          )}
-          {guardsChained && (
-            <div
-              style={{
-                color: 'var(--warning-text)',
-                marginTop: 6,
-              }}
-            >
-              {GUARD_CONTENT_NOTE} The daemon relays <Mono>--local</Mono> guard checks to Cloud so your Cloud rules
-              still apply; turn off <Mono>GUARDS_ENABLED</Mono> or forwarding to stop it.
             </div>
           )}
         </div>
@@ -2068,6 +2179,19 @@ function SettingsCloudTab({
           )}
         </>
       )}
+    </SettingsCard>
+  );
+
+  return (
+    <>
+      {forwardingCard}
+      <SettingsGuardsCard
+        form={form}
+        savedGuards={savedGuards}
+        set={set}
+        status={forwardStatus}
+        localOnly={localOnly}
+      />
 
       {confirmFull && (
         <ConfirmFullContentModal
@@ -2135,7 +2259,7 @@ function SettingsCloudTab({
           </div>
         </ModalFrame>
       )}
-    </SettingsCard>
+    </>
   );
 }
 
@@ -2469,6 +2593,7 @@ interface SettingsTabPanelsProps {
   form: Settings;
   set: (patch: Partial<Settings>) => void;
   savedEndpoint: string;
+  savedGuards: string;
   setTag: (index: number, patch: Partial<Tag>) => void;
   addTag: () => void;
   removeTag: (index: number) => void;
@@ -2487,6 +2612,7 @@ function SettingsTabPanels({
   form,
   set,
   savedEndpoint,
+  savedGuards,
   setTag,
   addTag,
   removeTag,
@@ -2506,6 +2632,7 @@ function SettingsTabPanels({
           form={form}
           set={set}
           savedEndpoint={savedEndpoint}
+          savedGuards={savedGuards}
           config={config}
           stackUrl={stackUrl}
           configured={configured}
@@ -2778,6 +2905,7 @@ export function SettingsView({
             form={form}
             set={set}
             savedEndpoint={(saved as Settings).endpoint}
+            savedGuards={(saved as Settings).guards}
             setTag={setTag}
             addTag={addTag}
             removeTag={removeTag}

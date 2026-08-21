@@ -3,6 +3,7 @@ import {
   cloudConfigured,
   type FormSettings,
   forwardChipMeta,
+  guardStatusMeta,
   pendingEdits,
   sameSettings,
 } from '../internal/local/web/src/settings-model';
@@ -173,6 +174,104 @@ describe('forwardLocalPatch', () => {
     expect(forwardLocalPatch({ localForward: true, capture: 'full' }, 'metadata_only')).toEqual({
       localForward: true,
       capture: 'metadata_only',
+    });
+  });
+});
+
+describe('guardStatusMeta', () => {
+  const now = Date.parse('2026-08-22T12:00:00Z');
+  const status = (overrides: Partial<ForwardStatus> = {}): ForwardStatus => ({
+    enabled: true,
+    mode: 'metadata_only',
+    generations: true,
+    otlp: true,
+    hooks: true,
+    ...overrides,
+  });
+
+  it('reports why the hook leg is refused', () => {
+    expect(
+      guardStatusMeta(
+        status({
+          hookReason: 'guard forwarding needs usable Cloud credentials',
+          legs: { hooks: { lastSuccessAt: '2026-08-22T11:59:00Z' } },
+        }),
+        now,
+      ),
+    ).toEqual({ accent: 'info', line: 'guard forwarding needs usable Cloud credentials' });
+  });
+
+  it('reports that Cloud forwarding is off', () => {
+    expect(guardStatusMeta(status({ enabled: false, hooks: false }), now)).toEqual({
+      accent: 'info',
+      line: 'Cloud forwarding is off, so this daemon does not relay guard checks.',
+    });
+  });
+
+  it('reports that no outcome has been recorded yet', () => {
+    expect(guardStatusMeta(status(), now)).toEqual({
+      accent: 'info',
+      line: 'The daemon has not recorded a Cloud guard verdict or evaluation failure since it started.',
+    });
+  });
+
+  it('reports a failure newer than the last delivery', () => {
+    expect(
+      guardStatusMeta(
+        status({
+          legs: {
+            hooks: {
+              lastSuccessAt: '2026-08-22T11:58:00Z',
+              lastFailureAt: '2026-08-22T11:59:00Z',
+              lastFailureDetail: 'connection refused',
+            },
+          },
+        }),
+        now,
+      ),
+    ).toEqual({
+      accent: 'error',
+      line: 'The latest guard evaluation got no Cloud verdict 1m ago: connection refused. The last Cloud verdict was 2m ago.',
+    });
+  });
+
+  it('orders outcomes within the same millisecond', () => {
+    expect(
+      guardStatusMeta(
+        status({
+          legs: {
+            hooks: {
+              lastSuccessAt: '2026-08-22T11:59:00.123100000Z',
+              lastFailureAt: '2026-08-22T11:59:00.123900000Z',
+              lastFailureDetail: 'connection refused',
+            },
+          },
+        }),
+        now,
+      ),
+    ).toEqual({
+      accent: 'error',
+      line: 'The latest guard evaluation got no Cloud verdict 1m ago: connection refused. The last Cloud verdict was 1m ago.',
+    });
+  });
+
+  it('reports a recovery and keeps the earlier error', () => {
+    expect(
+      guardStatusMeta(
+        status({
+          legs: {
+            hooks: {
+              lastSuccessAt: '2026-08-22T11:59:00Z',
+              lastFailureAt: '2026-08-22T11:58:00Z',
+              lastFailureDetail: 'connection refused',
+            },
+          },
+        }),
+        now,
+      ),
+    ).toEqual({
+      accent: 'success',
+      line: 'Cloud returned a verdict 1m ago. The previous evaluation got no verdict 2m ago: connection refused.',
     });
   });
 });

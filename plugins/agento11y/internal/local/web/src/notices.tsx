@@ -385,12 +385,13 @@ interface PillToggleProps {
   value?: string;
   onChange: (value: string) => void;
   size?: 'sm' | 'md';
+  disabled?: boolean;
 }
 
 // PillToggle's md size is for a control that carries a decision rather than
 // a view preference: the forwarding mode switch, which is the first thing on
 // the Cloud tab.
-export function PillToggle({ options, value, onChange, size = 'sm' }: PillToggleProps) {
+export function PillToggle({ options, value, onChange, size = 'sm', disabled = false }: PillToggleProps) {
   const md = size === 'md';
   return (
     <Stack
@@ -412,6 +413,8 @@ export function PillToggle({ options, value, onChange, size = 'sm' }: PillToggle
           <button
             key={o.value}
             type="button"
+            aria-pressed={active}
+            disabled={disabled}
             onClick={() => onChange(o.value)}
             style={{
               padding: md ? '7px 16px' : '5px 13px',
@@ -419,7 +422,8 @@ export function PillToggle({ options, value, onChange, size = 'sm' }: PillToggle
               background: active ? ACTIVE_PILL_BG : 'transparent',
               color: active ? 'var(--primary-text)' : 'var(--fg2)',
               border: 'none',
-              cursor: active ? 'default' : 'pointer',
+              cursor: disabled || active ? 'default' : 'pointer',
+              opacity: disabled ? 0.55 : 1,
               fontSize: md ? 13 : 12,
               fontWeight: active ? 600 : 400,
               fontFamily: 'var(--fontFamily)',
