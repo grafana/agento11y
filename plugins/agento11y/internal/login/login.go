@@ -387,7 +387,7 @@ func Run(ctx context.Context, opts RunOpts) (Result, error) {
 		otelEndpoint: cmp.Or(fixed.otelEndpoint, existing["SIGIL_OTEL_EXPORTER_OTLP_ENDPOINT"]),
 		contentMode:  normalizeContentMode(existing["SIGIL_CONTENT_CAPTURE_MODE"]),
 		tags:         existing["SIGIL_TAGS"],
-		autoTags:     envconfig.ParseBool(existing[envconfig.LegacyKey(envconfig.AutoTagsSuffix)]),
+		autoTags:     seedAutoTags(existing[envconfig.LegacyKey(envconfig.AutoTagsSuffix)]),
 		autoTagNames: seedAutoTagNames(existing[envconfig.LegacyKey(envconfig.AutoTagNamesSuffix)]),
 		guards:       seedGuards(existing["SIGIL_GUARDS_ENABLED"], existing["SIGIL_GUARDS_FAIL_OPEN"]),
 		guardTimeout: strings.TrimSpace(existing["SIGIL_GUARDS_TIMEOUT_MS"]),
@@ -703,14 +703,11 @@ func preferenceGroups(v *formValues) []*huh.Group {
 	}
 }
 
-// autoTagSwitchOptions answers the automatic-tag question. Off leads, like the
-// default option of every other list here, and says what staying off means:
-// the question describes what turning it on sends, so the answer that sends
-// nothing needs its own words rather than a bare No.
+// Keep Off first: huh matches the zero bool before binding Value and scrolls earlier options out of view.
 func autoTagSwitchOptions() []huh.Option[bool] {
 	return []huh.Option[bool]{
-		huh.NewOption("Off — no user, repository, or branch labels (default)", false),
-		huh.NewOption("On — choose which of the three to send next", true),
+		huh.NewOption("Off — no user, repository, or branch labels", false),
+		huh.NewOption("On — choose which of the three to send next (default)", true),
 	}
 }
 
@@ -1224,6 +1221,15 @@ func validateAutoTagNames(selected []string) error {
 		return errors.New("select at least one value, or turn automatic tags off")
 	}
 	return nil
+}
+
+// seedAutoTags starts the automatic-tag question on On when nothing is saved.
+// A saved false stays off: a rerun must not switch the setting back on.
+func seedAutoTags(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return true
+	}
+	return envconfig.ParseBool(raw)
 }
 
 // seedAutoTagNames turns a saved allowlist into the preselected names. An

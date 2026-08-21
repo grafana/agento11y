@@ -290,6 +290,27 @@ func TestSeedGuards(t *testing.T) {
 	}
 }
 
+func TestSeedAutoTags(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"unset starts on", "", true},
+		{"blank starts on", "   ", true},
+		{"saved false stays off", "false", false},
+		{"saved true stays on", "1", true},
+		{"unparseable stays off", "maybe", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := seedAutoTags(c.raw); got != c.want {
+				t.Errorf("seedAutoTags(%q) = %v, want %v", c.raw, got, c.want)
+			}
+		})
+	}
+}
+
 // TestSeedAutoTagNames pins what the checklist starts with. A saved allowlist
 // preselects the names it holds. No saved allowlist preselects every supported
 // name. A saved allowlist that holds no supported name preselects nothing: that
@@ -382,7 +403,7 @@ func TestPreferenceGroupsMarkTheAnswer(t *testing.T) {
 	for _, want := range []string{
 		"Metadata only",
 		"Disabled (default)",
-		"Off — no user, repository, or branch labels (default)",
+		"Off — no user, repository, or branch labels",
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("form does not list %q:\n%s", want, view)
