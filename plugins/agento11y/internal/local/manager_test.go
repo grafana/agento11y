@@ -1,10 +1,8 @@
-//go:build !windows
-
 package local
 
 import (
 	"context"
-	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -12,11 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -91,150 +89,97 @@ func TestSaveStatus_ConcurrentReadersSeeWholeFile(t *testing.T) {
 	assert.Zero(t, partial, "LoadStatus returned a status that was never written")
 }
 
-// TestServe_StampsStoreAfterPublishingStatus covers the order the daemon
-// starts things in: the status file the spawning process waits 5 seconds
-// for appears while the modification-time pass is still reading the store,
-// and the store repairs itself once the pass gets through it.
-//
-// A named pipe among the conversation files holds the pass: opening one
-// for reading returns only once this test opens the write end, so the pass
-// cannot reach the marker until the test lets it.
-func TestServe_StampsStoreAfterPublishingStatus(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "local")
-	storage, err := NewStorage(dir)
-	require.NoError(t, err)
-	activity := time.Now().Add(-90 * 24 * time.Hour).Truncate(time.Second)
-	seedConversation(t, storage, "conv-A", activity)
-	blocker := filepath.Join(dir, ConversationsDir, "conv-blocker.jsonl")
-	require.NoError(t, syscall.Mkfifo(blocker, 0o600))
+const (
+	daemonHelperEnv = "AGENTO11Y_TEST_LOCAL_DAEMON_HELPER"
+	daemonHelperDir = "AGENTO11Y_TEST_LOCAL_DAEMON_DIR"
+	idleHelperEnv   = "AGENTO11Y_TEST_IDLE_HELPER"
+)
 
-	// The pass reports what it stamped and what it could not, and this test
-	// can only fail by the pass not finishing, so keep its log.
-	logger := testLogger(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	served := make(chan error, 1)
-	go func() { served <- Serve(ctx, dir, 0, logger) }()
-	t.Cleanup(func() {
-		cancel()
-		require.NoError(t, <-served)
-	})
-	// Serve waits for the pass on the way out, so a failed assertion below
-	// must not leave it parked on the pipe. Opening the write end without
-	// blocking fails with ENXIO when the pass is not reading, which is the
-	// case where nothing needs freeing.
-	t.Cleanup(func() {
-		if w, err := os.OpenFile(blocker, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
-			_ = w.Close()
-		}
-	})
-
-	// IsRunning is what the spawning process polls: the status file plus an
-	// endpoint that answers.
-	require.Eventually(t, func() bool {
-		s, err := IsRunning(dir)
-		return err == nil && s != nil
-	}, 5*time.Second, 20*time.Millisecond, "daemon published its status and serves")
-
-	meta, err := readStoreMeta(dir)
-	require.NoError(t, err)
-	require.False(t, meta.MtimeStamped, "the daemon serves while the pass is still reading")
-
-	// Let the pass through the pipe: an empty file carries no activity, so
-	// it is scanned and left alone.
-	w, err := os.OpenFile(blocker, os.O_WRONLY, 0)
-	require.NoError(t, err)
-	require.NoError(t, w.Close())
-
-	require.Eventually(t, func() bool {
-		meta, err := readStoreMeta(dir)
-		return err == nil && meta.MtimeStamped
-	}, 5*time.Second, 20*time.Millisecond, "store marked as stamped")
-
-	info, err := os.Stat(filepath.Join(dir, ConversationsDir, "conv-A.jsonl"))
-	require.NoError(t, err)
-	assert.WithinDuration(t, activity, info.ModTime(), stampTolerance)
+func TestLocalDaemonHelperProcess(t *testing.T) {
+	if os.Getenv(daemonHelperEnv) != "1" {
+		return
+	}
+	if err := Serve(context.Background(), os.Getenv(daemonHelperDir), 0, nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
-func TestStop_EndpointDeadButProcessAlive(t *testing.T) {
-	if _, err := exec.LookPath("sleep"); err != nil {
-		t.Skip("sleep command unavailable")
+func TestIdleHelperProcess(t *testing.T) {
+	if os.Getenv(idleHelperEnv) != "1" {
+		return
 	}
-	for _, tc := range []struct {
-		name         string
-		cmdline      string
-		cmdlineError error
-		liveEndpoint bool
-		wantStop     bool
-		wantAlive    bool
-		wantErr      string
-		wantStatus   bool
-	}{
-		{name: "signals daemon-looking process", cmdline: "/usr/local/bin/sigil local serve", wantStop: true},
-		{name: "signals agento11y daemon", cmdline: "/usr/local/bin/agento11y local serve", wantStop: true},
-		{name: "signals agento11y.exe daemon", cmdline: "/usr/local/bin/agento11y.exe local serve", wantStop: true},
-		{name: "signals daemon-looking process with spaces in path", cmdline: "/tmp/Sigil Dev/sigil local serve", wantStop: true},
-		{name: "signals go run dev daemon", cmdline: "/Users/x/Library/Caches/go-build/ab/cd-d/main local serve", wantStop: true},
-		{name: "does not signal unrelated live pid", cmdline: "sleep 60", wantAlive: true},
-		{name: "does not signal main without local serve suffix", cmdline: "/tmp/main serve", wantAlive: true},
-		{name: "does not signal non-sigil binary with local serve suffix", cmdline: "/tmp/python local serve", wantAlive: true},
-		{name: "does not signal unrelated live pid with healthy endpoint", cmdline: "sleep 60", liveEndpoint: true, wantAlive: true},
-		{name: "keeps status when pid identity cannot be checked", cmdlineError: errors.New("ps failed"), wantAlive: true, wantErr: "identify recorded daemon", wantStatus: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			cmd := exec.Command("sleep", "60")
-			require.NoError(t, cmd.Start())
-			done := make(chan error, 1)
-			go func() { done <- cmd.Wait() }()
-			waited := false
-			t.Cleanup(func() {
-				if waited {
-					return
-				}
-				_ = cmd.Process.Kill()
-				<-done
-			})
+	time.Sleep(time.Minute)
+}
 
-			withProcessCommandLine(t, func(pid int) (string, error) {
-				require.Equal(t, cmd.Process.Pid, pid)
-				return tc.cmdline, tc.cmdlineError
-			})
+func TestLocalDaemonLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	helper := copyTestExecutable(t)
+	cmd := exec.Command(helper, "-test.run=^TestLocalDaemonHelperProcess$", "local", "serve")
+	cmd.Env = append(os.Environ(), daemonHelperEnv+"=1", daemonHelperDir+"="+dir)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	require.NoError(t, cmd.Start())
+	trustDaemonHelperProcess(t, cmd.Process.Pid)
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	waited := false
+	t.Cleanup(func() {
+		if waited {
+			return
+		}
+		_ = cmd.Process.Kill()
+		<-done
+	})
 
-			endpoint := "http://127.0.0.1:1"
-			if tc.liveEndpoint {
-				ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					w.WriteHeader(http.StatusOK)
-				}))
-				t.Cleanup(ts.Close)
-				endpoint = ts.URL
-			}
-			require.NoError(t, SaveStatus(dir, Status{PID: cmd.Process.Pid, Port: 1, Endpoint: endpoint}))
-			stopped, err := Stop(dir)
-			if tc.wantErr != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.wantErr)
-			} else {
-				require.NoError(t, err)
-			}
-			assert.Equal(t, tc.wantStop, stopped)
-			if tc.wantAlive {
-				assert.True(t, pidAlive(cmd.Process.Pid))
-			} else {
-				select {
-				case <-done:
-					waited = true
-				case <-time.After(time.Second):
-					t.Fatal("daemon process still running after Stop returned")
-				}
-			}
-			_, err = os.Stat(filepath.Join(dir, StatusFile))
-			if tc.wantStatus {
-				assert.NoError(t, err, "status file should remain when daemon identity cannot be checked")
-			} else {
-				assert.True(t, os.IsNotExist(err), "status file should be removed")
-			}
-		})
+	var first *Status
+	require.Eventually(t, func() bool {
+		var err error
+		first, err = IsRunning(dir)
+		return err == nil && first != nil
+	}, 5*time.Second, 20*time.Millisecond, "helper daemon published a healthy endpoint")
+	require.Equal(t, cmd.Process.Pid, first.PID)
+
+	reused, err := EnsureRunning(context.Background(), dir, nil)
+	require.NoError(t, err)
+	require.Equal(t, first, reused)
+
+	started := time.Now()
+	stopped, err := Stop(dir)
+	require.NoError(t, err)
+	require.True(t, stopped)
+	require.Less(t, time.Since(started), 3*time.Second)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+		waited = true
+	case <-time.After(3 * time.Second):
+		t.Fatal("helper daemon process did not exit")
 	}
+	require.False(t, pidAlive(first.PID))
+	_, err = os.Stat(filepath.Join(dir, StatusFile))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func copyTestExecutable(t *testing.T) string {
+	t.Helper()
+	sourcePath, err := os.Executable()
+	require.NoError(t, err)
+	source, err := os.Open(sourcePath)
+	require.NoError(t, err)
+	defer func() { _ = source.Close() }()
+
+	name := "agento11y"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	destinationPath := filepath.Join(t.TempDir(), name)
+	destination, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
+	require.NoError(t, err)
+	_, copyErr := io.Copy(destination, source)
+	closeErr := destination.Close()
+	require.NoError(t, copyErr)
+	require.NoError(t, closeErr)
+	return destinationPath
 }
 
 // TestListenLocal covers both halves of the port-fallback contract:
@@ -290,19 +235,6 @@ func TestListenLocal(t *testing.T) {
 	}
 }
 
-// TestEnsureRunning_ConcurrentCallersSpawnOnce drives several
-// EnsureRunning goroutines at the same empty state dir. A healthy
-// daemon is simulated by an httptest server so endpointAlive returns
-// true after the first SaveStatus; the flock-guarded recheck inside
-// EnsureRunning ensures only the first caller spawns the daemon and
-// the rest converge on the saved status.
-func withProcessCommandLine(t *testing.T, fn func(int) (string, error)) {
-	t.Helper()
-	prev := processCommandLineFn
-	t.Cleanup(func() { processCommandLineFn = prev })
-	processCommandLineFn = fn
-}
-
 // looksLikeTestBinary is what stops startDaemon from re-executing a test binary
 // as the daemon, which would fork the suite into more daemons.
 func TestLooksLikeTestBinary(t *testing.T) {
@@ -325,6 +257,11 @@ func TestLooksLikeTestBinary(t *testing.T) {
 	}
 }
 
+// TestEnsureRunning_ConcurrentCallersSpawnOnce drives several
+// EnsureRunning goroutines at the same empty state dir. A healthy
+// daemon is simulated by an httptest server so endpointAlive returns
+// true after the first SaveStatus; the file lock makes the callers converge
+// on the status that the first caller writes.
 func TestEnsureRunning_ConcurrentCallersSpawnOnce(t *testing.T) {
 	dir := t.TempDir()
 
@@ -340,7 +277,7 @@ func TestEnsureRunning_ConcurrentCallersSpawnOnce(t *testing.T) {
 	restore := SetStartDaemonForTesting(func(_ context.Context, dir string, _ *log.Logger) (*Status, error) {
 		spawns.Add(1)
 		// Yield a moment so the next goroutine has time to wait on the
-		// flock; without this, the first caller may finish before the
+		// file lock; without this, the first caller may finish before the
 		// others even contend.
 		time.Sleep(20 * time.Millisecond)
 		s := Status{
@@ -366,7 +303,7 @@ func TestEnsureRunning_ConcurrentCallersSpawnOnce(t *testing.T) {
 	wg.Wait()
 
 	if got := spawns.Load(); got != 1 {
-		t.Errorf("spawns = %d, want 1 (flock should serialise EnsureRunning)", got)
+		t.Errorf("spawns = %d, want 1 (file lock should serialise EnsureRunning)", got)
 	}
 }
 

@@ -3,6 +3,7 @@ package pi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -807,8 +808,13 @@ func TestPluginInstalled_AbsoluteLocalPath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"name":"@grafana/agento11y-pi"}`), 0o600); err != nil {
 		t.Fatalf("write package.json: %v", err)
 	}
-	contents := `{"packages":["` + pkgDir + `"]}`
-	writeSettings(t, dir, contents)
+	// Marshalled rather than concatenated: a Windows path carries backslashes
+	// that have to be escaped to keep the settings file valid JSON.
+	contents, err := json.Marshal(map[string][]string{"packages": {pkgDir}})
+	if err != nil {
+		t.Fatalf("marshal settings: %v", err)
+	}
+	writeSettings(t, dir, string(contents))
 	t.Setenv("PI_CODING_AGENT_DIR", dir)
 
 	got, err := pluginInstalled()

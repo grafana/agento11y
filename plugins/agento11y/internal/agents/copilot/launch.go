@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
@@ -43,7 +42,7 @@ const (
 // Test seams.
 var (
 	lookPath     = exec.LookPath
-	execFn       = syscall.Exec
+	execFn       = launcher.DefaultExec
 	runUninstall = defaultRunUninstall
 	pluginList   = defaultPluginList
 )

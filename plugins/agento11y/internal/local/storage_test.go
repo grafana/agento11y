@@ -83,9 +83,20 @@ func TestAppendGeneration(t *testing.T) {
 		wantErr   bool
 	}{
 		{name: "populated id writes per-conversation file", convID: "conv-A", wantPath: "conv-A.jsonl"},
+		{name: "UUID writes per-conversation file", convID: "9f2c4a1e-3b7d-4c58-9a10-2f6e8b4d1c07", wantPath: "9f2c4a1e-3b7d-4c58-9a10-2f6e8b4d1c07.jsonl"},
 		{name: "missing conversations dir is recreated", convID: "conv-A", removeDir: true, wantPath: "conv-A.jsonl"},
 		{name: "empty id rejected", convID: "", wantErr: true},
 		{name: "path id rejected", convID: "../runs", wantErr: true},
+		{name: "colon rejected", convID: "a:b", wantErr: true},
+		{name: "other reserved characters rejected", convID: `a<bad>|name?*"`, wantErr: true},
+		{name: "control character rejected", convID: "a\x1fb", wantErr: true},
+		{name: "reserved device name rejected", convID: "CON", wantErr: true},
+		{name: "reserved device name is case insensitive", convID: "com1", wantErr: true},
+		{name: "reserved device name with extension rejected", convID: "LPT9.txt", wantErr: true},
+		{name: "superscript COM device name rejected", convID: "COM¹", wantErr: true},
+		{name: "superscript LPT device name with extension rejected", convID: "LPT³.jsonl", wantErr: true},
+		{name: "trailing dot rejected", convID: "conversation.", wantErr: true},
+		{name: "trailing space rejected", convID: "conversation ", wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

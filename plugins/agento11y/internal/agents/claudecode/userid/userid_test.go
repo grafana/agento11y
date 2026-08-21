@@ -13,6 +13,14 @@ const sampleClaudeJSON = `{
   }
 }`
 
+// setHomeDir points os.UserHomeDir at dir: it reads HOME on unix and
+// USERPROFILE on Windows, so both are set.
+func setHomeDir(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
 func writeClaudeJSON(t *testing.T, dir, contents string) string {
 	t.Helper()
 	path := filepath.Join(dir, ".claude.json")
@@ -128,7 +136,7 @@ func TestResolve(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
-			t.Setenv("HOME", home)
+			setHomeDir(t, home)
 			t.Setenv("SIGIL_USER_ID", tt.envUserID)
 			t.Setenv("SIGIL_USER_ID_SOURCE", tt.envSource)
 

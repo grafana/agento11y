@@ -218,7 +218,7 @@ func cursorSession(t *testing.T, name string) (*cursorImporter, SessionPreview) 
 }
 
 func TestCursorRoots(t *testing.T) {
-	t.Setenv("HOME", "/home/tester")
+	setHomeDir(t, "/home/tester")
 	tests := []struct {
 		name string
 		imp  *cursorImporter

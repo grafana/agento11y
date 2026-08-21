@@ -216,6 +216,13 @@ func cursorHooksPath() (string, error) {
 // also keep the literal, so isOursHook checks for both.
 const legacyRunShLiteral = "${CURSOR_PLUGIN_ROOT}/scripts/run.sh"
 
+// legacyRunShSegment is the tail of the expanded legacy path, written with
+// forward slashes. Commands are separator-normalised before the comparison
+// because a Windows expansion mixes both flavors: the plugin root arrives
+// with backslashes while the "/scripts/run.sh" tail comes from the bundled
+// literal above.
+const legacyRunShSegment = "plugins/cursor/scripts/run.sh"
+
 // isOursHook reports whether an existing entry's command is one of ours, so
 // re-runs and the legacy /add-plugin run.sh wiring update in place instead of
 // double-firing. It matches any command of the form `<binary> cursor hook`
@@ -227,7 +234,7 @@ const legacyRunShLiteral = "${CURSOR_PLUGIN_ROOT}/scripts/run.sh"
 func isOursHook(cmd string) bool {
 	c := strings.TrimSpace(cmd)
 	if strings.Contains(c, legacyRunShLiteral) ||
-		strings.Contains(c, filepath.Join("plugins", "cursor", "scripts", "run.sh")) {
+		strings.Contains(strings.ReplaceAll(c, `\`, "/"), legacyRunShSegment) {
 		return true
 	}
 	bin, ok := strings.CutSuffix(c, " cursor hook")
