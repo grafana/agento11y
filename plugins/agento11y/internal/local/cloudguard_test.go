@@ -284,15 +284,47 @@ func TestHookTimeoutFromHeader(t *testing.T) {
 // marker every consumer checks, and its wording has to say the guard could not
 // be evaluated rather than that a policy blocked the call.
 func TestDenyFromCloudError(t *testing.T) {
-	body := []byte(`{"phase":"postflight","input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash"}}]}]}}`)
-	resp := denyFromCloudError(body, errors.New("POST https://cloud.example.test/api/v1/hooks:evaluate: connection refused"))
+	const detail = "POST https://cloud.example.test/api/v1/hooks:evaluate: connection refused"
+	cases := []struct {
+		name       string
+		body       string
+		wantReason string
+		wantNoSub  string
+	}{
+		{
+			name:       "tool_call_names_the_tool",
+			body:       `{"phase":"postflight","input":{"output":[{"role":"assistant","parts":[{"kind":"tool_call","tool_call":{"id":"c1","name":"Bash"}}]}]}}`,
+			wantReason: guard.FormatEvalFailure("Bash", detail),
+		},
+		{
+			// Prompt errors must not invent a tool call or address the model.
+			name:       "preflight_message_gets_the_message_wording",
+			body:       `{"phase":"preflight","input":{"messages":[{"role":"user","parts":[{"kind":"text","text":"hello"}]}]}}`,
+			wantReason: guard.FormatPromptEvalFailure(detail),
+			wantNoSub:  "tool call",
+		},
+		{
+			name:       "undecodable_body_gets_the_message_wording",
+			body:       `{"phase":`,
+			wantReason: guard.FormatPromptEvalFailure(detail),
+			wantNoSub:  "tool call",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := denyFromCloudError([]byte(tc.body), errors.New(detail))
 
-	assert.Equal(t, agento11y.HookActionDeny, resp.Action)
-	assert.Equal(t, guard.EvaluationFailureRuleID, resp.RuleID)
-	assert.Equal(t, guard.FormatEvalFailure("Bash", "POST https://cloud.example.test/api/v1/hooks:evaluate: connection refused"), resp.Reason)
-	assert.Contains(t, resp.Reason, "could not evaluate")
-	assert.NotContains(t, resp.Reason, "policy blocked")
-	assert.NotNil(t, resp.Evaluations)
+			assert.Equal(t, agento11y.HookActionDeny, resp.Action)
+			assert.Equal(t, guard.EvaluationFailureRuleID, resp.RuleID)
+			assert.Equal(t, tc.wantReason, resp.Reason)
+			assert.Contains(t, resp.Reason, "could not evaluate")
+			assert.NotContains(t, resp.Reason, "policy blocked")
+			if tc.wantNoSub != "" {
+				assert.NotContains(t, resp.Reason, tc.wantNoSub)
+			}
+			assert.NotNil(t, resp.Evaluations)
+		})
+	}
 }
 
 // TestHookRequestToolName covers naming the blocked call in the fail-closed
@@ -330,12 +362,14 @@ func TestHookRequestToolName(t *testing.T) {
 			body: `{"input":{"output":[{"role":"assistant","parts":[{"type":"text","text":"running it"},{"type":"tool_call","toolCall":{"name":"Edit"}}]}]}}`,
 			want: "Edit",
 		},
-		{name: "preflight_without_tool_call", body: `{"phase":"preflight","input":{"messages":[]}}`, want: unknownToolName},
-		{name: "undecodable_body", body: `{"phase":`, want: unknownToolName},
+		{name: "preflight_without_tool_call", body: `{"phase":"preflight","input":{"messages":[]}}`},
+		{name: "undecodable_body", body: `{"phase":`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, hookRequestToolName([]byte(tc.body)))
+			name, found := hookRequestToolName([]byte(tc.body))
+			assert.Equal(t, tc.want != "", found)
+			assert.Equal(t, tc.want, name)
 		})
 	}
 }

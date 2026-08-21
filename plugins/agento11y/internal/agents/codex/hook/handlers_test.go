@@ -44,7 +44,7 @@ func TestSessionStartWithoutTurnIDSeedsLaterTurn(t *testing.T) {
 		Timestamp:      "2026-05-11T10:00:00Z",
 	}, cfg, logger)
 
-	UserPromptSubmit(Payload{
+	UserPromptSubmit(context.Background(), io.Discard, Payload{
 		HookEventName: "UserPromptSubmit",
 		SessionID:     "sess",
 		TurnID:        "turn",
@@ -487,7 +487,7 @@ func TestStopResolvesSubagentParentGeneration(t *testing.T) {
 
 	SessionStart(Payload{HookEventName: "SessionStart", SessionID: "parent", TranscriptPath: parentTranscript}, cfg, logger)
 	SessionStart(Payload{HookEventName: "SessionStart", SessionID: "child", TranscriptPath: childTranscript}, cfg, logger)
-	UserPromptSubmit(Payload{HookEventName: "UserPromptSubmit", SessionID: "child", TurnID: "child-turn"}, cfg, logger)
+	UserPromptSubmit(context.Background(), io.Discard, Payload{HookEventName: "UserPromptSubmit", SessionID: "child", TurnID: "child-turn"}, cfg, logger)
 
 	Stop(Payload{HookEventName: "Stop", SessionID: "child", TurnID: "child-turn", Timestamp: "2026-05-11T10:00:00Z"}, cfg, logger)
 
@@ -999,6 +999,114 @@ func TestPreToolUseGuard(t *testing.T) {
 			}
 			if tt.wantLogContains != "" && !strings.Contains(logs.String(), tt.wantLogContains) {
 				t.Errorf("logs missing %q:\n%s", tt.wantLogContains, logs.String())
+			}
+		})
+	}
+}
+
+func TestUserPromptSubmitGuard(t *testing.T) {
+	var responseBody atomic.Value
+	responseBody.Store("")
+	var calls atomic.Int32
+	server := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		body, _ := responseBody.Load().(string)
+		if body == "" {
+			body = `{"action":"allow"}`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	tests := []struct {
+		name               string
+		env                map[string]string
+		serverResponds     string
+		expectServerCall   bool
+		wantStdoutEmpty    bool
+		wantStdoutContains []string
+		wantCaptured       bool
+	}{
+		{
+			name:            "disabled_by_default_no_env",
+			wantStdoutEmpty: true,
+			wantCaptured:    true,
+		},
+		{
+			name:             "enabled_allow_response",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:   `{"action":"allow"}`,
+			expectServerCall: true,
+			wantStdoutEmpty:  true,
+			wantCaptured:     true,
+		},
+		{
+			name:               "enabled_deny_response",
+			env:                map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:     `{"action":"deny","reason":"secret in prompt"}`,
+			expectServerCall:   true,
+			wantStdoutContains: []string{`"decision":"block"`, "secret in prompt", "blocked this message"},
+		},
+		{
+			// Shared-binary hosts ignore prompt transforms.
+			name:             "enabled_allow_with_transform_is_ignored",
+			env:              map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			serverResponds:   `{"action":"allow","transformed_input":{"messages":[{"role":"user","parts":[{"kind":"text","text":"[REDACTED]"}]}]}}`,
+			expectServerCall: true,
+			wantStdoutEmpty:  true,
+			wantCaptured:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			// Clear primary variables to avoid posting to an exported Cloud endpoint.
+			envconfig.PinAliasEnvBlank(t)
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			t.Setenv("SIGIL_ENDPOINT", server.URL)
+			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
+			t.Setenv("SIGIL_AUTH_TOKEN", "token")
+
+			calls.Store(0)
+			responseBody.Store(tt.serverResponds)
+
+			logger := log.New(io.Discard, "", 0)
+			cfg := config.Load(logger)
+			var stdout bytes.Buffer
+			UserPromptSubmit(context.Background(), &stdout, Payload{
+				HookEventName: "UserPromptSubmit",
+				SessionID:     "sess",
+				TurnID:        "turn",
+				Prompt:        "my token is glc_secret",
+				Model:         "gpt-5",
+			}, cfg, logger)
+
+			if tt.expectServerCall && calls.Load() == 0 {
+				t.Errorf("expected server call, got 0")
+			}
+			if !tt.expectServerCall && calls.Load() != 0 {
+				t.Errorf("expected no server call, got %d", calls.Load())
+			}
+			if tt.wantStdoutEmpty && stdout.Len() != 0 {
+				t.Errorf("stdout not empty: %q", stdout.String())
+			}
+			for _, want := range tt.wantStdoutContains {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("stdout = %q, want substring %q", stdout.String(), want)
+				}
+			}
+			// An allowed prompt is captured; a denied one must not reach
+			// disk at all.
+			frag := fragment.LoadTolerant("sess", "turn", logger)
+			if tt.wantCaptured && frag == nil {
+				t.Error("turn fragment not written")
+			}
+			if !tt.wantCaptured && frag != nil {
+				t.Errorf("turn fragment written for a denied prompt: %+v", frag)
 			}
 		})
 	}

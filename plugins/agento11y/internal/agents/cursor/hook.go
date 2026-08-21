@@ -1,11 +1,8 @@
-// Package cursor implements the Cursor agent adapter for the consolidated
-// agento11y binary. The dispatcher in cmd/agento11y routes `agento11y cursor hook` here.
+// Package cursor implements the Cursor adapter for the agento11y binary.
 //
-// Cursor expects a permissive JSON response on pre-execution events when the
-// plugin wants to allow the action — a missing or non-JSON stdout on those
-// events is treated as a block. We always emit the permissive response on
-// beforeSubmitPrompt regardless of how dispatch terminates, and on preToolUse
-// whenever the guard handler did not get a chance to answer itself.
+// Cursor expects JSON responses for beforeSubmitPrompt and preToolUse. The
+// dispatcher sends a permissive response when a handler writes nothing, so
+// behavior does not depend on Cursor's permissive default.
 package cursor
 
 import (
@@ -28,17 +25,27 @@ var (
 	preToolUseMarker   = []byte(`"hook_event_name":"preToolUse"`)
 )
 
-// Hook reads a Cursor hook JSON payload from stdin and dispatches it to the
-// matching handler. On beforeSubmitPrompt the permissive response is
-// always emitted to stdout, even on parse failure, so Cursor never blocks
-// the user's input on telemetry trouble. preToolUse gets the same treatment
-// when dispatch bails before the guard handler runs; the handler itself
-// always writes a response on every evaluation outcome.
+// answeredWriter prevents a fallback response after a handler writes one,
+// including when the handler panics.
+type answeredWriter struct {
+	w        io.Writer
+	answered bool
+}
+
+func (a *answeredWriter) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		a.answered = true
+	}
+	return a.w.Write(p)
+}
+
+// Hook dispatches a Cursor hook payload. If a pre-execution handler writes
+// nothing, Hook sends one permissive response.
 func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Logger) error {
 	var raw []byte
 	var event string
 	parsed := false
-	preToolUseHandled := false
+	out := &answeredWriter{w: stdout}
 	defer func() {
 		// Before the payload parses we can only guess the event from the raw
 		// bytes, and beforeSubmitPrompt wins so a nested preToolUse marker can't
@@ -52,10 +59,7 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 				event = "preToolUse"
 			}
 		}
-		if event == "beforeSubmitPrompt" {
-			_, _ = fmt.Fprint(stdout, permissiveResponse)
-		}
-		if event == "preToolUse" && !preToolUseHandled {
+		if !out.answered && (event == "beforeSubmitPrompt" || event == "preToolUse") {
 			_, _ = fmt.Fprint(stdout, permissiveResponse)
 		}
 	}()
@@ -90,10 +94,9 @@ func Hook(ctx context.Context, stdin io.Reader, stdout io.Writer, logger *log.Lo
 	case "sessionStart":
 		hook.SessionStart(payload, logger)
 	case "beforeSubmitPrompt":
-		hook.BeforeSubmit(payload, cfg, logger)
+		hook.BeforeSubmit(ctx, out, payload, cfg, logger)
 	case "preToolUse":
-		hook.PreToolUse(ctx, payload, cfg, stdout, logger)
-		preToolUseHandled = true
+		hook.PreToolUse(ctx, payload, cfg, out, logger)
 	case "afterAgentResponse":
 		hook.AfterAgentResponse(payload, cfg, logger)
 	case "afterAgentThought":

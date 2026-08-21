@@ -100,6 +100,25 @@ If nothing shows up, add `AGENTO11Y_DEBUG=true` to `~/.config/agento11y/config.e
 tail -f ~/.local/state/agento11y/logs/agento11y.log
 ```
 
+## Guards
+
+Guards apply [Agent Observability rules](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/guards/) to submitted messages and tool calls.
+
+Guards are off by default. Cursor launches from the GUI, so enable them in `~/.config/agento11y/config.env`:
+
+```sh
+AGENTO11Y_GUARDS_ENABLED=true
+```
+
+Guards can be
+
+- `preflight`: stop the turn before the message reaches the model.
+- `postflight`: block the tool call and tell the model why. A redact rule rewrites the tool arguments.
+
+When enabled, guards send every submitted message and tool argument to `AGENTO11Y_ENDPOINT`, regardless of `AGENTO11Y_CONTENT_CAPTURE_MODE`.
+
+Each message can wait up to `AGENTO11Y_GUARDS_TIMEOUT_MS` (1500 ms by default) before the turn starts.
+
 ## All options
 
 | Variable | Default | Description |
@@ -117,9 +136,9 @@ tail -f ~/.local/state/agento11y/logs/agento11y.log
 | `AGENTO11Y_AGENT_NAME` | `cursor` | Override the exported `agent_name`. Avoid a `/` in the name: a slash marks a subagent generation, so every turn of the run is counted as one. Guard rules and dashboards that filter on `cursor` no longer match the generations this run exports. |
 | `AGENTO11Y_LOCAL` | `false` | Send Cursor hook captures to the local viewer at `http://127.0.0.1:8765` instead of Grafana Cloud. Local mode always stores full content. Cloud forwarding also requires `AGENTO11Y_LOCAL_FORWARD`. |
 | `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
-| `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Cursor `preToolUse` hook is evaluated against Agent Observability: tool calls denied by guard rules are blocked, and Transform rules rewrite the tool arguments before execution. |
-| `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |
-| `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout. Lower = less added latency on every tool call, higher = better tolerance for slow `llm_judge` evaluators. |
+| `AGENTO11Y_GUARDS_ENABLED` | `false` | See [Guards](#guards). |
+| `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | On timeout, network error, or 5xx, send the message or run the tool call. Set `false` to block the message or call. |
+| `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Guard timeout per message or tool call. Raise it for slow `llm_judge` evaluators. |
 | `AGENTO11Y_BIN` | auto | Override the binary path if you installed `agento11y` (or the legacy `sigil`) somewhere unusual. |
 
 If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your Agent Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.

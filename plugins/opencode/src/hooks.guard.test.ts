@@ -1114,7 +1114,7 @@ describe("opencode prompt guard", () => {
       name: "refuses the turn when the evaluation fails and fail-open is off",
       config: { guards: { enabled: true, timeoutMs: 1500, failOpen: false } },
       respond: () => "error",
-      wantBlock: "blocked as a safety measure",
+      wantBlock: "blocked this message",
       wantCalls: 1,
     },
   ];

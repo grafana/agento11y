@@ -1,6 +1,9 @@
 package hook
 
 import (
+	"context"
+	"encoding/json"
+	"io"
 	"log"
 	"strings"
 	"unicode/utf8"
@@ -9,12 +12,43 @@ import (
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/config"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/fragment"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/guard"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 )
 
 // maxTitleLen caps the conversation title derived from the first user prompt.
 const maxTitleLen = 100
 
-// BeforeSubmit captures the user prompt for the upcoming generation. Cursor
+// beforeSubmitDeny is Cursor's response for blocking a submitted prompt.
+// UserMessage is shown to the user; the model is not called.
+type beforeSubmitDeny struct {
+	Continue    bool   `json:"continue"`
+	UserMessage string `json:"user_message,omitempty"`
+}
+
+// BeforeSubmit evaluates preflight guards before capturing the prompt. A deny
+// writes Cursor's stop response; an allow lets the dispatcher respond.
+// Denied messages never reach the session file or conversation title.
+func BeforeSubmit(ctx context.Context, stdout io.Writer, p Payload, cfg config.Config, logger *log.Logger) {
+	res := guard.EvaluatePrompt(ctx, envconfig.ResolveGuards(logger), guard.PromptInput{
+		AgentName:     cfg.Agent(),
+		AgentVersion:  strings.TrimSpace(p.CursorVersion),
+		ModelProvider: strings.TrimSpace(p.Provider),
+		ModelName:     resolvedModel(p),
+		Prompt:        p.Prompt,
+	}, logger)
+	if res.Blocked() {
+		_ = json.NewEncoder(stdout).Encode(beforeSubmitDeny{
+			Continue:    false,
+			UserMessage: res.Reason,
+		})
+		return
+	}
+
+	capturePrompt(p, cfg, logger)
+}
+
+// capturePrompt records the user prompt for the upcoming generation. Cursor
 // doesn't always assign a generation_id at prompt-submit time; without one we
 // cannot key the fragment, so skip the fragment write — the turn will still
 // be exported, just without the user prompt in `input`.
@@ -28,7 +62,7 @@ const maxTitleLen = 100
 // The conversation title is session-scoped, so it is stamped even when
 // generation_id is missing: first prompt wins, and a later sessionStart must
 // not wipe it.
-func BeforeSubmit(p Payload, cfg config.Config, logger *log.Logger) {
+func capturePrompt(p Payload, cfg config.Config, logger *log.Logger) {
 	if p.ConversationID == "" {
 		logger.Print("beforeSubmitPrompt: missing conversation_id — skipping")
 		return

@@ -107,6 +107,27 @@ AGENTO11Y_DEBUG=true agento11y codex  # one turn
 tail -f ~/.local/state/agento11y/logs/agento11y.log
 ```
 
+## Guards
+
+Guards apply [Agent Observability rules](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/guards/) to submitted messages and tool calls.
+
+Guards are off by default:
+
+```sh
+AGENTO11Y_GUARDS_ENABLED=true agento11y codex
+```
+
+Guards can be
+
+- `preflight`: stop the turn before the message reaches the model.
+- `postflight`: block the tool call and tell the model why. A redact rule rewrites the tool arguments.
+
+Codex only guards these tool types: Bash, the `apply_patch` variants, and MCP tools. See the [Codex hooks docs](https://developers.openai.com/codex/hooks) for the supported set.
+
+When enabled, guards send every submitted message and tool argument to `AGENTO11Y_ENDPOINT`, regardless of `AGENTO11Y_CONTENT_CAPTURE_MODE`.
+
+Each message can wait up to `AGENTO11Y_GUARDS_TIMEOUT_MS` (1500 ms by default) before the turn starts.
+
 ## All options
 
 | Variable | Default | Description |
@@ -125,12 +146,10 @@ tail -f ~/.local/state/agento11y/logs/agento11y.log
 | `AGENTO11Y_AGENT_NAME` | `codex` | Override the exported `agent_name`. Subagent turns become `<name>/subagent`. Avoid a `/` in the name itself: a slash marks a subagent generation, so every turn of the run is counted as one. Guard rules and dashboards that filter on `codex` no longer match the generations this run exports. |
 | `AGENTO11Y_LOCAL` | `false` | Send Codex captures (launches and installed hooks) to the local viewer at `http://127.0.0.1:8765` instead of Grafana Cloud. Local mode always stores full content. Cloud forwarding also requires `AGENTO11Y_LOCAL_FORWARD`. |
 | `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
-| `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable Codex `PreToolUse` guards against Agent Observability rules. |
-| `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | Allow the tool call when the guard request fails (set `false` for fail-closed). |
+| `AGENTO11Y_GUARDS_ENABLED` | `false` | See [Guards](#guards). |
+| `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | On guard failure, send the message or run the tool call. Set `false` to block the message or call. |
 | `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-call guard timeout. |
 | `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `agento11y-codex` plugin automatically. Set `false` to pin the installed version. |
-
-Guard rules can block a tool call or rewrite its arguments (Transform rules, e.g. redacting a secret before the tool runs). Guards only intercept tool calls that Codex routes through `PreToolUse` — Bash, the `apply_patch` variants, and MCP tools. See the [Codex hooks docs](https://developers.openai.com/codex/hooks) for the supported set.
 
 If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your Agent Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.
 

@@ -91,6 +91,23 @@ tail -f ~/.local/state/agento11y/logs/agento11y.log
 
 Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a missing token, or a token without the `sigil:write` scope.
 
+## Guards
+
+Guards apply [Agent Observability rules](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/guards/) to submitted messages and tool calls.
+
+Guards are off by default:
+
+```sh
+AGENTO11Y_GUARDS_ENABLED=true agento11y claude
+```
+
+Guards can be
+
+- `preflight`: stop the turn before the message reaches the model.
+- `postflight`: block the tool call and tells the model why. A redact rule rewrites the tool arguments.
+
+When enabled, guards send every submitted message and tool argument to `AGENTO11Y_ENDPOINT`, regardless of `AGENTO11Y_CONTENT_CAPTURE_MODE`.
+
 ## All options
 
 | Variable | Default | Description |
@@ -111,8 +128,8 @@ Common culprits: `agento11y --version` doesn't work (binary not on `PATH`), a mi
 | `AGENTO11Y_LOCAL` | `false` | Send Claude Code captures (launches and installed hooks) to the local viewer at `http://127.0.0.1:8765` instead of Grafana Cloud. Local mode always stores full content. Cloud forwarding also requires `AGENTO11Y_LOCAL_FORWARD`. |
 | `AGENTO11Y_DEBUG` | `false` | Log to `~/.local/state/agento11y/logs/agento11y.log`. |
 | `AGENTO11Y_AUTO_UPDATE` | `true` | Refresh the `agento11y-claude-code` plugin automatically. Set `false` to pin the installed version. |
-| `AGENTO11Y_GUARDS_ENABLED` | `false` | Enable tool-call guards. When on, each Claude Code `PreToolUse` hook calls the Agent Observability `/api/v1/hooks:evaluate` API and blocks tool calls denied by guard rules. |
-| `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | When the guard call fails (timeout, network, 5xx), proceed with the tool call. Set `false` for strict mode. |
-| `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Per-call timeout. Lower = less added latency on every tool call, higher = better tolerance for slow `llm_judge` evaluators. |
+| `AGENTO11Y_GUARDS_ENABLED` | `false` | See [Guards](#guards). |
+| `AGENTO11Y_GUARDS_FAIL_OPEN` | `true` | On timeout, network error, or 5xx, send the message or run the tool call. Set `false` to block the message or call. |
+| `AGENTO11Y_GUARDS_TIMEOUT_MS` | `1500` | Guard timeout per message or tool call. Raise it for slow `llm_judge` evaluators. |
 
 If your OTLP **Instance ID** (on the OpenTelemetry card) differs from your Agent Observability Instance ID, set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(otlp-id:glc_token)>`.

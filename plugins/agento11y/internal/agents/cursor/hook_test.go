@@ -21,9 +21,17 @@ func TestHookDispatch(t *testing.T) {
 	}))
 	defer denyServer.Close()
 
+	allowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"action":"allow"}`))
+	}))
+	defer allowServer.Close()
+
 	tests := []struct {
-		name               string
-		env                map[string]string
+		name string
+		env  map[string]string
+		// allowVerdict selects the allowing server; the default denies.
+		allowVerdict       bool
 		stdin              string
 		wantStdout         string
 		wantStdoutContains []string
@@ -53,17 +61,35 @@ func TestHookDispatch(t *testing.T) {
 				`"tool_name":"Shell","tool_use_id":"tu_1","tool_input":{"command":"echo hi"}}`,
 			wantStdoutContains: []string{`"permission":"deny"`, `blocked tool`},
 		},
+		{
+			name:               "prompt_deny_replaces_the_permissive_line",
+			env:                map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			stdin:              `{"hook_event_name":"beforeSubmitPrompt","conversation_id":"conv","generation_id":"gen","prompt":"my token is glc_secret"}`,
+			wantStdoutContains: []string{`"continue":false`, `"user_message":`, "blocked this message"},
+		},
+		{
+			name:         "prompt_allow_keeps_the_permissive_line",
+			env:          map[string]string{"SIGIL_GUARDS_ENABLED": "true"},
+			allowVerdict: true,
+			stdin:        `{"hook_event_name":"beforeSubmitPrompt","conversation_id":"conv","generation_id":"gen","prompt":"hello"}`,
+			wantStdout:   permissiveResponse,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
 			t.Setenv("SIGIL_GUARDS_ENABLED", "")
 			t.Setenv("SIGIL_GUARDS_FAIL_OPEN", "")
 			t.Setenv("SIGIL_GUARDS_TIMEOUT_MS", "")
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
-			t.Setenv("SIGIL_ENDPOINT", denyServer.URL)
+			endpoint := denyServer.URL
+			if tt.allowVerdict {
+				endpoint = allowServer.URL
+			}
+			t.Setenv("SIGIL_ENDPOINT", endpoint)
 			t.Setenv("SIGIL_AUTH_TENANT_ID", "tenant")
 			t.Setenv("SIGIL_AUTH_TOKEN", "token")
 

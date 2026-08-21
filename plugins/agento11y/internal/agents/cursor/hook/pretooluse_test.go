@@ -269,7 +269,7 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 			}
 
 			cfg := config.Load(logger)
-			BeforeSubmit(Payload{
+			BeforeSubmit(context.Background(), io.Discard, Payload{
 				HookEventName:  "beforeSubmitPrompt",
 				ConversationID: "conv",
 				GenerationID:   "gen",
@@ -293,8 +293,14 @@ func TestAgentNameOverrideGuardAndExport(t *testing.T) {
 				Status:         "completed",
 			}, cfg, logger)
 
-			if len(guardAgents) != 1 || guardAgents[0] != tt.want {
-				t.Fatalf("guard agent names = %v, want [%q]", guardAgents, tt.want)
+			// The prompt and tool call each make one guard request.
+			if len(guardAgents) != 2 {
+				t.Fatalf("guard agent names = %v, want two entries", guardAgents)
+			}
+			for _, got := range guardAgents {
+				if got != tt.want {
+					t.Fatalf("guard agent names = %v, want every entry %q", guardAgents, tt.want)
+				}
 			}
 			if len(exportAgents) != 1 || exportAgents[0] != tt.want {
 				t.Fatalf("exported agent names = %v, want [%q]", exportAgents, tt.want)

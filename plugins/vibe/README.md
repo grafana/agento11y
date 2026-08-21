@@ -118,7 +118,11 @@ Subagent turns are not tagged `subagent`. Mistral Vibe only exposes a session-le
 
 ## Guards
 
+Guards apply [Agent Observability rules](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/guides/guards/) to submitted messages and tool calls.
+
 `pre_tool` evaluates each tool call against Agent Observability guard policy. Guards are **off by default**; enable them with `AGENTO11Y_GUARDS_ENABLED=true` (tune with `AGENTO11Y_GUARDS_TIMEOUT_MS` and `AGENTO11Y_GUARDS_FAIL_OPEN`). When enabled, a policy can **deny** a tool call (Mistral Vibe blocks it and shows the reason to the model) or **rewrite** its arguments (e.g. redact a secret before the tool runs). With guards disabled, `pre_tool` is a pass-through that writes nothing. Evaluation runs synchronously before the tool, so a policy should be fast or local; on timeout or transport error the call follows `AGENTO11Y_GUARDS_FAIL_OPEN` (open by default).
+
+Mistral Vibe does not support blocking messages with `preflight` guards. 
 
 ## All options
 

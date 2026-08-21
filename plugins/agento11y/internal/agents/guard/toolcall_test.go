@@ -21,8 +21,7 @@ func TestEvaluateToolCall(t *testing.T) {
 		name           string
 		cfg            envconfig.GuardsConfig
 		serverResponds string
-		// useClosedServer makes the helper connect to a closed listener so
-		// the request fails at transport.
+		// useClosedServer forces a transport failure.
 		useClosedServer bool
 		// clearCreds blanks the SIGIL_ENDPOINT/SIGIL_AUTH_TENANT_ID/
 		// SIGIL_AUTH_TOKEN env vars before the call.
@@ -96,6 +95,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			toolName:        "bash",
 			wantAction:      agento11y.HookActionDeny,
 			wantReasonSub:   "could not evaluate",
+			wantRuleID:      EvaluationFailureRuleID,
 		},
 		{
 			name:          "missing credentials fail open",
@@ -112,6 +112,7 @@ func TestEvaluateToolCall(t *testing.T) {
 			toolName:      "bash",
 			wantAction:    agento11y.HookActionDeny,
 			wantReasonSub: "missing AGENTO11Y_ENDPOINT",
+			wantRuleID:    EvaluationFailureRuleID,
 		},
 		{
 			name:             "allow with transform returns redacted args",

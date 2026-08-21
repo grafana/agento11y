@@ -186,44 +186,42 @@ func hookTimeoutFromHeader(r *http.Request, fallback time.Duration) time.Duratio
 	return timeout / 2
 }
 
-// denyFromCloudError builds the fail-closed deny returned when the Cloud hook
-// call failed and GUARDS_FAIL_OPEN is false. It carries
-// guard.EvaluationFailureRuleID so every consumer can tell an infrastructure
-// failure from a policy decision, and reuses guard.FormatEvalFailure so the
-// wording matches the cloud-only path word for word.
+// denyFromCloudError marks fail-closed Cloud errors as evaluation failures.
+// Requests without a tool call use the prompt-specific message.
 func denyFromCloudError(body []byte, err error) agento11y.HookEvaluateResponse {
 	detail := ""
 	if err != nil {
 		detail = err.Error()
 	}
+	reason := guard.FormatPromptEvalFailure(detail)
+	if toolName, ok := hookRequestToolName(body); ok {
+		reason = guard.FormatEvalFailure(toolName, detail)
+	}
 	return agento11y.HookEvaluateResponse{
 		Action:      agento11y.HookActionDeny,
 		RuleID:      guard.EvaluationFailureRuleID,
-		Reason:      guard.FormatEvalFailure(hookRequestToolName(body), detail),
+		Reason:      reason,
 		Evaluations: []agento11y.HookEvaluation{},
 	}
 }
 
-// hookRequestToolName returns the name of the first tool call in a hook
-// request body (output messages first, then input messages) so the fail-closed
-// reason can name the blocked call. The body is decoded leniently and only for
-// this: a request the daemon cannot read is still relayed verbatim, and a
-// request with no tool call (a pi preflight context event) has no name to give.
-func hookRequestToolName(body []byte) string {
+// hookRequestToolName finds the first tool call in output or input messages.
+// It decodes leniently because undecodable requests are still relayed.
+func hookRequestToolName(body []byte) (string, bool) {
 	var req hookToolCallProbe
 	if err := json.Unmarshal(body, &req); err != nil {
-		return unknownToolName
+		return "", false
 	}
 	for _, msgs := range [][]hookProbeMessage{req.Input.Output, req.Input.Messages} {
 		for _, m := range msgs {
 			for _, p := range m.Parts {
 				if name := strings.TrimSpace(p.toolCallName()); name != "" {
-					return name
+					return name, true
 				}
 			}
 		}
 	}
-	return unknownToolName
+	return "", false
 }
 
 // hookToolCallProbe is a lenient view of a hook request: just enough to name a
@@ -264,7 +262,3 @@ func (p hookProbePart) toolCallName() string {
 type hookProbeToolCall struct {
 	Name string `json:"name"`
 }
-
-// unknownToolName stands in when the hook request names no tool call, so the
-// fail-closed message reads as a sentence rather than referring to "".
-const unknownToolName = "unknown"
