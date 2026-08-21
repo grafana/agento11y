@@ -171,10 +171,12 @@ public sealed partial class Agento11yClient : IAsyncDisposable
         _operationDurationHistogram = _meter.CreateHistogram<double>(
             MetricOperationDuration,
             unit: "s",
+            description: "GenAI operation duration.",
             advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = DurationBucketsSeconds });
         _tokenUsageHistogram = _meter.CreateHistogram<double>(
             MetricTokenUsage,
-            unit: "token",
+            unit: "{token}",
+            description: "Number of input and output tokens used.",
             advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = TokenUsageBuckets });
         _ttftHistogram = _meter.CreateHistogram<double>(
             MetricTimeToFirstToken,

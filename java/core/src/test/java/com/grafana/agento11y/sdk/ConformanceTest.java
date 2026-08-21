@@ -397,6 +397,13 @@ class ConformanceTest {
             assertThat(generation.getOperationName()).isEqualTo("streamText");
             assertThat(span.getName()).isEqualTo("streamText gpt-5");
             assertThat(metricNames).contains(Agento11yClient.METRIC_OPERATION_DURATION, Agento11yClient.METRIC_TTFT);
+
+            MetricData duration = env.metricData(Agento11yClient.METRIC_OPERATION_DURATION);
+            assertThat(duration.getDescription()).isEqualTo("GenAI operation duration.");
+            assertThat(duration.getUnit()).isEqualTo("s");
+            MetricData tokenUsage = env.metricData(Agento11yClient.METRIC_TOKEN_USAGE);
+            assertThat(tokenUsage.getDescription()).isEqualTo("Number of input and output tokens used.");
+            assertThat(tokenUsage.getUnit()).isEqualTo("{token}");
         }
     }
 

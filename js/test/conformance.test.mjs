@@ -458,6 +458,15 @@ test('conformance streaming telemetry semantics', async () => {
       1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864,
     ];
     assert.deepEqual(await env.metricBucketBoundaries('gen_ai.client.token.usage'), expectedTokenUsageBuckets);
+
+    assert.deepEqual(await env.metricMetadata('gen_ai.client.operation.duration'), {
+      description: 'GenAI operation duration.',
+      unit: 's',
+    });
+    assert.deepEqual(await env.metricMetadata('gen_ai.client.token.usage'), {
+      description: 'Number of input and output tokens used.',
+      unit: '{token}',
+    });
   } finally {
     await env.close();
   }
@@ -941,6 +950,16 @@ async function createConformanceEnv(options = {}) {
       assert.ok(metric, `expected histogram metric ${metricName}`);
       assert.ok(metric.dataPoints.length > 0, `expected ${metricName} datapoints`);
       return metric.dataPoints[0].value.buckets.boundaries;
+    },
+    async metricMetadata(metricName) {
+      await meterProvider.forceFlush();
+      const metric = metricExporter
+        .getMetrics()
+        .flatMap((resourceMetrics) => resourceMetrics.scopeMetrics)
+        .flatMap((scopeMetrics) => scopeMetrics.metrics)
+        .find((m) => m.descriptor.name === metricName);
+      assert.ok(metric, `expected metric ${metricName}`);
+      return { description: metric.descriptor.description, unit: metric.descriptor.unit };
     },
     async metricDataPointAttributes(metricName) {
       await meterProvider.forceFlush();
