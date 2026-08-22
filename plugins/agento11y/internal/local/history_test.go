@@ -319,22 +319,80 @@ func TestHistoryPlanRejectsBadInput(t *testing.T) {
 }
 
 func TestHistoryImportRunsAsynchronously(t *testing.T) {
-	isolateHistoryState(t)
-	srv, _ := newHistoryServer(t)
-	writeHistoryTranscript(t, "sess-1", 3, time.Now().Add(-2*time.Hour))
+	type sessionFixture struct {
+		id           string
+		turns        int
+		lastActivity time.Duration
+	}
+	tests := []struct {
+		name        string
+		since       time.Duration
+		sessions    []sessionFixture
+		want        map[string]int
+		notImported []string
+	}{
+		{
+			name: "default bound",
+			sessions: []sessionFixture{
+				{id: "sess-before-default", turns: 2, lastActivity: -120 * 24 * time.Hour},
+				{id: "sess-default", turns: 3, lastActivity: -2 * time.Hour},
+			},
+			want:        map[string]int{"sess-default": 3},
+			notImported: []string{"sess-before-default"},
+		},
+		{
+			name:  "explicit bound",
+			since: -24 * time.Hour,
+			sessions: []sessionFixture{
+				{id: "sess-before-bound", turns: 2, lastActivity: -25 * time.Hour},
+				// The first turn predates the bound; the last follows it.
+				{id: "sess-overlaps-bound", turns: 3, lastActivity: -24*time.Hour + time.Minute},
+				{id: "sess-after-bound", turns: 2, lastActivity: -2 * time.Hour},
+			},
+			want: map[string]int{
+				"sess-overlaps-bound": 3,
+				"sess-after-bound":    2,
+			},
+			notImported: []string{"sess-before-bound"},
+		},
+	}
 
-	runID := startImport(t, srv, `{"agent":"claude-code"}`)
-	run := waitForTerminalRun(t, srv, runID)
-	assert.Equal(t, importStatusCompleted, run.Status)
-	assert.Equal(t, 3, run.Imported)
-	assert.Equal(t, 0, run.Failed)
-	assert.Equal(t, 1, run.Selected)
-	assert.NotEmpty(t, run.FinishedAt)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateHistoryState(t)
+			srv, _ := newHistoryServer(t)
+			now := time.Now().UTC().Truncate(time.Second)
+			srv.now = func() time.Time { return now }
+			for _, session := range tt.sessions {
+				writeHistoryTranscript(t, session.id, session.turns, now.Add(session.lastActivity))
+			}
 
-	// The turns are in the store, under the source session's conversation ID.
-	detail, err := srv.storage.ConversationDetail("sess-1")
-	require.NoError(t, err)
-	assert.Len(t, detail.Generations, 3)
+			body := `{"agent":"claude-code"}`
+			if tt.since != 0 {
+				body = fmt.Sprintf(`{"agent":"claude-code","since":%q}`, now.Add(tt.since).Format(time.RFC3339))
+			}
+			run := waitForTerminalRun(t, srv, startImport(t, srv, body))
+			assert.Equal(t, importStatusCompleted, run.Status)
+			assert.Equal(t, len(tt.want), run.Selected)
+			assert.Zero(t, run.Failed)
+			assert.NotEmpty(t, run.FinishedAt)
+
+			wantTurns := 0
+			for sessionID, turns := range tt.want {
+				wantTurns += turns
+				detail, err := srv.storage.ConversationDetail(sessionID)
+				require.NoError(t, err)
+				require.NotNil(t, detail)
+				assert.Len(t, detail.Generations, turns)
+			}
+			assert.Equal(t, wantTurns, run.Imported)
+			for _, sessionID := range tt.notImported {
+				detail, err := srv.storage.ConversationDetail(sessionID)
+				require.NoError(t, err)
+				assert.Nil(t, detail)
+			}
+		})
+	}
 }
 
 // TestHistoryImportIsIdempotent covers the ledger: a second run of the same
