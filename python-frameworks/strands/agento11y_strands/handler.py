@@ -134,11 +134,12 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
         tags_payload["agento11y.framework.source"] = self._framework_source
         tags_payload["agento11y.framework.language"] = self._framework_language
 
+        stream = _stream_enabled(invocation_params)
         start = GenerationStart(
             conversation_id=conversation_id,
             agent_name=self._agent_name,
             agent_version=self._agent_version,
-            mode=GenerationMode.STREAM,
+            mode=GenerationMode.STREAM if stream else GenerationMode.SYNC,
             model=ModelRef(provider=provider_name, name=model_name),
             tags=tags_payload,
             metadata=metadata_payload,
@@ -149,7 +150,7 @@ class Agento11yStrandsHandler(Agento11yFrameworkHandlerBase):
             top_p=_optional_float(_read(invocation_params, "top_p")),
             tool_choice=_as_string(_read(invocation_params, "tool_choice")) or None,
         )
-        recorder = self._client.start_streaming_generation(start)
+        recorder = self._client.start_streaming_generation(start) if stream else self._client.start_generation(start)
         self._strands_runs[run_key] = _StrandsRunState(
             recorder=recorder,
             input_messages=_map_chat_inputs(messages) if self._capture_inputs else [],
@@ -475,6 +476,14 @@ def _event_id_from_payload(payload: Any) -> str:
     )
 
 
+def _stream_enabled(invocation_params: Any) -> bool:
+    for key in ("stream", "streaming"):
+        enabled = _optional_bool(_read(invocation_params, key))
+        if enabled is not None:
+            return enabled
+    return True
+
+
 def _normalize_role(role: str) -> MessageRole:
     normalized = role.strip().lower()
     if normalized in {"assistant", "ai"}:
@@ -515,6 +524,23 @@ def _optional_float(value: Any) -> float | None:
             return float(value.strip())
         except ValueError:
             return None
+    return None
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        return None
+    if isinstance(value, int):
+        return value != 0
     return None
 
 
