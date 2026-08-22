@@ -125,7 +125,11 @@ func TestHistoryAgentsEndpointComesFromTheRegistry(t *testing.T) {
 	for i, spec := range specs {
 		assert.Equal(t, string(spec.ID), got.Agents[i].ID)
 		assert.Equal(t, spec.DisplayName, got.Agents[i].DisplayName)
-		assert.Equal(t, spec.Aliases, got.Agents[i].Aliases)
+		wantAliases := spec.Aliases
+		if wantAliases == nil {
+			wantAliases = []string{}
+		}
+		assert.Equal(t, wantAliases, got.Agents[i].Aliases)
 	}
 }
 
@@ -393,6 +397,35 @@ func TestHistoryImportMatchesSelectionAgainstFreshDiscovery(t *testing.T) {
 	gone, err := srv.storage.ConversationDetail("sess-gone")
 	require.NoError(t, err)
 	assert.Nil(t, gone, "the unmatched session must not be imported")
+}
+
+func TestSelectHistorySessionsKeepsEverySessionFromASharedSource(t *testing.T) {
+	discovered := []history.SessionPreview{
+		{SessionID: "one", SourcePath: "/data/opencode.db"},
+		{SessionID: "two", SourcePath: "/data/opencode.db"},
+		{SessionID: "other", SourcePath: "/data/other.db"},
+	}
+	tests := []struct {
+		name        string
+		paths       []string
+		wantIDs     []string
+		wantMissing int
+	}{
+		{name: "shared source", paths: []string{"/data/opencode.db"}, wantIDs: []string{"one", "two"}},
+		{name: "missing source", paths: []string{"/data/opencode.db", "/data/gone.db"}, wantIDs: []string{"one", "two"}, wantMissing: 1},
+		{name: "duplicate source", paths: []string{"/data/opencode.db", "/data/opencode.db"}, wantIDs: []string{"one", "two"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			selected, missing := selectHistorySessions(discovered, tc.paths)
+			gotIDs := make([]string, len(selected))
+			for i, sess := range selected {
+				gotIDs[i] = sess.SessionID
+			}
+			assert.Equal(t, tc.wantIDs, gotIDs)
+			assert.Equal(t, tc.wantMissing, missing)
+		})
+	}
 }
 
 func TestHistoryImportPublishesProgressOverSSE(t *testing.T) {

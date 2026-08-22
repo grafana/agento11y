@@ -1,0 +1,126 @@
+{
+  "sessions": [
+    {
+      "id": "root-session",
+      "title": "Root work",
+      "directory": "/work/root",
+      "created": 1000,
+      "updated": 9000
+    },
+    {
+      "id": "child-session",
+      "parentID": "root-session",
+      "title": "Child session - 2026-08-07T08:54:44.300Z",
+      "directory": "/work/child",
+      "created": 7000,
+      "updated": 9000
+    }
+  ],
+  "messages": [
+    {
+      "id": "root-user-1",
+      "sessionID": "root-session",
+      "created": 1000,
+      "data": {
+        "role": "user",
+        "time": { "created": 1000 },
+        "summary": { "diffs": [{ "file": "secrets.yml", "after": "SUMMARY-DIFF-MUST-NOT-EXPORT" }] }
+      }
+    },
+    {
+      "id": "root-assistant-1",
+      "sessionID": "root-session",
+      "created": 1000,
+      "data": {
+        "role": "assistant",
+        "parentID": "root-user-1",
+        "time": { "created": 1000, "completed": 2500 },
+        "providerID": "anthropic",
+        "modelID": "claude-test",
+        "mode": "build",
+        "path": { "cwd": "/work/root", "root": "/work" },
+        "cost": 0.12,
+        "tokens": { "input": 80, "output": 25, "reasoning": 7, "cache": { "read": 20, "write": 10 } },
+        "finish": "tool-calls"
+      }
+    },
+    {
+      "id": "root-assistant-2",
+      "sessionID": "root-session",
+      "created": 3000,
+      "data": {
+        "role": "assistant",
+        "parentID": "root-user-1",
+        "time": { "created": 3000, "completed": 3500 },
+        "providerID": "openai",
+        "modelID": "gpt-test",
+        "path": { "cwd": "/work/root" },
+        "cost": 0,
+        "tokens": { "input": 999, "output": 999, "reasoning": 999, "cache": { "read": 999, "write": 999 } },
+        "finish": "stop"
+      }
+    },
+    {
+      "id": "root-user-2",
+      "sessionID": "root-session",
+      "created": 4000,
+      "data": { "role": "user", "time": { "created": 4000 } }
+    },
+    {
+      "id": "root-spawn",
+      "sessionID": "root-session",
+      "created": 5000,
+      "data": {
+        "role": "assistant",
+        "parentID": "root-user-2",
+        "time": { "created": 5000, "completed": 6000 },
+        "providerID": "anthropic",
+        "modelID": "claude-test",
+        "mode": "build",
+        "path": { "cwd": "/work/root" },
+        "tokens": { "input": 3, "output": 4, "reasoning": 0, "cache": { "read": 0, "write": 0 } },
+        "finish": "tool-calls"
+      }
+    },
+    {
+      "id": "child-user-1",
+      "sessionID": "child-session",
+      "created": 7000,
+      "data": { "role": "user", "time": { "created": 7000 } }
+    },
+    {
+      "id": "child-assistant-1",
+      "sessionID": "child-session",
+      "created": 8000,
+      "data": {
+        "role": "assistant",
+        "parentID": "child-user-1",
+        "time": { "created": 8000, "completed": 8500 },
+        "providerID": "anthropic",
+        "modelID": "claude-test",
+        "mode": "explore",
+        "path": { "cwd": "/work/child" },
+        "tokens": { "input": 9, "output": 2, "reasoning": 0, "cache": { "read": 1, "write": 0 } },
+        "finish": "stop",
+        "error": { "name": "MessageAbortedError", "data": {} }
+      }
+    }
+  ],
+  "parts": [
+    { "id": "u1-01", "messageID": "root-user-1", "sessionID": "root-session", "data": { "type": "text", "text": "Map this prompt" } },
+    { "id": "u1-02", "messageID": "root-user-1", "sessionID": "root-session", "data": { "type": "file", "text": "FILE-PART-MUST-NOT-EXPORT" } },
+    { "id": "a1-01", "messageID": "root-assistant-1", "sessionID": "root-session", "data": { "type": "text", "text": "Mapped answer" } },
+    { "id": "a1-02", "messageID": "root-assistant-1", "sessionID": "root-session", "data": { "type": "text", "text": "   " } },
+    { "id": "a1-03", "messageID": "root-assistant-1", "sessionID": "root-session", "data": { "type": "reasoning", "text": "Mapped reasoning", "metadata": { "anthropic": { "signature": "SIGNATURE-MUST-NOT-EXPORT" } } } },
+    { "id": "a1-04", "messageID": "root-assistant-1", "sessionID": "root-session", "data": { "type": "tool", "callID": "call-bash", "tool": "bash", "state": { "status": "completed", "input": { "cmd": "echo hi" }, "output": "command output" } } },
+    { "id": "a1-05", "messageID": "root-assistant-1", "sessionID": "root-session", "data": { "type": "tool", "callID": "call-read", "tool": "read", "state": { "status": "error", "input": null, "error": "" } } },
+    { "id": "a1-06", "messageID": "root-assistant-1", "sessionID": "root-session", "data": { "type": "tool", "callID": "call-running", "tool": "write", "state": { "status": "running", "input": { "file": "ignored" } } } },
+    { "id": "a2-01", "messageID": "root-assistant-2", "sessionID": "root-session", "data": { "type": "text", "text": "Second answer" } },
+    { "id": "a2-02", "messageID": "root-assistant-2", "sessionID": "root-session", "data": { "type": "step-finish", "tokens": { "input": 100, "output": 20, "reasoning": 5, "cache": { "read": 10, "write": 2 } }, "cost": 0.01 } },
+    { "id": "a2-03", "messageID": "root-assistant-2", "sessionID": "root-session", "data": { "type": "step-finish", "tokens": { "input": 210, "output": 40, "reasoning": 10, "cache": { "read": 60, "write": 12 } }, "cost": 0.05 } },
+    { "id": "u2-01", "messageID": "root-user-2", "sessionID": "root-session", "data": { "type": "text", "text": "Delegate this" } },
+    { "id": "spawn-01", "messageID": "root-spawn", "sessionID": "root-session", "data": { "type": "tool", "callID": "call-task", "tool": "task", "state": { "status": "completed", "input": { "description": "child" }, "output": "started", "metadata": { "sessionId": "child-session" } } } },
+    { "id": "cu1-01", "messageID": "child-user-1", "sessionID": "child-session", "data": { "type": "text", "text": "Child prompt" } },
+    { "id": "ca1-01", "messageID": "child-assistant-1", "sessionID": "child-session", "data": { "type": "text", "text": "Child answer" } }
+  ]
+}

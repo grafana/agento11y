@@ -106,7 +106,7 @@ Local mode stores full session content. Manage the app with `agento11y local sta
 
 The local Agent Observability app starts empty: it only has sessions captured after you installed agento11y. To backfill earlier sessions, prefer the app — a banner on the Sessions page, or Settings → History. Imports run in the background with live progress; you can cancel them, and a cancelled run keeps what it already imported.
 
-You can also use the CLI. Supported agents are `claude-code`, `codex`, `cursor`, and `pi` (`agento11y history import` with no agent lists them):
+You can also use the CLI. Supported agents are `claude-code`, `codex`, `cursor`, `opencode`, and `pi` (`agento11y history import` with no agent lists them):
 
 ```sh
 # See what would be imported. Nothing is decoded, exported, or stored.
@@ -123,6 +123,11 @@ Imported sessions are thinner than live capture — host logs omit fields that l
 
 - **pi** — reads `$PI_CODING_AGENT_DIR/sessions` (default `~/.pi/agent/sessions`). One generation per assistant turn. Missing vs live: compaction/branch-summary generations, system prompt and request controls, full tool schemas, and `git.branch`. Forks import only the fork's own turns; subagent logs are skipped.
 - **cursor** — reads agent-transcript JSONL under `~/.cursor/projects/…/agent-transcripts/` and the older `store.db` under `~/.cursor/chats/…`. Missing vs live: token usage/cost (turns are marked approximate), reliable timestamps on `store.db` sessions, models on transcripts, and tool results on transcripts. Cursor formats can change without notice.
+- **opencode**: Reads `opencode*.db` under `$XDG_DATA_HOME/opencode` (default `~/.local/share/opencode`).
+  `OPENCODE_DB` adds another database. Absolute values are used as-is. Relative values are resolved under the OpenCode data directory.
+  History cannot recover the system prompt, host version, configured agent-name prefix, capture-time Git branch, time to first token, or separate tool spans.
+  An assistant message is imported when it has a completion timestamp or an error. Messages with neither are skipped.
+  OpenCode forks copy all messages before the fork point into a new session with new IDs. If you import both sessions, those copied assistant turns are imported twice.
 
 Without `--since`, an import covers the last 90 days. Pass `--since 365d` (or a timestamp) to widen the window, and `--until` to bound the other end. Other useful flags: `--workspace`, `--max-sessions`, `--max-turns`, `--all`, `--yes`, `--force`. Without a terminal, pass `--all --yes` to import from a script.
 

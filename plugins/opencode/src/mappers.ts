@@ -29,9 +29,19 @@ function includesToolBodies(contentCapture: ContentCaptureMode): boolean {
   );
 }
 
+function completedToolFailed(tool: string, metadata: unknown): boolean {
+  if (tool === "invalid") return true;
+  if (tool !== "bash" || !metadata || typeof metadata !== "object") {
+    return false;
+  }
+  const exit = (metadata as Record<string, unknown>).exit;
+  return typeof exit === "number" && exit !== 0;
+}
+
 /**
- * Map user-side parts to agento11y input messages. A caller that ran a
- * preflight redact rule substitutes the rewritten text before calling this.
+ * Map user-side parts to agento11y input messages. Ignored text is user-only
+ * and never reaches the model. A caller that ran a preflight redact rule
+ * substitutes the rewritten text before calling this.
  *
  * Separately, user text gets tier 1 + tier 2 redaction when
  * `redactInputMessages` is on, which is the default. A prompt is where a
@@ -51,7 +61,11 @@ export function mapInputMessages(
 
   const messages: Message[] = [];
   for (const part of parts) {
-    if (part.type === "text" && part.text.trim().length > 0) {
+    if (
+      part.type === "text" &&
+      part.ignored !== true &&
+      part.text.trim().length > 0
+    ) {
       const text = redactInputMessages ? redactor.redact(part.text) : part.text;
       messages.push({
         role: "user",
@@ -127,6 +141,9 @@ export function mapOutputMessages(
                   content: includeToolBodies
                     ? redactor.redact(state.output ?? "")
                     : "",
+                  ...(completedToolFailed(part.tool, state.metadata)
+                    ? { isError: true }
+                    : {}),
                 },
               },
             ],

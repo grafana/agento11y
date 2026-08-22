@@ -308,7 +308,7 @@ func RunImport(ctx context.Context, opts ImportOptions) (ImportResult, error) {
 			turns++
 
 			fillSource(&gen, opts.Agent, sess)
-			disambiguateCollidedConversation(&gen, collided, sess.SourcePath)
+			disambiguateCollidedConversation(&gen, collided, sess)
 			id := gen.Source.Identity()
 			if !ledger.ShouldImport(id, opts.Force) {
 				result.Skipped++
@@ -407,23 +407,25 @@ func collisionSessionKeys(collisions []Collision) map[collisionSessionKey]bool {
 }
 
 // disambiguateCollidedConversation gives a turn a source-scoped conversation ID
-// when its native session ID is claimed by more than one file, so two unrelated
-// sessions do not merge into one conversation in the viewer.
-//
-// The scope is sessionPath, the file the session was discovered at, not the
-// file the turn was read from. A Claude subagent turn comes from its own
-// transcript under the session directory, and scoping by that path would break
-// one conversation into one per transcript. [DetectCollisions] compares the
-// same discovered paths, so the two agree on what collided.
-func disambiguateCollidedConversation(gen *HistoricalGeneration, collided map[collisionSessionKey]bool, sessionPath string) {
-	if gen == nil || gen.Source.SessionID == "" || sessionPath == "" {
+// when more than one file claims it. Multi-session importers can name the mapped
+// root in SessionPreview.ConversationID. Other importers keep their source
+// session identity and existing subagent path behavior.
+func disambiguateCollidedConversation(gen *HistoricalGeneration, collided map[collisionSessionKey]bool, sess SessionPreview) {
+	if gen == nil || sess.SourcePath == "" {
 		return
 	}
-	k := collisionSessionKey{agent: gen.Source.Agent, sessionID: gen.Source.SessionID}
+	conversationID := gen.Source.SessionID
+	if sess.ConversationID != "" {
+		conversationID = sess.ConversationID
+	}
+	if conversationID == "" {
+		return
+	}
+	k := collisionSessionKey{agent: gen.Source.Agent, sessionID: conversationID}
 	if !collided[k] {
 		return
 	}
 	gen.Gen.ConversationID = "histconv-" + hashFields(
-		string(gen.Source.Agent), gen.Source.SessionID, sessionPath,
+		string(gen.Source.Agent), conversationID, sess.SourcePath,
 	)[:24]
 }

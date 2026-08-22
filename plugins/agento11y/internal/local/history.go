@@ -252,7 +252,7 @@ func (s *Server) handleHistoryPlan(w http.ResponseWriter, r *http.Request) {
 
 // historyImportRequest is the body of POST /api/v1/history:import.
 //
-// SourcePaths names the sessions the user picked. They are matched against a
+// SourcePaths names the sources the user picked. They are matched against a
 // fresh discovery result rather than read directly: a plan can be minutes old,
 // and a path from it must not become a file the daemon reads on request.
 type historyImportRequest struct {
@@ -520,14 +520,15 @@ func selectHistorySessions(discovered []history.SessionPreview, sourcePaths []st
 			want[p] = true
 		}
 	}
-	selected := make([]history.SessionPreview, 0, len(want))
+	selected := make([]history.SessionPreview, 0, len(discovered))
+	seen := make(map[string]bool, len(want))
 	for _, sess := range discovered {
 		if want[sess.SourcePath] {
 			selected = append(selected, sess)
-			delete(want, sess.SourcePath)
+			seen[sess.SourcePath] = true
 		}
 	}
-	return selected, len(want)
+	return selected, len(want) - len(seen)
 }
 
 func (s *Server) handleHistoryRunStatus(w http.ResponseWriter, r *http.Request) {

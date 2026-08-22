@@ -55,6 +55,10 @@ func (s Sanitizer) maxBytes() int {
 	return s.MaxFieldBytes
 }
 
+func (s Sanitizer) cleanText(text string) (string, Truncation) {
+	return Truncate(s.Redactor.Redact(text), s.maxBytes())
+}
+
 // Sanitize redacts and truncates every text-bearing field of g.Gen in place and
 // records truncation in g.Quality.Truncated. A JSON field is redacted
 // key-aware and stays valid JSON.
@@ -63,8 +67,7 @@ func (s Sanitizer) Sanitize(g *HistoricalGeneration) {
 	truncated := false
 
 	clean := func(text string) string {
-		red := s.Redactor.Redact(text)
-		out, t := Truncate(red, max)
+		out, t := s.cleanText(text)
 		truncated = truncated || t.Truncated
 		return out
 	}

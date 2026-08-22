@@ -225,7 +225,7 @@ func TestNewImporter(t *testing.T) {
 // the viewer all read from. A missing init here makes an agent invisible
 // everywhere at once.
 func TestRealImportersAreRegistered(t *testing.T) {
-	for _, id := range []AgentID{AgentClaudeCode, AgentCodex} {
+	for _, id := range []AgentID{AgentClaudeCode, AgentCodex, AgentOpenCode} {
 		spec, ok := Spec(id)
 		if !ok {
 			t.Fatalf("no spec registered for %q", id)

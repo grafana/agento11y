@@ -466,7 +466,7 @@ configured `AGENTO11Y_LOCAL`.
 ### History import
 
 Until an import runs, the viewer and Grafana Cloud hold only sessions captured after installation.
-`agento11y history import` backfills sessions `claude-code`, `codex`, `cursor`, or `pi` already wrote to disk.
+`agento11y history import` backfills sessions `claude-code`, `codex`, `cursor`, `opencode`, or `pi` already wrote to disk.
 
 ```sh
 agento11y history import claude-code --dry-run   # plan only; no setup or export
