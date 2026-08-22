@@ -10,6 +10,10 @@ trial, generation, conversation, and occurrence-aware score identities.
 Re-running a resumed job with the same identities is idempotent; increment the
 attempt only for a genuinely new attempt.
 
+Set `N_ATTEMPTS` to run each test case more than once per experiment (the
+default `.env.example` uses 3). `pass@k` and `pass^k` are null below k=2, since
+both require multiple attempts of the same test case to compute.
+
 ```bash
 cd examples/experiments/go
 cp .env.example .env
