@@ -125,7 +125,7 @@ func goldenHealthyReport() *Report {
 		Agents: []AgentStatus{
 			{Name: "claude", OnPath: true, Install: InstallStateInstalled, Version: "0.3.0", Health: HealthOK},
 			{Name: "codex", OnPath: false, Install: InstallStateUnknown, Health: HealthSkipped},
-			{Name: "cursor", OnPath: true, HookBased: true, Version: "v0.22.0", Note: "hook-based; configured in Cursor settings", Health: HealthOK},
+			{Name: "cursor", OnPath: true, Install: InstallStateInstalled, HookBased: true, notInstalledLabel: "not configured", Note: "hook-based; configured in Cursor settings", Health: HealthOK},
 		},
 	}
 }

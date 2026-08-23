@@ -414,33 +414,60 @@ func TestInstall_WritesHooksWithoutCopilotCLI(t *testing.T) {
 	withExecutable(t, "/usr/local/bin/agento11y")
 	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
-	changed, err := Install()
+	var stdout bytes.Buffer
+	changed, err := Install(context.Background(), &stdout)
 	require.NoError(t, err)
 	assert.True(t, changed)
+	assert.Empty(t, stdout.String(), "managed install must not print user-facing outcomes")
 	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
 
-	changed, err = Install()
+	changed, err = Install(context.Background(), &stdout)
 	require.NoError(t, err)
 	assert.False(t, changed)
+	assert.Empty(t, stdout.String(), "managed install must stay quiet when already converged")
+}
+
+func TestInstall_ReportsLegacyHookFileRemovalAsAChange(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("COPILOT_HOME", home)
+	withExecutable(t, "/usr/local/bin/agento11y")
+	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+
+	changed, err := Install(context.Background(), io.Discard)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	legacyPath := filepath.Join(home, "hooks", legacyUserHooksFileName)
+	require.NoError(t, os.WriteFile(legacyPath, []byte("{}"), 0o644))
+	changed, err = Install(context.Background(), io.Discard)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.NoFileExists(t, legacyPath)
 }
 
 func TestInstall_RemovesStalePluginWhenCopilotCLIIsAvailable(t *testing.T) {
 	t.Setenv("COPILOT_HOME", t.TempDir())
 	withExecutable(t, "/usr/local/bin/agento11y")
 	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/copilot", nil })
-	withPluginList(t, func(context.Context, string) ([]byte, error) {
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "install context")
+	withPluginList(t, func(gotCtx context.Context, _ string) ([]byte, error) {
+		assert.Equal(t, "install context", gotCtx.Value(contextKey{}))
 		return []byte("Installed plugins:\n  • sigil-copilot (v0.2.0)\n"), nil
 	})
 	removed := 0
-	withRunUninstall(t, func(context.Context, string, io.Writer) error {
+	withRunUninstall(t, func(gotCtx context.Context, _ string, _ io.Writer) error {
+		assert.Equal(t, "install context", gotCtx.Value(contextKey{}))
 		removed++
 		return nil
 	})
 
-	changed, err := Install()
+	var stdout bytes.Buffer
+	changed, err := Install(ctx, &stdout)
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.Equal(t, 1, removed)
+	assert.Empty(t, stdout.String(), "managed install must not print user-facing outcomes")
 	assertValidUserHooks(t, userHooksPath(t), "/usr/local/bin/agento11y copilot hook")
 }
 
@@ -455,10 +482,137 @@ func TestInstall_ReportsStalePluginCleanupFailure(t *testing.T) {
 		return errors.New("permission denied")
 	})
 
-	_, err := Install()
+	_, err := Install(context.Background(), io.Discard)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "remove legacy Copilot plugin sigil-copilot to prevent duplicate capture")
+	assert.ErrorContains(t, err, "remove legacy Copilot plugin sigil-copilot")
 	assert.ErrorContains(t, err, "permission denied")
+}
+
+func TestUninstall_RemovesOnlyOwnedHookFiles(t *testing.T) {
+	const siblingContent = `{"version":1,"hooks":{"sessionStart":[{"hooks":[{"type":"command","command":"echo hand-authored"}]}]}}`
+	withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+	tests := []struct {
+		name        string
+		ownedFiles  []string
+		wantChanged bool
+	}{
+		{name: "nothing installed", wantChanged: false},
+		{name: "current agento11y file", ownedFiles: []string{userHooksFileName}, wantChanged: true},
+		{name: "legacy agento11y file", ownedFiles: []string{legacyUserHooksFileName}, wantChanged: true},
+		{name: "current and legacy files", ownedFiles: []string{userHooksFileName, legacyUserHooksFileName}, wantChanged: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("COPILOT_HOME", home)
+			dir := filepath.Join(home, "hooks")
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+
+			siblingPath := filepath.Join(dir, "personal-hooks.json")
+			require.NoError(t, os.WriteFile(siblingPath, []byte(siblingContent), 0o644))
+			for _, name := range tc.ownedFiles {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("owned"), 0o644))
+			}
+
+			var stdout bytes.Buffer
+			changed, err := Uninstall(context.Background(), &stdout)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantChanged, changed)
+			assert.Empty(t, stdout.String(), "managed uninstall must not print user-facing outcomes")
+			for _, name := range tc.ownedFiles {
+				assert.NoFileExists(t, filepath.Join(dir, name))
+			}
+			gotSibling, err := os.ReadFile(siblingPath)
+			require.NoError(t, err)
+			assert.Equal(t, siblingContent, string(gotSibling), "hand-authored sibling must be untouched")
+
+			changed, err = Uninstall(context.Background(), &stdout)
+			require.NoError(t, err)
+			assert.False(t, changed, "second uninstall must be idempotent")
+		})
+	}
+}
+
+func TestUninstall_WithoutCLIChecksRecordedPlugin(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{name: "legacy plugin recorded in JSONC", config: "// Copilot managed state\n{\"installedPlugins\":[{\"name\":\"sigil-copilot\"}]}", wantErr: "copilot CLI not found on PATH"},
+		{name: "similar plugin recorded", config: `{"installedPlugins":[{"name":"sigil-copilot-staging"}]}`},
+		{name: "invalid plugin state", config: `{"installedPlugins":`, wantErr: "parse Copilot plugin state"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("COPILOT_HOME", home)
+			require.NoError(t, os.WriteFile(filepath.Join(home, "config.json"), []byte(tc.config), 0o600))
+			withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+
+			changed, err := Uninstall(context.Background(), io.Discard)
+			assert.False(t, changed)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestUninstall_RemovesLegacyPlugin(t *testing.T) {
+	tests := []struct {
+		name          string
+		pluginList    string
+		listErr       error
+		uninstallErr  error
+		wantChanged   bool
+		wantUninstall int
+		wantErr       string
+	}{
+		{name: "plugin installed", pluginList: "Installed plugins:\n  • sigil-copilot (v0.2.0)\n", wantChanged: true, wantUninstall: 1},
+		{name: "plugin absent", pluginList: "Installed plugins:\n  • other-plugin (v1.0.0)\n"},
+		{name: "similar plugin name", pluginList: "Installed plugins:\n  • sigil-copilot-staging (v0.2.0)\n"},
+		{name: "list fails", listErr: errors.New("list failed"), wantErr: "list Copilot plugins"},
+		{name: "uninstall fails", pluginList: "Installed plugins:\n  • sigil-copilot (v0.2.0)\n", uninstallErr: errors.New("permission denied"), wantUninstall: 1, wantErr: "permission denied"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("COPILOT_HOME", t.TempDir())
+			withLookPath(t, func(name string) (string, error) {
+				assert.Equal(t, "copilot", name)
+				return "/usr/local/bin/copilot", nil
+			})
+			type contextKey struct{}
+			ctx := context.WithValue(context.Background(), contextKey{}, "uninstall context")
+			withPluginList(t, func(gotCtx context.Context, bin string) ([]byte, error) {
+				assert.Equal(t, "uninstall context", gotCtx.Value(contextKey{}))
+				assert.Equal(t, "/usr/local/bin/copilot", bin)
+				return []byte(tc.pluginList), tc.listErr
+			})
+			uninstalls := 0
+			withRunUninstall(t, func(gotCtx context.Context, bin string, stdout io.Writer) error {
+				assert.Equal(t, "uninstall context", gotCtx.Value(contextKey{}))
+				assert.Equal(t, "/usr/local/bin/copilot", bin)
+				assert.Equal(t, io.Discard, stdout)
+				uninstalls++
+				return tc.uninstallErr
+			})
+
+			changed, err := Uninstall(ctx, io.Discard)
+			assert.Equal(t, tc.wantChanged, changed)
+			assert.Equal(t, tc.wantUninstall, uninstalls)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+		})
+	}
 }
 
 // The shared hooks file must be installed and KEPT even when copilot is present
@@ -545,9 +699,9 @@ func TestWriteUserHooks_RemovesLegacyFileWhenUpToDate(t *testing.T) {
 	legacyPath := filepath.Join(os.Getenv("COPILOT_HOME"), "hooks", "sigil.json")
 	require.NoError(t, os.WriteFile(legacyPath, []byte("{}"), 0o644))
 
-	_, wrote, err = writeUserHooks()
+	_, changed, err := writeUserHooks()
 	require.NoError(t, err)
-	require.False(t, wrote, "content already matches, no rewrite expected")
+	require.True(t, changed, "removing the legacy file changes the integration")
 	assert.NoFileExists(t, legacyPath)
 }
 

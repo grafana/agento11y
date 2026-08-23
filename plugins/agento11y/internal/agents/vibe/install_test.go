@@ -1,8 +1,14 @@
 package vibe
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	toml "github.com/pelletier/go-toml/v2"
@@ -17,6 +23,215 @@ func withExecutable(t *testing.T, path string) {
 	prev := execpath.Executable
 	t.Cleanup(func() { execpath.Executable = prev })
 	execpath.Executable = func() (string, error) { return path, nil }
+}
+
+func TestInstall_SelectsInstalledVibeHookTypes(t *testing.T) {
+	tests := []struct {
+		name        string
+		version     string
+		wantPostTyp string
+		wantOutput  string
+	}{
+		{name: "current vibe", version: "vibe 2.24.2", wantPostTyp: "post_agent"},
+		{name: "pre-rename vibe", version: "vibe 2.20.0", wantPostTyp: "post_agent_turn", wantOutput: "agento11y: this Vibe version requires VIBE_ENABLE_EXPERIMENTAL_HOOKS=true.\n           Launch with `agento11y vibe`, or set it before starting Vibe directly.\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("VIBE_HOME", dir)
+			withVibeVersion(t, tt.version)
+
+			var stdout bytes.Buffer
+			changed, err := Install(context.Background(), &stdout)
+			if err != nil {
+				t.Fatalf("Install: %v", err)
+			}
+			if !changed {
+				t.Errorf("changed = false, want true")
+			}
+			if stdout.String() != tt.wantOutput {
+				t.Errorf("stdout = %q, want %q", stdout.String(), tt.wantOutput)
+			}
+
+			got := readTOML(t, filepath.Join(dir, "hooks.toml"))
+			byName := hooksByName(got["hooks"].([]any))
+			if byName["agento11y"]["type"] != tt.wantPostTyp {
+				t.Errorf("post-agent type = %v, want %q", byName["agento11y"]["type"], tt.wantPostTyp)
+			}
+
+			stdout.Reset()
+			changed, err = Install(context.Background(), &stdout)
+			if err != nil {
+				t.Fatalf("second Install: %v", err)
+			}
+			if changed {
+				t.Errorf("second changed = true, want false")
+			}
+			if stdout.String() != tt.wantOutput {
+				t.Errorf("stdout after second install = %q, want %q", stdout.String(), tt.wantOutput)
+			}
+		})
+	}
+}
+
+func TestInstall_RequiresReadableVibeVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		pathErr  error
+		out      string
+		probeErr error
+		wantErr  error
+		wantText string
+	}{
+		{name: "missing host", pathErr: exec.ErrNotFound, wantErr: ErrCLINotFound},
+		{name: "version probe fails", probeErr: errors.New("exit status 1"), wantText: "vibe --version: exit status 1"},
+		{name: "version output is invalid", out: "vibe unknown\n", wantText: `vibe --version: cannot parse "vibe unknown"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("VIBE_HOME", dir)
+			origLookPath, origOutput := lookPath, vibeVersionOutput
+			t.Cleanup(func() { lookPath, vibeVersionOutput = origLookPath, origOutput })
+			lookPath = func(string) (string, error) {
+				if tt.pathErr != nil {
+					return "", tt.pathErr
+				}
+				return "/fake/vibe", nil
+			}
+			vibeVersionOutput = func(context.Context, string) ([]byte, error) {
+				return []byte(tt.out), tt.probeErr
+			}
+
+			changed, err := Install(context.Background(), io.Discard)
+			if changed {
+				t.Error("changed = true, want false")
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Install error = %v, want errors.Is(_, %v)", err, tt.wantErr)
+			}
+			if tt.wantText != "" && (err == nil || !strings.Contains(err.Error(), tt.wantText)) {
+				t.Fatalf("Install error = %v, want text %q", err, tt.wantText)
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, "hooks.toml")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("hooks.toml stat error = %v, want not exist", statErr)
+			}
+		})
+	}
+}
+
+func TestUninstall_RemovesOwnedHooksAndPreservesHandAuthoredData(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("VIBE_HOME", dir)
+	path := filepath.Join(dir, "hooks.toml")
+	pre := `enabled = true
+owner = "developer"
+
+[[hooks]]
+name = "user-custom"
+type = "post_tool"
+command = "/bin/true"
+timeout = 5
+custom = "keep-me"
+
+[[hooks]]
+name = "agento11y"
+type = "post_agent"
+command = "agento11y vibe hook"
+
+[[hooks]]
+name = "agento11y-before-tool"
+type = "pre_tool"
+command = "agento11y vibe hook"
+
+[[hooks]]
+name = "agento11y-after-tool"
+type = "post_tool"
+command = "agento11y vibe hook"
+
+[[hooks]]
+name = "sigil"
+type = "post_agent_turn"
+command = "sigil vibe hook"
+
+[[hooks]]
+name = "sigil-before-tool"
+type = "before_tool"
+command = "sigil vibe hook"
+
+[[hooks]]
+name = "sigil-after-tool"
+type = "after_tool"
+command = "sigil vibe hook"
+`
+	if err := os.WriteFile(path, []byte(pre), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	changed, err := Uninstall(context.Background(), &stdout)
+	if err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if !changed {
+		t.Errorf("changed = false, want true")
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want no outcome output", stdout.String())
+	}
+
+	got := readTOML(t, path)
+	if got["enabled"] != true || got["owner"] != "developer" {
+		t.Errorf("top-level fields changed: enabled=%v owner=%v", got["enabled"], got["owner"])
+	}
+	hooks, _ := got["hooks"].([]any)
+	if len(hooks) != 1 {
+		t.Fatalf("hooks len = %d, want one hand-authored hook; got %v", len(hooks), hooks)
+	}
+	byName := hooksByName(hooks)
+	custom := byName["user-custom"]
+	if custom["command"] != "/bin/true" || custom["custom"] != "keep-me" {
+		t.Errorf("hand-authored hook changed: %v", custom)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat hooks.toml: %v", err)
+	}
+	if gotMode := info.Mode().Perm(); gotMode != 0o600 {
+		t.Errorf("hooks.toml mode = %04o, want 0600", gotMode)
+	}
+
+	changed, err = Uninstall(context.Background(), &stdout)
+	if err != nil {
+		t.Fatalf("second Uninstall: %v", err)
+	}
+	if changed {
+		t.Errorf("second changed = true, want false")
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout after second uninstall = %q, want no outcome output", stdout.String())
+	}
+}
+
+func TestUninstall_MissingFileIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("VIBE_HOME", dir)
+
+	var stdout bytes.Buffer
+	changed, err := Uninstall(context.Background(), &stdout)
+	if err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if changed {
+		t.Errorf("changed = true, want false")
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want no outcome output", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "hooks.toml")); !os.IsNotExist(err) {
+		t.Errorf("hooks.toml stat error = %v, want not exist", err)
+	}
 }
 
 func TestEnsureHookInstalled_FreshWrite(t *testing.T) {
@@ -62,6 +277,13 @@ func TestEnsureHookInstalled_FreshWrite(t *testing.T) {
 			}
 			if path != filepath.Join(dir, "hooks.toml") {
 				t.Errorf("path = %q, want %q", path, filepath.Join(dir, "hooks.toml"))
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat hooks.toml: %v", err)
+			}
+			if gotMode := info.Mode().Perm(); gotMode != 0o644 {
+				t.Errorf("hooks.toml mode = %04o, want 0644", gotMode)
 			}
 			got := readTOML(t, path)
 			hooks, _ := got["hooks"].([]any)
@@ -127,7 +349,7 @@ command = "/bin/true"
 timeout = 5
 `
 	path := filepath.Join(dir, "hooks.toml")
-	if err := os.WriteFile(path, []byte(pre), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(pre), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if _, _, err := ensureHookInstalled(currentHookTypes); err != nil {
@@ -147,6 +369,13 @@ timeout = 5
 	// The hand-authored hook must be left untouched.
 	if byName["user-custom"]["command"] != "/bin/true" {
 		t.Errorf("user-custom command = %v, want /bin/true (untouched)", byName["user-custom"]["command"])
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat hooks.toml: %v", err)
+	}
+	if gotMode := info.Mode().Perm(); gotMode != 0o600 {
+		t.Errorf("hooks.toml mode = %04o, want 0600", gotMode)
 	}
 }
 

@@ -296,7 +296,7 @@ func TestInstall(t *testing.T) {
 			return nil
 		})
 
-		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		changed, err := Install(context.Background(), io.Discard)
 		require.NoError(t, err)
 		assert.False(t, changed)
 	})
@@ -307,7 +307,7 @@ func TestInstall(t *testing.T) {
 		t.Setenv("PI_CODING_AGENT_DIR", dir)
 		withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
-		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		changed, err := Install(context.Background(), io.Discard)
 		assert.False(t, changed)
 		assert.ErrorIs(t, err, ErrCLINotFound)
 	})
@@ -322,9 +322,33 @@ func TestInstall(t *testing.T) {
 			return nil
 		})
 
-		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		changed, err := Install(context.Background(), io.Discard)
 		assert.False(t, changed)
 		assert.ErrorIs(t, err, ErrCLINotFound)
+	})
+
+	t.Run("successful legacy migration reports changed", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSettings(t, dir, `{"packages":["npm:@grafana/sigil-pi@0.17.0"]}`)
+		t.Setenv("PI_CODING_AGENT_DIR", dir)
+		t.Chdir(t.TempDir())
+		withLookPath(t, func(string) (string, error) { return "/usr/local/bin/pi", nil })
+		withRunPi(t, func(_ context.Context, _ string, _ io.Writer, args ...string) error {
+			if args[0] == "remove" {
+				writeSettings(t, dir, `{"packages":[]}`)
+			} else {
+				writeSettings(t, dir, `{"packages":["npm:@grafana/agento11y-pi"]}`)
+			}
+			return nil
+		})
+		withRunInstall(t, func(context.Context, string, io.Writer) error {
+			t.Fatal("install must not run after migration registered the current plugin")
+			return nil
+		})
+
+		changed, err := Install(context.Background(), io.Discard)
+		require.NoError(t, err)
+		assert.True(t, changed)
 	})
 
 	t.Run("legacy package that remains after migration reports a retryable error", func(t *testing.T) {
@@ -336,7 +360,7 @@ func TestInstall(t *testing.T) {
 			return errors.New("registry unavailable")
 		})
 
-		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		changed, err := Install(context.Background(), io.Discard)
 		assert.False(t, changed)
 		assert.ErrorContains(t, err, "legacy pi extension npm:@grafana/sigil-pi is still registered after migration")
 	})
@@ -355,7 +379,7 @@ func TestInstall(t *testing.T) {
 			return nil
 		})
 
-		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		changed, err := Install(context.Background(), io.Discard)
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 1, calls)

@@ -27,10 +27,8 @@ func publicHelpPages() map[string]clihelp.Page {
 	add("guards", "Test a command against saved local guard rules without executing it.", "<command>")
 	add("guards test", "Test a command against saved local guard rules without executing it.", "[--json] [--rules path] [--tool name] [--agent name] [--stdin] [--] <command>")
 	add("agents", "Configure registered agent integrations without launching them.", "<command>")
-	add("agents reconcile", "Reconcile selected integrations and print a JSON receipt.", "--agents all|name[,name...] --json")
-	add("cursor", "Manage Cursor hooks. Cursor is a GUI app and has no launcher.", "<command>")
-	add("cursor install", "Install Cursor hooks and offer capture setup if needed.", "")
-	add("cursor uninstall", "Remove agento11y hooks from Cursor.", "")
+	add("agents install", "Install selected integrations and optionally print a JSON receipt.", "--agents all|name[,name...] [--json]")
+	add("agents reconcile", "Reconcile selected integrations and optionally print a JSON receipt.", "--agents all|name[,name...] [--json]")
 	add("local", "Manage the local capture daemon and viewer.", "<command>")
 	for _, row := range []clihelp.Row{{Name: "start", Description: "Start the receiver if needed and print its address."}, {Name: "open", Description: "Start the receiver if needed, print its address, and try to open the viewer."}, {Name: "status", Description: "Report whether the receiver is running."}, {Name: "stop", Description: "Stop the receiver."}, {Name: "restart", Description: "Stop and start the receiver."}} {
 		usage := ""
@@ -55,8 +53,14 @@ func publicHelpPages() map[string]clihelp.Page {
 	for _, name := range launcherNames {
 		add(name, "Configure capture and launch "+name+". Arguments after -- belong to the host agent.", "[flags] [-- args...]")
 	}
-	for _, name := range []string{"claude", "copilot", "opencode", "pi"} {
-		add(name+" install", "Install the "+name+" integration without launching it or prompting.", "[--json]")
+	for _, agent := range registeredAgents() {
+		if _, launcher := launchers[agent.Name]; !launcher {
+			add(agent.Name, "Configure the "+agent.Name+" integration without launching it.", "<command>")
+		}
+		add(agent.Name+" install", "Configure the "+agent.Name+" integration without launching it.", "[--json]")
+		if agent.Uninstall != nil {
+			add(agent.Name+" uninstall", "Remove the "+agent.Name+" integration.", "[--json]")
+		}
 	}
 	for _, spec := range history.Specs() {
 		for _, name := range append([]string{string(spec.ID)}, spec.Aliases...) {
@@ -78,24 +82,29 @@ func publicHelpPages() map[string]clihelp.Page {
 	children("", "Launchers", launcherNames...)
 	children("", "Commands", "cursor", "guards", "local", "history", "skills", "help")
 	children("guards", "Commands", "test")
-	children("agents", "Commands", "reconcile")
-	children("cursor", "Commands", "install", "uninstall")
+	children("agents", "Commands", "install", "reconcile")
 	children("local", "Commands", "start", "open", "status", "stop", "restart")
 	children("history", "Commands", "import")
 	children("skills", "Commands", "list", "show", "get")
 	children("claude eval", "Commands", "import")
-	for _, name := range []string{"claude", "copilot", "opencode", "pi"} {
-		children(name, "Commands", "install")
+	for _, agent := range registeredAgents() {
+		commands := []string{"install"}
+		if agent.Uninstall != nil {
+			commands = append(commands, "uninstall")
+		}
+		children(agent.Name, "Commands", commands...)
 	}
 	children("claude", "Experiments", "eval")
-	page := pages["agents reconcile"]
-	targets := clihelp.Section{Title: "Installers"}
-	for _, spec := range registeredInstallers() {
-		targets.Rows = append(targets.Rows, clihelp.Row{Name: spec.Name, Description: "Available to --agents."})
+	targets := clihelp.Section{Title: "Agents"}
+	for _, agent := range registeredAgents() {
+		targets.Rows = append(targets.Rows, clihelp.Row{Name: agent.Name, Description: "Available to --agents."})
 	}
-	page.Sections = append(page.Sections, targets)
-	pages["agents reconcile"] = page
-	page = pages["history import"]
+	for _, path := range []string{"agents install", "agents reconcile"} {
+		page := pages[path]
+		page.Sections = append(page.Sections, targets)
+		pages[path] = page
+	}
+	page := pages["history import"]
 	importers := clihelp.Section{Title: "Agents"}
 	for _, spec := range history.Specs() {
 		description := spec.DisplayName
@@ -139,6 +148,12 @@ func newCommandFlags(name string) *flag.FlagSet {
 	return fs
 }
 
+func newJSONFlags(name string) (*flag.FlagSet, *bool) {
+	fs := newCommandFlags(name)
+	asJSON := fs.Bool("json", false, "print a machine-readable result")
+	return fs, asJSON
+}
+
 func helpFlags(path string) *flag.FlagSet {
 	switch {
 	case path == "login":
@@ -147,14 +162,14 @@ func helpFlags(path string) *flag.FlagSet {
 	case path == "local status":
 		fs, _ := newJSONFlags(path)
 		return fs
-	case path == "agents reconcile":
-		fs, _, _ := newReconcileFlags()
+	case path == "agents install" || path == "agents reconcile":
+		fs, _, _ := newAgentsFlags(path)
 		return fs
 	case path == "history import" || strings.HasPrefix(path, "history import "):
 		return historyHelpFlags()
 	case path == "claude eval import":
 		return claudeEvalHelpFlags()
-	case path == "claude install" || path == "copilot install" || path == "opencode install" || path == "pi install":
+	case strings.HasSuffix(path, " install") || strings.HasSuffix(path, " uninstall"):
 		fs, _ := newJSONFlags(path)
 		return fs
 	default:
@@ -203,6 +218,11 @@ func routeHelp(args []string, stdout, stderr io.Writer) bool {
 	if len(args) > 1 && args[1] == "hook" {
 		return false
 	}
+	if len(args) > 1 && args[1] == "uninstall" {
+		if agent, ok := registeredAgent(args[0]); ok && agent.Uninstall == nil {
+			return false
+		}
+	}
 	if args[0] == "--help" || args[0] == "-h" {
 		if len(args) == 1 {
 			printHelp("", stdout)
@@ -231,12 +251,13 @@ func routeHelp(args []string, stdout, stderr io.Writer) bool {
 		return true
 	}
 	rest := args[consumed:]
-	group := path == "local" || path == "history" || path == "skills" || path == "agents" || path == "cursor" || path == "claude eval"
+	_, launcher := launchers[path]
+	group := isHelpGroup(path)
 	if group && len(rest) == 0 {
 		printHelp(path, stdout)
 		return true
 	}
-	if _, launcher := launchers[path]; launcher {
+	if launcher {
 		_, err := parseLauncherOptions(path, rest)
 		return parsedHelp(path, err, stdout, stderr)
 	}
@@ -273,6 +294,16 @@ func routeHelp(args []string, stdout, stderr io.Writer) bool {
 		return true
 	}
 	return false
+}
+
+func isHelpGroup(path string) bool {
+	switch path {
+	case "local", "history", "skills", "agents", "claude eval":
+		return true
+	}
+	_, registered := registeredAgent(path)
+	_, launcher := launchers[path]
+	return registered && !launcher
 }
 
 func routeDoctorHelp(args []string, stdout, stderr io.Writer) bool {

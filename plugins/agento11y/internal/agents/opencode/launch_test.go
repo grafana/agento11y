@@ -198,7 +198,7 @@ func TestInstall(t *testing.T) {
 			return nil
 		})
 
-		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		changed, err := Install(context.Background(), io.Discard)
 		require.NoError(t, err)
 		assert.False(t, changed)
 	})
@@ -207,7 +207,7 @@ func TestInstall(t *testing.T) {
 		withConfig(t, "")
 		withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
 
-		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		changed, err := Install(context.Background(), io.Discard)
 		assert.False(t, changed)
 		assert.ErrorIs(t, err, ErrCLINotFound)
 	})
@@ -222,10 +222,23 @@ func TestInstall(t *testing.T) {
 			return nil
 		})
 
-		changed, err := Install(context.Background(), io.Discard, nopLogger())
+		changed, err := Install(context.Background(), io.Discard)
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 1, calls)
+	})
+
+	t.Run("legacy migration reports changed without reinstalling", func(t *testing.T) {
+		withConfig(t, `{"plugin":["@grafana/sigil-opencode"]}`)
+		withLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+		withRunInstall(t, func(context.Context, string, io.Writer) error {
+			t.Fatal("install must not run after migration registered the current plugin")
+			return nil
+		})
+
+		changed, err := Install(context.Background(), io.Discard)
+		require.NoError(t, err)
+		assert.True(t, changed)
 	})
 
 	t.Run("legacy migration failure is reported so reconciliation retries", func(t *testing.T) {
@@ -240,7 +253,7 @@ func TestInstall(t *testing.T) {
 		})
 
 		var output bytes.Buffer
-		changed, err := Install(context.Background(), &output, nopLogger())
+		changed, err := Install(context.Background(), &output)
 		assert.False(t, changed)
 		assert.ErrorContains(t, err, "migrate legacy OpenCode plugin configuration")
 		assert.ErrorContains(t, err, "write")

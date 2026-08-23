@@ -2,8 +2,10 @@ package vibe
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -75,6 +77,13 @@ func isLegacyHookName(name string) bool {
 		}
 	}
 	return false
+}
+
+func isOwnedHookName(name string) bool {
+	if _, ok := legacyHookNames[name]; ok {
+		return true
+	}
+	return isLegacyHookName(name)
 }
 
 // vibeHome returns the root vibe config directory. It honors VIBE_HOME
@@ -150,6 +159,52 @@ func HooksInstalled(types hookTypeSet) (bool, error) {
 	return true, nil
 }
 
+// Install registers the three agento11y-owned hooks without launching Vibe or
+// printing an outcome. It reports whether hooks.toml changed.
+func Install(ctx context.Context, stdout io.Writer) (changed bool, err error) {
+	types, err := installedHookTypes(ctx)
+	if err != nil {
+		return false, err
+	}
+	_, changed, err = ensureHookInstalled(types)
+	if err != nil {
+		return changed, err
+	}
+	if types == preRenameHookTypes {
+		fmt.Fprintln(stdout, "agento11y: this Vibe version requires VIBE_ENABLE_EXPERIMENTAL_HOOKS=true.\n           Launch with `agento11y vibe`, or set it before starting Vibe directly.")
+	}
+	return changed, nil
+}
+
+// Uninstall removes all current and legacy agento11y-owned hook entries. It
+// leaves hand-authored hooks and other top-level fields intact, does not print
+// an outcome, and treats a missing hooks.toml as already uninstalled.
+func Uninstall(_ context.Context, _ io.Writer) (changed bool, err error) {
+	path, err := hooksFilePath()
+	if err != nil {
+		return false, err
+	}
+	existing, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	updated, changed, err := removeOwnedHooksTOML(existing)
+	if err != nil {
+		return false, err
+	}
+	if !changed {
+		return false, nil
+	}
+	if err := writeHooksFile(path, updated); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // ensureHookInstalled merges the three agento11y-owned entries into vibe's
 // hooks.toml, spelled for the installed vibe. The write is atomic (temp file +
 // rename), idempotent (skipped when the entries already match), and preserves
@@ -180,35 +235,51 @@ func ensureHookInstalled(types hookTypeSet) (string, bool, error) {
 		return path, false, nil
 	}
 
+	if err := writeHooksFile(path, updated); err != nil {
+		return path, false, err
+	}
+	return path, true, nil
+}
+
+// writeHooksFile atomically replaces hooks.toml, creating its parent when an
+// install is writing the file for the first time.
+func writeHooksFile(path string, data []byte) error {
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return path, false, fmt.Errorf("mkdir %s: %w", dir, err)
+		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 	tmp, err := os.CreateTemp(dir, "hooks.toml.tmp-*")
 	if err != nil {
-		return path, false, fmt.Errorf("temp file in %s: %w", dir, err)
+		return fmt.Errorf("temp file in %s: %w", dir, err)
 	}
 	tmpPath := tmp.Name()
 	cleanup := func() { _ = os.Remove(tmpPath) }
-	if _, err := tmp.Write(updated); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		cleanup()
-		return path, false, fmt.Errorf("write temp: %w", err)
+		return fmt.Errorf("write temp: %w", err)
 	}
-	if err := tmp.Chmod(0o644); err != nil {
+	if err := tmp.Chmod(mode); err != nil {
 		_ = tmp.Close()
 		cleanup()
-		return path, false, fmt.Errorf("chmod temp: %w", err)
+		return fmt.Errorf("chmod temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		cleanup()
-		return path, false, fmt.Errorf("close temp: %w", err)
+		return fmt.Errorf("close temp: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		cleanup()
-		return path, false, fmt.Errorf("rename to %s: %w", path, err)
+		return fmt.Errorf("rename to %s: %w", path, err)
 	}
-	return path, true, nil
+	return nil
 }
 
 // mergeHooksTOML decodes the existing hooks.toml bytes, drops entries with
@@ -242,6 +313,42 @@ func mergeHooksTOML(existing []byte, command string, types hookTypeSet) (out []b
 	}
 	if bytes.Equal(bytes.TrimSpace(existing), bytes.TrimSpace(encoded)) {
 		return existing, false, nil
+	}
+	return encoded, true, nil
+}
+
+// removeOwnedHooksTOML removes every current and legacy agento11y entry and
+// round-trips all other data through a permissive map. A file with no owned
+// entries is returned unchanged so uninstall does not reformat it.
+func removeOwnedHooksTOML(existing []byte) (out []byte, changed bool, err error) {
+	doc := map[string]any{}
+	if len(bytes.TrimSpace(existing)) > 0 {
+		if err := toml.Unmarshal(existing, &doc); err != nil {
+			return nil, false, fmt.Errorf("parse hooks.toml: %w", err)
+		}
+	}
+
+	hooks, _ := doc["hooks"].([]any)
+	kept := hooks[:0]
+	for _, raw := range hooks {
+		entry, ok := raw.(map[string]any)
+		if ok {
+			name, _ := entry["name"].(string)
+			if isOwnedHookName(name) {
+				changed = true
+				continue
+			}
+		}
+		kept = append(kept, raw)
+	}
+	if !changed {
+		return existing, false, nil
+	}
+	doc["hooks"] = kept
+
+	encoded, err := toml.Marshal(doc)
+	if err != nil {
+		return nil, false, fmt.Errorf("encode hooks.toml: %w", err)
 	}
 	return encoded, true, nil
 }

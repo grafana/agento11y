@@ -35,6 +35,8 @@ func TestHookTypesForVersion(t *testing.T) {
 		{name: "renamed executable", out: "vibe-acp 2.20.0\n", want: preRenameHookTypes, wantOK: true},
 		{name: "no version in output", out: "vibe\n", want: currentHookTypes},
 		{name: "major only", out: "vibe 2\n", want: currentHookTypes},
+		{name: "version inside warning", out: "warning: using 2.20 defaults\n", want: currentHookTypes},
+		{name: "extra version text", out: "vibe unknown 2.20.0\n", want: currentHookTypes},
 		{name: "empty output", out: "", want: currentHookTypes},
 	}
 	for _, tt := range tests {

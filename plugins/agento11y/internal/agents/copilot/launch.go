@@ -14,10 +14,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
+	"github.com/tailscale/hujson"
 )
 
 const (
@@ -47,15 +47,6 @@ var (
 	runUninstall = defaultRunUninstall
 	pluginList   = defaultPluginList
 )
-
-func init() {
-	agentinstall.Register(agentinstall.Spec{
-		Name: "copilot",
-		Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
-			return Install()
-		},
-	})
-}
 
 // Launch installs the shared user-level Copilot hooks file (read by both
 // Copilot Chat in VS Code and the copilot CLI), resolves the `copilot` binary
@@ -102,7 +93,7 @@ func Launch(_ context.Context, args []string, localEnv *local.LaunchEnv, _ io.Re
 // stale legacy plugin. When the Copilot CLI is available, cleanup failures are
 // returned so unattended deployment does not report convergence while every
 // hook would still fire twice.
-func Install() (bool, error) {
+func Install(ctx context.Context, _ io.Writer) (bool, error) {
 	_, wrote, err := writeUserHooks()
 	if err != nil {
 		return false, err
@@ -116,18 +107,50 @@ func Install() (bool, error) {
 	if err != nil {
 		return wrote, nil
 	}
-	removed, err := removeStalePluginForInstall(context.Background(), bin)
+	removed, err := removeLegacyPlugin(ctx, bin)
 	if err != nil {
 		return wrote, err
 	}
 	return wrote || removed, nil
 }
 
-// removeStalePluginForInstall removes the legacy plugin for an unattended
-// install. Unlike the launcher cleanup, it returns probe and removal errors:
-// the launcher can safely continue a user's session, while a management tool
-// needs to retry rather than declare duplicate capture healthy.
-func removeStalePluginForInstall(ctx context.Context, bin string) (bool, error) {
+// Uninstall removes the agento11y-owned hook files and sigil-copilot plugin.
+// It leaves every other hook file and plugin unchanged.
+func Uninstall(ctx context.Context, _ io.Writer) (bool, error) {
+	dir, err := copilotHooksDir()
+	if err != nil {
+		return false, err
+	}
+
+	changed := false
+	for _, name := range []string{userHooksFileName, legacyUserHooksFileName} {
+		path := filepath.Join(dir, name)
+		if err := os.Remove(path); err == nil {
+			changed = true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return changed, fmt.Errorf("remove agento11y Copilot hooks file %s: %w", path, err)
+		}
+	}
+
+	bin, err := lookPath("copilot")
+	if err != nil {
+		installed, configErr := legacyPluginRecorded()
+		if configErr != nil {
+			return changed, configErr
+		}
+		if installed {
+			return changed, fmt.Errorf("remove legacy Copilot plugin %s: copilot CLI not found on PATH", PluginName)
+		}
+		return changed, nil
+	}
+	removed, err := removeLegacyPlugin(ctx, bin)
+	if err != nil {
+		return changed, err
+	}
+	return changed || removed, nil
+}
+
+func removeLegacyPlugin(ctx context.Context, bin string) (bool, error) {
 	installed, err := pluginInstalled(ctx, bin)
 	if err != nil {
 		return false, fmt.Errorf("list Copilot plugins before removing legacy %s: %w", PluginName, err)
@@ -136,7 +159,7 @@ func removeStalePluginForInstall(ctx context.Context, bin string) (bool, error) 
 		return false, nil
 	}
 	if err := runUninstall(ctx, bin, io.Discard); err != nil {
-		return false, fmt.Errorf("remove legacy Copilot plugin %s to prevent duplicate capture: %w", PluginName, err)
+		return false, fmt.Errorf("remove legacy Copilot plugin %s: %w", PluginName, err)
 	}
 	return true, nil
 }
@@ -209,10 +232,9 @@ func copilotHooksDir() (string, error) {
 
 // writeUserHooks renders the agento11y hook config and writes it to
 // <copilot-hooks-dir>/agento11y.json. The write is atomic (temp file + rename)
-// and idempotent: when the on-disk content already matches, it is left
-// untouched and wrote is false. It returns the target path so callers can
-// report where the hooks landed.
-func writeUserHooks() (path string, wrote bool, err error) {
+// and idempotent. It also removes the legacy sigil.json file after confirming
+// the current file exists. changed reports either operation.
+func writeUserHooks() (path string, changed bool, err error) {
 	dir, err := copilotHooksDir()
 	if err != nil {
 		return "", false, err
@@ -232,8 +254,8 @@ func writeUserHooks() (path string, wrote bool, err error) {
 		return "", false, err
 	}
 	if existing, readErr := os.ReadFile(path); readErr == nil && bytes.Equal(existing, content) {
-		removeLegacyUserHooks(dir)
-		return path, false, nil
+		removed, err := removeLegacyUserHooks(dir)
+		return path, removed, err
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", false, fmt.Errorf("mkdir %s: %w", dir, err)
@@ -262,17 +284,22 @@ func writeUserHooks() (path string, wrote bool, err error) {
 		cleanup()
 		return "", false, fmt.Errorf("rename to %s: %w", path, err)
 	}
-	removeLegacyUserHooks(dir)
-	return path, true, nil
+	_, err = removeLegacyUserHooks(dir)
+	return path, true, err
 }
 
 // removeLegacyUserHooks deletes the pre-rename hooks file: Copilot runs every
 // file in the hooks directory, so leaving sigil.json next to agento11y.json
 // would double-fire each hook. Called only after the new file is confirmed on
 // disk, so a failed write never leaves the install with no hooks file at all.
-// Best-effort; a leftover file surfaces as duplicate capture, not breakage.
-func removeLegacyUserHooks(dir string) {
-	_ = os.Remove(filepath.Join(dir, legacyUserHooksFileName))
+func removeLegacyUserHooks(dir string) (bool, error) {
+	path := filepath.Join(dir, legacyUserHooksFileName)
+	if err := os.Remove(path); err == nil {
+		return true, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("remove legacy Copilot hooks file %s: %w", path, err)
+	}
+	return false, nil
 }
 
 // hookCommand mirrors a single command-hook entry in a Copilot hooks file.
@@ -397,6 +424,54 @@ func pluginInstalled(ctx context.Context, bin string) (bool, error) {
 	}
 	installed, _ := parsePluginListStatus(out)
 	return installed, nil
+}
+
+func legacyPluginRecorded() (bool, error) {
+	dir, err := copilotHooksDir()
+	if err != nil {
+		return false, err
+	}
+	path := filepath.Join(filepath.Dir(dir), "config.json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read Copilot plugin state %s: %w", path, err)
+	}
+
+	standard, err := hujson.Standardize(data)
+	if err != nil {
+		return false, fmt.Errorf("parse Copilot plugin state %s: %w", path, err)
+	}
+	var config struct {
+		InstalledPlugins any `json:"installedPlugins"`
+	}
+	if err := json.Unmarshal(standard, &config); err != nil {
+		return false, fmt.Errorf("decode Copilot plugin state %s: %w", path, err)
+	}
+	return containsPluginName(config.InstalledPlugins, PluginName), nil
+}
+
+func containsPluginName(value any, name string) bool {
+	switch value := value.(type) {
+	case []any:
+		for _, entry := range value {
+			if containsPluginName(entry, name) {
+				return true
+			}
+		}
+	case map[string]any:
+		if value["name"] == name {
+			return true
+		}
+		for _, entry := range value {
+			if containsPluginName(entry, name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // parsePluginListStatus scans `copilot plugin list` output for the sigil

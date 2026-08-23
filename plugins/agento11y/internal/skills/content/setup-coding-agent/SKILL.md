@@ -243,25 +243,25 @@ rules in the Reference.
 | pi | `agento11y pi` | installs `@grafana/agento11y-pi` |
 | Vibe | `agento11y vibe` | shared Go binary via `hooks.toml` |
 
-After the first `agento11y codex` launch, open `/hooks` inside Codex and trust
+After installing the Codex integration, open `/hooks` inside Codex and trust
 the agento11y hooks. Codex does not export turns until the user completes this
 manual step, and doctor cannot detect whether they did.
 
-Vibe hooks are experimental. The launcher enables them in the child process, so
-launch Vibe through `agento11y vibe` for capture.
+Vibe below 2.21.0 requires `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true`; `agento11y vibe` sets it for the child process.
+After standalone installation, set it yourself when launching an older Vibe directly. Vibe 2.21.0 and later do not require it.
 
-**Cursor is the exception.** It is a GUI application with no launcher, so wire
-it directly:
+Run `agento11y <agent> install` to configure any agent above, or Cursor, without launching it.
+A successful interactive install offers setup when neither local mode nor complete Cloud credentials are configured.
+Add `--json` to suppress prompts and report `installed`, `already_installed`, `missing_host`, or `error`.
+A missing required host exits 0; rerun after installing it. Copilot and Cursor can configure hooks without their host CLI.
+Copilot, Cursor, and Vibe support `agento11y <agent> uninstall [--json]` to remove agento11y's integration.
 
-```sh
-agento11y cursor install     # merges the hook into ~/.cursor/hooks.json
-agento11y cursor uninstall   # removes it
-```
+Cursor is a GUI application with no launcher. `agento11y cursor install` merges hooks into `~/.cursor/hooks.json`.
+Local mode takes effect on the next Cursor hook. On macOS and Linux, rerun install after moving the binary: hooks store its absolute path.
 
-On macOS and Linux, re-run `agento11y cursor install` after moving the binary;
-Cursor's hook stores its absolute path.
-
-For managed macOS deployment, after the administrator has placed the connection file for the target user, use `agento11y claude install --json` and `agento11y cursor install`; neither launches a host. `missing_host` for Claude means rerun after Claude Code is installed for that user.
+For managed deployment, first supply the target user's connection file, then run `agento11y agents reconcile --agents claude,cursor --json`.
+`agents install` is an alias. The required `--agents` accepts a comma-separated list or `all`.
+The command never prompts or launches a host. Receipt status is `converged`, `deferred_missing_host` (exit 0), or `error` (exit 1). Convergence confirms registration, not capture readiness.
 
 Arguments after `--` go to the underlying CLI unchanged:
 
@@ -328,8 +328,8 @@ both signals when an endpoint is set.
   find that CLI. `on PATH, plugin not installed` describes current state; the
   integration may never have been installed, may have been removed, or may be
   installed for another scope. `install state unknown` means the read-only probe
-  could not determine the state. Cursor has no install probe. Its human row says
-  `detected <version>` when Cursor is on PATH; only JSON reports it as unknown.
+  could not determine the state. Cursor's hook-file probe reports `installed`
+  or `not configured`, even without its CLI on PATH. JSON includes `install_state`.
 
 ### Status codes
 

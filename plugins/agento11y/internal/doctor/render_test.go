@@ -31,7 +31,7 @@ func sampleReport() *Report {
 		},
 		Agents: []AgentStatus{
 			{Name: "claude", OnPath: true, Install: InstallStateInstalled, Version: "0.3.0", Health: HealthOK},
-			{Name: "cursor", OnPath: true, HookBased: true, Version: "v1.2.3", Note: "hook-based", Health: HealthOK},
+			{Name: "cursor", OnPath: true, Install: InstallStateInstalled, HookBased: true, Note: "hook-based", Health: HealthOK},
 		},
 	}
 }
@@ -50,6 +50,9 @@ func TestRenderJSON_ValidAndNoToken(t *testing.T) {
 	// the non-secret prefix.
 	if !strings.Contains(buf.String(), `"prefix": "glc_"`) {
 		t.Fatalf("expected redacted token prefix in output:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), `"hook_based": true`) {
+		t.Fatalf("expected cursor hook_based compatibility field:\n%s", buf.String())
 	}
 }
 
@@ -167,25 +170,19 @@ func TestRenderHuman_NoColorIsPlain(t *testing.T) {
 	}
 }
 
-// The binary version is printed exactly as the build stamped it, in the
-// heading and in cursor's line, which reports the same string. The `v` prefix
-// lives in the release ldflags (-X main.version=v{{ .Version }}) and nowhere
-// else, so a build that stamps it and one that doesn't both render one `v`.
+// The binary version is printed exactly as the build stamped it. The `v`
+// prefix lives in release ldflags, so builds with or without it must not gain
+// another prefix while rendering the heading.
 func TestRenderHuman_BinaryVersionPrintedAsStamped(t *testing.T) {
 	for _, version := range []string{"v0.22.0", "0.22.0", "dev"} {
 		t.Run(version, func(t *testing.T) {
 			r := sampleReport()
 			r.Binary.Version = version
-			r.Agents = []AgentStatus{{Name: "cursor", OnPath: true, HookBased: true, Version: version, Health: HealthOK}}
 			var buf bytes.Buffer
 			renderHuman(&buf, r, false)
-			out := buf.String()
-			heading, _, _ := strings.Cut(out, "\n")
+			heading, _, _ := strings.Cut(buf.String(), "\n")
 			if want := "agento11y doctor " + version; heading != want {
 				t.Fatalf("heading = %q, want %q", heading, want)
-			}
-			if want := "detected " + version + "\n"; !strings.Contains(out, want) {
-				t.Fatalf("cursor line missing %q:\n%s", want, out)
 			}
 		})
 	}
@@ -376,12 +373,6 @@ func TestDescribeAgent(t *testing.T) {
 		agent AgentStatus
 		want  string
 	}{
-		// cursor reports the agento11y binary version, which the release ldflags
-		// stamp with the `v` and a dev build reports as a bare word. It is
-		// printed as stamped, the way the heading prints it.
-		{name: "hook-based", agent: AgentStatus{HookBased: true, OnPath: true, Version: "v1.2.3", Note: "hook-based", Health: HealthOK}, want: "detected v1.2.3 (hook-based)"},
-		{name: "hook-based unstamped version", agent: AgentStatus{HookBased: true, OnPath: true, Version: "0.22.0", Health: HealthOK}, want: "detected 0.22.0"},
-		{name: "hook-based dev version", agent: AgentStatus{HookBased: true, OnPath: true, Version: "dev", Health: HealthOK}, want: "detected dev"},
 		// A host agent plugin's own version is a dotted number or a dist-tag
 		// (opencode and pi can report the tail of an npm spec); only the number
 		// takes the prefix.

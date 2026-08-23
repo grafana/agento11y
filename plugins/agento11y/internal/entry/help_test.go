@@ -9,12 +9,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/registry"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/history"
 )
 
 func TestPublicHelpPages(t *testing.T) {
-	paths := []string{"", "help", "login", "doctor", "guards", "guards test", "agents", "agents reconcile", "cursor", "cursor install", "cursor uninstall", "local", "local start", "local open", "local status", "local stop", "local restart", "history", "history import", "skills", "skills list", "skills show", "skills get", "claude eval", "claude eval import", "claude install", "copilot install", "opencode install", "pi install"}
+	paths := []string{"", "help", "login", "doctor", "guards", "guards test", "agents", "agents install", "agents reconcile", "local", "local start", "local open", "local status", "local stop", "local restart", "history", "history import", "skills", "skills list", "skills show", "skills get", "claude eval", "claude eval import"}
+	for _, agent := range registeredAgents() {
+		if _, launcher := launchers[agent.Name]; !launcher {
+			paths = append(paths, agent.Name)
+		}
+		paths = append(paths, agent.Name+" install")
+		if agent.Uninstall != nil {
+			paths = append(paths, agent.Name+" uninstall")
+		}
+	}
 	for name := range launchers {
 		paths = append(paths, name)
 	}
@@ -34,6 +43,17 @@ func TestPublicHelpPages(t *testing.T) {
 			if !strings.Contains(out.String(), page.Command) || !strings.Contains(out.String(), page.Summary) || !strings.Contains(out.String(), "Usage:") {
 				t.Fatalf("incomplete help: %s", out.String())
 			}
+			if _, registered := registeredAgent(path); registered {
+				sections := 0
+				for _, section := range page.Sections {
+					if section.Title == "Commands" {
+						sections++
+					}
+				}
+				if sections != 1 {
+					t.Errorf("got %d command sections, want 1", sections)
+				}
+			}
 			if path == "login" {
 				for _, want := range []string{
 					"access-policy token with the sigil:write scope",
@@ -47,7 +67,7 @@ func TestPublicHelpPages(t *testing.T) {
 			}
 		})
 	}
-	for _, path := range []string{"local serve", "codex install", "vibe install", "history search", "history show", "cursor hook"} {
+	for _, path := range []string{"local serve", "history search", "history show", "cursor hook"} {
 		if _, ok := helpPage(path); ok {
 			t.Errorf("unexpected public page for %q", path)
 		}
@@ -150,6 +170,7 @@ func TestUsageAndEmptyGroups(t *testing.T) {
 		{[]string{"history", "import"}, "history import"},
 		{[]string{"claude", "eval", "import"}, "claude eval import"},
 		{[]string{"agents", "reconcile"}, "agents reconcile"},
+		{[]string{"agents", "install"}, "agents install"},
 		{[]string{"local", "start", "extra"}, "local start"},
 		{[]string{"local", "open", "extra"}, "local open"},
 		{[]string{"local", "stop", "extra"}, "local stop"},
@@ -208,13 +229,19 @@ func TestHelpRegistryListings(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("registry subprocess: %v\n%s", err, out)
 	}
-	old := registeredInstallers
-	registeredInstallers = func() []agentinstall.Spec { return []agentinstall.Spec{{Name: "test-installer"}} }
-	t.Cleanup(func() { registeredInstallers = old })
+	old := registeredAgents
+	registeredAgents = func() []registry.Agent { return []registry.Agent{{Name: "test-installer"}} }
+	t.Cleanup(func() { registeredAgents = old })
 	var out bytes.Buffer
 	printHelp("agents reconcile", &out)
 	if !strings.Contains(out.String(), "test-installer") {
 		t.Fatal(out.String())
+	}
+	out.Reset()
+	var errOut bytes.Buffer
+	code := withExit(t, func() { run([]string{"test-installer"}, unreadableHelpInput{}, &out, &errOut) })
+	if code != nil || errOut.Len() != 0 || !strings.Contains(out.String(), "Usage:") {
+		t.Fatalf("exit=%v stdout=%q stderr=%q", code, out.String(), errOut.String())
 	}
 	out.Reset()
 	printHelp("history import", &out)

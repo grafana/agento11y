@@ -27,6 +27,99 @@ func TestLaunch_MissingCodexBinary(t *testing.T) {
 	}
 }
 
+func TestInstall(t *testing.T) {
+	probeBoom := errors.New("probe boom")
+	installBoom := errors.New("install boom")
+	tests := []struct {
+		name             string
+		probeOut         string
+		probeErr         error
+		lookPathBin      string
+		lookPathErr      error
+		installErr       error
+		wantChanged      bool
+		wantLookPathCall bool
+		wantInstallCall  bool
+		wantErr          error
+	}{
+		{
+			name:     "already installed skips host lookup and install",
+			probeOut: "  agento11y-codex@agento11y (installed, enabled)\n",
+		},
+		{
+			name:             "missing host is classifiable",
+			lookPathErr:      exec.ErrNotFound,
+			wantLookPathCall: true,
+			wantErr:          ErrCLINotFound,
+		},
+		{
+			name:             "missing plugin is installed",
+			lookPathBin:      "/usr/local/bin/codex",
+			wantChanged:      true,
+			wantLookPathCall: true,
+			wantInstallCall:  true,
+		},
+		{
+			name:             "probe failure falls through to install",
+			probeErr:         probeBoom,
+			lookPathBin:      "/usr/local/bin/codex",
+			wantChanged:      true,
+			wantLookPathCall: true,
+			wantInstallCall:  true,
+		},
+		{
+			name:             "install failure is returned",
+			lookPathBin:      "/usr/local/bin/codex",
+			installErr:       installBoom,
+			wantLookPathCall: true,
+			wantInstallCall:  true,
+			wantErr:          installBoom,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			probeCalls := 0
+			withPluginList(t, func(_ context.Context, bin string) ([]byte, error) {
+				probeCalls++
+				require.Equal(t, "codex", bin)
+				return []byte(tc.probeOut), tc.probeErr
+			})
+
+			lookPathCalls := 0
+			withLookPath(t, func(name string) (string, error) {
+				lookPathCalls++
+				require.Equal(t, "codex", name)
+				return tc.lookPathBin, tc.lookPathErr
+			})
+
+			installCalls := 0
+			withRunInstall(t, func(_ context.Context, bin string, _ io.Writer) error {
+				installCalls++
+				require.Equal(t, tc.lookPathBin, bin)
+				return tc.installErr
+			})
+
+			var stdout bytes.Buffer
+			changed, err := Install(context.Background(), &stdout)
+			require.Equal(t, tc.wantChanged, changed)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, 1, probeCalls)
+			require.Equal(t, tc.wantLookPathCall, lookPathCalls == 1)
+			require.Equal(t, tc.wantInstallCall, installCalls == 1)
+			if tc.wantErr == nil {
+				require.Equal(t, "agento11y: open /hooks inside codex and trust the agento11y hooks\n           to start exporting turns.\n", stdout.String())
+			} else {
+				require.Empty(t, stdout.String())
+			}
+		})
+	}
+}
+
 func TestLaunch_SkipsInstallWhenPluginInstalledAndEnabled(t *testing.T) {
 	for _, tc := range []struct {
 		name string

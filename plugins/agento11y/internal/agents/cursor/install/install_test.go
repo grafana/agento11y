@@ -2,9 +2,9 @@ package install
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,7 +17,7 @@ import (
 
 const testBin = "/opt/homebrew/bin/sigil"
 
-func TestRun(t *testing.T) {
+func TestInstall(t *testing.T) {
 	const (
 		superconductor = "/Users/me/.superconductor/hooks/cursor-notify.sh"
 		supersetStart  = "/Users/me/.superset/hooks/cursor-hook.sh Start"
@@ -29,11 +29,11 @@ func TestRun(t *testing.T) {
 
 	cases := []struct {
 		name string
-		// seed is the hooks.json written before Run; "" means no file.
+		// seed is the hooks.json written before Install; "" means no file.
 		seed string
 		// preserved commands that must survive untouched in their event.
 		preserved map[string][]string
-		// nonOursEvents are events whose entries Run must not touch at all.
+		// nonOursEvents are events whose entries Install must not touch at all.
 		nonOursEvents map[string][]string
 	}{
 		{
@@ -140,9 +140,9 @@ func TestRun(t *testing.T) {
 				seedHooks(t, home, tc.seed)
 			}
 
-			var stdout bytes.Buffer
-			require.NoError(t, Run(&stdout, io.Discard, nopLogger()))
-			assert.Contains(t, stdout.String(), "wired Cursor hooks at")
+			changed, err := Install(context.Background(), io.Discard)
+			require.NoError(t, err)
+			assert.True(t, changed)
 
 			got := readEntries(t, hooksPath(home))
 
@@ -167,12 +167,14 @@ func TestRun(t *testing.T) {
 
 // Fresh install records the running binary's path verbatim (no symlink
 // resolution) and defaults version to 1.
-func TestRun_FreshFileShape(t *testing.T) {
+func TestInstall_FreshFileShape(t *testing.T) {
 	home := t.TempDir()
 	withHome(t, home)
 	withExecutable(t, testBin)
 
-	require.NoError(t, Run(io.Discard, io.Discard, nopLogger()))
+	changed, err := Install(context.Background(), io.Discard)
+	require.NoError(t, err)
+	assert.True(t, changed)
 
 	data, err := os.ReadFile(hooksPath(home))
 	require.NoError(t, err)
@@ -190,7 +192,7 @@ func TestRun_FreshFileShape(t *testing.T) {
 }
 
 // version and unknown top-level keys survive a merge round-trip.
-func TestRun_PreservesUnknownTopLevelKeys(t *testing.T) {
+func TestInstall_PreservesUnknownTopLevelKeys(t *testing.T) {
 	home := t.TempDir()
 	withHome(t, home)
 	withExecutable(t, testBin)
@@ -200,7 +202,9 @@ func TestRun_PreservesUnknownTopLevelKeys(t *testing.T) {
   "hooks": {"sessionStart": [{"command": "/Users/me/.superset/hooks/x.sh"}]}
 }`)
 
-	require.NoError(t, Run(io.Discard, io.Discard, nopLogger()))
+	changed, err := Install(context.Background(), io.Discard)
+	require.NoError(t, err)
+	assert.True(t, changed)
 
 	data, err := os.ReadFile(hooksPath(home))
 	require.NoError(t, err)
@@ -213,7 +217,7 @@ func TestRun_PreservesUnknownTopLevelKeys(t *testing.T) {
 	assert.JSONEq(t, `{"keep": ["me"]}`, string(doc.Extras))
 }
 
-func TestRun_Idempotent(t *testing.T) {
+func TestInstall_Idempotent(t *testing.T) {
 	home := t.TempDir()
 	withHome(t, home)
 	withExecutable(t, testBin)
@@ -227,20 +231,22 @@ func TestRun_Idempotent(t *testing.T) {
   }
 }`)
 
-	require.NoError(t, Run(io.Discard, io.Discard, nopLogger()))
+	changed, err := Install(context.Background(), io.Discard)
+	require.NoError(t, err)
+	assert.True(t, changed)
 	first, err := os.ReadFile(hooksPath(home))
 	require.NoError(t, err)
 
-	var stdout bytes.Buffer
-	require.NoError(t, Run(&stdout, io.Discard, nopLogger()))
+	changed, err = Install(context.Background(), io.Discard)
+	require.NoError(t, err)
+	assert.False(t, changed)
 	second, err := os.ReadFile(hooksPath(home))
 	require.NoError(t, err)
 
-	assert.Equal(t, string(first), string(second), "second run must not change the file")
-	assert.Contains(t, stdout.String(), "already up to date")
+	assert.Equal(t, string(first), string(second), "second install must not change the file")
 }
 
-func TestReconcileReportsRewriteOfStaleOwnedHooks(t *testing.T) {
+func TestInstallReportsRewriteOfStaleOwnedHooks(t *testing.T) {
 	home := t.TempDir()
 	withHome(t, home)
 	withExecutable(t, testBin)
@@ -253,15 +259,16 @@ func TestReconcileReportsRewriteOfStaleOwnedHooks(t *testing.T) {
 	require.NoError(t, err)
 	seedHooks(t, home, string(seed))
 
-	installed, err := Status()
+	installed, version, err := Status(context.Background())
 	require.NoError(t, err)
 	assert.True(t, installed, "Status recognises stale owned hooks as installed")
+	assert.Empty(t, version)
 
-	changed, err := Reconcile(io.Discard, io.Discard, nopLogger())
+	changed, err := Install(context.Background(), io.Discard)
 	require.NoError(t, err)
-	assert.True(t, changed, "reconciliation rewrites stale binary paths")
+	assert.True(t, changed, "Install rewrites stale binary paths")
 
-	changed, err = Reconcile(io.Discard, io.Discard, nopLogger())
+	changed, err = Install(context.Background(), io.Discard)
 	require.NoError(t, err)
 	assert.False(t, changed, "the exact desired hook file is already converged")
 }
@@ -273,9 +280,9 @@ func TestCorruptHooksFileAborts(t *testing.T) {
 	const corrupt = `{"version": 1, "hooks": {`
 	cases := []struct {
 		name string
-		run  func(io.Writer, io.Writer, *log.Logger) error
+		run  func(context.Context, io.Writer) (bool, error)
 	}{
-		{"install", Run},
+		{"install", Install},
 		{"uninstall", Uninstall},
 	}
 	for _, tc := range cases {
@@ -288,7 +295,8 @@ func TestCorruptHooksFileAborts(t *testing.T) {
 			path := hooksPath(home)
 			require.NoError(t, os.WriteFile(path, []byte(corrupt), 0o644))
 
-			require.Error(t, tc.run(io.Discard, io.Discard, nopLogger()))
+			_, err := tc.run(context.Background(), io.Discard)
+			require.Error(t, err)
 
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)
@@ -304,7 +312,7 @@ func TestUninstall(t *testing.T) {
 		legacyRunSh    = "/Users/me/projects/sigil-sdk/plugins/cursor/scripts/run.sh"
 	)
 
-	t.Run("removes only sigil entries", func(t *testing.T) {
+	t.Run("removes owned hooks and preserves hand-authored entries", func(t *testing.T) {
 		home := t.TempDir()
 		withHome(t, home)
 		seedHooks(t, home, `{
@@ -312,6 +320,7 @@ func TestUninstall(t *testing.T) {
   "hooks": {
     "sessionStart": [
       {"command": "`+legacyRunSh+`"},
+      {"command": "/Users/me/bin/my-cursor-hook", "args": ["--mine"], "enabled": false},
       {"command": "`+superconductor+`"}
     ],
     "beforeSubmitPrompt": [
@@ -321,13 +330,22 @@ func TestUninstall(t *testing.T) {
   }
 }`)
 
-		var stdout bytes.Buffer
-		require.NoError(t, Uninstall(&stdout, io.Discard, nopLogger()))
-		assert.Contains(t, stdout.String(), "removed Cursor hooks from")
+		changed, err := Uninstall(context.Background(), io.Discard)
+		require.NoError(t, err)
+		assert.True(t, changed)
 
 		got := readEntries(t, hooksPath(home))
-		assert.Equal(t, []string{superconductor}, got["sessionStart"])
+		assert.Equal(t, []string{"/Users/me/bin/my-cursor-hook", superconductor}, got["sessionStart"])
 		assert.Equal(t, []string{supersetStart}, got["beforeSubmitPrompt"])
+
+		data, err := os.ReadFile(hooksPath(home))
+		require.NoError(t, err)
+		var doc struct {
+			Hooks map[string][]json.RawMessage `json:"hooks"`
+		}
+		require.NoError(t, json.Unmarshal(data, &doc))
+		require.Len(t, doc.Hooks["sessionStart"], 2)
+		assert.JSONEq(t, `{"command":"/Users/me/bin/my-cursor-hook","args":["--mine"],"enabled":false}`, string(doc.Hooks["sessionStart"][0]))
 	})
 
 	t.Run("drops events left empty", func(t *testing.T) {
@@ -338,43 +356,57 @@ func TestUninstall(t *testing.T) {
   "hooks": {"stop": [{"command": "`+legacyRunSh+`"}]}
 }`)
 
-		require.NoError(t, Uninstall(io.Discard, io.Discard, nopLogger()))
+		changed, err := Uninstall(context.Background(), io.Discard)
+		require.NoError(t, err)
+		assert.True(t, changed)
 		_, ok := readEntries(t, hooksPath(home))["stop"]
 		assert.False(t, ok, "empty event array must be dropped")
 	})
 
-	t.Run("idempotent on already-clean file", func(t *testing.T) {
+	t.Run("already-clean file is left byte-for-byte untouched", func(t *testing.T) {
 		home := t.TempDir()
 		withHome(t, home)
-		seedHooks(t, home, `{
+		const clean = `{
   "version": 1,
-  "hooks": {"sessionStart": [{"command": "`+superconductor+`"}]}
-}`)
+  "hooks": {"sessionStart": [{"command": "` + superconductor + `"}]}
+}`
+		seedHooks(t, home, clean)
 
-		require.NoError(t, Uninstall(io.Discard, io.Discard, nopLogger()))
-		first, err := os.ReadFile(hooksPath(home))
+		changed, err := Uninstall(context.Background(), io.Discard)
 		require.NoError(t, err)
-
-		var stdout bytes.Buffer
-		require.NoError(t, Uninstall(&stdout, io.Discard, nopLogger()))
-		second, err := os.ReadFile(hooksPath(home))
+		assert.False(t, changed)
+		data, err := os.ReadFile(hooksPath(home))
 		require.NoError(t, err)
-
-		assert.Equal(t, string(first), string(second))
-		assert.Contains(t, stdout.String(), "no Cursor hooks to remove")
-		assert.Equal(t, []string{superconductor}, readEntries(t, hooksPath(home))["sessionStart"])
+		assert.Equal(t, clean, string(data))
 	})
 
 	t.Run("missing file is a no-op", func(t *testing.T) {
 		home := t.TempDir()
 		withHome(t, home)
 
-		var stdout bytes.Buffer
-		require.NoError(t, Uninstall(&stdout, io.Discard, nopLogger()))
-		assert.Contains(t, stdout.String(), "no Cursor hooks to remove")
-		_, err := os.Stat(hooksPath(home))
+		changed, err := Uninstall(context.Background(), io.Discard)
+		require.NoError(t, err)
+		assert.False(t, changed)
+		_, err = os.Stat(hooksPath(home))
 		assert.True(t, os.IsNotExist(err), "uninstall must not create the file")
 	})
+}
+
+func TestInstallAndUninstallDoNotPrintOutcomes(t *testing.T) {
+	home := t.TempDir()
+	withHome(t, home)
+	withExecutable(t, testBin)
+
+	var stdout bytes.Buffer
+	changed, err := Install(context.Background(), &stdout)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Empty(t, stdout.String())
+
+	changed, err = Uninstall(context.Background(), &stdout)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Empty(t, stdout.String())
 }
 
 func TestInstallThenUninstallRoundTrip(t *testing.T) {
@@ -387,8 +419,12 @@ func TestInstallThenUninstallRoundTrip(t *testing.T) {
   "hooks": {"sessionStart": [{"command": "`+superconductor+`"}]}
 }`)
 
-	require.NoError(t, Run(io.Discard, io.Discard, nopLogger()))
-	require.NoError(t, Uninstall(io.Discard, io.Discard, nopLogger()))
+	changed, err := Install(context.Background(), io.Discard)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	changed, err = Uninstall(context.Background(), io.Discard)
+	require.NoError(t, err)
+	assert.True(t, changed)
 
 	got := readEntries(t, hooksPath(home))
 	assert.Equal(t, []string{superconductor}, got["sessionStart"])
@@ -401,20 +437,45 @@ func TestStatus(t *testing.T) {
 	home := t.TempDir()
 	withHome(t, home)
 
-	installed, err := Status()
+	installed, version, err := Status(context.Background())
 	require.NoError(t, err)
 	assert.False(t, installed, "a missing hooks file is not installed")
+	assert.Empty(t, version)
+	_, err = os.Stat(hooksPath(home))
+	assert.True(t, os.IsNotExist(err), "Status must not create the hooks file")
 
 	withExecutable(t, testBin)
-	require.NoError(t, Run(io.Discard, io.Discard, nopLogger()))
-	installed, err = Status()
+	changed, err := Install(context.Background(), io.Discard)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	installed, version, err = Status(context.Background())
 	require.NoError(t, err)
 	assert.True(t, installed)
+	assert.Empty(t, version)
+
+	legacyHooks := make(map[string][]map[string]string, len(cursorEvents))
+	for _, event := range cursorEvents {
+		legacyHooks[event] = []map[string]string{{"command": "/old/bin/sigil cursor hook"}}
+	}
+	seed, err := json.Marshal(map[string]any{"custom": "keep", "hooks": legacyHooks, "version": 7})
+	require.NoError(t, err)
+	seedHooks(t, home, string(seed))
+	before, err := os.ReadFile(hooksPath(home))
+	require.NoError(t, err)
+
+	installed, version, err = Status(context.Background())
+	require.NoError(t, err)
+	assert.True(t, installed)
+	assert.Empty(t, version)
+	after, err := os.ReadFile(hooksPath(home))
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "Status must not rewrite stale hooks or otherwise modify the file")
 
 	seedHooks(t, home, `{"version":1,"hooks":{"sessionStart":[{"command":"agento11y cursor hook"}]}}`)
-	installed, err = Status()
+	installed, version, err = Status(context.Background())
 	require.NoError(t, err)
 	assert.False(t, installed, "partial hook wiring is not a healthy install")
+	assert.Empty(t, version)
 }
 
 func TestIsOursHook(t *testing.T) {
@@ -516,8 +577,4 @@ func nonOursCommands(cmds []string) []string {
 		}
 	}
 	return out
-}
-
-func nopLogger() *log.Logger {
-	return log.New(io.Discard, "", 0)
 }

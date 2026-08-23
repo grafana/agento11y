@@ -3,6 +3,7 @@ package codex
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -36,6 +37,10 @@ const (
 
 	updateCheckTTL = 24 * time.Hour
 )
+
+// ErrCLINotFound means the Codex binary is not available on PATH for the
+// current user. Callers can defer setup until the host is installed.
+var ErrCLINotFound = errors.New("codex CLI not found")
 
 // Test seams.
 var (
@@ -81,12 +86,8 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 		// One-time trust step the launcher cannot automate: codex requires
 		// the user to open /hooks inside the TUI and accept each hook after
 		// the plugin is installed (or reinstalled under a new name).
-		PostInstallHint: func(w io.Writer) {
-			fmt.Fprintf(w,
-				"agento11y: open /hooks inside codex and trust the agento11y hooks\n"+
-					"           to start exporting turns.\n")
-		},
-		Update: runUpdate,
+		PostInstallHint: printHookTrustHint,
+		Update:          runUpdate,
 		UpdateRecoveryHint: func(w io.Writer) {
 			fmt.Fprintf(w,
 				"          codex plugin marketplace upgrade\n"+
@@ -96,6 +97,34 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 		UpdateTTL:     updateCheckTTL,
 		BinaryVersion: binaryVersion,
 	})
+}
+
+// Install registers the Codex plugin without starting Codex or prompting for
+// Agent Observability credentials. The returned value is true only when this
+// invocation registered the plugin.
+func Install(ctx context.Context, stdout io.Writer) (bool, error) {
+	// Probe before requiring the host so an already-converged installation can
+	// return without attempting another registration. An inconclusive probe is
+	// repaired by reinstalling when Codex is available.
+	installed, probeErr := pluginInstalled(ctx, "codex")
+	if probeErr == nil && installed {
+		printHookTrustHint(stdout)
+		return false, nil
+	}
+
+	bin, err := lookPath("codex")
+	if err != nil {
+		return false, fmt.Errorf("%w; install Codex or run this in the developer's user context", ErrCLINotFound)
+	}
+	if err := runInstall(ctx, bin, stdout); err != nil {
+		return false, err
+	}
+	printHookTrustHint(stdout)
+	return true, nil
+}
+
+func printHookTrustHint(w io.Writer) {
+	fmt.Fprintln(w, "agento11y: open /hooks inside codex and trust the agento11y hooks\n           to start exporting turns.")
 }
 
 // Status reports whether the codex plugin is installed and enabled. It

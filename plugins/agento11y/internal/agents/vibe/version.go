@@ -2,9 +2,12 @@ package vibe
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
@@ -40,45 +43,54 @@ const (
 // argparse, before it imports its config stack, but a frozen build still pays
 // its own bootstrap first, so the budget covers a cold start rather than the
 // warm case. The probe sits in front of an exec the user is waiting on, so it
-// cannot be unbounded either. On timeout the caller writes current-generation
+// cannot be unbounded either. On timeout Launch writes current-generation
 // types, which a pre-2.21.0 vibe then rejects with a warning per entry; the
 // next launch usually gets a warm answer and repairs the file.
 const versionProbeTimeout = 5 * time.Second
 
+// ErrCLINotFound means the Vibe binary is not available on PATH.
+var ErrCLINotFound = errors.New("vibe CLI not found")
+
 // vibeVersionRE matches the major.minor of `vibe --version` output, which
 // argparse renders as "<prog> <version>". A suffix (2.21.0rc1, 2.21.0.dev0)
 // is left to the caller: only major.minor decides the type set.
-var vibeVersionRE = regexp.MustCompile(`([0-9]+)\.([0-9]+)`)
+var vibeVersionRE = regexp.MustCompile(`^\s*\S+\s+v?([0-9]+)\.([0-9]+)(?:\.[0-9A-Za-z][0-9A-Za-z.+-]*)?\s*$`)
 
 // Test seam.
 var vibeVersionOutput = func(ctx context.Context, bin string) ([]byte, error) {
 	return launcher.Output(ctx, bin, "--version")
 }
 
-// hookTypesFor reports the type set the vibe on PATH accepts.
-//
-// Every failure path returns currentHookTypes: no vibe on PATH (doctor runs
-// without it), a probe that errors or times out, or output we cannot parse.
-// Guessing current is the safer default, because a pre-2.21.0 vibe also needs
-// VIBE_ENABLE_EXPERIMENTAL_HOOKS, so its users had to opt in explicitly and
-// are the rarer case.
+// hookTypesFor reports the type set the vibe on PATH accepts. Launch and
+// status fall back to current types when the version cannot be determined;
+// managed install uses installedHookTypes directly and returns the error.
 func hookTypesFor(ctx context.Context, logger *log.Logger) hookTypeSet {
+	types, err := installedHookTypes(ctx)
+	if err == nil {
+		return types
+	}
+	if !errors.Is(err, ErrCLINotFound) {
+		logf(logger, "%v", err)
+	}
+	return currentHookTypes
+}
+
+func installedHookTypes(ctx context.Context) (hookTypeSet, error) {
 	bin, err := lookPath("vibe")
 	if err != nil {
-		return currentHookTypes
+		return hookTypeSet{}, fmt.Errorf("%w: %v", ErrCLINotFound, err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
 	defer cancel()
 	out, err := vibeVersionOutput(ctx, bin)
 	if err != nil {
-		logf(logger, "vibe --version: %v", err)
-		return currentHookTypes
+		return hookTypeSet{}, fmt.Errorf("vibe --version: %w", err)
 	}
 	types, ok := hookTypesForVersion(string(out))
 	if !ok {
-		logf(logger, "vibe --version: cannot parse %q", string(out))
+		return hookTypeSet{}, fmt.Errorf("vibe --version: cannot parse %q", strings.TrimSpace(string(out)))
 	}
-	return types
+	return types, nil
 }
 
 // hookTypesForVersion maps `vibe --version` output to a type set. ok is false

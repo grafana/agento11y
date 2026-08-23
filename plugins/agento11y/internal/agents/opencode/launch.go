@@ -27,7 +27,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/launcher"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/tailscale/hujson"
@@ -51,14 +50,6 @@ const (
 // ErrCLINotFound means the OpenCode binary is not available on PATH for the
 // current user. Callers can defer setup until the host is installed.
 var ErrCLINotFound = errors.New("opencode CLI not found")
-
-func init() {
-	agentinstall.Register(agentinstall.Spec{
-		Name:          "opencode",
-		Install:       Install,
-		IsMissingHost: func(err error) bool { return errors.Is(err, ErrCLINotFound) },
-	})
-}
 
 // Test seams.
 var (
@@ -91,7 +82,7 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 	// refresh-skip below.
 	// Launch keeps legacy migration best-effort so an interactive OpenCode
 	// session can still start with its existing plugin if a rewrite fails.
-	_ = migrateLegacyConfig(stderr, logger)
+	_, _ = migrateLegacyConfig(stderr, logger)
 
 	// The periodic refresh installs PluginSource. When the config still
 	// references the legacy package name (because the migration above could
@@ -133,18 +124,21 @@ func Launch(ctx context.Context, args []string, localEnv *local.LaunchEnv, _ io.
 }
 
 // Install registers the OpenCode plugin without starting OpenCode or prompting
-// for Agent Observability credentials. The returned value is true only when
-// this invocation registered the plugin.
-func Install(ctx context.Context, stdout io.Writer, logger *log.Logger) (bool, error) {
+// for Agent Observability credentials. The returned value is true when this
+// invocation registered the plugin or migrated its legacy configuration.
+func Install(ctx context.Context, stdout io.Writer) (changed bool, err error) {
+	logger := log.New(io.Discard, "", 0)
+
 	// A legacy config must be rewritten before it can count as installed. If
 	// the rewrite fails, returning an error keeps fleet reconciliation retrying
 	// instead of silently leaving OpenCode pinned to the frozen package.
-	if err := migrateLegacyConfig(stdout, logger); err != nil {
+	migrated, err := migrateLegacyConfig(stdout, logger)
+	if err != nil {
 		return false, fmt.Errorf("migrate legacy OpenCode plugin configuration: %w", err)
 	}
 	installed, probeErr := pluginInstalled()
 	if probeErr == nil && installed {
-		return false, nil
+		return migrated, nil
 	}
 
 	bin, err := lookPath("opencode")
@@ -185,44 +179,44 @@ func defaultRunUpdate(ctx context.Context, bin string, w io.Writer) error {
 // stderr, and Launch's legacy refresh-skip keeps the frozen install working.
 // Install returns such a failure so managed reconciliation does not report a
 // legacy plugin as converged.
-func migrateLegacyConfig(stderr io.Writer, logger *log.Logger) error {
+func migrateLegacyConfig(stderr io.Writer, logger *log.Logger) (bool, error) {
 	path, data, err := readConfigFile()
 	if err != nil {
 		logger.Printf("opencode legacy migration: %v", err)
-		return err
+		return false, err
 	}
 	if data == nil {
-		return nil
+		return false, nil
 	}
 	v, err := hujson.Parse(data)
 	if err != nil {
 		err = fmt.Errorf("parse %s: %w", path, err)
 		logger.Printf("opencode legacy migration: %v", err)
-		return err
+		return false, err
 	}
 	ops, err := legacyPluginOps(v)
 	if err != nil {
 		err = fmt.Errorf("scan %s: %w", path, err)
 		logger.Printf("opencode legacy migration: %v", err)
-		return err
+		return false, err
 	}
 	if ops == nil {
-		return nil
+		return false, nil
 	}
 	fmt.Fprintf(stderr, "agento11y: migrating %s to %s in %s\n", legacyPluginName, PluginName, path)
 	if err := v.Patch(ops); err != nil {
 		err = fmt.Errorf("patch %s: %w", path, err)
 		logger.Printf("opencode legacy migration: %v", err)
 		printMigrationRecoveryHint(stderr, err, path)
-		return err
+		return false, err
 	}
 	if err := writeConfig(path, v.Pack()); err != nil {
 		err = fmt.Errorf("write %s: %w", path, err)
 		logger.Printf("opencode legacy migration: %v", err)
 		printMigrationRecoveryHint(stderr, err, path)
-		return err
+		return false, err
 	}
-	return nil
+	return true, nil
 }
 
 // printMigrationRecoveryHint tells the user how to finish the rename by hand

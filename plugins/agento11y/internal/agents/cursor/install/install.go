@@ -1,5 +1,5 @@
-// Package install wires agento11y's Cursor hook into the user-level
-// ~/.cursor/hooks.json from the command line.
+// Package install manages agento11y's Cursor hook in the user-level
+// ~/.cursor/hooks.json.
 //
 // Cursor is a GUI app with no exec launch point, so unlike the other agents
 // there is no `agento11y cursor` launcher to bootstrap capture on first run.
@@ -22,14 +22,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"maps"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
-	"github.com/grafana/agento11y/plugins/agento11y/internal/clihelp"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/execpath"
 )
 
@@ -52,19 +49,6 @@ var cursorEvents = []string{
 // Test seam.
 var userHomeDir = os.UserHomeDir
 
-func init() {
-	agentinstall.Register(agentinstall.Spec{
-		Name: "cursor",
-		Install: func(_ context.Context, stdout io.Writer, logger *log.Logger) (bool, error) {
-			changed, err := Reconcile(stdout, io.Discard, logger)
-			if err != nil {
-				return false, fmt.Errorf("write Cursor hooks: %w", err)
-			}
-			return changed, nil
-		},
-	})
-}
-
 // hookEntry is a single Cursor hook command entry. Cursor entries may carry
 // other fields, but agento11y only ever writes the command; extra fields on other
 // tools' entries are preserved as raw JSON, not through this type.
@@ -72,26 +56,18 @@ type hookEntry struct {
 	Command string `json:"command"`
 }
 
-// Run wires `agento11y cursor hook` into ~/.cursor/hooks.json for all eight
+// Install wires `agento11y cursor hook` into ~/.cursor/hooks.json for all nine
 // Cursor hook events, creating the file and parent directory when absent. It
 // merges into an existing file: unknown top-level keys and other tools'
-// entries are preserved, and a recognised pre-existing agento11y entry (a previous
-// install, or a legacy run.sh entry when detectable) is replaced in place to
-// avoid double-firing capture. The write is atomic and idempotent — when the
-// result already matches what is on disk, the file is left untouched.
-func Run(stdout, stderr io.Writer, logger *log.Logger) error {
-	_, err := Reconcile(stdout, stderr, logger)
-	return err
-}
-
-// Reconcile has the same behavior as Run and also reports whether it modified
-// the hooks file. Management tooling uses this result for an accurate
-// installed versus already_installed receipt.
+// entries are preserved, and a recognised pre-existing agento11y entry (a
+// previous install, or a legacy run.sh entry when detectable) is replaced in
+// place to avoid double-firing capture. The write is atomic and idempotent.
+// changed is false and the file is left untouched when it is already current.
 //
-// A Status probe alone cannot provide that result: Status intentionally treats
+// Status alone cannot provide the changed result: it intentionally treats
 // legacy run.sh entries and hooks pointing to another agento11y binary as
-// installed, while this function upgrades those entries in place.
-func Reconcile(stdout, _ io.Writer, logger *log.Logger) (bool, error) {
+// installed, while Install upgrades those entries in place.
+func Install(_ context.Context, _ io.Writer) (changed bool, err error) {
 	path, err := cursorHooksPath()
 	if err != nil {
 		return false, err
@@ -100,7 +76,6 @@ func Reconcile(stdout, _ io.Writer, logger *log.Logger) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	logger.Printf("cursor install: hooks=%s command=%q", path, cmd)
 
 	doc, err := loadHooks(path)
 	if err != nil {
@@ -115,70 +90,60 @@ func Reconcile(stdout, _ io.Writer, logger *log.Logger) (bool, error) {
 		doc.hooks[event] = upsertOurs(doc.hooks[event], entry)
 	}
 
-	wrote, err := writeHooks(path, doc)
-	if err != nil {
-		return false, err
-	}
-	if wrote {
-		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Success(fmt.Sprintf("agento11y: wired Cursor hooks at %s", path)))
-	} else {
-		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Success(fmt.Sprintf("agento11y: Cursor hooks already up to date at %s", path)))
-	}
-	return wrote, nil
+	return writeHooks(path, doc)
 }
 
 // Uninstall removes agento11y's hook entries from ~/.cursor/hooks.json, leaving
 // other tools' entries and unknown keys intact. Event arrays left empty are
-// dropped. The write is atomic and idempotent — a file with no agento11y entries
-// is left untouched, and a missing file is a no-op (no file is created).
-func Uninstall(stdout, _ io.Writer, logger *log.Logger) error {
+// dropped. The write is atomic and idempotent. changed is false and the file
+// is left untouched when it has no agento11y entries. A missing file is a no-op
+// and is not created.
+func Uninstall(_ context.Context, _ io.Writer) (changed bool, err error) {
 	path, err := cursorHooksPath()
 	if err != nil {
-		return err
+		return false, err
 	}
-	logger.Printf("cursor uninstall: hooks=%s", path)
 
 	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
-		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Detail(fmt.Sprintf("agento11y: no Cursor hooks to remove at %s", path)))
-		return nil
+		return false, nil
 	}
 
 	doc, err := loadHooks(path)
 	if err != nil {
-		return err
+		return false, err
 	}
+	removed := false
 	for event, entries := range doc.hooks {
 		kept := removeOurs(entries)
+		if len(kept) == len(entries) {
+			continue
+		}
+		removed = true
 		if len(kept) == 0 {
 			delete(doc.hooks, event)
 			continue
 		}
 		doc.hooks[event] = kept
 	}
+	if !removed {
+		return false, nil
+	}
 
-	wrote, err := writeHooks(path, doc)
-	if err != nil {
-		return err
-	}
-	if wrote {
-		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Success(fmt.Sprintf("agento11y: removed Cursor hooks from %s", path)))
-	} else {
-		_, _ = fmt.Fprintln(stdout, clihelp.New(stdout).Detail(fmt.Sprintf("agento11y: no Cursor hooks to remove at %s", path)))
-	}
-	return nil
+	return writeHooks(path, doc)
 }
 
 // Status reports whether every Cursor event agento11y wires has one of this
 // installer's hook commands. It is read-only so `agento11y doctor` can use it
-// safely in a managed deployment health check.
-func Status() (bool, error) {
+// safely in a managed deployment health check. Cursor capture ships in the
+// agento11y binary, so version is always empty.
+func Status(_ context.Context) (installed bool, version string, err error) {
 	path, err := cursorHooksPath()
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	doc, err := loadHooks(path)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	for _, event := range cursorEvents {
 		found := false
@@ -189,10 +154,10 @@ func Status() (bool, error) {
 			}
 		}
 		if !found {
-			return false, nil
+			return false, "", nil
 		}
 	}
-	return true, nil
+	return true, "", nil
 }
 
 // cursorHooksPath returns the user-level Cursor hooks file path.
@@ -317,7 +282,7 @@ func loadHooks(path string) (*hooksDoc, error) {
 		if err := json.Unmarshal(rawHooks, &doc.hooks); err != nil {
 			return nil, fmt.Errorf("parse hooks in %s: %w", path, err)
 		}
-		// A literal `"hooks": null` unmarshals to a nil map; reset it so Run
+		// A literal `"hooks": null` unmarshals to a nil map; reset it so Install
 		// can assign event entries without panicking.
 		if doc.hooks == nil {
 			doc.hooks = map[string][]json.RawMessage{}

@@ -431,14 +431,8 @@ func probeStatus(res *ProbeResult) string {
 }
 
 func describeAgent(p palette, a AgentStatus) string {
-	// Hook-only agents (cursor) are detected purely by PATH presence. Their
-	// version is the agento11y binary's, so it is rendered exactly as the
-	// report heading renders it.
-	if a.HookBased {
-		return agentNote(p, joinVersion("detected", a.Version), "", a.Note)
-	}
-	// The install probe never ran: a CLI-dependent agent whose binary is
-	// absent, or a hook-only agent off PATH.
+	// The install probe never ran because a host-dependent agent's binary is
+	// absent.
 	if a.Health == HealthSkipped {
 		return agentNote(p, p.faint("not found on PATH"), "", a.Note)
 	}
@@ -456,9 +450,8 @@ func describeAgent(p palette, a AgentStatus) string {
 	if installed {
 		version = a.Version
 	}
-	// Hook-file based agent (copilot, vibe): capture doesn't depend on the CLI being
-	// on PATH, so report install state with its own wording and no PATH
-	// qualifiers.
+	// Hook-file-based agents do not depend on their CLI being on PATH, so
+	// report install state with hook-specific wording and no PATH qualifiers.
 	if a.notInstalledLabel != "" {
 		state := a.notInstalledLabel
 		if installed {

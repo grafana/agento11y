@@ -81,7 +81,9 @@ agento11y claude
 | [Pi](https://github.com/earendil-works/pi) | `agento11y pi` |
 | [Vibe](https://github.com/mistralai/vibe) | `agento11y vibe` |
 
-Cursor has no launcher. Run `agento11y cursor install` once, then start Cursor normally. Remove its hooks with `agento11y cursor uninstall`. See also [`cursor/README.md`](../cursor/README.md). Per-agent notes and glue live under [`plugins/`](../).
+To configure an integration without launching its host, run `agento11y <agent> install`. The command accepts every agent in the table. A successful interactive install starts first-run setup when neither local mode nor complete Cloud credentials are saved. Add `--json` for a prompt-free operation and a machine-readable result. Copilot, Cursor, and Vibe also support `agento11y <agent> uninstall [--json]`.
+
+Cursor has no launcher. Run `agento11y cursor install`, then start Cursor normally. See [`cursor/README.md`](../cursor/README.md) for Cursor details. Per-agent notes and glue live under [`plugins/`](../).
 
 ## Claude plugin evals
 
@@ -341,27 +343,35 @@ Cloud credentials in this file are documented under [Grafana Agent Observability
 
 ### Noninteractive agent setup
 
-After writing the current user's `config.env`, a script can register an agent integration without launching the host or opening the credential prompt:
+After writing the current user's `config.env`, a script can configure any supported integration without launching its host:
 
 ```sh
-agento11y copilot install --json
-agento11y opencode install --json
-agento11y pi install --json
+agento11y <agent> install --json
 ```
 
-Each command prints one secret-free result with `installed`, `already_installed`, `missing_host`, or `error`. Copilot writes its shared user hook file and does not require the Copilot CLI on `PATH`; that file is also read by Copilot Chat in VS Code. OpenCode and pi require their respective CLI to be on the current user's `PATH`; `missing_host` is a successful deferral, so a later run can configure a host installed after the script.
+Replace `<agent>` with `claude`, `codex`, `copilot`, `cursor`, `opencode`, `pi`, or `vibe`. The command prints one secret-free result with `installed`, `already_installed`, `missing_host`, or `error`. Claude Code, Codex, OpenCode, Pi, and Vibe need their host CLI on the current user's `PATH`. For those agents, `missing_host` is a successful deferral. A later run can configure a host that was installed after the script.
 
-Claude Code provides the same command as `agento11y claude install --json`.
+Installation confirms plugin registration or hook configuration, not capture readiness. For Codex, open `/hooks` inside Codex and [trust the agento11y hooks](../codex/README.md). Vibe below 2.21.0 also needs `VIBE_ENABLE_EXPERIMENTAL_HOOKS=true` when started directly; [`agento11y vibe`](../vibe/README.md) sets it for the child process. Human-readable install output includes these instructions; JSON output does not.
+
+Copilot, Cursor, and Vibe support prompt-free removal of the configuration that agento11y owns:
+
+```sh
+agento11y copilot uninstall --json
+agento11y cursor uninstall --json
+agento11y vibe uninstall --json
+```
 
 #### Fleet reconciliation
 
-For MDM, configuration management, and other unattended rollout tools, reconcile those installers in one shot and receive one JSON result per agent:
+For mobile device management (MDM), configuration management, and other unattended rollout tools, configure several integrations in one run:
 
 ```sh
-agento11y agents reconcile --agents all --json
+agento11y agents reconcile --agents claude,cursor --json
 ```
 
-`all` includes every noninteractive installer registered in the installed binary, including an agent added by a future release. To target a fixed allowlist, pass names instead: `--agents claude,cursor`. The command never launches a coding agent or opens a login prompt. Its receipt reports `installed`, `already_installed`, `missing_host`, or a per-agent descriptive error; it exits non-zero only when an installer fails. This command contains no MDM-vendor, credential, or device-policy assumptions.
+`agents install` and `agents reconcile` have the same behavior. The required `--agents` flag accepts a comma-separated list. Pass `all` to include every agent registered in the installed binary, including agents added by future releases.
+
+The command never launches a coding agent or opens a login prompt. It emits one receipt for the whole run. The receipt includes the binary version, the optional `AGENTO11Y_MANAGED_CONFIG_REVISION`, and one result per requested agent. Its top-level status is `converged`, `deferred_missing_host`, or `error`. `converged` confirms registration; the host prerequisites above still apply. A deferred missing host exits 0; an installer error exits 1.
 
 ### Auto-update
 
@@ -373,7 +383,7 @@ agento11y agents reconcile --agents all --json
 
 `agento11y help` (or `--help`, or `-h`) prints the full command list on stdout and exits 0. An unknown subcommand, or a command given the wrong number of arguments, prints a one-line usage form on stderr and exits 2.
 
-Run `agento11y doctor` first. It's a read-only diagnostic that reports both export pipelines, config, and installed host-agent plugins in one place. It sends a lightweight request to each endpoint and reports the HTTP status, so a wrong endpoint or a token missing a scope shows up as a broken pipeline:
+Run `agento11y doctor` first. It's a read-only diagnostic that reports both export pipelines, config, and host-agent integrations in one place. It sends a lightweight request to each endpoint and reports the HTTP status, so a wrong endpoint or a token missing a scope shows up as a broken pipeline:
 
 ```sh
 agento11y doctor

@@ -23,7 +23,7 @@ agento11y doctor v0.22.0
 Coding agents
   claude:             installed v0.3.0
   codex:              not found on PATH
-  cursor:             detected v0.22.0 (hook-based; configured in Cursor settings)
+  cursor:             installed (hook-based; configured in Cursor settings)
 
 ✗ 1 problem(s): config misconfigured
 

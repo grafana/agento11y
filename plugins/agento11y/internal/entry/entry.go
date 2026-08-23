@@ -1,5 +1,5 @@
 // Package entry implements the shared CLI entrypoint behind the
-// cmd/agento11y and cmd/agento11y binaries. Both commands are the same single
+// cmd/agento11y and cmd/sigil binaries. Both commands are the same single
 // binary used by the Claude Code, Codex, Copilot, Cursor, OpenCode, pi, and
 // Vibe agent plugins. It accepts:
 //
@@ -10,9 +10,9 @@
 //	agento11y opencode [--local|--no-local] [--tag k=v] [-- args...]  — exec opencode after bootstrapping the @grafana/agento11y-opencode plugin
 //	agento11y pi       [--local|--no-local] [--tag k=v] [-- args...]  — exec pi after bootstrapping the @grafana/agento11y-pi extension
 //	agento11y vibe     [--local|--no-local] [--tag k=v] [-- args...]  — exec vibe after installing the sigil hook in vibe's hooks.toml
-//	agento11y cursor   install|uninstall                              — wire (or remove) the Cursor hook in ~/.cursor/hooks.json
-//	agento11y claude   install [--json]                               — register the Claude Code plugin without launching or prompting
-//	agento11y agents   reconcile --agents all|name[,name...] --json   — reconcile registered noninteractive installers
+//	agento11y <claude|codex|copilot|cursor|opencode|pi|vibe> install [--json] - configure an agent without launching it
+//	agento11y <copilot|cursor|vibe> uninstall [--json]                 - remove an integration that supports uninstall
+//	agento11y agents   install|reconcile --agents all|name[,name...] [--json] - configure several agents and emit a receipt
 //	agento11y local start|open|status [--json]|stop|restart           — manage the local capture daemon
 //	agento11y history import <agent> [flags]                          — backfill an agent's existing local sessions
 //	agento11y skills list|show <name>                                 — print an agent skill bundled into this binary
@@ -50,14 +50,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/codex"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/copilot"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor"
-	cursorinstall "github.com/grafana/agento11y/plugins/agento11y/internal/agents/cursor/install"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/opencode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/registry"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/vibe"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/browser"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/buildversion"
@@ -70,6 +69,7 @@ import (
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/skills"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/useragent"
+	"golang.org/x/term"
 )
 
 // renderLocalBanner draws the local-mode banner. envKey names the variable that
@@ -182,19 +182,12 @@ var loginRun = login.Run
 // openURL is a package var so local command tests do not launch a browser.
 var openURL = browser.Open
 
-// registeredInstallers is a seam for reconciliation tests. Production returns
-// every adapter that registered a noninteractive installer at package init.
-var registeredInstallers = agentinstall.All
-
-// cursorInstall and cursorUninstall are package vars so tests can stub the
-// filesystem-touching `agento11y cursor install`/`uninstall` flow.
 var (
-	cursorInstall   = cursorinstall.Run
-	cursorUninstall = cursorinstall.Uninstall
-	claudeInstall   = claudecode.Install
-	copilotInstall  = copilot.Install
-	opencodeInstall = opencode.Install
-	piInstall       = pi.Install
+	registeredAgents  = registry.All
+	installInputIsTTY = func(stdin io.Reader) bool {
+		f, ok := stdin.(*os.File)
+		return ok && term.IsTerminal(int(f.Fd()))
+	}
 )
 
 // Main is the entrypoint shared by cmd/agento11y and cmd/sigil.
@@ -248,16 +241,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	}
 
 	if args[0] == "agents" {
-		runAgentsReconcile(args[1:], stdout, stderr)
+		runAgentsCommand(args[1:], stdout, stderr)
 		return
 	}
 
-	// These installers configure one host without launching it or prompting for
-	// Agent Observability credentials. They are safe to invoke from unattended
-	// setup after the current user's config.env is in place.
-	if len(args) >= 2 && args[1] == "install" &&
-		(args[0] == "claude" || args[0] == "copilot" || args[0] == "opencode" || args[0] == "pi") {
-		runAgentInstall(args[0], args[2:], stdout, stderr)
+	if len(args) >= 2 && args[0] == "claude" && args[1] == "eval" {
+		runClaudeEvalCommand(args[2:], stdout, stderr)
 		return
 	}
 
@@ -268,24 +257,26 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		return
 	}
 
-	if len(args) >= 2 && args[0] == "claude" && args[1] == "eval" {
-		runClaudeEvalCommand(args[2:], stdout, stderr)
-		return
+	// Hook dispatch has priority when an agent is both a hook target and a
+	// launcher or registered installer. Codex depends on this: `codex hook`
+	// must consume the JSON payload rather than enter install or launch parsing.
+	if len(args) >= 2 && args[1] == "hook" {
+		if hook, ok := agents[args[0]]; ok {
+			runAgentHook(args[0], hook, stdin, stdout)
+			return
+		}
 	}
 
-	// Launcher dispatch handles `sigil <launcher> [--local] [-- args...]`
-	// before the hook branch because launchers have no verb (single mode
-	// of operation).
-	//
-	// One exception: when a name appears in both maps (today: `codex`,
-	// which is both a launcher and a hook agent), the literal verb `hook`
-	// always means hook dispatch. Without this guard `agento11y codex hook`
-	// would hit the launcher branch, fail parseLauncherArgs because there
-	// is no `--`, and exit 2 — breaking every hook fired by
-	// plugins/codex/hooks/hooks.json.
-	_, isHookAgent := agents[args[0]]
-	isHookCall := len(args) >= 2 && args[1] == "hook" && isHookAgent
-	if launcher, ok := launchers[args[0]]; ok && !isHookCall {
+	if len(args) >= 2 && (args[1] == "install" || args[1] == "uninstall") {
+		if agent, ok := registeredAgent(args[0]); ok {
+			runAgentOperation(agent, args[1], args[2:], stdin, stdout, stderr)
+			return
+		}
+	}
+
+	// Launcher dispatch handles `agento11y <launcher> [--local] [-- args...]`
+	// after hook and install verbs because launchers have no verb.
+	if launcher, ok := launchers[args[0]]; ok {
 		// dotenv must run before parseLauncherArgs so XDG_STATE_HOME set
 		// only in $XDG_CONFIG_HOME/agento11y/config.env reaches local.StateDir()
 		// when --local is used. Otherwise the daemon dir is resolved against
@@ -387,42 +378,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 		return
 	}
 
-	// Cursor has no launcher (it is a GUI app), so `agento11y cursor install`
-	// wires its hooks directly. This branch sits before the generic
-	// non-`hook` verb rejection below so `install`/`uninstall` reach the
-	// installer while `agento11y cursor hook` still falls through to dispatch.
-	if agent == "cursor" && (verb == "install" || verb == "uninstall") {
-		runCursorInstall(verb, stdout, stderr)
-		return
-	}
-
 	if verb != "hook" {
 		_, _ = fmt.Fprintf(stderr, "agento11y: unknown verb %q (only \"hook\" supported)\n", verb)
 		exit(2)
 		return
 	}
 
-	// Propagate the build version to the claude-code adapter so its hook
-	// evaluation request carries the right agent_version. Other adapters
-	// don't need it yet.
-	claudecode.Version = version
-
-	// Propagate the build version to the generation-export User-Agent so each
-	// agent plugin identifies itself, e.g. "agento11y-plugin-cursor/<ver> ...".
-	useragent.Version = version
-
-	// Apply the dotenv file before initialising the logger so SIGIL_DEBUG=true
-	// set only in $XDG_CONFIG_HOME/agento11y/config.env still enables file logging.
-	// Cursor (and Codex headless) launch hooks under a stripped environment
-	// where the dotenv is the only place SIGIL_DEBUG could come from.
-	dotenv.ApplyEnv(nil)
-	logger := cli.InitLogger(agent)
-	defer cli.RecoverAndLog(logger)
-	applyLocalHookEnv(logger)
-
-	if err := hook(context.Background(), stdin, stdout, logger); err != nil {
-		logger.Printf("hook: %v", err)
-	}
+	runAgentHook(agent, hook, stdin, stdout)
 }
 
 // hookLocalStartTimeout is the same deadline launchers use. It must be
@@ -671,73 +633,37 @@ func readTokenStdin(fs *flag.FlagSet, endpoint, tenant string, stdin io.Reader, 
 	return token, true
 }
 
-// runCursorInstall handles `agento11y cursor install` and `sigil cursor
-// uninstall`. install wires agento11y's hook into ~/.cursor/hooks.json and, when
-// neither Cloud credentials nor a local answer are configured yet, chains the
-// interactive login prompt the same way the launchers do; uninstall removes the
-// hook entries.
-func runCursorInstall(verb string, stdout, stderr io.Writer) {
-	// dotenv must run before InitLogger so SIGIL_DEBUG=true set only in
-	// $XDG_CONFIG_HOME/agento11y/config.env still enables file logging, and
-	// before HasCredentials so dotenv-supplied credentials are visible.
+func registeredAgent(name string) (registry.Agent, bool) {
+	for _, agent := range registeredAgents() {
+		if agent.Name == name {
+			return agent, true
+		}
+	}
+	return registry.Agent{}, false
+}
+
+func runAgentHook(agent string, hook agentHook, stdin io.Reader, stdout io.Writer) {
+	// Propagate the build version to the claude-code adapter so its hook
+	// evaluation request carries the right agent_version. Other adapters
+	// don't need it yet.
+	claudecode.Version = version
+
+	// Propagate the build version to the generation-export User-Agent so each
+	// agent plugin identifies itself, e.g. "agento11y-plugin-cursor/<ver> ...".
+	useragent.Version = version
+
+	// Apply the dotenv file before initialising the logger so SIGIL_DEBUG=true
+	// set only in $XDG_CONFIG_HOME/agento11y/config.env still enables file logging.
+	// Cursor (and Codex headless) launch hooks under a stripped environment
+	// where the dotenv is the only place SIGIL_DEBUG could come from.
 	dotenv.ApplyEnv(nil)
-	logger := cli.InitLogger("cursor")
+	logger := cli.InitLogger(agent)
+	defer cli.RecoverAndLog(logger)
+	applyLocalHookEnv(logger)
 
-	if verb == "uninstall" {
-		if err := cursorUninstall(stdout, stderr, logger); err != nil {
-			logger.Printf("cursor uninstall: %v", err)
-			_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
-			exit(1)
-		}
-		return
+	if err := hook(context.Background(), stdin, stdout, logger); err != nil {
+		logger.Printf("hook: %v", err)
 	}
-
-	if err := cursorInstall(stdout, stderr, logger); err != nil {
-		logger.Printf("cursor install: %v", err)
-		_, _ = fmt.Fprintf(stderr, "agento11y: %v\n", err)
-		exit(1)
-		return
-	}
-
-	// A wired hook needs Cloud credentials or local mode. If it has neither, chain
-	// the login prompt on first install. login.Run returns ErrNotInteractive when
-	// stdin is not a TTY (CI, piped input); in that case we leave setup for later.
-	// A failed or aborted login never fails the install: the hook is already wired.
-	localValue, _, _ := envconfig.LookupEnv("LOCAL")
-	if !dotenv.HasCredentials() && !envconfig.ParseBool(localValue) {
-		result, err := loginRun(context.Background(), login.RunOpts{
-			Stderr:           stderr,
-			Logger:           logger,
-			OfferLocal:       !localDestinationSet(),
-			OfferLocalDaemon: true,
-		})
-		switch {
-		case err == nil && result.LocalMode:
-			_, _ = fmt.Fprintln(stderr, "agento11y: Cursor hook now captures sessions locally")
-		case err == nil && result.UsesLocalDaemon:
-			_, _ = fmt.Fprintln(stderr, "agento11y: Cursor hook now captures sessions locally and forwards them to Grafana Cloud")
-		case err == nil, errors.Is(err, login.ErrNotInteractive):
-			// either succeeded or no TTY; nothing to report.
-		case errors.Is(err, login.ErrAborted):
-			_, _ = fmt.Fprintln(stderr, "agento11y: setup aborted; run `agento11y login` when ready")
-		case errors.Is(err, login.ErrNotVerified):
-			logger.Printf("auto-login: %v", err)
-			_, _ = fmt.Fprintln(stderr, "agento11y: credentials not saved; run `agento11y login` when ready")
-		default:
-			logger.Printf("auto-login: %v", err)
-			_, _ = fmt.Fprintf(stderr, "agento11y: setup failed (%v); run `agento11y login` when ready\n", err)
-		}
-	}
-}
-
-func newJSONFlags(name string) (*flag.FlagSet, *bool) {
-	fs := newCommandFlags(name)
-	return fs, fs.Bool("json", false, "print a machine-readable result")
-}
-
-func newReconcileFlags() (*flag.FlagSet, *string, *bool) {
-	fs := newCommandFlags("agents reconcile")
-	return fs, fs.String("agents", "", "comma-separated registered agent installers"), fs.Bool("json", false, "print a machine-readable reconciliation receipt")
 }
 
 type agentInstallResult struct {
@@ -746,165 +672,230 @@ type agentInstallResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// runAgentInstall registers one supported host integration without entering an
-// interactive setup flow or starting the host. It is suitable for scripts
-// after the current user's config.env has been created.
-func runAgentInstall(agent string, args []string, stdout, stderr io.Writer) {
-	if routeHelp(append([]string{agent, "install"}, args...), stdout, stderr) {
+func runAgentOperation(agent registry.Agent, verb string, args []string, stdin io.Reader, stdout, stderr io.Writer) {
+	path := agent.Name + " " + verb
+	fs, jsonFlag := newJSONFlags(path)
+	if err := fs.Parse(args); err != nil {
+		usageError(stderr, path, err.Error())
+		exit(2)
 		return
 	}
-	fs, jsonFlag := newJSONFlags(agent + " install")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		_, _ = fmt.Fprintf(stderr, "usage: agento11y %s install [--json]\n", agent)
+	if fs.NArg() != 0 {
+		usageError(stderr, path, fmt.Sprintf("unexpected arguments: %v", fs.Args()))
 		exit(2)
 		return
 	}
 
 	asJSON := *jsonFlag
+	operation := agent.Install
+	if verb == "uninstall" {
+		operation = agent.Uninstall
+	}
+	if operation == nil {
+		usageError(stderr, agent.Name, fmt.Sprintf("%s does not support %s", agent.Name, verb))
+		exit(2)
+		return
+	}
+
+	// Apply config.env only after successful argument parsing. Unknown flags or
+	// positional arguments must not cause any config or integration work.
+	dotenv.ApplyEnv(nil)
+	logger := cli.InitLogger(agent.Name)
 	writer := stdout
 	if asJSON {
 		writer = io.Discard
 	}
-	result := agentInstallResult{Agent: agent}
-	var changed bool
-	var err error
-	switch agent {
-	case "claude":
-		changed, err = claudeInstall(context.Background(), writer)
-	case "copilot":
-		changed, err = copilotInstall()
-	case "opencode":
-		changed, err = opencodeInstall(context.Background(), writer, cli.InitLogger("opencode"))
-	case "pi":
-		changed, err = piInstall(context.Background(), writer, cli.InitLogger("pi"))
+	changed, err := operation(context.Background(), writer)
+	result := classifyAgentOperation(agent, verb, changed, err)
+
+	if result.Status == "error" {
+		logger.Printf("%s %s: %v", agent.Name, verb, err)
+		_, _ = fmt.Fprintf(stderr, "agento11y: %s %s failed: %v\n", agent.Name, verb, err)
 	}
+	if asJSON {
+		data, marshalErr := json.Marshal(result)
+		if marshalErr != nil {
+			_, _ = fmt.Fprintf(stderr, "agento11y %s %s: encode result: %v\n", agent.Name, verb, marshalErr)
+			exit(1)
+			return
+		}
+		_, _ = fmt.Fprintln(stdout, string(data))
+	} else {
+		writeAgentOperationOutcome(stdout, result)
+	}
+
+	if result.Status == "error" {
+		exit(1)
+		return
+	}
+	if verb == "install" && !asJSON && result.Status != "missing_host" && installInputIsTTY(stdin) {
+		chainInstallLogin(agent.Name, stdin, stderr, logger)
+	}
+}
+
+func classifyAgentOperation(agent registry.Agent, verb string, changed bool, err error) agentInstallResult {
+	result := agentInstallResult{Agent: agent.Name}
 	switch {
-	case errors.Is(err, claudecode.ErrCLINotFound), errors.Is(err, opencode.ErrCLINotFound), errors.Is(err, pi.ErrCLINotFound):
+	case err != nil && agent.IsMissingHost != nil && agent.IsMissingHost(err):
 		result.Status = "missing_host"
 	case err != nil:
 		result.Status, result.Error = "error", err.Error()
+	case verb == "uninstall" && changed:
+		result.Status = "uninstalled"
+	case verb == "uninstall":
+		result.Status = "already_uninstalled"
 	case changed:
 		result.Status = "installed"
 	default:
 		result.Status = "already_installed"
 	}
+	return result
+}
 
-	if asJSON {
-		data, err := json.Marshal(result)
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "agento11y %s install: encode result: %v\n", agent, err)
-			exit(1)
-			return
-		} else {
-			_, _ = fmt.Fprintln(stdout, string(data))
-		}
-	}
-	if !asJSON {
-		renderer := clihelp.New(stdout)
-		status := strings.ReplaceAll(result.Status, "_", " ")
-		if result.Status == "error" {
-			status = renderer.Error(result.Error)
-		} else if result.Status == "missing_host" {
-			status = renderer.Warning(status)
-		} else {
-			status = renderer.Success(status)
-		}
-		renderer.Rows([]clihelp.Row{{Name: agent, Description: status}})
-	}
+func writeAgentOperationOutcome(stdout io.Writer, result agentInstallResult) {
+	renderer := clihelp.New(stdout)
+	status := strings.ReplaceAll(result.Status, "_", " ")
 	if result.Status == "error" {
-		exit(1)
+		status = renderer.Error(result.Error)
+	} else if result.Status == "missing_host" {
+		status = renderer.Warning(status)
+	} else {
+		status = renderer.Success(status)
+	}
+	renderer.Rows([]clihelp.Row{{Name: result.Agent, Description: status}})
+}
+
+func chainInstallLogin(agent string, stdin io.Reader, stderr io.Writer, logger *log.Logger) {
+	localValue, _, _ := envconfig.LookupEnv("LOCAL")
+	if dotenv.HasCredentials() || envconfig.ParseBool(localValue) {
+		return
+	}
+
+	stdinFile, _ := stdin.(*os.File)
+	result, err := loginRun(context.Background(), login.RunOpts{
+		Stdin:            stdinFile,
+		Stderr:           stderr,
+		Logger:           logger,
+		OfferLocal:       !localDestinationSet(),
+		OfferLocalDaemon: true,
+	})
+	switch {
+	case err == nil && result.LocalMode:
+		_, _ = fmt.Fprintf(stderr, "agento11y: %s now captures sessions locally\n", agent)
+	case err == nil && result.UsesLocalDaemon:
+		_, _ = fmt.Fprintf(stderr, "agento11y: %s now captures sessions locally and forwards them to Grafana Cloud\n", agent)
+	case err == nil, errors.Is(err, login.ErrNotInteractive):
+	case errors.Is(err, login.ErrAborted):
+		_, _ = fmt.Fprintln(stderr, "agento11y: setup aborted; run `agento11y login` when ready")
+	case errors.Is(err, login.ErrNotVerified):
+		logger.Printf("auto-login: %v", err)
+		_, _ = fmt.Fprintln(stderr, "agento11y: credentials not saved; run `agento11y login` when ready")
+	default:
+		logger.Printf("auto-login: %v", err)
+		_, _ = fmt.Fprintf(stderr, "agento11y: setup failed (%v); run `agento11y login` when ready\n", err)
 	}
 }
 
-const agentReconcileSchemaVersion = 1
+const agentReceiptSchemaVersion = 1
 
-// agentReconcileReport is a stable, secret-free result for any management
-// system or script. Credential and policy lifecycle remain outside the binary.
-type agentReconcileReport struct {
+// agentReceipt is the stable, secret-free result consumed by management
+// inventory. The management system owns the config file and stamps its revision.
+type agentReceipt struct {
 	SchemaVersion int                  `json:"schema_version"`
 	Status        string               `json:"status"`
-	Agento11y     reconcileBinary      `json:"agento11y"`
+	Agento11y     receiptBinary        `json:"agento11y"`
+	Config        receiptConfig        `json:"config"`
 	Agents        []agentInstallResult `json:"agents"`
 }
 
-type reconcileBinary struct {
+type receiptBinary struct {
 	Version string `json:"version"`
 }
 
-// runAgentsReconcile runs only installers registered by host adapters. Adding
-// a noninteractive adapter registration automatically makes it available here;
-// this command deliberately has no MDM-, credential-, or policy-specific code.
-func runAgentsReconcile(args []string, stdout, stderr io.Writer) {
-	if routeHelp(append([]string{"agents"}, args...), stdout, stderr) {
-		return
-	}
-	if len(args) == 0 || args[0] != "reconcile" {
-		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents reconcile --agents all|name[,name...] --json")
+type receiptConfig struct {
+	Revision string `json:"revision,omitempty"`
+}
+
+func newAgentsFlags(path string) (*flag.FlagSet, *string, *bool) {
+	fs := newCommandFlags(path)
+	return fs, fs.String("agents", "", "comma-separated agent names or all"), fs.Bool("json", false, "print one machine-readable receipt")
+}
+
+// runAgentsCommand configures several registered integrations without
+// launching a host or prompting for credentials.
+func runAgentsCommand(args []string, stdout, stderr io.Writer) {
+	if len(args) == 0 {
+		usageError(stderr, "agents", "a command is required")
 		exit(2)
 		return
 	}
+	if args[0] != "install" && args[0] != "reconcile" {
+		usageError(stderr, "agents", fmt.Sprintf("unknown agents verb %q", args[0]))
+		exit(2)
+		return
+	}
+	verb := args[0]
+	path := "agents " + verb
 
-	fs, agentsFlag, jsonFlag := newReconcileFlags()
-	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: agento11y agents reconcile --agents all|name[,name...] --json")
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "agento11y agents reconcile: invalid flags: %v\n", err)
-		} else {
-			_, _ = fmt.Fprintln(stderr, "agento11y agents reconcile: positional arguments are not supported")
-		}
+	fs, agentsFlag, jsonFlag := newAgentsFlags(path)
+	if err := fs.Parse(args[1:]); err != nil {
+		usageError(stderr, path, err.Error())
+		exit(2)
+		return
+	}
+	if fs.NArg() != 0 {
+		usageError(stderr, path, "positional arguments are not supported")
 		exit(2)
 		return
 	}
 
 	rawAgents, asJSON := *agentsFlag, *jsonFlag
-	specs := registeredInstallers()
-	available := make(map[string]agentinstall.Spec, len(specs))
-	availableNames := make([]string, 0, len(specs))
-	for _, spec := range specs {
-		available[spec.Name] = spec
-		availableNames = append(availableNames, spec.Name)
-	}
-	if len(availableNames) == 0 {
-		_, _ = fmt.Fprintln(stderr, "agento11y agents reconcile: no noninteractive installers are registered in this binary")
-		exit(1)
-		return
+	agents := registeredAgents()
+	available := make(map[string]registry.Agent, len(agents))
+	availableNames := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		available[agent.Name] = agent
+		availableNames = append(availableNames, agent.Name)
 	}
 	if strings.TrimSpace(rawAgents) == "" {
-		usageError(stderr, "agents reconcile", fmt.Sprintf("--agents is required; available installers: %s", strings.Join(availableNames, ", ")))
+		usageError(stderr, path, fmt.Sprintf("--agents is required; accepted agents: %s", strings.Join(availableNames, ", ")))
 		exit(2)
 		return
 	}
-	if !asJSON {
-		usageError(stderr, "agents reconcile", "--json is required so management tooling can parse the reconciliation receipt")
+	selected, err := selectAgents(rawAgents, available, availableNames)
+	if err != nil {
+		usageError(stderr, path, err.Error())
 		exit(2)
 		return
 	}
 
-	selected, ok := parseReconcileAgents(rawAgents, available, availableNames, stderr)
-	if !ok {
-		return
+	// The managed config revision is inventory metadata, not an alias family.
+	// ApplyEnv preserves a process value over the config-file value.
+	dotenv.ApplyEnv(nil)
+	writer := stdout
+	if asJSON {
+		writer = io.Discard
 	}
 
-	report := make([]agentInstallResult, 0, len(selected))
+	results := make([]agentInstallResult, 0, len(selected))
 	failed := false
 	missingHost := false
-	for _, spec := range selected {
-		changed, err := spec.Install(context.Background(), io.Discard, cli.InitLogger("reconcile-"+spec.Name))
-		result := agentInstallResult{Agent: spec.Name}
-		switch {
-		case err != nil && spec.IsMissingHost != nil && spec.IsMissingHost(err):
-			result.Status = "missing_host"
+	for _, agent := range selected {
+		changed, installErr := agent.Install(context.Background(), writer)
+		result := classifyAgentOperation(agent, "install", changed, installErr)
+		switch result.Status {
+		case "missing_host":
 			missingHost = true
-		case err != nil:
-			result.Status = "error"
-			result.Error = fmt.Sprintf("%s install failed: %v", spec.Name, err)
+		case "error":
 			failed = true
-		case changed:
-			result.Status = "installed"
-		default:
-			result.Status = "already_installed"
 		}
-		report = append(report, result)
+		results = append(results, result)
+		if !asJSON {
+			if installErr != nil && result.Status == "error" {
+				_, _ = fmt.Fprintf(stderr, "agento11y: %s install failed: %v\n", agent.Name, installErr)
+			}
+			writeAgentOperationOutcome(stdout, result)
+		}
 	}
 
 	status := "converged"
@@ -913,62 +904,57 @@ func runAgentsReconcile(args []string, stdout, stderr io.Writer) {
 	} else if missingHost {
 		status = "deferred_missing_host"
 	}
-	receipt := agentReconcileReport{
-		SchemaVersion: agentReconcileSchemaVersion,
-		Status:        status,
-		Agento11y:     reconcileBinary{Version: version},
-		Agents:        report,
+	if asJSON {
+		receipt := agentReceipt{
+			SchemaVersion: agentReceiptSchemaVersion,
+			Status:        status,
+			Agento11y:     receiptBinary{Version: version},
+			Config:        receiptConfig{Revision: strings.TrimSpace(os.Getenv("AGENTO11Y_MANAGED_CONFIG_REVISION"))},
+			Agents:        results,
+		}
+		data, marshalErr := json.Marshal(receipt)
+		if marshalErr != nil {
+			_, _ = fmt.Fprintf(stderr, "agento11y agents %s: encode receipt: %v\n", verb, marshalErr)
+			exit(1)
+			return
+		}
+		_, _ = fmt.Fprintln(stdout, string(data))
 	}
-	data, err := json.Marshal(receipt)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "agento11y agents reconcile: could not encode reconciliation receipt: %v\n", err)
-		exit(1)
-		return
-	}
-	_, _ = fmt.Fprintln(stdout, string(data))
 	if failed {
 		exit(1)
 	}
 }
 
-func parseReconcileAgents(raw string, available map[string]agentinstall.Spec, availableNames []string, stderr io.Writer) ([]agentinstall.Spec, bool) {
+func selectAgents(raw string, available map[string]registry.Agent, availableNames []string) ([]registry.Agent, error) {
 	if strings.TrimSpace(raw) == "all" {
-		selected := make([]agentinstall.Spec, 0, len(availableNames))
+		selected := make([]registry.Agent, 0, len(availableNames))
 		for _, name := range availableNames {
 			selected = append(selected, available[name])
 		}
-		return selected, true
+		return selected, nil
 	}
 
-	selected := make([]agentinstall.Spec, 0)
+	selected := make([]registry.Agent, 0)
 	seen := map[string]bool{}
 	for name := range strings.SplitSeq(raw, ",") {
 		name = strings.TrimSpace(name)
 		if name == "" {
-			usageError(stderr, "agents reconcile", "--agents contains an empty name; use a comma-separated list such as claude,cursor")
-			exit(2)
-			return nil, false
+			return nil, errors.New("--agents contains an empty name; use a comma-separated list such as claude,cursor")
 		}
 		if name == "all" {
-			usageError(stderr, "agents reconcile", "--agents=all must be used by itself; do not combine it with named agents")
-			exit(2)
-			return nil, false
+			return nil, errors.New("--agents=all must be used by itself; do not combine it with named agents")
 		}
 		if seen[name] {
-			usageError(stderr, "agents reconcile", fmt.Sprintf("--agents repeats %q; name each agent once", name))
-			exit(2)
-			return nil, false
+			return nil, fmt.Errorf("--agents repeats %q; name each agent once", name)
 		}
-		spec, found := available[name]
+		agent, found := available[name]
 		if !found {
-			usageError(stderr, "agents reconcile", fmt.Sprintf("%q has no noninteractive installer in this binary (available: %s)", name, strings.Join(availableNames, ", ")))
-			exit(2)
-			return nil, false
+			return nil, fmt.Errorf("unknown agent %q (accepted: %s)", name, strings.Join(availableNames, ", "))
 		}
 		seen[name] = true
-		selected = append(selected, spec)
+		selected = append(selected, agent)
 	}
-	return selected, true
+	return selected, nil
 }
 
 // runDoctorCommand handles `agento11y doctor`. doctor is strictly read-only and

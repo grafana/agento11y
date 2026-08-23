@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/claudecode"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/pi"
+	"github.com/grafana/agento11y/plugins/agento11y/internal/agents/registry"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/envconfig"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/local"
 	"github.com/grafana/agento11y/plugins/agento11y/internal/login"
@@ -528,6 +528,14 @@ func TestRun_LauncherDispatch(t *testing.T) {
 // `hook` so plugins/codex/hooks/hooks.json (which invokes `<binary> codex hook`)
 // keeps working after the launcher was added.
 func TestRun_CodexHookDispatchesEvenWithLauncher(t *testing.T) {
+	withStubAgentRegistry(t, []registry.Agent{{
+		Name:       "codex",
+		HostBinary: "codex",
+		Install: func(context.Context, io.Writer) (bool, error) {
+			t.Fatal("installer must not be called for `agento11y codex hook`")
+			return false, nil
+		},
+	}})
 	hookCalls := 0
 	prevAgents := agents
 	t.Cleanup(func() { agents = prevAgents })
@@ -632,11 +640,6 @@ func TestRun_CodexLauncherErrorExits1(t *testing.T) {
 	}
 }
 
-// `sigil cursor install`/`uninstall` must dispatch to the installer before
-// the generic non-`hook` verb rejection, while `sigil cursor hook` still
-// reaches the hook handler and an unknown cursor verb still exits 2. Each
-// row stubs all three seams with counters so the want* fields pin both the
-// branch that fired and the ones that must stay untouched.
 func TestRun_CursorInstallDispatch(t *testing.T) {
 	exitPtr := func(c int) *int { return &c }
 
@@ -654,7 +657,7 @@ func TestRun_CursorInstallDispatch(t *testing.T) {
 		{name: "uninstall dispatches to seam", verb: "uninstall", wantUninstall: 1},
 		{name: "hook verb still dispatches to handler", verb: "hook", wantHook: 1},
 		{name: "unknown cursor verb exits 2", verb: "bogus", wantExit: exitPtr(2), wantStderrContains: `unknown cursor verb "bogus"`},
-		{name: "install error exits 1", verb: "install", installErr: errors.New("boom"), wantInstall: 1, wantExit: exitPtr(1), wantStderrContains: "agento11y: boom"},
+		{name: "install error exits 1", verb: "install", installErr: errors.New("boom"), wantInstall: 1, wantExit: exitPtr(1), wantStderrContains: "agento11y: cursor install failed: boom"},
 	}
 
 	for _, tc := range cases {
@@ -666,13 +669,13 @@ func TestRun_CursorInstallDispatch(t *testing.T) {
 			t.Setenv("SIGIL_AUTH_TOKEN", "token")
 
 			install, uninstall, hook := 0, 0, 0
-			withStubCursorInstall(t, func(_, _ io.Writer, _ *log.Logger) error {
+			withStubCursorInstall(t, func(context.Context, io.Writer) (bool, error) {
 				install++
-				return tc.installErr
+				return true, tc.installErr
 			})
-			withStubCursorUninstall(t, func(io.Writer, io.Writer, *log.Logger) error {
+			withStubCursorUninstall(t, func(context.Context, io.Writer) (bool, error) {
 				uninstall++
-				return nil
+				return true, nil
 			})
 			prev := agents
 			t.Cleanup(func() { agents = prev })
@@ -709,6 +712,8 @@ func TestRun_CursorInstallDispatch(t *testing.T) {
 func TestRun_CursorInstallLoginChain(t *testing.T) {
 	cases := []struct {
 		name                 string
+		interactive          bool
+		asJSON               bool
 		creds                bool
 		local                bool
 		invalidLocal         bool
@@ -720,16 +725,20 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 		wantStderr           string
 	}{
 		{
-			name:                 "chains login when credentials missing",
+			name:                 "chains login when credentials missing in a terminal",
+			interactive:          true,
 			loginErr:             login.ErrNotInteractive,
 			wantLoginCalls:       1,
 			wantOfferLocal:       true,
 			wantOfferLocalDaemon: true,
 		},
-		{name: "skips login when credentials present", creds: true},
-		{name: "skips login when local mode is persisted", local: true},
+		{name: "skips login outside a terminal"},
+		{name: "skips login for JSON output", interactive: true, asJSON: true},
+		{name: "skips login when credentials present", interactive: true, creds: true},
+		{name: "skips login when local mode is persisted", interactive: true, local: true},
 		{
 			name:                 "invalid local value still offers destination",
+			interactive:          true,
 			invalidLocal:         true,
 			loginErr:             login.ErrNotInteractive,
 			wantLoginCalls:       1,
@@ -738,14 +747,16 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 		},
 		{
 			name:                 "local-only result enables local hook capture",
+			interactive:          true,
 			result:               login.Result{LocalMode: true, UsesLocalDaemon: true},
 			wantLoginCalls:       1,
 			wantOfferLocal:       true,
 			wantOfferLocalDaemon: true,
-			wantStderr:           "Cursor hook now captures sessions locally",
+			wantStderr:           "cursor now captures sessions locally",
 		},
 		{
 			name:                 "local daemon result names Cloud forwarding",
+			interactive:          true,
 			result:               login.Result{UsesLocalDaemon: true},
 			wantLoginCalls:       1,
 			wantOfferLocal:       true,
@@ -757,6 +768,7 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			isolateDotenvHome(t)
+			withStubInstallInputIsTTY(t, tc.interactive)
 			if tc.local {
 				t.Setenv("AGENTO11Y_LOCAL", "true")
 			}
@@ -773,7 +785,7 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 				t.Setenv("SIGIL_AUTH_TOKEN", "")
 			}
 
-			withStubCursorInstall(t, func(io.Writer, io.Writer, *log.Logger) error { return nil })
+			withStubCursorInstall(t, func(context.Context, io.Writer) (bool, error) { return true, nil })
 			loginCalls := 0
 			offerLocal := false
 			offerLocalDaemon := false
@@ -784,9 +796,13 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 				return tc.result, tc.loginErr
 			})
 
+			args := []string{"cursor", "install"}
+			if tc.asJSON {
+				args = append(args, "--json")
+			}
 			var stdout, stderr bytes.Buffer
 			gotExit := withExit(t, func() {
-				run([]string{"cursor", "install"}, strings.NewReader(""), &stdout, &stderr)
+				run(args, strings.NewReader(""), &stdout, &stderr)
 			})
 			require.Nil(t, gotExit, "stderr=%q", stderr.String())
 			assert.Equal(t, tc.wantLoginCalls, loginCalls)
@@ -799,67 +815,68 @@ func TestRun_CursorInstallLoginChain(t *testing.T) {
 	}
 }
 
-// withStubCursorInstall / withStubCursorUninstall replace the cursor install
-// seams so dispatch can be asserted without touching ~/.cursor/hooks.json.
-func withStubCursorInstall(t *testing.T, fn func(io.Writer, io.Writer, *log.Logger) error) {
+func withStubAgentRegistry(t *testing.T, agents []registry.Agent) {
 	t.Helper()
-	prev := cursorInstall
-	t.Cleanup(func() { cursorInstall = prev })
-	cursorInstall = fn
+	prev := registeredAgents
+	t.Cleanup(func() { registeredAgents = prev })
+	registeredAgents = func() []registry.Agent { return agents }
 }
 
-func withStubCursorUninstall(t *testing.T, fn func(io.Writer, io.Writer, *log.Logger) error) {
+func withStubAgentInstall(t *testing.T, name string, fn registry.InstallFunc) {
 	t.Helper()
-	prev := cursorUninstall
-	t.Cleanup(func() { cursorUninstall = prev })
-	cursorUninstall = fn
-}
-
-func withStubClaudeInstall(t *testing.T, fn func(context.Context, io.Writer) (bool, error)) {
-	t.Helper()
-	prev := claudeInstall
-	t.Cleanup(func() { claudeInstall = prev })
-	claudeInstall = fn
-}
-
-func withStubRegisteredInstallers(t *testing.T, specs []agentinstall.Spec) {
-	t.Helper()
-	prev := registeredInstallers
-	t.Cleanup(func() { registeredInstallers = prev })
-	registeredInstallers = func() []agentinstall.Spec { return specs }
-}
-
-func TestRegisteredInstallersIncludeExistingManagedInstallers(t *testing.T) {
-	names := make([]string, 0)
-	for _, spec := range registeredInstallers() {
-		names = append(names, spec.Name)
+	agents := registeredAgents()
+	for i := range agents {
+		if agents[i].Name == name {
+			agents[i].Install = fn
+			withStubAgentRegistry(t, agents)
+			return
+		}
 	}
-	assert.Contains(t, names, "claude")
-	assert.Contains(t, names, "copilot")
-	assert.Contains(t, names, "cursor")
-	assert.Contains(t, names, "opencode")
-	assert.Contains(t, names, "pi")
+	t.Fatalf("agent %q is not registered", name)
 }
 
-func withStubCopilotInstall(t *testing.T, fn func() (bool, error)) {
+func withStubAgentUninstall(t *testing.T, name string, fn registry.InstallFunc) {
 	t.Helper()
-	prev := copilotInstall
-	t.Cleanup(func() { copilotInstall = prev })
-	copilotInstall = fn
+	agents := registeredAgents()
+	for i := range agents {
+		if agents[i].Name == name {
+			agents[i].Uninstall = fn
+			withStubAgentRegistry(t, agents)
+			return
+		}
+	}
+	t.Fatalf("agent %q is not registered", name)
 }
 
-func withStubOpenCodeInstall(t *testing.T, fn func(context.Context, io.Writer, *log.Logger) (bool, error)) {
-	t.Helper()
-	prev := opencodeInstall
-	t.Cleanup(func() { opencodeInstall = prev })
-	opencodeInstall = fn
+func withStubCursorInstall(t *testing.T, fn registry.InstallFunc) {
+	withStubAgentInstall(t, "cursor", fn)
 }
 
-func withStubPiInstall(t *testing.T, fn func(context.Context, io.Writer, *log.Logger) (bool, error)) {
+func withStubCursorUninstall(t *testing.T, fn registry.InstallFunc) {
+	withStubAgentUninstall(t, "cursor", fn)
+}
+
+func withStubClaudeInstall(t *testing.T, fn registry.InstallFunc) {
+	withStubAgentInstall(t, "claude", fn)
+}
+
+func withStubCopilotInstall(t *testing.T, fn registry.InstallFunc) {
+	withStubAgentInstall(t, "copilot", fn)
+}
+
+func withStubOpenCodeInstall(t *testing.T, fn registry.InstallFunc) {
+	withStubAgentInstall(t, "opencode", fn)
+}
+
+func withStubPiInstall(t *testing.T, fn registry.InstallFunc) {
+	withStubAgentInstall(t, "pi", fn)
+}
+
+func withStubInstallInputIsTTY(t *testing.T, isTTY bool) {
 	t.Helper()
-	prev := piInstall
-	t.Cleanup(func() { piInstall = prev })
-	piInstall = fn
+	prev := installInputIsTTY
+	t.Cleanup(func() { installInputIsTTY = prev })
+	installInputIsTTY = func(io.Reader) bool { return isTTY }
 }
 
 func TestRun_ClaudeInstallJSON(t *testing.T) {
@@ -893,149 +910,316 @@ func TestRun_ClaudeInstallReportsMissingHost(t *testing.T) {
 	assert.Equal(t, agentInstallResult{Agent: "claude", Status: "missing_host"}, result)
 }
 
-func TestRun_AgentInstallsOutput(t *testing.T) {
-	exitPtr := func(code int) *int { return &code }
-	type testCase struct {
-		agent      string
-		stub       func(t *testing.T)
-		want       agentInstallResult
-		hostOutput string
-		wantExit   *int
-	}
-	cases := []testCase{
+func TestRun_AgentInstallsJSON(t *testing.T) {
+	cases := []struct {
+		agent string
+		stub  func(t *testing.T)
+		want  agentInstallResult
+	}{
 		{
 			agent: "copilot",
 			stub: func(t *testing.T) {
-				withStubCopilotInstall(t, func() (bool, error) { return true, nil })
+				withStubCopilotInstall(t, func(context.Context, io.Writer) (bool, error) { return true, nil })
 			},
 			want: agentInstallResult{Agent: "copilot", Status: "installed"},
 		},
 		{
 			agent: "opencode",
 			stub: func(t *testing.T) {
-				withStubOpenCodeInstall(t, func(_ context.Context, w io.Writer, _ *log.Logger) (bool, error) {
-					_, _ = io.WriteString(w, "host installation complete\n")
-					return false, nil
-				})
+				withStubOpenCodeInstall(t, func(context.Context, io.Writer) (bool, error) { return false, nil })
 			},
-			want:       agentInstallResult{Agent: "opencode", Status: "already_installed"},
-			hostOutput: "host installation complete\n",
+			want: agentInstallResult{Agent: "opencode", Status: "already_installed"},
 		},
 		{
 			agent: "pi",
 			stub: func(t *testing.T) {
-				withStubPiInstall(t, func(context.Context, io.Writer, *log.Logger) (bool, error) { return false, pi.ErrCLINotFound })
+				withStubPiInstall(t, func(context.Context, io.Writer) (bool, error) { return false, pi.ErrCLINotFound })
 			},
 			want: agentInstallResult{Agent: "pi", Status: "missing_host"},
 		},
 	}
-	for _, agent := range []string{"claude", "opencode", "pi"} {
-		cases = append(cases, testCase{
-			agent: agent,
-			stub: func(t *testing.T) {
-				install := func(_ context.Context, w io.Writer) (bool, error) {
-					_, _ = io.WriteString(w, "access denied: authenticate with host login\n")
-					return false, errors.New("exit status 7")
-				}
-				switch agent {
-				case "claude":
-					withStubClaudeInstall(t, install)
-				case "opencode":
-					withStubOpenCodeInstall(t, func(ctx context.Context, w io.Writer, _ *log.Logger) (bool, error) { return install(ctx, w) })
-				case "pi":
-					withStubPiInstall(t, func(ctx context.Context, w io.Writer, _ *log.Logger) (bool, error) { return install(ctx, w) })
-				}
-			},
-			want:       agentInstallResult{Agent: agent, Status: "error", Error: "exit status 7"},
-			hostOutput: "access denied: authenticate with host login\n",
-			wantExit:   exitPtr(1),
-		})
-	}
 	for _, tc := range cases {
-		t.Run(tc.agent+"/"+tc.want.Status, func(t *testing.T) {
+		t.Run(tc.agent, func(t *testing.T) {
 			tc.stub(t)
 			var stdout, stderr bytes.Buffer
 			gotExit := withExit(t, func() {
 				run([]string{tc.agent, "install", "--json"}, strings.NewReader(""), &stdout, &stderr)
 			})
-			require.Equal(t, tc.wantExit, gotExit, "stderr=%q", stderr.String())
+			require.Nil(t, gotExit, "stderr=%q", stderr.String())
 			require.Empty(t, stderr.String())
 
 			var result agentInstallResult
 			require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
 			assert.Equal(t, tc.want, result)
-
-			stdout.Reset()
-			gotExit = withExit(t, func() {
-				run([]string{tc.agent, "install"}, strings.NewReader(""), &stdout, &stderr)
-			})
-			require.Equal(t, tc.wantExit, gotExit)
-			require.Empty(t, stderr.String())
-			assert.Contains(t, stdout.String(), tc.agent)
-			if tc.want.Error != "" {
-				assert.Contains(t, stdout.String(), tc.want.Error)
-			} else {
-				assert.Contains(t, stdout.String(), strings.ReplaceAll(tc.want.Status, "_", " "))
-			}
-			if tc.hostOutput != "" {
-				assert.Equal(t, 1, strings.Count(stdout.String(), tc.hostOutput), "stdout=%q", stdout.String())
-			}
-			assert.NotContains(t, stdout.String(), "\x1b")
 		})
 	}
 }
 
-func TestRun_AgentsReconcileJSON(t *testing.T) {
-	prevVersion := version
-	version = "v0.0.1-test"
-	t.Cleanup(func() { version = prevVersion })
+func TestRun_EveryRegisteredAgentAcceptsInstall(t *testing.T) {
+	for _, name := range []string{"claude", "codex", "copilot", "cursor", "opencode", "pi", "vibe"} {
+		t.Run(name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			calls := 0
+			withStubAgentRegistry(t, []registry.Agent{{
+				Name:       name,
+				HostBinary: name,
+				Install: func(context.Context, io.Writer) (bool, error) {
+					calls++
+					return true, nil
+				},
+			}})
 
-	called := make([]string, 0, 2)
-	withStubRegisteredInstallers(t, []agentinstall.Spec{
-		{Name: "claude", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
-			called = append(called, "claude")
-			return true, nil
-		}},
-		{Name: "cursor", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
-			called = append(called, "cursor")
-			return false, nil
-		}},
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run([]string{name, "install", "--json"}, strings.NewReader(""), &stdout, &stderr)
+			})
+			require.Nil(t, gotExit, "stderr=%q", stderr.String())
+			assert.Equal(t, 1, calls)
+			assert.Empty(t, stderr.String())
+
+			var result agentInstallResult
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
+			assert.Equal(t, agentInstallResult{Agent: name, Status: "installed"}, result)
+		})
+	}
+}
+
+func TestRun_CodexInstallMissingHostDoesNotEnterLauncherParsing(t *testing.T) {
+	isolateDotenvHome(t)
+	missingHost := errors.New("codex CLI not found")
+	withStubAgentRegistry(t, []registry.Agent{{
+		Name:          "codex",
+		HostBinary:    "codex",
+		Install:       func(context.Context, io.Writer) (bool, error) { return false, missingHost },
+		IsMissingHost: func(err error) bool { return errors.Is(err, missingHost) },
+	}})
+	withStubLauncher(t, "codex", func(context.Context, []string, *local.LaunchEnv, io.Reader, io.Writer, io.Writer, *log.Logger, string) error {
+		t.Fatal("codex install must not enter launcher dispatch")
+		return nil
 	})
 
 	var stdout, stderr bytes.Buffer
 	gotExit := withExit(t, func() {
-		run([]string{"agents", "reconcile", "--agents", "cursor,claude", "--json"}, strings.NewReader(""), &stdout, &stderr)
+		run([]string{"codex", "install"}, strings.NewReader(""), &stdout, &stderr)
 	})
 	require.Nil(t, gotExit, "stderr=%q", stderr.String())
-	require.Empty(t, stderr.String())
-	assert.Equal(t, []string{"cursor", "claude"}, called)
-
-	var result agentReconcileReport
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
-	assert.Equal(t, agentReconcileReport{
-		SchemaVersion: agentReconcileSchemaVersion,
-		Status:        "converged",
-		Agento11y:     reconcileBinary{Version: "v0.0.1-test"},
-		Agents: []agentInstallResult{
-			{Agent: "cursor", Status: "already_installed"},
-			{Agent: "claude", Status: "installed"},
-		},
-	}, result)
+	assert.Equal(t, "  codex  missing host\n", stdout.String())
+	assert.NotContains(t, stderr.String(), "forward args")
+	assert.NotContains(t, stderr.String(), "use `agento11y codex -- <args>`")
 }
 
-func TestRun_AgentsReconcileAllIncludesNewlyRegisteredInstallers(t *testing.T) {
+func TestRun_InstallRejectsArgumentsBeforeAgentWork(t *testing.T) {
+	for _, args := range [][]string{
+		{"cursor", "install", "--nonsense", "bogus"},
+		{"cursor", "install", "--json", "bogus"},
+	} {
+		t.Run(strings.Join(args[2:], " "), func(t *testing.T) {
+			home := isolateDotenvHome(t)
+			hooksPath := filepath.Join(home, ".cursor", "hooks.json")
+			require.NoError(t, os.MkdirAll(filepath.Dir(hooksPath), 0o755))
+			original := []byte(`{"version":1,"hooks":{"sessionStart":[{"command":"other-tool"}]}}`)
+			require.NoError(t, os.WriteFile(hooksPath, original, 0o600))
+			mtime := time.Unix(1_700_000_000, 0)
+			require.NoError(t, os.Chtimes(hooksPath, mtime, mtime))
+
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() { run(args, strings.NewReader(""), &stdout, &stderr) })
+			require.NotNil(t, gotExit)
+			assert.Equal(t, 2, *gotExit)
+			assert.Empty(t, stdout.String())
+			assert.Contains(t, stderr.String(), "usage: agento11y cursor install [--json]")
+			assert.NoDirExists(t, filepath.Join(home, "state"), "argument errors must not initialize the logger")
+
+			got, err := os.ReadFile(hooksPath)
+			require.NoError(t, err)
+			assert.Equal(t, original, got)
+			info, err := os.Stat(hooksPath)
+			require.NoError(t, err)
+			assert.True(t, info.ModTime().Equal(mtime), "hooks.json mtime changed from %s to %s", mtime, info.ModTime())
+		})
+	}
+}
+
+func TestRun_InstallHumanOutcomes(t *testing.T) {
+	missingHost := errors.New("host missing")
+	cases := []struct {
+		name       string
+		agent      string
+		changed    bool
+		err        error
+		classifier func(error) bool
+		wantOut    string
+		wantErr    string
+		wantExit   *int
+	}{
+		{name: "installed", changed: true, wantOut: "  claude  installed\n"},
+		{name: "vibe already installed", agent: "vibe", wantOut: "  vibe  already installed\n"},
+		{name: "missing host", err: missingHost, classifier: func(err error) bool { return errors.Is(err, missingHost) }, wantOut: "  claude  missing host\n"},
+		{name: "error", err: errors.New("permission denied"), wantOut: "  claude  permission denied\n", wantErr: "agento11y: claude install failed: permission denied", wantExit: intPtr(1)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			agent := tc.agent
+			if agent == "" {
+				agent = "claude"
+			}
+			withStubAgentRegistry(t, []registry.Agent{{
+				Name:          agent,
+				HostBinary:    agent,
+				Install:       func(context.Context, io.Writer) (bool, error) { return tc.changed, tc.err },
+				IsMissingHost: tc.classifier,
+			}})
+
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run([]string{agent, "install"}, strings.NewReader(""), &stdout, &stderr)
+			})
+			if tc.wantExit == nil {
+				require.Nil(t, gotExit, "stderr=%q", stderr.String())
+			} else {
+				require.NotNil(t, gotExit)
+				assert.Equal(t, *tc.wantExit, *gotExit)
+			}
+			assert.Equal(t, tc.wantOut, stdout.String())
+			if tc.wantErr == "" {
+				assert.Empty(t, stderr.String())
+			} else {
+				assert.Contains(t, stderr.String(), tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestRun_UninstallUsesRegistryWhenSupported(t *testing.T) {
+	calls := 0
+	withStubAgentRegistry(t, []registry.Agent{{
+		Name:       "vibe",
+		HostBinary: "vibe",
+		Install:    func(context.Context, io.Writer) (bool, error) { return false, nil },
+		Uninstall: func(context.Context, io.Writer) (bool, error) {
+			calls++
+			return true, nil
+		},
+	}})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"vibe", "uninstall", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
+	assert.Equal(t, 1, calls)
+	assert.JSONEq(t, `{"agent":"vibe","status":"uninstalled"}`, stdout.String())
+	assert.Empty(t, stderr.String())
+}
+
+func TestRun_UninstallRefusesUnsupportedAgent(t *testing.T) {
+	calls := 0
+	withStubAgentRegistry(t, []registry.Agent{{
+		Name:       "claude",
+		HostBinary: "claude",
+		Install: func(context.Context, io.Writer) (bool, error) {
+			calls++
+			return true, nil
+		},
+	}})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"claude", "uninstall"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.NotNil(t, gotExit)
+	assert.Equal(t, 2, *gotExit)
+	assert.Equal(t, 0, calls)
+	assert.Empty(t, stdout.String())
+	assert.Contains(t, stderr.String(), "agento11y claude: claude does not support uninstall")
+	assert.Contains(t, stderr.String(), "usage: agento11y claude [flags] [-- args...]")
+}
+
+func TestRun_AgentsCommandsEmitOneJSONReceipt(t *testing.T) {
+	prevVersion := version
+	version = "v0.0.1-test"
+	t.Cleanup(func() { version = prevVersion })
+
+	for _, verb := range []string{"install", "reconcile"} {
+		for _, tc := range []struct {
+			name          string
+			configEnv     string
+			shellRevision string
+			wantRevision  string
+		}{
+			{name: "shell revision", shellRevision: "policy-42", wantRevision: "policy-42"},
+			{name: "file revision", configEnv: "AGENTO11Y_MANAGED_CONFIG_REVISION=policy-41\n", wantRevision: "policy-41"},
+			{name: "shell overrides file", configEnv: "AGENTO11Y_MANAGED_CONFIG_REVISION=policy-41\n", shellRevision: "policy-42", wantRevision: "policy-42"},
+			{name: "absent revision"},
+		} {
+			t.Run(verb+"/"+tc.name, func(t *testing.T) {
+				dir := isolateDotenvHome(t)
+				t.Setenv("AGENTO11Y_MANAGED_CONFIG_REVISION", tc.shellRevision)
+				if tc.configEnv != "" {
+					cfgDir := filepath.Join(dir, "config", "agento11y")
+					require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+					require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.env"), []byte(tc.configEnv), 0o600))
+				}
+				called := make([]string, 0, 2)
+				withStubAgentRegistry(t, []registry.Agent{
+					{Name: "claude", HostBinary: "claude", Install: func(_ context.Context, w io.Writer) (bool, error) {
+						called = append(called, "claude")
+						_, _ = io.WriteString(w, "claude installer output\n")
+						return true, nil
+					}},
+					{Name: "cursor", HostBinary: "cursor", Install: func(_ context.Context, w io.Writer) (bool, error) {
+						called = append(called, "cursor")
+						_, _ = io.WriteString(w, "cursor installer output\n")
+						return false, nil
+					}},
+				})
+
+				var stdout, stderr bytes.Buffer
+				gotExit := withExit(t, func() {
+					run([]string{"agents", verb, "--agents", "cursor,claude", "--json"}, strings.NewReader(""), &stdout, &stderr)
+				})
+				require.Nil(t, gotExit, "stderr=%q", stderr.String())
+				require.Empty(t, stderr.String())
+				assert.Equal(t, []string{"cursor", "claude"}, called)
+
+				var receipt agentReceipt
+				require.NoError(t, json.Unmarshal(stdout.Bytes(), &receipt), "stdout=%q", stdout.String())
+				assert.Equal(t, agentReceipt{
+					SchemaVersion: agentReceiptSchemaVersion,
+					Status:        "converged",
+					Agento11y:     receiptBinary{Version: "v0.0.1-test"},
+					Config:        receiptConfig{Revision: tc.wantRevision},
+					Agents: []agentInstallResult{
+						{Agent: "cursor", Status: "already_installed"},
+						{Agent: "claude", Status: "installed"},
+					},
+				}, receipt)
+				if tc.wantRevision == "" {
+					var rawReceipt struct {
+						Config map[string]json.RawMessage `json:"config"`
+					}
+					require.NoError(t, json.Unmarshal(stdout.Bytes(), &rawReceipt))
+					assert.NotContains(t, rawReceipt.Config, "revision")
+				}
+			})
+		}
+	}
+}
+
+func TestRun_AgentsAllIncludesNewRegistryEntries(t *testing.T) {
 	called := make([]string, 0, 3)
-	withStubRegisteredInstallers(t, []agentinstall.Spec{
-		{Name: "claude", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
+	withStubAgentRegistry(t, []registry.Agent{
+		{Name: "claude", Install: func(context.Context, io.Writer) (bool, error) {
 			called = append(called, "claude")
 			return false, nil
 		}},
-		{Name: "cursor", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
+		{Name: "cursor", Install: func(context.Context, io.Writer) (bool, error) {
 			called = append(called, "cursor")
 			return false, nil
 		}},
-		{Name: "opencode", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
-			called = append(called, "opencode")
+		{Name: "new-agent", Install: func(context.Context, io.Writer) (bool, error) {
+			called = append(called, "new-agent")
 			return true, nil
 		}},
 	})
@@ -1045,53 +1229,138 @@ func TestRun_AgentsReconcileAllIncludesNewlyRegisteredInstallers(t *testing.T) {
 		run([]string{"agents", "reconcile", "--agents", "all", "--json"}, strings.NewReader(""), &stdout, &stderr)
 	})
 	require.Nil(t, gotExit, "stderr=%q", stderr.String())
-	assert.Equal(t, []string{"claude", "cursor", "opencode"}, called)
-	assert.Contains(t, stdout.String(), `"agent":"opencode","status":"installed"`)
+	assert.Equal(t, []string{"claude", "cursor", "new-agent"}, called)
+	assert.Contains(t, stdout.String(), `"agent":"new-agent","status":"installed"`)
 }
 
-func TestRun_AgentsReconcileReportsMissingHostAndInstallerErrors(t *testing.T) {
-	withStubRegisteredInstallers(t, []agentinstall.Spec{
-		{Name: "claude", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) { return false, claudecode.ErrCLINotFound }, IsMissingHost: func(err error) bool { return errors.Is(err, claudecode.ErrCLINotFound) }},
-		{Name: "opencode", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) {
-			return false, errors.New("could not write plugin file: permission denied")
-		}},
+func TestRun_AgentsReconcileDefersMissingHost(t *testing.T) {
+	missingHost := errors.New("claude CLI not found")
+	withStubAgentRegistry(t, []registry.Agent{
+		{Name: "claude", HostBinary: "claude", Install: func(context.Context, io.Writer) (bool, error) { return false, missingHost }, IsMissingHost: func(err error) bool { return errors.Is(err, missingHost) }},
+		{Name: "cursor", HostBinary: "cursor", Install: func(context.Context, io.Writer) (bool, error) { return true, nil }},
 	})
 
 	var stdout, stderr bytes.Buffer
 	gotExit := withExit(t, func() {
-		run([]string{"agents", "reconcile", "--agents", "claude,opencode", "--json"}, strings.NewReader(""), &stdout, &stderr)
+		run([]string{"agents", "reconcile", "--agents", "claude,cursor", "--json"}, strings.NewReader(""), &stdout, &stderr)
 	})
-	require.NotNil(t, gotExit)
-	assert.Equal(t, 1, *gotExit)
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
 	require.Empty(t, stderr.String())
 
-	var result agentReconcileReport
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result), "stdout=%q", stdout.String())
-	assert.Equal(t, "error", result.Status)
+	var receipt agentReceipt
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &receipt), "stdout=%q", stdout.String())
+	assert.Equal(t, "deferred_missing_host", receipt.Status)
 	assert.Equal(t, []agentInstallResult{
 		{Agent: "claude", Status: "missing_host"},
-		{Agent: "opencode", Status: "error", Error: "opencode install failed: could not write plugin file: permission denied"},
-	}, result.Agents)
+		{Agent: "cursor", Status: "installed"},
+	}, receipt.Agents)
 }
 
-func TestRun_AgentsReconcileUsageErrorsNameTheProblem(t *testing.T) {
-	withStubRegisteredInstallers(t, []agentinstall.Spec{
-		{Name: "claude", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) { return false, nil }},
-		{Name: "cursor", Install: func(context.Context, io.Writer, *log.Logger) (bool, error) { return false, nil }},
+func TestRun_AgentsReceiptReportsInstallerErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		verb    string
+		agents  []string
+		changed bool
+		want    []agentInstallResult
+	}{
+		{
+			name:   "install failure last",
+			verb:   "install",
+			agents: []string{"claude", "opencode"},
+			want: []agentInstallResult{
+				{Agent: "claude", Status: "already_installed"},
+				{Agent: "opencode", Status: "error", Error: "could not write plugin file: permission denied"},
+			},
+		},
+		{
+			name:    "reconcile continues after failure",
+			verb:    "reconcile",
+			agents:  []string{"opencode", "claude"},
+			changed: true,
+			want: []agentInstallResult{
+				{Agent: "opencode", Status: "error", Error: "could not write plugin file: permission denied"},
+				{Agent: "claude", Status: "installed"},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateDotenvHome(t)
+			called := make([]string, 0, 2)
+			withStubAgentRegistry(t, []registry.Agent{
+				{Name: "claude", Install: func(_ context.Context, w io.Writer) (bool, error) {
+					called = append(called, "claude")
+					_, _ = io.WriteString(w, "claude installer output\n")
+					return tc.changed, nil
+				}},
+				{Name: "opencode", Install: func(_ context.Context, w io.Writer) (bool, error) {
+					called = append(called, "opencode")
+					_, _ = io.WriteString(w, "opencode installer output\n")
+					return false, errors.New("could not write plugin file: permission denied")
+				}},
+			})
+
+			var stdout, stderr bytes.Buffer
+			gotExit := withExit(t, func() {
+				run([]string{"agents", tc.verb, "--agents", strings.Join(tc.agents, ","), "--json"}, strings.NewReader(""), &stdout, &stderr)
+			})
+			require.NotNil(t, gotExit)
+			assert.Equal(t, 1, *gotExit)
+			require.Empty(t, stderr.String())
+			assert.Equal(t, tc.agents, called)
+
+			var receipt agentReceipt
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &receipt), "stdout=%q", stdout.String())
+			assert.Equal(t, "error", receipt.Status)
+			assert.Equal(t, tc.want, receipt.Agents)
+		})
+	}
+}
+
+func TestRun_AgentsWithoutJSONPrintsOneOutcomePerAgent(t *testing.T) {
+	missingHost := errors.New("host missing")
+	withStubAgentRegistry(t, []registry.Agent{
+		{Name: "claude", HostBinary: "claude", Install: func(context.Context, io.Writer) (bool, error) { return false, missingHost }, IsMissingHost: func(err error) bool { return errors.Is(err, missingHost) }},
+		{Name: "vibe", HostBinary: "vibe", Install: func(context.Context, io.Writer) (bool, error) { return false, nil }},
 	})
+
+	var stdout, stderr bytes.Buffer
+	gotExit := withExit(t, func() {
+		run([]string{"agents", "install", "--agents", "claude,vibe"}, strings.NewReader(""), &stdout, &stderr)
+	})
+	require.Nil(t, gotExit, "stderr=%q", stderr.String())
+	assert.Equal(t, strings.Join([]string{
+		"  claude  missing host",
+		"  vibe  already installed",
+		"",
+	}, "\n"), stdout.String())
+	assert.Empty(t, stderr.String())
+}
+
+func TestRun_AgentsUsageErrorsNameAcceptedAgents(t *testing.T) {
+	calls := 0
+	agents := []registry.Agent{
+		{Name: "claude", Install: func(context.Context, io.Writer) (bool, error) { calls++; return false, nil }},
+		{Name: "cursor", Install: func(context.Context, io.Writer) (bool, error) { calls++; return false, nil }},
+	}
 
 	cases := []struct {
 		name string
 		args []string
 		want string
 	}{
-		{name: "missing agents", args: []string{"agents", "reconcile", "--json"}, want: "--agents is required; available installers: claude, cursor"},
-		{name: "missing json", args: []string{"agents", "reconcile", "--agents", "claude"}, want: "--json is required so management tooling can parse the reconciliation receipt"},
-		{name: "unknown installer", args: []string{"agents", "reconcile", "--agents", "opencode", "--json"}, want: `"opencode" has no noninteractive installer in this binary (available: claude, cursor)`},
+		{name: "unsupported verb", args: []string{"agents", "remove"}, want: "usage: agento11y agents <command>"},
+		{name: "missing agents", args: []string{"agents", "reconcile", "--json"}, want: "--agents is required; accepted agents: claude, cursor"},
+		{name: "unknown agent", args: []string{"agents", "reconcile", "--agents", "opencode", "--json"}, want: `unknown agent "opencode" (accepted: claude, cursor)`},
 		{name: "all mixed with name", args: []string{"agents", "reconcile", "--agents", "all,claude", "--json"}, want: "--agents=all must be used by itself"},
+		{name: "duplicate", args: []string{"agents", "install", "--agents", "claude,claude"}, want: `--agents repeats "claude"`},
+		{name: "empty name", args: []string{"agents", "install", "--agents", "claude,"}, want: "--agents contains an empty name"},
+		{name: "positional argument", args: []string{"agents", "install", "--agents", "claude", "extra"}, want: "unexpected arguments: [extra]"},
+		{name: "unknown flag", args: []string{"agents", "install", "--agents", "claude", "--bogus"}, want: "flag provided but not defined"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			withStubAgentRegistry(t, agents)
 			var stdout, stderr bytes.Buffer
 			gotExit := withExit(t, func() { run(tc.args, strings.NewReader(""), &stdout, &stderr) })
 			require.NotNil(t, gotExit)
@@ -1100,6 +1369,7 @@ func TestRun_AgentsReconcileUsageErrorsNameTheProblem(t *testing.T) {
 			assert.Contains(t, stderr.String(), tc.want)
 		})
 	}
+	assert.Equal(t, 0, calls)
 }
 
 // withStubLauncher replaces the launchers map with a single entry for the
@@ -1275,7 +1545,7 @@ func TestRun_LauncherNoLocalKeepsSavedLocalSettingDuringSetup(t *testing.T) {
 					t.Error("--no-local must skip the destination question")
 				}
 				if !opts.OfferLocalDaemon {
-					t.Error("launcher auto-login must enable the caller gate")
+					t.Error("launcher auto-login must request local daemon preferences")
 				}
 				if !opts.KeepLocalSetting {
 					t.Error("--no-local setup must keep the saved local setting")
@@ -1711,11 +1981,9 @@ func inProcessDaemonWithStartCount(t *testing.T) (dir string, baseURL string, st
 // with guard evaluation chained to Cloud, "stays on this machine" is wrong.
 func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
 	cases := []struct {
-		name       string
-		posture    local.ForwardPosture
-		postureErr error
-		// guardsEnabled is the launcher's own GUARDS_ENABLED resolution, which
-		// is what the agent child inherits.
+		name          string
+		posture       local.ForwardPosture
+		postureErr    error
 		guardsEnabled bool
 		want          []string
 		wantNone      []string
@@ -1748,8 +2016,6 @@ func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
 			wantNone: []string{"Guard checks send", "before it is sent"},
 		},
 		{
-			// Rules are evaluated on the machine with nothing forwarded, so the
-			// banner does not claim anything reached Cloud.
 			name:          "local_rules_only",
 			posture:       local.ForwardPosture{LocalRules: 2},
 			guardsEnabled: true,
@@ -1764,8 +2030,6 @@ func TestRenderLocalBanner_PrivacyClaimTracksPosture(t *testing.T) {
 			wantNone:      []string{"Grafana Cloud"},
 		},
 		{
-			// GUARDS_ENABLED is off by default, and with it off the host agent
-			// sends no hook request, so a rule count must say that evaluation is off.
 			name:     "local_rules_with_guards_off",
 			posture:  local.ForwardPosture{LocalRules: 2},
 			want:     []string{"2 local guard rules are not evaluated: AGENTO11Y_GUARDS_ENABLED is off"},
