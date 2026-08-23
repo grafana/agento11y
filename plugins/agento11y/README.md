@@ -43,7 +43,7 @@ Verify with `agento11y --version`.
 
 ## Configure
 
-Run `agento11y login` to configure capture. On first run it asks where sessions go: **Local only**, or **Grafana Cloud**. That choice appears only on macOS and Linux when nothing is configured yet. Windows has no local receiver, so login goes straight to the Cloud credential questions. The Cloud path prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
+Run `agento11y login` to configure capture. On first run it asks where sessions go: **Local only**, or **Grafana Cloud**. That choice appears when nothing is configured yet. The Cloud path prints your stack's coding-agent setup page and asks you to paste the connection block from that page.
 
 Run `agento11y login` again to change the Cloud connection, content capture, tags, or guard settings. A rerun goes straight to the Cloud questions, and asks where sessions go only when neither that answer nor credentials are saved.
 
@@ -94,7 +94,7 @@ The skills for instrumenting your own application code are separate and ship wit
 
 `agento11y <agent> --local` records the session to a JSONL store and starts the local Agent Observability app. The command prints the app URL (tries `http://127.0.0.1:8765`, then a higher port if needed).
 
-`AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. Choosing **Local only** at first-run login writes that setting (and `SIGIL_LOCAL=true`) and later runs do not ask again. Local mode is available on macOS and Linux only; Windows has no local receiver. Use `--no-local` to override local mode for one launcher session.
+`AGENTO11Y_LOCAL=true` in the shell or `config.env` enables local mode for every launch and installed hook. Choosing **Local only** at first-run login writes that setting (and `SIGIL_LOCAL=true`) and later runs do not ask again. Use `--no-local` to override local mode for one launcher session.
 
 Local mode stores full session content. Manage the app with `agento11y local start|open|status|stop|restart`. `agento11y local open` starts the receiver if needed, prints its address, and tries to open the app.
 

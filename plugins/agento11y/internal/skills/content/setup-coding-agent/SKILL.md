@@ -127,8 +127,7 @@ against `sigil`.
 ## Step 3: Choose a destination
 
 A first `agento11y login` asks where sessions go: **Local only**, or **Grafana
-Cloud**. Windows has no local receiver, so its flow starts at the Cloud
-questions.
+Cloud**.
 
 **Local only** writes `AGENTO11Y_LOCAL=true` and `SIGIL_LOCAL=true` to
 `$XDG_CONFIG_HOME/agento11y/config.env`, or `~/.config/agento11y/config.env` when
@@ -140,8 +139,7 @@ which writes credentials there too.
 Tell the user to run `agento11y login` in their own terminal, then wait. You
 cannot drive it yourself: it needs a terminal, and the block it asks for holds a
 live token that must not pass through this conversation. The destination question
-appears only on macOS and Linux, and only when no destination and no credentials
-are saved. The Cloud questions after it run on every interactive `agento11y login`
+appears only when no destination and no credentials are saved. The Cloud questions after it run on every interactive `agento11y login`
 without complete credential flags, including a rerun with saved credentials.
 
 1. **Where should sessions go?**: a two-option list. **Local only** saves local
@@ -455,7 +453,7 @@ chooses which fields ship, not whether the shipped fields are clean. Treat
 launcher runs and agento11y hooks to a JSONL store on the machine. Local mode uses
 full content regardless of the configured capture mode. The launcher prints the viewer URL.
 Manage the daemon with `agento11y local start|open|status|stop|restart`. `agento11y local open`
-starts it if needed, prints its address, and tries to open the viewer. Local mode runs on macOS and Linux only. **Local only** at a launcher
+starts it if needed, prints its address, and tries to open the viewer. **Local only** at a launcher
 starts the receiver for that launch; after `agento11y login` or `agento11y cursor install` the receiver
 starts on the next launch or hook. `--no-local` runs one session against Cloud
 while the saved answer stays set. Never describe local mode as a switch that keeps

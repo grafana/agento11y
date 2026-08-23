@@ -85,6 +85,12 @@ func claudeImporterAt(root string) *claudeImporter {
 	return &claudeImporter{roots: []string{root}}
 }
 
+// fromClaudeSubagentTranscript reports whether a turn's source is one of the
+// session's subagent transcripts, on either path separator.
+func fromClaudeSubagentTranscript(sourcePath string) bool {
+	return strings.Contains(filepath.ToSlash(sourcePath), "/subagents/")
+}
+
 func collectTurns(t *testing.T, imp Importer, sess SessionPreview) []HistoricalGeneration {
 	t.Helper()
 	var out []HistoricalGeneration
@@ -106,7 +112,7 @@ func TestClaudeRootsResolveFromConfigDir(t *testing.T) {
 	}
 
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	t.Setenv("HOME", "/home/tester")
+	setHomeDir(t, "/home/tester")
 	if got := imp.Roots(); !slices.Equal(got, []string{filepath.Join("/home/tester", ".claude", "projects")}) {
 		t.Fatalf("Roots() = %v, want the home fallback", got)
 	}
@@ -403,7 +409,7 @@ func TestClaudeSubagentTurnsLinkToTheirParent(t *testing.T) {
 					}
 				}
 			}
-		case strings.Contains(turn.Source.SourcePath, "/subagents/"):
+		case fromClaudeSubagentTranscript(turn.Source.SourcePath):
 			subagentTurns = append(subagentTurns, turn)
 		}
 	}
@@ -427,7 +433,7 @@ func TestClaudeSubagentTurnsLinkToTheirParent(t *testing.T) {
 	// The subagent has its own transcript, so the parent's one-line Agent
 	// summary must not also appear.
 	for _, turn := range turns {
-		if turn.Gen.AgentName == "claude-code/explorer" && !strings.Contains(turn.Source.SourcePath, "/subagents/") {
+		if turn.Gen.AgentName == "claude-code/explorer" && !fromClaudeSubagentTranscript(turn.Source.SourcePath) {
 			t.Fatalf("the parent transcript still produced a summary generation %q", turn.Gen.ID)
 		}
 	}
@@ -661,7 +667,7 @@ func TestClaudeSubagentFinalAnswerIsImported(t *testing.T) {
 
 	var answers []string
 	for _, turn := range collectTurns(t, imp, preview) {
-		if !strings.Contains(turn.Source.SourcePath, "/subagents/") {
+		if !fromClaudeSubagentTranscript(turn.Source.SourcePath) {
 			continue
 		}
 		for _, msg := range turn.Gen.Output {
@@ -773,7 +779,7 @@ func TestClaudeSplitRequestKeepsParentLinks(t *testing.T) {
 		spawnID := claudeSpawnTurnID(t, turns, sessionID)
 		var sub []HistoricalGeneration
 		for _, turn := range turns {
-			if strings.Contains(turn.Source.SourcePath, "/subagents/") {
+			if fromClaudeSubagentTranscript(turn.Source.SourcePath) {
 				sub = append(sub, turn)
 			}
 		}
@@ -846,7 +852,7 @@ func TestClaudeSplitRequestKeepsParentLinks(t *testing.T) {
 		spawnID := claudeSpawnTurnID(t, turns, sessionID)
 		var sub []HistoricalGeneration
 		for _, turn := range turns {
-			if strings.Contains(turn.Source.SourcePath, "/subagents/") {
+			if fromClaudeSubagentTranscript(turn.Source.SourcePath) {
 				sub = append(sub, turn)
 			}
 		}

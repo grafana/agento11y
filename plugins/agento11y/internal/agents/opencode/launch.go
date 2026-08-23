@@ -4,9 +4,8 @@
 //
 // Unlike the hook adapters, this adapter owns the user's terminal: it
 // bootstraps the @grafana/agento11y-opencode plugin in opencode's global
-// config on first use, refreshes it periodically, then replaces the
-// current process with the opencode binary via execve so signals, exit
-// codes, and TTY behaviour pass through cleanly. The opencode telemetry
+// config on first use, refreshes it periodically, then hands the terminal
+// to the opencode process. The opencode telemetry
 // plugin itself runs in-process inside opencode through opencode's
 // TypeScript plugin API; the launcher only handles install/refresh and
 // shared env injection.
@@ -24,7 +23,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/grafana/agento11y/plugins/agento11y/internal/agentinstall"
@@ -63,7 +61,7 @@ func init() {
 // Test seams.
 var (
 	lookPath    = exec.LookPath
-	execFn      = syscall.Exec
+	execFn      = launcher.DefaultExec
 	runInstall  = defaultRunInstall
 	runUpdate   = defaultRunUpdate
 	configDirFn = defaultConfigDir

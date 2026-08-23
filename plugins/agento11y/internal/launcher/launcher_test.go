@@ -41,6 +41,19 @@ func TestExecForwardsArgvAndEnv(t *testing.T) {
 	}
 }
 
+func TestExecPreservesExitError(t *testing.T) {
+	execFn := func(string, []string, []string) error { return &ExitError{Code: 42} }
+	err := Exec(execFn, "/bin/claude", "claude", nil, nil)
+
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("err = %v, want ExitError", err)
+	}
+	if exitErr.ExitCode() != 42 {
+		t.Fatalf("exit code = %d, want 42", exitErr.ExitCode())
+	}
+}
+
 func TestExecWrapsFailureWithName(t *testing.T) {
 	cases := []struct{ name string }{{"codex"}, {"copilot"}, {"claude"}, {"pi"}}
 	for _, tc := range cases {

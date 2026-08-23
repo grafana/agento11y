@@ -25,8 +25,8 @@ func TestWriteDotenv_CreatesFileAndDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("perm = %o, want 0600", perm)
+	if perm := info.Mode().Perm(); perm != wantWrittenPerm {
+		t.Errorf("perm = %o, want %o", perm, wantWrittenPerm)
 	}
 
 	got := LoadDotenv(path, log.New(&bytes.Buffer{}, "", 0))
