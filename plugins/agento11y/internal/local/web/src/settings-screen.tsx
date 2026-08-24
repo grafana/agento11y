@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { markdownURL } from './detail';
+import { HistoryDatePicker, localDateStartISO } from './history-date-picker';
 import type { NoticeKind } from './notices';
 import {
   ACTIVE_PILL_BG,
@@ -556,31 +557,35 @@ function MonoInput({ value, onChange, placeholder, width, align, type }: MonoInp
 interface ButtonProps {
   onClick: () => void;
   children?: ReactNode;
+  disabled?: boolean;
 }
 
-function PrimaryButton({ onClick, children }: ButtonProps) {
+function PrimaryButton({ onClick, children, disabled }: ButtonProps) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
       onMouseEnter={(e) => {
+        if (disabled) return;
         e.currentTarget.style.background = 'var(--primary-shade)';
         e.currentTarget.style.borderColor = 'var(--primary-shade)';
       }}
       onMouseLeave={(e) => {
+        if (disabled) return;
         e.currentTarget.style.background = 'var(--primary-main)';
         e.currentTarget.style.borderColor = 'var(--primary-main)';
       }}
       style={{
         height: 32,
         padding: '0 14px',
-        background: 'var(--primary-main)',
-        border: '1px solid var(--primary-main)',
-        color: '#fff',
+        background: disabled ? 'rgba(204,204,220,0.08)' : 'var(--primary-main)',
+        border: `1px solid ${disabled ? 'transparent' : 'var(--primary-main)'}`,
+        color: disabled ? 'var(--fg3)' : '#fff',
         borderRadius: 2,
         fontSize: 13,
         fontWeight: 500,
-        cursor: 'pointer',
+        cursor: disabled ? 'not-allowed' : 'pointer',
       }}
     >
       {children}
@@ -2404,52 +2409,78 @@ interface SettingsHistoryTabProps {
   history: HistoryImport;
 }
 
-// SettingsHistoryTab is the import surface: pick a registered agent, see
-// what a 90-day import would cover, and run it. The plan request reads
-// metadata only, so opening this tab never reads session content.
-function SettingsHistoryTab({ history }: SettingsHistoryTabProps) {
+type HistoryPlanRequest =
+  | { key: string; status: 'idle' | 'loading' }
+  | { key: string; status: 'ready'; plan: HistoryPlan }
+  | { key: string; status: 'error'; error: string };
+
+function historyPlanKey(agent: string, sinceDate: string): string {
+  return `${agent}\u0000${sinceDate}`;
+}
+
+// Planning reads metadata only, so opening this tab never reads session content.
+export function SettingsHistoryTab({ history }: SettingsHistoryTabProps) {
   const agents = history.agents || [];
   const [agent, setAgent] = useState('');
-  const [plan, setPlan] = useState<HistoryPlan | null>(null);
-  const [planError, setPlanError] = useState<string | null>(null);
-  const [loadingPlan, setLoadingPlan] = useState(false);
+  const [sinceDate, setSinceDate] = useState('');
+  const [starting, setStarting] = useState(false);
+  const [planRequest, setPlanRequest] = useState<HistoryPlanRequest>({ key: '', status: 'idle' });
+  const planSeqRef = useRef(0);
 
   const selected = agent || agents[0]?.id || '';
+  const selectionKey = historyPlanKey(selected, sinceDate);
+  const currentPlanRequest = planRequest.key === selectionKey ? planRequest : null;
+  const plan = currentPlanRequest?.status === 'ready' ? currentPlanRequest.plan : null;
+  const planError = currentPlanRequest?.status === 'error' ? currentPlanRequest.error : null;
+  const loadingPlan = !!selected && (!currentPlanRequest || currentPlanRequest.status === 'loading');
   const run = history.run;
   const active = importRunIsActive(run);
+  const controlsLocked = active || starting;
+  const refreshedRunRef = useRef(run && !active ? run.run_id : '');
 
-  const loadPlan = useCallback((id: string) => {
-    if (!id) return;
-    setLoadingPlan(true);
-    setPlanError(null);
-    fetch(`/api/v1/history/plan?agent=${encodeURIComponent(id)}`)
+  const loadPlan = useCallback((id: string, date: string) => {
+    const seq = ++planSeqRef.current;
+    const key = historyPlanKey(id, date);
+    if (!id) {
+      setPlanRequest({ key, status: 'idle' });
+      return;
+    }
+    setPlanRequest({ key, status: 'loading' });
+    const params = new URLSearchParams({ agent: id });
+    const since = localDateStartISO(date);
+    if (since) params.set('since', since);
+    fetch(`/api/v1/history/plan?${params}`)
       .then((r) =>
         r.ok
           ? (r.json() as Promise<HistoryPlan>)
           : r.text().then((t) => Promise.reject(new Error(t.trim() || `HTTP ${r.status}`))),
       )
-      .then((b) => setPlan(b))
-      .catch((e) => {
-        setPlan(null);
-        setPlanError(String(e.message || e));
+      .then((body) => {
+        if (planSeqRef.current === seq) setPlanRequest({ key, status: 'ready', plan: body });
       })
-      .finally(() => setLoadingPlan(false));
+      .catch((error) => {
+        if (planSeqRef.current !== seq) return;
+        setPlanRequest({ key, status: 'error', error: String(error.message || error) });
+      });
   }, []);
 
   useEffect(() => {
-    loadPlan(selected);
-  }, [selected, loadPlan]);
-  // A finished run changes what is left to import, so the plan is stale.
+    loadPlan(selected, sinceDate);
+  }, [selected, sinceDate, loadPlan]);
   useEffect(() => {
-    if (run && !active) loadPlan(selected);
-  }, [run, active, selected, loadPlan]);
+    if (!run || active || refreshedRunRef.current === run.run_id) return;
+    refreshedRunRef.current = run.run_id;
+    loadPlan(selected, sinceDate);
+  }, [run, active, selected, sinceDate, loadPlan]);
 
   const sessions = plan?.sessions || [];
-  const turns = sessions.reduce((n, s) => n + (s.turn_count || 0), 0);
-  const approx = sessions.some((s) => s.approx_turns);
+  const turns = sessions.reduce((n, session) => n + (session.turn_count || 0), 0);
+  const approx = sessions.some((session) => session.approx_turns);
+  const importDisabled = !selected || loadingPlan || !plan || !!planError || starting;
+  const datePickerDisabled = controlsLocked || !selected || (!sinceDate && loadingPlan);
 
   return (
-    <SettingsCard>
+    <SettingsCard style={{ overflow: 'visible' }}>
       <SectionLabel>Import past sessions</SectionLabel>
       <div
         style={{
@@ -2467,21 +2498,34 @@ function SettingsHistoryTab({ history }: SettingsHistoryTabProps) {
         <Select
           value={selected}
           onChange={setAgent}
-          disabled={active}
+          disabled={controlsLocked}
           trigger={{
             ...fieldInput,
             width: 220,
             display: 'inline-flex',
           }}
-          options={agents.map((a) => ({
-            value: a.id,
-            label: a.display_name || a.id,
+          options={agents.map((item) => ({
+            value: item.id,
+            label: item.display_name || item.id,
           }))}
+        />
+      </SettingRow>
+      <SettingRow label="Start date">
+        <HistoryDatePicker
+          value={sinceDate}
+          effectiveSince={plan?.since}
+          onChange={setSinceDate}
+          disabled={datePickerDisabled}
         />
       </SettingRow>
       <SettingRow
         label="Available"
-        help={<>Sessions active in the last 90 days. Sessions an agent may still be writing are left out.</>}
+        help={
+          <>
+            Sessions active on or after the start date are included. Each matching session is imported in full,
+            including turns before that date. Sessions still in progress are left out.
+          </>
+        }
       >
         <div
           style={{
@@ -2497,17 +2541,6 @@ function SettingsHistoryTab({ history }: SettingsHistoryTabProps) {
           ) : (
             `${sessions.length} sessions · ${approx ? 'about ' : ''}${turns.toLocaleString()} turns`
           )}
-          {plan?.since && (
-            <div
-              style={{
-                fontSize: 11,
-                color: 'var(--fg3)',
-                marginTop: 2,
-              }}
-            >
-              since {plan.since}
-            </div>
-          )}
         </div>
       </SettingRow>
       <SettingRow
@@ -2517,7 +2550,17 @@ function SettingsHistoryTab({ history }: SettingsHistoryTabProps) {
         {active ? (
           <GhostButton onClick={history.cancel}>Cancel import</GhostButton>
         ) : (
-          <PrimaryButton onClick={() => history.start(selected)}>Import {sessions.length} sessions</PrimaryButton>
+          <PrimaryButton
+            disabled={importDisabled}
+            onClick={() => {
+              if (!plan) return;
+              setStarting(true);
+              const body = sinceDate ? { since: plan.since } : {};
+              void history.start(selected, body).finally(() => setStarting(false));
+            }}
+          >
+            {starting ? 'Starting…' : `Import ${sessions.length} sessions`}
+          </PrimaryButton>
         )}
       </SettingRow>
       {history.error && (
