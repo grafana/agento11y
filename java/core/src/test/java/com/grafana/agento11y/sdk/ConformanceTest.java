@@ -417,21 +417,26 @@ class ConformanceTest {
                     .setToolName("weather")
                     .setToolCallId("call-weather-1")
                     .setToolType("function")
+                    .setSkillName("\u00a0code-review\u00a0")
                     .setIncludeContent(true));
             recorder.setResult(new ToolExecutionResult()
                     .setArguments(Map.of("city", "Paris"))
                     .setResult(Map.of("forecast", "sunny")));
             recorder.end();
+            ToolExecution completedExecution = env.client.debugSnapshot().getToolExecutions().get(0);
             env.client.shutdown();
 
             SpanData span = env.latestSpanByNamePrefix("execute_tool ");
             List<String> metricNames = env.metricNames();
 
             assertThat(env.requests).isEmpty();
+            assertThat(completedExecution.getSkillName()).isEqualTo("code-review");
             assertThat(span.getName()).isEqualTo("execute_tool weather");
             assertThat(span.getAttributes().get(AttributeKey.stringKey(Agento11yClient.SPAN_ATTR_TOOL_NAME))).isEqualTo("weather");
             assertThat(span.getAttributes().get(AttributeKey.stringKey(Agento11yClient.SPAN_ATTR_TOOL_CALL_ID))).isEqualTo("call-weather-1");
             assertThat(span.getAttributes().get(AttributeKey.stringKey(Agento11yClient.SPAN_ATTR_TOOL_TYPE))).isEqualTo("function");
+            assertThat(span.getAttributes().get(AttributeKey.stringKey("agento11y.skill.name")))
+                    .isEqualTo("code-review");
             assertThat(String.valueOf(span.getAttributes().get(AttributeKey.stringKey(Agento11yClient.SPAN_ATTR_TOOL_CALL_ARGUMENTS))))
                     .contains("Paris");
             assertThat(String.valueOf(span.getAttributes().get(AttributeKey.stringKey(Agento11yClient.SPAN_ATTR_TOOL_CALL_RESULT))))
@@ -444,6 +449,9 @@ class ConformanceTest {
                     .isEqualTo("v-context");
             assertThat(metricNames).contains(Agento11yClient.METRIC_OPERATION_DURATION);
             assertThat(metricNames).doesNotContain(Agento11yClient.METRIC_TTFT);
+            assertThat(env.metricData(Agento11yClient.METRIC_OPERATION_DURATION).getHistogramData().getPoints())
+                    .allSatisfy(point -> assertThat(point.getAttributes()
+                            .get(AttributeKey.stringKey("agento11y.skill.name"))).isNull());
         }
     }
 
