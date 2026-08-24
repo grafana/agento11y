@@ -296,6 +296,8 @@ func historyResolveDestination(ctx context.Context, opts *historyImportOptions, 
 		return nil
 	}
 
+	// History imports marked as locally forwarded never relay to Cloud, so this
+	// setup cannot offer the local daemon's Local + Cloud behavior.
 	result, err := loginRun(ctx, login.RunOpts{
 		Stderr:           stderr,
 		Logger:           logger,

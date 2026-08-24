@@ -127,44 +127,44 @@ against `sigil`.
 ## Step 3: Choose a destination
 
 A first `agento11y login` asks where sessions go: **Local only**, or **Grafana
-Cloud**. Windows has no local receiver, so its flow starts at the Cloud
-questions.
-
-**Local only** writes `AGENTO11Y_LOCAL=true` and `SIGIL_LOCAL=true` to
-`$XDG_CONFIG_HOME/agento11y/config.env`, or `~/.config/agento11y/config.env` when
-`XDG_CONFIG_HOME` is unset. **Grafana Cloud** continues to the credential flow,
-which writes credentials there too.
+Cloud**. **Local only** needs no Cloud credentials and never forwards sessions.
+**Grafana Cloud** continues to the credential flow. Its interactive preferences
+on macOS and Linux include **Local web UI**. It starts on **Yes** by default and
+remembers an earlier answer. **Yes** keeps a full local copy and forwards a Cloud
+copy. **No** sends directly
+to Cloud. Windows has no local receiver, so it shows neither local choice.
 
 ### The paste flow
 
 Tell the user to run `agento11y login` in their own terminal, then wait. You
 cannot drive it yourself: it needs a terminal, and the block it asks for holds a
 live token that must not pass through this conversation. The destination question
-appears only on macOS and Linux, and only when no destination and no credentials
-are saved. The Cloud questions after it run on every interactive `agento11y login`
-without complete credential flags, including a rerun with saved credentials.
+appears only on macOS and Linux when no destination or credentials are saved. A
+saved Cloud connection starts at step 2.
 
 1. **Where should sessions go?**: a two-option list. **Local only** saves local
    mode and ends the flow. **Grafana Cloud** continues with the steps below.
-2. **Your Grafana Cloud URL**: the Grafana they open in a browser, for example
+2. **Grafana Cloud connection**: shown when both the stack URL and credentials
+   are saved. **Keep this connection** is the default; **Change connection** continues below.
+3. **Your Grafana Cloud URL**: the Grafana they open in a browser, for example
    `https://mystack.grafana.net`. The field arrives pre-filled from the stack an
    earlier run saved or from a gcx configuration, and becomes a list when more
    than one is known. It only builds the links below; it is never the ingest
    endpoint.
-3. Login prints `https://<stack>/a/grafana-agento11y-app/setup-coding-agent` and
+4. Login prints `https://<stack>/a/grafana-agento11y-app/setup-coding-agent` and
    tries to open it in a browser. That page has three steps: create an API token,
    copy the connection settings, and paste them back in the terminal. The page
    creates the token when the user has permission and the stack supports it.
    Otherwise it links to Cloud Access Policies and accepts an existing token.
-4. **Paste from Grafana**: the whole block goes into this one masked field, which
+5. **Paste from Grafana**: the whole block goes into this one masked field, which
    fills the endpoint, instance ID, token, and OTLP settings. Login then asks
    only for what the block did not carry. Pasting is optional: Enter on the empty
    box types the values field by field instead.
-5. **Preferences**: content capture mode, session tags, guards and their timeout,
-   and automatic tags. Enter keeps the current behavior, which is the answer
-   unless the user asks otherwise. Read the privacy warning in Rule 5 before
-   enabling full capture or guards. Read **Automatic tags** below before enabling
-   automatic tags; Yes opens a second checklist for the values to attach.
+6. **Preferences**: local web UI, content capture mode, session tags, guards and
+   their timeout, and automatic tags. **Local web UI** starts on Yes by default
+   and remembers an earlier answer. The web UI always stores full content locally.
+   Cloud receives full content in Full mode and metadata in other modes. Enter keeps
+   each answer. Read Rule 5 before enabling full capture or guards. Read **Automatic tags** before enabling automatic tags.
 
 The copied block has concrete values in this shape:
 
@@ -391,10 +391,11 @@ All hosts read the resolved config path. The default is
 | `AGENTO11Y_DEBUG` | A true value writes the debug log |
 
 All branded keys except `AGENTO11Y_STACK_URL` have an older `SIGIL_*` spelling.
-**Local only** writes both `AGENTO11Y_LOCAL=true` and `SIGIL_LOCAL=true`, so later
-launchers and `agento11y cursor install` ask nothing. An explicit `agento11y login`
-still runs the Cloud questions, and does not ask where sessions go again. Doctor
-reports provenance only for settings in its report.
+**Local only** writes `AGENTO11Y_LOCAL` and `SIGIL_LOCAL` as true, and both
+`LOCAL_FORWARD` spellings as false. **Local web UI = Yes** writes all four local
+keys as true. **Local web UI = No** writes all four as false. An explicit
+`agento11y login` still runs Cloud setup. Doctor reports provenance only for
+settings in its report.
 
 ### Tagging sessions
 
@@ -451,17 +452,16 @@ chooses which fields ship, not whether the shipped fields are clean. Treat
 
 ### Local mode
 
-`agento11y <agent> --local`, or **Local only** at the first-run question, routes
-launcher runs and agento11y hooks to a JSONL store on the machine. Local mode uses
-full content regardless of the configured capture mode. The launcher prints the viewer URL.
-Manage the daemon with `agento11y local start|open|status|stop|restart`. `agento11y local open`
-starts it if needed, prints its address, and tries to open the viewer. Local mode runs on macOS and Linux only. **Local only** at a launcher
-starts the receiver for that launch; after `agento11y login` or `agento11y cursor install` the receiver
-starts on the next launch or hook. `--no-local` runs one session against Cloud
-while the saved answer stays set. Never describe local mode as a switch that keeps
-all data on the machine: with `AGENTO11Y_LOCAL_FORWARD` and valid Cloud settings
-it forwards to Grafana Cloud too. Doctor prints that correction only for a
-configured `AGENTO11Y_LOCAL`.
+`agento11y <agent> --local`, **Local only**, or **Local web UI = Yes** routes
+launcher runs and agento11y hooks through the local daemon. The daemon stores
+full generation content in its JSONL store. It forwards full content only when
+`AGENTO11Y_CONTENT_CAPTURE_MODE=full`; every other selected mode is reduced to
+`metadata_only` for Cloud. **Local only** does not forward. **Local web UI = No**
+sends directly to Cloud without a local copy. `--no-local` uses Cloud once without
+changing either saved alias family. The launcher prints the viewer URL. Manage
+the daemon with `agento11y local start|open|status|stop|restart`. Local mode runs
+on macOS and Linux only. A launcher starts the receiver in the same invocation;
+a saved choice from Cursor install applies to the next hook.
 
 ### History import
 
@@ -477,7 +477,8 @@ agento11y history import claude-code --no-local  # import into Grafana Cloud
 The import resolves the destination in this order: `--no-local`, `--local`, a true
 `AGENTO11Y_LOCAL`/`SIGIL_LOCAL` value from the shell or `config.env`, then saved Cloud credentials.
 With none set, an interactive run asks where sessions go. `--no-local` or any valid LOCAL value
-skips that question; missing Cloud credentials still starts Cloud setup. A noninteractive run never
+skips that question; missing Cloud credentials still starts Cloud setup. That setup does not offer
+**Local web UI** because locally forwarded imports never relay to Cloud. A noninteractive run never
 asks. It imports only with both `--all` and `--yes`; otherwise it prints a dry-run plan and exits 0.
 
 Without `--since`, an import selects sessions active during the last 90 days. Each imported turn goes into a per-agent ledger that omits the destination.
