@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.37.0] - 2026-08-24
+
+### Features
+
+- **plugins/agento11y**: add local daemon setting to the login command (#660)
+- **plugins/agento11y**: add history import date picker (#656)
+- **plugins/agento11y**: add opencode history import (#657)
+- **plugins/agento11y**: add local viewer analytics tab (#650)
+- **plugins/agento11y**: add guard settings to local viewer (#646)
+- **plugins/agento11y**: block denied prompts (#647)
+- **plugins/agento11y**: change coding agent tags selector (#645)
+- **plugins/agento11y**: split local viewer into separate files (#644)
+
+### Bug Fixes
+
+- **plugins/agento11y**: enable coding agent tags by default (#649)
+
+### Documentation
+
+- add agento11y gif (#655)
+
 ## [0.36.0] - 2026-08-20
 
 ### Features
