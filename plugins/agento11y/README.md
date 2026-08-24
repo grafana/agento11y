@@ -1,5 +1,9 @@
 # Coding Agent Observability
 
+<p align="center">
+  <img src="../../.github/img/agento11y.gif" alt="agento11y capturing a coding agent session" width="80%" />
+</p>
+
 Monitor the coding agents you already use — Cursor, Claude Code, Codex, Copilot CLI, OpenCode, Pi, Vibe, and others. Observe usage, cost, tokens, and tools across all of them in one place. Keep sessions on your machine with the local Agent Observability app, or send them to [Grafana Agent Observability](https://grafana.com/docs/grafana-cloud/machine-learning/agent-observability/).
 
 ## Quick start
