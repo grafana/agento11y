@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -289,5 +290,94 @@ func TestEmitOneStrandedDropsThoughtOnly(t *testing.T) {
 	}
 	if len(entries) == 0 {
 		t.Fatal("conversation dir emptied unexpectedly")
+	}
+}
+
+func TestModelParams(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []ModelParam
+		want map[string]string
+	}{
+		{
+			name: "auto routing mode",
+			in:   []ModelParam{{ID: "optimize_for", Value: []byte(`"balanced"`)}},
+			want: map[string]string{"optimize_for": "balanced"},
+		},
+		{
+			name: "multiple params",
+			in: []ModelParam{
+				{ID: "optimize_for", Value: []byte(`"intelligence"`)},
+				{ID: "thinking", Value: []byte(`"high"`)},
+			},
+			want: map[string]string{"optimize_for": "intelligence", "thinking": "high"},
+		},
+		{
+			name: "non-string value keeps its JSON literal",
+			in:   []ModelParam{{ID: "thinking", Value: []byte(`true`)}},
+			want: map[string]string{"thinking": "true"},
+		},
+		{
+			name: "empty list",
+			in:   nil,
+			want: nil,
+		},
+		{
+			name: "blank id, null and empty values are dropped",
+			in: []ModelParam{
+				{ID: "  ", Value: []byte(`"x"`)},
+				{ID: "context", Value: []byte(`null`)},
+				{ID: "effort", Value: []byte(`""`)},
+			},
+			want: nil,
+		},
+		{
+			name: "id outside the documented shape is dropped",
+			in:   []ModelParam{{ID: "opt for/you", Value: []byte(`"cost"`)}},
+			want: nil,
+		},
+		{
+			name: "oversized value is dropped",
+			in:   []ModelParam{{ID: "effort", Value: []byte(`"` + strings.Repeat("x", maxModelParamLen+1) + `"`)}},
+			want: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := modelParams(Payload{ModelParams: tc.in})
+			if len(got) != len(tc.want) {
+				t.Fatalf("modelParams = %v; want %v", got, tc.want)
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Errorf("modelParams[%q] = %q; want %q", k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
+func TestApplyModelParamsKeepsEarlierParams(t *testing.T) {
+	frag := &fragment.Fragment{}
+	if !applyModelParams(frag, Payload{ModelParams: []ModelParam{{ID: "optimize_for", Value: []byte(`"cost"`)}}}) {
+		t.Fatal("first apply should report a change")
+	}
+	// A later event without model_params must not clear what we already have.
+	if applyModelParams(frag, Payload{}) {
+		t.Error("apply with no params should report no change")
+	}
+	if frag.ModelParams["optimize_for"] != "cost" {
+		t.Fatalf("ModelParams = %v; want optimize_for preserved", frag.ModelParams)
+	}
+	// Re-applying the same value is not a change, but a new value wins.
+	if applyModelParams(frag, Payload{ModelParams: []ModelParam{{ID: "optimize_for", Value: []byte(`"cost"`)}}}) {
+		t.Error("re-applying an identical value should report no change")
+	}
+	applyStopModel(frag, Payload{Model: "auto-smart", ModelParams: []ModelParam{{ID: "optimize_for", Value: []byte(`"intelligence"`)}}})
+	if frag.ModelParams["optimize_for"] != "intelligence" {
+		t.Fatalf("ModelParams = %v; want stop's value to win", frag.ModelParams)
+	}
+	if frag.Model != "auto-smart" {
+		t.Fatalf("Model = %q; want auto-smart slug untouched by model params", frag.Model)
 	}
 }

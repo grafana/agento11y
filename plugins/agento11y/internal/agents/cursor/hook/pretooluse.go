@@ -82,7 +82,7 @@ func persistModelFromPreToolUse(p Payload, logger *log.Logger) {
 	if p.ConversationID == "" || p.GenerationID == "" {
 		return
 	}
-	if resolvedModel(p) == "" && strings.TrimSpace(p.Provider) == "" {
+	if resolvedModel(p) == "" && strings.TrimSpace(p.Provider) == "" && len(p.ModelParams) == 0 {
 		return
 	}
 	ts := p.ResolvedTimestamp()
